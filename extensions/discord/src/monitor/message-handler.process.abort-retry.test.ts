@@ -35,7 +35,7 @@ describe("processDiscordMessage deliver-lambda abort logging", () => {
     // the dispatch mock and then queue a single block reply via the captured
     // dispatcher. The mocked createReplyDispatcherWithTyping (see line ~229)
     // routes sendBlockReply straight into the deliver lambda, where the very
-    // first gate is `if (isProcessAborted(abortSignal)) return;` — the line
+    // first gate is `if (abortSignal?.aborted) return;` — the line
     // the PR added the logVerbose call to.
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       abortController.abort();
@@ -112,7 +112,7 @@ describe("processDiscordMessage reply session init conflict retry", () => {
     expect(guildHistories.get("c1")).toHaveLength(1);
     expect(guildHistories.get("c1")?.[0]).toMatchObject({
       body: "hi",
-      messageId: "m1",
+      messageId: "1001",
     });
     sleepSpy.mockRestore();
   });
@@ -242,7 +242,7 @@ describe("processDiscordMessage reply session init conflict retry", () => {
 
     expect(getLastDispatchCtx()?.Body).not.toContain("[Chat messages since your last reply");
     expect(guildHistories.get("c1")).toHaveLength(1);
-    expect(guildHistories.get("c1")?.[0]?.messageId).toBe("m1");
+    expect(guildHistories.get("c1")?.[0]?.messageId).toBe("1001");
     sleepSpy.mockRestore();
   });
 

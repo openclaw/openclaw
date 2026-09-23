@@ -5,7 +5,7 @@ import {
   normalizeOptionalString,
 } from "../../packages/normalization-core/src/string-coerce.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { callGateway as defaultCallGateway } from "../gateway/call.js";
+import type { callGateway as defaultCallGateway } from "../gateway/call.js";
 import {
   createSessionVisibilityDecisionChecker,
   listSpawnedSessionKeysWithResult,
@@ -13,6 +13,10 @@ import {
   renderSessionVisibilityDenial,
   resolveIncognitoSessionAccessDecision,
   sessionOwnershipLookupDenied,
+  type SessionVisibilityDecisionAction,
+  type SessionVisibilityDecisionMode,
+  type SessionVisibilityDecisionPolicy,
+  type SessionVisibilityDecisionRow,
   type SessionVisibilityDecision,
   type SessionOwnershipLookupFailure,
 } from "./session-visibility-internal.js";
@@ -20,17 +24,15 @@ import {
 type GatewayCaller = typeof defaultCallGateway;
 
 /** Configured visibility mode for session tools and session-related commands. */
-export type SessionToolsVisibility = "self" | "tree" | "agent" | "all";
+export type SessionToolsVisibility = SessionVisibilityDecisionMode;
 
 /** Agent-to-agent access policy compiled from `tools.agentToAgent` config. */
-export type AgentToAgentPolicy = {
-  enabled: boolean;
+export type AgentToAgentPolicy = SessionVisibilityDecisionPolicy & {
   matchesAllow: (agentId: string) => boolean;
-  isAllowed: (requesterAgentId: string, targetAgentId: string) => boolean;
 };
 
 /** Session operation whose visibility error copy should be rendered. */
-export type SessionAccessAction = "history" | "send" | "list" | "status";
+export type SessionAccessAction = SessionVisibilityDecisionAction;
 
 /** Result of checking whether one session operation may target a session. */
 export type SessionAccessResult =
@@ -49,11 +51,29 @@ type ScopedSessionAccessProvider = (
   request: ScopedSessionAccessRequest,
 ) => ScopedSessionAccessGrant | undefined;
 
-const scopedSessionAccessProviders = new Set<ScopedSessionAccessProvider>();
+type ScopedSessionAccessRegistration = {
+  provider: ScopedSessionAccessProvider;
+  resolveAsync?: (
+    request: ScopedSessionAccessRequest,
+  ) => Promise<ScopedSessionAccessGrant | undefined>;
+};
 
-function registerScopedSessionAccessProvider(provider: ScopedSessionAccessProvider): () => void {
-  scopedSessionAccessProviders.add(provider);
-  return () => scopedSessionAccessProviders.delete(provider);
+const scopedSessionAccessProviders = new Map<
+  ScopedSessionAccessProvider,
+  ScopedSessionAccessRegistration
+>();
+
+function registerScopedSessionAccessProvider(
+  provider: ScopedSessionAccessProvider,
+  options?: Pick<ScopedSessionAccessRegistration, "resolveAsync">,
+): () => void {
+  const registration = { provider, resolveAsync: options?.resolveAsync };
+  scopedSessionAccessProviders.set(provider, registration);
+  return () => {
+    if (scopedSessionAccessProviders.get(provider) === registration) {
+      scopedSessionAccessProviders.delete(provider);
+    }
+  };
 }
 
 function resolveScopedSessionAccess(
@@ -64,7 +84,7 @@ function resolveScopedSessionAccess(
   if (resolveIncognitoSessionAccessDecision(request.targetSessionKey)) {
     return undefined;
   }
-  for (const provider of scopedSessionAccessProviders) {
+  for (const provider of scopedSessionAccessProviders.keys()) {
     try {
       const grant = provider(request);
       const expectedSessionId = normalizeOptionalString(grant?.expectedSessionId);
@@ -78,14 +98,34 @@ function resolveScopedSessionAccess(
   return undefined;
 }
 
+async function resolveScopedSessionAccessAsync(
+  request: ScopedSessionAccessRequest,
+): Promise<ScopedSessionAccessGrant | undefined> {
+  if (resolveIncognitoSessionAccessDecision(request.targetSessionKey)) {
+    return undefined;
+  }
+  // A replacement registration cannot authorize work admitted by its predecessor.
+  const registrations = [...scopedSessionAccessProviders.values()];
+  for (const registration of registrations) {
+    const { provider, resolveAsync } = registration;
+    if (scopedSessionAccessProviders.get(provider) !== registration) {
+      continue;
+    }
+    try {
+      const grant = await (resolveAsync ?? provider)(request);
+      const expectedSessionId = normalizeOptionalString(grant?.expectedSessionId);
+      if (expectedSessionId && scopedSessionAccessProviders.get(provider) === registration) {
+        return { expectedSessionId };
+      }
+    } catch {
+      // Do not retry a declined async decision through its synchronous companion.
+    }
+  }
+  return undefined;
+}
+
 /** Minimal session row metadata needed to evaluate ownership and cross-agent access. */
-export type SessionVisibilityRow = {
-  key: string;
-  agentId?: string;
-  ownerSessionKey?: string;
-  spawnedBy?: string;
-  parentSessionKey?: string;
-};
+export type SessionVisibilityRow = SessionVisibilityDecisionRow;
 
 /** Public compatibility wrapper; direct guards use the richer private result. */
 export async function listSpawnedSessionKeys(params: {
@@ -104,7 +144,7 @@ export async function listSpawnedSessionKeys(params: {
   return result.value;
 }
 
-/** Resolve configured session-tool visibility, defaulting invalid or missing values to agent. */
+/** Resolve configured session-tool visibility, defaulting invalid or missing values to all. */
 export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionToolsVisibility {
   const raw = (cfg.tools as { sessions?: { visibility?: unknown } } | undefined)?.sessions
     ?.visibility;
@@ -112,7 +152,7 @@ export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionTools
   if (value === "self" || value === "tree" || value === "agent" || value === "all") {
     return value;
   }
-  return "agent";
+  return "all";
 }
 
 /** Resolve visibility after applying sandbox clamps for spawned-session-only agents. */
@@ -203,11 +243,13 @@ function matchesCompiledWildcard(
 /** Compile agent-to-agent allow rules into reusable matching predicates. */
 export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolicy {
   const routingA2A = cfg.tools?.agentToAgent;
-  const enabled = routingA2A?.enabled === true;
+  const enabled = routingA2A?.enabled !== false;
   const rawAllowPatterns = Array.isArray(routingA2A?.allow) ? routingA2A.allow : [];
   const allowPatterns = rawAllowPatterns.map((pattern) => compileAgentAllowPattern(pattern));
   const hasWildcardPatterns = allowPatterns.some((pattern) => pattern.kind === "wildcard");
   const matchesAllow = (agentId: string) => {
+    // Agent-to-agent is on by default; omitted/empty `allow` permits every agent pair.
+    // Blank entries compile to `deny`, so a configured-but-blank list still fails closed.
     if (allowPatterns.length === 0) {
       return true;
     }
@@ -339,6 +381,7 @@ function createSessionVisibilityCheckerImpl(
 export const createSessionVisibilityChecker = Object.assign(createSessionVisibilityCheckerImpl, {
   registerScopedAccessProvider: registerScopedSessionAccessProvider,
   resolveScopedAccess: resolveScopedSessionAccess,
+  resolveScopedAccessAsync: resolveScopedSessionAccessAsync,
 });
 
 /** Create a row-aware visibility checker that can use owner/spawn metadata. */

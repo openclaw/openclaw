@@ -69,6 +69,36 @@ describe("resolveMatrixRoomId", () => {
     expect(client["setAccountData"]).toHaveBeenCalledWith(EventType.Direct, { [userId]: [roomId] });
   });
 
+  it.each(["@fallback:example.org", "user:@fallback:example.org"])(
+    "preserves send mapping repair after cached read resolution of %s",
+    async (target) => {
+      const userId = "@fallback:example.org";
+      const roomId = "!room:example.org";
+      const getJoinedRooms = vi.fn<MatrixClient["getJoinedRooms"]>().mockResolvedValue([roomId]);
+      const setAccountData = vi.fn<MatrixClient["setAccountData"]>().mockResolvedValue(undefined);
+      const client = makeFallbackDirectClient({
+        userId,
+        roomIds: [roomId],
+        extra: { getJoinedRooms, setAccountData },
+      });
+
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await expect(
+          resolveMatrixRoomId(client, target, { persistDirectMapping: false }),
+        ).resolves.toBe(roomId);
+      }
+      expect(getJoinedRooms).toHaveBeenCalledTimes(1);
+      expect(setAccountData).not.toHaveBeenCalled();
+
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await expect(resolveMatrixRoomId(client, target)).resolves.toBe(roomId);
+      }
+      expect(getJoinedRooms).toHaveBeenCalledTimes(2);
+      expect(setAccountData).toHaveBeenCalledTimes(1);
+      expect(setAccountData).toHaveBeenCalledWith(EventType.Direct, { [userId]: [roomId] });
+    },
+  );
+
   it("prefers joined rooms marked direct in local member state over plain strict rooms", async () => {
     const userId = "@fallback:example.org";
     const client = makeFallbackDirectClient({

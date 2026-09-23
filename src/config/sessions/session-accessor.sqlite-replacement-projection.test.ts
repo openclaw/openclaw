@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 
 const { readExactSessionEntryRowMock } = vi.hoisted(() => ({
   readExactSessionEntryRowMock:
@@ -44,8 +49,57 @@ describe("session entry replacement compare-and-swap", () => {
 
   afterEach(() => {
     readExactSessionEntryRowMock.mockReset();
+    closeOpenClawAgentDatabasesForTest();
     cleanupTempDirs(tempDirs);
   });
+
+  it.each([false, true])(
+    "hydrates replacement candidates once while preserving detached snapshots (status selection: %s)",
+    async (selectStatus) => {
+      const prompt = "synthetic replacement payload ".repeat(8192);
+      for (const suffix of ["a", "b"]) {
+        await upsertSessionEntryCore(
+          { storePath, sessionKey: `agent:main:payload-${suffix}` },
+          {
+            sessionId: `payload-${suffix}`,
+            updatedAt: 10,
+            status: "running",
+            skillsSnapshot: { prompt, skills: [] },
+          },
+        );
+      }
+      const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+      const reads = trackSqliteStatementExecutions(database.db, ["entries"], (sql) =>
+        /\bfrom\s+"session_nodes"/iu.test(sql) ? "entries" : null,
+      );
+      try {
+        const result = await applySessionEntryReplacements({
+          storePath,
+          ...(selectStatus ? { statuses: ["running" as const] } : {}),
+          skipMaintenance: true,
+          update: (entries) => {
+            const selected = entries.filter(({ sessionKey }) => sessionKey.includes("payload-"));
+            expect(selected).toHaveLength(2);
+            for (const { entry } of selected) {
+              expect(entry.skillsSnapshot?.prompt).toBe(prompt);
+              if (entry.skillsSnapshot) {
+                entry.skillsSnapshot.prompt = "detached mutation";
+              }
+            }
+            return { result: selected.length };
+          },
+        });
+        expect(result).toBe(2);
+        // Two full candidate payloads, with room for their small metadata; enumeration must not hydrate them again.
+        expect(reads.textBytes.entries).toBeLessThan(prompt.length * 3);
+      } finally {
+        reads.restore();
+      }
+      expect(
+        loadSessionEntry({ storePath, sessionKey: "agent:main:payload-a" })?.skillsSnapshot?.prompt,
+      ).toBe(prompt);
+    },
+  );
 
   it.each([
     { mutation: "deleted", expected: undefined },

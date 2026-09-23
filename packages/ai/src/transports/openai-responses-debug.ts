@@ -151,7 +151,7 @@ function readResponsesToolDisplayName(tool: unknown): string {
   return typeof type === "string" && type !== "function" ? type : "";
 }
 
-export function summarizeResponsesTools(tools: unknown): string {
+function summarizeResponsesTools(tools: unknown): string {
   if (!Array.isArray(tools)) {
     return "count=0";
   }
@@ -163,7 +163,7 @@ export function summarizeResponsesTools(tools: unknown): string {
   return `count=${tools.length}${shown ? ` ${label}=${shown}` : ""}`;
 }
 
-export function stringifyRedactedPayload(value: unknown): string {
+function stringifyRedactedPayload(value: unknown): string {
   try {
     const encoded = JSON.stringify(value, (key, child) =>
       key === "encrypted_content" ? "<opaque data omitted>" : child,
@@ -381,7 +381,7 @@ function buildResponsesFailedFailureFields(
   return fields;
 }
 
-export function buildResponsesFailedNoDetailsObservation(
+function buildResponsesFailedNoDetailsObservation(
   event: Record<string, unknown>,
   model: Model,
   response: Record<string, unknown> | undefined = isRecord(event.response)
@@ -419,7 +419,7 @@ export function buildResponsesFailedNoDetailsObservation(
   };
 }
 
-export function summarizeResponsesFailedNoDetailsObservation(
+function summarizeResponsesFailedNoDetailsObservation(
   observation: ResponsesFailedNoDetailsObservation,
 ): string {
   const requestIds = observation.requestIdHashes.join(",");

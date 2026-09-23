@@ -6,9 +6,23 @@ import {
 } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { t } from "../i18n/index.ts";
 import { EDITOR_IDS, EDITOR_LABELS } from "../lib/editor-links.ts";
+import {
+  KEYBOARD_SHORTCUT_COMBOS,
+  type KeyboardShortcutCombo,
+} from "../lib/keyboard-shortcut-contract.ts";
 import { icons } from "./icons.ts";
 import { menuShortcutHint } from "./menu-shortcuts.ts";
 import { syncDropdownItemRadio } from "./web-awesome.ts";
+
+export function sessionArchiveShortcut(state: {
+  session: { archived: boolean };
+  selectionCount: number;
+  archiveShortcut?: boolean;
+}): KeyboardShortcutCombo | undefined {
+  return state.archiveShortcut && state.selectionCount === 1 && !state.session.archived
+    ? KEYBOARD_SHORTCUT_COMBOS.archiveSession
+    : undefined;
+}
 
 export function renderSessionEditorOptions(params: { inline: boolean; disabled: boolean }) {
   return html`
@@ -54,11 +68,13 @@ export function renderSessionGroupOptions(params: {
         title=${params.actionTitle(actionKind)}
       >
         <span class="session-menu__text">${label}</span>
-        ${radio && checked
-          ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
-              >${icons.check}</span
-            >`
-          : nothing}
+        ${
+          radio && checked
+            ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
+                >${icons.check}</span
+              >`
+            : nothing
+        }
         ${digit ? menuShortcutHint(digit) : nothing}
       </wa-dropdown-item>
     `;
@@ -67,24 +83,27 @@ export function renderSessionGroupOptions(params: {
     ${params.groups.map((group) =>
       entry(group, params.category === group, `move-to-group:${encodeURIComponent(group)}`),
     )}
-    ${params.category
-      ? entry(
-          t(
-            params.categoryClearReturnsToGroups
-              ? "sessionsView.moveBackToGroups"
-              : "sessionsView.removeFromGroup",
-          ),
-          false,
-          "move-to-group:",
-          false,
-        )
-      : nothing}
+    ${
+      params.category
+        ? entry(
+            t(
+              params.categoryClearReturnsToGroups
+                ? "sessionsView.moveBackToGroups"
+                : "sessionsView.removeFromGroup",
+            ),
+            false,
+            "move-to-group:",
+            false,
+          )
+        : nothing
+    }
     ${entry(t("sessionsView.newGroup"), false, "new-group", false)}
   `;
 }
 
 export function renderSessionColorOptions(params: {
   color: string | null;
+  allowDefault?: boolean;
   disabled: boolean;
   disabledReason?: string;
   onSelect: (event: MouseEvent, color: string | null) => void;
@@ -95,24 +114,27 @@ export function renderSessionColorOptions(params: {
     role="group"
     aria-label=${t("sessionsView.setColorMenu")}
   >
-    ${[null, ...SESSION_COLOR_IDS].map((color) => {
-      const label = color ? t(`sessionsView.colors.${color}`) : t("common.default");
-      return html`<button
-        type="button"
-        class="session-menu__color-choice"
-        aria-label=${label}
-        aria-pressed=${String(current === color)}
-        ?disabled=${params.disabled}
-        title=${params.disabledReason ?? label}
-        @click=${(event: MouseEvent) => params.onSelect(event, color)}
-      >
-        <span
-          class="session-menu__color-swatch"
-          style=${color ? `background: var(--session-color-${color})` : nothing}
-          aria-hidden="true"
-          >${current === color ? icons.check : nothing}</span
+    ${(params.allowDefault === false ? SESSION_COLOR_IDS : [null, ...SESSION_COLOR_IDS]).map(
+      (color) => {
+        const label = color ? t(`sessionsView.colors.${color}`) : t("sessionsView.noColor");
+        const selected = current === color && (color !== null || !params.color);
+        return html`<button
+          type="button"
+          class="session-menu__color-choice"
+          aria-label=${label}
+          aria-pressed=${String(selected)}
+          ?disabled=${params.disabled}
+          title=${params.disabledReason ?? label}
+          @click=${(event: MouseEvent) => params.onSelect(event, color)}
         >
-      </button>`;
-    })}
+          <span
+            class=${`session-menu__color-swatch${color === null ? " session-menu__color-swatch--none" : ""}`}
+            style=${color ? `background: var(--session-color-${color})` : nothing}
+            aria-hidden="true"
+            >${color === null ? icons.circleX : selected ? icons.check : nothing}</span
+          >
+        </button>`;
+      },
+    )}
   </div>`;
 }

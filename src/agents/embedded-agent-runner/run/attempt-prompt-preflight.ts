@@ -9,6 +9,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SessionManager } from "../../sessions/index.js";
 import { log } from "../logger.js";
+import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   resolveLiveToolResultMaxChars,
   truncateOversizedToolResultsInSessionManager,
@@ -54,17 +55,18 @@ function buildPreflightRecoveryBudgetSnapshot(snapshot: PreflightRecoveryBudgetS
   };
 }
 
-export function handleEmbeddedAttemptMidTurnPrecheck(input: {
+export async function handleEmbeddedAttemptMidTurnPrecheck(input: {
   attempt: AttemptPromptPreflightParams & Pick<EmbeddedRunAttemptParams, "contextTokenBudget">;
   request: MidTurnPrecheckRequest;
   sessionAgentId: string;
   sessionManager: SessionManager;
+  toolResultPromptProjectionState: ToolResultPromptProjectionState;
   prePromptMessageCount: number;
   replaceSessionMessages: (messages: AgentMessage[]) => void;
-}): {
+}): Promise<{
   preflightRecovery: NonNullable<EmbeddedRunAttemptResult["preflightRecovery"]>;
   promptError?: Error;
-} {
+}> {
   const { attempt, request } = input;
   const logMidTurnPrecheck = (route: string, extra?: string) => {
     log.warn(
@@ -86,8 +88,9 @@ export function handleEmbeddedAttemptMidTurnPrecheck(input: {
     const toolResultMaxChars = resolveLiveToolResultMaxChars({
       contextWindowTokens: contextTokenBudget,
     });
-    const truncationResult = truncateOversizedToolResultsInSessionManager({
+    const truncationResult = await truncateOversizedToolResultsInSessionManager({
       sessionManager: input.sessionManager,
+      projectionState: input.toolResultPromptProjectionState,
       contextWindowTokens: contextTokenBudget,
       maxCharsOverride: toolResultMaxChars,
       sessionFile: attempt.sessionFile,
@@ -159,6 +162,7 @@ export function handleEmbeddedAttemptMidTurnPrecheck(input: {
 }
 
 export async function prepareEmbeddedAttemptPromptPreflight(input: {
+  appendOnlyRuntimeContext?: boolean;
   attempt: AttemptPromptPreflightParams &
     Pick<EmbeddedRunAttemptParams, "model" | "runtimePlan" | "authProfileId">;
   activeContextEngine?: Pick<AttemptContextEngine, "info">;
@@ -175,18 +179,17 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
   systemPrompt: string;
   timezone?: string;
   toolResultMaxChars: number;
+  toolSchemaTokens?: number;
   unwindowedContextEngineMessagesForPrecheck?: AgentMessage[];
 }): Promise<AttemptPromptPreflightState> {
   const { attempt } = input;
   let contextBudgetStatus = input.state.contextBudgetStatus;
   const { skipPromptSubmission } = input.state;
-  const boundaryOptions =
-    input.timezone || !input.includeBoundaryTimestamp
-      ? {
-          ...(input.timezone ? { timezone: input.timezone } : {}),
-          ...(input.includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
-        }
-      : undefined;
+  const boundaryOptions = {
+    appendOnlyRuntimeContext: input.appendOnlyRuntimeContext,
+    ...(input.timezone ? { timezone: input.timezone } : {}),
+    ...(input.includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
+  };
   const unwindowedLlmBoundaryMessagesForPrecheck =
     input.contextEnginePromptAuthority === "preassembly_may_overflow" &&
     input.unwindowedContextEngineMessagesForPrecheck
@@ -206,6 +209,9 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
         contextTokenBudget: input.contextTokenBudget,
         reserveTokens: input.reserveTokens,
         toolResultMaxChars: input.toolResultMaxChars,
+        ...(typeof input.toolSchemaTokens === "number"
+          ? { toolSchemaTokens: input.toolSchemaTokens }
+          : {}),
         replay: {
           model: attempt.model,
           sessionId: attempt.sessionId,

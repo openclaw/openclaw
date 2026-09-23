@@ -1,10 +1,6 @@
 // Qa Lab API module exposes the plugin public contract.
-import type * as NodeFs from "node:fs/promises";
-import type * as NodePath from "node:path";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
-
-type QaScenarioRuntimeFunction = (...args: never[]) => unknown;
 
 type QaScenarioTransport = Pick<
   QaTransportAdapter,
@@ -25,86 +21,10 @@ export type QaScenarioRuntimeEnv<
   transport: TTransport;
 };
 
-export type QaScenarioRuntimeDeps = {
-  fs: typeof NodeFs;
-  path: typeof NodePath;
+type QaScenarioRuntimeApiDeps = {
   sleep: (ms?: number) => Promise<unknown>;
-  randomUUID: () => string;
-  runScenario: QaScenarioRuntimeFunction;
-  waitForOutboundMessage: QaScenarioRuntimeFunction;
-  waitForNoOutbound: QaScenarioRuntimeFunction;
-  waitForNoTransportOutbound: QaScenarioRuntimeFunction;
-  recentOutboundSummary: QaScenarioRuntimeFunction;
-  formatConversationTranscript: QaScenarioRuntimeFunction;
-  readTransportTranscript: QaScenarioRuntimeFunction;
-  formatTransportTranscript: QaScenarioRuntimeFunction;
-  fetchJson: QaScenarioRuntimeFunction;
-  waitForGatewayHealthy: QaScenarioRuntimeFunction;
-  waitForTransportReady: QaScenarioRuntimeFunction;
-  browserRequest: QaScenarioRuntimeFunction;
-  waitForBrowserReady: QaScenarioRuntimeFunction;
-  browserOpenTab: QaScenarioRuntimeFunction;
-  browserSnapshot: QaScenarioRuntimeFunction;
-  browserAct: QaScenarioRuntimeFunction;
-  webOpenPage: QaScenarioRuntimeFunction;
-  webWait: QaScenarioRuntimeFunction;
-  webType: QaScenarioRuntimeFunction;
-  webSnapshot: QaScenarioRuntimeFunction;
-  webEvaluate: QaScenarioRuntimeFunction;
-  waitForConfigRestartSettle: QaScenarioRuntimeFunction;
-  patchConfig: QaScenarioRuntimeFunction;
-  applyConfig: QaScenarioRuntimeFunction;
-  readConfigSnapshot: QaScenarioRuntimeFunction;
-  restartGatewayWithConfigPatch: QaScenarioRuntimeFunction;
-  createSession: QaScenarioRuntimeFunction;
-  readEffectiveTools: QaScenarioRuntimeFunction;
-  readSkillStatus: QaScenarioRuntimeFunction;
-  readRawQaSessionStore: QaScenarioRuntimeFunction;
-  seedQaSessionEntries: QaScenarioRuntimeFunction;
-  seedQaSessionTranscript: QaScenarioRuntimeFunction;
-  readGatewayLogs: QaScenarioRuntimeFunction;
-  markGatewayLogCursor: QaScenarioRuntimeFunction;
-  scanGatewayLogSentinels: QaScenarioRuntimeFunction;
-  assertNoGatewayLogSentinels: QaScenarioRuntimeFunction;
-  readSessionTranscriptSummary: QaScenarioRuntimeFunction;
-  runQaCli: QaScenarioRuntimeFunction;
-  inspectQaExecutionIdentityStorage: QaScenarioRuntimeFunction;
-  extractMediaPathFromText: QaScenarioRuntimeFunction;
-  resolveGeneratedImagePath: QaScenarioRuntimeFunction;
-  startAgentRun: QaScenarioRuntimeFunction;
-  waitForAgentRun: QaScenarioRuntimeFunction;
-  waitForAgentHistoryReply: QaScenarioRuntimeFunction;
-  listCronJobs: QaScenarioRuntimeFunction;
-  findManagedDreamingCronJob: QaScenarioRuntimeFunction;
-  waitForCronRunCompletion: QaScenarioRuntimeFunction;
-  readDoctorMemoryStatus: QaScenarioRuntimeFunction;
-  forceMemoryIndex: QaScenarioRuntimeFunction;
-  findSkill: QaScenarioRuntimeFunction;
-  writeWorkspaceSkill: QaScenarioRuntimeFunction;
-  callPluginToolsMcp: QaScenarioRuntimeFunction;
-  runAgentPrompt: QaScenarioRuntimeFunction;
-  ensureImageGenerationConfigured: QaScenarioRuntimeFunction;
-  handleQaAction: QaScenarioRuntimeFunction;
-  runRuntimeToolFixture: QaScenarioRuntimeFunction;
-  extractQaToolPayload: QaScenarioRuntimeFunction;
-  formatMemoryDreamingDay: QaScenarioRuntimeFunction;
-  resolveSessionTranscriptsDirForAgent: QaScenarioRuntimeFunction;
-  activeMemoryToggleKey: QaScenarioRuntimeFunction;
-  setActiveMemorySessionDisabled: QaScenarioRuntimeFunction;
-  buildAgentSessionKey: QaScenarioRuntimeFunction;
-  normalizeLowercaseStringOrEmpty: QaScenarioRuntimeFunction;
-  formatErrorMessage: QaScenarioRuntimeFunction;
-  liveTurnTimeoutMs: QaScenarioRuntimeFunction;
-  resolveQaLiveTurnTimeoutMs: QaScenarioRuntimeFunction;
-  normalizeModelRef: QaScenarioRuntimeFunction;
-  splitModelRef: QaScenarioRuntimeFunction;
-  hasDiscoveryLabels: QaScenarioRuntimeFunction;
-  reportsDiscoveryScopeLeak: QaScenarioRuntimeFunction;
-  reportsMissingDiscoveryFiles: QaScenarioRuntimeFunction;
-  hasModelSwitchContinuitySignal: QaScenarioRuntimeFunction;
+  waitForTransportReady: (...args: never[]) => unknown;
 };
-
-type QaScenarioRuntimeApiDeps = Pick<QaScenarioRuntimeDeps, "sleep" | "waitForTransportReady">;
 
 type QaScenarioRuntimeConstants = {
   imageUnderstandingPngBase64: string;
@@ -114,7 +34,7 @@ type QaScenarioRuntimeConstants = {
 
 type QaScenarioRuntimeApi<
   TEnv extends QaScenarioRuntimeEnv = QaScenarioRuntimeEnv,
-  TDeps extends QaScenarioRuntimeApiDeps = QaScenarioRuntimeDeps,
+  TDeps extends QaScenarioRuntimeApiDeps = QaScenarioRuntimeApiDeps,
 > = TDeps & {
   env: TEnv;
   lab: TEnv["lab"];
@@ -130,7 +50,7 @@ type QaScenarioRuntimeApi<
   imageUnderstandingValidPngBase64: string;
   getTransportSnapshot: TEnv["transport"]["state"]["getSnapshot"];
   resetTransport: () => Promise<void>;
-  injectInboundMessage: TEnv["transport"]["state"]["addInboundMessage"];
+  injectInboundMessage: TEnv["transport"]["sendInbound"];
   injectOutboundMessage: TEnv["transport"]["state"]["addOutboundMessage"];
   readTransportMessage: TEnv["transport"]["state"]["readMessage"];
   resetBus: () => Promise<void>;
@@ -169,7 +89,7 @@ export function createQaScenarioRuntimeApi<
     imageUnderstandingValidPngBase64: params.constants.imageUnderstandingValidPngBase64,
     getTransportSnapshot: transportState.getSnapshot.bind(transportState),
     resetTransport: resetTransportState,
-    injectInboundMessage: transportState.addInboundMessage.bind(transportState),
+    injectInboundMessage: transport.sendInbound.bind(transport),
     injectOutboundMessage: transportState.addOutboundMessage.bind(transportState),
     readTransportMessage: transportState.readMessage.bind(transportState),
     resetBus: resetTransportState,

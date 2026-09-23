@@ -2,43 +2,28 @@
  * Provider discovery descriptor for Anthropic Vertex. This variant is used by
  * catalog surfaces that need the provider contract without full plugin entry setup.
  */
-import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
-import { runAnthropicVertexCatalog } from "./provider-catalog-runtime.js";
+import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { hasAnthropicVertexAvailableAuth, resolveAnthropicVertexConfigApiKey } from "./region.js";
 
 const PROVIDER_ID = "anthropic-vertex";
 const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
 
-type AnthropicVertexProviderPlugin = {
-  id: string;
-  label: string;
-  docsPath: string;
-  auth: [];
-  catalog: {
-    order: "simple";
-    run: (ctx: ProviderCatalogContext) => ReturnType<typeof runAnthropicVertexCatalog>;
-  };
-  resolveConfigApiKey: (params: { env: NodeJS.ProcessEnv }) => string | undefined;
-  resolveSyntheticAuth: () =>
-    | {
-        apiKey: string;
-        source: string;
-        mode: "api-key";
-      }
-    | undefined;
-};
-
 /** Anthropic Vertex provider discovery descriptor. */
-export const anthropicVertexProviderDiscovery: AnthropicVertexProviderPlugin = {
+export const anthropicVertexProviderDiscovery = {
   id: PROVIDER_ID,
   label: "Anthropic Vertex",
   docsPath: "/providers/models",
   auth: [],
   catalog: {
     order: "simple",
-    run: runAnthropicVertexCatalog,
+    // Descriptor reads need ADC facts; catalog execution owns model/runtime loading.
+    run: async (ctx) => {
+      const { runAnthropicVertexCatalog } = await import("./provider-catalog-runtime.js");
+      return await runAnthropicVertexCatalog(ctx);
+    },
   },
-  resolveConfigApiKey: ({ env }) => resolveAnthropicVertexConfigApiKey(env),
+  resolveConfigApiKey: ({ env }: { env: NodeJS.ProcessEnv }) =>
+    resolveAnthropicVertexConfigApiKey(env),
   resolveSyntheticAuth: () => {
     if (!hasAnthropicVertexAvailableAuth()) {
       return undefined;
@@ -49,6 +34,6 @@ export const anthropicVertexProviderDiscovery: AnthropicVertexProviderPlugin = {
       mode: "api-key",
     };
   },
-};
+} satisfies ProviderPlugin;
 
 export default anthropicVertexProviderDiscovery;

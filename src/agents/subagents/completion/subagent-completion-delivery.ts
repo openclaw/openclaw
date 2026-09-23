@@ -1,18 +1,20 @@
-import { getDeliveryQueueEntryStatus } from "../../../infra/delivery-queue-sqlite.js";
+import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
+import type { DeliveryQueueStoredStatus } from "../../../infra/delivery-queue-sqlite.kernel.js";
 import { scheduleSessionDelivery } from "../../../infra/session-delivery-queue-runtime.js";
+import { releaseSessionDeliveryClaim } from "../../../infra/session-delivery-queue-storage.js";
 import {
   prepareClaimedSessionDelivery,
-  releaseSessionDeliveryClaim,
-  SESSION_DELIVERY_QUEUE_NAME,
   type QueuedSessionDelivery,
   type QueuedSessionDeliveryPayload,
   type SessionDeliverySettledOutcome,
   SessionDeliveryDeadLetteredError,
   SessionDeliveryDeferredError,
-} from "../../../infra/session-delivery-queue-storage.js";
+} from "../../../infra/session-delivery-queue.records.js";
 import type { OpenClawStateDatabaseOptions } from "../../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { findTaskByRunId, getTaskById } from "../../../tasks/runtime-internal.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
+import type { RuntimeContextFragment } from "../../internal-runtime-context.js";
 import { ensureDeliveryState } from "../registry/subagent-delivery-state.js";
 import {
   ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
@@ -29,22 +31,18 @@ import {
   settleSubagentCompletionDelivery,
   SUSPENDED_RETENTION_MS,
 } from "./subagent-completion-admission.store.js";
+import { SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION } from "./subagent-completion-instructions.js";
 import { resolveSubagentCompletionResultText } from "./subagent-completion-result.js";
 
 const CLAIM_LEASE_MS = 125_000;
 const MAX_DELIVERY_GENERATION = 10;
-const CANONICAL_RESULT_PROMPT =
-  "A completed subagent task is ready for parent review. The canonical result follows.";
+const CANONICAL_RESULT_PROMPT = `A completed subagent task is ready for parent review. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} The canonical result follows.`;
 type CompletionDeliveryRecoveryResult = {
   ok: boolean;
   reason?: string;
   task?: TaskRecord;
   duplicateRisk?: boolean;
 };
-
-function resolveTask(entry: SubagentRunRecord): TaskRecord | undefined {
-  return findTaskByRunId(entry.taskRunId ?? entry.runId);
-}
 
 function findSubagentForTask(task: TaskRecord): SubagentRunRecord | undefined {
   // Child sessions are reused; only the exact task run owns its retained result.
@@ -79,12 +77,12 @@ function projectRedrivenTask(
 export function admitCorrelatedSubagentSessionDelivery(params: {
   runId: string;
   payload: Extract<QueuedSessionDeliveryPayload, { kind: "agentTurn" }>;
-}): { id: string; claimed: boolean; status: "pending" | "failed" | "completed" } {
+}): { id: string; claimed: boolean; status: DeliveryQueueStoredStatus } {
   const current = subagentRuns.get(params.runId);
   if (!current) {
     throw new Error(`subagent completion owner not found: ${params.runId}`);
   }
-  const task = resolveTask(current);
+  const task = findTaskByRunId(current.taskRunId ?? current.runId);
   if (!task || task.runtime !== "subagent") {
     throw new Error(`subagent completion task not found: ${params.runId}`);
   }
@@ -131,18 +129,12 @@ export function admitCorrelatedSubagentSessionDelivery(params: {
     task: projectedTask,
   });
   publishCommittedRecords(subagent, projectedTask);
-  const status = getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, queueEntry.id);
-  return { id: queueEntry.id, claimed: admission.claimed, status: status ?? "pending" };
-}
-
-function canonicalResultMessage(entry: SubagentRunRecord): string {
-  const result = resolveSubagentCompletionResultText(entry) ?? "(no output)";
-  return `${CANONICAL_RESULT_PROMPT}\n\n${result}`;
+  return { id: queueEntry.id, ...admission };
 }
 
 export function resolveCorrelatedSubagentDelivery(
   queued: QueuedSessionDelivery,
-): QueuedSessionDelivery {
+): QueuedSessionDelivery & { runtimeContextFragments?: RuntimeContextFragment[] } {
   if (queued.kind !== "agentTurn" || queued.owner?.kind !== "subagent_completion") {
     return queued;
   }
@@ -160,7 +152,15 @@ export function resolveCorrelatedSubagentDelivery(
   ) {
     throw new SessionDeliveryDeferredError("correlated subagent delivery owner mismatch");
   }
-  return { ...queued, message: canonicalResultMessage(entry) };
+  const result = resolveSubagentCompletionResultText(entry) ?? "(no output)";
+  return {
+    ...queued,
+    message: `${CANONICAL_RESULT_PROMPT}\n\n${result}`,
+    runtimeContextFragments: [
+      { kind: "runtime-instruction", text: CANONICAL_RESULT_PROMPT },
+      { kind: "conversation-data", text: result },
+    ],
+  };
 }
 
 export async function settleCorrelatedSubagentDelivery(
@@ -184,21 +184,7 @@ export async function settleCorrelatedSubagentDelivery(
   const subagent = structuredClone(current);
   const delivery = ensureDeliveryState(subagent);
   const projectedTask = { ...task };
-  if (outcome === "recovered") {
-    Object.assign(delivery, {
-      status: "delivered" as const,
-      disposition: "delivered" as const,
-      deliveredAt: now,
-      announcedAt: now,
-      lastError: undefined,
-      nextAttemptAt: undefined,
-      queueId: undefined,
-    });
-    delivery.payload = undefined;
-    projectedTask.deliveryStatus = "delivered";
-    projectedTask.terminalOutcome = "succeeded";
-    projectedTask.error = undefined;
-  } else {
+  if (outcome !== "recovered") {
     blockSubagentCompletionDelivery({
       subagent: current,
       taskId: queued.owner.taskId,
@@ -207,15 +193,26 @@ export async function settleCorrelatedSubagentDelivery(
     });
     return;
   }
+  Object.assign(delivery, {
+    status: "delivered" as const,
+    disposition: "delivered" as const,
+    deliveredAt: now,
+    announcedAt: now,
+    lastError: undefined,
+    nextAttemptAt: undefined,
+    queueId: undefined,
+  });
+  delivery.payload = undefined;
+  projectedTask.deliveryStatus = "delivered";
+  projectedTask.terminalOutcome = "succeeded";
+  projectedTask.error = undefined;
   projectedTask.progressSummary =
     resolveSubagentCompletionResultText(subagent) ?? projectedTask.progressSummary;
   projectedTask.lastEventAt = now;
   settleSubagentCompletionDelivery({ subagent, task: projectedTask });
   publishCommittedRecords(subagent, projectedTask);
-  if (outcome === "recovered") {
-    const { resumeSubagentRun } = await import("../registry/subagent-registry.js");
-    resumeSubagentRun(subagent.runId);
-  }
+  const { resumeSubagentRun } = await import("../registry/subagent-registry.js");
+  resumeSubagentRun(subagent.runId);
 }
 
 export async function retrySubagentCompletionDelivery(
@@ -229,8 +226,9 @@ export async function retrySubagentCompletionDelivery(
   }
   const delivery = ensureDeliveryState(current);
   if (delivery.status === "in_progress" && delivery.queueId) {
-    await releaseSessionDeliveryClaim(delivery.queueId);
-    await scheduleSessionDelivery(delivery.queueId);
+    const queueContext = captureOpenClawStateWorkerContext();
+    await releaseSessionDeliveryClaim(delivery.queueId, queueContext);
+    await scheduleSessionDelivery(delivery.queueId, queueContext);
     return { ok: true, task: getTaskById(taskId) };
   }
   if (delivery.status !== "suspended") {
@@ -252,16 +250,31 @@ export async function retrySubagentCompletionDelivery(
     suspendedAt: undefined,
     suspendedReason: undefined,
     attemptCount: 0,
+    lastDropReason: undefined,
     lastError: undefined,
     nextAttemptAt: undefined,
   });
   redrive.cleanupHandled = false;
   const projectedTask = projectRedrivenTask(task, redrive, "pending", now);
-  settleSubagentCompletionDelivery({ subagent: redrive, task: projectedTask, databaseOptions });
-  publishCommittedRecords(redrive, projectedTask);
-  const { resumeSubagentRun } = await import("../registry/subagent-registry.js");
-  resumeSubagentRun(redrive.runId);
-  return { ok: true, task: getTaskById(taskId), duplicateRisk: true };
+  // An explicit retry is a fresh admitted operation, never a revival of the expired source.
+  const continuation = captureOperatorToolGatewayContinuationContext();
+  let transferred = false;
+  try {
+    settleSubagentCompletionDelivery({ subagent: redrive, task: projectedTask, databaseOptions });
+    // The committed new generation owns the caller before publication can schedule delivery.
+    if (continuation?.operatorAuthority) {
+      subagentRuns.bindCompletionAuthority(current, continuation);
+      transferred = true;
+    }
+    publishCommittedRecords(redrive, projectedTask);
+    const { resumeSubagentRun } = await import("../registry/subagent-registry.js");
+    resumeSubagentRun(redrive.runId);
+    return { ok: true, task: getTaskById(taskId), duplicateRisk: true };
+  } finally {
+    if (!transferred) {
+      continuation?.release();
+    }
+  }
 }
 
 export async function dismissSubagentCompletionDelivery(

@@ -300,9 +300,14 @@ function buildRoutedModel(
     upstreamModel = model.upstream;
   }
 
+  const providerPrefix = `${provider.id}/`;
+  const modelLabel = model.id.startsWith(providerPrefix)
+    ? model.id.slice(providerPrefix.length)
+    : model.id;
+
   return {
     id: model.id,
-    name: model.displayName ?? `${provider.displayName} · ${model.id}`,
+    name: model.displayName ?? `${provider.displayName} · ${modelLabel}`,
     api,
     baseUrl,
     reasoning:

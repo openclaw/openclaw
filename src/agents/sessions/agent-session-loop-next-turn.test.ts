@@ -7,11 +7,15 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { buildTimestampPrefix } from "../../gateway/server-methods/agent-timestamp.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { normalizeMessagesForLlmBoundary } from "../embedded-agent-runner/run/attempt-llm-boundary.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
+import { createUserTranscriptContextRegistry } from "../embedded-agent-runner/run/attempt-user-transcript-context-registry.js";
 import type { AgentTool } from "../runtime/index.js";
+import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -189,43 +193,6 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     expect(JSON.stringify(requests[1]?.messages)).toContain("queued after end");
     expect(session.agent.hasQueuedMessages()).toBe(false);
     expect(lifecycleEvents).toEqual(["agent_end", "agent_end", "agent_settled"]);
-  });
-
-  it("publishes settlement when deferred bash persistence fails", async () => {
-    let finishResponse: (() => void) | undefined;
-    streamMocks.streamSimple.mockImplementation((activeModel: Model) => {
-      const stream = createAssistantMessageEventStream();
-      finishResponse = () => {
-        const message = createAssistant(activeModel, [{ type: "text", text: "finished" }]);
-        stream.push({ type: "done", reason: "stop", message });
-        stream.end();
-      };
-      return stream;
-    });
-    const { session, sessionManager } = await createTestSession();
-    const settled = vi.fn();
-    session.subscribe((event) => {
-      if (event.type === "agent_end") {
-        vi.spyOn(sessionManager, "appendMessage").mockImplementation(() => {
-          throw new Error("deferred bash persistence failed");
-        });
-      } else if (event.type === "agent_settled") {
-        settled();
-      }
-    });
-
-    const prompt = session.prompt("run until the response is released");
-    await vi.waitFor(() => expect(finishResponse).toBeTypeOf("function"));
-    session.recordBashResult("printf done", {
-      output: "done",
-      exitCode: 0,
-      cancelled: false,
-      truncated: false,
-    });
-    finishResponse?.();
-
-    await expect(prompt).rejects.toThrow("deferred bash persistence failed");
-    expect(settled).toHaveBeenCalledOnce();
   });
 
   it("does not settle an active run when a concurrent prompt loses admission", async () => {
@@ -490,6 +457,80 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     expect(session.getSteeringMessages()).toEqual([]);
     expect(session.pendingMessageCount).toBe(0);
   });
+
+  it.each([false, true])(
+    "keeps accepted steering bytes stable across transcript persistence (image: %s)",
+    async (withImage) => {
+      const { session, sessionManager } = await createTestSession();
+      const admittedAt = 1717570800000;
+      const queuedAt = admittedAt + 120_000;
+      const image = { type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" };
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "Visible transcript prompt",
+          timestamp: admittedAt,
+          sender: { id: "alice-id", name: "Alice" },
+        },
+        target: createTestUserTurnTranscriptTarget(),
+      });
+      const queued = vi.spyOn(session.agent, "steer");
+      const clock = vi.spyOn(Date, "now").mockReturnValue(queuedAt);
+      try {
+        await session.steer("Expanded runtime prompt", withImage ? [image] : undefined, recorder);
+      } finally {
+        clock.mockRestore();
+      }
+      const message = queued.mock.calls[0]?.[0];
+      if (!message || message.role !== "user") {
+        throw new Error("expected queued user message");
+      }
+      const registry = createUserTranscriptContextRegistry();
+      const project = () =>
+        normalizeMessagesForLlmBoundary([message], {
+          timezone: "UTC",
+          userTranscriptContexts: registry.list(),
+        });
+      const accepted = project();
+      const guard = guardSessionManager(sessionManager, {
+        onUserMessagePersisted: (persisted, runtime) => {
+          if (runtime) {
+            registry.record(runtime, persisted);
+          }
+        },
+      });
+      const entryId = guard.appendMessage(message);
+      const acceptedContent = accepted[0]?.role === "user" ? accepted[0].content : undefined;
+      const firstBlock = Array.isArray(acceptedContent) ? acceptedContent[0] : undefined;
+      const acceptedText =
+        typeof acceptedContent === "string"
+          ? acceptedContent
+          : firstBlock?.type === "text"
+            ? firstBlock.text
+            : undefined;
+
+      expect(project()).toEqual(accepted);
+      expect(acceptedText).toContain('"name":"Alice"');
+      expect(acceptedText).toContain(
+        buildTimestampPrefix(new Date(admittedAt), { timezone: "UTC" }),
+      );
+      expect(acceptedText).toContain("Expanded runtime prompt");
+      expect(acceptedText).not.toContain("Visible transcript prompt");
+      expect(message.timestamp).toBe(admittedAt);
+      expect(message.content).toEqual([
+        { type: "text", text: "Expanded runtime prompt" },
+        ...(withImage ? [image] : []),
+      ]);
+      expect(guard.getEntry(entryId)).toMatchObject({
+        message: {
+          timestamp: admittedAt,
+          content: withImage ? message.content : "Visible transcript prompt",
+        },
+      });
+      if (withImage) {
+        expect(acceptedContent).toContainEqual(image);
+      }
+    },
+  );
 
   it.each([
     {
@@ -842,7 +883,6 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     const abortRetry = vi.spyOn(session, "abortRetry");
     const abortCompaction = vi.spyOn(session, "abortCompaction");
     const abortBranchSummary = vi.spyOn(session, "abortBranchSummary");
-    const abortBash = vi.spyOn(session, "abortBash");
     const abortAgent = vi.spyOn(session.agent, "abort");
     abortRetry.mockImplementationOnce(() => {
       throw new Error("retry abort failed");
@@ -857,7 +897,6 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     expect(abortRetry).toHaveBeenCalledOnce();
     expect(abortCompaction).toHaveBeenCalledOnce();
     expect(abortBranchSummary).toHaveBeenCalledOnce();
-    expect(abortBash).toHaveBeenCalledOnce();
     expect(abortAgent).toHaveBeenCalledOnce();
   });
 

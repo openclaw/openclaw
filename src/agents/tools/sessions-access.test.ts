@@ -2,7 +2,7 @@
 // and agent-to-agent allow rules.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { pageExecutionDecisionFactsForContext } from "../../audit/execution-decision-facts.js";
+import { pageExecutionDecisionFactsForContextInDatabase } from "../../audit/execution-decision-facts.js";
 import { configureExecutionDecisionWorkSink } from "../../audit/execution-decision-work.js";
 import {
   createExecutionIdentityAdmissionToken,
@@ -21,6 +21,11 @@ import {
   resolveSandboxSessionToolsVisibility,
   resolveSessionToolsVisibility,
 } from "../../plugin-sdk/session-visibility.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
   formatSessionToolAccessDenial,
@@ -43,6 +48,11 @@ beforeEach(() => {
   gatewayMocks.callGateway.mockReset();
 });
 
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const AUDIT_REF_RE = /^hmac-sha256:v1:[a-f0-9]{32}:[a-f0-9]{64}$/u;
 
@@ -51,13 +61,13 @@ function makeConfig(overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
 }
 
 describe("resolveSessionToolsVisibility", () => {
-  it("defaults to agent when unset or invalid", () => {
-    expect(resolveSessionToolsVisibility(makeConfig())).toBe("agent");
+  it("defaults to all when unset or invalid", () => {
+    expect(resolveSessionToolsVisibility(makeConfig())).toBe("all");
     expect(
       resolveSessionToolsVisibility({
         tools: { sessions: { visibility: "invalid" } },
       } as unknown as OpenClawConfig),
-    ).toBe("agent");
+    ).toBe("all");
   });
 
   it("accepts known visibility values case-insensitively", () => {
@@ -155,8 +165,16 @@ describe("sandbox session-tools context", () => {
 });
 
 describe("createAgentToAgentPolicy", () => {
-  it("denies cross-agent access when disabled", () => {
+  it("allows cross-agent access by default", () => {
     const policy = createAgentToAgentPolicy(makeConfig());
+    expect(policy.enabled).toBe(true);
+    expect(policy.isAllowed("main", "ops")).toBe(true);
+  });
+
+  it("denies cross-agent access when explicitly disabled", () => {
+    const policy = createAgentToAgentPolicy(
+      makeConfig({ tools: { agentToAgent: { enabled: false } } }),
+    );
     expect(policy.enabled).toBe(false);
     expect(policy.isAllowed("main", "main")).toBe(true);
     expect(policy.isAllowed("main", "ops")).toBe(false);
@@ -365,7 +383,7 @@ describe("createSessionVisibilityGuard", () => {
       allowed: false,
       status: "forbidden",
       error:
-        "Session list visibility is restricted. Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access; use tools.agentToAgent.allow to restrict permitted agent pairs.",
+        "Session list visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access; use tools.agentToAgent to restrict permitted agent pairs.",
     });
   });
 
@@ -422,7 +440,7 @@ describe("createSessionVisibilityGuard", () => {
       allowed: false,
       status: "forbidden",
       error:
-        "Session history visibility is restricted. Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access; use tools.agentToAgent.allow to restrict permitted agent pairs.",
+        "Session history visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access; use tools.agentToAgent to restrict permitted agent pairs.",
     });
   });
 
@@ -443,7 +461,9 @@ describe("createSessionVisibilityGuard", () => {
       action: "send",
       requesterSessionKey: "agent:main:main",
       visibility: "all",
-      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
+      a2aPolicy: createAgentToAgentPolicy(
+        makeConfig({ tools: { agentToAgent: { enabled: false } } }),
+      ),
       callGateway: callGateway as never,
     });
 
@@ -467,7 +487,9 @@ describe("createSessionVisibilityGuard", () => {
       action: "status",
       requesterSessionKey: "agent:main:main",
       visibility: "all",
-      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
+      a2aPolicy: createAgentToAgentPolicy(
+        makeConfig({ tools: { agentToAgent: { enabled: false } } }),
+      ),
       callGateway: callGateway as never,
     });
 
@@ -547,7 +569,9 @@ describe("createSessionVisibilityGuard", () => {
       targetSessionKey: "agent:ops:main",
       requesterOwned: false,
       visibility: "all",
-      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
+      a2aPolicy: createAgentToAgentPolicy(
+        makeConfig({ tools: { agentToAgent: { enabled: false } } }),
+      ),
     });
 
     expect(access).toMatchObject({
@@ -563,7 +587,10 @@ describe("createSessionVisibilityGuard", () => {
     const now = Date.now();
     const stateDir = tempDirs.make("openclaw-session-access-audit-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    const stopWriter = startAgentLocalAuditWriter({ stateDir });
+    const stopWriter = startAgentLocalAuditWriter(
+      { logging: { audit: { executionIdentity: true } } },
+      { stateDir },
+    );
     if (!stopWriter) {
       throw new Error("expected an isolated direct-local audit writer");
     }
@@ -623,12 +650,10 @@ describe("createSessionVisibilityGuard", () => {
       await stopWriter();
     }
 
-    const page = pageExecutionDecisionFactsForContext({
-      context: token,
-      limit: 10,
-      now: now + 1,
-      database,
-    });
+    const page = pageExecutionDecisionFactsForContextInDatabase(
+      openOpenClawStateDatabase(database).db,
+      { context: token, limit: 10, now: now + 1 },
+    );
     expect(page.receipts).toHaveLength(1);
     expect(page.receipts[0]).toMatchObject({
       contextId: token.contextId,
@@ -741,7 +766,9 @@ describe("createSessionVisibilityGuard", () => {
       targetSessionKey: "agent:ops:main",
       requesterOwned: false,
       visibility: "all",
-      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
+      a2aPolicy: createAgentToAgentPolicy(
+        makeConfig({ tools: { agentToAgent: { enabled: false } } }),
+      ),
       callGateway: gateway as never,
     });
 
@@ -792,9 +819,11 @@ describe("createSessionVisibilityGuard", () => {
 
   it("keeps incognito targets hidden from scoped grants", async () => {
     const targetSessionKey = "agent:main:dashboard:incognito-private";
-    const unregister = createSessionVisibilityChecker.registerScopedAccessProvider(() => ({
-      expectedSessionId: "incognito-incarnation",
-    }));
+    const asyncProvider = vi.fn(async () => ({ expectedSessionId: "incognito-incarnation" }));
+    const unregister = createSessionVisibilityChecker.registerScopedAccessProvider(
+      () => ({ expectedSessionId: "incognito-incarnation" }),
+      { resolveAsync: asyncProvider },
+    );
     try {
       const gateway = vi.fn();
       const access = await resolveSessionToolAccess({
@@ -826,6 +855,7 @@ describe("createSessionVisibilityGuard", () => {
         ).toBe(`Session not visible from session tools: ${targetSessionKey}`);
       }
       expect(gateway).not.toHaveBeenCalled();
+      expect(asyncProvider).not.toHaveBeenCalled();
     } finally {
       unregister();
     }
@@ -876,7 +906,9 @@ describe("createSessionVisibilityGuard", () => {
       action: "send",
       requesterSessionKey: "agent:main:main",
       visibility: "all",
-      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
+      a2aPolicy: createAgentToAgentPolicy(
+        makeConfig({ tools: { agentToAgent: { enabled: false } } }),
+      ),
       callGateway: vi.fn(async () => ({ sessions: [] })) as never,
     });
 
@@ -920,7 +952,7 @@ describe("createSessionVisibilityGuard", () => {
       allowed: false,
       status: "forbidden",
       error:
-        "Session history visibility is restricted. Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access; use tools.agentToAgent.allow to restrict permitted agent pairs.",
+        "Session history visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access; use tools.agentToAgent to restrict permitted agent pairs.",
     });
   });
 
@@ -956,7 +988,9 @@ describe("createSessionVisibilityGuard", () => {
       action: "history",
       requesterSessionKey: "agent:main:main",
       visibility,
-      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
+      a2aPolicy: createAgentToAgentPolicy(
+        makeConfig({ tools: { agentToAgent: { enabled: false } } }),
+      ),
       callGateway: vi.fn(async () => {
         throw new GatewayClientRequestError({
           code: "UNAVAILABLE",

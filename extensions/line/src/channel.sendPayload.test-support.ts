@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { type Mock, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../api.js";
 import { createLineSendReceipt } from "./send-receipt.js";
 
@@ -8,7 +8,7 @@ type LineRuntimeMocks = {
   pushFlexMessage: ReturnType<typeof vi.fn>;
   pushTemplateMessage: ReturnType<typeof vi.fn>;
   pushLocationMessage: ReturnType<typeof vi.fn>;
-  pushTextMessageWithQuickReplies: ReturnType<typeof vi.fn>;
+  pushTextMessageWithQuickReplies: Mock<typeof import("./send.js").pushTextMessageWithQuickReplies>;
   createQuickReplyItems: ReturnType<typeof vi.fn>;
   buildTemplateMessageFromPayload: ReturnType<typeof vi.fn>;
   sendMessageLine: ReturnType<typeof vi.fn>;
@@ -31,9 +31,22 @@ export function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMoc
   const pushFlexMessage = vi.fn(async () => lineResult("m-flex"));
   const pushTemplateMessage = vi.fn(async () => lineResult("m-template"));
   const pushLocationMessage = vi.fn(async () => lineResult("m-loc"));
-  const pushTextMessageWithQuickReplies = vi.fn(async () => lineResult("m-quick"));
+  const pushTextMessageWithQuickReplies = vi.fn<
+    typeof import("./send.js").pushTextMessageWithQuickReplies
+  >(async () => lineResult("m-quick"));
   const createQuickReplyItems = vi.fn((labels: string[]) => ({ items: labels }));
-  const buildTemplateMessageFromPayload = vi.fn(() => ({ type: "buttons" }));
+  const buildTemplateMessageFromPayload = vi.fn(() => ({
+    type: "template",
+    altText: "Continue?",
+    template: {
+      type: "confirm",
+      text: "Continue?",
+      actions: [
+        { type: "message", label: "Yes", text: "yes" },
+        { type: "message", label: "No", text: "no" },
+      ],
+    },
+  }));
   const sendMessageLine = vi.fn(async () => lineResult("m-media"));
   const chunkMarkdownText = vi.fn((text: string) => [text]);
   const resolveTextChunkLimit = vi.fn(() => 123);

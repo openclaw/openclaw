@@ -2,6 +2,7 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SpawnResult } from "../process/exec-result.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
 type DetectBinary = typeof import("./detect-binary.js").detectBinary;
 
@@ -66,7 +67,7 @@ afterEach(() => {
 
 describe("openUrl", () => {
   it("returns true after a normal zero exit", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    mockProcessPlatform("win32");
     vi.stubEnv("VITEST", "");
     vi.stubEnv("NODE_ENV", "development");
 
@@ -74,7 +75,7 @@ describe("openUrl", () => {
   });
 
   it("returns false after a non-zero exit", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    mockProcessPlatform("win32");
     vi.stubEnv("VITEST", "");
     vi.stubEnv("NODE_ENV", "development");
     runCommandWithTimeoutMock.mockResolvedValueOnce({
@@ -90,7 +91,7 @@ describe("openUrl", () => {
   });
 
   it("returns false after a timeout", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    mockProcessPlatform("win32");
     vi.stubEnv("VITEST", "");
     vi.stubEnv("NODE_ENV", "development");
     runCommandWithTimeoutMock.mockResolvedValueOnce({
@@ -108,7 +109,7 @@ describe("openUrl", () => {
 
 describe("resolveBrowserOpenCommand", () => {
   it("retains process-level WSL detection caching through the resolver", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    mockProcessPlatform("linux");
     vi.stubEnv("DISPLAY", "");
     vi.stubEnv("WAYLAND_DISPLAY", "");
     vi.stubEnv("WSL_INTEROP", "");
@@ -150,7 +151,7 @@ describe("resolveBrowserOpenCommand", () => {
   });
 
   it("does not resolve Windows browser launching through a relative SystemRoot", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    mockProcessPlatform("win32");
     vi.stubEnv("SystemRoot", ".\\fake-root");
     vi.stubEnv("windir", ".\\fake-windir");
 
@@ -163,7 +164,7 @@ describe("resolveBrowserOpenCommand", () => {
 
   it("prefers the registry-backed Windows system root over process env", async () => {
     getWindowsInstallRootsMock.mockReturnValue({ systemRoot: "D:\\Windows" });
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    mockProcessPlatform("win32");
     vi.stubEnv("SystemRoot", "C:\\PoisonedWindows");
 
     const resolved = await resolveBrowserOpenCommand();
@@ -174,7 +175,7 @@ describe("resolveBrowserOpenCommand", () => {
   });
 
   it("resolves macOS open even when SSH environment variables are present", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    mockProcessPlatform("darwin");
     vi.stubEnv("SSH_CONNECTION", "192.0.2.1 12345 192.0.2.2 22");
     detectBinaryMock.mockResolvedValueOnce(true);
 
@@ -185,7 +186,7 @@ describe("resolveBrowserOpenCommand", () => {
   });
 
   it("still refuses browser launch over Linux SSH without a display", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    mockProcessPlatform("linux");
     vi.stubEnv("SSH_CONNECTION", "192.0.2.1 12345 192.0.2.2 22");
 
     const resolved = await resolveBrowserOpenCommand();

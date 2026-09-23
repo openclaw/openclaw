@@ -1,12 +1,16 @@
 import type { ChatRunStartupPhase } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+
+registerNewSessionSetupEnglish();
 
 export type { ChatRunStartupPhase } from "../../../../packages/gateway-protocol/src/index.js";
 
 export type ChatRunStartupState =
   | { state: "status"; runId: string; phase: ChatRunStartupPhase; seq?: number }
-  | { state: "activity"; runId: string };
+  | { state: "status"; runId: string; phase: "retrying"; message: string; seq: number }
+  | { state: "activity"; runId: string; seq?: number };
 
 export type ChatRunStartupStatus = Extract<ChatRunStartupState, { state: "status" }>;
 
@@ -19,11 +23,18 @@ export function reconcileChatRunStartup(
     return;
   }
   const current = host.chatRunStartup;
-  if (current?.runId === next.runId && next.state === "status") {
+  if (current?.runId === next.runId) {
     if (
-      current.state === "activity" ||
-      (current.seq !== undefined && (next.seq === undefined || next.seq <= current.seq))
+      (next.state === "status" && next.phase !== "retrying" && current.state === "activity") ||
+      (current.seq !== undefined &&
+        (next.seq === undefined ? next.state === "status" : next.seq <= current.seq))
     ) {
+      return;
+    }
+    // Chat deltas use a different sequence; retain the agent sequence so an
+    // older reconnect snapshot cannot resurrect an already-cleared retry.
+    if (next.state === "activity" && next.seq === undefined && current.seq !== undefined) {
+      host.chatRunStartup = { ...next, seq: current.seq };
       return;
     }
   }
@@ -37,6 +48,7 @@ const STARTUP_LABEL_KEYS = {
   running_setup: "chat.startupStatus.runningSetup",
   provisioning_environment: "chat.startupStatus.provisioningEnvironment",
   preparing_context: "chat.startupStatus.preparingContext",
+  memory_flushing: "chat.startupStatus.memoryFlushing",
   starting_model: "chat.startupStatus.startingModel",
 } as const satisfies Record<ChatRunStartupPhase, Parameters<typeof t>[0]>;
 
@@ -45,9 +57,11 @@ export function chatStartupStatusLabel(
   placement: ApplicationPlacementStartupStatus | null | undefined,
 ): string | undefined {
   if (run) {
-    return t(STARTUP_LABEL_KEYS[run.phase]);
+    return run.phase === "retrying" ? run.message : t(STARTUP_LABEL_KEYS[run.phase]);
   }
   switch (placement?.phase) {
+    case "reconnecting":
+      return t("connection.reconnecting");
     case "pending":
     case "requested":
     case "provisioning":

@@ -17,17 +17,6 @@ export OPENCLAW_PLUGINS_TMP_DIR
 OPENCLAW_PLUGINS_CLI_TIMEOUT="${OPENCLAW_PLUGINS_CLI_TIMEOUT:-180s}"
 mkdir -p "$OPENCLAW_PLUGINS_TMP_DIR"
 
-plugins_lifecycle_trace_enabled() {
-  case "${OPENCLAW_PLUGIN_LIFECYCLE_TRACE:-}" in
-    1 | true | TRUE | yes | YES)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
 # Redact complete stderr before truncation so a split credential can never expose its suffix.
 print_plugins_stderr_log() {
   local error_file="$1"
@@ -70,7 +59,7 @@ run_plugins_command_logged() {
   }
   local status=0
   if "$@" >"$output_file" 2>"$error_file"; then
-    if plugins_lifecycle_trace_enabled; then
+    if docker_e2e_lifecycle_trace_enabled; then
       print_plugins_stderr_log "$error_file" || status=$?
     fi
   else
@@ -240,6 +229,10 @@ run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins-npm-retained.jso
 node scripts/e2e/lib/plugins/assertions.mjs plugin-npm-retained
 
 run_plugins_fixture_logged reinstall-npm plugins install "npm:@openclaw/demo-plugin-npm@0.0.1" --force
+run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins-npm-reinstalled.json" plugins list --json
+node scripts/e2e/lib/plugins/assertions.mjs plugin-npm-reinstalled
+# Reinstall preserves the explicit uninstall marker until the operator enables the plugin.
+run_plugins_fixture_logged enable-reinstalled-npm plugins enable demo-plugin-npm
 run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins-npm.json" plugins list --json
 run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins-npm-inspect.json" plugins inspect demo-plugin-npm --runtime --json
 run_plugins_shell_logged exec-reinstalled-npm-plugin-cli 'node "$OPENCLAW_ENTRY" demo-npm ping >"$OPENCLAW_PLUGINS_TMP_DIR/plugins-npm-cli.txt"'

@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
+import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
 import {
   isRuntimeToolAllowed,
   createRuntimeToolMatcher,
@@ -14,6 +15,7 @@ import {
 } from "./tool-policy-match.js";
 import {
   collectExplicitAllowlist,
+  couldNormalizeToolNamePrefixToAllowedTool,
   DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
   expandToolGroups,
   hasRestrictiveAllowPolicy,
@@ -23,6 +25,28 @@ import {
 } from "./tool-policy.js";
 
 describe("tool-policy", () => {
+  it.each([
+    { deny: "bundle-mcp", expected: [] },
+    { deny: "group:plugins", expected: [] },
+    { deny: "*", expected: [] },
+    { deny: " ALPHA__* ", expected: ["beta"] },
+    { deny: "a*__*", expected: ["beta"] },
+    { deny: "alpha__read", expected: ["alpha", "beta"] },
+    { deny: "alpha__", expected: ["alpha", "beta"] },
+    { deny: "alpha*__", expected: ["alpha", "beta"] },
+    { deny: "bundle*", expected: ["alpha", "beta"] },
+    { deny: "group:*", expected: ["alpha", "beta"] },
+  ])("preserves discoverable MCP namespaces for deny=$deny", ({ deny, expected }) => {
+    const declared = buildDeclaredToolAllowlistContext({
+      config: {
+        plugins: { enabled: false },
+        mcp: { servers: { alpha: { command: "alpha" }, beta: { command: "beta" } } },
+      },
+      toolDenylist: [deny],
+    });
+    expect([...(declared?.mcpServerNames ?? [])]).toEqual(expected);
+  });
+
   it("expands groups and normalizes aliases", () => {
     const expanded = expandToolGroups(["group:runtime", "BASH", "apply-patch", "group:fs"]);
     const set = new Set(expanded);
@@ -39,7 +63,7 @@ describe("tool-policy", () => {
     const coding = resolveToolProfilePolicy("coding");
     expect(coding?.allow).toContain("read");
     expect(coding?.allow).toContain("automations");
-    expect(coding?.allow).not.toContain("gateway");
+    expect(coding?.allow).toContain("gateway");
     expect(resolveToolProfilePolicy("nope")).toBeUndefined();
   });
 
@@ -59,6 +83,29 @@ describe("tool-policy", () => {
     // Pre-rename scheduler tool name from persisted config (RFC 0026).
     expect(normalizeToolPolicyName("cron")).toBe("automations");
     expect(normalizeToolPolicyName("automations")).toBe("automations");
+  });
+
+  it.each(["constructor", "__proto__"])(
+    "preserves the literal tool name %s in aliases and groups",
+    (name) => {
+      expect(normalizeToolPolicyName(name)).toBe(name);
+      expect(expandToolGroups([name])).toEqual([name]);
+    },
+  );
+
+  it.each(["constructor", "__proto__"])("matches literal %s prefixes only when allowed", (name) => {
+    expect(couldNormalizeToolNamePrefixToAllowedTool(name.slice(0, 3), new Set([name]))).toBe(true);
+    expect(couldNormalizeToolNamePrefixToAllowedTool("other", new Set([name]))).toBe(false);
+    expect(couldNormalizeToolNamePrefixToAllowedTool(name, new Set(["other"]))).toBe(false);
+  });
+
+  it.each(["ba", "bash", "apply-", "cron"])("retains declared alias prefix %s", (prefix) => {
+    expect(
+      couldNormalizeToolNamePrefixToAllowedTool(
+        prefix,
+        new Set(["exec", "apply_patch", "automations"]),
+      ),
+    ).toBe(true);
   });
 
   it("collects explicit allowlist entries", () => {
@@ -103,6 +150,20 @@ describe("tool-policy", () => {
 });
 
 describe("sandbox tool policy", () => {
+  it.each(["constructor", "__proto__"])("applies allow and deny to literal %s", (name) => {
+    const allow = { allow: [` ${name.toUpperCase()} `] };
+    const deny = { allow: ["*"], deny: [` ${name.toUpperCase()} `] };
+    for (const matches of [
+      (policy: SandboxToolPolicy, tool: string) => isToolAllowed(policy, tool),
+      (policy: SandboxToolPolicy, tool: string) => isToolAllowedByPolicyName(tool, policy),
+    ]) {
+      expect(matches(allow, name)).toBe(true);
+      expect(matches(allow, "other")).toBe(false);
+      expect(matches(deny, name)).toBe(false);
+      expect(matches(deny, "other")).toBe(true);
+    }
+  });
+
   it("allows all tools with * allow", () => {
     const policy: SandboxToolPolicy = { allow: ["*"], deny: [] };
     expect(isToolAllowed(policy, "browser")).toBe(true);

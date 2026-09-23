@@ -3,9 +3,11 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
+import { applyModelRuntimeDirective } from "../../auto-reply/reply/directive-handling.model-runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
-import { readTranscriptStatsSync } from "../../config/sessions/session-accessor.js";
+import { hasSessionTranscriptEventsSync } from "../../config/sessions/session-accessor.js";
+import type { SessionResetBoundaryWrite } from "../../config/sessions/session-accessor.lifecycle-types.js";
 import {
   buildSessionCreationStamp,
   inheritSessionCreationPolicy,
@@ -55,21 +57,25 @@ export type CronLiveSelection = LiveSessionModelSelection;
  * returns the full entry to commit. `fallbackEntry` seeds creation when the
  * row does not exist yet.
  */
-type PersistSessionEntry = (params: {
+export type CronSessionRowWriter = (params: {
   fallbackEntry: SessionEntry;
-  resetBoundaryReason?: "cron-stale";
+  resetBoundary?: SessionResetBoundaryWrite;
   sessionKey: string;
   storePath: string;
   update: (currentEntry: SessionEntry | undefined) => SessionEntry;
+  assertCommitAllowed?: () => void;
 }) => Promise<void>;
 
 /** Persists the currently selected mutable cron session entry to the session store. */
-export type PersistCronSessionEntry = () => Promise<void>;
+export type PersistCronSessionEntry = (
+  assertCommitAllowed?: () => void,
+  entry?: MutableCronSessionEntry,
+) => Promise<void>;
 
 /** Hidden exact-run row retained while detached cron work can still resume. */
 export type CronRunContinuationSession = {
   initialize: () => Promise<void>;
-  sync: () => Promise<void>;
+  sync: (assertCommitAllowed?: () => void) => Promise<void>;
   setCliExecutionProvider: (provider?: string) => Promise<void>;
   seal: (options?: { basePersisted?: boolean }) => Promise<void>;
 };
@@ -100,13 +106,11 @@ function cronTranscriptExists(params: {
     return false;
   }
   try {
-    return (
-      readTranscriptStatsSync({
-        sessionId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      }).eventCount > 0
-    );
+    return hasSessionTranscriptEventsSync({
+      sessionId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    });
   } catch {
     return false;
   }
@@ -143,11 +147,15 @@ export function createPersistCronSessionEntry(params: {
   agentSessionKey: string;
   createdActor?: SessionCreatedActor;
   sandbox?: "required";
-  persistSessionEntry: PersistSessionEntry;
+  workspaceDir: string;
+  persistSessionEntry: CronSessionRowWriter;
 }): PersistCronSessionEntry {
-  return async () => {
+  return async (assertCommitAllowed, liveEntry = params.cronSession.sessionEntry) => {
     const resetBoundaryPending = params.cronSession.resetBoundaryPending !== undefined;
-    const liveEntry = params.cronSession.sessionEntry;
+    // Reset admission completes before a CLI turn can own settlement.
+    if (assertCommitAllowed && resetBoundaryPending) {
+      throw new CronSessionLifecycleClaimError(params.agentSessionKey);
+    }
     const persistedEntry =
       isCronSessionKey(params.agentSessionKey) &&
       liveEntry.sessionId &&
@@ -164,7 +172,16 @@ export function createPersistCronSessionEntry(params: {
       storePath: params.cronSession.storePath,
       sessionKey: params.agentSessionKey,
       fallbackEntry: persistedEntry,
-      ...(resetBoundaryPending ? { resetBoundaryReason: "cron-stale" as const } : {}),
+      assertCommitAllowed,
+      ...(resetBoundaryPending
+        ? {
+            resetBoundary: {
+              context: "preserve-tail",
+              reason: "cron-stale",
+              cwd: params.workspaceDir,
+            } satisfies SessionResetBoundaryWrite,
+          }
+        : {}),
       update: (currentEntry) => {
         if (!currentEntry) {
           const creationStamp = buildSessionCreationStamp({
@@ -264,7 +281,7 @@ export function createCronRunContinuationSession(params: {
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     requireExplicitMessageTarget?: boolean;
   };
-  persistSessionEntry: PersistSessionEntry;
+  persistSessionEntry: CronSessionRowWriter;
 }): CronRunContinuationSession {
   const scheduledToolPolicy =
     params.toolsAllow === undefined
@@ -300,7 +317,12 @@ export function createCronRunContinuationSession(params: {
   };
   const owns = (entry: SessionEntry | undefined) =>
     entry?.cronRunContinuation?.lifecycleRevision === continuation.lifecycleRevision;
-  const persist = async (create: boolean, phase: "running" | "ready", basePersisted = false) => {
+  const persist = async (
+    create: boolean,
+    phase: "running" | "ready",
+    basePersisted = false,
+    assertCommitAllowed?: () => void,
+  ) => {
     const source = structuredClone(params.cronSession.sessionEntry);
     delete source.createdVia;
     delete source.createdActor;
@@ -315,6 +337,7 @@ export function createCronRunContinuationSession(params: {
       storePath: params.cronSession.storePath,
       sessionKey: params.runSessionKey,
       fallbackEntry: source,
+      assertCommitAllowed,
       update: (current) => {
         if ((current && !owns(current)) || (!current && !create)) {
           throw new CronSessionLifecycleClaimError(params.runSessionKey);
@@ -332,6 +355,11 @@ export function createCronRunContinuationSession(params: {
         return {
           ...current,
           ...source,
+          // Snapshot merges remove cleared keys; continuity copies must carry
+          // their absence too, or this row resurrects an invalid native handle.
+          cliSessionBindings: source.cliSessionBindings,
+          cliSessionIds: source.cliSessionIds,
+          claudeCliSessionId: source.claudeCliSessionId,
           ...(!current
             ? buildSessionCreationStamp({
                 via: "cron",
@@ -357,7 +385,8 @@ export function createCronRunContinuationSession(params: {
   };
   return {
     initialize: async () => await persist(true, "running"),
-    sync: async () => await persist(false, "running"),
+    sync: async (assertCommitAllowed) =>
+      await persist(false, "running", false, assertCommitAllowed),
     setCliExecutionProvider: async (provider) => {
       const normalizedProvider = provider?.trim();
       if (normalizedProvider) {
@@ -487,11 +516,12 @@ export function syncCronSessionLiveSelection(params: {
   if (previousRuntime !== nextRuntime) {
     clearCronContextOwnerState(params.entry);
   }
-  if (params.liveSelection.agentRuntimeOverride) {
-    params.entry.agentRuntimeOverride = params.liveSelection.agentRuntimeOverride;
-  } else {
-    delete params.entry.agentRuntimeOverride;
-  }
+  applyModelRuntimeDirective(
+    params.entry,
+    params.liveSelection.agentRuntimeOverride
+      ? { kind: "set", runtime: params.liveSelection.agentRuntimeOverride }
+      : { kind: "clear" },
+  );
   if (params.liveSelection.authProfileId) {
     const source =
       params.liveSelection.authProfileIdSource ??

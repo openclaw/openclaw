@@ -3,11 +3,11 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
   encodeIosAppStoreVersion,
-  extractChangelogSection,
   MAX_IOS_APP_STORE_REVISION,
   normalizeIosAppStoreRevision,
   normalizePinnedIosVersion,
 } from "./ios-version.ts";
+import { extractChangelogSection } from "./mobile-changelog.ts";
 
 const IOS_BUILD_UPLOAD_STATES = ["AWAITING_UPLOAD", "PROCESSING", "FAILED", "COMPLETE"] as const;
 // 2026.7.2 is the last exact-version iOS release in App Store Connect.

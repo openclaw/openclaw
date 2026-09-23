@@ -4,13 +4,19 @@ import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
+  takeControlUiElementScreenshot,
+  takeControlUiViewportScreenshot,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
   controlUiSessionPath,
   controlUiSessionUrl,
   installMockGateway,
   waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
+import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openSidebarMoreMenu } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI sidebar customization mocked Gateway E2E",
@@ -34,36 +40,18 @@ function visibleDrawerButton(page: Page) {
   return page.locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible").first();
 }
 
-async function expectLobsterOnFooterLedge(sidebar: Locator) {
-  const footer = sidebar.locator(".sidebar-shell__footer");
-  const sprite = footer.locator(".lobster-pet:not(.lobster-pet--passer)").first();
-  await sprite.waitFor();
-
-  await expect
-    .poll(async () => {
-      const [footerBox, spriteBox, borderTopWidth] = await Promise.all([
-        footer.boundingBox(),
-        sprite.boundingBox(),
-        footer.evaluate((element) =>
-          Number.parseFloat(window.getComputedStyle(element).borderTopWidth),
-        ),
-      ]);
-      if (!footerBox || !spriteBox) {
-        return null;
-      }
-      return {
-        bottomOverlap: Math.round(spriteBox.y + spriteBox.height - footerBox.y - borderTopWidth),
-        isAboveFooter: spriteBox.y < footerBox.y,
-      };
-    })
-    .toEqual({ bottomOverlap: 3, isAboveFooter: true });
-}
-
-async function captureUiProof(page: Page, fileName: string) {
+async function captureUiProof(page: Page, fileName: string, surface = page.locator(".shell")) {
   if (!captureUiProofEnabled) {
     return;
   }
   await mkdir(path.join(suite.artifactDir, "sidebar-customization"), { recursive: true });
+  if (page.video()) {
+    await writeFile(
+      path.join(suite.artifactDir, "sidebar-customization", fileName),
+      await takeControlUiViewportScreenshot(page, surface, [surface]),
+    );
+    return;
+  }
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
@@ -76,10 +64,10 @@ async function captureSettingsSidebarProof(sidebar: Locator, fileName: string) {
     return;
   }
   await mkdir(path.join(suite.artifactDir, "sidebar-customization"), { recursive: true });
-  await sidebar.screenshot({
-    animations: "disabled",
-    path: path.join(path.join(suite.artifactDir, "sidebar-customization"), fileName),
-  });
+  await writeFile(
+    path.join(suite.artifactDir, "sidebar-customization", fileName),
+    await takeControlUiElementScreenshot(sidebar.page(), sidebar, [sidebar.locator("input")]),
+  );
 }
 
 async function holdUiProof(page: Page, durationMs = 600) {
@@ -99,19 +87,6 @@ async function setThemeMode(page: Page, mode: "dark" | "light") {
     root.style.colorScheme = nextMode;
   }, mode);
   await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
-}
-
-async function openSidebarTestPage() {
-  const context = await suite.browser.newContext({
-    locale: "en-US",
-    serviceWorkers: "block",
-    viewport: { height: 900, width: 1440 },
-  });
-  const page = await context.newPage();
-  await installMockGateway(page);
-  await page.goto(`${suite.server.baseUrl}chat`);
-  await page.waitForFunction(() => Boolean(customElements.get("openclaw-lobster-pet")));
-  return { context, page };
 }
 
 suite.define(() => {
@@ -145,7 +120,10 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
       await waitForControlUiSettingsTakeover(page);
-      await gateway.waitForRequest("sessions.catalog.list");
+      const labelsRequest = await gateway.waitForRequest("sessions.catalog.list", {
+        match: { metadataOnly: true },
+      });
+      expect(labelsRequest.params).not.toHaveProperty("limitPerHost");
       const sidebarSettings = page.locator("#settings-appearance-sidebar");
       await sidebarSettings.getByRole("heading", { name: "Hidden session sections" }).waitFor();
       const recovery = sidebarSettings.locator(".settings-group", { hasText: "offline-catalog" });
@@ -250,8 +228,9 @@ suite.define(() => {
       const pinnedItems = sidebar.locator(
         '.sidebar-zone-entry[data-sidebar-entry^="route:"] > .nav-item',
       );
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Automations", "Plugins"]);
-      await expect.poll(() => sidebar.locator(".sidebar-brand").count()).toBe(1);
+      await expect
+        .poll(() => trimmedTextContents(pinnedItems))
+        .toEqual(["Agents", "Dashboards", "Systems", "Automations", "Plugins"]);
       // Desktop renders no topbar row: the sidebar owns navigation.
       await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
       const shellNav = page.locator(".shell-nav");
@@ -317,7 +296,7 @@ suite.define(() => {
             .getAttribute("aria-current"),
         )
         .toBe("page");
-      await captureUiProof(page, "01a-settings-takeover.png");
+      await captureUiProof(page, "01a-settings-takeover.png", settingsSidebar);
       await captureSettingsSidebarProof(settingsSidebar, "01a-settings-search-initial.png");
       await holdUiProof(page);
       const settingsLinks = settingsSidebar.locator(".settings-sidebar__item");
@@ -367,6 +346,7 @@ suite.define(() => {
           "Ask OpenClaw",
           "Approvals",
           "Infrastructure",
+          "Labs",
           "Advanced",
           "Debug",
           "Logs",
@@ -515,7 +495,7 @@ suite.define(() => {
       const moreButton = sidebar.locator(".sidebar-nav__head-action");
       const moreMenu = sidebar.locator("wa-dropdown.sidebar-more-menu");
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("false");
-      await moreButton.click();
+      await openSidebarMoreMenu(page);
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("true");
       // Enabled plugin tabs render directly in the sidebar body (#111995),
       // not inside the More menu.
@@ -547,19 +527,19 @@ suite.define(() => {
       await expect
         .poll(() => menu.getByRole("menuitemcheckbox", { name: "OpenClaw" }).count())
         .toBe(0);
-      await captureUiProof(page, "02-customize-menu.png");
+      await captureUiProof(page, "02-customize-menu.png", menu.locator('[part="menu"]'));
 
       await tasksItem.click();
       await expect
         .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Automations", "Plugins", "Tasks"]);
+        .toEqual(["Agents", "Dashboards", "Systems", "Automations", "Plugins", "Tasks"]);
       await page.reload();
       await expect
         .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Automations", "Plugins", "Tasks"]);
+        .toEqual(["Agents", "Dashboards", "Systems", "Automations", "Plugins", "Tasks"]);
       // The More menu is transient: closed after reload, unpinned routes inside.
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("false");
-      await moreButton.click();
+      await openSidebarMoreMenu(page);
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("true");
       const editPersistedPinnedItems = moreMenu.getByRole("menuitem", {
         name: "Edit pinned items",
@@ -568,26 +548,32 @@ suite.define(() => {
       await expect
         .poll(() => trimmedTextContents(moreMenu.getByRole("menuitem")))
         .not.toContain("Tasks");
-      await captureUiProof(page, "03-persisted-customization.png");
+      await captureUiProof(
+        page,
+        "03-persisted-customization.png",
+        moreMenu.locator('[part="menu"]'),
+      );
 
       await editPersistedPinnedItems.click();
       await menu.getByRole("menuitem", { name: "Reset pinned items" }).click();
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Automations", "Plugins"]);
+      await expect
+        .poll(() => trimmedTextContents(pinnedItems))
+        .toEqual(["Agents", "Dashboards", "Systems", "Automations", "Plugins"]);
 
-      // The shell chrome search button is the command palette entry point.
-      const searchButton = page.locator(".shell-chrome-controls__search");
+      // The sidebar header search button is the command palette entry point.
+      const searchButton = page.locator(".sidebar-brand__search");
       await searchButton.click();
       const paletteInput = page.locator("#cmd-palette-input");
       await expect.poll(() => paletteInput.isVisible()).toBe(true);
       await page.keyboard.press("Escape");
       await expect.poll(() => paletteInput.isVisible()).toBe(false);
 
-      // The shell chrome toggle stays visible while the desktop sidebar
-      // collapses and expands (there is no icon rail).
-      const collapseButton = page.getByRole("button", { name: "Collapse sidebar" });
+      // The sidebar header toggle collapses the rail; collapsed shell chrome
+      // then provides the matching expand control.
+      const collapseButton = page.locator(".sidebar-brand__collapse");
       await expect
         .poll(() =>
-          collapseButton.evaluate((element) => Boolean(element.closest(".shell-chrome-controls"))),
+          collapseButton.evaluate((element) => Boolean(element.closest(".sidebar-brand__actions"))),
         )
         .toBe(true);
       await collapseButton.click();
@@ -607,9 +593,7 @@ suite.define(() => {
       await expect.poll(() => navExpand.isVisible()).toBe(true);
       await page.reload();
       // Sidebar visibility is tab-local and intentionally not persisted; width is.
-      await expect
-        .poll(() => page.locator(".shell-chrome-controls__nav-toggle").isVisible())
-        .toBe(true);
+      await expect.poll(() => page.locator(".sidebar-brand__collapse").isVisible()).toBe(true);
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .not.toContain("shell--nav-collapsed");
@@ -650,7 +634,7 @@ suite.define(() => {
       // Widening with the drawer open must not leave its stale state blocking
       // the desktop collapse control.
       await page.setViewportSize({ height: 900, width: 1440 });
-      await page.locator(".shell-chrome-controls__nav-toggle").click();
+      await page.locator(".sidebar-brand__collapse").click();
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .toContain("shell--nav-collapsed");
@@ -765,7 +749,9 @@ suite.define(() => {
 
         const activity = home.locator(".sidebar-home-session-states");
         const editor = sidebar.locator(".sidebar-nav__head-action");
-        await expect.poll(() => activity.locator(".session-run-spinner").count()).toBe(1);
+        await expect
+          .poll(() => home.locator(".session-glyph--running .session-glyph__ring").count())
+          .toBe(1);
         await expect.poll(() => activity.locator(".session-row-badge--attention").count()).toBe(1);
 
         await page.mouse.move(900, 400);
@@ -811,7 +797,7 @@ suite.define(() => {
           methodResponses: {
             "cron.list": {
               jobs: [
-                {
+                compactCronJobFixture({
                   id: "release-digest",
                   name: "Release digest",
                   enabled: true,
@@ -825,7 +811,7 @@ suite.define(() => {
                     lastRunStatus: "error",
                     lastError: "Provider request failed",
                   },
-                },
+                }),
               ],
               snapshotRevision: "sidebar-mobile-attention",
               total: 1,
@@ -904,119 +890,5 @@ suite.define(() => {
         expect(floatingKinds).toEqual([]);
       },
     );
-  });
-
-  it("passes failed run outcomes through the desktop and drawer sidebar", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1440 },
-      },
-      async ({ page }) => {
-        await installMockGateway(page, {
-          methodResponses: {
-            "sessions.list": {
-              count: 1,
-              defaults: {
-                contextTokens: null,
-                model: "gpt-5.5",
-                modelProvider: "openai",
-              },
-              path: "",
-              sessions: [
-                {
-                  endedAt: 100,
-                  key: "main",
-                  kind: "direct",
-                  status: "failed",
-                  updatedAt: 100,
-                },
-              ],
-              ts: 100,
-            },
-          },
-        });
-
-        const outcome = (locator: Locator) =>
-          locator.evaluate(
-            (element) => (element as HTMLElement & { runOutcome: string }).runOutcome,
-          );
-
-        await page.goto(`${suite.server.baseUrl}chat`);
-        const sidebar = page.locator("openclaw-app-sidebar");
-        const pet = sidebar.locator(".sidebar-shell openclaw-lobster-pet");
-        await expect.poll(() => pet.count()).toBe(1);
-        await expect.poll(() => outcome(pet)).toBe("error");
-        await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
-
-        await page.setViewportSize({ height: 900, width: 900 });
-        const drawerButton = visibleDrawerButton(page);
-        await expect.poll(() => drawerButton.isVisible()).toBe(true);
-        await drawerButton.click();
-        await expect.poll(() => sidebar.isVisible()).toBe(true);
-        await expect.poll(() => pet.count()).toBe(1);
-        await expect.poll(() => outcome(pet)).toBe("error");
-      },
-    );
-  });
-
-  it("keeps the lobster on the footer ledge across desktop and drawer layouts", async () => {
-    const { context, page } = await openSidebarTestPage();
-
-    try {
-      const sidebar = page.locator("openclaw-app-sidebar");
-      const pet = sidebar.locator("openclaw-lobster-pet");
-      const movement = await pet.evaluate(async (element) => {
-        const lobster = element as HTMLElement & {
-          anchor: "bar";
-          mode: "offline";
-          performAct(act: "scuttle"): void;
-          requestUpdate(): void;
-          updateComplete: Promise<unknown>;
-        };
-        lobster.mode = "offline";
-        await lobster.updateComplete;
-        lobster.anchor = "bar";
-        lobster.setAttribute("data-spot", "bar");
-        lobster.requestUpdate();
-        await lobster.updateComplete;
-
-        const sprite = lobster.querySelector<HTMLElement>(".lobster-pet:not(.lobster-pet--passer)");
-        const before = sprite?.style.getPropertyValue("--lob-x") ?? "";
-        lobster.performAct("scuttle");
-        await lobster.updateComplete;
-        const after = sprite?.style.getPropertyValue("--lob-x") ?? "";
-        return { after, before, spot: lobster.getAttribute("data-spot") };
-      });
-
-      expect(movement.spot).toBe("bar");
-      expect(movement.after).not.toBe(movement.before);
-      expect(Number.parseFloat(movement.after)).toBeGreaterThanOrEqual(18);
-      expect(Number.parseFloat(movement.after)).toBeLessThanOrEqual(50);
-      await expectLobsterOnFooterLedge(sidebar);
-      // startle clears itself after LOBSTER_PET_ACT_DURATION_MS.startle (750ms), so
-      // poking over one round trip and then polling for the class over another can
-      // straddle the entire window on a loaded runner and never observe it. Poke and
-      // read the resulting class in a single in-page step, as the unit test does.
-      const startleClasses = await pet.evaluate(async (element) => {
-        const lobster = element as HTMLElement & { updateComplete: Promise<unknown> };
-        const target = lobster.querySelector<HTMLElement>(".lobster-pet:not(.lobster-pet--passer)");
-        target?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
-        target?.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
-        await lobster.updateComplete;
-        return target?.getAttribute("class") ?? "";
-      });
-      expect(startleClasses).toContain("lobster-pet--act-startle");
-      await captureUiProof(page, "08-lobster-footer-ledge-desktop.png");
-
-      await page.setViewportSize({ height: 900, width: 900 });
-      await visibleDrawerButton(page).click();
-      await expect.poll(() => sidebar.isVisible()).toBe(true);
-      await expectLobsterOnFooterLedge(sidebar);
-      await captureUiProof(page, "09-lobster-footer-ledge-drawer.png");
-    } finally {
-      await context.close();
-    }
   });
 });

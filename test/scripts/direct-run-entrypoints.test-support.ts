@@ -73,7 +73,10 @@ console.log(JSON.stringify({ value: first.value, evaluations: globalThis.pluginE
 }
 
 export async function withShimFixture<T>(
-  wrapper: (typeof TSX_SHIM_WRAPPERS)[number],
+  wrapper:
+    | (typeof TSX_SHIM_WRAPPERS)[number]
+    | "scripts/run-node.mjs"
+    | "scripts/crabbox-wrapper.mjs",
   run: (paths: {
     checkoutRoot: string;
     fixtureRoot: string;
@@ -133,7 +136,7 @@ export async function withShimFixture<T>(
     const outputPath = path.join(fixtureRoot, "command-output.log");
     writeFileSync(outputPath, results.map(formatShimResult).join("\n\n"));
     throw new Error(
-      `Child cleanup unverified; retained fixture ${fixtureRoot} and output ${outputPath}. Stop remaining writers before removing this directory.`,
+      `${callbackError instanceof Error ? `${callbackError.message}\n` : ""}Child cleanup unverified; retained fixture ${fixtureRoot} and output ${outputPath}. Stop remaining writers before removing this directory.`,
       {
         cause:
           callbackError && callbackError !== unjoined

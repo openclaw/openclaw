@@ -1,4 +1,3 @@
-// Line plugin module implements channel behavior.
 import {
   buildDmGroupAccountAllowlistAdapter,
   createFlatAllowlistOverrideResolver,
@@ -19,6 +18,7 @@ import { resolveLineAccount } from "./accounts.js";
 import { lineBindingsAdapter } from "./bindings.js";
 import { lineChannelPluginCommon } from "./channel-shared.js";
 import { lineConfigAdapter } from "./config-adapter.js";
+import { lineDoctor } from "./doctor.js";
 import { lineGatewayAdapter } from "./gateway.js";
 import { resolveLineGroupLookupIds } from "./group-keys.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
@@ -29,7 +29,7 @@ import { getLineRuntime } from "./runtime.js";
 import { lineSetupContract } from "./setup-core.js";
 import { lineSetupWizard } from "./setup-surface.js";
 import { lineStatusAdapter } from "./status.js";
-import type { ResolvedLineAccount } from "./types.js";
+import type { LineProbeResult, ResolvedLineAccount } from "./types.js";
 
 const loadLineChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
 
@@ -55,7 +55,9 @@ function normalizeLineDirectoryId(entry: string, kind: "direct" | "group"): stri
   return id && inferLineTargetChatType(id) === kind ? id : null;
 }
 
-export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelPlugin({
+type LineChannelPlugin = ChannelPlugin<ResolvedLineAccount, LineProbeResult>;
+
+export const linePlugin: LineChannelPlugin = createChatChannelPlugin({
   base: {
     id: "line",
     ...lineChannelPluginCommon,
@@ -142,6 +144,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
     }),
     setupContract: lineSetupContract,
     status: lineStatusAdapter,
+    doctor: lineDoctor,
     gateway: lineGatewayAdapter,
     heartbeat: {
       sendTyping: async ({ cfg, to, accountId }) => {
@@ -177,9 +180,10 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
       idLabel: "lineUserId",
       message: "OpenClaw: your access has been approved.",
       normalizeAllowEntry: createPairingPrefixStripper(/^line:(?:user:)?/i),
-      notify: async ({ cfg, id, message }) => {
+      notify: async ({ cfg, id, message, accountId }) => {
         const account = (getLineRuntime().channel.line?.resolveLineAccount ?? resolveLineAccount)({
           cfg,
+          accountId,
         });
         if (!account.channelAccessToken) {
           throw new Error("LINE channel access token not configured");
@@ -196,5 +200,13 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
     },
   },
   security: lineSecurityAdapter,
+  threading: {
+    scopedAccountReplyToMode: {
+      resolveAccount: (cfg, accountId) =>
+        resolveLineAccount({ cfg, accountId: accountId ?? undefined }),
+      resolveReplyToMode: (account) => account.config.replyToMode,
+      fallback: "off",
+    },
+  },
   outbound: lineOutboundAdapter,
 });

@@ -1,17 +1,22 @@
 // Gateway supervised lock tests cover single-runner locking for supervised gateway starts.
 import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
+import { resolveGatewayRuntimeConfig } from "../../gateway/server-runtime-config.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
+import { StateDatabaseCoordinatorContentionError } from "../../infra/state-database-coordinator.js";
 import { TailscaleRouteOwnershipConflictError } from "../../infra/tailscale-route-ownership-error.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "../../state/openclaw-agent-db-migration-required.js";
 import { testing } from "./run.test-support.js";
 
-const loadGatewayTlsServerRuntimeMock = vi.hoisted(() =>
-  vi.fn(async () => ({ fingerprintSha256: "" })),
+const inspectGatewayTlsCertificateMock = vi.hoisted(() =>
+  vi.fn<typeof import("../../infra/tls/gateway.js").inspectGatewayTlsCertificate>(async () => ({
+    ok: false,
+    error: "public certificate missing",
+  })),
 );
 
 vi.mock("../../infra/tls/gateway.js", () => ({
-  loadGatewayTlsServerRuntime: loadGatewayTlsServerRuntimeMock,
+  inspectGatewayTlsCertificate: inspectGatewayTlsCertificateMock,
 }));
 
 function createLogger() {
@@ -22,10 +27,93 @@ function createLogger() {
 }
 
 describe("supervised gateway lock recovery", () => {
+  it("retries lifecycle contention without treating a healthy port as ownership", async () => {
+    const error = new GatewayLockError(
+      "failed to acquire gateway state ownership",
+      new StateDatabaseCoordinatorContentionError("gateway-lifecycle"),
+    );
+    const startLoop = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(error)
+      .mockResolvedValueOnce();
+    const probeHealth = vi.fn(async () => true);
+    let elapsedMs = 0;
+    await testing.runGatewayLoopWithSupervisedLockRecovery({
+      startLoop,
+      supervisor: "systemd",
+      port: 18789,
+      healthHost: "127.0.0.1",
+      log: createLogger(),
+      probeHealth,
+      now: () => elapsedMs,
+      sleep: async (ms) => {
+        elapsedMs += ms;
+      },
+    });
+    expect(startLoop).toHaveBeenCalledTimes(2);
+    expect(probeHealth).not.toHaveBeenCalled();
+  });
+
+  it("spends one budget across supervised retries and lifecycle acquisition", async () => {
+    let elapsedMs = 0;
+    const error = new GatewayLockError(
+      "failed to acquire gateway state ownership; waited 295000ms for gateway-lifecycle ownership",
+      new StateDatabaseCoordinatorContentionError("gateway-lifecycle"),
+    );
+    const budgets: Array<number | undefined> = [];
+    const startLoop = vi.fn(async (deadlineMs?: number) => {
+      budgets.push(deadlineMs === undefined ? undefined : deadlineMs - elapsedMs);
+      if (budgets.length > 1) {
+        elapsedMs = deadlineMs ?? elapsedMs;
+      }
+      throw error;
+    });
+    const sleep = vi.fn(async (ms: number) => {
+      elapsedMs += ms;
+    });
+    await expect(
+      testing.runGatewayLoopWithSupervisedLockRecovery({
+        startLoop,
+        supervisor: "systemd",
+        port: 18789,
+        healthHost: "127.0.0.1",
+        log: createLogger(),
+        now: () => elapsedMs,
+        sleep,
+      }),
+    ).rejects.toBe(error);
+    expect(budgets).toEqual([300_000, 295_000]);
+    expect(elapsedMs).toBe(300_000);
+    expect(sleep).toHaveBeenCalledTimes(1);
+  });
+
   it("uses exit 78 for an ambiguous persistent Tailscale route", () => {
     expect(
       testing.resolveGatewayStartupFailureExitCode(new TailscaleRouteOwnershipConflictError()),
     ).toBe(78);
+  });
+
+  it("uses exit 78 for an effective bind/Tailscale config conflict", async () => {
+    // Reproduces the reported crash-loop trigger: a persisted gateway.bind=lan
+    // combined with a service-level tailscale serve override is only invalid
+    // once the two are merged, so only runtime resolution (not static config
+    // validation) can detect it.
+    const conflict = await resolveGatewayRuntimeConfig({
+      cfg: {
+        gateway: {
+          bind: "lan",
+          auth: { mode: "token", token: "test-token-123" },
+          tailscale: { mode: "serve" },
+        },
+      },
+      port: 18789,
+    }).catch((err: unknown) => err);
+
+    expect(conflict).toBeInstanceOf(Error);
+    expect((conflict as Error).message).toBe(
+      "tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)",
+    );
+    expect(testing.resolveGatewayStartupFailureExitCode(conflict)).toBe(78);
   });
 
   it("uses exit 78 for offline agent database migration requirements", () => {
@@ -212,8 +300,8 @@ describe("supervised gateway lock recovery", () => {
     },
   );
 
-  it("retries non-mutating TLS fingerprint loads until certificate material is ready", async () => {
-    loadGatewayTlsServerRuntimeMock.mockClear();
+  it("retries public certificate inspection while TLS material is unavailable", async () => {
+    inspectGatewayTlsCertificateMock.mockClear();
     const probeHealth = testing.createConfiguredGatewayHealthProbe({
       gateway: { tls: { enabled: true, autoGenerate: true } },
     });
@@ -221,14 +309,10 @@ describe("supervised gateway lock recovery", () => {
     await expect(probeHealth({ host: "127.0.0.1", port: 18789 })).resolves.toBe(false);
     await expect(probeHealth({ host: "127.0.0.1", port: 18789 })).resolves.toBe(false);
 
-    expect(loadGatewayTlsServerRuntimeMock).toHaveBeenCalledTimes(2);
-    expect(loadGatewayTlsServerRuntimeMock).toHaveBeenNthCalledWith(1, {
+    expect(inspectGatewayTlsCertificateMock).toHaveBeenCalledTimes(2);
+    expect(inspectGatewayTlsCertificateMock).toHaveBeenCalledWith({
       enabled: true,
-      autoGenerate: false,
-    });
-    expect(loadGatewayTlsServerRuntimeMock).toHaveBeenNthCalledWith(2, {
-      enabled: true,
-      autoGenerate: false,
+      autoGenerate: true,
     });
   });
 

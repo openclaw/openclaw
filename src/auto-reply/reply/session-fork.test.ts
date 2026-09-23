@@ -2,15 +2,20 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  appendTranscriptEvent,
+  appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readCodexSessionContext } from "../../plugin-sdk/codex-session-transcript-runtime.js";
 import {
   forkSessionEntryFromParent,
   forkSessionFromParent,
@@ -96,7 +101,7 @@ describe("forkSessionEntryFromParent", () => {
     const sessionKey = "agent:main:subagent:child";
     const staleSessionKey = "agent:main:subagent:stale-child";
 
-    await replaceSessionEntry(
+    replaceSessionEntrySync(
       {
         agentId: "main",
         sessionKey: staleSessionKey,
@@ -164,6 +169,14 @@ describe("forkSessionEntryFromParent", () => {
           targetId: "active-answer",
         },
       ],
+    );
+    await vi.waitFor(
+      () => {
+        expect(loadSessionEntry({ agentId: "main", sessionKey: staleSessionKey, storePath })).toBe(
+          undefined,
+        );
+      },
+      { timeout: 5_000 },
     );
 
     const fallbackEntry: InternalSessionEntry = {
@@ -460,23 +473,133 @@ describe("forkSessionEntryFromParent", () => {
     });
   });
 
-  it("adds only post-usage SQLite transcript pressure to exact context usage", async () => {
-    const root = makeRoot("openclaw-session-fork-post-usage-tail-");
-    const storePath = path.join(root, "sessions.json");
-    const parentEntry = {
-      sessionId: "parent-session",
-      totalTokens: 1,
-      totalTokensFresh: false,
-      updatedAt: 1,
-    };
-    await replaceTranscriptEvents(
-      {
+  it.each(["compaction", "reset"] as const)(
+    "forks retained messages without reviving their usage before %s",
+    async (boundaryType) => {
+      const root = makeRoot("openclaw-session-fork-context-boundary-");
+      const storePath = path.join(root, "sessions.json");
+      const parentSessionKey = "agent:main:main";
+      const sessionKey = "agent:main:subagent:child";
+      const parentEntry = {
+        sessionId: "parent-session",
+        totalTokens: 10_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1 as const,
+        updatedAt: 1,
+      };
+      await replaceTranscriptEvents(
+        {
+          agentId: "main",
+          sessionId: parentEntry.sessionId,
+          sessionKey: parentSessionKey,
+          storePath,
+        },
+        [
+          {
+            type: "session",
+            version: 3,
+            id: parentEntry.sessionId,
+            timestamp: "2026-06-27T00:00:00.000Z",
+            cwd: root,
+          },
+          {
+            type: "message",
+            id: "retained",
+            parentId: null,
+            timestamp: "2026-06-27T00:00:01.000Z",
+            message: {
+              role: "assistant",
+              content: "retained answer",
+              __openclaw: { upstreamUserText: "private replay ".repeat(35_000) },
+              providerReplay: {
+                v: 1,
+                type: "openai-responses-compaction",
+                data: "retired checkpoint ".repeat(25_000),
+                provider: "openai",
+                api: "openai-responses",
+                model: "gpt-5.6-luna",
+                baseUrlHash: "synthetic",
+              },
+              usage: { contextUsage: { state: "available", totalTokens: 150_000 } },
+            },
+          },
+          { type: "opaque-synthetic", id: "opaque-keep", parentId: "retained" },
+          {
+            type: boundaryType,
+            id: "boundary",
+            parentId: "opaque-keep",
+            timestamp: "2026-06-27T00:00:02.000Z",
+            firstKeptEntryId: "opaque-keep",
+            ...(boundaryType === "compaction"
+              ? { summary: "compact context", tokensBefore: 150_000 }
+              : { reason: "reset" }),
+          },
+        ],
+      );
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: parentSessionKey, storePath },
+        parentEntry,
+      );
+
+      await expect(resolveParentForkDecision({ parentEntry, storePath })).resolves.toMatchObject({
+        status: "fork",
+        parentTokens: 10_000,
+      });
+      const result = await forkSessionEntryFromParent({
+        agentId: "main",
+        parentSessionKey,
+        sessionKey,
+        storePath,
+        fallbackEntry: { sessionId: "", updatedAt: 2 },
+      });
+      expect(result).toMatchObject({
+        status: "forked",
+        decision: { status: "fork", parentTokens: 10_000 },
+      });
+      if (result.status !== "forked") {
+        throw new Error("expected fork");
+      }
+      await expect(
+        loadTranscriptEvents({
+          agentId: "main",
+          sessionId: result.fork.sessionId,
+          sessionKey,
+          storePath,
+        }),
+      ).resolves.toContainEqual(expect.objectContaining({ id: "retained" }));
+      const context = readCodexSessionContext(
+        { agentId: "main", sessionId: result.fork.sessionId, sessionKey, storePath },
+        (messages) => Array.from(messages),
+      );
+      expect(context).toContainEqual(expect.objectContaining({ content: "retained answer" }));
+    },
+  );
+
+  it.each([
+    { fresh: false, side: false },
+    { fresh: true, side: false },
+    { fresh: true, side: true },
+  ])(
+    "rejects post-usage transcript growth with freshness $fresh and selected side append $side",
+    async ({ fresh, side }) => {
+      const root = makeRoot("openclaw-session-fork-post-usage-tail-");
+      const storePath = path.join(root, "sessions.json");
+      const parentSessionKey = "agent:main:main";
+      const sessionKey = "agent:main:subagent:child";
+      const parentEntry = {
+        sessionId: "parent-session",
+        totalTokens: 80_000,
+        totalTokensFresh: fresh,
+        totalTokensVersion: 1 as const,
+        updatedAt: 1,
+      };
+      const parentScope = {
         agentId: "main",
         sessionId: parentEntry.sessionId,
-        sessionKey: "agent:main:main",
+        sessionKey: parentSessionKey,
         storePath,
-      },
-      [
+      };
+      await replaceTranscriptEvents(parentScope, [
         {
           type: "session",
           version: 3,
@@ -503,27 +626,88 @@ describe("forkSessionEntryFromParent", () => {
             },
           },
         },
-        {
-          type: "message",
-          id: "tail",
-          parentId: "usage",
-          timestamp: "2026-06-27T00:00:02.000Z",
-          message: {
-            role: "tool",
-            content: `large appended tool result ${"x".repeat(100_000)}`,
-          },
+      ]);
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: parentSessionKey, storePath },
+        parentEntry,
+      );
+      await appendTranscriptMessage(parentScope, {
+        eventId: "tool-call",
+        parentId: "usage",
+        message: {
+          role: "assistant",
+          stopReason: "toolUse",
+          content: [
+            {
+              type: "toolCall",
+              id: "tail-call",
+              name: "exec",
+              arguments: { command: "synthetic tail" },
+            },
+          ],
         },
-      ],
-    );
+      });
+      const tailText = `large appended tool result ${"x".repeat(100_000)}`;
+      await appendTranscriptMessage(parentScope, {
+        eventId: "tail",
+        parentId: "tool-call",
+        message: {
+          role: "toolResult",
+          toolCallId: "tail-call",
+          toolName: "exec",
+          content: [{ type: "text", text: tailText }],
+          isError: false,
+        },
+      });
+      if (side) {
+        // Imported transcripts can select side-appended context with a leaf control.
+        const events = await loadTranscriptEvents(parentScope);
+        for (const event of events) {
+          if (isRecord(event) && (event.id === "tool-call" || event.id === "tail")) {
+            event.appendMode = "side";
+          }
+        }
+        await replaceTranscriptEvents(parentScope, events);
+        await appendTranscriptEvent(parentScope, {
+          type: "leaf",
+          id: "selected-tail",
+          parentId: "tail",
+          targetId: "tail",
+          appendParentId: "tail",
+        });
+      }
+      const storedParent = loadSessionEntry({
+        agentId: "main",
+        sessionKey: parentSessionKey,
+        storePath,
+      });
+      expect(storedParent).toMatchObject({
+        totalTokens: 80_000,
+        totalTokensFresh: fresh,
+        totalTokensVersion: 1,
+      });
 
-    const decision = await resolveParentForkDecision({ parentEntry, storePath });
+      await expect(resolveParentForkDecision({ parentEntry, storePath })).resolves.toMatchObject({
+        status: "skip",
+        reason: "parent-too-large",
+      });
 
-    expect(decision).toMatchObject({
-      status: "skip",
-      reason: "parent-too-large",
-      parentTokens: expect.any(Number),
-    });
-    expect(decision.parentTokens).toBeGreaterThan(100_000);
-    expect(decision.parentTokens).toBeLessThan(110_000);
-  });
+      const result = await forkSessionEntryFromParent({
+        agentId: "main",
+        parentSessionKey,
+        sessionKey,
+        storePath,
+        fallbackEntry: { sessionId: "", updatedAt: 2 },
+      });
+      const decision =
+        result.status === "forked" || result.status === "skipped" ? result.decision : undefined;
+      expect(result).toMatchObject({
+        status: "skipped",
+        reason: "decision-skip",
+        decision: { status: "skip", reason: "parent-too-large", parentTokens: expect.any(Number) },
+      });
+      expect(decision?.parentTokens).toBeGreaterThan(100_000);
+      expect(decision?.parentTokens).toBeLessThan(110_000);
+    },
+  );
 });

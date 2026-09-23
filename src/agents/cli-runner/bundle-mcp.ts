@@ -18,9 +18,12 @@ import {
   type BundleMcpConfig,
   type BundleMcpServerConfig,
 } from "../../plugins/bundle-mcp.js";
-import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
+import type { CliBackendConfig, CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import type { CliBundleMcpMode } from "../../plugins/types.js";
-import { getOrCreateSessionMcpRuntime } from "../agent-bundle-mcp-manager-api.js";
+import {
+  acquireSessionMcpRuntime,
+  releaseSessionMcpRuntime,
+} from "../agent-bundle-mcp-manager-api.js";
 import { isRecord } from "../bundle-mcp-adapter.js";
 import {
   loadMergedBundleMcpConfig,
@@ -56,6 +59,21 @@ type PreparedCliBundleMcpConfig = {
   mcpResumeHash?: string;
   env?: Record<string, string>;
 };
+
+/** A managed provider pin replaces native search without disabling OpenClaw's MCP tool. */
+export function resolveCliNativeWebSearchEnabled(
+  params: { config?: OpenClawConfig; toolOverrides?: SessionToolOverrides },
+  backend: Pick<CliBackendPlugin, "bundleMcp" | "bundleMcpMode">,
+): boolean {
+  if (params.toolOverrides?.webSearch === false) {
+    return false;
+  }
+  if (!backend.bundleMcp && !backend.bundleMcpMode) {
+    return true;
+  }
+  const search = params.config?.tools?.web?.search;
+  return search?.enabled !== false && !search?.provider?.trim();
+}
 
 async function readExternalMcpConfig(configPath: string): Promise<BundleMcpConfig> {
   return { mcpServers: extractMcpServerMap(await tryReadJson<unknown>(configPath)) };
@@ -184,6 +202,19 @@ function applyMcpServerOverrides(
         ),
       }
     : config;
+}
+
+function selectBundleMcpServers(
+  config: BundleMcpConfig,
+  selected: BundleMcpConfig,
+): BundleMcpConfig {
+  return {
+    mcpServers: Object.fromEntries(
+      Object.entries(config.mcpServers).filter(([name]) =>
+        Object.hasOwn(selected.mcpServers, name),
+      ),
+    ),
+  };
 }
 
 function resolveOpenClawMcpEnvTemplates(value: unknown, env?: Record<string, string>): unknown {
@@ -344,8 +375,12 @@ export async function prepareCliBundleMcpConfig(params: {
     runtimeToolsAllow?: string[];
   };
 }): Promise<PreparedCliBundleMcpConfig> {
+  const nativeWebSearchEnabled = resolveCliNativeWebSearchEnabled(params, {
+    bundleMcp: params.enabled,
+    bundleMcpMode: params.mode,
+  });
   if (!params.enabled) {
-    return params.toolOverrides?.webSearch === false
+    return !nativeWebSearchEnabled
       ? await prepareCliWebSearchDisabled({
           mode: params.mode ?? "claude-config-file",
           backend: params.backend,
@@ -365,7 +400,7 @@ export async function prepareCliBundleMcpConfig(params: {
       ),
       env: params.env,
       mcpToolsDeny: params.toolOverrides?.mcpToolsDeny,
-      webSearchEnabled: params.toolOverrides?.webSearch,
+      webSearchEnabled: nativeWebSearchEnabled,
     });
   }
   const resumeMcpConfigPaths =
@@ -408,16 +443,17 @@ export async function prepareCliBundleMcpConfig(params: {
       delete prepareDataDirsByServer[serverName];
     }
   }
+  const warnUnavailableOAuthServer = (serverName: string, error: unknown) =>
+    params.warn?.(
+      `bundle MCP skipped unavailable OAuth server ${serverName}: ${formatErrorMessage(error)}`,
+    );
   const resolvedBearerConfig = await resolveMcpBearerBundleConfig({
     config: mergedConfig,
     cfg: params.config,
     agentDir: params.agentDir,
     env: params.env,
     omitUnavailableOAuthServers: true,
-    onServerUnavailable: (serverName, error) =>
-      params.warn?.(
-        `bundle MCP skipped unavailable OAuth server ${serverName}: ${formatErrorMessage(error)}`,
-      ),
+    onServerUnavailable: warnUnavailableOAuthServer,
   });
 
   const preparedDataDirs = prepareOwnedBundleMcpDataDirs({
@@ -429,6 +465,7 @@ export async function prepareCliBundleMcpConfig(params: {
   }
 
   let effectiveConfig = preparedDataDirs.config;
+  let effectiveEnv = resolvedBearerConfig.env;
   let effectiveDenials = params.toolOverrides?.mcpToolsDeny;
   const policyConfig: BundleMcpConfig = {
     mcpServers: Object.fromEntries(
@@ -438,55 +475,78 @@ export async function prepareCliBundleMcpConfig(params: {
     ),
   };
   if (params.nativeMcpPolicy && Object.keys(policyConfig.mcpServers).length > 0) {
+    // Native policy discovery runs in-process and owns OAuth refresh. Restrict it
+    // to projected survivors without passing external-runtime bearer placeholders.
+    const nativePolicyConfig = selectBundleMcpServers(mergedConfig, policyConfig);
     const runtimeConfig: OpenClawConfig = {
       ...params.config,
-      mcp: { ...params.config?.mcp, servers: policyConfig.mcpServers },
+      mcp: { ...params.config?.mcp, servers: nativePolicyConfig.mcpServers },
     };
-    const runtime = await getOrCreateSessionMcpRuntime({
+    const acquisition = await acquireSessionMcpRuntime({
       sessionId: params.nativeMcpPolicy.sessionId,
       sessionKey: params.nativeMcpPolicy.sessionKey,
       workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       cfg: runtimeConfig,
       toolOverrides: params.toolOverrides,
+      toolDenylist: params.nativeMcpPolicy.capabilityProfile.policy.explicitToolDenylist,
     });
-    const policy = await prepareNativeMcpPolicy({
-      runtime,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      capabilityProfile: params.nativeMcpPolicy.capabilityProfile,
-      runtimeToolsAllow: params.nativeMcpPolicy.runtimeToolsAllow,
-      warn: params.warn ?? (() => {}),
-    });
-    effectiveConfig = {
-      mcpServers: {
-        ...applyPreparedNativeMcpPolicy(policyConfig, policy).mcpServers,
-        ...Object.fromEntries(
-          Object.entries(effectiveConfig.mcpServers).filter(([serverName]) =>
-            additionalServerNames.has(serverName),
+    let retainedServerNames: ReadonlySet<string> | undefined;
+    try {
+      const policy = await prepareNativeMcpPolicy({
+        runtime: acquisition.runtime,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        capabilityProfile: params.nativeMcpPolicy.capabilityProfile,
+        runtimeToolsAllow: params.nativeMcpPolicy.runtimeToolsAllow,
+        warn: params.warn ?? (() => {}),
+      });
+      effectiveConfig = {
+        mcpServers: {
+          ...applyPreparedNativeMcpPolicy(policyConfig, policy).mcpServers,
+          ...Object.fromEntries(
+            Object.entries(effectiveConfig.mcpServers).filter(([serverName]) =>
+              additionalServerNames.has(serverName),
+            ),
           ),
+        },
+      };
+      const preservedAdditionalDenials = Object.fromEntries(
+        Object.entries(params.toolOverrides?.mcpToolsDeny ?? {}).filter(([serverName]) =>
+          additionalServerNames.has(serverName),
         ),
-      },
-    };
-    const preservedAdditionalDenials = Object.fromEntries(
-      Object.entries(params.toolOverrides?.mcpToolsDeny ?? {}).filter(([serverName]) =>
-        additionalServerNames.has(serverName),
-      ),
-    );
-    const combinedDenials = {
-      ...preparedNativeMcpDenials(policy),
-      ...preservedAdditionalDenials,
-    };
-    effectiveDenials = Object.keys(combinedDenials).length > 0 ? combinedDenials : undefined;
+      );
+      const combinedDenials = {
+        ...preparedNativeMcpDenials(policy),
+        ...preservedAdditionalDenials,
+      };
+      effectiveDenials = Object.keys(combinedDenials).length > 0 ? combinedDenials : undefined;
+
+      // Policy discovery can refresh OAuth. Reproject the final survivors afterward
+      // so the external runtime receives the same current credential.
+      const refreshedBearerConfig = await resolveMcpBearerBundleConfig({
+        config: selectBundleMcpServers(mergedConfig, effectiveConfig),
+        cfg: params.config,
+        agentDir: params.agentDir,
+        env: params.env,
+        omitUnavailableOAuthServers: true,
+        onServerUnavailable: warnUnavailableOAuthServer,
+      });
+      effectiveConfig = selectBundleMcpServers(effectiveConfig, refreshedBearerConfig.config);
+      effectiveEnv = refreshedBearerConfig.env;
+      retainedServerNames = new Set(Object.keys(effectiveConfig.mcpServers));
+    } finally {
+      await releaseSessionMcpRuntime(acquisition, retainedServerNames);
+    }
   }
 
   return await prepareModeSpecificBundleMcpConfig({
     mode,
     backend: params.backend,
     mergedConfig: effectiveConfig,
-    env: resolvedBearerConfig.env,
+    env: effectiveEnv,
     mcpToolsDeny: effectiveDenials,
-    webSearchEnabled: params.toolOverrides?.webSearch,
+    webSearchEnabled: nativeWebSearchEnabled,
   });
 }
 

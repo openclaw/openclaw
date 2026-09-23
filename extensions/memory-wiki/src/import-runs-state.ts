@@ -308,29 +308,25 @@ function toPathRecords(
   record: ChatGptImportRunRecord,
 ): MemoryWikiImportRunPathStateRecord[] {
   return [
-    ...record.createdPaths.map(
-      (entry, index): MemoryWikiImportRunPathStateRecord => ({
-        kind: "created-path",
-        vaultRootKey,
-        runId: record.runId,
-        index,
-        path: entry.path,
-        ...(entry.contentHash ? { contentHash: entry.contentHash } : {}),
-        ...(entry.recoveryPaths ? { recoveryPaths: [...entry.recoveryPaths] } : {}),
-      }),
-    ),
-    ...record.updatedPaths.map(
-      (entry, index): MemoryWikiImportRunPathStateRecord => ({
-        kind: "updated-path",
-        vaultRootKey,
-        runId: record.runId,
-        index,
-        path: entry.path,
-        ...(entry.snapshotPath ? { snapshotPath: entry.snapshotPath } : {}),
-        ...(entry.contentHash ? { contentHash: entry.contentHash } : {}),
-        ...(entry.recoveryPaths ? { recoveryPaths: [...entry.recoveryPaths] } : {}),
-      }),
-    ),
+    ...record.createdPaths.map((entry, index): MemoryWikiImportRunPathStateRecord => ({
+      kind: "created-path",
+      vaultRootKey,
+      runId: record.runId,
+      index,
+      path: entry.path,
+      ...(entry.contentHash ? { contentHash: entry.contentHash } : {}),
+      ...(entry.recoveryPaths ? { recoveryPaths: [...entry.recoveryPaths] } : {}),
+    })),
+    ...record.updatedPaths.map((entry, index): MemoryWikiImportRunPathStateRecord => ({
+      kind: "updated-path",
+      vaultRootKey,
+      runId: record.runId,
+      index,
+      path: entry.path,
+      ...(entry.snapshotPath ? { snapshotPath: entry.snapshotPath } : {}),
+      ...(entry.contentHash ? { contentHash: entry.contentHash } : {}),
+      ...(entry.recoveryPaths ? { recoveryPaths: [...entry.recoveryPaths] } : {}),
+    })),
   ];
 }
 
@@ -445,7 +441,8 @@ export function createMemoryWikiImportRunStateStore(
       );
     },
     async rowCount() {
-      return (await openStore().entries()).length;
+      const store = openStore();
+      return (await store.count?.()) ?? (await store.entries()).length;
     },
   };
 }

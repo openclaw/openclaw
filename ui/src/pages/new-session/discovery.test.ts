@@ -31,6 +31,69 @@ describe("draftCloudProfileSupportsExecutionMode", () => {
 });
 
 describe("readDraftCloudProfiles", () => {
+  it("projects only bounded display identity and never guesses from a profile name", () => {
+    expect(
+      readDraftCloudProfiles([
+        {
+          id: "production",
+          providerId: "crabbox",
+          providerDisplayId: "aws",
+          settings: { provider: "azure" },
+        },
+        { id: "aws", providerId: "crabbox", providerDisplayId: "azure" },
+      ]),
+    ).toEqual([
+      { id: "aws", providerId: "crabbox", providerDisplayId: "azure", trust: undefined },
+      { id: "production", providerId: "crabbox", providerDisplayId: "aws", trust: undefined },
+    ]);
+    for (const providerDisplayId of [undefined, "", " aws", "aws\n", "a".repeat(65), {}, 42]) {
+      const [profile] = readDraftCloudProfiles([
+        { id: "aws", providerId: "crabbox", providerDisplayId },
+      ]);
+      expect(profile).not.toHaveProperty("providerDisplayId");
+    }
+  });
+
+  it("keeps same-class choices distinct per OS and bounds catalogs", () => {
+    const [profile] = readDraftCloudProfiles([
+      {
+        id: "aws",
+        providerId: "crabbox",
+        operatingSystems: [
+          { id: "linux", label: "Linux", default: true },
+          {
+            id: "windows/wsl2",
+            label: "Windows (WSL2)",
+            disabledReason: "Upgrade the worker provider.",
+          },
+          { id: "linux", label: "Duplicate" },
+        ],
+        machines: [
+          { id: "tiny", label: "Tiny Linux", os: "linux" },
+          { id: "tiny", label: "Duplicate", os: "linux" },
+          { id: "tiny", label: "Tiny Windows", os: "windows/wsl2" },
+          ...Array.from({ length: 64 }, (_, index) => ({
+            id: `class-${index}`,
+            label: `Class ${index}`,
+          })),
+        ],
+      },
+    ]);
+    expect(profile?.operatingSystems).toEqual([
+      { id: "linux", label: "Linux", default: true },
+      {
+        id: "windows/wsl2",
+        label: "Windows (WSL2)",
+        disabledReason: "Upgrade the worker provider.",
+      },
+    ]);
+    expect(profile?.machines?.slice(0, 2)).toEqual([
+      { id: "tiny", label: "Tiny Linux", os: "linux" },
+      { id: "tiny", label: "Tiny Windows", os: "windows/wsl2" },
+    ]);
+    expect(profile?.machines).toHaveLength(63);
+  });
+
   it("keeps closed profile summaries in stable order", () => {
     expect(
       readDraftCloudProfiles([
@@ -157,7 +220,7 @@ describe("readDraftEnvironments", () => {
     ).toEqual([issue]);
   });
 
-  it("normalizes bounded invocable commands separately from declared capabilities", () => {
+  it("normalizes command inventory and keeps only closed required-command state", () => {
     expect(
       readDraftEnvironments([
         {
@@ -166,15 +229,27 @@ describe("readDraftEnvironments", () => {
           status: "available",
           capabilities: ["codex.exec-server.stdio.v1", "camera.snap"],
           invocableCommands: [" z.command ", "camera.snap", "camera.snap", "x".repeat(129), ""],
+          requiredNodeCommand: { command: " codex.exec-server.stdio.v1 ", state: "unauthorized" },
+        },
+        {
+          id: "node:invalid-state",
+          type: "node",
+          status: "available",
+          requiredNodeCommand: { command: "runtime.exec", state: "unknown" },
         },
       ]),
     ).toEqual([
+      { id: "node:invalid-state", type: "node", status: "available" },
       {
         id: "node:runner",
         type: "node",
         status: "available",
         capabilities: ["codex.exec-server.stdio.v1", "camera.snap"],
         invocableCommands: ["camera.snap", "z.command"],
+        requiredNodeCommand: {
+          command: "codex.exec-server.stdio.v1",
+          state: "unauthorized",
+        },
       },
     ]);
   });

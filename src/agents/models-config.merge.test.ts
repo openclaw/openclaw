@@ -1,9 +1,8 @@
 // Verifies models.json provider/model merge behavior and secret preservation.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import type { ExistingProviderConfig } from "./models-config.merge.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
-
-let NON_ENV_SECRETREF_MARKER: typeof import("./model-auth-markers.js").NON_ENV_SECRETREF_MARKER;
 let mergeProviderModels: typeof import("./models-config.merge.js").mergeProviderModels;
 let mergeProviders: typeof import("./models-config.merge.js").mergeProviders;
 let mergeWithExistingProviderSecrets: typeof import("./models-config.merge.js").mergeWithExistingProviderSecrets;
@@ -12,7 +11,6 @@ async function loadMergeModules() {
   // Merge helpers depend on real manifest registry behavior; undo previous
   // mocks before importing the module under test.
   vi.doUnmock("../plugins/manifest-registry.js");
-  ({ NON_ENV_SECRETREF_MARKER } = await import("./model-auth-markers.js"));
   ({ mergeProviderModels, mergeProviders, mergeWithExistingProviderSecrets } =
     await import("./models-config.merge.js"));
 }
@@ -104,6 +102,36 @@ describe("models-config merge helpers", () => {
     ]);
   });
 
+  it.each([false, true])(
+    "preserves configured provider routing for catalog rows (overlap: %s)",
+    (overlap) => {
+      const implicit = createConfigProvider({
+        api: "anthropic-messages",
+        baseUrl: "https://catalog.example/v1",
+        models: [
+          createModel({
+            id: overlap ? "config-model" : "catalog-only",
+            ...(overlap
+              ? { api: "anthropic-messages", baseUrl: "https://catalog-model.example/v1" }
+              : {}),
+          }),
+        ],
+      });
+      const explicit = createConfigProvider();
+      const merged = mergeProviders({
+        implicit: { example: implicit },
+        explicit: { example: explicit },
+      });
+      const provider = merged.example;
+      const selected = provider?.models.find(
+        (model) => model.id === (overlap ? "config-model" : "catalog-only"),
+      );
+      expect(selected).toBeDefined();
+      expect(selected?.api ?? provider?.api).toBe(explicit.api);
+      expect(selected?.baseUrl ?? provider?.baseUrl).toBe(explicit.baseUrl);
+    },
+  );
+
   it("uses source input presence when merging matching model metadata", () => {
     const implicit = {
       api: "ollama",
@@ -136,7 +164,7 @@ describe("models-config merge helpers", () => {
       mergeProviderModels(implicit, explicit, {
         providerId: "ollama",
         sourceModelFields: new Map([
-          ["ollama/qwen3-vl:latest", { inputOmitted: true, cost: undefined }],
+          [JSON.stringify(["ollama", "qwen3-vl:latest"]), { inputOmitted: true, cost: undefined }],
         ]),
       }).models?.[0]?.input,
     ).toEqual(["text", "image"]);

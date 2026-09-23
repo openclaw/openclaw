@@ -1,6 +1,6 @@
-// Tests session maintenance warning formatting and suppression.
 import { randomUUID } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 
 type DeliveryCall = {
   channel?: string;
@@ -36,7 +36,7 @@ vi.mock("../utils/message-channel.js", () => ({
   normalizeMessageChannel: mocks.normalizeMessageChannel,
   isDeliverableMessageChannel: mocks.isDeliverableMessageChannel,
 }));
-vi.mock("../utils/delivery-context.shared.js", () => ({
+vi.mock("../utils/delivery-context.read.js", () => ({
   deliveryContextFromSession: mocks.deliveryContextFromSession,
 }));
 vi.mock("./outbound/deliver-runtime.js", () => ({
@@ -56,6 +56,7 @@ function createParams(
   const sessionKey = overrides.sessionKey ?? `agent:${randomUUID()}:main`;
   return {
     cfg: {},
+    agentId: parseAgentSessionKey(sessionKey)?.agentId ?? "main",
     sessionKey,
     entry: {} as never,
     warning: {
@@ -70,10 +71,10 @@ function createParams(
   };
 }
 
-function expectedMaintenanceWarning(reasonText: string): string {
+function expectedMaintenanceWarning(reasonText: string, outcome = "archived"): string {
   return (
-    `\u26A0\uFE0F Session maintenance warning: this active session would be evicted (${reasonText}). ` +
-    `Maintenance is set to warn-only, so nothing was reset. ` +
+    `\u26A0\uFE0F Session maintenance warning: this active session would be ${outcome} (${reasonText}). ` +
+    `Maintenance is set to warn-only, so nothing was changed. ` +
     `To enforce cleanup, set \`session.maintenance.mode: "enforce"\` or increase the limits.`
   );
 }
@@ -90,9 +91,13 @@ describe("deliverSessionMaintenanceWarning", () => {
   let prevVitest: string | undefined;
   let prevNodeEnv: string | undefined;
 
-  beforeEach(async () => {
+  beforeAll(async () => {
+    // Start under this suite's mocks, then reuse the owner across disjoint session keys.
     vi.resetModules();
     ({ deliverSessionMaintenanceWarning } = await import("./session-maintenance-warning.js"));
+  });
+
+  beforeEach(() => {
     prevVitest = process.env.VITEST;
     prevNodeEnv = process.env.NODE_ENV;
     delete process.env.VITEST;
@@ -163,6 +168,7 @@ describe("deliverSessionMaintenanceWarning", () => {
         maxEntries: 10,
         wouldPrune: false,
         wouldCap: true,
+        capOutcome: "archive",
       } as never,
     });
 
@@ -171,7 +177,27 @@ describe("deliverSessionMaintenanceWarning", () => {
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
     expect(firstSystemEventCall()).toEqual([
-      expectedMaintenanceWarning("not in the most recent 10 sessions"),
+      expectedMaintenanceWarning("not in the most recent 10 sessions", "archived"),
+      { sessionKey: params.sessionKey },
+    ]);
+  });
+
+  it("describes synthetic cap overflow as removal", async () => {
+    mocks.deliveryContextFromSession.mockReturnValueOnce(undefined as never);
+    const params = createParams({
+      warning: {
+        pruneAfterMs: 3_600_000,
+        maxEntries: 10,
+        wouldPrune: false,
+        wouldCap: true,
+        capOutcome: "remove",
+      } as never,
+    });
+
+    await deliverSessionMaintenanceWarning(params);
+
+    expect(firstSystemEventCall()).toEqual([
+      expectedMaintenanceWarning("not in the most recent 10 sessions", "removed"),
       { sessionKey: params.sessionKey },
     ]);
   });

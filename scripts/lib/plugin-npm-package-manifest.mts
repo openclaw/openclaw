@@ -9,6 +9,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import JSON5 from "json5";
 import { parse as parseYaml } from "yaml";
+import { validatePluginCategories } from "../../packages/plugin-package-contract/src/categories.ts";
 import {
   generateNpmPackageLock,
   packageJsonForNpmLock,
@@ -19,9 +20,11 @@ import {
 } from "../generate-npm-package-lock.mts";
 import { resolveNpmRunner } from "../npm-runner.mts";
 import type { NpmRunnerParams } from "../npm-runner.mts";
+import { mapPluginCatalogEntries } from "./bundled-plugin-build-entries.mjs";
 import {
   listPluginNpmRuntimeBuildOutputs,
   resolvePluginNpmRuntimeBuildPlan,
+  toPackageRuntimeEntry,
 } from "./plugin-npm-runtime-build.mts";
 import type { PluginNpmRuntimeBuildPlan, PluginPackageJson } from "./plugin-npm-runtime-build.mts";
 import { pnpmLockfileDocuments } from "./pnpm-lockfile-documents.mjs";
@@ -34,6 +37,7 @@ type JsonRecord = Record<string, unknown>;
 type PluginPackageParams = Parameters<typeof resolvePluginNpmRuntimeBuildPlan>[0] & {
   bundleDependencies?: unknown;
   patchedDependencies?: WorkspacePatchedDependency[];
+  clawhubMetadataDir?: string;
 };
 type GeneratedChannelConfig = {
   description?: string;
@@ -158,58 +162,47 @@ function assertPluginNpmRuntimeBuildExists(plan: PluginNpmRuntimeBuildPlan) {
   assertPackageFilesDoNotExcludeRequiredRuntimeArtifacts(plan);
 }
 
-function resolvePackagedChannelStateMetadata(
-  metadata: unknown,
-  metadataKey: string,
-  plan: PluginNpmRuntimeBuildPlan,
+/** Map channel probes to the selected build outputs relative to the emitted package.json. */
+export function resolvePluginRuntimeChannelMetadata(
+  channel: unknown,
+  params: { pluginDir: string; runtimeBuildOutputs: string[]; runtimeRoot: "." | "dist" },
 ) {
-  if (
-    !metadata ||
-    !isRecord(metadata) ||
-    typeof metadata.specifier !== "string" ||
-    !metadata.specifier.trim()
-  ) {
-    return metadata;
-  }
-
-  const normalizedSpecifier = normalizePackPath(metadata.specifier);
-  const sourceEntry = normalizedSpecifier.replace(/\.(?:[cm]?[jt]s)$/u, "");
-  const runtimeSpecifier = plan.runtimeBuildOutputs.find((runtimePath) => {
-    const normalizedRuntimePath = normalizePackPath(runtimePath);
-    return (
-      normalizedRuntimePath === normalizedSpecifier ||
-      normalizedRuntimePath.replace(/^dist\//u, "").replace(/\.(?:[cm]?js)$/u, "") === sourceEntry
-    );
-  });
-  if (!runtimeSpecifier) {
-    throw new Error(
-      `channel ${metadataKey} specifier '${metadata.specifier}' has no package-local runtime output for ${plan.pluginDir}`,
-    );
-  }
-
-  // Published plugins omit source files; installed channel probes must load
-  // the exact ESM or CommonJS sidecar emitted by the package runtime build.
-  return {
-    ...metadata,
-    specifier: runtimeSpecifier,
-  };
-}
-
-function resolvePackagedChannelMetadata(plan: PluginNpmRuntimeBuildPlan) {
-  const channel = plan.packageJson.openclaw?.channel;
   if (!isRecord(channel)) {
     return channel;
   }
 
   const packagedChannel: JsonRecord = { ...channel };
   for (const metadataKey of ["configuredState", "persistedAuthState"]) {
-    if (Object.hasOwn(channel, metadataKey)) {
-      packagedChannel[metadataKey] = resolvePackagedChannelStateMetadata(
-        channel[metadataKey],
-        metadataKey,
-        plan,
+    const metadata = channel[metadataKey];
+    // Incomplete pairs may be env-backed; only module-backed probes need outputs.
+    if (
+      !Object.hasOwn(channel, metadataKey) ||
+      !isRecord(metadata) ||
+      typeof metadata.specifier !== "string" ||
+      !metadata.specifier.trim() ||
+      typeof metadata.exportName !== "string" ||
+      !metadata.exportName.trim()
+    ) {
+      continue;
+    }
+    const normalizedSpecifier = normalizePackPath(metadata.specifier);
+    const sourceEntry = normalizedSpecifier.replace(/\.(?:[cm]?[jt]s)$/u, "");
+    const runtimeSpecifier = params.runtimeBuildOutputs.find((runtimePath) => {
+      const normalizedRuntimePath = normalizePackPath(runtimePath);
+      const relativeRuntimePath = path.posix.relative(params.runtimeRoot, normalizedRuntimePath);
+      return (
+        normalizedRuntimePath === normalizedSpecifier ||
+        relativeRuntimePath.replace(/\.(?:[cm]?js)$/u, "") === sourceEntry
+      );
+    });
+    if (!runtimeSpecifier) {
+      throw new Error(
+        `channel ${metadataKey} specifier '${metadata.specifier}' has no runtime output for ${params.pluginDir}`,
       );
     }
+    // Native Node resolution does not infer .cjs from a stem. Both checkout and
+    // standalone metadata must name the exact sidecar selected by their build.
+    packagedChannel[metadataKey] = { ...metadata, specifier: runtimeSpecifier };
   }
   return packagedChannel;
 }
@@ -355,32 +348,51 @@ export function generatePluginNpmPackageLockWithRetry(
   throw new Error(`package-lock generation retry loop exhausted for ${pluginDir}`);
 }
 
-function resolveInstalledPackageDir(packageDir: string, packageName: string) {
-  return path.join(packageDir, "node_modules", ...packageName.split("/"));
+function resolveInstalledPackageDir(
+  packageDir: string,
+  packageName: string,
+  fromDir = packageDir,
+): string | undefined {
+  const root = fs.realpathSync(packageDir);
+  let current = fs.realpathSync(fromDir);
+  while (true) {
+    const relative = path.relative(root, current);
+    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      return undefined;
+    }
+    const candidate = path.join(current, "node_modules", ...packageName.split("/"));
+    if (fs.existsSync(path.join(candidate, "package.json"))) {
+      const resolved = fs.realpathSync(candidate);
+      const resolvedRelative = path.relative(root, resolved);
+      if (
+        resolvedRelative === ".." ||
+        resolvedRelative.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(resolvedRelative)
+      ) {
+        return undefined;
+      }
+      return resolved;
+    }
+    if (current === root) {
+      return undefined;
+    }
+    current = path.dirname(current);
+  }
 }
 
-function readInstalledPackageJson(packageDir: string, packageName: string) {
-  const packageJsonPath = path.join(
-    resolveInstalledPackageDir(packageDir, packageName),
-    "package.json",
-  );
-  if (!fs.existsSync(packageJsonPath)) {
+function readInstalledPackageJson(packageDir: string, packageName: string, fromDir = packageDir) {
+  const installedDir = resolveInstalledPackageDir(packageDir, packageName, fromDir);
+  if (!installedDir) {
     return undefined;
   }
   try {
     return {
-      packageDir: path.dirname(packageJsonPath),
-      packageJson: readJsonFile(packageJsonPath),
+      packageDir: installedDir,
+      packageJson: readJsonFile(path.join(installedDir, "package.json")),
     };
   } catch {
     return undefined;
   }
-}
-
-function hasInstalledPackage(packageDir: string, packageName: string) {
-  return fs.existsSync(
-    path.join(resolveInstalledPackageDir(packageDir, packageName), "package.json"),
-  );
 }
 
 function normalizeOptionalDependencySpec(
@@ -408,31 +420,33 @@ function collectMissingOptionalBundledDependencySpecs(
   packageDir: string,
   packageJson: PluginPackageJson,
 ) {
-  const queue = listConfiguredBundledDependencyNames(packageJson);
+  const queue = listConfiguredBundledDependencyNames(packageJson).map((name) => ({
+    name,
+    fromDir: fs.realpathSync(packageDir),
+  }));
   const visited = new Set<string>();
   const missing = new Map<string, string>();
 
   while (queue.length > 0) {
-    const packageName = queue.shift();
-    if (!packageName || visited.has(packageName)) {
+    const dependency = queue.shift();
+    if (!dependency) {
       continue;
     }
-    visited.add(packageName);
-
-    const installed = readInstalledPackageJson(packageDir, packageName);
-    if (!installed) {
+    const installed = readInstalledPackageJson(packageDir, dependency.name, dependency.fromDir);
+    if (!installed || visited.has(installed.packageDir)) {
       continue;
     }
+    visited.add(installed.packageDir);
     const dependencyNames = [
       ...Object.keys(installed.packageJson.dependencies ?? {}),
       ...Object.keys(installed.packageJson.optionalDependencies ?? {}),
     ].toSorted((left, right) => left.localeCompare(right));
-    queue.push(...dependencyNames);
+    queue.push(...dependencyNames.map((name) => ({ name, fromDir: installed.packageDir })));
 
     for (const [optionalName, optionalSpec] of Object.entries(
       installed.packageJson.optionalDependencies ?? {},
     ).toSorted(([left], [right]) => left.localeCompare(right))) {
-      if (hasInstalledPackage(packageDir, optionalName)) {
+      if (resolveInstalledPackageDir(packageDir, optionalName, installed.packageDir)) {
         continue;
       }
       const normalizedSpec = normalizeOptionalDependencySpec(
@@ -519,6 +533,33 @@ function readYamlRecord(file: string, lockfile = false) {
   return isRecord(value) ? value : {};
 }
 
+function isolatedPnpmPackageDirectory(
+  storeDir: string,
+  dependencyPath: string,
+  name: string,
+  maxLength: unknown,
+) {
+  if (typeof maxLength !== "number" || !Number.isSafeInteger(maxLength) || maxLength < 1) {
+    throw new Error("frozen pnpm install has an invalid virtualStoreDirMaxLength");
+  }
+  // pnpm 12's PkgNameVerPeer::to_virtual_store_name and shorten_virtual_store_name.
+  let filename = dependencyPath.replace(/[\\/:*?"<>|#]/gu, "+");
+  if (filename.includes("(")) {
+    filename = filename.replace(/\)$/u, "").replaceAll(")(", "_").replace(/[()]/gu, "_");
+  }
+  if (Buffer.byteLength(filename) > maxLength || /[A-Z]/u.test(filename)) {
+    let prefix = "";
+    for (const character of filename) {
+      if (Buffer.byteLength(prefix + character) > Math.max(0, maxLength - 33)) {
+        break;
+      }
+      prefix += character;
+    }
+    filename = `${prefix}_${createHash("sha256").update(filename).digest("hex").slice(0, 32)}`;
+  }
+  return path.join(fs.realpathSync(storeDir), filename, "node_modules", name);
+}
+
 function collectWorkspacePatchedDependencies(
   repoRoot: string,
   packageDir: string,
@@ -567,16 +608,14 @@ function collectWorkspacePatchedDependencies(
   if (typeof virtualStoreDir !== "string") {
     throw new Error("frozen pnpm install has an invalid virtualStoreDir");
   }
-  const installedLock = readYamlRecord(
-    path.resolve(repoRoot, "node_modules", virtualStoreDir, "lock.yaml"),
-    true,
-  );
+  const storeDir = path.resolve(repoRoot, "node_modules", virtualStoreDir);
+  const installedLock = readYamlRecord(path.join(storeDir, "lock.yaml"), true);
   const installedImporter = isRecord(installedLock.importers)
     ? installedLock.importers[importerKey]
     : undefined;
   const require = createRequire(path.join(packageDir, "package.json"));
   // A root declaration alone does not prove the installed bytes were patched.
-  // Bind the patch hash, importer and actual hoisted package before packing it.
+  // Bind the patch hash, importer and actual installed package before packing it.
   return selected.map(({ name, version, selector, patchPath }) => {
     const patchHash =
       typeof patchPath === "string"
@@ -613,17 +652,29 @@ function collectWorkspacePatchedDependencies(
       .paths(name)
       ?.map((dir) => path.join(dir, name))
       .find((dir) => fs.existsSync(path.join(dir, "package.json")));
-    const locations = isRecord(modules.hoistedLocations)
-      ? modules.hoistedLocations[`${name}@${resolved.version}`]
-      : undefined;
+    const dependencyPath = `${name}@${resolved.version}`;
+    const locations =
+      modules.nodeLinker === "isolated"
+        ? [
+            isolatedPnpmPackageDirectory(
+              storeDir,
+              dependencyPath,
+              name,
+              modules.virtualStoreDirMaxLength ?? (process.platform === "win32" ? 60 : 120),
+            ),
+          ]
+        : modules.nodeLinker === "hoisted" && isRecord(modules.hoistedLocations)
+          ? modules.hoistedLocations[dependencyPath]
+          : undefined;
     if (
       !candidate ||
-      modules.nodeLinker !== "hoisted" ||
       !Array.isArray(locations) ||
       !locations.some(
         (location) =>
           typeof location === "string" &&
-          fs.realpathSync(path.resolve(repoRoot, location)) === fs.realpathSync(candidate),
+          (modules.nodeLinker === "isolated"
+            ? location
+            : fs.realpathSync(path.resolve(repoRoot, location))) === fs.realpathSync(candidate),
       )
     ) {
       throw new Error(`patched runtime dependency is not the frozen pnpm package: ${selector}`);
@@ -848,7 +899,11 @@ export function resolveAugmentedPluginNpmPackageJson(params: PluginPackageParams
   }
   assertPluginNpmRuntimeBuildExists(plan);
 
-  const packagedChannel = resolvePackagedChannelMetadata(plan);
+  const packagedChannel = resolvePluginRuntimeChannelMetadata(plan.packageJson.openclaw?.channel, {
+    pluginDir: plan.pluginDir,
+    runtimeBuildOutputs: plan.runtimeBuildOutputs,
+    runtimeRoot: "dist",
+  });
   const packageJson: PluginPackageJson = {
     ...plan.packageJson,
     files: plan.packageFiles,
@@ -1009,6 +1064,9 @@ export function resolveAugmentedPluginNpmManifest(params: PluginPackageParams) {
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
   const manifestPath = path.join(packageDir, "openclaw.plugin.json");
   if (!fs.existsSync(manifestPath)) {
+    if (params.clawhubMetadataDir) {
+      throw new Error("ClawHub metadata requires a candidate plugin manifest");
+    }
     return {
       manifestPath,
       pluginId: path.basename(packageDir),
@@ -1019,10 +1077,55 @@ export function resolveAugmentedPluginNpmManifest(params: PluginPackageParams) {
   }
 
   const manifest = readJsonFile(manifestPath);
+  let publicationManifest = manifest;
+  if (params.clawhubMetadataDir) {
+    const metadataDir = path.resolve(params.clawhubMetadataDir);
+    const metadata = readJsonFile(path.join(metadataDir, "openclaw.plugin.json"));
+    const sourcePackage = readJsonFile(resolvePackageJsonPath(packageDir));
+    const toolingPackage = readJsonFile(resolvePackageJsonPath(metadataDir));
+    if (
+      typeof manifest.id !== "string" ||
+      !manifest.id ||
+      metadata.id !== manifest.id ||
+      typeof sourcePackage.name !== "string" ||
+      !sourcePackage.name ||
+      toolingPackage.name !== sourcePackage.name
+    ) {
+      throw new Error("ClawHub metadata must match the candidate package name and plugin ID");
+    }
+    const result = validatePluginCategories(metadata.categories);
+    if (!result.ok || result.categories?.length !== 1) {
+      throw new Error("ClawHub metadata must declare exactly one supported plugin category");
+    }
+    // The published 2026.9.4 reader rejects the renamed agent-runtimes slug.
+    // Remove this pack-only encoding when recovery no longer packs 2026.9.4.
+    if (sourcePackage.version === "2026.9.4" && result.categories[0] === "agent-runtimes") {
+      if (!Array.isArray(manifest.categories) || !manifest.categories.includes("runtime")) {
+        throw new Error("ClawHub 2026.9.4 metadata requires the candidate to declare runtime");
+      }
+      result.categories = ["runtime"];
+    }
+    // Tooling owns reviewed catalog metadata; the candidate owns every runtime
+    // field and version. These revisions intentionally need not share a version.
+    publicationManifest = { ...manifest, categories: result.categories };
+  }
   const pluginId =
     typeof manifest.id === "string" && manifest.id ? manifest.id : path.basename(packageDir);
   const generatedChannelConfigs = readGeneratedBundledChannelConfigs(repoRoot).get(pluginId);
-  const augmentedManifest = mergeGeneratedChannelConfigs(manifest, generatedChannelConfigs);
+  // Manifest-only overlays have no package runtime to rewrite.
+  const runtimePlan =
+    (manifest.providerCatalogEntry || manifest.capabilityCatalogEntry) &&
+    fs.existsSync(resolvePackageJsonPath(packageDir))
+      ? resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir })
+      : null;
+  const augmentedManifest = mergeGeneratedChannelConfigs(
+    runtimePlan
+      ? mapPluginCatalogEntries(publicationManifest, (entry: string) =>
+          toPackageRuntimeEntry(entry, runtimePlan.runtimeFormat),
+        )
+      : publicationManifest,
+    generatedChannelConfigs,
+  );
   const changed = JSON.stringify(augmentedManifest) !== JSON.stringify(manifest);
   return {
     manifestPath,
@@ -1056,22 +1159,32 @@ export function withAugmentedPluginNpmManifestForPackage<T>(
     ? collectWorkspacePatchedDependencies(repoRoot, packageDir, packageJson)
     : [];
   const resolvedParams = { ...params, patchedDependencies };
+  const bundleDependencies = shouldBundleDependencies(
+    params.bundleDependencies,
+    packageJson,
+    patchedDependencies,
+  );
   if (
-    !packageJson ||
-    !shouldBundleDependencies(params.bundleDependencies, packageJson, patchedDependencies) ||
-    !hasPackageRuntimeDependencies(packageJson)
+    !params.clawhubMetadataDir &&
+    (!packageJson || !bundleDependencies || !hasPackageRuntimeDependencies(packageJson))
   ) {
     return withPluginNpmManifestOverlay(resolvedParams, callback);
   }
 
   // pnpm owns the source install. npm bundling needs a separate tree so its
   // production-only install and cleanup cannot replace source versions or links.
+  // ClawHub metadata overlays likewise never write into the frozen candidate.
   const stagingRoot = fs.mkdtempSync(path.join(tmpdir(), "openclaw-plugin-npm-pack-"));
   const stagedPackageDir = path.join(stagingRoot, path.basename(packageDir));
   try {
     fs.cpSync(packageDir, stagedPackageDir, {
       recursive: true,
-      filter: (source) => path.basename(source) !== "node_modules",
+      // Historical candidates contain npm shrinkwraps. npm ci prefers them to
+      // the fresh pnpm-policy lock, so exclude only the bundle's root shrinkwrap
+      // from staging; preserve the frozen source and dependency-owned locks.
+      filter: (source) =>
+        path.basename(source) !== "node_modules" &&
+        (!bundleDependencies || source !== path.join(packageDir, "npm-shrinkwrap.json")),
     });
     return withPluginNpmManifestOverlay(
       { ...resolvedParams, repoRoot, packageDir: stagedPackageDir },
@@ -1100,6 +1213,7 @@ function withPluginNpmManifestOverlay<T>(
   const resolvedManifest = resolveAugmentedPluginNpmManifest({
     repoRoot,
     packageDir,
+    clawhubMetadataDir: params.clawhubMetadataDir,
   });
   const resolvedPackageJson = resolveAugmentedPluginNpmPackageJson({
     repoRoot,
@@ -1118,7 +1232,7 @@ function withPluginNpmManifestOverlay<T>(
       : undefined;
   if (resolvedManifest.changed && resolvedManifest.manifest) {
     console.error(
-      `[plugin-npm-publish] overlaying generated channel config metadata for ${resolvedManifest.pluginId}`,
+      `[plugin-npm-publish] overlaying plugin manifest metadata for ${resolvedManifest.pluginId}`,
     );
     writeJsonFile(resolvedManifest.manifestPath, resolvedManifest.manifest);
   }
@@ -1155,7 +1269,7 @@ function withPluginNpmManifestOverlay<T>(
 }
 
 const RUN_USAGE =
-  "usage: node scripts/lib/plugin-npm-package-manifest.mjs --run <package-dir> -- <command> [args...]";
+  "usage: node scripts/lib/plugin-npm-package-manifest.mjs --run <package-dir> [--clawhub-metadata <package-dir>] -- <command> [args...]";
 
 function readRunPackageDir(argv: string[]) {
   const packageDir = argv[1];
@@ -1166,11 +1280,15 @@ function readRunPackageDir(argv: string[]) {
 }
 
 /** @internal Directly tested script implementation detail. */
-export function parseRunArgs(
-  argv: string[],
-):
+export function parseRunArgs(argv: string[]):
   | { help: true; packageDir: string; command: string; args: string[] }
-  | { packageDir: string; command: string; args: string[]; help?: undefined } {
+  | {
+      packageDir: string;
+      command: string;
+      args: string[];
+      clawhubMetadataDir?: string;
+      help?: undefined;
+    } {
   if (argv[0] === "--help" || argv[0] === "-h") {
     return { help: true, packageDir: "", command: "", args: [] };
   }
@@ -1182,7 +1300,11 @@ export function parseRunArgs(
   if (!packageDir || separatorIndex === -1 || separatorIndex === argv.length - 1) {
     throw new Error(RUN_USAGE);
   }
-  if (separatorIndex !== 2) {
+  const clawhubMetadataDir = argv[2] === "--clawhub-metadata" ? argv[3] : undefined;
+  if (
+    separatorIndex !== 2 &&
+    (separatorIndex !== 4 || !clawhubMetadataDir || clawhubMetadataDir.startsWith("--"))
+  ) {
     throw new Error(`unexpected plugin npm package manifest run argument: ${argv[2]}`);
   }
   const command = argv[separatorIndex + 1];
@@ -1191,6 +1313,7 @@ export function parseRunArgs(
   }
   return {
     packageDir,
+    ...(clawhubMetadataDir ? { clawhubMetadataDir: path.resolve(clawhubMetadataDir) } : {}),
     command,
     args: argv.slice(separatorIndex + 2),
   };
@@ -1207,6 +1330,7 @@ function main(argv: string[] = process.argv.slice(2)) {
     {
       packageDir,
       bundleDependencies: process.env.OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES,
+      clawhubMetadataDir: parsedArgs.clawhubMetadataDir,
     },
     ({ packageDir: cwd }) => {
       const commandArgs = [...args];

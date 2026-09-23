@@ -1,5 +1,6 @@
 // Verifies task-flow owner access checks for parent and child sessions.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createInMemoryTaskFlowRegistryStore } from "../test-utils/task-registry-store.js";
 import {
   findLatestTaskFlowForOwner,
   getTaskFlowByIdForOwner,
@@ -26,12 +27,7 @@ function createManagedTaskFlow(
 beforeEach(() => {
   resetTaskFlowRegistryForTests({ persist: false });
   configureTaskFlowRegistryRuntime({
-    store: {
-      loadSnapshot: () => ({ flows: new Map() }),
-      saveSnapshot: () => {},
-      upsertFlow: () => {},
-      deleteFlow: () => {},
-    },
+    store: createInMemoryTaskFlowRegistryStore(),
   });
 });
 

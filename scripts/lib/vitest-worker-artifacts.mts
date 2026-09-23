@@ -2,22 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-// Declaration paths are shared metadata; only the runner imports their build values.
-export const runtimeProcessDeclarationEntries = {
-  "infra/runtime-process-entrypoints": "src/infra/runtime-process-entrypoints.ts",
-  "extensions/memory-core/manager-search-knn-entrypoint":
-    "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
-};
-export const vitestWorkerDeclarationEntries = {
-  ...runtimeProcessDeclarationEntries,
-  "agents/command/cli-compaction-runtime.test-support":
-    "src/agents/command/cli-compaction-runtime.test-support.ts",
-  "gateway/session-title-retention.test-support":
-    "src/gateway/session-title-retention.test-support.ts",
-  "skills/library/persistence-runtime.test-support":
-    "src/skills/library/persistence-runtime.test-support.ts",
-  "tui/tui-pty-runtime-test-support": "src/tui/tui-pty-runtime-test-support.ts",
-};
+import { vitestWorkerDeclarationEntries } from "./vitest-worker-declarations.mts";
 
 export type VitestWorkerDescriptor = { directory: string };
 export type VitestWorkerManifest = {
@@ -25,6 +10,7 @@ export type VitestWorkerManifest = {
   inputs: Record<string, string>;
   outputs: Record<string, string>;
   durationMs: number;
+  cacheSignature?: string;
 };
 const root = fileURLToPath(new URL("../../", import.meta.url));
 export const hashVitestWorkerArtifact = (bytes: string | Buffer) =>
@@ -40,19 +26,51 @@ const declarations = new Map(
 export const VITEST_WORKER_PREPARE_REQUEST = "openclaw:prepare-test-subprocesses";
 export const VITEST_WORKER_PREPARE_REPLY = "openclaw:test-subprocesses-prepared";
 
-export function verifyVitestWorkerArtifacts(directory: string, manifest?: VitestWorkerManifest) {
+export async function verifyVitestWorkerArtifacts(
+  directory: string,
+  manifest?: VitestWorkerManifest,
+  { inputsChangedAfter }: { inputsChangedAfter?: number } = {},
+) {
   const completed: VitestWorkerManifest =
-    manifest ?? JSON.parse(fs.readFileSync(path.join(directory, "manifest.json"), "utf8"));
-  for (const [filename, expected] of Object.entries(completed.inputs)) {
-    if (hashVitestWorkerArtifact(fs.readFileSync(filename)) !== expected) {
-      throw new Error(`Source changed during compiled subprocess invocation: ${filename}`);
-    }
-  }
-  for (const [name, expected] of Object.entries(completed.outputs)) {
-    if (
-      hashVitestWorkerArtifact(fs.readFileSync(path.join(directory, "dist", name))) !== expected
-    ) {
-      throw new Error(`Compiled subprocess artifact changed: ${name}`);
+    manifest ??
+    JSON.parse(await fs.promises.readFile(path.join(directory, "manifest.json"), "utf8"));
+  const groups = [
+    {
+      files: completed.inputs,
+      root: undefined,
+      changed: "Source changed during compiled subprocess invocation",
+    },
+    {
+      files: completed.outputs,
+      root: path.join(directory, "dist"),
+      changed: "Compiled subprocess artifact changed",
+    },
+  ];
+  const batchSize = 32;
+  for (const { files, root: baseDir, changed } of groups) {
+    const entries = Object.entries(files);
+    for (let offset = 0; offset < entries.length; offset += batchSize) {
+      // Native batches keep pre-install planning dependency-free and signals responsive.
+      // Drain every started read before rejection: the owner may delete files next.
+      const settled = await Promise.allSettled(
+        entries.slice(offset, offset + batchSize).map(async ([name, expected]) => {
+          const filename = baseDir ? path.join(baseDir, name) : name;
+          if (hashVitestWorkerArtifact(await fs.promises.readFile(filename)) !== expected) {
+            throw new Error(`${changed}: ${name}`);
+          }
+          if (
+            !baseDir &&
+            inputsChangedAfter !== undefined &&
+            (await fs.promises.stat(filename)).ctimeMs >= inputsChangedAfter
+          ) {
+            throw new Error(`${changed}: ${name}`);
+          }
+        }),
+      );
+      const failed = settled.find((result) => result.status === "rejected");
+      if (failed?.status === "rejected") {
+        throw failed.reason;
+      }
     }
   }
 }
@@ -72,13 +90,14 @@ export function isVitestWorkerDeclaration(id: string): boolean {
 }
 
 /** One finite request over the already-owned Node IPC channel; never a path/build request. */
-export function requestVitestWorkerArtifacts(): Promise<void> {
+export function requestVitestWorkerArtifacts(signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (!process.send || !process.connected) {
       reject(new Error("Compiled subprocess owner IPC is unavailable"));
       return;
     }
     const finish = (error?: Error) => {
+      signal?.removeEventListener("abort", onAbort);
       process.off("message", onMessage);
       process.off("disconnect", onDisconnect);
       process.channel?.unref();
@@ -88,6 +107,7 @@ export function requestVitestWorkerArtifacts(): Promise<void> {
         resolve();
       }
     };
+    const onAbort = () => finish(new Error("Compiled subprocess preparation request canceled"));
     const onDisconnect = () => finish(new Error("Compiled subprocess owner disconnected"));
     const onMessage = (message: unknown) => {
       if (
@@ -101,6 +121,11 @@ export function requestVitestWorkerArtifacts(): Promise<void> {
     };
     process.on("message", onMessage);
     process.once("disconnect", onDisconnect);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
     process.channel?.ref();
     process.send(VITEST_WORKER_PREPARE_REQUEST, (error) => {
       if (error) {

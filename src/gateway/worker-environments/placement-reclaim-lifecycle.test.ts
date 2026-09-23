@@ -1,15 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
-import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
 import type { NodeWorkerWorkspaceExecInput } from "../../worker/node-workspace-protocol.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import * as nodeSupport from "./node-worker-tunnel.test-support.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
-import { MANIFEST_REF, REQUEST } from "./placement-dispatch-test-fixtures.js";
+import { MANIFEST_REF, REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
+import { createWorkerPlacementIdleSweep } from "./placement-idle-sweep.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import * as support from "./service.test-support.js";
+import type { WorkerTunnelManager } from "./tunnel.js";
 import {
   REMOTE_WORKSPACE_QUIESCE_JS,
   REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
@@ -36,25 +41,32 @@ describe("placement reclaim with provider-owned node teardown", () => {
         reconcileChanged: false,
         reconcileCommitsManifest: false,
       };
-      let harness = createHarness(placements, harnessOptions);
+      let harness = createHarness(support.testState.stateDb, placements, harnessOptions);
       const environmentId = harness.ready.environmentId;
       const build = {
         ...support.BOOTSTRAP_RECEIPT,
-        protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+        protocolFeatures: [
+          WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+          WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+        ],
       };
       support.testState.prepareInstallation = async () => ({
         ...support.BUNDLE_ARTIFACT,
         ...build,
       });
-      support.testState.store.createIntent({
+      await support.testState.store.createIntent({
         environmentId,
         providerId: "fake",
         profileId: REQUEST.profileId,
         profileSnapshot: { settings: { region: "test" } },
         provisionOperationId: "provision-fixture",
       });
-      support.testState.store.transition({ environmentId, from: "requested", to: "provisioning" });
-      support.testState.store.transition({
+      await support.testState.store.transition({
+        environmentId,
+        from: "requested",
+        to: "provisioning",
+      });
+      await support.testState.store.transition({
         environmentId,
         from: "provisioning",
         to: "ready",
@@ -65,7 +77,7 @@ describe("placement reclaim with provider-owned node teardown", () => {
           sharedHost: false,
         },
       });
-      const attached = support.testState.store.transition({
+      const attached = await support.testState.store.transition({
         environmentId,
         from: "ready",
         to: "attached",
@@ -79,16 +91,16 @@ describe("placement reclaim with provider-owned node teardown", () => {
         throw new Error("expected active placement");
       }
       if (operation === "recovery") {
-        placements.markWorkspaceResultPending(
-          placements.claimTurn({
-            ...REQUEST,
-            claimId: "pending-claim",
-            runId: "pending-run",
-            owner: { kind: "worker", environmentId, ownerEpoch: attached.ownerEpoch },
-          }),
-        );
+        const claim = placements.claimTurn({
+          ...REQUEST,
+          claimId: "pending-claim",
+          runId: "pending-run",
+          owner: { kind: "worker", environmentId, ownerEpoch: attached.ownerEpoch },
+        });
+        placements.markWorkspaceResultPending(claim);
+        placements.startWorkspaceResultDrain(claim);
         placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-        harness = createHarness(placements, harnessOptions);
+        harness = createHarness(support.testState.stateDb, placements, harnessOptions);
       }
       harness.markEnvironmentOwnerEpoch(attached.ownerEpoch);
       const transport = nodeSupport.transport();
@@ -112,7 +124,7 @@ describe("placement reclaim with provider-owned node teardown", () => {
           payloadJSON: nodeSupport.workspaceCommandPayload(active.remoteWorkspaceDir, { stdout }),
         };
       });
-      transport.invoke = invoke;
+      transport.invoke = nodeSupport.withWorkspaceDrain(invoke);
       const transfer = nodeSupport.workspaceTransfer();
       transfer.closeAll = vi.fn(async () => {});
       transfer.prepareSync = vi.fn(async () => ({
@@ -134,7 +146,7 @@ describe("placement reclaim with provider-owned node teardown", () => {
         workspaceTransfer: transfer,
       });
       tunnels.bindWorkspaceBindingResolver(async () => ({
-        localPath: support.testState.root,
+        source: { kind: "local", path: support.testState.root },
         remoteWorkspaceDir: active.remoteWorkspaceDir,
         manifestRef: MANIFEST_REF,
       }));
@@ -215,7 +227,8 @@ describe("placement reclaim with provider-owned node teardown", () => {
       );
       invoke.mockClear();
       vi.mocked(harness.environments.startTunnel).mockClear();
-      vi.useFakeTimers();
+      // SQLite workers compare cross-thread monotonic deadlines; fake only the provider timer.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const request = {
         sessionId: active.sessionId,
         sessionKey: active.sessionKey,
@@ -284,14 +297,16 @@ describe("placement reclaim with provider-owned node teardown", () => {
           await vi.advanceTimersByTimeAsync(1_001);
         }
         const outcome = await result;
-        expect(primaryError).toMatchObject({ code: "provider_failure" });
+        const expectedError =
+          failure === "timeout"
+            ? "Worker provider operation timed out after 1000ms"
+            : "provider destruction is indeterminate";
+        expect(primaryError).toMatchObject({ code: "provider_failure", message: expectedError });
         if (operation === "recovery") {
           expect(outcome).toBeUndefined();
           expect
             .soft(harness.reportWorkspaceResultRecoveryFailure)
-            .toHaveBeenCalledWith(
-              expect.objectContaining({ error: "Worker provider operation failed" }),
-            );
+            .toHaveBeenCalledWith(expect.objectContaining({ error: expectedError }));
           expect(placements.get(active.sessionId)?.state).toBe("draining");
         } else {
           expect.soft(outcome).toBe(primaryError);
@@ -324,6 +339,93 @@ describe("placement reclaim with provider-owned node teardown", () => {
         vi.useRealTimers();
         await closingOwner;
       }
+    },
+  );
+});
+
+describe("SSH placement cleanup after worker credential expiry", () => {
+  support.setupWorkerEnvironmentServiceSuite();
+
+  it.each(["reclaim", "move", "idle suspend"] as const)(
+    "%s reconciles the workspace before releasing the exact lease",
+    async (operation) => {
+      const placements = createWorkerSessionPlacementStore({
+        database: support.testState.stateDb,
+        now: () => support.testState.nowMs,
+      });
+      const harness = createHarness(support.testState.stateDb, placements, {
+        workspacePath: support.testState.root,
+      });
+      const environmentId = harness.ready.environmentId;
+      const identity = await support.seedAttachedIdentity(environmentId, REQUEST.sessionId);
+      const active = seedActivePlacement(placements, {
+        environmentId,
+        ownerEpoch: identity.ownerEpoch,
+        executionMode: "remote-exec",
+      });
+      if (active.state !== "active") {
+        throw new Error("expected active SSH placement");
+      }
+      await harness.environments.attachSession({
+        environmentId,
+        ownerEpoch: harness.ready.ownerEpoch,
+        sessionId: REQUEST.sessionId,
+      });
+      const workspace = await harness.environments.startTunnel({
+        environmentId,
+        ownerEpoch: identity.ownerEpoch,
+      });
+      const reconcileWorkspace = vi.spyOn(workspace, "reconcileWorkspace");
+      const tunnelManager = {
+        status: () => "connected" as const,
+        start: vi.fn(async () => workspace),
+        stop: vi.fn(async () => {}),
+        stopAll: vi.fn(async () => {}),
+      } as unknown as WorkerTunnelManager;
+      const destroy = vi.fn(async () => {
+        expect(reconcileWorkspace).toHaveBeenCalledOnce();
+      });
+      const service = support.createService(support.createProvider({ destroy }), { tunnelManager });
+      vi.mocked(harness.environments.get).mockImplementation(service.get);
+      vi.mocked(harness.environments.startTunnel).mockImplementation(service.startTunnel);
+      vi.mocked(harness.environments.stopTunnel).mockImplementation(service.stopTunnel);
+      vi.mocked(harness.environments.destroy).mockImplementation(service.destroy);
+      support.testState.nowMs = identity.credentialExpiresAtMs + 60_001;
+
+      if (operation === "move") {
+        await harness.service.move({
+          ...REQUEST,
+          source: {
+            generation: active.generation,
+            environmentId,
+            ownerEpoch: identity.ownerEpoch,
+          },
+          target: { kind: "gateway" },
+        });
+      } else if (operation === "idle suspend") {
+        support.getDevelopmentProfile().suspendAfter = "1m";
+        const warn = vi.fn();
+        await createWorkerPlacementIdleSweep({
+          placements,
+          environments: service,
+          dispatch: harness.service,
+          getConfig: () => support.testState.config,
+          now: () => support.testState.nowMs,
+          info: vi.fn(),
+          warn,
+        }).sweep();
+        expect(warn).not.toHaveBeenCalled();
+      } else {
+        await harness.service.reclaim(REQUEST);
+      }
+
+      expect(destroy).toHaveBeenCalledOnce();
+      expect(service.get(environmentId)?.state).toBe("destroyed");
+      expect(placements.get(active.sessionId)).toMatchObject({
+        state: operation === "move" ? "local" : "reclaimed",
+        turnClaim: null,
+      });
+      expect(placements.listPendingWorkspaceResults()).toEqual([]);
     },
   );
 });

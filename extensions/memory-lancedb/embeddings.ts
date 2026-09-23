@@ -512,18 +512,17 @@ export class MemoryRecallEmbeddingError extends Error {
   }
 }
 
-export const testing = {
-  isEmbeddingDimensionsRejectedError,
-  isMemoryRecallTimeoutError,
-  runWithTimeout,
-  truncateEmbeddingVector,
-} as const;
-
-export function createEmbeddings(api: OpenClawPluginApi): Embeddings {
-  const provider = new ProviderAdapterEmbeddings(api);
+export function createEmbeddings(api: OpenClawPluginApi): Embeddings & { start(): void } {
+  let provider = new ProviderAdapterEmbeddings(api);
   let direct: { fingerprint: string; client: OpenAiCompatibleEmbeddings } | undefined;
   let closed = false;
   return {
+    start() {
+      if (closed) {
+        provider = new ProviderAdapterEmbeddings(api);
+        closed = false;
+      }
+    },
     async embed(agentId, text, embeddingConfig, timeoutMs) {
       if (closed) {
         throw new Error("memory-lancedb embeddings are closed");
@@ -564,13 +563,6 @@ type EmbeddingCreateResponse = {
 };
 
 export function normalizeEmbeddingVector(value: unknown): number[] {
-  if (Array.isArray(value)) {
-    if (!value.every((item) => typeof item === "number" && Number.isFinite(item))) {
-      throw new Error("Embedding response contains non-numeric values");
-    }
-    return value;
-  }
-
   if (typeof value === "string") {
     const canonicalEmbedding = canonicalizeBase64(value);
     if (!canonicalEmbedding) {
@@ -585,8 +577,14 @@ export function normalizeEmbeddingVector(value: unknown): number[] {
     for (let offset = 0; offset < bytes.byteLength; offset += Float32Array.BYTES_PER_ELEMENT) {
       floats.push(view.getFloat32(offset, true));
     }
-    return floats;
+    return normalizeEmbeddingVector(floats);
   }
 
-  throw new Error("Embedding response is missing a vector");
+  if (!Array.isArray(value)) {
+    throw new Error("Embedding response is missing a vector");
+  }
+  if (!value.every((item) => typeof item === "number" && Number.isFinite(item))) {
+    throw new Error("Embedding response contains non-numeric values");
+  }
+  return value;
 }

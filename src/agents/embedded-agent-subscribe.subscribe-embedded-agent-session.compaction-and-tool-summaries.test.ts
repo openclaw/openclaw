@@ -9,7 +9,10 @@ import {
   createSubscribedSessionHarness,
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
+import type { AgentSessionEvent } from "./sessions/index.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
+import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
+import { createHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 type SessionEventHandler = (evt: unknown) => void;
@@ -53,8 +56,8 @@ describe("synchronous context accounting", () => {
         completedCompactionEnd(false, 18_000, 8_000),
       ],
       expected: [
-        { kind: "model", contextTokens: 90_000 },
-        { kind: "model", contextTokens: 18_000 },
+        { kind: "model", contextTokens: 90_000, successful: false },
+        { kind: "model", contextTokens: 18_000, successful: false },
       ],
     },
     {
@@ -71,7 +74,7 @@ describe("synchronous context accounting", () => {
           },
         }),
       ],
-      expected: [{ kind: "model", contextTokens: undefined }],
+      expected: [{ kind: "model", contextTokens: undefined, successful: false }],
     },
     {
       name: "failed zero-usage retry without old assistant backfill",
@@ -81,8 +84,8 @@ describe("synchronous context accounting", () => {
         accountingAssistant(0, "error"),
       ],
       expected: [
-        { kind: "model", contextTokens: 90_000 },
-        { kind: "model", contextTokens: undefined },
+        { kind: "model", contextTokens: 90_000, successful: false },
+        { kind: "model", contextTokens: undefined, successful: false },
       ],
     },
   ])("records $name in producer order", ({ events, expected }) => {
@@ -140,8 +143,8 @@ describe("synchronous context accounting", () => {
       },
     });
     const expected: EmbeddedContextAccountingEvent[] = [
-      { kind: "model", contextTokens: 90_000 },
-      { kind: "model", contextTokens: 20_000 },
+      { kind: "model", contextTokens: 90_000, successful: false },
+      { kind: "model", contextTokens: 20_000, successful: false },
     ];
     try {
       const before = accountingAssistant(90_000);
@@ -151,27 +154,33 @@ describe("synchronous context accounting", () => {
       emit(completedCompactionEnd(false, 90_000, 12_000));
       const after = accountingAssistant(0);
       emit({ type: "message_start", message: after });
+      const partial = {
+        ...after,
+        usage: {
+          ...makeZeroUsageSnapshot(),
+          input: 18_000,
+          cacheRead: 2_000,
+          totalTokens: 20_000,
+        },
+      };
       emit({
         type: "message_update",
-        message: after,
+        message: partial,
         assistantMessageEvent: {
-          type: "done",
-          message: {
-            ...after,
-            usage: {
-              ...makeZeroUsageSnapshot(),
-              input: 18_000,
-              cacheRead: 2_000,
-              totalTokens: 20_000,
-            },
-          },
+          type: "text_end",
+          contentIndex: 0,
+          content: "model reply",
+          partial,
         },
-      });
+      } satisfies AgentSessionEvent);
       emit({ type: "message_end", message: after });
       for (const model of ["delivery-mirror", "gateway-injected"]) {
         const synthetic = { ...accountingAssistant(99_000), provider: "openclaw", model };
         emit({ type: "message_start", message: synthetic });
         emit({ type: "message_end", message: synthetic });
+        const withoutUsage = { role: "assistant", provider: "openclaw", model };
+        emit({ type: "message_end", message: withoutUsage });
+        expect(withoutUsage).not.toHaveProperty("usage");
       }
       expect(observed).toEqual(expected);
       expect(after.usage.input).toBe(18_000);
@@ -189,6 +198,54 @@ describe("synchronous context accounting", () => {
 });
 
 describe("fenced output and compaction retries", () => {
+  it("preserves an accepted heartbeat response and private scratch through compaction retry", async () => {
+    const onHeartbeatToolResponse = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-heartbeat-compaction",
+      sessionPersistence: "detached",
+      onHeartbeatToolResponse,
+    });
+    const tool = createHeartbeatResponseTool();
+    const response = {
+      outcome: "done" as const,
+      notify: true,
+      summary: "The monitored task completed.",
+      notificationText: "Your report is ready.",
+      scratch: "Private monitor notes: report completion confirmed.",
+    };
+    const toolCallId = "heartbeat-before-compaction";
+    emit({
+      type: "tool_execution_start",
+      toolName: tool.name,
+      toolCallId,
+      args: response,
+    });
+    const result = await tool.execute(toolCallId, response);
+    emit({
+      type: "tool_execution_end",
+      toolName: tool.name,
+      toolCallId,
+      isError: false,
+      result,
+    });
+    await subscription.waitForPendingEvents();
+    expect(subscription.getHeartbeatToolResponse()).toEqual(response);
+
+    emit(completedCompactionEnd());
+    const assistant = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "Internal retry fallback." }],
+    });
+    emit({ type: "message_start", message: assistant });
+    emit({ type: "message_end", message: assistant });
+    emit({ type: "agent_end", messages: [assistant] });
+    await subscription.waitForPendingEvents();
+    await subscription.waitForCompactionRetry();
+
+    expect(subscription.getHeartbeatToolResponse()).toEqual(response);
+    expect(onHeartbeatToolResponse).toHaveBeenCalledExactlyOnceWith(response);
+    expect(subscription.getCompactionCount()).toBe(1);
+  });
+
   it("waits for auto-compaction retry and clears buffered text", async () => {
     // A retrying compaction invalidates any assistant text buffered from the
     // failed attempt; waiters resolve only after the retry path reaches agent_end.
@@ -210,10 +267,7 @@ describe("fenced output and compaction retries", () => {
       runId: "run-1",
     });
 
-    const assistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "oops" }],
-    } as AssistantMessage;
+    const assistantMessage = textAssistant("oops") as AssistantMessage;
 
     for (const listener of listeners) {
       listener({ type: "message_end", message: assistantMessage });
@@ -517,10 +571,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     const { emit, subscription } = createSubscribedSessionHarness({
       runId: "run-compaction-assistant",
     });
-    const assistant = {
-      role: "assistant",
-      content: [{ type: "text", text: "Reply before compaction" }],
-    } as AssistantMessage;
+    const assistant = textAssistant("Reply before compaction") as AssistantMessage;
 
     emit({ type: "message_end", message: assistant });
     expect(subscription.getCurrentAttemptAssistant()).toEqual(assistant);

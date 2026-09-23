@@ -445,6 +445,17 @@ describe("run-oxlint", () => {
     ).toThrow("OPENCLAW_OXLINT_SHARD_CONCURRENCY must be a positive integer; got: 2x");
   });
 
+  it("keeps explicitly split extension stripes serial on roomy hosts", () => {
+    expect(
+      resolveOxlintShardConcurrency({
+        env: { CI: "true", OPENCLAW_OXLINT_SHARD_CONCURRENCY: "2" },
+        platform: "linux",
+        hostResources: ROOMY_HOST,
+        splitExtensions: true,
+      }),
+    ).toBe(1);
+  });
+
   it("uses a bounded oxlint shard heartbeat by default", () => {
     expect(resolveShardHeartbeatMs({})).toBe(30_000);
     expect(resolveShardHeartbeatMs({ OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS: "0" })).toBe(0);
@@ -635,6 +646,62 @@ describe("run-oxlint", () => {
   );
 
   it.each([
+    { name: "Linux CI", env: { CI: "true" }, chunkSize: 16 },
+    { name: "GitHub Actions", env: { GITHUB_ACTIONS: "true" }, chunkSize: 16 },
+    { name: "three CPUs", logicalCpuCount: 3, chunkSize: 8 },
+    { name: "below capacity threshold", memoryCapacityBytes: 15 * 1024 ** 3 - 1, chunkSize: 8 },
+    { name: "ancestor memory cap", memoryCapacityBytes: 8 * 1024 ** 3, chunkSize: 8 },
+    { name: "unknown capacity", memoryCapacityBytes: null, chunkSize: 8 },
+    { name: "local Linux", env: {}, chunkSize: 8 },
+    { name: "macOS", platform: "darwin", chunkSize: 8 },
+    { name: "Windows", platform: "win32", chunkSize: 8 },
+    { name: "explicit stripes", splitExtensions: true, chunkSize: 8 },
+    {
+      name: "explicit serial",
+      env: { CI: "true", OPENCLAW_OXLINT_SHARDS_SERIAL: "1" },
+      chunkSize: 8,
+    },
+  ] as const)("preserves complete plugin coverage with $name batches", (scenario) => {
+    const directories = Array.from(
+      { length: 17 },
+      (_, index) => `plugin-${String(index).padStart(2, "0")}`,
+    );
+    const shards = filterOxlintShards(
+      createOxlintShards({
+        cwd: "/repo",
+        env: { CI: "true" },
+        platform: "linux",
+        ...scenario,
+        hostResources: {
+          totalMemoryBytes: 16 * 1024 ** 3,
+          logicalCpuCount: scenario.logicalCpuCount ?? 4,
+          memoryCapacityBytes:
+            "memoryCapacityBytes" in scenario ? scenario.memoryCapacityBytes : 15 * 1024 ** 3,
+        },
+        readDir: (target) =>
+          target.endsWith("/extensions")
+            ? ([
+                ...directories
+                  .toReversed()
+                  .map((name) => ({ name, isDirectory: () => true, isFile: () => false })),
+                { name: "root.test.ts", isDirectory: () => false, isFile: () => true },
+                { name: "notes.md", isDirectory: () => false, isFile: () => true },
+              ] as never)
+            : [],
+      }),
+      new Set(["extensions"]),
+    );
+    expect(shards.map((shard) => shard.args.slice(2).length)).toEqual(
+      scenario.chunkSize === 16 ? [1, 16, 1] : [1, 8, 8, 1],
+    );
+    expect(shards.flatMap((shard) => shard.args.slice(2))).toEqual([
+      "extensions/root.test.ts",
+      ...directories.map((directory) => `extensions/${directory}`),
+    ]);
+    expect(shouldPrepareExtensionPackageBoundaryArtifactsForShards(shards)).toBe(true);
+  });
+
+  it.each([
     { name: "explicit full speed", memoryGiB: 16, env: { OPENCLAW_LOCAL_CHECK_MODE: "full" } },
     { name: "explicit fast mode", memoryGiB: 16, env: { OPENCLAW_LOCAL_CHECK_MODE: "fast" } },
     { name: "explicit parallel", memoryGiB: 16, env: { OPENCLAW_OXLINT_SHARDS_SERIAL: "0" } },
@@ -672,6 +739,57 @@ describe("run-oxlint", () => {
     ]);
   });
 
+  it.each([
+    { platform: "linux", env: { CI: "true" } },
+    { platform: "linux", env: {} },
+    { platform: "linux", env: { GITHUB_ACTIONS: "true" } },
+    { platform: "darwin", env: {} },
+    { platform: "win32", env: {} },
+  ] as const)(
+    "preserves the published updater's automatic full-lint plan on $platform with $env",
+    ({ platform, env }) => {
+      const directories = ["agents", "alpha", "beta", "gateway", "infra", "zeta"];
+      const cwd = createTempDir("openclaw-oxlint-core-memory-");
+      for (const directory of directories) {
+        mkdirSync(join(cwd, "src", directory), { recursive: true });
+      }
+      writeFileSync(join(cwd, "src", "root.ts"), "");
+      const shards = filterOxlintShards(
+        createOxlintShards({
+          cwd,
+          env,
+          platform,
+          hostResources: CONSTRAINED_HOST,
+        }),
+        new Set(["core"]),
+      );
+
+      expect(shards.map((shard) => shard.args.slice(2))).toEqual([
+        ["src/agents", "src/zeta"],
+        ["src/alpha", "src/root.ts"],
+        ["src/beta", "ui"],
+        ["src/gateway", "packages"],
+        ["src/infra"],
+      ]);
+      expect(shards.every((shard) => shard.args[1] === "config/tsconfig/oxlint.core.json")).toBe(
+        true,
+      );
+      const targets = shards.flatMap((shard) => shard.args.slice(2));
+      expect(targets.toSorted()).toEqual(
+        [
+          ...directories.map((directory) => `src/${directory}`),
+          "src/root.ts",
+          "ui",
+          "packages",
+        ].toSorted(),
+      );
+      expect(new Set(targets).size).toBe(targets.length);
+      expect(shouldRunOxlintShardsSerial({ env, platform, hostResources: CONSTRAINED_HOST })).toBe(
+        true,
+      );
+    },
+  );
+
   it("parses shard runner flags without forwarding them to oxlint", () => {
     const parsed = parseShardRunnerArgs([
       "--only=core",
@@ -693,35 +811,46 @@ describe("run-oxlint", () => {
     expect(extension.oxlintArgs).toEqual([]);
   });
 
-  it("aggregates split core targets into deterministic disjoint Programs", () => {
+  it("isolates large core targets while preserving disjoint stripe coverage", () => {
     const shards = createOxlintShards({
       cwd: "/repo",
       splitCore: true,
       readDir: () =>
         [
-          { name: "alpha", isDirectory: () => true, isFile: () => false },
-          { name: "beta", isDirectory: () => true, isFile: () => false },
-          { name: "gamma", isDirectory: () => true, isFile: () => false },
+          { name: "agents", isDirectory: () => true, isFile: () => false },
+          { name: "gateway", isDirectory: () => true, isFile: () => false },
+          { name: "infra", isDirectory: () => true, isFile: () => false },
+          { name: "misc", isDirectory: () => true, isFile: () => false },
         ] as never,
     }).filter((shard) => shard.name.startsWith("core:"));
-    const stripes = [1, 2, 3].map((index) => selectCoreOxlintStripe(shards, { index, total: 3 }));
+    const stripes = [1, 2, 3].map((index) =>
+      selectCoreOxlintStripe(shards, { index, total: 3 }, { isolateLargeTargets: true }),
+    );
 
-    expect(stripes.map((stripe) => stripe.map((shard) => shard.name))).toEqual([
-      ["core:stripe:1"],
-      ["core:stripe:2"],
-      ["core:stripe:3"],
-    ]);
-    const stripeTargets = stripes.flatMap(([stripe]) => stripe?.args.slice(2) ?? []);
+    const programs = stripes.flat();
+    for (const target of ["src/agents", "src/gateway", "src/infra", "ui"]) {
+      const program = programs.find((shard) => shard.args.slice(2).includes(target));
+      expect(program?.args).toEqual(["--tsconfig", "config/tsconfig/oxlint.core.json", target]);
+    }
+    const stripeTargets = programs.flatMap((stripe) => stripe.args.slice(2));
     const sourceTargets = shards.flatMap((shard) => shard.args.slice(2));
     expect(stripeTargets.toSorted()).toEqual(sourceTargets.toSorted());
     expect(new Set(stripeTargets)).toHaveProperty("size", sourceTargets.length);
-    expect(selectCoreOxlintStripe(shards, { index: 6, total: 6 })).toEqual([]);
+    expect(selectCoreOxlintStripe(shards, { index: 7, total: 7 })).toEqual([]);
     expect(() =>
       selectCoreOxlintStripe(createOxlintShards({ cwd: "/repo" }), { index: 1, total: 2 }),
     ).toThrow("--core-stripe requires a non-empty core-only shard selection");
   });
 
-  it("partitions constrained extension programs exactly once without aggregating them", () => {
+  it.each([
+    { name: "constrained CI", hostResources: CONSTRAINED_HOST, env: { CI: "true" } },
+    { name: "roomy CI", hostResources: ROOMY_HOST, env: { CI: "true" } },
+    {
+      name: "explicit parallel",
+      hostResources: CONSTRAINED_HOST,
+      env: { OPENCLAW_OXLINT_SHARDS_SERIAL: "0" },
+    },
+  ])("partitions explicit extension stripes on $name", ({ hostResources, env }) => {
     const entries = [
       { name: "root.test.ts", isDirectory: () => false, isFile: () => true },
       ...Array.from({ length: 55 }, (_, index) => ({
@@ -730,11 +859,17 @@ describe("run-oxlint", () => {
         isFile: () => false,
       })),
     ] as never;
-    const shards = createExtensionOxlintShards({
-      cwd: "/repo",
-      platform: "linux",
-      readDir: () => entries,
-    });
+    const shards = filterOxlintShards(
+      createOxlintShards({
+        cwd: "/repo",
+        env,
+        hostResources,
+        platform: "linux",
+        readDir: () => entries,
+        splitExtensions: true,
+      }),
+      new Set(["extensions"]),
+    );
     const stripes = Array.from({ length: 6 }, (_, index) =>
       selectExtensionOxlintStripe(shards, { index: index + 1, total: 6 }),
     );
@@ -745,13 +880,71 @@ describe("run-oxlint", () => {
     );
     expect(new Set(selected.map((shard) => shard.name))).toHaveProperty("size", shards.length);
     expect(selectExtensionOxlintStripe(shards, { index: 9, total: 9 })).toEqual([]);
+    expect(selectExtensionOxlintStripe([], { index: 1, total: 6 })).toEqual([]);
     expect(() =>
       selectExtensionOxlintStripe(createOxlintShards({ cwd: "/repo" }), {
         index: 1,
         total: 2,
       }),
-    ).toThrow("--extension-stripe requires a non-empty extension-only shard selection");
+    ).toThrow("--extension-stripe requires an extension-only shard selection");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "partitions explicit extension stripes through the CLI on nonserial hosts",
+    () => {
+      const cwd = createTempDir("openclaw-oxlint-cli-stripes-");
+      const receivedArgsPath = join(cwd, "received-args.jsonl");
+      for (const directory of PLUGIN_FIXTURE_DIRECTORIES) {
+        mkdirSync(join(cwd, "extensions", directory), { recursive: true });
+      }
+      writeFileSync(join(cwd, "extensions", "root.test.ts"), "");
+      mkdirSync(join(cwd, "scripts"));
+      writeModule(join(cwd, "scripts", "run-oxlint.mts"), [
+        "import { appendFileSync } from 'node:fs';",
+        `appendFileSync(${JSON.stringify(receivedArgsPath)}, JSON.stringify(process.argv.slice(2)) + '\\n');`,
+      ]);
+
+      for (let stripe = 1; stripe <= 6; stripe += 1) {
+        const result = spawnSync(
+          process.execPath,
+          [
+            fileURLToPath(RUN_OXLINT_SHARDS_URL),
+            "--only=extensions",
+            `--extension-stripe=${stripe}/6`,
+            "--threads=1",
+            "--help",
+          ],
+          {
+            cwd,
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              OPENCLAW_LOCAL_CHECK: "0",
+              OPENCLAW_OXLINT_SHARDS_SERIAL: "0",
+            },
+            timeout: 5_000,
+          },
+        );
+        expect(result.status, result.stderr).toBe(0);
+      }
+
+      const receivedArgs = readFileSync(receivedArgsPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as string[]);
+      const targets = receivedArgs.flatMap((args) => {
+        expect(args.slice(0, 2)).toEqual(["--tsconfig", "extensions/tsconfig.json"]);
+        expect(args.slice(-2)).toEqual(["--threads=1", "--help"]);
+        return args.slice(2, -2);
+      });
+      expect(targets.toSorted()).toEqual(
+        [
+          "extensions/root.test.ts",
+          ...PLUGIN_FIXTURE_DIRECTORIES.map((directory) => `extensions/${directory}`),
+        ].toSorted(),
+      );
+    },
+  );
 
   it.each([
     ["--core-stripe=0/3"],

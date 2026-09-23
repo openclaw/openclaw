@@ -9,12 +9,21 @@ import {
 describe("configured model refs", () => {
   it("lists raw refs from one model selector without normalizing them", () => {
     expect(listModelRefsFromConfigValue("  openai/gpt-5.5  ")).toEqual(["  openai/gpt-5.5  "]);
-    expect(
-      listModelRefsFromConfigValue({
-        primary: " primary/model ",
-        fallbacks: ["", "fallback/model", 42, "fallback/model"],
-      }),
-    ).toEqual([" primary/model ", "", "fallback/model", "fallback/model"]);
+    const selector = Object.freeze({
+      primary: " primary/model ",
+      fallbacks: Object.freeze(["", "fallback/model", 42, "fallback/model"]),
+    });
+    expect(listModelRefsFromConfigValue(selector)).toEqual([
+      " primary/model ",
+      "",
+      "fallback/model",
+      "fallback/model",
+    ]);
+    expect(collectConfiguredModelRefs({ agents: { defaults: { model: selector } } })).toEqual([
+      { path: "agents.defaults.model.primary", value: "primary/model", kind: "selector" },
+      { path: "agents.defaults.model.fallbacks.1", value: "fallback/model", kind: "selector" },
+      { path: "agents.defaults.model.fallbacks.3", value: "fallback/model", kind: "selector" },
+    ]);
     expect(listModelRefsFromConfigValue(["openai/gpt-5.5"])).toEqual([]);
     expect(listModelRefsFromConfigValue({ primary: 42, fallbacks: "openai/gpt-5.5" })).toEqual([]);
   });
@@ -49,19 +58,36 @@ describe("configured model refs", () => {
         },
       }),
     ).toEqual([
-      { path: "agents.defaults.model.primary", value: "openai/gpt-5.5" },
-      { path: "agents.defaults.model.fallbacks.0", value: "anthropic/claude-sonnet-4-6" },
+      { path: "agents.defaults.model.primary", value: "openai/gpt-5.5", kind: "selector" },
+      {
+        path: "agents.defaults.model.fallbacks.0",
+        value: "anthropic/claude-sonnet-4-6",
+        kind: "selector",
+      },
       {
         path: "agents.defaults.utilityModel",
         value: "google/gemini-3.1-flash-lite-preview",
+        kind: "selector",
       },
-      { path: "agents.defaults.mediaModels.image", value: "openai/gpt-image-2" },
-      { path: "agents.defaults.compaction.memoryFlush.model", value: "openai/gpt-5.5-mini" },
-      { path: "agents.entries.custom.model", value: "xai/grok-4-fast" },
-      { path: "agents.entries.custom.utilityModel", value: "openai/gpt-5.5-nano" },
-      { path: "channels.modelByChannel.discord.guild", value: "anthropic/claude-opus-4-8" },
-      { path: "hooks.mappings.0.model", value: "openai/gpt-5.5-nano" },
-      { path: "tts.summaryModel", value: "openai/gpt-5.5-mini" },
+      { path: "agents.defaults.mediaModels.image", value: "openai/gpt-image-2", kind: "literal" },
+      {
+        path: "agents.defaults.compaction.memoryFlush.model",
+        value: "openai/gpt-5.5-mini",
+        kind: "selector",
+      },
+      { path: "agents.entries.custom.model", value: "xai/grok-4-fast", kind: "selector" },
+      {
+        path: "agents.entries.custom.utilityModel",
+        value: "openai/gpt-5.5-nano",
+        kind: "selector",
+      },
+      {
+        path: "channels.modelByChannel.discord.guild",
+        value: "anthropic/claude-opus-4-8",
+        kind: "selector",
+      },
+      { path: "hooks.mappings.0.model", value: "openai/gpt-5.5-nano", kind: "selector" },
+      { path: "tts.summaryModel", value: "openai/gpt-5.5-mini", kind: "selector" },
     ]);
   });
 
@@ -91,8 +117,12 @@ describe("configured model refs", () => {
         },
       }),
     ).toEqual([
-      { path: "agents.list.0.model", value: "openai/gpt-5.6" },
-      { path: "agents.list.1.utilityModel", value: "anthropic/claude-sonnet-4-6" },
+      { path: "agents.list.0.model", value: "openai/gpt-5.6", kind: "selector" },
+      {
+        path: "agents.list.1.utilityModel",
+        value: "anthropic/claude-sonnet-4-6",
+        kind: "selector",
+      },
     ]);
   });
 
@@ -104,14 +134,16 @@ describe("configured model refs", () => {
           list: [{ id: "stale", model: "anthropic/claude-opus-4-8" }],
         },
       }),
-    ).toEqual([{ path: "agents.entries.ops.model", value: "openai/gpt-5.6" }]);
+    ).toEqual([{ path: "agents.entries.ops.model", value: "openai/gpt-5.6", kind: "selector" }]);
   });
 
   it.each([
     {
       name: "global exec reviewer string",
       config: { tools: { exec: { reviewer: { model: "global-review/model" } } } },
-      expected: [{ path: "tools.exec.reviewer.model", value: "global-review/model" }],
+      expected: [
+        { path: "tools.exec.reviewer.model", value: "global-review/model", kind: "selector" },
+      ],
     },
     {
       name: "global exec reviewer selector",
@@ -125,8 +157,16 @@ describe("configured model refs", () => {
         },
       },
       expected: [
-        { path: "tools.exec.reviewer.model.primary", value: "global-primary/model" },
-        { path: "tools.exec.reviewer.model.fallbacks.0", value: "global-fallback/model" },
+        {
+          path: "tools.exec.reviewer.model.primary",
+          value: "global-primary/model",
+          kind: "selector",
+        },
+        {
+          path: "tools.exec.reviewer.model.fallbacks.0",
+          value: "global-fallback/model",
+          kind: "selector",
+        },
       ],
     },
     {
@@ -144,14 +184,17 @@ describe("configured model refs", () => {
         {
           path: "tools.media.image.preferredModel",
           value: "image-provider/model",
+          kind: "literal",
         },
         {
           path: "tools.media.audio.preferredModel",
           value: "audio-provider/model",
+          kind: "literal",
         },
         {
           path: "tools.media.video.preferredModel",
           value: "video-provider/model",
+          kind: "literal",
         },
       ],
     },
@@ -179,10 +222,12 @@ describe("configured model refs", () => {
         {
           path: "agents.entries.worker.tools.exec.reviewer.model.primary",
           value: "entry-review-primary/model",
+          kind: "selector",
         },
         {
           path: "agents.entries.worker.tools.exec.reviewer.model.fallbacks.0",
           value: "entry-review-fallback/model",
+          kind: "selector",
         },
       ],
     },
@@ -193,27 +238,49 @@ describe("configured model refs", () => {
           list: [{ id: "worker", tools: { exec: { reviewer: { model: "list-review/model" } } } }],
         },
       },
-      expected: [{ path: "agents.list.0.tools.exec.reviewer.model", value: "list-review/model" }],
+      expected: [
+        {
+          path: "agents.list.0.tools.exec.reviewer.model",
+          value: "list-review/model",
+          kind: "selector",
+        },
+      ],
     },
     {
       name: "keyed agent TTS summary",
       config: { agents: { entries: { worker: { tts: { summaryModel: "entry-tts/model" } } } } },
-      expected: [{ path: "agents.entries.worker.tts.summaryModel", value: "entry-tts/model" }],
+      expected: [
+        {
+          path: "agents.entries.worker.tts.summaryModel",
+          value: "entry-tts/model",
+          kind: "selector",
+        },
+      ],
     },
     {
       name: "legacy agent TTS summary",
       config: { agents: { list: [{ id: "worker", tts: { summaryModel: "list-tts/model" } }] } },
-      expected: [{ path: "agents.list.0.tts.summaryModel", value: "list-tts/model" }],
+      expected: [
+        { path: "agents.list.0.tts.summaryModel", value: "list-tts/model", kind: "selector" },
+      ],
     },
     {
       name: "Discord root voice model",
       config: { channels: { discord: { voice: { model: "discord-voice/model" } } } },
-      expected: [{ path: "channels.discord.voice.model", value: "discord-voice/model" }],
+      expected: [
+        { path: "channels.discord.voice.model", value: "discord-voice/model", kind: "selector" },
+      ],
     },
     {
       name: "Discord root voice TTS summary",
       config: { channels: { discord: { voice: { tts: { summaryModel: "discord-tts/model" } } } } },
-      expected: [{ path: "channels.discord.voice.tts.summaryModel", value: "discord-tts/model" }],
+      expected: [
+        {
+          path: "channels.discord.voice.tts.summaryModel",
+          value: "discord-tts/model",
+          kind: "selector",
+        },
+      ],
     },
     {
       name: "Discord account voice model",
@@ -221,7 +288,11 @@ describe("configured model refs", () => {
         channels: { discord: { accounts: { work: { voice: { model: "account-voice/model" } } } } },
       },
       expected: [
-        { path: "channels.discord.accounts.work.voice.model", value: "account-voice/model" },
+        {
+          path: "channels.discord.accounts.work.voice.model",
+          value: "account-voice/model",
+          kind: "selector",
+        },
       ],
     },
     {
@@ -237,6 +308,7 @@ describe("configured model refs", () => {
         {
           path: "channels.discord.accounts.work.voice.tts.summaryModel",
           value: "account-tts/model",
+          kind: "selector",
         },
       ],
     },

@@ -45,12 +45,16 @@ import {
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { streamSimple } from "../../stream.js";
 import type { SimpleStreamOptions } from "../../types.js";
+import {
+  normalizeOpenAIServiceTier,
+  supportsOpenAIResponsesFastMode,
+  type OpenAIServiceTier,
+} from "../openai-fast-mode.js";
 import { mapThinkingLevelToReasoningEffort } from "./reasoning-effort-utils.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 const log = createSubsystemLogger("llm/providers/stream-wrappers");
 
-type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
 type DynamicFastMode = boolean | (() => boolean | undefined);
 type OpenClawSimpleStreamOptions = SimpleStreamOptions & {
   openclawCodeModeToolSurface?: boolean;
@@ -282,22 +286,6 @@ function raiseMinimalReasoningForResponsesWebSearchPayload(params: {
   }
 }
 
-function normalizeOpenAIServiceTier(value: unknown): OpenAIServiceTier | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (
-    normalized === "auto" ||
-    normalized === "default" ||
-    normalized === "flex" ||
-    normalized === "priority"
-  ) {
-    return normalized;
-  }
-  return undefined;
-}
-
 /** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function resolveOpenAIServiceTier(
   extraParams: Record<string, unknown> | undefined,
@@ -512,13 +500,7 @@ export function createOpenAIFastModeWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (
-      normalizeOpenAIFastMode(enabled) !== true ||
-      (model.api !== "openai-responses" &&
-        model.api !== "openai-chatgpt-responses" &&
-        model.api !== "azure-openai-responses") ||
-      model.provider !== "openai"
-    ) {
+    if (normalizeOpenAIFastMode(enabled) !== true || !supportsOpenAIResponsesFastMode(model)) {
       return underlying(model, context, options);
     }
     const originalOnPayload = options?.onPayload;

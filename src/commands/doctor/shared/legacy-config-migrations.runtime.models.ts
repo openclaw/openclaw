@@ -5,11 +5,17 @@ import {
 } from "../../../config/legacy.shared.js";
 import { materializeModelPolicyAllowlist } from "../../../config/model-policy-allowlist-migration.js";
 import { isModelThinkingFormat } from "../../../config/types.models.js";
+import { materializeUtilityModelSeparation } from "../../../config/utility-model-separation-migration.js";
+import { containsAuthoredInclude } from "./include-migration-ownership.js";
 import * as catalog from "./legacy-config-migrations.runtime.models.catalog.js";
 import * as codex from "./legacy-config-migrations.runtime.models.codex.js";
 import * as refs from "./legacy-config-migrations.runtime.models.refs.js";
 import * as vllm from "./legacy-config-migrations.runtime.models.vllm.js";
 import { visitAgentEntries } from "./legacy-config-record-shared.js";
+import {
+  collectLegacyDefaultModelAllowRefs,
+  migrateExplicitDefaultModelAllowPolicy,
+} from "./legacy-runtime-model-policy.js";
 
 export { collectBlockedLegacyOpenAICodexProviderPlan } from "./legacy-config-migrations.runtime.models.codex.js";
 export type { BlockedLegacyOpenAICodexProviderPlan } from "./legacy-config-migrations.runtime.models.codex.js";
@@ -43,6 +49,33 @@ const LEGACY_DEFAULT_MODEL_MIGRATION = defineLegacyConfigMigration({
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS = [
   LEGACY_DEFAULT_MODEL_MIGRATION,
+  defineLegacyConfigMigration({
+    id: "runtime.utility-model-separation",
+    describe: "Preserve the legacy implicit primary before separating utility models",
+    legacyRules: [
+      {
+        path: ["agents"],
+        message:
+          'Legacy implicit primary model selection needs preservation before separating utility models. Run "openclaw doctor --fix"; dynamic catalog IDs need an explicit primary model.',
+        // Advice may inspect resolved values; applying the migration still requires authored input.
+        match: (_value, root) =>
+          materializeUtilityModelSeparation(structuredClone(root)).changes.length > 0,
+      },
+    ],
+    apply: (raw, changes, context) => {
+      // Includes need the writer's resolved authored env map; a resolved literal cannot prove intent.
+      if (context && containsAuthoredInclude(context.authoredRaw)) {
+        return;
+      }
+      const migrated = materializeUtilityModelSeparation(raw, context?.authoredRaw ?? raw);
+      // Marker-only conversion is stamped by the config writer, not an unrelated Doctor repair.
+      if (migrated.changes.length === 0) {
+        return;
+      }
+      Object.assign(raw, migrated.config);
+      changes.push(...migrated.changes);
+    },
+  }),
   defineLegacyConfigMigration({
     id: "models.pricing-retired",
     describe: "Remove the retired client-side model pricing bootstrap toggle",
@@ -127,7 +160,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS = [
         path: ["agents", "defaults", "models"],
         message:
           'Legacy agents.defaults.models restricts model overrides; run "openclaw doctor --fix" to migrate valid refs to agents.defaults.modelPolicy.allow.',
-        match: (_value, root) => refs.collectLegacyDefaultModelAllowRefs(root) !== null,
+        match: (_value, root) => collectLegacyDefaultModelAllowRefs(root) !== null,
       },
       {
         path: ["agents", "defaults", "models"],
@@ -136,7 +169,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS = [
         match: (_value, root) => materializeModelPolicyAllowlist(root).kind === "deferred",
       },
     ],
-    apply: refs.migrateExplicitDefaultModelAllowPolicy,
+    apply: migrateExplicitDefaultModelAllowPolicy,
   }),
   defineLegacyConfigMigration({
     id: "agents.defaults.models.vllm.params.qwenThinkingFormat->models.providers.vllm.models.compat.thinkingFormat",
@@ -230,24 +263,13 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS = [
             vllm.listExistingVllmModelTargets(raw),
             vllm.createVllmModelTargets(raw, providerModelIds),
           );
-          if (targets.length === 0) {
-            vllm.removeUntargetedLegacyVllmQwenThinkingFormat({
-              sourcePath: "models.providers.vllm.params",
-              legacyParams: providerParams,
-              legacyFormat: providerLegacyFormat,
-              changes,
-            });
-          } else {
-            for (const target of targets) {
-              vllm.applyLegacyVllmQwenThinkingFormat({
-                sourcePath: "models.providers.vllm.params",
-                legacyParams: providerParams,
-                target,
-                legacyFormat: providerLegacyFormat,
-                changes,
-              });
-            }
-          }
+          vllm.applyLegacyVllmQwenThinkingFormatToTargets({
+            sourcePath: "models.providers.vllm.params",
+            legacyParams: providerParams,
+            targets,
+            legacyFormat: providerLegacyFormat,
+            changes,
+          });
           if (Object.keys(providerParams).length === 0) {
             delete vllmProvider?.params;
           }
@@ -263,24 +285,13 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS = [
             defaultModelIds.length > 0
               ? vllm.createVllmModelTargets(raw, defaultModelIds)
               : vllm.listExistingVllmModelTargets(raw);
-          if (targets.length === 0) {
-            vllm.removeUntargetedLegacyVllmQwenThinkingFormat({
-              sourcePath: "agents.defaults.params",
-              legacyParams: defaultParams,
-              legacyFormat: defaultLegacyFormat,
-              changes,
-            });
-          } else {
-            for (const target of targets) {
-              vllm.applyLegacyVllmQwenThinkingFormat({
-                sourcePath: "agents.defaults.params",
-                legacyParams: defaultParams,
-                target,
-                legacyFormat: defaultLegacyFormat,
-                changes,
-              });
-            }
-          }
+          vllm.applyLegacyVllmQwenThinkingFormatToTargets({
+            sourcePath: "agents.defaults.params",
+            legacyParams: defaultParams,
+            targets,
+            legacyFormat: defaultLegacyFormat,
+            changes,
+          });
           if (Object.keys(defaultParams).length === 0) {
             delete agentsDefaults?.params;
           }
@@ -305,24 +316,13 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS = [
           agentModelIds.length > 0
             ? vllm.createVllmModelTargets(raw, agentModelIds)
             : vllm.listExistingVllmModelTargets(raw);
-        if (targets.length === 0) {
-          vllm.removeUntargetedLegacyVllmQwenThinkingFormat({
-            sourcePath: `${path}.params`,
-            legacyParams: agentParams,
-            legacyFormat: agentLegacyFormat,
-            changes,
-          });
-        } else {
-          for (const target of targets) {
-            vllm.applyLegacyVllmQwenThinkingFormat({
-              sourcePath: `${path}.params`,
-              legacyParams: agentParams,
-              target,
-              legacyFormat: agentLegacyFormat,
-              changes,
-            });
-          }
-        }
+        vllm.applyLegacyVllmQwenThinkingFormatToTargets({
+          sourcePath: `${path}.params`,
+          legacyParams: agentParams,
+          targets,
+          legacyFormat: agentLegacyFormat,
+          changes,
+        });
         if (Object.keys(agentParams).length === 0) {
           delete agentRecord.params;
         }

@@ -152,21 +152,38 @@ describe("qa suite runtime agent process helpers", () => {
     readSessionTranscriptSummaryMock.mockReset();
   });
 
-  it("runs the qa cli through the resolved node executable", async () => {
-    const { child, pending } = startMockQaCli({ args: ["qa", "suite"] });
+  it.each([
+    { name: "repository", cliCommand: undefined },
+    {
+      name: "candidate",
+      cliCommand: {
+        executablePath: "/candidate/bin/openclaw",
+        argsPrefix: ["--profile", "qa"],
+        cwd: "/candidate",
+      },
+    },
+  ])("runs the qa cli through the $name command", async ({ cliCommand }) => {
+    const { child, pending } = startMockQaCli({
+      args: ["qa", "suite"],
+      env: { ...QA_CLI_ENV, gateway: { ...QA_CLI_ENV.gateway, cliCommand } },
+    });
 
     await waitForSpawnCount(1);
     child.stdout.emit("data", Buffer.from("ok\n"));
     child.emit("close", 0);
 
     await expect(pending).resolves.toBe("ok");
-    const spawnCall = firstSpawnCall();
-    expect(spawnCall?.[0]).toBe("/usr/bin/node");
-    expect(spawnCall?.[1]).toEqual([path.join("/repo", "dist", "index.js"), "qa", "suite"]);
-    expect((spawnCall?.[2] as { cwd?: string; env?: unknown } | undefined)?.cwd).toBe(
-      "/tmp/runtime",
-    );
-    expect((spawnCall?.[2] as { env?: unknown } | undefined)?.env).toEqual({ PATH: "/usr/bin" });
+    expect(firstSpawnCall()).toEqual([
+      cliCommand?.executablePath ?? "/usr/bin/node",
+      [...(cliCommand?.argsPrefix ?? [path.join("/repo", "dist", "index.js")]), "qa", "suite"],
+      {
+        cwd: cliCommand?.cwd ?? "/tmp/runtime",
+        env: { PATH: "/usr/bin" },
+        detached: process.platform !== "win32",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    ]);
+    expect(resolveQaNodeExecPathMock).toHaveBeenCalledTimes(cliCommand ? 0 : 1);
   });
 
   it("caps oversized qa cli timeout timers", async () => {
@@ -480,6 +497,7 @@ describe("qa suite runtime agent process helpers", () => {
           to: "transport-target",
           replyChannel: "reply-channel",
           replyTo: "reply-target",
+          threadId: "adapter-thread",
         })),
       },
     } as never;
@@ -499,6 +517,7 @@ describe("qa suite runtime agent process helpers", () => {
           replyChannel?: string;
           replyTo?: string;
           sessionKey?: string;
+          threadId?: string;
           to?: string;
         }
       | undefined;
@@ -508,15 +527,17 @@ describe("qa suite runtime agent process helpers", () => {
     expect(agentPayload?.to).toBe("transport-target");
     expect(agentPayload?.replyChannel).toBe("reply-channel");
     expect(agentPayload?.replyTo).toBe("reply-target");
+    expect(agentPayload?.threadId).toBe("adapter-thread");
     expect(gatewayArgs?.[2]).toBeTypeOf("object");
   });
 
-  it("starts an interactive run without CLI task tracking", async () => {
+  it("preserves thread routing for an interactive run without CLI task tracking", async () => {
     const gatewayCall = vi.fn(async () => ({ runId: "run-chat", status: "started" }));
     const buildAgentDelivery = vi.fn(() => ({
       channel: "qa-channel",
       replyChannel: "qa-channel",
       replyTo: "dm:qa-operator",
+      threadId: "provider-topic-42",
     }));
     const env = {
       gateway: { call: gatewayCall },
@@ -529,6 +550,7 @@ describe("qa suite runtime agent process helpers", () => {
       startAgentRun(env, {
         sessionKey: "agent:qa:main",
         message: "hello",
+        threadId: "topic-42",
         taskTracking: false,
       }),
     ).resolves.toEqual({ runId: "run-chat", status: "started" });
@@ -541,10 +563,14 @@ describe("qa suite runtime agent process helpers", () => {
         deliver: true,
         originatingChannel: "qa-channel",
         originatingTo: "dm:qa-operator",
+        originatingThreadId: "provider-topic-42",
       },
       { timeoutMs: 30_000 },
     );
-    expect(buildAgentDelivery).toHaveBeenCalledWith({ target: "dm:qa-operator" });
+    expect(buildAgentDelivery).toHaveBeenCalledWith({
+      target: "dm:qa-operator",
+      threadId: "topic-42",
+    });
   });
 
   it("finds managed dreaming cron jobs across legacy and current payload contracts", () => {

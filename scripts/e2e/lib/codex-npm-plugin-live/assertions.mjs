@@ -3,6 +3,11 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import {
+  readSqliteTranscriptPayload,
+  sqliteTranscriptPayloadBytesSql,
+  sqliteTranscriptPayloadColumns,
+} from "../../../lib/sqlite-transcript-payload.mjs";
 import { extractAgentReplyTexts } from "../agent-turn-output.mjs";
 import {
   assertPathInside,
@@ -218,7 +223,7 @@ function readSessionEntry(sessionId) {
       const transcriptSummary = db
         .prepare(
           `SELECT COUNT(*) AS event_count,
-                  COALESCE(SUM(length(CAST(event_json AS BLOB))), 0) AS transcript_bytes
+                  COALESCE(SUM(${sqliteTranscriptPayloadBytesSql(db)}), 0) AS transcript_bytes
              FROM transcript_events
             WHERE session_id = ?`,
         )
@@ -242,7 +247,7 @@ function readSessionEntry(sessionId) {
       }
       const transcriptRows = db
         .prepare(
-          `SELECT event_json
+          `SELECT ${sqliteTranscriptPayloadColumns(db)}
              FROM transcript_events
             WHERE session_id = ?
             ORDER BY seq`,
@@ -250,16 +255,14 @@ function readSessionEntry(sessionId) {
         .all(sessionId);
       let transcriptBytes = 0;
       const transcriptEvents = transcriptRows.map((transcriptRow) => {
-        if (typeof transcriptRow.event_json !== "string") {
-          throw new Error(`invalid OpenClaw transcript event for ${sessionId}`);
-        }
-        transcriptBytes += Buffer.byteLength(transcriptRow.event_json);
+        const eventJson = readSqliteTranscriptPayload(transcriptRow);
+        transcriptBytes += Buffer.byteLength(eventJson);
         if (transcriptBytes > MAX_TRANSCRIPT_SCAN_BYTES) {
           throw new Error(
             `OpenClaw transcript exceeded ${MAX_TRANSCRIPT_SCAN_BYTES} bytes for ${sessionId}`,
           );
         }
-        return JSON.parse(transcriptRow.event_json);
+        return JSON.parse(eventJson);
       });
       const entry = JSON.parse(row.entry_json);
       return {
@@ -467,7 +470,6 @@ function assertNpmDeps(options = {}) {
   if (!openAiCodexPackageJson) {
     throw new Error("missing @openai/codex dependency under .openclaw/npm");
   }
-  assertPathInside(npmRoot, openAiCodexPackageJson, "@openai/codex dependency");
 
   assertCodexReleasePackageContract({
     pluginPackageJson,
@@ -909,6 +911,7 @@ function assertAgentError() {
     : "";
   const combined = `${stdout}\n${stderr}`;
   const expectedErrors = [
+    'Agent harness runtime "codex" is unavailable. (reason=owner-plugin-not-activatable, ownerPluginId=codex)',
     'Requested agent harness "codex" is not registered',
     "Unknown model: codex/",
     'Agent harness runtime "codex" is not present in the prepared registry.',

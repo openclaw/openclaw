@@ -93,16 +93,4 @@ export const SECRET_MAPPINGS: readonly SecretMapping[] = [
     profileId: "github-copilot:github",
     mode: "token",
   },
-  {
-    envVar: "GH_TOKEN",
-    provider: "github-copilot",
-    profileId: "github-copilot:github",
-    mode: "token",
-  },
-  {
-    envVar: "GITHUB_TOKEN",
-    provider: "github-copilot",
-    profileId: "github-copilot:github",
-    mode: "token",
-  },
 ] as const;

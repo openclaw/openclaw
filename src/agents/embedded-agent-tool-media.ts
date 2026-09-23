@@ -9,6 +9,7 @@ import { extractToolResultText } from "./embedded-agent-tool-results.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { readToolResultDetails } from "./tool-result-error.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
+import { getCoreTtsToolResultMediaUrls } from "./tools/tts-tool-result-provenance.js";
 
 function pushUniqueMessagingMediaUrl(urls: string[], seen: Set<string>, value: unknown): void {
   if (typeof value !== "string") {
@@ -132,7 +133,7 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
 ]);
 const HTTP_URL_RE = /^https?:\/\//i;
 
-function isCoreToolResultMediaTrustedName(toolName?: string): boolean {
+export function isCoreToolResultMediaTrustedName(toolName?: string): boolean {
   if (!toolName) {
     return false;
   }
@@ -168,23 +169,25 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   ] = { isToolResultMediaTrusted };
 }
 
-function isTrustedOwnedTtsLocalMedia(
+function getTrustedOwnedTtsLocalMediaUrls(
   toolName: string | undefined,
   result: unknown,
   trustedLocalMediaToolNames?: ReadonlySet<string>,
-): boolean {
+): readonly string[] | undefined {
   if (
     !toolName ||
     !isToolResultMediaTrusted(toolName, result, trustedLocalMediaToolNames) ||
     normalizeToolPolicyName(toolName) !== "tts"
   ) {
-    return false;
+    return undefined;
   }
   const media = readToolResultDetails(result)?.media;
   if (!media || typeof media !== "object" || Array.isArray(media)) {
-    return false;
+    return undefined;
   }
-  return (media as Record<string, unknown>).trustedLocalMedia === true;
+  return (media as Record<string, unknown>).trustedLocalMedia === true
+    ? getCoreTtsToolResultMediaUrls(result)
+    : undefined;
 }
 
 export function filterToolResultMediaUrls(
@@ -196,26 +199,20 @@ export function filterToolResultMediaUrls(
   if (mediaUrls.length === 0) {
     return mediaUrls;
   }
-  const trustedOwnedTtsLocalMedia = isTrustedOwnedTtsLocalMedia(
+  const trustedOwnedTtsMediaUrls = getTrustedOwnedTtsLocalMediaUrls(
     toolName,
     result,
     trustedLocalMediaToolNames,
   );
   if (isToolResultMediaTrusted(toolName, result, trustedLocalMediaToolNames)) {
-    // When the current run provides its exact trusted local-media tool names,
-    // require the raw emitted tool name to match one of them before allowing
-    // local media paths.
-    // This blocks normalized aliases and case-variant collisions such as
-    // "Bash" -> "bash" or "Web_Search" -> "web_search" from inheriting a
-    // registered tool's media trust. TTS-generated local files carry a
-    // separate trusted-media flag from the owned tool result, so they can
-    // survive runs whose exact trusted set omitted the raw tts name.
+    // An omitted raw name needs private core-TTS provenance for each local path.
+    // A result field alone cannot grant that exception to a plugin with a core name.
     if (trustedLocalMediaToolNames !== undefined) {
-      if (!trustedOwnedTtsLocalMedia) {
-        const registeredName = toolName?.trim();
-        if (!registeredName || !trustedLocalMediaToolNames.has(registeredName)) {
-          return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
-        }
+      const registeredName = toolName?.trim();
+      if (!registeredName || !trustedLocalMediaToolNames.has(registeredName)) {
+        return mediaUrls.filter(
+          (url) => HTTP_URL_RE.test(url.trim()) || trustedOwnedTtsMediaUrls?.includes(url.trim()),
+        );
       }
     }
     return mediaUrls;

@@ -18,7 +18,7 @@ import type {
   StructuredInputField,
   StructuredInputRecord,
 } from "./structured-input-boundary.js";
-import type { AgentHarnessUserInputOption } from "./user-input-bridge.js";
+import type { AgentHarnessUserInputOption } from "./user-input-types.js";
 
 const MAX_SCHEMA_KEYS = 24;
 const MAX_FIELD_TEXT = 512;
@@ -415,12 +415,10 @@ function buildField(
       isOther: params.isOther,
       isSecret: context.secret,
       options:
-        params.options?.map(
-          (choice): AgentHarnessUserInputOption => ({
-            label: choice.label,
-            ...(choice.description ? { description: choice.description } : {}),
-          }),
-        ) ?? null,
+        params.options?.map((choice): AgentHarnessUserInputOption => ({
+          label: choice.label,
+          ...(choice.description ? { description: choice.description } : {}),
+        })) ?? null,
     },
     decode: (values) => {
       const decoded = params.decode(values);

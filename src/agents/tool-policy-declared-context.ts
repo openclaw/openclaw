@@ -9,8 +9,9 @@ import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { hasManifestToolAvailability } from "../plugins/manifest-tool-availability.js";
 import { isPluginMetadataSnapshotCompatible } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-names.js";
+import { sanitizeServerName } from "./agent-bundle-mcp-names.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
+import { createMcpServerToolDenyMatcher } from "./tool-policy-match.js";
 import type { DeclaredToolAllowlistContext } from "./tool-policy.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 
@@ -25,31 +26,6 @@ function denylistBlocksName(name: string, denylist: ToolDenylist): boolean {
   return normalized ? matchesAnyGlobPattern(normalized, denylist) : false;
 }
 
-function denylistBlocksMcpServerNamespace(params: {
-  safeServerName: string;
-  denylist: ToolDenylist;
-}): boolean {
-  const serverPrefix = normalizeToolPolicyName(params.safeServerName + TOOL_NAME_SEPARATOR);
-  if (!serverPrefix) {
-    return false;
-  }
-  return matchesAnyGlobPattern(serverPrefix, params.denylist);
-}
-
-function denylistBlocksMcpServer(params: {
-  safeServerName: string;
-  denylist: ToolDenylist;
-}): boolean {
-  return (
-    denylistBlocksName("bundle-mcp", params.denylist) ||
-    matchesAnyGlobPattern("group:plugins", params.denylist) ||
-    denylistBlocksMcpServerNamespace({
-      safeServerName: params.safeServerName,
-      denylist: params.denylist,
-    })
-  );
-}
-
 function denylistBlocksPlugin(params: { pluginId: string; denylist: ToolDenylist }): boolean {
   return (
     denylistBlocksName(params.pluginId, params.denylist) ||
@@ -62,7 +38,7 @@ function collectConfiguredMcpServerNames(params: {
   toolDenylist?: string[];
 }): string[] {
   const servers = normalizeConfiguredMcpServers(params.config?.mcp?.servers);
-  const denylist = normalizeToolDenylist(params.toolDenylist);
+  const isDenied = createMcpServerToolDenyMatcher(params.toolDenylist);
   const usedServerNames = new Set<string>();
   const names: string[] = [];
   for (const [name, value] of Object.entries(servers)) {
@@ -70,12 +46,7 @@ function collectConfiguredMcpServerNames(params: {
       continue;
     }
     const safeServerName = sanitizeServerName(name, usedServerNames);
-    if (
-      denylistBlocksMcpServer({
-        safeServerName,
-        denylist,
-      })
-    ) {
+    if (isDenied(safeServerName)) {
       continue;
     }
     names.push(safeServerName);
@@ -182,8 +153,8 @@ export function buildDeclaredToolAllowlistContext(params: {
     }),
   );
   const pluginContext = collectDeclaredPluginContext(params);
-  const pluginIds = uniqueStrings(pluginContext.pluginIds ?? []);
-  const pluginToolNames = uniqueStrings(pluginContext.pluginToolNames ?? []);
+  const pluginIds = [...(pluginContext.pluginIds ?? [])];
+  const pluginToolNames = [...(pluginContext.pluginToolNames ?? [])];
   if (mcpServerNames.length === 0 && pluginIds.length === 0 && pluginToolNames.length === 0) {
     return undefined;
   }

@@ -4,10 +4,14 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { WorkerNodeEnrollment } from "../../plugins/types.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -70,7 +74,10 @@ describe("worker node provisioning shutdown replay", () => {
     });
     support.testState.prepareInstallation = vi.fn(async () => ({
       ...support.BUNDLE_ARTIFACT,
-      protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+      protocolFeatures: [
+        WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+        WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+      ],
     }));
     let placements = createWorkerSessionPlacementStore({
       database: support.testState.stateDb,
@@ -87,14 +94,14 @@ describe("worker node provisioning shutdown replay", () => {
       expectedGeneration: requested.generation,
       patch: { environmentId: intent.environmentId },
     });
-    const environment = support.testState.store.createIntent({
+    const environment = await support.testState.store.createIntent({
       environmentId: intent.environmentId,
       providerId: provider.id,
       profileId: "development",
       profileSnapshot: { install: "bundle", settings: { region: "test" } },
       provisionOperationId: intent.provisionOperationId,
     });
-    support.testState.store.transition({
+    await support.testState.store.transition({
       environmentId: environment.environmentId,
       from: "requested",
       to: "provisioning",
@@ -111,7 +118,10 @@ describe("worker node provisioning shutdown replay", () => {
     });
     const receipt = {
       ...support.BOOTSTRAP_RECEIPT,
-      protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+      protocolFeatures: [
+        WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+        WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+      ],
     };
     const first = support.createService(provider, {
       prepareNodeBootstrap: firstEnrollment.prepare,
@@ -133,17 +143,18 @@ describe("worker node provisioning shutdown replay", () => {
         isCurrentNodePlacement: () => true,
         workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
         runLocalBarrier: async ({ startDispatch }) => startDispatch(),
-        runRecoveryBarrier: async ({ run }) => await run("/gateway/workspace"),
+        runRecoveryBarrier: async ({ run }) =>
+          await run({ kind: "local", path: "/gateway/workspace" }),
         runActivationBarrier: async ({ activate }) => activate(),
         runMoveBarrier: async ({ begin }) => begin(),
         resolveMoveDestination: async () => undefined,
         runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
         runReclaimBarrier: async ({ begin, reclaim }) =>
-          await reclaim("/gateway/workspace", begin()),
+          await reclaim({ kind: "local", path: "/gateway/workspace" }, begin()),
         runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-        resolveWorkspacePath: async () => "/gateway/workspace",
+        resolveWorkspace: async () => ({ kind: "local", path: "/gateway/workspace" }),
         reportWorkspaceResultConflict: async () => {},
-        resolveWorkspaceResultConflict: async () => undefined,
+        resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
       });
     const firstDispatch = createDispatch(first);
     const uninstallFirstGuard = first.installReconcileEnvironmentGuard(
@@ -187,11 +198,12 @@ describe("worker node provisioning shutdown replay", () => {
     expect(destroy).not.toHaveBeenCalled();
 
     support.testState.service = undefined;
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     support.testState.stateDb = openOpenClawStateDatabase({
       env: { OPENCLAW_STATE_DIR: support.testState.root },
     });
-    support.testState.store = createWorkerEnvironmentStore({
+    support.testState.store = await createWorkerEnvironmentStore({
       database: support.testState.stateDb,
       now: () => support.testState.nowMs,
     });
@@ -246,7 +258,11 @@ describe("worker node provisioning shutdown replay", () => {
         clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
         clientMode: GATEWAY_CLIENT_MODES.NODE,
         protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-        workerHost: { enabled: true, capacity: { total: 1, available: 1 } },
+        workerHost: {
+          enabled: true,
+          capacity: { total: 1, available: 1 },
+          capturedExecPolicy: true,
+        },
         commands: [],
       },
     }));

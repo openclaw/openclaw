@@ -1,46 +1,24 @@
 // Gateway-owned custom session group catalog.
 // Membership stays on each session entry's category field; this module owns
 // which groups exist, their display order, and bulk member category updates.
-import type { DatabaseSync } from "node:sqlite";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions.js";
-import {
-  applySessionEntryReplacements,
-  listSessionEntriesReadOnly,
-} from "../config/sessions/session-accessor.js";
+import { updateSessionGroupCategoriesInWorker } from "../config/sessions/session-group-categories.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { readConfigMachineState } from "../state/config-machine-state.js";
-import { ensureColumn, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+  ensureSessionGroupCatalog,
+  mutateSessionGroupCatalog,
+  readSessionGroupCatalog,
+  readSessionGroupMembershipInWorker,
+} from "./session-group-catalog.js";
+import type {
+  SessionGroupDefaultsRecord,
+  SessionGroupRecord,
+} from "./session-group-catalog.types.js";
 import {
   SessionMutationAuthorizationChangedError,
   type SessionMutationTarget,
 } from "./session-mutation-authorization-error.js";
-
-// Write transactions must run on the same env-scoped handle as their
-// statements; a bare transaction would open the default state DB while the
-// SQL hits the override, losing atomicity under OPENCLAW_STATE_DIR overrides.
-
-type SessionGroupRecord = {
-  name: string;
-  position: number;
-};
-
-type SessionGroupDefaultsRecord = {
-  name: string;
-  cwd?: string;
-  worktree?: boolean;
-};
-
-type SessionGroupsDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  "session_groups" | "config_machine_state"
->;
 
 export class SessionGroupNotFoundError extends Error {
   constructor(name: string) {
@@ -58,62 +36,6 @@ export class SessionGroupNotEmptyError extends Error {
     );
     this.name = "SessionGroupNotEmptyError";
   }
-}
-
-const ensuredSessionGroupDefaultsDatabases = new WeakSet<DatabaseSync>();
-const SIDEBAR_SECTION_ORDER_STATE_KEY = "sidebar.sectionOrder";
-
-function dbFor(env: NodeJS.ProcessEnv): DatabaseSync {
-  return openOpenClawStateDatabase({ env }).db;
-}
-
-function kyselyFor(db: DatabaseSync) {
-  return getNodeSqliteKysely<SessionGroupsDatabase>(db);
-}
-
-// Config-machine-state helpers open their own transaction; use direct Kysely
-// so sidebar edits stay inside the existing session-group write transaction.
-function updateSidebarSectionOrder(
-  db: DatabaseSync,
-  update: (current: string[] | undefined) => string[] | undefined,
-): void {
-  const kysely = kyselyFor(db);
-  const row = executeSqliteQuerySync(
-    db,
-    kysely
-      .selectFrom("config_machine_state")
-      .select("value_json")
-      .where("state_key", "=", SIDEBAR_SECTION_ORDER_STATE_KEY),
-  ).rows[0];
-  // SAFETY: The sidebar owner and v12 migration store this key only as a string array.
-  const next = update(row ? (JSON.parse(row.value_json) as string[]) : undefined);
-  if (!next) {
-    return;
-  }
-  const valueJson = JSON.stringify(next);
-  const updatedAtMs = Date.now();
-  executeSqliteQuerySync(
-    db,
-    kysely
-      .insertInto("config_machine_state")
-      .values({
-        state_key: SIDEBAR_SECTION_ORDER_STATE_KEY,
-        value_json: valueJson,
-        updated_at_ms: updatedAtMs,
-      })
-      .onConflict((conflict) =>
-        conflict.column("state_key").doUpdateSet({
-          value_json: valueJson,
-          updated_at_ms: updatedAtMs,
-        }),
-      ),
-  );
-}
-
-function hasSessionGroupDefaultsSchema(db: DatabaseSync): boolean {
-  return (
-    tableHasColumn(db, "session_groups", "cwd") && tableHasColumn(db, "session_groups", "worktree")
-  );
 }
 
 export function normalizeGroupNames(names: readonly string[]): string[] {
@@ -163,43 +85,17 @@ function normalizeSidebarSectionOrder(
 }
 
 export function listSessionGroups(env: NodeJS.ProcessEnv = process.env): SessionGroupRecord[] {
-  const db = dbFor(env);
-  const query = kyselyFor(db)
-    .selectFrom("session_groups")
-    .select(["name", "position"])
-    .orderBy("position", "asc")
-    .orderBy("name", "asc");
-  return executeSqliteQuerySync(db, query).rows;
+  return readSessionGroupCatalog(env).groups;
 }
 
 export function listSessionGroupDefaults(
   env: NodeJS.ProcessEnv = process.env,
 ): SessionGroupDefaultsRecord[] {
-  const db = dbFor(env);
-  if (!hasSessionGroupDefaultsSchema(db)) {
-    return listSessionGroups(env).map(({ name }) => ({ name }));
-  }
-  return executeSqliteQuerySync(
-    db,
-    kyselyFor(db)
-      .selectFrom("session_groups")
-      .select(["name", "cwd", "worktree"])
-      .orderBy("position", "asc")
-      .orderBy("name", "asc"),
-  ).rows.map((row) => {
-    const group: SessionGroupDefaultsRecord = { name: row.name };
-    if (row.cwd) {
-      group.cwd = row.cwd;
-    }
-    if (row.worktree !== null) {
-      group.worktree = row.worktree === 1;
-    }
-    return group;
-  });
+  return readSessionGroupCatalog(env).defaults;
 }
 
 export function listSidebarSectionOrder(env: NodeJS.ProcessEnv = process.env): string[] {
-  return readConfigMachineState<string[]>(SIDEBAR_SECTION_ORDER_STATE_KEY, { env }) ?? [];
+  return readSessionGroupCatalog(env).sectionOrder;
 }
 
 /**
@@ -207,252 +103,80 @@ export function listSidebarSectionOrder(env: NodeJS.ProcessEnv = process.env): s
  * sessions is rejected: member sweeps stay owned by sessions.groups.delete,
  * so a put can never leave dangling categories that resurrect the group.
  */
-export function putSessionGroups(params: {
+export async function putSessionGroups(params: {
   cfg: OpenClawConfig;
   names: readonly string[];
   sectionOrder?: readonly string[];
   env?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
   assertTargetCurrent?: (target: { agentId?: string; sessionKey: string }) => void;
-}): SessionGroupRecord[] {
+}): Promise<SessionGroupRecord[]> {
   const { cfg, names, sectionOrder, env = process.env } = params;
+  await ensureSessionGroupCatalog(env);
   const normalized = normalizeGroupNames(names);
   const normalizedSectionOrder =
     sectionOrder === undefined ? undefined : normalizeSidebarSectionOrder(sectionOrder, normalized);
-  params.assertCurrent?.();
-  const dropped = listSessionGroups(env).filter((group) => !normalized.includes(group.name));
-  if (dropped.length > 0) {
-    // Accepted race: sessions.patch can assign a dropped category between this scan and commit.
-    // That residue self-heals via ensureSessionGroupRegistered absorption on the next patch.
-    const targetsByName = resolveSessionGroupMutationTargetsByName(cfg, env);
-    // Unlike updateMemberCategories, put has not committed any catalog changes yet.
-    // Fail closed on changed targets before disclosing any member counts.
-    for (const { name } of dropped) {
-      for (const target of targetsByName.get(name) ?? []) {
-        params.assertTargetCurrent?.({ agentId: target.agentId, sessionKey: target.sessionKey });
-      }
-    }
-    const nonEmpty = dropped
-      .map(({ name }) => ({ name, memberSessions: targetsByName.get(name)?.length ?? 0 }))
-      .filter((group) => group.memberSessions > 0);
-    if (nonEmpty.length > 0) {
-      throw new SessionGroupNotEmptyError(nonEmpty);
-    }
-  }
-  const now = Date.now();
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const kysely = kyselyFor(db);
-      const existing = new Map(
-        executeSqliteQuerySync(
-          db,
-          kysely.selectFrom("session_groups").select(["name", "created_at"]),
-        ).rows.map((row) => [row.name, row]),
-      );
-      executeSqliteQuerySync(
-        db,
-        normalized.length === 0
-          ? kysely.deleteFrom("session_groups")
-          : kysely.deleteFrom("session_groups").where("name", "not in", normalized),
-      );
-      normalized.forEach((name, position) => {
-        const prior = existing.get(name);
-        executeSqliteQuerySync(
-          db,
-          prior
-            ? kysely.updateTable("session_groups").set({ position }).where("name", "=", name)
-            : kysely.insertInto("session_groups").values({
-                name,
-                position,
-                created_at: now,
-              }),
-        );
-      });
-      if (normalizedSectionOrder) {
-        updateSidebarSectionOrder(db, () => normalizedSectionOrder);
-        // `names` remains authoritative for group-only surfaces such as the Sessions page.
-        // The sidebar stores the caller's cross-section order without silently deriving it.
+  const result = await mutateSessionGroupCatalog(
+    {
+      kind: "put",
+      names: normalized,
+      sectionOrder: normalizedSectionOrder,
+      cfg: { agents: cfg.agents, session: cfg.session },
+    },
+    env,
+    (facts) => {
+      params.assertCurrent?.();
+      for (const [, targets] of facts?.groups ?? []) {
+        for (const target of targets) {
+          params.assertTargetCurrent?.(target);
+        }
       }
     },
-    { env },
   );
-  return listSessionGroups(env);
+  if (result.nonEmpty?.length) {
+    throw new SessionGroupNotEmptyError(result.nonEmpty);
+  }
+  return result.snapshot.groups;
 }
 
 /**
  * Absorbs a category assigned through sessions.patch so the catalog keeps
  * covering every group an operator UI can observe, appended at the end.
  */
-export function ensureSessionGroupRegistered(
+export async function ensureSessionGroupRegistered(
   name: string,
   env: NodeJS.ProcessEnv = process.env,
-): boolean {
+): Promise<boolean> {
   const normalized = normalizeOptionalString(name);
   if (!normalized) {
     return false;
   }
-  let inserted = false;
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const kysely = kyselyFor(db);
-      const existing = executeSqliteQuerySync(
-        db,
-        kysely.selectFrom("session_groups").select("name").where("name", "=", normalized).limit(1),
-      ).rows[0];
-      if (existing) {
-        return;
-      }
-      inserted = true;
-      const maxRow = executeSqliteQuerySync(
-        db,
-        kysely.selectFrom("session_groups").select("position").orderBy("position", "desc").limit(1),
-      ).rows[0];
-      executeSqliteQuerySync(
-        db,
-        kysely.insertInto("session_groups").values({
-          name: normalized,
-          position: (maxRow?.position ?? -1) + 1,
-          created_at: Date.now(),
-        }),
-      );
-    },
-    { env },
-  );
-  return inserted;
+  return (await mutateSessionGroupCatalog({ kind: "register", name: normalized }, env)).changed;
 }
 
-function renameCatalogEntry(from: string, to: string, env: NodeJS.ProcessEnv): void {
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const kysely = kyselyFor(db);
-      const hasDefaults = hasSessionGroupDefaultsSchema(db);
-      const source = executeSqliteQuerySync(
-        db,
-        hasDefaults
-          ? kysely.selectFrom("session_groups").selectAll().where("name", "=", from).limit(1)
-          : kysely
-              .selectFrom("session_groups")
-              .select(["name", "position", "created_at"])
-              .where("name", "=", from)
-              .limit(1),
-      ).rows[0];
-      if (!source) {
-        throw new SessionGroupNotFoundError(from);
-      }
-      const targetExists = executeSqliteQuerySync(
-        db,
-        kysely.selectFrom("session_groups").select("name").where("name", "=", to).limit(1),
-      ).rows[0];
-      const sourceSectionId = `category:${from}`;
-      const targetSectionId = `category:${to}`;
-      executeSqliteQuerySync(db, kysely.deleteFrom("session_groups").where("name", "=", from));
-      updateSidebarSectionOrder(db, (current) => {
-        if (!current?.includes(sourceSectionId)) {
-          return undefined;
-        }
-        // A target slot already owns the merged group's position; retire the source slot.
-        return current.includes(targetSectionId)
-          ? current.filter((sectionId) => sectionId !== sourceSectionId)
-          : current.map((sectionId) =>
-              sectionId === sourceSectionId ? targetSectionId : sectionId,
-            );
-      });
-      if (targetExists) {
-        // Rename into an existing group merges memberships; keep its catalog row.
-        return;
-      }
-      const base = {
-        name: to,
-        position: source.position,
-        created_at: source.created_at,
-      };
-      executeSqliteQuerySync(
-        db,
-        kysely.insertInto("session_groups").values(
-          hasDefaults
-            ? {
-                ...base,
-                cwd: "cwd" in source && typeof source.cwd === "string" ? source.cwd : null,
-                worktree:
-                  "worktree" in source && typeof source.worktree === "number"
-                    ? source.worktree
-                    : null,
-              }
-            : base,
-        ),
-      );
-    },
-    { env },
-  );
-}
-
-export function updateSessionGroupDefaults(
+export async function updateSessionGroupDefaults(
   name: string,
   defaults: { cwd: string | null; worktree: boolean },
   env: NodeJS.ProcessEnv = process.env,
-): SessionGroupDefaultsRecord[] | null {
+  assertCurrent?: (targets?: readonly SessionMutationTarget[]) => void,
+  cfg: OpenClawConfig = {},
+): Promise<SessionGroupDefaultsRecord[] | null> {
   const normalized = normalizeOptionalString(name);
   if (!normalized) {
     throw new Error("group defaults update requires a non-empty name");
   }
-  const database = openOpenClawStateDatabase({ env });
-  let updated = false;
-  let defaultsSchemaEnsured = false;
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const kysely = kyselyFor(db);
-      const existing = executeSqliteQuerySync(
-        db,
-        kysely.selectFrom("session_groups").select("name").where("name", "=", normalized).limit(1),
-      ).rows[0];
-      if (!existing) {
-        return;
-      }
-      if (!ensuredSessionGroupDefaultsDatabases.has(db)) {
-        ensureColumn(db, "session_groups", "cwd TEXT");
-        ensureColumn(db, "session_groups", "worktree INTEGER");
-        defaultsSchemaEnsured = true;
-      }
-      const result = executeSqliteQuerySync(
-        db,
-        kysely
-          .updateTable("session_groups")
-          .set({
-            cwd: normalizeOptionalString(defaults.cwd) ?? null,
-            worktree: defaults.worktree ? 1 : 0,
-          })
-          .where("name", "=", normalized),
-      );
-      updated = result.numAffectedRows === 1n;
+  const result = await mutateSessionGroupCatalog(
+    {
+      kind: "defaults",
+      cfg: { agents: cfg.agents, session: cfg.session },
+      name: normalized,
+      cwd: normalizeOptionalString(defaults.cwd) ?? null,
+      worktree: defaults.worktree,
     },
-    { env },
+    env,
+    (facts) => assertCurrent?.(facts?.groups?.find(([group]) => group === normalized)?.[1]),
   );
-  if (defaultsSchemaEnsured) {
-    ensuredSessionGroupDefaultsDatabases.add(database.db);
-  }
-  return updated ? listSessionGroupDefaults(env) : null;
-}
-
-export function resolveSessionGroupMutationTargetsByName(
-  cfg: OpenClawConfig,
-  env: NodeJS.ProcessEnv = process.env,
-): Map<string, SessionMutationTarget[]> {
-  const targetsByName = new Map<string, SessionMutationTarget[]>();
-  for (const storeTarget of resolveAllAgentSessionStoreTargetsSync(cfg, { env })) {
-    for (const { sessionKey, entry } of listSessionEntriesReadOnly({
-      agentId: storeTarget.agentId,
-      storePath: storeTarget.storePath,
-    })) {
-      const groupName = normalizeOptionalString(entry.category);
-      if (!groupName) {
-        continue;
-      }
-      const targets = targetsByName.get(groupName) ?? [];
-      targets.push({ sessionKey, agentId: storeTarget.agentId });
-      targetsByName.set(groupName, targets);
-    }
-  }
-  return targetsByName;
+  return result.changed ? result.snapshot.defaults : null;
 }
 
 /**
@@ -467,61 +191,85 @@ async function updateMemberCategories(
   assertTargetCurrent?: (target: { agentId: string; sessionKey: string }) => void,
 ): Promise<number> {
   let updated = 0;
-  for (const target of resolveAllAgentSessionStoreTargetsSync(cfg, { env })) {
-    updated += await applySessionEntryReplacements<number>({
-      storePath: target.storePath,
-      update: (entries) => {
-        const replacements = entries.flatMap(({ sessionKey, entry }) => {
-          if (entry.category?.trim() !== from) {
-            return [];
-          }
-          try {
-            assertTargetCurrent?.({ agentId: target.agentId, sessionKey });
-          } catch (error) {
-            if (error instanceof SessionMutationAuthorizationChangedError) {
-              // Group membership spans separate agent databases. Once the catalog commit starts,
-              // skip a concurrently replaced target instead of failing after earlier stores wrote.
-              return [];
-            }
-            throw error;
-          }
-          const next = { ...entry };
-          if (to === undefined) {
-            delete next.category;
-          } else {
-            next.category = to;
-          }
-          return [{ sessionKey, entry: next }];
-        });
-        return { replacements, result: replacements.length };
-      },
+  const { stores } = await readSessionGroupMembershipInWorker(cfg, env);
+  for (const target of stores) {
+    updated += await updateSessionGroupCategoriesInWorker({
+      scope: { ...target, sessionKey: "", env },
+      from,
+      to,
+      assertTargetCurrent,
     });
   }
   return updated;
 }
 
-export async function renameSessionGroup(params: {
+type SessionGroupMutationParams = {
   cfg: OpenClawConfig;
   name: string;
-  to: string;
   env?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
   assertTargetCurrent?: (target: { agentId: string; sessionKey: string }) => void;
-}): Promise<{ groups: SessionGroupRecord[]; sectionOrder: string[]; updatedSessions: number }> {
+};
+
+async function mutateSessionGroup(
+  params: SessionGroupMutationParams & { to?: string },
+  action: "rename" | "delete",
+): Promise<{ groups: SessionGroupRecord[]; sectionOrder: string[]; updatedSessions: number }> {
   const env = params.env ?? process.env;
+  await ensureSessionGroupCatalog(env);
   const from = normalizeOptionalString(params.name);
-  const to = normalizeOptionalString(params.to);
-  if (!from || !to) {
-    throw new Error("group rename requires non-empty names");
+  const to = action === "rename" ? normalizeOptionalString(params.to) : undefined;
+  if (!from || (action === "rename" && !to)) {
+    throw new Error(
+      action === "rename"
+        ? "group rename requires non-empty names"
+        : "group delete requires a non-empty name",
+    );
   }
+  let updatedSessions = 0;
   if (from !== to) {
     params.assertCurrent?.();
-    renameCatalogEntry(from, to, env);
+    const prepared = await mutateSessionGroupCatalog(
+      { kind: "prepare", name: from, to },
+      env,
+      params.assertCurrent,
+    );
+    if (prepared.missingName) {
+      throw new SessionGroupNotFoundError(prepared.missingName);
+    }
+    const source = prepared.source;
+    try {
+      updatedSessions = await updateMemberCategories(
+        params.cfg,
+        from,
+        to,
+        env,
+        params.assertTargetCurrent,
+      );
+      params.assertCurrent?.();
+      // The state worker rereads all stores in the retirement transaction so late assignments retain the source.
+      const retired = await mutateSessionGroupCatalog(
+        {
+          kind: "retire",
+          name: from,
+          to,
+          source,
+          cfg: { agents: params.cfg.agents, session: params.cfg.session },
+        },
+        env,
+        params.assertCurrent,
+      );
+      if (retired.missingName) {
+        throw new SessionGroupNotFoundError(retired.missingName);
+      }
+    } catch (error) {
+      const message = `${formatErrorMessage(error)}. Group changes may be partial; reload groups and retry the same operation.`;
+      if (error instanceof SessionMutationAuthorizationChangedError) {
+        throw new SessionMutationAuthorizationChangedError({ ...error.error, message });
+      }
+      throw new Error(message, { cause: error });
+    }
   }
-  const updatedSessions =
-    from === to
-      ? 0
-      : await updateMemberCategories(params.cfg, from, to, env, params.assertTargetCurrent);
   return {
     groups: listSessionGroups(env),
     sectionOrder: listSidebarSectionOrder(env),
@@ -529,42 +277,10 @@ export async function renameSessionGroup(params: {
   };
 }
 
-export async function deleteSessionGroup(params: {
-  cfg: OpenClawConfig;
-  name: string;
-  env?: NodeJS.ProcessEnv;
-  assertCurrent?: () => void;
-  assertTargetCurrent?: (target: { agentId: string; sessionKey: string }) => void;
-}): Promise<{ groups: SessionGroupRecord[]; sectionOrder: string[]; updatedSessions: number }> {
-  const env = params.env ?? process.env;
-  const name = normalizeOptionalString(params.name);
-  if (!name) {
-    throw new Error("group delete requires a non-empty name");
-  }
-  params.assertCurrent?.();
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const kysely = kyselyFor(db);
-      executeSqliteQuerySync(db, kysely.deleteFrom("session_groups").where("name", "=", name));
-      const sectionId = `category:${name}`;
-      updateSidebarSectionOrder(db, (current) =>
-        current?.includes(sectionId)
-          ? current.filter((section) => section !== sectionId)
-          : undefined,
-      );
-    },
-    { env },
-  );
-  const updatedSessions = await updateMemberCategories(
-    params.cfg,
-    name,
-    undefined,
-    env,
-    params.assertTargetCurrent,
-  );
-  return {
-    groups: listSessionGroups(env),
-    sectionOrder: listSidebarSectionOrder(env),
-    updatedSessions,
-  };
+export async function renameSessionGroup(params: SessionGroupMutationParams & { to: string }) {
+  return await mutateSessionGroup(params, "rename");
+}
+
+export async function deleteSessionGroup(params: SessionGroupMutationParams) {
+  return await mutateSessionGroup(params, "delete");
 }

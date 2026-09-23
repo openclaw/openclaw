@@ -20,6 +20,7 @@ import {
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { hasRetainedManagedNpmInstallMarker } from "../plugins/managed-npm-retention.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
+import { isExternallyDistributedPlugin } from "../plugins/official-external-plugin-catalog.js";
 import { refreshPluginRegistry } from "../plugins/plugin-registry-refresh.js";
 import {
   listStaleLocalBundledPluginInstallRecords,
@@ -42,6 +43,7 @@ import {
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
   InvalidPluginInstallRecordStateError,
+  migrateOfficialPluginInstallProvenance,
   migratePluginRegistryForDoctor,
   preflightPluginRegistryDoctorMigration,
   type PluginRegistryDoctorMigrationParams,
@@ -157,7 +159,9 @@ function listStaleManagedNpmBundledPlugins(
   const currentBundled = loadInstalledPluginIndex({
     ...params,
     installRecords: {},
-  }).plugins.filter((plugin) => plugin.origin === "bundled" && plugin.packageName);
+  }).plugins.filter(
+    (plugin) => plugin.origin === "bundled" && !isExternallyDistributedPlugin(plugin),
+  );
   const bundledByPackage = new Map(
     currentBundled.map((plugin) => [plugin.packageName, plugin] as const),
   );
@@ -383,7 +387,7 @@ async function maybeRepairStaleLocalBundledPluginInstallRecords(
   return stale.map((record) => record.pluginId);
 }
 
-async function loadInstallRecordsWithoutPluginIds(
+async function loadRepairedPluginInstallRecords(
   params: PluginRegistryDoctorRepairParams,
   pluginIds: readonly string[],
   baselineRecords?: Record<string, PluginInstallRecord>,
@@ -392,7 +396,7 @@ async function loadInstallRecordsWithoutPluginIds(
   for (const pluginId of pluginIds) {
     records = removePluginInstallRecordFromRecords(records, pluginId);
   }
-  return records;
+  return migrateOfficialPluginInstallProvenance(records);
 }
 
 export async function detectPluginRegistryHealthIssues(
@@ -505,10 +509,10 @@ export function pluginRegistryIssueToHealthFinding(
       return {
         checkId: PLUGIN_REGISTRY_CHECK_ID,
         severity: "warning",
-        message: `Registered npm plugin ${issue.packageName} has a broken OpenClaw host link: ${issue.reason}.`,
+        message: `Registered plugin ${issue.packageName} has a broken OpenClaw host link: ${issue.reason}.`,
         path: issue.packageDir,
         target: issue.packageName,
-        fixHint: "Run `openclaw doctor --fix` to relink the installed npm plugin package.",
+        fixHint: "Run `openclaw doctor --fix` to relink the installed plugin package.",
       };
     case "managed-npm-package-unreadable":
       return {
@@ -522,7 +526,7 @@ export function pluginRegistryIssueToHealthFinding(
       return {
         checkId: PLUGIN_REGISTRY_CHECK_ID,
         severity: "warning",
-        message: `Registered npm plugin package could not be inspected: ${issue.reason}.`,
+        message: `Registered plugin package could not be inspected: ${issue.reason}.`,
         path: issue.packageDir,
         fixHint: "Restore access to the package files, then run `openclaw doctor` again.",
       };
@@ -628,8 +632,7 @@ export async function maybeRepairPluginRegistryState(
   const staleManagedNpmBundledPluginRepair = maybeRepairStaleManagedNpmBundledPlugins(params);
   const removedStaleLocalBundledPluginIds =
     await maybeRepairStaleLocalBundledPluginInstallRecords(params);
-  const retiredStaleManagedNpmInstallGenerations =
-    await maybeRepairStaleManagedNpmInstallGenerations(params);
+  await maybeRepairStaleManagedNpmInstallGenerations(params);
   const repairedPluginOpenClawHostLinks = await maybeRepairPluginOpenClawHostLinks(params);
   const stalePluginIdsToRemove = [
     ...new Set([
@@ -650,14 +653,15 @@ export async function maybeRepairPluginRegistryState(
     return { config: params.config };
   }
 
+  const installRecords = await loadRepairedPluginInstallRecords(
+    params,
+    stalePluginIdsToRemove,
+    staleManagedNpmBundledPluginRepair?.installRecords,
+  );
   if (preflight.action !== "skip-existing") {
     const result = await migratePluginRegistryForDoctor({
       ...migrationParams,
-      installRecords: await loadInstallRecordsWithoutPluginIds(
-        params,
-        stalePluginIdsToRemove,
-        staleManagedNpmBundledPluginRepair?.installRecords,
-      ),
+      installRecords,
     });
     if (result.migrated) {
       const total = result.current.plugins.length;
@@ -673,38 +677,24 @@ export async function maybeRepairPluginRegistryState(
     };
   }
 
-  if (
-    preflight.action === "skip-existing" ||
-    staleManagedNpmBundledPluginRepair ||
-    removedStaleLocalBundledPluginIds.length > 0 ||
-    retiredStaleManagedNpmInstallGenerations ||
-    repairedPluginOpenClawHostLinks
-  ) {
-    const index = await refreshPluginRegistry({
-      ...migrationParams,
-      reason: "migration",
-      installRecords: await loadInstallRecordsWithoutPluginIds(
-        params,
-        stalePluginIdsToRemove,
-        staleManagedNpmBundledPluginRepair?.installRecords,
-      ),
-    });
-    const total = index.plugins.length;
-    const enabled = index.plugins.filter((plugin) => plugin.enabled).length;
-    note(
-      `Plugin registry refreshed: ${enabled}/${total} enabled plugins indexed.`,
-      "Plugin registry",
-    );
-    const indexChanged =
-      resolveInstalledManifestRegistryIndexFingerprint(preflight.current) !==
-      resolveInstalledManifestRegistryIndexFingerprint(index);
-    return {
-      config: params.config,
-      ...(indexChanged || repairedPluginOpenClawHostLinks
-        ? { pluginInventoryChanged: true as const }
-        : {}),
-    };
-  }
-
-  return { config: params.config };
+  const index = await refreshPluginRegistry({
+    ...migrationParams,
+    reason: "migration",
+    installRecords,
+  });
+  const total = index.plugins.length;
+  const enabled = index.plugins.filter((plugin) => plugin.enabled).length;
+  note(
+    `Plugin registry refreshed: ${enabled}/${total} enabled plugins indexed.`,
+    "Plugin registry",
+  );
+  const indexChanged =
+    resolveInstalledManifestRegistryIndexFingerprint(preflight.current) !==
+    resolveInstalledManifestRegistryIndexFingerprint(index);
+  return {
+    config: params.config,
+    ...(indexChanged || repairedPluginOpenClawHostLinks
+      ? { pluginInventoryChanged: true as const }
+      : {}),
+  };
 }

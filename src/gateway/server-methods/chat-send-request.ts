@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
-import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { Static } from "typebox";
 import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
@@ -8,24 +9,38 @@ import {
 import {
   formatValidationErrors,
   validateChatSendParams,
+  type HumanMention,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type {
-  ChatSendIntent,
+  ChatSendParamsSchema,
   QueueMode,
 } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import type {
-  SessionPermissionMode,
-  SessionToolOverrides,
-} from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { isBtwRequestText } from "../../auto-reply/reply/btw-command.js";
+import {
+  captureChatWorkContext,
+  formatChatWorkContext,
+  type AttachedChatWorkContext,
+} from "../../chat/work-context.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
-import { normalizeInputProvenance } from "../../sessions/input-provenance.js";
-import { isBrowserCopilotClient, isOperatorUiClient } from "../../utils/message-channel.js";
+import {
+  isProgressCardRefreshInputProvenance,
+  normalizeInputProvenance,
+} from "../../sessions/input-provenance.js";
+import {
+  readProviderReviewAcknowledgment,
+  type ProviderReviewAcknowledgment,
+} from "../../sessions/provider-review.js";
+import {
+  isBrowserCopilotClient,
+  isBrowserOperatorUiClient,
+  isOperatorUiClient,
+} from "../../utils/message-channel.js";
 import { isChatStopCommandText } from "../chat-abort.js";
 import type { ChatAttachment } from "../chat-attachments.js";
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
+import { normalizeChatHumanMentions } from "./chat-human-mentions.js";
 import {
   hasGatewayAdminScope,
   normalizeExplicitChatSendOrigin,
@@ -36,41 +51,17 @@ import { resolveControlUiReconnectResumeParams } from "./chat-server-timing.js";
 import { fingerprintSessionGoalRequest } from "./session-goal-request.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-type ChatSendRequestParams = {
-  sessionKey: string;
-  agentId?: string;
-  sessionId?: string;
-  message: string;
-  intent?: ChatSendIntent;
-  thinking?: string;
-  fastMode?: FastMode;
-  fastAutoOnSeconds?: number;
+// TypeBox validates these string enums narrowly but infers them as string.
+type ChatSendRequestParams = Omit<
+  Static<typeof ChatSendParamsSchema>,
+  "queueMode" | "systemInputProvenance"
+> & {
   queueMode?: QueueMode;
-  deliver?: boolean;
-  originatingChannel?: string;
-  originatingTo?: string;
-  originatingAccountId?: string;
-  originatingThreadId?: string;
-  replyToId?: string;
-  attachments?: Array<{
-    type?: string;
-    mimeType?: string;
-    fileName?: string;
-    content?: unknown;
-  }>;
-  toolBindings?: Record<string, unknown>;
-  timeoutMs?: number;
   systemInputProvenance?: InputProvenance;
-  systemProvenanceReceipt?: string;
-  suppressCommandInterpretation?: boolean;
-  expectedLeafEntryId?: string | null;
-  expectedSessionRoutingContract?: string;
-  expectedPermissionMode?: SessionPermissionMode | null;
-  expectedToolOverrides?: SessionToolOverrides | null;
-  idempotencyKey: string;
 };
 
 export type NormalizedChatSendRequest = {
+  providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   goalOperation?: SessionGoalOperation & { action: "start" | "resume" };
   chatSendReceivedAtMs: number;
   clientInfo?: GatewayClientInfo;
@@ -86,6 +77,10 @@ export type NormalizedChatSendRequest = {
   turnKind: "btw" | "main";
   normalizedAttachments: ChatAttachment[];
   rawMessage: string;
+  /** Submitted annotation identity is immutable even when profile aliases later merge. */
+  requestIdentity: string;
+  mentions?: HumanMention[];
+  workContext?: AttachedChatWorkContext;
   reconnectResumeRequested: boolean;
 };
 
@@ -99,6 +94,7 @@ export function normalizeChatSendRequest(params: {
   client: GatewayRequestHandlerOptions["client"];
   trustedSystemInput?: boolean;
   goalResume?: SessionGoalOperation & { action: "resume" };
+  providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
 }): NormalizeChatSendRequestResult {
   const chatSendReceivedAtMs = performance.now();
   const client = params.client;
@@ -116,6 +112,28 @@ export function normalizeChatSendRequest(params: {
   }
 
   const p = controlUiReconnectResume.params as ChatSendRequestParams;
+  const providerReview = params.providerReviewAcknowledgment
+    ? readProviderReviewAcknowledgment(params.providerReviewAcknowledgment)
+    : undefined;
+  if (
+    providerReview &&
+    (p.sessionId !== providerReview.target.sessionId ||
+      p.idempotencyKey !== providerReview.nextRunId ||
+      p.message !== providerReview.review.review?.continuation?.message ||
+      p.attachments?.length ||
+      p.intent ||
+      p.queueMode ||
+      p.toolBindings ||
+      p.workContext ||
+      p.systemInputProvenance ||
+      p.systemProvenanceReceipt ||
+      p.suppressCommandInterpretation !== undefined ||
+      p.thinking !== undefined ||
+      p.fastMode !== undefined ||
+      p.timeoutMs !== undefined)
+  ) {
+    return { ok: false, error: "Provider continuation no longer matches the reviewed input." };
+  }
   const suppressCommandInterpretation = p.suppressCommandInterpretation === true;
   const explicitOriginResult = normalizeExplicitChatSendOrigin({
     originatingChannel: p.originatingChannel,
@@ -199,11 +217,15 @@ export function normalizeChatSendRequest(params: {
         }
       : undefined);
   const commandInterpretationSuppressed =
-    suppressCommandInterpretation || goalOperation !== undefined;
-  const inboundMessage = p.intent ? p.message : sanitizedMessageResult.message;
+    suppressCommandInterpretation || goalOperation !== undefined || providerReview !== undefined;
+  // This text comes from the current provider review, not a browser-supplied command.
+  const inboundMessage = p.intent || providerReview ? p.message : sanitizedMessageResult.message;
   const systemInputProvenance = params.goalResume
     ? { kind: "internal_system" as const, sourceTool: "session_goal_resume" }
     : normalizeInputProvenance(p.systemInputProvenance);
+  if (!params.trustedSystemInput && isProgressCardRefreshInputProvenance(systemInputProvenance)) {
+    return { ok: false, error: "Progress refresh input is reserved for progressCard.refresh." };
+  }
   const systemProvenanceReceipt = systemReceiptResult.receipt;
   const stopCommand = !commandInterpretationSuppressed && isChatStopCommandText(inboundMessage);
   if (p.toolBindings) {
@@ -230,10 +252,69 @@ export function normalizeChatSendRequest(params: {
   const turnKind =
     !commandInterpretationSuppressed && isBtwRequestText(inboundMessage) ? "btw" : "main";
   const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(p.attachments);
-  const rawMessage = goalOperation ? inboundMessage : inboundMessage.trim();
+  const rawMessage = goalOperation || providerReview ? inboundMessage : inboundMessage.trim();
   if (!rawMessage && normalizedAttachments.length === 0) {
     return { ok: false, error: "message or attachment required" };
   }
+  const mentions = normalizeChatHumanMentions(
+    p.message,
+    p.mentions,
+    sanitizedMessageResult.message,
+  );
+  if (!mentions.ok) {
+    return mentions;
+  }
+  if (
+    mentions.value &&
+    (!isBrowserOperatorUiClient(clientInfo) ||
+      !client?.authenticatedUserProfile ||
+      client.internal?.syntheticClient ||
+      client.internal?.senderAttribution ||
+      goalOperation ||
+      systemInputProvenance ||
+      systemProvenanceReceipt ||
+      explicitOriginResult.value ||
+      suppressCommandInterpretation ||
+      stopCommand ||
+      turnKind !== "main" ||
+      rawMessage.startsWith("/") ||
+      rawMessage.startsWith("!"))
+  ) {
+    return {
+      ok: false,
+      error:
+        "Human mentions require a signed-in Control UI chat. Remove the selected mentions to use this mode.",
+    };
+  }
+  if (
+    p.workContext &&
+    (goalOperation ||
+      stopCommand ||
+      turnKind !== "main" ||
+      rawMessage.startsWith("/") ||
+      rawMessage.startsWith("!"))
+  ) {
+    return { ok: false, error: "Working context is only supported for ordinary chat messages." };
+  }
+  const workContext = p.workContext
+    ? { snapshot: captureChatWorkContext(p.workContext), text: rawMessage }
+    : undefined;
+  if (workContext && !workContext.snapshot.page) {
+    return { ok: false, error: "Working context requires a nonempty page." };
+  }
+  const modelMessage = workContext
+    ? [rawMessage, formatChatWorkContext(workContext.snapshot)].filter(Boolean).join("\n\n")
+    : rawMessage;
+  const requestIdentity = createHash("sha256")
+    .update(
+      JSON.stringify([
+        p.message,
+        p.mentions?.map(({ profileId, start, end }) => [profileId, start, end]) ?? [],
+        ...(workContext ? [workContext.snapshot] : []),
+        ...(providerReview ? [providerReview.review.id, providerReview.target.sessionId] : []),
+      ]),
+    )
+    .digest("hex");
 
   return {
     ok: true,
@@ -242,9 +323,13 @@ export function normalizeChatSendRequest(params: {
       clientInfo,
       supportsTaskSuggestions,
       p,
+      ...(params.providerReviewAcknowledgment
+        ? { providerReviewAcknowledgment: params.providerReviewAcknowledgment }
+        : {}),
       ...(goalOperation ? { goalOperation } : {}),
       explicitOrigin: explicitOriginResult.value,
-      inboundMessage,
+      inboundMessage: workContext ? modelMessage : inboundMessage,
+      ...(workContext ? { workContext } : {}),
       systemInputProvenance,
       systemProvenanceReceipt,
       suppressCommandInterpretation: commandInterpretationSuppressed,
@@ -252,7 +337,9 @@ export function normalizeChatSendRequest(params: {
       stopCommand,
       turnKind,
       normalizedAttachments,
-      rawMessage,
+      rawMessage: modelMessage,
+      requestIdentity,
+      ...(mentions.value ? { mentions: mentions.value } : {}),
       reconnectResumeRequested: controlUiReconnectResume.resumeRequested,
     },
   };

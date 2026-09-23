@@ -1,6 +1,19 @@
+import fs from "node:fs/promises";
 import path from "node:path";
-import type { Readable } from "node:stream";
 import type { TriageUpdateFailure } from "../commands/triage-update.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { buildRestartSentinelRow, parseRestartSentinelEnvelope } from "./restart-sentinel-store.js";
+import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
+import type { UpdateRequester } from "./update-requester-authority.js";
+import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
+import type { UpdateRunRecord } from "./update-run-record.js";
+import type { UpdateRunResult } from "./update-runner-types.js";
+
+const testNodeExecPath = resolveTestNodeExecPath();
+
+export function isManagedServiceInspectionCommand(command: string): boolean {
+  return /^(?:--user )?(?:show|print) /.test(command);
+}
 
 type ManagedSystemdPostExitState = {
   activeState: string;
@@ -12,6 +25,8 @@ type ManagedSystemdPostExitState = {
 };
 
 export type ManagedServiceManagerBoundaryOptions = {
+  ledger?: boolean;
+  rollbackRestoration?: boolean;
   cancelAfterPark?: boolean;
   parentExitTimeoutMs?: number;
   launchdFault?: "wrong-parent" | "missing-restored-pid" | "dead-restored-pid";
@@ -28,16 +43,28 @@ export type ManagedServiceManagerBoundaryOptions = {
   systemdHandoffFailure?: boolean;
   systemdPostExitStates?: ManagedSystemdPostExitState[];
   systemdStopDelayMs?: number;
+  expireParentWhileStopPending?: boolean;
+  originalRecovery?: UpdateRunResult["recovery"];
+  revokeOwner?: boolean;
+  requester?: UpdateRequester;
   updaterExitCode?: number;
-  updaterSignal?: NodeJS.Signals;
-  updaterSkippedReason?: "dirty" | "already-current" | "managed-service-handoff-cancelled";
+  recoveryExitCode?: number;
+  recoveryTimeoutMs?: number;
+  recoveryChecksServiceIdentity?: true;
+  recoveryHang?: boolean;
+  recoveryClockAdvanceMs?: number;
+  recoverySentinel?: "retained" | "consumed" | "replaced";
   triageExitCode?: number;
   triageHang?: boolean;
   triageMissing?: boolean;
-  recoveryExitCode?: number;
-  recoveryHang?: boolean;
-  recoverySentinel?: "retained" | "consumed" | "replaced";
   recordedFailure?: TriageUpdateFailure;
+  helperExitCode?: number;
+  updaterResult?: unknown;
+  updaterOutput?: "malformed" | "overflow" | "missing" | "split-utf8";
+  updaterSignal?: boolean;
+  updaterNotification?: "published" | "consumed";
+  gatewayHealth?: "ready" | "unready" | "wrong-version" | "wrong-build" | "exited" | "throw";
+  diagnosticReadFailure?: "before-recovery" | "after-recovery";
 };
 
 export type ManagedServiceCommandTiming = {
@@ -47,14 +74,25 @@ export type ManagedServiceCommandTiming = {
 };
 
 export type ManagedServiceManagerBoundaryResult = {
+  run?: UpdateRunRecord;
   commands: string[];
   parentSignal: NodeJS.Signals | null;
   state: Record<string, unknown>;
   sentinel: unknown;
+  log: string;
   commandTimings: ManagedServiceCommandTiming[];
-  helperLog: string;
+  triageDeadline?: { requestedMs: number; descendantPid: number };
   savedFailure: { path: string; mode: number; contents: TriageUpdateFailure } | null;
   sensitiveFilesRemoved: boolean;
+  parkAdmitted?: boolean;
+  stopSettlement?: {
+    pid: number;
+    closed: boolean;
+    code: number | null;
+    signal: string | null;
+    parentKilledWhileStopPending: boolean;
+    failedWhileStopPending: boolean;
+  };
 };
 
 type ManagedSystemdFailureCase = readonly [string, ManagedSystemdPostExitState];
@@ -99,6 +137,7 @@ export function registerManagedSystemdHandoffConvergenceTests(
       ],
       systemdStopDelayMs: 100,
       updaterExitCode: 0,
+      updaterResult: { status: "ok", mode: "npm" },
     });
 
     expect(commands.map((command) => command.split(" ")[1])).toEqual([
@@ -111,6 +150,49 @@ export function registerManagedSystemdHandoffConvergenceTests(
     expect(state.reset).toBeUndefined();
     expect(state.restored).toBeUndefined();
     expect(sentinel).toBeNull();
+  });
+
+  itUnix("accepts a failed unit that retained the parked generation after activation", async () => {
+    // A Gateway main process that exits non-zero during KillMode=mixed stop settles
+    // the unit into ActiveState=failed with the parked identity retained; the exact
+    // parked unit is still verified, so activation must proceed.
+    const { commands, sentinel, state } = await runManagedServiceManagerBoundary("systemd", {
+      systemdPostExitStates: [
+        { activeState: "failed", generation: "parked", invocation: "parked", mainPid: "none" },
+      ],
+      updaterExitCode: 0,
+      updaterResult: { status: "ok", mode: "npm" },
+    });
+
+    expect(commands.map((command) => command.split(" ")[1])).toEqual(["show", "stop", "show"]);
+    expect(state).toMatchObject({ parked: true, postExitShows: 1, stopCompleted: true });
+    expect(sentinel).toBeNull();
+  });
+
+  itUnix("restores a failed unit that retained the parked generation", async () => {
+    const { commands, sentinel, state } = await runManagedServiceManagerBoundary("systemd", {
+      cancelAfterPark: true,
+      systemdPostExitStates: [
+        { activeState: "failed", generation: "parked", invocation: "parked", mainPid: "none" },
+      ],
+    });
+    const verbs = commands.map((command) =>
+      command.split(" ").find((part) => ["show", "stop", "reset-failed", "start"].includes(part)),
+    );
+
+    expect(verbs).toEqual(["show", "stop", "show", "start", "show"]);
+    expect(state).toMatchObject({ parked: true, restored: true });
+    expect(sentinel).toMatchObject({
+      payload: {
+        status: "skipped",
+        stats: {
+          reason: "managed-service-handoff-cancelled",
+          steps: expect.arrayContaining([
+            expect.objectContaining({ name: "service-restore", log: { exitCode: 0 } }),
+          ]),
+        },
+      },
+    });
   });
 
   itUnix.each([
@@ -134,7 +216,15 @@ export function registerManagedSystemdHandoffConvergenceTests(
     ["a replacement main PID", { activeState: "deactivating", mainPid: "replacement" }],
     ["an active service", { activeState: "active", mainPid: "replacement" }],
     ["a restarting service", { activeState: "activating", mainPid: "none" }],
-    ["a failed service", { activeState: "failed", mainPid: "none" }],
+    [
+      "a failed service with a replacement generation",
+      {
+        activeState: "failed",
+        generation: "replacement",
+        invocation: "replacement",
+        mainPid: "none",
+      },
+    ],
     ["an inactive service retaining a main PID", { activeState: "inactive", mainPid: "parent" }],
     ["a replaced service unit", { activeState: "inactive", id: "replacement.service" }],
     ["an unloaded service unit", { activeState: "inactive", loadState: "not-found" }],
@@ -146,188 +236,8 @@ export function registerManagedSystemdHandoffConvergenceTests(
         systemdPostExitStates: [invalidState],
       });
 
-      expect(state).toMatchObject({ parked: true, stopCompleted: true, postExitShows: 1 });
-      expect(commands.filter((command) => command.includes("reset-failed"))).toHaveLength(1);
-      expect(sentinel).toMatchObject({
-        payload: {
-          status: "error",
-          stats: {
-            reason: "managed-service-handoff-helper-failed",
-            steps: expect.arrayContaining([
-              expect.objectContaining({ name: "service-restore", log: { exitCode: 0 } }),
-            ]),
-          },
-        },
-      });
-    },
-  );
-
-  itUnix(
-    "fails closed when the exact systemd stop job exhausts the parent-exit deadline",
-    async () => {
-      const { sentinel, state } = await runManagedServiceManagerBoundary("systemd", {
-        systemdHandoffDeadlineMs: 5_000,
-        systemdHandoffFailure: true,
-        systemdStopDelayMs: 6_000,
-      });
-
-      expect(state).toMatchObject({ parked: true, reset: true, restored: true });
-      expect(state.stopCompleted).toBeUndefined();
-      expect(sentinel).toMatchObject({
-        payload: { status: "error", stats: { reason: "managed-service-handoff-helper-failed" } },
-      });
-    },
-  );
-}
-
-export function registerManagedLaunchdHandoffRestorationTests(
-  runManagedServiceManagerBoundary: (
-    kind: "launchd",
-    options?: ManagedServiceManagerBoundaryOptions,
-  ) => Promise<ManagedServiceManagerBoundaryResult>,
-  itUnix: ReturnType<typeof import("vitest").it.runIf>,
-  expect: typeof import("vitest").expect,
-): void {
-  itUnix("parks and restores the exact launchd service from its detached helper", async () => {
-    const { commands, sentinel, state } = await runManagedServiceManagerBoundary("launchd");
-    const verbs = commands.map((command) => command.split(" ")[0]);
-    const disable = verbs.indexOf("disable");
-    const bootout = verbs.indexOf("bootout");
-    const enable = verbs.indexOf("enable");
-    const restart = verbs.findIndex((verb) => verb === "bootstrap" || verb === "kickstart");
-
-    expect(disable).toBeGreaterThan(0);
-    expect(commands[0]).toBe("print gui/501/ai.openclaw.gateway");
-    expect(bootout).toBeGreaterThan(disable);
-    expect(enable).toBeGreaterThan(bootout);
-    expect(verbs.slice(bootout + 1, enable)).toContain("print");
-    expect(restart).toBeGreaterThan(enable);
-    expect(verbs.lastIndexOf("print")).toBeGreaterThan(restart);
-    expect(commands[disable]).toBe("disable gui/501/ai.openclaw.gateway");
-    expect(commands[bootout]).toBe("bootout gui/501/ai.openclaw.gateway");
-    expect(commands.every((command) => !command.includes("kickstart -k"))).toBe(true);
-    expect(state).toMatchObject({ disabled: false, parked: true, restored: true });
-    expect(sentinel).toMatchObject({
-      payload: {
-        status: "error",
-        stats: {
-          reason: "managed-service-handoff-failed",
-          steps: expect.arrayContaining([
-            expect.objectContaining({ name: "service-restore", log: { exitCode: 0 } }),
-          ]),
-        },
-      },
-    });
-  });
-
-  itUnix.each([
-    {
-      label: "keeps bootout alive beyond the short command timeout before authorizing the updater",
-      options: { launchdTeardown: { bootoutDelayMs: 5_250, loadedPrints: 2 } },
-      updaterRan: true,
-    },
-    {
-      label: "restores a cancelled handoff after loaded teardown and transient bootstrap EIO",
-      options: {
-        cancelAfterPark: true,
-        launchdTeardown: { loadedPrints: 2, pendingBootstrapFailures: 2 },
-      },
-      updaterRan: false,
-    },
-    {
-      label: "restores an expired handoff after loaded teardown and transient bootstrap EIO",
-      options: {
-        parentExitTimeoutMs: 500,
-        launchdTeardown: { loadedPrints: 2, pendingBootstrapFailures: 2 },
-      },
-      updaterRan: false,
-    },
-    {
-      label:
-        "retries canonical bootstrap when an operation-in-progress service disappears during restoration",
-      options: {
-        cancelAfterPark: true,
-        launchdTeardown: { loadedPrints: 2, pendingOperationInProgress: 1 },
-      },
-      updaterRan: false,
-    },
-  ])(
-    "$label",
-    async ({ options, updaterRan }) => {
-      const { commands, parentSignal, sentinel, state } = await runManagedServiceManagerBoundary(
-        "launchd",
-        options,
-      );
-      const verbs = commands.map((command) => command.split(" ")[0]);
-
-      expect(state).toMatchObject({
-        disabled: false,
-        parked: true,
-        unloaded: true,
-        restored: true,
-        loadedPrintsObserved: 2,
-        ...(updaterRan
-          ? { bootoutCompleted: true, updaterObservedUnloaded: true }
-          : {
-              pendingBootstrapFailures: 0,
-              bootstrapAttempts: "pendingOperationInProgress" in options.launchdTeardown ? 2 : 3,
-              ...("pendingOperationInProgress" in options.launchdTeardown
-                ? { operationInProgressObserved: 1, pendingOperationInProgress: 0 }
-                : {}),
-            }),
-      });
-      expect(verbs.filter((verb) => verb === "print").length).toBeGreaterThanOrEqual(4);
-      expect(parentSignal).toBe("parentExitTimeoutMs" in options ? "SIGKILL" : null);
-      expect(sentinel).toMatchObject({
-        payload: {
-          status: updaterRan ? "error" : "skipped",
-          stats: {
-            reason: updaterRan
-              ? "managed-service-handoff-failed"
-              : "managed-service-handoff-cancelled",
-            steps: expect.arrayContaining([
-              expect.objectContaining({ name: "service-restore", log: { exitCode: 0 } }),
-            ]),
-          },
-        },
-      });
-    },
-    20_000,
-  );
-
-  itUnix(
-    "never starts launchd bootstrap after its absolute restoration deadline or grants a command excess time",
-    async () => {
-      const { commandTimings, commands, sentinel, state } = await runManagedServiceManagerBoundary(
-        "launchd",
-        {
-          cancelAfterPark: true,
-          launchdTeardown: { clockEachCommandMs: 5_000, loadedPrints: 4 },
-        },
-      );
-      const restoreIndex = commandTimings.findIndex(({ action }) => action === "enable");
-      expect(restoreIndex).toBeGreaterThan(0);
-      const restoration = commandTimings.slice(restoreIndex);
-      const restoreStartedAtMs = restoration[0]?.startedAtMs ?? 0;
-
-      expect(restoration.map(({ action }) => action)).toEqual([
-        "enable",
-        "print",
-        "print",
-        "print",
-        "print",
-        "print",
-      ]);
-      expect(commands.some((command) => command.startsWith("bootstrap "))).toBe(false);
-      for (const { startedAtMs, timeoutMs } of restoration) {
-        const elapsedMs = startedAtMs - restoreStartedAtMs;
-        expect(elapsedMs).toBeLessThan(30_000);
-        expect(timeoutMs).toBeLessThanOrEqual(5_000);
-        expect(elapsedMs + timeoutMs).toBeLessThanOrEqual(30_000);
-      }
-      expect(restoration.at(-1)?.timeoutMs).toBeLessThan(5_000);
-      expect(state).toMatchObject({ disabled: false, parked: true, unloaded: true });
-      expect(state.restored).toBeUndefined();
+      expect(state).toMatchObject({ parked: true, stopCompleted: true, postExitShows: 2 });
+      expect(commands.filter((command) => command.includes("reset-failed"))).toHaveLength(0);
       expect(sentinel).toMatchObject({
         payload: {
           status: "error",
@@ -340,56 +250,48 @@ export function registerManagedLaunchdHandoffRestorationTests(
         },
       });
     },
-    15_000,
   );
 
-  itUnix(
-    "rejects a launchd target owned by a different parent without native mutation",
-    async () => {
-      const { commands, sentinel, state } = await runManagedServiceManagerBoundary("launchd", {
-        launchdFault: "wrong-parent",
-      });
-
-      expect(commands).toEqual(["print gui/501/ai.openclaw.gateway"]);
-      expect(state).toEqual({});
-      expect(sentinel).toMatchObject({
-        payload: {
-          status: "skipped",
-          stats: { reason: "managed-service-handoff-cancelled" },
-        },
-      });
-    },
-  );
-
-  itUnix.each([
-    ["a missing PID", "missing-restored-pid"],
-    ["a dead PID", "dead-restored-pid"],
-  ] as const)("rejects launchd restoration reporting running with %s", async (_label, fault) => {
-    const { commands, sentinel, state } = await runManagedServiceManagerBoundary("launchd", {
-      launchdFault: fault,
-      cancelAfterPark: true,
-    });
-
-    expect(commands).toEqual(
-      expect.arrayContaining([
-        "disable gui/501/ai.openclaw.gateway",
-        "bootout gui/501/ai.openclaw.gateway",
-        "enable gui/501/ai.openclaw.gateway",
-      ]),
+  itUnix("rejects an overdue commit before its delayed deadline callback executes", async () => {
+    const { commands, parentSignal, sentinel, state } = await runManagedServiceManagerBoundary(
+      "systemd",
+      { overdueCommit: true },
     );
-    expect(state).toMatchObject({ disabled: false, parked: true, restored: true });
+
+    expect(parentSignal).toBeNull();
+    expect(
+      commands.filter((command) => command.includes("stop openclaw-gateway.service")),
+    ).toHaveLength(0);
+    expect(
+      commands.filter((command) => command.includes("start openclaw-gateway.service")),
+    ).toHaveLength(0);
+    expect(state).toEqual({});
     expect(sentinel).toMatchObject({
       payload: {
-        status: "error",
-        stats: {
-          reason: "managed-service-handoff-restore-failed",
-          steps: expect.arrayContaining([
-            expect.objectContaining({ name: "service-restore", log: { exitCode: 1 } }),
-          ]),
-        },
+        status: "skipped",
+        stats: { reason: "managed-service-handoff-cancelled", steps: [] },
       },
     });
   });
+
+  itUnix(
+    "fails closed when the exact systemd stop job exhausts the parent-exit deadline",
+    async () => {
+      const { sentinel, state } = await runManagedServiceManagerBoundary("systemd", {
+        systemdHandoffDeadlineMs: 5_000,
+        systemdHandoffFailure: true,
+        systemdStopDelayMs: 6_000,
+      });
+
+      expect(state).toMatchObject({ parked: true });
+      expect(state.reset).toBeUndefined();
+      expect(state.restored).toBeUndefined();
+      expect(state.stopCompleted).toBeUndefined();
+      expect(sentinel).toMatchObject({
+        payload: { status: "error", stats: { reason: "managed-service-handoff-restore-failed" } },
+      });
+    },
+  );
 }
 
 export function createManagedServiceManagerFixtureScript(params: {
@@ -397,27 +299,35 @@ export function createManagedServiceManagerFixtureScript(params: {
   parentPid: number;
   statePath: string;
   commandsPath: string;
+  configPath: string;
   options?: ManagedServiceManagerBoundaryOptions;
 }): string {
   const { commandsPath, kind, options, parentPid, statePath } = params;
-  return `#!${process.execPath}
+  return `#!${testNodeExecPath}
 const fs = require("node:fs");
 const args = process.argv.slice(2);
-const statePath = ${JSON.stringify(statePath)};
-const state = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, "utf8")) : {};
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 fs.appendFileSync(${JSON.stringify(commandsPath)}, args.join(" ") + "\\n");
 const action = args.find((arg) => ["show", "stop", "reset-failed", "start", "print", "disable", "bootout", "enable", "bootstrap", "kickstart"].includes(arg));
-if (${JSON.stringify(kind)} === "systemd") {
-  if (action === "stop") {
-    state.parked = true;
-    fs.writeFileSync(statePath, JSON.stringify(state));
-    for (;;) {
-      try { process.kill(${parentPid}, 0); sleep(10); } catch { break; }
-    }
+void (async () => {
+  const { isPidDefinitelyDead } = action === ${JSON.stringify(kind === "systemd" ? "stop" : "print")}
+    ? await import(${JSON.stringify(new URL("../shared/pid-alive.ts", import.meta.url).href)})
+    : {};
+  if (${JSON.stringify(kind)} === "systemd" && action === "stop") {
+    ${managedServiceStateUpdateScript(statePath, "state.parked = true")};
+    while (!isPidDefinitelyDead(${parentPid})) sleep(10);
     sleep(${options?.systemdStopDelayMs ?? 0});
-    state.stopCompleted = true;
+    ${managedServiceStateUpdateScript(
+      statePath,
+      `${options?.revokeOwner ? `fs.writeFileSync(${JSON.stringify(params.configPath)}, JSON.stringify({ commands: { ownerAllowFrom: [] } })); state.ownerRevokedAfterExit = true;` : ""}
+      state.stopCompleted = true`,
+    )};
+    return;
   }
+  ${managedServiceStateUpdateScript(
+    statePath,
+    `
+if (${JSON.stringify(kind)} === "systemd") {
   if (action === "reset-failed") state.reset = true;
   if (action === "start" && ${JSON.stringify(options?.systemdFault)} === "start-failed") {
     state.startFailed = true;
@@ -437,11 +347,13 @@ if (${JSON.stringify(kind)} === "systemd") {
       : observation?.mainPid === "none" ? 0
       : state.restored ? restoredPid : active ? ${parentPid} : 0;
     const observedGeneration = state.restored || observation?.generation === "replacement" ? "222"
+      : state.previousGenerationRestored ? "333"
       : observation?.generation === "parked" ? "111"
         : observation?.generation === "cleared" ? "0"
           : active || observation?.activeState === "deactivating" ? "111" : "0";
     const observedInvocation = state.restored || observation?.invocation === "replacement"
       ? "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      : state.previousGenerationRestored ? "cccccccccccccccccccccccccccccccc"
       : observation?.invocation === "parked" ? "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         : observation?.invocation === "cleared" ? ""
           : active || observation?.activeState === "deactivating"
@@ -463,11 +375,6 @@ if (${JSON.stringify(kind)} === "systemd") {
     state.loadedPrintsRemaining = ${options?.launchdTeardown?.loadedPrints ?? 0};
     state.pendingBootstrapFailures = ${options?.launchdTeardown?.pendingBootstrapFailures ?? 0};
     state.pendingOperationInProgress = ${options?.launchdTeardown?.pendingOperationInProgress ?? 0};
-    const delay = ${options?.launchdTeardown?.bootoutDelayMs ?? 0};
-    if (delay) setTimeout(() => {
-      state.bootoutCompleted = true;
-      fs.writeFileSync(statePath, JSON.stringify(state));
-    }, delay);
   }
   if (action === "enable") state.disabled = false;
   if (action === "bootstrap" || action === "kickstart") {
@@ -487,8 +394,7 @@ if (${JSON.stringify(kind)} === "systemd") {
     } else state.restored = true;
   }
   if (action === "print") {
-    let parentAlive = false;
-    try { process.kill(${parentPid}, 0); parentAlive = true; } catch {}
+    const parentAlive = !isPidDefinitelyDead(${parentPid});
     if (state.parked && !state.restored && !parentAlive) {
       if (state.loadedPrintsRemaining > 0) {
         state.loadedPrintsRemaining -= 1;
@@ -496,8 +402,8 @@ if (${JSON.stringify(kind)} === "systemd") {
       } else {
         state.unloaded = true;
         process.stderr.write("Could not find service\\n");
-        fs.writeFileSync(statePath, JSON.stringify(state));
-        process.exit(113);
+        process.exitCode = 113;
+        return state;
       }
     }
     const fault = ${JSON.stringify(options?.launchdFault)};
@@ -510,13 +416,221 @@ if (${JSON.stringify(kind)} === "systemd") {
     }
   }
 }
-fs.writeFileSync(statePath, JSON.stringify(state));
+  `,
+  )};
+  if (action === "bootout" && ${options?.launchdTeardown?.bootoutDelayMs ?? 0}) {
+    await new Promise((resolve) => setTimeout(resolve, ${options?.launchdTeardown?.bootoutDelayMs ?? 0}));
+    ${managedServiceStateUpdateScript(statePath, "state.bootoutCompleted = true")};
+  }
+})().catch((error) => { console.error(error); process.exitCode = 1; });
 `;
+}
+
+export function createManagedServiceUpdaterFixtureScript(params: {
+  kind: "systemd" | "launchd";
+  root: string;
+  statePath: string;
+  updaterPath: string;
+  logPath: string;
+  stateDatabasePath: string;
+  consumeNotification: string;
+  options?: ManagedServiceManagerBoundaryOptions;
+}): string {
+  const { kind, root, statePath, updaterPath, stateDatabasePath, consumeNotification, options } =
+    params;
+  const updaterResult = options?.updaterResult
+    ? { root, ...(options.updaterResult as UpdateRunResult) }
+    : null;
+  const notification =
+    updaterResult && options?.updaterNotification
+      ? buildUpdateRestartSentinelPayload({
+          result: {
+            ...updaterResult,
+            steps: updaterResult.steps ?? [],
+            durationMs: updaterResult.durationMs ?? 0,
+          },
+          meta: { root, handoffId: `${kind}-boundary` },
+        })
+      : null;
+  // Use the canonical row shape without moving publication ahead of the child.
+  const notificationEnvelope = notification
+    ? parseRestartSentinelEnvelope({ version: 1, payload: notification })
+    : null;
+  if (notification && !notificationEnvelope) {
+    throw new Error("Expected a valid updater notification fixture");
+  }
+  const notificationRow = notificationEnvelope
+    ? buildRestartSentinelRow(notificationEnvelope.payload, notificationEnvelope.payload.ts)
+    : null;
+  return [
+    `void (async () => {`,
+    `const fs = require("node:fs");`,
+    ...(kind === "launchd"
+      ? [
+          `const state = ${managedServiceStateUpdateScript(statePath, "if (state.unloaded) state.updaterObservedUnloaded = true")};`,
+          `if (!state.unloaded) process.exit(19);`,
+        ]
+      : []),
+    `fs.writeFileSync(${JSON.stringify(updaterPath)}, "ran");`,
+    ...(notificationEnvelope && notificationRow
+      ? [
+          `const notification = ${JSON.stringify(notificationEnvelope.payload)};`,
+          `const row = ${JSON.stringify(notificationRow)};`,
+          `const db = new (require("node:sqlite").DatabaseSync)(${JSON.stringify(stateDatabasePath)});`,
+          `db.prepare("INSERT INTO gateway_restart_sentinel (" + Object.keys(row).join(", ") + ") VALUES (" + Object.keys(row).map(() => "?").join(", ") + ")").run(...Object.values(row)); db.close();`,
+          `${managedServiceStateUpdateScript(statePath, "state.publishedSentinel = { version: 1, payload: notification, revision: notification.ts }")};`,
+          ...(options?.updaterNotification === "consumed" &&
+          (updaterResult?.status === "ok" ||
+            (updaterResult?.recovery?.serviceRestartSafe && updaterResult.recovery.service))
+            ? [`{ ${consumeNotification} }`]
+            : []),
+        ]
+      : []),
+    ...(options?.diagnosticReadFailure === "before-recovery"
+      ? [
+          `{ const db = new (require("node:sqlite").DatabaseSync)(${JSON.stringify(stateDatabasePath)}); db.exec("ALTER TABLE gateway_restart_sentinel RENAME COLUMN thread_id TO unreadable_thread_id"); db.close(); }`,
+        ]
+      : []),
+    `const result = JSON.stringify(${JSON.stringify(updaterResult)});`,
+    `const mode = ${JSON.stringify(options?.updaterOutput)};`,
+    `const output = mode === "missing" ? "" : mode === "malformed" ? "diagnostic before JSON\\n" + result : mode === "overflow" ? " ".repeat(4 * 1024 * 1024) + result : result;`,
+    `let remaining = Buffer.from(output);`,
+    ...(options?.updaterOutput === "split-utf8"
+      ? [
+          `const split = remaining.findIndex((byte) => byte >= 0x80) + 1;`,
+          `if (!split) throw new Error("expected a Unicode installation root");`,
+          `const prefix = remaining.subarray(0, split);`,
+          `const logPath = ${JSON.stringify(params.logPath)};`,
+          `const logOffset = fs.statSync(logPath).size;`,
+          `fs.writeSync(1, prefix);`,
+          // The raw log acknowledges a distinct pipe read before the remaining UTF-8 bytes.
+          `const deadline = Date.now() + 5000;`,
+          `while (!fs.readFileSync(logPath).subarray(logOffset).includes(prefix)) {`,
+          `  if (Date.now() >= deadline) throw new Error("helper did not receive the UTF-8 prefix");`,
+          `  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);`,
+          `}`,
+          `remaining = remaining.subarray(split);`,
+        ]
+      : []),
+    `process.stdout.write(remaining, () => { ${options?.updaterSignal ? 'process.kill(process.pid, "SIGTERM");' : `process.exit(${options?.updaterExitCode ?? 7});`} });`,
+    `})().catch((error) => { console.error(error); process.exitCode = 1; });`,
+  ].join("");
+}
+
+export function createManagedServiceCancellationPreload(params: {
+  scriptPath: string;
+  updaterPidPath: string;
+  activationGatePath: string;
+  activationReleasePath: string;
+  mutationPath: string;
+  gateInspection: boolean;
+}): string {
+  return `
+  if (process.argv[1] === ${JSON.stringify(params.scriptPath)}) {
+    const fs = require("node:fs");
+    const children = require("node:child_process");
+    const spawn = children.spawn;
+    const kill = process.kill;
+    let updaterPid;
+    let inspectionHeld = false;
+    // Keep termination pending until activation observes accepted cancellation.
+    // The test process owns final cleanup of this exact synthetic updater group.
+    process.kill = (pid, signal) => signal === "SIGKILL" && pid === -updaterPid
+      ? true : kill.call(process, pid, signal);
+    children.spawn = (command, args, options) => {
+      const mutation = (command === "systemctl" && args.includes("stop")) ||
+        (command === "launchctl" && ["disable", "bootout"].includes(args[0]));
+      if (mutation) fs.writeFileSync(${JSON.stringify(params.mutationPath)}, args.join(" "));
+      const child = spawn(command, args, options);
+      if (command === process.execPath && args[0] === "-e" && !updaterPid) {
+        updaterPid = child.pid;
+        fs.writeFileSync(${JSON.stringify(params.updaterPidPath)}, String(updaterPid));
+        const killChild = child.kill.bind(child);
+        child.kill = (signal) => signal === "SIGKILL" ? true : killChild(signal);
+      }
+      const inspection = (command === "systemctl" && args.includes("show")) ||
+        (command === "launchctl" && args[0] === "print");
+      if (${params.gateInspection} && inspection && !inspectionHeld) {
+        inspectionHeld = true;
+        const emit = child.emit.bind(child);
+        child.emit = (event, ...values) => {
+          if (event !== "close") return emit(event, ...values);
+          fs.writeFileSync(${JSON.stringify(params.activationGatePath)}, "inspection");
+          const timer = setInterval(() => {
+            if (!fs.existsSync(${JSON.stringify(params.activationReleasePath)})) return;
+            clearInterval(timer);
+            emit(event, ...values);
+          }, 5);
+          return true;
+        };
+      }
+      return child;
+    };
+  }`;
+}
+
+export async function prepareManagedServiceTriageClockPreload(
+  params: { root: string; scriptPath: string; statePath: string },
+  triageCommandArgv: string[],
+  triageInputPath: string,
+  env: NodeJS.ProcessEnv,
+): Promise<NodeJS.ProcessEnv> {
+  const preloadPath = path.join(params.root, "triage-clock-preload.cjs");
+  const commandArgv = [...triageCommandArgv, "--update-result", triageInputPath];
+  // Only the generated helper advances its diagnostic timer. The installed
+  // command, its descendant, recovery, and lease clocks stay native.
+  const source = `if (process.argv[1] === ${JSON.stringify(params.scriptPath)}) {
+    const fs = require("node:fs");
+    const children = require("node:child_process");
+    const spawn = children.spawn;
+    const setTimeout = global.setTimeout;
+    const clearTimeout = global.clearTimeout;
+    const polls = new Map();
+    let diagnostic;
+    let captured = false;
+    children.spawn = (command, args, options) => {
+      const child = spawn(command, args, options);
+      if (command === ${JSON.stringify(commandArgv[0])} &&
+          (args.at(-1) === ${JSON.stringify(JSON.stringify(commandArgv))} ||
+           JSON.stringify(args.slice(-${commandArgv.length - 1})) === ${JSON.stringify(JSON.stringify(commandArgv.slice(1)))})) {
+        diagnostic = child;
+        child.once("close", () => { diagnostic = undefined; });
+      }
+      return child;
+    };
+    global.clearTimeout = (timer) => {
+      clearInterval(polls.get(timer));
+      polls.delete(timer);
+      return clearTimeout(timer);
+    };
+    global.setTimeout = (callback, delay, ...args) => {
+      const timer = setTimeout(callback, delay, ...args);
+      if (!diagnostic || delay !== 60_000) return timer;
+      if (captured) throw new Error("duplicate diagnostic deadline");
+      captured = true;
+      const poll = setInterval(() => {
+        if (!fs.existsSync(${JSON.stringify(path.join(params.root, "triage-descendant-ready"))})) return;
+        const descendantPid = Number(fs.readFileSync(${JSON.stringify(path.join(params.root, "triage-descendant-ready"))}, "utf8"));
+        const state = JSON.parse(fs.readFileSync(${JSON.stringify(params.statePath)}, "utf8"));
+        if (state.triageDescendantPid !== descendantPid) return;
+        process.kill(descendantPid, 0);
+        global.clearTimeout(timer);
+        fs.writeFileSync(${JSON.stringify(path.join(params.root, "triage-deadline.json"))}, JSON.stringify({ requestedMs: delay, descendantPid }));
+        callback.apply(timer, args);
+      }, 5);
+      polls.set(timer, poll);
+      return timer;
+    };
+  }`;
+  await fs.writeFile(preloadPath, source);
+  return { ...env, NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require ${preloadPath}`.trim() };
 }
 
 export function createManagedServiceLaunchdClockPreload(params: {
   commandTimingsPath: string;
   clockEachCommandMs: number;
+  recoveryClockAdvanceMs?: number;
+  recoveryCommandArgv: string[];
 }): string {
   return [
     'const fs = require("node:fs");',
@@ -534,182 +648,77 @@ export function createManagedServiceLaunchdClockPreload(params: {
     "  return actualSetTimeout(callback, delay, ...args);",
     "};",
     "children.spawn = (command, args, options) => {",
+    "  let timedOut = false;",
     '  if (command === "launchctl") {',
     "    const timeoutMs = options.timeout;",
     "    const startedAtMs = Date.now();",
     `    fs.appendFileSync(${JSON.stringify(params.commandTimingsPath)}, JSON.stringify({ action: args[0], startedAtMs, timeoutMs }) + "\\n");`,
     `    elapsed += Math.min(${params.clockEachCommandMs}, timeoutMs);`,
+    `    timedOut = ${params.clockEachCommandMs} > timeoutMs;`,
     "  }",
-    "  return actualSpawn(command, args, options);",
+    // Expired simulated work must not execute the manager's completed side effect.
+    '  const child = timedOut ? actualSpawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], options) : actualSpawn(command, args, options);',
+    '  if (timedOut) child.once("spawn", () => child.kill("SIGKILL"));',
+    // Advance only when the exact guarded restart closes, before the helper resumes.
+    `  if (command === ${JSON.stringify(params.recoveryCommandArgv[0])} && (args.at(-1) === ${JSON.stringify(JSON.stringify(params.recoveryCommandArgv))} || JSON.stringify(args.slice(-${params.recoveryCommandArgv.length - 1})) === ${JSON.stringify(JSON.stringify(params.recoveryCommandArgv.slice(1)))})) {`,
+    `    child.once("close", () => { elapsed += ${params.recoveryClockAdvanceMs ?? 0}; });`,
+    "  }",
+    "  return child;",
     "};",
   ].join("\n");
 }
 
-export function createManagedServiceUpdateCommandFixture(params: {
-  kind: "systemd" | "launchd";
-  root: string;
-  statePath: string;
-  updaterPath: string;
-  stateDatabasePath: string;
-  options?: ManagedServiceManagerBoundaryOptions;
-}) {
-  const { kind, root, statePath, updaterPath, options } = params;
-  const recovery =
-    kind === "systemd"
-      ? { kind, unit: "openclaw-gateway.service" }
-      : {
-          kind,
-          uid: 501,
-          label: "ai.openclaw.gateway",
-          plistPath: path.join(root, "ai.openclaw.gateway.plist"),
-        };
-  return {
-    serviceRecovery: recovery,
-    commandArgv: [
-      process.execPath,
-      "-e",
-      [
-        `const fs = require("node:fs");`,
-        ...(kind === "launchd"
-          ? [
-              `const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8"));`,
-              `if (!state.unloaded) process.exit(19);`,
-              `state.updaterObservedUnloaded = true;`,
-              `fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));`,
-            ]
-          : []),
-        `fs.writeFileSync(${JSON.stringify(updaterPath)}, "ran");`,
-        ...(options?.updaterSkippedReason
-          ? [
-              `const { DatabaseSync } = require("node:sqlite");`,
-              `const db = new DatabaseSync(${JSON.stringify(params.stateDatabasePath)});`,
-              `const payload = JSON.parse(db.prepare("SELECT payload_json FROM gateway_restart_sentinel WHERE sentinel_key = 'current'").get().payload_json);`,
-              `payload.status = "skipped"; payload.stats.reason = ${JSON.stringify(options.updaterSkippedReason)};`,
-              `db.prepare("UPDATE gateway_restart_sentinel SET status = 'skipped', payload_json = ?, stats_json = ?, updated_at_ms = updated_at_ms + 1 WHERE sentinel_key = 'current'").run(JSON.stringify(payload), JSON.stringify(payload.stats));`,
-              `db.close();`,
-            ]
-          : []),
-        options?.updaterSignal
-          ? `process.kill(process.pid, ${JSON.stringify(options.updaterSignal)});`
-          : `process.exit(${options?.updaterExitCode ?? 80});`,
-      ].join(""),
-    ],
-    recoveryCommandArgv: [
-      process.execPath,
-      "-e",
-      [
-        `const fs = require("node:fs");`,
-        `const { spawnSync } = require("node:child_process");`,
-        `const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8"));`,
-        `state.guardedRestart = process.argv.slice(1);`,
-        `fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));`,
-        ...(options?.recoverySentinel
-          ? [
-              `const { DatabaseSync } = require("node:sqlite");`,
-              `const db = new DatabaseSync(${JSON.stringify(params.stateDatabasePath)});`,
-              `const row = db.prepare("SELECT payload_json FROM gateway_restart_sentinel WHERE sentinel_key = 'current'").get();`,
-              `state.sentinelAtRecovery = JSON.parse(row.payload_json);`,
-              `fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));`,
-              ...(options.recoverySentinel === "consumed"
-                ? [
-                    `db.prepare("DELETE FROM gateway_restart_sentinel WHERE sentinel_key = 'current'").run();`,
-                  ]
-                : options.recoverySentinel === "replaced"
-                  ? [
-                      `const replacement = { ...state.sentinelAtRecovery, stats: { ...state.sentinelAtRecovery.stats, reason: "newer update failure" } };`,
-                      `db.prepare("UPDATE gateway_restart_sentinel SET payload_json = ?, stats_json = ?, updated_at_ms = updated_at_ms + 1 WHERE sentinel_key = 'current'").run(JSON.stringify(replacement), JSON.stringify(replacement.stats));`,
-                    ]
-                  : []),
-              `db.close();`,
-            ]
-          : []),
-        ...(options?.recoveryHang
-          ? [
-              `const { spawn } = require("node:child_process");`,
-              `state.recoveryDescendantPid = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }).pid;`,
-              `fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));`,
-              `setInterval(() => {}, 1000);`,
-            ]
-          : options?.recoveryExitCode === undefined
-            ? (kind === "systemd"
-                ? [
-                    ["--user", "reset-failed", recovery.unit],
-                    ["--user", "start", recovery.unit],
-                    ["--user", "show", recovery.unit],
-                  ]
-                : [
-                    ["enable", `gui/501/ai.openclaw.gateway`],
-                    ["bootstrap", "gui/501", path.join(root, "ai.openclaw.gateway.plist")],
-                    ["print", "gui/501/ai.openclaw.gateway"],
-                  ]
-              ).map(
-                (args) =>
-                  `if (spawnSync(${JSON.stringify(kind === "systemd" ? "systemctl" : "launchctl")}, ${JSON.stringify(args)}).status !== 0) process.exit(1);`,
-              )
-            : [`process.exit(${options.recoveryExitCode});`]),
-      ].join(""),
-      "--",
-      "gateway",
-      "restart",
-      "--preserve-definition",
-      "--json",
-    ],
-    triageCommandArgv: options?.triageMissing
-      ? [path.join(root, "missing-triage")]
-      : [
-          process.execPath,
-          "-e",
-          [
-            `const fs = require("node:fs");`,
-            `const args = process.argv.slice(1);`,
-            `const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8"));`,
-            `const contextPath = args[args.indexOf("--update-result") + 1];`,
-            `state.triageCalls = (state.triageCalls || 0) + 1;`,
-            `state.triageArgs = args;`,
-            `state.triageInput = JSON.parse(fs.readFileSync(contextPath, "utf8"));`,
-            `state.triageInputMode = fs.statSync(contextPath).mode & 0o777;`,
-            `state.triageObservedRestored = state.restored === true;`,
-            `state.triageObservedRecovery = Array.isArray(state.guardedRestart);`,
-            `fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));`,
-            ...(options?.triageHang
-              ? [
-                  `const { spawn } = require("node:child_process");`,
-                  `state.triageDescendantPid = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }).pid;`,
-                  `fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));`,
-                  `setInterval(() => {}, 1000);`,
-                ]
-              : [
-                  `console.log(JSON.stringify({ promptPath: "triage-prompt.md", bundlePath: "support.zip" }));`,
-                  `process.exit(${options?.triageExitCode ?? 0});`,
-                ]),
-          ].join(""),
-          "--",
-          "triage",
-          "--json",
-          "--non-interactive",
-        ],
-  };
-}
-
-export async function waitForHandoffResponse(
-  output: Readable | null,
-  expected: string,
-): Promise<void> {
-  if (!output) {
-    throw new Error("expected managed handoff helper stdout");
-  }
-  await new Promise<void>((resolve, reject) => {
-    let buffered = "";
-    const onData = (chunk: Buffer | string) => {
-      buffered = `${buffered}${chunk.toString()}`.slice(-1024);
-      if (buffered.includes(`${expected}\n`)) {
-        output.removeListener("data", onData);
-        output.removeListener("end", onEnd);
-        resolve();
+export function registerManagedHandoffOwnerTests(
+  runManagedServiceManagerBoundary: (
+    kind: "systemd",
+    options?: ManagedServiceManagerBoundaryOptions,
+  ) => Promise<ManagedServiceManagerBoundaryResult>,
+  itUnix: ReturnType<typeof import("vitest").it.runIf>,
+  expect: typeof import("vitest").expect,
+): void {
+  itUnix.each(["revoked", "unchanged", "internal", "channel-less"] as const)(
+    "rechecks the %s requester after helper readiness and parent exit",
+    async (owner) => {
+      const { state, sentinel, log, sensitiveFilesRemoved } =
+        await runManagedServiceManagerBoundary("systemd", {
+          requester: {
+            channel:
+              owner === "internal" ? "webchat" : owner === "channel-less" ? undefined : "slack",
+            accountId: "primary",
+            senderId: "owner",
+          },
+          revokeOwner: owner === "revoked",
+          helperExitCode: owner === "revoked" ? 1 : 0,
+          updaterExitCode: 0,
+          updaterResult: { status: "ok", mode: "npm" },
+        });
+      expect(state).toMatchObject({ parked: true, stopCompleted: true });
+      expect(state.ownerChecked).toBe(
+        owner === "revoked" || owner === "unchanged" ? true : undefined,
+      );
+      if (owner === "revoked") {
+        expect(state).toMatchObject({
+          ownerRevokedAfterExit: true,
+          restored: true,
+          healthProbed: true,
+        });
+        expect(sentinel).toMatchObject({
+          payload: {
+            status: "error",
+            stats: {
+              reason: "owner_required",
+              steps: expect.arrayContaining([
+                expect.objectContaining({ name: "service-restore", log: { exitCode: 0 } }),
+              ]),
+            },
+          },
+        });
+        expect(log).toContain("owner_required");
+        expect(log).not.toContain("starting managed update command");
+      } else {
+        expect(log).toContain("starting managed update command");
       }
-    };
-    const onEnd = () => reject(new Error(`managed handoff helper exited before ${expected}`));
-    output.on("data", onData);
-    output.once("end", onEnd);
-  });
+      expect(sensitiveFilesRemoved).toBe(true);
+    },
+  );
 }

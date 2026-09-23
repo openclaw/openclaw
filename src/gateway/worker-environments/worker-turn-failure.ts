@@ -1,6 +1,3 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { redactSensitiveText } from "../../logging/redact.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type {
   WorkerSessionPlacementRecord,
@@ -8,6 +5,7 @@ import type {
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
 import type { WorkerEnvironmentService } from "./service.js";
+import { boundedWorkerError } from "./worker-error.js";
 import { releaseClaimIfOwned } from "./worker-turn-admission.js";
 
 export type WorkerTurnEnvironmentService = Pick<
@@ -27,16 +25,13 @@ export type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { stat
 
 export class WorkerTurnExecutionError extends Error {}
 
+export class WorkerWorkspaceReconciliationError extends Error {
+  override name = "WorkerWorkspaceReconciliationError";
+}
+
 // Journal-terminal launches get a short cleanup grace before failure is surfaced.
 // This never limits a live launch or a turn still holding its claim.
 const TERMINAL_WORKER_CLEANUP_GRACE_MS = 30_000;
-
-function workerTurnRecoveryError(error: unknown): string {
-  const message = redactSensitiveText(formatErrorMessage(error), { mode: "tools" })
-    .replace(/\s+/gu, " ")
-    .trim();
-  return truncateUtf16Safe(message || "cloud worker turn failed", 1_024);
-}
 
 export async function failHandedOffTurn(params: {
   environments: WorkerTurnEnvironmentService;
@@ -49,7 +44,7 @@ export async function failHandedOffTurn(params: {
     registerRecovery(recover: () => string | undefined): void;
   };
 }): Promise<void> {
-  const failures = [workerTurnRecoveryError(params.error)];
+  const failures = [boundedWorkerError(params.error)];
   let drained: WorkerSessionPlacementRecord;
   try {
     drained = params.placements.startDrain({
@@ -140,7 +135,7 @@ export async function failHandedOffTurn(params: {
       ),
     );
   } catch (error) {
-    failures.push(`tunnel stop: ${workerTurnRecoveryError(error)}`);
+    failures.push(`tunnel stop: ${boundedWorkerError(error)}`);
   }
   // Recovery may have recorded failure, or a replacement may own the session.
   // A late cleanup completion must never destroy that newer placement.
@@ -150,7 +145,7 @@ export async function failHandedOffTurn(params: {
   try {
     await waitForCleanup(params.environments.destroy(params.placement.environmentId));
   } catch (error) {
-    failures.push(`environment destroy: ${workerTurnRecoveryError(error)}`);
+    failures.push(`environment destroy: ${boundedWorkerError(error)}`);
   }
   recordFailure();
 }

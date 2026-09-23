@@ -7,11 +7,11 @@ import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import {
-  applyLocalModelLeanToolSearchDefaults,
   filterLocalModelLeanTools,
   isLocalModelLeanEnabled,
   resolveLocalModelLeanPreserveToolNames,
 } from "./local-model-lean.js";
+import { resolveAgentToolSearchRuntimeConfig } from "./tool-search-runtime-config.js";
 
 function tools(names: string[]): AnyAgentTool[] {
   return names.map((name) => ({ name })) as AnyAgentTool[];
@@ -339,6 +339,18 @@ describe("local model lean tool filtering", () => {
     ).toThrow(/belongs to "gemma"/);
   });
 
+  it.each([undefined, {}])("keeps local search limits with config %j", (config) => {
+    expect(
+      resolveAgentToolSearchRuntimeConfig({ config, model: { toolSearchMode: "tools" } })?.tools
+        ?.toolSearch,
+    ).toEqual({
+      enabled: true,
+      mode: "tools",
+      searchDefaultLimit: 5,
+      maxSearchLimit: 10,
+    });
+  });
+
   it("defaults lean runs to structured Tool Search controls", () => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -350,7 +362,7 @@ describe("local model lean tool filtering", () => {
       },
     };
 
-    const resolved = applyLocalModelLeanToolSearchDefaults({ config: cfg, agentId: "main" });
+    const resolved = resolveAgentToolSearchRuntimeConfig({ config: cfg, agentId: "main" });
 
     expect(resolved).not.toBe(cfg);
     expect(resolved?.tools?.toolSearch).toEqual({
@@ -376,6 +388,6 @@ describe("local model lean tool filtering", () => {
       },
     };
 
-    expect(applyLocalModelLeanToolSearchDefaults({ config: cfg, agentId: "main" })).toBe(cfg);
+    expect(resolveAgentToolSearchRuntimeConfig({ config: cfg, agentId: "main" })).toBe(cfg);
   });
 });

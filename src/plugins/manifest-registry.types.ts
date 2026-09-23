@@ -1,44 +1,25 @@
-import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
-import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
+import type { ThemeDefinition } from "../../packages/gateway-protocol/src/theme.js";
 import type {
   PluginBundleFormat,
   PluginConfigUiHint,
   PluginDiagnostic,
   PluginFormat,
-  PluginManifestBackupResource,
-  PluginManifestDoctorContract,
-  PluginManifestActivation,
-  PluginManifestCatalog,
-  PluginManifestConfigContracts,
   PluginManifest,
-  PluginManifestCapabilityProviderMetadata,
   PluginManifestChannelCommandDefaults,
   PluginManifestChannelConfig,
-  PluginManifestContracts,
-  PluginManifestDashboard,
-  PluginManifestMediaUnderstandingProviderMetadata,
-  PluginManifestMcpServer,
-  PluginManifestModelCatalog,
-  PluginManifestModelIdNormalization,
-  PluginManifestModelPricing,
-  PluginManifestModelSupport,
-  PluginManifestProviderEndpoint,
-  PluginManifestProviderRequest,
-  PluginManifestQaRunner,
-  PluginManifestSecretProviderIntegration,
-  PluginManifestSetup,
-  PluginManifestToolMetadata,
 } from "./manifest-types.js";
 import type {
   OpenClawPackageManifest,
   PluginPackageChannel,
   PluginPackageInstall,
 } from "./package-manifest.types.js";
-import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
-import type { PluginDependencySpecMap } from "./status-dependencies-core.js";
+import type { PluginTrust } from "./plugin-trust.js";
+import type { PluginDependencySpecMap } from "./status-dependencies.types.js";
 
 export type PluginManifestContractListKey =
+  | "codeModeExecutors"
+  | "decisionProviders"
   | "speechProviders"
   | "externalAuthProviders"
   | "embeddingProviders"
@@ -58,57 +39,57 @@ export type PluginManifestContractListKey =
   | "migrationProviders"
   | "gatewayMethodDispatch";
 
-export type PluginManifestRecord = {
-  id: string;
-  backupResources?: PluginManifestBackupResource[];
-  name?: string;
-  description?: string;
-  catalog?: PluginManifestCatalog;
-  icon?: string;
-  version?: string;
+type PluginManifestRecordStatic = Omit<
+  PluginManifest,
+  | "capabilityCatalogEntry"
+  | "channels"
+  | "cliBackends"
+  | "configSchema"
+  | "enabledByDefaultOnPlatforms"
+  | "providerCatalogEntry"
+  | "providers"
+  | "requiresPlugins"
+  | "skills"
+  | "uiHints"
+>;
+
+export type PluginThemeArtwork = {
+  hats?: Record<string, { svg: string }>;
+  critters?: Record<string, { svg: string; title?: string; crossMs?: number }>;
+};
+
+export type PluginManifestRecord = PluginManifestRecordStatic & {
+  /** Validated palettes and artwork captured by the immutable metadata generation. */
+  themeDefinitions?: Array<{
+    id: string;
+    definition: ThemeDefinition;
+    artwork?: PluginThemeArtwork;
+  }>;
+  /** Process-local source selection, never persisted in the installed index. */
+  sourcePreferred?: true;
+  iconPath?: string;
+  activityIconPath?: string;
+  toolActivityIconPaths?: Record<string, string>;
   packageName?: string;
   packageVersion?: string;
   packageDescription?: string;
-  enabledByDefault?: boolean;
   enabledByDefaultOnPlatforms?: string[];
-  autoEnableWhenConfiguredProviders?: string[];
-  legacyPluginIds?: string[];
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
   bundleCapabilities?: string[];
-  kind?: PluginKind | PluginKind[];
   channels: string[];
   providers: string[];
   providerDiscoverySource?: string;
-  modelSupport?: PluginManifestModelSupport;
-  modelCatalog?: PluginManifestModelCatalog;
-  modelPricing?: PluginManifestModelPricing;
-  modelIdNormalization?: PluginManifestModelIdNormalization;
-  providerEndpoints?: PluginManifestProviderEndpoint[];
-  providerRequest?: PluginManifestProviderRequest;
-  secretProviderIntegrations?: Record<string, PluginManifestSecretProviderIntegration>;
+  /** Undefined is undeclared; null retains a rejected declaration without enabling full-entry fallback. */
+  capabilityCatalogSource?: string | null;
   cliBackends: string[];
-  syntheticAuthRefs?: string[];
-  nonSecretAuthMarkers?: string[];
-  commandAliases?: PluginManifestCommandAlias[];
-  cliCommands?: PluginManifest["cliCommands"];
-  providerUsageAuthEnvVars?: Record<string, string[]>;
-  providerAuthAliases?: Record<string, string>;
-  providerAuthChoices?: PluginManifest["providerAuthChoices"];
-  activation?: PluginManifestActivation;
-  setup?: PluginManifestSetup;
-  doctorContract?: PluginManifestDoctorContract;
-  doctorHealthChecks?: boolean;
-  sessionRouteStateOwners?: DoctorSessionRouteStateOwner[];
   packageManifest?: OpenClawPackageManifest;
   packageDependencies?: PluginDependencySpecMap;
   packageOptionalDependencies?: PluginDependencySpecMap;
   packageChannel?: PluginPackageChannel;
   packageInstall?: PluginPackageInstall;
   trustedOfficialInstall?: boolean;
-  qaRunners?: PluginManifestQaRunner[];
-  dashboard?: PluginManifestDashboard;
-  mcpServers?: Record<string, PluginManifestMcpServer>;
+  trust?: PluginTrust;
   skills: string[];
   settingsFiles?: string[];
   hooks: string[];
@@ -121,17 +102,6 @@ export type PluginManifestRecord = {
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
   configUiHints?: Record<string, PluginConfigUiHint>;
-  contracts?: PluginManifestContracts;
-  mediaUnderstandingProviderMetadata?: Record<
-    string,
-    PluginManifestMediaUnderstandingProviderMetadata
-  >;
-  imageGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
-  videoGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
-  musicGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
-  toolMetadata?: Record<string, PluginManifestToolMetadata>;
-  configContracts?: PluginManifestConfigContracts;
-  channelConfigs?: Record<string, PluginManifestChannelConfig>;
   channelCatalogMeta?: {
     id: string;
     label?: string;

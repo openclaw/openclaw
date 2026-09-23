@@ -53,7 +53,7 @@ describe("Microsoft Teams QA Bot Framework server", () => {
     }
   });
 
-  it("models an ambiguous gateway timeout after accepting the marked activity", async () => {
+  it("models an ambiguous gateway timeout only for a marked message activity", async () => {
     const onOutbound = vi.fn(async () => {});
     const server = await startMSTeamsQaBotFrameworkServer({
       botToken: "bot-token",
@@ -61,6 +61,18 @@ describe("Microsoft Teams QA Bot Framework server", () => {
       onOutbound,
     });
     try {
+      const progressResponse = await fetch(
+        `${server.baseUrl}qa/v3/conversations/channel/activities`,
+        {
+          method: "POST",
+          headers: {
+            authorization: "Bearer bot-token",
+            "content-type": "application/json",
+            "x-openclaw-msteams-qa-nonce": "qa-nonce",
+          },
+          body: JSON.stringify({ type: "typing", text: "QA-MSTEAMS-AMBIGUOUS-504" }),
+        },
+      );
       const response = await fetch(`${server.baseUrl}qa/v3/conversations/channel/activities`, {
         method: "POST",
         headers: {
@@ -71,8 +83,9 @@ describe("Microsoft Teams QA Bot Framework server", () => {
         body: JSON.stringify({ type: "message", text: "QA-MSTEAMS-AMBIGUOUS-504" }),
       });
 
+      expect(progressResponse.status).toBe(200);
       expect(response.status).toBe(504);
-      expect(onOutbound).toHaveBeenCalledOnce();
+      expect(onOutbound).toHaveBeenCalledTimes(2);
     } finally {
       await server.close();
     }

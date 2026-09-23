@@ -1,17 +1,26 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { RouteId } from "../app-route-paths.ts";
 import { chatInputOwnerForContext } from "../app/chat-input-owner.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
+import {
+  CHAT_ROUTE_READY_EVENT,
+  CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
+} from "../pages/chat/chat-history-events.ts";
 import { publishChatWorkContext, type ChatWorkContext } from "../pages/chat/chat-work-context.ts";
 import { createContext } from "../pages/custodian/custodian-page.test-harness.ts";
 import { CustodianSessionStore } from "../pages/custodian/custodian-session-store.ts";
+import {
+  publishPluginHelpContext,
+  createPluginHelpRequest,
+} from "../pages/custodian/plugin-help.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT, HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import "./assistant-panel.ts";
+import "./assistant-panel-content.ts";
 
 vi.mock("./home-session.runtime.ts", () => {
   if (!customElements.get("openclaw-home-session")) {
@@ -26,6 +35,7 @@ type TestAssistantPanel = HTMLElement & {
   pageRouteId: RouteId;
   pageSessionKey: string;
   pageAgentId: string;
+  pageRouteFailed: boolean;
   assistantPanelOpen: boolean;
   minimizeRequestId: number;
   store: CustodianSessionStore;
@@ -55,7 +65,12 @@ async function mountPanel(options: { global?: boolean } = {}) {
       },
     },
   );
-  const context = { ...baseContext, sessions: createSessionCapability(baseContext.gateway) };
+  const context = {
+    ...baseContext,
+    sessions: createSessionCapability(baseContext.gateway, baseContext.agentSelection),
+  };
+  // The app owns this capability; removing its panel does not stop subscription retries.
+  onTestFinished(() => context.sessions.dispose());
   const provider = createApplicationContextProvider(context);
   const store = new CustodianSessionStore();
   const panel = document.createElement("openclaw-assistant-panel") as TestAssistantPanel;
@@ -66,6 +81,21 @@ async function mountPanel(options: { global?: boolean } = {}) {
   document.body.append(provider);
   await panel.updateComplete;
   return { context, panel, provider, request, setGatewaySnapshot, store };
+}
+
+async function restoreHomePanel() {
+  const { panel } = await mountPanel();
+  panel.homeAvailable = true;
+  await panel.updateComplete;
+  window.dispatchEvent(new CustomEvent(HOME_PANEL_TOGGLE_EVENT));
+  await vi.dynamicImportSettled();
+  await panel.updateComplete;
+  panel.remove();
+  const restored = await mountPanel();
+  restored.panel.homeAvailable = true;
+  restored.panel.pageSessionKey = "agent:main:task";
+  await restored.panel.updateComplete;
+  return restored;
 }
 
 describe("assistant panel", () => {
@@ -282,6 +312,16 @@ describe("assistant panel", () => {
       setGatewaySnapshot({ hello });
       await panel.updateComplete;
       expect(workContext()).toEqual(disconnectedContext);
+
+      provider.append(panel);
+      await panel.updateComplete;
+      request.mockResolvedValueOnce({
+        ...agents.state.agentsList,
+        agents: [{ id: "main" }, { id: "research", workspace: "/projects/reconnected" }],
+      });
+      await agents.refreshList();
+      await panel.updateComplete;
+      expect(workContext()?.workspace).toBe("/projects/reconnected");
     } finally {
       agents.dispose();
     }
@@ -300,6 +340,7 @@ describe("assistant panel", () => {
 
     const { panel: replacement } = await mountPanel();
     replacement.homeAvailable = true;
+    replacement.pageRouteId = "appearance";
     replacement.custodianSuppressed = false;
     await replacement.updateComplete;
     const home = replacement.querySelector<HTMLElement & { agentId: string }>(
@@ -313,6 +354,69 @@ describe("assistant panel", () => {
     expect(replacement.querySelector("openclaw-custodian-surface")).not.toBeNull();
     expect(replacement.querySelectorAll(".assistant-panel")).toHaveLength(1);
   });
+
+  it("restores Home only after the selected transcript has rendered, preserving dock geometry", async () => {
+    const { panel: replacement, provider } = await restoreHomePanel();
+    const home = () => replacement.querySelector("openclaw-home-session");
+    expect(replacement.assistantPanelOpen).toBe(true);
+    expect(document.documentElement.style.getPropertyValue("--oc-assistant-reserve-right")).toBe(
+      "440px",
+    );
+    expect(home()).toBeNull();
+
+    let finishRender!: () => void;
+    const pane = Object.assign(document.createElement("openclaw-chat-pane"), {
+      sessionKey: "agent:main:task",
+      presented: true,
+      transcriptReady: false,
+      updateComplete: new Promise<void>((resolve) => {
+        finishRender = resolve;
+      }),
+    });
+    pane.classList.add("chat-pane-cache__pane--active");
+    provider.prepend(pane);
+    pane.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT, { bubbles: true }));
+    await replacement.updateComplete;
+    expect(home()).toBeNull();
+    pane.transcriptReady = true;
+    pane.dispatchEvent(new Event(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, { bubbles: true }));
+    await replacement.updateComplete;
+    expect(home()).toBeNull();
+    // A superseded route must not release Home from the old pane's late commit.
+    replacement.pageSessionKey = "agent:main:next-task";
+    await replacement.updateComplete;
+    finishRender();
+    await pane.updateComplete;
+    await replacement.updateComplete;
+    expect(home()).toBeNull();
+    replacement.pageSessionKey = "agent:main:task";
+    await replacement.updateComplete;
+    await vi.waitFor(() => expect(home()).not.toBeNull());
+    expect(document.documentElement.style.getPropertyValue("--oc-assistant-reserve-right")).toBe(
+      "440px",
+    );
+
+    replacement.pageSessionKey = "agent:main:next-task";
+    await replacement.updateComplete;
+    expect(home()).not.toBeNull();
+  });
+
+  it.each(["explicit", "non-chat", "failed"] as const)(
+    "releases restored Home without a primary transcript for %s navigation",
+    async (release) => {
+      const { panel: replacement } = await restoreHomePanel();
+      expect(replacement.querySelector("openclaw-home-session")).toBeNull();
+      if (release === "explicit") {
+        window.dispatchEvent(new CustomEvent(HOME_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
+      } else if (release === "non-chat") {
+        replacement.pageRouteId = "appearance";
+      } else {
+        replacement.pageRouteFailed = true;
+      }
+      await replacement.updateComplete;
+      expect(replacement.querySelector("openclaw-home-session")).not.toBeNull();
+    },
+  );
 
   it("minimizes a real page conversation into the dock on route leave", async () => {
     const { context, panel, request, store } = await mountPanel();
@@ -373,6 +477,65 @@ describe("assistant panel", () => {
     expect(panel.assistantPanelOpen).toBe(false);
   });
 
+  it.each([900, 1342])(
+    "opens installed plugin help once on a wide overview and preserves dismissal (%s)",
+    async (width) => {
+      vi.stubGlobal("innerWidth", width);
+      const { context, panel, request } = await mountPanel();
+      panel.custodianSuppressed = false;
+      panel.pageRouteId = "plugin-settings";
+      await panel.updateComplete;
+      const owner = {};
+      publishPluginHelpContext(
+        context,
+        owner,
+        { id: "first", name: "First" },
+        { overview: true, installed: true },
+      );
+      await panel.updateComplete;
+      expect(panel.assistantPanelOpen).toBe(width > 1100);
+      await createPluginHelpRequest(context, { id: "first", name: "First" })();
+      await panel.updateComplete;
+      expect(panel.assistantPanelOpen).toBe(true);
+      window.dispatchEvent(
+        new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: false } }),
+      );
+      await panel.updateComplete;
+      publishPluginHelpContext(
+        context,
+        owner,
+        { id: "second", name: "Second" },
+        { overview: true, installed: true },
+      );
+      await panel.updateComplete;
+      expect(panel.assistantPanelOpen).toBe(false);
+      publishPluginHelpContext(
+        context,
+        owner,
+        { id: "second", name: "Second" },
+        { overview: false, installed: true },
+      );
+      await panel.updateComplete;
+      expect(panel.assistantPanelOpen).toBe(false);
+      expect(request.mock.calls.every((call) => call[1]?.message === undefined)).toBe(true);
+    },
+  );
+
+  it("opens catalog help only on an explicit request even at a wide viewport", async () => {
+    vi.stubGlobal("innerWidth", 1342);
+    const { context, panel, request } = await mountPanel();
+    panel.custodianSuppressed = false;
+    await panel.updateComplete;
+    const plugin = { id: "catalog-example", name: "Catalog Example" };
+    publishPluginHelpContext(context, {}, plugin, { overview: true, installed: false });
+    await panel.updateComplete;
+    expect(panel.assistantPanelOpen).toBe(false);
+    await createPluginHelpRequest(context, plugin)();
+    await panel.updateComplete;
+    expect(panel.assistantPanelOpen).toBe(true);
+    expect(request.mock.calls.every((call) => call[1]?.message === undefined)).toBe(true);
+  });
+
   it("opens and closes from the global toggle event", async () => {
     const { panel, store } = await mountPanel();
     const refresh = vi.spyOn(store, "refreshTranscriptIfIdle");
@@ -387,6 +550,32 @@ describe("assistant panel", () => {
     window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT));
     await panel.updateComplete;
     expect(panel.assistantPanelOpen).toBe(false);
+  });
+
+  it("suppresses automatic Ask OpenClaw restores in Settings while keeping explicit opens usable", async () => {
+    const { panel } = await mountPanel();
+    panel.custodianSuppressed = false;
+    await panel.updateComplete;
+    window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT));
+    await panel.updateComplete;
+    expect(panel.assistantPanelOpen).toBe(true);
+
+    panel.pageRouteId = "updates";
+    await panel.updateComplete;
+    expect(panel.assistantPanelOpen).toBe(false);
+    window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT));
+    await panel.updateComplete;
+    expect(panel.assistantPanelOpen).toBe(true);
+
+    panel.remove();
+    const { panel: restored } = await mountPanel();
+    restored.custodianSuppressed = false;
+    restored.pageRouteId = "updates";
+    await restored.updateComplete;
+    expect(restored.assistantPanelOpen).toBe(false);
+    restored.pageRouteId = "agents-home";
+    await restored.updateComplete;
+    expect(restored.assistantPanelOpen).toBe(true);
   });
 
   it.each(["right", "bottom"])("drags only passive header chrome when docked %s", async (dock) => {

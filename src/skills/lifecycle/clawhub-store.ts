@@ -1,16 +1,49 @@
 import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString as normalizeOptionalStringValue } from "@openclaw/normalization-core/string-coerce";
-import type { ClawHubDownloadResult } from "../../infra/clawhub-artifacts.js";
+import {
+  getAgentWorkspaceAccess,
+  WorkspaceAccessUnavailableError,
+} from "../../agents/workspace-access.js";
 import {
   CLAWHUB_SKILLS_SH_REF_PREFIX,
   CLAWHUB_SKILLS_SH_TRUST_STATE,
-  type ClawHubSkillVerificationResponse,
   type ClawHubSkillsShTrustState,
 } from "../../infra/clawhub-skills.js";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { readJsonIfExists, tryReadJson, writeJson } from "../../infra/json-files.js";
-import { normalizeTrackedSkillSlug, validateRequestedSkillSlug } from "./archive-install.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
+import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
+import { pathExists, statRegularFile } from "../../infra/fs-safe.js";
+import {
+  JsonFileReadError,
+  readJson,
+  readJsonIfExists,
+  tryReadJson,
+  writeJson,
+} from "../../infra/json-files.js";
+import { replaceFileAtomicSync } from "../../infra/replace-file.js";
+import {
+  normalizeTrackedSkillSlug,
+  resolveWorkspaceSkillInstallDir,
+  validateRequestedSkillSlug,
+} from "./install-paths.js";
+import { digestClawHubSkillTree } from "./skill-tree-digest.js";
+import type {
+  WorkspaceSkillLifecycle,
+  ClawHubSkillDownloadedArtifactLock,
+  ClawHubSkillFileLock,
+  ClawHubSkillOrigin,
+  ClawHubSkillsLockfile,
+  ClawHubSkillRef,
+} from "./workspace-types.js";
+
+export type {
+  ClawHubSkillDownloadedArtifactLock,
+  ClawHubSkillFileLock,
+  ClawHubSkillVerificationLock,
+  ClawHubSkillsLockfile,
+  ClawHubSkillRef,
+} from "./workspace-types.js";
 
 export { normalizeOptionalStringValue };
 
@@ -20,74 +53,10 @@ const CLAWHUB_OWNER_HANDLE_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{0,38}[a-z0-9])?$/;
 const GITHUB_OWNER_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
 const GITHUB_REPO_PATTERN = /^[A-Za-z0-9._-]{1,100}$/;
 
-export type ClawHubSkillDownloadedArtifactLock = {
-  kind: ClawHubDownloadResult["artifact"];
-  sha256: string;
-  integrity: string;
-};
-
-export type ClawHubSkillFileLock = {
-  path: string;
-  sha256: string;
-};
-
-export type ClawHubSkillVerificationLock = {
-  schema: ClawHubSkillVerificationResponse["schema"];
-  ok: boolean;
-  decision: ClawHubSkillVerificationResponse["decision"];
-  reasons: string[];
-  card?: unknown;
-  artifact?: unknown;
-  provenance?: unknown;
-  security?: unknown;
-  signature?: unknown;
-};
-
-type ClawHubSkillLockEntry = {
-  version: string;
-  installedAt: number;
-  registry?: string;
-  ownerHandle?: string;
-  requestedReference?: string;
-  trustState?: ClawHubSkillsShTrustState;
-  sourceUrl?: string;
-  artifact?: ClawHubSkillDownloadedArtifactLock;
-  skillFile?: ClawHubSkillFileLock;
-  fileTreeSha256?: string;
-  verification?: ClawHubSkillVerificationLock;
-};
-
-type ClawHubSkillOrigin = {
-  version: 1;
-  registry: string;
-  slug: string;
-  ownerHandle?: string;
-  requestedReference?: string;
-  trustState?: ClawHubSkillsShTrustState;
-  installedVersion: string;
-  installedAt: number;
-  sourceUrl?: string;
-  artifact?: ClawHubSkillDownloadedArtifactLock;
-  skillFile?: ClawHubSkillFileLock;
-  fileTreeSha256?: string;
-};
-
-export type ClawHubSkillsLockfile = {
-  version: 1;
-  skills: Record<string, ClawHubSkillLockEntry>;
-};
-
 export type ClawHubSkillsLockfileStatusRead =
   | { kind: "found"; lock: ClawHubSkillsLockfile; path: string }
   | { kind: "missing" }
   | { kind: "malformed"; path: string; error: string };
-
-export type ClawHubSkillRef = {
-  slug: string;
-  ownerHandle?: string;
-  requestedReference?: string;
-  trustState?: ClawHubSkillsShTrustState;
-};
 
 type StrictOriginReadResult =
   | { kind: "found"; origin: ClawHubSkillOrigin; path: string }
@@ -266,23 +235,40 @@ function normalizeClawHubSkillOrigin(
   };
 }
 
+function parseClawHubSkillsLockfile(
+  raw: Partial<ClawHubSkillsLockfile> | null,
+): ClawHubSkillsLockfile {
+  if (raw?.version !== 1 || !raw.skills || typeof raw.skills !== "object") {
+    throw new Error("expected version 1 lockfile with skills");
+  }
+  return { version: 1, skills: raw.skills };
+}
+
 export async function readClawHubSkillsLockfile(
-  workspaceDir: string,
+  workspaceDir: Parameters<WorkspaceSkillLifecycle["readClawHubSkillsLockfile"]>[0],
 ): Promise<ClawHubSkillsLockfile> {
   for (const candidate of metadataPaths(workspaceDir, "lock.json")) {
     try {
-      const raw = await tryReadJson<Partial<ClawHubSkillsLockfile>>(candidate);
-      if (raw?.version === 1 && raw.skills && typeof raw.skills === "object") {
-        return { version: 1, skills: raw.skills };
+      // Missing metadata is normal before installation. Leave present-file races
+      // and uncertain paths to the strict reader, including its error diagnostics.
+      if ((await statRegularFile(candidate).catch(() => undefined))?.missing) {
+        continue;
       }
-    } catch {
-      // ignore
+      return parseClawHubSkillsLockfile(await readJson<Partial<ClawHubSkillsLockfile>>(candidate));
+    } catch (err) {
+      if (err instanceof JsonFileReadError && hasErrnoCode(err.cause, "ENOENT")) {
+        continue;
+      }
+      throw new Error(
+        `Malformed workspace ClawHub lockfile at ${candidate}: ${formatErrorMessage(err)}. Repair or restore it before retrying.`,
+        { cause: err },
+      );
     }
   }
   return { version: 1, skills: {} };
 }
 
-export async function writeClawHubSkillsLockfile(
+async function writeClawHubSkillsLockfile(
   workspaceDir: string,
   lockfile: ClawHubSkillsLockfile,
 ): Promise<void> {
@@ -313,14 +299,11 @@ export function readClawHubSkillsLockfileStatusSync(
       if (!read.exists) {
         continue;
       }
-      const raw = read.value as Partial<ClawHubSkillsLockfile>;
-      return raw?.version === 1 && raw.skills && typeof raw.skills === "object"
-        ? { kind: "found", path: candidate, lock: { version: 1, skills: raw.skills } }
-        : {
-            kind: "malformed",
-            path: candidate,
-            error: "expected version 1 lockfile with skills",
-          };
+      return {
+        kind: "found",
+        path: candidate,
+        lock: parseClawHubSkillsLockfile(read.value as Partial<ClawHubSkillsLockfile>),
+      };
     } catch (err) {
       return { kind: "malformed", path: candidate, error: formatErrorMessage(err) };
     }
@@ -388,35 +371,125 @@ export async function readClawHubSkillOriginStrict(
   return { kind: "missing" };
 }
 
-export async function writeClawHubSkillOrigin(
+async function writeClawHubSkillOrigin(
   skillDir: string,
   origin: ClawHubSkillOrigin,
 ): Promise<void> {
   await writeJson(path.join(skillDir, DOT_DIR, "origin.json"), origin, { trailingNewline: true });
 }
 
+async function readInstalledSkillFileLock(
+  skillDir: string,
+): Promise<ClawHubSkillFileLock | undefined> {
+  const { CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS } = await import("./archive-install.js");
+  for (const marker of CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS) {
+    try {
+      return { path: marker, sha256: sha256Hex(await fs.readFile(path.join(skillDir, marker))) };
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
+}
+
+/** Finalize native tracking beside the installed files, preserving other tracked skills. */
+export async function recordClawHubSkillInstall(
+  params: Parameters<WorkspaceSkillLifecycle["recordClawHubSkillInstall"]>[0],
+): Promise<void> {
+  const { origin, verification } = params;
+  await writeClawHubSkillOrigin(params.skillDir, origin);
+  const lock = await readClawHubSkillsLockfile(params.workspaceDir);
+  lock.skills[origin.slug] = {
+    version: origin.installedVersion,
+    registry: origin.registry,
+    installedAt: origin.installedAt,
+    ...(origin.ownerHandle ? { ownerHandle: origin.ownerHandle } : {}),
+    ...(origin.requestedReference ? { requestedReference: origin.requestedReference } : {}),
+    ...(origin.trustState ? { trustState: origin.trustState } : {}),
+    ...(origin.sourceUrl ? { sourceUrl: origin.sourceUrl } : {}),
+    ...(origin.artifact ? { artifact: origin.artifact } : {}),
+    ...(origin.skillFile ? { skillFile: origin.skillFile } : {}),
+    ...(origin.fileTreeSha256 ? { fileTreeSha256: origin.fileTreeSha256 } : {}),
+    ...(verification ? { verification } : {}),
+  };
+  await writeClawHubSkillsLockfile(params.workspaceDir, lock);
+}
+
 export async function readTrackedClawHubSkillSlugs(workspaceDir: string): Promise<string[]> {
-  return Object.keys((await readClawHubSkillsLockfile(workspaceDir)).skills).toSorted();
+  const workspaceAccess = getAgentWorkspaceAccess(workspaceDir, "loadSkills");
+  const access = workspaceAccess?.loadSkills ? workspaceAccess : undefined;
+  if (access && !access.clawHubSkills) {
+    throw new WorkspaceAccessUnavailableError("Remote workspace ClawHub tracking is unavailable");
+  }
+  const lock = await (
+    access?.clawHubSkills?.readClawHubSkillsLockfile ?? readClawHubSkillsLockfile
+  )(workspaceDir);
+  return Object.keys(lock.skills).toSorted();
 }
 
 export async function untrackClawHubSkill(
   workspaceDir: string,
   slug: string,
+  beforePersistentApply?: () => void,
+  beforeRollback = beforePersistentApply,
+  authorizeMutation?: (phase: "apply" | "rollback") => Promise<void>,
 ): Promise<() => Promise<void>> {
   const trackedSlug = normalizeTrackedSkillSlug(slug);
+  // Remote authorization can wait; read current tracking only after it returns.
+  if (authorizeMutation) {
+    await authorizeMutation("apply");
+  }
   const lock = await readClawHubSkillsLockfile(workspaceDir);
   const previous = lock.skills[trackedSlug];
   if (!previous) {
     return async () => undefined;
   }
+  // Keep the authority check and atomic publication in one synchronous commit section.
+  // The async atomic writer awaits identity checks after its pre-rename callback.
+  const writeLock = (value: ClawHubSkillsLockfile, assertCurrent = beforePersistentApply) => {
+    assertCurrent?.();
+    return replaceFileAtomicSync({
+      filePath: path.join(workspaceDir, DOT_DIR, "lock.json"),
+      content: `${JSON.stringify(value, null, 2)}\n`,
+      mode: 0o600,
+      dirMode: 0o777 & ~process.umask(),
+      copyFallbackOnPermissionError: true,
+      syncTempFile: true,
+      syncParentDir: true,
+      beforeRename: assertCurrent,
+    });
+  };
   delete lock.skills[trackedSlug];
-  await writeClawHubSkillsLockfile(workspaceDir, lock);
+  writeLock(lock);
   return async () => {
+    if (authorizeMutation) {
+      await authorizeMutation("rollback");
+    }
     const current = await readClawHubSkillsLockfile(workspaceDir);
     if (current.skills[trackedSlug]) {
       throw new Error(`Skill ${JSON.stringify(trackedSlug)} was retracked during rollback.`);
     }
     current.skills[trackedSlug] = previous;
-    await writeClawHubSkillsLockfile(workspaceDir, current);
+    writeLock(current, beforeRollback);
   };
+}
+
+/** Check the native target and tracking before acquiring an archive. */
+export async function assertClawHubSkillInstallState(
+  params: Parameters<WorkspaceSkillLifecycle["assertClawHubSkillInstallState"]>[0],
+): Promise<void> {
+  const targetDir = resolveWorkspaceSkillInstallDir(params.workspaceDir, params.slug);
+  if (!params.force && (await pathExists(targetDir))) {
+    throw new Error(`Skill already exists at ${targetDir}. Re-run with force/update.`);
+  }
+  // Reread at publication too, retaining skills tracked during download.
+  await readClawHubSkillsLockfile(params.workspaceDir);
+}
+
+export async function readInstalledClawHubSkillFiles(
+  params: Parameters<WorkspaceSkillLifecycle["readInstalledClawHubSkillFiles"]>[0],
+): Promise<{ fileTreeSha256: string; skillFile?: ClawHubSkillFileLock }> {
+  const fileTreeSha256 = await digestClawHubSkillTree(params.skillDir);
+  const skillFile = await readInstalledSkillFileLock(params.skillDir);
+  return { fileTreeSha256, ...(skillFile ? { skillFile } : {}) };
 }

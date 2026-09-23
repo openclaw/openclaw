@@ -40,9 +40,68 @@ describe("resolveCompactionContextTokenBudget", () => {
       expect(budget).toBe(expected);
     },
   );
+
+  it.each([
+    { requested: 16_000, expected: 3_000 },
+    { requested: 2_000, expected: 2_000 },
+  ])(
+    "caps requested=$requested by the authored native window despite a larger contextTokens cap",
+    ({ requested, expected }) => {
+      const budget = resolveCompactionContextTokenBudget({
+        config: {
+          models: {
+            providers: {
+              custom: {
+                baseUrl: "https://models.example.test/v1",
+                models: [
+                  {
+                    id: "tiny-model",
+                    name: "Tiny model",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 3_000,
+                    contextTokens: 16_000,
+                    maxTokens: 256,
+                  },
+                ],
+              },
+            },
+          },
+        },
+        provider: "custom",
+        modelId: "tiny-model",
+        model: modelWithWindow(3_000),
+        requestedTokenBudget: requested,
+      });
+      expect(budget).toBe(expected);
+    },
+  );
 });
 
 describe("resolveEmbeddedCompactionThinkingLevel", () => {
+  it.each([
+    { configured: undefined, inherited: "high", expected: "off" },
+    { configured: "low", inherited: "high", expected: "low" },
+    { configured: "inherit", inherited: "high", expected: "high" },
+    { configured: "inherit", inherited: undefined, expected: "off" },
+  ] as const)(
+    "uses the prepared default only when compaction thinking is unset ($configured)",
+    ({ configured, inherited, expected }) => {
+      expect(
+        resolveEmbeddedCompactionThinkingLevel({
+          config: configured
+            ? { agents: { defaults: { compaction: { thinkingLevel: configured } } } }
+            : {},
+          provider: "demo",
+          modelId: "demo-model",
+          inheritedLevel: inherited,
+          compactionThinkingDefault: "off",
+        }),
+      ).toBe(expected);
+    },
+  );
+
   it("lets the compaction override replace the inherited session level", () => {
     expect(
       resolveEmbeddedCompactionThinkingLevel({
@@ -133,6 +192,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
   it("preserves sender and current message routing for compaction", () => {
     const result = buildEmbeddedCompactionRuntimeContext({
       sessionKey: "agent:main:thread:1",
+      pinnedWidgetAuthoring: true,
       messageChannel: "slack",
       messageProvider: "slack",
       chatType: "channel",
@@ -144,6 +204,8 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       authProfileId: "openai:p1",
       workspaceDir: "/tmp/workspace",
       cwd: "/tmp/task-repo",
+      requireWorkspaceOnly: true,
+      requireWritableSandbox: true,
       agentDir: "/tmp/agent",
       config: {} as unknown as OpenClawConfig,
       senderIsOwner: true,
@@ -156,6 +218,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       ownerNumbers: ["+15555550123"],
     });
     expect(result.sessionKey).toBe("agent:main:thread:1");
+    expect(result.pinnedWidgetAuthoring).toBe(true);
     expect(result.messageChannel).toBe("slack");
     expect(result.messageProvider).toBe("slack");
     expect(result.chatType).toBe("channel");
@@ -167,6 +230,8 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.authProfileId).toBe("openai:p1");
     expect(result.workspaceDir).toBe("/tmp/workspace");
     expect(result.cwd).toBe("/tmp/task-repo");
+    expect(result.requireWorkspaceOnly).toBe(true);
+    expect(result.requireWritableSandbox).toBe(true);
     expect(result.agentDir).toBe("/tmp/agent");
     expect(result.senderIsOwner).toBe(true);
     expect(result.senderId).toBe("user-123");
@@ -262,7 +327,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     "resolves literal compaction overrides without discovering provider plugins $name",
     ({ models }) => {
       const manifestNormalization = vi
-        .spyOn(manifestModelIdNormalization, "normalizeProviderModelIdWithManifest")
+        .spyOn(manifestModelIdNormalization, "resolveManifestModelIdNormalizationPolicies")
         .mockImplementation(() => {
           throw new Error("literal compaction overrides must not discover plugin manifests");
         });

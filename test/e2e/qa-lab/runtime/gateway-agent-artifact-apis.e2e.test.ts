@@ -26,7 +26,10 @@ import {
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../../../../src/gateway/test-helpers.env.js";
 import type { WorkerEnvironmentServiceRecord } from "../../../../src/gateway/worker-environments/service-contract.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../../../src/state/openclaw-state-db.js";
 import { createTaskRecord, deleteTaskRecordById } from "../../../../src/tasks/task-registry.js";
 import { captureEnv, setTestEnvValue } from "../../../../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
@@ -137,8 +140,6 @@ describe("Gateway agent and artifact APIs", () => {
     for (const step of cleanup.splice(0).toReversed()) {
       await step();
     }
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
     clearSessionStoreCacheForTest();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
@@ -146,7 +147,12 @@ describe("Gateway agent and artifact APIs", () => {
 
   it("composes agent, environment, and artifact RPCs over one real Gateway", async () => {
     const envSnapshot = captureEnv([...ENV_KEYS]);
-    cleanup.push(() => envSnapshot.restore());
+    cleanup.push(async () => {
+      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+      envSnapshot.restore();
+    });
 
     const tempHome = tempDirs.make("gateway-agent-artifacts-");
     const stateDir = path.join(tempHome, ".openclaw");
@@ -394,7 +400,7 @@ describe("Gateway agent and artifact APIs", () => {
     expect(managedBlocks).toHaveLength(2);
     // Startup maintenance may run after preparation but before transcript commit.
     await cleanupManagedOutgoingMediaRecords({ stateDir });
-    expect(listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(2);
+    expect(await listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(2);
     await appendTranscriptMessage(scope, {
       eventId: messageId,
       message: {
@@ -439,10 +445,10 @@ describe("Gateway agent and artifact APIs", () => {
       "report.pdf",
     ]);
     expect(reloadedArtifactList.artifacts.every((artifact) => artifact.type === "file")).toBe(true);
-    expect(listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(2);
+    expect(await listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(2);
 
     await restartGateway("gateway artifact APIs after document restart");
-    expect(listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(2);
+    expect(await listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(2);
     const artifactList = await client.request<ArtifactList>("artifacts.list", {
       taskId: task.taskId,
     });

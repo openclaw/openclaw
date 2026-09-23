@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { build } from "esbuild";
+import packageJson from "../../package.json" with { type: "json" };
 import { appendTranscriptEventsInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -14,7 +15,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 
 export async function probeTranscriptHealthMemory(
   stateDir: string,
-  scenario: "headers" | "labels",
+  scenario: "headers" | "headers-after-event" | "labels",
 ) {
   const cacheDir = path.join(process.cwd(), "node_modules/.cache");
   fs.mkdirSync(cacheDir, { recursive: true });
@@ -36,11 +37,13 @@ export async function probeTranscriptHealthMemory(
       ],
       format: "esm",
       outfile: childPath,
-      packages: "external",
+      external: Object.entries(packageJson.dependencies)
+        .filter(([, version]) => !version.startsWith("workspace:"))
+        .map(([name]) => name),
       platform: "node",
       target: "node22",
     });
-    const { sqlitePath, expectedDigest } = seedTranscriptHealthHistory();
+    const { sqlitePath, expectedDigest } = seedTranscriptHealthHistory(scenario);
     const { stdout } = await promisify(execFile)(
       process.execPath,
       ["--max-old-space-size=256", childPath, stateDir, scenario, sqlitePath, expectedDigest],
@@ -57,7 +60,7 @@ export async function probeTranscriptHealthMemory(
   }
 }
 
-function seedTranscriptHealthHistory() {
+function seedTranscriptHealthHistory(scenario: "headers" | "headers-after-event" | "labels") {
   const sessionId = "healthy-history";
   const eventCount = 4096;
   const timestamp = "2026-07-15T21:23:03.698Z";
@@ -103,6 +106,22 @@ function seedTranscriptHealthHistory() {
       database.db.exec(
         "PRAGMA defer_foreign_keys = ON; UPDATE transcript_event_identities SET seq = -7 WHERE seq = 0; UPDATE transcript_events SET seq = -7 WHERE seq = 0;",
       );
+      if (scenario === "headers-after-event") {
+        // Retained histories can have an earlier event before their existing header.
+        // Doctor must find that header without buffering the remaining payloads.
+        insert.run(
+          sessionId,
+          -8,
+          JSON.stringify({
+            type: "message",
+            id: "preceding-event",
+            parentId: null,
+            timestamp,
+            message: { role: "user", content: "Earlier event" },
+          }),
+          0,
+        );
+      }
       for (const row of database.db
         .prepare(
           "SELECT seq, created_at, event_json FROM transcript_events ORDER BY session_id, seq",

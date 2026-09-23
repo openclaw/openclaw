@@ -6,7 +6,8 @@ import { icons } from "../../components/icons.ts";
 import { renderSettingsStatus, renderSettingsToggle } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
-import { formatDurationCompact, formatTimeMs } from "../../lib/format.ts";
+import { formatDurationCompact } from "../../lib/format-duration.ts";
+import { formatTimeMs } from "../../lib/format.ts";
 import "../../styles/activity.css";
 import { activityRunInspectorHref } from "./run-inspector-model.ts";
 import type { ActivityEntry, ActivityStatus } from "./tool-activity.ts";
@@ -17,7 +18,7 @@ const STATUS_ORDER: ActivityStatus[] = ["running", "done", "error"];
 
 type ActivityProps = {
   basePath: string;
-  entries: ActivityEntry[];
+  entries: readonly ActivityEntry[];
   filterText: string;
   statusFilters: Record<ActivityStatus, boolean>;
   toolFilter: string;
@@ -100,7 +101,7 @@ function matchesEntry(entry: ActivityEntry, needle: string): boolean {
   return haystack.includes(needle);
 }
 
-function resolveToolNames(entries: ActivityEntry[]): string[] {
+function resolveToolNames(entries: readonly ActivityEntry[]): string[] {
   return sortUniqueStrings(entries.map((entry) => entry.toolName));
 }
 
@@ -254,31 +255,39 @@ function renderEntry(props: ActivityProps, entry: ActivityEntry) {
       </summary>
       <div class="activity-entry__body">
         <div class="activity-entry__facts">
-          ${entry.entryKind === "answer_candidate"
-            ? html`<span class="mono"
-                >${t("activity.answerCandidate.itemId")}: ${entry.itemId}</span
-              >`
-            : html`
-                <span>${hiddenArgumentsLabel(entry.hiddenArgumentCount)}</span>
-                <span class="mono">${t("activity.toolCallId")}: ${entry.toolCallId}</span>
-              `}
+          ${
+            entry.entryKind === "answer_candidate"
+              ? html`<span class="mono"
+                  >${t("activity.answerCandidate.itemId")}: ${entry.itemId}</span
+                >`
+              : html`
+                  <span>${hiddenArgumentsLabel(entry.hiddenArgumentCount)}</span>
+                  <span class="mono">${t("activity.toolCallId")}: ${entry.toolCallId}</span>
+                `
+          }
           <a
             class="activity-entry__run-link mono"
             href=${activityRunInspectorHref(entry.runId, props.basePath)}
             >${t("activity.runId")}: ${entry.runId}</a
           >
-          ${entry.sessionKey
-            ? html`<span class="mono">${t("activity.session")}: ${entry.sessionKey}</span>`
-            : nothing}
+          ${
+            entry.sessionKey
+              ? html`<span class="mono">${t("activity.session")}: ${entry.sessionKey}</span>`
+              : nothing
+          }
         </div>
-        ${entry.outputPreview
-          ? html`
-              <pre class="activity-entry__preview">${entry.outputPreview}</pre>
-              ${entry.outputTruncated
-                ? html`<div class="activity-entry__note">${t("activity.outputTruncated")}</div>`
-                : nothing}
-            `
-          : html`<div class="activity-entry__note">${t("activity.noOutputPreview")}</div>`}
+        ${
+          entry.outputPreview
+            ? html`
+                <pre class="activity-entry__preview">${entry.outputPreview}</pre>
+                ${
+                  entry.outputTruncated
+                    ? html`<div class="activity-entry__note">${t("activity.outputTruncated")}</div>`
+                    : nothing
+                }
+              `
+            : html`<div class="activity-entry__note">${t("activity.noOutputPreview")}</div>`
+        }
       </div>
     </details>
   `;
@@ -341,15 +350,19 @@ export function renderActivity(props: ActivityProps) {
           aria-label=${t("activity.streamLabel")}
           @scroll=${props.onScroll}
         >
-          ${filtered.length === 0
-            ? html`
-                <div class="activity-empty">
-                  ${props.entries.length === 0 || !hasAnyFilters
-                    ? t("activity.empty")
-                    : t("activity.emptyFiltered")}
-                </div>
-              `
-            : filtered.map((entry) => renderEntry(props, entry))}
+          ${
+            filtered.length === 0
+              ? html`
+                  <div class="activity-empty">
+                    ${
+                      props.entries.length === 0 || !hasAnyFilters
+                        ? t("activity.empty")
+                        : t("activity.emptyFiltered")
+                    }
+                  </div>
+                `
+              : filtered.map((entry) => renderEntry(props, entry))
+          }
         </div>
       </div>
     </section>

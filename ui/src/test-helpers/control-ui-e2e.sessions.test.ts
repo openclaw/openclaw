@@ -1,72 +1,13 @@
 /* @vitest-environment jsdom */
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect } from "vitest";
-import {
-  createControlUiMockGatewayInitScript,
-  type ControlUiMockGatewayScenario,
-} from "./control-ui-e2e.ts";
-import { mockGatewayTest } from "./mock-gateway-page.test-support.ts";
+import { sessionGatewayTest as it } from "./control-ui-e2e.sessions.test-support.ts";
+import type { ControlUiMockGatewayScenario } from "./control-ui-e2e.ts";
+import { buildWorkboardMocks } from "./control-ui-workboard-fixtures.ts";
+import { flushMockTimers as flush } from "./mock-gateway-page.test-support.ts";
 
 type Row = Record<string, unknown>;
-type Frame = { type: string; id: string; ok: boolean; payload: Row; error?: Row };
-type Controls = {
-  deferNext: (method: string) => void;
-  resolveDeferred: (method: string, payload?: unknown) => void;
-  rejectDeferred: (method: string) => void;
-  setMethodResponse: (method: string, payload: unknown) => void;
-};
-const flush = () =>
-  new Promise<void>((resolve) => {
-    setTimeout(resolve, 0);
-  });
 const notes = { key: "agent:ops:notes", sessionId: "notes-generation-1", label: "Notes" };
-
-const it = mockGatewayTest.extend<{
-  connect: (scenario?: ControlUiMockGatewayScenario) => Promise<{
-    send: (method: string, params?: Row) => Promise<string>;
-    response: (id: string) => Frame | undefined;
-    request: (method: string, params?: Row) => Promise<Frame>;
-    controls: Controls;
-  }>;
-}>({
-  connect: async ({ gatewayPage }, use) => {
-    await use(async (scenario = {}) => {
-      const { window, execute } = gatewayPage;
-      execute(createControlUiMockGatewayInitScript(scenario));
-      const socket = new window.WebSocket("ws://mock-gateway");
-      const frames: Frame[] = [];
-      socket.addEventListener("message", (event: MessageEvent) => {
-        frames.push(JSON.parse(String(event.data)) as Frame);
-      });
-      await flush();
-      let sequence = 0;
-      const send = async (method: string, params: Row = {}) => {
-        const id = String(++sequence);
-        socket.send(JSON.stringify({ type: "req", id, method, params }));
-        await flush();
-        return id;
-      };
-      const response = (id: string) =>
-        frames.find((frame) => frame.type === "res" && frame.id === id);
-      const controls = (
-        window as typeof window & {
-          openclawControlUiE2eGateway: Controls;
-        }
-      ).openclawControlUiE2eGateway;
-      return {
-        send,
-        response,
-        controls,
-        request: async (method, params) => {
-          const frame = response(await send(method, params));
-          if (!frame) {
-            throw new Error(`Missing response for ${method}`);
-          }
-          return frame;
-        },
-      };
-    });
-  },
-});
 
 it.for([
   { defaultAgentId: "main", sessionKey: "agent:main:notes", expected: "agent:main:main" },
@@ -136,12 +77,87 @@ it.for(["rows", "static list"])(
       expect((await request("sessions.describe", { key: row.key })).payload).toMatchObject({
         session: row,
       });
+      expect((await request("sessions.resolve", { reference: { key: row.key } })).payload).toEqual({
+        ok: true,
+        key: row.key,
+        agentId: "ops",
+      });
     }
     expect((await request("sessions.list")).payload).toMatchObject({
       sessions: expectedRows,
     });
   },
 );
+
+it("resolves canonical short references and starts the matching transcript", async ({
+  connect,
+}) => {
+  const first = {
+    key: "agent:ops:thread:12345678-aaaa-4000-8000-000000000001",
+    displayName: "First",
+    boardFace: "dashboard",
+  };
+  const second = {
+    key: "agent:ops:thread:12345678-bbbb-4000-8000-000000000002",
+    displayName: "Second",
+  };
+  const otherAgent = {
+    key: "agent:other:thread:12345678-bbbb-4000-8000-000000000003",
+    displayName: "Other agent",
+  };
+  const messages = [{ role: "assistant", content: "Second transcript" }];
+  const { request } = await connect({
+    sessions: [first, second, otherAgent],
+    sessionTranscripts: { [second.key]: { messages } },
+  });
+  expect(
+    (await request("sessions.resolve", { shortId: "12345678", agentId: "ops" })).payload,
+  ).toEqual({
+    ok: false,
+    candidates: [
+      { key: first.key, agentId: "ops", displayName: "First", boardFace: "dashboard" },
+      { key: second.key, agentId: "ops", displayName: "Second" },
+    ],
+  });
+  expect(
+    (await request("chat.startup", { shortId: "12345678b", agentId: "ops" })).payload,
+  ).toMatchObject({
+    resolution: { ok: true, key: second.key, agentId: "ops", displayName: "Second" },
+    messages,
+  });
+  await request("sessions.patch", { key: first.key, boardFace: "chat" });
+  expect((await request("sessions.resolve", { reference: { key: first.key } })).payload).toEqual({
+    ok: true,
+    key: first.key,
+    agentId: "ops",
+    displayName: "First",
+    boardFace: "chat",
+  });
+});
+
+it("returns a missing descriptor without materializing an unseeded session", async ({
+  connect,
+}) => {
+  const { request } = await connect({
+    defaultAgentId: "ops",
+    sessionKey: notes.key,
+    sessions: [notes],
+  });
+  const missingKey = "agent:ops:main";
+
+  expect((await request("sessions.describe", { key: missingKey })).payload).toEqual({
+    session: null,
+  });
+  expect((await request("sessions.resolve", { reference: { key: missingKey } })).payload).toEqual({
+    ok: false,
+  });
+  expect((await request("sessions.list")).payload.sessions).toEqual([
+    expect.objectContaining(notes),
+  ]);
+  expect((await request("chat.history", { sessionKey: missingKey })).payload).not.toHaveProperty(
+    "sessionInfo",
+  );
+});
 
 it.for(["cases", "sequence"])(
   "does not invent metadata for %s-only rows",
@@ -162,7 +178,6 @@ it.for(["cases", "sequence"])(
             : { sequence: [list, { sessions: [] }] },
       },
     });
-    const identity = { key: row.key, sessionId: row.sessionId };
     for (const method of ["chat.startup", "chat.history"]) {
       // A sessionInfo is a complete row replacement at the UI boundary, not a patch.
       expect((await request(method, { sessionKey: row.key })).payload).not.toHaveProperty(
@@ -170,9 +185,11 @@ it.for(["cases", "sequence"])(
       );
     }
     expect((await request("sessions.list")).payload.sessions).toEqual([row]);
-    expect((await request("sessions.describe", { key: row.key })).payload.session).toEqual(
-      identity,
-    );
+    // Wire-only list responses do not declare a canonical stored row for describe.
+    expect((await request("sessions.describe", { key: row.key })).payload.session).toBeNull();
+    expect((await request("sessions.resolve", { reference: { key: row.key } })).payload).toEqual({
+      ok: false,
+    });
   },
 );
 
@@ -275,7 +292,7 @@ it("preserves stale wire responses without consuming sequences or replacing cano
 });
 
 it("keeps patch metadata and pin/archive timestamps coherent across reads", async ({ connect }) => {
-  const scenario = { sessionKey: notes.key, sessions: [notes] };
+  const scenario = { sessionKey: notes.key, sessions: [{ ...notes, updatedAt: 1 }] };
   const { request } = await connect(scenario);
   const readRow = async () => {
     const { payload } = await request("sessions.list", { archived: "all" });
@@ -292,8 +309,9 @@ it("keeps patch metadata and pin/archive timestamps coherent across reads", asyn
     return row;
   };
   const patch = (fields: Row) => request("sessions.patch", { key: notes.key, ...fields });
-  await patch({ color: "blue" });
-  expect((await readRow()).color).toBe("blue");
+  const committed = (await patch({ color: "blue" })).payload.entry as Row;
+  expect(committed.updatedAt).toBeGreaterThan(1);
+  expect(await readRow()).toMatchObject({ color: "blue", updatedAt: committed.updatedAt });
   await patch({ color: null });
   expect((await readRow()).color).toBeNull();
   await patch({ pinned: true });
@@ -306,9 +324,10 @@ it("keeps patch metadata and pin/archive timestamps coherent across reads", asyn
   expect(archived).toMatchObject({ archived: true, archivedAt: expect.any(Number), pinned: false });
   expect(archived).not.toHaveProperty("pinnedAt");
   await patch({ archived: true });
-  expect((await readRow()).archivedAt).toBe(archived.archivedAt);
+  const repeatedArchive = await readRow();
+  expect(repeatedArchive.archivedAt).toBe(archived.archivedAt);
   expect(await patch({ pinned: true })).toMatchObject({ ok: false });
-  expect(await readRow()).toEqual(archived);
+  expect(await readRow()).toEqual(repeatedArchive);
   await patch({ archived: false, pinned: true });
   expect(await readRow()).toMatchObject({
     archived: false,
@@ -341,6 +360,39 @@ it("does not commit rejected patches or unresolved deferrals", async ({ connect 
   expect((await request("sessions.list")).payload).toMatchObject({
     sessions: [{ pinned: true, pinnedAt: expect.any(Number) }],
   });
+  const beforeStalePatch = (await request("sessions.list")).payload.sessions;
+  expect(
+    await request("sessions.patch", {
+      key: notes.key,
+      expectedSessionId: "retired-generation",
+      label: "Wrong generation",
+    }),
+  ).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+  expect((await request("sessions.list")).payload.sessions).toEqual(beforeStalePatch);
+  const replacementSessionId = "replacement-generation";
+  controls.setSessionsListResponse({
+    sessions: [{ ...notes, sessionId: replacementSessionId }],
+  });
+  expect(
+    await request("sessions.patch", {
+      key: notes.key,
+      expectedSessionId: replacementSessionId,
+      label: "Replacement label",
+    }),
+  ).toMatchObject({ ok: true });
+  expect((await request("sessions.list")).payload.sessions).toEqual([
+    expect.objectContaining({ sessionId: replacementSessionId, label: "Replacement label" }),
+  ]);
+  for (const method of ["sessions.describe", "chat.history", "chat.startup"]) {
+    const params = method === "sessions.describe" ? { key: notes.key } : { sessionKey: notes.key };
+    expect((await request(method, params)).payload).toEqual(
+      expect.objectContaining(
+        method === "sessions.describe"
+          ? { session: expect.objectContaining({ sessionId: replacementSessionId }) }
+          : { sessionId: replacementSessionId },
+      ),
+    );
+  }
 });
 
 it("replays later commits onto an injected list without adopting its stale generation", async ({
@@ -351,15 +403,58 @@ it("replays later commits onto an injected list without adopting its stale gener
   const stale = { ...notes, archived: false, sessionId: "retired-generation" };
   controls.setMethodResponse("sessions.list", { sessions: [stale] });
   expect((await request("sessions.list")).payload.sessions).toEqual([
-    expect.objectContaining(stale),
+    expect.objectContaining({ ...stale, archived: true }),
   ]);
+  expect(
+    await request("sessions.patch", {
+      key: notes.key,
+      expectedSessionId: stale.sessionId,
+      label: "Wrong generation",
+    }),
+  ).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
   await request("sessions.patch", { key: notes.key, label: "Renamed" });
   expect((await request("sessions.list")).payload.sessions).toEqual([
-    expect.objectContaining({ ...stale, label: "Renamed" }),
+    expect.objectContaining({ ...stale, archived: true, label: "Renamed" }),
   ]);
   expect((await request("sessions.describe", { key: notes.key })).payload).toMatchObject({
     session: { sessionId: notes.sessionId, archived: true, label: "Renamed" },
   });
+});
+
+it("replaces canonical rows and membership without retaining omitted fields", async ({
+  connect,
+}) => {
+  const omitted = { key: "agent:ops:omitted", sessionId: "omitted-generation" };
+  const scenario = { sessions: [notes, omitted] };
+  const { request, controls } = await connect(scenario);
+  await request("sessions.patch", { key: notes.key, color: "purple", label: "Patched" });
+  await request("sessions.create", { key: "agent:ops:materialized", label: "Materialized" });
+  const replacement = { key: notes.key, sessionId: notes.sessionId, label: "Exact replacement" };
+
+  controls.setSessionsListResponse({ sessions: [replacement] });
+
+  const assertReplacement = async (currentRequest: typeof request) => {
+    expect((await currentRequest("sessions.list")).payload.sessions).toEqual([replacement]);
+    expect((await currentRequest("sessions.describe", { key: notes.key })).payload.session).toEqual(
+      replacement,
+    );
+    for (const method of ["chat.history", "chat.startup"]) {
+      expect((await currentRequest(method, { sessionKey: notes.key })).payload).toMatchObject({
+        sessionId: notes.sessionId,
+        sessionInfo: replacement,
+      });
+    }
+    for (const key of [omitted.key, "agent:ops:materialized"]) {
+      expect((await currentRequest("sessions.describe", { key })).payload.session).toBeNull();
+      expect(
+        (await currentRequest("chat.startup", { sessionKey: key })).payload,
+      ).not.toHaveProperty("sessionInfo");
+    }
+  };
+  await assertReplacement(request);
+
+  const reloaded = await connect(scenario);
+  await assertReplacement(reloaded.request);
 });
 
 it("commits only successful patchMany targets", async ({ connect }) => {
@@ -416,7 +511,7 @@ it.for(["sessions.create", "sessions.catalog.continue"])(
 
 it.for([
   { sessionKey: "agent:ops:notes", sessionScope: "global" as const, kind: "direct" },
-  { sessionKey: "global", sessionScope: "agent" as const, kind: "global" },
+  { sessionKey: "global", sessionScope: "per-sender" as const, kind: "global" },
 ])(
   "derives selected row kind from its key under $sessionScope scope",
   async ({ kind, ...scenario }, { connect }) => {
@@ -427,5 +522,400 @@ it.for([
     expect(
       (await request("chat.history", { sessionKey: scenario.sessionKey })).payload.sessionInfo,
     ).toMatchObject({ key: scenario.sessionKey, kind });
+  },
+);
+
+it("serves progress for the Workboard dashboard and its individual card sessions", async ({
+  connect,
+}) => {
+  const seed = buildWorkboardMocks(1_800_000_000_000, { id: "operator", label: "Operator" });
+  const { request } = await connect({
+    sessionKey: seed.sessionKey,
+    methodResponses: seed.methodResponses,
+  });
+  const dashboard = (await request("board.get", { sessionKey: seed.sessionKey })).payload;
+  expect(dashboard).toMatchObject({
+    sessionKey: seed.sessionKey,
+    widgets: expect.arrayContaining([
+      expect.objectContaining({ name: "session-progress", pluginKind: "session:progress" }),
+    ]),
+  });
+  const progress = (await request("progressCard.get", { sessionKey: dashboard.sessionKey }))
+    .payload;
+  expect(progress.card).toMatchObject({
+    sessionKey: seed.sessionKey,
+    markdown: "**Product launch** is moving through final checks.",
+    steps: [
+      { step: "Confirm release scope", status: "completed" },
+      { step: "Validate onboarding flow", status: "in_progress" },
+      { step: "Publish support handoff", status: "pending" },
+    ],
+  });
+  const cardSessionKey = "agent:main:workboard-onboarding";
+  expect(
+    (await request("progressCard.get", { sessionKey: cardSessionKey })).payload.card,
+  ).toMatchObject({
+    sessionKey: cardSessionKey,
+    markdown: "Account setup passed. First-task navigation is being checked.",
+  });
+  expect(
+    (await request("progressCard.get", { sessionKey: "agent:main:without-progress" })).payload,
+  ).toEqual({ card: null });
+});
+
+it.for(["chat.history", "chat.startup"])(
+  "keeps Workboard session edits when reopening through %s",
+  async (method, { connect }) => {
+    const seed = buildWorkboardMocks(1_800_000_000_000, { id: "operator", label: "Operator" });
+    const key = "agent:main:workboard-onboarding";
+    const transcripts: NonNullable<ControlUiMockGatewayScenario["sessionTranscripts"]> =
+      seed.cardSessionHistories;
+    const history = expectDefined(transcripts[key], "onboarding history");
+    const { request } = await connect({
+      sessions: seed.cardSessions,
+      sessionTranscripts: transcripts,
+    });
+    await request("sessions.patch", { key, label: "Renamed onboarding", pinned: true });
+    const reopened = (await request(method, { sessionKey: key })).payload;
+    expect(reopened.sessionInfo).toMatchObject({ key, label: "Renamed onboarding", pinned: true });
+    expect(reopened.messages).toEqual(history.messages);
+  },
+);
+
+it.for(
+  ["chat.history", "chat.startup"].flatMap((method) =>
+    ["transcript", "scenario"].map((source) => ({ method, source })),
+  ),
+)(
+  "does not replay a stopped $source Workboard run through $method",
+  async ({ method, source }, { connect }) => {
+    const seed = buildWorkboardMocks(1_800_000_000_000, { id: "operator", label: "Operator" });
+    const key = "agent:main:workboard-onboarding";
+    const transcripts: NonNullable<ControlUiMockGatewayScenario["sessionTranscripts"]> =
+      seed.cardSessionHistories;
+    const history = expectDefined(transcripts[key], "onboarding history");
+    const runId = "workboard-onboarding-run";
+    const preview = expectDefined(history.inFlightRun, "onboarding run preview");
+    const { request } = await connect({
+      sessions: seed.cardSessions,
+      sessionTranscripts:
+        source === "transcript" ? transcripts : { [key]: { messages: history.messages } },
+      ...(source === "scenario" ? { inFlightRun: preview } : {}),
+    });
+    expect((await request(method, { sessionKey: key })).payload.inFlightRun).toMatchObject({
+      runId,
+      text: "Checking first-task navigation and recovery after a validation error…",
+    });
+    expect((await request("chat.abort", { sessionKey: key, runId })).payload).toEqual({
+      aborted: true,
+      runIds: [runId],
+    });
+    const reopened = (await request(method, { sessionKey: key })).payload;
+    expect(reopened.inFlightRun).toBeNull();
+    expect(reopened.sessionInfo).toMatchObject({
+      key,
+      status: "killed",
+      hasActiveRun: false,
+      activeRunIds: [],
+    });
+    expect(reopened.messages).toEqual(history.messages);
+  },
+);
+
+it("commits targeted and session-wide aborts without replacing session edits or other runs", async ({
+  connect,
+}) => {
+  const active = {
+    key: "agent:main:workboard-onboarding",
+    status: "running",
+    hasActiveRun: true,
+    activeRunIds: ["run-a", "run-b"],
+    label: "Onboarding",
+  };
+  const other = {
+    key: "agent:main:other",
+    status: "running",
+    hasActiveRun: true,
+    activeRunIds: ["other-run"],
+    label: "Other",
+  };
+  const { request, frames } = await connect({
+    sessions: [active, other],
+    methodResponses: { "sessions.list": { sessions: [active, other] } },
+  });
+  await request("sessions.patch", { key: active.key, label: "Renamed onboarding" });
+  await request("sessions.patch", { key: other.key, pinned: true });
+  expect(
+    (await request("chat.abort", { sessionKey: active.key, runId: "unknown-run" })).payload,
+  ).toMatchObject({ aborted: false, runIds: [] });
+  expect(
+    (await request("chat.abort", { sessionKey: active.key, runId: "run-a" })).payload,
+  ).toMatchObject({ aborted: true, runIds: ["run-a"] });
+  expect((await request("sessions.list")).payload.sessions).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        key: active.key,
+        label: "Renamed onboarding",
+        status: "running",
+        hasActiveRun: true,
+        activeRunIds: ["run-b"],
+      }),
+    ]),
+  );
+  expect((await request("chat.abort", { sessionKey: active.key })).payload).toMatchObject({
+    aborted: true,
+    runIds: ["run-b"],
+  });
+  expect((await request("sessions.list")).payload.sessions).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        key: active.key,
+        label: "Renamed onboarding",
+        status: "killed",
+        hasActiveRun: false,
+        activeRunIds: [],
+        abortedLastRun: true,
+      }),
+      expect.objectContaining({
+        key: other.key,
+        pinned: true,
+        status: "running",
+        hasActiveRun: true,
+        activeRunIds: ["other-run"],
+      }),
+    ]),
+  );
+  expect(frames.filter((frame) => frame.event === "chat").map((frame) => frame.payload)).toEqual([
+    expect.objectContaining({ sessionKey: active.key, runId: "run-a", state: "aborted" }),
+    expect.objectContaining({ sessionKey: active.key, runId: "run-b", state: "aborted" }),
+  ]);
+  expect(frames.filter((frame) => frame.event === "sessions.changed")).toHaveLength(2);
+});
+
+it("registers a started send for targeted abort without cancelling another run or reviving a replayed ACK", async ({
+  connect,
+}) => {
+  const key = "agent:main:send-abort";
+  const active = { key, status: "running", hasActiveRun: true, activeRunIds: ["other-run"] };
+  const { request, frames } = await connect({
+    sessions: [active],
+    methodResponses: {
+      "chat.send": { runId: "new-run", status: "started" },
+      "sessions.list": { sessions: [active] },
+    },
+  });
+  const params = { sessionKey: key, message: "Start another run", idempotencyKey: "new-run" };
+  expect((await request("chat.send", params)).payload).toMatchObject({
+    runId: "new-run",
+    status: "started",
+  });
+  expect((await request("sessions.list")).payload.sessions).toEqual([
+    expect.objectContaining({ activeRunIds: ["other-run", "new-run"], hasActiveRun: true }),
+  ]);
+  expect((await request("chat.abort", { sessionKey: key, runId: "new-run" })).payload).toEqual({
+    aborted: true,
+    runIds: ["new-run"],
+  });
+  await request("chat.send", params);
+  expect((await request("sessions.list")).payload.sessions).toEqual([
+    expect.objectContaining({ activeRunIds: ["other-run"], hasActiveRun: true, status: "running" }),
+  ]);
+  expect(frames.filter((frame) => frame.event === "chat").map((frame) => frame.payload)).toEqual([
+    expect.objectContaining({ sessionKey: key, runId: "new-run", state: "aborted" }),
+  ]);
+});
+
+it.for([
+  { event: "final", outcome: "done", otherRun: false },
+  { event: "error", outcome: "failed", otherRun: false },
+  { event: "aborted", outcome: "killed", otherRun: false },
+  { event: "final", outcome: "done", otherRun: true },
+  { event: "error", outcome: "failed", otherRun: true },
+  { event: "aborted", outcome: "killed", otherRun: true },
+])(
+  "retains $event before a started ACK (other active run: $otherRun)",
+  async ({ event, outcome, otherRun }, { connect }) => {
+    const key = "agent:main:fast-completion";
+    const diagnostic = "Provider request failed: session store unavailable. Retry after recovery.";
+    const initial = {
+      key,
+      status: otherRun ? "running" : "queued",
+      hasActiveRun: otherRun,
+      activeRunIds: otherRun ? ["other-run"] : [],
+    };
+    const { send, response, request, controls } = await connect({
+      sessions: [initial],
+      deferredMethods: ["chat.send"],
+      methodResponses: { "chat.send": { runId: "fast-run", status: "started" } },
+    });
+    const params = { sessionKey: key, message: "Complete quickly", idempotencyKey: "fast-run" };
+    const id = await send("chat.send", params);
+    expect(response(id)).toBeUndefined();
+    controls.emit("chat", {
+      sessionKey: key,
+      runId: "fast-run",
+      state: event,
+      ...(event === "error" ? { errorMessage: diagnostic } : {}),
+    });
+    expect((await request("sessions.list")).payload.sessions).toEqual([
+      expect.objectContaining(initial),
+    ]);
+    controls.resolveDeferred("chat.send");
+    await flush();
+    expect(response(id)?.payload).toMatchObject({ runId: "fast-run", status: "started" });
+    expect((await request("sessions.list")).payload.sessions).toEqual([
+      expect.objectContaining({
+        key,
+        status: otherRun ? "running" : outcome,
+        hasActiveRun: otherRun,
+        activeRunIds: otherRun ? ["other-run"] : [],
+        abortedLastRun: !otherRun && outcome === "killed",
+        ...(!otherRun && outcome === "failed" ? { lastRunError: diagnostic } : {}),
+      }),
+    ]);
+    if (!otherRun && outcome === "failed") {
+      await request("sessions.patch", { key, unread: false });
+      expect(
+        (await request("chat.startup", { sessionKey: key })).payload.sessionInfo,
+      ).toMatchObject({
+        status: "failed",
+        lastRunError: diagnostic,
+      });
+    }
+    expect((await request("chat.abort", { sessionKey: key, runId: "fast-run" })).payload).toEqual({
+      aborted: false,
+      runIds: [],
+    });
+    // A replayed ACK must not overwrite a newer outcome on the same session.
+    if (otherRun) {
+      controls.emit("chat", { sessionKey: key, runId: "other-run", state: "error" });
+    }
+    const beforeReplay = (await request("sessions.list")).payload.sessions;
+    if (otherRun) {
+      expect(beforeReplay).toEqual([
+        expect.objectContaining({ status: "failed", hasActiveRun: false, activeRunIds: [] }),
+      ]);
+    }
+    controls.deferNext("chat.send");
+    await send("chat.send", params);
+    controls.resolveDeferred("chat.send");
+    await flush();
+    expect((await request("sessions.list")).payload.sessions).toEqual(beforeReplay);
+    if (!otherRun && outcome === "failed") {
+      controls.setMethodResponse("chat.send", { runId: "next-run", status: "started" });
+      controls.deferNext("chat.send");
+      await send("chat.send", { ...params, idempotencyKey: "next-run" });
+      controls.resolveDeferred("chat.send");
+      await flush();
+      const next = (await request("chat.startup", { sessionKey: key })).payload.sessionInfo;
+      expect(next).toMatchObject({ status: "running", activeRunIds: ["next-run"] });
+      expect(next).not.toHaveProperty("lastRunError");
+      controls.emit("chat", { sessionKey: key, runId: "next-run", state: "final" });
+      const completed = (await request("chat.startup", { sessionKey: key })).payload.sessionInfo;
+      expect(completed).toMatchObject({ status: "done", activeRunIds: [] });
+      expect(completed).not.toHaveProperty("lastRunError");
+    }
+  },
+);
+
+it.for([
+  { event: "final", outcome: "done" },
+  { event: "error", outcome: "failed" },
+  { event: "aborted", outcome: "killed" },
+  { event: "abort receipt", outcome: "killed" },
+])(
+  "preserves newer $event before the first delayed send ACK",
+  async ({ event, outcome }, { connect }) => {
+    const key = "agent:main:delayed-completion";
+    const { send, response, request, controls } = await connect({
+      sessions: [{ key, status: "running", hasActiveRun: true, activeRunIds: ["other-run"] }],
+      deferredMethods: ["chat.send"],
+      methodResponses: { "chat.send": { runId: "fast-run", status: "started" } },
+    });
+    const id = await send("chat.send", {
+      sessionKey: key,
+      message: "Complete before acknowledgment",
+      idempotencyKey: "fast-run",
+    });
+    controls.emit("chat", {
+      sessionKey: key,
+      runId: "fast-run",
+      state: "error",
+      errorMessage: "Earlier run failed",
+    });
+    if (event === "abort receipt") {
+      await request("chat.abort", { sessionKey: key, runId: "other-run" });
+    } else {
+      controls.emit("chat", {
+        sessionKey: key,
+        runId: "other-run",
+        state: event,
+        ...(event === "error" ? { errorMessage: "Later run failed" } : {}),
+      });
+    }
+    const completed = (await request("chat.startup", { sessionKey: key })).payload.sessionInfo;
+    expect(completed).toMatchObject({
+      status: outcome,
+      activeRunIds: [],
+      hasActiveRun: false,
+      abortedLastRun: outcome === "killed",
+    });
+    if (event === "error") {
+      expect(completed).toHaveProperty("lastRunError", "Later run failed");
+    } else {
+      expect(completed).not.toHaveProperty("lastRunError");
+    }
+    expect(response(id)).toBeUndefined();
+    controls.resolveDeferred("chat.send");
+    await flush();
+    expect(response(id)?.payload).toMatchObject({ runId: "fast-run", status: "started" });
+    expect((await request("sessions.list")).payload.sessions).toEqual([completed]);
+  },
+);
+
+it.for([
+  { targeted: true, outcome: "success" },
+  { targeted: false, outcome: "success" },
+  { targeted: true, outcome: "not-aborted" },
+  { targeted: false, outcome: "not-aborted" },
+  { targeted: true, outcome: "error" },
+  { targeted: false, outcome: "error" },
+])(
+  "preserves $outcome abort before send ACK (targeted: $targeted)",
+  async ({ targeted, outcome }, { connect }) => {
+    const key = "agent:main:abort-before-ack";
+    const runId = "pending-run";
+    const aborted = outcome === "success";
+    const { send, request, controls, frames } = await connect({
+      sessions: [{ key, status: "queued", hasActiveRun: false, activeRunIds: [] }],
+      deferredMethods: ["chat.send"],
+      methodResponses: {
+        "chat.send": { runId, status: "started" },
+        "chat.abort":
+          outcome === "error"
+            ? { __mockError: { code: "INVALID_REQUEST", message: "Abort rejected" } }
+            : { aborted, runIds: aborted ? [runId] : [] },
+      },
+    });
+    await send("chat.send", { sessionKey: key, message: "Start", idempotencyKey: runId });
+    const result = await request("chat.abort", { sessionKey: key, ...(targeted ? { runId } : {}) });
+    if (outcome === "error") {
+      expect(result.ok).toBe(false);
+    } else {
+      expect(result.payload).toEqual({ aborted, runIds: aborted ? [runId] : [] });
+    }
+    controls.resolveDeferred("chat.send");
+    await flush();
+    expect((await request("sessions.list")).payload.sessions).toEqual([
+      expect.objectContaining({
+        key,
+        status: aborted ? "killed" : "running",
+        hasActiveRun: !aborted,
+        activeRunIds: aborted ? [] : [runId],
+      }),
+    ]);
+    expect(frames.filter((frame) => frame.event === "chat").map((frame) => frame.payload)).toEqual(
+      aborted ? [expect.objectContaining({ sessionKey: key, runId, state: "aborted" })] : [],
+    );
   },
 );

@@ -62,10 +62,12 @@ describe("live person presence timing", () => {
 
   const clients = new GatewayClientRegistry();
   const sockets: ReturnType<typeof attachGatewayWsForTest>["socket"][] = [];
+  let nextTestTime = new Date("2040-01-01T00:00:00Z").getTime();
 
   beforeEach(() => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2040-01-01T00:00:00Z"));
+    vi.setSystemTime(nextTestTime);
+    nextTestTime += 24 * 60 * 60 * 1000;
     attachMessageHandler.mockClear();
   });
   afterEach(() => {
@@ -79,7 +81,7 @@ describe("live person presence timing", () => {
     vi.useRealTimers();
   });
 
-  async function connect(email: string, profileId = "timing-person") {
+  async function connect(email: string | undefined, profileId = "timing-person") {
     const { socket } = attachGatewayWsForTest({
       attach: attachGatewayWsConnectionHandler,
       clients,
@@ -122,6 +124,27 @@ describe("live person presence timing", () => {
   function row(email: string) {
     return listSystemPresence().find((entry) => entry.user?.email === email);
   }
+
+  it("shares the owner's online interval and activity across tabs without an email", async () => {
+    const first = await connect(undefined, "timing-owner");
+    const started = Date.now();
+    expect(first.handler.setClient(first.client)).toBe(true);
+    vi.setSystemTime(started + 1_000);
+    const second = await connect(undefined, "timing-owner");
+    expect(second.handler.setClient(second.client)).toBe(true);
+    expect(recordClientPresenceActivity(clients, second.client)).toBe(true);
+
+    const ownerRows = listSystemPresence().filter((entry) => entry.user?.id === "timing-owner");
+    expect(ownerRows).toHaveLength(2);
+    for (const entry of ownerRows) {
+      expect(entry).toMatchObject({
+        onlineSince: started,
+        lastActivityAt: started + 1_000,
+        user: { id: "timing-owner", identity: { type: "profile", id: "timing-owner" } },
+      });
+      expect(entry.user).not.toHaveProperty("email");
+    }
+  });
 
   it("retains the oldest online interval across overlapping sockets but not a full reconnect", async () => {
     const first = await connect("first@timing.test");
@@ -239,14 +262,16 @@ describe("live person presence timing", () => {
         firstNamespace === "profile" ? ([qualified, raw] as const) : ([raw, qualified] as const);
       vi.setSystemTime(started + 3_000);
       // Activity can be the first presence operation after the profile snapshot changes.
-      recordClientPresenceActivity(clients, first.client);
+      expect(recordClientPresenceActivity(clients, first.client)).toBe(
+        firstNamespace === "profile",
+      );
       refreshClientPresence(clients, second.client);
       expect.soft(liveRows(firstNamespace !== "profile")[0]).toMatchObject({
         onlineSince: started,
         lastActivityAt: started + 2_000,
       });
       vi.setSystemTime(started + 4_000);
-      recordClientPresenceActivity(clients, second.client);
+      expect(recordClientPresenceActivity(clients, second.client)).toBe(false);
       refreshClientPresence(clients, first.client);
       expect.soft(liveRows(firstNamespace === "profile")[0]).toMatchObject({
         onlineSince: started,
@@ -261,6 +286,8 @@ describe("live person presence timing", () => {
 
   it("keeps heartbeat freshness and cache eviction independent of person timing", async () => {
     const first = await connect("heartbeat@timing.test", "heartbeat-person");
+    first.client.connect.client.id = "openclaw-tui";
+    first.client.connect.client.mode = "ui";
     const started = Date.now();
     first.handler.setClient(first.client);
     recordClientPresenceActivity(clients, first.client);
@@ -272,6 +299,8 @@ describe("live person presence timing", () => {
       lastInputSeconds: 0,
     });
     expect(row("heartbeat@timing.test")).toMatchObject({
+      clientId: "openclaw-tui",
+      mode: "ui",
       ts: started + 10_000,
       onlineSince: started,
       lastActivityAt: started,
@@ -283,8 +312,13 @@ describe("live person presence timing", () => {
     }
     expect(row("heartbeat@timing.test")).toBeUndefined();
     const overlap = await connect("eviction@timing.test", "heartbeat-person");
+    overlap.client.connect.client.id = "openclaw-macos";
+    overlap.client.connect.client.mode = "ui";
     overlap.handler.setClient(overlap.client);
+    expect(row("heartbeat@timing.test")).toMatchObject({ clientId: "openclaw-tui", mode: "ui" });
     expect(row("eviction@timing.test")).toMatchObject({
+      clientId: "openclaw-macos",
+      mode: "ui",
       onlineSince: started,
       lastActivityAt: started,
     });
@@ -292,7 +326,10 @@ describe("live person presence timing", () => {
     vi.setSystemTime(started + 400_000);
     expect(row("eviction@timing.test")).toBeUndefined();
     expect(recordClientPresenceActivity(clients, overlap.client)).toBe(true);
+    expect(row("heartbeat@timing.test")).toMatchObject({ clientId: "openclaw-tui", mode: "ui" });
     expect(row("eviction@timing.test")).toMatchObject({
+      clientId: "openclaw-macos",
+      mode: "ui",
       onlineSince: started,
       lastActivityAt: started + 400_000,
     });

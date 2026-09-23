@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import "./browser-panel.ts";
-import { createView } from "./browser-panel-controller-test-support.ts";
+import { createBrowserClient, createView } from "./browser-panel-controller-test-support.ts";
 import type { BrowserPanelController } from "./browser-panel-controller.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
@@ -148,40 +149,64 @@ describe("normalizeBrowserUrlDraft", () => {
     expect(empty?.querySelector("svg")).not.toBeNull();
   });
 
-  it("overlays a retained browser view only while its refresh is pending", async () => {
-    const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
-      available: boolean;
-      embedded: boolean;
-      browserPanelController: BrowserPanelController;
-      renderRoot: ShadowRoot;
-      requestUpdate: () => void;
-      updateComplete: Promise<unknown>;
-    };
-    panel.available = true;
-    panel.embedded = true;
-    document.body.append(panel);
-    await panel.updateComplete;
+  it.each([true, false])(
+    "keeps refresh feedback out of an existing page (retained: %s)",
+    async (retained) => {
+      const response = createDeferred<unknown>();
+      const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
+        available: boolean;
+        embedded: boolean;
+        presented: boolean;
+        refreshOnPresentation: boolean;
+        client: GatewayBrowserClient;
+        browserPanelController: BrowserPanelController;
+        renderRoot: ShadowRoot;
+        requestUpdate: () => void;
+        updateComplete: Promise<unknown>;
+      };
+      panel.available = true;
+      panel.embedded = true;
+      panel.presented = true;
+      panel.refreshOnPresentation = false;
+      panel.client = createBrowserClient(async () => response.promise).client;
+      document.body.append(panel);
+      await panel.updateComplete;
 
-    panel.browserPanelController.activeTargetId = "tab-a";
-    panel.browserPanelController.view = createView("tab-a");
-    panel.browserPanelController.loading = true;
-    panel.requestUpdate();
-    await panel.updateComplete;
+      panel.browserPanelController.activeTargetId = "tab-a";
+      panel.browserPanelController.view = retained ? createView("tab-a") : null;
+      panel.requestUpdate();
+      await panel.updateComplete;
+      const preview = panel.renderRoot.querySelector(".bp-shot");
+      const input = panel.renderRoot.querySelector<HTMLTextAreaElement>(".bp-input");
+      input?.focus();
+      const refresh = panel.browserPanelController.refreshAll();
+      await panel.updateComplete;
 
-    expect(panel.renderRoot.querySelector(".bp-shot")).not.toBeNull();
-    expect(
-      panel.renderRoot.querySelector(
-        'openclaw-panel-loading-skeleton[data-panel-skeleton="browser"][overlay]',
-      ),
-    ).not.toBeNull();
+      expect(panel.renderRoot.querySelector(".bp-shot")).toBe(preview);
+      expect(panel.renderRoot.querySelector("openclaw-panel-loading-skeleton") !== null).toBe(
+        !retained,
+      );
+      const reload = panel.renderRoot.querySelector('button[aria-label="Reload"]');
+      expect(reload?.getAttribute("aria-busy")).toBe("true");
+      expect(panel.renderRoot.querySelector(".bp-viewport")?.getAttribute("aria-busy")).toBe(
+        "true",
+      );
+      if (retained) {
+        expect(panel.renderRoot.activeElement).toBe(input);
+      }
 
-    panel.browserPanelController.loading = false;
-    panel.requestUpdate();
-    await panel.updateComplete;
+      response.reject(new Error("Refresh connection interrupted"));
+      await refresh;
+      await panel.updateComplete;
 
-    expect(panel.renderRoot.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
-    expect(panel.renderRoot.querySelector(".bp-shot")).not.toBeNull();
-  });
+      expect(panel.renderRoot.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
+      expect(panel.renderRoot.querySelector(".bp-shot")).toBe(preview);
+      expect(reload?.getAttribute("aria-busy")).toBe("false");
+      expect(panel.renderRoot.querySelector('[role="alert"]')?.textContent).toContain(
+        "Refresh connection interrupted",
+      );
+    },
+  );
 
   it("suppresses an open dock without overwriting its persisted preference", async () => {
     localStorage.setItem(

@@ -4,8 +4,11 @@ import { constants as fsConstants, type Dirent, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { sha256File } from "../infra/directory-durability.js";
 import { isErrno } from "../infra/errors.js";
+import { copyFileHandle } from "../infra/file-descriptor.js";
 import { isWithinDir } from "../infra/path-safety.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseControlUiAssetManifest } from "./control-ui-asset-manifest-parse.js";
 import {
   CONTROL_UI_ASSET_MANIFEST_FILENAME,
@@ -20,6 +23,7 @@ const CONTROL_UI_GENERATION_PATTERN = /^[a-f0-9]{64}$/u;
 const CONTROL_UI_STAGING_PATTERN = /^\.staging-[0-9]+-[a-f0-9-]+$/u;
 const CONTROL_UI_STAGING_MAX_AGE_MS = 60 * 60 * 1000;
 const CONTROL_UI_MANIFEST_MAX_BYTES = 4 * 1024 * 1024;
+const log = createSubsystemLogger("gateway/control-ui-assets");
 
 type RetainedGeneration = {
   assetPaths: ReadonlySet<string>;
@@ -37,7 +41,7 @@ type ResolvedRetainedControlUiAsset = {
 };
 
 export type ControlUiAssetRetention = {
-  prepare: (options?: { isCancelled?: () => boolean; signal?: AbortSignal }) => Promise<void>;
+  prepare: (options?: { signal?: AbortSignal }) => Promise<void>;
   resolveAsset: (assetPath: string) => ResolvedRetainedControlUiAsset | null;
 };
 
@@ -45,24 +49,12 @@ function resolveControlUiAssetCacheDir(): string {
   return path.join(resolveStateDir(), "cache", "control-ui-assets");
 }
 
-type RetentionOperation = {
-  isCancelled?: () => boolean;
-  signal?: AbortSignal;
-};
-
-function throwIfCancelled(operation?: RetentionOperation): void {
-  operation?.signal?.throwIfAborted();
-  if (operation?.isCancelled?.()) {
-    throw new DOMException("Control UI asset retention cancelled", "AbortError");
-  }
-}
-
 async function readCachedGeneration(
   directory: string,
-  operation?: RetentionOperation,
+  signal?: AbortSignal,
 ): Promise<RetainedGeneration | null> {
   try {
-    throwIfCancelled(operation);
+    signal?.throwIfAborted();
     const stats = await fs.lstat(directory);
     if (stats.isSymbolicLink() || !stats.isDirectory()) {
       return null;
@@ -71,28 +63,20 @@ async function readCachedGeneration(
     if (!isWithinDir(path.dirname(directory), realPath)) {
       return null;
     }
-    const manifest = await readAssetManifest(realPath, operation);
+    const manifest = await readAssetManifest(realPath, signal);
     if (manifest.generation !== path.basename(directory)) {
       return null;
     }
     for (const asset of manifest.assets) {
-      throwIfCancelled(operation);
-      const assetPath = path.join(realPath, asset.path);
-      const assetStats = await fs.lstat(assetPath);
-      throwIfCancelled(operation);
-      if (
-        assetStats.isSymbolicLink() ||
-        !assetStats.isFile() ||
-        assetStats.size !== asset.size ||
-        createHash("sha256")
-          .update(await fs.readFile(assetPath, { signal: operation?.signal }))
-          .digest("hex") !== asset.sha256
-      ) {
-        return null;
-      }
+      await verifyAsset({
+        entry: asset,
+        signal,
+        root: realPath,
+        rootRealPath: realPath,
+      });
     }
     const currentStats = await fs.lstat(directory);
-    throwIfCancelled(operation);
+    signal?.throwIfAborted();
     if (!sameDirectory(stats, currentStats)) {
       return null;
     }
@@ -105,7 +89,7 @@ async function readCachedGeneration(
       realPath,
     };
   } catch {
-    throwIfCancelled(operation);
+    signal?.throwIfAborted();
     return null;
   }
 }
@@ -127,7 +111,7 @@ function compareGenerations(left: RetainedGeneration, right: RetainedGeneration)
 
 async function readCacheInventory(
   cacheDir: string,
-  operation?: RetentionOperation,
+  signal?: AbortSignal,
   verified: RetainedGeneration[] = [],
 ) {
   const generations: RetainedGeneration[] = [];
@@ -135,16 +119,16 @@ async function readCacheInventory(
   let cacheRealPath: string;
   let entries: Dirent[];
   try {
-    throwIfCancelled(operation);
+    signal?.throwIfAborted();
     cacheRealPath = await fs.realpath(cacheDir);
     entries = await fs.readdir(cacheRealPath, { withFileTypes: true });
   } catch {
-    throwIfCancelled(operation);
+    signal?.throwIfAborted();
     return { generations, directories };
   }
   const known = new Map(verified.map((generation) => [generation.generation, generation]));
   for (const entry of entries) {
-    throwIfCancelled(operation);
+    signal?.throwIfAborted();
     if (!entry.isDirectory() || entry.isSymbolicLink()) {
       continue;
     }
@@ -163,43 +147,44 @@ async function readCacheInventory(
     const generation =
       previous && sameDirectory(previous.stats, stats)
         ? { ...previous, stats }
-        : await readCachedGeneration(directory, operation);
+        : await readCachedGeneration(directory, signal);
     if (generation) {
       generations.push(generation);
     }
   }
-  throwIfCancelled(operation);
+  signal?.throwIfAborted();
   return { generations: generations.toSorted(compareGenerations), directories };
 }
 
 async function readAssetManifest(
   root: string,
-  operation?: RetentionOperation,
+  signal?: AbortSignal,
 ): Promise<ControlUiAssetManifest> {
   const manifestPath = path.join(root, CONTROL_UI_ASSET_MANIFEST_FILENAME);
-  throwIfCancelled(operation);
+  signal?.throwIfAborted();
   const stats = await fs.lstat(manifestPath);
-  throwIfCancelled(operation);
+  signal?.throwIfAborted();
   if (stats.isSymbolicLink() || !stats.isFile() || stats.size > CONTROL_UI_MANIFEST_MAX_BYTES) {
     throw new Error(`Invalid Control UI asset manifest: ${manifestPath}`);
   }
   const manifest = parseControlUiAssetManifest(
-    JSON.parse(await fs.readFile(manifestPath, { encoding: "utf8", signal: operation?.signal })),
+    JSON.parse(await fs.readFile(manifestPath, { encoding: "utf8", signal })),
   );
-  throwIfCancelled(operation);
+  signal?.throwIfAborted();
   if (!manifest) {
     throw new Error(`Invalid Control UI asset manifest: ${manifestPath}`);
   }
   return manifest;
 }
 
-async function readVerifiedAsset(params: {
+async function verifyAsset(params: {
+  destination?: string;
   entry: ControlUiAssetManifestEntry;
-  operation?: RetentionOperation;
+  signal?: AbortSignal;
   root: string;
   rootRealPath: string;
-}): Promise<Buffer> {
-  throwIfCancelled(params.operation);
+}): Promise<void> {
+  params.signal?.throwIfAborted();
   const sourcePath = path.resolve(params.root, params.entry.path);
   if (!isWithinDir(params.root, sourcePath)) {
     throw new Error(`Unsafe Control UI asset path: ${params.entry.path}`);
@@ -212,28 +197,53 @@ async function readVerifiedAsset(params: {
   if (initialStats.isSymbolicLink() || !initialStats.isFile()) {
     throw new Error(`Unsafe Control UI asset: ${params.entry.path}`);
   }
-  const handle = await fs.open(sourcePath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+  const source = await fs.open(sourcePath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+  let destination: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
-    const openedStats = await handle.stat();
-    const contents = await handle.readFile({ signal: params.operation?.signal });
+    if (params.destination) {
+      destination = await fs.open(
+        params.destination,
+        fsConstants.O_WRONLY |
+          fsConstants.O_CREAT |
+          fsConstants.O_EXCL |
+          (fsConstants.O_NOFOLLOW ?? 0),
+        0o600,
+      );
+    }
+    const options = { maxBytes: params.entry.size, signal: params.signal };
+    let bytes: number;
+    let digest: string;
+    if (destination) {
+      const hash = createHash("sha256");
+      bytes = await copyFileHandle(source, destination, {
+        ...options,
+        onChunk: (chunk) => {
+          hash.update(chunk);
+        },
+      });
+      digest = hash.digest("hex");
+    } else {
+      ({ bytes, digest } = await sha256File(source, options));
+    }
+    const openedStats = await source.stat();
     const currentStats = await fs.lstat(sourcePath);
     const currentRealPath = await fs.realpath(sourcePath);
     if (
       !openedStats.isFile() ||
+      openedStats.size !== params.entry.size ||
       currentStats.isSymbolicLink() ||
       !currentStats.isFile() ||
       currentRealPath !== expectedRealPath ||
       currentStats.dev !== openedStats.dev ||
       currentStats.ino !== openedStats.ino ||
-      contents.byteLength !== params.entry.size ||
-      createHash("sha256").update(contents).digest("hex") !== params.entry.sha256
+      bytes !== params.entry.size ||
+      digest !== params.entry.sha256
     ) {
       throw new Error(`Control UI asset changed while being retained: ${params.entry.path}`);
     }
-    throwIfCancelled(params.operation);
-    return contents;
+    params.signal?.throwIfAborted();
   } finally {
-    await handle.close();
+    await Promise.allSettled([source.close(), destination?.close()]);
   }
 }
 
@@ -241,7 +251,7 @@ async function publishGeneration(params: {
   cacheDir: string;
   manifest: ControlUiAssetManifest;
   verified?: RetainedGeneration;
-  operation?: RetentionOperation;
+  signal?: AbortSignal;
   root: string;
 }): Promise<RetainedGeneration> {
   const target = path.join(await fs.realpath(params.cacheDir), params.manifest.generation);
@@ -256,58 +266,60 @@ async function publishGeneration(params: {
     stats &&
     (params.verified && sameDirectory(params.verified.stats, stats)
       ? params.verified
-      : await readCachedGeneration(target, params.operation));
+      : await readCachedGeneration(target, params.signal));
   if (verified) {
-    throwIfCancelled(params.operation);
+    params.signal?.throwIfAborted();
     await fs.utimes(target, new Date(), new Date());
     return verified;
   }
 
   const staging = path.join(params.cacheDir, `.staging-${process.pid}-${randomUUID()}`);
-  throwIfCancelled(params.operation);
+  params.signal?.throwIfAborted();
   await fs.mkdir(staging, { recursive: false, mode: 0o700 });
   try {
     const rootRealPath = await fs.realpath(params.root);
+    let preparedDirectory: string | undefined;
     for (const entry of params.manifest.assets) {
-      throwIfCancelled(params.operation);
-      const contents = await readVerifiedAsset({
+      params.signal?.throwIfAborted();
+      const destination = path.join(staging, entry.path);
+      const directory = path.dirname(destination);
+      // This preparer owns staging; adjacent assets can reuse its last created directory.
+      if (directory !== preparedDirectory) {
+        await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+        preparedDirectory = directory;
+      }
+      await verifyAsset({
+        destination,
         entry,
-        operation: params.operation,
+        signal: params.signal,
         root: params.root,
         rootRealPath,
       });
-      const destination = path.join(staging, entry.path);
-      throwIfCancelled(params.operation);
-      await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
-      throwIfCancelled(params.operation);
-      await fs.writeFile(destination, contents, {
-        mode: 0o600,
-        signal: params.operation?.signal,
-      });
     }
-    throwIfCancelled(params.operation);
+    params.signal?.throwIfAborted();
     await fs.writeFile(
       path.join(staging, CONTROL_UI_ASSET_MANIFEST_FILENAME),
       `${JSON.stringify(params.manifest)}\n`,
-      { mode: 0o600, signal: params.operation?.signal },
+      { mode: 0o600, signal: params.signal },
     );
-    throwIfCancelled(params.operation);
+    params.signal?.throwIfAborted();
     let collision: NodeJS.ErrnoException | undefined;
     try {
       await fs.rename(staging, target);
     } catch (error) {
-      // Node forwards native rename errno; nonempty directory collisions are
-      // ENOTEMPTY on macOS and may be EEXIST on other filesystems.
-      if (!isErrno(error) || (error.code !== "EEXIST" && error.code !== "ENOTEMPTY")) {
+      // Windows reports EPERM for a nonempty destination; verify the winner below.
+      const collisionCodes =
+        process.platform === "win32" ? ["EEXIST", "ENOTEMPTY", "EPERM"] : ["EEXIST", "ENOTEMPTY"];
+      if (!isErrno(error) || !collisionCodes.includes(error.code ?? "")) {
         throw error;
       }
       collision = error;
     }
-    const published = await readCachedGeneration(target, params.operation);
+    const published = await readCachedGeneration(target, params.signal);
     if (!published) {
       throw collision ?? new Error(`Invalid retained Control UI generation: ${target}`);
     }
-    throwIfCancelled(params.operation);
+    params.signal?.throwIfAborted();
     await fs.utimes(target, new Date(), new Date());
     return published;
   } finally {
@@ -320,9 +332,9 @@ async function pruneRetainedGenerations(params: {
   currentGeneration?: string;
   verified: RetainedGeneration[];
   now: number;
-  operation?: RetentionOperation;
+  signal?: AbortSignal;
 }): Promise<RetainedGeneration[]> {
-  const inventory = await readCacheInventory(params.cacheDir, params.operation, params.verified);
+  const inventory = await readCacheInventory(params.cacheDir, params.signal, params.verified);
   const generations = inventory.generations.toSorted((left, right) => {
     if (left.generation === params.currentGeneration) {
       return -1;
@@ -345,7 +357,7 @@ async function pruneRetainedGenerations(params: {
   }
 
   for (const [target, stats] of inventory.directories) {
-    throwIfCancelled(params.operation);
+    params.signal?.throwIfAborted();
     const name = path.basename(target);
     const generation = CONTROL_UI_GENERATION_PATTERN.test(name);
     const staleStaging =
@@ -355,7 +367,7 @@ async function pruneRetainedGenerations(params: {
       continue;
     }
     const currentStats = await fs.lstat(target).catch(() => null);
-    throwIfCancelled(params.operation);
+    params.signal?.throwIfAborted();
     // Never remove a replacement or a generation refreshed by another preparer.
     // Publications after this inventory belong to a later pruning pass.
     if (
@@ -365,7 +377,43 @@ async function pruneRetainedGenerations(params: {
     ) {
       continue;
     }
-    await fs.rm(target, { recursive: true, force: true });
+    // Claim into a fresh container: the victim's old mtime must not make our
+    // in-progress deletion eligible for another preparer's stale staging sweep.
+    const staging = path.join(params.cacheDir, `.staging-${process.pid}-${randomUUID()}`);
+    let owned = false;
+    let claimed = false;
+    try {
+      await fs.mkdir(staging, { mode: 0o700 });
+      owned = true;
+      params.signal?.throwIfAborted();
+      await fs.rename(target, path.join(staging, name));
+      claimed = true;
+      await fs.rm(staging, { recursive: true, force: true });
+      log.debug("Control UI asset pruning completed", { directory: target, outcome: "pruned" });
+    } catch (error) {
+      params.signal?.throwIfAborted();
+      const gone =
+        !claimed &&
+        (await fs.lstat(target).then(
+          () => false,
+          (cause: unknown) => isErrno(cause) && cause.code === "ENOENT",
+        ));
+      log[gone ? "debug" : "warn"]("Control UI asset pruning outcome", {
+        directory: target,
+        outcome: gone ? "already-pruned" : "deferred",
+        error: String(error),
+      });
+    } finally {
+      if (owned && !claimed) {
+        await fs.rm(staging, { recursive: true, force: true }).catch((error: unknown) => {
+          log.warn("Control UI asset pruning cleanup deferred", {
+            directory: staging,
+            outcome: "deferred",
+            error: String(error),
+          });
+        });
+      }
+    }
   }
   const survivors: RetainedGeneration[] = [];
   for (const generation of inventory.generations) {
@@ -373,7 +421,7 @@ async function pruneRetainedGenerations(params: {
       continue;
     }
     const stats = await fs.lstat(generation.directory).catch(() => null);
-    throwIfCancelled(params.operation);
+    params.signal?.throwIfAborted();
     if (stats && sameDirectory(generation.stats, stats)) {
       survivors.push({ ...generation, stats });
     }
@@ -387,22 +435,22 @@ export function createControlUiAssetRetention(root: string): ControlUiAssetReten
   let preparing: Promise<void> | undefined;
 
   return {
-    prepare(operation) {
+    prepare({ signal } = {}) {
       preparing ??= (async () => {
-        throwIfCancelled(operation);
+        signal?.throwIfAborted();
         await fs.mkdir(cacheDir, { recursive: true, mode: 0o700 });
         await fs.chmod(cacheDir, 0o700);
-        const inventory = await readCacheInventory(cacheDir, operation);
-        throwIfCancelled(operation);
+        const inventory = await readCacheInventory(cacheDir, signal);
+        signal?.throwIfAborted();
         generations = inventory.generations;
         const verified = [...generations];
-        const manifest = await readAssetManifest(root, operation);
+        const manifest = await readAssetManifest(root, signal);
         const manifestBytes = manifest.assets.reduce((total, asset) => total + asset.size, 0);
         if (manifestBytes <= CONTROL_UI_RETAINED_ASSET_MAX_BYTES) {
           const published = await publishGeneration({
             cacheDir,
             manifest,
-            operation,
+            signal,
             root,
             verified: verified.find((entry) => entry.generation === manifest.generation),
           });
@@ -414,9 +462,9 @@ export function createControlUiAssetRetention(root: string): ControlUiAssetReten
           currentGeneration:
             manifestBytes <= CONTROL_UI_RETAINED_ASSET_MAX_BYTES ? manifest.generation : undefined,
           now: Date.now(),
-          operation,
+          signal,
         });
-        throwIfCancelled(operation);
+        signal?.throwIfAborted();
         generations = survivors;
       })().catch((error: unknown) => {
         preparing = undefined;

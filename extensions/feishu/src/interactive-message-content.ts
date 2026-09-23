@@ -1,5 +1,5 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { parsePostContent } from "./post.js";
+import { renderPostContent } from "./post.js";
 
 const INTERACTIVE_CARD_FALLBACK_TEXT = "[Interactive Card]";
 const POST_FALLBACK_TEXT = "[Rich text message]";
@@ -236,7 +236,7 @@ export function parseInteractiveCardContent(parsed: unknown): string {
     }
   }
 
-  const postText = parsePostContent(JSON.stringify(parsed)).textContent.trim();
+  const postText = renderPostContent(parsed).textContent.trim();
   if (postText && postText !== POST_FALLBACK_TEXT) {
     return postText;
   }

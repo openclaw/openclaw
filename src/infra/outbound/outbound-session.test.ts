@@ -53,7 +53,111 @@ vi.mock("../../config/sessions/session-accessor.js", () => ({
   loadSessionEntryReadOnly: mocks.loadSessionEntryReadOnly,
 }));
 
+const imessageRoutePlugin = {
+  ...createChannelTestPluginBase({ id: "imessage" }),
+  messaging: {
+    resolveOutboundSessionRoute: () => ({
+      sessionKey: "agent:main:imessage:direct:Alice",
+      baseSessionKey: "agent:main:imessage:direct:Alice",
+      peer: { kind: "direct" as const, id: "Alice" },
+      chatType: "direct" as const,
+      from: "imessage:Alice",
+      to: "imessage:Alice",
+    }),
+  },
+} satisfies ChannelPlugin;
+
+const telegramRoutePlugin = {
+  ...createChannelTestPluginBase({ id: "telegram" }),
+  messaging: {
+    resolveOutboundSessionRoute: () => ({
+      sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
+      baseSessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
+      peer: { kind: "group" as const, id: "-1001234567890:topic:42" },
+      chatType: "group" as const,
+      from: "telegram:group:-1001234567890:topic:42",
+      to: "telegram:-1001234567890:topic:42",
+    }),
+  },
+} satisfies ChannelPlugin;
+
 describe("resolveOutboundSessionRoute", () => {
+  it("carries a resolved directory display name into the session route", async () => {
+    const route = await resolveOutboundSessionRoute({
+      cfg: perChannelPeerSessionCfg,
+      channel: "guildchat",
+      agentId: "main",
+      target: "user-42",
+      resolvedTarget: {
+        to: "user-42",
+        kind: "user",
+        display: "Alice",
+        source: "directory",
+        resolutionSource: "directory",
+      },
+    });
+
+    expect(route?.displayName).toBe("Alice");
+  });
+
+  it("keeps directory identifier fallbacks out of durable session names", async () => {
+    const roomId = "8f560ffb-37e2-4078-a6c4-83e4d72e94b3";
+    const route = await resolveOutboundSessionRoute({
+      cfg: perChannelPeerSessionCfg,
+      channel: "telegram",
+      plugin: telegramRoutePlugin,
+      agentId: "main",
+      target: `group:${roomId}`,
+      resolvedTarget: {
+        to: `group:${roomId}`,
+        kind: "group",
+        display: roomId,
+        source: "directory",
+        resolutionSource: "directory",
+      },
+    });
+
+    expect(route?.displayName).toBeUndefined();
+  });
+
+  it("carries an iMessage plugin contact alias into the session route", async () => {
+    const route = await resolveOutboundSessionRoute({
+      cfg: perChannelPeerSessionCfg,
+      channel: "imessage",
+      plugin: imessageRoutePlugin,
+      agentId: "main",
+      target: "imessage:Alice",
+      resolvedTarget: {
+        to: "imessage:Alice",
+        kind: "user",
+        display: "Alice",
+        source: "normalized",
+        resolutionSource: "plugin",
+      },
+    });
+
+    expect(route?.displayName).toBe("Alice");
+  });
+
+  it("keeps normalized route displays out of durable session names", async () => {
+    const route = await resolveOutboundSessionRoute({
+      cfg: perChannelPeerSessionCfg,
+      channel: "telegram",
+      plugin: telegramRoutePlugin,
+      agentId: "main",
+      target: "-1001234567890:topic:42",
+      resolvedTarget: {
+        to: "telegram:-1001234567890:topic:42",
+        kind: "group",
+        display: "telegram:-1001234567890:topic:42",
+        source: "normalized",
+        resolutionSource: "normalized",
+      },
+    });
+
+    expect(route?.displayName).toBeUndefined();
+  });
+
   beforeEach(() => {
     mocks.updateSessionLastRoute.mockClear();
     mocks.resolveStorePath.mockClear();
@@ -664,6 +768,56 @@ describe("ensureOutboundSessionEntry", () => {
       NativeChannelId: "c1",
       OriginatingTo: "channel:C1",
     });
+  });
+
+  it("persists a resolved target display name as presentation metadata", async () => {
+    await ensureOutboundSessionEntry({
+      cfg: {} as OpenClawConfig,
+      channel: "imessage",
+      route: {
+        sessionKey: "agent:main:imessage:direct:+15551234567",
+        baseSessionKey: "agent:main:imessage:direct:+15551234567",
+        peer: { kind: "direct", id: "+15551234567" },
+        chatType: "direct",
+        from: "auto:+15551234567",
+        to: "auto:+15551234567",
+        displayName: "Alice",
+      },
+    });
+
+    const metadata = firstMockArg(mocks.updateSessionLastRoute, "updateSessionLastRoute");
+    expect(metadata.ctx).toMatchObject({ ConversationLabel: "Alice" });
+  });
+
+  it("does not persist an identifier-only target as a group title", async () => {
+    const route = await resolveOutboundSessionRoute({
+      cfg: { session: { groupScope: "per-group" } } as OpenClawConfig,
+      channel: "telegram",
+      plugin: telegramRoutePlugin,
+      agentId: "main",
+      target: "-1001234567890:topic:42",
+      resolvedTarget: {
+        to: "telegram:-1001234567890:topic:42",
+        kind: "group",
+        display: "telegram:-1001234567890:topic:42",
+        source: "normalized",
+        resolutionSource: "normalized",
+      },
+    });
+    expect(route).toBeDefined();
+    if (!route) {
+      return;
+    }
+    expect(route.displayName).toBeUndefined();
+
+    await ensureOutboundSessionEntry({
+      cfg: {} as OpenClawConfig,
+      channel: "telegram",
+      route,
+    });
+
+    const metadata = firstMockArg(mocks.updateSessionLastRoute, "updateSessionLastRoute");
+    expect((metadata.ctx as Record<string, unknown>).GroupSubject).toBeUndefined();
   });
 
   it("persists the canonical direct peer separately from its adapter target", async () => {

@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
+import {
+  getRuntimeAuthProfileStoreCredentialsRevision,
+  getRuntimeAuthProfileStoreSnapshotsRevision,
+} from "../agents/auth-profiles/runtime-snapshots.js";
 import { createEmptyRuntimeWebToolsMetadata } from "../secrets/runtime-fast-path.js";
 import {
   activateSecretsRuntimeSnapshot,
@@ -7,23 +10,15 @@ import {
   getActiveSecretsRuntimeSnapshotRevision,
 } from "../secrets/runtime.js";
 import {
-  captureSharedGatewaySessionGenerationOwnership,
-  claimSharedGatewaySessionGenerationIfOwned,
   enforceSharedGatewaySessionGenerationForConfigWrite,
-  finalizeOwnedSharedGatewaySessionGeneration,
-  setRequiredSharedGatewaySessionGenerationIfOwned,
-  type SharedGatewaySessionGenerationState,
+  SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
 
 function claimGeneration(
   state: SharedGatewaySessionGenerationState,
   generation: string | undefined,
 ) {
-  const ownership = claimSharedGatewaySessionGenerationIfOwned(
-    state,
-    captureSharedGatewaySessionGenerationOwnership(state),
-    generation,
-  );
+  const ownership = state.claim(state.capture(), generation);
   if (!ownership) {
     throw new Error("expected generation ownership claim");
   }
@@ -36,16 +31,17 @@ describe("shared gateway generation publication", () => {
   });
 
   it("normalizes a matching required marker after a same-generation refresh", () => {
-    const state: SharedGatewaySessionGenerationState = {
+    const state = new SharedGatewaySessionGenerationState({
       current: "generation-a",
       required: "generation-a",
-    };
+    });
     const ownership = claimGeneration(state, "generation-a");
     const snapshot = {
       sourceConfig: {},
       config: {},
       authStores: [],
       authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+      authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
       warnings: [],
       webTools: createEmptyRuntimeWebToolsMetadata(),
     };
@@ -55,15 +51,18 @@ describe("shared gateway generation publication", () => {
 
     expect(getActiveSecretsRuntimeSnapshotRevision()).toBeGreaterThan(publishedRevision);
 
-    expect(finalizeOwnedSharedGatewaySessionGeneration(state, ownership)).toBe(true);
-    expect(state).toEqual({ current: "generation-a", required: null });
+    expect(state.finalize(ownership)).toBe(true);
+    expect({ current: state.current, required: state.required }).toEqual({
+      current: "generation-a",
+      required: null,
+    });
   });
 
   it("does not clear a same-generation required marker owned by a newer config write", () => {
-    const state: SharedGatewaySessionGenerationState = {
+    const state = new SharedGatewaySessionGenerationState({
       current: "generation-a",
       required: "generation-a",
-    };
+    });
     const ownership = claimGeneration(state, "generation-a");
     enforceSharedGatewaySessionGenerationForConfigWrite({
       state,
@@ -72,26 +71,32 @@ describe("shared gateway generation publication", () => {
       clients: [],
     });
 
-    expect(finalizeOwnedSharedGatewaySessionGeneration(state, ownership)).toBe(false);
-    expect(state).toEqual({ current: "generation-a", required: "generation-a" });
+    expect(state.finalize(ownership)).toBe(false);
+    expect({ current: state.current, required: state.required }).toEqual({
+      current: "generation-a",
+      required: "generation-a",
+    });
   });
 
   it("clears the previous required generation after a credential rotation commits", () => {
-    const state: SharedGatewaySessionGenerationState = {
+    const state = new SharedGatewaySessionGenerationState({
       current: "generation-a",
       required: "generation-a",
-    };
+    });
     const ownership = claimGeneration(state, "generation-b");
 
-    expect(finalizeOwnedSharedGatewaySessionGeneration(state, ownership)).toBe(true);
-    expect(state).toEqual({ current: "generation-b", required: null });
+    expect(state.finalize(ownership)).toBe(true);
+    expect({ current: state.current, required: state.required }).toEqual({
+      current: "generation-b",
+      required: null,
+    });
   });
 
   it("does not overwrite a newer published generation", () => {
-    const state: SharedGatewaySessionGenerationState = {
+    const state = new SharedGatewaySessionGenerationState({
       current: "generation-a",
       required: "generation-a",
-    };
+    });
     const ownership = claimGeneration(state, "generation-a");
     enforceSharedGatewaySessionGenerationForConfigWrite({
       state,
@@ -100,16 +105,19 @@ describe("shared gateway generation publication", () => {
       clients: [],
     });
 
-    expect(finalizeOwnedSharedGatewaySessionGeneration(state, ownership)).toBe(false);
-    expect(state).toEqual({ current: "generation-b", required: "generation-b" });
+    expect(state.finalize(ownership)).toBe(false);
+    expect({ current: state.current, required: state.required }).toEqual({
+      current: "generation-b",
+      required: "generation-b",
+    });
   });
 
   it("rejects a stale restart marker after a newer config write", () => {
-    const state: SharedGatewaySessionGenerationState = {
+    const state = new SharedGatewaySessionGenerationState({
       current: "generation-a",
       required: null,
-    };
-    const restartOwnership = captureSharedGatewaySessionGenerationOwnership(state);
+    });
+    const restartOwnership = state.capture();
     enforceSharedGatewaySessionGenerationForConfigWrite({
       state,
       nextConfig: { gateway: { reload: { mode: "off" } } },
@@ -117,9 +125,10 @@ describe("shared gateway generation publication", () => {
       clients: [],
     });
 
-    expect(
-      setRequiredSharedGatewaySessionGenerationIfOwned(state, restartOwnership, "generation-a"),
-    ).toBeNull();
-    expect(state).toEqual({ current: "generation-b", required: "generation-b" });
+    expect(state.setRequired(restartOwnership, "generation-a")).toBeNull();
+    expect({ current: state.current, required: state.required }).toEqual({
+      current: "generation-b",
+      required: "generation-b",
+    });
   });
 });

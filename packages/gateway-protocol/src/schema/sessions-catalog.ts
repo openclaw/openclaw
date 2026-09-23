@@ -26,6 +26,7 @@ export const SessionCatalogCapabilitiesSchema = closedObject({
     }),
   ),
   openTerminal: Type.Optional(Type.Boolean()),
+  startTerminal: Type.Optional(Type.Boolean()),
 });
 
 export const SessionCatalogShareRouteSchema = closedObject({
@@ -89,7 +90,10 @@ export const SessionCatalogHostSchema = closedObject({
   label: NonEmptyString,
   kind: Type.Union([Type.Literal("gateway"), Type.Literal("node")]),
   connected: Type.Boolean(),
+  /** First snapshot is still loading; retain prior rows until the host publication arrives. */
+  pending: Type.Optional(Type.Boolean()),
   nodeId: Type.Optional(NonEmptyString),
+  canStartTerminal: Type.Optional(Type.Boolean()),
   sessions: Type.Array(SessionCatalogSessionSchema),
   nextCursor: Type.Optional(Type.String()),
   error: Type.Optional(SessionCatalogErrorSchema),
@@ -107,6 +111,8 @@ export const SessionCatalogSchema = closedObject({
 const SessionsCatalogListCommonProperties = {
   agentId: Type.Optional(NonEmptyString),
   progressId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+  /** Opt into pending hosts completed by incremental publications for this progressId. */
+  allowPartialResults: Type.Optional(Type.Boolean()),
   search: Type.Optional(Type.String()),
   limitPerHost: Type.Optional(Type.Integer({ minimum: 1 })),
   hostIds: Type.Optional(Type.Array(NonEmptyString)),
@@ -114,6 +120,8 @@ const SessionsCatalogListCommonProperties = {
 
 export const SessionsCatalogListParamsSchema = closedObject({
   catalogId: Type.Optional(NonEmptyString),
+  /** Return catalog labels and capabilities with empty hosts, without listing sessions. */
+  metadataOnly: Type.Optional(Type.Boolean()),
   cursors: Type.Optional(Type.Record(NonEmptyString, Type.String())),
   ...SessionsCatalogListCommonProperties,
 });
@@ -181,8 +189,8 @@ export const SessionsCatalogStartTerminalParamsSchema = closedObject({
   catalogId: NonEmptyString,
   hostId: Type.Optional(NonEmptyString),
   agentId: NonEmptyString,
-  cwd: NonEmptyString,
-  initialMessage: Type.Optional(Type.String()),
+  cwd: Type.String({ minLength: 1, maxLength: 4096 }),
+  initialMessage: Type.Optional(Type.String({ maxLength: 16384 })),
 });
 
 // Mirrors terminal.open so callers can hand the new session to the same terminal UI.

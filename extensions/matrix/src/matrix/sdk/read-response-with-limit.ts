@@ -1,4 +1,3 @@
-// Matrix plugin module implements read response with limit behavior.
 import { readResponseWithLimit as readSharedResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 
 export async function readResponseWithLimit(

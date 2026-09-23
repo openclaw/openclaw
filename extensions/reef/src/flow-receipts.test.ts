@@ -3,12 +3,11 @@ import {
   canonicalBytes,
   composeOutbound,
   generateIdentity,
-  MemoryAuditStore,
-  MemoryReplayStore,
   sha256Hex,
   signReceipt,
   type AuditEntry,
 } from "../protocol/index.js";
+import { MemoryAuditStore, MemoryReplayStore } from "../protocol/memory-stores.test-support.js";
 import { ReefMessageFlow } from "./flow.js";
 import {
   allow,

@@ -15,6 +15,7 @@ extension OpenClawChatSQLiteTranscriptCache {
                     OpenClawChatMessageContent(
                         type: item.type,
                         text: item.text,
+                        textSignature: item.textSignature,
                         thinking: item.thinking,
                         thinkingSignature: nil,
                         mimeType: item.mimeType,
@@ -36,6 +37,7 @@ extension OpenClawChatSQLiteTranscriptCache {
                 },
                 timestamp: message.timestamp,
                 transcriptMessageID: message.transcriptMessageID,
+                transcriptRunID: message.transcriptRunID,
                 isTruncated: message.isTruncated,
                 idempotencyKey: message.idempotencyKey,
                 toolCallId: message.toolCallId,
@@ -46,7 +48,11 @@ extension OpenClawChatSQLiteTranscriptCache {
                 details: self.cacheableDetails(message.details),
                 isError: message.isError,
                 provenance: message.provenance,
-                historyMarker: message.historyMarker)
+                historyMarker: message.historyMarker,
+                phase: message.phase,
+                turnBoundary: message.turnBoundary,
+                steerTargetRunID: message.steerTargetRunID,
+                streamFallback: message.streamFallback)
         }
     }
 

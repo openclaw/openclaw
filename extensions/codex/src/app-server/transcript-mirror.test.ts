@@ -1,8 +1,6 @@
 // Codex tests cover transcript mirror plugin behavior.
-import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
   embeddedAgentLog,
@@ -15,7 +13,6 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   castAgentMessage,
@@ -23,9 +20,16 @@ import {
   makeAgentUserMessage,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CodexAppServerEventProjector } from "./event-projector.js";
+import {
+  buildEmptyToolTelemetry,
+  createParams as createProjectorParams,
+  forCurrentTurn,
+  registerCodexEventProjectorTestLifecycle,
+  turnCompleted,
+} from "./event-projector.test-harness.js";
 import type { CodexThread } from "./protocol.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
-import { projectBoundedCodexVisibleSessionHistory } from "./transcript-history-projection.js";
 import { attachCodexMirrorRunId } from "./transcript-mirror-attestation.js";
 import {
   buildCodexUserPromptMessage,
@@ -34,11 +38,15 @@ import {
   mirrorPromptAtTurnStartBestEffort,
   projectBoundedCodexThreadHistory,
 } from "./transcript-mirror.js";
+import {
+  createTranscriptMirrorTestHarness,
+  readMirrorMessages,
+  readMirrorRaw,
+} from "./transcript-mirror.test-harness.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
 
 const mirrorCodexAppServerTranscript = codexTranscriptMirrorRuntime.mirror;
 const mirrorTranscriptBestEffort = codexTranscriptMirrorRuntime.mirrorBestEffort;
-const deliverAsyncMessageBestEffort = codexTranscriptMirrorRuntime.deliverAsyncMessageBestEffort;
 
 const publishSessionTranscriptUpdateByIdentityMock = vi.hoisted(() => vi.fn());
 
@@ -67,21 +75,12 @@ function messageContent(message: AgentMessage | undefined) {
   return message.content;
 }
 
-const tempDirs: string[] = [];
+const { makeRoot, createSqliteMirrorTarget } = createTranscriptMirrorTestHarness();
 
-afterEach(async () => {
+afterEach(() => {
   resetGlobalHookRunner();
   publishSessionTranscriptUpdateByIdentityMock.mockReset();
-  for (const dir of tempDirs.splice(0)) {
-    await fs.rm(dir, { recursive: true, force: true });
-  }
 });
-
-async function makeRoot(prefix: string): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  tempDirs.push(root);
-  return root;
-}
 
 describe("buildCodexUserPromptMessage", () => {
   it("uses transcriptPrompt when an embedded caller does not provide a recorder", () => {
@@ -130,78 +129,6 @@ describe("buildCodexUserPromptMessage", () => {
     });
   });
 });
-
-function readEventMessages(events: unknown[]): Array<{ role?: string; text?: string }> {
-  return events
-    .map((event) =>
-      event && typeof event === "object" ? (event as { message?: unknown }).message : undefined,
-    )
-    .filter((message): message is { role?: string; content?: unknown } =>
-      Boolean(message && typeof message === "object"),
-    )
-    .map((message) => {
-      const content = Array.isArray(message.content)
-        ? message.content.find((part): part is { text: string } =>
-            Boolean(part && typeof part === "object" && typeof part.text === "string"),
-          )?.text
-        : typeof message.content === "string"
-          ? message.content
-          : undefined;
-      return { role: message.role, text: content };
-    });
-}
-
-async function createSqliteMirrorTarget(prefix: string, options: { sessionId?: string } = {}) {
-  const root = await makeRoot(prefix);
-  const agentId = "main";
-  const sessionId = options.sessionId ?? "session-1";
-  const sessionKey = `agent:${agentId}:${sessionId}`;
-  const storePath = path.join(root, "openclaw-agent.sqlite");
-  await upsertSessionEntry({
-    agentId,
-    sessionKey,
-    storePath,
-    entry: {
-      sessionFile: `sqlite:${agentId}:${sessionId}:${storePath}`,
-      sessionId,
-      updatedAt: 1,
-    },
-  });
-  return {
-    agentId,
-    sessionId,
-    sessionKey,
-    storePath,
-    bogusSessionFile: path.join(root, "should-not-be-created.jsonl"),
-  };
-}
-
-async function readMirrorEvents(target: {
-  agentId: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-}): Promise<unknown[]> {
-  return await readSessionTranscriptEvents(target);
-}
-
-async function readMirrorRaw(target: {
-  agentId: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-}): Promise<string> {
-  return (await readMirrorEvents(target)).map((event) => JSON.stringify(event)).join("\n");
-}
-
-async function readMirrorMessages(target: {
-  agentId: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-}): Promise<Array<{ role?: string; text?: string }>> {
-  return readEventMessages(await readMirrorEvents(target));
-}
 
 describe("importCodexThreadHistoryToTranscript", () => {
   it.each([
@@ -401,7 +328,7 @@ describe("importCodexThreadHistoryToTranscript", () => {
       }),
     ).resolves.toEqual({ importedMessages: 2, omittedMessages: 0 });
 
-    const events = await readMirrorEvents(target);
+    const events = await readSessionTranscriptEvents(target);
     const raw = events.map((event) => JSON.stringify(event)).join("\n");
     const messages = (events as Array<{ message?: AgentMessage; type?: string }>)
       .filter((event) => event.type === "message")
@@ -486,7 +413,7 @@ describe("importCodexThreadHistoryToTranscript", () => {
       omittedMessages: 5,
     });
 
-    const events = await readMirrorEvents(target);
+    const events = await readSessionTranscriptEvents(target);
     const messages = (events as Array<{ message?: AgentMessage; type?: string }>)
       .filter((event) => event.type === "message")
       .map((event) => event.message);
@@ -554,318 +481,6 @@ describe("importCodexThreadHistoryToTranscript", () => {
   });
 });
 
-describe("projectBoundedCodexThreadHistory", () => {
-  const thread = {
-    id: "thread-prefix",
-    createdAt: 1_700_000_000,
-    turns: [
-      {
-        id: "turn-a",
-        status: "completed",
-        startedAt: 1_700_000_001,
-        completedAt: 1_700_000_002,
-        items: [
-          {
-            id: "user-a",
-            type: "userMessage",
-            content: [{ type: "text", text: "First question" }],
-          },
-          {
-            id: "assistant-a",
-            type: "agentMessage",
-            text: "First answer",
-            phase: "commentary",
-          },
-        ],
-      },
-      {
-        id: "turn-b",
-        status: "completed",
-        startedAt: 1_700_000_003,
-        completedAt: 1_700_000_004,
-        items: [
-          {
-            id: "user-b",
-            type: "userMessage",
-            content: [{ type: "text", text: "Second question" }],
-          },
-          {
-            id: "assistant-b",
-            type: "agentMessage",
-            text: "Second answer",
-            phase: "final_answer",
-          },
-        ],
-      },
-      {
-        id: "turn-active",
-        status: "inProgress",
-        items: [
-          {
-            id: "active-secret",
-            type: "agentMessage",
-            text: "Do not import the active tail",
-          },
-        ],
-      },
-      {
-        id: "turn-failed",
-        status: "failed",
-        items: [
-          {
-            id: "failed-secret",
-            type: "agentMessage",
-            text: "Do not import the failed tail",
-          },
-        ],
-      },
-    ],
-  } as unknown as CodexThread;
-
-  it("uses one inclusive completed-turn prefix for transcript and Responses API projection", () => {
-    const projection = projectBoundedCodexThreadHistory({
-      thread,
-      throughTurnId: "turn-b",
-      importedAt: 1_800_000_000_000,
-      modelProvider: "native-provider",
-    });
-
-    expect(projection).toMatchObject({ importedMessages: 4, omittedMessages: 0 });
-    expect(projection.transcriptMessages.map(messageContent)).toEqual([
-      "First question",
-      [{ type: "text", text: "First answer" }],
-      "Second question",
-      [{ type: "text", text: "Second answer" }],
-    ]);
-    expect(projection.transcriptMessages[1]).toMatchObject({
-      role: "assistant",
-      api: "openai-chatgpt-responses",
-      provider: "native-provider",
-      model: "native-history",
-    });
-    expect(projection.responseItems).toEqual([
-      {
-        type: "message",
-        role: "user",
-        content: [{ type: "input_text", text: "First question" }],
-      },
-      {
-        type: "message",
-        role: "assistant",
-        content: [{ type: "output_text", text: "First answer" }],
-        phase: "commentary",
-      },
-      {
-        type: "message",
-        role: "user",
-        content: [{ type: "input_text", text: "Second question" }],
-      },
-      {
-        type: "message",
-        role: "assistant",
-        content: [{ type: "output_text", text: "Second answer" }],
-        phase: "final_answer",
-      },
-    ]);
-    expect(JSON.stringify(projection)).not.toContain("active tail");
-    expect(JSON.stringify(projection)).not.toContain("failed tail");
-  });
-
-  it("preserves imported async and commentary ownership while keeping async messages out of model history", () => {
-    const importedThread = {
-      ...thread,
-      turns: [
-        {
-          id: "turn-async-history",
-          status: "completed",
-          items: [
-            {
-              id: "user-async-history",
-              type: "userMessage",
-              content: [{ type: "text", text: "Investigate this" }],
-            },
-            {
-              id: "commentary-history",
-              type: "agentMessage",
-              text: "Checking the deployment.",
-              phase: "commentary",
-            },
-            {
-              id: "async-history",
-              type: "agentMessage",
-              text: "Which environment should I use?",
-              phase: "final_answer",
-              delivery: "async",
-            },
-            {
-              id: "final-history",
-              type: "agentMessage",
-              text: "Deployment complete.",
-              phase: "final_answer",
-            },
-          ],
-        },
-      ],
-    } as unknown as CodexThread;
-
-    const projection = projectBoundedCodexThreadHistory({
-      thread: importedThread,
-      throughTurnId: "turn-async-history",
-      importedAt: 1_800_000_000_000,
-    });
-
-    expect(projection.transcriptMessages).toHaveLength(4);
-    expect(projection.transcriptMessages[1]).toMatchObject({ phase: "commentary" });
-    expect(projection.transcriptMessages[2]).toMatchObject({
-      phase: "final_answer",
-      openclawAsyncDelivery: { itemId: "async-history" },
-    });
-    expect(JSON.stringify(projection.responseItems)).not.toContain(
-      "Which environment should I use?",
-    );
-    expect(projection.responseItems).toHaveLength(3);
-    const visibleSessionHistory = projectBoundedCodexVisibleSessionHistory(
-      projection.transcriptMessages.map((message, index) => ({
-        entryId: `entry-${index}`,
-        parentId: index === 0 ? null : `entry-${index - 1}`,
-        seq: index,
-        role: message.role,
-        message,
-      })),
-    );
-    expect(JSON.stringify(visibleSessionHistory)).not.toContain("Which environment should I use?");
-    expect(visibleSessionHistory).toHaveLength(3);
-  });
-
-  it("accepts terminal boundaries", () => {
-    for (const [status, stopReason] of [
-      ["completed", "stop"],
-      ["interrupted", "aborted"],
-      ["failed", "error"],
-    ] as const) {
-      const terminalThread = {
-        ...thread,
-        turns: [
-          ...(thread.turns?.slice(0, 2) ?? []),
-          {
-            id: `turn-${status}`,
-            status,
-            ...(status === "failed" ? { error: { message: "provider disconnected" } } : {}),
-            items: [
-              {
-                id: `user-${status}`,
-                type: "userMessage",
-                content: [{ type: "text", text: `${status} question` }],
-              },
-              {
-                id: `assistant-${status}`,
-                type: "agentMessage",
-                text: `${status} answer`,
-              },
-            ],
-          },
-        ],
-      } as unknown as CodexThread;
-      const projection = projectBoundedCodexThreadHistory({
-        thread: terminalThread,
-        throughTurnId: `turn-${status}`,
-        importedAt: 1_800_000_000_000,
-      });
-      expect(messageContent(projection.transcriptMessages.at(-2))).toBe(`${status} question`);
-      const assistant = projection.transcriptMessages.at(-1);
-      expect(messageContent(assistant)).toEqual([{ type: "text", text: `${status} answer` }]);
-      expect(assistant).toMatchObject({ role: "assistant", stopReason });
-      expect(projection.responseItems).toHaveLength(status === "completed" ? 6 : 5);
-      expect(projection.responseItems.at(-1)).toEqual(
-        status === "completed"
-          ? {
-              type: "message",
-              role: "assistant",
-              content: [{ type: "output_text", text: "completed answer" }],
-            }
-          : {
-              type: "message",
-              role: "user",
-              content: [{ type: "input_text", text: `${status} question` }],
-            },
-      );
-      if (status === "failed") {
-        expect(assistant).toMatchObject({ errorMessage: "provider disconnected" });
-      } else {
-        expect(assistant).not.toHaveProperty("errorMessage");
-      }
-    }
-  });
-
-  it("enforces UTF-8 byte limits without splitting multibyte text", () => {
-    const oversizedText = `prefix-${"🙂".repeat(20_000)}-suffix`;
-    const oversizedThread = {
-      id: "thread-byte-bounds",
-      turns: Array.from({ length: 9 }, (_, index) => ({
-        id: `turn-${index}`,
-        status: "completed",
-        items: [
-          {
-            id: `user-${index}`,
-            type: "userMessage",
-            content: [{ type: "text", text: `${index}:${oversizedText}` }],
-          },
-        ],
-      })),
-    } as unknown as CodexThread;
-
-    const projection = projectBoundedCodexThreadHistory({
-      thread: oversizedThread,
-      throughTurnId: "turn-8",
-      importedAt: 1_800_000_000_000,
-    });
-    const texts = projection.transcriptMessages.map((message) => {
-      const content = messageContent(message);
-      return typeof content === "string" ? content : "";
-    });
-
-    expect(projection).toMatchObject({ importedMessages: 8, omittedMessages: 1 });
-    expect(texts[0]).toMatch(/^1:prefix-/u);
-    expect(texts.every((text) => Buffer.byteLength(text, "utf8") <= 64 * 1024)).toBe(true);
-    expect(
-      texts.reduce((bytes, text) => bytes + Buffer.byteLength(text, "utf8"), 0),
-    ).toBeLessThanOrEqual(512 * 1024);
-    expect(texts.every((text) => !text.includes("�"))).toBe(true);
-    expect(
-      texts.every((text) => text.endsWith("[Message truncated during Codex history import.]")),
-    ).toBe(true);
-  });
-
-  it("rejects a non-terminal or missing boundary and projects no history without one", () => {
-    expect(() =>
-      projectBoundedCodexThreadHistory({
-        thread,
-        throughTurnId: "turn-active",
-        importedAt: 1_800_000_000_000,
-      }),
-    ).toThrow("Codex history boundary turn is not terminal: turn-active");
-    expect(() =>
-      projectBoundedCodexThreadHistory({
-        thread,
-        throughTurnId: "turn-missing",
-        importedAt: 1_800_000_000_000,
-      }),
-    ).toThrow("Codex history boundary turn not found: turn-missing");
-    expect(
-      projectBoundedCodexThreadHistory({
-        thread,
-        throughTurnId: null,
-        importedAt: 1_800_000_000_000,
-      }),
-    ).toEqual({
-      importedMessages: 0,
-      omittedMessages: 0,
-      responseItems: [],
-      transcriptMessages: [],
-    });
-  });
-});
-
 describe("mirrorCodexAppServerTranscript", () => {
   it("clears terminal ownership when a mirrored message becomes non-terminal", () => {
     const message = makeAgentAssistantMessage({
@@ -888,7 +503,7 @@ describe("mirrorCodexAppServerTranscript", () => {
             const { display: _display, ...message } = (
               event as { message: Record<string, unknown> }
             ).message;
-            return { message: castAgentMessage(message) };
+            return { message: castAgentMessage({ ...message, display: true }) };
           },
         },
       ]),
@@ -947,7 +562,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       prepareAssistantTranscriptMessage,
     });
 
-    const persistedMessages = (await readMirrorEvents(target))
+    const persistedMessages = (await readSessionTranscriptEvents(target))
       .map((event) =>
         event && typeof event === "object" ? (event as { message?: unknown }).message : undefined,
       )
@@ -1030,10 +645,10 @@ describe("mirrorCodexAppServerTranscript", () => {
     expect(raw).toContain('"idempotencyKey":"client-run:user"');
     expect(raw).toContain('"mirrorOrigin":"codex-app-server"');
     expect(raw).not.toContain('"idempotencyKey":"codex-app-server:thread-1:');
-    expect(first.userMessagesPresent).toHaveLength(1);
-    expect(second.userMessagesPresent).toHaveLength(1);
     expect(first.userMessageReceipts).toHaveLength(1);
     expect(second.userMessageReceipts).toHaveLength(1);
+    expect(first.userMessageReceipts[0]?.appended).toBe(true);
+    expect(second.userMessageReceipts[0]?.appended).toBe(false);
     expect(second.userMessageReceipts[0]?.anchor.entryId).toBe(
       first.userMessageReceipts[0]?.anchor.entryId,
     );
@@ -1115,189 +730,18 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
     });
     expect(updates[0]?.update?.messageSeq).toBe(1);
-    expect(firstMirror.userMessagesPresent).toHaveLength(1);
-    expect(firstMirror.userMessagesPresent[0]).toMatchObject({
+    expect(firstMirror.userMessageReceipts).toHaveLength(1);
+    expect(firstMirror.userMessageReceipts[0]?.message).toMatchObject({
       role: "user",
       content: [{ type: "text", text: "show me live" }],
       idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
     });
-    expect(secondMirror.userMessagesPresent).toHaveLength(1);
-    expect(secondMirror.userMessagesPresent[0]).toMatchObject({
+    expect(secondMirror.userMessageReceipts).toHaveLength(1);
+    expect(secondMirror.userMessageReceipts[0]?.message).toMatchObject({
       role: "user",
       content: [{ type: "text", text: "show me live" }],
       idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
     });
-  });
-
-  it("delivers the persisted async rewrite once across reconnect replay", async () => {
-    const target = await createSqliteMirrorTarget("openclaw-codex-mirror-async-reconnect-");
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_message_write",
-          handler: () => ({
-            message: castAgentMessage({
-              ...makeAgentAssistantMessage({
-                content: [{ type: "text", text: "[redacted async update]" }],
-                timestamp: Date.now(),
-              }),
-              phase: "final_answer",
-            }),
-          }),
-        },
-      ]),
-    );
-    const message = castAgentMessage({
-      ...makeAgentAssistantMessage({
-        content: [{ type: "text", text: "Sensitive background update." }],
-        timestamp: Date.now(),
-      }),
-      phase: "final_answer",
-      openclawAsyncDelivery: { itemId: "async-update" },
-    });
-    const onBlockReply = vi.fn();
-    const runParams = {
-      agentId: target.agentId,
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-      sessionTarget: target,
-      workspaceDir: path.dirname(target.storePath),
-      runId: "run-async",
-      onBlockReply,
-    } as unknown as EmbeddedRunAttemptParams;
-    const delivery = {
-      cwd: path.dirname(target.storePath),
-      params: runParams,
-      itemId: "async-update",
-      message,
-      text: "Sensitive background update.",
-      threadId: "thread-1",
-      turnId: "turn-1",
-    };
-
-    await expect(deliverAsyncMessageBestEffort(delivery)).resolves.toBe("settled");
-    await expect(
-      deliverAsyncMessageBestEffort({
-        ...delivery,
-        params: { ...runParams, runId: "run-async-reconnect" },
-      }),
-    ).resolves.toBe("settled");
-
-    expect(onBlockReply).toHaveBeenCalledTimes(2);
-    expect(onBlockReply).toHaveBeenNthCalledWith(
-      1,
-      { text: "[redacted async update]" },
-      {
-        deliveryIntentId: "block-reply:v1:codex-app-server:thread-1:turn-1:async-update",
-      },
-    );
-    expect(onBlockReply.mock.calls[1]).toEqual(onBlockReply.mock.calls[0]);
-    expect(onBlockReply.mock.calls.map(([payload]) => payload)).not.toContainEqual({
-      text: "Sensitive background update.",
-    });
-    expect(await readMirrorMessages(target)).toEqual([
-      { role: "assistant", text: "[redacted async update]" },
-    ]);
-    const updates = publishSessionTranscriptUpdateByIdentityMock.mock.calls.map(
-      ([update]) => update as Record<string, unknown> & { update?: Record<string, unknown> },
-    );
-    expect(updates).toHaveLength(1);
-    expect(updates[0]?.update?.message).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "[redacted async update]" }],
-      phase: "final_answer",
-      idempotencyKey: "codex-app-server:thread-1:turn-1:async:async-update",
-      openclawAsyncDelivery: { itemId: "async-update" },
-    });
-  });
-
-  it("retries a durable async callback from the persisted row", async () => {
-    const target = await createSqliteMirrorTarget("openclaw-codex-mirror-async-callback-fail-");
-    const onBlockReply = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("channel unavailable"))
-      .mockResolvedValue(undefined);
-    const runParams = {
-      agentId: target.agentId,
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-      sessionTarget: target,
-      workspaceDir: path.dirname(target.storePath),
-      runId: "run-async-callback-fail",
-      onBlockReply,
-    } as unknown as EmbeddedRunAttemptParams;
-    const delivery = {
-      cwd: path.dirname(target.storePath),
-      params: runParams,
-      itemId: "async-callback-fail",
-      message: castAgentMessage({
-        ...makeAgentAssistantMessage({
-          content: [{ type: "text", text: "Persisted background update." }],
-          timestamp: Date.now(),
-        }),
-        openclawAsyncDelivery: { itemId: "async-callback-fail" },
-      }),
-      text: "Persisted background update.",
-      threadId: "thread-1",
-      turnId: "turn-1",
-    };
-
-    await expect(deliverAsyncMessageBestEffort(delivery)).resolves.toBe("retry");
-    await expect(deliverAsyncMessageBestEffort(delivery)).resolves.toBe("settled");
-
-    expect(onBlockReply).toHaveBeenCalledTimes(2);
-    expect(onBlockReply.mock.calls[1]).toEqual(onBlockReply.mock.calls[0]);
-    expect(onBlockReply).toHaveBeenCalledWith(
-      { text: "Persisted background update." },
-      {
-        deliveryIntentId: "block-reply:v1:codex-app-server:thread-1:turn-1:async-callback-fail",
-      },
-    );
-    expect(await readMirrorMessages(target)).toEqual([
-      { role: "assistant", text: "Persisted background update." },
-    ]);
-    expect(publishSessionTranscriptUpdateByIdentityMock).toHaveBeenCalledOnce();
-  });
-
-  it("does not deliver async messages blocked by before_message_write", async () => {
-    const target = await createSqliteMirrorTarget("openclaw-codex-mirror-async-blocked-");
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        { hookName: "before_message_write", handler: () => ({ block: true }) },
-      ]),
-    );
-    const onBlockReply = vi.fn();
-    const runParams = {
-      agentId: target.agentId,
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-      sessionTarget: target,
-      workspaceDir: path.dirname(target.storePath),
-      runId: "run-async-blocked",
-      onBlockReply,
-    } as unknown as EmbeddedRunAttemptParams;
-
-    await expect(
-      deliverAsyncMessageBestEffort({
-        cwd: path.dirname(target.storePath),
-        params: runParams,
-        itemId: "async-blocked",
-        message: castAgentMessage({
-          ...makeAgentAssistantMessage({
-            content: [{ type: "text", text: "Blocked update." }],
-            timestamp: Date.now(),
-          }),
-          openclawAsyncDelivery: { itemId: "async-blocked" },
-        }),
-        text: "Blocked update.",
-        threadId: "thread-1",
-        turnId: "turn-1",
-      }),
-    ).resolves.toBe("settled");
-
-    expect(onBlockReply).not.toHaveBeenCalled();
-    expect(await readMirrorMessages(target)).toEqual([]);
-    expect(publishSessionTranscriptUpdateByIdentityMock).not.toHaveBeenCalled();
   });
 
   it("emits stable sequence numbers for multi-message mirror batches", async () => {
@@ -1459,7 +903,7 @@ describe("mirrorCodexAppServerTranscript", () => {
         content: [{ type: "text", text: rewrittenText }],
         openclawDelivery: { mediaUrls: ["./artifact.json"] },
       });
-      const persisted = (await readMirrorEvents(target)).flatMap((event) =>
+      const persisted = (await readSessionTranscriptEvents(target)).flatMap((event) =>
         event && typeof event === "object" && "message" in event ? [event.message] : [],
       );
       expect(persisted).toEqual(published);
@@ -1554,10 +998,9 @@ describe("mirrorCodexAppServerTranscript", () => {
     expect((await readMirrorMessages(target)).filter((entry) => entry.role)).toEqual([
       { role: "user", text: "append once" },
     ]);
-    expect(results.map((result) => messageContent(result.userMessagesPresent[0]))).toEqual([
-      [{ type: "text", text: "append once" }],
-      [{ type: "text", text: "append once" }],
-    ]);
+    expect(results.map((result) => messageContent(result.userMessageReceipts[0]?.message))).toEqual(
+      [[{ type: "text", text: "append once" }], [{ type: "text", text: "append once" }]],
+    );
   });
 
   it("reports final assistant ownership for new and idempotent mirrors", async () => {
@@ -1627,7 +1070,7 @@ describe("mirrorCodexAppServerTranscript", () => {
           }),
         ],
       });
-      const entries = (await readMirrorEvents(target)) as Array<{
+      const entries = (await readSessionTranscriptEvents(target)) as Array<{
         type: string;
         message?: { role: string; __openclaw?: Record<string, unknown> };
       }>;
@@ -1704,13 +1147,13 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyScope: "scope-1",
     });
 
-    expect(first.userMessagesPresent[0]?.content).toEqual([
+    expect(first.userMessageReceipts[0]?.message.content).toEqual([
       { type: "text", text: "[redacted by hook]" },
     ]);
-    expect(second.userMessagesPresent[0]?.content).toEqual([
+    expect(second.userMessageReceipts[0]?.message.content).toEqual([
       { type: "text", text: "[redacted by hook]" },
     ]);
-    expect(JSON.stringify(second.userMessagesPresent)).not.toContain("secret prompt");
+    expect(JSON.stringify(second.userMessageReceipts)).not.toContain("secret prompt");
     expect(
       (await readMirrorMessages(target)).filter((message) => message.role === "user"),
     ).toHaveLength(1);
@@ -1776,7 +1219,7 @@ describe("mirrorCodexAppServerTranscript", () => {
   });
 
   it("skips transcript mirrors for sessionless embedded runs", async () => {
-    const root = await makeRoot("openclaw-codex-transcript-failure-");
+    const root = makeRoot("openclaw-codex-transcript-failure-");
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const markRuntimePersistencePending = vi.fn();
     const assistantMessage = attachCodexMirrorIdentity(
@@ -1824,7 +1267,7 @@ describe("mirrorCodexAppServerTranscript", () => {
   });
 
   it("renders normal-session mirror failures in structured warnings", async () => {
-    const root = await makeRoot("openclaw-codex-transcript-failure-");
+    const root = makeRoot("openclaw-codex-transcript-failure-");
     const blockedParent = path.join(root, "not-a-directory");
     await fs.writeFile(blockedParent, "blocked");
     const storePath = path.join(blockedParent, "openclaw-agent.sqlite");
@@ -2013,7 +1456,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       threadId: "thread-1",
       turnId: "turn-1",
     });
-    const terminalEvent = (await readMirrorEvents(target)).find(
+    const terminalEvent = (await readSessionTranscriptEvents(target)).find(
       (event): event is { id: string; message: { role: string } } =>
         Boolean(
           event &&
@@ -2055,7 +1498,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       threadId: "thread-1",
       turnId: "turn-1",
     });
-    const terminalEvent = (await readMirrorEvents(target)).find(
+    const terminalEvent = (await readSessionTranscriptEvents(target)).find(
       (event): event is { id: string; message: { role: string } } =>
         Boolean(
           event &&
@@ -2068,6 +1511,162 @@ describe("mirrorCodexAppServerTranscript", () => {
 
     expect(mirrorOutcome.assistantTranscriptOwned).toBe(false);
     expect(mirrorOutcome.terminalAnchor?.entryId).toBe(terminalEvent?.id);
+  });
+
+  describe("projected transcript persistence", () => {
+    registerCodexEventProjectorTestLifecycle();
+
+    it.each([true, false])(
+      "keeps failed attempt diagnostics without taking deferred run ownership (deferred: %s)",
+      async (deferTerminalLifecycle) => {
+        const target = await createSqliteMirrorTarget("openclaw-codex-mirror-retry-owner-");
+        const params: EmbeddedRunAttemptParams = {
+          ...(await createProjectorParams()),
+          ...target,
+          sessionTarget: target,
+          workspaceDir: path.dirname(target.storePath),
+          suppressNextUserMessagePersistence: true,
+          deferTerminalLifecycle,
+        };
+        const finalRunId = deferTerminalLifecycle ? params.runId : "run-2";
+        const attempts = [
+          { turnId: "turn-1", runId: params.runId, failed: true, text: "The file is ready." },
+          {
+            turnId: "turn-2",
+            runId: finalRunId,
+            failed: false,
+            text: "The action completed once.",
+          },
+        ];
+        for (const attempt of attempts) {
+          const attemptParams = { ...params, runId: attempt.runId };
+          const projector = new CodexAppServerEventProjector(
+            attemptParams,
+            "thread-1",
+            attempt.turnId,
+          );
+          await projector.handleNotification({
+            method: "turn/completed",
+            params: {
+              threadId: "thread-1",
+              turn: {
+                id: attempt.turnId,
+                status: attempt.failed ? "failed" : "completed",
+                items: [
+                  { type: "agentMessage", id: `answer-${attempt.turnId}`, text: attempt.text },
+                ],
+                error: attempt.failed
+                  ? { message: "Rate limit reached", codexErrorInfo: "rateLimitExceeded" }
+                  : null,
+              },
+            },
+          });
+          await mirrorTranscriptBestEffort({
+            params: attemptParams,
+            result: projector.buildResult(buildEmptyToolTelemetry()),
+            agentId: target.agentId,
+            sessionKey: target.sessionKey,
+            notifyUserMessagePersisted: () => undefined,
+            cwd: params.workspaceDir,
+            threadId: "thread-1",
+            turnId: attempt.turnId,
+          });
+        }
+
+        const messages = await readCodexMirroredSessionHistoryMessages({
+          ...params,
+          sessionFile: target.bogusSessionFile,
+        });
+        expect(messages).toHaveLength(2);
+        expect(messages).toMatchObject([
+          {
+            content: [{ type: "text", text: "The file is ready." }],
+            stopReason: "error",
+            errorMessage: expect.stringContaining("Rate limit reached"),
+            __openclaw: { mirrorIdentity: "turn-1:assistant", runId: params.runId },
+          },
+          {
+            content: [{ type: "text", text: "The action completed once." }],
+            stopReason: "stop",
+            __openclaw: {
+              mirrorIdentity: "turn-2:assistant",
+              runId: finalRunId,
+              runTerminal: true,
+            },
+          },
+        ]);
+        if (deferTerminalLifecycle) {
+          expect(messages?.[0]).not.toHaveProperty("__openclaw.runTerminal");
+          expect(
+            publishSessionTranscriptUpdateByIdentityMock.mock.calls[0]?.[0].update,
+          ).not.toHaveProperty("runId");
+        } else {
+          expect(messages?.[0]).toHaveProperty("__openclaw.runTerminal", true);
+          expect(
+            publishSessionTranscriptUpdateByIdentityMock.mock.calls[0]?.[0].update,
+          ).toHaveProperty("runId", params.runId);
+        }
+        expect(
+          publishSessionTranscriptUpdateByIdentityMock.mock.calls[1]?.[0].update,
+        ).toHaveProperty("runId", finalRunId);
+      },
+    );
+
+    it("preserves reasoning as nonterminal thinking beside the final answer in SQLite", async () => {
+      const target = await createSqliteMirrorTarget("openclaw-codex-mirror-reasoning-");
+      const params: EmbeddedRunAttemptParams = {
+        ...(await createProjectorParams()),
+        ...target,
+        sessionTarget: target,
+        workspaceDir: path.dirname(target.storePath),
+      };
+      const projector = new CodexAppServerEventProjector(params, "thread-1", "turn-1");
+      await projector.handleNotification(
+        forCurrentTurn("item/reasoning/summaryTextDelta", {
+          itemId: "reason-1",
+          summaryIndex: 0,
+          delta: "checking the answer",
+        }),
+      );
+      await projector.handleNotification(
+        turnCompleted([
+          { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "hi there" },
+        ]),
+      );
+      const result = projector.buildResult(buildEmptyToolTelemetry());
+      expect(result.assistantTexts).toEqual(["hi there"]);
+
+      const mirrored = await mirrorTranscriptBestEffort({
+        params,
+        result,
+        agentId: target.agentId,
+        sessionKey: target.sessionKey,
+        notifyUserMessagePersisted: () => undefined,
+        cwd: params.workspaceDir,
+        threadId: "thread-1",
+        turnId: "turn-1",
+      });
+
+      expect(mirrored.assistantTranscriptOwned).toBe(true);
+      const messages = await readCodexMirroredSessionHistoryMessages({
+        ...params,
+        sessionFile: target.bogusSessionFile,
+      });
+      expect(messages).toMatchObject([
+        { role: "user", content: "hello" },
+        {
+          role: "assistant",
+          content: [{ type: "thinking", thinking: "checking the answer" }],
+          __openclaw: { mirrorIdentity: "turn-1:reasoning", runId: "run-1" },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "hi there" }],
+          __openclaw: { mirrorIdentity: "turn-1:assistant", runTerminal: true },
+        },
+      ]);
+      expect(messages?.[1]).not.toHaveProperty("__openclaw.runTerminal");
+    });
   });
 
   it("dedupes mirrored messages despite snapshot positional shifts", async () => {
@@ -2094,7 +1693,7 @@ describe("mirrorCodexAppServerTranscript", () => {
     });
     const reasoningMessage = attachCodexMirrorIdentity(
       makeAgentAssistantMessage({
-        content: [{ type: "text", text: "[Codex reasoning] thinking" }],
+        content: [{ type: "thinking", thinking: "thinking" }],
         timestamp: Date.now() + 2,
       }),
       "turn-1:reasoning",
@@ -2108,7 +1707,7 @@ describe("mirrorCodexAppServerTranscript", () => {
     expect((await readMirrorMessages(target)).map((m) => m.text)).toEqual([
       "hello",
       "hi there",
-      "[Codex reasoning] thinking",
+      undefined,
     ]);
   });
 

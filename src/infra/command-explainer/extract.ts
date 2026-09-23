@@ -996,6 +996,12 @@ async function visitNode(
             ? spanFromNode(nameNode, state.spanBase)
             : (parsed.arguments[0]?.span ?? span),
       };
+      if (nameNode) {
+        step.argvSpans = [
+          step.executableSpan,
+          ...parsed.arguments.map((argument) => argument.span),
+        ];
+      }
       if (state.parentCommandId) {
         step.parentCommandId = state.parentCommandId;
       }

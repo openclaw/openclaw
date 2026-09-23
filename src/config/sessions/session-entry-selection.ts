@@ -55,6 +55,27 @@ export class SessionLabelOwnerIndex {
   }
 }
 
+type SessionModelOverrideSelection = Pick<
+  SessionEntry,
+  | "modelOverride"
+  | "providerOverride"
+  | "modelOverrideSource"
+  | "modelOverrideRouteResolution"
+  | "agentRuntimeOverride"
+>;
+
+export function selectSessionModelOverride(
+  entry: Partial<SessionModelOverrideSelection>,
+): SessionModelOverrideSelection {
+  return {
+    modelOverride: entry.modelOverride,
+    providerOverride: entry.providerOverride,
+    modelOverrideSource: entry.modelOverrideSource,
+    modelOverrideRouteResolution: entry.modelOverrideRouteResolution,
+    agentRuntimeOverride: entry.agentRuntimeOverride,
+  };
+}
+
 /** Carries only user/runtime selection into a new dashboard fork. */
 export function inheritSessionSelection(
   parentEntry: SessionEntry | undefined,
@@ -64,7 +85,10 @@ export function inheritSessionSelection(
   }
   const authProfileOverrideSource = resolveSessionAuthProfileOverrideSource(parentEntry);
   const inheritModelSelection = !hasSessionActiveAutoModelFallback(parentEntry);
-  const inheritAuthProfile = inheritModelSelection || authProfileOverrideSource === "user";
+  const inheritAuthProfile =
+    inheritModelSelection ||
+    authProfileOverrideSource === "user" ||
+    authProfileOverrideSource === "user-link";
   return {
     ...(inheritModelSelection && parentEntry.providerOverride
       ? { providerOverride: parentEntry.providerOverride }

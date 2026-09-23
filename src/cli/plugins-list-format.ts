@@ -3,27 +3,33 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { PluginBundleFormat } from "../plugins/manifest-types.js";
 import type { PluginRecord } from "../plugins/registry.js";
-import { shortenHomeInString } from "../utils.js";
+import { shortenHomePath } from "../utils.js";
 
 export function formatPluginBundleFormat(bundleFormat: PluginBundleFormat): string {
   return bundleFormat === "agent" ? "agent (Agent Plugins)" : bundleFormat;
 }
 
+/** Snapshot status describes enablement; only explicit runtime inspection reports loading. */
+export function formatPluginStatus(
+  plugin: Pick<PluginRecord, "enabled" | "status">,
+  runtimeInspection = false,
+): string {
+  if (plugin.status === "error") {
+    return theme.error("error");
+  }
+  const enabled = runtimeInspection ? plugin.status === "loaded" : plugin.enabled;
+  return enabled ? theme.success(runtimeInspection ? "loaded" : "enabled") : theme.warn("disabled");
+}
+
 export function formatPluginLine(plugin: PluginRecord): string {
-  const status =
-    plugin.status === "error"
-      ? theme.error("error")
-      : plugin.enabled
-        ? theme.success("enabled")
-        : theme.warn("disabled");
   const name = theme.command(plugin.name || plugin.id);
   const idSuffix = plugin.name && plugin.name !== plugin.id ? theme.muted(` (${plugin.id})`) : "";
   const format = plugin.format ?? "openclaw";
 
   const parts = [
-    `${name}${idSuffix} ${status}`,
+    `${name}${idSuffix} ${formatPluginStatus(plugin)}`,
     `  format: ${format}`,
-    `  source: ${theme.muted(shortenHomeInString(plugin.source))}`,
+    `  source: ${theme.muted(shortenHomePath(plugin.source))}`,
     `  origin: ${plugin.origin}`,
   ];
   if (plugin.bundleFormat) {

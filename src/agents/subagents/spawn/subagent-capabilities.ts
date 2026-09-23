@@ -11,7 +11,10 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../../../config/agent-limits.js";
+import {
+  DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
+  isSubagentSpawnDepthAllowed,
+} from "../../../config/agent-limits.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
@@ -23,11 +26,20 @@ import {
   normalizeInheritedToolAllowlist,
   normalizeInheritedToolDenylist,
 } from "../../inherited-tool-deny.js";
+import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import {
-  findSubagentSessionEntryById,
-  getSubagentDepthFromSessionStore,
-  readSubagentSessionStore,
-} from "./subagent-depth.js";
+  asSessionCapabilityLookup,
+  createSubagentSessionStore,
+  isSessionCapabilityLookup,
+  type PreparedSessionCapabilityEntry,
+  type SessionCapabilityEntry,
+  type SessionCapabilityStore,
+} from "./subagent-session-store.js";
+
+export type {
+  PreparedSessionCapabilityEntry,
+  SessionCapabilityStore,
+} from "./subagent-session-store.js";
 
 /** Resolved role for a main session, orchestrating subagent, or leaf subagent. */
 export type SubagentSessionRole = "main" | "orchestrator" | "leaf";
@@ -39,34 +51,6 @@ const SUBAGENT_SESSION_ROLES: readonly SubagentSessionRole[] = [
 
 type SubagentControlScope = "children" | "none";
 const SUBAGENT_CONTROL_SCOPES: readonly SubagentControlScope[] = ["children", "none"] as const;
-
-type SessionCapabilityEntry = {
-  sessionId?: unknown;
-  spawnDepth?: unknown;
-  subagentRole?: unknown;
-  subagentControlScope?: unknown;
-  spawnedBy?: unknown;
-  completionOwnerSessionKey?: unknown;
-  inheritedToolPolicyVersion?: unknown;
-  inheritedToolAllow?: unknown;
-  inheritedToolDeny?: unknown;
-};
-
-/** Minimal persisted session-store shape needed to resolve subagent capabilities. */
-export type SessionCapabilityStore = Record<
-  string,
-  {
-    sessionId?: unknown;
-    spawnDepth?: unknown;
-    subagentRole?: unknown;
-    subagentControlScope?: unknown;
-    spawnedBy?: unknown;
-    completionOwnerSessionKey?: unknown;
-    inheritedToolPolicyVersion?: unknown;
-    inheritedToolAllow?: unknown;
-    inheritedToolDeny?: unknown;
-  }
->;
 
 type PersistedSubagentToolPolicyEnvelope = {
   sessionKey: string;
@@ -122,10 +106,8 @@ function resolveSessionCapabilityEntry(params: {
   store?: SessionCapabilityStore;
 }): SessionCapabilityEntry | undefined {
   if (params.store) {
-    return (
-      params.store[params.sessionKey] ??
-      findSubagentSessionEntryById(params.store, params.sessionKey)
-    );
+    const store = asSessionCapabilityLookup(params.store);
+    return store.get(params.sessionKey) ?? store.getById(params.sessionKey);
   }
   if (!params.cfg) {
     return undefined;
@@ -137,8 +119,8 @@ function resolveSessionCapabilityEntry(params: {
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: parsed.agentId,
   });
-  const store = readSubagentSessionStore<SessionCapabilityEntry>(storePath, parsed.agentId);
-  return store[params.sessionKey] ?? findSubagentSessionEntryById(store, params.sessionKey);
+  const store = createSubagentSessionStore(storePath, parsed.agentId);
+  return store.get(params.sessionKey) ?? store.getById(params.sessionKey);
 }
 
 /** Resolve the session-store subset used for subagent capability lookup. */
@@ -148,6 +130,7 @@ export function resolveSubagentCapabilityStore(
     cfg?: OpenClawConfig;
     store?: SessionCapabilityStore;
     agentId?: string;
+    preparedSessionEntry?: PreparedSessionCapabilityEntry;
   },
 ): SessionCapabilityStore | undefined {
   const normalizedSessionKey = normalizeOptionalString(sessionKey);
@@ -173,7 +156,13 @@ export function resolveSubagentCapabilityStore(
   const storePath = resolveSessionStorePathCore(opts.cfg.session?.store, {
     agentId: parsed.agentId,
   });
-  return readSubagentSessionStore<SessionCapabilityEntry>(storePath, parsed.agentId);
+  return createSubagentSessionStore(
+    storePath,
+    parsed.agentId,
+    opts.preparedSessionEntry?.sessionKey === normalizedSessionKey
+      ? opts.preparedSessionEntry
+      : undefined,
+  );
 }
 
 /** Resolve depth-derived role/scope booleans for a subagent position. */
@@ -190,7 +179,7 @@ function resolveSubagentRoleForDepth(params: {
   if (depth <= 0) {
     return "main";
   }
-  return depth < maxSpawnDepth ? "orchestrator" : "leaf";
+  return isSubagentSpawnDepthAllowed(depth, maxSpawnDepth) ? "orchestrator" : "leaf";
 }
 
 function resolveSubagentControlScopeForRole(role: SubagentSessionRole): SubagentControlScope {
@@ -319,19 +308,11 @@ export function resolvePersistedSubagentToolPolicyEnvelope(
     agentId?: string;
   },
 ): PersistedSubagentToolPolicyEnvelope | undefined {
-  const normalizedSessionKey = normalizeOptionalString(sessionKey);
-  if (
-    !normalizedSessionKey ||
-    !canInspectStoredSubagentEnvelope(normalizedSessionKey, opts?.store)
-  ) {
+  const stored = resolveStoredSubagentToolPolicy(sessionKey, opts);
+  if (!stored) {
     return undefined;
   }
-  const store = resolveSubagentCapabilityStore(normalizedSessionKey, opts);
-  const entry = resolveSessionCapabilityEntry({
-    sessionKey: normalizedSessionKey,
-    cfg: opts?.cfg,
-    store,
-  });
+  const { sessionKey: normalizedSessionKey, store, entry } = stored;
   const spawnedBy = normalizeOptionalString(entry?.spawnedBy);
   const hasSpawnDepth =
     typeof entry?.spawnDepth === "number" &&
@@ -392,75 +373,59 @@ export function resolveStoredSubagentCapabilities(
         store,
       })
     : undefined;
-  const depthStore = opts?.cfg && typeof entry?.spawnDepth !== "number" ? undefined : store;
-  // If config is available but the envelope lacks an explicit spawnDepth, let
-  // the depth helper read canonical persisted state instead of trusting a partial store.
+  const depthStore =
+    opts?.cfg && !isSessionCapabilityLookup(store) && typeof entry?.spawnDepth !== "number"
+      ? undefined
+      : store;
+  // Explicit records may be partial. Lazy lookups already read canonical entries
+  // and must retain their memo while the depth helper follows the parent chain.
   const depth = getSubagentDepthFromSessionStore(normalizedSessionKey, {
     cfg: opts?.cfg,
     store: depthStore,
     agentId: opts?.agentId,
   });
-  if (!isSubagentEnvelopeSession(normalizedSessionKey, { ...opts, store, entry })) {
-    return resolveSubagentCapabilities({ depth, maxSpawnDepth });
+  // Current policy is authoritative. Persisted role/scope describe the policy
+  // at creation time and must not leave existing sessions permanently stale
+  // after an operator changes the depth cap or upgrades to a new default.
+  return resolveSubagentCapabilities({ depth, maxSpawnDepth });
+}
+
+function resolveStoredSubagentToolPolicy(
+  sessionKey: string | undefined | null,
+  opts?: { cfg?: OpenClawConfig; store?: SessionCapabilityStore },
+) {
+  const normalizedSessionKey = normalizeOptionalString(sessionKey);
+  if (
+    !normalizedSessionKey ||
+    !canInspectStoredSubagentEnvelope(normalizedSessionKey, opts?.store)
+  ) {
+    return undefined;
   }
-  const storedRole = normalizeSubagentRole(entry?.subagentRole);
-  const storedControlScope = normalizeSubagentControlScope(entry?.subagentControlScope);
-  const fallback = resolveSubagentCapabilities({ depth, maxSpawnDepth });
-  const role = storedRole ?? fallback.role;
-  const controlScope = storedControlScope ?? resolveSubagentControlScopeForRole(role);
-  return {
-    depth,
-    role,
-    controlScope,
-    canSpawn: role === "main" || role === "orchestrator",
-    canControlChildren: controlScope === "children",
-  };
+  const store = resolveSubagentCapabilityStore(normalizedSessionKey, opts);
+  const entry = resolveSessionCapabilityEntry({
+    sessionKey: normalizedSessionKey,
+    cfg: opts?.cfg,
+    store,
+  });
+  return { sessionKey: normalizedSessionKey, store, entry };
 }
 
 /** Resolve inherited tool deny rules stored on a subagent envelope. */
 export function resolveStoredSubagentInheritedToolDenylist(
   sessionKey: string | undefined | null,
-  opts?: {
-    cfg?: OpenClawConfig;
-    store?: SessionCapabilityStore;
-  },
+  opts?: { cfg?: OpenClawConfig; store?: SessionCapabilityStore },
 ): string[] {
-  const normalizedSessionKey = normalizeOptionalString(sessionKey);
-  if (
-    !normalizedSessionKey ||
-    !canInspectStoredSubagentEnvelope(normalizedSessionKey, opts?.store)
-  ) {
-    return [];
-  }
-  const store = resolveSubagentCapabilityStore(normalizedSessionKey, opts);
-  const entry = resolveSessionCapabilityEntry({
-    sessionKey: normalizedSessionKey,
-    cfg: opts?.cfg,
-    store,
-  });
-  return normalizeInheritedToolDenylist(entry?.inheritedToolDeny);
+  return normalizeInheritedToolDenylist(
+    resolveStoredSubagentToolPolicy(sessionKey, opts)?.entry?.inheritedToolDeny,
+  );
 }
 
 /** Resolve inherited tool allow rules stored on a subagent envelope. */
 export function resolveStoredSubagentInheritedToolAllowlist(
   sessionKey: string | undefined | null,
-  opts?: {
-    cfg?: OpenClawConfig;
-    store?: SessionCapabilityStore;
-  },
+  opts?: { cfg?: OpenClawConfig; store?: SessionCapabilityStore },
 ): string[] {
-  const normalizedSessionKey = normalizeOptionalString(sessionKey);
-  if (
-    !normalizedSessionKey ||
-    !canInspectStoredSubagentEnvelope(normalizedSessionKey, opts?.store)
-  ) {
-    return [];
-  }
-  const store = resolveSubagentCapabilityStore(normalizedSessionKey, opts);
-  const entry = resolveSessionCapabilityEntry({
-    sessionKey: normalizedSessionKey,
-    cfg: opts?.cfg,
-    store,
-  });
-  return normalizeInheritedToolAllowlist(entry?.inheritedToolAllow);
+  return normalizeInheritedToolAllowlist(
+    resolveStoredSubagentToolPolicy(sessionKey, opts)?.entry?.inheritedToolAllow,
+  );
 }

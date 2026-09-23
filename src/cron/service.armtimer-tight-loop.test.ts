@@ -1,7 +1,8 @@
 // Timer tight-loop tests cover cron service guards against immediate rearm loops.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNoopLogger, createCronStoreHarness } from "./service.test-harness.js";
-import { createCronServiceState } from "./service/state.js";
+import { stop } from "./service/ops-lifecycle.js";
+import { createCronServiceState, type CronServiceState } from "./service/state.js";
 import { armTimer } from "./service/timer.js";
 import { onTimer } from "./service/timer.test-support.js";
 import { saveCronStore } from "./store.js";
@@ -40,6 +41,8 @@ function createStuckPastDueJob(params: { id: string; nowMs: number; pastDueMs: n
 }
 
 describe("CronService - armTimer tight loop prevention", () => {
+  const states: CronServiceState[] = [];
+
   function extractTimeoutDelays(timeoutSpy: ReturnType<typeof vi.spyOn>) {
     const calls = timeoutSpy.mock.calls as Array<[unknown, unknown, ...unknown[]]>;
     return calls
@@ -60,7 +63,7 @@ describe("CronService - armTimer tight loop prevention", () => {
     now: number;
     runIsolatedAgentJob?: () => Promise<{ status: "ok" }>;
   }) {
-    return createCronServiceState({
+    const state = createCronServiceState({
       storePath: params.storePath,
       cronEnabled: true,
       log: noopLogger,
@@ -70,6 +73,8 @@ describe("CronService - armTimer tight loop prevention", () => {
       runIsolatedAgentJob:
         params.runIsolatedAgentJob ?? vi.fn().mockResolvedValue({ status: "ok" }),
     });
+    states.push(state);
+    return state;
   }
 
   beforeEach(() => {
@@ -80,6 +85,10 @@ describe("CronService - armTimer tight loop prevention", () => {
   });
 
   afterEach(() => {
+    for (const state of states) {
+      stop(state);
+    }
+    states.length = 0;
     vi.clearAllMocks();
   });
 
@@ -169,6 +178,19 @@ describe("CronService - armTimer tight loop prevention", () => {
       expect(lengthReads).toBe(2);
       expect(state.timer).toBe(latestTimeoutHandle(timeoutSpy));
       expect(extractTimeoutDelays(timeoutSpy)).toContain(10_000);
+      expect(noopLogger.debug).toHaveBeenLastCalledWith(
+        {
+          nextAt: now + 10_000,
+          nextAtIso: expect.stringMatching(
+            /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/,
+          ),
+          delayMs: 10_000,
+          clamped: false,
+        },
+        "cron: timer armed",
+      );
+      const timerLog = noopLogger.debug.mock.lastCall?.[0] as { nextAtIso: string };
+      expect(Date.parse(timerLog.nextAtIso)).toBe(now + 10_000);
     } finally {
       timeoutSpy.mockRestore();
     }
@@ -261,6 +283,5 @@ describe("CronService - armTimer tight loop prevention", () => {
     expect(lastDelay).toBeGreaterThanOrEqual(2_000);
 
     timeoutSpy.mockRestore();
-    await store.cleanup();
   });
 });

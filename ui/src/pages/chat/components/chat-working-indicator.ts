@@ -1,9 +1,12 @@
 import { html, nothing } from "lit";
+import type { ThemeMascot } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import "../../../components/elapsed-time.ts";
 import "../../../components/working-phrase.ts";
 import { icons } from "../../../components/icons.ts";
+import { currentThemeBranding } from "../../../components/neutral-mark.ts";
 import { i18n, t } from "../../../i18n/index.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
+import { formatCompactTokenCount } from "../../../lib/format.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
 
@@ -38,17 +41,18 @@ function formatTurnRecapDuration(ms: number): string {
   return new Intl.ListFormat(locale, { style: "long", type: "unit" }).format(parts);
 }
 
-// Keep counts exact so small response updates remain visible above 1,000 tokens.
 // 0 is valid; only null/undefined means "unknown".
 function outputTokensLabel(outputTokens: number): string {
   return outputTokens === 1
     ? t("chat.turnRecap.tokensOne")
-    : t("chat.turnRecap.tokens", { count: outputTokens.toLocaleString(i18n.getLocale()) });
+    : t("chat.turnRecap.tokens", { count: formatCompactTokenCount(outputTokens) });
 }
 
 export function renderChatWorkingIndicator(
   part: Extract<ChatItem, { kind: "reading-indicator" }>,
   options: {
+    mascot?: ThemeMascot;
+    workingPhrases?: readonly string[];
     waitingApproval?: boolean;
     startupLabel?: string;
     outputTokens?: number | null;
@@ -56,6 +60,7 @@ export function renderChatWorkingIndicator(
   } = {},
 ) {
   const waitingApproval = options.waitingApproval === true;
+  const neutral = (options.mascot ?? currentThemeBranding().mascot) === "none";
   const continuation = options.presentation === "continuation";
   const statusLabel = waitingApproval
     ? t("chat.waitingForApproval")
@@ -72,42 +77,55 @@ export function renderChatWorkingIndicator(
       role="status"
       aria-live="off"
     >
-      ${continuation
-        ? nothing
-        : html`
-            <div
-              class="chat-bubble chat-reading-indicator ${selectWorkingClawSurprise(part.key, {
-                eligible: !waitingApproval,
-              })}"
-              aria-hidden="true"
-            >
-              ${icons.claw}
-            </div>
-          `}
-      <span class="chat-working-indicator__status">
-        <span class=${working && !continuation ? "sr-only" : ""}>${statusLabel}</span>
-        ${waitingApproval
+      ${
+        continuation
           ? nothing
           : html`
-              <openclaw-elapsed-time
-                class="chat-working-indicator__elapsed"
-                .startMs=${part.startedAt}
-              ></openclaw-elapsed-time>
-            `}
-        ${outputTokens !== null && outputTokens !== undefined
-          ? html`
-              <span aria-hidden="true">·</span>
-              <span class="chat-working-indicator__tokens">${outputTokensLabel(outputTokens)}</span>
+              <div
+                class="chat-bubble chat-reading-indicator ${
+                  neutral
+                    ? "chat-reading-indicator--neutral"
+                    : selectWorkingClawSurprise(part.key, {
+                        eligible: !waitingApproval,
+                      })
+                }"
+                aria-hidden="true"
+              >
+                ${neutral ? html`<span></span><span></span><span></span>` : icons.claw}
+              </div>
             `
-          : working
-            ? html`
-                <openclaw-working-phrase
-                  aria-hidden="true"
+      }
+      <span class="chat-working-indicator__status">
+        <span class=${working && !continuation ? "sr-only" : ""}>${statusLabel}</span>
+        ${
+          waitingApproval
+            ? nothing
+            : html`
+                <openclaw-elapsed-time
+                  class="chat-working-indicator__elapsed"
                   .startMs=${part.startedAt}
-                  .seed=${part.key}
-                ></openclaw-working-phrase>
+                ></openclaw-elapsed-time>
               `
-            : nothing}
+        }
+        ${
+          outputTokens !== null && outputTokens !== undefined
+            ? html`
+                <span aria-hidden="true">·</span>
+                <span class="chat-working-indicator__tokens"
+                  >${outputTokensLabel(outputTokens)}</span
+                >
+              `
+            : working
+              ? html`
+                  <openclaw-working-phrase
+                    aria-hidden="true"
+                    .startMs=${part.startedAt}
+                    .seed=${part.key}
+                    .phrases=${options.workingPhrases}
+                  ></openclaw-working-phrase>
+                `
+              : nothing
+        }
       </span>
     </div>
   `;
@@ -127,21 +145,27 @@ export function renderTurnRecapRow(
     typeof recap.outputTokens === "number" ? outputTokensLabel(recap.outputTokens) : null;
   return html`
     <div
-      class="chat-tasks-status chat-turn-recap ${continuation
-        ? "chat-turn-recap--continuation"
-        : ""}"
+      class="chat-tasks-status chat-turn-recap ${
+        continuation ? "chat-turn-recap--continuation" : ""
+      }"
       role="status"
     >
-      ${continuation
-        ? nothing
-        : html`<span class="chat-tasks-status__claw" aria-hidden="true">${icons.claw}</span>`}
+      ${
+        continuation
+          ? nothing
+          : html`<span class="chat-tasks-status__claw" aria-hidden="true"
+              >${currentThemeBranding().mascot === "none" ? icons.mark : icons.claw}</span
+            >`
+      }
       <span>${t("chat.turnRecap.doneIn", { duration })}</span>
-      ${tokens === null
-        ? nothing
-        : html`
-            <span class="chat-tasks-status__sep" aria-hidden="true">·</span>
-            <span>${tokens}</span>
-          `}
+      ${
+        tokens === null
+          ? nothing
+          : html`
+              <span class="chat-tasks-status__sep" aria-hidden="true">·</span>
+              <span>${tokens}</span>
+            `
+      }
     </div>
   `;
 }

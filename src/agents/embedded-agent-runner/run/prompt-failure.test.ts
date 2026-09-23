@@ -1,10 +1,19 @@
 import { CompactionReplayRefreshRequiredError } from "@openclaw/ai/transports";
 import { describe, expect, it, vi } from "vitest";
+import { buildKnownAgentRunFailureReplyPayload } from "../../../auto-reply/reply/agent-runner-failure-reply.js";
+import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
+import { FailoverError } from "../../failover-error.js";
+import { recordModelFallbackStop } from "../../model-fallback-stop.js";
+import { resolveAgentRunErrorLifecycleFields } from "../../run-termination.js";
+import { SessionManager } from "../../sessions/session-manager.js";
+import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
 import { handleEmbeddedPromptFailure } from "./prompt-failure.js";
 
 type Params = Parameters<typeof handleEmbeddedPromptFailure>[0];
 
-function makeParams(overrides: Partial<Params> = {}): Params {
+function makeParams(
+  overrides: Partial<Omit<Params, "failover">> & { failover?: Partial<Params["failover"]> } = {},
+): Params {
   const provider = "openai";
   const modelId = "gpt-5";
   const defaults: Params = {
@@ -13,6 +22,7 @@ function makeParams(overrides: Partial<Params> = {}): Params {
       runId: "run:prompt-failure-test",
     } as Params["runParams"],
     attempt: {
+      terminal: { kind: "ok" },
       replayMetadata: {
         replaySafe: true,
       },
@@ -43,24 +53,166 @@ function makeParams(overrides: Partial<Params> = {}): Params {
     externalAbort: false,
     pluginHarnessOwnsTransport: false,
     timedOutByRunBudget: false,
-    resolveAuthProfileFailureReason: vi.fn<Params["resolveAuthProfileFailureReason"]>(
-      () => "rate_limit",
-    ),
-    advanceAuthProfile: vi.fn(async () => true),
-    advanceRateLimitAuthProfile: vi.fn(async () => true),
-    maybeMarkAuthProfileFailure: vi.fn(async () => {}),
-    maybeRetryTransient: vi.fn(async () => false),
-    getTransientRetryCount: () => 0,
+    failover: {
+      resolveAuthProfileFailureReason: vi.fn<Params["failover"]["resolveAuthProfileFailureReason"]>(
+        () => "rate_limit",
+      ),
+      advanceAuthProfile: vi.fn(async () => true),
+      advanceRateLimitAuthProfile: vi.fn(async () => true),
+      maybeMarkAuthProfileFailure: vi.fn(async () => {}),
+      transientRetryCount: 0,
+    },
     attemptedThinking: new Set(),
     thinkLevel: "low",
     getThinkLevel: () => "low",
     traceAttempts: [],
     previousRetryFailoverReason: null,
   };
-  return { ...defaults, ...overrides };
+  return { ...defaults, ...overrides, failover: { ...defaults.failover, ...overrides.failover } };
 }
 
 describe("handleEmbeddedPromptFailure", () => {
+  it("records local profile absence without an HTTP status in the fallback trace", async () => {
+    const code = "selected_auth_profile_unavailable";
+    const message = 'Selected auth profile "openai:work" was not found in OpenClaw.';
+    const params = makeParams({
+      promptError: Object.assign(new Error(message), { code }),
+      failover: {
+        advanceAuthProfile: vi.fn(async () => false),
+        resolveAuthProfileFailureReason: vi.fn(() => null),
+      },
+    });
+
+    await expect(handleEmbeddedPromptFailure(params)).rejects.toMatchObject({
+      code,
+      message,
+      status: undefined,
+    });
+    expect(params.traceAttempts).toEqual([
+      expect.objectContaining({ result: "fallback_model", reason: "auth", stage: "prompt" }),
+    ]);
+    expect(params.traceAttempts[0]).not.toHaveProperty("status");
+  });
+
+  it.each(["401 invalid API key", "Reasoning is mandatory for this endpoint"])(
+    "does not recover a recorded terminal failure despite provider-shaped text: %s",
+    async (message) => {
+      const committed = Object.freeze(new Error(message));
+      recordModelFallbackStop(committed);
+      const failure = new Error("metadata view unavailable", { cause: committed });
+      const params = makeParams({ promptError: failure });
+
+      await expect(handleEmbeddedPromptFailure(params)).rejects.toBe(failure);
+
+      expect(params.maybeRefreshRuntimeAuthForAuthError).not.toHaveBeenCalled();
+      expect(params.suspendForFailure).not.toHaveBeenCalled();
+      expect(params.failover.advanceAuthProfile).not.toHaveBeenCalled();
+      expect(params.failover.advanceRateLimitAuthProfile).not.toHaveBeenCalled();
+      expect(params.failover.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+      expect(params.attemptedThinking).toEqual(new Set());
+      expect(params.traceAttempts).toEqual([]);
+    },
+  );
+
+  it.each([false, true])(
+    "keeps account-restricted model errors on the model-failure path with fallback=%s",
+    async (fallbackConfigured) => {
+      const promptError = new Error(
+        "400 The 'unavailable-thinking-model' model is not supported when using Codex with a ChatGPT account.",
+      );
+      const params = makeParams({
+        promptError,
+        fallbackConfigured,
+        pluginHarnessOwnsTransport: true,
+        failover: {
+          advanceAuthProfile: vi.fn(async () => false),
+          resolveAuthProfileFailureReason: vi.fn(() => null),
+        },
+        thinkLevel: "high",
+        attemptedThinking: new Set(["high"]),
+      });
+
+      const error = await handleEmbeddedPromptFailure(params).catch((failure: unknown) => failure);
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error).toHaveProperty("message", promptError.message);
+      expect(params.traceAttempts).toEqual([
+        expect.objectContaining({
+          result: fallbackConfigured ? "fallback_model" : "surface_error",
+          reason: "model_not_found",
+        }),
+      ]);
+    },
+  );
+
+  it.each(
+    (["prompt", "compaction", "tool_execution"] as const).flatMap((phase) =>
+      [false, true].map((fallbackConfigured) => ({ phase, fallbackConfigured })),
+    ),
+  )(
+    "preserves recorded $phase timeouts with fallback=$fallbackConfigured",
+    async ({ phase, fallbackConfigured }) => {
+      const params = makeParams({
+        promptError: new FailoverError("Provider stopped responding", { reason: "timeout" }),
+        fallbackConfigured,
+        failover: {
+          advanceAuthProfile: vi.fn(async () => false),
+          resolveAuthProfileFailureReason: vi.fn(() => null),
+        },
+      });
+      params.attempt.terminal = { kind: "timeout", phase, source: "runtime" };
+
+      const error = await handleEmbeddedPromptFailure(params).catch((failure: unknown) => failure);
+
+      const fields = resolveAgentRunErrorLifecycleFields(error, undefined);
+      expect(fields).toEqual({
+        stopReason: "timeout",
+        ...(phase === "prompt" ? { timeoutPhase: "provider", providerStarted: true } : {}),
+      });
+      expect(
+        buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase: "error", data: fields }).reason,
+      ).toBe(phase === "prompt" ? "hard_timeout" : "timed_out");
+    },
+  );
+
+  it("retains a harness's provider-started timeout without inventing its phase", async () => {
+    const params = makeParams({
+      promptError: new FailoverError("Harness deadline reached", { reason: "timeout" }),
+      failover: {
+        advanceAuthProfile: vi.fn(async () => false),
+        resolveAuthProfileFailureReason: vi.fn(() => null),
+      },
+    });
+    params.attempt.terminal = { kind: "timeout", phase: "tool_execution", source: "runtime" };
+    params.attempt.promptTimeoutOutcome = { providerStarted: true };
+    const error = await handleEmbeddedPromptFailure(params).catch((failure: unknown) => failure);
+    const fields = resolveAgentRunErrorLifecycleFields(error, undefined);
+    expect(fields).toEqual({ stopReason: "timeout", providerStarted: true });
+    expect(
+      buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase: "error", data: fields }).reason,
+    ).toBe("hard_timeout");
+  });
+
+  it.each(["prompt", "compaction", "tool_execution"] as const)(
+    "retains an opaque %s watchdog failure without changing its retry routing",
+    async (phase) => {
+      const params = makeParams({
+        promptError: new Error("Opaque provider failure"),
+        failover: { resolveAuthProfileFailureReason: vi.fn(() => null) },
+      });
+      params.attempt.terminal = { kind: "timeout", phase, source: "runtime" };
+
+      const error = await handleEmbeddedPromptFailure(params).catch((failure: unknown) => failure);
+
+      expect(resolveAgentRunErrorLifecycleFields(error, undefined)).toEqual({
+        stopReason: "timeout",
+        ...(phase === "prompt" ? { timeoutPhase: "provider", providerStarted: true } : {}),
+      });
+      expect(params.failover.advanceAuthProfile).not.toHaveBeenCalled();
+      expect(error).toHaveProperty("cause", params.promptError);
+    },
+  );
+
   it.each([false, true])(
     "surfaces trusted checkpoint recovery without provider failover (altered message: %s)",
     async (alteredMessage) => {
@@ -98,11 +250,10 @@ describe("handleEmbeddedPromptFailure", () => {
       for (const callback of [
         params.maybeRefreshRuntimeAuthForAuthError,
         params.suspendForFailure,
-        params.resolveAuthProfileFailureReason,
-        params.advanceAuthProfile,
-        params.advanceRateLimitAuthProfile,
-        params.maybeMarkAuthProfileFailure,
-        params.maybeRetryTransient,
+        params.failover.resolveAuthProfileFailureReason,
+        params.failover.advanceAuthProfile,
+        params.failover.advanceRateLimitAuthProfile,
+        params.failover.maybeMarkAuthProfileFailure,
       ]) {
         expect(callback).not.toHaveBeenCalled();
       }
@@ -134,7 +285,7 @@ describe("handleEmbeddedPromptFailure", () => {
       const params = makeParams({
         promptError,
         promptErrorSource,
-        resolveAuthProfileFailureReason: vi.fn(() => null),
+        failover: { resolveAuthProfileFailureReason: vi.fn(() => null) },
       });
 
       await expect(handleEmbeddedPromptFailure(params)).rejects.toBeInstanceOf(Error);
@@ -143,6 +294,42 @@ describe("handleEmbeddedPromptFailure", () => {
       expect(params.maybeRefreshRuntimeAuthForAuthError).toHaveBeenCalledOnce();
     },
   );
+
+  it("never refreshes auth or retries a recorded CLI terminal stop, even with an auth-shaped reason", async () => {
+    // The stop message repeats the backend's own terminal_reason; a value like
+    // `unauthorized` reads as an auth failure to text classifiers, and a retry
+    // would replay tool effects the terminal-stop policy exists to protect.
+    const promptError = new FailoverError(
+      "Claude CLI ended the turn without a reply (terminal_reason: unauthorized, stop_reason: end_turn). " +
+        "Tool actions may already have run; verify their effects before retrying.",
+      { reason: "unknown", code: "cli_turn_stopped", provider: "claude-cli", model: "sonnet" },
+    );
+    const params = makeParams({
+      promptError,
+      provider: "claude-cli",
+      modelId: "sonnet",
+      activeErrorContext: { provider: "claude-cli", model: "sonnet" },
+      maybeRefreshRuntimeAuthForAuthError: vi.fn(async () => true),
+      failover: {
+        resolveAuthProfileFailureReason: vi.fn(() => null),
+      },
+    });
+
+    await expect(handleEmbeddedPromptFailure(params)).rejects.toMatchObject({
+      code: "cli_turn_stopped",
+    });
+
+    for (const callback of [
+      params.maybeRefreshRuntimeAuthForAuthError,
+      params.failover.advanceAuthProfile,
+      params.failover.advanceRateLimitAuthProfile,
+    ]) {
+      expect(callback).not.toHaveBeenCalled();
+    }
+    expect(params.traceAttempts).toEqual([
+      expect.objectContaining({ result: "surface_error", stage: "prompt" }),
+    ]);
+  });
 
   it("returns the profile-rotation retry before failure marking finishes", async () => {
     const events: string[] = [];
@@ -159,11 +346,13 @@ describe("handleEmbeddedPromptFailure", () => {
     try {
       const outcome = await handleEmbeddedPromptFailure(
         makeParams({
-          advanceRateLimitAuthProfile: vi.fn(async () => {
-            events.push("advance");
-            return true;
-          }),
-          maybeMarkAuthProfileFailure,
+          failover: {
+            advanceRateLimitAuthProfile: vi.fn(async () => {
+              events.push("advance");
+              return true;
+            }),
+            maybeMarkAuthProfileFailure,
+          },
         }),
       );
 
@@ -184,5 +373,58 @@ describe("handleEmbeddedPromptFailure", () => {
     }
 
     await vi.waitFor(() => expect(events).toEqual(["advance", "mark-start", "mark-finish"]));
+  });
+
+  it("keeps a live SessionManager transcript-validation error off shared credential health", async () => {
+    let promptError: unknown;
+    try {
+      await SessionManager.inMemory("/tmp").appendModelChange("", "");
+    } catch (error) {
+      promptError = error;
+    }
+    expect(promptError).toBeInstanceOf(Error);
+    expect(promptError).toHaveProperty("message", "Invalid session transcript entry: model_change");
+
+    const params = makeParams({
+      promptError,
+      provider: "openrouter",
+      modelId: "gemini-2.5-flash",
+      activeErrorContext: { provider: "openrouter", model: "gemini-2.5-flash" },
+      failover: {
+        resolveAuthProfileFailureReason: (reason, opts) =>
+          resolveAuthProfileFailureReason({
+            failoverReason: reason,
+            providerStarted: opts?.providerStarted,
+            transientRateLimit: opts?.transientRateLimit,
+            policy: "shared",
+          }),
+        advanceAuthProfile: vi.fn(async () => false),
+      },
+    });
+
+    const error = await handleEmbeddedPromptFailure(params).catch((failure: unknown) => failure);
+
+    expect(error).toBe(promptError);
+    expect(params.failover.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+    expect(params.failover.advanceAuthProfile).not.toHaveBeenCalled();
+    expect(params.traceAttempts).toEqual([
+      expect.objectContaining({
+        provider: "openrouter",
+        model: "gemini-2.5-flash",
+        result: "surface_error",
+        reason: "format",
+        stage: "prompt",
+      }),
+    ]);
+    expect(
+      buildKnownAgentRunFailureReplyPayload({
+        err: error,
+        sessionCtx: { ChatType: "direct" },
+        resolvedVerboseLevel: "off",
+      }),
+    ).toMatchObject({
+      text: "LLM request failed: the Gateway rejected a session transcript entry. Compact or reset this session and try again.",
+      isError: true,
+    });
   });
 });

@@ -91,7 +91,6 @@ vi.mock("./message/register.discord-admin.js", () => ({
 describe("registerMessageCommands", () => {
   const ctx: ProgramContext = {
     programVersion: "9.9.9-test",
-    channelOptions: ["telegram", "discord"],
     messageChannelOptions: "telegram|discord",
     agentChannelOptions: "last|telegram|discord",
   };
@@ -106,7 +105,7 @@ describe("registerMessageCommands", () => {
     registerMessageCommands(program, ctx);
 
     const message = requireProgramCommand(program, "message");
-    expect(createMessageCliHelpersMock).toHaveBeenCalledWith(message, "telegram|discord");
+    expect(createMessageCliHelpersMock).toHaveBeenCalledWith("telegram|discord");
 
     const expectedRegistrars = [
       registerMessageSendCommandMock,

@@ -316,6 +316,7 @@ describe("handleDiscordMessageAction", () => {
         before: undefined,
         after: undefined,
         around: undefined,
+        messageId: undefined,
       },
       cfg,
       options: {
@@ -327,6 +328,33 @@ describe("handleDiscordMessageAction", () => {
           currentChannelId: "channel:123",
         },
       },
+    });
+  });
+
+  it("forwards messageId for Discord read actions", async () => {
+    const cfg = discordConfig();
+    await handleDiscordMessageAction({
+      action: "read",
+      params: {
+        channelId: "channel:123",
+        messageId: "1542546825066577940",
+      },
+      cfg,
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "readMessages",
+        accountId: undefined,
+        channelId: "123",
+        limit: undefined,
+        before: undefined,
+        after: undefined,
+        around: undefined,
+        messageId: "1542546825066577940",
+      },
+      cfg,
+      options: defaultActionOptions(),
     });
   });
 
@@ -843,7 +871,7 @@ describe("handleDiscordMessageAction", () => {
       expect.objectContaining({
         action: "sendMessage",
         to: "channel:123",
-        content: "",
+        content: undefined,
         embeds,
       }),
       cfg,

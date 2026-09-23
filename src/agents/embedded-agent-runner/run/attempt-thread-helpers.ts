@@ -4,6 +4,12 @@ import { normalizeStructuredPromptSection } from "@openclaw/ai/internal/shared";
  */
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
+import type { isCacheTtlEligibleProvider } from "../cache-ttl.js";
+import {
+  hashToolResultProjectionSnapshot,
+  serializeCacheTtlToolResultProjections,
+  type ToolResultPromptProjectionState,
+} from "../session-prompt-state.js";
 
 /** Custom transcript marker used to preserve cache-TTL pruning state across attempts. */
 const ATTEMPT_CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
@@ -63,14 +69,20 @@ function shouldAppendAttemptCacheTtl(params: {
   provider: string;
   modelId: string;
   modelApi?: string;
-  isCacheTtlEligibleProvider: (provider: string, modelId: string, modelApi?: string) => boolean;
+  modelRoute?: Parameters<typeof isCacheTtlEligibleProvider>[3];
+  isCacheTtlEligibleProvider: typeof isCacheTtlEligibleProvider;
 }): boolean {
   if (params.timedOutDuringCompaction || params.compactionOccurredThisAttempt) {
     return false;
   }
   return (
     params.config?.agents?.defaults?.contextPruning?.mode === "cache-ttl" &&
-    params.isCacheTtlEligibleProvider(params.provider, params.modelId, params.modelApi)
+    params.isCacheTtlEligibleProvider(
+      params.provider,
+      params.modelId,
+      params.modelApi,
+      params.modelRoute,
+    )
   );
 }
 
@@ -89,17 +101,25 @@ export function appendAttemptCacheTtlIfNeeded(params: {
   provider: string;
   modelId: string;
   modelApi?: string;
-  isCacheTtlEligibleProvider: (provider: string, modelId: string, modelApi?: string) => boolean;
+  modelRoute?: Parameters<typeof isCacheTtlEligibleProvider>[3];
+  isCacheTtlEligibleProvider: typeof isCacheTtlEligibleProvider;
   now?: number;
+  toolResultPromptProjectionState: ToolResultPromptProjectionState;
 }): boolean {
   if (!shouldAppendAttemptCacheTtl(params)) {
     return false;
   }
-  params.sessionManager.appendCustomEntry?.(ATTEMPT_CACHE_TTL_CUSTOM_TYPE, {
-    timestamp: params.now ?? Date.now(),
-    provider: params.provider,
-    modelId: params.modelId,
-  });
+  if (params.sessionManager.appendCustomEntry) {
+    const snapshot = serializeCacheTtlToolResultProjections(params.toolResultPromptProjectionState);
+    const hash = hashToolResultProjectionSnapshot(snapshot);
+    params.sessionManager.appendCustomEntry(ATTEMPT_CACHE_TTL_CUSTOM_TYPE, {
+      timestamp: params.now ?? Date.now(),
+      provider: params.provider,
+      modelId: params.modelId,
+      ...(hash !== params.toolResultPromptProjectionState.lastWrittenSnapshotHash ? snapshot : {}),
+    });
+    params.toolResultPromptProjectionState.lastWrittenSnapshotHash = hash;
+  }
   return true;
 }
 

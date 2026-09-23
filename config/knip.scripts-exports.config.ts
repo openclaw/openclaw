@@ -28,6 +28,7 @@ const repositoryToolEntries = [
   "security/opengrep/check-rule-metadata.mjs!",
   "security/opengrep/compile-rules.mjs!",
   "skills/meme-maker/scripts/meme.mjs!",
+  "scripts/check-openclaw-package-tarball.mts!",
 ] as const;
 
 const config = {
@@ -73,6 +74,10 @@ const config = {
         ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
+        // CLI subprocess fixtures consume the shared native-report collector.
+        "src/cli/cli-process-child.test-helpers.test.ts!",
+        // Core bootstrap packaging consumes the scripts' dist-import scanner.
+        "src/gateway/worker-environments/node-bootstrap-artifact.ts!",
         "src/plugin-sdk/api-baseline.ts!",
       ],
       project: [
@@ -83,6 +88,8 @@ const config = {
         "skills/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "test/**/*.{js,mjs,cjs,ts,mts,cts}!",
+        "src/cli/cli-process-child.test-helpers{,.test}.ts!",
+        "src/gateway/worker-environments/node-bootstrap-artifact.ts!",
         "src/plugin-sdk/api-baseline.ts!",
       ],
     },

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { RuntimeEnv } from "../runtime-api.js";
 import { startBotIdentityRecovery } from "./monitor.bot-identity.js";
 
@@ -26,11 +27,7 @@ afterEach(() => {
 describe("Feishu bot identity retry failures", () => {
   it("reports a rejected background retry without leaking an unhandled rejection", async () => {
     fetchBotIdentityForMonitorMock.mockRejectedValueOnce(new Error("probe exploded"));
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } satisfies RuntimeEnv;
+    const runtime = createRuntimeSpies() satisfies RuntimeEnv;
     const unhandled: unknown[] = [];
     const onUnhandledRejection = (reason: unknown) => {
       unhandled.push(reason);
@@ -68,11 +65,7 @@ describe("Feishu bot identity retry failures", () => {
   });
 
   it("stops an aborted retry without probing or reporting an error", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } satisfies RuntimeEnv;
+    const runtime = createRuntimeSpies() satisfies RuntimeEnv;
     const controller = new AbortController();
 
     startBotIdentityRecovery({

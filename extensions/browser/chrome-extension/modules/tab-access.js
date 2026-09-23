@@ -1,8 +1,9 @@
-import { ACCESS_MODE_ALL, ACCESS_MODE_SELECTED, OPENCLAW_TAB_GROUP_TITLE } from "./relay-core.js";
+import { ACCESS_MODE_ALL, ACCESS_MODE_SELECTED } from "./relay-core.js";
 import { addTabToOpenClawGroup } from "./relay-tab-groups.js";
 import { TAB_SCOPED_COMMANDS } from "./tab-access-command-scope.js";
 import { createTabDocumentProvenance } from "./tab-document-provenance.js";
 import { effectiveTabUrl, isValidTabId, tabEligibility } from "./tab-eligibility.js";
+import { createTabGroupRevocations } from "./tab-group-revocations.js";
 
 const DENIED_TAB_IDS_KEY = "deniedTabIdsV1";
 
@@ -43,8 +44,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       invalidateTab,
       requireTab,
       provenTabIsCurrent: (tabId, epoch) =>
-        provenEpochs.get(epoch)?.tabId === tabId &&
-        epochIsCurrent(tabId, { ...epoch, documentRevision: undefined }),
+        groupRevocations.isProvenCurrent(tabId, epoch, epochIsCurrent),
       recordRootCommit: (tabId, url) => {
         discoveryRevision += 1;
         const created = createdTabs.get(tabId);
@@ -60,6 +60,15 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     },
   });
 
+  const groupRevocations = createTabGroupRevocations({
+    createdTabs,
+    provenEpochs,
+    epochIsCurrent,
+    invalidateDocuments: documents.invalidateGroup,
+    invalidateAll,
+    reviseDiscovery: () => (discoveryRevision += 1),
+  });
+
   async function readTabDocument(tabId) {
     // A native root commit can overtake Chrome's snapshot callback. Discard it
     // before consuming provenance, without recapturing the admitted epoch.
@@ -69,7 +78,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       root = documents.rootRevision(tabId);
       tab = await chromeApi.tabs.get(tabId);
     } while (root !== documents.rootRevision(tabId));
-    return tab;
+    return documents.resolveTabSnapshot(tabId, tab);
   }
 
   const mutateStorage = (task) => {
@@ -147,6 +156,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     const current = tabRevisions.get(tabId);
     return {
       revision,
+      groupRevision: groupRevocations.capture(),
       tabRevision: current?.access ?? 0,
       ...(!TAB_SCOPED_COMMANDS.has(method) ? { documentRevision: current?.document ?? 0 } : {}),
     };
@@ -161,51 +171,36 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     return false;
   }
 
-  function epochMatches(tabId, epoch) {
+  function epochMatches(tabId, epoch, groupId = provenEpochs.get(epoch)?.groupId) {
     return (
       enabled &&
       !transitioning &&
       !tabIsRevoking(tabId) &&
       epoch.revision === revision &&
+      groupRevocations.isCurrent(epoch, groupId) &&
       epoch.tabRevision === (tabRevisions.get(tabId)?.access ?? 0) &&
       (epoch.documentRevision === undefined ||
         epoch.documentRevision === (tabRevisions.get(tabId)?.document ?? 0))
     );
   }
 
-  function epochIsCurrent(tabId, epoch) {
+  function epochIsCurrent(tabId, epoch, groupId) {
+    // Handoff retires the creator's epoch gate, not its initial-blank record.
+    // Commands and attachments retain their own epochs after re-selection.
     const created = createdTabs.get(tabId);
     return (
-      epochMatches(tabId, epoch) &&
+      epochMatches(tabId, epoch, groupId) &&
       (!created ||
-        (created.isCurrent() && (created.handedOff || epochMatches(tabId, created.epoch))))
+        (created.isCurrent() &&
+          (created.handedOff ||
+            (groupRevocations.isCreationCurrent(created) && epochMatches(tabId, created.epoch)))))
     );
   }
 
-  function invalidateAll(group) {
-    const naming = [...createdTabs.values()].filter(
-      (created) =>
-        !created.handedOff &&
-        created.namingGroup === group?.id &&
-        (group?.title === OPENCLAW_TAB_GROUP_TITLE ||
-          (created.initialGroup && group?.title === "")) &&
-        epochIsCurrent(created.tab.id, created.epoch),
-    );
+  function invalidateAll() {
     documents.invalidateAll();
     revision += 1;
     discoveryRevision += 1;
-    // Renew only the exact expected naming event of a still-current creation.
-    // An earlier pause/mode/group revocation cannot be recaptured here.
-    for (const created of naming) {
-      // Only this private creation epoch is shared with its pending attachment.
-      // Updating it also covers a naming event delivered after the API callback.
-      created.epoch.revision = revision;
-      if (group?.title === "") {
-        created.initialGroup = false;
-      } else {
-        created.namingGroup = undefined;
-      }
-    }
   }
 
   function observeTabUpdate(tabId, change, tab) {
@@ -222,9 +217,6 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       (typeof tab?.pendingUrl === "string" && !eligibilityForTab(tab).eligible);
     const created = createdTabs.get(tabId);
     if (!created) {
-      if (mode === ACCESS_MODE_SELECTED && typeof change.groupId === "number") {
-        invalidateTab(tabId);
-      }
       return accessChanged;
     }
     if (typeof change.url === "string") {
@@ -275,7 +267,10 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     const created = {
       tab,
       // Creation owns a tab, not its first HTTP document (which may redirect).
-      epoch: { revision: operationRevision, tabRevision: tabRevisions.get(tab.id)?.access ?? 0 },
+      epoch: groupRevocations.captureEpoch(
+        operationRevision,
+        tabRevisions.get(tab.id)?.access ?? 0,
+      ),
       isCurrent,
       initialBlank: message.url === "about:blank" && initialBlankDocument(tab),
       handedOff: false,
@@ -319,7 +314,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       handoff({ tabId: tab.id, targetId: attached.targetId });
       created.handedOff = true;
       // Earlier inventory reads must not retract the target just handed to a
-      // client. Self-group events need not change discovery's revision.
+      // client. Group events advance the same revision without renewing access.
       discoveryRevision += 1;
     } catch (error) {
       // Rollback belongs to the creator, before any id is handed to the relay.
@@ -329,6 +324,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       const ownsRollback = () =>
         createdTabs.get(tab.id) === created &&
         !deniedTabIds.has(tab.id) &&
+        groupRevocations.isCreationCurrent(created) &&
         epochMatches(tab.id, created.epoch);
       try {
         if (ownsRollback()) {
@@ -467,8 +463,11 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     invalidateTab(tabId);
   }
 
-  function renewTabAccess(tabId, attachedEpoch, tab) {
+  function renewTabAccess(tabId, attachedEpoch, observedTab, change) {
+    const tab = documents.resolveTabUpdate(tabId, observedTab, change);
+    const selectedGroupChange = mode === ACCESS_MODE_SELECTED && typeof change.groupId === "number";
     const blankObservers =
+      !selectedGroupChange &&
       !attachedEpoch &&
       tab?.id === tabId &&
       initialBlankDocument(tab) &&
@@ -491,7 +490,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     // An allowed document change retires page reads/actions, not tab authority.
     // Only an already-proven attachment gets synchronous event renewal. Without
     // an attachment, an eligible initial HTTP commit can precede create's callback.
-    if (!eligibilityForTab(tab).eligible || (attachedEpoch && !canRenew)) {
+    if (!eligibilityForTab(tab).eligible || (!canRenew && (attachedEpoch || selectedGroupChange))) {
       invalidateTab(tabId);
     } else {
       tabRevisions.set(tabId, {
@@ -508,16 +507,14 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       return undefined;
     }
     const epoch = capture(tabId);
-    provenEpochs.set(epoch, { tabId, groupId: tab.groupId });
+    const groupId = mode === ACCESS_MODE_SELECTED ? tab.groupId : undefined;
+    provenEpochs.set(epoch, { tabId, groupId });
     return epoch;
   }
 
   async function inspectTab(tabId, epoch = capture(tabId)) {
     if (!isValidTabId(tabId)) {
       return { accessible: false, eligible: false, denied: false, reason: "missing", tab: null };
-    }
-    if (!enabled || transitioning || tabIsRevoking(tabId)) {
-      return { accessible: false, eligible: false, denied: false, reason: "revoked", tab: null };
     }
     if (!epochIsCurrent(tabId, epoch)) {
       return { accessible: false, eligible: false, denied: false, reason: "revoked", tab: null };
@@ -528,7 +525,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     } catch {
       return { accessible: false, eligible: false, denied: false, reason: "missing", tab: null };
     }
-    if (!epochIsCurrent(tabId, epoch)) {
+    if (!epochIsCurrent(tabId, epoch) || !groupRevocations.isCurrentInMode(mode, epoch, tab)) {
       return { accessible: false, eligible: false, denied: false, reason: "revoked", tab };
     }
     const document = documents.get(tabId);
@@ -543,7 +540,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     if (!selected && (document || createdTabs.get(tabId)?.epoch === epoch)) {
       invalidateTab(tabId);
     }
-    if (!epochIsCurrent(tabId, epoch)) {
+    if (!epochIsCurrent(tabId, epoch) || !groupRevocations.isCurrentInMode(mode, epoch, tab)) {
       return { accessible: false, eligible: true, denied, reason: "revoked", tab };
     }
     if (mode === ACCESS_MODE_SELECTED && selected) {
@@ -553,7 +550,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       } catch {
         return { accessible: false, eligible: false, denied: false, reason: "missing", tab: null };
       }
-      if (!epochIsCurrent(tabId, epoch)) {
+      if (!epochIsCurrent(tabId, epoch) || !groupRevocations.isCurrentInMode(mode, epoch, tab)) {
         return { accessible: false, eligible: false, denied, reason: "revoked", tab: current };
       }
       const currentEligible = eligibilityForTab(current).eligible;
@@ -561,7 +558,10 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       if (!currentSelected && (document || createdTabs.get(tabId)?.epoch === epoch)) {
         invalidateTab(tabId);
       }
-      if (!epochIsCurrent(tabId, epoch)) {
+      if (
+        !epochIsCurrent(tabId, epoch) ||
+        !groupRevocations.isCurrentInMode(mode, epoch, current)
+      ) {
         return { accessible: false, eligible: false, denied, reason: "revoked", tab: current };
       }
       if (
@@ -581,11 +581,12 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
         return { accessible: false, eligible: false, denied, reason: "revoked", tab: current };
       }
     }
-    if (!epochIsCurrent(tabId, epoch)) {
+    if (!epochIsCurrent(tabId, epoch) || !groupRevocations.isCurrentInMode(mode, epoch, tab)) {
       return { accessible: false, eligible: true, denied, reason: "revoked", tab };
     }
     if (!denied && selected) {
-      provenEpochs.set(epoch, { tabId, groupId: tab.groupId });
+      const groupId = mode === ACCESS_MODE_SELECTED ? tab.groupId : undefined;
+      provenEpochs.set(epoch, { tabId, groupId });
     }
     return {
       accessible: !denied && selected,
@@ -632,10 +633,11 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
         continue;
       }
       const accessible = [];
-      for (const tab of tabs) {
+      for (const snapshot of tabs) {
         if (listRevision !== discoveryRevision) {
           break;
         }
+        const tab = documents.resolveTabSnapshot(snapshot.id, snapshot);
         if (tabIsRevoking(tab.id) || !eligibilityForTab(tab).eligible) {
           continue;
         }
@@ -750,8 +752,8 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     retireTabDocument: documents.retireAttachment,
     forwardDocumentEvent: documents.forwardDocumentEvent,
     navigateTab: documents.navigateTab,
-    invalidateDocumentGroup: documents.invalidateGroup,
     renewTabAccess,
+    invalidateGroup: groupRevocations.invalidate,
     invalidateAll,
     observeTabUpdate,
     createTab,

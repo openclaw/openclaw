@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { build } from "tsdown";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { TSDOWN_UNIFIED_CONFIG_GROUP } from "../../scripts/lib/tsdown-config-groups.mts";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import buildConfigs from "../../tsdown.config.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { copyFsSafePackageFixture } from "./fs-safe-package.test-support.js";
@@ -13,6 +14,7 @@ import { copyFsSafePackageFixture } from "./fs-safe-package.test-support.js";
 const builds = useAutoCleanupTempDirTracker(afterAll);
 const fixtures = useAutoCleanupTempDirTracker(afterEach);
 const helper = path.resolve("scripts/verify-mac-node-worker-fs.mjs");
+const testNodeExecPath = resolveTestNodeExecPath();
 // This verifier consumes Mach-O Mac worker payloads; exercise both Mac slices
 // with their selected Node executables in package proof, not simulated platforms.
 describe.skipIf(process.platform !== "darwin")("Mac worker bundled filesystem proof", () => {
@@ -21,7 +23,7 @@ describe.skipIf(process.platform !== "darwin")("Mac worker bundled filesystem pr
     compiled = builds.make("openclaw-worker-fs-build-");
     const selected = buildConfigs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
     expect(selected).toBeDefined();
-    const bundles = await build({
+    const { bundles } = await build({
       ...selected,
       config: false,
       entry: {
@@ -37,6 +39,7 @@ describe.skipIf(process.platform !== "darwin")("Mac worker bundled filesystem pr
     for (const bundle of bundles) {
       await bundle[Symbol.asyncDispose]();
     }
+    expect(fs.existsSync(path.join(compiled, "dist/native"))).toBe(false);
     fs.writeFileSync(path.join(compiled, "package.json"), '{"type":"module"}');
   });
 
@@ -59,7 +62,7 @@ describe.skipIf(process.platform !== "darwin")("Mac worker bundled filesystem pr
   }
 
   function probe(packageRoot: string, home: string, args = [helper, packageRoot, home]) {
-    const result = spawnSync(process.execPath, args, {
+    const result = spawnSync(testNodeExecPath, args, {
       cwd: home,
       env: { HOME: home, TMPDIR: home, FS_SAFE_NATIVE_MODE: "require" },
       encoding: "utf8",
@@ -80,10 +83,10 @@ describe.skipIf(process.platform !== "darwin")("Mac worker bundled filesystem pr
 
     const node = path.join(runtime, "bin/node");
     fs.mkdirSync(path.dirname(node));
-    fs.copyFileSync(process.execPath, node, fs.constants.COPYFILE_FICLONE);
+    fs.copyFileSync(testNodeExecPath, node, fs.constants.COPYFILE_FICLONE);
     // Shared Homebrew Node needs its adjacent libnode at the relocated rpath;
     // official static Node distributions have no matching library to copy.
-    for (const library of fs.globSync(path.resolve(process.execPath, "../../lib/libnode*.dylib"))) {
+    for (const library of fs.globSync(path.resolve(testNodeExecPath, "../../lib/libnode*.dylib"))) {
       fs.copyFileSync(
         library,
         path.join(runtime, "lib", path.basename(library)),
@@ -169,5 +172,26 @@ registerHooks({
     expect(fs.readFileSync(path.join(home, "native-create-proof"), "utf8")).toBe(
       "bundled worker create proof\n",
     );
+  });
+
+  it("does not recover an omitted platform package from a stale dist native tree", () => {
+    const { packageRoot, home, native, nativePackage } = fixture();
+    const staleNative = path.join(
+      packageRoot,
+      "dist/native",
+      `${process.platform}-${process.arch}`,
+      "fs-safe-native.node",
+    );
+    fs.mkdirSync(path.dirname(staleNative), { recursive: true });
+    fs.copyFileSync(native, staleNative);
+    fs.rmSync(nativePackage.root, { recursive: true });
+    const result = probe(packageRoot, home);
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("helper-unavailable");
+    expect(result.stderr).toContain(nativePackage.name);
+    expect(fs.readFileSync(path.join(home, "native-write-proof"), "utf8")).toBe(
+      "before replacement\n",
+    );
+    expect(fs.existsSync(path.join(home, "native-create-proof"))).toBe(false);
   });
 });

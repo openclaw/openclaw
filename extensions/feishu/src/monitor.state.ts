@@ -1,4 +1,3 @@
-// Feishu plugin module implements monitor.state behavior.
 import * as http from "node:http";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import {

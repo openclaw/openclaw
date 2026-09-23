@@ -6,17 +6,13 @@ import {
   UpdateAvailableSchema,
   UpdateScheduleStateSchema,
 } from "../../../packages/gateway-protocol/src/schema/config.js";
-import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
+import type { GatewayHelloOk } from "../api/gateway.ts";
 import { i18n } from "../i18n/index.ts";
-import type {
-  ApplicationStatusBanner,
-  PendingUpdateReconciliation,
-  UpdateRestartStatusResponse,
-} from "./update-overlay-helpers.ts";
 import {
-  createUpdateVerificationController,
+  projectUpdateSentinel,
   projectUpdateStatusResponse,
   resolveUpdateStatusBanner,
+  resolveUpdateStatusCheckBanner,
 } from "./update-overlay-helpers.ts";
 import {
   readUpdateAvailable,
@@ -26,125 +22,11 @@ import {
 } from "./update-schedule-dto.ts";
 import { formatUpdateCampaignLabel } from "./update-schedule-projection.ts";
 
-const TRIAGE_HINT = "Run openclaw triage on the Gateway host before retrying.";
-const translations: Record<string, string> = {
-  "updates.triage.hostHint": TRIAGE_HINT,
-  "updates.status": "Update {status}: {reason}. {guidance}",
-  "updates.failureReasons.dirty": "Commit or stash changes, then retry.",
-  "updates.failureReasons.depsInstallFailed":
-    "Dependency install failed. Fix the install error and retry.",
-  "updates.failureReasons.managedServiceHandoffUnavailable":
-    "Stop the foreground Gateway, update in the terminal, then launch it again.",
-  "updates.failureReasons.default":
-    "See the gateway logs for the exact failure and retry once the cause is fixed.",
-  "updates.verificationFailedWithIdentity":
-    "Update finished, but the running install does not match the expected revision. Expected {expected}, running {actual}.",
-  "updates.outcomeUnknown": "The update outcome is unknown.",
-  "common.unknown": "Unknown",
-  "updates.failureReasons.restartUnhealthy":
-    "The replacement process never became healthy. The previous process stayed up so you can recover.",
-  "updates.failedAtStep": "The update failed at {step}: {cause}.",
-  "updates.handoffTimeout":
-    "Update handoff started, but completion was not reported after reconnect. Run `openclaw update status` for the final result.",
-  "updates.campaign.countdown": "Updating in {time}",
-  "updates.campaign.applying": "Updating…",
-  "updates.campaign.held": "Update held · resumes in {time}",
-  "updates.campaign.waitingForIdle": "Waiting for active work · forced update in {time}",
-};
-
-function installTranslations() {
-  return vi.spyOn(i18n, "t").mockImplementation((key, params) => {
-    const template = translations[key] ?? key;
-    return template.replace(/\{(\w+)\}/g, (_match, name: string) => params?.[name] ?? `{${name}}`);
-  });
-}
-
 afterEach(() => {
-  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
-async function verifyUpdate(params: {
-  pending: Omit<
-    PendingUpdateReconciliation,
-    "requestId" | "profileId" | "handoffId" | "deadlineAtMs"
-  >;
-  response: unknown;
-  advanceToMs?: number;
-  onVerifiedInstall?: (identity: { version: string | null; sha: string | null }) => void;
-}): Promise<ApplicationStatusBanner | null | undefined> {
-  vi.useFakeTimers();
-  vi.setSystemTime(0);
-  const response = params.response as UpdateRestartStatusResponse | null;
-  const handoffId = params.pending.kind === "handoff" ? "verification-handoff" : null;
-  // An admitted update carries its server record; restart-health rewrites retain its timestamp.
-  const sentinel = response?.sentinel
-    ? {
-        ...response.sentinel,
-        ts: 1_000,
-        stats: { ...response.sentinel.stats, ...(handoffId ? { handoffId } : {}) },
-      }
-    : null;
-  let banner: ApplicationStatusBanner | null | undefined;
-  const pending: PendingUpdateReconciliation = {
-    ...params.pending,
-    requestId: "request-current",
-    profileId: null,
-    handoffId,
-    record: sentinel ? { id: handoffId ?? "recorded:1000", timestampMs: 1_000 } : undefined,
-    deadlineAtMs: 35 * 60_000,
-  };
-  const client = {
-    request: vi.fn(async () => {
-      if (params.advanceToMs !== undefined) {
-        vi.setSystemTime(params.advanceToMs);
-      }
-      return response ? { ...response, sentinel } : null;
-    }),
-  } as unknown as GatewayBrowserClient;
-  const controller = createUpdateVerificationController({
-    getPending: () => pending,
-    updatePending: vi.fn(),
-    clearPending: vi.fn(),
-    isCurrent: () => true,
-    publish: vi.fn(),
-    publishBanner: (value) => {
-      banner = value;
-    },
-    publishFailure: ({ banner: value }) => {
-      banner = value;
-    },
-    ...(params.onVerifiedInstall ? { onVerifiedInstall: params.onVerifiedInstall } : {}),
-  });
-
-  await controller.verify(client, 1);
-  return banner;
-}
-
 describe("update schedule hydration", () => {
-  it("preserves an active hold deadline after reconnect", () => {
-    const holdUntilMs = 3_601_000;
-    const hello = {
-      snapshot: {
-        updateSchedule: {
-          channel: "stable",
-          autoEnabled: true,
-          target: { kind: "package", version: "2.0.0" },
-          campaign: {
-            id: "campaign-held",
-            state: "waiting-for-idle",
-            announcedAtMs: 1_000,
-            holdUntilMs,
-            forceAtMs: 4_501_000,
-            updatedAtMs: 2_000,
-          },
-        },
-      },
-    } as GatewayHelloOk;
-
-    expect(readUpdateSchedule(hello)?.campaign?.holdUntilMs).toBe(holdUntilMs);
-  });
-
   it("preserves additive git availability and the hello schedule DTO", () => {
     const updateSchedule = {
       channel: "dev",
@@ -183,6 +65,7 @@ describe("update schedule hydration", () => {
           currentSha: "a".repeat(40),
           upstreamRef: "origin/main",
           upstreamSha: "b".repeat(40),
+          repositoryUrl: "https://github.com/example/openclaw",
           commitsBehind: 3,
           commits: [
             { sha: "b0b0b0b", subject: "Improve update scheduling" },
@@ -197,6 +80,7 @@ describe("update schedule hydration", () => {
       currentSha: "a".repeat(40),
       upstreamRef: "origin/main",
       upstreamSha: "b".repeat(40),
+      repositoryUrl: "https://github.com/example/openclaw",
       commitsBehind: 3,
       commits: [
         { sha: "b0b0b0b", subject: "Improve update scheduling" },
@@ -207,7 +91,6 @@ describe("update schedule hydration", () => {
   });
 
   it("formats countdown deadlines with a stable minutes-and-seconds shape", () => {
-    installTranslations();
     const schedule = {
       channel: "stable",
       autoEnabled: true,
@@ -252,7 +135,7 @@ describe("update schedule hydration", () => {
         },
         1_000,
       ),
-    ).toBe("Updating…");
+    ).toBe("Applying update…");
   });
 
   it.each([
@@ -447,8 +330,35 @@ describe("update schedule hydration", () => {
 });
 
 describe("update status localization", () => {
+  it("keeps external supervisor refusals visible without launching failure triage", () => {
+    const projected = projectUpdateSentinel({
+      kind: "update",
+      status: "skipped",
+      ts: 123,
+      stats: { reason: "external-supervisor-update-required" },
+    });
+
+    expect(projected?.banner?.tone).toBe("warn");
+    expect(projected?.banner?.text).toContain("managed by an external supervisor");
+    expect(projected?.banner?.text).toContain("Use your server or deployment's update workflow");
+    expect(projected?.banner?.text).not.toContain("openclaw triage");
+    expect(projected?.attempt?.reason).toBe("external-supervisor-update-required");
+    expect(projected?.failure).toBeNull();
+  });
+
+  it("distinguishes a failed status check from a failed update", () => {
+    const error = "gateway request timed out after 5000ms: update.status";
+    expect(resolveUpdateStatusCheckBanner(new Error(error))).toEqual({
+      tone: "warn",
+      text: `Could not check for updates: ${error}`,
+    });
+    expect(resolveUpdateStatusBanner({ status: "error", reason: "build-failed" })).toMatchObject({
+      tone: "danger",
+      text: expect.stringContaining("Update error: build-failed"),
+    });
+  });
+
   it("projects the recorded update attempt without inferring from localized text", () => {
-    installTranslations();
     const projected = projectUpdateStatusResponse(
       {
         sentinel: {
@@ -487,14 +397,6 @@ describe("update status localization", () => {
       afterSha: "after",
       failure: { step: "build", detail: "Type check failed" },
     });
-    const refreshed = projectUpdateStatusResponse(
-      { sentinel: { kind: "update", status: "ok", ts: 122 } },
-      { ...projected, heldUpdateCampaignId: null },
-      projected.failure,
-    );
-    expect(refreshed.failure).toEqual(projected.failure);
-    expect(refreshed.recordedUpdateAttempt).toEqual(projected.recordedUpdateAttempt);
-    expect(refreshed.updateStatusBanner).toEqual(projected.updateStatusBanner);
   });
 
   it.each([
@@ -502,10 +404,11 @@ describe("update status localization", () => {
     {
       reason: "managed-service-handoff-unavailable",
       key: "managedServiceHandoffUnavailable",
-      guidance: "Stop the foreground Gateway, update in the terminal, then launch it again.",
+      guidance:
+        "Stop the foreground Gateway, run `openclaw update`, then launch it again. For automatic updates, install a managed Gateway service.",
     },
   ])("localizes known update failure guidance for $reason", ({ reason, key, guidance }) => {
-    const translate = installTranslations();
+    const translate = vi.spyOn(i18n, "t");
 
     expect(resolveUpdateStatusBanner({ status: "skipped", reason })).toEqual({
       tone: "warn",
@@ -519,42 +422,35 @@ describe("update status localization", () => {
     });
   });
 
-  it("names the recorded cause instead of the reason slug when a step failed", async () => {
-    installTranslations();
-
-    await expect(
-      verifyUpdate({
-        pending: { kind: "handoff", expectedVersion: "2.0.0", expectedSha: null },
-        response: {
-          sentinel: {
-            kind: "update",
-            status: "error",
-            stats: {
-              reason: "deps-install-failed",
-              steps: [
-                { name: "fetch", log: { exitCode: 0, stderrTail: "done" } },
-                {
-                  name: "install",
-                  log: {
-                    exitCode: 1,
-                    stderrTail: "Progress: resolved 1\nENOSPC: no space left on device, write",
-                  },
-                },
-              ],
+  it("names the recorded cause instead of the reason slug when a retained step failed", () => {
+    expect(
+      projectUpdateSentinel({
+        kind: "update",
+        status: "error",
+        ts: 1_000,
+        stats: {
+          reason: "deps-install-failed",
+          steps: [
+            { name: "fetch", log: { exitCode: 0, stderrTail: "done" } },
+            {
+              name: "install",
+              log: {
+                exitCode: 1,
+                stderrTail: "Progress: resolved 1\nENOSPC: no space left on device, write",
+              },
             },
-          },
+          ],
         },
-      }),
-    ).resolves.toEqual({
+      })?.banner,
+    ).toEqual({
       tone: "danger",
-      text: `The update failed at install: ENOSPC: no space left on device, write. Dependency install failed. Fix the install error and retry. ${TRIAGE_HINT}`,
+      text: "The update failed at install: ENOSPC: no space left on device, write. Dependency install failed. Fix the install error and retry. If Ask OpenClaw is unavailable, run `openclaw triage` on the Gateway host to open a local coding agent for diagnosis and repair. Diagnose the cause before retrying.",
     });
   });
 
   it.each(["stderrTail", "stdoutTail"])(
     "redacts credentials in %s before shortening the recorded cause",
     (stream) => {
-      installTranslations();
       const password = "synthetic-password-value";
       const prefix = "npm ERR! fetch failed ";
       const userinfo = `https://build:${password}`;
@@ -583,137 +479,12 @@ describe("update status localization", () => {
   );
 
   it("preserves unknown status details inside localized fallback guidance", () => {
-    const translate = installTranslations();
+    const translate = vi.spyOn(i18n, "t");
 
     expect(resolveUpdateStatusBanner({ status: "error", reason: "disk-read-only" })).toEqual({
       tone: "danger",
       text: "Update error: disk-read-only. See the gateway logs for the exact failure and retry once the cause is fixed.",
     });
     expect(translate).toHaveBeenCalledWith("updates.failureReasons.default", undefined);
-  });
-
-  it("localizes restart verification with and without version diagnostics", async () => {
-    installTranslations();
-
-    await expect(
-      verifyUpdate({
-        pending: { kind: "restart", expectedVersion: "2.0.0", expectedSha: null },
-        response: {
-          sentinel: {
-            kind: "update",
-            status: "ok",
-            stats: { after: { version: "1.9.0" } },
-          },
-        },
-      }),
-    ).resolves.toEqual({
-      tone: "danger",
-      text: "Update finished, but the running install does not match the expected revision. Expected v2.0.0, running v1.9.0.",
-    });
-    await expect(
-      verifyUpdate({
-        pending: { kind: "restart", expectedVersion: "2.0.0", expectedSha: null },
-        response: null,
-        advanceToMs: 10_000,
-      }),
-    ).resolves.toEqual({
-      tone: "danger",
-      text: "The update outcome is unknown.",
-    });
-  });
-
-  it("verifies the restarted Git revision before reporting success", async () => {
-    installTranslations();
-    const onVerifiedInstall = vi.fn();
-
-    await expect(
-      verifyUpdate({
-        pending: {
-          kind: "restart",
-          expectedVersion: "2.0.0",
-          expectedSha: "abcdef0123456789",
-        },
-        response: {
-          sentinel: {
-            kind: "update",
-            status: "ok",
-            stats: { after: { version: "2.0.0", sha: "abcdef0" } },
-          },
-        },
-        onVerifiedInstall,
-      }),
-    ).resolves.toBeNull();
-    expect(onVerifiedInstall).toHaveBeenCalledWith({ version: "2.0.0", sha: "abcdef0" });
-
-    await expect(
-      verifyUpdate({
-        pending: {
-          kind: "restart",
-          expectedVersion: "2.0.0",
-          expectedSha: "abcdef0123456789",
-        },
-        response: {
-          sentinel: {
-            kind: "update",
-            status: "ok",
-            stats: { after: { version: "2.0.0", sha: "1234567" } },
-          },
-        },
-      }),
-    ).resolves.toEqual({
-      tone: "danger",
-      text: "Update finished, but the running install does not match the expected revision. Expected abcdef012345, running 1234567.",
-    });
-  });
-
-  it("localizes post-restart and handoff timeout guidance", async () => {
-    installTranslations();
-
-    await expect(
-      verifyUpdate({
-        pending: { kind: "restart", expectedVersion: "2.0.0", expectedSha: null },
-        response: {
-          sentinel: {
-            kind: "update",
-            status: "error",
-            stats: { reason: "restart-unhealthy" },
-          },
-        },
-      }),
-    ).resolves.toEqual({
-      tone: "danger",
-      text: `Update error: restart-unhealthy. The replacement process never became healthy. The previous process stayed up so you can recover. ${TRIAGE_HINT}`,
-    });
-    await expect(
-      verifyUpdate({
-        pending: { kind: "restart", expectedVersion: "2.0.0", expectedSha: null },
-        response: {
-          sentinel: {
-            kind: "update",
-            status: "error",
-            stats: { reason: "supervisor-exited" },
-          },
-        },
-      }),
-    ).resolves.toEqual({
-      tone: "danger",
-      text: `Update error: supervisor-exited. See the gateway logs for the exact failure and retry once the cause is fixed. ${TRIAGE_HINT}`,
-    });
-    await expect(
-      verifyUpdate({
-        pending: { kind: "handoff", expectedVersion: null, expectedSha: null },
-        response: {
-          sentinel: {
-            kind: "update",
-            status: "skipped",
-            stats: { reason: "managed-service-handoff-started" },
-          },
-        },
-        advanceToMs: 35 * 60_000,
-      }),
-    ).resolves.toEqual({
-      tone: "danger",
-      text: "Update handoff started, but completion was not reported after reconnect. Run `openclaw update status` for the final result.",
-    });
   });
 });

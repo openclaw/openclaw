@@ -1,6 +1,6 @@
 // Exa provider module implements model/runtime integration.
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { ProviderHttpError, readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import {
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
@@ -75,12 +75,8 @@ type ExaSearchResponse = {
   results?: unknown;
 };
 
-async function readExaSearchResults(
-  response: Response,
-  opts?: { maxBytes?: number },
-): Promise<ExaSearchResult[]> {
-  const maxBytes = opts?.maxBytes ?? EXA_SEARCH_JSON_MAX_BYTES;
-  const bytes = await readResponseWithLimit(response, maxBytes, {
+async function readExaSearchResults(response: Response): Promise<ExaSearchResult[]> {
+  const bytes = await readResponseWithLimit(response, EXA_SEARCH_JSON_MAX_BYTES, {
     onOverflow: ({ maxBytes: maxBytesLocal }) =>
       new Error(`Exa API response exceeds ${maxBytesLocal} bytes`),
   });
@@ -367,9 +363,11 @@ async function runExaSearch(params: {
     async (res) => {
       if (!res.ok) {
         const detail = await readExaErrorDetail(res);
-        throw new Error(`Exa API error (${res.status}): ${detail || res.statusText}`);
+        throw new ProviderHttpError(`Exa API error (${res.status}): ${detail || res.statusText}`, {
+          status: res.status,
+        });
       }
-      return readExaSearchResults(res);
+      return (await readExaSearchResults(res)).slice(0, params.count);
     },
   );
 }
@@ -558,15 +556,3 @@ export async function executeExaWebSearchProviderTool(
   writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
   return payload;
 }
-
-export const testing = {
-  parseExaContents,
-  buildExaCacheKey,
-  resolveExaApiKey,
-  resolveExaDescription,
-  resolveExaSearchCount,
-  resolveExaSearchEndpoint,
-  resolveFreshnessStartDate,
-  readExaErrorDetail,
-  readExaSearchResults,
-} as const;

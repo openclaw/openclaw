@@ -3,4 +3,7 @@ export {
   readOpenAIResponsesCompactionWindow,
   type OpenAIResponsesCompactionOutput,
 } from "../transports/openai-responses-compaction-window.js";
-export { resolveOpenAIResponsesServerCompactionPlan } from "../transports/openai-responses-payload-policy.js";
+export {
+  resolveOpenAIResponsesPayloadPolicy,
+  resolveOpenAIResponsesServerCompactionPlan,
+} from "../transports/openai-responses-payload-policy.js";

@@ -1,7 +1,7 @@
 /** Session awareness and transcript mirroring for direct cron delivery. */
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { copyReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import {
   canonicalizeMainSessionAlias,
@@ -232,11 +232,11 @@ export function buildDirectCronTranscriptMirrorPayloads(
       spokenText: _spokenText,
       ...rest
     } = payload;
-    return {
+    return copyReplyPayloadMetadata(payload, {
       ...rest,
       text: spokenText,
       ...(mediaUrls.length ? { mediaUrls } : {}),
-    };
+    });
   });
 }
 
@@ -635,7 +635,9 @@ export async function appendAdmittedDirectCronDeliveryTranscriptMirror(params: {
             `Session "${params.mirror.sessionKey}" changed before transcript mirror.`,
           );
         }
-        const archivedError = resolveSessionWorkStartError(params.mirror.sessionKey, latest);
+        const archivedError = resolveSessionWorkStartError(params.mirror.sessionKey, latest, {
+          purpose: "accepted-result-settlement",
+        });
         if (archivedError) {
           throw new Error(archivedError);
         }

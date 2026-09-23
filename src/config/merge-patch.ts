@@ -1,8 +1,8 @@
 // Creates and applies JSON merge-patch updates to config-like objects.
 import { isDeepStrictEqual } from "node:util";
 import { isPlainObject } from "../infra/plain-object.js";
-import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { isRecord } from "../utils.js";
+import { formatConfigPatchPath, isMergePatchObjectKeyAllowed } from "./patch-replace-paths.js";
 
 type PlainObject = Record<string, unknown>;
 
@@ -16,8 +16,12 @@ function cloneUnknown<T>(value: T): T {
   return structuredClone(value);
 }
 
-/** Builds an RFC-7396-style merge patch between source and target config values. */
-export function createMergePatch(base: unknown, target: unknown): unknown {
+/** Builds a merge patch; ID-keyed array mode emits changed fields for upserts. */
+export function createMergePatch(
+  base: unknown,
+  target: unknown,
+  options: Pick<MergePatchOptions, "mergeObjectArraysById"> = {},
+): unknown {
   if (!isRecord(base) || !isRecord(target)) {
     return cloneUnknown(target);
   }
@@ -37,8 +41,27 @@ export function createMergePatch(base: unknown, target: unknown): unknown {
       continue;
     }
     const baseValue = base[key];
+    if (options.mergeObjectArraysById && isIdKeyedArray(baseValue) && isIdKeyedArray(targetValue)) {
+      const baseById = new Map(baseValue.map((entry) => [entry.id, entry]));
+      const updates: PlainObject[] = [];
+      for (const entry of targetValue) {
+        const baseEntry = baseById.get(entry.id);
+        const update = createMergePatch(
+          baseEntry,
+          applyMergePatch(baseEntry, entry, options),
+          options,
+        );
+        if (isRecord(update) && Object.keys(update).length > 0) {
+          updates.push({ ...update, id: entry.id });
+        }
+      }
+      if (updates.length > 0) {
+        patch[key] = updates;
+      }
+      continue;
+    }
     if (isRecord(baseValue) && isRecord(targetValue)) {
-      const childPatch = createMergePatch(baseValue, targetValue);
+      const childPatch = createMergePatch(baseValue, targetValue, options);
       if (isRecord(childPatch) && Object.keys(childPatch).length === 0) {
         continue;
       }
@@ -52,6 +75,43 @@ export function createMergePatch(base: unknown, target: unknown): unknown {
   return patch;
 }
 
+/** Whether a merge patch would replace a value changed since its source was read. */
+export function mergePatchConflicts(
+  base: unknown,
+  current: unknown,
+  patch: unknown,
+  options: Pick<MergePatchOptions, "mergeObjectArraysById"> = {},
+): boolean {
+  if (
+    options.mergeObjectArraysById &&
+    isIdKeyedArray(base) &&
+    isIdKeyedArray(current) &&
+    isIdKeyedArray(patch)
+  ) {
+    const baseById = new Map(base.map((entry) => [entry.id, entry]));
+    const currentById = new Map(current.map((entry) => [entry.id, entry]));
+    return patch.some((entry) =>
+      mergePatchConflicts(baseById.get(entry.id), currentById.get(entry.id), entry, options),
+    );
+  }
+  if (!isRecord(patch)) {
+    return !isDeepStrictEqual(base, current);
+  }
+  const baseIsObject = isRecord(base);
+  const currentIsObject = isRecord(current);
+  if (baseIsObject !== currentIsObject && base !== undefined) {
+    return true;
+  }
+  if (!baseIsObject && !currentIsObject && !isDeepStrictEqual(base, current)) {
+    return true;
+  }
+  const baseRecord = baseIsObject ? base : {};
+  const currentRecord = currentIsObject ? current : {};
+  return Object.entries(patch).some(([key, childPatch]) =>
+    mergePatchConflicts(baseRecord[key], currentRecord[key], childPatch, options),
+  );
+}
+
 function isObjectWithStringId(value: unknown): value is Record<string, unknown> & { id: string } {
   if (!isPlainObject(value)) {
     return false;
@@ -59,22 +119,12 @@ function isObjectWithStringId(value: unknown): value is Record<string, unknown> 
   return typeof value.id === "string" && value.id.length > 0;
 }
 
-function formatMergePatchPath(parentPath: string | undefined, key: string): string {
-  return parentPath ? `${parentPath}.${key}` : key;
+function isIdKeyedArray(value: unknown): value is (PlainObject & { id: string })[] {
+  return Array.isArray(value) && value.every(isObjectWithStringId);
 }
 
 function formatMergePatchArrayEntryPath(arrayPath: string): string {
   return `${arrayPath}[]`;
-}
-
-/** Whether a merge-patch key is safe at its exact config path. */
-export function isMergePatchObjectKeyAllowed(key: string, parentPath?: string): boolean {
-  if (!isBlockedObjectKey(key)) {
-    return true;
-  }
-  // Browser profile names are schema-validated map ids. Their values still
-  // recurse through this guard, so nested prototype-related keys stay blocked.
-  return parentPath === "browser.profiles" && (key === "constructor" || key === "prototype");
 }
 
 /**
@@ -145,7 +195,7 @@ export function applyMergePatch(
   const result: PlainObject = isPlainObject(base) ? { ...base } : {};
 
   for (const [key, value] of Object.entries(patch)) {
-    const path = formatMergePatchPath(options.path, key);
+    const path = formatConfigPatchPath(options.path, key);
     if (!isMergePatchObjectKeyAllowed(key, options.path)) {
       continue;
     }

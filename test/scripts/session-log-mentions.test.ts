@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { zstdCompressSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   countSessionLogMentions,
@@ -74,7 +75,7 @@ describe("session log mention scanner", () => {
     });
   });
 
-  it("counts mentions from SQLite transcript rows", async () => {
+  it.each(["legacy", "zstd"])("counts mentions from %s SQLite transcript rows", async (storage) => {
     const root = tempRoots.make("openclaw-session-log-mentions-");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     const sqlitePath = path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -85,7 +86,7 @@ describe("session log mention scanner", () => {
         CREATE TABLE transcript_events (
           session_id TEXT NOT NULL,
           seq INTEGER NOT NULL,
-          event_json TEXT NOT NULL,
+          event_json TEXT,
           created_at INTEGER NOT NULL,
           PRIMARY KEY (session_id, seq)
         );
@@ -115,6 +116,21 @@ describe("session log mention scanner", () => {
         }),
         2,
       );
+      if (storage === "zstd") {
+        db.exec(
+          "ALTER TABLE transcript_events ADD COLUMN event_zstd BLOB; ALTER TABLE transcript_events ADD COLUMN event_utf8_bytes INTEGER",
+        );
+        const update = db.prepare(
+          "UPDATE transcript_events SET event_json = NULL, event_zstd = ?, event_utf8_bytes = ? WHERE seq = ?",
+        );
+        for (const row of db.prepare("SELECT seq, event_json FROM transcript_events").all()) {
+          if (typeof row.event_json !== "string" || typeof row.seq !== "number") {
+            throw new Error("Invalid transcript fixture row");
+          }
+          const bytes = Buffer.from(row.event_json, "utf8");
+          update.run(zstdCompressSync(bytes), bytes.byteLength, row.seq);
+        }
+      }
     } finally {
       db.close();
     }

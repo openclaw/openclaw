@@ -6,6 +6,7 @@ import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { REDACTED_SENTINEL } from "../config/redact-sentinel.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -89,17 +90,22 @@ async function createSignedDevice(params: {
   };
 }
 
-async function writeTrustedProxyBrowserAuthConfig() {
+async function writeTrustedProxyBrowserAuthConfig(password?: string) {
   const { writeConfigFile } = await import("../config/config.js");
+  const auth = {
+    mode: "trusted-proxy" as const,
+    trustedProxy: {
+      userHeader: "x-forwarded-user",
+      requiredHeaders: ["x-forwarded-proto"],
+      allowLoopback: true,
+    },
+    ...(password ? { password } : {}),
+  };
+  // The harness otherwise replaces file auth with its default token policy.
+  testState.gatewayAuth = auth;
   await writeConfigFile({
     gateway: {
-      auth: {
-        mode: "trusted-proxy",
-        trustedProxy: {
-          userHeader: "x-forwarded-user",
-          requiredHeaders: ["x-forwarded-proto"],
-        },
-      },
+      auth,
       trustedProxies: ["127.0.0.1"],
       controlUi: {
         allowedOrigins: [ALLOWED_BROWSER_ORIGIN],
@@ -108,8 +114,12 @@ async function writeTrustedProxyBrowserAuthConfig() {
   });
 }
 
-async function withTrustedProxyBrowserWs(origin: string, run: (ws: WebSocket) => Promise<void>) {
-  await writeTrustedProxyBrowserAuthConfig();
+async function withTrustedProxyBrowserWs(
+  origin: string,
+  run: (ws: WebSocket) => Promise<void>,
+  password?: string,
+) {
+  await writeTrustedProxyBrowserAuthConfig(password);
   await withGatewayServer(async ({ port }) => {
     const ws = await openWs(port, {
       origin,
@@ -241,15 +251,23 @@ describe("gateway auth browser hardening", () => {
     });
   });
 
-  test("accepts trusted-proxy browser connects from allowed origins", async () => {
-    await withTrustedProxyBrowserWs(ALLOWED_BROWSER_ORIGIN, async (ws) => {
-      const payload = await connectOk(ws, {
-        client: TEST_OPERATOR_CLIENT,
-        device: null,
-      });
-      expect(payload.type).toBe("hello-ok");
-    });
-  });
+  test.each([undefined, REDACTED_SENTINEL])(
+    "accepts trusted-proxy browser connects with optional password %s",
+    async (password) => {
+      await withTrustedProxyBrowserWs(
+        ALLOWED_BROWSER_ORIGIN,
+        async (ws) => {
+          const payload = await connectOk(ws, {
+            client: TEST_OPERATOR_CLIENT,
+            device: null,
+            skipDefaultAuth: true,
+          });
+          expect(payload.type).toBe("hello-ok");
+        },
+        password,
+      );
+    },
+  );
 
   test("clears scopes for trusted-proxy non-control-ui browser sessions", async () => {
     await withTrustedProxyBrowserWs(ALLOWED_BROWSER_ORIGIN, async (ws) => {

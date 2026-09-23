@@ -1,6 +1,13 @@
 // Discord tests cover approval handler plugin behavior.
-import { describe, expect, it } from "vitest";
+import assert from "node:assert/strict";
+import {
+  createChannelApprovalHandlerFromCapability,
+  createLazyChannelApprovalNativeRuntimeAdapter,
+} from "openclaw/plugin-sdk/approval-handler-runtime";
+import { describe, expect, it, vi } from "vitest";
+import { parseExecApprovalData } from "./approval-custom-id.js";
 import { discordApprovalNativeRuntime } from "./approval-handler.runtime.js";
+import { parseCustomId } from "./internal/discord.js";
 import { DiscordUiContainer } from "./ui.js";
 
 async function buildExecApprovalPayloadText(commandText: string): Promise<string> {
@@ -142,6 +149,65 @@ describe("discordApprovalNativeRuntime", () => {
     );
   });
 
+  it("round-trips system-agent buttons emitted by the native approval handler", async () => {
+    const buildPendingPayload = vi.fn(
+      discordApprovalNativeRuntime.presentation.buildPendingPayload,
+    );
+    const handler = await createChannelApprovalHandlerFromCapability({
+      label: "discord/approval-test",
+      clientDisplayName: "Discord approval test",
+      channel: "discord",
+      channelLabel: "Discord",
+      cfg: {},
+      accountId: "main",
+      context: { token: "discord-token", config: {} },
+      nowMs: () => 0,
+      capability: {
+        nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
+          capabilityBoundary: true,
+          eventKinds: discordApprovalNativeRuntime.eventKinds,
+          isConfigured: () => true,
+          shouldHandle: () => true,
+          load: async () => ({
+            ...discordApprovalNativeRuntime,
+            presentation: { ...discordApprovalNativeRuntime.presentation, buildPendingPayload },
+          }),
+        }),
+      },
+    });
+    assert(handler);
+    try {
+      await handler.handleRequested({
+        id: "change-1",
+        request: {
+          title: "Apply proposed change",
+          description: "Rewrite the scheduler.",
+          command: "rewrite scheduler",
+          proposalHash: "hash-1",
+          sessionId: "session-1",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+        createdAtMs: 0,
+        expiresAtMs: 1_000,
+      });
+      expect(buildPendingPayload).toHaveBeenCalledOnce();
+      const pending = await buildPendingPayload.mock.results[0]?.value;
+      const customIds: string[] = [];
+      JSON.stringify(pending, (key, value: unknown) => {
+        if (key === "custom_id" && typeof value === "string") {
+          customIds.push(value);
+        }
+        return value;
+      });
+      expect(customIds.map((id) => parseExecApprovalData(parseCustomId(id).data))).toEqual([
+        { approvalId: "change-1", approvalKind: "system-agent", action: "allow-once" },
+        { approvalId: "change-1", approvalKind: "system-agent", action: "deny" },
+      ]);
+    } finally {
+      await handler.stop();
+    }
+  });
+
   it.each([
     { severity: "info" as const, accentColor: 0x5865f2 },
     { severity: "warning" as const, accentColor: 0xfaa61a },
@@ -199,12 +265,31 @@ describe("discordApprovalNativeRuntime", () => {
       label: "Denied",
       accentColor: 0xed4245,
     },
+    {
+      approvalKind: "system-agent",
+      phase: "resolved",
+      decision: "deny",
+      applicationStatus: "not-applied",
+      terminalStatus: undefined,
+      label: "Denied",
+      accentColor: 0xed4245,
+    },
+    {
+      approvalKind: "system-agent",
+      phase: "resolved",
+      decision: "deny",
+      applicationStatus: "not-applied",
+      terminalStatus: "cancelled",
+      label: "Cancelled",
+      accentColor: 0xed4245,
+    },
     { approvalKind: "exec", phase: "expired", label: "Expired", accentColor: 0x99aab5 },
     { approvalKind: "plugin", phase: "expired", label: "Expired", accentColor: 0x99aab5 },
   ] as const)(
     "preserves $approvalKind $phase approval components and terminal preview limits ($label)",
     async (scenario) => {
       const plugin = scenario.approvalKind === "plugin";
+      const systemAgent = scenario.approvalKind === "system-agent";
       const commandLimit = plugin ? 700 : 500;
       const secondaryLimit = plugin ? 1_000 : 300;
       const command = `${"x".repeat(commandLimit)}😀`;
@@ -220,6 +305,13 @@ describe("discordApprovalNativeRuntime", () => {
           : { commandText: command, commandPreview: secondary }),
         ...(scenario.phase === "resolved"
           ? { decision: scenario.decision, resolvedBy: "<@456>" }
+          : {}),
+        ...(systemAgent
+          ? {
+              operationSummary: command,
+              applicationStatus: scenario.applicationStatus,
+              terminalStatus: scenario.terminalStatus,
+            }
           : {}),
       };
       const args = {
@@ -245,8 +337,14 @@ describe("discordApprovalNativeRuntime", () => {
       expect(container).toMatchObject({
         accent_color: scenario.accentColor,
         components: expect.arrayContaining([
-          { content: `## ${plugin ? "Plugin" : "Exec"} Approval: ${scenario.label}`, type: 10 },
-          { content: `### Command\n\`\`\`\n${"x".repeat(commandLimit)}...\n\`\`\``, type: 10 },
+          {
+            content: `## ${plugin ? "Plugin" : systemAgent ? "OpenClaw Change" : "Exec"} Approval: ${scenario.label}`,
+            type: 10,
+          },
+          {
+            content: `### ${systemAgent ? "Change" : "Command"}\n\`\`\`\n${"x".repeat(commandLimit)}...\n\`\`\``,
+            type: 10,
+          },
           {
             content: `### Shell Preview\n\`\`\`\n${"y".repeat(secondaryLimit)}...\n\`\`\``,
             type: 10,

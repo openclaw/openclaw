@@ -1,200 +1,43 @@
 // Gateway node event tests protect how node clients surface inbound commands,
 // delivery metadata, pairing state, and outbound payload lifecycle events.
+import "./server-node-events.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { DurableMessageBatchSendResult } from "../channels/message/runtime.js";
-import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { CliDeps } from "../cli/deps.js";
+import { getCurrentActiveNodeContext, setActiveNodeContext } from "../infra/active-node-context.js";
 import {
   prepareGatewaySuspend,
   resumeGatewaySuspend,
 } from "../infra/gateway-suspend-coordinator.js";
-import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
-import { resolveOutboundTarget } from "../infra/outbound/targets.js";
-import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
-import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import { defaultRuntime } from "../runtime.js";
-import { NodeRegistry } from "./node-registry.js";
-import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
-import type { loadSessionEntry as loadSessionEntryType } from "./session-utils.js";
-
-const buildSessionLookup = (
-  sessionKey: string,
-  entry: {
-    agentHarnessId?: string;
-    modelSelectionLocked?: boolean;
-    sessionId?: string;
-    model?: string;
-    modelProvider?: string;
-    lastChannel?: string;
-    lastTo?: string;
-    lastAccountId?: string;
-    lastThreadId?: string | number;
-    updatedAt?: number;
-    label?: string;
-    spawnedBy?: string;
-    parentSessionKey?: string;
-  } = {},
-): ReturnType<typeof loadSessionEntryType> => ({
-  cfg: { session: { mainKey: "agent:main:main" } } as OpenClawConfig,
-  agentId: "main",
-  storePath: "/tmp/sessions.json",
-  store: {} as ReturnType<typeof loadSessionEntryType>["store"],
-  entry: {
-    agentHarnessId: entry.agentHarnessId,
-    modelSelectionLocked: entry.modelSelectionLocked,
-    sessionId: entry.sessionId ?? `sid-${sessionKey}`,
-    updatedAt: entry.updatedAt ?? Date.now(),
-    model: entry.model,
-    modelProvider: entry.modelProvider,
-    delivery: normalizeLegacySessionEntryDelivery({
-      ...entry,
-      sessionId: entry.sessionId ?? `sid-${sessionKey}`,
-      updatedAt: entry.updatedAt ?? Date.now(),
-    } as SessionEntry).delivery,
-    label: entry.label,
-    spawnedBy: entry.spawnedBy,
-    parentSessionKey: entry.parentSessionKey,
-  },
-  canonicalKey: sessionKey,
-  storeKeys: [sessionKey],
-  legacyKey: undefined,
-});
-
-const ingressAgentCommandMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-const registerApnsRegistrationMock = vi.hoisted(() => vi.fn());
-const loadOrCreateProcessDeviceIdentityMock = vi.hoisted(() =>
-  vi.fn(() => ({
-    deviceId: "gateway-device-1",
-    publicKeyPem: "public",
-    privateKeyPem: "private",
-  })),
-);
-const parseMessageWithAttachmentsMock = vi.hoisted(() => vi.fn());
-const persistInboundImagesForTranscriptMock = vi.hoisted(() => vi.fn());
-const normalizeChannelIdMock = vi.hoisted(() =>
-  vi.fn((channel?: string | null) => channel ?? null),
-);
-const updatePairedDevicePresenceMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
-
-const runtimeMocks = vi.hoisted(() => ({
-  agentCommandFromIngress: ingressAgentCommandMock,
-  ApnsRegistrationPairingChangedError: class ApnsRegistrationPairingChangedError extends Error {
-    constructor() {
-      super("node pairing changed before APNs registration");
-      this.name = "ApnsRegistrationPairingChangedError";
-    }
-  },
-  deleteMediaBuffer: vi.fn(async () => {}),
-  deliverOutboundPayloads: vi.fn(async () => {}),
-  enqueueSystemEvent: vi.fn(),
-  formatForLog: vi.fn((err: unknown) => (err instanceof Error ? err.message : String(err))),
-  getRuntimeConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
-  INLINE_IMAGE_DURABLE_OMISSION_MARKER:
-    "[image attachment omitted: durable managed media claim unavailable]",
-  loadOrCreateProcessDeviceIdentity: loadOrCreateProcessDeviceIdentityMock,
-  loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
-  upsertSessionEntryCore: vi.fn(),
-  normalizeChannelId: normalizeChannelIdMock,
-  normalizeMainKey: vi.fn((key?: string | null) => key?.trim() || "agent:main:main"),
-  parseMessageWithAttachments: parseMessageWithAttachmentsMock,
-  registerApnsRegistration: registerApnsRegistrationMock,
-  requestHeartbeat: vi.fn(),
-  resolveSystemMainSessionTarget: vi.fn(() => ({
-    agentId: "ops",
-    sessionKey: "agent:ops:main",
-  })),
-  resolveChatAttachmentMaxBytes: vi.fn(() => 20 * 1024 * 1024),
-  resolveGatewayModelSupportsImages: vi.fn(
-    async ({
-      loadGatewayModelCatalog,
-      provider,
-      model,
-    }: {
-      loadGatewayModelCatalog: () => Promise<
-        Array<{ id: string; provider: string; input?: string[] }>
-      >;
-      provider?: string;
-      model?: string;
-    }) => {
-      if (!model) {
-        return true;
-      }
-      const catalog = await loadGatewayModelCatalog();
-      const modelEntry = catalog.find(
-        (entry) => entry.id === model && (!provider || entry.provider === provider),
-      );
-      return modelEntry ? (modelEntry.input?.includes("image") ?? false) : true;
-    },
-  ),
-  sendDurableMessageBatch: vi.fn(
-    async (): Promise<DurableMessageBatchSendResult> => ({
-      status: "sent",
-      results: [],
-      receipt: { platformMessageIds: [], parts: [], sentAt: 1 },
-    }),
-  ),
-  resolveSessionAgentId: vi.fn(() => "main"),
-  resolveSessionModelRef: vi.fn(
-    (_cfg: OpenClawConfig, entry?: { model?: string; modelProvider?: string }) => ({
-      provider: entry?.modelProvider ?? "test-provider",
-      model: entry?.model ?? "default-model",
-    }),
-  ),
-  persistInboundImagesForTranscript: persistInboundImagesForTranscriptMock,
-  scopedHeartbeatWakeOptions: vi.fn((sessionKey?: string, opts?: { reason: string }) => {
-    const wakeOptions = { reason: opts?.reason };
-    return /^agent:[^:]+:.+$/i.test(sessionKey ?? "")
-      ? { ...wakeOptions, sessionKey: sessionKey as string }
-      : wakeOptions;
-  }),
-}));
-
-import type { CliDeps } from "../cli/deps.js";
 import type { HealthSummary } from "./health/types.js";
-import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
-import { handleNodeEvent as handleNodeEventWithDependencies } from "./server-node-events.js";
+import { NodeRegistry } from "./node-registry.js";
+import type { NodeEventContext } from "./server-node-events-types.js";
+import { handleNodeEvent } from "./server-node-events.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
 
-type ServerNodeEventDependencies = NonNullable<
-  Parameters<typeof handleNodeEventWithDependencies>[4]
->;
-
-const serverNodeEventDependencies: ServerNodeEventDependencies = {
-  ...runtimeMocks,
-  buildOutboundSessionContext,
-  createOutboundSendDeps,
-  defaultRuntime,
-  normalizeRpcAttachmentsToChatAttachments,
-  resolveOutboundTarget,
-  withSystemEventOwner,
-  sendDurableMessageBatchCore: runtimeMocks.sendDurableMessageBatch,
-  updatePairedDevicePresence: updatePairedDevicePresenceMock,
-};
+const {
+  buildSessionLookup,
+  loadOrCreateProcessDeviceIdentityMock,
+  parseMessageWithAttachmentsMock,
+  persistInboundImagesForTranscriptMock,
+  runtimeMocks,
+  updatePairedDevicePresenceMock,
+} = await import("./server-node-events.test-support.js");
 
 const sentDurableMessageBatchResult: Extract<DurableMessageBatchSendResult, { status: "sent" }> = {
   status: "sent",
   results: [],
   receipt: { platformMessageIds: [], parts: [], sentAt: 1 },
 };
-
-function handleNodeEvent(
-  ctx: NodeEventContext,
-  nodeId: string,
-  event: NodeEvent,
-  options?: Parameters<typeof handleNodeEventWithDependencies>[3],
-) {
-  return handleNodeEventWithDependencies(ctx, nodeId, event, options, serverNodeEventDependencies);
-}
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -544,7 +387,7 @@ describe("node exec events", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "Exec finished (node=node-2 id=run-finished, code 0)\ndone",
       {
-        sessionKey: "node-node-2",
+        sessionKey: "agent:main:node-node-2",
         contextKey: "exec:run-finished",
       },
     );
@@ -1510,6 +1353,22 @@ describe("notifications changed events", () => {
     });
   });
 
+  it("compacts notification text without splitting surrogate pairs", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-n1", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({
+        change: "posted",
+        key: "notif-long",
+        title: ` \n${"A".repeat(117)}   🫠 tail `,
+      }),
+    });
+
+    expect(mockCallArg(enqueueSystemEventMock)).toBe(
+      `Notification posted (node=node-n1 key=notif-long): ${"A".repeat(117)} …`,
+    );
+  });
+
   it("enqueues notifications.changed removed events", async () => {
     const ctx = buildCtx();
     await handleNodeEvent(ctx, "node-n2", {
@@ -1570,6 +1429,7 @@ describe("notifications changed events", () => {
       source: "notifications-event",
       intent: "event",
       reason: "notifications-event",
+      agentId: "main",
       sessionKey: "agent:main:main",
     });
   });
@@ -1589,7 +1449,7 @@ describe("notifications changed events", () => {
       }),
     });
 
-    expect(loadSessionEntryMock).toHaveBeenCalledWith("node-node-n5");
+    expect(loadSessionEntryMock).toHaveBeenCalledWith("node-node-n5", { agentId: undefined });
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "Notification posted (node=node-n5 key=notif-5)",
       {
@@ -1601,6 +1461,7 @@ describe("notifications changed events", () => {
       source: "notifications-event",
       intent: "event",
       reason: "notifications-event",
+      agentId: "main",
       sessionKey: "agent:main:node-node-n5",
     });
   });
@@ -2288,6 +2149,133 @@ describe("agent request events", () => {
     expect(updatePairedDevicePresenceMock).toHaveBeenCalledTimes(2);
   });
 
+  it("stores host stats on the current connection without Accessibility or prompt changes", async () => {
+    const registry = new NodeRegistry();
+    const client = makeNodeClient("stats-connection", "stats-node");
+    const session = registry.register(client, { pairingIdentity: "stats-identity" });
+    const broadcast = vi.fn();
+    const ctx: NodeEventContext = {
+      ...buildCtx(),
+      broadcast,
+      updateNodeHostStats: (params) => registry.updateHostStats(params),
+    };
+    const stats = {
+      cpuCount: 8,
+      loadAverage: [1.5, 1, 0.5],
+      memoryTotalBytes: 8192,
+      memoryFreeBytes: 4096,
+      diskTotalBytes: 32768,
+      diskAvailableBytes: 16384,
+    };
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(100_000);
+    setActiveNodeContext({ nodeId: "active-computer" });
+    try {
+      await expect(
+        handleNodeEvent(
+          ctx,
+          session.nodeId,
+          { event: "node.host.stats", payloadJSON: JSON.stringify(stats) },
+          { connId: client.connId, presenceAllowed: false },
+        ),
+      ).resolves.toEqual({
+        ok: true,
+        event: "node.host.stats",
+        handled: true,
+        reason: "updated",
+      });
+      expect(session.hostStats).toEqual({ ...stats, updatedAtMs: 100_000 });
+      expect(broadcast).toHaveBeenCalledExactlyOnceWith(
+        "node.hostStats",
+        { nodeId: session.nodeId, hostStats: { ...stats, updatedAtMs: 100_000 } },
+        { dropIfSlow: true },
+      );
+      expect(getCurrentActiveNodeContext()).toEqual({ nodeId: "active-computer" });
+      expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+      expect(updatePairedDevicePresenceMock).not.toHaveBeenCalled();
+    } finally {
+      nowSpy.mockRestore();
+      setActiveNodeContext(null);
+      registry.unregister(client.connId);
+    }
+  });
+
+  it.each(["stale", "missing", "unknown", "invalidated"] as const)(
+    "rejects host stats from a %s connection without replacing the live snapshot",
+    async (connection) => {
+      const registry = new NodeRegistry();
+      const client = makeNodeClient("stats-connection", "stats-node");
+      const session = registry.register(client, { pairingIdentity: "stats-identity" });
+      const stats = { cpuCount: 4, memoryTotalBytes: 8192, memoryFreeBytes: 4096 };
+      registry.updateHostStats({
+        nodeId: session.nodeId,
+        connId: client.connId,
+        stats,
+        observedAtMs: 100,
+      });
+      if (connection === "invalidated") {
+        registry.invalidateConnectionForPairingChange(client.connId);
+      }
+      const broadcast = vi.fn();
+      const ctx: NodeEventContext = {
+        ...buildCtx(),
+        broadcast,
+        updateNodeHostStats: (params) => registry.updateHostStats(params),
+      };
+      try {
+        await expect(
+          handleNodeEvent(
+            ctx,
+            connection === "unknown" ? "unknown-node" : session.nodeId,
+            {
+              event: "node.host.stats",
+              payloadJSON: JSON.stringify({ ...stats, memoryFreeBytes: 1024 }),
+            },
+            {
+              connId:
+                connection === "missing"
+                  ? undefined
+                  : connection === "stale"
+                    ? "retired-connection"
+                    : client.connId,
+            },
+          ),
+        ).resolves.toEqual({
+          ok: true,
+          event: "node.host.stats",
+          handled: false,
+          reason: "stale_connection",
+        });
+        expect(session.hostStats).toEqual({ ...stats, updatedAtMs: 100 });
+        expect(broadcast).not.toHaveBeenCalled();
+      } finally {
+        registry.unregister(client.connId);
+      }
+    },
+  );
+
+  it.each(["not json", "null", "[]", '{"cpuCount":4}'])(
+    "rejects malformed host stats: %s",
+    async (payloadJSON) => {
+      const updateNodeHostStats = vi.fn();
+      const broadcast = vi.fn();
+      await expect(
+        handleNodeEvent(
+          { ...buildCtx(), updateNodeHostStats, broadcast },
+          "stats-node",
+          { event: "node.host.stats", payloadJSON },
+          { connId: "stats-connection" },
+        ),
+      ).resolves.toEqual({
+        ok: true,
+        event: "node.host.stats",
+        handled: false,
+        reason: "invalid_payload",
+      });
+      expect(updateNodeHostStats).not.toHaveBeenCalled();
+      expect(broadcast).not.toHaveBeenCalled();
+    },
+  );
+
   it("updates authenticated accessibility-backed node activity without a system event", async () => {
     const broadcast = vi.fn();
     const updateNodePresenceActivity = vi.fn(() => ({
@@ -2420,8 +2408,6 @@ describe("chat subscribe/unsubscribe events", () => {
     const nodeSubscribe = vi.fn();
     const ctx = { ...buildCtx(), nodeSubscribe };
 
-    // parseSessionKeyFromPayloadJSON trims whitespace; canonicalization
-    // may further normalize (e.g. lowercasing, agent-key resolution).
     loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
       ...buildSessionLookup(sessionKey),
       canonicalKey: `agent:main:${sessionKey.toLowerCase()}`,
@@ -2437,12 +2423,7 @@ describe("chat subscribe/unsubscribe events", () => {
       { connId: "node-c1-connection" },
     );
 
-    // The canonicalized key (not the parsed raw key) must be passed to
-    // nodeSubscribe. On unfixed main, nodeSubscribe receives the parsed
-    // key ("Main"), causing a mismatch with delivery which uses the
-    // canonical form ("agent:main:main").
     expect(nodeSubscribe).toHaveBeenCalledWith("node-c1", "agent:main:main", "node-c1-connection");
-    // loadSessionEntry is called with the parsed (trimmed) key from the payload.
     expect(loadSessionEntryMock).toHaveBeenCalledWith("Main");
   });
 
@@ -2465,8 +2446,6 @@ describe("chat subscribe/unsubscribe events", () => {
       { connId: "node-c2-connection" },
     );
 
-    // parseSessionKeyFromPayloadJSON trims "\tOtherAgent " to "OtherAgent".
-    // The fix canonicalizes it to the canonical key.
     expect(nodeUnsubscribe).toHaveBeenCalledWith(
       "node-c2",
       "agent:other:otheragent",

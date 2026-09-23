@@ -161,10 +161,7 @@ describe("MatrixAuthedHttpClient", () => {
 
   it("raises HTTP errors with status code metadata", async () => {
     performMatrixRequestMock.mockResolvedValue({
-      response: new Response(JSON.stringify({ error: "forbidden" }), {
-        status: 403,
-        headers: { "content-type": "application/json" },
-      }),
+      response: Response.json({ error: "forbidden" }, { status: 403 }),
       text: JSON.stringify({ error: "forbidden" }),
       buffer: Buffer.from(JSON.stringify({ error: "forbidden" }), "utf8"),
     });

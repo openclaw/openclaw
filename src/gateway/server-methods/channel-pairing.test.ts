@@ -31,9 +31,6 @@ vi.mock("../../pairing/pairing-store.js", () => ({
   listChannelPairingRequests: mocks.listRequests,
   resolveChannelPairingRequestId: vi.fn(() => "opaque-request-id"),
 }));
-vi.mock("../runtime-plugin-config.js", () => ({
-  resolveGatewayPluginConfig: ({ config }: { config: unknown }) => config,
-}));
 
 import { channelPairingHandlers } from "./channel-pairing.js";
 

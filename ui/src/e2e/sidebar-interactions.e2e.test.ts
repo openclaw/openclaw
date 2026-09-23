@@ -16,6 +16,7 @@ import {
   captureSidebarUiProof,
   createSidebarCustomizationSuite,
   openSidebarCustomizationPage,
+  openSidebarMoreMenu,
 } from "./sidebar-customization.test-support.ts";
 
 const suite = createSidebarCustomizationSuite("Control UI sidebar interactions mocked Gateway E2E");
@@ -36,6 +37,10 @@ suite.define(() => {
       defaultAgentId: agentId,
       sessionKey: `agent:${agentId}:main`,
       sessionGroups: [group],
+      sessions: [
+        { key: `agent:${agentId}:main`, label: "Grouped conversation", category: group },
+        { key: `agent:${agentId}:notes`, label: "Ungrouped notes" },
+      ],
       featureMethods: [...defaultControlUiFeatureMethods, "sessions.catalog.list"],
       methodResponses: {
         "sessions.catalog.list": {
@@ -46,9 +51,26 @@ suite.define(() => {
               capabilities: {
                 continueSession: true,
                 archive: false,
-                createSession: { model: "openai/gpt-5.6-luna" },
+                startTerminal: true,
               },
-              hosts: [],
+              hosts: [
+                {
+                  hostId: "gateway:local",
+                  label: "Gateway Mac",
+                  kind: "gateway",
+                  connected: true,
+                  sessions: [
+                    {
+                      threadId: "cli-thread",
+                      name: "CLI plan",
+                      status: "stored",
+                      archived: false,
+                      canContinue: true,
+                      canArchive: false,
+                    },
+                  ],
+                },
+              ],
             },
           ],
         },
@@ -99,6 +121,11 @@ suite.define(() => {
             params: { agent: agentId, group },
           },
           {
+            selector: '[data-session-section="ungrouped"] .sidebar-new-session',
+            section: "ungrouped",
+            params: { agent: agentId },
+          },
+          {
             selector: `[data-session-section="catalog:${catalogId}"] .sidebar-session-catalog-new`,
             section: `catalog:${catalogId}`,
             params: { agent: agentId, catalog: catalogId },
@@ -107,7 +134,7 @@ suite.define(() => {
         ];
       for (const [index, action] of actions.entries()) {
         if (index === actions.length - 1) {
-          await page.locator(".shell-chrome-controls__nav-toggle").click();
+          await page.locator(".sidebar-brand__collapse").click();
         }
         if (action.section) {
           await page
@@ -181,44 +208,81 @@ suite.define(() => {
     await installMockGateway(page);
     await page.goto(`${suite.server.baseUrl}chat`);
 
-    const sidebar = page.locator("openclaw-app-sidebar");
-    await sidebar.locator(".sidebar-agent-card__main").click();
-    await sidebar
-      .locator('wa-dropdown.sidebar-agent-menu wa-dropdown-item[value="command:capabilities"]')
-      .click();
-
-    const textarea = page.locator(".agent-chat__composer-combobox > textarea");
-    const input = textarea.locator("xpath=ancestor::*[contains(@class, 'agent-chat__input')][1]");
-    let cueStyle = { background: "", boxShadow: "", duration: "", name: "" };
-    await expect
-      .poll(async () => {
-        const state = await textarea.evaluate((element) => {
-          if (!(element instanceof HTMLTextAreaElement)) {
-            throw new TypeError("capabilities prompt target must be a textarea");
-          }
-          const inputElement = element.closest<HTMLElement>(".agent-chat__input");
-          const style = inputElement ? getComputedStyle(inputElement) : null;
-          return {
-            active:
-              inputElement?.classList.contains("agent-chat__input--prefill-attention") ?? false,
-            background: style?.backgroundColor ?? "",
-            boxShadow: style?.boxShadow ?? "",
-            duration: style?.animationDuration ?? "",
-            focused: element === document.activeElement,
-            name: style?.animationName ?? "",
-            value: element.value,
-          };
+    // Record the 600ms cue before clicking; a host-side poll can arrive after it expires.
+    const observedCue = await page.evaluateHandle(() => {
+      const state = {
+        active: false,
+        background: "",
+        boxShadow: "",
+        duration: "",
+        focused: false,
+        name: "",
+        value: "",
+      };
+      const observer = new MutationObserver(() => {
+        const textarea = document.querySelector<HTMLTextAreaElement>(
+          ".agent-chat__composer-combobox > textarea",
+        );
+        const input = textarea?.closest<HTMLElement>(".agent-chat__input");
+        if (!textarea || !input?.classList.contains("agent-chat__input--prefill-attention")) {
+          return;
+        }
+        const style = getComputedStyle(input);
+        Object.assign(state, {
+          active: true,
+          background: style.backgroundColor,
+          boxShadow: style.boxShadow,
+          duration: style.animationDuration,
+          focused: textarea === document.activeElement,
+          name: style.animationName,
+          value: textarea.value,
         });
-        cueStyle = {
-          background: state.background,
-          boxShadow: state.boxShadow,
-          duration: state.duration,
-          name: state.name,
-        };
-        return { active: state.active, focused: state.focused, value: state.value };
-      })
-      .toEqual({ active: true, focused: true, value: "What can you do?" });
-    return { context, cueStyle, input, page };
+        observer.disconnect();
+      });
+      observer.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ["class"],
+        childList: true,
+        subtree: true,
+      });
+      return { state, disconnect: () => observer.disconnect() };
+    });
+
+    try {
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.locator(".sidebar-agent-card__main").click();
+      await sidebar
+        .locator('wa-dropdown.sidebar-agent-menu wa-dropdown-item[value="command:capabilities"]')
+        .click();
+
+      const textarea = page.locator(".agent-chat__composer-combobox > textarea");
+      const input = textarea.locator("xpath=ancestor::*[contains(@class, 'agent-chat__input')][1]");
+      let cueStyle = { background: "", boxShadow: "", duration: "", name: "" };
+      await expect
+        .poll(async () => {
+          const state = await observedCue.evaluate((cue) => cue.state);
+          cueStyle = {
+            background: state.background,
+            boxShadow: state.boxShadow,
+            duration: state.duration,
+            name: state.name,
+          };
+          return { active: state.active, focused: state.focused, value: state.value };
+        })
+        .toEqual({ active: true, focused: true, value: "What can you do?" });
+      await expect
+        .poll(() =>
+          textarea.evaluate((element: HTMLTextAreaElement) => ({
+            focused: element === document.activeElement,
+            value: element.value,
+          })),
+        )
+        .toEqual({ focused: true, value: "What can you do?" });
+      return { context, cueStyle, input, page };
+    } finally {
+      await observedCue.evaluate((cue) => cue.disconnect());
+      await observedCue.dispose();
+    }
   }
 
   it("focuses and highlights the composer from the agent capabilities action", async () => {
@@ -265,11 +329,8 @@ suite.define(() => {
     try {
       const sidebar = page.locator("openclaw-app-sidebar");
       const moreButton = sidebar.locator(".sidebar-nav__head-action");
-      await moreButton.click();
-      await sidebar
-        .locator("wa-dropdown.sidebar-more-menu")
-        .getByRole("menuitem", { name: "Edit pinned items" })
-        .click();
+      const moreMenu = await openSidebarMoreMenu(page);
+      await moreMenu.getByRole("menuitem", { name: "Edit pinned items" }).click();
       const pinItems = sidebar
         .locator(
           "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu):not(.sidebar-agent-menu)",
@@ -308,8 +369,7 @@ suite.define(() => {
 
     try {
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.locator(".sidebar-nav__head-action").click();
-      const moreMenu = sidebar.locator("wa-dropdown.sidebar-more-menu");
+      const moreMenu = await openSidebarMoreMenu(page);
       await expect
         .poll(() =>
           moreMenu
@@ -374,7 +434,12 @@ suite.define(() => {
           cases: [
             {
               match: { agentId: "main" },
-              response: { agentId: "main", avatar: "", emoji: "🦞", name: "Main" },
+              response: {
+                agentId: "main",
+                avatar: "",
+                emoji: "🦞",
+                name: "Scheduled Automations",
+              },
             },
             {
               match: { agentId: "research" },
@@ -407,7 +472,7 @@ suite.define(() => {
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       const menu = sidebar.locator("wa-dropdown.sidebar-agent-menu");
-      const mainSwitch = menu.getByRole("menuitemradio", { name: "Main" });
+      const mainSwitch = menu.getByRole("menuitemradio", { name: "Scheduled Automations" });
       const researchSwitch = menu.getByRole("menuitemradio", { name: "Research" });
       await expect
         .poll(() =>
@@ -417,7 +482,7 @@ suite.define(() => {
         )
         .toBe(true);
       await expect
-        .poll(() => researchSwitch.locator("img.agent-select__avatar").getAttribute("src"))
+        .poll(() => researchSwitch.locator(".agent-select__avatar img").getAttribute("src"))
         .toContain("data:image/png;base64,");
       await expect.poll(() => menu.getByText(/^New session —/).count()).toBe(0);
       const gridLayout = await menu.evaluate((dropdown) => {
@@ -452,9 +517,27 @@ suite.define(() => {
       expect(new Set(gridLayout.widths).size).toBe(1);
       expect(gridLayout.avatarOffsets).toEqual([0, 0, 0]);
       expect(gridLayout.labelOffsets).toEqual([0, 0, 0]);
-      await page.evaluate(() => {
-        document.documentElement.style.setProperty("--control-ui-text-scale", "1.4");
+      const capabilities = menu.getByRole("menuitem", {
+        name: "What can Scheduled Automations do?",
+        exact: true,
       });
+      for (const scale of [1, 1.4]) {
+        await page.evaluate((value) => {
+          document.documentElement.style.setProperty("--control-ui-text-scale", String(value));
+        }, scale);
+        await captureSidebarUiProof(suite, page, `agent-menu-long-label-${scale}.png`);
+        await expect
+          .poll(() =>
+            capabilities.evaluate((item) => {
+              const label = item.querySelector(".sidebar-customize-menu__text");
+              if (!label) {
+                throw new Error("Capabilities label is missing");
+              }
+              return label.getBoundingClientRect().right - item.getBoundingClientRect().right;
+            }),
+          )
+          .toBeLessThanOrEqual(0);
+      }
       await expect
         .poll(() =>
           menu.evaluate((dropdown) => {

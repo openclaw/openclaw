@@ -1,4 +1,5 @@
 import { isRecord } from "../utils.js";
+import type { ConfigHealthEntry, ConfigHealthFingerprint } from "./io.health-state.types.js";
 
 type ConfigObserveSuspiciousBaseline = {
   bytes: number;
@@ -52,7 +53,7 @@ export function resolveConfigObserveSuspiciousReasons(params: {
 // `missing-meta-vs-last-good` is intentionally excluded from auto-restore: the
 // writer always stamps `meta`, so a valid config lacking it was hand-authored,
 // and restoring would silently revert a read-only load. Observe warns.
-export function isRecoverableConfigReadSuspiciousReason(reason: string): boolean {
+function isRecoverableConfigReadSuspiciousReason(reason: string): boolean {
   return (
     reason === "gateway-mode-missing-vs-last-good" ||
     reason === "update-channel-only-root" ||
@@ -67,4 +68,27 @@ export function isRecoverableConfigReadSuspiciousReason(reason: string): boolean
 // and let a later recognized clobber restore over the accepted settings.
 export function isAcceptedConfigRead(params: { valid: boolean; suspicious: string[] }): boolean {
   return params.valid && !params.suspicious.some(isRecoverableConfigReadSuspiciousReason);
+}
+
+export function resolveConfigReadRecoveryContext(params: {
+  current: ConfigHealthFingerprint;
+  parsed: unknown;
+  entry: ConfigHealthEntry;
+  backupBaseline?: ConfigHealthFingerprint;
+}): { suspicious: string[]; suspiciousSignature: string } | null {
+  const suspicious = resolveConfigObserveSuspiciousReasons({
+    bytes: params.current.bytes,
+    hasMeta: params.current.hasMeta,
+    gatewayMode: params.current.gatewayMode,
+    parsed: params.parsed,
+    lastKnownGood: params.backupBaseline,
+  });
+  if (!suspicious.some(isRecoverableConfigReadSuspiciousReason)) {
+    return null;
+  }
+  const suspiciousSignature = `${params.current.hash}:${suspicious.join(",")}`;
+  if (params.entry.lastObservedSuspiciousSignature === suspiciousSignature) {
+    return null;
+  }
+  return { suspicious, suspiciousSignature };
 }

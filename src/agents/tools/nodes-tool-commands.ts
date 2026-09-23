@@ -15,7 +15,7 @@ import {
   readToolStringParam,
 } from "./common.js";
 import type { GatewayCallOptions } from "./gateway.js";
-import { callNodesToolNodeInvoke } from "./nodes-tool-invoke.js";
+import { callNodesToolNodeInvoke, resolveNodesToolInvokeTimeouts } from "./nodes-tool-invoke.js";
 import { POLICY_REDIRECT_INVOKE_COMMANDS } from "./nodes-tool-media.js";
 import { resolveAgentNodeId } from "./nodes-utils.js";
 
@@ -150,8 +150,14 @@ export async function executeNodeCommandAction(params: {
           ? params.input.desiredAccuracy
           : undefined;
       const locationTimeoutMs = readPositiveIntegerParam(params.input, "locationTimeoutMs");
-      const payload = await invokeNodeCommandPayload({
+      const timeouts = resolveNodesToolInvokeTimeouts({
+        input: params.input,
         gatewayOpts: params.gatewayOpts,
+        operationTimeoutMs: locationTimeoutMs,
+      });
+      const payload = await invokeNodeCommandPayload({
+        gatewayOpts: timeouts.gatewayOpts,
+        invokeTimeoutMs: timeouts.invokeTimeoutMs,
         node,
         command: "location.get",
         commandParams: {
@@ -215,14 +221,17 @@ export async function executeNodeCommandAction(params: {
           });
         }
       }
-      const invokeTimeoutMs = readPositiveIntegerParam(params.input, "invokeTimeoutMs");
+      const timeouts = resolveNodesToolInvokeTimeouts({
+        input: params.input,
+        gatewayOpts: params.gatewayOpts,
+      });
       const raw = await callNodesToolNodeInvoke(
-        params.gatewayOpts,
+        timeouts.gatewayOpts,
         {
           nodeId,
           command: invokeCommand,
           params: invokeParams,
-          timeoutMs: invokeTimeoutMs,
+          timeoutMs: timeouts.invokeTimeoutMs,
           idempotencyKey: crypto.randomUUID(),
           ...(params.agentSessionKey ? { sessionKey: params.agentSessionKey } : {}),
         },
@@ -239,12 +248,14 @@ async function invokeNodeCommandPayload(params: {
   node: string;
   command: string;
   commandParams?: Record<string, unknown>;
+  invokeTimeoutMs?: number;
 }): Promise<unknown> {
   const nodeId = await resolveAgentNodeId(params.gatewayOpts, params.node);
   const raw = await callNodesToolNodeInvoke<{ payload: unknown }>(params.gatewayOpts, {
     nodeId,
     command: params.command,
     params: params.commandParams ?? {},
+    ...(params.invokeTimeoutMs === undefined ? {} : { timeoutMs: params.invokeTimeoutMs }),
     idempotencyKey: crypto.randomUUID(),
   });
   return raw && typeof raw === "object" && Object.hasOwn(raw, "payload") ? raw.payload : {};

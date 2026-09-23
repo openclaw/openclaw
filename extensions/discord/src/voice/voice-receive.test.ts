@@ -1,30 +1,28 @@
-import type { Readable } from "node:stream";
-import type { MockCallSource } from "./manager.e2e.test-support.js";
+import { PassThrough, type Readable } from "node:stream";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { DiscordVoiceIngressContext } from "./ingress.js";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
 defineDiscordVoiceTests(
   ({
-    PassThrough,
     VoiceOpcodes,
     expect,
     it,
     vi,
     ChannelType,
-    createVoiceCaptureState,
     DECRYPT_FAILURE_WINDOW_MS,
-    requireRecord,
-    lastMockCall,
     createConnectionMock,
     joinVoiceChannelMock,
     transcribeAudioFileMock,
+    resolveVoiceIngressWithParticipantsMock,
+    loggerWarnMock,
     realtimeSessionMock,
-    decodeOpusStreamMock,
     decodeOpusStreamChunksMock,
     createClient,
     createManager,
+    createAgentProxyManager,
     makeVoiceConfig,
     configureVoiceStateGateway,
-    createAgentProxyManager,
     createFollowManager,
     expectConnectedStatus,
     getSessionEntry,
@@ -32,11 +30,94 @@ defineDiscordVoiceTests(
     getVoiceReceive,
     getVoiceFollowing,
     emitDecryptFailure,
+    emitWorkerReceiveFailure,
+    openWorkerReceiveCapture,
     installFailingDaveSession,
     makePoisonedDaveConnections,
     updateVoiceState,
     handleSpeakingStart,
+    startTranscripts,
+    stopTranscripts,
+    beginSpeakerTurn,
+    lastRealtimeBridgeParams,
+    emitFinalRealtimeUserTranscript,
+    receiveRecordedSpeech,
+    agentCommandMock,
   }) => {
+    it.each([false, true])(
+      "keeps Live microphone input open during playback without local interruption (recording: %s)",
+      async (recording) => {
+        realtimeSessionMock.bridge.outputAudioMode = "continuous";
+        resolveVoiceIngressWithParticipantsMock.mockResolvedValue({
+          speakerLabel: "Speaker",
+          senderIsOwner: true,
+        });
+        const manager = createAgentProxyManager();
+        try {
+          await manager.join({ guildId: "g1", channelId: "1001" });
+          if (recording) {
+            await startTranscripts(manager, vi.fn());
+          }
+          const entry = getSessionEntry(manager);
+          getLastAudioPlayer().state.status = "playing";
+          await receiveRecordedSpeech(manager, "A spoken interruption", entry);
+          expect(realtimeSessionMock.sendAudio).toHaveBeenCalled();
+          expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
+        } finally {
+          await manager.destroy();
+        }
+      },
+    );
+
+    it.each(["agent-proxy", "bidi"] as const)(
+      "keeps exact capture and %s conversation after destructive recovery",
+      async (mode) => {
+        const manager = createManager(
+          makeVoiceConfig(
+            { mode, realtime: { provider: "openai", requireWakeName: true } },
+            { groupPolicy: "open", allowFrom: ["discord:u-owner"] },
+          ),
+        );
+        await manager.join({ guildId: "g1", channelId: "1001" });
+        const onUtterance = vi.fn();
+        expect(await startTranscripts(manager, onUtterance)).toMatchObject({ ok: true });
+        await receiveRecordedSpeech(manager, "before recovery");
+        await emitFinalRealtimeUserTranscript(lastRealtimeBridgeParams(), "before recovery");
+        expect(onUtterance).toHaveBeenCalledOnce();
+        const oldEntry = getSessionEntry(manager);
+        emitDecryptFailure(manager);
+        emitDecryptFailure(manager);
+        emitDecryptFailure(manager);
+        await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2));
+        await receiveRecordedSpeech(manager, "after recovery");
+        await emitFinalRealtimeUserTranscript(lastRealtimeBridgeParams(), "after recovery");
+        expect(onUtterance).toHaveBeenCalledTimes(2);
+        expect(agentCommandMock).not.toHaveBeenCalled();
+        await receiveRecordedSpeech(manager, "stale connection", oldEntry);
+        expect(onUtterance).toHaveBeenCalledTimes(2);
+        expect(await stopTranscripts()).toMatchObject({ ok: true });
+        expectConnectedStatus(manager, "1001");
+        beginSpeakerTurn(getSessionEntry(manager));
+        if (mode === "agent-proxy") {
+          await emitFinalRealtimeUserTranscript(
+            lastRealtimeBridgeParams(),
+            "OpenClaw, what changed?",
+          );
+        } else {
+          await lastRealtimeBridgeParams().onToolCall?.(
+            {
+              itemId: "consult-after-recovery",
+              callId: "consult-after-recovery",
+              name: "openclaw_agent_consult",
+              args: { question: "what changed?" },
+            },
+            realtimeSessionMock,
+          );
+        }
+        expect(agentCommandMock).toHaveBeenCalledOnce();
+        expect(onUtterance).toHaveBeenCalledTimes(2);
+      },
+    );
     it("authorizes realtime speakers before subscribing receiver streams", async () => {
       const connection = createConnectionMock();
       joinVoiceChannelMock.mockReturnValueOnce(connection);
@@ -80,7 +161,7 @@ defineDiscordVoiceTests(
       if (!entry) {
         throw new Error("expected voice session for guild g1");
       }
-      expect(entry.player.state.status).toBe("idle");
+      expect(entry.audio.playerStatus).toBe("idle");
       getLastAudioPlayer().state.status = "playing";
 
       await handleSpeakingStart(manager, entry, "u-denied");
@@ -89,6 +170,81 @@ defineDiscordVoiceTests(
       expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
       expect(client.fetchMember).toHaveBeenCalledWith("g1", "u-denied");
     });
+
+    it("owns start/end/start during realtime admission without subscribing before authorization", async () => {
+      const connection = createConnectionMock();
+      joinVoiceChannelMock.mockReturnValueOnce(connection);
+      const manager = createAgentProxyManager();
+      await manager.join({ guildId: "g1", channelId: "1001" });
+      const entry = getSessionEntry(manager);
+      const admission = createDeferred<DiscordVoiceIngressContext | null>();
+      resolveVoiceIngressWithParticipantsMock.mockReturnValue(admission.promise);
+      vi.useFakeTimers();
+      try {
+        const first = handleSpeakingStart(manager, entry, "u-speaker");
+        getVoiceReceive(manager).scheduleCaptureFinalize(entry, "u-speaker", "speaker end");
+        const resumed = handleSpeakingStart(manager, entry, "u-speaker");
+        expect(resolveVoiceIngressWithParticipantsMock).toHaveBeenCalledOnce();
+        expect(connection.receiver.subscribe).not.toHaveBeenCalled();
+        expect(decodeOpusStreamChunksMock).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(2_500);
+        expect(entry.capture.size).toBe(1);
+
+        admission.resolve({ speakerLabel: "Speaker", senderIsOwner: false });
+        await Promise.all([first, resumed]);
+        expect(connection.receiver.subscribe).toHaveBeenCalledOnce();
+        expect(decodeOpusStreamChunksMock).toHaveBeenCalledOnce();
+        expect(entry.capture.size).toBe(0);
+      } finally {
+        admission.resolve(null);
+        await manager.destroy();
+        vi.useRealTimers();
+      }
+    });
+
+    it.each(["denied", "failed", "stopped", "silence expired"] as const)(
+      "retires %s realtime admission without a late subscription",
+      async (reason) => {
+        const connection = createConnectionMock();
+        joinVoiceChannelMock.mockReturnValueOnce(connection);
+        const manager = createAgentProxyManager();
+        await manager.join({ guildId: "g1", channelId: "1001" });
+        const entry = getSessionEntry(manager);
+        const admission = createDeferred<DiscordVoiceIngressContext | null>();
+        resolveVoiceIngressWithParticipantsMock.mockReturnValue(admission.promise);
+        vi.useFakeTimers();
+        try {
+          const completion = handleSpeakingStart(manager, entry, "u-speaker");
+          const outcome =
+            reason === "failed"
+              ? expect(completion).rejects.toThrow("admission failed")
+              : expect(completion).resolves.toBeUndefined();
+          getVoiceReceive(manager).scheduleCaptureFinalize(entry, "u-speaker", "speaker end");
+          expect(connection.receiver.subscribe).not.toHaveBeenCalled();
+          if (reason === "stopped") {
+            await manager.destroy();
+          } else if (reason === "silence expired") {
+            await vi.advanceTimersByTimeAsync(2_500);
+          }
+          if (reason === "failed") {
+            admission.reject(new Error("admission failed"));
+          } else {
+            admission.resolve(
+              reason === "denied" ? null : { speakerLabel: "Speaker", senderIsOwner: false },
+            );
+          }
+          await outcome;
+          await vi.advanceTimersByTimeAsync(2_500);
+          expect(connection.receiver.subscribe).not.toHaveBeenCalled();
+          expect(decodeOpusStreamChunksMock).not.toHaveBeenCalled();
+          expect(entry.capture.size).toBe(0);
+        } finally {
+          admission.resolve(null);
+          await manager.destroy();
+          vi.useRealTimers();
+        }
+      },
+    );
 
     it("stores guild metadata on joined voice sessions", async () => {
       const manager = createManager();
@@ -121,7 +277,7 @@ defineDiscordVoiceTests(
       await manager.join({ guildId: "g1", channelId: "1001" });
       connection.daveSetPassthroughMode.mockClear();
 
-      emitDecryptFailure(manager);
+      await emitWorkerReceiveFailure(manager);
 
       expect(dave.recoverFromInvalidTransition).toHaveBeenCalledOnce();
       expect(dave.recoverFromInvalidTransition).toHaveBeenCalledWith(0);
@@ -170,52 +326,53 @@ defineDiscordVoiceTests(
         await manager.join({ guildId: "g1", channelId: "1001" });
         connection.state.networking.state.code = networkingStatus;
 
-        emitDecryptFailure(manager);
+        await emitWorkerReceiveFailure(manager);
 
         expect(dave.recoverFromInvalidTransition).not.toHaveBeenCalled();
       },
     );
 
-    it("does not invalidate a stale voice-session transition", async () => {
-      const staleConnection = createConnectionMock();
-      const staleDave = staleConnection.state.networking.state.dave;
-      staleDave.lastTransitionId = 0;
-      staleDave.reinitializing = false;
-      staleDave.recoverFromInvalidTransition = vi.fn();
-      joinVoiceChannelMock
-        .mockReturnValueOnce(staleConnection)
-        .mockReturnValueOnce(createConnectionMock());
-      const manager = createManager();
-
-      await manager.join({ guildId: "g1", channelId: "1001" });
-      const staleEntry = getSessionEntry(manager);
-      await manager.join({ guildId: "g1", channelId: "1002" });
-
-      getVoiceReceive(manager).handleReceiveError(
-        staleEntry,
-        new Error("Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)"),
-      );
-
-      expect(staleDave.recoverFromInvalidTransition).not.toHaveBeenCalled();
-    });
-
-    it("does not invalidate a stopped voice-session transition", async () => {
-      const connection = createConnectionMock();
-      const dave = connection.state.networking.state.dave;
-      dave.lastTransitionId = 0;
-      dave.reinitializing = false;
-      dave.recoverFromInvalidTransition = vi.fn();
-      joinVoiceChannelMock.mockReturnValueOnce(connection);
-      const manager = createManager();
-
-      await manager.join({ guildId: "g1", channelId: "1001" });
-      const entry = getSessionEntry(manager);
-      entry.sessionLifecycle = { status: "stopped", reason: "test" };
-
-      emitDecryptFailure(manager);
-
-      expect(dave.recoverFromInvalidTransition).not.toHaveBeenCalled();
-    });
+    it.each(["replace", "leave"] as const)(
+      "retires native DAVE receive callbacks when the session is stopped by %s",
+      async (boundary) => {
+        const connection = createConnectionMock();
+        const dave = connection.state.networking.state.dave;
+        dave.lastTransitionId = 0;
+        dave.reinitializing = false;
+        dave.recoverFromInvalidTransition = vi.fn();
+        joinVoiceChannelMock
+          .mockReturnValueOnce(connection)
+          .mockReturnValueOnce(createConnectionMock());
+        const manager = createManager();
+        await manager.join({ guildId: "g1", channelId: "1001" });
+        const capture = await openWorkerReceiveCapture(manager);
+        if (boundary === "replace") {
+          await manager.join({ guildId: "g1", channelId: "1002" });
+        } else {
+          await manager.leave({ guildId: "g1" });
+        }
+        await capture.receiving;
+        expect(capture.source.destroyed).toBe(true);
+        expect(capture.source.listenerCount("error")).toBe(0);
+        expect(capture.entry.sessionLifecycle.status).toBe("stopped");
+        const lateFault = vi.fn();
+        capture.source.on("error", lateFault);
+        capture.source.emit(
+          "error",
+          new Error("DecryptionFailed(UnencryptedWhenPassthroughDisabled)"),
+        );
+        capture.source.off("error", lateFault);
+        expect(lateFault).toHaveBeenCalledOnce();
+        expect(dave.recoverFromInvalidTransition).not.toHaveBeenCalled();
+        expect(connection.destroy).toHaveBeenCalledOnce();
+        expect(joinVoiceChannelMock).toHaveBeenCalledTimes(boundary === "replace" ? 2 : 1);
+        if (boundary === "replace") {
+          expectConnectedStatus(manager, "1002");
+        } else {
+          expect(manager.status()).toEqual([]);
+        }
+      },
+    );
 
     it("does not invalidate transition zero for unrelated receive failures", async () => {
       const connection = createConnectionMock();
@@ -227,10 +384,9 @@ defineDiscordVoiceTests(
       const manager = createManager();
 
       await manager.join({ guildId: "g1", channelId: "1001" });
-      getVoiceReceive(manager).handleReceiveError(
-        getSessionEntry(manager),
-        new Error("DecryptionFailed(InvalidCiphertext)"),
-      );
+      await emitWorkerReceiveFailure(manager, {
+        error: new Error("DecryptionFailed(InvalidCiphertext)"),
+      });
 
       expect(dave.recoverFromInvalidTransition).not.toHaveBeenCalled();
     });
@@ -251,9 +407,9 @@ defineDiscordVoiceTests(
       await manager.join({ guildId: "g1", channelId: "1001" });
       connection.daveSetPassthroughMode.mockClear();
 
-      emitDecryptFailure(manager);
-      emitDecryptFailure(manager);
-      emitDecryptFailure(manager);
+      await emitWorkerReceiveFailure(manager);
+      await emitWorkerReceiveFailure(manager);
+      await emitWorkerReceiveFailure(manager);
 
       await vi.waitFor(() => {
         expect(connection.daveSetPassthroughMode).toHaveBeenCalledWith(true, 15);
@@ -281,7 +437,8 @@ defineDiscordVoiceTests(
           "UnencryptedWhenPassthroughDisabled",
         );
 
-        emitDecryptFailure(manager);
+        const faults = await emitWorkerReceiveFailure(manager);
+        expect(faults).toContainEqual(expect.objectContaining({ daveRecoveryFailed: true }));
 
         expect(dave.reinitializing).toBe(true);
         expect(gateway.sendPacket).toHaveBeenCalledWith({
@@ -307,7 +464,7 @@ defineDiscordVoiceTests(
       entry.receiveRecovery.decryptRecoveryInFlight = true;
       connection.daveSetPassthroughMode.mockClear();
 
-      emitDecryptFailure(manager);
+      await emitWorkerReceiveFailure(manager);
 
       expect(dave.reinitializing).toBe(true);
       expect(entry.receiveRecovery.decryptRecoveryInFlight).toBe(true);
@@ -325,10 +482,12 @@ defineDiscordVoiceTests(
 
       await manager.join({ guildId: "g1", channelId: "1001" });
       const entry = getSessionEntry(manager);
-      stopEntry.current = () => entry.stop();
+      stopEntry.current = () => {
+        void entry.stop();
+      };
       connection.daveSetPassthroughMode.mockClear();
 
-      emitDecryptFailure(manager);
+      await emitWorkerReceiveFailure(manager);
 
       expect(dave.reinitializing).toBe(true);
       expect(connection.destroy).toHaveBeenCalledOnce();
@@ -342,11 +501,11 @@ defineDiscordVoiceTests(
       const manager = createManager();
 
       await manager.join({ guildId: "g1", channelId: "1001" });
-      emitDecryptFailure(manager);
+      await emitWorkerReceiveFailure(manager);
       await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2));
       secondConnection.daveSetPassthroughMode.mockClear();
 
-      emitDecryptFailure(manager);
+      await emitWorkerReceiveFailure(manager);
 
       expect(firstConnection.destroy).toHaveBeenCalledOnce();
       expect(secondConnection.destroy).toHaveBeenCalledOnce();
@@ -369,9 +528,9 @@ defineDiscordVoiceTests(
 
       try {
         await manager.autoJoin();
-        emitDecryptFailure(manager);
+        await emitWorkerReceiveFailure(manager);
         await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2));
-        emitDecryptFailure(manager);
+        await emitWorkerReceiveFailure(manager);
         expect(manager.status()).toEqual([]);
 
         await vi.advanceTimersByTimeAsync(10_000);
@@ -395,9 +554,9 @@ defineDiscordVoiceTests(
       const manager = createFollowManager();
 
       await updateVoiceState(manager, "u-owner", "1001");
-      emitDecryptFailure(manager);
+      await emitWorkerReceiveFailure(manager);
       await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2));
-      emitDecryptFailure(manager);
+      await emitWorkerReceiveFailure(manager);
       const previousVoiceState = {
         guild_id: "g1",
         user_id: "u-owner",
@@ -422,9 +581,9 @@ defineDiscordVoiceTests(
       const manager = createFollowManager();
 
       await updateVoiceState(manager, "u-owner", "1001");
-      emitDecryptFailure(manager);
+      await emitWorkerReceiveFailure(manager);
       await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2));
-      emitDecryptFailure(manager);
+      await emitWorkerReceiveFailure(manager);
       expect(manager.status()).toEqual([]);
 
       await updateVoiceState(manager, "u-owner", "1002");
@@ -438,9 +597,9 @@ defineDiscordVoiceTests(
       const manager = createFollowManager();
 
       await updateVoiceState(manager, "u-owner", "1001");
-      emitDecryptFailure(manager);
+      await emitWorkerReceiveFailure(manager);
       await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2));
-      emitDecryptFailure(manager);
+      await emitWorkerReceiveFailure(manager);
 
       await updateVoiceState(manager, "u-owner", null);
       await updateVoiceState(manager, "u-owner", "1001");
@@ -463,9 +622,9 @@ defineDiscordVoiceTests(
 
       try {
         await manager.autoJoin();
-        emitDecryptFailure(manager);
+        await emitWorkerReceiveFailure(manager);
         await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2));
-        emitDecryptFailure(manager);
+        await emitWorkerReceiveFailure(manager);
         client.rest.get.mockResolvedValue({
           guild_id: "g1",
           user_id: "u-owner",
@@ -487,9 +646,9 @@ defineDiscordVoiceTests(
       const manager = createManager();
 
       await manager.join({ guildId: "g1", channelId: "1001" });
-      emitDecryptFailure(manager);
+      await emitWorkerReceiveFailure(manager);
       await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2));
-      emitDecryptFailure(manager);
+      await emitWorkerReceiveFailure(manager);
       expect(manager.status()).toEqual([]);
 
       const manualJoin = await manager.join({ guildId: "g1", channelId: "1001" });
@@ -512,12 +671,12 @@ defineDiscordVoiceTests(
       const manager = createManager();
 
       await manager.join({ guildId: "g1", channelId: "1001" });
-      emitDecryptFailure(manager);
+      await emitWorkerReceiveFailure(manager);
       await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2));
       expect((await manager.leave({ guildId: "g1" })).ok).toBe(true);
 
       await manager.join({ guildId: "g1", channelId: "1001" });
-      emitDecryptFailure(manager);
+      await emitWorkerReceiveFailure(manager);
 
       await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(4));
       expect(lastConnection.destroy).not.toHaveBeenCalled();
@@ -536,7 +695,7 @@ defineDiscordVoiceTests(
       attempts.set("g1", Date.now() - DECRYPT_FAILURE_WINDOW_MS);
       attempts.set("other-guild", Date.now());
 
-      emitDecryptFailure(manager);
+      await emitWorkerReceiveFailure(manager);
 
       await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2));
       expect(attempts.has("other-guild")).toBe(true);
@@ -566,12 +725,9 @@ defineDiscordVoiceTests(
 
       await manager.join({ guildId: "g1", channelId: "1001" });
       await manager.join({ guildId: "g2", channelId: "2001" });
-      emitDecryptFailure(manager);
+      await emitWorkerReceiveFailure(manager);
       await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(3));
-      getVoiceReceive(manager).handleReceiveError(
-        getSessionEntry(manager, "g2"),
-        new Error("Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)"),
-      );
+      await emitWorkerReceiveFailure(manager, { guildId: "g2" });
 
       await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(4));
       expect(manager.status()).toHaveLength(2);
@@ -597,9 +753,9 @@ defineDiscordVoiceTests(
       await manager.join({ guildId: "g1", channelId: "1001" });
       connection.daveSetPassthroughMode.mockClear();
 
-      emitDecryptFailure(manager);
-      emitDecryptFailure(manager);
-      emitDecryptFailure(manager);
+      await emitWorkerReceiveFailure(manager);
+      await emitWorkerReceiveFailure(manager);
+      await emitWorkerReceiveFailure(manager);
 
       await vi.waitFor(() => {
         expect(connection.daveSetPassthroughMode).toHaveBeenCalledWith(true, 15);
@@ -616,9 +772,9 @@ defineDiscordVoiceTests(
 
       await updateVoiceState(manager, "u-owner", "1001");
 
-      emitDecryptFailure(manager);
-      emitDecryptFailure(manager);
-      emitDecryptFailure(manager);
+      await emitWorkerReceiveFailure(manager);
+      await emitWorkerReceiveFailure(manager);
+      await emitWorkerReceiveFailure(manager);
 
       await vi.waitFor(() => {
         expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
@@ -653,9 +809,9 @@ defineDiscordVoiceTests(
       );
       await manager.autoJoin();
 
-      emitDecryptFailure(manager);
-      emitDecryptFailure(manager);
-      emitDecryptFailure(manager);
+      await emitWorkerReceiveFailure(manager);
+      await emitWorkerReceiveFailure(manager);
+      await emitWorkerReceiveFailure(manager);
       await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2));
 
       voiceStates = [];
@@ -664,23 +820,12 @@ defineDiscordVoiceTests(
       expect(manager.status()).toEqual([]);
     });
 
-    it("resets DAVE receive recovery after realtime audio decodes", async () => {
-      const connection = createConnectionMock();
-      joinVoiceChannelMock.mockReturnValueOnce(connection);
-      decodeOpusStreamChunksMock.mockImplementationOnce(
-        async (
-          _stream: Readable,
-          params: {
-            onChunk: (pcm48kStereo: Buffer) => void;
-          },
-        ) => {
-          params.onChunk(Buffer.alloc(8));
-        },
+    it("streams realtime with batch transcription disabled and resets receive recovery", async () => {
+      const manager = createAgentProxyManager(
+        undefined,
+        { allowFrom: ["discord:u-speaker"] },
+        { tools: { media: { audio: { enabled: false } } } },
       );
-      const manager = createAgentProxyManager(undefined, {
-        allowFrom: ["discord:u-speaker"],
-      });
-
       await manager.join({ guildId: "g1", channelId: "1001" });
       emitDecryptFailure(manager);
       emitDecryptFailure(manager);
@@ -688,224 +833,203 @@ defineDiscordVoiceTests(
       const attempts = getVoiceReceive(manager).daveRecoveryAttempts;
       attempts.set("g1", Date.now());
       expect(entry.receiveRecovery.decryptFailureCount).toBe(2);
-      const stream = {
-        on: vi.fn(),
-        destroy: vi.fn(),
-        async *[Symbol.asyncIterator]() {},
-      };
-      connection.receiver.subscribe.mockReturnValueOnce(stream);
-
-      await handleSpeakingStart(manager, entry, "u-speaker");
-
-      expect(decodeOpusStreamChunksMock).toHaveBeenCalledTimes(1);
+      await receiveRecordedSpeech(manager, undefined, entry, "u-speaker");
+      expect(decodeOpusStreamChunksMock).toHaveBeenCalledOnce();
+      expect(realtimeSessionMock.sendAudio).toHaveBeenCalled();
+      expect(transcribeAudioFileMock).not.toHaveBeenCalled();
+      expect(loggerWarnMock).not.toHaveBeenCalledWith(
+        expect.stringContaining("audio understanding is disabled"),
+      );
       expect(entry.receiveRecovery.decryptFailureCount).toBe(0);
       expect(entry.receiveRecovery.lastDecryptFailureAt).toBe(0);
       expect(attempts.has("g1")).toBe(false);
-      expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
+      expect(joinVoiceChannelMock).toHaveBeenCalledOnce();
     });
 
-    it("cleans up realtime receive streams after WASM bounds failures", async () => {
-      const connection = createConnectionMock();
-      joinVoiceChannelMock.mockReturnValueOnce(connection);
-      decodeOpusStreamChunksMock.mockImplementationOnce(
-        async (
-          stream: Readable,
-          params: {
-            onError: (err: unknown) => void;
-          },
-        ) => {
-          const err = new Error("memory access out of bounds");
-          params.onError(err);
-          const errorListener = (
-            stream as unknown as {
-              on: ReturnType<typeof vi.fn>;
+    it.each([
+      { mode: "agent-proxy", captureOnly: false },
+      { mode: "bidi", captureOnly: false },
+      { mode: "stt-tts", captureOnly: false },
+      { mode: "stt-tts", captureOnly: true },
+    ] as const)(
+      "resets recovery once per stream while other speakers fail in $mode (captureOnly=$captureOnly)",
+      async ({ mode, captureOnly }) => {
+        const connection = createConnectionMock();
+        joinVoiceChannelMock.mockReturnValueOnce(connection);
+        const manager = createManager(
+          makeVoiceConfig(
+            { mode, realtime: { provider: "openai" } },
+            { groupPolicy: "open", allowFrom: ["discord:u-speaker", "discord:u-failing"] },
+          ),
+        );
+        if (captureOnly) {
+          expect(await startTranscripts(manager)).toMatchObject({ ok: true });
+        } else {
+          expect(await manager.join({ guildId: "g1", channelId: "1001" })).toMatchObject({
+            ok: true,
+          });
+        }
+        const entry = getSessionEntry(manager);
+        let consumed = createDeferred<void>();
+        const send = entry.audio.send.bind(entry.audio);
+        vi.spyOn(entry.audio, "send").mockImplementation((command, transferList) => {
+          send(command, transferList);
+          if (command.type === "capture-ack") {
+            consumed.resolve();
+          }
+        });
+        decodeOpusStreamChunksMock.mockImplementation(
+          async (
+            input: Readable,
+            callbacks: { onChunk: (pcm: Buffer, packet: Buffer) => void | Promise<void> },
+          ) => {
+            for await (const packet of input) {
+              await callbacks.onChunk(Buffer.alloc(packet[0] === 0 ? 0 : 3_840), packet);
             }
-          ).on.mock.calls.find(([event]) => event === "error")?.[1] as
-            | ((err: unknown) => void)
-            | undefined;
-          errorListener?.(err);
-        },
-      );
-      const manager = createAgentProxyManager(undefined, {
-        allowFrom: ["discord:u-speaker"],
-      });
-
-      await manager.join({ guildId: "g1", channelId: "1001" });
-      const entry = getSessionEntry(manager);
-      const stream = {
-        on: vi.fn(),
-        off: vi.fn(),
-        destroy: vi.fn(),
-        destroyed: false,
-        async *[Symbol.asyncIterator]() {},
-      };
-      connection.receiver.subscribe.mockReturnValueOnce(stream);
-
-      await handleSpeakingStart(manager, entry, "u-speaker");
-
-      const errorListener = stream.on.mock.calls.find(([event]) => event === "error")?.[1];
-      expect(errorListener).toBeTypeOf("function");
-      expect(stream.off).toHaveBeenCalledWith("error", errorListener);
-      expect(stream.destroy).toHaveBeenCalledTimes(1);
-      expect(entry.capture.activeSpeakers.has("u-speaker")).toBe(false);
-      expect(entry.capture.activeCaptureStreams.has("u-speaker")).toBe(false);
-      expect(entry.receiveRecovery.decryptFailureCount).toBe(1);
-    });
-
-    it("keeps receive recovery state after non-realtime decoder failures", async () => {
-      const connection = createConnectionMock();
-      joinVoiceChannelMock.mockReturnValueOnce(connection);
-      decodeOpusStreamMock.mockImplementationOnce(
-        async (
-          _stream: Readable,
-          params: {
-            onError: (err: unknown) => void;
           },
-        ) => {
-          params.onError(new Error("memory access out of bounds"));
-          return Buffer.alloc(8);
-        },
-      );
-      const manager = createManager(
-        makeVoiceConfig({}, { groupPolicy: "open", allowFrom: ["discord:u-speaker"] }),
-      );
+        );
+        const openStream = async (userId: string) => {
+          const stream = new PassThrough({ objectMode: true });
+          const subscribed = createDeferred<void>();
+          connection.receiver.subscribe.mockImplementationOnce(() => {
+            subscribed.resolve();
+            return stream;
+          });
+          const receiving = handleSpeakingStart(manager, entry, userId);
+          await subscribed.promise;
+          return { stream, receiving };
+        };
+        const failOtherSpeaker = async () => {
+          const other = await openStream("u-failing");
+          // The native receiver destroys the speaker's subscription when decryption fails.
+          other.stream.destroy(new Error("DecryptionFailed(InvalidCiphertext)"));
+          await other.receiving;
+        };
+        const writePacket = async (stream: PassThrough, marker: number) => {
+          consumed = createDeferred<void>();
+          stream.write(Buffer.from([marker]));
+          // Decoder completion only posts IPC. The credit acknowledges that the
+          // parent consumed this frame and finished the recovery-state update.
+          await consumed.promise;
+        };
+        const openHealthyStream = async () => {
+          await failOtherSpeaker();
+          await failOtherSpeaker();
+          const attempts = getVoiceReceive(manager).daveRecoveryAttempts;
+          attempts.set("g1", Date.now());
+          const healthy = await openStream("u-speaker");
+          await writePacket(healthy.stream, 0);
+          expect(entry.receiveRecovery.decryptFailureCount).toBe(2);
+          expect(attempts.has("g1")).toBe(true);
+          await writePacket(healthy.stream, 1);
+          expect(entry.receiveRecovery.decryptFailureCount).toBe(0);
+          expect(entry.receiveRecovery.lastDecryptFailureAt).toBe(0);
+          expect(attempts.has("g1")).toBe(false);
+          return healthy;
+        };
 
-      await manager.join({ guildId: "g1", channelId: "1001" });
-      const entry = getSessionEntry(manager);
-      const stream = {
-        on: vi.fn(),
-        off: vi.fn(),
-        destroy: vi.fn(),
-        destroyed: false,
-        async *[Symbol.asyncIterator]() {},
-      };
-      connection.receiver.subscribe.mockReturnValueOnce(stream);
+        const first = await openHealthyStream();
+        first.stream.end();
+        await first.receiving;
+        await entry.processingQueue;
+        // A fresh stream on the same entry still gets its own successful-audio reset.
+        const healthy = await openHealthyStream();
+        try {
+          for (let failure = 1; failure <= 3; failure++) {
+            await failOtherSpeaker();
+            if (failure < 3) {
+              await writePacket(healthy.stream, 1);
+              expect(connection.destroy).not.toHaveBeenCalled();
+            }
+          }
+          await vi.waitFor(() => {
+            expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
+            expect(getSessionEntry(manager)).not.toBe(entry);
+            expectConnectedStatus(manager, "1001");
+          });
+          expect(connection.destroy).toHaveBeenCalledOnce();
+          expect(healthy.stream.destroyed).toBe(true);
+          if (captureOnly) {
+            expect(realtimeSessionMock.sendAudio).not.toHaveBeenCalled();
+            expect(agentCommandMock).not.toHaveBeenCalled();
+          }
+        } finally {
+          healthy.stream.destroy();
+          await healthy.receiving;
+          await manager.destroy();
+        }
+      },
+    );
 
-      await handleSpeakingStart(manager, entry, "u-speaker");
+    it.each(["agent-proxy", "stt-tts"] as const)(
+      "cleans up %s receive streams without clearing decoder failure state",
+      async (mode) => {
+        const connection = createConnectionMock();
+        joinVoiceChannelMock.mockReturnValueOnce(connection);
+        const stream = new PassThrough({ objectMode: true });
+        decodeOpusStreamChunksMock.mockImplementationOnce(async (input, params) => {
+          for await (const packet of input) {
+            const err = new Error("memory access out of bounds");
+            params.onError?.(err);
+            stream.emit("error", err);
+            await params.onChunk(Buffer.alloc(8), packet);
+          }
+        });
+        const manager = createManager(
+          makeVoiceConfig(
+            { mode, realtime: { provider: "openai" } },
+            { groupPolicy: "open", allowFrom: ["discord:u-speaker"] },
+          ),
+        );
 
-      expect(transcribeAudioFileMock).not.toHaveBeenCalled();
-      expect(entry.receiveRecovery.decryptFailureCount).toBe(1);
-      expect(entry.receiveRecovery.lastDecryptFailureAt).toBeGreaterThan(0);
-      expect(stream.destroy).toHaveBeenCalledTimes(1);
-    });
+        await manager.join({ guildId: "g1", channelId: "1001" });
+        const entry = getSessionEntry(manager);
+        connection.receiver.subscribe.mockReturnValueOnce(stream);
+
+        const receiving = handleSpeakingStart(manager, entry, "u-speaker");
+        stream.end(Buffer.from("opus-packet"));
+        await receiving;
+        await entry.processingQueue;
+
+        expect(stream.destroyed).toBe(true);
+        expect(stream.listenerCount("error")).toBe(0);
+        expect(entry.capture.has("u-speaker")).toBe(false);
+        expect(transcribeAudioFileMock).not.toHaveBeenCalled();
+        expect(entry.receiveRecovery.decryptFailureCount).toBe(1);
+        expect(entry.receiveRecovery.lastDecryptFailureAt).toBeGreaterThan(0);
+      },
+    );
 
     it("processes partial non-realtime audio after abort-like stream endings", async () => {
       const connection = createConnectionMock();
       joinVoiceChannelMock.mockReturnValueOnce(connection);
-      decodeOpusStreamMock.mockImplementationOnce(
-        async (
-          _stream: Readable,
-          params: {
-            onError: (err: unknown) => void;
-          },
-        ) => {
+      decodeOpusStreamChunksMock.mockImplementationOnce(async (input, params) => {
+        for await (const packet of input) {
+          await params.onChunk(Buffer.alloc(48_000), packet);
           const err = new Error("The operation was aborted");
           err.name = "AbortError";
-          params.onError(err);
-          return Buffer.alloc(48_000);
-        },
-      );
+          params.onError?.(err);
+        }
+      });
       const manager = createManager(
         makeVoiceConfig({}, { groupPolicy: "open", allowFrom: ["discord:u-speaker"] }),
       );
 
       await manager.join({ guildId: "g1", channelId: "1001" });
       const entry = getSessionEntry(manager);
-      const stream = {
-        on: vi.fn(),
-        off: vi.fn(),
-        destroy: vi.fn(),
-        destroyed: false,
-        async *[Symbol.asyncIterator]() {},
-      };
+      const conversations = vi.spyOn(entry.conversations, "enqueue");
+      const stream = new PassThrough({ objectMode: true });
       connection.receiver.subscribe.mockReturnValueOnce(stream);
 
-      await handleSpeakingStart(manager, entry, "u-speaker");
+      const receiving = handleSpeakingStart(manager, entry, "u-speaker");
+      stream.end(Buffer.from("opus-packet"));
+      await receiving;
       await entry.processingQueue;
+      await Promise.all(conversations.mock.results.map((result) => result.value));
 
       expect(transcribeAudioFileMock).toHaveBeenCalledTimes(1);
       expect(entry.receiveRecovery.decryptFailureCount).toBe(0);
-      expect(stream.destroy).toHaveBeenCalledTimes(1);
-    });
-
-    it("allows the same speaker to restart after finalize fires", async () => {
-      vi.useFakeTimers();
-      try {
-        const connection = createConnectionMock();
-        joinVoiceChannelMock.mockReturnValueOnce(connection);
-        const manager = createManager();
-
-        await manager.join({ guildId: "g1", channelId: "1001" });
-
-        const entry = getSessionEntry(manager);
-
-        const firstStream = new PassThrough();
-        const destroyFirstStream = vi.spyOn(firstStream, "destroy");
-        entry.capture.activeSpeakers.add("u1");
-        entry.capture.captureGenerations.set("u1", 1);
-        entry.capture.activeCaptureStreams.set("u1", { generation: 1, stream: firstStream });
-
-        getVoiceReceive(manager).scheduleCaptureFinalize(entry, "u1", "test");
-
-        await vi.advanceTimersByTimeAsync(2_500);
-
-        expect(destroyFirstStream).toHaveBeenCalledTimes(1);
-        expect(entry?.capture.activeSpeakers.has("u1")).toBe(false);
-
-        const secondStream = {
-          on: vi.fn(),
-          destroy: vi.fn(),
-          async *[Symbol.asyncIterator]() {},
-        };
-        connection.receiver.subscribe.mockReturnValueOnce(secondStream);
-
-        await handleSpeakingStart(manager, entry, "u1");
-
-        const subscribeCall = lastMockCall(
-          connection.receiver.subscribe as unknown as MockCallSource,
-          "receiver subscribe",
-        );
-        expect(subscribeCall?.[0]).toBe("u1");
-        expect(
-          requireRecord(requireRecord(subscribeCall?.[1], "subscribe options").end, "end").behavior,
-        ).toBe("Manual");
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
-    it("uses configured silence grace before finalizing voice capture", async () => {
-      vi.useFakeTimers();
-      try {
-        const manager = createManager({
-          voice: {
-            enabled: true,
-            captureSilenceGraceMs: 4_000,
-          },
-        });
-        const stream = { destroy: vi.fn() };
-        const entry = {
-          guildId: "g1",
-          channelId: "1001",
-          capture: createVoiceCaptureState(),
-        };
-        entry.capture.activeSpeakers.add("u1");
-        entry.capture.captureGenerations.set("u1", 1);
-        entry.capture.activeCaptureStreams.set("u1", {
-          generation: 1,
-          stream: stream as unknown as Readable,
-        });
-
-        getVoiceReceive(manager).scheduleCaptureFinalize(entry, "u1", "test");
-
-        await vi.advanceTimersByTimeAsync(3_999);
-        expect(stream.destroy).not.toHaveBeenCalled();
-
-        await vi.advanceTimersByTimeAsync(1);
-        expect(stream.destroy).toHaveBeenCalledTimes(1);
-      } finally {
-        vi.useRealTimers();
-      }
+      expect(stream.destroyed).toBe(true);
     });
   },
 );

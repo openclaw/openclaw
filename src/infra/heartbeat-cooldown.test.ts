@@ -65,32 +65,17 @@ describe("shouldDeferWake", () => {
   });
 
   describe("immediate wake intent (wake-now contracts)", () => {
-    it("does not defer 'wake' even within nextDueMs (system event --mode now contract)", () => {
-      expect(decide({ ...afterRun, intent: "immediate", reason: "wake" })).toEqual({
-        defer: false,
-      });
-    });
-
-    it("does not defer 'background-task' even within nextDueMs (task completion contract)", () => {
-      expect(decide({ ...afterRun, intent: "immediate", reason: "background-task" })).toEqual({
-        defer: false,
-      });
-    });
-
-    it("does not defer 'background-task-blocked' even within nextDueMs", () => {
-      expect(
-        decide({ ...afterRun, intent: "immediate", reason: "background-task-blocked" }),
-      ).toEqual({ defer: false });
-    });
-
-    it("does not defer explicit hook wake-now calls even within nextDueMs", () => {
-      expect(decide({ ...afterRun, intent: "immediate", reason: "hook:wake" })).toEqual({
-        defer: false,
-      });
-    });
-
-    it("does not defer explicit cron wake-now calls even within nextDueMs", () => {
-      expect(decide({ ...afterRun, intent: "immediate", reason: "cron:morning-brief" })).toEqual({
+    it.each<[name: string, reason: Input["reason"]]>([
+      ["does not defer 'wake' even within nextDueMs (system event --mode now contract)", "wake"],
+      [
+        "does not defer 'background-task' even within nextDueMs (task completion contract)",
+        "background-task",
+      ],
+      ["does not defer 'background-task-blocked' even within nextDueMs", "background-task-blocked"],
+      ["does not defer explicit hook wake-now calls even within nextDueMs", "hook:wake"],
+      ["does not defer explicit cron wake-now calls even within nextDueMs", "cron:morning-brief"],
+    ])("%s", (_name, reason) => {
+      expect(decide({ ...afterRun, intent: "immediate", reason })).toEqual({
         defer: false,
       });
     });
@@ -107,7 +92,11 @@ describe("shouldDeferWake", () => {
       ).toEqual({ defer: false });
     });
 
-    it("flood guard still applies to 'wake' as a backstop against unexpected loops", () => {
+    it.each<[name: string, reason: Input["reason"]]>([
+      ["flood guard still applies to 'wake' as a backstop against unexpected loops", "wake"],
+      ["flood guard still applies to 'background-task' as a backstop", "background-task"],
+      ["flood guard still applies to explicit wake-now bypass calls", "hook:wake"],
+    ])("%s", (_name, reason) => {
       const now = 1_000_000;
       const recentRunStarts = [
         now - 50_000,
@@ -123,49 +112,7 @@ describe("shouldDeferWake", () => {
           nextDueMs: 0,
           lastRunStartedAtMs: now - 10_000,
           recentRunStarts,
-          reason: "wake",
-        }),
-      ).toEqual({ defer: true, reason: "flood", retryAtMs: 1_010_001 });
-    });
-
-    it("flood guard still applies to 'background-task' as a backstop", () => {
-      const now = 1_000_000;
-      const recentRunStarts = [
-        now - 50_000,
-        now - 40_000,
-        now - 30_000,
-        now - 20_000,
-        now - 10_000,
-      ];
-      expect(
-        decide({
-          intent: "immediate",
-          now,
-          nextDueMs: 0,
-          lastRunStartedAtMs: now - 10_000,
-          recentRunStarts,
-          reason: "background-task",
-        }),
-      ).toEqual({ defer: true, reason: "flood", retryAtMs: 1_010_001 });
-    });
-
-    it("flood guard still applies to explicit wake-now bypass calls", () => {
-      const now = 1_000_000;
-      const recentRunStarts = [
-        now - 50_000,
-        now - 40_000,
-        now - 30_000,
-        now - 20_000,
-        now - 10_000,
-      ];
-      expect(
-        decide({
-          intent: "immediate",
-          now,
-          nextDueMs: 0,
-          lastRunStartedAtMs: now - 10_000,
-          recentRunStarts,
-          reason: "hook:wake",
+          reason,
         }),
       ).toEqual({ defer: true, reason: "flood", retryAtMs: 1_010_001 });
     });
@@ -239,40 +186,14 @@ describe("shouldDeferWake", () => {
   });
 
   describe("event-driven wakes after a prior run (regression for #75436)", () => {
-    it("defers exec-event wakes when now < nextDueMs", () => {
-      expect(decide({ ...afterRun, source: "exec-event", reason: "exec-event" })).toEqual({
-        defer: true,
-        reason: "not-due",
-        retryAtMs: 79_000,
-      });
-    });
-
-    it("defers cron wakes when now < nextDueMs", () => {
-      expect(decide({ ...afterRun, source: "cron", reason: "cron:morning-brief" })).toEqual({
-        defer: true,
-        reason: "not-due",
-        retryAtMs: 79_000,
-      });
-    });
-
-    it("defers hook wakes when now < nextDueMs", () => {
-      expect(decide({ ...afterRun, source: "hook", reason: "hook:wake" })).toEqual({
-        defer: true,
-        reason: "not-due",
-        retryAtMs: 79_000,
-      });
-    });
-
-    it("defers acp spawn stream wakes when now < nextDueMs", () => {
-      expect(decide({ ...afterRun, source: "acp-spawn", reason: "acp:spawn:stream" })).toEqual({
-        defer: true,
-        reason: "not-due",
-        retryAtMs: 79_000,
-      });
-    });
-
-    it("defers unknown wake reasons when now < nextDueMs", () => {
-      expect(decide({ ...afterRun, source: "other", reason: "something-new" })).toEqual({
+    it.each<[name: string, source: Input["source"], reason: Input["reason"]]>([
+      ["defers exec-event wakes when now < nextDueMs", "exec-event", "exec-event"],
+      ["defers cron wakes when now < nextDueMs", "cron", "cron:morning-brief"],
+      ["defers hook wakes when now < nextDueMs", "hook", "hook:wake"],
+      ["defers acp spawn stream wakes when now < nextDueMs", "acp-spawn", "acp:spawn:stream"],
+      ["defers unknown wake reasons when now < nextDueMs", "other", "something-new"],
+    ])("%s", (_name, source, reason) => {
+      expect(decide({ ...afterRun, source, reason })).toEqual({
         defer: true,
         reason: "not-due",
         retryAtMs: 79_000,
@@ -281,20 +202,16 @@ describe("shouldDeferWake", () => {
   });
 
   describe("event-driven wakes before any prior run (bootstrap)", () => {
-    it("does NOT defer the first exec-event wake (lets idle agent respond)", () => {
-      expect(decide({ ...beforeFirstRun, source: "exec-event", reason: "exec-event" })).toEqual({
-        defer: false,
-      });
-    });
-
-    it("does NOT defer the first cron wake", () => {
-      expect(decide({ ...beforeFirstRun, source: "cron", reason: "cron:job-x" })).toEqual({
-        defer: false,
-      });
-    });
-
-    it("does NOT defer the first hook wake", () => {
-      expect(decide({ ...beforeFirstRun, source: "hook", reason: "hook:wake" })).toEqual({
+    it.each<[name: string, source: Input["source"], reason: Input["reason"]]>([
+      [
+        "does NOT defer the first exec-event wake (lets idle agent respond)",
+        "exec-event",
+        "exec-event",
+      ],
+      ["does NOT defer the first cron wake", "cron", "cron:job-x"],
+      ["does NOT defer the first hook wake", "hook", "hook:wake"],
+    ])("%s", (_name, source, reason) => {
+      expect(decide({ ...beforeFirstRun, source, reason })).toEqual({
         defer: false,
       });
     });

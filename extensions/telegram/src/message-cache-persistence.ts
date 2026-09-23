@@ -20,7 +20,8 @@ export type TelegramMessageThreadBinding = {
   threadSpec:
     | { scope: "direct-messages"; id: number }
     | { scope: "dm"; id: number }
-    | { scope: "forum"; id: number };
+    | { scope: "forum"; id: number }
+    | { scope: "none"; id?: never };
 };
 
 export type TelegramResolvedMedia = {
@@ -40,6 +41,7 @@ export type PersistedTelegramMessageCacheValue = {
   promptContextProjection?: TelegramPromptContextProjection | TelegramPromptContextSource;
   resolvedMedia?: TelegramResolvedMedia;
   threadBinding?: TelegramMessageThreadBinding;
+  historyEligible?: true;
   threadId?: string;
 };
 

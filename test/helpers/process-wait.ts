@@ -1,5 +1,5 @@
 import type { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import fs, { existsSync, readFileSync } from "node:fs";
 import { isPidAlive } from "../../src/shared/pid-alive.js";
 
 export { isPidAlive as isProcessAlive };
@@ -22,8 +22,14 @@ export async function waitForFile(filePath: string, timeoutMs: number): Promise<
 }
 
 // writeFileSync can expose an open-truncate window, so wait for valid contents, not existence.
-export async function waitForPidFile(filePath: string, timeoutMs: number): Promise<number> {
-  const deadlineAt = Date.now() + timeoutMs;
+// Inject a real delay when the caller controls execution deadlines with fake timers.
+export async function waitForPidFile(
+  filePath: string,
+  timeoutMs: number,
+  delay: (ms: number) => Promise<unknown> = sleep,
+  now: () => number = () => Date.now(),
+): Promise<number> {
+  const deadlineAt = now() + timeoutMs;
   while (true) {
     if (existsSync(filePath)) {
       const pid = Number.parseInt(readFileSync(filePath, "utf8"), 10);
@@ -31,10 +37,10 @@ export async function waitForPidFile(filePath: string, timeoutMs: number): Promi
         return pid;
       }
     }
-    if (Date.now() >= deadlineAt) {
+    if (now() >= deadlineAt) {
       throw new Error(`timeout waiting for pid in ${filePath}`);
     }
-    await sleep(5);
+    await delay(5);
   }
 }
 
@@ -65,5 +71,42 @@ export function waitForChildClose(
       clearTimeout(timeout);
       resolve({ code, signal });
     });
+  });
+}
+
+export function waitForFixtureFile(
+  filename: string,
+  completion: Promise<unknown>,
+  expected?: string,
+) {
+  return new Promise<void>((resolve, reject) => {
+    const matches = () =>
+      fs.existsSync(filename) &&
+      fs.statSync(filename).size > 0 &&
+      (expected === undefined || fs.readFileSync(filename, "utf8") === expected);
+    const check = () => {
+      if (matches()) {
+        clearInterval(poll);
+        resolve();
+      }
+    };
+    // watchFile can adopt a newly created receipt in its first stat without an event.
+    // Poll the persistent state itself so readiness never depends on that race.
+    const poll = setInterval(check, 50);
+    void completion.then(
+      () => {
+        clearInterval(poll);
+        if (matches()) {
+          resolve();
+        } else {
+          reject(new Error(`Child exited before writing ${filename}`));
+        }
+      },
+      (error: unknown) => {
+        clearInterval(poll);
+        reject(new Error(`Child failed before writing ${filename}`, { cause: error }));
+      },
+    );
+    check();
   });
 }

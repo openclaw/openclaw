@@ -194,6 +194,15 @@ function extractTextContent(content: unknown): string {
   return extractTextContentParts(content).join(" ").trim();
 }
 
+function findActiveMemoryCloseLine(lines: string[], startIndex: number): number {
+  for (let index = startIndex; index < lines.length; index += 1) {
+    if ((lines[index]?.trim() ?? "") === ACTIVE_MEMORY_CLOSE_TAG) {
+      return index;
+    }
+  }
+  return -1;
+}
+
 function stripRecalledContextNoise(text: string): string {
   const lines = text.split("\n");
   const cleanedLines: string[] = [];
@@ -207,13 +216,7 @@ function stripRecalledContextNoise(text: string): string {
       continue;
     }
     if (line === ACTIVE_MEMORY_OPEN_TAG) {
-      let closeIndex = -1;
-      for (let probe = index + 1; probe < lines.length; probe += 1) {
-        if ((lines[probe]?.trim() ?? "") === ACTIVE_MEMORY_CLOSE_TAG) {
-          closeIndex = probe;
-          break;
-        }
-      }
+      const closeIndex = findActiveMemoryCloseLine(lines, index + 1);
       if (closeIndex !== -1) {
         index = closeIndex;
         continue;
@@ -243,13 +246,7 @@ function stripInjectedActiveMemoryPrefixOnly(text: string): string {
     if (line === ACTIVE_MEMORY_CONTEXT_HEADER) {
       const nextLine = lines[index + 1]?.trim() ?? "";
       if (nextLine === ACTIVE_MEMORY_OPEN_TAG) {
-        let closeIndex = -1;
-        for (let probe = index + 2; probe < lines.length; probe += 1) {
-          if ((lines[probe]?.trim() ?? "") === ACTIVE_MEMORY_CLOSE_TAG) {
-            closeIndex = probe;
-            break;
-          }
-        }
+        const closeIndex = findActiveMemoryCloseLine(lines, index + 2);
         if (closeIndex !== -1) {
           index = closeIndex;
           continue;

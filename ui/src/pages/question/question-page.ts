@@ -5,7 +5,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { RouteId } from "../../app-route-paths.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -33,7 +32,7 @@ type QuestionPageRequestError = "connection" | "unavailable" | null;
 
 export class QuestionPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: false })
-  context!: ApplicationContext<RouteId>;
+  context!: ApplicationContext;
 
   @property({ attribute: "question-id" }) questionId = "";
   @state() private loading = true;
@@ -136,7 +135,6 @@ export class QuestionPage extends OpenClawLightDomElement {
       }
       const record = result.question;
       if (
-        record.id !== id ||
         (record.status !== "pending" &&
           record.status !== "answered" &&
           record.status !== "cancelled" &&
@@ -212,9 +210,11 @@ export class QuestionPage extends OpenClawLightDomElement {
       ? html`<div class="approval-page__state" role="status">${t("common.loading")}</div>`
       : this.requestError
         ? html`<div class="approval-page__state" role="status">
-            ${this.requestError === "connection"
-              ? t("chat.questions.disconnected")
-              : t("chat.questions.unavailable")}
+            ${
+              this.requestError === "connection"
+                ? t("chat.questions.disconnected")
+                : t("chat.questions.unavailable")
+            }
           </div>`
         : prompt
           ? this.renderQuestion(prompt)

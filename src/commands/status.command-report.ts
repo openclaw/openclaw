@@ -3,7 +3,7 @@
 
 import type { RenderTableOptions, TableColumn } from "../../packages/terminal-core/src/table.js";
 import { statusOverviewTableColumns } from "./status-all/report-tables.js";
-import { appendStatusReportSections } from "./status-all/text-report.js";
+import { appendStatusReportLines, appendStatusReportTable } from "./status-all/text-report.js";
 
 /** Builds terminal lines for the standard status report. */
 export async function buildStatusCommandReportLines(params: {
@@ -34,108 +34,82 @@ export async function buildStatusCommandReportLines(params: {
   const lines: string[] = [];
   lines.push(params.heading("OpenClaw status"));
 
-  appendStatusReportSections({
+  const report = {
     lines,
     heading: params.heading,
     width: params.width,
     renderTable: params.renderTable,
-    sections: [
-      {
-        kind: "table",
-        title: "Overview",
-        columns: [...statusOverviewTableColumns],
-        rows: params.overviewRows,
-      },
-      {
-        kind: "raw",
-        body:
-          params.showTaskMaintenanceHint ||
-          params.taskRegistryMigrationHint ||
-          params.retainedLostTaskLine
-            ? [
-                "",
-                // Raw section keeps maintenance hints directly below the overview table.
-                ...(params.showTaskMaintenanceHint
-                  ? [params.muted(params.taskMaintenanceHint)]
-                  : []),
-                ...(params.taskRegistryMigrationHint ? [params.taskRegistryMigrationHint] : []),
-                ...(params.retainedLostTaskLine ? [params.retainedLostTaskLine] : []),
-              ]
-            : [],
-        skipIfEmpty: true,
-      },
-      {
-        kind: "lines",
-        title: "Plugin compatibility",
-        body: params.pluginCompatibilityLines,
-        skipIfEmpty: true,
-      },
-      {
-        kind: "raw",
-        body: params.pairingRecoveryLines.length > 0 ? ["", ...params.pairingRecoveryLines] : [],
-        skipIfEmpty: true,
-      },
-      {
-        kind: "lines",
-        title: "Model selection",
-        body: params.modelSelectionLines,
-        skipIfEmpty: true,
-      },
-      {
-        kind: "lines",
-        title: "Security audit",
-        body: params.securityAuditLines,
-      },
-      params.channelsRows.length === 0
-        ? {
-            kind: "lines",
-            title: "Channels",
-            body: [params.muted("No channels configured")],
-          }
-        : {
-            kind: "table",
-            title: "Channels",
-            columns: [...params.channelsColumns],
-            rows: params.channelsRows,
-          },
-      params.sessionsRows.length === 0
-        ? {
-            kind: "lines",
-            title: "Sessions",
-            body: [params.muted("No sessions")],
-          }
-        : {
-            kind: "table",
-            title: "Sessions",
-            columns: [...params.sessionsColumns],
-            rows: params.sessionsRows,
-          },
-      {
-        kind: "table",
-        title: "System events",
-        columns: [{ key: "Event", header: "Event", flex: true, minWidth: 24 }],
-        rows: params.systemEventsRows ?? [],
-        trailer: params.systemEventsTrailer,
-        skipIfEmpty: true,
-      },
-      {
-        kind: "table",
-        title: "Health",
-        columns: [...(params.healthColumns ?? [])],
-        rows: params.healthRows ?? [],
-        skipIfEmpty: true,
-      },
-      {
-        kind: "lines",
-        title: "Usage",
-        body: params.usageLines ?? [],
-        skipIfEmpty: true,
-      },
-      {
-        kind: "raw",
-        body: ["", ...params.footerLines],
-      },
-    ],
-  });
+  };
+  // Prepare callbacks and column snapshots before rendering any table, as one report view.
+  const overviewColumns = [...statusOverviewTableColumns];
+  const overviewRows = params.overviewRows;
+  const maintenanceLines =
+    params.showTaskMaintenanceHint ||
+    params.taskRegistryMigrationHint ||
+    params.retainedLostTaskLine
+      ? [
+          "",
+          ...(params.showTaskMaintenanceHint ? [params.muted(params.taskMaintenanceHint)] : []),
+          ...(params.taskRegistryMigrationHint ? [params.taskRegistryMigrationHint] : []),
+          ...(params.retainedLostTaskLine ? [params.retainedLostTaskLine] : []),
+        ]
+      : [];
+  const pluginCompatibilityLines = params.pluginCompatibilityLines;
+  const pairingRecoveryLines =
+    params.pairingRecoveryLines.length > 0 ? ["", ...params.pairingRecoveryLines] : [];
+  const modelSelectionLines = params.modelSelectionLines;
+  const securityAuditLines = params.securityAuditLines;
+  const channelsMessage =
+    params.channelsRows.length === 0 ? params.muted("No channels configured") : undefined;
+  const channelsColumns = channelsMessage === undefined ? [...params.channelsColumns] : [];
+  const channelsRows = channelsMessage === undefined ? params.channelsRows : [];
+  const sessionsMessage =
+    params.sessionsRows.length === 0 ? params.muted("No sessions") : undefined;
+  const sessionsColumns = sessionsMessage === undefined ? [...params.sessionsColumns] : [];
+  const sessionsRows = sessionsMessage === undefined ? params.sessionsRows : [];
+  const systemEventsColumns = [{ key: "Event", header: "Event", flex: true, minWidth: 24 }];
+  const systemEventsRows = params.systemEventsRows ?? [];
+  const systemEventsTrailer = params.systemEventsTrailer;
+  const healthColumns = [...(params.healthColumns ?? [])];
+  const healthRows = params.healthRows ?? [];
+  const usageLines = params.usageLines ?? [];
+  const footerLines = ["", ...params.footerLines];
+
+  appendStatusReportTable(report, "Overview", overviewColumns, overviewRows);
+  lines.push(...maintenanceLines);
+  if (pluginCompatibilityLines.length > 0) {
+    appendStatusReportLines(report, "Plugin compatibility", pluginCompatibilityLines);
+  }
+  lines.push(...pairingRecoveryLines);
+  if (modelSelectionLines.length > 0) {
+    appendStatusReportLines(report, "Model selection", modelSelectionLines);
+  }
+  appendStatusReportLines(report, "Security audit", securityAuditLines);
+  if (channelsMessage !== undefined) {
+    appendStatusReportLines(report, "Channels", [channelsMessage]);
+  } else {
+    appendStatusReportTable(report, "Channels", channelsColumns, channelsRows);
+  }
+  if (sessionsMessage !== undefined) {
+    appendStatusReportLines(report, "Sessions", [sessionsMessage]);
+  } else {
+    appendStatusReportTable(report, "Sessions", sessionsColumns, sessionsRows);
+  }
+  if (systemEventsRows.length > 0) {
+    appendStatusReportTable(
+      report,
+      "System events",
+      systemEventsColumns,
+      systemEventsRows,
+      systemEventsTrailer,
+    );
+  }
+  if (healthRows.length > 0) {
+    appendStatusReportTable(report, "Health", healthColumns, healthRows);
+  }
+  if (usageLines.length > 0) {
+    appendStatusReportLines(report, "Usage", usageLines);
+  }
+  lines.push(...footerLines);
   return lines;
 }

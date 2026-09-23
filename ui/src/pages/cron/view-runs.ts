@@ -3,55 +3,47 @@
 // detail history tab.
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import type {
-  CronRunLogEntry,
-  CronDeliveryStatus,
-  CronRunsStatusValue,
-  CronSortDir,
-} from "../../api/types.ts";
+import type { CronRunLogEntry, CronDeliveryStatus, CronRunsStatusValue } from "../../api/types.ts";
 import { icon } from "../../components/icons.ts";
 import "../../components/web-awesome.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { i18n, t } from "../../i18n/index.ts";
+import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
+import { formatDurationCompact, formatDurationHuman } from "../../lib/format-duration.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import {
-  formatDurationCompact,
-  formatDurationHuman,
   formatRelativeTimestamp,
-  formatMs,
+  createMsFormatter,
   formatCompactTokenCount,
 } from "../../lib/format.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
-import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { cronRunEntryMatchesLink } from "./route-model.ts";
+import type { CronProps } from "./view-types.ts";
 
-// Leaf contract: the slice of the cron view props this module needs. Keeping
-// it local (instead of importing CronProps from view.ts) avoids a module
-// cycle between view.ts and view-runs.ts.
-type CronRunsSectionProps = {
-  basePath: string;
-  agentId: string;
-  runs: CronRunLogEntry[];
-  highlightedRunId?: string | null;
-  runsHasMore: boolean;
-  runsLoadingMore: boolean;
-  runsStatuses: CronRunsStatusValue[];
-  runsDeliveryStatuses: CronDeliveryStatus[];
-  runsQuery: string;
-  runsSortDir: CronSortDir;
+registerCronEnglish();
+
+type CronRunsSectionProps = Pick<
+  CronProps,
+  | "basePath"
+  | "agentId"
+  | "runs"
+  | "runsState"
+  | "highlightedRunId"
+  | "runsHasMore"
+  | "runsLoadingMore"
+  | "runsStatuses"
+  | "runsDeliveryStatuses"
+  | "runsQuery"
+  | "runsSortDir"
+  | "onLoadMoreRuns"
+  | "onRefresh"
+  | "onRunsFiltersChange"
+  | "onViewRunTranscript"
+> & {
   conditionActivity?: {
     checkCount: number;
     lastCheckedAtMs?: number;
     lastFiredAtMs?: number;
   };
-  onLoadMoreRuns: () => void;
-  onRunsFiltersChange: (patch: {
-    cronRunsStatuses?: CronRunsStatusValue[];
-    cronRunsDeliveryStatuses?: CronDeliveryStatus[];
-    cronRunsQuery?: string;
-    cronRunsSortDir?: CronSortDir;
-  }) => void | Promise<void>;
-  onNavigateToChat?: (sessionKey: string) => void;
 };
 
 function renderConditionMetric(label: string, value: string) {
@@ -177,9 +169,9 @@ function renderFilterDropdown(params: {
         <button
           slot="trigger"
           type="button"
-          class="btn btn--sm cron-filter-dropdown__trigger ${params.selected.length > 0
-            ? "active"
-            : ""}"
+          class="btn btn--sm cron-filter-dropdown__trigger ${
+            params.selected.length > 0 ? "active" : ""
+          }"
           title=${params.title}
           aria-label=${`${params.title} ${accessibleSummary}`}
         >
@@ -208,6 +200,7 @@ function renderFilterDropdown(params: {
 }
 
 export function renderRunsSection(props: CronRunsSectionProps) {
+  const formatTimestamp = createMsFormatter();
   const runs = props.runs.toSorted((a, b) =>
     props.runsSortDir === "asc" ? a.ts - b.ts : b.ts - a.ts,
   );
@@ -228,7 +221,7 @@ export function renderRunsSection(props: CronRunsSectionProps) {
   const sortLabel =
     props.runsSortDir === "asc" ? t("cron.runs.oldestFirst") : t("cron.runs.newestFirst");
   return html`
-    <div class="cron-runs">
+    <div class="cron-runs" aria-busy=${String(props.runsState === "pending")}>
       ${props.conditionActivity ? renderConditionActivity(props.conditionActivity) : nothing}
       <div class="cron-run-filters">
         <div class="cron-search-box cron-run-filter-search">
@@ -310,47 +303,66 @@ export function renderRunsSection(props: CronRunsSectionProps) {
           </wa-dropdown>
         </div>
       </div>
-      ${runs.length === 0
-        ? hasRunFilters
-          ? html`<div class="muted cron-runs__empty">${t("cron.runs.noMatching")}</div>`
+      ${props.runsState === "failed" ? html`<button class="btn btn--sm" @click=${props.onRefresh}>${t("common.retry")}</button>` : nothing}
+      ${
+        runs.length === 0
+          ? props.runsState === "pending"
+            ? html`<div
+                class="cron-empty-state"
+                role="status"
+                aria-live="polite"
+                data-test-id="cron-runs-loading"
+              >
+                ${t("cron.list.loading")}
+              </div>`
+            : props.runsState !== "ready"
+              ? nothing
+              : hasRunFilters
+                ? html`<div class="muted cron-runs__empty">${t("cron.runs.noMatching")}</div>`
+                : html`
+                    <div class="cron-empty-state">
+                      <div class="cron-empty-state__title">
+                        ${
+                          props.conditionActivity
+                            ? t("cron.runs.emptyConditionTitle")
+                            : t("cron.runs.emptyTitle")
+                        }
+                      </div>
+                      <div class="cron-empty-state__copy">
+                        ${
+                          props.conditionActivity
+                            ? conditionEmptyHint(props.conditionActivity)
+                            : t("cron.runs.emptyHint")
+                        }
+                      </div>
+                    </div>
+                  `
           : html`
-              <div class="cron-empty-state">
-                <div class="cron-empty-state__title">
-                  ${props.conditionActivity
-                    ? t("cron.runs.emptyConditionTitle")
-                    : t("cron.runs.emptyTitle")}
-                </div>
-                <div class="cron-empty-state__copy">
-                  ${props.conditionActivity
-                    ? conditionEmptyHint(props.conditionActivity)
-                    : t("cron.runs.emptyHint")}
-                </div>
+              <div class="cron-runs__list">
+                ${runs.map((entry) =>
+                  renderRun(
+                    entry,
+                    formatTimestamp,
+                    props.highlightedRunId,
+                    props.onViewRunTranscript,
+                  ),
+                )}
               </div>
             `
-        : html`
-            <div class="cron-runs__list">
-              ${runs.map((entry) =>
-                renderRun(
-                  entry,
-                  props.agentId,
-                  props.basePath,
-                  props.highlightedRunId,
-                  props.onNavigateToChat,
-                ),
-              )}
-            </div>
-          `}
-      ${props.runsHasMore
-        ? html`
-            <button
-              class="btn btn--sm cron-load-more"
-              ?disabled=${props.runsLoadingMore}
-              @click=${props.onLoadMoreRuns}
-            >
-              ${props.runsLoadingMore ? t("cron.list.loading") : t("cron.runs.loadMore")}
-            </button>
-          `
-        : nothing}
+      }
+      ${
+        props.runsHasMore
+          ? html`
+              <button
+                class="btn btn--sm cron-load-more"
+                ?disabled=${props.runsLoadingMore}
+                @click=${props.onLoadMoreRuns}
+              >
+                ${props.runsLoadingMore ? t("cron.list.loading") : t("cron.runs.loadMore")}
+              </button>
+            `
+          : nothing
+      }
     </div>
   `;
 }
@@ -360,7 +372,16 @@ function formatRunNextLabel(nextRunAtMs: number, nowMs = Date.now()) {
   return nextRunAtMs > nowMs ? t("cron.runEntry.next", { rel }) : t("cron.runEntry.due", { rel });
 }
 
-export function runStatusLabel(value: string): string {
+export function runStatusLabel(
+  value: string,
+  completion?: CronRunLogEntry["completionStatus"],
+): string {
+  if (value === "ok" && (completion === "failed" || completion === "unknown")) {
+    const completionLabel = t(
+      completion === "failed" ? "cron.runs.runStatusError" : "cron.runs.runStatusUnknown",
+    );
+    return `${t("cron.runs.runStatusOk")} · ${completionLabel}`;
+  }
   switch (value) {
     case "ok":
       return t("cron.runs.runStatusOk");
@@ -388,21 +409,11 @@ function runDeliveryLabel(value: string): string {
 
 function renderRun(
   entry: CronRunLogEntry,
-  fallbackAgentId: string,
-  basePath: string,
+  formatTimestamp: ReturnType<typeof createMsFormatter>,
   highlightedRunId?: string | null,
-  onNavigateToChat?: (sessionKey: string) => void,
+  onViewRunTranscript?: (entry: CronRunLogEntry) => void,
 ) {
-  const chatUrl =
-    typeof entry.sessionKey === "string" && entry.sessionKey.trim().length > 0
-      ? sessionNavigationTarget({
-          face: "chat",
-          sessionKey: entry.sessionKey,
-          fallbackAgentId,
-          basePath,
-        }).href
-      : null;
-  const status = runStatusLabel(entry.status ?? "unknown");
+  const status = runStatusLabel(entry.status ?? "unknown", entry.completionStatus);
   const delivery = runDeliveryLabel(entry.deliveryStatus ?? "not-requested");
   const usage = entry.usage;
   const usageSummary =
@@ -436,43 +447,46 @@ function renderRun(
           <div class="cron-run-entry__facts muted">${facts.join(" · ")}</div>
         </div>
         <div class="cron-run-entry__meta">
-          <div>${formatMs(entry.ts)}</div>
-          ${typeof entry.runAtMs === "number"
-            ? html`<div class="muted">${t("cron.runEntry.runAt")} ${formatMs(entry.runAtMs)}</div>`
-            : nothing}
+          <div>${formatTimestamp(entry.ts)}</div>
+          ${
+            typeof entry.runAtMs === "number"
+              ? html`<div class="muted">
+                  ${t("cron.runEntry.runAt")} ${formatTimestamp(entry.runAtMs)}
+                </div>`
+              : nothing
+          }
           <div class="muted">
-            ${typeof entry.durationMs === "number" && Number.isFinite(entry.durationMs)
-              ? (formatDurationCompact(entry.durationMs) ??
-                formatDurationHuman(entry.durationMs, t("common.na")))
-              : t("common.na")}
+            ${
+              typeof entry.durationMs === "number" && Number.isFinite(entry.durationMs)
+                ? (formatDurationCompact(entry.durationMs) ??
+                  formatDurationHuman(entry.durationMs, t("common.na")))
+                : t("common.na")
+            }
           </div>
-          ${typeof entry.nextRunAtMs === "number"
-            ? html`<div class="muted">${formatRunNextLabel(entry.nextRunAtMs)}</div>`
-            : nothing}
-          ${chatUrl
-            ? html`<div>
-                <a
-                  class="session-link"
-                  href=${chatUrl}
-                  @click=${(e: MouseEvent) => {
-                    if (!shouldHandleNavigationClick(e)) {
-                      return;
-                    }
-                    if (onNavigateToChat && entry.sessionKey) {
-                      e.preventDefault();
-                      onNavigateToChat(entry.sessionKey);
-                    }
-                  }}
-                  >${t("cron.runEntry.openRunChat")}</a
-                >
-              </div>`
-            : nothing}
-          ${showErrorInMeta
-            ? html`<div class="muted">${formatUiExternalText(entry.error)}</div>`
-            : nothing}
-          ${entry.deliveryError
-            ? html`<div class="muted">${formatUiExternalText(entry.deliveryError)}</div>`
-            : nothing}
+          ${
+            typeof entry.nextRunAtMs === "number"
+              ? html`<div class="muted">${formatRunNextLabel(entry.nextRunAtMs)}</div>`
+              : nothing
+          }
+          ${
+            entry.sessionKey
+              ? html`<div>
+                  <button class="btn btn--sm" @click=${() => onViewRunTranscript?.(entry)}>
+                    ${t("tasksPage.viewTranscript")}
+                  </button>
+                </div>`
+              : nothing
+          }
+          ${
+            showErrorInMeta
+              ? html`<div class="muted">${formatUiExternalText(entry.error)}</div>`
+              : nothing
+          }
+          ${
+            entry.deliveryError
+              ? html`<div class="muted">${formatUiExternalText(entry.deliveryError)}</div>`
+              : nothing
+          }
         </div>
       </div>
       <div class="cron-run-entry__body chat-text">

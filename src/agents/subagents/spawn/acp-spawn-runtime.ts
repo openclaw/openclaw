@@ -6,7 +6,6 @@ import {
 import type { AcpRuntimeSessionMode } from "@openclaw/acp-core/runtime/types";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
-import type { AcpSpawnRuntimeCloseHandle } from "../../../acp/control-plane/spawn.js";
 import { formatThinkingLevels } from "../../../auto-reply/thinking.js";
 import {
   resolveThreadBindingIntroText,
@@ -37,7 +36,6 @@ import { splitModelRef } from "./subagent-spawn-plan.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
 
 const ACP_RUNTIME_TIMEOUT_MAX_SECONDS = 24 * 60 * 60;
-
 export function resolveAcpSessionMode(mode: "run" | "session"): AcpRuntimeSessionMode {
   return mode === "session" ? "persistent" : "oneshot";
 }
@@ -69,7 +67,6 @@ type AcpSpawnInitializedSession = Awaited<
 
 export type AcpSpawnInitializedRuntime = {
   initialized: AcpSpawnInitializedSession;
-  runtimeCloseHandle: AcpSpawnRuntimeCloseHandle;
   sessionId?: string;
   sessionEntry: SessionEntry | undefined;
   storePath: string;
@@ -96,14 +93,21 @@ export function resolveAcpSpawnRuntimeOptions(params: {
   thinking?: string;
   runTimeoutSeconds?: number;
 }):
-  | { ok: true; runtimeOptions?: AcpSpawnRuntimeOptions; modelExplicit: boolean }
+  | {
+      ok: true;
+      runtimeOptions?: AcpSpawnRuntimeOptions;
+      modelExplicit: boolean;
+      thinkingExplicit: boolean;
+    }
   | { ok: false; error: string } {
   const policyAgentId = params.configAgentId ?? params.targetAgentId;
   const modelExplicit = normalizeOptionalString(params.model) !== undefined;
+  const thinkingExplicit = normalizeOptionalString(params.thinking) !== undefined;
   const rawModel = resolveConfiguredSubagentSpawnModelSelection({
     cfg: params.cfg,
     agentId: policyAgentId,
     modelOverride: params.model,
+    modelRuntime: "acp",
   });
   const modelSelection = splitTrailingAuthProfile(rawModel ?? "");
   if (modelExplicit && modelSelection.profile) {
@@ -128,18 +132,19 @@ export function resolveAcpSpawnRuntimeOptions(params: {
     };
   }
 
-  let thinking = thinkingPlan.thinkingOverride ?? targetAgentConfig?.thinkingDefault;
-  if (!thinking && model) {
+  let thinking = thinkingPlan.thinkingOverride;
+  if (!thinking) {
     const { provider, model: modelId } = splitModelRef(model);
-    if (provider && modelId) {
-      thinking = resolveThinkingDefault({
-        cfg: params.cfg,
-        provider,
-        model: modelId,
-      });
-    }
+    thinking =
+      provider && modelId
+        ? resolveThinkingDefault({
+            cfg: params.cfg,
+            agentId: policyAgentId,
+            provider,
+            model: modelId,
+          })
+        : targetAgentConfig?.thinkingDefault;
   }
-
   const timeoutSeconds = resolveAcpRuntimeTimeoutSeconds(params.runTimeoutSeconds);
   const runtimeOptions =
     model || thinking || timeoutSeconds
@@ -149,10 +154,11 @@ export function resolveAcpSpawnRuntimeOptions(params: {
           ...(timeoutSeconds ? { timeoutSeconds } : {}),
         }
       : undefined;
-  return { ok: true, runtimeOptions, modelExplicit };
+  return { ok: true, runtimeOptions, modelExplicit, thinkingExplicit };
 }
 
 export async function initializeAcpSpawnRuntime(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   sessionKey: string;
   targetAgentId: string;
@@ -161,8 +167,10 @@ export async function initializeAcpSpawnRuntime(params: {
   resumeSessionId?: string;
   runtimeOptions?: AcpSpawnRuntimeOptions;
   modelExplicit?: boolean;
+  thinkingExplicit?: boolean;
   cwd?: string;
 }): Promise<AcpSpawnInitializedRuntime> {
+  params.assertActive?.();
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: params.targetAgentId,
   });
@@ -185,6 +193,7 @@ export async function initializeAcpSpawnRuntime(params: {
   }
 
   const initialized = await getAcpSessionManager().initializeSession({
+    assertActive: params.assertActive,
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     agentId: params.targetAgentId,
@@ -193,16 +202,13 @@ export async function initializeAcpSpawnRuntime(params: {
     resumeSessionId: params.resumeSessionId,
     runtimeOptions: params.runtimeOptions,
     modelExplicit: params.modelExplicit,
+    thinkingExplicit: params.thinkingExplicit,
     cwd: params.cwd,
     backendId: params.backendId,
   });
 
   return {
     initialized,
-    runtimeCloseHandle: {
-      runtime: initialized.runtime,
-      handle: initialized.handle,
-    },
     sessionId,
     sessionEntry,
     storePath,
@@ -210,6 +216,7 @@ export async function initializeAcpSpawnRuntime(params: {
 }
 
 export async function bindPreparedAcpThread(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   sessionKey: string;
   targetAgentId: string;
@@ -261,6 +268,7 @@ export async function bindPreparedAcpThread(params: {
       }),
     },
   });
+  params.assertActive?.();
   if (!binding.conversation.conversationId) {
     throw new Error(
       params.preparedBinding.placement === "child"

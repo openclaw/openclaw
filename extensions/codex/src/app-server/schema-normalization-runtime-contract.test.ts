@@ -9,11 +9,13 @@ import {
   normalizedParameterFreeSchema,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { threadStartResult as nativeThreadStartResult } from "./codex-app-server.test-fixtures.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import type { CodexThreadStartParams } from "./protocol.js";
 import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
 import { createCodexTestModel } from "./test-support.js";
 import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
+import { createAppServerOptions as createBaseAppServerOptions } from "./thread-lifecycle.test-fixtures.js";
 
 function startOrResumeThread(
   params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
@@ -46,57 +48,19 @@ function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAtt
 
 function createAppServerOptions(): Parameters<typeof startOrResumeThread>[0]["appServer"] {
   return {
-    start: {
-      transport: "stdio",
-      command: "codex",
-      args: ["app-server"],
-      headers: {},
-    },
-    codeModeOnly: false,
-    loopDetectionPreToolUseRelay: true,
-    requestTimeoutMs: 60_000,
-    turnCompletionIdleTimeoutMs: 60_000,
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    sandbox: "workspace-write",
+    ...createBaseAppServerOptions(),
     connectionClass: "local-loopback",
     remoteAppsSubstrate: "preconfigured",
   };
 }
 
 function threadStartResult(threadId = "thread-1", serviceTier: string | null = null) {
+  const result = nativeThreadStartResult(threadId, tempDir);
   return {
-    thread: {
-      id: threadId,
-      sessionId: "session-1",
-      forkedFromId: null,
-      preview: "",
-      ephemeral: false,
-      modelProvider: "openai",
-      createdAt: 1,
-      updatedAt: 1,
-      status: { type: "idle" },
-      path: null,
-      cwd: tempDir,
-      projectId: null,
-      cliVersion: "0.149.0",
-      source: "unknown",
-      agentNickname: null,
-      agentRole: null,
-      gitInfo: null,
-      name: null,
-      turns: [],
-    },
+    ...result,
+    thread: { ...result.thread, cliVersion: "0.149.0" },
     model: "gpt-5.4",
-    modelProvider: "openai",
     serviceTier,
-    cwd: tempDir,
-    instructionSources: [],
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    sandbox: { type: "dangerFullAccess" },
-    permissionProfile: null,
-    reasoningEffort: null,
   };
 }
 
@@ -121,6 +85,12 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
       inputSchema: normalizedParameterFreeSchema(),
     };
     const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start") {
         return threadStartResult();
       }
@@ -135,10 +105,15 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
       appServer: createAppServerOptions(),
     });
 
-    expect(request).toHaveBeenCalledTimes(1);
-    const [method, payload] = request.mock.calls[0] ?? [];
-    if (method !== "thread/start") {
-      throw new Error(`expected thread/start request, got ${method}`);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+    ]);
+    const [startMethod, payload] =
+      request.mock.calls.find(([method]) => method === "thread/start") ?? [];
+    if (startMethod !== "thread/start") {
+      throw new Error(`expected thread/start request, got ${startMethod}`);
     }
     const startPayload = payload as CodexThreadStartParams | undefined;
     expect(startPayload?.dynamicTools).toStrictEqual([
@@ -165,6 +140,12 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start") {
         return threadStartResult("thread-priority", "priority");
       }
@@ -188,6 +169,12 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
     const appServer = createAppServerOptions();
     let nextThreadId = 1;
     const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start") {
         return threadStartResult(`thread-${nextThreadId++}`);
       }
@@ -224,6 +211,13 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
       appServer,
     });
 
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/start"]);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+    ]);
   });
 });

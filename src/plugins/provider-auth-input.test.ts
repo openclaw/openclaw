@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import { captureProviderApiKey } from "./provider-api-key-auth.js";
 import {
   ensureApiKeyFromEnvOrPrompt,
   ensureApiKeyFromOptionEnvOrPrompt,
@@ -221,6 +222,43 @@ async function ensureWithOptionEnvOrPrompt(params: {
 afterEach(() => {
   restoreMinimaxEnv();
   vi.restoreAllMocks();
+});
+
+describe("captureProviderApiKey", () => {
+  it("retains the storage reference while resolving through the staged workspace and explicit env", async () => {
+    const workspaceDir = "/tmp/openclaw-provider-workspace";
+    const config: OpenClawConfig = {
+      agents: { entries: { main: {}, work: { workspace: workspaceDir } } },
+      plugins: { entries: { minimax: { enabled: true } } },
+    };
+    const env = { MINIMAX_API_KEY: "workspace-env-key" };
+    const { confirm, text } = createPromptSpies();
+    const captured = await captureProviderApiKey(
+      {
+        config,
+        workspaceDir,
+        prompter: createPrompter({ confirm, text }),
+        secretInputMode: "ref",
+      },
+      {
+        token: undefined,
+        tokenProvider: undefined,
+        env,
+        expectedProviders: ["minimax"],
+        provider: "minimax",
+        envLabel: "MINIMAX_API_KEY",
+        promptMessage: "Enter key",
+      },
+    );
+
+    expect(captured).toEqual({
+      apiKey: "workspace-env-key",
+      input: { source: "env", provider: "default", id: "MINIMAX_API_KEY" },
+      mode: "ref",
+    });
+    expect(resolveEnvApiKey).toHaveBeenCalledWith("minimax", env, { config, workspaceDir });
+    expect(text).not.toHaveBeenCalled();
+  });
 });
 
 describe("normalizeTokenProviderInput", () => {

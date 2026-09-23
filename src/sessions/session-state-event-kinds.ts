@@ -1,5 +1,7 @@
 export type SessionStateActorType = "human" | "agent" | "system";
 
+export const SESSION_CREATED_NOTICE_CONTEXT_PREFIX = "session-created:";
+
 export type SessionStateEventKind =
   | "created"
   | "human_direct_message"

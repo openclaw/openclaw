@@ -2,12 +2,9 @@
 // Starts an unauthenticated loopback gateway and opens connected test clients.
 import { WebSocket } from "ws";
 import { captureEnv } from "../test-utils/env.js";
-import {
-  connectOk,
-  getGatewayTestPort,
-  startTestGatewayServer,
-  trackConnectChallengeNonce,
-} from "./test-helpers.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { gatewayFixtureLifetime } from "./gateway-fixture-lifetime.test-support.js";
+import { connectOk, startTestGatewayServer, trackConnectChallengeNonce } from "./test-helpers.js";
 
 type GatewayWsClient = {
   ws: WebSocket;
@@ -23,16 +20,27 @@ export type GatewayServerHarness = {
 
 /** Start a loopback Gateway server with a helper for opening authenticated test clients. */
 export async function startGatewayServerHarness(): Promise<GatewayServerHarness> {
-  const port = await getGatewayTestPort();
+  gatewayFixtureLifetime.assertAdmission();
+  const claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+  try {
+    gatewayFixtureLifetime.assertAdmission();
+  } catch (error) {
+    await claim.release();
+    throw error;
+  }
+  const { port } = claim;
   const envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
   const clients = new Set<WebSocket>();
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
-  const server = await startTestGatewayServer(port, {
+  const server = await startTestGatewayServer(claim, {
     auth: { mode: "none" },
     bind: "loopback",
     controlUiEnabled: false,
   }).catch((error: unknown) => {
-    envSnapshot.restore();
+    // Failed startup has no receipt, but must not restore over another closing owner.
+    if (gatewayFixtureLifetime.canAdmit()) {
+      envSnapshot.restore();
+    }
     throw error;
   });
 
@@ -69,7 +77,9 @@ export async function startGatewayServerHarness(): Promise<GatewayServerHarness>
       await server.close();
     } finally {
       clearTimeout(forceCloseTimer);
-      envSnapshot.restore();
+      if (gatewayFixtureLifetime.canReleaseState(server)) {
+        envSnapshot.restore();
+      }
     }
   };
 

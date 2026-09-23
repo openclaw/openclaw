@@ -7,6 +7,7 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import {
@@ -51,6 +52,7 @@ async function withTempStateDir<T>(fn: (dir: string) => Promise<T>) {
     }
     // The keyed store keeps the state database open under the temporary dir, so Windows
     // fails the removal with EBUSY unless the cached handle is released first.
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     await fs.rm(dir, { recursive: true, force: true });
   }

@@ -1,15 +1,20 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import {
+  appendTranscriptMessage,
+  loadTranscriptEvents,
+  readSessionTranscriptWatermark,
+  upsertSessionEntryCore,
+} from "../../../config/sessions/session-accessor.js";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "../../../llm/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/session-manager.js";
-import { log } from "../logger.js";
-import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt-finalize.js";
-import {
-  stripSessionsYieldArtifacts,
-  waitForSessionsYieldAbortSettle,
-} from "./attempt-sessions-yield.js";
+import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
+import { stripSessionsYieldArtifacts } from "./attempt-sessions-yield.js";
 
 const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "openclaw.sessions_yield_interrupt";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function makeAssistantMessage(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
   return {
@@ -18,14 +23,7 @@ function makeAssistantMessage(overrides: Partial<AssistantMessage> = {}): Assist
     api: "openai-responses",
     provider: "openai",
     model: "test-model",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop",
     timestamp: Date.now(),
     ...overrides,
@@ -69,60 +67,6 @@ function buildSession(messages: AgentMessage[], sessionManager = SessionManager.
     sessionManager,
   };
 }
-
-describe("waitForSessionsYieldAbortSettle", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
-
-  it("logs the yield-specific warning and clears its timer after timeout", async () => {
-    vi.useFakeTimers();
-    vi.spyOn(log, "warn").mockImplementation(() => {});
-    const timeoutMs = resolveEmbeddedAbortSettleTimeoutMs();
-    const wait = waitForSessionsYieldAbortSettle({
-      settlePromise: new Promise(() => {}),
-      runId: "run-1",
-      sessionId: "session-1",
-    });
-
-    await vi.advanceTimersByTimeAsync(timeoutMs);
-    await wait;
-
-    expect(log.warn).toHaveBeenCalledWith(
-      `sessions_yield abort settle timed out: runId=run-1 sessionId=session-1 timeoutMs=${timeoutMs}`,
-    );
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("logs rejected settlement and clears its pending timer", async () => {
-    vi.useFakeTimers();
-    vi.spyOn(log, "warn").mockImplementation(() => {});
-
-    await waitForSessionsYieldAbortSettle({
-      settlePromise: Promise.reject(new Error("settle failed")),
-      runId: "run-1",
-      sessionId: "session-1",
-    });
-
-    expect(log.warn).toHaveBeenCalledWith(
-      "sessions_yield abort settle failed: runId=run-1 sessionId=session-1 err=Error: settle failed",
-    );
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("skips missing settlement without scheduling a timer", async () => {
-    vi.useFakeTimers();
-
-    await waitForSessionsYieldAbortSettle({
-      settlePromise: null,
-      runId: "run-1",
-      sessionId: "session-1",
-    });
-
-    expect(vi.getTimerCount()).toBe(0);
-  });
-});
 
 describe("stripSessionsYieldArtifacts", () => {
   it("removes the full non-continuable yield suffix", () => {
@@ -259,5 +203,94 @@ describe("stripSessionsYieldArtifacts", () => {
             entry.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE),
       ),
     ).toBe(false);
+  });
+
+  it("keeps live and durable histories unchanged when concurrent persistence wins", async () => {
+    const dir = tempDirs.make("openclaw-sessions-yield-concurrent-");
+    const scope = {
+      agentId: "main",
+      sessionId: "sessions-yield-concurrent",
+      sessionKey: "agent:main:sessions-yield-concurrent",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const sessionManager = SessionManager.open(scope, dir);
+    const toolResult = makeToolResultMessage();
+    const assistant = makeAssistantMessage({ stopReason: "aborted" });
+    const interrupt = makeYieldInterruptMessage();
+    sessionManager.appendMessage(toolResult);
+    sessionManager.appendMessage(assistant);
+    sessionManager.appendCustomMessageEntry(
+      SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE,
+      "[sessions_yield interrupt]",
+      false,
+    );
+    const session = buildSession([toolResult, assistant, interrupt], sessionManager);
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "concurrent",
+      message: makeUserMessage(),
+    });
+
+    expect(() => stripSessionsYieldArtifacts(session)).toThrow(
+      "SQLite transcript changed while preparing suffix removal",
+    );
+    expect(session.agent.state.messages).toEqual([toolResult, assistant, interrupt]);
+    expect(SessionManager.open(scope, dir).buildSessionContext().messages).toMatchObject([
+      toolResult,
+      assistant,
+      { role: "custom", customType: SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE },
+      { role: "user", content: [{ type: "text", text: "continue" }] },
+    ]);
+  });
+
+  it.each([
+    { assistantCount: 1, label: "immediate yield" },
+    { assistantCount: 3, label: "multiple tool turns before yield" },
+  ])("keeps SQLite projection available after $label cleanup", async ({ assistantCount }) => {
+    const dir = tempDirs.make("openclaw-sessions-yield-sqlite-");
+    const scope = {
+      agentId: "main",
+      sessionId: `sessions-yield-${assistantCount}`,
+      sessionKey: `agent:main:sessions-yield-${assistantCount}`,
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const sessionManager = SessionManager.open(scope, dir);
+    const toolResult = makeToolResultMessage();
+    sessionManager.appendMessage(toolResult);
+    const assistants = Array.from({ length: assistantCount }, (_value, index) =>
+      makeAssistantMessage({
+        content: [{ type: "text", text: `assistant ${index}` }],
+        ...(index === assistantCount - 1 ? { stopReason: "aborted" as const } : {}),
+      }),
+    );
+    for (const assistant of assistants) {
+      sessionManager.appendMessage(assistant);
+    }
+    sessionManager.appendCustomMessageEntry(
+      SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE,
+      "[sessions_yield interrupt]",
+      false,
+    );
+    const generationBefore = readSessionTranscriptWatermark(scope).generation;
+    const session = buildSession(
+      [toolResult, ...assistants, makeYieldInterruptMessage()],
+      sessionManager,
+    );
+
+    stripSessionsYieldArtifacts(session);
+
+    expect(session.agent.state.messages).toEqual([toolResult]);
+    expect(readSessionTranscriptWatermark(scope).generation).not.toBe(generationBefore);
+    expect(SessionManager.open(scope, dir).buildSessionContext().messages).toEqual([toolResult]);
+    expect(await loadTranscriptEvents(scope)).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "custom_message",
+          customType: SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE,
+        }),
+      ]),
+    );
   });
 });

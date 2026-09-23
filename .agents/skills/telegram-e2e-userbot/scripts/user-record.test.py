@@ -3,6 +3,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -23,6 +24,126 @@ class FakeClient:
 
 
 class CallbackScenarioTest(unittest.TestCase):
+    def test_scenario_sends_to_the_selected_forum_topic(self):
+        clock = [0]
+        calls = []
+        class Recorder:
+            started_at = 0
+            chat_id = -10042
+            def _append(self, *_args, **_kwargs):
+                pass
+        class Driver:
+            def send_text(self, chat_id, text, reply_to=None, thread_id=0, forum_topic_id=None):
+                calls.append((chat_id, text, forum_topic_id))
+                clock[0] = 2
+                return {"id": 42}
+        with patch.object(record.time, "time", side_effect=lambda: clock[0]):
+            record.run_scenario(Recorder(), Driver(), {}, [{"type": "send", "atMs": 0, "text": "topic proof", "forumTopicId": 17}], 1)
+        self.assertEqual(calls, [(-10042, "topic proof", 17)])
+
+    def test_scenario_photo_send_and_reply_to_previous(self):
+        clock = [0]
+        calls = []
+        class Recorder:
+            started_at = 0
+            chat_id = 4242
+            def _append(self, *_args, **_kwargs):
+                pass
+        class Driver:
+            def send_photos(self, chat_id, paths, caption="", reply_to=None, thread_id=0, forum_topic_id=None):
+                calls.append(("photo", chat_id, tuple(paths), caption, reply_to, forum_topic_id))
+                clock[0] = 1
+                return [{"id": 7}]
+            def send_text(self, chat_id, text, reply_to=None, thread_id=0, forum_topic_id=None):
+                calls.append(("text", chat_id, text, reply_to, forum_topic_id))
+                clock[0] = 6
+                return {"id": 8}
+        actions = [
+            {"type": "send", "atMs": 0, "text": "", "photo": "/tmp/fixture.png"},
+            {"type": "send", "atMs": 0, "text": "/btw check this", "replyToPrevious": True},
+        ]
+        with patch.object(record.time, "time", side_effect=lambda: clock[0]):
+            sent = record.run_scenario(Recorder(), Driver(), {}, actions, 5)
+        self.assertEqual(calls, [
+            ("photo", 4242, ("/tmp/fixture.png",), "", None, None),
+            ("text", 4242, "/btw check this", 7, None),
+        ])
+        self.assertEqual(sent, [7, 8])
+
+    def test_unconfirmed_send_keeps_recording_without_resend_or_success_receipt(self):
+        clock = [100]
+        class Client:
+            def __init__(self):
+                self.updates = [{"@type": "updateNewMessage", "message": {
+                    "id": 42, "chat_id": 7, "date": 101,
+                    "sender_id": {"user_id": 9},
+                    "content": {"@type": "messageText", "text": {"text": "Observed reply"}},
+                }}]
+            def next_update(self, timeout=1):
+                clock[0] += timeout
+                return self.updates.pop(0) if self.updates else None
+        class Driver:
+            def __init__(self):
+                self.client = Client()
+                self.sends = 0
+            def send_text(self, *_args, **_kwargs):
+                self.sends += 1
+                clock[0] = 130
+                raise record.driver.DriverError("Timed out waiting for Telegram message send confirmation")
+        instance = Driver()
+        with patch.object(record.time, "time", side_effect=lambda: clock[0]):
+            recorder = record.EventRecorder(instance.client, 7, "", 9)
+            with self.assertRaisesRegex(record.driver.DriverError, "send confirmation"):
+                record.run_scenario(recorder, instance, {}, [
+                    {"type": "send", "atMs": 0, "text": "first"},
+                    {"type": "send", "atMs": 35000, "text": "must not send"},
+                ], 40)
+        self.assertEqual(instance.sends, 1)
+        self.assertEqual(clock[0], 140)
+        self.assertEqual(recorder.events[0]["status"], "failed")
+        self.assertIsNone(recorder.events[0]["messageId"])
+        self.assertEqual(recorder.events[0]["sendOutcome"], "unknown")
+        self.assertEqual(recorder.summary()["sutRevisionTexts"], ["Observed reply"])
+        self.assertEqual([event["kind"] for event in recorder.events], ["action", "message"])
+
+    def test_records_partial_rich_revisions_raw_without_fetching_full_content(self):
+        client = FakeClient()
+        rich = {
+            "@type": "richMessage", "is_full": False, "is_rtl": False,
+            "blocks": [{"@type": "pageBlockParagraph", "text": {
+                "@type": "richTextPlain", "text": "partial send",
+            }}],
+        }
+        replacement = {
+            **rich, "blocks": [{"@type": "pageBlockParagraph", "text": {
+                "@type": "richTextPlain", "text": "partial edit",
+            }}],
+        }
+        updates = [
+            {"@type": "updateNewMessage", "message": {
+                "id": 42 << 20, "chat_id": -1001,
+                "sender_id": {"@type": "messageSenderUser", "user_id": 42},
+                "content": {"@type": "messageRichMessage", "message": rich},
+            }},
+            {"@type": "updateMessageContent", "chat_id": -1001,
+             "message_id": 42 << 20,
+             "new_content": {"@type": "messageRichMessage", "message": replacement}},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "events.jsonl"
+            recorder = record.EventRecorder(client, -1001, target, 42)
+            try:
+                for update in updates:
+                    recorder.ingest(update)
+            finally:
+                recorder.close()
+            events = [json.loads(line) for line in target.read_text().splitlines()]
+        self.assertEqual([event["kind"] for event in events], ["message", "edit"])
+        self.assertEqual([event["text"] for event in events], ["partial send", "partial edit"])
+        self.assertEqual([event["richMessageIsFull"] for event in events], [False, False])
+        self.assertEqual([event["raw"] for event in events], updates)
+        self.assertEqual(client.requests, [])
+
     def test_waits_for_prior_gateway_barriers(self):
         actions = [
             {"type": "patchConfig", "atMs": 0},
@@ -123,6 +244,52 @@ class CallbackScenarioTest(unittest.TestCase):
                 )
             ],
         )
+
+    def test_finds_callback_under_current_heading_after_content_and_keyboard_edits(self):
+        for content_first in (True, False):
+            with self.subTest(content_first=content_first):
+                recorder = record.EventRecorder(FakeClient(), -1001, "", 42)
+                message = {
+                    "id": 1048576, "chat_id": -1001,
+                    "sender_id": {"@type": "messageSenderUser", "user_id": 42},
+                    "content": {
+                        "@type": "messageText",
+                        "text": {"@type": "formattedText", "text": "Select a provider:"},
+                    },
+                    "reply_markup": {
+                        "@type": "replyMarkupInlineKeyboard",
+                        "rows": [[{"text": "Example", "type": {
+                            "@type": "inlineKeyboardButtonTypeCallback", "data": "cHJvdmlkZXI=",
+                        }}]],
+                    },
+                }
+                content_edit = {
+                    "@type": "updateMessageContent", "chat_id": -1001, "message_id": 1048576,
+                    "new_content": {
+                        "@type": "messageText",
+                        "text": {"@type": "formattedText", "text": "Models (example) — 2 available"},
+                    },
+                }
+                keyboard_edit = {
+                    "@type": "updateMessageEdited", "chat_id": -1001, "message_id": 1048576,
+                    "reply_markup": {
+                        "@type": "replyMarkupInlineKeyboard",
+                        "rows": [[{"text": "middle", "type": {
+                            "@type": "inlineKeyboardButtonTypeCallback", "data": "bWlkZGxl",
+                        }}]],
+                    },
+                }
+                recorder.ingest({"@type": "updateNewMessage", "message": message})
+                edits = ((content_edit, keyboard_edit) if content_first
+                         else (keyboard_edit, content_edit))
+                for update in edits:
+                    recorder.ingest(update)
+
+                self.assertEqual(recorder.find_callback_button("Models (", "middle"),
+                                 (1048576, "bWlkZGxl"))
+                self.assertIsNone(recorder.find_callback_button("Select a provider:", "middle"))
+                self.assertEqual(message["content"]["text"]["text"], "Select a provider:")
+                self.assertEqual(message["reply_markup"]["rows"][0][0]["text"], "Example")
 
 
 if __name__ == "__main__":

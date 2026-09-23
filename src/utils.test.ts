@@ -19,6 +19,16 @@ import {
   sleep,
 } from "./utils.js";
 
+const homeDisplayCases = [
+  ["", "/home/other", "~"],
+  ["undefined", "/home/other", "~"],
+  ["null", "/home/other", "~"],
+  [" undefined ", "/home/other", "~"],
+  ["\tnull\t", "/home/other", "~"],
+  ["/srv/openclaw-home", "/srv/openclaw-home", "$OPENCLAW_HOME"],
+  [" /srv/openclaw-home ", "/srv/openclaw-home", "$OPENCLAW_HOME"],
+] as const;
+
 describe("ensureDir", () => {
   it("creates nested directory", async () => {
     await withTestDir({ prefix: "openclaw-test-" }, async (tmp) => {
@@ -134,13 +144,11 @@ describe("normalizeE164", () => {
 });
 
 describe("resolveConfigDir", () => {
-  it("prefers ~/.openclaw when legacy dir is missing", async () => {
-    await withTestDir({ prefix: "openclaw-config-dir-" }, async (root) => {
-      const newDir = path.join(root, ".openclaw");
-      await fs.promises.mkdir(newDir, { recursive: true });
-      const resolved = resolveConfigDir({} as NodeJS.ProcessEnv, () => root);
-      expect(resolved).toBe(newDir);
-    });
+  it("resolves the default config directory", () => {
+    const root = path.resolve("config-dir-home");
+    const newDir = path.join(root, ".openclaw");
+    const resolved = resolveConfigDir({} as NodeJS.ProcessEnv, () => root);
+    expect(resolved).toBe(newDir);
   });
 
   it("expands OPENCLAW_STATE_DIR using the provided env", () => {
@@ -190,13 +198,16 @@ describe("resolveHomeDir", () => {
 });
 
 describe("shortenHomePath", () => {
-  it("uses $OPENCLAW_HOME prefix when OPENCLAW_HOME is set", () => {
-    withEnv({ OPENCLAW_HOME: "/srv/openclaw-home", HOME: "/home/other" }, () => {
-      expect(shortenHomePath(`${path.resolve("/srv/openclaw-home")}/.openclaw/openclaw.json`)).toBe(
-        "$OPENCLAW_HOME/.openclaw/openclaw.json",
-      );
-    });
-  });
+  it.each(homeDisplayCases)(
+    "uses the effective home prefix for OPENCLAW_HOME=%j",
+    (override, home, prefix) => {
+      withEnv({ OPENCLAW_HOME: override, HOME: "/home/other" }, () => {
+        expect(shortenHomePath(`${path.resolve(home)}/.openclaw/openclaw.json`)).toBe(
+          `${prefix}/.openclaw/openclaw.json`,
+        );
+      });
+    },
+  );
 
   it.skipIf(process.platform === "win32")("keeps POSIX home matching case-sensitive", () => {
     withEnv({ OPENCLAW_HOME: "/srv/OpenClaw-Home", HOME: "/home/other" }, () => {
@@ -230,15 +241,16 @@ describe("shortenHomePath", () => {
 });
 
 describe("shortenHomeInString", () => {
-  it("uses $OPENCLAW_HOME replacement when OPENCLAW_HOME is set", () => {
-    withEnv({ OPENCLAW_HOME: "/srv/openclaw-home", HOME: "/home/other" }, () => {
-      expect(
-        shortenHomeInString(
-          `config: ${path.resolve("/srv/openclaw-home")}/.openclaw/openclaw.json`,
-        ),
-      ).toBe("config: $OPENCLAW_HOME/.openclaw/openclaw.json");
-    });
-  });
+  it.each(homeDisplayCases)(
+    "uses the effective home prefix for OPENCLAW_HOME=%j",
+    (override, home, prefix) => {
+      withEnv({ OPENCLAW_HOME: override, HOME: "/home/other" }, () => {
+        expect(shortenHomeInString(`config: ${path.resolve(home)}/.openclaw/openclaw.json`)).toBe(
+          `config: ${prefix}/.openclaw/openclaw.json`,
+        );
+      });
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "keeps embedded POSIX home matching case-sensitive",

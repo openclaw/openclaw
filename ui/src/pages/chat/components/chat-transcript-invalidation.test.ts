@@ -1,12 +1,15 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
+import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { currentThemeBranding, setCurrentThemeBranding } from "../../../app/theme-branding.ts";
+import { resolveAvatarHat } from "../../../components/agent-avatar-hat.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import * as messageNormalizer from "../../../lib/chat/message-normalizer.ts";
+import * as videoPoster from "../../../lib/media/video-poster.ts";
 import { resolveAssistantAttachmentAuthToken } from "../chat-pane-state.ts";
-import { createTestChatPane } from "../chat-pane.test-support.ts";
+import { createSessionCapabilityFixture, createTestChatPane } from "../chat-pane.test-support.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
 import {
   buildCachedChatItems,
@@ -15,12 +18,13 @@ import {
   getExpansionStateVersion,
 } from "../chat-thread.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
+import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
+import * as chatMessage from "./chat-message.ts";
 import {
-  isChatMediaResourceCurrent,
-  observeChatMediaResource,
-  releaseChatMediaResourceSubscriber,
-} from "./chat-message-media.ts";
-import { resetTranscriptSession } from "./chat-thread-interactions.ts";
+  renderTranscriptSearch,
+  resetTranscriptSession,
+  toggleTranscriptSearch,
+} from "./chat-thread-interactions.ts";
 import { renderChatThread } from "./chat-thread.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import {
@@ -34,26 +38,459 @@ describe("chat transcript invalidation", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
-  it("does not normalize historical messages again when their transcript is projected", () => {
-    const messages = Array.from({ length: 30 }, (_, index) => ({
-      role: index % 2 === 0 ? "user" : "assistant",
-      content: `Historical message ${index}`,
-      timestamp: index + 1,
-      __openclaw: { id: `message-${index}` },
-    }));
-    const transcript = {
-      expandedAssistantMessages: new Map(),
-      setContentReady: vi.fn(),
-      syncMessageRows: vi.fn(),
-    } as unknown as Parameters<typeof projectChatTranscript>[1];
-    const props = threadProps("pane-offscreen-history", "agent:main:main", messages);
-    projectChatTranscript(props, transcript);
+  it.each(["ready", "delayed"])(
+    "updates settled avatars when only the theme hat changes with a %s palette",
+    (palette) => {
+      const branding = { mascot: "claw" as const, critters: [], avatarHat: "fedora" as const };
+      const agentId = Array.from({ length: 100 }, (_, index) => `agent-${index}`).find((id) =>
+        resolveAvatarHat(id, branding),
+      )!;
+      const props = threadProps("pane-avatar-hat", `agent:${agentId}:main`, [
+        { role: "assistant", content: "Ready.", timestamp: 1_000 },
+      ]);
+      props.currentAgentId = agentId;
+      props.selectedSession = { key: props.sessionKey, kind: "group", updatedAt: 1 };
+      props.branding = { ...branding, avatarHat: undefined };
+      const transcript = createTestTranscript();
+      const container = document.body.appendChild(document.createElement("div"));
+      const rerender = () => render(renderChatThread(props, transcript), container);
+      const previousBranding = currentThemeBranding();
+      try {
+        setCurrentThemeBranding(props.branding);
+        rerender();
+        expect(container.querySelector(".identity-avatar--agent")).not.toBeNull();
+        expect(container.querySelector(".identity-avatar__hat")).toBeNull();
+        props.branding = branding;
+        setCurrentThemeBranding(branding);
+        rerender();
+        expect(container.querySelector(".identity-avatar__hat--fedora")).not.toBeNull();
+        props.branding = { ...branding, avatarHat: undefined };
+        if (palette === "delayed") {
+          rerender();
+          expect(container.querySelector(".identity-avatar__hat--fedora")).not.toBeNull();
+        }
+        setCurrentThemeBranding(props.branding);
+        rerender();
+        expect(container.querySelector(".identity-avatar__hat")).toBeNull();
+      } finally {
+        setCurrentThemeBranding(previousBranding);
+        render(nothing, container);
+        transcript.hostDisconnected();
+      }
+    },
+  );
 
-    const normalizeSpy = vi.spyOn(messageNormalizer, "normalizeMessage");
-    projectChatTranscript(props, transcript);
+  it.each(["session participants", "history", "pending input"] as const)(
+    "shows your name when a peer arrives through %s and keeps it while search hides the peer",
+    async (peerSource) => {
+      const paneId = `pane-sender-${peerSource}`;
+      const self = { identity: { type: "profile" as const, id: "viewer" }, label: "Alex" };
+      const peer = { identity: { type: "profile" as const, id: "peer" }, label: "Riley" };
+      const ownMessage = {
+        role: "user",
+        content: "Review my draft.",
+        timestamp: 1_000,
+        __openclaw: {
+          id: "own-message",
+          senderId: self.identity.id,
+          senderIdentity: self.identity,
+          senderName: self.label,
+          transport: { clients: [{ id: "openclaw-control-ui", mode: "webchat" }] },
+        },
+      };
+      const peerMessage = {
+        role: "user",
+        content: "Check the example too.",
+        timestamp: 3_000,
+        __openclaw: {
+          id: "peer-message",
+          senderId: peer.identity.id,
+          senderIdentity: peer.identity,
+          senderName: peer.label,
+        },
+      };
+      const props = threadProps(paneId, "agent:main:dashboard:sender-visibility", [
+        ownMessage,
+        { role: "assistant", content: "The draft looks good.", timestamp: 2_000 },
+      ]);
+      props.userId = self.identity.id;
+      props.userName = self.label;
+      props.selectedSession = {
+        key: props.sessionKey,
+        kind: "direct",
+        updatedAt: 1,
+        participants: [self, { identity: { type: "agent", id: "main" }, label: "Molty" }],
+        participantCount: 2,
+      };
+      const transcript = createTestTranscript();
+      const container = document.body.appendChild(document.createElement("div"));
+      const searchContainer = document.body.appendChild(document.createElement("div"));
+      const rerender = () => {
+        render(renderTranscriptSearch(paneId, rerender), searchContainer);
+        render(renderChatThread({ ...props, onRequestUpdate: rerender }, transcript), container);
+        transcript.hostUpdated();
+      };
+      const ownName = () =>
+        container.querySelector(".chat-group.user:not(.chat-group--peer) .chat-sender-name");
+      try {
+        rerender();
+        transcript.hostConnected();
+        await flushDeferredRowPrune();
+        expect(container.textContent).toContain(ownMessage.content);
+        expect(ownName()).toBeNull();
+        expect(container.querySelector(".chat-message-source")).toBeNull();
 
-    expect(normalizeSpy.mock.calls.some(([message]) => message === messages[0])).toBe(false);
+        if (peerSource === "session participants") {
+          props.selectedSession = {
+            ...props.selectedSession,
+            expandedParticipants: [...props.selectedSession.participants!, peer],
+            participantCount: 3,
+          };
+        } else if (peerSource === "history") {
+          props.messages = [...props.messages, peerMessage];
+        } else {
+          props.pendingInputs = [
+            {
+              id: "queued-peer",
+              runId: "peer-run",
+              acceptedAt: 3_000,
+              state: "queued",
+              message: peerMessage,
+            },
+          ];
+        }
+        rerender();
+        await flushDeferredRowPrune();
+        expect(ownName()?.textContent).toBe("Alex");
+        if (peerSource !== "session participants") {
+          expect(container.querySelector(".chat-group--peer .chat-sender-name")?.textContent).toBe(
+            "Riley",
+          );
+        }
+
+        toggleTranscriptSearch(paneId, rerender);
+        const input = expectDefined(
+          searchContainer.querySelector<HTMLInputElement>("input"),
+          "transcript search",
+        );
+        input.value = ownMessage.content;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        await flushDeferredRowPrune();
+        expect(container.textContent).toContain(ownMessage.content);
+        expect(container.textContent).not.toContain(peerMessage.content);
+        expect(ownName()?.textContent).toBe("Alex");
+      } finally {
+        transcript.hostDisconnected();
+      }
+    },
+  );
+
+  describe("user video previews", () => {
+    const videoUrl = "https://cdn.example/recording.mp4";
+    const onOpenSidebar = vi.fn();
+    const revokeObjectURL = vi.fn();
+    let props: ReturnType<typeof threadProps>;
+    let transcript: ReturnType<typeof createTestTranscript>;
+    let container: HTMLDivElement;
+
+    beforeEach(() => {
+      vi.spyOn(videoPoster, "requestVideoPoster").mockResolvedValue(new Blob(["poster"]));
+      onOpenSidebar.mockClear();
+      revokeObjectURL.mockClear();
+      vi.stubGlobal(
+        "URL",
+        class extends URL {
+          static override createObjectURL = () => "blob:transcript-poster";
+          static override revokeObjectURL = revokeObjectURL;
+        },
+      );
+      props = {
+        ...threadProps("video-preview", "agent:main:video", [
+          {
+            role: "user",
+            timestamp: 1_000,
+            content: [
+              { type: "image", url: "/media/reference.png", alt: "Reference" },
+              {
+                type: "attachment",
+                attachment: {
+                  kind: "video",
+                  url: videoUrl,
+                  label: "Recording.mp4",
+                  mimeType: "video/mp4",
+                },
+              },
+              { type: "text", text: "Check this recording." },
+            ],
+          },
+        ]),
+        presented: false,
+        transcriptVisible: true,
+        onOpenSidebar,
+      };
+      container = document.body.appendChild(document.createElement("div"));
+      transcript = createTestTranscript();
+      transcript.hostConnected();
+    });
+    afterEach(() => {
+      render(nothing, container);
+      transcript.hostDisconnected();
+    });
+    async function renderPreview() {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+      await flushDeferredRowPrune();
+    }
+
+    it("places mixed user media above text and opens the video in Files without inline playback", async () => {
+      await renderPreview();
+      const bubble = container.querySelector(".chat-bubble--with-images");
+      const gallery = bubble?.querySelector(":scope > .chat-message-images");
+      expect(gallery?.querySelectorAll(".chat-image-frame")).toHaveLength(2);
+      expect(gallery?.nextElementSibling?.textContent).toContain("Check this recording.");
+      expect(container.querySelector("video, openclaw-chat-video-player")).toBeNull();
+      gallery?.querySelector<HTMLButtonElement>(".chat-video-preview button")?.click();
+      expect(onOpenSidebar).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "attachment", attachmentKind: "video", src: videoUrl }),
+      );
+    });
+
+    it.each(["video", "image"])(
+      "keeps an openable gallery card when %s decoding fails",
+      async (stage) => {
+        if (stage === "video") {
+          vi.mocked(videoPoster.requestVideoPoster).mockResolvedValue(null);
+        }
+        await renderPreview();
+        const frame = container.querySelector(".chat-video-preview");
+        if (stage === "image") {
+          expectDefined(frame?.querySelector("img"), "loaded video poster").dispatchEvent(
+            new Event("error"),
+          );
+        }
+        expect(frame?.querySelector(".chat-assistant-attachment-card--compact")).toBeInstanceOf(
+          HTMLElement,
+        );
+        frame?.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.click();
+        expect(onOpenSidebar).toHaveBeenCalledWith(
+          expect.objectContaining({ kind: "attachment", src: videoUrl }),
+        );
+      },
+    );
+
+    it("retains visible inactive video previews, releases hidden rows and restores them on return", async () => {
+      await renderPreview();
+      expect(container.querySelector(".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
+      props.transcriptVisible = false;
+      await renderPreview();
+      expect(container.querySelector(".chat-video-preview img")).toBeNull();
+      expect(revokeObjectURL).toHaveBeenCalledWith("blob:transcript-poster");
+      props.transcriptVisible = true;
+      await renderPreview();
+      expect(container.querySelector(".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
+    });
   });
+
+  it("updates persisted named references when the connection catalog changes without transcript edits", () => {
+    const props = threadProps("pane-named", "agent:main:named", [
+      { role: "assistant", content: "ClawSweeper PR **#1576 opened**", timestamp: 1_000 },
+    ]);
+    props.githubRepo = { owner: "openclaw", repo: "openclaw" };
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () => render(renderChatThread(props, transcript), container);
+    const chip = () => container.querySelector<HTMLAnchorElement>("a.markdown-github-item");
+    rerender();
+    expect(chip()).toBeNull();
+    props.githubRepositories = [
+      { owner: "openclaw", repo: "clawsweeper", aliases: ["ClawSweeper"] },
+    ];
+    rerender();
+    expect(chip()?.href).toBe("https://github.com/openclaw/clawsweeper/pull/1576");
+    props.githubRepositories = [{ aliases: ["ClawSweeper"] }];
+    rerender();
+    expect(chip()).toBeNull();
+    props.githubRepositories = [{ owner: "fork", repo: "clawsweeper", aliases: ["ClawSweeper"] }];
+    rerender();
+    expect(chip()?.href).toBe("https://github.com/fork/clawsweeper/pull/1576");
+  });
+
+  it("updates settled GitHub reference chips when the session repository arrives or changes", () => {
+    vi.spyOn(Date, "now").mockReturnValue(60_000);
+    const props = threadProps("pane-github-repository", "agent:main:github-repository", [
+      { role: "assistant", content: "PR #141270", timestamp: 1_000 },
+    ]);
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () => render(renderChatThread(props, transcript), container);
+    const chip = () => container.querySelector<HTMLAnchorElement>("a.markdown-github-item");
+    rerender();
+    expect(chip()).toBeNull();
+
+    props.githubRepo = { owner: "openclaw", repo: "openclaw" };
+    rerender();
+    expect(chip()?.href).toBe("https://github.com/openclaw/openclaw/pull/141270");
+    props.githubRepo = { owner: "other", repo: "checkout" };
+    rerender();
+    expect(chip()?.href).toBe("https://github.com/other/checkout/pull/141270");
+    props.githubRepo = null;
+    rerender();
+    expect(chip()).toBeNull();
+  });
+
+  it.each(["agent:main:main", "agent:main:dashboard:history"])(
+    "does not normalize historical messages again when their transcript is projected in %s",
+    (sessionKey) => {
+      const messages = Array.from({ length: 30 }, (_, index) => ({
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `Historical message ${index}`,
+        timestamp: index + 1,
+        __openclaw: { id: `message-${index}` },
+      }));
+      const transcript = createTestTranscript();
+      const props = threadProps("pane-offscreen-history", sessionKey, messages);
+      const project = () =>
+        transcript.renderSession(props.paneId, sessionKey, (session) => {
+          projectChatTranscript(props, session);
+          return html``;
+        });
+      project();
+
+      const normalizeSpy = vi.spyOn(messageNormalizer, "normalizeMessage");
+      project();
+
+      const historicalMessages = new Set<unknown>(messages);
+      expect(normalizeSpy.mock.calls.some(([message]) => historicalMessages.has(message))).toBe(
+        false,
+      );
+    },
+  );
+
+  it.each(["unchanged", "stream-only"] as const)(
+    "keeps settled run frames idle during %s updates",
+    async (update) => {
+      vi.spyOn(Date, "now").mockReturnValue(60_000);
+      const completedRunId = "settled-run";
+      const activeRunId = "active-run";
+      const props = {
+        ...threadProps(`pane-settled-${update}`, "agent:main:dashboard:settled", [
+          {
+            role: "user",
+            content: "Inspect the workspace",
+            timestamp: 1_000,
+            __openclaw: { id: "settled-user", idempotencyKey: `${completedRunId}:user` },
+          },
+          {
+            role: "toolResult",
+            toolCallId: "settled-read",
+            toolName: "read",
+            content: "Read complete",
+            timestamp: 2_000,
+            runId: completedRunId,
+          },
+          {
+            role: "assistant",
+            content: "Workspace checked",
+            phase: "final_answer",
+            stopReason: "stop",
+            timestamp: 3_000,
+            runId: completedRunId,
+            __openclaw: { id: "settled-final" },
+          },
+          {
+            role: "user",
+            content: "Continue with the next task",
+            timestamp: 4_000,
+            __openclaw: { id: "active-user", idempotencyKey: `${activeRunId}:user` },
+          },
+        ]),
+        showToolCalls: true,
+        runId: activeRunId,
+        runActive: true,
+        runWorking: true,
+        stream: "Draft next reply",
+        streamStartedAt: 5_000,
+      };
+      const transcript = createTestTranscript();
+      const container = document.body.appendChild(document.createElement("div"));
+      const rerender = () => {
+        render(renderChatThread(props, transcript), container);
+        transcript.hostUpdated();
+      };
+      try {
+        rerender();
+        transcript.hostConnected();
+        await flushDeferredRowPrune();
+        const finalBubble = expectDefined(
+          container.querySelector('[data-entry-id="settled-final"]'),
+          "settled final reply",
+        );
+        const workToggle = expectDefined(
+          finalBubble.closest(".chat-group")?.querySelector(".chat-work-group button"),
+          "completed work disclosure",
+        );
+        expect(workToggle.getAttribute("aria-expanded")).toBe("false");
+        expect(container.querySelector(".chat-bubble.streaming")?.textContent).toContain(
+          props.stream,
+        );
+        const renderGroup = vi.spyOn(chatMessage, "renderMessageGroup");
+        if (update === "stream-only") {
+          props.stream = "Advanced next reply";
+        }
+        rerender();
+
+        expect(container.querySelector(".chat-bubble.streaming")?.textContent).toContain(
+          props.stream,
+        );
+        expect(container.querySelector('[data-entry-id="settled-final"]')).toBe(finalBubble);
+        expect(finalBubble.textContent).toContain("Workspace checked");
+        expect(workToggle.getAttribute("aria-expanded")).toBe("false");
+        expect(renderGroup.mock.calls.filter(([group]) => group.runId === completedRunId)).toEqual(
+          [],
+        );
+      } finally {
+        transcript.hostDisconnected();
+      }
+    },
+  );
+
+  it.each(["done", "interrupted"] as const)(
+    "keeps settled history idle when %s status appears, refreshes or clears",
+    async (phase) => {
+      vi.spyOn(Date, "now").mockReturnValue(60_000);
+      const props = threadProps(`pane-terminal-status-${phase}`);
+      const transcript = createTestTranscript();
+      const container = document.body.appendChild(document.createElement("div"));
+      const rerender = () => {
+        render(renderChatThread(props, transcript), container);
+        transcript.hostUpdated();
+      };
+      try {
+        rerender();
+        transcript.hostConnected();
+        await flushDeferredRowPrune();
+        const bubbles = Array.from(container.querySelectorAll(".chat-bubble"));
+        expect(bubbles).toHaveLength(4);
+        const renderGroup = vi.spyOn(chatMessage, "renderMessageGroup");
+
+        for (const occurredAt of [59_000, 59_500, null]) {
+          props.runStatus =
+            occurredAt === null
+              ? null
+              : { phase, runId: "finished-run", sessionKey: props.sessionKey, occurredAt };
+          rerender();
+
+          expect(renderGroup).not.toHaveBeenCalled();
+          const currentBubbles = Array.from(container.querySelectorAll(".chat-bubble"));
+          expect(currentBubbles).toHaveLength(bubbles.length);
+          currentBubbles.forEach((bubble, index) => expect(bubble).toBe(bubbles[index]));
+          expect(container.textContent).toContain("reply two");
+        }
+      } finally {
+        transcript.hostDisconnected();
+      }
+    },
+  );
 
   it("keeps built row identities across an A to B to A presentation reset", () => {
     const paneId = "pane-session-items";
@@ -93,6 +530,152 @@ describe("chat transcript invalidation", () => {
     expect(restoredItemsA.every((item, index) => item === itemsA[index])).toBe(true);
   });
 
+  it("keeps history cached during worker setup and clears its notice when placement becomes active", async () => {
+    const props = threadProps("pane-worker-setup", "agent:main:worker-setup", [
+      { role: "user", content: "Earlier request", timestamp: 1_000 },
+      { role: "assistant", content: "Earlier reply", timestamp: 2_000 },
+    ]);
+    props.pendingInputs = [
+      {
+        id: "queued-follow-up",
+        runId: "queued-run",
+        acceptedAt: 3_000,
+        state: "queued",
+        message: { role: "user", content: "Queued follow-up", timestamp: 3_000 },
+      },
+    ];
+    const timing = { generation: 1, createdAtMs: 1, updatedAtMs: 1, stateChangedAtMs: 1 };
+    props.selectedSession = {
+      key: props.sessionKey,
+      kind: "direct",
+      updatedAt: 1,
+      placement: { state: "requested", ...timing },
+    };
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const buildSpy = vi.spyOn(chatThreadBuild, "buildChatItems");
+    const rerender = () => {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    };
+    try {
+      rerender();
+      transcript.hostConnected();
+      await flushDeferredRowPrune();
+      expect(container.textContent).toContain("Received · waiting for worker setup");
+      expect(container.querySelectorAll('[data-message-text="Queued follow-up"]')).toHaveLength(1);
+      expect(buildSpy).toHaveBeenCalledOnce();
+
+      rerender();
+      expect(buildSpy).toHaveBeenCalledOnce();
+      expect(container.textContent).toContain("Received · waiting for worker setup");
+
+      props.selectedSession = {
+        ...props.selectedSession,
+        placement: {
+          state: "active",
+          ...timing,
+          environmentId: "worker:fixture",
+          activeOwnerEpoch: 1,
+          workerBundleHash: "a".repeat(64),
+          workspaceBaseManifestRef: "base-manifest",
+          remoteWorkspaceDir: "/worker/repo",
+        },
+      };
+      rerender();
+      expect(buildSpy).toHaveBeenCalledTimes(2);
+      expect(container.textContent).not.toContain("Received · waiting for worker setup");
+      expect(container.querySelectorAll('[data-message-text="Queued follow-up"]')).toHaveLength(1);
+    } finally {
+      transcript.hostDisconnected();
+    }
+  });
+
+  it("keeps settled rows idle across session metadata updates but refreshes their identity gutter", () => {
+    vi.spyOn(Date, "now").mockReturnValue(60_000);
+    const props = threadProps("pane-session-metadata");
+    props.selectedSession = { key: props.sessionKey, kind: "direct", updatedAt: 1 };
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () => render(renderChatThread(props, transcript), container);
+    rerender();
+    const userRow = expectDefined(container.querySelector(".chat-group.user"), "user row");
+    expect(userRow.querySelector(".chat-avatar")).toBeNull();
+    const renderGroup = vi.spyOn(chatMessage, "renderMessageGroup");
+
+    props.selectedSession = { ...props.selectedSession, updatedAt: 2, label: "Renamed chat" };
+    rerender();
+    expect(renderGroup).not.toHaveBeenCalled();
+    expect(container.querySelector(".chat-group.user")).toBe(userRow);
+
+    props.selectedSession = { ...props.selectedSession, kind: "group" };
+    rerender();
+    expect(userRow.querySelector(".chat-avatar")).not.toBeNull();
+  });
+
+  it("rechecks visible images when the same session changes workspace protection", async () => {
+    const source = "/outside/project/policy-preview.png";
+    const props = threadProps("pane-media-policy", "agent:main:media-policy", [
+      {
+        role: "assistant",
+        content: [{ type: "image", url: source, alt: "Policy preview" }],
+        timestamp: 1_000,
+      },
+    ]);
+    props.selectedSession = {
+      key: props.sessionKey,
+      kind: "direct",
+      updatedAt: 1,
+      permissionMode: "full",
+    };
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () =>
+        props.selectedSession?.permissionMode === "full"
+          ? {
+              available: true,
+              mediaTicket: "full-access-image",
+              mediaTicketExpiresAt: new Date(Date.now() + 90_000).toISOString(),
+            }
+          : {
+              available: false,
+              reason: "Outside allowed folders",
+              canAllow: true,
+              retryable: false,
+            },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () => {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    };
+    props.onRequestUpdate = rerender;
+    rerender();
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+    expect(container.querySelector("img.chat-message-image")).not.toBeNull();
+
+    for (const permissionMode of ["workspace", "full", "workspace"] as const) {
+      props.selectedSession = { ...props.selectedSession, permissionMode };
+      rerender();
+      await flushDeferredRowPrune();
+      expect(Boolean(container.querySelector("img.chat-message-image"))).toBe(
+        permissionMode === "full",
+      );
+      if (permissionMode === "workspace") {
+        expect(container.querySelector(".chat-assistant-attachment-card")?.textContent).toContain(
+          "Allow image",
+        );
+      }
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    releaseChatMediaResourceSubscriber(rerender);
+    transcript.hostDisconnected();
+  });
+
   it("rebinds guarded transcript images when the gateway rotates its auth token", async () => {
     const NativeUrl = URL;
     const blobUrl = `blob:transcript-media-${crypto.randomUUID()}`;
@@ -129,7 +712,7 @@ describe("chat transcript invalidation", () => {
     const client = {
       request: vi.fn(async () => null),
     } as unknown as Parameters<typeof createTestChatPane>[0]["client"];
-    const sessions = {} as Parameters<typeof createTestChatPane>[0]["sessions"];
+    const sessions = createSessionCapabilityFixture();
     const { pane, state } = createTestChatPane({ client, sessions });
     state.hello = {
       auth: { deviceToken: "test-auth-token" },
@@ -162,13 +745,12 @@ describe("chat transcript invalidation", () => {
     transcript.hostUpdated();
     await flushDeferredRowPrune();
 
-    const thumbnailSource = source.replace(/\/full$/u, "/thumbnail");
-    const previousResource = observeChatMediaResource<string | null>(
-      "managed-image",
-      `${thumbnailSource}::test-auth-token::`,
-    );
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(previousResource.subscribers.size).toBe(1);
+    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
+      "Bearer test-auth-token",
+    );
+    expect(previousSignal?.aborted).toBe(false);
+    expect(container.querySelector(".chat-message-image")).toBeNull();
 
     pane.applyGatewaySnapshot({
       ...pane.context.gateway.snapshot,
@@ -180,139 +762,13 @@ describe("chat transcript invalidation", () => {
       } as typeof pane.context.gateway.snapshot.hello,
     });
     expect(previousSignal?.aborted).toBe(true);
-    expect(isChatMediaResourceCurrent(previousResource)).toBe(false);
     await flushDeferredRowPrune();
 
-    const nextResource = observeChatMediaResource<string | null>(
-      "managed-image",
-      `${thumbnailSource}::test-token::`,
-    );
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get("Authorization")).toBe(
       "Bearer test-token",
     );
-    expect(isChatMediaResourceCurrent(nextResource)).toBe(true);
-    expect(nextResource.subscribers.size).toBe(1);
     expect(container.querySelector<HTMLImageElement>(".chat-message-image")?.src).toBe(blobUrl);
-
-    releaseChatMediaResourceSubscriber(renderPane);
-    transcript.hostDisconnected();
-  });
-
-  it("reconciles guarded local attachments when pane preview roots change", async () => {
-    let previousSignal: AbortSignal | undefined;
-    const fetchMock = vi.fn((_source: string, init?: RequestInit) => {
-      if (fetchMock.mock.calls.length === 1) {
-        return new Promise<Response>((_resolve, reject) => {
-          previousSignal = init?.signal ?? undefined;
-          previousSignal?.addEventListener(
-            "abort",
-            () => reject(new DOMException("preview roots changed", "AbortError")),
-            { once: true },
-          );
-        });
-      }
-      return Promise.resolve({
-        ok: true,
-        json: async () => ({
-          available: true,
-          mediaTicket: "root-restored-ticket",
-          mediaTicketExpiresAt: new Date(Date.now() + 90_000).toISOString(),
-        }),
-      } as Response);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const client = {
-      request: vi.fn(async () => null),
-    } as unknown as Parameters<typeof createTestChatPane>[0]["client"];
-    const sessions = {} as Parameters<typeof createTestChatPane>[0]["sessions"];
-    const { pane, state } = createTestChatPane({ client, sessions });
-    const configPane = pane as typeof pane & {
-      applyApplicationConfig: (config: typeof pane.context.config.current) => void;
-    };
-    state.hello = {
-      auth: { deviceToken: "test-auth-token" },
-    } as typeof state.hello;
-    state.localMediaPreviewRoots = ["/tmp/openclaw"];
-    state.embedSandboxMode = "scripts";
-    state.allowExternalEmbedUrls = false;
-
-    const source = `/tmp/openclaw/${crypto.randomUUID()}.pdf`;
-    const messages = [
-      {
-        role: "assistant",
-        content: `Local document\nMEDIA:${source}`,
-        timestamp: 1_000,
-      },
-    ];
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    const renderPane = () => {
-      render(
-        renderChatThread(
-          {
-            ...threadProps("pane-local-media-roots", state.sessionKey, messages),
-            assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state),
-            localMediaPreviewRoots: state.localMediaPreviewRoots,
-            onRequestUpdate: renderPane,
-          },
-          transcript,
-        ),
-        container,
-      );
-      transcript.hostUpdated();
-    };
-    state.requestUpdate = renderPane;
-
-    renderPane();
-    transcript.hostConnected();
-    transcript.hostUpdated();
-    await flushDeferredRowPrune();
-
-    const previousResource = observeChatMediaResource(
-      "assistant-attachment",
-      `::test-auth-token::${source}`,
-    );
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(previousResource.subscribers.size).toBe(1);
-
-    const config = {
-      ...pane.context.config.current,
-      localMediaPreviewRoots: ["/tmp/elsewhere"],
-      embedSandboxMode: "scripts" as const,
-      allowExternalEmbedUrls: false,
-    };
-    configPane.applyApplicationConfig(config);
-    await flushDeferredRowPrune();
-
-    expect(previousSignal?.aborted).toBe(true);
-    expect(isChatMediaResourceCurrent(previousResource)).toBe(false);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(
-      container.querySelector(".chat-assistant-attachment-card__status-meta")?.textContent,
-    ).toContain("Outside allowed folders");
-
-    configPane.applyApplicationConfig({
-      ...config,
-      localMediaPreviewRoots: ["/tmp/openclaw"],
-    });
-    await flushDeferredRowPrune();
-
-    const restoredResource = observeChatMediaResource(
-      "assistant-attachment",
-      `::test-auth-token::${source}`,
-    );
-    const metadataCalls = fetchMock.mock.calls.filter(([input]) => input.includes("meta=1"));
-    expect(metadataCalls).toHaveLength(2);
-    expect(new Headers(metadataCalls[1]?.[1]?.headers).get("Authorization")).toBe(
-      "Bearer test-auth-token",
-    );
-    expect(isChatMediaResourceCurrent(restoredResource)).toBe(true);
-    expect(restoredResource.subscribers.size).toBe(1);
-    expect(
-      container.querySelector(".chat-assistant-attachment-card__download")?.getAttribute("href"),
-    ).toContain("mediaTicket=root-restored-ticket");
 
     releaseChatMediaResourceSubscriber(renderPane);
     transcript.hostDisconnected();

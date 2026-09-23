@@ -289,6 +289,18 @@ describe("session goals", () => {
 
     expect(completed.status).toBe("complete");
     expect(completed.lastStatusNote).toBe("done");
+    const repeated = await updateSessionGoalStatus({
+      storePath: fixture.storePath(),
+      sessionKey,
+      status: "complete",
+      note: "verified",
+      now: 30,
+    });
+    expect(repeated.completedAt).toBe(completed.completedAt);
+    expect(repeated.lastStatusNote).toBe("verified");
+    expect(getSessionEntry({ storePath: fixture.storePath(), sessionKey })?.goal?.completedAt).toBe(
+      completed.completedAt,
+    );
     await expect(
       updateSessionGoalStatus({
         storePath: fixture.storePath(),

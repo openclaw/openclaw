@@ -5,11 +5,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createChatRunState } from "../server-chat-state.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { recordClientPresenceActivity } from "../server/client-presence.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
+import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { handleChatSend } from "./chat-send-handler.js";
-import { chatHandlers } from "./chat.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 vi.mock("./chat-send-agent-dispatch.js", () => ({
@@ -21,17 +21,11 @@ vi.mock("./chat-send-agent-dispatch.js", () => ({
 function createMockContext() {
   const broadcast = vi.fn();
   const nodeSendToSession = vi.fn();
-  const chatAbortControllers = new Map();
-  const agentRunSeq = new Map<string, number>();
-  const dedupe = new Map();
 
   return {
+    ...createDirectChatContext(),
     broadcast,
     nodeSendToSession,
-    chatAbortControllers,
-    chatRunState: createChatRunState(),
-    agentRunSeq,
-    dedupe,
     getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
     logGateway: { warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
     addChatRun: vi.fn(),
@@ -45,10 +39,7 @@ describe("chat.send error broadcast", () => {
     const ctx = createMockContext();
     const respond = vi.fn();
 
-    await expectDefined(
-      chatHandlers["chat.send"],
-      'chatHandlers["chat.send"] test invariant',
-    )({
+    await handleDirectExternalChatSend({
       params: {
         sessionKey: "main",
         message: "hello",
@@ -79,10 +70,7 @@ describe("chat.send error broadcast", () => {
     const ctx = createMockContext();
     const respond = vi.fn();
 
-    await expectDefined(
-      chatHandlers["chat.send"],
-      'chatHandlers["chat.send"] test invariant',
-    )({
+    await handleDirectExternalChatSend({
       params: {
         sessionKey: "main",
         message: "hello",
@@ -117,10 +105,7 @@ describe("chat.send error broadcast", () => {
       payload: { runId: "test-cached-routing", status: "started" },
     });
 
-    await expectDefined(
-      chatHandlers["chat.send"],
-      'chatHandlers["chat.send"] test invariant',
-    )({
+    await handleDirectExternalChatSend({
       params: {
         sessionKey: "main",
         message: "hello",
@@ -233,10 +218,7 @@ describe("chat.send error broadcast", () => {
     const ctx = createMockContext();
     const respond = vi.fn();
 
-    await expectDefined(
-      chatHandlers["chat.send"],
-      'chatHandlers["chat.send"] test invariant',
-    )({
+    await handleDirectExternalChatSend({
       params: {
         sessionKey: "main",
         message: "/stop",
@@ -267,10 +249,7 @@ describe("chat.send error broadcast", () => {
       throw Object.assign(new Error("LLM timeout"), { code: "TIMEOUT" });
     });
 
-    await expectDefined(
-      chatHandlers["chat.send"],
-      'chatHandlers["chat.send"] test invariant',
-    )({
+    await handleDirectExternalChatSend({
       params: {
         sessionKey: "main",
         message: "hello",
@@ -314,10 +293,7 @@ describe("chat.send error broadcast", () => {
       throw Object.assign(new Error("LLM timeout"), { code: "TIMEOUT" });
     });
 
-    await expectDefined(
-      chatHandlers["chat.send"],
-      'chatHandlers["chat.send"] test invariant',
-    )({
+    await handleDirectExternalChatSend({
       params: {
         sessionKey: "global",
         agentId: "main",

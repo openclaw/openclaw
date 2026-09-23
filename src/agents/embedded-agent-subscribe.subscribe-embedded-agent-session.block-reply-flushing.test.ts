@@ -1,10 +1,12 @@
 // Block-reply flush boundaries and optional callback behavior.
 import { describe, expect, it, vi } from "vitest";
+import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
 import {
   createStubSessionHarness,
   emitAssistantTextDelta,
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
+import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 
 function firstBlockReplyText(onBlockReply: ReturnType<typeof vi.fn>): string | undefined {
   // Flush tests only care about the first emitted user-visible chunk.
@@ -60,7 +62,14 @@ describe("subscribeEmbeddedAgentSession", () => {
 
     expect(onBlockReplyFlush).toHaveBeenCalledTimes(2);
   });
-  it("flushes buffered block chunks before tool execution", async () => {
+  it.each([
+    { name: "prose", text: "Short chunk.", code: undefined },
+    {
+      name: "indented code with literal trailing spaces",
+      text: "    literal  ",
+      code: "literal  \n",
+    },
+  ])("flushes buffered $name before tool execution", async ({ text, code }) => {
     const { session, emit } = createStubSessionHarness();
 
     const onBlockReply = vi.fn();
@@ -80,7 +89,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       message: { role: "assistant" },
     });
 
-    emitAssistantTextDelta({ emit, delta: "Short chunk." });
+    emitAssistantTextDelta({ emit, delta: text });
 
     expect(onBlockReply).not.toHaveBeenCalled();
 
@@ -93,7 +102,16 @@ describe("subscribeEmbeddedAgentSession", () => {
     await Promise.resolve();
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(firstBlockReplyText(onBlockReply)).toBe("Short chunk.");
+    const delivered = firstBlockReplyText(onBlockReply);
+    if (code === undefined) {
+      expect(delivered).toBe(text);
+    } else {
+      const ir = markdownToIR(delivered ?? "");
+      expect(ir.styles.filter((span) => span.style === "code_block")).toEqual([
+        { start: 0, end: code.length, style: "code_block" },
+      ]);
+      expect(ir.text).toBe(code);
+    }
     expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
   });
 
@@ -161,10 +179,7 @@ describe("subscribeEmbeddedAgentSession", () => {
 
     emit({
       type: "message_end",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Final reply before lifecycle end." }],
-      },
+      message: textAssistant("Final reply before lifecycle end."),
     });
     await Promise.resolve();
 
@@ -201,114 +216,12 @@ describe("subscribeEmbeddedAgentSession", () => {
 
     emit({
       type: "message_end",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Final reply before lifecycle end." }],
-      },
+      message: textAssistant("Final reply before lifecycle end."),
     });
     await vi.waitFor(() => {
       expect(delivered).toEqual(["Final reply before lifecycle end."]);
       expect(flushSnapshots).toEqual([["Final reply before lifecycle end."]]);
     });
-  });
-
-  it("repairs final usage before persistence when delivery work is queued", async () => {
-    const { session, emit } = createStubSessionHarness();
-    let releaseFirstReply: (() => void) | undefined;
-    const firstReplyPending = new Promise<void>((resolve) => {
-      releaseFirstReply = resolve;
-    });
-    let blockReplyCount = 0;
-
-    subscribeEmbeddedAgentSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"],
-      runId: "run-queued-usage-persistence",
-      onBlockReply: () => {
-        blockReplyCount += 1;
-        return blockReplyCount === 1 ? firstReplyPending : undefined;
-      },
-      onBlockReplyFlush: vi.fn(),
-      blockReplyBreak: "message_end",
-    });
-
-    emit({
-      type: "message_start",
-      message: { role: "assistant" },
-    });
-    emit({
-      type: "message_end",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "First reply." }],
-        usage: {
-          input: 3,
-          output: 2,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 5,
-        },
-      },
-    });
-
-    emit({
-      type: "message_start",
-      message: { role: "assistant" },
-    });
-    emit({
-      type: "message_update",
-      message: {
-        role: "assistant",
-        api: "openai-completions",
-        content: [{ type: "text", text: "Second reply." }],
-      },
-      assistantMessageEvent: {
-        type: "text_end",
-        usage: {
-          input: 7,
-          output: 5,
-          cacheRead: 0,
-          cacheWrite: 0,
-          reasoningTokens: 2,
-          totalTokens: 12,
-        },
-      },
-    });
-    const finalMessage = {
-      role: "assistant",
-      api: "openai-completions",
-      content: [{ type: "text", text: "Second reply." }],
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-      },
-    };
-    emit({ type: "message_end", message: finalMessage });
-
-    // AgentSession persists immediately after notifying listeners, so this
-    // mutation must happen before the queued message_end handler executes.
-    expect(finalMessage.usage).toMatchObject({
-      input: 7,
-      output: 5,
-      reasoningTokens: 2,
-      totalTokens: 12,
-    });
-
-    releaseFirstReply?.();
-    await vi.waitFor(() => {
-      expect(blockReplyCount).toBeGreaterThanOrEqual(2);
-    });
-
-    const transcriptOnlyMessage = {
-      role: "assistant",
-      provider: "openclaw",
-      model: "delivery-mirror",
-      content: [{ type: "text", text: "Already delivered." }],
-    };
-    emit({ type: "message_end", message: transcriptOnlyMessage });
-    expect(transcriptOnlyMessage).not.toHaveProperty("usage");
   });
 });
 

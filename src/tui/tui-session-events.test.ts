@@ -116,6 +116,7 @@ describe("readTuiSessionUserMessage", () => {
       content: [{ type: "image", source: { type: "url", url: "/image.png" } }],
       media: undefined,
       expected: "Attached image",
+      images: [{ source: "/image.png" }],
     },
     {
       name: "document block",
@@ -127,36 +128,42 @@ describe("readTuiSessionUserMessage", () => {
       ],
       media: undefined,
       expected: "Attached file: report.pdf",
+      images: undefined,
     },
     {
       name: "canonical persisted media",
       content: "",
       media: [{ path: "/media/inbound/image.png", contentType: "image/png" }],
       expected: "Attached image",
+      images: [{ source: "/media/inbound/image.png" }],
     },
-  ])("accepts an authoritative attachment-only $name event", ({ content, media, expected }) => {
-    expect(
-      readTuiSessionUserMessage({
-        sessionKey: "agent:main:main",
-        messageId: "attachment-user-1",
-        message: {
-          role: "user",
-          content,
-          __openclaw: {
-            id: "attachment-user-1",
-            idempotencyKey: "attachment-run-1:user",
-            seq: 1,
-            ...(media ? { media } : {}),
+  ])(
+    "accepts an authoritative attachment-only $name event",
+    ({ content, media, expected, images }) => {
+      expect(
+        readTuiSessionUserMessage({
+          sessionKey: "agent:main:main",
+          messageId: "attachment-user-1",
+          message: {
+            role: "user",
+            content,
+            __openclaw: {
+              id: "attachment-user-1",
+              idempotencyKey: "attachment-run-1:user",
+              seq: 1,
+              ...(media ? { media } : {}),
+            },
           },
-        },
-      } satisfies SessionMessageEvent),
-    ).toEqual({
-      messageId: "attachment-user-1",
-      runId: "attachment-run-1",
-      sendId: "attachment-run-1",
-      text: expected,
-    });
-  });
+        } satisfies SessionMessageEvent),
+      ).toEqual({
+        messageId: "attachment-user-1",
+        runId: "attachment-run-1",
+        sendId: "attachment-run-1",
+        text: expected,
+        ...(images ? { images } : {}),
+      });
+    },
+  );
 
   it("recovers the durable prompt identity and owning chat run", () => {
     expect(

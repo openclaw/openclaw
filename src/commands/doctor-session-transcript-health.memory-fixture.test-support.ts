@@ -7,7 +7,10 @@ import { noteSessionTranscriptLabelHealth } from "./doctor-session-transcript-la
 
 const [stateDir, scenario, sqlitePath, expectedDigest] = process.argv.slice(2);
 assert(
-  stateDir && sqlitePath && expectedDigest && (scenario === "headers" || scenario === "labels"),
+  stateDir &&
+    sqlitePath &&
+    expectedDigest &&
+    (scenario === "headers" || scenario === "headers-after-event" || scenario === "labels"),
 );
 process.stderr.write(`checking ${scenario}\n`);
 process.env.OPENCLAW_STATE_DIR = stateDir;
@@ -18,7 +21,7 @@ const params = {
   env: process.env,
   shouldRepair: true,
 };
-if (scenario === "headers") {
+if (scenario === "headers" || scenario === "headers-after-event") {
   assert.deepEqual(await noteSessionTranscriptHeaderHealth(params), { found: 0, repaired: 0 });
 } else {
   await noteSessionTranscriptLabelHealth(params);

@@ -1,25 +1,31 @@
 import { isDeepStrictEqual } from "node:util";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
   ErrorCodes,
   errorShape,
   type ErrorShape,
+  type SessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
-import { materializeProjectClone } from "../../projects/project-clone.js";
+import { materializeProjectClone, refreshProjectClone } from "../../projects/project-clone.js";
 import { parseProjectGitUrl } from "../../projects/project-git-url.js";
 import { resolveProjectDirectory } from "../../projects/project-registry.js";
-import { githubApiToken } from "../control-ui-github-api.js";
-import {
-  generateWorktreeSessionTitle,
-  hasExplicitSessionName,
-  resolveExplicitSessionName,
-} from "../dashboard-session-title.js";
+import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import { generateWorktreeSessionTitle } from "../dashboard-session-title.js";
+import { githubApiToken } from "../github-public-api.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
-import type { PreparedGatewaySessionLifecycle } from "../session-lifecycle-preparation.js";
-import { prepareSessionWorktree } from "../session-worktree-preparation.js";
+import type {
+  PrepareGatewaySessionLifecycle,
+  PreparedGatewaySessionLifecycle,
+} from "../session-lifecycle-preparation.js";
+import { hasExplicitSessionName, resolveExplicitSessionName } from "../session-title-state.js";
+import {
+  prepareSessionWorktree,
+  resolveSessionWorktreeBase,
+} from "../session-worktree-preparation.js";
 import { hasActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
@@ -30,6 +36,118 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 const SESSION_PROJECT_OWNERSHIP_ERROR =
   "Session changed while preparing its project; retry the task.";
 const workspacePreparations = new KeyedAsyncQueue();
+
+type RepositorySource = NonNullable<SessionsCreateParams["repository"]>;
+
+export function resolveSessionRepositoryCreation(
+  params: SessionsCreateParams,
+  hasInitialTurn: boolean,
+): Result<RepositorySource | undefined, ErrorShape> {
+  if (!params.repository) {
+    return ok(undefined);
+  }
+  const url = normalizeSessionProjectGitUrl(params.repository.url);
+  const ref = params.repository.ref?.trim();
+  if (!url || (ref !== undefined && (!ref || ref.startsWith("-") || /\s|\0/u.test(ref)))) {
+    return err(
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "Use a GitHub repository URL and a nonempty branch, tag, or commit ref.",
+      ),
+    );
+  }
+  if (
+    params.cwd ||
+    params.execNode ||
+    params.projectId ||
+    params.projectGitUrl ||
+    params.worktree !== undefined ||
+    params.worktreeBaseRef ||
+    params.worktreeName ||
+    params.catalogId
+  ) {
+    return err(
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "sessions.create repository cannot be combined with local workspace or catalog options.",
+      ),
+    );
+  }
+  if (hasInitialTurn) {
+    return err(
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "Create the repository session without an initial turn, dispatch it with sessions.dispatch, then send the message with sessions.send.",
+      ),
+    );
+  }
+  return ok({ url, ...(ref ? { ref } : {}) });
+}
+
+export function prepareSessionRepositoryWorkspace(
+  repository: RepositorySource,
+  options: { runSetupScript: boolean; assertCurrent: () => void },
+): PrepareGatewaySessionLifecycle {
+  const { assertCurrent } = options;
+  return async (target) => {
+    const store = getSessionRepositoryWorkspaceStore();
+    const existing = store.find({ agentId: target.agentId, sessionKey: target.key });
+    if (
+      target.entry &&
+      (!target.entry.repositoryWorkspaceId ||
+        target.entry.repositoryWorkspaceId !== existing?.workspaceId)
+    ) {
+      return err(
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "repository source requires a new repository session",
+        ),
+      );
+    }
+    if (
+      existing &&
+      (existing.url !== repository.url || existing.requestedRef !== (repository.ref ?? null))
+    ) {
+      return err(
+        errorShape(ErrorCodes.INVALID_REQUEST, "session repository source cannot be changed"),
+      );
+    }
+    assertCurrent();
+    const workspace = store.create({
+      agentId: target.agentId,
+      sessionKey: target.key,
+      url: repository.url,
+      requestedRef: repository.ref,
+      runSetupScript: options.runSetupScript,
+      assertCurrent,
+    });
+    return ok({
+      repositoryWorkspaceId: workspace.workspaceId,
+      ...(!existing
+        ? {
+            rollback: async () => {
+              // Creation still holds the session lifecycle lock. Cleanup owns only the
+              // untouched row it allocated, even when the initiating caller has gone away.
+              await store.delete({
+                workspaceId: workspace.workspaceId,
+                assertCurrent: () => {
+                  const current = store.get(workspace.workspaceId);
+                  if (
+                    current &&
+                    (current.agentId !== target.agentId ||
+                      current.sessionKey !== target.key ||
+                      current.revision !== workspace.revision)
+                  ) {
+                    throw new Error("Repository preparation changed before rollback");
+                  }
+                },
+              });
+            },
+          }
+        : {}),
+    });
+  };
+}
 
 export function normalizeSessionProjectGitUrl(value: unknown): string | undefined {
   return typeof value === "string" && value.length <= 2048
@@ -122,7 +240,18 @@ export async function prepareSessionWorkspace(params: {
     if (!saved || saved.sessionId !== entry.sessionId) {
       throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
     }
-    const pending = saved.pendingWorktree;
+    let pending = saved.pendingWorktree;
+    const assertSavedWorkspaceIntent = (current: typeof saved) => {
+      assertRunOwnership();
+      if (
+        current.sessionId !== entry.sessionId ||
+        current.projectId !== saved.projectId ||
+        current.pendingProjectGitUrl !== saved.pendingProjectGitUrl ||
+        !isDeepStrictEqual(current.pendingWorktree, pending)
+      ) {
+        throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
+      }
+    };
     const gitUrl = normalizeSessionProjectGitUrl(saved.pendingProjectGitUrl);
     if (
       Object.hasOwn(saved, "pendingProjectGitUrl") &&
@@ -152,8 +281,10 @@ export async function prepareSessionWorkspace(params: {
     }
     const root = prepareSessionCreateFilesystemRoot({
       cfg,
-      enforceSandboxContainment: Boolean(project),
-      requestedProjectId: project?.id,
+      // Direct bindings still require containment. Pending managed checkouts use
+      // the saved child requirement and source custody in the preparation owner.
+      enforceSandboxContainment: !pending && Boolean(project || saved.projectId),
+      requestedProjectId: project?.id ?? saved.projectId,
       sessionCwd: directory,
       sessionKey,
       targetAgentId: agentId,
@@ -190,17 +321,64 @@ export async function prepareSessionWorkspace(params: {
       sessionRoot: root.value.sessionRoot,
     };
     if (pending) {
+      if (pending.baseRef && !pending.baseCommit) {
+        let resolved = await resolveSessionWorktreeBase(directory, pending.baseRef, signal);
+        if (
+          !resolved.ok &&
+          resolved.error.code === ErrorCodes.INVALID_REQUEST &&
+          project?.source === "cloned"
+        ) {
+          await refreshProjectClone(project, {
+            signal,
+            token: githubApiToken(process.env, cfg),
+          });
+          assertRunOwnership();
+          resolved = await resolveSessionWorktreeBase(directory, pending.baseRef, signal);
+        }
+        if (!resolved.ok) {
+          throw new Error(resolved.error.message);
+        }
+        // Accept once, before setup can fail: retries keep the commit while the
+        // original ref remains publication metadata, never a fallback selection.
+        const next = { ...pending, baseCommit: resolved.value };
+        const updated = await patchSessionEntryCore(
+          target,
+          (current) => {
+            assertSavedWorkspaceIntent(current);
+            return { pendingWorktree: next };
+          },
+          {
+            assertCommitAllowed: assertRunOwnership,
+            requireWriteSuccess: true,
+            skipMaintenance: true,
+          },
+        );
+        if (!updated) {
+          throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
+        }
+        Object.assign(saved, updated);
+        pending = next;
+      }
       // Retries inherit workspace intent, not a previous caller's setup authority.
       const result = await prepareSessionWorktree({
-        target: { ...target, key: sessionKey, entry: saved },
+        cfg,
+        target: {
+          ...target,
+          key: sessionKey,
+          entry: saved,
+          projectId: project?.id ?? saved.projectId,
+          sandboxRequired: saved.sandbox === "required",
+        },
         workspace: directory,
         name: pending.name,
         baseRef: pending.baseRef,
-        label: title ?? resolveExplicitSessionName(saved) ?? pending.titleSource,
+        checkoutCommit: pending.baseCommit,
+        label: title ?? resolveExplicitSessionName(saved),
         runSetupScript: client?.connect?.scopes?.includes(ADMIN_SCOPE) === true,
         signal,
         commitGuard: assertRunOwnership,
         onProgress: (stage) => status(stage === "setup" ? "running_setup" : "creating_worktree"),
+        acceptedSource: pending.source,
       });
       if (!result.ok) {
         throw new Error(result.error.message);
@@ -209,33 +387,31 @@ export async function prepareSessionWorkspace(params: {
     }
     let bound;
     try {
-      bound = await patchSessionEntryCore(
-        target,
-        (current) => {
-          assertRunOwnership();
-          if (
-            current.sessionId !== entry.sessionId ||
-            current.projectId !== saved.projectId ||
-            current.pendingProjectGitUrl !== saved.pendingProjectGitUrl ||
-            !isDeepStrictEqual(current.pendingWorktree, pending)
-          ) {
-            throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
-          }
-          return {
-            ...(project ? { projectId: project.id } : {}),
-            sessionRoot: prepared.sessionRoot,
-            spawnedCwd: prepared.spawnedCwd,
-            ...(prepared.worktree ? { worktree: prepared.worktree } : {}),
-            pendingProjectGitUrl: undefined,
-            pendingWorktree: undefined,
-          };
-        },
-        {
-          assertCommitAllowed: assertRunOwnership,
-          requireWriteSuccess: true,
-          skipMaintenance: true,
-        },
-      );
+      const bind = async (assertSourceCurrent: () => void) =>
+        await patchSessionEntryCore(
+          target,
+          (current) => {
+            assertSourceCurrent();
+            assertSavedWorkspaceIntent(current);
+            return {
+              ...(project ? { projectId: project.id } : {}),
+              sessionRoot: prepared.sessionRoot,
+              spawnedCwd: prepared.spawnedCwd,
+              ...(prepared.worktree ? { worktree: prepared.worktree } : {}),
+              pendingProjectGitUrl: undefined,
+              pendingWorktree: undefined,
+            };
+          },
+          {
+            assertCommitAllowed: () => {
+              assertRunOwnership();
+              assertSourceCurrent();
+            },
+            requireWriteSuccess: true,
+            skipMaintenance: true,
+          },
+        );
+      bound = prepared.withCommit ? await prepared.withCommit(bind) : await bind(() => {});
       if (!bound) {
         throw new Error("Session disappeared while preparing its workspace; start a new session.");
       }

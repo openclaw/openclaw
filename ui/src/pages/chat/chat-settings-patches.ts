@@ -1,9 +1,9 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import type { SessionsPatchResult } from "../../api/types.ts";
 import {
   resolveSessionKey,
   type SessionCapability,
   type SessionPatch,
+  type SessionPatchResult,
   type SessionScopeHost,
 } from "../../lib/sessions/index.ts";
 import {
@@ -95,10 +95,12 @@ export function patchChatSessionSettings(
   patch: SessionPatch,
   options: {
     agentId?: string;
+    expectedSessionId?: string;
     ownsModelOverride?: () => boolean;
-    reconcile?: (result: SessionsPatchResult) => Promise<void> | void;
+    canDispatch?: () => boolean;
+    reconcile?: (result: SessionPatchResult) => Promise<void> | void;
   } = {},
-): Promise<SessionsPatchResult | null> {
+): Promise<SessionPatchResult | null> {
   const previous = getPendingChatPickerPatch(host, sessionKey, options.agentId);
   const operation = (async () => {
     // Run-affecting settings and sends share this canonical per-session tail.
@@ -106,7 +108,9 @@ export function patchChatSessionSettings(
     // redirect queued intent to a replacement Gateway.
     const result = await host.sessions.patch(sessionKey, patch, {
       agentId: options.agentId,
+      expectedSessionId: options.expectedSessionId,
       ownsModelOverride: options.ownsModelOverride,
+      canDispatch: options.canDispatch,
       waitFor: previous,
     });
     if (result) {
@@ -148,7 +152,7 @@ export async function patchChatCommandSessionSettings(
   patch: SessionPatch,
   options: {
     ownsModelOverride?: () => boolean;
-    reconcile?: (result: SessionsPatchResult) => Promise<void> | void;
+    reconcile?: (result: SessionPatchResult) => Promise<void> | void;
   } = {},
 ): Promise<NonNullable<Awaited<ReturnType<SessionCapability["patch"]>>>> {
   const result = await patchChatSessionSettings(

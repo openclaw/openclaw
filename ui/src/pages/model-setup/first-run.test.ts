@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { routeIdFromPath } from "../../app-routes.ts";
-import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { persistFirstRunActivationReceipt } from "./first-run-activation-receipt.ts";
@@ -9,14 +9,16 @@ import { isDefaultChatLanding, startModelSetupFirstRunRedirectAfterLocation } fr
 const defaultLanding = { pathname: "/chat/main", search: "", hash: "" };
 
 async function startRedirect(
-  context: ApplicationContext<RouteId>,
+  context: ApplicationContext,
   currentLocation = defaultLanding,
+  onInitialDecision?: () => void,
 ): Promise<() => void> {
   return startModelSetupFirstRunRedirectAfterLocation({
     context,
     enabled: true,
     history: { location: () => currentLocation, replace: () => undefined },
     initialLocationReady: Promise.resolve(defaultLanding),
+    onInitialDecision,
   });
 }
 
@@ -65,7 +67,7 @@ function createConnectedContext(
       state: { selectedId: options.selectedId === undefined ? "main" : options.selectedId },
     },
     replace,
-  } as unknown as ApplicationContext<RouteId>;
+  } as unknown as ApplicationContext;
   return { context, replace, request };
 }
 
@@ -166,7 +168,7 @@ describe("model setup first-run redirect", () => {
     const context = {
       gateway: { snapshot: {}, subscribe },
       replace: replaceRoute,
-    } as unknown as ApplicationContext<RouteId>;
+    } as unknown as ApplicationContext;
 
     await startModelSetupFirstRunRedirectAfterLocation({
       context,
@@ -269,11 +271,11 @@ describe("model setup first-run redirect", () => {
       modelRef: "openai/expected",
     });
 
-    const dispose = await startRedirect(context);
+    const decision = createDeferred();
+    const dispose = await startRedirect(context, defaultLanding, decision.resolve);
 
-    await vi.waitFor(() => {
-      expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
-    });
+    await decision.promise;
+    expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
     dispose();
   });
 
@@ -285,11 +287,11 @@ describe("model setup first-run redirect", () => {
     });
     context.gateway.connection.token = "different-owner-token";
 
-    const dispose = await startRedirect(context);
+    const decision = createDeferred();
+    const dispose = await startRedirect(context, defaultLanding, decision.resolve);
 
-    await vi.waitFor(() => {
-      expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBeNull();
-    });
+    await decision.promise;
+    expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBeNull();
     expect(replace).not.toHaveBeenCalled();
     dispose();
   });
@@ -305,7 +307,7 @@ describe("model setup first-run redirect", () => {
         },
         agentSelection: { state: { selectedId: "main" } },
         replace: vi.fn(),
-      } as unknown as ApplicationContext<RouteId>;
+      } as unknown as ApplicationContext;
 
       const dispose = await startModelSetupFirstRunRedirectAfterLocation({
         context,

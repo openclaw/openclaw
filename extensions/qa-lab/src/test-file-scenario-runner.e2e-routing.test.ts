@@ -79,10 +79,7 @@ describe("QA native Vitest scenario routing", () => {
           "--reporter=verbose",
           "--reporter=json",
           `--outputFile.json=${path.join(
-            repoRoot,
-            ".artifacts",
-            "qa-e2e",
-            scenario.id,
+            path.dirname(result.results[0]!.logPath),
             `${scenario.id}.vitest-report.json`,
           )}`,
         ],

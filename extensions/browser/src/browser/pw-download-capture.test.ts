@@ -7,6 +7,41 @@ import { describe, expect, it, vi } from "vitest";
 import { createDownloadCaptureForPage } from "./pw-download-capture.js";
 
 describe("Playwright download capture cancellation", () => {
+  it("awaits cancellation when owned download admission rejects", async () => {
+    const page = new EventEmitter();
+    const state = { downloadWaiterDepth: 0 };
+    const rejection = new Error("download destination blocked by policy");
+    const cancelGate = createDeferred<void>();
+    const cancel = vi.fn(async () => await cancelGate.promise);
+    const saveAs = vi.fn(async () => {});
+    const capture = createDownloadCaptureForPage(page, state, 1_000, {
+      mode: "explicit",
+      beforeSave: async () => {
+        throw rejection;
+      },
+      cancelOnBeforeSaveError: () => true,
+    });
+    const outcome = capture.promise.then(
+      () => "resolved" as const,
+      (error: unknown) => error,
+    );
+
+    page.emit("download", {
+      url: () => "http://169.254.169.254/latest/meta-data/",
+      suggestedFilename: () => "metadata.bin",
+      saveAs,
+      cancel,
+    });
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+    await expect(Promise.race([outcome, Promise.resolve("pending")])).resolves.toBe("pending");
+    cancelGate.resolve();
+
+    await expect(outcome).resolves.toBe(rejection);
+    expect(saveAs).not.toHaveBeenCalled();
+    expect(state.downloadWaiterDepth).toBe(0);
+    expect(page.listenerCount("download")).toBe(0);
+  });
+
   it.each(["explicit", "passive"] as const)(
     "enforces the %s download deadline after its event arrives",
     async (mode) => {

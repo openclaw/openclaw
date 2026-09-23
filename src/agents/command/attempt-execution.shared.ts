@@ -1,22 +1,10 @@
-/**
- * Shared session persistence and prompt-body helpers for agent attempt
- * execution paths.
- */
+/** Shared session persistence for agent attempt execution. */
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import {
-  formatAgentInternalEventsForPlainPrompt,
-  formatAgentInternalEventsForPrompt,
-} from "../internal-events.js";
-import {
-  hasInternalRuntimeContext,
-  stripInternalRuntimeContext,
-} from "../internal-runtime-context.js";
-import type { AgentCommandOpts } from "./types.js";
-
 /** Parameters for merging and persisting a session entry update. */
 type PersistSessionEntryParams = {
+  agentId: string;
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
   storePath: string;
@@ -31,7 +19,7 @@ export async function persistAgentSession(
 ): Promise<SessionEntry | undefined> {
   let rejectedMissingEntry = false;
   const persisted = await patchSessionEntryCore(
-    { sessionKey: params.sessionKey, storePath: params.storePath },
+    { agentId: params.agentId, sessionKey: params.sessionKey, storePath: params.storePath },
     (_entry, context) => {
       const shouldPersistCurrent = params.shouldPersist?.(context.existingEntry);
       if (!context.existingEntry && shouldPersistCurrent !== true) {
@@ -71,52 +59,4 @@ export async function persistAgentSession(
     delete params.sessionStore[params.sessionKey];
   }
   return persisted ?? undefined;
-}
-
-/** Prepends hidden internal event context unless the body already carries it. */
-export function prependInternalEventContext(
-  body: string,
-  events: AgentCommandOpts["internalEvents"],
-): string {
-  if (hasInternalRuntimeContext(body)) {
-    return body;
-  }
-  const renderedEvents = formatAgentInternalEventsForPrompt(events);
-  if (!renderedEvents) {
-    return body;
-  }
-  return [renderedEvents, body].filter(Boolean).join("\n\n");
-}
-
-// ACP/plain transcript bodies cannot carry internal runtime context markup, so
-// render events as visible plain text before stripping hidden sections.
-function resolvePlainInternalEventBody(
-  body: string,
-  events: AgentCommandOpts["internalEvents"],
-): string {
-  const renderedEvents = formatAgentInternalEventsForPlainPrompt(events);
-  if (!renderedEvents) {
-    return body;
-  }
-  const visibleBody = stripInternalRuntimeContext(body).trim();
-  return [renderedEvents, visibleBody].filter(Boolean).join("\n\n") || body;
-}
-
-/** Resolves the prompt body submitted to ACP runtimes. */
-export function resolveAcpPromptBody(
-  body: string,
-  events: AgentCommandOpts["internalEvents"],
-): string {
-  return events?.length ? resolvePlainInternalEventBody(body, events) : body;
-}
-
-/** Resolves the body stored in transcripts after internal event rendering. */
-export function resolveInternalEventTranscriptBody(
-  body: string,
-  events: AgentCommandOpts["internalEvents"],
-): string {
-  if (!hasInternalRuntimeContext(body)) {
-    return body;
-  }
-  return resolvePlainInternalEventBody(body, events);
 }

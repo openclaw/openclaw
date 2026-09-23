@@ -16,6 +16,7 @@ export const PROVIDER_LABELS = {
   openai: "OpenAI",
   openrouter: "OpenRouter",
   venice: "Venice",
+  xai: "xAI",
   xiaomi: "Xiaomi",
   "xiaomi-token-plan": "Xiaomi Token Plan",
   zai: "z.ai",
@@ -77,20 +78,24 @@ export const ignoredErrors = new Set([
 export const clampPercent = (value: number) =>
   Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0));
 
-/** Resolves a promise with a fallback when usage collection exceeds the timeout. */
+/** Aborts usage collection and returns a fallback when its deadline expires. */
 export const raceUsageTimeout = async <T>(
-  work: Promise<T>,
+  work: (signal: AbortSignal) => Promise<T>,
   ms: number,
   fallback: T,
 ): Promise<T> => {
   let timeout: NodeJS.Timeout | undefined;
+  const controller = new AbortController();
   const timeoutMs = resolveTimerTimeoutMs(ms, 1);
   try {
     return await Promise.race([
-      work,
       new Promise<T>((resolve) => {
-        timeout = setTimeout(() => resolve(fallback), timeoutMs);
+        timeout = setTimeout(() => {
+          resolve(fallback);
+          controller.abort(new DOMException("Usage collection timed out", "TimeoutError"));
+        }, timeoutMs);
       }),
+      work(controller.signal),
     ]);
   } finally {
     if (timeout) {

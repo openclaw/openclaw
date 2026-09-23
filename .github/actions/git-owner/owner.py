@@ -1,4 +1,5 @@
 import base64
+import builtins
 import json
 import os
 import re
@@ -9,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from types import TracebackType
 
 linux = os.environ.get("RUNNER_OS", sys.platform) in ("Linux", "linux")
 fetch_timeout_seconds = 120 if linux else 90
@@ -90,6 +92,49 @@ if os.name == "nt":
     set_job = bind("SetInformationJobObject", w.BOOL, w.HANDLE, c.c_int, c.c_void_p, w.DWORD)
     query_job = bind("QueryInformationJobObject", w.BOOL, w.HANDLE, c.c_int, c.c_void_p, w.DWORD, c.c_void_p)
     terminate_job = bind("TerminateJobObject", w.BOOL, w.HANDLE, w.UINT)
+    open_process = bind("OpenProcess", w.HANDLE, w.DWORD, w.BOOL, w.DWORD)
+    in_job = bind("IsProcessInJob", w.BOOL, w.HANDLE, w.HANDLE, c.POINTER(w.BOOL))
+    wait_process = kernel.WaitForSingleObject
+    wait_process.argtypes, wait_process.restype = [w.HANDLE, w.DWORD], w.DWORD
+
+    def job_members(job, deadline):
+        # PIDs are discovery hints only. Hold query/synchronize handles and verify
+        # job membership before using them; never signal a process found by PID.
+        before = Accounting()
+        query_job(job, 1, c.byref(before), c.sizeof(before), None)
+        capacity = max(16, before.ActiveProcesses + 1)
+        while True:
+            if time.monotonic() >= deadline or capacity > 65536:
+                raise RuntimeError("Job member census did not complete")
+            class Members(c.Structure):
+                _fields_ = [("assigned", w.DWORD), ("count", w.DWORD),
+                            ("pids", c.c_size_t * capacity)]
+            members = Members()
+            try:
+                query_job(job, 3, c.byref(members), c.sizeof(members), None)
+                break
+            except OSError as error:
+                if error.winerror != 234:  # ERROR_MORE_DATA: retry the census, not cleanup.
+                    raise
+                capacity *= 2
+        handles = []
+        try:
+            for pid in members.pids[:members.count]:
+                handle = open_process(0x00100000 | 0x1000, False, pid)
+                handles.append(handle)
+                member = w.BOOL()
+                in_job(handle, job, c.byref(member))
+                if not member.value:
+                    raise RuntimeError("Job member identity changed during census")
+            after = Accounting()
+            query_job(job, 1, c.byref(after), c.sizeof(after), None)
+            if after.TotalProcesses != before.TotalProcesses:
+                raise RuntimeError("Job membership grew during census")
+            return handles, after.TotalProcesses
+        except BaseException:
+            for handle in handles:
+                close_handle(handle)
+            raise
     bootstrap = windows_api + '''
 job = int(sys.argv[1])
 assign = bind("AssignProcessToJobObject", w.BOOL, w.HANDLE, w.HANDLE)
@@ -106,30 +151,61 @@ def group_signal(pgid, signum, deadline):
     except ProcessLookupError:
         return False
     except PermissionError:
-        # Darwin can report EPERM for a zombie-only group. Only a checked
-        # census proving no live members can authorize continuing.
-        if group_alive(pgid, deadline):
+        # Darwin can refuse signals while members are exiting but not yet zombies.
+        # Keep those members pending until drain proves termination; never accept a live denial.
+        states = group_states(pgid, deadline)
+        if any(not state.startswith("Z") and not (sys.platform == "darwin" and "E" in state)
+               for state in states):
             raise
-        return False
+        return any(not state.startswith("Z") for state in states)
     return True
 
 
 def group_alive(pgid, deadline):
+    return any(not state.startswith("Z") for state in group_states(pgid, deadline))
+
+
+def group_states(pgid, deadline):
     try:
         os.killpg(pgid, 0)
     except ProcessLookupError:
-        return False
+        return []
     except PermissionError:
         pass  # EPERM can mean zombie-only; the census must still prove extinction.
-    # Zombies are terminated, not writers. A failed/ambiguous inspection
-    # never authorizes checkout reuse, including after a denied signal probe.
-    result = subprocess.run(
-        ["ps", "-axo", "pgid=,stat="], stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, text=True, check=True,
-        timeout=max(0.001, deadline - time.monotonic()),
-    )
-    return any(int(group) == pgid and not state.startswith("Z")
-               for group, state in (line.split() for line in result.stdout.splitlines()))
+    # Darwin -g selects a group; procps selects its session (a superset because
+    # run_git starts a new session). Pin Darwin's standard, not legacy, -g syntax.
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "pgid=,stat=", "-g", str(pgid)], stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            env={**os.environ, "COMMAND_MODE": "unix2003"},
+            timeout=max(0.001, deadline - time.monotonic()),
+        )
+    except subprocess.TimeoutExpired as error:
+        print((error.stderr or b"").decode(errors="replace"), end="", file=sys.stderr)
+        raise
+    if result.stderr:
+        print(result.stderr, end="", file=sys.stderr)
+    states = []
+    if result.returncode != 1 or result.stdout or result.stderr:
+        result.check_returncode()
+        # Validate the complete census before ignoring zombies; Darwin ps can
+        # report sysctl errors on stderr with exit 0. Neither permits reuse.
+        if result.stderr or not re.fullmatch(
+            r"(?:[ \t]*[1-9][0-9]*[ \t]+[RSDTtXZxKWPIU?][<+NLlsEVWX]*[ \t]*\n)+", result.stdout
+        ):
+            raise RuntimeError("Invalid process group census")
+        states = [state for group, state in (line.split() for line in result.stdout.splitlines())
+                  if int(group) == pgid]
+    if states:
+        return states
+    # Empty selection (exit 1), or a session with only other groups, can race
+    # extinction. Require native ESRCH; a bare status 1 or EPERM proves nothing.
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return []
+    raise RuntimeError("Process group census missed a present group")
 
 
 def drain(child, job):
@@ -139,15 +215,36 @@ def drain(child, job):
         # an empty Job alone cannot prove that no Git will start afterwards.
         child.kill()
         child.wait(timeout=max(0.001, deadline - time.monotonic()))
-        terminate_job(job, 1)
-        accounting = Accounting()
-        while True:
-            query_job(job, 1, c.byref(accounting), c.sizeof(accounting), None)
-            if accounting.ActiveProcesses == 0:
-                return
-            if time.monotonic() >= deadline:
-                raise RuntimeError("Job cleanup did not complete")
-            time.sleep(0.05)
+        handles = []
+        terminated = False
+        try:
+            handles, total = job_members(job, deadline)
+            terminate_job(job, 1)
+            terminated = True
+            accounting = Accounting()
+            while True:
+                settled = True
+                for handle in handles:
+                    status = wait_process(handle, 0)
+                    if status == 258:  # WAIT_TIMEOUT: accounting can reach zero first.
+                        settled = False
+                    elif status != 0:
+                        raise c.WinError(c.get_last_error())
+                query_job(job, 1, c.byref(accounting), c.sizeof(accounting), None)
+                if accounting.TotalProcesses != total:
+                    raise RuntimeError("Job membership grew during cleanup")
+                if accounting.ActiveProcesses == 0 and settled:
+                    return
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("Job cleanup did not complete")
+                time.sleep(0.05)
+        finally:
+            try:
+                if not terminated:
+                    terminate_job(job, 1)
+            finally:
+                for handle in handles:
+                    close_handle(handle)
     else:
         # The group remains ours after leader exit. Reserve half the existing
         # cleanup allowance for KILL and extinction verification after TERM.
@@ -363,23 +460,49 @@ def checkout_selected_ref():
 
 def checkout_harness(sha):
     action = ".github/actions/setup-node-env/action.yml"
+    node_setup_scripts = ("scripts/lib/pnpm-lockfile-documents.mjs",)
+    evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs")
+    platform_scripts = ("scripts/lib/swift-toolchain.sh",)
+    upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs")
     if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
         raise GitFailure(1)
     harness = os.path.join(workspace, ".ci-harness")
+    # This owner creates the harness, not candidate source. Keep strict source-status
+    # checks useful without hiding tracked edits or similarly named nested paths.
+    exclude = os.path.join(workspace, git_output(workspace, "rev-parse", "--git-path", "info/exclude").strip())
+    os.makedirs(os.path.dirname(exclude), exist_ok=True)
+    with open(exclude, "a+b") as output:
+        output.seek(0)
+        if output.read().splitlines()[-1:] != [b"/.ci-harness/"]:
+            output.write(b"\n/.ci-harness/\n")
     os.makedirs(harness, exist_ok=True)
     if sha == os.environ["WORKFLOW_SHA"]:
         # Export the workflow revision from the freshly populated index, replacing
-        # retained platform files without updating the index or trusting later edits.
-        paths = git_output(workspace, "ls-files", "-z", "--", ".github/actions").split("\0")[:-1]
+        # retained harness files without updating the index or trusting later edits.
+        pathspecs = [".github/actions", *node_setup_scripts]
+        if kind in ("platform", "linux-node"):
+            pathspecs += evidence_scripts
+        elif kind == "preflight":
+            pathspecs += ["scripts/lib/release-context.mjs", "scripts/lib/release-version.mjs"]
+        if kind == "platform":
+            pathspecs += platform_scripts
+        if kind == "linux-node":
+            pathspecs += upgrade_scripts
+        paths = git_output(workspace, "ls-files", "-z", "--", *pathspecs).split("\0")[:-1]
         run_git(workspace, "checkout-index", "--force", f"--prefix={harness}/", "--", *paths)
     else:
         run_git(harness, "init", harness)
         run_git(harness, "remote", "add", "origin", remote)
-        # The harness only supplies .github/actions, so narrow the fetch before it runs:
-        # sparse first, then blob-less. A full snapshot here downloads a second copy of
-        # the repository that the checkout below immediately discards, and every extra
-        # byte is amplified by the shared runner egress.
-        run_git(harness, "sparse-checkout", "set", ".github/actions")
+        sparse_paths = ["/.github/actions/", *(f"/{path}" for path in node_setup_scripts)]
+        if kind in ("platform", "linux-node"):
+            sparse_paths += [f"/{path}" for path in evidence_scripts]
+        if kind == "platform":
+            sparse_paths += [f"/{path}" for path in platform_scripts]
+        if kind == "linux-node":
+            sparse_paths += [f"/{path}" for path in upgrade_scripts]
+        # Rooted non-cone patterns keep the kind-owned workflow files exact.
+        # Sparse first, then blob-less avoids downloading a second repository snapshot.
+        run_git(harness, "sparse-checkout", "set", "--no-cone", *sparse_paths)
         fetch(harness, f"+{os.environ['WORKFLOW_SHA']}:refs/remotes/origin/ci-harness",
               max_attempts=1, blobless=True)
         # Checkout now materializes the sparse blobs over the network, so it carries the
@@ -500,14 +623,70 @@ def main():
         checkout_environment.clear()
 
 
+def terminal_diagnostic(error, owner_code):
+    # Code identity, not a filename supplied by policy, proves source provenance.
+    codes = {id(owner_code): owner_code}
+    pending = [owner_code]
+    while pending:
+        for value in pending.pop().co_consts:
+            if type(value) is type(owner_code):
+                codes[id(value)] = value
+                pending.append(value)
+    names = {value: value.__name__ for value in vars(builtins).values()
+             if isinstance(value, type) and issubclass(value, BaseException)}
+    names.update({FetchTimeout: "FetchTimeout", GitFailure: "GitFailure"})
+    records, seen, via = [], set(), "terminal"
+    while error is not None and id(error) not in seen and len(records) < 4:
+        seen.add(id(error))
+        record = {"type": names.get(type(error), "unknown"), "via": via}
+        for field in ("errno", "winerror"):
+            value = getattr(error, field, None)
+            if type(value) is int and -(2 ** 31) <= value < 2 ** 32:
+                record[field] = value
+        frames, trace = [], error.__traceback__
+        # Bound traversal as well as output; malformed metadata cannot stall exit.
+        for _ in range(256):
+            if trace is None:
+                break
+            if type(trace) is not TracebackType:
+                raise TypeError
+            frame, code = trace.tb_frame, trace.tb_frame.f_code
+            if frame.f_globals is globals() and id(code) in codes and 0 < trace.tb_lineno < 2 ** 31:
+                frames.append({"function": code.co_name[:64], "line": trace.tb_lineno})
+                frames = frames[-6:]
+            trace = trace.tb_next
+        record["owner_frames"] = frames
+        if trace is not None:
+            record["traceback_truncated"] = 1
+        records.append(record)
+        cause = error.__cause__
+        error, via = (cause, "cause") if cause is not None else (error.__context__, "context")
+    return records
+
+
 if __name__ == "__main__":
+    exit_code, terminal_error = 0, None
     try:
         main()
     except FetchTimeout:
-        raise SystemExit(124)
+        exit_code = 124
     except GitFailure as error:
-        raise SystemExit(error.code)
+        exit_code = error.code
     except Exception as error:
-        # Do not print command arguments or environment: Git may carry credentials.
-        print(f"::error::Git ownership/setup failed ({type(error).__name__}); refusing reuse or retry", file=sys.stderr)
-        raise SystemExit(125)
+        exit_code, terminal_error = 125, error
+    # Leave the handler before diagnostics or exit can raise: older Python's
+    # implicit exception chaining can loop on an already-cyclic context.
+    if terminal_error is not None:
+        name, diagnostic = "unknown", "unavailable"
+        try:
+            records = terminal_diagnostic(terminal_error, sys._getframe().f_code)
+            diagnostic = json.dumps(records, separators=(",", ":"))
+            name = records[0]["type"]
+        except BaseException:
+            pass  # Diagnostics must never replace the authoritative terminal exit.
+        try:
+            print(f"::error::Git ownership/setup failed ({name}); refusing reuse or retry", file=sys.stderr)
+            print(f"[ci-git-owner] diagnostic={diagnostic}", file=sys.stderr)
+        except BaseException:
+            pass
+    raise SystemExit(exit_code)

@@ -1,11 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import * as exec from "../process/exec.js";
 import { isPidAlive } from "../shared/pid-alive.js";
-import { runUpdateFailureTriage } from "./update-triage.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
+import { prepareUpdateFailureTriage, runUpdateFailureTriage } from "./update-triage.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -19,7 +22,7 @@ async function createInstalledTriage(params: { hang?: boolean; promptPath?: stri
     path.join(root, "dist", "index.js"),
     `
     const fs = require("node:fs");
-    fs.writeFileSync(${JSON.stringify(receiptPath)}, JSON.stringify({ pid: process.pid }));
+    fs.writeFileSync(${JSON.stringify(receiptPath)}, JSON.stringify({ pid: process.pid, updateRunId: process.env[${JSON.stringify(UPDATE_RUN_ID_ENV)}] ?? null }));
     ${params.hang ? "setInterval(() => {}, 1000);" : `process.stdout.write(JSON.stringify({ promptPath: ${JSON.stringify(promptPath)}, bundlePath: null, bundleError: "Snapshot unavailable" }));`}
   `,
   );
@@ -35,8 +38,54 @@ async function createInstalledTriage(params: { hang?: boolean; promptPath?: stri
 }
 
 describe("update triage child lifecycle", () => {
+  it.each(["abort", "owner closure"] as const)(
+    "does not start prepared interactive triage after %s during cwd validation",
+    async (closure) => {
+      await withOpenClawTestState({ layout: "split" }, async (state) => {
+        const triage = await import("../commands/triage.js");
+        const handoff = vi.spyOn(triage, "triageCommand").mockResolvedValue();
+        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const prepared = await prepareUpdateFailureTriage({
+          mode: "interactive",
+          runtime,
+          invocationCwd: state.workspaceDir,
+        });
+        const cwdStat = await fs.stat(state.workspaceDir);
+        let release!: () => void;
+        const { promise: validating, resolve: started } = createDeferred();
+        const blocked = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        vi.spyOn(fs, "stat").mockImplementationOnce(async () => {
+          started();
+          await blocked;
+          return cwdStat;
+        });
+        const controller = new AbortController();
+        let current = true;
+        const pending = prepared({
+          failure: { error: "Update failed" },
+          target: { env: { ...process.env } },
+          signal: controller.signal,
+          isCurrent: () => current,
+        });
+        await validating;
+        if (closure === "abort") {
+          controller.abort();
+        } else {
+          current = false;
+        }
+        release();
+        expect(await pending).toEqual({ status: "cancelled" });
+        expect(handoff).not.toHaveBeenCalled();
+        expect(runtime.error).not.toHaveBeenCalled();
+      });
+    },
+  );
+
   it("keeps artifact paths in local output and returns the partial-export outcome", async () => {
     const { target, promptPath } = await createInstalledTriage();
+    const runCommand = vi.spyOn(exec, "runCommandWithTimeout");
     const runtime = { log: vi.fn(), error: vi.fn() };
     const result = await runUpdateFailureTriage({
       failure: { error: "Update could not install the package" },
@@ -46,23 +95,36 @@ describe("update triage child lifecycle", () => {
     });
     expect(result).toMatchObject({
       status: "completed",
-      contextPath: expect.any(String),
       hint: expect.stringContaining("Diagnostics export unavailable: Snapshot unavailable"),
     });
+    expect(runCommand).toHaveBeenCalledOnce();
+    const args = runCommand.mock.calls[0]![0];
+    expect(args.slice(-3)).toEqual(["--update-result", expect.any(String), "--json"]);
     expect("hint" in result && result.hint).not.toContain(target.root);
     expect(runtime.log).toHaveBeenCalledWith(
       JSON.stringify({ promptPath, bundlePath: null, bundleError: "Snapshot unavailable" }),
     );
+    expect(runtime.log).toHaveBeenCalledWith("Update failed. Preparing triage diagnostics...");
+    expect(runtime.log).not.toHaveBeenCalledWith("Update failed. Entering triage...");
     expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("does not lend the completed update run identity to fresh triage", async () => {
+    const { target, receiptPath } = await createInstalledTriage();
+    const result = await runUpdateFailureTriage({
+      failure: { error: "Update failed" },
+      target: { ...target, env: { ...target.env, [UPDATE_RUN_ID_ENV]: "completed-update-run" } },
+      mode: "json",
+      runtime: { log: vi.fn(), error: vi.fn() },
+    });
+    expect(result.status).toBe("completed");
+    expect(JSON.parse(await fs.readFile(receiptPath, "utf8"))).toMatchObject({ updateRunId: null });
   });
 
   it("does not launch diagnostics after its owner closes during root discovery", async () => {
     const { target, receiptPath } = await createInstalledTriage();
     let releaseRoot!: (root: string) => void;
-    let started!: () => void;
-    const discovering = new Promise<void>((resolve) => {
-      started = resolve;
-    });
+    const { promise: discovering, resolve: started } = createDeferred();
     let current = true;
     const pending = runUpdateFailureTriage({
       failure: { error: "Update failed" },
@@ -102,7 +164,9 @@ describe("update triage child lifecycle", () => {
       controller.abort();
       expect(await pending).toEqual({ status: "cancelled" });
       await expect.poll(() => isPidAlive(pid)).toBe(false);
-      expect(runtime.log).toHaveBeenCalledExactlyOnceWith("Update failed. Entering triage...");
+      expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
+        "Update failed. Preparing triage diagnostics...",
+      );
       expect(runtime.error).not.toHaveBeenCalled();
     } finally {
       controller.abort();
@@ -166,9 +230,11 @@ describe("update triage child lifecycle", () => {
         OPENCLAW_WORKSPACE_DIR: workspaceDir,
       };
       const credential = "synthetic-triage-bearer-value";
-      vi.spyOn(exec, "runCommandWithTimeout").mockRejectedValueOnce(
-        new Error(`ENOSPC Authorization: Bearer ${credential}\n${"detail ".repeat(1000)}`),
-      );
+      const runCommand = vi
+        .spyOn(exec, "runCommandWithTimeout")
+        .mockRejectedValueOnce(
+          new Error(`ENOSPC Authorization: Bearer ${credential}\n${"detail ".repeat(1000)}`),
+        );
       const runtime = { log: vi.fn(), error: vi.fn() };
       const result = await runUpdateFailureTriage({
         failure: { error: "Update failed" },
@@ -182,23 +248,26 @@ describe("update triage child lifecycle", () => {
         const guidance = runtime.log.mock.calls.flat().join("\n");
         expect(result.hint).not.toContain(target.root);
         expect(result.hint.split("\n")[0]?.length).toBeLessThan(284);
-        expect(result.contextPath).toEqual(expect.any(String));
+        expect(runCommand).toHaveBeenCalledOnce();
+        const args = runCommand.mock.calls[0]![0];
+        expect(args.slice(-3)).toEqual(["--update-result", expect.any(String), "--json"]);
+        const contextPath = args.at(-2)!;
         if (platformName === "win32") {
           expect(guidance).toContain(
-            `& openclaw triage --update-result '${result.contextPath!.replaceAll("'", "''")}'`,
+            `& openclaw triage --update-result '${contextPath.replaceAll("'", "''")}'`,
           );
           for (const selector of [targetEnv.OPENCLAW_STATE_DIR, configPath, workspaceDir]) {
             expect(guidance).toContain(`'${selector.replaceAll("'", "''")}'`);
           }
         } else {
-          expect(guidance).toContain(`--update-result ${quoteCliArg(result.contextPath!)}`);
+          expect(guidance).toContain(`--update-result ${quoteCliArg(contextPath)}`);
           expect(guidance).toContain(
             `OPENCLAW_STATE_DIR=${quoteCliArg(targetEnv.OPENCLAW_STATE_DIR)}`,
           );
           expect(guidance).toContain(`OPENCLAW_CONFIG_PATH=${quoteCliArg(configPath)}`);
           expect(guidance).toContain(`OPENCLAW_WORKSPACE_DIR=${quoteCliArg(workspaceDir)}`);
         }
-        await expect(fs.stat(result.contextPath!)).resolves.toMatchObject({
+        await expect(fs.stat(contextPath)).resolves.toMatchObject({
           size: expect.any(Number),
         });
       }

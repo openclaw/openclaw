@@ -14,6 +14,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import { createWorkerPortalToolExecutor } from "./worker-portal-tool-executor.js";
 
 const sessionEntries = vi.hoisted(() => new Map<string, SessionEntry>());
@@ -101,6 +102,11 @@ describe("worker portal tool execution", () => {
         workspaceBaseManifestRef: `manifest-${SOURCE.sessionId}`,
         remoteWorkspaceDir: `/workspace/${SOURCE.sessionId}`,
       },
+    });
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: SOURCE.environmentId,
+      sessionId: SOURCE.sessionId,
+      ownerEpoch: SOURCE.ownerEpoch,
     });
     placements.transition({
       sessionId: SOURCE.sessionId,

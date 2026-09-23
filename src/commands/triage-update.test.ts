@@ -2,66 +2,90 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeTriageUpdateFailure } from "../infra/update-failure-report-artifact.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
-import { readTriageUpdateFailure, writeTriageUpdateFailure } from "./triage-update.js";
+import { readTriageUpdateFailure } from "./triage-update.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("update failure triage diagnostics", () => {
-  it("writes only bounded sanitized failure evidence and preserves the original update result", async () => {
-    const home = tempDirs.make("openclaw-update-triage-");
-    const stateDir = path.join(home, ".openclaw");
-    const env = { HOME: home, OPENCLAW_STATE_DIR: stateDir };
-    const secret = "sk-test-update-triage-secret-1234567890";
-    const result: UpdateRunResult = {
-      status: "error",
-      mode: "npm",
-      root: path.join(home, "npm", "openclaw"),
-      reason: "Package install failed",
-      before: { version: "2026.8.1" },
-      durationMs: 10,
-      steps: Array.from({ length: 5 }, (_, index) => ({
-        name: `step-${index}`,
-        command: `unredacted-command --token ${secret}`,
-        cwd: home,
-        durationMs: 1,
-        exitCode: index === 0 ? 0 : 1,
-        stdoutTail: `${"Earlier build output\n".repeat(100)}The compiler reported the actual failure on stdout`,
-        stderrTail: `token=${secret}\n${"🦞".repeat(8_000)} ${stateDir}/npm.log terminal failure token=${secret}`,
-        advisory:
-          index === 4
-            ? { kind: "package-post-install-doctor" as const, message: "Recoverable Doctor advice" }
-            : undefined,
-      })),
-    };
+  it.each(["package-post-install-doctor", "candidate-runtime-unavailable"] as const)(
+    "writes bounded sanitized failure evidence without changing the result (%s)",
+    async (advisoryKind) => {
+      const home = tempDirs.make("openclaw-update-triage-");
+      const stateDir = path.join(home, ".openclaw");
+      const env = { HOME: home, OPENCLAW_STATE_DIR: stateDir };
+      const secret = "sk-test-update-triage-secret-1234567890";
+      const result: UpdateRunResult = {
+        runId: "10000000-0000-4000-8000-000000000001",
+        status: "error",
+        mode: "npm",
+        root: path.join(home, "npm", "openclaw"),
+        reason: "Package install failed",
+        before: { version: "2026.8.1" },
+        recovery: {
+          serviceRestartSafe: true,
+          version: "2026.8.1",
+          buildId: "verified-recovery-build",
+          service: "healthy",
+        },
+        durationMs: 10,
+        steps: Array.from({ length: 5 }, (_, index) => ({
+          name: `step-${index}`,
+          command: `unredacted-command --token ${secret}`,
+          cwd: home,
+          durationMs: 1,
+          exitCode: index === 0 ? 0 : 1,
+          stdoutTail: `${"Earlier build output\n".repeat(100)}The compiler reported the actual failure on stdout`,
+          stderrTail: `token=${secret}\n${"🦞".repeat(8_000)} ${stateDir}/npm.log terminal failure token=${secret}`,
+          failureFacts: [
+            {
+              check: "core/doctor/runtime-tool-schemas",
+              code: "doctor-failed",
+              affectedKey: "mcp.servers",
+              message: `Cannot expose runtime tools: token=${secret}`,
+            },
+          ],
+          advisory:
+            index === 4 ? { kind: advisoryKind, message: "Non-failure update advice" } : undefined,
+        })),
+      };
 
-    const outputPath = await writeTriageUpdateFailure({ result }, { env });
-    const raw = await fs.readFile(outputPath, "utf8");
-    const failure = await readTriageUpdateFailure(outputPath, { env, stateDir });
+      const outputPath = await writeTriageUpdateFailure({ result }, { env });
+      const raw = await fs.readFile(outputPath, "utf8");
+      const failure = await readTriageUpdateFailure(outputPath, { env, stateDir });
 
-    expect(outputPath.startsWith(path.join(stateDir, "logs", "support"))).toBe(true);
-    expect(Buffer.byteLength(raw)).toBeLessThanOrEqual(8 * 1024);
-    expect(raw).not.toContain(secret);
-    expect(raw).not.toContain(home);
-    expect(raw).not.toContain("unredacted-command");
-    expect(raw).not.toContain("\uFFFD");
-    expect(failure).toMatchObject({
-      result: { reason: "Package install failed", before: { version: "2026.8.1" } },
-    });
-    expect("result" in failure && failure.result.steps.map((step) => step.name)).toEqual([
-      "step-1",
-      "step-2",
-      "step-3",
-    ]);
-    expect(raw).toContain("actual failure on stdout");
-    expect(raw).toContain("npm.log");
-    expect(raw).not.toContain("step-4");
-    expect(result.steps).toHaveLength(5);
-    expect(result.steps[0]?.command).toContain(secret);
-    if (process.platform !== "win32") {
-      expect((await fs.stat(outputPath)).mode & 0o777).toBe(0o600);
-    }
-  });
+      expect(outputPath.startsWith(path.join(stateDir, "logs", "support"))).toBe(true);
+      expect(Buffer.byteLength(raw)).toBeLessThanOrEqual(8 * 1024);
+      expect(raw).not.toContain(secret);
+      expect(raw).not.toContain(home);
+      expect(raw).not.toContain("unredacted-command");
+      expect(raw).toContain("core/doctor/runtime-tool-schemas");
+      expect(raw).toContain("mcp.servers");
+      expect(raw).not.toContain("\uFFFD");
+      expect(failure).toMatchObject({
+        result: {
+          runId: result.runId,
+          reason: "Package install failed",
+          before: { version: "2026.8.1" },
+          recovery: result.recovery,
+        },
+      });
+      expect("result" in failure && failure.result.steps.map((step) => step.name)).toEqual([
+        "step-1",
+        "step-2",
+        "step-3",
+      ]);
+      expect(raw).toContain("actual failure on stdout");
+      expect(raw).toContain("npm.log");
+      expect(raw).not.toContain("step-4");
+      expect(result.steps).toHaveLength(5);
+      expect(result.steps[0]?.command).toContain(secret);
+      if (process.platform !== "win32") {
+        expect((await fs.stat(outputPath)).mode & 0o777).toBe(0o600);
+      }
+    },
+  );
 
   it("preserves a post-install activation error even when the core update succeeded", async () => {
     const stateDir = tempDirs.make("openclaw-update-triage-");
@@ -81,6 +105,41 @@ describe("update failure triage diagnostics", () => {
     expect(recorded).toMatchObject({ result: failure.result });
     expect(recorded.error).toContain("Gateway activation failed");
     expect(recorded.error).toContain("terminal recovery cause");
+  });
+
+  it("retains package rollback proof without promoting restart safety", async () => {
+    const stateDir = tempDirs.make("openclaw-update-triage-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const outputPath = await writeTriageUpdateFailure(
+      {
+        result: {
+          status: "error",
+          mode: "npm",
+          reason: "openclaw doctor",
+          before: { version: "2026.8.1" },
+          after: { version: "2026.8.1" },
+          steps: [],
+          recovery: {
+            serviceRestartSafe: false,
+            reason: "runtime-verification-failed",
+            packageRollbackVerified: true,
+          },
+        },
+      },
+      { env },
+    );
+
+    const recorded = await readTriageUpdateFailure(outputPath, { env, stateDir });
+
+    expect(recorded).toMatchObject({
+      result: {
+        recovery: {
+          serviceRestartSafe: false,
+          reason: "runtime-verification-failed",
+          packageRollbackVerified: true,
+        },
+      },
+    });
   });
 
   it("retains actual plugin sync and npm errors after a successful core replacement", async () => {
@@ -238,5 +297,41 @@ describe("update failure triage diagnostics", () => {
     await fs.writeFile(inputPath, input);
 
     await expect(readTriageUpdateFailure(inputPath, { env: {}, stateDir })).rejects.toThrow(error);
+  });
+
+  it("keeps the leading diagnostic of a failed step beside the outcome tail", async () => {
+    const stateDir = tempDirs.make("openclaw-update-triage-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const result: UpdateRunResult = {
+      status: "error",
+      mode: "npm",
+      root: "openclaw",
+      reason: "Package install failed",
+      before: { version: "2026.9.3" },
+      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      durationMs: 10,
+      steps: [
+        {
+          name: "global install swap",
+          command: "swap staged package",
+          cwd: ".",
+          durationMs: 1,
+          exitCode: 1,
+          stdoutTail: null,
+          stderrTail: [
+            "PackageUpdateSwapError: retained package tree changed after a copy fallback",
+            ...Array.from({ length: 30 }, (_, index) => `rollback detail line ${index}`),
+            "Installation recovery is unverified.",
+          ].join("\n"),
+        },
+      ],
+    };
+
+    const outputPath = await writeTriageUpdateFailure({ result }, { env });
+    const raw = await fs.readFile(outputPath, "utf8");
+
+    expect(raw).toContain("PackageUpdateSwapError");
+    expect(raw).toContain("recovery is unverified");
+    expect(raw).toContain("...");
   });
 });

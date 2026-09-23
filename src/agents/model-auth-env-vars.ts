@@ -4,7 +4,7 @@
  * helper names to model/auth modules.
  */
 import {
-  listKnownProviderAuthEnvVarNames,
+  listKnownProviderAuthEnvVarNamesCore,
   resolveProviderAuthLookupMaps,
 } from "../secrets/provider-env-vars.js";
 import type {
@@ -33,5 +33,5 @@ export function listProviderEnvAuthLookupKeys(params: {
 
 /** Lists known provider API-key env var names for redaction and marker matching. */
 export function listKnownProviderEnvApiKeyNames(): string[] {
-  return listKnownProviderAuthEnvVarNames();
+  return listKnownProviderAuthEnvVarNamesCore();
 }

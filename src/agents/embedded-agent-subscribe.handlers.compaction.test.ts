@@ -19,6 +19,7 @@ import {
 import reconcileSessionStoreCompactionCountAfterSuccess from "./embedded-agent-subscribe.handlers.compaction.runtime.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import type { AgentMessage } from "./runtime/index.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 import { makeZeroUsageSnapshot, type AssistantUsageSnapshot } from "./usage.js";
 
 function createCompactionContext(params: {
@@ -68,18 +69,9 @@ function createCompactionContext(params: {
 
 function makeUsageSnapshot(totalTokens: number): AssistantUsageSnapshot {
   return {
+    ...createZeroUsageFixture(),
     input: totalTokens,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
     totalTokens,
-    cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      total: 0,
-    },
   };
 }
 

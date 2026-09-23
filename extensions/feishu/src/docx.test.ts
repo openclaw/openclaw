@@ -24,11 +24,10 @@ const permissionMemberCreateMock = vi.hoisted(() => vi.fn());
 const blockPatchMock = vi.hoisted(() => vi.fn());
 const scopeListMock = vi.hoisted(() => vi.fn());
 const toolAccountModule = await import("./tool-account.js");
+const clientModule = await import("./client.js");
 const runtimeModule = await import("./runtime.js");
 
-vi.spyOn(toolAccountModule, "createFeishuToolClient").mockImplementation(() =>
-  createFeishuClientMock(),
-);
+vi.spyOn(clientModule, "createFeishuClient").mockImplementation(() => createFeishuClientMock());
 vi.spyOn(toolAccountModule, "resolveAnyEnabledFeishuToolsConfig").mockReturnValue({
   doc: true,
   chat: false,

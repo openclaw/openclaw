@@ -4,11 +4,25 @@
  * candidate seam. This keeps request caching coupled to the actual watcher
  * lifecycle instead of individual config writers.
  */
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
-import { startManagedGatewayConfigReloader } from "./server-reload-handlers.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { buildGatewayReloadPlan } from "./config-reload-plan.js";
+import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
+import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
+import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import { startManagedGatewayConfigReloader } from "./server-reload-managed.js";
+import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
+import { createTestRuntimeSecretsActivator } from "./server-startup-config.test-support.js";
 
 const hoisted = vi.hoisted(() => ({
   hotReloadStatus: { current: "active" as "active" | "disabled" },
@@ -20,7 +34,9 @@ const hoisted = vi.hoisted(() => ({
         changedPaths: readonly string[];
       }) => void)
     | undefined,
-  notifyPluginMetadataChanged: vi.fn(),
+  onRuntimeConfigCommitted: undefined as Parameters<
+    typeof import("./config-reload.js").startGatewayConfigReloader
+  >[0]["onRuntimeConfigCommitted"],
   stop: vi.fn(async () => {}),
 }));
 
@@ -39,12 +55,19 @@ vi.mock("./config-reload.js", async () => {
           persistedHash: string | null;
           changedPaths: readonly string[];
         }) => void;
+        onRuntimeConfigCommitted?: Parameters<
+          typeof import("./config-reload.js").startGatewayConfigReloader
+        >[0]["onRuntimeConfigCommitted"];
       }) => {
         hoisted.onConfigCandidateCommitted = options.onConfigCandidateCommitted;
+        hoisted.onRuntimeConfigCommitted = options.onRuntimeConfigCommitted;
         return {
+          ready: Promise.resolve(),
+          isReady: () => true,
           stop: hoisted.stop,
           hotReloadStatus: () => hoisted.hotReloadStatus.current,
-          notifyPluginMetadataChanged: hoisted.notifyPluginMetadataChanged,
+          isReloading: () => false,
+          applyPluginLifecycleChange: vi.fn(),
         };
       },
     ),
@@ -54,8 +77,14 @@ vi.mock("./config-reload.js", async () => {
 describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
   it("forwards live status and invalidates config.get on watcher commit", async () => {
     const initialConfig = { session: { store: "/tmp/sessions.json" } } as OpenClawConfig;
+    const pluginRegistry = createEmptyPluginRegistry();
     const broadcast = vi.fn();
+    const invalidateMentions = vi.fn();
+    const gatewayContext = {
+      mentionInbox: { invalidate: invalidateMentions },
+    } as unknown as GatewayRequestContext;
     const reloader = startManagedGatewayConfigReloader({
+      getPluginRegistry: () => pluginRegistry,
       configRevisionProjector: {
         projectRawHash: (hash) => `opaque:${hash}`,
         projectResolvedHash: (hash) => `resolved:${hash}`,
@@ -67,13 +96,13 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
       initialAuthoredConfig: {},
       initialSnapshotValid: true,
       initialSnapshotIssues: [],
-      initialInternalWriteHash: null,
       watchPath: "/tmp/openclaw.json",
       readSnapshot: vi.fn() as never,
       promoteSnapshot: vi.fn(async () => true) as never,
       subscribeToWrites: vi.fn(() => () => {}) as never,
       deps: {} as never,
       broadcast,
+      resolveGatewayContext: () => gatewayContext,
       getState: () => ({
         hooksConfig: {} as never,
         hookClientIpConfig: {} as never,
@@ -85,19 +114,15 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
           reconcileExitWatchers: vi.fn(async () => {}),
           reconcileStreamWatchers: vi.fn(async () => {}),
           stopStreamWatchers: vi.fn(async () => {}),
-          reconcileHeartbeatJobs: vi.fn(async () => "converged" as const),
+          reconcileSystemJobs: vi.fn(async () => "converged" as const),
         } as never,
-        channelHealthMonitor: null,
       }),
       setState: vi.fn(),
       startChannel: vi.fn(async () => new Map()),
       stopChannel: vi.fn(async () => {}),
-      reloadPlugins: vi.fn(
-        async (): Promise<GatewayPluginReloadResult> => ({
-          restartChannels: new Set(),
-          activeChannels: new Set(),
-        }),
-      ),
+      reloadPlugins: vi.fn(async () => {
+        throw new Error("Unexpected plugin reload while observing config status");
+      }),
       logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       logChannels: { info: vi.fn(), error: vi.fn() },
       logCron: { error: vi.fn() },
@@ -107,22 +132,19 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
         invalidate: vi.fn(),
       },
       channelManager: {} as never,
-      activateRuntimeSecrets: vi.fn(async (config: OpenClawConfig) => ({
-        sourceConfig: config,
-        config,
-        authStores: [],
-        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-        warnings: [],
-        webTools: {},
-      })) as never,
+      activateRuntimeSecrets: createTestRuntimeSecretsActivator(),
       resolveSharedGatewaySessionGenerationForConfig: () => undefined,
-      sharedGatewaySessionGenerationState: { current: undefined, required: null },
+      sharedGatewaySessionGenerationState: new SharedGatewaySessionGenerationState({
+        current: undefined,
+        required: null,
+      }),
       prepareTerminalConfig: vi.fn(),
-      reconcileTerminalSessions: vi.fn(),
-      commitTerminalConfig: vi.fn(),
+      reconcileRuntimePolicy: vi.fn(),
+      commitRuntimePolicy: vi.fn(),
       acceptTerminalConfig: vi.fn(),
       clients: [],
     });
+    await reloader.ready;
 
     expect(reloader.hotReloadStatus).toBeTypeOf("function");
     expect(reloader.hotReloadStatus?.()).toBe("active");
@@ -143,6 +165,66 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
       { path: "/tmp/openclaw.json", hash: "opaque:persisted-1", ts: expect.any(Number) },
       { dropIfSlow: true },
     );
+    expect(invalidateMentions).not.toHaveBeenCalled();
+
+    hoisted.onRuntimeConfigCommitted?.(buildGatewayReloadPlan(["gateway.roles"]), initialConfig);
+    expect(invalidateMentions).toHaveBeenCalledOnce();
+
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const profile = ensureProfileForEmail("committed-policy@example.test");
+      gatewayContext.getRuntimeConfig = () => getRuntimeConfigSnapshot() ?? initialConfig;
+      gatewayContext.getCommittedRuntimeConfig = expectDefined(
+        reloader.getCommittedRuntimeConfig,
+        "committed runtime config reader",
+      );
+      gatewayContext.resolveGatewayContext = () => gatewayContext;
+      const capture = () =>
+        expectDefined(
+          captureGatewayOperatorRunAuthority({
+            client: createSyntheticPluginRuntimeClient({
+              scopes: ["operator.write"],
+              operatorRoleActor: { kind: "operator", profileId: profile.id },
+            }),
+            context: gatewayContext,
+          }),
+          "operator source",
+        );
+      const original = capture();
+      let duringActivation: ReturnType<typeof capture> | undefined;
+      const candidate: OpenClawConfig = {
+        ...initialConfig,
+        gateway: {
+          roles: {
+            default: "reader",
+            definitions: {
+              reader: { scopes: ["operator.read"], agents: "*", sessions: { others: "view" } },
+            },
+          },
+        },
+      };
+      try {
+        setRuntimeConfigSnapshot(candidate);
+        expect(original.authority.signal?.aborted).toBe(false);
+        expect(() => original.authority.assertCurrent()).not.toThrow();
+        duringActivation = capture();
+        // An unrelated Gateway publication cannot turn this tentative policy into source loss.
+        publishOperatorRoleConfigChange({});
+        expect(duringActivation.authority.signal?.aborted).toBe(false);
+        setRuntimeConfigSnapshot(initialConfig);
+        expect(duringActivation.authority.assertCurrent).not.toThrow();
+        expect(original.authority.signal?.aborted).toBe(false);
+
+        setRuntimeConfigSnapshot(candidate);
+        hoisted.onRuntimeConfigCommitted?.(buildGatewayReloadPlan(["gateway.roles"]), candidate);
+        expect(gatewayContext.getCommittedRuntimeConfig()).toBe(candidate);
+        expect(original.authority.signal?.aborted).toBe(true);
+        expect(duringActivation.authority.signal?.aborted).toBe(true);
+      } finally {
+        original.release();
+        duringActivation?.release();
+        clearRuntimeConfigSnapshot();
+      }
+    });
 
     await reloader.stop();
     expect(hoisted.stop).toHaveBeenCalledOnce();

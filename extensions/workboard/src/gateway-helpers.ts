@@ -3,11 +3,12 @@ import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-cont
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginApi } from "../api.js";
+import { redactClaimToken } from "./card-redaction.js";
 import {
   dispatchAndStartWorkboardCards,
   type WorkboardDispatchStartOptions,
 } from "./dispatcher.js";
-import type { WorkboardStore } from "./store.js";
+import { WorkboardCardConflictError, type WorkboardStore } from "./store.js";
 import {
   resolveAgentWorkboardWorkspaceRuntime,
   resolveConfiguredWorkboardWorkspaceAccess,
@@ -25,6 +26,17 @@ type WorkboardGatewayScope = NonNullable<
 >;
 
 export function respondError(respond: GatewayRespond, error: unknown) {
+  if (error instanceof WorkboardCardConflictError) {
+    respond(false, undefined, {
+      code: "workboard_conflict",
+      message: error.message,
+      details: {
+        type: "workboard_card_conflict",
+        card: redactClaimToken(error.current),
+      },
+    });
+    return;
+  }
   respond(false, undefined, {
     code: "workboard_error",
     message: formatErrorMessage(error),
@@ -50,6 +62,14 @@ export function registerWorkboardResultMethods(
       { scope },
     );
   }
+}
+
+export function readExpectedUpdatedAt(params: Record<string, unknown>): number | undefined {
+  const value = params.expectedUpdatedAt;
+  if (value !== undefined && (typeof value !== "number" || !Number.isFinite(value))) {
+    throw new Error("expectedUpdatedAt must be a finite number.");
+  }
+  return value;
 }
 
 export function readId(params: Record<string, unknown>): string {

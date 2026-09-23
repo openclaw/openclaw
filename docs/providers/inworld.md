@@ -27,8 +27,10 @@ OpenClaw posts to Inworld's streaming TTS endpoint, concatenates the returned ba
 
 ```bash
 openclaw plugins install @openclaw/inworld-speech
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Getting started
 

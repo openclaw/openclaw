@@ -13,6 +13,30 @@ describe("pending session placement recovery state", () => {
   beforeEach(() => sessionStorage.clear());
   afterEach(() => vi.unstubAllGlobals());
 
+  it("does not restore a creating draft owned by another mounted surface", () => {
+    const context = {};
+    const palette = new PendingSessionPlacementRecoveryState(() => context);
+    const page = new PendingSessionPlacementRecoveryState(() => context);
+    const request = palette.stageCreate({
+      agentId: "main",
+      target: { kind: "device", deviceId: "runner" },
+      message: "palette task",
+      gatewayUrl: "ws://gateway.example",
+      recoveryScope: "principal-a",
+      createParams: { agentId: "main", message: "", worktree: true, worktreeSource: "empty" },
+    });
+    expect(request).not.toBeNull();
+    expect(page.restore("ws://gateway.example", "principal-a")).toBeNull();
+    expect(palette.restore("ws://gateway.example", "principal-a")?.message).toBe("palette task");
+    palette.releaseClaim();
+    expect(page.restore("ws://gateway.example", "principal-a")?.message).toBe("palette task");
+    expect(
+      palette.hasOtherLiveOwner("ws://gateway.example", "principal-a", palette.sessionKey),
+    ).toBe(true);
+    expect(palette.owns("ws://gateway.example", "principal-a", palette.sessionKey)).toBe(false);
+    page.clear();
+  });
+
   it.each([
     {
       name: "a replacement Gateway",
@@ -126,24 +150,27 @@ describe("pending session placement recovery state", () => {
     },
   );
 
-  it.each(["", "x".repeat(129)])(
-    "rejects an invalid persisted machine class %#",
-    (machineClass) => {
-      expect(
-        writeSessionPlacementRecovery({
-          sessionKey: "agent:cloud:invalid-machine",
-          messageId: "message-invalid-machine",
-          message: "run remotely",
-          target: { kind: "profile", profileId: "aws", machineClass },
-          agentId: "cloud",
-          gatewayUrl: "ws://gateway.example",
-          recoveryScope: "principal-a",
-          phase: "dispatching",
-        }),
-      ).toBe(false);
-      expect(sessionStorage.length).toBe(0);
-    },
-  );
+  it.each([
+    { machineClass: "" },
+    { machineClass: "x".repeat(129) },
+    { os: "" },
+    { os: " " },
+    { os: "x".repeat(65) },
+  ])("rejects invalid persisted placement options %#", (options) => {
+    expect(
+      writeSessionPlacementRecovery({
+        sessionKey: "agent:cloud:invalid-machine",
+        messageId: "message-invalid-machine",
+        message: "run remotely",
+        target: { kind: "profile", profileId: "aws", ...options },
+        agentId: "cloud",
+        gatewayUrl: "ws://gateway.example",
+        recoveryScope: "principal-a",
+        phase: "dispatching",
+      }),
+    ).toBe(false);
+    expect(sessionStorage.length).toBe(0);
+  });
 
   it("promotes the acknowledged server key before dispatch", () => {
     const pending = new PendingSessionPlacementRecoveryState();
@@ -319,7 +346,7 @@ describe("pending session placement recovery state", () => {
     expect(sessionStorage.length).toBe(0);
   });
 
-  it("captures creating recovery without sharing mutable payloads", () => {
+  it("captures named creating recovery without sharing mutable payloads", () => {
     const pending = new PendingSessionPlacementRecoveryState();
     expect(
       pending.stageCreate({
@@ -329,7 +356,13 @@ describe("pending session placement recovery state", () => {
         attachments: [{ type: "image" }],
         gatewayUrl: "ws://gateway.example",
         recoveryScope: "principal-a",
-        createParams: { agentId: "cloud", message: "", worktree: true },
+        createParams: {
+          agentId: "cloud",
+          message: "",
+          displayName: "Repair naming",
+          worktreeName: "my-explicit-branch",
+          worktree: true,
+        },
       }),
     ).not.toBeNull();
 
@@ -337,7 +370,11 @@ describe("pending session placement recovery state", () => {
     expect(captured).toMatchObject({
       phase: "creating",
       message: "run remotely",
-      createParams: { key: pending.sessionKey },
+      createParams: {
+        key: pending.sessionKey,
+        displayName: "Repair naming",
+        worktreeName: "my-explicit-branch",
+      },
     });
     expect(captured?.attachments).not.toBe(pending.attachments);
     expect(captured?.createParams).not.toBe(pending.createParams);

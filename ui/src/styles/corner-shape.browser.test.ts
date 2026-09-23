@@ -15,20 +15,13 @@ const describeCornerShape = canRunPlaywrightChromium(chromiumExecutablePath)
   ? describe
   : describe.skip;
 
-// The `@supports` condition base.css gates the whole refinement on. Rewriting
-// its value to one no engine implements is how this file reproduces Firefox
-// and Safari from the shipped stylesheet instead of a hand-copied fallback.
+// Rewrite the property in both feature queries and declarations: unsupported
+// engines also ignore corner-shape outside an @supports block.
 const SUPPORTS_CONDITION = "@supports (corner-shape: superellipse(1.5))";
-const UNSUPPORTED_CONDITION = "@supports (corner-shape: openclaw-unsupported-shape)";
 
 type CornerCase = {
   /** Corner radius an engine without `corner-shape` keeps drawing. */
   readonly circular: string;
-  /** Which physical corner to probe; most fixtures round all four equally,
-   * so "topLeft" (the default) stands in for the rest. Only a directional
-   * shorthand like .agent-chat__search-bar's `0 0 var(...) var(...)` needs
-   * "bottomLeft" — its top corners are permanently 0 either way. */
-  readonly corner?: "bottomLeft" | "topLeft";
   readonly markup: string;
   readonly selector: string;
   /** Radius once the 1.25 corner scale applies. */
@@ -145,15 +138,7 @@ const CORNER_CASES: readonly CornerCase[] = [
     superelliptical: "8.5px",
   },
   {
-    // Real DOM shape from chat-thread-interactions.ts. Found and fixed
-    // alongside the two P2s above during a final invariant sweep of every
-    // selector in the base.css corner block: this one already scaled its
-    // (bottom-only) radius but never carried corner-shape, same "radius
-    // grew, shape didn't follow" gap as the menu items. Its only non-zero
-    // corners are the bottom two (`border-radius: 0 0 var(...) var(...)`),
-    // so this is the one case that needs the bottom-left probe.
     circular: "14px",
-    corner: "bottomLeft",
     markup: '<div class="agent-chat__search-bar"><input type="text" /></div>',
     selector: ".agent-chat__search-bar",
     superelliptical: "17.5px",
@@ -209,6 +194,10 @@ const EXCLUDED_CASES: readonly CornerCase[] = [
 
 const ALL_CASES = [...CORNER_CASES, ...ROUND_CASES, ...EXCLUDED_CASES];
 
+// CSSOM can serialize the same circular shape as round or superellipse(1).
+// https://drafts.csswg.org/css-borders-4/#valdef-corner-shape-value-round
+const CIRCULAR_SHAPE = expect.stringMatching(/^(?:round|superellipse\(1\))$/);
+
 // The radius tokens themselves, read at :root exactly like
 // collectMcpAppStyleVariables() in mcp-app-theme.ts reads them for embedded
 // MCP apps. They must stay canonical/unscaled even under the superelliptical
@@ -228,7 +217,11 @@ function readUiCss(): string {
     "ui/src/styles/components.css",
     "ui/src/styles/layout.css",
     "ui/src/styles/option-card.css",
+    "ui/src/styles/chat/startup-layout.css",
     "ui/src/styles/chat/layout.css",
+    "ui/src/styles/chat/message-layout.css",
+    "ui/src/styles/chat/composer-surface.css",
+    "ui/src/styles/chat/composer.css",
     "ui/src/styles/settings-controls.css",
     "ui/src/styles/settings.css",
     "ui/src/pages/activity/run-inspector.css",
@@ -250,24 +243,20 @@ async function probeCorners(browser: Browser, fixtureFile: string): Promise<Corn
   try {
     await page.goto(`file://${fixtureFile}`);
     return await page.evaluate(
-      (probes: readonly { selector: string; corner: "bottomLeft" | "topLeft" }[]) => {
+      (probes: readonly string[]) => {
         return Object.fromEntries(
-          probes.map(({ selector, corner }) => {
+          probes.map((selector) => {
             const element = document.querySelector(selector);
             if (!element) {
               throw new Error(`Missing corner fixture element for ${selector}`);
             }
             const style = getComputedStyle(element);
-            const radius =
-              corner === "bottomLeft" ? style.borderBottomLeftRadius : style.borderTopLeftRadius;
+            const radius = style.borderTopLeftRadius;
             return [selector, { radius, shape: style.getPropertyValue("corner-shape") }];
           }),
         );
       },
-      ALL_CASES.map((corner) => ({
-        selector: corner.selector,
-        corner: corner.corner ?? "topLeft",
-      })),
+      ALL_CASES.map((corner) => corner.selector),
     );
   } finally {
     await page.close().catch(() => {});
@@ -309,7 +298,7 @@ beforeAll(async () => {
   fs.writeFileSync(superellipticalFixture, fixtureDocument(css), "utf8");
   fs.writeFileSync(
     circularFixture,
-    fixtureDocument(css.replaceAll(SUPPORTS_CONDITION, UNSUPPORTED_CONDITION)),
+    fixtureDocument(css.replaceAll("corner-shape:", "openclaw-unsupported-corner-shape:")),
     "utf8",
   );
   browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
@@ -334,11 +323,11 @@ describeCornerShape("Control UI corner curvature", () => {
         ]),
         ...ROUND_CASES.map((corner) => [
           corner.selector,
-          { radius: corner.superelliptical, shape: "round" },
+          { radius: corner.superelliptical, shape: CIRCULAR_SHAPE },
         ]),
         ...EXCLUDED_CASES.map((corner) => [
           corner.selector,
-          { radius: corner.superelliptical, shape: "round" },
+          { radius: corner.superelliptical, shape: CIRCULAR_SHAPE },
         ]),
       ]),
     );
@@ -349,7 +338,10 @@ describeCornerShape("Control UI corner curvature", () => {
 
     expect(probe).toEqual(
       Object.fromEntries(
-        ALL_CASES.map((corner) => [corner.selector, { radius: corner.circular, shape: "round" }]),
+        ALL_CASES.map((corner) => [
+          corner.selector,
+          { radius: corner.circular, shape: CIRCULAR_SHAPE },
+        ]),
       ),
     );
   });

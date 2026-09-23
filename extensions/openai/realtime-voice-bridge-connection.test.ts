@@ -1,7 +1,13 @@
 // Openai tests cover realtime voice provider plugin behavior.
+import { once } from "node:events";
+import { MessageChannel } from "node:worker_threads";
 import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice";
-import type { RealtimeVoiceBridge } from "openclaw/plugin-sdk/realtime-voice";
+import type {
+  RealtimeVoiceBridge,
+  RealtimeVoiceGatewayControl,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
 const mocks = await vi.hoisted(async () => {
@@ -21,6 +27,15 @@ vi.mock("node:child_process", async (importOriginal) => {
 vi.mock("ws", () => ({
   default: mocks.FakeWebSocket,
 }));
+
+vi.mock("./realtime-quicksilver-socket.js", async () => {
+  const { createTestMediaSocketFactory } = await import("./realtime-voice-test-support.js");
+  return {
+    OpenAIQuicksilverWorkerSocket: {
+      create: await createTestMediaSocketFactory(mocks.FakeWebSocket),
+    },
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuardMock,
@@ -74,7 +89,7 @@ describe("OpenAI realtime voice bridge connection", () => {
     });
 
     void bridge.connect();
-    bridge.close();
+    void bridge.close();
 
     const socket = FakeWebSocket.instances[0];
     const options = socket?.args[1] as
@@ -89,137 +104,190 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(options?.maxPayload).toBe(16 * 1024 * 1024);
   });
 
-  it("sends one shared GA policy and waits for session.updated on an attached sideband", async () => {
-    const { broker, createBrowserSession } = createQuicksilverBrowserBrokerFixture({
-      session: { clientSecret: "gateway-token" },
-    });
-    const provider = buildOpenAIRealtimeVoiceProvider({
-      quicksilverBrowserSessionBroker: broker,
-    });
-    const bindBridge = vi.fn();
-    const onEvent = vi.fn();
-    const onReady = vi.fn();
-    const cfg = {} as never;
+  it.each([
+    { binding: "modern", throwingCloseCallback: false },
+    { binding: "modern", throwingCloseCallback: true },
+    { binding: "v2026.8.1", throwingCloseCallback: false },
+    { binding: "v2026.8.1", throwingCloseCallback: true },
+  ] as const)(
+    "shares GA policy and retires the $binding binding with throwing callback=$throwingCloseCallback",
+    async ({ binding, throwingCloseCallback }) => {
+      const { broker, createBrowserSession } = createQuicksilverBrowserBrokerFixture({
+        session: { clientSecret: "gateway-token" },
+      });
+      const provider = buildOpenAIRealtimeVoiceProvider({
+        quicksilverBrowserSessionBroker: broker,
+      });
+      const bindBridge = vi.fn();
+      const bindControl = vi.fn<NonNullable<RealtimeVoiceGatewayControl["bindControl"]>>();
+      const onEvent = vi.fn();
+      const onReady = vi.fn();
+      const onClose = vi.fn(() => {
+        if (throwingCloseCallback) {
+          throw new Error("close callback failed");
+        }
+      });
+      const onTerminal = vi.fn();
+      const cfg = {} as never;
 
-    expect(
-      readInternalRealtimeVoiceProviderApi(provider).resolveBrowserSessionCapabilities({
-        cfg,
-        providerConfig: { apiKey: "test-api-key-platform" },
-        model: "gpt-realtime-2.1",
-      }),
-    ).toMatchObject({ supportsGatewayControl: true });
-    await expect(
-      provider.createBrowserSession?.({
-        cfg,
-        providerConfig: { apiKey: "test-api-key-platform" },
+      expect(
+        readInternalRealtimeVoiceProviderApi(provider).resolveBrowserSessionCapabilities({
+          cfg,
+          providerConfig: { apiKey: "test-api-key-platform" },
+          model: "gpt-realtime-2.1",
+        }),
+      ).toMatchObject({ supportsGatewayControl: true });
+      await expect(
+        provider.createBrowserSession?.({
+          cfg,
+          providerConfig: { apiKey: "test-api-key-platform" },
+          instructions: "Stay concise.",
+          model: "gpt-realtime-2.1",
+          prefixPaddingMs: 420,
+          reasoningEffort: "medium",
+          silenceDurationMs: 650,
+          tools: [createRealtimeTool("openclaw_agent_consult")],
+          vadThreshold: 0.7,
+          voice: "marin",
+          gatewayControl: {
+            bindBridge,
+            onEvent,
+            onReady,
+            onClose,
+            ...(binding === "modern" ? { bindControl } : {}),
+          },
+        }),
+      ).resolves.toMatchObject({
+        clientSecret: "gateway-token",
+        offerUrl: "/plugins/openai/realtime/calls",
+      });
+      const brokerRequest = requireRecord(
+        createBrowserSession.mock.calls[0]?.[0],
+        "broker request",
+      );
+      expect(brokerRequest.clientControl).toEqual({ owner: "gateway" });
+      expect(createBrowserSession.mock.calls[0]?.[1]).toEqual({
+        type: "api-key",
+        token: "test-api-key-platform",
+      });
+      const gaSideband = requireRecord(brokerRequest.gaSideband, "GA sideband request");
+      const gaSession = requireRecord(brokerRequest.gaSession, "GA session policy");
+      expect(gaSession).toMatchObject({
+        type: "realtime",
         instructions: "Stay concise.",
         model: "gpt-realtime-2.1",
-        prefixPaddingMs: 420,
-        reasoningEffort: "medium",
-        silenceDurationMs: 650,
-        tools: [createRealtimeTool("openclaw_agent_consult")],
-        vadThreshold: 0.7,
-        voice: "marin",
-        gatewayControl: { bindBridge, onEvent, onReady },
-      }),
-    ).resolves.toMatchObject({
-      clientSecret: "gateway-token",
-      offerUrl: "/plugins/openai/realtime/calls",
-    });
-    const brokerRequest = requireRecord(createBrowserSession.mock.calls[0]?.[0], "broker request");
-    expect(createBrowserSession.mock.calls[0]?.[1]).toEqual({
-      type: "api-key",
-      token: "test-api-key-platform",
-    });
-    const gaSideband = requireRecord(brokerRequest.gaSideband, "GA sideband request");
-    const gaSession = requireRecord(brokerRequest.gaSession, "GA session policy");
-    expect(gaSession).toMatchObject({
-      type: "realtime",
-      instructions: "Stay concise.",
-      model: "gpt-realtime-2.1",
-      output_modalities: ["audio"],
-      reasoning: { effort: "medium" },
-      tool_choice: "auto",
-      audio: {
-        input: {
-          format: { type: "audio/pcm", rate: 24000 },
-          noise_reduction: { type: "near_field" },
-          turn_detection: {
-            type: "server_vad",
-            threshold: 0.7,
-            prefix_padding_ms: 420,
-            silence_duration_ms: 650,
-            create_response: true,
-            interrupt_response: true,
+        output_modalities: ["audio"],
+        reasoning: { effort: "medium" },
+        tool_choice: "auto",
+        audio: {
+          input: {
+            format: { type: "audio/pcm", rate: 24000 },
+            noise_reduction: { type: "near_field" },
+            turn_detection: {
+              type: "server_vad",
+              threshold: 0.7,
+              prefix_padding_ms: 420,
+              silence_duration_ms: 650,
+              create_response: true,
+              interrupt_response: true,
+            },
           },
+          output: { format: { type: "audio/pcm", rate: 24000 }, voice: "marin" },
         },
-        output: { format: { type: "audio/pcm", rate: 24000 }, voice: "marin" },
-      },
-    });
-    const createBridge = gaSideband.createBridge as (params: {
-      apiKey: string;
-      callId: string;
-      onTerminal: () => void;
-    }) => RealtimeVoiceBridge;
-    const bridge = createBridge({
-      apiKey: "test-api-key-platform",
-      callId: "rtc_gateway",
-      onTerminal: vi.fn(),
-    });
-    expect(bindBridge).toHaveBeenCalledWith(bridge);
-    const { connecting, socket } = beginBridgeConnection(bridge);
-    let connectResolved = false;
-    void connecting.then(() => {
-      connectResolved = true;
-    });
-    expect(socket.args[0]).toBe("wss://api.openai.com/v1/realtime?call_id=rtc_gateway");
-    openSocket(socket);
-    await Promise.resolve();
-    const sessionUpdates = parseSent(socket).filter((event) => event.type === "session.update");
-    expect(sessionUpdates).toHaveLength(1);
-    expect(sessionUpdates[0]?.session).toEqual(gaSession);
-    emitServerEvent(socket, {
-      type: "session.created",
-      session: { type: "realtime", tools: [{ type: "function" }], tool_choice: "auto" },
-    });
-    await Promise.resolve();
-    expect(connectResolved).toBe(false);
-    expect(onReady).not.toHaveBeenCalled();
-    expect(parseSent(socket).filter((event) => event.type === "session.update")).toHaveLength(1);
-    emitSessionUpdated(socket);
-    await connecting;
-    expect(connectResolved).toBe(true);
-    expect(onReady).toHaveBeenCalledOnce();
-    expect(onEvent).toHaveBeenCalledWith({
-      direction: "server",
-      type: "session.created",
-      detail: "tools=1 toolChoice=auto",
-    });
+      });
+      const createBridge = gaSideband.createBridge as (params: {
+        apiKey: string;
+        callId: string;
+        onTerminal: () => void;
+      }) => RealtimeVoiceBridge;
+      const bridge = createBridge({
+        apiKey: "test-api-key-platform",
+        callId: "rtc_gateway",
+        onTerminal,
+      });
+      if (binding === "modern") {
+        expect(bindControl).toHaveBeenCalledOnce();
+        expect(bindBridge).not.toHaveBeenCalled();
+      } else {
+        expect(bindBridge).toHaveBeenCalledWith(bridge);
+        expect(bindControl).not.toHaveBeenCalled();
+      }
+      const { connecting, socket } = beginBridgeConnection(bridge);
+      let connectResolved = false;
+      void connecting.then(() => {
+        connectResolved = true;
+      });
+      expect(socket.args[0]).toBe("wss://api.openai.com/v1/realtime?call_id=rtc_gateway");
+      openSocket(socket);
+      await Promise.resolve();
+      const sessionUpdates = parseSent(socket).filter((event) => event.type === "session.update");
+      expect(sessionUpdates).toHaveLength(1);
+      expect(sessionUpdates[0]?.session).toEqual(gaSession);
+      emitServerEvent(socket, {
+        type: "session.created",
+        session: { type: "realtime", tools: [{ type: "function" }], tool_choice: "auto" },
+      });
+      await Promise.resolve();
+      expect(connectResolved).toBe(false);
+      expect(onReady).not.toHaveBeenCalled();
+      expect(parseSent(socket).filter((event) => event.type === "session.update")).toHaveLength(1);
+      emitSessionUpdated(socket);
+      await connecting;
+      expect(connectResolved).toBe(true);
+      expect(onReady).toHaveBeenCalledOnce();
+      expect(onEvent).toHaveBeenCalledWith({
+        direction: "server",
+        type: "session.created",
+        detail: "tools=1 toolChoice=auto",
+      });
 
-    bridge.setMediaTimestamp(1_000);
-    emitServerEvent(socket, {
-      type: "response.output_audio.delta",
-      item_id: "item_pcm",
-      delta: Buffer.alloc(3_700 * 48).toString("base64"),
-    });
-    bridge.setMediaTimestamp(4_760);
-    bridge.handleBargeIn?.({ audioPlaybackActive: true });
-
-    expect(parseSent(socket).slice(-2)).toEqual([
-      {
-        type: "response.cancel",
-        event_id: expect.stringMatching(/^openclaw-response-cancel-/),
-      },
-      {
-        type: "conversation.item.truncate",
+      bridge.setMediaTimestamp(1_000);
+      emitServerEvent(socket, {
+        type: "response.output_audio.delta",
         item_id: "item_pcm",
-        content_index: 0,
-        audio_end_ms: 3_700,
-      },
-    ]);
-    bridge.close();
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-  });
+        delta: Buffer.alloc(3_700 * 48).toString("base64"),
+      });
+      bridge.setMediaTimestamp(4_760);
+      bridge.handleBargeIn?.({ audioPlaybackActive: true });
+
+      expect(parseSent(socket).slice(-2)).toEqual([
+        {
+          type: "response.cancel",
+          event_id: expect.stringMatching(/^openclaw-response-cancel-/),
+        },
+        {
+          type: "conversation.item.truncate",
+          item_id: "item_pcm",
+          content_index: 0,
+          audio_end_ms: 3_700,
+        },
+      ]);
+      if (binding === "modern") {
+        const control = bindControl.mock.calls[0]?.[0];
+        if (!control?.sendUserMessage || !control.submitToolResult) {
+          throw new Error("Expected both GA control operations");
+        }
+        await control.submitToolResult("unknown-call", {});
+        control.sendUserMessage("Read the current status");
+        expect(parseSent(socket)).toContainEqual({
+          type: "conversation.item.create",
+          item: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Read the current status" }],
+          },
+        });
+      }
+      if (throwingCloseCallback) {
+        expect(() => bridge.close()).toThrow("close callback failed");
+      } else {
+        await bridge.close();
+      }
+      expect(onClose).toHaveBeenCalledOnce();
+      expect(onTerminal).toHaveBeenCalledOnce();
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("waits for session.updated before draining audio and firing onReady", async () => {
     const onReady = vi.fn();
@@ -293,7 +361,7 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(
       audioEvents.map((event) => Buffer.from(String(event.audio), "base64").byteLength),
     ).toEqual([512 * 1024, Buffer.byteLength("overflow")]);
-    bridge.close();
+    await bridge.close();
   });
 
   it("drops stalled input audio and rate-limits aggregate warnings", async () => {
@@ -329,7 +397,7 @@ describe("OpenAI realtime voice bridge connection", () => {
         2,
         "OpenAI realtime input audio backpressure; droppedFrames=2",
       );
-      bridge.close();
+      await bridge.close();
     } finally {
       vi.useRealTimers();
     }
@@ -356,7 +424,7 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(logger.warn).toHaveBeenCalledWith(
       "OpenAI realtime input audio backpressure; droppedFrames=1",
     );
-    bridge.close();
+    await bridge.close();
   });
 
   it("discards audio closed before the first connection and reconnects fresh", async () => {
@@ -364,8 +432,8 @@ describe("OpenAI realtime voice bridge connection", () => {
     const bridge = createNativeBridge({ onClose });
 
     bridge.sendAudio(Buffer.from("queued-before-connect"));
-    bridge.close();
-    bridge.close();
+    void bridge.close();
+    void bridge.close();
     bridge.sendAudio(Buffer.from("sent-after-close"));
 
     expect(FakeWebSocket.instances).toHaveLength(0);
@@ -380,7 +448,7 @@ describe("OpenAI realtime voice bridge connection", () => {
       parseSent(socket).filter((event) => event.type === "input_audio_buffer.append"),
     ).toHaveLength(0);
 
-    bridge.close();
+    void bridge.close();
     expect(onClose).toHaveBeenCalledOnce();
     expect(onClose).toHaveBeenCalledWith("completed");
   });
@@ -392,7 +460,7 @@ describe("OpenAI realtime voice bridge connection", () => {
     await Promise.resolve();
 
     bridge.sendAudio(Buffer.from("queued-before-close"));
-    bridge.close();
+    void bridge.close();
     await firstConnect;
     bridge.sendAudio(Buffer.from("sent-after-close"));
 
@@ -404,7 +472,7 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(
       parseSent(secondSocket).filter((event) => event.type === "input_audio_buffer.append"),
     ).toHaveLength(0);
-    bridge.close();
+    await bridge.close();
   });
 
   it("shares an in-flight connection until session readiness", async () => {
@@ -420,7 +488,7 @@ describe("OpenAI realtime voice bridge connection", () => {
 
     await Promise.all([firstConnect, secondConnect]);
     expect(onReady).toHaveBeenCalledOnce();
-    bridge.close();
+    await bridge.close();
   });
 
   it("fails terminally when the readiness callback throws", async () => {
@@ -444,7 +512,7 @@ describe("OpenAI realtime voice bridge connection", () => {
     await vi.advanceTimersByTimeAsync(0);
     const immediateConnectError = connectError;
 
-    bridge.close();
+    await bridge.close();
     await observedConnect;
 
     expect(immediateConnectError).toBe(readyError);
@@ -669,6 +737,83 @@ describe("OpenAI realtime voice bridge connection", () => {
     },
   );
 
+  it("routes registered GPT-Live Gateway PCM to the pre-connected output port and drains final transcripts", async () => {
+    const { port1, port2 } = new MessageChannel();
+    const state = new SharedArrayBuffer(4);
+    const onAudio = vi.fn();
+    const onReady = vi.fn();
+    const onClose = vi.fn();
+    const onTranscript = vi.fn();
+    const runAgentConsult = vi.fn(async () => ({ text: "Delegated answer" }));
+    const bridge = buildOpenAIRealtimeVoiceProvider().createBridge({
+      providerConfig: { apiKey: "fixture-key", model: "gpt-live-1" },
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      onAudio,
+      onClearAudio: vi.fn(),
+      onReady,
+      onClose,
+      onTranscript,
+      runAgentConsult,
+    });
+    try {
+      expect(bridge).toBeInstanceOf(OpenAIQuicksilverGatewayBridge);
+      if (!bridge.setAudioOutputPort) {
+        throw new Error("registered GPT-Live bridge lacks its audio output endpoint");
+      }
+      bridge.setAudioOutputPort({ port: port1, state });
+      expect(FakeWebSocket.instances).toHaveLength(0);
+      const connecting = bridge.connect();
+      await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const socket = requireSocket();
+      openSocket(socket);
+      await vi.waitFor(() =>
+        expect(parseSent(socket)).toContainEqual(
+          expect.objectContaining({ type: "session.start" }),
+        ),
+      );
+      expect(onReady).not.toHaveBeenCalled();
+      emitServerEvent(socket, { type: "session.started", session: {} });
+      await connecting;
+      expect(onReady).toHaveBeenCalledOnce();
+      expect(bridge.isConnected()).toBe(true);
+      const pcm = Buffer.alloc(960, 1);
+      const output = once(port2, "message");
+      emitServerEvent(socket, {
+        type: "session.output_audio.delta",
+        delta: pcm.toString("base64"),
+      });
+      expect((await output)[0]).toEqual({ type: "audio", audio: new Uint8Array(pcm) });
+      expect(onAudio).not.toHaveBeenCalled();
+      const closing = bridge.close({ disposition: "detach" });
+      expect(closing).toBeInstanceOf(Promise);
+      expect(Atomics.load(new Int32Array(state), 0)).toBe(1);
+      expect(onClose).not.toHaveBeenCalled();
+      expect(socket.closed).toBe(false);
+      emitServerEvent(socket, {
+        type: "session.input_transcript.delta",
+        delta: "Trailing words.",
+        start_ms: 0,
+        end_ms: 100,
+      });
+      emitServerEvent(socket, { type: "session.closed", reason: "close_requested" });
+      await closing;
+      expect(onTranscript).toHaveBeenCalledWith("user", "Trailing words.", true);
+      expect(onClose).toHaveBeenCalledExactlyOnceWith("completed");
+      expect(socket.closed).toBe(true);
+      expect(runAgentConsult).not.toHaveBeenCalled();
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    } finally {
+      const closing = bridge.close();
+      const socket = FakeWebSocket.instances[0];
+      if (socket && !socket.closed) {
+        emitServerEvent(socket, { type: "session.closed", reason: "close_requested" });
+      }
+      await Promise.allSettled([closing]);
+      port1.close();
+      port2.close();
+    }
+  });
+
   it("can request PCM16 24 kHz realtime audio for Chrome command-pair bridges", async () => {
     const bridge = createNativeBridge({
       audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
@@ -691,8 +836,8 @@ describe("OpenAI realtime voice bridge connection", () => {
     const bridge = createNativeBridge({ onClose });
     const { connecting, socket } = beginBridgeConnection(bridge);
 
-    bridge.close();
-    bridge.close();
+    void bridge.close();
+    void bridge.close();
 
     await expect(connecting).resolves.toBeUndefined();
     expect(socket.closed).toBe(true);

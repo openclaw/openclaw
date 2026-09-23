@@ -129,12 +129,6 @@ export function extractSnapshot(result: ChromeMcpToolResult): ChromeMcpSnapshotN
   return snapshot;
 }
 
-function extractJsonBlock(text: string): unknown {
-  const match = text.match(/```json\s*([\s\S]*?)\s*```/i);
-  const raw = match?.[1]?.trim() || text.trim();
-  return raw ? JSON.parse(raw) : null;
-}
-
 function extractMessageText(result: ChromeMcpToolResult): string {
   const message = extractStructuredContent(result).message;
   if (typeof message === "string" && message.trim()) {
@@ -144,9 +138,30 @@ function extractMessageText(result: ChromeMcpToolResult): string {
   return blocks.find((block) => block.trim()) ?? "";
 }
 
-export function extractToolErrorMessage(result: ChromeMcpToolResult, name: string): string {
+function extractToolErrorMessage(result: ChromeMcpToolResult, name: string): string {
   const message = extractMessageText(result).trim();
   return message || `Chrome MCP tool "${name}" failed.`;
+}
+
+export function extractChromeMcpToolError(
+  result: ChromeMcpToolResult,
+  name: string,
+  args: Record<string, unknown>,
+): string | undefined {
+  if (
+    result.isError ||
+    (name === "close_page" &&
+      extractStructuredPages(result).some((page) => page.id === args.pageId))
+  ) {
+    return extractToolErrorMessage(result, name);
+  }
+  if (name !== "navigate_page") {
+    return undefined;
+  }
+  // Chrome MCP catches page.goto failures without setting isError.
+  return [extractMessageText(result), ...extractTextContent(result)]
+    .flatMap((text) => text.split(/\r?\n/))
+    .find((line) => line.startsWith("Unable to navigate in the selected page:"));
 }
 
 function formatChromeMcpEndpointForDiagnostic(browserUrl: string): string {
@@ -195,7 +210,12 @@ export function extractJsonMessage(result: ChromeMcpToolResult): unknown {
   let lastError: unknown;
   for (const candidate of candidates) {
     try {
-      return extractJsonBlock(candidate);
+      // MCP fence delimiters occupy lines; backticks inside JSON strings are data.
+      const match = candidate.match(
+        /^[\t ]*```json[\t ]*\r?\n([\s\S]*?)\r?\n[\t ]*```[\t ]*\r?$/im,
+      );
+      const json = match?.[1]?.trim() || candidate.trim();
+      return json === "undefined" ? undefined : JSON.parse(json);
     } catch (err) {
       lastError = err;
     }

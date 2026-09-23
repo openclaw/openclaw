@@ -4,6 +4,7 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
 
 /** Options that scope npm config and cache paths for project-local installs. */
 export type NpmProjectInstallEnvOptions = {
@@ -312,7 +313,7 @@ export function createNpmProjectInstallEnv(
     npm_config_fetch_retries: nextEnv.npm_config_fetch_retries ?? "5",
     npm_config_fetch_retry_maxtimeout: nextEnv.npm_config_fetch_retry_maxtimeout ?? "120000",
     npm_config_fetch_retry_mintimeout: nextEnv.npm_config_fetch_retry_mintimeout ?? "10000",
-    npm_config_fetch_timeout: nextEnv.npm_config_fetch_timeout ?? "300000",
+    npm_config_fetch_timeout: nextEnv.npm_config_fetch_timeout ?? String(UPDATE_NETWORK_TIMEOUT_MS),
     npm_config_global: "false",
     npm_config_location: "project",
     npm_config_package_lock: "false",

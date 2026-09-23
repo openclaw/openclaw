@@ -174,50 +174,108 @@ async function runAccountFooterProof(
   }
 }
 
+const featureBuild = buildInfo("feat/sidebar-footer");
+const gatewayBuild = {
+  serverVersion: featureBuild.version ?? undefined,
+  serverBuildId: featureBuild.buildId,
+};
 const suite = createSidebarFooterProofSuite(
   "Control UI sidebar account footer feature build E2E",
-  buildInfo("feat/sidebar-footer"),
+  featureBuild,
 );
 
 suite.define(() => {
-  it("shows visible offline retry and immediate announced-restart states", async () => {
-    const opened = await openSidebarFooterProofPage(suite);
+  it("shows one lifecycle subtitle and retries through the account menu", async () => {
+    const opened = await openSidebarFooterProofPage(suite, {
+      ...gatewayBuild,
+      gatewaySuspensionPhase: "prepared",
+    });
     try {
       const { gateway, page, sidebar } = opened;
       const footer = sidebar.locator(".sidebar-footer-bar");
       await setSidebarProofTheme(page, "dark");
       await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
       await waitForControlUiGatewayReady(page);
+      await expect
+        .poll(() => footer.locator(".gateway-status__label").textContent())
+        .toBe("Suspended");
+      await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
+      await expect.poll(() => footer.locator(".gateway-status").count()).toBe(0);
+
+      for (const [phase, label] of [
+        ["preparing", "Suspending…"],
+        ["draining", "Suspending…"],
+        ["prepared", "Suspended"],
+      ]) {
+        await gateway.emitGatewayEvent("gateway.suspension", { phase });
+        await expect.poll(() => footer.locator(".gateway-status__label").textContent()).toBe(label);
+        await captureUnionProof(
+          suite,
+          page,
+          "sidebar-account-footer",
+          `feature-dark-${phase}.png`,
+          [footer],
+        );
+      }
+      await sidebar.locator(".sidebar-identity-card").click();
+      await sidebar.locator('wa-dropdown-item[value="command:settings"]').click();
+      const settingsStatus = page.locator(".settings-sidebar .gateway-status__label");
+      await expect.poll(() => settingsStatus.textContent()).toBe("Suspended");
+      await captureUnionProof(
+        suite,
+        page,
+        "sidebar-account-footer",
+        "feature-dark-settings-suspended.png",
+        [page.locator(".settings-sidebar__footer")],
+      );
+      await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
+      await expect.poll(() => settingsStatus.count()).toBe(0);
+      await page.locator(".settings-sidebar__back").click();
+      await sidebar.waitFor();
+      await gateway.emitGatewayEvent("gateway.suspension", { phase: "prepared" });
+      await expect
+        .poll(() => footer.locator(".gateway-status__label").textContent())
+        .toBe("Suspended");
 
       await gateway.setOnline(false);
-      // The offline pill waits out the store's 2s offline-stability debounce.
-      const offline = footer.locator("button.sidebar-footer-bar__status");
-      await offline.waitFor({ state: "visible", timeout: 10_000 });
-      expect(await offline.textContent()).toContain("Offline");
-      expect(await offline.textContent()).toContain("Reconnecting…");
+      const reconnecting = footer.locator(".gateway-status--reconnecting");
+      await reconnecting.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await footer.locator(".gateway-status").count()).toBe(1);
+      expect(await reconnecting.locator(".gateway-status__label").textContent()).toBe(
+        "Reconnecting…",
+      );
+      expect(await footer.getByText("Offline", { exact: true }).count()).toBe(0);
       await expect.poll(() => page.title()).toContain("(Disconnected)");
       await captureUnionProof(suite, page, "sidebar-account-footer", "feature-dark-offline.png", [
         footer,
       ]);
 
       const socketCount = await gateway.getSocketCount();
-      await offline.click();
+      await reconnecting.click();
+      const retry = sidebar.locator('wa-dropdown-item[value="command:retry-connect"]');
+      await retry.waitFor();
+      await retry.click();
       await expect
         .poll(() => gateway.getSocketCount(), { timeout: 10_000 })
         .toBeGreaterThan(socketCount);
 
       await gateway.setOnline(true);
       await expect
-        .poll(() => footer.locator(".sidebar-footer-bar__status").count(), { timeout: 10_000 })
+        .poll(() => footer.locator(".gateway-status__label").textContent())
+        .toBe("Suspended");
+      await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
+      await expect
+        .poll(() => footer.locator(".gateway-status").count(), { timeout: 10_000 })
         .toBe(0);
       await expect.poll(() => page.title()).not.toContain("Disconnected");
+      await gateway.emitGatewayEvent("gateway.suspension", { phase: "prepared" });
       await gateway.emitGatewayEvent("shutdown", {
         reason: "gateway restart",
         restartExpectedMs: 5_000,
       });
-      const restarting = footer.locator(".sidebar-footer-bar__status--restarting");
+      const restarting = footer.locator(".gateway-status--restarting");
       await restarting.waitFor({ state: "visible" });
-      expect(await restarting.textContent()).toBe("Restarting…");
+      expect(await restarting.locator(".gateway-status__label").textContent()).toBe("Restarting…");
       await captureUnionProof(
         suite,
         page,
@@ -231,7 +289,7 @@ suite.define(() => {
   });
 
   it("keeps the feature account target, identity menu, and visual states coherent", async () => {
-    const opened = await openSidebarFooterProofPage(suite);
+    const opened = await openSidebarFooterProofPage(suite, gatewayBuild);
     try {
       await runAccountFooterProof(suite, opened.page, opened.sidebar, "feature");
     } finally {
@@ -240,7 +298,7 @@ suite.define(() => {
   });
 
   it("navigates from the build link without opening its hovercard", async () => {
-    const opened = await openSidebarFooterProofPage(suite);
+    const opened = await openSidebarFooterProofPage(suite, gatewayBuild);
     try {
       const { page, sidebar } = opened;
       await sidebar.locator(".sidebar-identity-card").click();

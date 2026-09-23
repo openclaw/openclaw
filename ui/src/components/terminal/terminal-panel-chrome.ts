@@ -20,6 +20,7 @@ import {
 type TerminalDock = Exclude<DockPanelPlacement, "left">;
 type TerminalPanelViewportParams = {
   activeId: string | null;
+  tabsInHeader?: boolean;
   connecting: boolean;
   error: { text: string; retry?: () => void } | null;
   uploadController: TerminalPanelUploadController;
@@ -71,42 +72,60 @@ export function renderTerminalPanelHeader(
 
 export function renderTerminalPanelViewport({
   activeId,
+  tabsInHeader = false,
   connecting,
   error,
   uploadController,
 }: TerminalPanelViewportParams): TemplateResult {
   return html`
-    ${error
-      ? html`<div class="tp-error" role="alert">
-          <span>${error.text}</span>
-          ${error.retry
-            ? html`<button class="btn btn--sm" type="button" @click=${error.retry}>
-                ${t("common.retry")}
-              </button>`
-            : nothing}
-        </div>`
-      : nothing}
+    ${
+      error
+        ? html`<div class="tp-error" role="alert">
+            <span>${error.text}</span>
+            ${
+              error.retry
+                ? html`<button class="btn btn--sm" type="button" @click=${error.retry}>
+                    ${t("common.retry")}
+                  </button>`
+                : nothing
+            }
+          </div>`
+        : nothing
+    }
     <wa-tab-panel
       id="terminal-tab-panel"
       class="tp-viewport"
       name=${activeId ?? "terminal"}
       active
-      aria-labelledby=${activeId ? `terminal-tab-${activeId}` : nothing}
+      aria-labelledby=${activeId && !tabsInHeader ? `terminal-tab-${activeId}` : nothing}
+      aria-label=${tabsInHeader ? t("terminal.title") : nothing}
       @dragenter=${uploadController.handleDragEnter}
       @dragover=${uploadController.handleDragOver}
       @dragleave=${uploadController.handleDragLeave}
       @drop=${uploadController.handleDrop}
     >
-      ${connecting
-        ? renderPanelLoadingSkeleton("terminal", t("terminal.connecting"), false, true)
-        : nothing}
-      ${!activeId && !connecting && !error
-        ? renderPanelEmptyState({
-            icon: icons.terminal,
-            heading: t("chat.sidePanel.terminal"),
-            description: t("chat.sidePanel.terminalEmpty"),
-          })
-        : nothing}
+      ${
+        connecting
+          ? renderPanelLoadingSkeleton("terminal", t("terminal.connecting"), false, true)
+          : nothing
+      }
+      ${
+        !activeId && !connecting && !error
+          ? renderPanelEmptyState({
+              icon: icons.terminal,
+              heading: t("chat.sidePanel.terminal"),
+              description: t("chat.sidePanel.terminalEmpty"),
+            })
+          : nothing
+      }
+      <input
+        class="tp-file-input"
+        type="file"
+        multiple
+        aria-hidden="true"
+        tabindex="-1"
+        @change=${uploadController.handleFileSelection}
+      />
       ${renderTerminalUploadLayer(uploadController)}
     </wa-tab-panel>
   `;

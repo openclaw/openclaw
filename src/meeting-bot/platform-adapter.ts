@@ -1,7 +1,10 @@
 import { z } from "zod";
 import { formatErrorMessage } from "../infra/errors.js";
 import { ensureMeetingAudioBackend, resolveMeetingAudioRuntimeForFormat } from "./audio-backend.js";
-import { createMeetingChromeTransport } from "./chrome-transport.js";
+import {
+  createMeetingChromeTransport,
+  createMeetingChromeTransportWithExternalAudio,
+} from "./chrome-transport.js";
 import { createMeetingConfiguredNodeHost } from "./configured-node-host.js";
 import { isMeetingRealtimeRouteReady, isMeetingTalkBackMode } from "./meeting-modes.js";
 import type {
@@ -383,6 +386,7 @@ function createMeetingPlatformAdapter<
 export const MeetingPlatformAdapter = {
   create: createMeetingPlatformAdapter,
   createChromeTransport: createMeetingChromeTransport,
+  createChromeTransportWithExternalAudio: createMeetingChromeTransportWithExternalAudio,
   createChromeRuntimeBindings: createMeetingChromeRuntimeBindings,
   createPluginChromeTransport: createMeetingPluginChromeTransport,
   createPluginConfigSchema: createMeetingPluginConfigSchema,

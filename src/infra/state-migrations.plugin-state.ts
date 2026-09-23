@@ -2,10 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
 import {
-  countPluginStateLiveEntries,
   createPluginStateKeyedStore,
   registerMigratedPluginStateEntry,
-  resolveMaxPluginStateEntriesPerPlugin,
 } from "../plugin-state/plugin-state-store.js";
 import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-state.js";
 import { writePersistedInstalledPluginIndexSync } from "../plugins/installed-plugin-index-store-write.js";
@@ -43,7 +41,7 @@ type LegacyPluginStateImportDatabase = Pick<OpenClawStateKyselyDatabase, "plugin
 
 export async function migrateLegacyPluginStateSidecar(params: {
   stateDir: string;
-}): Promise<{ changes: string[]; warnings: string[] }> {
+}): Promise<MigrationMessages> {
   const sourcePath = resolveLegacyPluginStateSidecarPath(params.stateDir);
   if (!migrationFileExists(sourcePath)) {
     const changes: string[] = [];
@@ -146,6 +144,8 @@ export async function migrateLegacyPluginStateSidecar(params: {
     if (conflictedKeys.length > 0) {
       return {
         changes,
+        // Both copies remain intact; unrelated repairs can still finish safely.
+        warningDisposition: "recoverable",
         warnings: [
           `Left plugin-state sidecar in place because ${conflictedKeys.length} ${conflictedKeys.length === 1 ? "row differs" : "rows differ"} from shared state without a newer canonical timestamp. First key: ${conflictedKeys[0]}`,
         ],
@@ -306,9 +306,10 @@ async function withPluginStateImportEnv(stateDir: string | undefined, run: () =>
 
 export async function runLegacyMigrationPlans(
   plans: ChannelLegacyStateMigrationPlan[],
-): Promise<{ changes: string[]; warnings: string[] }> {
+): Promise<MigrationMessages> {
   const changes: string[] = [];
   const warnings: string[] = [];
+  let hasRefusal = false;
   // The declared source may feed several imports. Retire it after its last consumer,
   // while keeping unrelated sources in order and unique-source cleanup immediate.
   const lastConsumers = new Map(plans.map((plan, index) => [plan.sourcePath, index]));
@@ -316,6 +317,7 @@ export async function runLegacyMigrationPlans(
   const incompleteSources = new Set<string>();
   for (const [index, plan] of plans.entries()) {
     const recordIncomplete = (message: string) => {
+      hasRefusal = true;
       incompleteSources.add(plan.sourcePath);
       warnings.push(message);
     };
@@ -337,7 +339,6 @@ export async function runLegacyMigrationPlans(
           });
           operation = `reading ${plan.label} plugin state before migration`;
           const storeEntries = await store.entries();
-          const pluginEntryCount = countPluginStateLiveEntries(plan.pluginId);
           const existingEntriesByKey = new Map(storeEntries.map((entry) => [entry.key, entry]));
           const expectedKeys = new Set(existingEntriesByKey.keys());
           const namespaceRemainingCapacity = Math.max(0, plan.maxEntries - storeEntries.length);
@@ -366,22 +367,14 @@ export async function runLegacyMigrationPlans(
             newEntries.push({ ...entry, targetKey });
           }
           const missingEntryCount = newEntries.length;
-          const pluginRemainingCapacity = Math.max(
-            0,
-            resolveMaxPluginStateEntriesPerPlugin() - pluginEntryCount,
-          );
           // Capacity limits must never turn the import into a permanent no-op: import the
           // newest entries that fit and defer the rest to a later startup (the legacy source
           // stays in place until every entry is covered).
-          const importBudget = Math.min(namespaceRemainingCapacity, pluginRemainingCapacity);
-          if (missingEntryCount > importBudget) {
+          if (missingEntryCount > namespaceRemainingCapacity) {
             newEntries = newEntries
               .toSorted(compareImportEntriesNewestFirst)
-              .slice(0, importBudget);
-            const constraint =
-              namespaceRemainingCapacity <= pluginRemainingCapacity
-                ? `plugin state namespace ${plan.namespace} has room for ${namespaceRemainingCapacity}`
-                : `plugin state has room for ${pluginRemainingCapacity}`;
+              .slice(0, namespaceRemainingCapacity);
+            const constraint = `plugin state namespace ${plan.namespace} has room for ${namespaceRemainingCapacity}`;
             recordIncomplete(
               newEntries.length > 0
                 ? `Partially migrating ${plan.label} because ${constraint} of ${missingEntryCount} missing entries; importing the newest ${newEntries.length} and deferring the rest in the legacy source`
@@ -525,7 +518,23 @@ export async function runLegacyMigrationPlans(
             } catch (err) {
               cleanupWarnings.push(`Failed removing ${plan.label} legacy source: ${String(err)}`);
             }
-            cleanupWarnings.forEach(recordIncomplete);
+            // Shared-source cleanup is advisory only when every consumer permits it.
+            const recoverable = plans.every(
+              (consumer) =>
+                consumer.sourcePath !== plan.sourcePath ||
+                (consumer.kind === "plugin-state-import" &&
+                  consumer.cleanupWarningDisposition === "recoverable"),
+            );
+            if (recoverable && cleanupWarnings.length > 0) {
+              incompleteSources.add(plan.sourcePath);
+              warnings.push(
+                ...cleanupWarnings.map(
+                  (warning) => `Run openclaw doctor --fix to retry legacy cleanup. ${warning}`,
+                ),
+              );
+            } else {
+              cleanupWarnings.forEach(recordIncomplete);
+            }
           });
           cleanups.set(plan.sourcePath, pending);
         });
@@ -557,5 +566,9 @@ export async function runLegacyMigrationPlans(
       }
     }
   }
-  return { changes, warnings };
+  return {
+    changes,
+    warnings,
+    ...(warnings.length > 0 && !hasRefusal ? { warningDisposition: "recoverable" as const } : {}),
+  };
 }

@@ -31,6 +31,8 @@ const rubyVersionPath = path.join(process.cwd(), "apps", "ios", ".ruby-version")
 const gemfilePath = path.join(process.cwd(), "apps", "ios", "Gemfile");
 const gemfileLockPath = path.join(process.cwd(), "apps", "ios", "Gemfile.lock");
 const iosReadmePath = path.join(process.cwd(), "apps", "ios", "README.md");
+const iosAgentsPath = path.join(process.cwd(), "apps", "ios", "AGENTS.md");
+const iosVersioningPath = path.join(process.cwd(), "apps", "ios", "VERSIONING.md");
 const fastlaneSetupPath = path.join(process.cwd(), "apps", "ios", "fastlane", "SETUP.md");
 const metadataReadmePath = path.join(
   process.cwd(),
@@ -114,6 +116,16 @@ function functionBody(source: string, name: string): string {
   return nextFunction < 0 ? rest : rest.slice(0, nextFunction);
 }
 
+function functionDefinition(source: string, name: string): string {
+  const start = source.indexOf(`def ${name}`);
+  if (start < 0) {
+    throw new Error(`missing Fastfile function ${name}`);
+  }
+  const rest = source.slice(start);
+  const nextFunction = rest.slice(1).search(/\ndef /);
+  return nextFunction < 0 ? rest : rest.slice(0, nextFunction + 1);
+}
+
 function swiftFunctionBody(source: string, name: string): string {
   const startMarker = `func ${name}(`;
   const start = source.indexOf(startMarker);
@@ -138,9 +150,9 @@ describe("iOS Fastlane release upload gates", () => {
     const lockfile = readFileSync(gemfileLockPath, "utf8");
 
     expect(readFileSync(rubyVersionPath, "utf8")).toBe("3.4.10\n");
-    expect(gemfile).toContain('gem "fastlane", "2.238.0"');
+    expect(gemfile).toContain('gem "fastlane", "2.239.0"');
     expect(gemfile).toContain('ruby "3.4.10"');
-    expect(lockfile).toContain("fastlane (2.238.0)");
+    expect(lockfile).toContain("fastlane (2.239.0)");
     expect(lockfile).toContain("arm64-darwin");
     expect(lockfile).toContain("x86_64-darwin");
     expect(lockfile).toContain("CHECKSUMS");
@@ -176,6 +188,23 @@ describe("iOS Fastlane release upload gates", () => {
     for (const command of documentedCommands) {
       expect(command).toContain('BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane');
     }
+  });
+
+  it("documents the shared mobile cutter as the sole release-note writer", () => {
+    const operatorSurfaces = [
+      iosAgentsPath,
+      iosReadmePath,
+      iosVersioningPath,
+      fastlaneSetupPath,
+      metadataReadmePath,
+    ];
+
+    for (const documentationPath of operatorSurfaces) {
+      const documentation = readFileSync(documentationPath, "utf8");
+      expect(documentation).not.toContain("pnpm ios:release:cut");
+      expect(documentation).toContain("scripts/mobile-release-version.ts");
+    }
+    expect(readFastfile()).not.toContain("pnpm ios:release:cut");
   });
 
   it("documents a direct Fastlane command that rejects an inherited Gemfile", () => {
@@ -345,6 +374,28 @@ describe("iOS Fastlane release upload gates", () => {
     );
   });
 
+  it("gates iOS uploads on committed shared mobile release state", () => {
+    const fastfile = readFastfile();
+    const checker = functionBody(fastfile, "check_mobile_release_versioning!");
+    const prepareContext = laneBody(fastfile, "prepare_app_store_context");
+    const plan = prepareContext.indexOf("resolve_ios_release_plan!");
+    const gate = prepareContext.indexOf("check_mobile_release_versioning!");
+    const sync = prepareContext.indexOf("sync_ios_versioning!");
+
+    expect(checker).toContain('"android-sync-versioning.ts"');
+    expect(checker).toContain('"--check"');
+    expect(checker).toContain('"--require-mobile-release"');
+    expect(checker).toContain('"--revision"');
+    expect(checker).toContain("app_store_revision");
+    expect(checker).toContain('"--root"');
+    expect(prepareContext).toContain(
+      "check_mobile_release_versioning!(app_store_revision: app_store_revision)",
+    );
+    expect(plan).toBeGreaterThanOrEqual(0);
+    expect(gate).toBeGreaterThan(plan);
+    expect(sync).toBeGreaterThan(gate);
+  });
+
   it("preflights the exact App Store version before screenshots and archive work", () => {
     const fastfile = readFastfile();
     const releaseUpload = laneBody(fastfile, "release_upload");
@@ -391,7 +442,7 @@ describe("iOS Fastlane release upload gates", () => {
     expect(planner).toContain("app_store_build_upload_state(upload)");
     expect(uploadState).toContain('detail["state"]');
     expect(uploadState).toContain("expected a StateDetail object");
-    expect(planner).toContain("does not match canonical root version");
+    expect(planner).toContain("does not match canonical mobile version");
     expect(planner).toContain('File.join(repo_root, "scripts", "ios-release-plan.ts")');
     expect(planLane).toContain("resolve_ios_release_plan!");
     expect(planLane).toContain("JSON.pretty_generate(plan)");
@@ -422,15 +473,506 @@ describe("iOS Fastlane release upload gates", () => {
     expect(upload).toBeGreaterThan(planRecheck);
   });
 
-  it("waits for Apple build processing without submitting to TestFlight review", () => {
+  it("keeps local upload-only behavior but requires explicit internal distribution in CI", () => {
     const releaseUpload = laneBody(readFastfile(), "release_upload");
+    const intentContext = functionBody(readFastfile(), "mobile_release_intent_context!");
 
+    expect(releaseUpload).toContain(
+      "intent_context = mobile_release_intent_context!(gateway_version: context[:version])",
+    );
+    expect(releaseUpload).toContain(
+      "internal_group_id = intent_context ? resolve_ci_testflight_internal_group_id! : nil",
+    );
     expect(releaseUpload).toContain("skip_waiting_for_build_processing: false");
-    expect(releaseUpload).toContain("skip_submission: true");
+    expect(releaseUpload).toContain("upload_options[:skip_submission] = true");
+    expect(releaseUpload).toContain("skip_submission: false");
+    expect(releaseUpload).toContain("submit_beta_review: false");
+    expect(releaseUpload).toContain("distribute_external: false");
+    expect(releaseUpload).not.toContain("groups:");
     expect(releaseUpload).toContain(
       "wait_processing_timeout_duration: APP_STORE_BUILD_PROCESSING_TIMEOUT_SECONDS",
     );
     expect(releaseUpload).not.toContain("skip_waiting_for_build_processing: true");
+    expect(releaseUpload.indexOf("mobile_release_intent_context!")).toBeLessThan(
+      releaseUpload.indexOf("upload_to_testflight(**upload_options)"),
+    );
+    expect(releaseUpload.indexOf("resolve_ci_testflight_internal_group_id!")).toBeLessThan(
+      releaseUpload.indexOf("upload_to_testflight(**upload_options)"),
+    );
+    expect(
+      releaseUpload.indexOf("assign_and_verify_ci_testflight_internal_group!"),
+    ).toBeGreaterThan(releaseUpload.indexOf("upload_to_testflight(**upload_options)"));
+    expect(releaseUpload.indexOf("finalize_mobile_release_ref!")).toBeGreaterThan(
+      releaseUpload.indexOf("assign_and_verify_ci_testflight_internal_group!"),
+    );
+    expect(intentContext).toContain("OPENCLAW_MOBILE_RELEASE_INTENT_PATH");
+    expect(intentContext).toContain("OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST");
+    expect(intentContext).toContain("OPENCLAW_MOBILE_RELEASE_TARGET_REF");
+  });
+
+  it("requires one immutable internal TestFlight group ID without name collisions", () => {
+    const configured = functionDefinition(
+      readFastfile(),
+      "configured_ci_testflight_internal_group_id!",
+    );
+    const selector = functionDefinition(
+      readFastfile(),
+      "select_ci_testflight_internal_group_by_id!",
+    );
+    const source = `
+module UI
+  def self.user_error!(message)
+    raise message
+  end
+end
+Group = Struct.new(:id, :name, :is_internal_group, :has_access_to_all_builds)
+${configured}
+${selector}
+base_groups = [
+  Group.new("internal-id", "Internal", true, false),
+  Group.new("external-id", "External", false, false)
+]
+cases = [
+  ["blank", "   ", base_groups],
+  ["name-only", "Internal", base_groups],
+  ["unknown", "missing-id", base_groups],
+  ["external", "external-id", base_groups],
+  [
+    "collision",
+    "internal-id",
+    base_groups + [Group.new("other-id", "internal-id", true, false)]
+  ],
+  [
+    "automatic-other",
+    "internal-id",
+    base_groups + [Group.new("automatic-id", "Automatic", true, true)]
+  ],
+  [
+    "unknown-internal",
+    "internal-id",
+    base_groups + [Group.new("unknown-id", "Unknown Internal", true, nil)]
+  ],
+  [
+    "unknown-external",
+    "internal-id",
+    [
+      Group.new("internal-id", "Internal", true, false),
+      Group.new("external-id", "External", false, nil)
+    ]
+  ],
+  [
+    "automatic-target",
+    "internal-id",
+    [
+      Group.new("internal-id", "Internal", true, true),
+      Group.new("external-id", "External", false, false)
+    ]
+  ],
+  ["valid", "internal-id", base_groups]
+]
+cases.each do |label, configured_id, groups|
+  ENV["TESTFLIGHT_INTERNAL_GROUP"] = configured_id
+  begin
+    group_id = configured_ci_testflight_internal_group_id!
+    group = select_ci_testflight_internal_group_by_id!(groups: groups, group_id: group_id)
+    puts "#{label}:ok:#{group.id}"
+  rescue => error
+    puts "#{label}:error:#{error.message}"
+  end
+end
+`;
+    const result = spawnSync("ruby", ["-e", source], { encoding: "utf8" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim().split("\n")).toEqual([
+      "blank:error:TESTFLIGHT_INTERNAL_GROUP must be a nonblank App Store Connect beta-group ID.",
+      "name-only:error:TESTFLIGHT_INTERNAL_GROUP must match exactly one App Store Connect beta-group ID.",
+      "unknown:error:TESTFLIGHT_INTERNAL_GROUP must match exactly one App Store Connect beta-group ID.",
+      "external:error:The configured TestFlight beta group must be internal.",
+      "collision:error:TESTFLIGHT_INTERNAL_GROUP collides with another TestFlight group name.",
+      "automatic-other:error:Every non-target internal TestFlight group must explicitly disable automatic all-build access.",
+      "unknown-internal:error:Every non-target internal TestFlight group must explicitly disable automatic all-build access.",
+      "unknown-external:ok:internal-id",
+      "automatic-target:ok:internal-id",
+      "valid:ok:internal-id",
+    ]);
+  });
+
+  it.each([
+    {
+      name: "existing access disappears at final readback",
+      automatic: true,
+      assigned: ["group-id"],
+      writes: 0,
+      disappear: true,
+      error: "not assigned",
+    },
+    {
+      name: "other access appears at final readback",
+      automatic: true,
+      assigned: ["group-id"],
+      writes: 0,
+      finalBroaden: true,
+      error: "outside",
+    },
+    {
+      name: "automatic access already verified",
+      automatic: true,
+      assigned: ["group-id"],
+      writes: 0,
+    },
+    { name: "manual access already verified", automatic: false, assigned: ["group-id"], writes: 0 },
+    {
+      name: "automatic flag is not access proof",
+      automatic: true,
+      assigned: [],
+      writes: 0,
+      error: "not assigned",
+    },
+    {
+      name: "unknown automatic flag fails closed",
+      automatic: null,
+      assigned: [],
+      writes: 0,
+      error: "not assigned",
+    },
+    {
+      name: "existing other access blocks mutation",
+      automatic: false,
+      assigned: ["other-id"],
+      writes: 0,
+      error: "outside",
+    },
+    { name: "manual missing access assigns once", automatic: false, assigned: [], writes: 1 },
+    {
+      name: "readback failure propagates",
+      automatic: false,
+      assigned: [],
+      writes: 0,
+      readError: true,
+      error: "read failed",
+    },
+    {
+      name: "assignment failure propagates",
+      automatic: false,
+      assigned: [],
+      writes: 1,
+      writeError: true,
+      error: "write failed",
+    },
+    {
+      name: "target changes before assignment",
+      automatic: false,
+      assigned: [],
+      writes: 0,
+      flip: true,
+      error: "must be internal",
+    },
+    {
+      name: "other access appears after assignment",
+      automatic: false,
+      assigned: [],
+      writes: 1,
+      broaden: true,
+      error: "outside",
+    },
+    {
+      name: "other automatic access appears after assignment",
+      automatic: false,
+      assigned: [],
+      writes: 1,
+      otherAutomatic: true,
+      error: "disable automatic",
+    },
+  ])("reconciles TestFlight access: $name", (scenario) => {
+    const selector = functionDefinition(
+      readFastfile(),
+      "select_ci_testflight_internal_group_by_id!",
+    );
+    const verifier = functionDefinition(
+      readFastfile(),
+      "assign_and_verify_ci_testflight_internal_group!",
+    );
+    const source = `
+require "json"
+module UI
+  def self.user_error!(message)
+    raise message
+  end
+end
+module Spaceship
+  class ConnectAPI
+    module Platform
+      IOS = "IOS"
+    end
+  end
+end
+$scenario = JSON.parse(ARGV.fetch(0))
+$writes = 0
+$reads = 0
+Group = Struct.new(:id, :name, :is_internal_group, :has_access_to_all_builds, :builds) do
+  def fetch_builds
+    raise "read failed" if $scenario["readError"]
+    builds
+  end
+end
+Build = Struct.new(:id, :app_version, :version, :platform) do
+  def add_beta_groups(beta_groups:)
+    $writes += 1
+    raise "write failed" if $scenario["writeError"]
+    raise "duplicate assignment rejected" if beta_groups.any? { |group| group.builds.include?(self) }
+    raise "automatic assignment rejected" if beta_groups.any? { |group| group.has_access_to_all_builds != false }
+    raise "wrong immutable group" unless beta_groups.map(&:id) == ["group-id"]
+    beta_groups.each { |group| group.builds << self }
+    $groups.last.builds << self if $scenario["broaden"]
+    $groups.last.has_access_to_all_builds = true if $scenario["otherAutomatic"]
+  end
+end
+App = Struct.new(:build) do
+  def get_beta_groups
+    $reads += 1
+    $groups.first.is_internal_group = false if $scenario["flip"] && $reads >= 3
+    $groups.first.builds.clear if $scenario["disappear"] && $reads >= 3
+    $groups.last.builds << build if $scenario["finalBroaden"] && $reads >= 3
+    $groups
+  end
+  def get_builds(filter:, includes:)
+    raise "wrong build query" unless filter == { "preReleaseVersion.version" => "2026.9.20", version: "1" } && includes == "preReleaseVersion"
+    [build]
+  end
+end
+def env_present?(value)
+  !value.nil? && !value.strip.empty?
+end
+def resolve_app_store_connect_app(app_identifier:, app_id:)
+  $app
+end
+${selector}
+${functionDefinition(readFastfile(), "resolve_ci_testflight_build!")}
+${functionDefinition(readFastfile(), "ci_testflight_build_group_ids")}
+${verifier}
+build = Build.new("build-id", "2026.9.20", "1", "IOS")
+$groups = [
+  Group.new("group-id", "Internal", true, $scenario["automatic"], []),
+  Group.new("other-id", "Other", true, false, [])
+]
+$groups.each { |group| group.builds << build if $scenario.fetch("assigned").include?(group.id) }
+$app = App.new(build)
+begin
+  result = assign_and_verify_ci_testflight_internal_group!(group_id: "group-id", app_store_version: "2026.9.20", build_number: "1")
+  puts JSON.generate({ group: result.fetch(:group).id, writes: $writes })
+rescue => error
+  puts JSON.generate({ error: error.message, writes: $writes })
+end
+`;
+    const result = spawnSync("ruby", ["-e", source, JSON.stringify(scenario)], {
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const output = JSON.parse(result.stdout) as { group?: string; error?: string; writes: number };
+    expect(output.writes).toBe(scenario.writes);
+    if (scenario.error) {
+      expect(output.error).toContain(scenario.error);
+    } else {
+      expect(output).toEqual({ group: "group-id", writes: scenario.writes });
+    }
+  });
+
+  it("freshly resolves and directly assigns the exact internal group to the uploaded build", () => {
+    const selector = functionDefinition(
+      readFastfile(),
+      "select_ci_testflight_internal_group_by_id!",
+    );
+    const verifier = functionDefinition(
+      readFastfile(),
+      "assign_and_verify_ci_testflight_internal_group!",
+    );
+    const source = `
+module UI
+  def self.user_error!(message)
+    raise message
+  end
+end
+Group = Struct.new(:id, :name, :is_internal_group, :has_access_to_all_builds, :builds) do
+  def fetch_builds
+    builds
+  end
+end
+module Spaceship
+  class ConnectAPI
+    module Platform
+      IOS = "IOS"
+    end
+  end
+end
+Build = Struct.new(:id, :app_version, :version, :platform, :assigned_group_ids, :persist_assignment) do
+  def add_beta_groups(beta_groups:)
+    assigned_group_ids.concat(beta_groups.map(&:id))
+    beta_groups.each { |group| group.builds << self } if persist_assignment
+  end
+end
+App = Struct.new(:groups, :builds) do
+  def get_beta_groups
+    groups
+  end
+
+  def get_builds(filter:, includes:)
+    builds
+  end
+end
+def env_present?(value)
+  !value.nil? && !value.strip.empty?
+end
+def resolve_app_store_connect_app(app_identifier:, app_id:)
+  $fresh_app
+end
+${selector}
+${functionDefinition(readFastfile(), "resolve_ci_testflight_build!")}
+${functionDefinition(readFastfile(), "ci_testflight_build_group_ids")}
+${verifier}
+
+def run_case(label, post_groups:, app_builds:)
+  pre_group = Group.new("group-id", "Pre-upload Internal", true, false, [])
+  select_ci_testflight_internal_group_by_id!(groups: [pre_group], group_id: "group-id")
+  $fresh_app = App.new(post_groups, app_builds)
+  begin
+    result = assign_and_verify_ci_testflight_internal_group!(
+      group_id: "group-id",
+      app_store_version: "2026.9.20",
+      build_number: "8"
+    )
+    build = app_builds.first
+    relationship_ids = result.fetch(:group).fetch_builds.map(&:id)
+    puts "#{label}:ok:#{result.fetch(:group).name}:#{build.assigned_group_ids.join(",")}:#{relationship_ids.join(",")}"
+  rescue => error
+    puts "#{label}:error:#{error.message}"
+  end
+end
+
+uploaded = Build.new("build-id", "2026.9.20", "8", "IOS", [], true)
+run_case(
+  "valid",
+  post_groups: [Group.new("group-id", "Fresh Internal", true, false, [])],
+  app_builds: [uploaded]
+)
+run_case(
+  "missing-build",
+  post_groups: [Group.new("group-id", "Fresh Internal", true, false, [])],
+  app_builds: []
+)
+run_case(
+  "wrong-platform",
+  post_groups: [Group.new("group-id", "Fresh Internal", true, false, [])],
+  app_builds: [Build.new("build-id", "2026.9.20", "8", "MAC_OS", [], true)]
+)
+run_case(
+  "duplicate-builds",
+  post_groups: [Group.new("group-id", "Fresh Internal", true, false, [])],
+  app_builds: [
+    Build.new("build-id-1", "2026.9.20", "8", "IOS", [], true),
+    Build.new("build-id-2", "2026.9.20", "8", "IOS", [], true)
+  ]
+)
+run_case(
+  "missing-assignment",
+  post_groups: [Group.new("group-id", "Fresh Internal", true, false, [])],
+  app_builds: [Build.new("build-id", "2026.9.20", "8", "IOS", [], false)]
+)
+run_case(
+  "post-upload-external",
+  post_groups: [Group.new("group-id", "Fresh External", false, false, [])],
+  app_builds: [Build.new("build-id", "2026.9.20", "8", "IOS", [], true)]
+)
+run_case(
+  "post-upload-automatic-other",
+  post_groups: [
+    Group.new("group-id", "Fresh Internal", true, false, []),
+    Group.new("automatic-id", "Automatic", true, true, [])
+  ],
+  app_builds: [Build.new("build-id", "2026.9.20", "8", "IOS", [], true)]
+)
+unexpected = Build.new("build-id", "2026.9.20", "8", "IOS", [], true)
+run_case(
+  "unexpected-assignment",
+  post_groups: [
+    Group.new("group-id", "Fresh Internal", true, false, []),
+    Group.new("other-id", "Other Internal", true, false, [unexpected])
+  ],
+  app_builds: [unexpected]
+)
+`;
+    const result = spawnSync("ruby", ["-e", source], { encoding: "utf8" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim().split("\n")).toEqual([
+      "valid:ok:Fresh Internal:group-id:build-id",
+      "missing-build:error:Uploaded TestFlight build could not be resolved after processing.",
+      "wrong-platform:error:Uploaded TestFlight build could not be resolved after processing.",
+      "duplicate-builds:error:Uploaded TestFlight build could not be resolved after processing.",
+      "missing-assignment:error:Uploaded TestFlight build is not assigned to the configured internal group.",
+      "post-upload-external:error:The configured TestFlight beta group must be internal.",
+      "post-upload-automatic-other:error:Every non-target internal TestFlight group must explicitly disable automatic all-build access.",
+      "unexpected-assignment:error:Uploaded TestFlight build is assigned outside the configured internal group.",
+    ]);
+  });
+
+  it("validates the complete iOS intent context before store mutation", () => {
+    const intentContext = functionDefinition(readFastfile(), "mobile_release_intent_context!");
+    const source = `
+module UI
+  def self.user_error!(message)
+    raise message
+  end
+end
+${intentContext}
+cases = [
+  {},
+  { "OPENCLAW_MOBILE_RELEASE_REF_MODE" => "invalid" },
+  { "OPENCLAW_MOBILE_RELEASE_REF_MODE" => "intent" },
+  {
+    "OPENCLAW_MOBILE_RELEASE_REF_MODE" => "intent",
+    "OPENCLAW_MOBILE_RELEASE_INTENT_PATH" => "/tmp/intent.json",
+    "OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST" => "sha256:receipt",
+    "OPENCLAW_MOBILE_RELEASE_TARGET_REF" => "release/2026.9.2-mobile"
+  },
+  {
+    "OPENCLAW_MOBILE_RELEASE_REF_MODE" => "intent",
+    "OPENCLAW_MOBILE_RELEASE_INTENT_PATH" => "/tmp/intent.json",
+    "OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST" => "sha256:#{"a" * 64}",
+    "OPENCLAW_MOBILE_RELEASE_TARGET_REF" => "release/2026.9.3-mobile"
+  },
+  {
+    "OPENCLAW_MOBILE_RELEASE_REF_MODE" => "intent",
+    "OPENCLAW_MOBILE_RELEASE_INTENT_PATH" => "/tmp/intent.json",
+    "OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST" => "sha256:#{"a" * 64}",
+    "OPENCLAW_MOBILE_RELEASE_TARGET_REF" => "release/2026.9.2-mobile"
+  }
+]
+cases.each do |values|
+  ENV.delete("OPENCLAW_MOBILE_RELEASE_REF_MODE")
+  ENV.delete("OPENCLAW_MOBILE_RELEASE_INTENT_PATH")
+  ENV.delete("OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST")
+  ENV.delete("OPENCLAW_MOBILE_RELEASE_TARGET_REF")
+  values.each { |key, value| ENV[key] = value }
+  begin
+    context = mobile_release_intent_context!(gateway_version: "2026.9.2")
+    puts context ? "ok:#{context.fetch(:target_ref)}" : "ok:local"
+  rescue => error
+    puts "error:#{error.message}"
+  end
+end
+`;
+    const result = spawnSync("ruby", ["-e", source], { encoding: "utf8" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim().split("\n")).toEqual([
+      "ok:local",
+      "error:OPENCLAW_MOBILE_RELEASE_REF_MODE must be empty or intent.",
+      "error:OPENCLAW_MOBILE_RELEASE_INTENT_PATH is required in intent mode.",
+      "error:OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST must be a canonical SHA-256 digest.",
+      "error:OPENCLAW_MOBILE_RELEASE_TARGET_REF must exactly match the mobile gateway version.",
+      "ok:release/2026.9.2-mobile",
+    ]);
   });
 
   it("finishes fallible local release work before mutating App Store metadata", () => {
@@ -526,7 +1068,7 @@ describe("iOS Fastlane release upload gates", () => {
     expect(snapshotUITest).not.toContain("selectReleaseScreenshotDestination");
     expect(navigationTest).toContain("self.launchApp(for: Self.agentScreenshotTarget)");
     expect(navigationTest).toContain('self.selectSidebarDestination("Settings")');
-    expect(navigationTest).toContain('"settings-system-agent-row"');
+    expect(navigationTest).toContain('"SettingsHub.Fallback"');
     expect(navigationTest).not.toContain("XCTExpectFailure");
     expect(navigationTest).not.toContain("XCTExpectedFailure");
     expect(rootTabs).toContain("self.scenePhase == .active");
@@ -555,9 +1097,193 @@ describe("iOS Fastlane release upload gates", () => {
       screenshots.indexOf("RELEASE_IOS_SCREENSHOT_TESTS.each"),
     );
     expect(screenshots.indexOf("verify_release_ios_screenshot_manifest!")).toBeLessThan(
-      screenshots.indexOf("watch_screenshot("),
+      screenshots.indexOf("capture_watch_screenshot"),
     );
     expect(screenshots).toContain('ENV["OPENCLAW_SNAPSHOT_SKIP_WATCH"] == "1"');
+  });
+
+  it("reuses only the current screenshot build for Watch while standalone capture builds fresh", () => {
+    const source = `
+require "json"
+require "tmpdir"
+module UI
+  def self.user_error!(message)
+    raise message
+  end
+  def self.success(message); end
+end
+def default_platform(*); end
+def desc(*); end
+def platform(*)
+  yield
+end
+def lane(name, &body)
+  define_singleton_method(name, &body)
+end
+alias private_lane lane
+load ARGV.fetch(0)
+
+def repo_root
+  @root
+end
+def ios_root
+  File.join(@root, "apps", "ios")
+end
+def snapshot_devices
+  ["iPad Pro 13-inch"]
+end
+def resolve_simulator_device(_name)
+  { "name" => "Apple Watch Ultra 3 (49mm)", "udid" => "watch-simulator" }
+end
+def write_watch_screenshot_mode_defaults(*); end
+def clear_watch_screenshot_mode_defaults(*); end
+def set_watch_status_bar_override(*)
+  false
+end
+def normalize_watch_screenshot_status_bar(*); end
+def sleep(*); end
+
+def make_product(derived_data_path)
+  app = File.join(derived_data_path, "Build", "Products", "Debug-watchsimulator", "OpenClawWatchApp.app")
+  raise "stale product survived clean build" if File.exist?(File.join(app, "stale"))
+  return if @scenario == "missing"
+  FileUtils.mkdir_p(app)
+  File.write(File.join(app, "Info.plist"), "fixture.watch") unless @scenario == "invalid-plist"
+end
+module Open3
+  def self.capture3(command, *args)
+    raise "unexpected external command: #{command}" unless command == "/usr/libexec/PlistBuddy"
+    [File.read(args.last), "", Struct.new(:success?).new(true)]
+  end
+end
+def run_tests(**options)
+  raise "snapshot build is not fresh" unless options[:clean] && options[:build_for_testing]
+  @builds << "snapshot"
+  raise "snapshot build failed" if @scenario == "build-failure"
+  make_product(options.fetch(:derived_data_path))
+end
+def capture_release_ios_screenshot!(**options)
+  raise "capture before successful build" unless @builds == ["snapshot"]
+  name = options.fetch(:screenshot).fetch(:name)
+  output = File.join(options.fetch(:output_directory), "en-US", "#{options.fetch(:device)}-#{name}.png")
+  FileUtils.mkdir_p(File.dirname(output))
+  File.binwrite(output, PNG_SIGNATURE + "fixture")
+  FileUtils.mkdir_p(File.join(options.fetch(:result_bundle_archive_directory), "#{name}.xcresult"))
+  options.fetch(:capture_attempts) << { name: name, outcome: "passed" }
+  write_release_ios_screenshot_attempts!(
+    attempts: options.fetch(:capture_attempts), output_path: options.fetch(:capture_attempts_path)
+  )
+end
+def sh(command)
+  args = Shellwords.split(command)
+  @commands << args
+  if args.include?("xcodebuild") && args.include?("build")
+    @builds << "watch"
+    raise "Watch build failed" if @scenario == "standalone-build-failure"
+    make_product(args.fetch(args.index("-derivedDataPath") + 1))
+  elsif args[0, 3] == ["xcrun", "simctl", "install"]
+    @installed = args.last.sub(@root, "")
+    raise "simulator rejected Watch product" if @scenario == "invalid-install"
+  elsif args[0, 3] == ["xcrun", "simctl", "io"]
+    File.binwrite(args.last, PNG_SIGNATURE + "watch")
+  end
+end
+
+results = %w[combined iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure].map do |scenario|
+  Dir.mktmpdir("openclaw-watch-build-") do |root|
+    @root, @scenario, @builds, @commands, @installed = root, scenario, [], [], nil
+    %w[SnapshotDerivedData WatchScreenshotDerivedData].each do |directory|
+      app = File.join(ios_root, "build", directory, "Build", "Products", "Debug-watchsimulator", "OpenClawWatchApp.app")
+      FileUtils.mkdir_p(app)
+      File.write(File.join(app, "stale"), "previous invocation")
+    end
+    if scenario.start_with?("standalone")
+      output = File.join(ios_root, "fastlane", "screenshots", "en-US")
+      FileUtils.mkdir_p(output)
+      File.write(File.join(output, "Apple Watch Ultra 3 (49mm)-01-now-face.png"), "previous screenshot")
+    end
+    ENV["OPENCLAW_SNAPSHOT_SKIP_WATCH"] = scenario == "iphone" ? "1" : "0"
+    error = nil
+    begin
+      options = { release_version: "2026.9.1", app_store_revision: "2", build_number: "123" }
+      scenario.start_with?("standalone") ? watch_screenshot(options) : screenshots(options)
+    rescue => failure
+      error = failure.message.sub(root, "")
+    end
+    {
+      scenario: scenario, builds: @builds, error: error, installed: @installed,
+      pngs: Dir[File.join(ios_root, "fastlane", "screenshots", "en-US", "*.png")].length,
+      xcresults: Dir[File.join(ios_root, "build", "SnapshotTestResults", "*.xcresult")].length,
+      attempts: File.exist?(File.join(ios_root, "build", "SnapshotTestResults", "capture-attempts.json")),
+      versions: @commands.select { |args| args.any? { |arg| arg.end_with?("/ios-write-version-xcconfig.sh") } }
+        .map { |args| args.drop(2) }
+    }
+  end
+end
+puts JSON.generate(results)
+`;
+    const result = spawnSync("ruby", ["-e", source, fastfilePath], { encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    const rows = JSON.parse(result.stdout) as {
+      scenario: string;
+      builds: string[];
+      error: string | null;
+      installed: string | null;
+      pngs: number;
+      xcresults: number;
+      attempts: boolean;
+      versions: string[][];
+    }[];
+    const row = (scenario: string) => rows.find((entry) => entry.scenario === scenario)!;
+    const versionArgs = ["--version", "2026.9.1", "--revision", "2", "--build-number", "123"];
+    expect(row("combined")).toMatchObject({
+      builds: ["snapshot"],
+      error: null,
+      installed:
+        "/apps/ios/build/SnapshotDerivedData/Build/Products/Debug-watchsimulator/OpenClawWatchApp.app",
+      pngs: 5,
+      xcresults: 4,
+      attempts: true,
+      versions: [versionArgs],
+    });
+    expect(row("iphone")).toMatchObject({
+      builds: ["snapshot"],
+      error: null,
+      installed: null,
+      pngs: 4,
+    });
+    expect(row("standalone")).toMatchObject({
+      builds: ["watch"],
+      error: null,
+      installed:
+        "/apps/ios/build/WatchScreenshotDerivedData/Build/Products/Debug-watchsimulator/OpenClawWatchApp.app",
+      pngs: 1,
+      versions: [versionArgs],
+    });
+    expect(row("standalone-build-failure")).toMatchObject({
+      builds: ["watch"],
+      error: "Watch build failed",
+      installed: null,
+      pngs: 0,
+    });
+    for (const scenario of ["missing", "invalid-plist", "invalid-install"]) {
+      expect(row(scenario), scenario).toMatchObject({
+        builds: ["snapshot"],
+        pngs: 4,
+        xcresults: 4,
+        attempts: true,
+      });
+    }
+    expect(row("missing").error).toContain("Watch screenshot build did not produce");
+    expect(row("invalid-plist").error).toContain("Expected Info.plist");
+    expect(row("invalid-install").error).toBe("simulator rejected Watch product");
+    expect(row("build-failure")).toMatchObject({
+      builds: ["snapshot"],
+      error: "snapshot build failed",
+      installed: null,
+      pngs: 0,
+      xcresults: 0,
+    });
   });
 
   it("runs screenshot shards alongside builds without changing runner authorization", () => {
@@ -573,18 +1299,25 @@ describe("iOS Fastlane release upload gates", () => {
     const reducerJob = workflow.slice(reducerJobStart, reducerJobEnd);
 
     expect(workflow).toContain('IOS_SCREENSHOT_NODE_VERSION: "24.16.0"');
-    expect(workflow).toContain('IOS_SCREENSHOT_XCODE_VERSION: "Xcode 26.6 Build version 17F113"');
+    expect(workflow).toContain('IOS_SCREENSHOT_XCODE_VERSION: "Xcode 27.0 Build version 27A266a"');
     expect(iosJob).toContain("timeout-minutes: 150");
     expect(iosJob).not.toContain("Capture iOS release screenshots");
     expect(shardJob).toContain("needs: [preflight]");
     expect(shardJob).toContain("max-parallel: 2");
     expect(shardJob).toContain("device_family: [iphone, ipad-13]");
-    expect(shardJob).toContain('OPENCLAW_SNAPSHOT_SKIP_WATCH: "1"');
-    expect(shardJob).toContain("if: matrix.device_family == 'iphone'");
-    expect(shardJob).toContain("run_ios_fastlane ios watch_screenshot");
+    expect(shardJob).toContain(
+      "OPENCLAW_SNAPSHOT_SKIP_WATCH: ${{ matrix.device_family == 'iphone' && '1' || '0' }}",
+    );
+    expect(shardJob).not.toContain("run_ios_fastlane ios watch_screenshot");
     expect(shardJob).toContain("run: pnpm ios:screenshots");
     expect(shardJob).toContain("id: package_screenshot_evidence");
+    expect(shardJob).toContain('if [[ "$DEVICE_FAMILY" == "ipad-13" ]]; then');
+    expect(
+      shardJob.match(/node \.ci-harness\/scripts\/ios-screenshot-evidence\.mjs/g),
+    ).toHaveLength(2);
+    expect(shardJob).not.toContain("node scripts/ios-screenshot-evidence.mjs");
     expect(shardJob).toContain("steps.package_screenshot_evidence.outcome == 'failure'");
+    expect(shardJob).toContain("steps.device_screenshots.outcome == 'failure'");
     expect(shardJob).toContain("apps/ios/build/SnapshotTestResults/capture-attempts.json");
     expect(shardJob).not.toContain("IOS_SCREENSHOT_FASTLANE_VERSION");
     expect(shardJob).toContain("IOS_SCREENSHOT_NODE_VERSION");
@@ -598,7 +1331,8 @@ describe("iOS Fastlane release upload gates", () => {
     expect(reducerJob).toContain("Setup screenshot evidence Node");
     expect(reducerJob).toContain("node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}");
     expect(reducerJob).toContain("id: reduce_screenshot_evidence");
-    expect(reducerJob).toContain("scripts/ios-screenshot-evidence.mjs reduce");
+    expect(reducerJob).toContain("node .ci-harness/scripts/ios-screenshot-evidence.mjs reduce");
+    expect(reducerJob).not.toContain("node scripts/ios-screenshot-evidence.mjs");
     expect(reducerJob).toContain('--workflow-sha "$WORKFLOW_SHA"');
     expect(reducerJob).toContain('--run-id "$RUN_ID"');
     expect(reducerJob).toContain('--run-attempt "$RUN_ATTEMPT"');
@@ -667,7 +1401,7 @@ describe("iOS Fastlane release upload gates", () => {
     );
   });
 
-  it("preflights and records mobile release refs around TestFlight upload", () => {
+  it("preflights and finalizes mobile release refs only after TestFlight accepts the build", () => {
     const fastfile = readFastfile();
     const releaseUpload = laneBody(fastfile, "release_upload");
 
@@ -682,7 +1416,7 @@ describe("iOS Fastlane release upload gates", () => {
     );
     expect(releaseUpload).toContain("release_sha = context[:git_commit]");
     expect(releaseUpload).toContain("ensure_mobile_release_ref_available!");
-    expect(releaseUpload).toContain("record_mobile_release_ref!");
+    expect(releaseUpload).toContain("finalize_mobile_release_ref!");
     expect(releaseUpload).toContain("screenshots(\n          release_version: context[:version]");
     expect(fastfile).toContain("def without_xcode_xcconfig_file");
     expect(releaseUpload).toContain("without_xcode_xcconfig_file do");
@@ -696,9 +1430,32 @@ describe("iOS Fastlane release upload gates", () => {
     expect(releaseUpload.indexOf("ensure_mobile_release_ref_available!")).toBeLessThan(
       releaseUpload.indexOf("\n    metadata(\n      release_version: context[:version]"),
     );
-    expect(releaseUpload.indexOf("record_mobile_release_ref!")).toBeGreaterThan(
+    expect(releaseUpload.indexOf("finalize_mobile_release_ref!")).toBeGreaterThan(
       releaseUpload.indexOf("upload_to_testflight("),
     );
+  });
+
+  it("keeps local ref recording as the default and emits a closed intent only in CI mode", () => {
+    const finalizer = functionBody(readFastfile(), "finalize_mobile_release_ref!");
+    const intentContext = functionBody(readFastfile(), "mobile_release_intent_context!");
+
+    expect(finalizer).toContain("unless intent_context");
+    expect(finalizer).toContain("record_mobile_release_ref!(");
+    expect(intentContext).toContain('unless mode == "intent"');
+    expect(finalizer).toContain('"mobile-release-intent.mjs"');
+    expect(finalizer).toContain('"--authority-receipt-digest"');
+    expect(finalizer).toContain('"--gateway-version"');
+    expect(finalizer).toContain('"--app-store-version"');
+    expect(finalizer).toContain('"--build-number"');
+    expect(finalizer).toContain('"--internal-group-id"');
+    expect(finalizer).toContain('"--internal-group-name"');
+    expect(finalizer).toContain('"--target-ref"');
+    expect(finalizer).toContain('"--target-sha"');
+    expect(
+      functionBody(readFastfile(), "assign_and_verify_ci_testflight_internal_group!"),
+    ).toContain("build.add_beta_groups(beta_groups: [group])");
+    expect(finalizer).not.toContain('"git"');
+    expect(finalizer).not.toContain("push");
   });
 
   it("normalizes Watch screenshots as opaque RGB PNGs for App Store upload", () => {

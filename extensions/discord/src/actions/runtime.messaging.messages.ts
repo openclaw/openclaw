@@ -1,12 +1,13 @@
-// Discord plugin module implements runtime.messaging.messages behavior.
 import {
   jsonResult,
   readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
+import { createChannelProgressDraftCompositor } from "openclaw/plugin-sdk/channel-outbound";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
+import { buildDiscordTextChunks } from "../send.shared.js";
+import * as discordMessagingActionRuntime from "./runtime.messaging.runtime.js";
 import type { DiscordMessagingActionContext } from "./runtime.messaging.shared.js";
 
 function parseDiscordMessageLink(link: string) {
@@ -102,15 +103,28 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       }
       const channelId = ctx.resolveChannelId();
       await ctx.assertReadTargetAllowed({ channelId });
+      const messageId = readStringParam(ctx.params, "messageId");
       const query = {
         limit: readPositiveIntegerParam(ctx.params, "limit"),
         before: readStringParam(ctx.params, "before"),
         after: readStringParam(ctx.params, "after"),
         around: readStringParam(ctx.params, "around"),
       };
-      const messages = assertDiscordMessageListResult(
-        await discordMessagingActionRuntime.readMessagesDiscord(channelId, query, ctx.withOpts()),
-      );
+      const messages = messageId
+        ? [
+            await discordMessagingActionRuntime.fetchMessageDiscord(
+              channelId,
+              messageId,
+              ctx.withOpts(),
+            ),
+          ]
+        : assertDiscordMessageListResult(
+            await discordMessagingActionRuntime.readMessagesDiscord(
+              channelId,
+              query,
+              ctx.withOpts(),
+            ),
+          );
       return jsonResult({
         ok: true,
         channelId,
@@ -125,14 +139,31 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       const messageId = readStringParam(ctx.params, "messageId", {
         required: true,
       });
-      const content = readStringParam(ctx.params, "content", {
-        required: true,
-      });
+      const snapshot = ctx.options?.progressSnapshot;
+      const content = snapshot
+        ? (buildDiscordTextChunks(
+            createChannelProgressDraftCompositor({
+              entry: ctx.accountConfig,
+              mode: "progress",
+              active: true,
+              seed: `${ctx.accountId}:${channelId}`,
+              initialSnapshot: snapshot,
+            }).getText(),
+            {
+              maxChars: Math.min(ctx.accountConfig.textChunkLimit ?? 2000, 2000),
+              maxLinesPerMessage: Number.MAX_SAFE_INTEGER,
+            },
+          )[0] ?? "")
+        : readStringParam(ctx.params, "content", {
+            required: true,
+            allowEmpty: true,
+            trim: false,
+          });
       await ctx.assertReadTargetAllowed({ channelId });
       const message = await discordMessagingActionRuntime.editMessageDiscord(
         channelId,
         messageId,
-        { content },
+        { content, ...(snapshot ? { allowedMentions: { parse: [] } } : {}) },
         ctx.withOpts(),
       );
       return jsonResult({ ok: true, message });

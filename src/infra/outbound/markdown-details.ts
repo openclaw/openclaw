@@ -29,7 +29,24 @@ function appendNode(target: DetailsNode[], node: DetailsNode): void {
 }
 
 function trimMarkdownBlankLines(value: string): string {
-  return value.replace(/^(?:[ \t]*\r?\n)+/, "").replace(/(?:\r?\n[ \t]*)+$/, "");
+  const body = value.replace(/^(?:[ \t]*\r?\n)+/, "");
+  let end = body.length;
+  // Scan backward: an unanchored repeated suffix regex retries internal blank
+  // lines quadratically and blocks unrelated sessions on the same event loop.
+  for (let cursor = end; cursor > 0;) {
+    while (body[cursor - 1] === " " || body[cursor - 1] === "\t") {
+      cursor -= 1;
+    }
+    if (body[cursor - 1] !== "\n") {
+      break;
+    }
+    cursor -= 1;
+    if (body[cursor - 1] === "\r") {
+      cursor -= 1;
+    }
+    end = cursor;
+  }
+  return body.slice(0, end);
 }
 
 type MarkdownContainerLayout = { blankPrefix: string; continuationPrefix: string };
@@ -95,6 +112,11 @@ function collectDetailsText(nodes: readonly DetailsNode[]): string {
 }
 
 function renderDetailsNodes(nodes: readonly DetailsNode[], depth = 0): string {
+  // Render nodes at the limit; only their children fall back to plain text.
+  if (depth > MAX_DETAILS_RENDER_DEPTH) {
+    return collectDetailsText(nodes);
+  }
+
   let rendered = "";
   for (const [index, node] of nodes.entries()) {
     if (typeof node === "string") {
@@ -102,10 +124,7 @@ function renderDetailsNodes(nodes: readonly DetailsNode[], depth = 0): string {
       continue;
     }
     if (node.type === "summary") {
-      rendered +=
-        depth >= MAX_DETAILS_RENDER_DEPTH
-          ? collectDetailsText(node.children)
-          : renderDetailsNodes(node.children, depth + 1);
+      rendered += renderDetailsNodes(node.children, depth + 1);
       continue;
     }
 
@@ -115,19 +134,11 @@ function renderDetailsNodes(nodes: readonly DetailsNode[], depth = 0): string {
     );
     const bodyNodes = node.children.filter((child) => child !== summary);
     const container = resolveMarkdownContainerLayout(rendered);
-    const renderedBody =
-      depth >= MAX_DETAILS_RENDER_DEPTH
-        ? collectDetailsText(bodyNodes)
-        : renderDetailsNodes(bodyNodes, depth + 1);
+    const renderedBody = renderDetailsNodes(bodyNodes, depth + 1);
     const body = trimMarkdownBlankLines(
       container ? stripMarkdownContainerLayout(renderedBody, container) : renderedBody,
     );
-    const label = summary
-      ? (depth >= MAX_DETAILS_RENDER_DEPTH
-          ? collectDetailsText(summary.children)
-          : renderDetailsNodes(summary.children, depth + 1)
-        ).trim()
-      : "Details";
+    const label = summary ? renderDetailsNodes(summary.children, depth + 1).trim() : "Details";
     const heading = `**${label || "Details"}**`;
     const block = body ? `${heading}\n\n${body}` : heading;
     if (container) {

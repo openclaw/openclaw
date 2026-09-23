@@ -1,4 +1,3 @@
-// Msteams plugin module implements inbound media behavior.
 import {
   formatInboundMediaUnavailableText,
   type MediaPlaceholderTextFact,

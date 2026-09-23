@@ -12,23 +12,28 @@ import type {
   ChannelPlugin,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
-import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
+import type { ChannelProgressDraftCompositorSnapshot } from "../../channels/progress-draft-compositor.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { MessageActionAuthorization } from "../../gateway/message-action-turn-capability.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 import type { OutboundSendDeps } from "./deliver.js";
-import type { DurableDeliveryCompletion } from "./delivery-completion.js";
+import type {
+  ConversationDeliveryTarget,
+  DurableDeliveryCompletion,
+} from "./delivery-completion.js";
 import type { MessageBroadcastAccountPlan } from "./message-account-selection.js";
 import type { MessageActionDeniedError } from "./message-action-denial.js";
+import type { OutboundMessageGatewayOptionsInput } from "./message-gateway-options.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
-export type MessageActionGateway = {
-  url?: string;
-  token?: string;
-  timeoutMs?: number;
+export type MessageActionGateway = Omit<
+  OutboundMessageGatewayOptionsInput,
+  "resolveAgentRuntimeIdentityToken"
+> & {
   resolveAgentRuntimeIdentityToken?: (context?: {
     sourceReplyFinal?: boolean;
     sourceReplyToolCallId?: string;
@@ -43,6 +48,8 @@ export type MessageActionInput = {
   cfg: OpenClawConfig;
   action: ChannelMessageActionName;
   params: Record<string, unknown>;
+  /** @internal Host-prepared display state for an existing progress message edit. */
+  progressSnapshot?: ChannelProgressDraftCompositorSnapshot;
   /** @internal Identifies model-authored calls for lossy input normalization. */
   actionOrigin?: "message-tool";
   defaultAccountId?: string;
@@ -60,11 +67,7 @@ export type MessageActionInput = {
    * Authorization facts resolved from the host-issued current-turn capability.
    * Presence means ambient routing fields must not be used as identity.
    */
-  messageActionAuthorization?: {
-    requesterAccountId?: string;
-    requesterSenderId?: string;
-    toolContext?: InternalChannelThreadingToolContext;
-  };
+  messageActionAuthorization?: MessageActionAuthorization;
   sessionId?: string;
   /** @internal Admitted run correlation carried into owner-native delivery audit. */
   runId?: string;
@@ -97,6 +100,8 @@ export type MessageActionInput = {
   deliveryIntentId?: string;
   /** @internal Serializable owner state finalized by live send or recovery. */
   deliveryCompletion?: DurableDeliveryCompletion;
+  /** @internal Captured conversation storage facts, excluded from plugins and durable payloads. */
+  conversationDeliveryTarget?: ConversationDeliveryTarget;
   /** @internal Runs after queue persistence and before platform I/O. */
   onDeliveryIntent?: (intent: DurableMessageSendIntent) => void;
   /** @internal Revalidates caller-owned authority before each durable adapter attempt. */
@@ -105,6 +110,8 @@ export type MessageActionInput = {
   onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
   /** @internal Revalidates caller authority immediately before recipient-visible I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
+  /** @internal Synchronously fence the live owner after waits and before platform I/O. */
+  assertDirectAdapterHandoff?: () => void;
   /** @internal Keep ephemeral-authority sends out of replayable recovery. */
   skipQueue?: boolean;
   /** @internal Runs when broadcast converts a typed target denial into result text. */
@@ -155,6 +162,7 @@ export type MessageActionResult =
           to: string;
           ok: boolean;
           error?: string;
+          attempted?: false;
           sentBeforeError?: true;
           payload?: unknown;
           result?: MessageSendResult;
@@ -183,15 +191,11 @@ export type MessageActionResult =
       dryRun: boolean;
     };
 
-export function resolveMessageSendOutcome(
+function resolveMessageSendOutcome(
   sendResult: MessageSendResult | undefined,
   action: "Message" | "Broadcast" = "Message",
 ): { ok: true } | { ok: false; error: string; sentBeforeError?: true } {
-  if (
-    !sendResult ||
-    sendResult.deliveryStatus === undefined ||
-    sendResult.deliveryStatus === "sent"
-  ) {
+  if (sendResult?.deliveryStatus === undefined || sendResult.deliveryStatus === "sent") {
     return { ok: true };
   }
   switch (sendResult.deliveryStatus) {
@@ -199,9 +203,14 @@ export function resolveMessageSendOutcome(
       return {
         ok: false,
         error: `${action} send suppressed: ${sendResult.suppressionReason ?? "unknown reason"}.`,
+        ...(sendResult.sentBeforeError ? { sentBeforeError: true } : {}),
       };
     case "failed":
-      return { ok: false, error: sendResult.error ?? `${action} send failed.` };
+      return {
+        ok: false,
+        error: sendResult.error ?? `${action} send failed.`,
+        ...(sendResult.sentBeforeError ? { sentBeforeError: true } : {}),
+      };
     case "partial_failed":
       return {
         ok: false,
@@ -214,6 +223,7 @@ export function resolveMessageSendOutcome(
 
 export function resolveMessageActionOutcome(
   result: MessageActionResult,
+  action: "Message" | "Broadcast" = "Message",
 ): ReturnType<typeof resolveMessageSendOutcome> {
   if (result.kind === "broadcast") {
     const failure = result.payload.results.find((entry) => !entry.ok);
@@ -223,7 +233,9 @@ export function resolveMessageActionOutcome(
     return { ok: true };
   }
   const outcome =
-    result.kind === "send" ? resolveMessageSendOutcome(result.sendResult) : { ok: true as const };
+    result.kind === "send"
+      ? resolveMessageSendOutcome(result.sendResult, action)
+      : { ok: true as const };
   const payload = result.payload;
   if (!outcome.ok || !isRecord(payload) || payload.ok !== false) {
     return outcome;
@@ -232,7 +244,9 @@ export function resolveMessageActionOutcome(
     [payload.error, payload.warning, payload.hint, payload.reason]
       .map(normalizeOptionalString)
       .find(Boolean) ?? `Message ${result.action} failed.`;
-  return { ok: false, error };
+  return payload.sentBeforeError === true
+    ? { ok: false, error, sentBeforeError: true }
+    : { ok: false, error };
 }
 
 export function resolveMessageActionMessageId(payload: unknown): string | undefined {

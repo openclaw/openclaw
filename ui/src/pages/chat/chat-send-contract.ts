@@ -1,3 +1,4 @@
+import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import type { ApplicationChatSubmissions } from "../../app/chat-submissions.ts";
@@ -8,6 +9,7 @@ import type {
   ChatAttachment,
   ChatGoalDraftMode,
   ChatQueueItem,
+  HumanMention,
 } from "../../lib/chat/chat-types.ts";
 import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
 import type { SessionCapability, SessionRefreshTarget } from "../../lib/sessions/index.ts";
@@ -22,6 +24,11 @@ import type { ToolStreamHost } from "./tool-stream-contract.ts";
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
   agents?: AgentsListResult["agents"];
+};
+
+export type ChatComposerRecoveryOwner = {
+  resolveOwner: () => ChatHost | undefined;
+  retainedAttachmentIds: (attachments: readonly ChatAttachment[]) => ReadonlySet<string>;
 };
 
 export type ChatHost = ChatInputHistoryState &
@@ -39,8 +46,12 @@ export type ChatHost = ChatInputHistoryState &
     reconnectResumeSessionId?: string | null;
     chatLoading: boolean;
     chatMessage: string;
+    canRestoreComposer?: () => boolean;
+    /** Captures this composer's identity while its presentation may hand ownership off. */
+    captureComposerRecoveryOwner?: () => ChatComposerRecoveryOwner | undefined;
+    chatMentions?: readonly HumanMention[];
     /** Captured once at submit; queued delivery never re-reads the current page. */
-    getWorkContext?: () => string | undefined;
+    getWorkContext?: () => ChatWorkContext | undefined;
     chatGoalDraftMode?: ChatGoalDraftMode | null;
     chatMessages: unknown[];
     chatThinkingLevel: string | null;
@@ -64,7 +75,7 @@ export type ChatHost = ChatInputHistoryState &
     selfUser?: AuthenticatedUser | null;
     requestUpdate?: () => void;
     refreshSessionsAfterChat: Map<string, SessionRefreshTarget>;
-    chatSubmitGuards?: Map<string, Promise<void>>;
+    chatSubmitGuards?: Set<string>;
     chatSendTimingsByRun?: Map<string, ChatSendTimingEntry>;
     eventLogBuffer?: unknown[];
     assistantAgentId?: string | null;

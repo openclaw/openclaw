@@ -24,6 +24,11 @@ type DiscordMessageProcessContext = NonNullable<
   Awaited<ReturnType<typeof buildDiscordMessageProcessContext>>
 >;
 
+export function formatDiscordGroupThreadReply(text: string, participant: { name: string }): string {
+  const name = participant.name.replace(/[\\`*_{}[\]()<>#!|]/g, "\\$&").replace(/\s+/g, " ");
+  return `**${name}**\n${text}`;
+}
+
 export function formatDiscordReasoningQuote(quoteText: string): string | undefined {
   const lines = quoteText
     .split("\n")
@@ -68,7 +73,7 @@ export function createDiscordBeforePayloadDelivery(params: {
       return null;
     }
     if (info.kind === "final" && !params.isFallbackOnlyToolWarningFinal(payload)) {
-      params.draftPreview.markFinalReplyStarted();
+      params.draftPreview.freezeProgress();
     }
     return payload;
   };
@@ -83,6 +88,8 @@ export function createDiscordMessageReplyRuntime(params: {
   dispatchStartedAt: number;
   feedbackRest: RequestClient;
   deliveryRest: RequestClient;
+  onFinalReplyStart?: () => void;
+  onFinalReplyDelivered?: () => void;
 }) {
   const { ctx, processContext } = params;
   const {
@@ -191,17 +198,18 @@ export function createDiscordMessageReplyRuntime(params: {
     ? deliverTarget.slice("channel:".length)
     : messageChannelId;
   const draftPreview = createDiscordDraftPreviewController({
+    groupThread: Boolean(ctxPayload.GroupThread),
     cfg,
     discordConfig,
     accountId,
+    abortSignal: ctx.abortSignal,
     sourceRepliesAreToolOnly: params.sourceRepliesAreToolOnly,
     textLimit,
     deliveryRest: params.deliveryRest,
     deliverChannelId,
     replyReference,
-    tableMode,
-    maxLinesPerMessage,
-    chunkMode,
+    onFinalReplyStart: params.onFinalReplyStart,
+    onFinalReplyDelivered: params.onFinalReplyDelivered,
     log: logVerbose,
   });
   const resolvedBlockStreamingEnabled = resolveChannelStreamingBlockEnabled(discordConfig);
@@ -215,7 +223,6 @@ export function createDiscordMessageReplyRuntime(params: {
     beginQueuedDeliveryCorrelation: beginDeliveryCorrelation,
     endDeliveryCorrelation,
     resolveCurrentTurnTranscriptFinalText,
-    deliverChannelId,
     draftPreview,
     resolvedBlockStreamingEnabled,
   };

@@ -7,7 +7,6 @@ import { getProgramContext, setProgramContext } from "./program-context.js";
 function makeCtx(version: string): ProgramContext {
   return {
     programVersion: version,
-    channelOptions: ["quietchat"],
     messageChannelOptions: "quietchat",
     agentChannelOptions: "last|quietchat",
   };

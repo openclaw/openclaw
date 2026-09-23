@@ -13,8 +13,166 @@ type CompilerInputPolicy = {
   toolchainFiles: string[];
   generatorInputs: string[];
   isGeneratorInput?: (file: string) => boolean;
+  assertInput?: (file: string) => string;
 };
+type TopologyEntry = { id: string; name: string; directory: string; file?: string };
+type NamespaceDirectory = { directory: string; realDirectory: string; installed: boolean };
 const digest = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
+const PREPARATION_CONCURRENCY = 16;
+
+function diagnosticJson(value: object) {
+  // JSON escapes C0 controls but leaves terminal controls and bidi formatting literal.
+  return JSON.stringify(value).replace(
+    /[\u007f-\u009f\u061c\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/gu,
+    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
+function skipNamespaceEntry(id: string, name: string, installed: boolean) {
+  return (
+    id === ".ci-harness" ||
+    id === ".worktrees" ||
+    // Tests create and remove fixture packages here while sibling compilers run.
+    // Only checkout-root scratch is excluded; workspace and installed inputs still count.
+    id === ".tmp" ||
+    id === ".cache/openclaw-pnpm-store" ||
+    id === ".cache/vitest" ||
+    id === "apps/macos/.build" ||
+    id === "apps/macos/.build-local" ||
+    id === "apps/macos-mlx-tts/.build" ||
+    (!installed && [".git", ".artifacts", ".claude", ".agents", ".local", "dist"].includes(name)) ||
+    // Installed tool scratch is not resolvable; pnpm's package store is.
+    (installed && name !== ".pnpm" && name.startsWith(".")) ||
+    /^extensions\/[^/]+\/(?:__rootdir_boundary_canary__\.ts|tsconfig\.rootdir-canary\.json)$/u.test(
+      id,
+    )
+  );
+}
+
+function prepareNamespace(rootDir: string) {
+  type Result = { entries: fs.Dirent[] } | { error: unknown };
+  type Directory = {
+    path: string;
+    contexts: Map<string, NamespaceDirectory>;
+    completion: Promise<Result>;
+    complete: (result: Result) => void;
+    result?: Result;
+  };
+  const directories = new Map<string, Directory>();
+  const pending = new Map<string, Directory>();
+  const demanded: Directory[] = [];
+  const active = new Set<Promise<void>>();
+  let closed = false;
+
+  function expand(context: NamespaceDirectory, entries: fs.Dirent[]) {
+    for (const entry of entries) {
+      const directory = path.join(context.directory, entry.name);
+      if (
+        entry.isDirectory() &&
+        !skipNamespaceEntry(portableRelativePath(rootDir, directory), entry.name, context.installed)
+      ) {
+        void enqueue({
+          directory,
+          realDirectory: path.join(context.realDirectory, entry.name),
+          installed: context.installed || entry.name === "node_modules",
+        });
+      }
+    }
+  }
+
+  function enqueue(context: NamespaceDirectory, priority = false) {
+    let directory = directories.get(context.realDirectory);
+    if (!directory) {
+      let complete!: (result: Result) => void;
+      const completion = new Promise<Result>((resolve) => {
+        complete = resolve;
+      });
+      directory = {
+        path: context.realDirectory,
+        contexts: new Map(),
+        completion,
+        complete,
+      };
+      directories.set(directory.path, directory);
+      pending.set(directory.path, directory);
+    }
+    const key = `${context.directory}\0${context.installed}`;
+    if (!directory.contexts.has(key)) {
+      directory.contexts.set(key, context);
+      if (directory.result && "entries" in directory.result) {
+        expand(context, directory.result.entries);
+      }
+    }
+    if (priority && pending.delete(directory.path)) {
+      demanded.push(directory);
+    }
+    return directory.completion;
+  }
+
+  function pump() {
+    if (closed) {
+      return;
+    }
+    while (active.size < PREPARATION_CONCURRENCY) {
+      const directory = demanded.shift() ?? pending.values().next().value;
+      if (!directory) {
+        break;
+      }
+      pending.delete(directory.path);
+      const reading: Promise<void> = fs.promises
+        .readdir(directory.path, { withFileTypes: true })
+        .then(
+          (entries): Result => ({ entries }),
+          (error: unknown): Result => ({ error }),
+        )
+        .then((result) => {
+          directory.result = result;
+          if (!closed && "entries" in result) {
+            for (const context of directory.contexts.values()) {
+              expand(context, result.entries);
+            }
+          }
+          // Speculative errors matter only if the ordered visitor admits this path.
+          directory.complete(result);
+        })
+        .finally(() => {
+          active.delete(reading);
+          pump();
+        });
+      active.add(reading);
+    }
+  }
+
+  return {
+    async read(context: NamespaceDirectory) {
+      const result = enqueue(context, true);
+      pump();
+      const completed = await result;
+      if ("error" in completed) {
+        throw completed.error;
+      }
+      return completed.entries;
+    },
+    async close() {
+      closed = true;
+      pending.clear();
+      demanded.length = 0;
+      await Promise.allSettled(active);
+    },
+  };
+}
+
+async function prepareBatches<T>(values: T[], prepare: (value: T) => Promise<unknown>) {
+  for (let offset = 0; offset < values.length; offset += PREPARATION_CONCURRENCY) {
+    const completed = await Promise.allSettled(
+      values.slice(offset, offset + PREPARATION_CONCURRENCY).map(prepare),
+    );
+    const failed = completed.find((result) => result.status === "rejected");
+    if (failed?.status === "rejected") {
+      throw failed.reason;
+    }
+  }
+}
 
 /** One phase owns all byte reads; freshness never trusts persisted timestamps. */
 export class CompilerInputSnapshot {
@@ -23,7 +181,8 @@ export class CompilerInputSnapshot {
     string,
     { files: string[]; roots: string[]; options: ts.CompilerOptions }
   >();
-  private topology?: { name: string; directory: string; file?: string }[];
+  private topology?: TopologyEntry[];
+  private readonly namespaceDigests = new Map<string | undefined, string>();
   private generatorInputs?: string[];
   private readonly policy: CompilerInputPolicy;
   private tools?: string;
@@ -33,24 +192,63 @@ export class CompilerInputSnapshot {
     this.policy = policy;
   }
 
-  private read(file: string) {
+  private inputPath(file: string) {
     const absolute = path.resolve(this.rootDir, file);
+    return this.policy.assertInput?.(absolute) ?? absolute;
+  }
+
+  private read(file: string) {
+    // Admit the same spelling used for reads and prior-snapshot keys, including Windows aliases.
+    const absolute = this.inputPath(file);
     let entry = this.files.get(absolute);
     if (!entry) {
       const before = fs.statSync(absolute);
       const bytes = fs.readFileSync(absolute);
       const after = fs.statSync(absolute);
-      if (
-        before.ctimeMs !== after.ctimeMs ||
-        before.ino !== after.ino ||
-        before.size !== after.size
-      ) {
-        throw new Error(`Boundary input changed while reading: ${file}`);
-      }
-      entry = { bytes, hash: digest(bytes), ctimeMs: after.ctimeMs };
-      this.files.set(absolute, entry);
+      entry = this.capture(absolute, before, bytes, after);
     }
     return entry;
+  }
+
+  private capture(file: string, before: fs.Stats, bytes: Buffer, after: fs.Stats) {
+    if (
+      before.ctimeMs !== after.ctimeMs ||
+      before.ino !== after.ino ||
+      before.size !== after.size
+    ) {
+      throw new Error(`Boundary input changed while reading: ${file}`);
+    }
+    const entry = { bytes, hash: digest(bytes), ctimeMs: after.ctimeMs };
+    this.files.set(file, entry);
+    return entry;
+  }
+
+  /** Prefetch I/O while the shared ordered visitor retains namespace ownership. */
+  async prepare() {
+    if (this.topology === undefined) {
+      const directories = prepareNamespace(this.rootDir);
+      const traversal = this.readTopology();
+      try {
+        let next = traversal.next();
+        while (!next.done) {
+          next = traversal.next(await directories.read(next.value));
+        }
+        this.topology = next.value;
+      } finally {
+        await directories.close();
+      }
+    }
+    await prepareBatches(
+      [...new Set(this.toolInputs().map((file) => this.inputPath(file)))],
+      async (file) => {
+        if (!this.files.has(file)) {
+          const before = await fs.promises.stat(file);
+          const bytes = await fs.promises.readFile(file);
+          const after = await fs.promises.stat(file);
+          this.capture(file, before, bytes, after);
+        }
+      },
+    );
   }
 
   hash = (file: string) => this.read(file).hash;
@@ -60,7 +258,7 @@ export class CompilerInputSnapshot {
     if (!result) {
       const files = new Set<string>();
       const parsed = ts.getParsedCommandLineOfConfigFile(
-        path.resolve(this.rootDir, file),
+        this.inputPath(file),
         {},
         {
           ...ts.sys,
@@ -88,102 +286,109 @@ export class CompilerInputSnapshot {
     return result;
   }
 
+  private *readTopology(): Generator<NamespaceDirectory, TopologyEntry[], fs.Dirent[]> {
+    const rootDir = this.rootDir;
+    const names: TopologyEntry[] = [];
+    const visited = new Map<string, boolean>();
+    const active = new Set<string>();
+    const visit = function* (
+      directory: string,
+      realDirectory: string,
+      installed = false,
+    ): Generator<NamespaceDirectory, void, fs.Dirent[]> {
+      if (
+        active.has(realDirectory) ||
+        visited.get(realDirectory) === true ||
+        (!installed && visited.has(realDirectory))
+      ) {
+        return;
+      }
+      // A local alias may precede an installed package, whose dist must count.
+      // Upgrade that traversal once; active ancestors still fence link cycles.
+      visited.set(realDirectory, installed);
+      active.add(realDirectory);
+      const entries = (yield { directory, realDirectory, installed }).toSorted((left, right) =>
+        left.name < right.name ? -1 : 1,
+      );
+      for (const entry of entries) {
+        const file = path.join(directory, entry.name);
+        const canonicalFile = path.join(realDirectory, entry.name);
+        const id = portableRelativePath(rootDir, file);
+        const add = (name: string, contentFile?: string) =>
+          names.push({ id, name, directory: realDirectory, file: contentFile });
+        if (skipNamespaceEntry(id, entry.name, installed)) {
+          continue;
+        }
+        let canonical = canonicalFile;
+        let isDirectory = entry.isDirectory();
+        if (entry.isSymbolicLink()) {
+          // Resolve entries beneath the parent we enumerated. Windows relative
+          // links reached through a junction can otherwise follow a different alias.
+          add(`${id}->${fs.readlinkSync(canonicalFile)}`);
+          try {
+            isDirectory = fs.statSync(canonicalFile).isDirectory();
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+              throw error;
+            }
+            add(`${id}:missing`);
+            continue;
+          }
+          add(`${id}:${isDirectory ? "directory" : "file"}`);
+          // The first link's text can stay unchanged while a later link retargets.
+          canonical = fs.realpathSync.native(canonicalFile);
+          const relativeTarget = portableRelativePath(rootDir, canonical);
+          const target =
+            relativeTarget === ".." ||
+            relativeTarget.startsWith("../") ||
+            path.isAbsolute(relativeTarget)
+              ? canonical
+              : relativeTarget;
+          add(`${id}:target:${target}`);
+        }
+        if (isDirectory) {
+          // Extend native-canonical parents; resolve only links so Windows aliases
+          // share output ownership without rewalking every ancestor.
+          yield* visit(file, canonical, installed || entry.name === "node_modules");
+        } else if (/\.(?:[cm]?[jt]sx?|json)$/u.test(entry.name)) {
+          add(id, canonicalFile);
+        }
+      }
+      active.delete(realDirectory);
+    };
+    // A failed lookup can be outside declared roots. Name/existence changes in
+    // the local resolution namespace invalidate conservatively; unrelated byte
+    // edits do not. Installed package contents are included, not just lockfiles.
+    yield* visit(rootDir, fs.realpathSync.native(rootDir));
+    return names.toSorted((left, right) => (left.name < right.name ? -1 : 1));
+  }
+
   private namespace(outputRoot?: string) {
     if (this.topology === undefined) {
-      const names: { name: string; directory: string; file?: string }[] = [];
-      const visited = new Map<string, boolean>();
-      const active = new Set<string>();
-      const visit = (directory: string, realDirectory: string, installed = false) => {
-        if (
-          active.has(realDirectory) ||
-          visited.get(realDirectory) === true ||
-          (!installed && visited.has(realDirectory))
-        ) {
-          return;
-        }
-        // A local alias may precede an installed package, whose dist must count.
-        // Upgrade that traversal once; active ancestors still fence link cycles.
-        visited.set(realDirectory, installed);
-        active.add(realDirectory);
-        const add = (name: string, file?: string) =>
-          names.push({ name, directory: realDirectory, file });
-        const entries = fs
-          .readdirSync(realDirectory, { withFileTypes: true })
-          .toSorted((left, right) => (left.name < right.name ? -1 : 1));
-        for (const entry of entries) {
-          const file = path.join(directory, entry.name);
-          const canonicalFile = path.join(realDirectory, entry.name);
-          const id = portableRelativePath(this.rootDir, file);
-          // Helper checkouts and package stores are separate roots; aliases retain their paths.
-          if (
-            id === ".ci-harness" ||
-            id === ".worktrees" ||
-            id === ".cache/openclaw-pnpm-store" ||
-            (!installed &&
-              [".git", ".artifacts", ".claude", ".agents", ".local", "dist"].includes(entry.name))
-          ) {
-            continue;
-          }
-          // Tool scratch (.vite-temp bundles, jiti/vitest caches) churns under
-          // installed roots while sibling tasks run and would flip the topology
-          // digest mid-compile. Resolution never enters dot-entries except .pnpm.
-          if (installed && entry.name !== ".pnpm" && entry.name.startsWith(".")) {
-            continue;
-          }
-          if (
-            /^extensions\/[^/]+\/(?:__rootdir_boundary_canary__\.ts|tsconfig\.rootdir-canary\.json)$/u.test(
-              id,
-            )
-          ) {
-            continue;
-          }
-          let isDirectory = entry.isDirectory();
-          if (entry.isSymbolicLink()) {
-            // Resolve entries beneath the parent we enumerated. Windows relative
-            // links reached through a junction can otherwise follow a different alias.
-            add(`${id}->${fs.readlinkSync(canonicalFile)}`);
-            try {
-              isDirectory = fs.statSync(canonicalFile).isDirectory();
-            } catch (error) {
-              if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-                throw error;
-              }
-              add(`${id}:missing`);
-              continue;
-            }
-            add(`${id}:${isDirectory ? "directory" : "file"}`);
-          }
-          if (isDirectory) {
-            // Extend the canonical parent path for ordinary children; resolve only links.
-            // Rewalking every ancestor multiplies metadata calls across installed trees.
-            const canonical = entry.isSymbolicLink()
-              ? fs.realpathSync(canonicalFile)
-              : canonicalFile;
-            visit(file, canonical, installed || entry.name === "node_modules");
-          } else if (/\.(?:[cm]?[jt]sx?|json)$/u.test(entry.name)) {
-            add(id, canonicalFile);
-          }
-        }
-        active.delete(realDirectory);
-      };
-      // A failed lookup can be outside declared roots. Name/existence changes in
-      // the local resolution namespace invalidate conservatively; unrelated byte
-      // edits do not. Installed package contents are included, not just lockfiles.
-      visit(this.rootDir, fs.realpathSync(this.rootDir));
-      this.topology = names.toSorted((left, right) => (left.name < right.name ? -1 : 1));
+      const traversal = this.readTopology();
+      let next = traversal.next();
+      while (!next.done) {
+        next = traversal.next(fs.readdirSync(next.value.realDirectory, { withFileTypes: true }));
+      }
+      this.topology = next.value;
     }
     // Workspace aliases can expose this producer's outputs as installed inputs.
     // Keep their link identities, and retain the same subtree for other consumers.
-    return digest(
-      this.topology
-        .filter(
-          ({ directory }) =>
-            !outputRoot ||
-            (directory !== outputRoot && !directory.startsWith(`${outputRoot}${path.sep}`)),
-        )
-        .map(({ name }) => name)
-        .join("\0"),
-    );
+    let signature = this.namespaceDigests.get(outputRoot);
+    if (signature === undefined) {
+      signature = digest(
+        this.topology
+          .filter(
+            ({ directory }) =>
+              !outputRoot ||
+              (directory !== outputRoot && !directory.startsWith(`${outputRoot}${path.sep}`)),
+          )
+          .map(({ name }) => name)
+          .join("\0"),
+      );
+      this.namespaceDigests.set(outputRoot, signature);
+    }
+    return signature;
   }
 
   private toolInputs() {
@@ -199,6 +404,54 @@ export class CompilerInputSnapshot {
       ]),
     ].toSorted();
     return [...this.policy.toolchainFiles, ...this.generatorInputs];
+  }
+
+  private namespaceChanges(before: CompilerInputSnapshot, outputRoot?: string) {
+    const identities = (entries: TopologyEntry[]) => {
+      const result = new Map<string, string[]>();
+      for (const { id, name, directory } of entries) {
+        if (
+          outputRoot &&
+          (directory === outputRoot || directory.startsWith(`${outputRoot}${path.sep}`))
+        ) {
+          continue;
+        }
+        const names = result.get(id) ?? [];
+        names.push(name);
+        result.set(id, names);
+      }
+      return result;
+    };
+    // Compare captured topology only. Decorated names contain link targets;
+    // diagnostics must emit the separately captured logical identity instead.
+    const previous = identities(before.topology ?? []);
+    const current = identities(this.topology ?? []);
+    const changes: { change: string; path: string }[] = [];
+    let omitted = 0;
+    for (const id of [...new Set([...previous.keys(), ...current.keys()])].toSorted()) {
+      if (JSON.stringify(previous.get(id)) === JSON.stringify(current.get(id))) {
+        continue;
+      }
+      if (
+        changes.length >= 16 ||
+        path.posix.isAbsolute(id) ||
+        path.win32.isAbsolute(id) ||
+        id.split(/[\\/]/u).includes("..")
+      ) {
+        omitted++;
+        continue;
+      }
+      changes.push({
+        change: !previous.has(id) ? "added" : !current.has(id) ? "removed" : "changed",
+        path: id.length > 160 ? `${id.slice(0, 157)}...` : id,
+      });
+      // Leave room for category and omission count even with JSON escaping or UTF-8.
+      if (Buffer.byteLength(diagnosticJson(changes)) > 4000) {
+        changes.pop();
+        omitted++;
+      }
+    }
+    return { changes, omitted };
   }
 
   private toolchain() {
@@ -279,17 +532,28 @@ export class CompilerInputSnapshot {
     outputRoot?: string,
   ) {
     const signature = this.signature(config, args, inputs, outputRoot);
-    if (
-      before.namespace(outputRoot) !== this.namespace(outputRoot) ||
-      before.toolchain() !== this.toolchain() ||
-      JSON.stringify(before.config(config)) !== JSON.stringify(this.config(config)) ||
-      before.config(config).files.some((file) => before.hash(file) !== this.hash(file))
-    ) {
-      throw new Error("Boundary configuration or resolution topology changed during compilation");
+    const category =
+      before.namespace(outputRoot) !== this.namespace(outputRoot)
+        ? "namespace"
+        : before.toolchain() !== this.toolchain()
+          ? "toolchain"
+          : JSON.stringify(before.config(config)) !== JSON.stringify(this.config(config))
+            ? "config"
+            : before.config(config).files.some((file) => before.hash(file) !== this.hash(file))
+              ? "config-bytes"
+              : undefined;
+    if (category) {
+      const diagnostic = {
+        category,
+        ...(category === "namespace" ? this.namespaceChanges(before, outputRoot) : {}),
+      };
+      throw new Error(
+        `Boundary configuration or resolution topology changed during compilation: ${diagnosticJson(diagnostic)}`,
+      );
     }
     for (const file of [...inputs, ...this.config(config).files, ...this.toolInputs()]) {
       const current = this.read(file);
-      const previous = before.files.get(path.resolve(this.rootDir, file));
+      const previous = before.files.get(before.inputPath(file));
       // ctime is an invocation-only mutation fence, never a cache key or a warm
       // acceptance path. It covers newly discovered inputs (including manifests)
       // without assuming native XXH3 versions are SHA256 digests of disk bytes.

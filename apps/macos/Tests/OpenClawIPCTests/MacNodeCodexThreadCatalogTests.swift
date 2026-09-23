@@ -7,6 +7,10 @@ import Testing
 
 @Suite(.serialized)
 struct MacNodeCodexThreadCatalogTests {
+    private static let fixtureSourceHomeId = "fe94896e07f486e0c81c8eb582386bf8c881819fc553a097d922707e48677414"
+    private static let fixtureInitializeResult =
+        #"{"userAgent":"x","codexHome":"/x","platformFamily":"unix","platformOs":"macos"}"#
+
     private final class FakeCodex: Sendable {
         let directory: URL
         let executable: URL
@@ -48,18 +52,19 @@ struct MacNodeCodexThreadCatalogTests {
 
     private func makeAppServer(
         preamble: String = "",
-        initializeResult: String = "{}",
+        initializeResult: String = Self.fixtureInitializeResult,
         captureHandshake: Bool = false,
         body: String) throws -> FakeCodex
     {
         let captureCommand = captureHandshake ? "printf" : ":"
         return try self.makeFakeCodex(#"""
         #!/bin/sh
+        initialize_result='\#(initializeResult)'
         \#(preamble)
         IFS= read -r initialize || exit 2
         \#(captureCommand) '%s\n' "$initialize" >> "${0}.requests"
         id=$(printf '%s\n' "$initialize" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
-        printf '{"id":%s,"result":\#(initializeResult)}\n' "$id"
+        printf '{"id":%s,"result":%s}\n' "$id" "$initialize_result"
         IFS= read -r initialized || exit 3
         \#(captureCommand) '%s\n' "$initialized" >> "${0}.requests"
         \#(body)
@@ -112,24 +117,28 @@ struct MacNodeCodexThreadCatalogTests {
             body: body)
     }
 
-    private func makeBlockedRequestServer(warmup: Bool = false) throws -> FakeCodex {
+    private func makeBlockedRequestServer(warmup: Bool = false, requestGate: Bool = false) throws -> FakeCodex {
         let warmupResponse = warmup ? #"""
         id=$(printf '%s\n' "$request" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
         printf '{"id":%s,"result":{"data":[]}}\n' "$id"
         IFS= read -r request || exit 5
         """# : ""
+        let createRequestGate = requestGate ? #"[ "$count" != 1 ] || mkfifo "${0}.request-gate""# : ""
+        let awaitRequestGate = requestGate ? #"IFS= read -r _ < "${0}.request-gate" || exit 0"# : ""
         return try self.makeAppServer(
             preamble: #"""
             count=0
             [ ! -f "${0}.processes" ] || count=$(cat "${0}.processes")
             count=$((count + 1))
             printf '%s\n' "$count" > "${0}.processes"
+            \#(createRequestGate)
             """#,
             body: #"""
             IFS= read -r request || exit 4
             if [ "$count" = 1 ]; then
               \#(warmupResponse)
               printf '%s\n' "$request" > "${0}.request-started"
+              \#(awaitRequestGate)
               IFS= read -r unexpected || exit 0
               printf '%s\n' "$unexpected" > "${0}.unexpected-request"
               exit 6
@@ -244,7 +253,7 @@ struct MacNodeCodexThreadCatalogTests {
             method: "thread/list",
             requestParams: ["limit": 1],
             timeoutSeconds: timeoutSeconds,
-            maxLineBytes: maxLineBytes)
+            maxLineBytes: maxLineBytes).data
     }
 
     @Test func `normalizes App Server metadata and drops sensitive thread fields`() throws {
@@ -278,13 +287,14 @@ struct MacNodeCodexThreadCatalogTests {
         ]
         let data = try JSONSerialization.data(withJSONObject: raw)
 
-        let json = try MacNodeCodexThreadCatalog.normalize(listResultData: data)
+        let json = try MacNodeCodexThreadCatalog.normalize(listResultData: data, sourceHomeId: Self.fixtureSourceHomeId)
         let decoded = try #require(
             JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
         let sessions = try #require(decoded["sessions"] as? [[String: Any]])
         let session = try #require(sessions.first)
 
         #expect(decoded["codexHome"] == nil)
+        #expect(decoded["canContinueCodex"] as? Bool == true)
         #expect(decoded["nextCursor"] as? String == "next-page")
         #expect(decoded["backwardsCursor"] as? String == "previous-page")
         #expect(session["threadId"] as? String == "thread-1")
@@ -327,7 +337,7 @@ struct MacNodeCodexThreadCatalogTests {
         ]
         let data = try JSONSerialization.data(withJSONObject: raw)
 
-        let json = try MacNodeCodexThreadCatalog.normalize(listResultData: data)
+        let json = try MacNodeCodexThreadCatalog.normalize(listResultData: data, sourceHomeId: Self.fixtureSourceHomeId)
         let decoded = try #require(
             JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
         let sessions = try #require(decoded["sessions"] as? [[String: Any]])
@@ -1326,36 +1336,68 @@ extension MacNodeCodexThreadCatalogTests {
         await client.shutdown()
     }
 
-    @Test func `timeout restarts the client without dropping the next request`() async throws {
-        let fake = try makeBlockedRequestServer(warmup: true)
+    @Test func `timeout recovers with a best-effort concurrent successor`() async throws {
+        let fake = try makeBlockedRequestServer(warmup: true, requestGate: true)
+        defer { withExtendedLifetime(fake) {} }
         let client = CodexAppServerThreadClient(idleTimeoutSeconds: 10)
-        // Complete the real handshake before exercising an active or queued deadline.
-        _ = try await self.requestEmptyList(client: client, executable: fake.executable)
+        do {
+            _ = try await self.requestEmptyList(client: client, executable: fake.executable)
+        } catch {
+            await client.shutdown()
+            throw error
+        }
 
+        let readiness = Task {
+            try await self.openFIFOForWriting(
+                URL(fileURLWithPath: fake.executable.path + ".request-gate"))
+        }
         let first = Task {
-            try await self.requestEmptyList(
+            defer { readiness.cancel() }
+            return try await self.requestEmptyList(
                 client: client,
                 executable: fake.executable,
                 timeoutSeconds: 0.5)
         }
-        #expect(await self.waitForFile(
-            URL(fileURLWithPath: fake.executable.path + ".request-started")))
-        let second = Task {
-            try await self.requestEmptyList(client: client, executable: fake.executable)
-        }
+        var requestGate: FileHandle?
+        defer { try? requestGate?.close() }
+        var second: Task<Data, Error>?
+        do {
+            do {
+                requestGate = try await readiness.value
+                // Peer receipt permits overlap; Task creation does not prove queue admission.
+                second = Task {
+                    try await self.requestEmptyList(client: client, executable: fake.executable)
+                }
+            } catch is CancellationError {
+                // The first deadline may precede receipt; require its typed timeout below.
+            }
 
-        await #expect(throws: MacNodeCodexThreadCatalog.CatalogError.timedOut) {
-            try await first.value
+            await #expect(throws: MacNodeCodexThreadCatalog.CatalogError.timedOut) {
+                try await first.value
+            }
+            let result: Data = if let second {
+                try await second.value
+            } else {
+                try await self.requestEmptyList(client: client, executable: fake.executable)
+            }
+            #expect(try (JSONSerialization.jsonObject(with: result) as? [String: Any])?["data"] != nil)
+            #expect(try self.readTrimmed(
+                URL(fileURLWithPath: fake.executable.path + ".processes")) == "2")
+        } catch {
+            readiness.cancel()
+            first.cancel()
+            second?.cancel()
+            _ = await first.result
+            _ = await readiness.result
+            _ = await second?.result
+            await client.shutdown()
+            throw error
         }
-        let result = try await second.value
-        #expect(try (JSONSerialization.jsonObject(with: result) as? [String: Any])?["data"] != nil)
-        #expect(try self.readTrimmed(
-            URL(fileURLWithPath: fake.executable.path + ".processes")) == "2")
         await client.shutdown()
     }
 
     @Test func `queued request consumes its wall-clock deadline`() async throws {
-        let fake = try makeBlockedRequestServer(warmup: true)
+        let fake = try makeBlockedRequestServer(warmup: true, requestGate: true)
         let client = CodexAppServerThreadClient(idleTimeoutSeconds: 10)
         do {
             // Complete the real handshake before exercising an active or queued deadline.
@@ -1365,15 +1407,31 @@ extension MacNodeCodexThreadCatalogTests {
             throw error
         }
 
+        let readiness = Task {
+            try await self.openFIFOForWriting(
+                URL(fileURLWithPath: fake.executable.path + ".request-gate"))
+        }
         let first = Task {
-            try await self.requestEmptyList(
+            defer { readiness.cancel() }
+            return try await self.requestEmptyList(
                 client: client,
                 executable: fake.executable,
                 timeoutSeconds: MacNodeCodexThreadCatalog.defaultTimeoutSeconds)
         }
         do {
-            try #require(await self.waitForFile(
-                URL(fileURLWithPath: fake.executable.path + ".request-started")))
+            // The writer witnesses request receipt; readiness shares the first
+            // request's lifetime instead of racing an independent polling deadline.
+            let requestGate: FileHandle
+            do {
+                requestGate = try await readiness.value
+            } catch is CancellationError {
+                _ = try await first.value
+                throw CancellationError()
+            }
+            defer { try? requestGate.close() }
+            try #require(FileManager.default.fileExists(atPath: fake.executable.path + ".request-started"))
+            try requestGate.write(contentsOf: Data("ready\n".utf8))
+            try requestGate.close()
             let second = Task {
                 try await self.requestEmptyList(
                     client: client,
@@ -1392,8 +1450,10 @@ extension MacNodeCodexThreadCatalogTests {
             #expect(try self.readTrimmed(
                 URL(fileURLWithPath: fake.executable.path + ".processes")) == "1")
         } catch {
+            readiness.cancel()
             first.cancel()
             _ = await first.result
+            _ = await readiness.result
             await client.shutdown()
             throw error
         }
@@ -1686,7 +1746,7 @@ extension MacNodeCodexThreadCatalogTests {
 
     @Test func `App Server error details stay on node`() async throws {
         let fake = try makeAppServer(
-            initializeResult: #"{"codexHome":"/private"}"#,
+            initializeResult: #"{"userAgent":"x","codexHome":"/private","platformFamily":"unix","platformOs":"macos"}"#,
             body: #"""
             IFS= read -r list || exit 4
             printf '%s\n' '{"id":2,"error":{"code":-32000,"message":"private /Users/secret/path"}}'
@@ -1704,5 +1764,113 @@ extension MacNodeCodexThreadCatalogTests {
             #expect(error.localizedDescription == "UNAVAILABLE: Codex app-server request failed")
             #expect(!error.localizedDescription.contains("/Users/secret"))
         }
+    }
+}
+
+extension MacNodeCodexThreadCatalogTests {
+    @Test func `catalog replies retain their serving home across concurrent client replacement`() async throws {
+        let first = try self.makeEmptyListServer()
+        let second = try self.makeAppServer(
+            initializeResult: #"{"userAgent":"x","codexHome":"/y","platformFamily":"unix","platformOs":"macos"}"#,
+            body: #"""
+            while IFS= read -r request; do
+              id=$(printf '%s\n' "$request" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
+              printf '{"id":%s,"result":{"data":[]}}\n' "$id"
+            done
+            """#)
+        let firstRoot = self.codexRoot(appServer: ["command": first.executable.path])
+        let secondRoot = self.codexRoot(appServer: ["command": second.executable.path])
+        let client = CodexAppServerThreadClient(idleTimeoutSeconds: 10)
+        do {
+            async let firstReply = MacNodeCodexThreadCatalog.list(
+                paramsJSON: nil, loadRoot: { firstRoot }, client: client)
+            async let secondReply = MacNodeCodexThreadCatalog.list(
+                paramsJSON: nil, loadRoot: { secondRoot }, client: client)
+            let replies = try await [firstReply, secondReply]
+            let sourceIds = try replies.map {
+                try #require((JSONSerialization
+                        .jsonObject(with: Data($0.utf8)) as? [String: Any])?["sourceHomeId"] as? String)
+            }
+            // Independent wire vectors from the TypeScript catalog identity owner.
+            #expect(sourceIds == [
+                Self.fixtureSourceHomeId,
+                "c3c07879185eedbda6f1a8e2cccd4a3937f0a9108a7ef7f78d3d44babae995db",
+            ])
+            #expect(replies.allSatisfy { !$0.contains("/x") && !$0.contains("/y") })
+        } catch {
+            await client.shutdown()
+            throw error
+        }
+        await client.shutdown()
+    }
+
+    @Test func `stale catalog selectors send no list or transcript request`() async throws {
+        let fake = try self.makeEmptyListServer(captureHandshake: true)
+        let root = self.codexRoot(appServer: ["command": fake.executable.path])
+        let client = MacNodeCodexThreadCatalogClient(loadRoot: { root })
+        let stale = String(repeating: "0", count: 64)
+        let expected = MacNodeCodexThreadCatalog.CatalogError.invalidParams(
+            "Codex session source changed; refresh the catalog and retry")
+        await #expect(throws: expected) {
+            try await client.list(paramsJSON: #"{"sourceHomeId":"\#(stale)"}"#)
+        }
+        await #expect(throws: expected) {
+            try await client.turns(paramsJSON: #"{"sourceHomeId":"\#(stale)","threadId":"thread-1"}"#)
+        }
+        await client.shutdown()
+        let requests = try String(contentsOf: fake.capture, encoding: .utf8)
+            .split(whereSeparator: \.isNewline)
+            .map { try #require(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
+        #expect(requests.compactMap { $0["method"] as? String } == ["initialize", "initialized"])
+    }
+
+    @Test(arguments: ["search", "turns"])
+    func `pins paginated discovery and transcript eligibility across a child restart`(_ operation: String) async throws {
+        let fake = try self.makeAppServer(
+            preamble: #"""
+            count=0
+            [ ! -f "${0}.processes" ] || count=$(cat "${0}.processes")
+            count=$((count + 1))
+            printf '%s\n' "$count" > "${0}.processes"
+            if [ "$count" != 1 ]; then
+              initialize_result='{"userAgent":"x","codexHome":"/y","platformFamily":"unix","platformOs":"macos"}'
+            fi
+            """#,
+            body: #"""
+            IFS= read -r request || exit 0
+            printf '%s\n' "$request" >> "${0}.requests"
+            id=$(printf '%s\n' "$request" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
+            exec 0<&-
+            printf '{"id":%s,"result":{"data":[{"id":"thread-1","name":"Other"}],"nextCursor":"next"}}\n' "$id"
+            """#)
+        let root = self.codexRoot(appServer: ["command": fake.executable.path])
+        let client = MacNodeCodexThreadCatalogClient(loadRoot: { root })
+        let expected = MacNodeCodexThreadCatalog.CatalogError.invalidParams(
+            "Codex session source changed; refresh the catalog and retry")
+        await #expect(throws: expected) {
+            if operation == "search" {
+                try await client.list(paramsJSON: #"{"searchTerm":"target"}"#)
+            } else {
+                try await client.turns(paramsJSON: #"{"threadId":"thread-1"}"#)
+            }
+        }
+        await client.shutdown()
+        #expect(try self.readTrimmed(URL(fileURLWithPath: fake.executable.path + ".processes")) == "2")
+        let requests = try String(contentsOf: fake.capture, encoding: .utf8)
+            .split(whereSeparator: \.isNewline)
+            .map { try #require(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
+        #expect(requests.compactMap { $0["method"] as? String } == ["thread/list"])
+    }
+
+    @Test(arguments: ["{}", #"{"codexHome":"relative"}"#, #"{"codexHome":42}"#])
+    func `rejects initialize responses without an absolute source home`(_ initializeResult: String) async throws {
+        let fake = try self.makeAppServer(initializeResult: initializeResult, body: #"""
+        IFS= read -r request || exit 0
+        printf '%s\n' "$request" > "${0}.unexpected-request"
+        """#)
+        await #expect(throws: MacNodeCodexThreadCatalog.CatalogError.appServerUnavailable) {
+            try await MacNodeCodexThreadCatalog.list(paramsJSON: nil, executable: fake.executable.path)
+        }
+        #expect(!FileManager.default.fileExists(atPath: fake.executable.path + ".unexpected-request"))
     }
 }

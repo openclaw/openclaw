@@ -1,4 +1,3 @@
-// Whatsapp tests cover setup surface plugin behavior.
 import {
   createPluginSetupWizardStatus,
   createQueuedWizardPrompter,
@@ -7,6 +6,7 @@ import {
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { DEFAULT_ACCOUNT_ID, type OpenClawConfig } from "openclaw/plugin-sdk/setup";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { whatsappSetupWizard } from "./setup-surface.js";
 import {
   createWhatsAppLinkingHarness,
@@ -86,11 +86,6 @@ vi.mock("./auth-store.js", async () => {
   });
 });
 
-const createRuntime = (): RuntimeEnv =>
-  ({
-    error: vi.fn(),
-  }) as unknown as RuntimeEnv;
-
 const whatsappGetStatus = createPluginSetupWizardStatus({
   id: "whatsapp",
   meta: {
@@ -111,7 +106,7 @@ async function runFinalizeWithHarness(params: {
     finalize: whatsappSetupWizard.finalize,
     cfg: params.cfg ?? {},
     accountId: params.accountId ?? DEFAULT_ACCOUNT_ID,
-    runtime: params.runtime ?? createRuntime(),
+    runtime: params.runtime ?? createRuntimeSpies(),
     prompter: params.harness.prompter,
     options: params.options,
     forceAllowFrom: params.forceAllowFrom ?? false,
@@ -317,7 +312,7 @@ describe("whatsapp setup wizard", () => {
   it("runs WhatsApp login when not linked and user confirms linking", async () => {
     hoisted.pathExists.mockResolvedValue(false);
     const harness = createWhatsAppLinkingHarness(createQueuedWizardPrompter);
-    const runtime = createRuntime();
+    const runtime = createRuntimeSpies();
     expect(hoisted.loginModuleState.loaded).toBe(false);
     const beforePersistentEffect = vi.fn(async () => {
       expect(hoisted.loginModuleState.loaded).toBe(true);
@@ -338,7 +333,7 @@ describe("whatsapp setup wizard", () => {
   it("propagates the persistent-effect guard before WhatsApp login persists state", async () => {
     hoisted.pathExists.mockResolvedValue(false);
     const harness = createWhatsAppLinkingHarness(createQueuedWizardPrompter);
-    const runtime = createRuntime();
+    const runtime = createRuntimeSpies();
     const guardError = new Error("verified inference changed");
     const beforePersistentEffect = vi.fn(async () => {
       throw guardError;
@@ -360,7 +355,7 @@ describe("whatsapp setup wizard", () => {
   it("rejects delayed credential persistence when the inference route changes during login", async () => {
     hoisted.pathExists.mockResolvedValue(false);
     const harness = createWhatsAppLinkingHarness(createQueuedWizardPrompter);
-    const runtime = createRuntime();
+    const runtime = createRuntimeSpies();
     const guardError = new Error("verified inference route changed");
     let routeOwner = "original";
     const beforePersistentEffect = vi.fn(async () => {

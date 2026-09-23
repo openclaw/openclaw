@@ -1,6 +1,11 @@
 // Coverage for model-call diagnostic events around attempt stream functions.
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import {
+  createAssistantMessageEventStream,
+  type AssistantMessageEvent,
+} from "openclaw/plugin-sdk/llm";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -19,6 +24,10 @@ import {
   startDiagnosticRunActivityTracking,
 } from "../../../logging/diagnostic-run-activity.js";
 import { resetGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import { makeZeroUsageSnapshot } from "../../usage.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 
 async function collectModelCallEvents(
@@ -36,9 +45,7 @@ async function collectModelCallEvents(
   });
   try {
     await run();
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await yieldToEventLoop();
     return events;
   } finally {
     stop();
@@ -62,9 +69,7 @@ async function collectTrustedModelCallEvents(run: () => Promise<void>): Promise<
   });
   try {
     await run();
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await yieldToEventLoop();
     return events;
   } finally {
     stop();
@@ -181,6 +186,80 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     expectNumberField(completedEvent, "responseStreamBytes");
     expectNumberField(completedEvent, "timeToFirstByteMs");
     expect(JSON.stringify(events)).not.toContain("sk-test-secret-value");
+  });
+
+  it("observes and yields the same iterator value without reading it twice", async () => {
+    const model = makeProviderModelFixture({
+      id: "test-model",
+      provider: "test-provider",
+      api: "openai-responses",
+      baseUrl: "https://example.invalid",
+    });
+    const firstChunk: AssistantMessageEvent = {
+      type: "text_delta",
+      contentIndex: 0,
+      delta: "first",
+    };
+    const readChunk = vi
+      .fn<() => AssistantMessageEvent>()
+      .mockReturnValueOnce(firstChunk)
+      .mockReturnValue({ type: "text_delta", contentIndex: 0, delta: "second value" });
+    const source: Awaited<ReturnType<StreamFn>> = {
+      [Symbol.asyncIterator]() {
+        let emitted = false;
+        return {
+          async next(): Promise<IteratorResult<AssistantMessageEvent>> {
+            if (emitted) {
+              return { done: true, value: undefined };
+            }
+            emitted = true;
+            return {
+              done: false,
+              get value() {
+                return readChunk();
+              },
+            };
+          },
+        };
+      },
+      async result() {
+        return {
+          role: "assistant",
+          content: [{ type: "text", text: "first" }],
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: makeZeroUsageSnapshot(),
+          stopReason: "stop",
+          timestamp: 0,
+        };
+      },
+    };
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(() => source, {
+      runId: "run-value-getter",
+      provider: model.provider,
+      model: model.id,
+      trace: createDiagnosticTraceContext(),
+      nextCallId: () => "call-value-getter",
+    });
+    const chunks: AssistantMessageEvent[] = [];
+    const events = await collectModelCallEvents(async () => {
+      const response = await wrapped(model, { messages: [] });
+      for await (const chunk of response) {
+        chunks.push(chunk);
+      }
+      await response.result();
+    });
+
+    expect(chunks).toEqual([firstChunk]);
+    expect(readChunk).toHaveBeenCalledOnce();
+    expect(events.map((event) => event.type)).toEqual([
+      "model.call.started",
+      "model.call.completed",
+    ]);
+    expect(events[1]).toMatchObject({
+      responseStreamBytes: Buffer.byteLength(firstChunk.delta, "utf8"),
+    });
   });
 
   it("normalizes the timeout from each exact model request", async () => {
@@ -309,134 +388,147 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     expect(requestTimeouts).toEqual([300_000]);
   });
 
-  it("captures output and completes when callers only await stream.result()", async () => {
-    const assistant = {
-      role: "assistant",
-      content: [{ type: "text", text: "compaction summary" }],
-      api: "openai-responses",
-      provider: "openai",
-      model: "gpt-5.4",
-      usage: { input: 11, output: 7, cacheRead: 0, cacheWrite: 0, totalTokens: 18 },
-      stopReason: "stop",
-      timestamp: 1,
-    };
-    const originalStream = {
-      [Symbol.asyncIterator]() {
-        return {
-          next() {
-            throw new Error("result-only callers should not need stream iteration");
-          },
-        };
-      },
-      result: vi.fn(async () => assistant),
-    };
-    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
-      (() => originalStream) as unknown as StreamFn,
-      {
-        runId: "run-compact",
-        sessionKey: "session-key",
-        sessionId: "session-id",
+  it.each([
+    { stopReason: "stop", terminalType: "model.call.completed" },
+    { stopReason: "error", terminalType: "model.call.error" },
+    { stopReason: "aborted", terminalType: "model.call.error" },
+  ])(
+    "records $stopReason when callers only await stream.result()",
+    async ({ stopReason, terminalType }) => {
+      const assistant = {
+        role: "assistant",
+        content: [{ type: "text", text: "compaction summary" }],
+        api: "openai-responses",
         provider: "openai",
         model: "gpt-5.4",
-        trace: createDiagnosticTraceContext(),
-        contentCapture: {
-          inputMessages: true,
-          outputMessages: true,
-          toolInputs: false,
-          toolOutputs: false,
-          systemPrompt: true,
-          toolDefinitions: true,
-          anyModelContent: true,
+        usage: { input: 11, output: 7, cacheRead: 0, cacheWrite: 0, totalTokens: 18 },
+        stopReason,
+        errorMessage: stopReason === "stop" ? undefined : "synthetic provider failure",
+        timestamp: 1,
+      };
+      const originalStream = {
+        [Symbol.asyncIterator]() {
+          return {
+            next() {
+              throw new Error("result-only callers should not need stream iteration");
+            },
+          };
         },
-        nextCallId: () => "call-result-only",
-      },
-    );
-
-    const inputMessages = [{ role: "user", content: "summarize this transcript", timestamp: 1 }];
-    const events = await collectTrustedModelCallEvents(async () => {
-      const streamResult = wrapped(
-        {} as never,
+        result: vi.fn(async () => assistant),
+      };
+      const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+        (() => originalStream) as unknown as StreamFn,
         {
-          systemPrompt: "summarize accurately",
-          messages: inputMessages,
-        } as never,
-        {},
-      ) as unknown as typeof originalStream;
-      expect(await streamResult.result()).toBe(assistant);
-    });
-
-    expect(originalStream.result).toHaveBeenCalledOnce();
-    expect(events.map(({ event }) => event.type)).toEqual([
-      "model.call.started",
-      "model.call.completed",
-    ]);
-    const completedEvent = getEvent(
-      events.map((entry) => entry.event),
-      1,
-    );
-    expect(completedEvent.type).toBe("model.call.completed");
-    expect(completedEvent.callId).toBe("call-result-only");
-    expect(completedEvent.responseStreamBytes).toBe(
-      Buffer.byteLength(JSON.stringify(assistant), "utf8"),
-    );
-    expect(events[1]?.privateData.modelContent?.inputMessages).toEqual(inputMessages);
-    expect(events[1]?.privateData.modelContent?.systemPrompt).toBe("summarize accurately");
-    expect(events[1]?.privateData.modelContent?.outputMessages).toEqual([assistant]);
-  });
-
-  it("closes the underlying iterator when result() completes before the consumer abandons it", async () => {
-    // Mirrors packages/agent-core/src/agent-loop.ts: iterate, await result() on
-    // the terminal event, then return (abandoning the iterator). The iterator's
-    // return() carries provider cleanup (idle-timeout abort listeners, readers),
-    // so it must still run even though result() emits the terminal event first.
-    let returnCalled = false;
-    const doneEvent = { type: "done", message: { role: "assistant", content: "ok" } };
-    const stream = {
-      [Symbol.asyncIterator]() {
-        let emitted = false;
-        return {
-          async next() {
-            if (!emitted) {
-              emitted = true;
-              return { value: doneEvent, done: false };
-            }
-            return { value: undefined, done: true };
+          runId: "run-compact",
+          sessionKey: "session-key",
+          sessionId: "session-id",
+          provider: "openai",
+          model: "gpt-5.4",
+          trace: createDiagnosticTraceContext(),
+          contentCapture: {
+            inputMessages: true,
+            outputMessages: true,
+            toolInputs: false,
+            toolOutputs: false,
+            systemPrompt: true,
+            toolDefinitions: true,
+            anyModelContent: true,
           },
-          async return() {
-            returnCalled = true;
-            return { value: undefined, done: true };
-          },
-        };
-      },
-      result: async () => doneEvent.message,
-    };
-    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
-      (() => stream) as unknown as StreamFn,
-      {
-        runId: "run-cleanup",
-        provider: "openai",
-        model: "gpt-5.4",
-        trace: createDiagnosticTraceContext(),
-        nextCallId: () => "call-cleanup",
-      },
-    );
+          nextCallId: () => "call-result-only",
+        },
+      );
 
-    const events = await collectModelCallEvents(async () => {
-      const response = wrapped({} as never, {} as never, {} as never) as unknown as typeof stream;
-      for await (const event of response as AsyncIterable<{ type: string }>) {
-        if (event.type === "done") {
-          await (response as { result: () => Promise<unknown> }).result();
+      const inputMessages = [{ role: "user", content: "summarize this transcript", timestamp: 1 }];
+      const events = await collectTrustedModelCallEvents(async () => {
+        const streamResult = wrapped(
+          {} as never,
+          {
+            systemPrompt: "summarize accurately",
+            messages: inputMessages,
+          } as never,
+          {},
+        ) as unknown as typeof originalStream;
+        expect(await streamResult.result()).toBe(assistant);
+      });
+
+      expect(originalStream.result).toHaveBeenCalledOnce();
+      expect(events.map(({ event }) => event.type)).toEqual(["model.call.started", terminalType]);
+      const terminalEvent = getEvent(
+        events.map((entry) => entry.event),
+        1,
+      );
+      expect(terminalEvent.callId).toBe("call-result-only");
+      expect(terminalEvent.responseStreamBytes).toBe(
+        Buffer.byteLength(JSON.stringify(assistant), "utf8"),
+      );
+      expect(events[1]?.privateData.modelContent?.inputMessages).toEqual(inputMessages);
+      expect(events[1]?.privateData.modelContent?.systemPrompt).toBe("summarize accurately");
+      expect(events[1]?.privateData.modelContent?.outputMessages).toEqual([assistant]);
+    },
+  );
+
+  it.each([
+    { stopReason: "stop", resultFirst: false, terminalType: "model.call.completed" },
+    { stopReason: "error", resultFirst: false, terminalType: "model.call.error" },
+    { stopReason: "error", resultFirst: true, terminalType: "model.call.error" },
+  ])(
+    "closes the $stopReason iterator with resultFirst=$resultFirst",
+    async ({ stopReason, resultFirst, terminalType }) => {
+      // Mirrors packages/agent-core/src/agent-loop.ts: iterate, await result() on
+      // the terminal event, then return (abandoning the iterator). The iterator's
+      // return() carries provider cleanup (idle-timeout abort listeners, readers),
+      // so it must still run regardless of which observer emits the terminal event.
+      let returnCalled = false;
+      const assistant = { role: "assistant", content: "ok", stopReason };
+      const terminalEvent =
+        stopReason === "stop"
+          ? { type: "done", reason: stopReason, message: assistant }
+          : { type: "error", reason: stopReason, error: assistant };
+      const stream = {
+        [Symbol.asyncIterator]() {
+          let emitted = false;
+          return {
+            async next() {
+              if (!emitted) {
+                emitted = true;
+                return { value: terminalEvent, done: false };
+              }
+              return { value: undefined, done: true };
+            },
+            async return() {
+              returnCalled = true;
+              return { value: undefined, done: true };
+            },
+          };
+        },
+        result: async () => assistant,
+      };
+      const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+        (() => stream) as unknown as StreamFn,
+        {
+          runId: "run-cleanup",
+          provider: "openai",
+          model: "gpt-5.4",
+          trace: createDiagnosticTraceContext(),
+          nextCallId: () => "call-cleanup",
+        },
+      );
+
+      const events = await collectModelCallEvents(async () => {
+        const response = wrapped({} as never, {} as never, {} as never) as unknown as typeof stream;
+        const earlyResult = resultFirst ? await response.result() : undefined;
+        for await (const event of response as AsyncIterable<{ type: string }>) {
+          expect(event).toBe(terminalEvent);
+          const result = resultFirst ? earlyResult : await response.result();
+          expect(result).toBe(assistant);
           break;
         }
-      }
-    });
+      });
 
-    expect(returnCalled).toBe(true);
-    expect(events.map((event) => event.type)).toEqual([
-      "model.call.started",
-      "model.call.completed",
-    ]);
-  });
+      expect(returnCalled).toBe(true);
+      expect(events.map((event) => event.type)).toEqual(["model.call.started", terminalType]);
+    },
+  );
 
   it("emits error events when stream iteration fails", async () => {
     const requestId = "req_provider_123";
@@ -549,4 +641,133 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     expectNumberField(completedEvent, "durationMs");
     expect(events[1]).not.toHaveProperty("errorCategory");
   });
+
+  it.each([
+    { stopReason: "reject", terminalType: "model.call.error" },
+    { stopReason: "error", terminalType: "model.call.error" },
+    { stopReason: "aborted", terminalType: "model.call.error" },
+    { stopReason: "stop", terminalType: "model.call.completed" },
+  ] as const)(
+    "classifies bare EOF with $stopReason for every consumer",
+    async ({ stopReason, terminalType }) => {
+      // Exercise the actual producer contract: end() rejects, while end(message)
+      // resolves without yielding a terminal event. Workers may only drain events.
+      for (const readResult of [false, true]) {
+        const originalStream = createAssistantMessageEventStream();
+        if (stopReason === "reject") {
+          originalStream.end();
+        } else {
+          originalStream.end({
+            role: "assistant",
+            content: [{ type: "text", text: "partial" }],
+            api: "openai-responses",
+            provider: "openai",
+            model: "gpt-5.6-luna",
+            stopReason,
+            errorMessage: "connection reset [request_id=req_eof_proof]",
+            usage: makeZeroUsageSnapshot(),
+            timestamp: 0,
+          });
+        }
+        const result = vi.spyOn(originalStream, "result");
+        const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(() => originalStream, {
+          runId: "run-bare-eof",
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          trace: createDiagnosticTraceContext(),
+          nextCallId: () => `call-eof-${readResult}`,
+        });
+        const events = await collectModelCallEvents(async () => {
+          const response = await wrapped({} as never, { messages: [] });
+          await drain(response);
+          if (readResult) {
+            const firstResult = response.result();
+            expect(response.result()).toBe(firstResult);
+            if (stopReason === "reject") {
+              await expect(firstResult).rejects.toThrow(
+                "event stream ended without a terminal event or final result",
+              );
+            } else {
+              await expect(firstResult).resolves.toMatchObject({ stopReason });
+            }
+          }
+        });
+        expect(result).toHaveBeenCalledOnce();
+        expect(events.map((event) => event.type)).toEqual(["model.call.started", terminalType]);
+        if (stopReason === "aborted") {
+          expect(events[1]).toMatchObject({ failureKind: "aborted" });
+        } else if (stopReason === "error") {
+          expect(events[1]).toMatchObject({
+            failureKind: "connection_reset",
+            upstreamRequestIdHash: expect.stringMatching(/^sha256:[a-f0-9]{12}$/),
+          });
+        }
+      }
+    },
+  );
+
+  it("completes iterator-only bare EOF streams without a result() method", async () => {
+    async function* stream() {
+      yield { type: "start" };
+    }
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream()) as unknown as StreamFn,
+      {
+        runId: "run-iterator-only",
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-iterator-only",
+      },
+    );
+    const events = await collectModelCallEvents(async () => {
+      await drain(await wrapped({} as never, { messages: [] }));
+    });
+    expect(events.map((event) => event.type)).toEqual([
+      "model.call.started",
+      "model.call.completed",
+    ]);
+  });
+
+  it.each([false, true])(
+    "retains delayed result work through owner close (reject=%s)",
+    async (reject) => {
+      const work = new AsyncWorkScope();
+      const gate = createDeferredCore();
+      const source = createAssistantMessageEventStream();
+      source.end();
+      const nativeResult = source.result.bind(source);
+      source.result = async () => {
+        await gate.promise;
+        return nativeResult();
+      };
+      const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(() => source, {
+        runId: "run-delayed-eof",
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-delayed-eof",
+      });
+      const events = await collectModelCallEvents(async () => {
+        const response = await wrapped({} as never, { messages: [] });
+        await work.run(() => drain(response));
+        let closed = false;
+        const closing = work.drain().then(() => {
+          closed = true;
+        });
+        try {
+          await yieldToEventLoop();
+          expect(closed).toBe(false);
+        } finally {
+          if (reject) {
+            gate.reject(new Error("deferred result repair failed"));
+          } else {
+            gate.resolve();
+          }
+          await closing;
+        }
+      });
+      expect(events.map((event) => event.type)).toEqual(["model.call.started", "model.call.error"]);
+    },
+  );
 });

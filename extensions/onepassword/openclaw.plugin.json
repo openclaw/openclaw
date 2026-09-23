@@ -1,5 +1,6 @@
 {
   "id": "onepassword",
+  "categories": ["security"],
   "name": "1Password",
   "description": "1Password SecretRef resolver and curated agent broker with approval policy and SQLite audit history.",
   "cliCommands": [
@@ -53,6 +54,32 @@
       ]
     }
   },
+  "configGroups": [
+    {
+      "id": "1password-connection",
+      "title": "1Password connection",
+      "order": 10,
+      "properties": ["vault", "opBin", "opTimeoutMs"]
+    },
+    {
+      "id": "registered-items",
+      "title": "Registered items",
+      "order": 20,
+      "properties": ["items"]
+    },
+    {
+      "id": "access-policy",
+      "title": "Access policy",
+      "order": 30,
+      "properties": ["defaultPolicy", "grantTtlHours"]
+    },
+    {
+      "id": "credential-caching",
+      "title": "Credential caching",
+      "order": 40,
+      "properties": ["cacheTtlSeconds"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

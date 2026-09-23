@@ -131,6 +131,11 @@ describe("chat queue order", () => {
       item: queued("a", 1, { sendState: "waiting-reconnect" }),
       movable: true,
     },
+    {
+      label: "attempted reconnecting send",
+      item: queued("a", 1, { sendState: "waiting-reconnect", sendAttempts: 1 }),
+      movable: false,
+    },
     { label: "failed send", item: queued("a", 1, { sendState: "failed" }), movable: true },
     { label: "in-flight send", item: queued("a", 1, { sendState: "sending" }), movable: false },
     { label: "pending run row", item: queued("a", 1, { pendingRunId: "run-1" }), movable: false },

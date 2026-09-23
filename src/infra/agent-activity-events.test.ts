@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, expectTypeOf, test } from "vitest";
 import {
   emitAgentActivityEvent,
+  projectAgentToolActivity,
   type AgentCommandOutputEventData,
   type AgentItemEventData,
   type AgentPatchSummaryEventData,
@@ -16,6 +17,25 @@ describe("agent activity events", () => {
   beforeEach(() => {
     resetAgentEventsForTest();
   });
+
+  test.each([true, false])(
+    "does not expose a child assignment in progress (named: %s)",
+    (named) => {
+      const item = projectAgentToolActivity({
+        toolCallId: "spawn-worker",
+        name: "sessions_spawn",
+        phase: "start",
+        args: {
+          ...(named ? { label: "Maple", taskName: "verify-release" } : {}),
+          task: "PRIVATE_CHILD_ASSIGNMENT: inspect an internal document and report its contents",
+        },
+      });
+      if (named) {
+        expect(`${item.title} ${item.meta ?? ""}`).toContain("Maple");
+      }
+      expect(JSON.stringify(item)).not.toContain("PRIVATE_CHILD_ASSIGNMENT");
+    },
+  );
 
   test("emits every activity stream with shared sequencing and context", () => {
     const itemData: AgentItemEventData = {

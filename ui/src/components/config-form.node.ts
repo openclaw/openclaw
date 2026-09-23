@@ -12,9 +12,9 @@ import { renderNumberInput, renderSelect, renderTextInput } from "./config-form.
 import {
   renderFieldRow,
   isAnySchema,
+  isSecretRefObject,
   renderSchemaDefaultDescription,
   renderSegmentedControl,
-  renderTags,
   type ConfigNodeRenderParams,
 } from "./config-form.node.shared.ts";
 import {
@@ -22,14 +22,14 @@ import {
   matchesNodeSearch,
   resolveConfigFieldMeta as resolveFieldMeta,
 } from "./config-form.search.ts";
-import { configFieldId, hintForPath, pathKey, schemaType } from "./config-form.shared.ts";
+import { hintForPath, pathKey, schemaType } from "./config-form.shared.ts";
 import { renderSettingsToggle, renderSettingsToggleRow } from "./settings-ui.ts";
 
 export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typeof nothing {
   const { schema, value, path, hints, unsupported, disabled, onPatch } = params;
   const showLabel = params.showLabel ?? true;
   const type = schemaType(schema);
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+  const { label, help } = resolveFieldMeta(path, schema, hints);
   const key = pathKey(path);
   const criteria = params.searchCriteria;
 
@@ -49,7 +49,6 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
   ) {
     return renderFieldRow({
       label,
-      tags: [],
       showLabel: true,
       control: nothing,
       error: t("configForm.unsupportedNode"),
@@ -65,7 +64,7 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
   const structuredDraftValue = structuredDraftInitialValue(params);
   if (shouldStageStructuredDraft(params, structuredDraftValue)) {
     const props: ConfigFormStructuredDraftProps = {
-      identity: configFieldId(path, "structured-draft"),
+      identity: JSON.stringify(path.filter((segment) => typeof segment === "string")),
       sourceIdentity: params.sourceIdentity ?? value,
       initialValue: structuredDraftValue,
       params,
@@ -115,13 +114,13 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
         label,
         help,
         defaultDescription: renderSchemaDefaultDescription(schema, value),
-        tags,
         showLabel,
         control: renderSegmentedControl({
           options: literals,
           resolvedValue,
           disabled,
           ariaLabel: label,
+          descriptionId: params.descriptionId,
           onSelect: (literal) => onPatch(path, literal),
         }),
       });
@@ -139,6 +138,17 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
         variantType === "integer" ? "number" : variantType,
       ),
     );
+
+    if (
+      params.maskSensitive === true &&
+      Array.isArray(schema.type) &&
+      normalizedTypes.size === 2 &&
+      normalizedTypes.has("string") &&
+      normalizedTypes.has("object") &&
+      (value === undefined || typeof value === "string" || isSecretRefObject(value))
+    ) {
+      return renderTextInput({ ...params, inputType: "text" });
+    }
 
     if (
       [...normalizedTypes].every((variantType) =>
@@ -168,22 +178,22 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
     return renderJsonTextarea(params);
   }
 
-  // Enum - use segmented for small, dropdown for large
+  // Nullable enums use the dropdown's distinct null and unset choices.
   if (schema.enum) {
     const options = schema.enum;
-    if (options.length <= 5) {
+    if (options.length <= 5 && !(schema.nullable && schema.enumIncludesNull)) {
       const resolvedValue = value !== undefined ? value : schema.default;
       return renderFieldRow({
         label,
         help,
         defaultDescription: renderSchemaDefaultDescription(schema, value),
-        tags,
         showLabel,
         control: renderSegmentedControl({
           options,
           resolvedValue,
           disabled,
           ariaLabel: label,
+          descriptionId: params.descriptionId,
           onSelect: (option) => onPatch(path, option),
         }),
       });
@@ -215,13 +225,33 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
           ? schema.default
           : false;
     const onChange = (checked: boolean) => onPatch(path, checked);
+    if (params.compact) {
+      return renderFieldRow({
+        label,
+        help,
+        showLabel,
+        control: html`<input
+          type="checkbox"
+          aria-label=${label}
+          aria-describedby=${params.descriptionId ?? nothing}
+          .checked=${displayValue}
+          ?disabled=${disabled}
+          @change=${(event: Event) => {
+            // SAFETY: Lit binds this handler directly to the native checkbox.
+            const input = event.currentTarget as HTMLInputElement;
+            if (onChange(input.checked) === false) {
+              input.checked = displayValue;
+            }
+          }}
+        />`,
+      });
+    }
     if (!showLabel) {
       // Control-only contexts (array items, map values) have no visible title,
       // so the switch keeps its accessible name from the field label.
       return renderFieldRow({
         label,
         help,
-        tags,
         showLabel,
         control: renderSettingsToggle({
           checked: displayValue,
@@ -232,10 +262,10 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
       });
     }
     const description =
-      help || tags.length > 0 || schema.default !== undefined
+      help || schema.default !== undefined
         ? html`
             ${help ?? nothing} ${help && schema.default !== undefined ? html`<br />` : nothing}
-            ${renderSchemaDefaultDescription(schema, value)}${renderTags(tags)}
+            ${renderSchemaDefaultDescription(schema, value)}
           `
         : undefined;
     return renderSettingsToggleRow({
@@ -264,7 +294,6 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
   // Fallback
   return renderFieldRow({
     label,
-    tags: [],
     showLabel: true,
     control: nothing,
     error: t("configForm.unsupportedType", { type: String(type) }),

@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AgentActivityItem } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
@@ -91,31 +92,29 @@ describe("chat history cursor revalidation", () => {
         ...message("assistant", "Alice finished the command.", "alice-final", 4),
         timestamp: 2000,
       };
-      const handler = vi.fn(
-        async (): Promise<unknown> => ({
-          kind: "delta",
-          messages: [
-            {
-              sessionKey,
-              message: aliceFinal,
-              messageId: "alice-final",
-              messageSeq: 4,
-              runId: "alice-run",
-            },
-          ],
-          deltaCursor: "cursor-4",
-          sessionInfo: {
-            key: sessionKey,
-            kind: "direct",
-            sessionId: "session-cursor",
-            activeLeafEntryId: "alice-final",
-            updatedAt: 2000,
-            hasActiveRun: false,
-            status: "done",
-            lastRunId: "alice-run",
+      const handler = vi.fn(async (): Promise<unknown> => ({
+        kind: "delta",
+        messages: [
+          {
+            sessionKey,
+            message: aliceFinal,
+            messageId: "alice-final",
+            messageSeq: 4,
+            runId: "alice-run",
           },
-        }),
-      );
+        ],
+        deltaCursor: "cursor-4",
+        sessionInfo: {
+          key: sessionKey,
+          kind: "direct",
+          sessionId: "session-cursor",
+          activeLeafEntryId: "alice-final",
+          updatedAt: 2000,
+          hasActiveRun: false,
+          status: "done",
+          lastRunId: "alice-run",
+        },
+      }));
       const state = createState(handler);
       state.sessionKey = sessionKey;
       state.chatDisplayedLeafEntryId = "alice-tool-result";
@@ -282,7 +281,22 @@ describe("chat history cursor revalidation", () => {
     expect(current.runs).toBe(projection.runs);
   });
 
-  it("keeps cached paint while replay updates an existing tool message in place", async () => {
+  it.each<{ name: string; items: AgentActivityItem[] }>([
+    { name: "authoritative quiet", items: [] },
+    {
+      name: "prepared completion",
+      items: [
+        {
+          itemId: "call-1",
+          toolCallId: "call-1",
+          kind: "tool",
+          phase: "end",
+          title: "Read file",
+          status: "completed",
+        },
+      ],
+    },
+  ])("keeps cached paint while replay hydrates $name in place", async ({ items }) => {
     const cached = message(
       "assistant",
       [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
@@ -311,6 +325,7 @@ describe("chat history cursor revalidation", () => {
     );
     response.resolve({
       kind: "delta",
+      activity: [{ messageId: "assistant-tool", items }],
       messages: [
         {
           sessionKey: "main",
@@ -329,33 +344,32 @@ describe("chat history cursor revalidation", () => {
     });
     await load;
 
-    expect(state.chatMessages).toEqual([replayed]);
+    const hydrated = { ...replayed, activity: items };
+    expect(state.chatMessages).toEqual([hydrated]);
     expect(readChatSessionSnapshot(cache, state, { sessionKey: state.sessionKey })).toMatchObject({
       deltaCursor: "cursor-2",
-      messages: [replayed],
+      messages: [hydrated],
     });
   });
 
   it("retires a missed terminal failure after a newer successful cursor catch-up", async () => {
     const cached = message("user", "cached", "cached-user", 1);
-    const handler = vi.fn(
-      async (_params?: unknown): Promise<unknown> => ({
-        kind: "delta",
-        messages: [],
-        deltaCursor: "cursor-2",
-        sessionInfo: {
-          key: "main",
-          kind: "direct",
-          sessionId: "session-cursor",
-          updatedAt: 2,
-          status: "failed",
-          hasActiveRun: false,
-          lastRunId: "run-first",
-          lastRunError:
-            "Git clone could not reach GitHub. Check the Gateway network connection and retry.",
-        },
-      }),
-    );
+    const handler = vi.fn(async (_params?: unknown): Promise<unknown> => ({
+      kind: "delta",
+      messages: [],
+      deltaCursor: "cursor-2",
+      sessionInfo: {
+        key: "main",
+        kind: "direct",
+        sessionId: "session-cursor",
+        updatedAt: 2,
+        status: "failed",
+        hasActiveRun: false,
+        lastRunId: "run-first",
+        lastRunError:
+          "Git clone could not reach GitHub. Check the Gateway network connection and retry.",
+      },
+    }));
     const state = createState(handler);
     const cache = seedCachedHistory(state, [cached], "cursor-1");
 

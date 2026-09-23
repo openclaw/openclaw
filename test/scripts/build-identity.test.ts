@@ -1,5 +1,84 @@
-import { describe, expect, it, vi } from "vitest";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveBuildIdentityEnvironment } from "../../scripts/lib/build-identity.mts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { toolingProbeRuntimeEntrypoints } from "./tooling-probe-runtime.test-support.mts";
+
+const buildIdentityUrl = resolveRuntimeWorkerUrl(toolingProbeRuntimeEntrypoints.buildIdentity);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const testNodeExecPath = resolveTestNodeExecPath();
+
+function readGitCommitInChild(cwd: string, env: NodeJS.ProcessEnv = process.env) {
+  const result = spawnSync(
+    testNodeExecPath,
+    [
+      ...resolveRuntimeWorkerArgv(buildIdentityUrl, testNodeExecPath).slice(0, -1),
+      "--input-type=module",
+      "--eval",
+      `const { readCurrentGitCommit } = await import(${JSON.stringify(buildIdentityUrl.href)}); process.stdout.write(JSON.stringify(readCurrentGitCommit()));`,
+    ],
+    {
+      cwd,
+      encoding: "utf8",
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 10_000,
+    },
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+  return JSON.parse(result.stdout) as string | null;
+}
+
+describe("readCurrentGitCommit", () => {
+  it("reads HEAD from the inherited cwd and returns null when Git cannot resolve it", () => {
+    const root = tempDirs.make("openclaw-build-identity-");
+    const repo = join(root, "repo");
+    const outsideRepo = join(root, "outside");
+    mkdirSync(repo);
+    mkdirSync(outsideRepo);
+
+    execFileSync("git", ["init", "-q"], { cwd: repo, stdio: "ignore" });
+    writeFileSync(join(repo, "fixture.txt"), "fixture\n");
+    execFileSync("git", ["add", "fixture.txt"], { cwd: repo, stdio: "ignore" });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=OpenClaw Tests",
+        "-c",
+        "user.email=openclaw-tests@example.invalid",
+        "commit",
+        "-qm",
+        "fixture",
+      ],
+      { cwd: repo, stdio: "ignore" },
+    );
+    const expected = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repo,
+      encoding: "utf8",
+    }).trim();
+
+    expect(readGitCommitInChild(repo)).toBe(expected);
+    expect(readGitCommitInChild(outsideRepo)).toBeNull();
+
+    const envWithoutGit = { ...process.env };
+    for (const key of Object.keys(envWithoutGit)) {
+      if (key.toLowerCase() === "path") {
+        delete envWithoutGit[key];
+      }
+    }
+    envWithoutGit.PATH = "";
+    expect(readGitCommitInChild(repo, envWithoutGit)).toBeNull();
+  });
+});
 
 describe("resolveBuildIdentityEnvironment", () => {
   it.each([

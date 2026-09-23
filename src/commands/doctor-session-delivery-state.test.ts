@@ -12,7 +12,10 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import {
   repairCanonicalSessionDeliveryStates,
   repairCanonicalSessionResolvedSkills,
@@ -265,7 +268,7 @@ describe("doctor canonical session delivery state", () => {
     expect(repaired).not.toHaveProperty("lastAccountId");
   });
 
-  it("publishes cross-agent incognito parent rewrites to each existing SQLite connection", () => {
+  it("publishes cross-agent incognito parent rewrites to each existing SQLite connection", async () => {
     const stateDir = fs.realpathSync(tempDirs.make("openclaw-incognito-warm-cache-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     const oldParentKey = "agent:main:dashboard:incognito-warm-cache";
@@ -291,7 +294,7 @@ describe("doctor canonical session delivery state", () => {
       updatedAt: 20,
       parentSessionKey: oldParentKey,
     });
-    expect(repairReservedIncognitoSessionKeys({ apply: true, cfg: {}, env })).toEqual({
+    expect(await repairReservedIncognitoSessionKeys({ apply: true, cfg: {}, env })).toEqual({
       found: 1,
       repaired: 1,
     });
@@ -521,6 +524,7 @@ describe("doctor canonical session delivery state", () => {
 
     const copiedStateDir = fs.realpathSync(tempDirs.make("openclaw-delivery-copy-"));
     const copiedEnv = { ...process.env, OPENCLAW_STATE_DIR: copiedStateDir };
+    openOpenClawStateDatabase({ env: copiedEnv });
     const copiedPath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: copiedEnv });
     fs.mkdirSync(path.dirname(copiedPath), { recursive: true });
     fs.copyFileSync(sourcePath, copiedPath);

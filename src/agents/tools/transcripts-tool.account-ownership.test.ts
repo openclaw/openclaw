@@ -1,24 +1,32 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
+import { createTranscriptsAutoStartService } from "../../transcripts/auto-start.js";
+import * as transcriptCapture from "../../transcripts/capture.js";
+import { clearTranscriptCapturesForTest } from "../../transcripts/capture.test-support.js";
 import type { TranscriptSourceProvider } from "../../transcripts/provider-types.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
-import { activeSessions } from "./transcripts-tool-runtime.js";
-import { createTranscriptsAutoStartService, createTranscriptsTool } from "./transcripts-tool.js";
+import { createTranscriptsTool } from "./transcripts-tool.js";
 
-const { getTranscriptSourceProviderMock, listTranscriptSourceProvidersMock } = vi.hoisted(() => ({
-  getTranscriptSourceProviderMock: vi.fn(),
-  listTranscriptSourceProvidersMock: vi.fn(() => []),
-}));
-
-vi.mock("../../transcripts/provider-registry.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../transcripts/provider-registry.js")>()),
-  getTranscriptSourceProvider: getTranscriptSourceProviderMock,
-  listTranscriptSourceProviders: listTranscriptSourceProvidersMock,
-}));
-
+const plugins = { allow: ["transcript-test-fixture"] };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function registerProvider(provider: TranscriptSourceProvider): void {
+  const registry = createEmptyPluginRegistry();
+  registry.transcriptSourceProviders.push({
+    pluginId: "transcript-test-fixture",
+    provider,
+    source: import.meta.url,
+  });
+  setActivePluginRegistry(registry);
+}
 
 function createTool(
   stateDir: string,
@@ -26,7 +34,7 @@ function createTool(
   origin?: { channel: string; accountId?: string },
 ) {
   return createTranscriptsTool({
-    config: { transcripts: { enabled: true } },
+    config: { plugins, transcripts: { enabled: true } },
     stateDir,
     agentId,
     ...(origin ? { agentChannel: origin.channel } : {}),
@@ -66,15 +74,16 @@ function discordAccountOwnership(
 }
 
 describe("transcripts tool account ownership", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await clearTranscriptCapturesForTest();
+    setActivePluginRegistry(createEmptyPluginRegistry());
     vi.useRealTimers();
-    activeSessions.clear();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
   });
 
   beforeEach(() => {
-    getTranscriptSourceProviderMock.mockReset();
-    listTranscriptSourceProvidersMock.mockClear();
+    setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
   it("binds account-bound imports to the trusted turn account", async () => {
@@ -84,7 +93,7 @@ describe("transcripts tool account ownership", () => {
       value: source.accountId,
     }));
     const importTranscript = vi.fn(async () => [{ text: "trusted import" }]);
-    getTranscriptSourceProviderMock.mockReturnValue({
+    registerProvider({
       id: "account-bound-import",
       accessControl: discordAccountOwnership(resolveAccountId),
       name: "Account-bound Import",
@@ -129,13 +138,19 @@ describe("transcripts tool account ownership", () => {
 
   it("binds same-channel capture and lifecycle access to the trusted turn account", async () => {
     const stateDir = tempDirs.make("openclaw-transcripts-account-");
-    const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
-    const stop = vi.fn(async () => ({ ok: true as const, sessionId: "account-bound" }));
+    const start = vi.fn<NonNullable<TranscriptSourceProvider["start"]>>(async (request) => ({
+      ok: true as const,
+      session: request.session,
+    }));
+    const stop = vi.fn<NonNullable<TranscriptSourceProvider["stop"]>>(async () => ({
+      ok: true as const,
+      sessionId: "account-bound",
+    }));
     const resolveAccountId = vi.fn(({ source }: { source: { accountId?: string } }) => ({
       ok: true as const,
       value: source.accountId,
     }));
-    getTranscriptSourceProviderMock.mockReturnValue({
+    registerProvider({
       id: "discord-voice",
       aliases: ["discord"],
       accessControl: discordAccountOwnership(resolveAccountId),
@@ -222,7 +237,7 @@ describe("transcripts tool account ownership", () => {
     ).rejects.toThrow("transcripts session not found: account-bound");
     expect(stop).not.toHaveBeenCalled();
 
-    getTranscriptSourceProviderMock.mockReturnValue(undefined);
+    setActivePluginRegistry(createEmptyPluginRegistry());
     await expect(
       createTool(stateDir, "main", { channel: "webchat", accountId: "operator" }).execute(
         "call-provider-missing-webchat",
@@ -289,12 +304,15 @@ describe("transcripts tool account ownership", () => {
     },
   ])("$name before persistence", async ({ resolve, error }) => {
     const stateDir = tempDirs.make("openclaw-transcripts-account-");
-    const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
+    const start = vi.fn<NonNullable<TranscriptSourceProvider["start"]>>(async (request) => ({
+      ok: true as const,
+      session: request.session,
+    }));
     const resolveAccountId = vi.fn(({ source }: { source: { accountId?: string } }) => {
       expect(source.accountId).toBe("account-a");
       return resolve();
     });
-    getTranscriptSourceProviderMock.mockReturnValue({
+    registerProvider({
       id: "discord-voice",
       aliases: ["discord"],
       accessControl: discordAccountOwnership(resolveAccountId),
@@ -325,8 +343,11 @@ describe("transcripts tool account ownership", () => {
 
   it("preserves explicit accounts for providers outside the turn channel namespace", async () => {
     const stateDir = tempDirs.make("openclaw-transcripts-account-");
-    const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
-    getTranscriptSourceProviderMock.mockReturnValue({
+    const start = vi.fn<NonNullable<TranscriptSourceProvider["start"]>>(async (request) => ({
+      ok: true as const,
+      session: request.session,
+    }));
+    registerProvider({
       id: "google-meet",
       aliases: ["googlemeet"],
       name: "Google Meet",
@@ -361,8 +382,11 @@ describe("transcripts tool account ownership", () => {
 
   it("starts account-bound providers only from a binding channel or local tool", async () => {
     const stateDir = tempDirs.make("openclaw-transcripts-account-");
-    const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
-    getTranscriptSourceProviderMock.mockReturnValue({
+    const start = vi.fn<NonNullable<TranscriptSourceProvider["start"]>>(async (request) => ({
+      ok: true as const,
+      session: request.session,
+    }));
+    registerProvider({
       id: "discord-voice",
       aliases: ["discord"],
       accessControl: discordAccountOwnership(),
@@ -422,8 +446,11 @@ describe("transcripts tool account ownership", () => {
   it("does not treat provider lookup aliases as account binding channels", async () => {
     const stateDir = tempDirs.make("openclaw-transcripts-account-");
     const meetingAccountId = `meeting\n${"x".repeat(200)}`;
-    const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
-    getTranscriptSourceProviderMock.mockReturnValue({
+    const start = vi.fn<NonNullable<TranscriptSourceProvider["start"]>>(async (request) => ({
+      ok: true as const,
+      session: request.session,
+    }));
+    registerProvider({
       id: "teams",
       aliases: ["msteams"],
       name: "Teams Meetings",
@@ -464,7 +491,7 @@ describe("transcripts tool account ownership", () => {
   it("applies provider access to historical rows after the agent boundary", async () => {
     const stateDir = tempDirs.make("openclaw-transcripts-account-");
     const store = storeFor(stateDir);
-    getTranscriptSourceProviderMock.mockReturnValue({
+    registerProvider({
       id: "discord-voice",
       aliases: ["discord"],
       accessControl: discordAccountOwnership(),
@@ -606,7 +633,7 @@ describe("transcripts tool account ownership", () => {
       ),
     ).rejects.toThrow("transcripts session not found: beta-named-agent");
 
-    getTranscriptSourceProviderMock.mockReturnValue(undefined);
+    setActivePluginRegistry(createEmptyPluginRegistry());
     await expect(
       webchatTool.execute(
         "call-provider-missing-legacy",
@@ -706,7 +733,7 @@ describe("transcripts tool account ownership", () => {
   it("recovers shipped agent-owned account-less sessions only off-channel", async () => {
     const stateDir = tempDirs.make("openclaw-transcripts-account-");
     const store = storeFor(stateDir);
-    getTranscriptSourceProviderMock.mockReturnValue({
+    registerProvider({
       id: "discord-voice",
       accessControl: discordAccountOwnership(),
       name: "Discord Voice",
@@ -751,7 +778,7 @@ describe("transcripts tool account ownership", () => {
   it("keeps named-agent ownership authoritative for non-binding sources", async () => {
     const stateDir = tempDirs.make("openclaw-transcripts-account-");
     const store = storeFor(stateDir);
-    getTranscriptSourceProviderMock.mockReturnValue({
+    registerProvider({
       id: "meeting-provider",
       name: "Meeting Provider",
       sourceKinds: ["live-caption"],
@@ -796,7 +823,7 @@ describe("transcripts tool account ownership", () => {
 
   it("uses provider access for a recorded agent's historical session", async () => {
     const stateDir = tempDirs.make("openclaw-transcripts-account-");
-    getTranscriptSourceProviderMock.mockReturnValue({
+    registerProvider({
       id: "discord-voice",
       accessControl: discordAccountOwnership(),
       name: "Discord Voice",
@@ -839,11 +866,17 @@ describe("transcripts tool account ownership", () => {
     ).rejects.toThrow(`transcripts session not found: ${session.sessionId}`);
   });
 
-  it("does not stop a same-millisecond replacement owned by another account", async () => {
+  it("does not stop a next-day capture owned by another account", async () => {
     const stateDir = tempDirs.make("openclaw-transcripts-account-");
-    const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
-    const stop = vi.fn(async (request) => ({ ok: true as const, sessionId: request.sessionId }));
-    getTranscriptSourceProviderMock.mockReturnValue({
+    const start = vi.fn<NonNullable<TranscriptSourceProvider["start"]>>(async (request) => ({
+      ok: true as const,
+      session: request.session,
+    }));
+    const stop = vi.fn<NonNullable<TranscriptSourceProvider["stop"]>>(async (request) => ({
+      ok: true as const,
+      sessionId: request.sessionId,
+    }));
+    registerProvider({
       id: "discord-voice",
       accessControl: discordAccountOwnership(({ source }) => ({
         ok: true,
@@ -855,6 +888,7 @@ describe("transcripts tool account ownership", () => {
       stop,
     } satisfies TranscriptSourceProvider);
     const config = {
+      plugins,
       transcripts: {
         enabled: true,
         autoStart: [
@@ -881,52 +915,69 @@ describe("transcripts tool account ownership", () => {
       accountId: "account-b",
     });
 
-    service.start();
-    await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
-    const autoStarted = await storeFor(stateDir).readSession("account-bound-auto-start");
-    if (!autoStarted) {
-      throw new Error("expected the configured capture to start");
-    }
-    await expect(
-      otherAccountTool.execute("other-status", { action: "status" }, undefined, vi.fn()),
-    ).resolves.toMatchObject({ details: { active: [] } });
-    await ownerTool.execute(
-      "owner-stop",
-      { action: "stop", sessionId: "account-bound-auto-start" },
-      undefined,
-      vi.fn(),
-    );
-    expect(stop).toHaveBeenCalledWith(
-      expect.objectContaining({ source: expect.objectContaining({ accountId: "account-a" }) }),
-    );
+    const startTranscripts = transcriptCapture.startTranscripts;
+    const started = createDeferred<Awaited<ReturnType<typeof startTranscripts>>>();
+    // Provider entry precedes active publication; observe the real startup completion.
+    const observeStart = vi
+      .spyOn(transcriptCapture, "startTranscripts")
+      .mockImplementationOnce((params) => {
+        const pending = startTranscripts(params);
+        void pending.then(started.resolve, started.reject);
+        return pending;
+      });
+    try {
+      service.start();
+      await expect(started.promise).resolves.toMatchObject({ status: "active" });
+      expect(start).toHaveBeenCalledOnce();
+      const autoStarted = await storeFor(stateDir).readSession("account-bound-auto-start");
+      if (!autoStarted) {
+        throw new Error("expected the configured capture to start");
+      }
+      await expect(
+        otherAccountTool.execute("other-status", { action: "status" }, undefined, vi.fn()),
+      ).resolves.toMatchObject({ details: { active: [] } });
+      await ownerTool.execute(
+        "owner-stop",
+        { action: "stop", sessionId: "account-bound-auto-start" },
+        undefined,
+        vi.fn(),
+      );
+      expect(stop).toHaveBeenCalledWith(
+        expect.objectContaining({ source: expect.objectContaining({ accountId: "account-a" }) }),
+      );
 
-    stop.mockClear();
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date(autoStarted.startedAt));
-    await otherAccountTool.execute(
-      "replacement-start",
-      {
-        action: "start",
-        providerId: "discord-voice",
-        sessionId: "account-bound-auto-start",
-      },
-      undefined,
-      vi.fn(),
-    );
-    const selector = `${autoStarted.startedAt.slice(0, 10)}/account-bound-auto-start`;
-    await service.stop();
-    expect(stop).not.toHaveBeenCalled();
-    const replacement = await storeFor(stateDir).readSession(selector);
-    expect(replacement).toMatchObject({ source: { accountId: "account-b" } });
-    expect(replacement?.stoppedAt).toBeUndefined();
-    await otherAccountTool.execute(
-      "replacement-stop",
-      { action: "stop", sessionId: "account-bound-auto-start" },
-      undefined,
-      vi.fn(),
-    );
-    expect(stop).toHaveBeenCalledWith(
-      expect.objectContaining({ source: expect.objectContaining({ accountId: "account-b" }) }),
-    );
+      stop.mockClear();
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const nextDay = new Date(Date.parse(autoStarted.startedAt) + 86_400_000);
+      vi.setSystemTime(nextDay);
+      await otherAccountTool.execute(
+        "replacement-start",
+        {
+          action: "start",
+          providerId: "discord-voice",
+          sessionId: "account-bound-auto-start",
+        },
+        undefined,
+        vi.fn(),
+      );
+      const selector = `${nextDay.toISOString().slice(0, 10)}/account-bound-auto-start`;
+      await service.stop();
+      expect(stop).not.toHaveBeenCalled();
+      const replacement = await storeFor(stateDir).readSession(selector);
+      expect(replacement).toMatchObject({ source: { accountId: "account-b" } });
+      expect(replacement?.stoppedAt).toBeUndefined();
+      await otherAccountTool.execute(
+        "replacement-stop",
+        { action: "stop", sessionId: "account-bound-auto-start" },
+        undefined,
+        vi.fn(),
+      );
+      expect(stop).toHaveBeenCalledWith(
+        expect.objectContaining({ source: expect.objectContaining({ accountId: "account-b" }) }),
+      );
+    } finally {
+      observeStart.mockRestore();
+      await service.stop();
+    }
   });
 });

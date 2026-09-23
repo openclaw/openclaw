@@ -13,7 +13,7 @@ import {
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { requestSharedHistory } from "./chat-history-request.ts";
 import {
-  type ChatHistoryResult,
+  type ObservedChatHistoryResult,
   isHistoryCursor,
   resolveChatHistoryPagination,
   historySessionId,
@@ -22,12 +22,12 @@ import {
   clearHistoryCursor,
 } from "./chat-history-snapshot.ts";
 import {
-  chatHistoryRequests,
   beginHistoryRequest,
   ownsHistoryRequest,
   acceptsHistoryResult,
   resetChatHistoryProjection,
   setChatError,
+  setChatHistoryLoad,
 } from "./chat-history-state.ts";
 import {
   materializeVisibleAssistantStreamMessages,
@@ -37,7 +37,7 @@ import {
 } from "./chat-history-stream.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { reconcileChatRunStartup } from "./chat-run-startup.ts";
-import type { ChatState } from "./chat-state-contract.ts";
+import type { ChatHistoryHost, ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import {
   getChatSessionProjection,
   readChatSessionProjectionScope,
@@ -50,6 +50,7 @@ import {
   recordControlUiPerformanceEvent,
   roundedControlUiDurationMs,
 } from "./performance.ts";
+import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { rolloverChatStream } from "./stream-causal-boundary.ts";
 import {
@@ -88,17 +89,35 @@ function recordChatHistoryTiming(
 }
 
 export async function hydrateChatHistory(
-  state: ChatState,
+  state: ChatHistoryHost,
   client: NonNullable<ChatState["client"]>,
   connectionEpoch: number,
+  sessions: ChatHistorySessions,
   sessionKey: string,
   requestAgentId: string | undefined,
   method: "chat.history" | "chat.startup",
   deltaCursor: string | undefined,
   inputRunIds: string[],
   requestKeyPrefix: string,
-): Promise<ChatHistoryResult | undefined> {
+): Promise<ObservedChatHistoryResult | undefined> {
   const ownership = beginHistoryRequest(state, client, connectionEpoch, sessionKey, requestAgentId);
+  const isCurrent = () => state.sessions === sessions && acceptsHistoryResult(state, ownership);
+  const captureRun = (): ChatHistoryRunObservation | undefined => {
+    const runId = state.chatRunId;
+    const sessionId = state.currentSessionId;
+    const generation = state.chatRunLifecycleGeneration ?? 0;
+    return isCurrent() && runId && sessionId
+      ? {
+          runId,
+          sessionId,
+          isCurrent: () =>
+            isCurrent() &&
+            state.chatRunId === runId &&
+            (state.chatRunLifecycleGeneration ?? 0) === generation &&
+            state.currentSessionId === sessionId,
+        }
+      : undefined;
+  };
   const startedAtMs = controlUiNowMs();
   const previousMessages = state.chatMessages;
   const previousRunProjections = readRunProjections(state, sessionKey, requestAgentId);
@@ -120,18 +139,18 @@ export async function hydrateChatHistory(
     const requestModeKey = deltaCursor === undefined ? "page" : `cursor:${deltaCursor}`;
     const requestKey = `${requestKeyPrefix}${requestModeKey}`;
     let response = await requestSharedHistory(
+      sessions,
       client,
       requestKey,
       method,
       sessionKey,
       requestAgentId,
       state,
-      () => acceptsHistoryResult(state, ownership),
+      { isCurrent, captureRun },
       deltaCursor,
-      state.sessions?.canonicalListRevision,
       inputRunIds,
     );
-    if (!acceptsHistoryResult(state, ownership)) {
+    if (!isCurrent()) {
       recordChatHistoryTiming(state, "stale", startedAtMs, {
         requestSessionKey: sessionKey,
         requestAgentId,
@@ -144,18 +163,18 @@ export async function hydrateChatHistory(
       clearHistoryCursor(state, sessionKey, requestAgentId);
       const pageRequestKey = `${requestKeyPrefix}page`;
       response = await requestSharedHistory(
+        sessions,
         client,
         pageRequestKey,
         method,
         sessionKey,
         requestAgentId,
         state,
-        () => acceptsHistoryResult(state, ownership),
+        { isCurrent, captureRun },
         undefined,
-        state.sessions?.canonicalListRevision,
         inputRunIds,
       );
-      if (!acceptsHistoryResult(state, ownership)) {
+      if (!isCurrent()) {
         recordChatHistoryTiming(state, "stale", startedAtMs, {
           requestSessionKey: sessionKey,
           requestAgentId,
@@ -219,7 +238,7 @@ export async function hydrateChatHistory(
         sessionInfo: response.sessionInfo,
         ...(response.inFlightRun ? { inFlightRun: response.inFlightRun } : {}),
         ...(response.metadata ? { metadata: response.metadata } : {}),
-        sourceCanonicalListRevision: response.sourceCanonicalListRevision,
+        observation: response.observation,
       };
     }
     if (isHistoryCursor(response)) {
@@ -263,6 +282,7 @@ export async function hydrateChatHistory(
         ? { activeLeafEntryId: nextDisplayedLeafEntryId }
         : {}),
     });
+    state.chatSubmissions?.observeInitialSession(sessionKey, client, nextSessionId);
     // Only the pane-owned reducer proves which live and pending rows survive;
     // terminal-renderer cleanup must not reclassify them as history. A new
     // session or leaf starts empty.
@@ -319,7 +339,11 @@ export async function hydrateChatHistory(
       );
       pruneHistoryReplacedStreamSegments(state.chatMessages, state, streamReconciliation);
       const liveToolIds = currentLiveToolCallIds(state);
-      if (state.chatRunId && (hasVisibleStream || liveToolIds.length > 0)) {
+      if (
+        state.chatRunId &&
+        (hasVisibleStream || liveToolIds.length > 0) &&
+        !(state.chatRunStartup?.state === "status" && state.chatRunStartup.phase === "retrying")
+      ) {
         reconcileChatRunStartup(state, { state: "activity", runId: state.chatRunId });
       }
       const persistedToolStreamIds = persistedCurrentToolStreamIds(state.chatMessages, state);
@@ -397,7 +421,7 @@ export async function hydrateChatHistory(
     });
     return res;
   } catch (err) {
-    if (!acceptsHistoryResult(state, ownership)) {
+    if (!isCurrent()) {
       recordChatHistoryTiming(state, "stale", startedAtMs, {
         requestSessionKey: sessionKey,
         requestAgentId,
@@ -417,7 +441,7 @@ export async function hydrateChatHistory(
       state.chatThinkingLevel = null;
       state.chatVerboseLevel = null;
     }
-    chatHistoryRequests(state).historyLoad = {
+    setChatHistoryLoad(state, {
       phase: "failed",
       sessionKey,
       requestAgentId,
@@ -426,7 +450,7 @@ export async function hydrateChatHistory(
         ? formatMissingOperatorReadScopeMessage("existing chat history")
         : formatUiError(err),
       retryable: err instanceof GatewayRequestError && err.retryable,
-    };
+    });
     state.requestUpdate?.();
   } finally {
     if (ownsHistoryRequest(state, ownership)) {

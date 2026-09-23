@@ -60,6 +60,59 @@ describe("calculateCost", () => {
 });
 
 describe("clampThinkingLevel", () => {
+  it.each(
+    [
+      "openai-responses",
+      "openclaw-openai-responses-transport",
+      "openclaw-openai-completions-transport",
+    ].flatMap((api) => [undefined, null].map((cap) => ({ api, cap }))),
+  )("advertises a mapped logical Max for $api with cap=$cap", ({ api, cap }) => {
+    const model = makeModel(cap === null ? { max: null } : undefined, {
+      api,
+      compat: {
+        supportedReasoningEfforts: ["ProviderLow", "ProviderHigh"],
+        reasoningEffortMap: { high: "ProviderLow", MAX: "ProviderHigh" },
+      },
+    });
+
+    expect(getSupportedThinkingLevels(model).includes("max")).toBe(cap !== null);
+  });
+
+  it.each(["anthropic-messages", "google-generative-ai", "mistral-conversations"] as const)(
+    "does not apply OpenAI compat levels to %s",
+    (api) => {
+      const model = makeModel(undefined, {
+        api,
+        compat: { supportedReasoningEfforts: ["max"] },
+      });
+      expect(clampThinkingLevel(model, "max")).toBe("high");
+    },
+  );
+
+  it.each(
+    ["openai-responses", "openclaw-openai-completions-transport"].flatMap((api) =>
+      [{ supportsReasoningEffort: false }, { supportedReasoningEfforts: [] }].map((compat) => ({
+        api,
+        compat,
+      })),
+    ),
+  )(
+    "does not expose mapped extended levels when scalar effort is disabled: $api $compat",
+    ({ api, compat }) => {
+      const model = makeModel({ xhigh: "xhigh", max: "max" }, { api, compat });
+
+      expect(getSupportedThinkingLevels(model)).toEqual([
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+      ]);
+      expect(clampThinkingLevel(model, "xhigh")).toBe("high");
+      expect(clampThinkingLevel(model, "max")).toBe("high");
+    },
+  );
+
   it("downgrades explicit extended-level opt-outs", () => {
     expect(clampThinkingLevel(makeModel({ xhigh: null, max: "max" }), "xhigh")).toBe("high");
   });

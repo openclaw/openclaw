@@ -8,12 +8,22 @@ import type {
 
 export type TuiSubmitAction = "local shell" | "command" | "message";
 
-function isExecutableBangLine(text: string): boolean {
-  return !text.includes("\n") && text.startsWith("!") && text !== "!";
+function isBrowserSetupInput(text: string): boolean {
+  return /^\/browser-setup(?:\s|$)/i.test(text.trimStart());
 }
 
-export function trimWouldCreateExecutableBangLine(text: string): boolean {
-  return !isExecutableBangLine(text) && isExecutableBangLine(text.trim());
+function resolveEditorSubmitAction(text: string): TuiSubmitAction {
+  // Reject pasted extra arguments locally, without leaking them into model chat or recall.
+  if (isBrowserSetupInput(text)) {
+    return "command";
+  }
+  if (text.includes("\n")) {
+    return "message";
+  }
+  if (text.startsWith("!") && text.trimEnd() !== "!") {
+    return "local shell";
+  }
+  return text.trimStart().startsWith("/") ? "command" : "message";
 }
 
 function runSubmitAction(
@@ -61,8 +71,8 @@ export function createEditorSubmitHandler(params: {
   return (text: string, snapshot?: TuiChatSubmitSnapshot) => {
     const raw = text;
     const value = raw.trim();
-    const multiline = raw.includes("\n");
-    const trimCreatesExecutableBangLine = trimWouldCreateExecutableBangLine(raw);
+    const action = resolveEditorSubmitAction(raw);
+    const trimChangesAction = resolveEditorSubmitAction(value) !== action;
 
     // Keep previous behavior: ignore empty/whitespace-only submissions.
     if (!value) {
@@ -70,21 +80,14 @@ export function createEditorSubmitHandler(params: {
       return;
     }
 
-    // Bash mode: only if the very first character is '!' and it's not just '!'.
-    // IMPORTANT: use the raw (untrimmed) text so leading spaces do NOT trigger.
-    // Per requirement: a lone '!' should be treated as a normal message.
-    if (isExecutableBangLine(raw)) {
+    if (action !== "message") {
       clearSubmittedEditor();
-      params.editor.addToHistory(raw);
-      runSubmitAction("local shell", () => params.handleBangLine(raw), params.onSubmitError);
-      return;
-    }
-
-    if (!multiline && value.startsWith("/")) {
-      clearSubmittedEditor();
-      // Enable built-in editor prompt history navigation (up/down).
-      params.editor.addToHistory(value);
-      runSubmitAction("command", () => params.handleCommand(value), params.onSubmitError);
+      const command = action === "local shell" ? raw : value;
+      const handle = action === "local shell" ? params.handleBangLine : params.handleCommand;
+      if (!isBrowserSetupInput(command)) {
+        params.editor.addToHistory(command);
+      }
+      runSubmitAction(action, () => handle(command), params.onSubmitError);
       return;
     }
 
@@ -92,14 +95,14 @@ export function createEditorSubmitHandler(params: {
       ? params.admitMessage?.(value, snapshot)
       : params.admitMessage?.(value)) ?? { status: "allowed" };
     if (admission.status === "blocked") {
-      restoreBlockedEditor(trimCreatesExecutableBangLine ? raw : value);
+      restoreBlockedEditor(trimChangesAction ? raw : value);
       params.onBlockedMessageSubmit?.(value, admission);
       return;
     }
 
     clearSubmittedEditor();
-    // Omit chat text whose trimmed history recall would become executable shell input.
-    if (!trimCreatesExecutableBangLine) {
+    // Keep editor dispatch stable on recall; shared chat commands still belong to sendMessage.
+    if (!trimChangesAction) {
       params.editor.addToHistory(value);
     }
     runSubmitAction("message", () => params.sendMessage(value), params.onSubmitError);

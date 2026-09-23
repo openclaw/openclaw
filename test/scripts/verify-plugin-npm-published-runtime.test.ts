@@ -98,6 +98,71 @@ describe("plugin npm publish verifier command limits", () => {
 });
 
 describe("collectPluginNpmPublishedRuntimeErrors", () => {
+  it.each(
+    [".js", ".mjs", ".cjs"].flatMap((extension) => [
+      { extension, present: false },
+      { extension, present: true },
+    ]),
+  )("checks declared $extension runtime presence (present=$present)", ({ extension, present }) => {
+    const entry = `./lib/index${extension}`;
+    expect(
+      collectPluginNpmPublishedRuntimeErrors({
+        packageJson: {
+          name: "runtime-entry-fixture",
+          openclaw: { extensions: [entry] },
+        },
+        files: ["package.json", "openclaw.plugin.json", ...(present ? [entry.slice(2)] : [])],
+      }),
+    ).toEqual(present ? [] : [`runtime-entry-fixture runtime extension entry not found: ${entry}`]);
+  });
+
+  it("reports a missing later JavaScript entry alongside valid JavaScript and TypeScript entries", () => {
+    expect(
+      collectPluginNpmPublishedRuntimeErrors({
+        packageJson: {
+          name: "runtime-entry-fixture",
+          openclaw: { extensions: ["./first.js", "./second.mjs", "./third.cts"] },
+        },
+        files: ["package.json", "openclaw.plugin.json", "first.js", "dist/third.cjs"],
+      }),
+    ).toEqual(["runtime-entry-fixture runtime extension entry not found: ./second.mjs"]);
+  });
+
+  it.each([
+    {
+      name: "uses a valid override without the declared source",
+      sourcePresent: false,
+      runtimePresent: true,
+    },
+    {
+      name: "rejects a missing override despite the declared source",
+      sourcePresent: true,
+      runtimePresent: false,
+    },
+  ])("$name for JavaScript entries", ({ sourcePresent, runtimePresent }) => {
+    expect(
+      collectPluginNpmPublishedRuntimeErrors({
+        packageJson: {
+          name: "runtime-entry-fixture",
+          openclaw: {
+            extensions: ["./index.js"],
+            runtimeExtensions: ["./dist/runtime.cjs"],
+          },
+        },
+        files: [
+          "package.json",
+          "openclaw.plugin.json",
+          ...(sourcePresent ? ["index.js"] : []),
+          ...(runtimePresent ? ["dist/runtime.cjs"] : []),
+        ],
+      }),
+    ).toEqual(
+      runtimePresent
+        ? []
+        : ["runtime-entry-fixture runtime extension entry not found: ./dist/runtime.cjs"],
+    );
+  });
+
   it.each([".ts", ".tsx", ".mts", ".cts"])(
     "rejects source-only %s runtime and setup entries",
     (extension) => {
@@ -382,15 +447,18 @@ describe("findPackedPackageReadmePath", () => {
 });
 
 describe("parseNpmReadmeMetadata", () => {
-  it("accepts non-empty npm readme metadata", () => {
-    expect(parseNpmReadmeMetadata(JSON.stringify("# Plugin\n\nInstall it."))).toBe(
-      "# Plugin\n\nInstall it.",
-    );
+  it.each([
+    { npm: "<=11", payload: "# Plugin\n\nInstall it." },
+    { npm: "12", payload: ["# Plugin\n\nInstall it."] },
+  ])("accepts non-empty npm $npm readme metadata", ({ payload }) => {
+    expect(parseNpmReadmeMetadata(JSON.stringify(payload))).toBe("# Plugin\n\nInstall it.");
   });
 
   it("rejects empty or unsupported npm readme metadata", () => {
     expect(parseNpmReadmeMetadata(JSON.stringify(""))).toBe("");
     expect(parseNpmReadmeMetadata(JSON.stringify(null))).toBe("");
+    expect(parseNpmReadmeMetadata(JSON.stringify([]))).toBe("");
+    expect(parseNpmReadmeMetadata(JSON.stringify(["# One", "# Two"]))).toBe("");
     expect(parseNpmReadmeMetadata("{")).toBe("");
   });
 });

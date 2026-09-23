@@ -19,6 +19,7 @@ export type SignalReactionOpts = {
   targetAuthor?: string;
   targetAuthorUuid?: string;
   groupId?: string;
+  assertDirectAdapterHandoff?: () => void;
 };
 
 export type SignalReactionResult = {
@@ -83,6 +84,7 @@ async function sendReactionSignalCore(params: {
     baseUrl,
     timeoutMs: params.opts.timeoutMs,
     transportKind: params.opts.transportKind ?? accountInfo.transport.kind,
+    assertDirectAdapterHandoff: params.opts.assertDirectAdapterHandoff,
   });
 
   return {

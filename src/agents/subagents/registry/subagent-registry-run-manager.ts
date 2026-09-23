@@ -27,8 +27,7 @@ import { SubagentLaunchManager } from "./subagent-registry-run-launch.js";
 import type { SubagentManagerOptions } from "./subagent-registry-run-wait.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-export type { RegisterSubagentRunParams } from "./subagent-registry-run-launch.js";
-export { markSubagentRunPausedAfterYield } from "./subagent-registry-run-wait.js";
+export { preserveSubagentRunForRestart } from "./subagent-registry-run-wait.js";
 
 const log = createSubsystemLogger("agents/subagent-registry");
 
@@ -258,6 +257,10 @@ class SubagentRunManager extends SubagentLaunchManager {
       entry.killReconciliation = {
         killedAt:
           existingKillIntent?.requestedAt ?? existingKillReconciliation?.killedAt ?? taskEndedAt,
+        taskCancellationAccepted:
+          existingKillIntent || existingKillReconciliation?.taskCancellationAccepted === true
+            ? true
+            : undefined,
         suppressTaskDelivery:
           existingKillIntent?.suppressTaskDelivery === true ||
           existingKillReconciliation?.suppressTaskDelivery === true ||

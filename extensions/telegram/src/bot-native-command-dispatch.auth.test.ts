@@ -1,273 +1,202 @@
-// Telegram tests cover bot native commands.group auth plugin behavior.
-import type {
-  ChannelGroupPolicy,
-  OpenClawConfig,
-  TelegramAccountConfig,
-  TelegramGroupConfig,
-  TelegramTopicConfig,
-} from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import {
-  createNativeCommandsHarness,
-  createTelegramDmCommandContext,
-  createTelegramGroupCommandContext,
-  findNotAuthorizedCalls,
-} from "./bot-native-commands.test-helpers.js";
+  commandMessage,
+  createBot,
+  from,
+  harness,
+} from "./bot.create-telegram-bot.native-pipeline.test-support.js";
+
+vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>()),
+  loadPreparedModelCatalog: vi.fn(async () => []),
+}));
+
+const groupChat = {
+  id: -100999,
+  type: "supergroup",
+  title: "Test group",
+  is_forum: true,
+} as const;
+
+function groupCommand(text = "/status") {
+  return {
+    ...commandMessage(text),
+    chat: groupChat,
+    message_thread_id: 42,
+    is_topic_message: true,
+  };
+}
+
+function setup(
+  params: {
+    telegram?: TelegramAccountConfig;
+    commands?: OpenClawConfig["commands"];
+  } = {},
+) {
+  const bot = createBot(true, true, {
+    commands: { native: true, text: true, ...params.commands },
+    channels: {
+      telegram: {
+        dmPolicy: "allowlist",
+        allowFrom: [],
+        groupAllowFrom: [],
+        groupPolicy: "open",
+        streaming: { mode: "off" },
+        groups: { "*": { requireMention: false } },
+        ...params.telegram,
+      },
+    },
+  });
+  return { bot, sendMessage: vi.spyOn(bot.api, "sendMessage") };
+}
 
 describe("native command auth in groups", () => {
-  function setup(params: {
-    cfg?: OpenClawConfig;
-    telegramCfg?: TelegramAccountConfig;
-    allowFrom?: string[];
-    groupAllowFrom?: string[];
-    storeAllowFrom?: string[];
-    useAccessGroups?: boolean;
-    groupConfig?: TelegramGroupConfig;
-    topicConfig?: TelegramTopicConfig;
-    resolveGroupPolicy?: () => ChannelGroupPolicy;
-  }) {
-    return createNativeCommandsHarness({
-      cfg: params.cfg ?? ({} as OpenClawConfig),
-      telegramCfg: params.telegramCfg ?? ({} as TelegramAccountConfig),
-      allowFrom: params.allowFrom ?? [],
-      groupAllowFrom: params.groupAllowFrom ?? [],
-      storeAllowFrom: params.storeAllowFrom,
-      useAccessGroups: params.useAccessGroups ?? false,
-      resolveGroupPolicy:
-        params.resolveGroupPolicy ??
-        (() =>
-          ({
-            allowlistEnabled: false,
-            allowed: true,
-          }) as ChannelGroupPolicy),
-      groupConfig: params.groupConfig,
-      topicConfig: params.topicConfig,
-    });
-  }
-
   it("authorizes native commands in groups when sender is in groupAllowFrom", async () => {
-    const { handlers, sendMessage } = setup({
-      groupAllowFrom: ["12345"],
-      useAccessGroups: true,
-      // no allowFrom — sender is NOT in DM allowlist
+    const { bot } = setup({ telegram: { groupAllowFrom: [String(from.id)] } });
+
+    await bot.handleUpdate({ update_id: 1001, message: groupCommand() });
+
+    expect(harness.replySpy).toHaveBeenCalledTimes(1);
+    expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
+      CommandSource: "native",
+      CommandAuthorized: true,
+      CommandBody: "/status",
     });
-
-    const ctx = createTelegramGroupCommandContext();
-
-    await handlers.status?.(ctx);
-
-    const notAuthCalls = findNotAuthorizedCalls(sendMessage);
-    expect(notAuthCalls).toHaveLength(0);
   });
 
   it("does not authorize group native commands from the DM allowlist store", async () => {
-    const { handlers, sendMessage } = setup({
-      storeAllowFrom: ["12345"],
-      useAccessGroups: true,
-    });
+    harness.getReadChannelAllowFromStoreMock().mockResolvedValue([String(from.id)]);
+    const { bot, sendMessage } = setup();
 
-    const ctx = createTelegramGroupCommandContext();
+    await bot.handleUpdate({ update_id: 1001, message: groupCommand() });
 
-    await handlers.status?.(ctx);
-
-    const notAuthCalls = findNotAuthorizedCalls(sendMessage);
-    expect(notAuthCalls.length).toBeGreaterThan(0);
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("authorizes native commands in groups from commands.allowFrom.telegram", async () => {
-    const { handlers, sendMessage } = setup({
-      cfg: {
-        commands: {
-          allowFrom: {
-            telegram: ["12345"],
-          },
-        },
-      } as OpenClawConfig,
-      allowFrom: ["99999"],
-      groupAllowFrom: ["99999"],
-      useAccessGroups: true,
+  it("authorizes native commands in admitted groups from commands.allowFrom.telegram", async () => {
+    const { bot } = setup({
+      commands: { allowFrom: { telegram: [String(from.id)] } },
+      telegram: { allowFrom: ["99999"], groupAllowFrom: ["99999"] },
     });
 
-    const ctx = createTelegramGroupCommandContext();
+    await bot.handleUpdate({ update_id: 1001, message: groupCommand() });
 
-    await handlers.status?.(ctx);
-
-    const notAuthCalls = findNotAuthorizedCalls(sendMessage);
-    expect(notAuthCalls).toHaveLength(0);
+    expect(harness.replySpy).toHaveBeenCalledTimes(1);
+    expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({ CommandAuthorized: true });
   });
 
-  it("uses commands.allowFrom.telegram as the sole auth source when configured", async () => {
-    const { handlers, sendMessage } = setup({
-      cfg: {
-        commands: {
-          allowFrom: {
-            telegram: ["99999"],
-          },
-        },
-      } as OpenClawConfig,
-      groupAllowFrom: ["12345"],
-      useAccessGroups: true,
+  it("uses commands.allowFrom.telegram as the sole command auth source when configured", async () => {
+    const { bot, sendMessage } = setup({
+      commands: { allowFrom: { telegram: ["99999"] } },
+      telegram: { groupAllowFrom: [String(from.id)] },
     });
 
-    const ctx = createTelegramGroupCommandContext();
+    await bot.handleUpdate({ update_id: 1001, message: groupCommand() });
 
-    await handlers.status?.(ctx);
-
-    expect(sendMessage).toHaveBeenCalledWith(
-      -100999,
-      "You are not authorized to use this command.",
-      { message_thread_id: 42 },
-    );
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("silently drops account-disabled native commands", async () => {
-    const { handlers, sendMessage } = setup({
-      cfg: {
-        channels: {
-          telegram: {
-            groupPolicy: "disabled",
-          },
-        },
-        commands: {
-          allowFrom: {
-            telegram: ["12345"],
-          },
-        },
-      } as OpenClawConfig,
-      useAccessGroups: true,
-      resolveGroupPolicy: () =>
-        ({
-          allowlistEnabled: false,
-          allowed: false,
-        }) as ChannelGroupPolicy,
+    const { bot, sendMessage } = setup({
+      commands: { allowFrom: { telegram: [String(from.id)] } },
+      telegram: { groupPolicy: "disabled" },
     });
 
-    const ctx = createTelegramGroupCommandContext();
+    await bot.handleUpdate({ update_id: 1001, message: groupCommand() });
 
-    await handlers.status?.(ctx);
-
+    expect(harness.replySpy).not.toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("silently drops topic-disabled native commands before dispatch", async () => {
-    const cfg = {
-      commands: {
-        allowFrom: {
-          telegram: ["12345"],
+    const { bot, sendMessage } = setup({
+      commands: { allowFrom: { telegram: [String(from.id)] } },
+      telegram: {
+        groups: {
+          [String(groupChat.id)]: {
+            groupPolicy: "open",
+            topics: { "42": { groupPolicy: "disabled" } },
+          },
         },
       },
-    } as OpenClawConfig;
-    const disabled = setup({
-      cfg,
-      telegramCfg: { groupPolicy: "open" } as TelegramAccountConfig,
-      groupConfig: { groupPolicy: "open" },
-      topicConfig: { groupPolicy: "disabled" },
-      useAccessGroups: true,
     });
 
-    await disabled.handlers.status?.(createTelegramGroupCommandContext({ threadId: 42 }));
+    await bot.handleUpdate({ update_id: 1001, message: groupCommand() });
 
-    expect(disabled.sendMessage).not.toHaveBeenCalled();
-    expect(disabled.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("silently drops native commands that inherit disabled group policy", async () => {
-    const { handlers, sendMessage, dispatchReplyWithBufferedBlockDispatcher } = setup({
-      cfg: {
-        commands: {
-          allowFrom: {
-            telegram: ["12345"],
-          },
-        },
-      } as OpenClawConfig,
-      telegramCfg: { groupPolicy: "open" } as TelegramAccountConfig,
-      groupConfig: { groupPolicy: "disabled" },
-      useAccessGroups: true,
+    const { bot, sendMessage } = setup({
+      commands: { allowFrom: { telegram: [String(from.id)] } },
+      telegram: { groups: { [String(groupChat.id)]: { groupPolicy: "disabled" } } },
     });
 
-    await handlers.status?.(createTelegramGroupCommandContext());
+    await bot.handleUpdate({ update_id: 1001, message: groupCommand() });
 
+    expect(harness.replySpy).not.toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
-    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 
   it("silently drops native commands from groups outside the chat allowlist", async () => {
-    const { handlers, sendMessage } = setup({
-      cfg: {
-        commands: {
-          allowFrom: {
-            telegram: ["12345"],
-          },
-        },
-      } as OpenClawConfig,
-      useAccessGroups: true,
-      resolveGroupPolicy: () =>
-        ({
-          allowlistEnabled: true,
-          allowed: false,
-        }) as ChannelGroupPolicy,
+    const { bot, sendMessage } = setup({
+      commands: { allowFrom: { telegram: [String(from.id)] } },
+      telegram: { groups: { "-100888": { requireMention: false } } },
     });
 
-    const ctx = createTelegramGroupCommandContext();
+    await bot.handleUpdate({ update_id: 1001, message: groupCommand() });
 
-    await handlers.status?.(ctx);
-
+    expect(harness.replySpy).not.toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("rejects native commands in groups when sender is in neither allowlist", async () => {
-    const { handlers, sendMessage } = setup({
-      allowFrom: ["99999"],
-      groupAllowFrom: ["99999"],
-      useAccessGroups: true,
+  it("silently drops native commands in groups when sender is in neither allowlist", async () => {
+    const { bot, sendMessage } = setup({
+      telegram: { allowFrom: ["99999"], groupAllowFrom: ["99999"] },
     });
 
-    const ctx = createTelegramGroupCommandContext({
-      username: "intruder",
-    });
+    await bot.handleUpdate({ update_id: 1001, message: groupCommand() });
 
-    await handlers.status?.(ctx);
-
-    const notAuthCalls = findNotAuthorizedCalls(sendMessage);
-    expect(notAuthCalls.length).toBeGreaterThan(0);
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("authorizes a DM native command from commands.allowFrom.telegram when pairing-store read fails transiently", async () => {
-    const readChannelAllowFromStore = vi.fn(async () => {
-      throw new Error("store temporarily unavailable");
-    });
-    const { handlers, sendMessage } = createNativeCommandsHarness({
-      cfg: {
-        commands: { native: true, allowFrom: { telegram: ["12345"] } },
-        channels: { telegram: { dmPolicy: "pairing" } },
-      } as OpenClawConfig,
-      telegramCfg: { dmPolicy: "pairing" } as TelegramAccountConfig,
-      readChannelAllowFromStore,
+  it("authorizes a DM command menu from commands.allowFrom.telegram when pairing-store read fails transiently", async () => {
+    const readStore = harness
+      .getReadChannelAllowFromStoreMock()
+      .mockRejectedValue(new Error("store temporarily unavailable"));
+    const { bot, sendMessage } = setup({
+      commands: { allowFrom: { telegram: [String(from.id)] } },
+      telegram: { dmPolicy: "pairing" },
     });
 
-    const ctx = createTelegramDmCommandContext({ senderId: 12345 });
+    await bot.handleUpdate({ update_id: 1001, message: commandMessage("/think") });
 
-    await handlers.status?.(ctx);
-
-    expect(readChannelAllowFromStore).not.toHaveBeenCalled();
-    expect(findNotAuthorizedCalls(sendMessage)).toHaveLength(0);
-  });
-
-  it("replies in the originating forum topic when auth is rejected", async () => {
-    const { handlers, sendMessage } = setup({
-      allowFrom: ["99999"],
-      groupAllowFrom: ["99999"],
-      useAccessGroups: true,
-    });
-
-    const ctx = createTelegramGroupCommandContext({
-      username: "intruder",
-    });
-
-    await handlers.status?.(ctx);
-
+    expect(readStore).not.toHaveBeenCalled();
+    expect(harness.replySpy).not.toHaveBeenCalled();
     expect(sendMessage).toHaveBeenCalledWith(
-      -100999,
+      from.id,
+      expect.stringContaining("thinking"),
+      expect.objectContaining({
+        reply_markup: expect.objectContaining({ inline_keyboard: expect.any(Array) }),
+      }),
+    );
+  });
+
+  it("replies in the originating forum topic when command menu auth is rejected", async () => {
+    const { bot, sendMessage } = setup({
+      telegram: { allowFrom: ["99999"], groupAllowFrom: ["99999"] },
+    });
+
+    await bot.handleUpdate({ update_id: 1001, message: groupCommand("/think") });
+
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      groupChat.id,
       "You are not authorized to use this command.",
       { message_thread_id: 42 },
     );

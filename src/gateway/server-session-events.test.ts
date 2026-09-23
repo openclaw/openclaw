@@ -15,18 +15,18 @@ import {
   projectChatDisplayMessageMock,
   readSessionMessageByIdAsyncMock,
   readSessionMessageCountAsyncMock,
-  resolveEmbeddedAgentRunProgressStateMock,
-  resolveTranscriptSessionKeyBySessionIdMock,
+  resolveEmbeddedAgentSessionProgressStateMock,
   runtimeConfigState,
   sessionRow,
   storedMessage,
   subscribePluginSessionsChanged,
 } from "./server-session-events.test-support.js";
+import { GatewayClientRegistry } from "./server/client-registry.js";
 
 describe("createTranscriptUpdateBroadcastHandler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    resolveEmbeddedAgentRunProgressStateMock.mockReturnValue(undefined);
+    resolveEmbeddedAgentSessionProgressStateMock.mockReturnValue(undefined);
     listAccessorSessionEntriesReadOnlyMock.mockReturnValue([]);
     loadAccessorSessionEntryReadOnlyMock.mockReturnValue(undefined);
     loadGatewaySessionEntryReadOnlyMock.mockReturnValue({ entry: undefined, storePath: "" });
@@ -35,7 +35,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     readSessionMessageByIdAsyncMock
       .mockReset()
       .mockImplementation(async (_scope, id: string) => storedMessage(id));
-    resolveTranscriptSessionKeyBySessionIdMock.mockReturnValue(undefined);
     runtimeConfigState.value = {};
     sessionRow.key = "agent:main:main";
     sessionRow.thinkingLevel = "ultra";
@@ -191,12 +190,9 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
   });
 
   it("scopes a queued marker update to its final transcript key", async () => {
-    resolveTranscriptSessionKeyBySessionIdMock
-      .mockReturnValueOnce("agent:main:queued")
-      .mockReturnValue("agent:main:current");
-    listAccessorSessionEntriesReadOnlyMock.mockReturnValue([
-      { key: "agent:main:current", entry: { sessionId: "sess-main" } },
-    ]);
+    listAccessorSessionEntriesReadOnlyMock
+      .mockReturnValueOnce([{ key: "agent:main:queued", entry: { sessionId: "sess-main" } }])
+      .mockReturnValue([{ key: "agent:main:current", entry: { sessionId: "sess-main" } }]);
     const getSessionMessageSubscribers = vi.fn((sessionKey: string) =>
       sessionKey === "agent:main:current" ? new Set(["conn-current"]) : new Set(["conn-stale"]),
     );
@@ -515,7 +511,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
   });
 
   it("keeps transcript snapshots active for embedded or channel reply runs", async () => {
-    resolveEmbeddedAgentRunProgressStateMock.mockImplementation((sessionId) =>
+    resolveEmbeddedAgentSessionProgressStateMock.mockImplementation((sessionId) =>
       sessionId === "sess-main" ? "running" : undefined,
     );
 
@@ -530,7 +526,10 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         activeRunIds: null,
       },
     });
-    expect(resolveEmbeddedAgentRunProgressStateMock).toHaveBeenCalledWith("sess-main");
+    expect(resolveEmbeddedAgentSessionProgressStateMock).toHaveBeenCalledWith(
+      "sess-main",
+      expect.objectContaining({ agentId: "main" }),
+    );
   });
 
   it.each([
@@ -568,7 +567,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     expect(getSessionMessageSubscribers).toHaveBeenCalledWith("global");
     expect(loadGatewaySessionRowMock).toHaveBeenCalledWith("global", {
       agentId: "ops",
-      transcriptUsageMaxBytes: 64 * 1024,
     });
     expect(broadcastToConnIds).toHaveBeenCalledWith(
       "session.message",
@@ -656,7 +654,9 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
   it("publishes message-phase changes to plugins without websocket subscribers", async () => {
     const received = vi.fn();
     const unsubscribe = subscribePluginSessionsChanged(received);
-    const { broadcastToConnIds } = createGatewayBroadcaster({ clients: new Set() });
+    const { broadcastToConnIds } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry(),
+    });
     const handler = createTranscriptUpdateBroadcastHandler({
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set() },
@@ -839,7 +839,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       listAccessorSessionEntriesReadOnlyMock.mockReturnValue([
         { key: scenario.firstSessionKey, entry: { sessionId: "sess-main" } },
       ]);
-      resolveTranscriptSessionKeyBySessionIdMock.mockReturnValue(scenario.firstSessionKey);
     }
     const { broadcastToConnIds, handler } = createHandler(false);
 

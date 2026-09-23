@@ -6,6 +6,7 @@ import {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
 } from "./embedded-agent-tool-media.js";
+import { markCoreTtsToolResult } from "./tools/tts-tool-result-provenance.js";
 
 describe("extractToolResultMediaArtifact", () => {
   it("returns undefined for null/undefined", () => {
@@ -415,22 +416,19 @@ describe("extractToolResultMediaArtifact", () => {
     ).toEqual(["/tmp/screenshot.png"]);
   });
 
-  it("keeps trusted TTS local media when the raw built-in name is absent", () => {
+  it("keeps only attested TTS local media when the raw built-in name is absent", () => {
+    const result = markCoreTtsToolResult(
+      { details: { media: { mediaUrl: "/tmp/reply.opus", trustedLocalMedia: true } } },
+      ["/tmp/reply.opus"],
+    );
     expect(
       filterToolResultMediaUrls(
         "tts",
-        ["/tmp/reply.opus"],
-        {
-          details: {
-            media: {
-              mediaUrl: "/tmp/reply.opus",
-              trustedLocalMedia: true,
-            },
-          },
-        },
+        ["/tmp/reply.opus", "/tmp/unattested.opus", "https://example.com/audio.opus"],
+        result,
         new Set(["web_search"]),
       ),
-    ).toEqual(["/tmp/reply.opus"]);
+    ).toEqual(["/tmp/reply.opus", "https://example.com/audio.opus"]);
   });
 
   it("keeps local media for bundled plugin tool names trusted in this run", () => {

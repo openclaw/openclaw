@@ -121,6 +121,99 @@ describe("runGitHubCopilotDeviceFlow — normal flow", () => {
   });
 });
 
+describe("runGitHubCopilotDeviceFlow — live authority", () => {
+  it("does not dispatch the initial request after authority is revoked", async () => {
+    const dispatch = vi.fn();
+    mocks.fetchWithSsrFGuard.mockImplementation(async (params) => {
+      params.beforeRequest?.();
+      dispatch();
+      throw new Error("Request dispatched after authority was revoked");
+    });
+
+    await expect(
+      runGitHubCopilotDeviceFlow({
+        showCode: vi.fn(),
+        assertCurrent: () => {
+          throw new Error("Login revoked");
+        },
+      }),
+    ).rejects.toThrow("Login revoked");
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("does not poll after authority is revoked while presenting the device code", async () => {
+    vi.useFakeTimers();
+    let current = true;
+    let tokenPolls = 0;
+    mocks.fetchWithSsrFGuard.mockImplementation(async (params) => {
+      params.beforeRequest?.();
+      if (params.url === DEVICE_CODE_URL) {
+        return guardResponse({ ...VALID_DEVICE_CODE_BODY, interval: 0 });
+      }
+      tokenPolls += 1;
+      return guardResponse(
+        { access_token: "ghu_tok_xyz", token_type: "bearer" },
+        200,
+        ACCESS_TOKEN_URL,
+      );
+    });
+
+    const rejection = expect(
+      runGitHubCopilotDeviceFlow({
+        showCode: async () => {
+          current = false;
+        },
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("Login revoked");
+          }
+        },
+      }),
+    ).rejects.toThrow("Login revoked");
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await rejection;
+    expect(tokenPolls).toBe(0);
+  });
+
+  it("does not issue another poll after a pending response loses authority", async () => {
+    vi.useFakeTimers();
+    let current = true;
+    let tokenPolls = 0;
+    mocks.fetchWithSsrFGuard.mockImplementation(async (params) => {
+      params.beforeRequest?.();
+      if (params.url === DEVICE_CODE_URL) {
+        return guardResponse({ ...VALID_DEVICE_CODE_BODY, interval: 1 });
+      }
+      tokenPolls += 1;
+      if (tokenPolls === 1) {
+        current = false;
+        return guardResponse({ error: "authorization_pending" }, 200, ACCESS_TOKEN_URL);
+      }
+      return guardResponse(
+        { access_token: "ghu_tok_xyz", token_type: "bearer" },
+        200,
+        ACCESS_TOKEN_URL,
+      );
+    });
+
+    const rejection = expect(
+      runGitHubCopilotDeviceFlow({
+        showCode: vi.fn(async () => {}),
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("Login revoked");
+          }
+        },
+      }),
+    ).rejects.toThrow("Login revoked");
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    await rejection;
+    expect(tokenPolls).toBe(1);
+  });
+});
+
 describe("runGitHubCopilotDeviceFlow — HTTP error propagation", () => {
   it("throws with failureLabel on non-OK device code response", async () => {
     mocks.fetchWithSsrFGuard.mockImplementation(async () => guardResponse({}, 401));

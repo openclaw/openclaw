@@ -33,7 +33,8 @@ async function readJsonBody(request: IncomingMessage): Promise<Record<string, un
 }
 
 function sendJson(response: ServerResponse, result: unknown): void {
-  response.writeHead(200, { "content-type": "application/json" });
+  // Same-process model selection can stall past the loopback socket's idle timeout.
+  response.writeHead(200, { "content-type": "application/json", connection: "close" });
   response.end(JSON.stringify({ ok: true, result }));
 }
 

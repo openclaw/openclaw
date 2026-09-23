@@ -2,10 +2,11 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { pnpmLockfileDocuments } from "../../../scripts/lib/pnpm-lockfile-documents.mjs";
 
 const INSTALL_LIFECYCLE_SCRIPTS = new Set([
   "pnpm:devPreinstall",
@@ -24,6 +25,7 @@ const FILTERED_SCRIPT_CONTRACTS = new Map([
   [
     "package.json",
     {
+      "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
       postinstall: "node scripts/postinstall-bundled-plugins.mjs",
       preinstall: "node scripts/preinstall-package-manager-warning.mjs",
       prepare: "node scripts/prepare-git-hooks.mjs",
@@ -31,17 +33,21 @@ const FILTERED_SCRIPT_CONTRACTS = new Map([
   ],
 ]);
 
+const PNPM_HOOK_FILES = [".pnpmfile.mjs", ".pnpmfile.cjs", "pnpmfile.cjs"];
+
 const INSTALL_INPUT_FILES = [
   "pnpm-lock.yaml",
   "pnpm-workspace.yaml",
   ".npmrc",
-  ".pnpmfile.mjs",
-  ".pnpmfile.cjs",
-  "pnpmfile.cjs",
+  ...PNPM_HOOK_FILES,
   ".github/actions/setup-node-env/dependency-fingerprint.mjs",
+  ".github/actions/setup-node-env/install-dependencies.sh",
   "node-version.mjs",
+  "scripts/lib/pnpm-lockfile-documents.mjs",
+  "scripts/check-install-dependency-ownership.mjs",
   "scripts/postinstall-bundled-plugins.mjs",
   "scripts/lib/package-dist-imports.mjs",
+  "scripts/lib/package-lifecycle-marker.mjs",
   "scripts/preinstall-package-manager-warning.mjs",
   "scripts/prepare-git-hooks.mjs",
 ];
@@ -135,11 +141,67 @@ function trackedPackageManifests(workspace) {
     .toSorted();
 }
 
+function frozenInstallManifests(workspace, manifests) {
+  // Custom readPackage hooks can inspect manifests outside the locked graph.
+  if (
+    PNPM_HOOK_FILES.some((file) => existsSync(path.join(workspace, file))) ||
+    Object.keys(process.env).some((name) => /^(?:pnpm|npm)_config_.*pnpmfile$/iu.test(name)) ||
+    [".npmrc", "pnpm-workspace.yaml"].some((file) => {
+      const config = path.join(workspace, file);
+      return existsSync(config) && /pnpmfile/iu.test(readFileSync(config, "utf8"));
+    })
+  ) {
+    return manifests;
+  }
+  const { dependencies } = pnpmLockfileDocuments(
+    readFileSync(path.join(workspace, "pnpm-lock.yaml"), "utf8"),
+  );
+  // Read only pnpm's generated importer keys before dependencies are available.
+  // Unknown YAML shapes and local tarballs/directories retain the conservative
+  // inventory; frozen reconciliation remains the authority for install validity.
+  if (/(?:^|[\s'":{,])file:/u.test(dependencies)) {
+    return manifests;
+  }
+  const section = dependencies.match(/^importers:\n([\s\S]*?)(?=^[^\s#]|(?![\s\S]))/mu)?.[1];
+  if (!section) {
+    return manifests;
+  }
+  const selected = new Set(["package.json"]);
+  let importer;
+  for (const line of section.split("\n")) {
+    if (!line.trim() || line.trimStart().startsWith("#")) {
+      continue;
+    }
+    if (/^  \S/u.test(line)) {
+      const match = /^  ([a-zA-Z0-9_./-]+):(?: \{\})?$/u.exec(line);
+      if (!match) {
+        return manifests;
+      }
+      importer = match[1];
+      selected.add(path.posix.join(importer, "package.json"));
+    } else if (!/^    /u.test(line)) {
+      return manifests;
+    }
+    const link = /^ +version: link:([a-zA-Z0-9_./-]+)$/u.exec(line);
+    if (line.includes("link:")) {
+      if (!link || !importer) {
+        return manifests;
+      }
+      selected.add(path.posix.join(importer, link[1], "package.json"));
+    }
+  }
+  return manifests.filter((manifest) => selected.has(manifest));
+}
+
 function computeDependencyFingerprint({ workspace, frozenLockfile }) {
   const hash = createHash("sha256");
   addRecord(hash, "contract", "frozen-lockfile", String(frozenLockfile));
 
-  const manifests = trackedPackageManifests(workspace);
+  const trackedManifests = trackedPackageManifests(workspace);
+  const manifests =
+    frozenLockfile === "true"
+      ? frozenInstallManifests(workspace, trackedManifests)
+      : trackedManifests;
   if (manifests.length === 0) {
     throw new Error(`no tracked package.json files found under ${workspace}`);
   }

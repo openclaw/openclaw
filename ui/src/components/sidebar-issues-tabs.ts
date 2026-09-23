@@ -1,11 +1,15 @@
 import { t } from "../i18n/index.ts";
+import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 
-export const ISSUE_TABS = ["all", "approvals", "automations", "system"] as const;
+registerSidebarAttentionEnglish();
+
+export const ISSUE_TABS = ["all", "approvals", "mentions", "automations", "system"] as const;
 export type IssueTab = (typeof ISSUE_TABS)[number];
 
 const TAB_LABEL_KEYS = {
   all: "attention.tabs.all",
   approvals: "attention.tabs.approvals",
+  mentions: "attention.tabs.mentions",
   automations: "attention.tabs.automations",
   system: "attention.tabs.system",
 } as const;

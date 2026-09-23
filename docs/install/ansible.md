@@ -41,7 +41,7 @@ curl -fsSL https://raw.githubusercontent.com/openclaw/openclaw-ansible/main/inst
 1. Tailscale (mesh VPN for secure remote access)
 2. UFW firewall (SSH + Tailscale ports only)
 3. Docker CE + Compose V2 (default agent sandbox backend)
-4. Node.js and pnpm (OpenClaw requires Node 22.22.3+, 24.15+, or 25.9+; Node 26 is recommended)
+4. Node.js and pnpm (OpenClaw requires Node 24.16+ or 26.1+; Node 26 is recommended)
 5. OpenClaw, installed host-based, not containerized
 6. A systemd service with security hardening
 
@@ -115,7 +115,7 @@ nmap -p- YOUR_SERVER_IP
 
 Only port 22 (SSH) should be open. Gateway and Docker stay locked down.
 
-Docker is installed for agent sandboxes (isolated tool execution), not for running the gateway. See [Multi-Agent Sandbox and Tools](/tools/multi-agent-sandbox-tools) for sandbox configuration.
+Docker is installed for agent sandboxes (isolated tool execution), not for running the gateway. See [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools) for sandbox configuration.
 
 ## Manual installation
 
@@ -224,4 +224,4 @@ For detailed security architecture and troubleshooting, see the openclaw-ansible
 - [openclaw-ansible](https://github.com/openclaw/openclaw-ansible): full deployment guide
 - [Docker](/install/docker): containerized gateway setup
 - [Sandboxing](/gateway/sandboxing): agent sandbox configuration
-- [Multi-Agent Sandbox and Tools](/tools/multi-agent-sandbox-tools): per-agent isolation
+- [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools): per-agent isolation

@@ -1,15 +1,16 @@
 // Image operation helpers normalize image transforms and adapter calls.
 import {
-  createRastermill,
   isRastermillUnavailableError,
   RastermillUnavailableError,
   readImageProbeFromHeader as readRastermillImageProbeFromHeader,
   type ImageProbe,
   type ImageMetadata,
 } from "rastermill";
-import { resolveSystemBin } from "../infra/resolve-system-bin.js";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { MAX_IMAGE_INPUT_PIXELS } from "./image-processor-config.js";
+import { convertBmpToPngWithWorker, createImageProcessor } from "./image-processor.js";
+
+export { MAX_IMAGE_INPUT_PIXELS } from "./image-processor-config.js";
+export { createImageProcessor } from "./image-processor.js";
 
 export type { ImageMetadata, ImageProbe };
 
@@ -39,27 +40,6 @@ type ResizeToJpegParams = {
 
 /** Ordered JPEG quality ladder used when shrinking generated or attached images. */
 export const IMAGE_REDUCE_QUALITY_STEPS = [85, 75, 65, 55, 45, 35] as const;
-/** Shared input/output pixel cap for Rastermill-backed image operations. */
-export const MAX_IMAGE_INPUT_PIXELS = 25_000_000;
-
-const loadPhotonRuntime = createLazyRuntimeModule(() => import("./photon.runtime.js"));
-
-/** Creates a Rastermill processor with OpenClaw temp-dir, pixel-limit, and command trust policy. */
-export function createImageProcessor() {
-  return createRastermill({
-    execution: "auto",
-    limits: {
-      inputPixels: MAX_IMAGE_INPUT_PIXELS,
-      outputPixels: MAX_IMAGE_INPUT_PIXELS,
-    },
-    temp: {
-      rootDir: resolvePreferredOpenClawTmpDir(),
-      prefix: "openclaw-img-",
-    },
-    commandResolver: (command) =>
-      resolveSystemBin(command, { trust: command === "powershell" ? "strict" : "standard" }),
-  });
-}
 
 /** Detects either OpenClaw's wrapper error or Rastermill's native unavailable error. */
 export function isImageProcessorUnavailableError(err: unknown): boolean {
@@ -93,6 +73,20 @@ export function readImageMetadataFromHeader(buffer: Buffer): ImageMetadata | nul
 /** Reads image probe data from header bytes without invoking a full image decode. */
 export function readImageProbeFromHeader(buffer: Buffer): ImageProbe | null {
   return readRastermillImageProbeFromHeader(buffer);
+}
+
+/** Detects animated WebP before a single-frame image transform can discard its frames. */
+export function isAnimatedWebpBuffer(buffer: Buffer): boolean {
+  // Rastermill's probe has no animation flag. RFC 9649 §2.7 defines this VP8X bit.
+  return (
+    buffer.length >= 30 &&
+    buffer.toString("ascii", 0, 4) === "RIFF" &&
+    buffer.toString("ascii", 8, 12) === "WEBP" &&
+    buffer.toString("ascii", 12, 16) === "VP8X" &&
+    buffer.readUInt32LE(16) >= 10 &&
+    buffer.readUInt32LE(16) <= buffer.length - 20 &&
+    (buffer.readUInt8(20) & 0x02) !== 0
+  );
 }
 
 function wrapRastermillUnavailable(operation: string, error: unknown): never {
@@ -160,7 +154,7 @@ export async function convertImageToPng(buffer: Buffer): Promise<Buffer> {
     }
 
     try {
-      return (await loadPhotonRuntime()).convertBmpToPngWithPhoton(buffer);
+      return await convertBmpToPngWithWorker(buffer);
     } catch {
       throw error;
     }

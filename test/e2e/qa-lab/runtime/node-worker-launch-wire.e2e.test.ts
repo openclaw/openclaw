@@ -44,6 +44,7 @@ const CONTROL_PROBE_P95_MS = 1_000;
 const FINALIZATION_LOAD_CONCURRENCY = 12;
 const FINALIZATION_LOAD_WAVES = 3;
 const MIN_CONTROL_PROBE_SAMPLES = 12;
+const WORKSPACE_INVENTORY_FILES = 4_096;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -167,6 +168,18 @@ describe("node worker launch wire", () => {
           path.join(localWorkspaceDir!, "gateway-push.txt"),
           "dirty gateway workspace\n",
         );
+        const inventoryRoot = path.join(localWorkspaceDir!, "inventory-load");
+        await fs.mkdir(inventoryRoot);
+        for (let start = 0; start < WORKSPACE_INVENTORY_FILES; start += 64) {
+          await Promise.all(
+            Array.from({ length: 64 }, (_, offset) =>
+              fs.writeFile(
+                path.join(inventoryRoot, `file-${start + offset}.txt`),
+                "workspace inventory fixture\n",
+              ),
+            ),
+          );
+        }
         const dispatched = await gateway.call(
           "sessions.dispatch",
           { key: SESSION_KEY, deviceId: workerNode.identity.deviceId },
@@ -188,6 +201,19 @@ describe("node worker launch wire", () => {
         await expect(
           fs.readFile(path.join(remoteWorkspaceDir, "nested", "tracked.txt"), "utf8"),
         ).resolves.toBe("nested tracked input\n");
+        expect(await fs.readdir(path.join(remoteWorkspaceDir, "inventory-load"))).toHaveLength(
+          WORKSPACE_INVENTORY_FILES,
+        );
+        await expect(
+          fs.readFile(
+            path.join(
+              remoteWorkspaceDir,
+              "inventory-load",
+              `file-${WORKSPACE_INVENTORY_FILES - 1}.txt`,
+            ),
+            "utf8",
+          ),
+        ).resolves.toBe("workspace inventory fixture\n");
         await fs.writeFile(path.join(remoteWorkspaceDir, "node-result.txt"), "device result\n");
 
         const runId = `node-worker-launch-wire-${Date.now()}`;
@@ -482,6 +508,7 @@ describe("node worker launch wire", () => {
                 return loadRunId;
               }),
             );
+            const waveGateway = gateway;
             const waits = Promise.all(
               loadRunIds.map(async (loadRunId) => {
                 const completedLoad = await operator!.request<{ status?: string }>(
@@ -489,10 +516,19 @@ describe("node worker launch wire", () => {
                   { runId: loadRunId, timeoutMs: PROOF_TIMEOUT_MS },
                   { timeoutMs: PROOF_TIMEOUT_MS + 5_000 },
                 );
-                expect(completedLoad.status).toBe("ok");
+                expect(
+                  completedLoad,
+                  `load run ${loadRunId} failed\n${waveGateway.logs().slice(-12_000)}`,
+                ).toMatchObject({ status: "ok" });
               }),
             );
-            await waveFinalizationStarted;
+            // Failed turns may never upload; observe their failure while waiting for finalization.
+            await Promise.race([
+              waveFinalizationStarted,
+              waits.then(() => {
+                throw new Error("load wave completed without workspace finalization");
+              }),
+            ]);
             const freshConnectionStartedAt = performance.now();
             const freshClient = await connectWireClient({
               gateway,

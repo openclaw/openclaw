@@ -61,7 +61,7 @@ enum WizardCliError: Error, CustomStringConvertible {
     }
 }
 
-func runWizardCommand(_ args: [String]) async {
+func runWizardCommand(_ args: [String], configURL: URL) async {
     let opts = WizardCliOptions.parse(args)
     if opts.help {
         print("""
@@ -72,6 +72,7 @@ func runWizardCommand(_ args: [String]) async {
                               [--mode <local|remote>] [--workspace <path>] [--json]
 
         Options:
+          --profile <name>  App profile; overrides OPENCLAW_PROFILE (default: default)
           --url <url>        Gateway WebSocket URL (overrides config)
           --token <token>    Gateway token (if required)
           --password <pw>    Gateway password (if required)
@@ -83,7 +84,7 @@ func runWizardCommand(_ args: [String]) async {
         return
     }
 
-    let config = loadGatewayConfig()
+    let config = loadGatewayConfig(from: configURL)
     do {
         guard isatty(STDIN_FILENO) != 0 else {
             throw WizardCliError.gatewayError("Wizard requires an interactive TTY.")

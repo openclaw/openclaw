@@ -3,12 +3,17 @@ import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { VERSION } from "../version.js";
+import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  reconcileOpenClawStateSchemaPublication,
   repairOpenClawStateDatabaseSchema,
+  repairOpenClawStateDatabaseSchemaIfNeeded,
 } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -123,9 +128,11 @@ async function holdGatewayLifecycle(databasePath: string): Promise<{
   child: ChildProcess;
   release: () => Promise<void>;
 }> {
-  const coordinatorUrl = new URL("../infra/state-database-coordinator.ts", import.meta.url).href;
+  const coordinatorUrl = resolveRuntimeWorkerUrl(
+    stateNativeProcessEntrypoints.stateDatabaseCoordinator,
+  );
   const source = `
-    import { acquireGatewayLifecycleCoordinator } from ${JSON.stringify(coordinatorUrl)};
+    import { acquireGatewayLifecycleCoordinator } from ${JSON.stringify(coordinatorUrl.href)};
     const coordinator = acquireGatewayLifecycleCoordinator({ databasePath: ${JSON.stringify(databasePath)}, busyTimeoutMs: 0 });
     process.stdout.write("ready\\n");
     process.stdin.resume();
@@ -133,7 +140,12 @@ async function holdGatewayLifecycle(databasePath: string): Promise<{
   `;
   const child = spawn(
     process.execPath,
-    ["--import", "tsx", "--input-type=module", "--eval", source],
+    [
+      ...resolveRuntimeWorkerArgv(coordinatorUrl).slice(0, -1),
+      "--input-type=module",
+      "--eval",
+      source,
+    ],
     { stdio: ["pipe", "pipe", "pipe"] },
   );
   try {
@@ -174,6 +186,50 @@ async function holdGatewayLifecycle(databasePath: string): Promise<{
 }
 
 describe("conversation binding target migration", () => {
+  it("admits deferred content without schema mutation while another Gateway owns the state", async () => {
+    const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-deferred-reader-") } };
+    const initial = openOpenClawStateDatabase(options);
+    const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } }, options);
+    initial.db
+      .prepare(`INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+      VALUES ('state.schema.contentVersion', ?, ?)`)
+      .run(String(OPENCLAW_STATE_SCHEMA_VERSION), Date.now());
+    initial.db.exec(`PRAGMA user_version = 15;
+      UPDATE schema_meta SET schema_version = 15 WHERE meta_key = 'primary';`);
+    initial.db
+      .prepare(`UPDATE update_runs SET status = 'succeeded', phase = 'finished',
+      finished_at_ms = ? WHERE run_id = ?`)
+      .run(Date.now() - 60_000, run.runId);
+    closeOpenClawStateDatabaseForTest();
+    const holder = await holdGatewayLifecycle(initial.path);
+    try {
+      expect(repairOpenClawStateDatabaseSchemaIfNeeded(options)).toEqual({
+        changes: [],
+        warnings: [],
+      });
+      const reader = openOpenClawStateDatabase(options);
+      expect(reader.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
+      expect(reader.db.prepare("SELECT total_changes() AS writes").get()).toEqual({ writes: 0 });
+      reader.db
+        .prepare("UPDATE update_runs SET finished_at_ms = ? WHERE run_id = ?")
+        .run(Date.now() - 5 * 60_000, run.runId);
+      expect(() => reconcileOpenClawStateSchemaPublication(options)).not.toThrow();
+      expect(openOpenClawStateDatabase(options).db).toBe(reader.db);
+      expect(reader.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
+      closeOpenClawStateDatabaseForTest();
+      const agedReader = openOpenClawStateDatabase(options);
+      expect(agedReader.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
+      expect(agedReader.db.prepare("SELECT total_changes() AS writes").get()).toEqual({
+        writes: 0,
+      });
+    } finally {
+      await holder.release();
+    }
+    expect(openOpenClawStateDatabase(options).db.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+    });
+  });
+
   it("refuses runtime and doctor schema mutation while another Gateway owns the state", async () => {
     const { options, databasePath } = createVersion14Bindings();
     const holder = await holdGatewayLifecycle(databasePath);
@@ -224,7 +280,10 @@ describe("conversation binding target migration", () => {
         migrated.db
           .prepare("SELECT schema_version, app_version FROM schema_meta WHERE meta_key = 'primary'")
           .get(),
-      ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION, app_version: VERSION });
+      ).toEqual({
+        schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
+        app_version: migrationPath === "runtime open" ? VERSION : null,
+      });
       expect(
         migrated.db
           .prepare(

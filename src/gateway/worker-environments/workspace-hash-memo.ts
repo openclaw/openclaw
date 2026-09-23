@@ -1,8 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { z } from "zod";
-import { MAX_RECONCILIATION_ENTRIES } from "./workspace-manifest.js";
 
-type WorkspaceHashMetrics = {
+export type WorkspaceHashMetrics = {
   contentHashCount: number;
   contentHashDurationMs: number;
   memoHitCount: number;
@@ -28,6 +27,7 @@ type RemoteWorkspaceHashMetrics = WorkspaceHashMetrics & {
 };
 
 export const MAX_WORKSPACE_HASH_MEMO_BYTES = 8 * 1024 * 1024;
+export const MAX_WORKSPACE_HASH_MEMO_ENTRIES = 25_000;
 
 const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 const WORKER_HASH_IDENTITY_PATTERN = /^worker:\d+:\d+:\d+:\d+:\d+$/u;
@@ -40,7 +40,7 @@ const remoteWorkspaceManifestEnvelopeSchema = z
       .array(
         z.tuple([z.string().regex(WORKER_HASH_IDENTITY_PATTERN), z.string().regex(SHA256_PATTERN)]),
       )
-      .max(MAX_RECONCILIATION_ENTRIES),
+      .max(MAX_WORKSPACE_HASH_MEMO_ENTRIES),
     metrics: z
       .object({
         contentHashCount: z.number().finite().nonnegative(),
@@ -127,13 +127,18 @@ export async function withWorkspaceHashMemo<T>(
 export async function withWorkerWorkspaceHashMemo<T>(
   memo: WorkspaceHashMemo,
   operation: () => Promise<T>,
+  metrics?: WorkspaceHashMetrics,
 ): Promise<T> {
-  return await workspaceHashContext.run({ memo, owner: "worker" }, operation);
+  return await workspaceHashContext.run({ memo, owner: "worker", metrics }, operation);
 }
 
 export async function withWorkspaceHashContext<T>(operation: () => Promise<T>): Promise<T> {
   const active = workspaceHashContext.getStore();
   return await withWorkspaceHashMemo(active?.memo ?? new Map(), operation, active?.metrics);
+}
+
+export async function withoutWorkspaceHashContext<T>(operation: () => Promise<T>): Promise<T> {
+  return await workspaceHashContext.exit(operation);
 }
 
 // A placement-lifetime memo self-bounds its worker entries (each remote capture
@@ -190,13 +195,12 @@ export function selectWorkerWorkspaceHashMemoEntries(
   return selected.toSorted(compareIdentity);
 }
 
-export function serializeRemoteWorkspaceHashMemo(memo: WorkspaceHashMemo): string {
+export function serializeRemoteWorkspaceHashMemo(
+  memo: WorkspaceHashMemo,
+  maxBytes = MAX_WORKSPACE_HASH_MEMO_BYTES,
+): string {
   return JSON.stringify(
-    selectWorkerWorkspaceHashMemoEntries(
-      memo,
-      MAX_RECONCILIATION_ENTRIES,
-      MAX_WORKSPACE_HASH_MEMO_BYTES,
-    ),
+    selectWorkerWorkspaceHashMemoEntries(memo, MAX_WORKSPACE_HASH_MEMO_ENTRIES, maxBytes),
   );
 }
 

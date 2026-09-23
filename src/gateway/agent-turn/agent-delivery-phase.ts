@@ -31,7 +31,7 @@ export type AgentDeliveryPhaseResult = {
   deliveryTargetMode: DeliveryPlan["deliveryTargetMode"];
   resolvedAccountId: DeliveryPlan["resolvedAccountId"];
   resolvedTo: DeliveryPlan["resolvedTo"];
-  originMessageChannel: string;
+  originMessageChannel?: string;
   deliver: boolean;
   explicitThreadId?: string;
 };
@@ -235,7 +235,11 @@ export async function resolveAgentDeliveryPhase(params: {
       turnSourceMessageChannel ??
       (params.client?.connect && params.isWebchatConnect(params.client.connect)
         ? INTERNAL_MESSAGE_CHANNEL
-        : resolvedChannel),
+        : resolvedChannel !== INTERNAL_MESSAGE_CHANNEL ||
+            deliveryPlan.baseDelivery.channel ||
+            normalizeMessageChannel(params.request.replyChannel) === INTERNAL_MESSAGE_CHANNEL
+          ? resolvedChannel
+          : undefined),
     deliver: wantsDelivery,
     explicitThreadId,
   };

@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements auth behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   applyAuthProfileConfig,

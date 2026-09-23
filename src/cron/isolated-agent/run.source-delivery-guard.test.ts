@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createAgentLifecycleTerminalBackstop } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createSourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { CronJob } from "../types.js";
@@ -44,14 +46,11 @@ function makeJob(
 }
 
 function makeExecutor(overrides: Record<string, unknown>) {
-  const resolvedDelivery = overrides.resolvedDelivery ?? {};
   return {
     runPrompt: async (commandBody: string) =>
       await executeCronRun(
         makeExecuteCronRunParams({
-          resolvedDeliveryOk: true,
           ...overrides,
-          resolvedDelivery,
           commandBody,
         }),
       ),
@@ -193,8 +192,9 @@ describe("executeCronRun sourceDelivery mapping", () => {
 
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
+    expect(args.runId).toBe("source-delivery-run");
+    expect(args.sessionId).toBe("test-session-id");
     expect(args.sourceReplyDeliveryMode).toBeUndefined();
-    expect(args.allowEmptyAssistantReplyAsSilent).toBe(true);
     expect(args.terminalReplyExpectation).toBe("optional");
     expect(args.requireExplicitMessageTarget).toBe(false);
     expect(args.disableMessageTool).toBe(false);
@@ -216,8 +216,7 @@ describe("executeCronRun sourceDelivery mapping", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
     expect(args.sourceReplyDeliveryMode).toBeUndefined();
-    expect(args.allowEmptyAssistantReplyAsSilent).toBe(true);
-    expect(args.terminalReplyExpectation).toBe("required");
+    expect(args.terminalReplyExpectation).toBe("optional");
     expect(args.disableMessageTool).toBe(false);
     expect(args.forceMessageTool).toBe(false);
     expect(args.messageChannel).toBe("messagechat");
@@ -256,7 +255,7 @@ describe("executeCronRun sourceDelivery mapping", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
     expect(args.sourceReplyDeliveryMode).toBeUndefined();
-    expect(args.terminalReplyExpectation).toBe("required");
+    expect(args.terminalReplyExpectation).toBe("optional");
     expect(args.disableMessageTool).toBe(false);
     expect(args.forceMessageTool).toBe(false);
     expect(args.messageChannel).toBe("messagechat");
@@ -292,7 +291,6 @@ describe("executeCronRun sourceDelivery mapping", () => {
     const executor = makeExecutor({
       job: makeJob({ delivery: { mode: "announce", channel: "messagechat", to: "123" } }),
       deliveryRequested: true,
-      resolvedDeliveryOk: false,
       resolvedDelivery: { ok: false, channel: "messagechat", to: "123" },
     });
 
@@ -377,15 +375,15 @@ describe("executeCronRun sourceDelivery mapping", () => {
 
 function makeExecuteCronRunParams(overrides: Record<string, unknown> = {}) {
   const job = (overrides.job ?? makeJob()) as CronJob;
-  const resolvedDelivery = (overrides.resolvedDelivery ?? {}) as {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string | number;
-    ok?: boolean;
+  const resolvedDelivery = {
+    ok: true,
+    ...(overrides.resolvedDelivery as
+      | Partial<Parameters<typeof resolveCronSourceDeliveryPlan>[0]["resolvedDelivery"]>
+      | undefined),
   };
 
   return {
+    runId: "source-delivery-run",
     cfg: {},
     cfgWithAgentDefaults: {},
     job,
@@ -405,17 +403,23 @@ function makeExecuteCronRunParams(overrides: Record<string, unknown> = {}) {
     cronSession: makeCronSession() as unknown as MutableCronSession,
     commandBody: "run a task",
     persistSessionEntry: vi.fn().mockResolvedValue(undefined),
+    lifecycle: createAgentLifecycleTerminalBackstop({
+      runId: "source-delivery-run",
+      sessionKey: "cron:source-delivery-guard:run:test-session-id",
+      getLifecycleGeneration: getAgentEventLifecycleGeneration,
+      resolveTerminationFields: () => ({}),
+    }),
     abortReason: () => "aborted",
     isAborted: () => false,
     immutableThinkLevel: undefined,
     loadThinkingCatalog: async () => [],
     timeoutMs: 60_000,
     suppressExecNotifyOnExit: true,
-    resolvedDelivery,
     sourceDelivery: resolveCronSourceDeliveryPlan({
       deliveryPlan: actualDeliveryPlanModule.resolveCronDeliveryPlan(job),
       resolvedDelivery,
     }),
     ...overrides,
+    resolvedDelivery,
   } as never;
 }

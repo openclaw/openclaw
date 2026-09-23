@@ -64,6 +64,12 @@ describe("mattermost monitor resources", () => {
       expected: '[mattermost attachment unavailable] "report].pdf"',
     },
     { fileName: "   ", expected: "[mattermost attachment unavailable]" },
+    { fileName: ".", expected: "[mattermost attachment unavailable]" },
+    { fileName: "..", expected: "[mattermost attachment unavailable]" },
+    { fileName: "\u0000\u0001", expected: "[mattermost attachment unavailable]" },
+    { fileName: "file", expected: '[mattermost attachment unavailable] "file"' },
+    { fileName: "_", expected: '[mattermost attachment unavailable] "_"' },
+    { fileName: "-", expected: '[mattermost attachment unavailable] "-"' },
   ])("safely formats unavailable attachment names: $fileName", ({ fileName, expected }) => {
     expect(
       formatMattermostInboundMediaText({
@@ -400,6 +406,30 @@ describe("mattermost monitor resources", () => {
       props: { attachments: [] },
     });
   });
+
+  it.each(["channel", "user"] as const)(
+    "retries a failed %s lookup on the next event instead of caching the failure",
+    async (kind) => {
+      const fetchResource = kind === "channel" ? fetchMattermostChannel : fetchMattermostUser;
+      fetchResource
+        .mockRejectedValueOnce(new Error("mattermost api unavailable"))
+        .mockResolvedValueOnce({ id: `${kind}-1` });
+      const resources = createMattermostMonitorResources({
+        accountId: "default",
+        callbackUrl: "https://openclaw.test/callback",
+        client: {} as never,
+        logger: {},
+        mediaMaxBytes: 1024,
+        saveRemoteMedia: vi.fn(),
+        mediaKindFromMime: () => "document",
+      });
+      const resolve = kind === "channel" ? resources.resolveChannelInfo : resources.resolveUserInfo;
+
+      await expect(resolve(`${kind}-1`)).resolves.toBeNull();
+      await expect(resolve(`${kind}-1`)).resolves.toEqual({ id: `${kind}-1` });
+      expect(fetchResource).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it.each(["channel", "user"] as const)(
     "bounds the %s cache without refreshing insertion order on reads",

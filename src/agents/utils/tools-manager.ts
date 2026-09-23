@@ -5,30 +5,20 @@
  */
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import {
-  chmodSync,
-  createWriteStream,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  renameSync,
-  rmSync,
-} from "node:fs";
+import { chmodSync, existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { arch, platform } from "node:os";
 import { join } from "node:path";
-import { Readable, Transform } from "node:stream";
-import { pipeline } from "node:stream/promises";
-import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import chalk from "chalk";
 import { extractArchive } from "../../infra/archive.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { type FileLockOptions, withFileLock } from "../../infra/file-lock.js";
+import { root as fsRoot, type Root, walkDirectorySync } from "../../infra/fs-safe.js";
 import { cancelUnreadResponseBody } from "../../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
-import { APP_NAME, getBinDir } from "../config.js";
+import { getBinDir } from "../config.js";
+import { APP_NAME } from "../package-metadata.js";
 import { readProviderJsonResponse } from "../provider-http-errors.js";
 
-const TOOLS_DIR = getBinDir();
 const NETWORK_TIMEOUT_MS = 10_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
 const MAX_ARCHIVE_BYTES = 100 * 1024 * 1024;
@@ -39,7 +29,7 @@ const CONTENT_LENGTH_RE = /^\d+$/;
 const GITHUB_RELEASE_JSON_MAX_BYTES = 1024 * 1024;
 const TOOL_INSTALL_STALE_MS =
   DOWNLOAD_TIMEOUT_MS + ARCHIVE_EXTRACT_TIMEOUT_MS + NETWORK_TIMEOUT_MS + 30_000;
-const toolInstallations = new Map<"fd" | "rg", Promise<string>>();
+const toolInstallations = new Map<string, Promise<string>>();
 const TOOL_INSTALL_LOCK_OPTIONS: FileLockOptions = {
   retries: {
     // The minimum backoff total is about 234s, beyond the full 220s install bound.
@@ -129,13 +119,15 @@ function commandExists(cmd: string): boolean {
 }
 
 // Get the path to a tool (system-wide or in our tools dir)
-function getToolPath(tool: "fd" | "rg"): string | null {
+function getToolPath(tool: "fd" | "rg", toolsDir: string | undefined): string | null {
   const config = TOOLS[tool];
 
   // Check our tools directory first
-  const localPath = join(TOOLS_DIR, config.binaryName + (platform() === "win32" ? ".exe" : ""));
-  if (existsSync(localPath)) {
-    return localPath;
+  if (toolsDir) {
+    const localPath = join(toolsDir, config.binaryName + (platform() === "win32" ? ".exe" : ""));
+    if (existsSync(localPath)) {
+      return localPath;
+    }
   }
 
   // Check system PATH - if found, just return the command name (it's in PATH)
@@ -176,7 +168,7 @@ async function getLatestVersion(repo: string): Promise<string> {
   }
 }
 
-async function downloadFile(url: string, dest: string, maxBytes: number): Promise<void> {
+async function downloadFile(url: string, destination: Root, assetName: string): Promise<void> {
   const guarded = await fetchWithSsrFGuard({
     url,
     timeoutMs: DOWNLOAD_TIMEOUT_MS,
@@ -195,70 +187,32 @@ async function downloadFile(url: string, dest: string, maxBytes: number): Promis
     }
 
     const rawContentLength = response.headers.get("content-length");
-    if (rawContentLength !== null) {
+    const contentEncoding = response.headers.get("content-encoding")?.trim().toLowerCase();
+    if (rawContentLength !== null && (!contentEncoding || contentEncoding === "identity")) {
       const contentLength = rawContentLength.trim();
       if (CONTENT_LENGTH_RE.test(contentLength)) {
         const declaredBytes = Number(contentLength);
-        if (!Number.isSafeInteger(declaredBytes) || declaredBytes > maxBytes) {
+        if (!Number.isSafeInteger(declaredBytes) || declaredBytes > MAX_ARCHIVE_BYTES) {
           await cancelUnreadResponseBody(response);
-          throw new Error(`Download exceeds the ${maxBytes}-byte archive limit`);
+          throw new Error(`Download exceeds the ${MAX_ARCHIVE_BYTES}-byte archive limit`);
         }
       }
     }
 
-    const fileStream = createWriteStream(dest);
-
-    let downloadCompleted = false;
-    try {
-      let downloadedBytes = 0;
-      const byteCap = new Transform({
-        transform(chunk: Uint8Array, _encoding, callback) {
-          downloadedBytes += chunk.byteLength;
-          if (downloadedBytes > maxBytes) {
-            callback(new Error(`Download exceeded the ${maxBytes}-byte archive limit`));
-            return;
-          }
-          callback(null, chunk);
-        },
-      });
-      await pipeline(
-        Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>),
-        byteCap,
-        fileStream,
-      );
-      downloadCompleted = true;
-    } finally {
-      if (!downloadCompleted) {
-        rmSync(dest, { force: true });
-      }
+    const body = response.body;
+    async function* chunks() {
+      // Admit the destination before acquiring a reader; the fetch guard owns cancellation.
+      yield* body.values({ preventCancel: true });
     }
+    await destination.create(join(destination.rootReal, assetName), chunks(), {
+      maxBytes: MAX_ARCHIVE_BYTES,
+      mkdir: false,
+      durable: false,
+      mode: 0o666 & ~process.umask(),
+    });
   } finally {
     await guarded.release();
   }
-}
-
-function findBinaryRecursively(rootDir: string, binaryFileName: string): string | null {
-  const stack: string[] = [rootDir];
-
-  while (stack.length > 0) {
-    const currentDir = stack.pop();
-    if (!currentDir) {
-      continue;
-    }
-
-    const entries = readdirSync(currentDir, { withFileTypes: true });
-    for (const entry of entries) {
-      const fullPath = join(currentDir, entry.name);
-      if (entry.isFile() && entry.name === binaryFileName) {
-        return fullPath;
-      }
-      if (entry.isDirectory()) {
-        stack.push(fullPath);
-      }
-    }
-  }
-
-  return null;
 }
 
 async function extractArchiveSafe(
@@ -286,7 +240,7 @@ async function extractArchiveSafe(
 }
 
 // Download and install a tool
-async function downloadTool(tool: "fd" | "rg"): Promise<string> {
+async function downloadTool(tool: "fd" | "rg", toolsDir: string): Promise<string> {
   const config = TOOLS[tool];
 
   const plat = platform();
@@ -305,15 +259,15 @@ async function downloadTool(tool: "fd" | "rg"): Promise<string> {
   }
 
   // Create tools directory
-  mkdirSync(TOOLS_DIR, { recursive: true });
+  mkdirSync(toolsDir, { recursive: true });
 
   const downloadUrl = `https://github.com/${config.repo}/releases/download/${config.tagPrefix}${version}/${assetName}`;
   const binaryExt = plat === "win32" ? ".exe" : "";
-  const binaryPath = join(TOOLS_DIR, config.binaryName + binaryExt);
+  const binaryPath = join(toolsDir, config.binaryName + binaryExt);
   // Keep every installation's archive and extracted files together so parallel
   // processes cannot remove or overwrite another installation's staging files.
   const stagingDir = join(
-    TOOLS_DIR,
+    toolsDir,
     `install_tmp_${config.binaryName}_${process.pid}_${randomUUID()}`,
   );
   const archivePath = join(stagingDir, assetName);
@@ -321,9 +275,8 @@ async function downloadTool(tool: "fd" | "rg"): Promise<string> {
   mkdirSync(extractDir, { recursive: true });
 
   try {
-    // Download with byte cap so oversized archives are rejected before
-    // hitting disk, not just during extraction.
-    await downloadFile(downloadUrl, archivePath, MAX_ARCHIVE_BYTES);
+    const stagingRoot = await fsRoot(stagingDir);
+    await downloadFile(downloadUrl, stagingRoot, assetName);
 
     if (assetName.endsWith(".tar.gz") || assetName.endsWith(".zip")) {
       await extractArchiveSafe(archivePath, extractDir, assetName);
@@ -342,7 +295,15 @@ async function downloadTool(tool: "fd" | "rg"): Promise<string> {
     let extractedBinary = extractedBinaryCandidates.find((candidate) => existsSync(candidate));
 
     if (!extractedBinary) {
-      extractedBinary = findBinaryRecursively(extractDir, binaryFileName) ?? undefined;
+      const { entries, failedDirs } = walkDirectorySync(extractDir, {
+        symlinks: "skip",
+        include: (entry) => entry.kind === "file" && entry.name === binaryFileName,
+      });
+      extractedBinary = entries[0]?.path;
+      const failure = failedDirs[0];
+      if (!extractedBinary && failure) {
+        throw failure.error;
+      }
     }
 
     if (extractedBinary) {
@@ -364,29 +325,29 @@ async function downloadTool(tool: "fd" | "rg"): Promise<string> {
   return binaryPath;
 }
 
-function installTool(tool: "fd" | "rg"): Promise<string> {
-  const currentInstallation = toolInstallations.get(tool);
+function installTool(tool: "fd" | "rg", toolsDir: string): Promise<string> {
+  const config = TOOLS[tool];
+  const binaryPath = join(toolsDir, config.binaryName + (platform() === "win32" ? ".exe" : ""));
+  const currentInstallation = toolInstallations.get(binaryPath);
   if (currentInstallation) {
     return currentInstallation;
   }
 
-  const config = TOOLS[tool];
-  const binaryPath = join(TOOLS_DIR, config.binaryName + (platform() === "win32" ? ".exe" : ""));
-  mkdirSync(TOOLS_DIR, { recursive: true });
+  mkdirSync(toolsDir, { recursive: true });
   const installation = withFileLock(binaryPath, TOOL_INSTALL_LOCK_OPTIONS, async () => {
-    const existingPath = getToolPath(tool);
-    return existingPath ?? downloadTool(tool);
+    const existingPath = getToolPath(tool, toolsDir);
+    return existingPath ?? downloadTool(tool, toolsDir);
   });
-  toolInstallations.set(tool, installation);
+  toolInstallations.set(binaryPath, installation);
   void installation.then(
     () => {
-      if (toolInstallations.get(tool) === installation) {
-        toolInstallations.delete(tool);
+      if (toolInstallations.get(binaryPath) === installation) {
+        toolInstallations.delete(binaryPath);
       }
     },
     () => {
-      if (toolInstallations.get(tool) === installation) {
-        toolInstallations.delete(tool);
+      if (toolInstallations.get(binaryPath) === installation) {
+        toolInstallations.delete(binaryPath);
       }
     },
   );
@@ -402,12 +363,24 @@ const TERMUX_PACKAGES: Record<string, string> = {
 // Ensure a tool is available, downloading if necessary
 // Returns the path to the tool, or null if unavailable
 export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<string | undefined> {
-  const existingPath = getToolPath(tool);
+  const toolsDir = getBinDir();
+  const existingPath = getToolPath(tool, toolsDir);
   if (existingPath) {
     return existingPath;
   }
 
   const config = TOOLS[tool];
+
+  if (!toolsDir) {
+    if (!silent) {
+      console.log(
+        chalk.yellow(
+          `${config.name} not found. Install it on PATH or select an agent owner before downloading.`,
+        ),
+      );
+    }
+    return undefined;
+  }
 
   if (isOfflineModeEnabled()) {
     if (!silent) {
@@ -434,7 +407,7 @@ export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<str
   }
 
   try {
-    const path = await installTool(tool);
+    const path = await installTool(tool, toolsDir);
     if (!silent) {
       console.log(chalk.dim(`${config.name} installed to ${path}`));
     }
@@ -449,14 +422,4 @@ export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<str
     }
     return undefined;
   }
-}
-
-const testing = {
-  downloadFile,
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.toolsManagerTestApi")] = {
-    testing,
-  };
 }

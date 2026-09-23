@@ -57,12 +57,6 @@ function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps 
     dreams: html`<div class="test-dreams"></div>`,
     editor: html`<div class="test-editor"></div>`,
     dreamingSettings: html`<div class="test-dreaming-settings"></div>`,
-    agentId: "main",
-    agents: [
-      { value: "main", label: "Main" },
-      { value: "research", label: "Research" },
-    ],
-    onAgentChange: vi.fn(),
     ...overrides,
   };
 }
@@ -74,27 +68,10 @@ function renderInto(props: MemoryViewProps): HTMLElement {
 }
 
 describe("renderMemory", () => {
-  it("renders the agent scope only for multiple configured agents", () => {
-    const emptyRoster = renderInto(createProps({ activeTab: "overview", agents: [] }));
-    expect(emptyRoster.querySelector(".agent-scope-control")).toBeNull();
-
-    const singleAgent = renderInto(
-      createProps({
-        activeTab: "overview",
-        agents: [{ value: "main", label: "Main" }],
-      }),
-    );
-    expect(singleAgent.querySelector(".agent-scope-control")).toBeNull();
-
-    const multipleAgents = renderInto(createProps({ activeTab: "overview" }));
-    expect(multipleAgents.querySelector(".agent-scope-control")).not.toBeNull();
-  });
-
   it.each(["overview", "memories", "dreams"] as const)(
-    "renders the shared header and agent scope on %s",
+    "renders the Memory tabs without a duplicate agent picker on %s",
     (activeTab) => {
-      const onAgentChange = vi.fn();
-      const container = renderInto(createProps({ activeTab, onAgentChange }));
+      const container = renderInto(createProps({ activeTab }));
       const header = container.querySelector(".hub-page-header");
 
       expect(header?.querySelector(".page-title")?.textContent).toBe("Memory");
@@ -104,22 +81,9 @@ describe("renderMemory", () => {
       expect(header?.querySelector(".memory-hub-tabs")).not.toBeNull();
       expect(container.textContent).not.toContain("Agent view");
 
-      const select = header?.querySelector("openclaw-agent-select") as HTMLElement & {
-        accessibleLabel?: string;
-        onSelect?: (value: string) => void;
-      };
-      expect(select.accessibleLabel).toBe("Agent");
-      select.onSelect?.("research");
-      expect(onAgentChange).toHaveBeenCalledWith("research");
+      expect(header?.querySelector("openclaw-agent-select")).toBeNull();
     },
   );
-
-  it("keeps the header action slot empty on Settings", () => {
-    const container = renderInto(createProps({ activeTab: "settings" }));
-
-    expect(container.querySelector(".hub-page-header__actions")?.childElementCount).toBe(0);
-    expect(container.querySelector("openclaw-agent-select")).toBeNull();
-  });
 
   it("replaces the memory-import link with an admin-required note", () => {
     const container = renderInto(createProps({ canImportMemory: false }));
@@ -145,7 +109,7 @@ describe("renderMemory", () => {
   it("reports whether the engine came from config or from the slot default", () => {
     const auto = renderInto(createProps());
     expect(auto.textContent).toContain("falls back to its default owner");
-    expect(auto.textContent).toContain("Using default: OpenClaw Memory");
+    expect(auto.textContent).not.toContain("Using default:");
 
     const pinned = renderInto(
       createProps({ engineSelection: { kind: "pinned", engineId: "memory-core" } }),

@@ -1,7 +1,8 @@
 import { noteBackupDoctorHint } from "../commands/backup-health.js";
 import { isLegacyParentWritableUpdateDoctorPass } from "../commands/doctor/shared/update-phase.js";
-import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
+import { recordDoctorHealthWarnings } from "./doctor-health-contribution.js";
 
 const loadDoctorStateIntegrityModule = async () =>
   await import("../commands/doctor-state-integrity.js");
@@ -31,6 +32,14 @@ export async function runPluginRegistryHealth(ctx: DoctorHealthFlowContext): Pro
   if (result.pluginInventoryChanged) {
     ctx.invalidatePluginMetadataSnapshot?.();
   }
+}
+
+export async function runLegacyPluginSourceCapturesHealth(
+  ctx: DoctorHealthFlowContext,
+): Promise<void> {
+  const { noteLegacyPluginSourceCaptures } =
+    await import("../commands/doctor-plugin-source-captures.js");
+  await noteLegacyPluginSourceCaptures(ctx.env ?? process.env, ctx.prompter.shouldRepair);
 }
 
 export async function runReleaseConfiguredPluginInstallsHealth(
@@ -72,14 +81,14 @@ export async function runReleaseConfiguredPluginInstallsHealth(
   writeConfigMachineState("config.lastTouchedAt", new Date().toISOString());
 }
 
-export async function runDiskSpaceHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+export async function runDiskSpaceHealth(): Promise<void> {
   const { noteDiskSpace } = await import("../commands/doctor-disk-space.js");
-  noteDiskSpace(ctx.cfg);
+  noteDiskSpace();
 }
 
-export async function runDatabaseBloatHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+export async function runDatabaseBloatHealth(): Promise<void> {
   const { noteSqliteDatabaseBloat } = await import("../commands/doctor-db-bloat.js");
-  noteSqliteDatabaseBloat(ctx.cfg);
+  await noteSqliteDatabaseBloat();
 }
 
 export async function runAgentMemorySchemaHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -97,11 +106,23 @@ export async function runChannelIngressDeadLettersHealth(): Promise<void> {
 }
 
 export async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteDoctorAgentDatabasePathHealth } =
+    await import("../commands/doctor-agent-database-paths.js");
+  const warnings = noteDoctorAgentDatabasePathHealth({
+    env: ctx.env ?? process.env,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
+  if (warnings.length > 0) {
+    ctx.updateWarnings ??= [];
+    ctx.updateWarnings.push(...warnings);
+  }
   const { noteStateIntegrity } = await loadDoctorStateIntegrityModule();
   await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath, {
     stateDirExistedAtStart: ctx.stateDirExistedAtStart,
   });
-  noteBackupDoctorHint(ctx.env ?? process.env);
+  await noteBackupDoctorHint(ctx.env ?? process.env);
+  const { noteBackupScratchHealth } = await import("../commands/doctor-backup-scratch.js");
+  await noteBackupScratchHealth(ctx.env ?? process.env, ctx.prompter.shouldRepair);
 }
 
 export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -110,13 +131,19 @@ export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): 
   const { note } = await import("../../packages/terminal-core/src/note.js");
   const result = await maybeRepairCodexSessionRoutes({
     cfg: ctx.cfg,
+    ...(ctx.configResult.retiredModelRefConfig
+      ? { retiredModelRefConfig: ctx.configResult.retiredModelRefConfig }
+      : {}),
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,
     ...(ctx.configResult.blockedCodexModelIdentities?.length
       ? { blockedModelIdentities: new Set(ctx.configResult.blockedCodexModelIdentities) }
       : {}),
     ...(ctx.configResult.openAICodexAuthProfileIdMap?.size
-      ? { authProfileIdMap: ctx.configResult.openAICodexAuthProfileIdMap }
+      ? {
+          authProfileIdMap: ctx.configResult.openAICodexAuthProfileIdMap,
+          ...(!ctx.prompter.shouldRepair ? { authProfileOnly: true } : {}),
+        }
       : {}),
   });
   if (result.changes.length > 0) {
@@ -133,6 +160,17 @@ export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext):
     cfg: ctx.cfg,
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,
+    onWarnings: (warnings) => recordDoctorHealthWarnings(ctx, [], warnings),
+    ...(ctx.configResult.postSessionPluginMigration
+      ? { postSessionPluginMigration: ctx.configResult.postSessionPluginMigration }
+      : {}),
+    ...(ctx.configResult.postSessionPluginMigrationPlanBound
+      ? { postSessionPluginMigrationPlanBound: true }
+      : {}),
+    onStepReceipt: (receipt) => {
+      ctx.configResult.stateMigrationStepReceipts ??= [];
+      ctx.configResult.stateMigrationStepReceipts.push(receipt);
+    },
   });
 }
 

@@ -110,6 +110,13 @@ function resolveEnvelopeTimezone(options: NormalizedEnvelopeOptions): ResolvedEn
   return explicit ? { mode: "iana", timeZone: explicit } : { mode: "utc" };
 }
 
+let utcWeekdayFormatter:
+  | {
+      dateTimeFormatConstructor: typeof Intl.DateTimeFormat;
+      formatter: Intl.DateTimeFormat;
+    }
+  | undefined;
+
 /** Formats an envelope timestamp using local, UTC, user, or explicit IANA timezone rules. */
 export function formatAgentEnvelopeTimestamp(
   ts: number | Date | undefined,
@@ -137,9 +144,16 @@ export function formatAgentEnvelopeTimestamp(
   }
   const formatted = formatUtcTimestamp(date, { displaySeconds: true });
   try {
-    const weekday = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" }).format(
-      date,
-    );
+    const DateTimeFormat = Intl.DateTimeFormat;
+    const cached = utcWeekdayFormatter;
+    const formatter =
+      cached?.dateTimeFormatConstructor === DateTimeFormat
+        ? cached.formatter
+        : new DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" });
+    const weekday = formatter.format(date);
+    if (formatter !== cached?.formatter) {
+      utcWeekdayFormatter = { dateTimeFormatConstructor: DateTimeFormat, formatter };
+    }
     return `${weekday} ${formatted}`;
   } catch {
     return formatted;

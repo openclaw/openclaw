@@ -2,13 +2,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
-import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import {
   captureEnv,
   createPathResolutionEnv,
@@ -16,17 +17,7 @@ import {
   setTestEnvValue,
   withEnvAsync,
 } from "../test-utils/env.js";
-
-type CollectPluginsTrustFindings =
-  typeof import("./audit-plugins-trust.js").collectPluginsTrustFindings;
-
-async function collectPluginsTrustFindingsForTest(
-  ...args: Parameters<CollectPluginsTrustFindings>
-): Promise<Awaited<ReturnType<CollectPluginsTrustFindings>>> {
-  vi.resetModules();
-  const { collectPluginsTrustFindings } = await import("./audit-plugins-trust.js");
-  return await collectPluginsTrustFindings(...args);
-}
+import { collectPluginsTrustFindings } from "./audit-plugins-trust.js";
 
 const mockChannelPlugins = vi.hoisted(() => [
   {
@@ -51,7 +42,7 @@ const mockPluginRegistryIds = vi.hoisted(() => [
 ]);
 
 const readInstalledPackageVersionMock = vi.hoisted(() =>
-  vi.fn(async (dir: string) => {
+  vi.fn(async (dir: string): Promise<string | undefined> => {
     if (dir.includes("/extensions/voice-call") || dir.includes("\\extensions\\voice-call")) {
       return "9.9.9";
     }
@@ -172,7 +163,7 @@ describe("security audit install metadata findings", () => {
   };
 
   const runInstallMetadataAudit = async (cfg: OpenClawConfig, stateDir: string) => {
-    return await collectPluginsTrustFindingsForTest({ cfg, stateDir });
+    return await collectPluginsTrustFindings({ cfg, stateDir });
   };
 
   const writeHookInstalls = (
@@ -230,9 +221,15 @@ describe("security audit install metadata findings", () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-install-"));
   });
 
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+  });
+
   afterAll(async () => {
+    // Fixture writers and audit readers share one SQLite owner; close it before removing files.
+    await closeOpenClawStateDatabaseAsync();
     if (fixtureRoot) {
-      await fs.rm(fixtureRoot, { recursive: true, force: true }).catch(() => undefined);
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
     }
   });
 
@@ -363,6 +360,86 @@ describe("security audit install metadata findings", () => {
     }
   });
 
+  it("keeps install metadata precedence and reads hooks after plugin versions", async () => {
+    const stateDir = await makeTmpDir("install-metadata-order");
+    const pluginPath = path.join(stateDir, "custom-plugin");
+    const hookPath = path.join(stateDir, "hooks", "test-hooks");
+    await writePluginIndexInstallRecords(stateDir, {
+      "voice-call": {
+        source: "npm",
+        spec: "@openclaw/voice-call",
+        installPath: pluginPath,
+        version: "0.9.0",
+        resolvedVersion: "1.0.0",
+      },
+      "empty-version": {
+        source: "npm",
+        spec: "@openclaw/empty-version@1.0.0",
+        integrity: "sha512-empty",
+        version: "1.0.0",
+        resolvedVersion: "",
+      },
+      "local-plugin": { source: "path", spec: "local-plugin", version: "1.0.0" },
+    });
+    writeHookInstalls(stateDir, {
+      "old-hooks": { source: "npm", spec: "old-hooks", version: "1.0.0" },
+    });
+
+    const reads: string[] = [];
+    await readInstalledPackageVersionMock.withImplementation(
+      async (dir) => {
+        reads.push(dir);
+        if (dir === pluginPath) {
+          writeHookInstalls(stateDir, {
+            "test-hooks": {
+              source: "npm",
+              spec: "@openclaw/test-hooks",
+              integrity: " ",
+              version: "2.0.0",
+            },
+          });
+          return "1.1.0";
+        }
+        return dir === hookPath ? "2.1.0" : undefined;
+      },
+      async () => {
+        const findings = await runInstallMetadataAudit({}, stateDir);
+        // Persistence drops blank resolved versions and sorts plugin IDs before the audit reads them.
+        expect(reads).toEqual([
+          path.join(stateDir, "extensions", "empty-version"),
+          pluginPath,
+          hookPath,
+        ]);
+        expect(findings.map(({ checkId, detail }) => [checkId, detail])).toEqual([
+          [
+            "plugins.installs_unpinned_npm_specs",
+            "Unpinned plugin index install records:\n- voice-call (@openclaw/voice-call)",
+          ],
+          [
+            "plugins.installs_missing_integrity",
+            "Plugin index records missing integrity:\n- voice-call",
+          ],
+          [
+            "plugins.installs_version_drift",
+            "Detected plugin install metadata drift:\n- voice-call (recorded 1.0.0, installed 1.1.0)",
+          ],
+          [
+            "hooks.installs_unpinned_npm_specs",
+            "Unpinned hook install records:\n- test-hooks (@openclaw/test-hooks)",
+          ],
+          [
+            "hooks.installs_missing_integrity",
+            "Hook install records missing integrity:\n- test-hooks",
+          ],
+          [
+            "hooks.installs_version_drift",
+            "Detected hook install metadata drift:\n- test-hooks (recorded 2.0.0, installed 2.1.0)",
+          ],
+        ]);
+      },
+    );
+  });
+
   it("evaluates phantom allowlist findings", async () => {
     const bundledStateDir = await makeTmpDir("phantom-bundled-excluded");
     await fs.mkdir(path.join(bundledStateDir, "extensions", "some-installed-plugin"), {
@@ -473,7 +550,7 @@ describe("security audit extension tool reachability findings", () => {
   let pathResolutionEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 
   const runSharedExtensionsAudit = async (config: OpenClawConfig) => {
-    return await collectPluginsTrustFindingsForTest({
+    return await collectPluginsTrustFindings({
       cfg: config,
       stateDir: sharedExtensionsStateDir,
     });
@@ -509,7 +586,7 @@ describe("security audit extension tool reachability findings", () => {
     homedirSpy?.mockRestore();
     pathResolutionEnvSnapshot?.restore();
     if (fixtureRoot) {
-      await fs.rm(fixtureRoot, { recursive: true, force: true }).catch(() => undefined);
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
     }
   });
 

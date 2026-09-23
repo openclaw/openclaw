@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
+import { listProviderPolicyOwners as collectPolicyOwners } from "../plugins/provider-policy-owners.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const note = vi.hoisted(() => vi.fn());
@@ -31,30 +34,20 @@ const noteWorkspaceMemoryHealth = vi.hoisted(() => vi.fn(async () => undefined))
 const maybeRepairWorkspaceMemoryHealth = vi.hoisted(() => vi.fn(async () => undefined));
 const inspectConfiguredEmbeddingProviderSetup = vi.hoisted(() => vi.fn());
 const loadPluginManifestRegistryForPluginRegistry = vi.hoisted(() =>
-  vi.fn(() => ({ plugins: [], diagnostics: [] })),
+  vi.fn<() => PluginManifestRegistry>(() => ({ plugins: [], diagnostics: [] })),
 );
-const listTrustedExternalProviderPolicyOwners = vi.hoisted(() =>
-  vi.fn((): Array<{ id: string }> => [{ id: "llama-cpp" }]),
+const listProviderPolicyOwners = vi.hoisted(() =>
+  vi.fn<(provider: string, registry: PluginManifestRegistry) => Array<{ id: string }>>(),
 );
-const loadTrustedExternalProviderPolicyArtifacts = vi.hoisted(() =>
-  vi.fn(
-    (
-      owners: Array<{ id: string }>,
-    ): {
+const loadProviderPolicyArtifacts = vi.hoisted(() =>
+  vi.fn<
+    (owners: Array<{ id: string }>) => {
       owner: { id: string };
       surface: {
         inspectEmbeddingProviderSetup: typeof inspectConfiguredEmbeddingProviderSetup;
       } | null;
-    } | null => {
-      const owner = owners[0];
-      return owner
-        ? {
-            owner,
-            surface: { inspectEmbeddingProviderSetup: inspectConfiguredEmbeddingProviderSetup },
-          }
-        : null;
-    },
-  ),
+    } | null
+  >(),
 );
 const resolveManifestOwnerBasePolicyBlock = vi.hoisted(() =>
   vi.fn(
@@ -119,8 +112,8 @@ vi.mock("../plugins/manifest-owner-policy.js", () => ({
 }));
 
 vi.mock("../plugins/provider-public-artifacts.js", () => ({
-  listTrustedExternalProviderPolicyOwners,
-  loadTrustedExternalProviderPolicyArtifacts,
+  listProviderPolicyOwners,
+  loadProviderPolicyArtifacts,
 }));
 
 vi.mock("../plugin-sdk/memory-core-bundled-runtime.js", () => ({
@@ -280,15 +273,6 @@ describe("noteMemorySearchHealth", () => {
     await noteMemorySearchHealth(config, options);
   }
 
-  async function runConfiguredMemorySearch(
-    provider: string,
-    config: OpenClawConfig,
-    options?: Parameters<typeof noteMemorySearchHealth>[1],
-    overrides?: Record<string, unknown>,
-  ) {
-    await runMemorySearchHealth(provider, options, overrides, config);
-  }
-
   function conversationRecallConfig(
     plugins?: OpenClawConfig["plugins"],
     rememberAcrossConversations = true,
@@ -311,20 +295,20 @@ describe("noteMemorySearchHealth", () => {
     rememberAcrossConversations = true,
     overrides: Record<string, unknown> = conversationRecall,
   ) {
-    await runConfiguredMemorySearch(
+    await runMemorySearchHealth(
       "none",
-      conversationRecallConfig(plugins, rememberAcrossConversations),
       undefined,
       overrides,
+      conversationRecallConfig(plugins, rememberAcrossConversations),
     );
   }
 
   async function runAuthLintHealth(provider: "openai" | "bedrock", config: OpenClawConfig = cfg) {
-    await runConfiguredMemorySearch(
+    await runMemorySearchHealth(
       provider,
-      config,
       skippedAuthProfileOptions,
       provider === "openai" ? openAiEmbeddingModel : bedrockEmbeddingModel,
+      config,
     );
   }
 
@@ -350,10 +334,10 @@ describe("noteMemorySearchHealth", () => {
     getMissingLocalMemoryEmbeddingProviderMessage.mockClear();
     inspectConfiguredEmbeddingProviderSetup.mockReset();
     inspectConfiguredEmbeddingProviderSetup.mockResolvedValue(null);
-    listTrustedExternalProviderPolicyOwners.mockReset();
-    listTrustedExternalProviderPolicyOwners.mockReturnValue([{ id: "llama-cpp" }]);
-    loadTrustedExternalProviderPolicyArtifacts.mockReset();
-    loadTrustedExternalProviderPolicyArtifacts.mockImplementation((owners) => {
+    listProviderPolicyOwners.mockReset();
+    listProviderPolicyOwners.mockReturnValue([{ id: "llama-cpp" }]);
+    loadProviderPolicyArtifacts.mockReset();
+    loadProviderPolicyArtifacts.mockImplementation((owners) => {
       const owner = owners[0];
       return owner
         ? {
@@ -376,7 +360,7 @@ describe("noteMemorySearchHealth", () => {
   });
 
   it("uses the memory-core recovery message when the local provider plugin is missing", async () => {
-    listTrustedExternalProviderPolicyOwners.mockReturnValueOnce([]);
+    listProviderPolicyOwners.mockReturnValueOnce([]);
     await runMemorySearchHealth("local", {});
 
     expect(note).toHaveBeenCalledTimes(1);
@@ -389,7 +373,7 @@ describe("noteMemorySearchHealth", () => {
   });
 
   it("updates a legacy installed provider that has no setup policy artifact", async () => {
-    loadTrustedExternalProviderPolicyArtifacts.mockReturnValueOnce({
+    loadProviderPolicyArtifacts.mockReturnValueOnce({
       owner: { id: "llama-cpp" },
       surface: null,
     });
@@ -433,7 +417,7 @@ describe("noteMemorySearchHealth", () => {
       "openclaw plugins install @openclaw/llama-cpp-provider",
       "openclaw plugins update llama-cpp",
     );
-    expect(loadTrustedExternalProviderPolicyArtifacts).not.toHaveBeenCalled();
+    expect(loadProviderPolicyArtifacts).not.toHaveBeenCalled();
   });
 
   it("reports global plugin disablement before the inactive memory-runtime gate", async () => {
@@ -452,14 +436,14 @@ describe("noteMemorySearchHealth", () => {
     );
     expectFirstNoteExcludes("No active memory plugin is registered");
     expect(resolveActiveMemoryBackendConfig).not.toHaveBeenCalled();
-    expect(loadTrustedExternalProviderPolicyArtifacts).not.toHaveBeenCalled();
+    expect(loadProviderPolicyArtifacts).not.toHaveBeenCalled();
   });
 
   it("uses the policy owner selected after an earlier disabled owner", async () => {
     const earlierOwner = { id: "a-disabled" };
     const selectedOwner = { id: "b-policy" };
-    listTrustedExternalProviderPolicyOwners.mockReturnValueOnce([earlierOwner, selectedOwner]);
-    loadTrustedExternalProviderPolicyArtifacts.mockImplementationOnce((owners) => {
+    listProviderPolicyOwners.mockReturnValueOnce([earlierOwner, selectedOwner]);
+    loadProviderPolicyArtifacts.mockImplementationOnce((owners) => {
       const owner = owners[0];
       if (!owner) {
         throw new Error("missing selected provider owner");
@@ -484,12 +468,24 @@ describe("noteMemorySearchHealth", () => {
     expect(resolveManifestOwnerBasePolicyBlock).toHaveBeenCalledWith(
       expect.objectContaining({ plugin: selectedOwner }),
     );
-    expect(loadTrustedExternalProviderPolicyArtifacts).toHaveBeenCalledWith([selectedOwner]);
+    expect(loadProviderPolicyArtifacts).toHaveBeenCalledWith([selectedOwner]);
     expectFirstNoteContains("Selected provider needs setup", "Configure the selected provider");
     expectFirstNoteExcludes("openclaw plugins enable a-disabled");
   });
 
-  it("uses installed provider setup guidance instead of reinstalling the plugin", async () => {
+  it.each([
+    failedGatewayOptions("Managed local embeddings are unavailable."),
+    skippedGatewayOptions,
+  ])("uses bundled provider setup guidance for Gateway probe %j", async (options) => {
+    const owner = createPluginManifestRecordFixture({
+      id: "llama-cpp",
+      contracts: { embeddingProviders: ["local"] },
+    });
+    loadPluginManifestRegistryForPluginRegistry.mockReturnValueOnce({
+      plugins: [owner],
+      diagnostics: [],
+    });
+    listProviderPolicyOwners.mockImplementationOnce(collectPolicyOwners);
     inspectConfiguredEmbeddingProviderSetup.mockResolvedValueOnce({
       provider: "local",
       reason: "Local embeddings need the managed llama.cpp server config.",
@@ -498,15 +494,12 @@ describe("noteMemorySearchHealth", () => {
         "Run `openclaw models --agent agent-default auth login --provider llama-cpp --method local` in an interactive terminal, then rerun this check.",
     });
 
-    await runMemorySearchHealth(
-      "local",
-      failedGatewayOptions("Managed local embeddings are unavailable."),
-    );
+    await runMemorySearchHealth("local", options);
 
+    expect(loadProviderPolicyArtifacts).toHaveBeenCalledWith([owner]);
     expectFirstNoteContains(
       "Local embeddings need the managed llama.cpp server config",
       "openclaw models --agent agent-default auth login --provider llama-cpp --method local",
-      "Managed local embeddings are unavailable",
     );
     expectFirstNoteExcludes("openclaw plugins install @openclaw/llama-cpp-provider");
   });
@@ -742,7 +735,7 @@ describe("noteMemorySearchHealth", () => {
   ])("%s", async (_name, plugins, isActive) => {
     resolveActiveMemoryBackendConfig.mockReturnValue(null);
     const config = { session: { dmScope: "per-peer" }, plugins } as unknown as OpenClawConfig;
-    await runConfiguredMemorySearch("auto", config);
+    await runMemorySearchHealth("auto", undefined, undefined, config);
     expect(resolveApiKeyForProviderCore).not.toHaveBeenCalled();
     if (isActive) {
       expect(note).not.toHaveBeenCalled();
@@ -898,10 +891,47 @@ describe("noteMemorySearchHealth", () => {
       "openai",
       { source: "env", provider: "default", id: "OPENAI_API_KEY" },
     ],
+    [
+      "treats store SecretRef remote apiKey as configured for explicit provider",
+      "openai",
+      { source: "store", provider: "default", id: "OPENAI_API_KEY" },
+    ],
   ])("%s", async (_name, provider, apiKey) => {
     await runMemorySearchHealth(provider, {}, { remote: { apiKey } });
     expect(note).not.toHaveBeenCalled();
     expect(resolveApiKeyForProviderCore).not.toHaveBeenCalled();
+  });
+
+  describe.each([
+    ["gemini", "google", "GOOGLE_API_KEY"],
+    ["openai", "openai", "OPENAI_API_KEY"],
+  ])("%s provider credentials", (provider, authProvider, secretId) => {
+    it.each(["store", "absent", "marker"] as const)("checks a %s key", async (keyKind) => {
+      hasAnyAuthProfileStoreSource.mockReturnValue(false);
+      const config: OpenClawConfig = {
+        models: {
+          providers: {
+            [authProvider]: {
+              baseUrl: "https://embeddings.example.test/v1",
+              models: [],
+              apiKey:
+                keyKind === "store"
+                  ? { source: "store", provider: "default", id: secretId }
+                  : keyKind === "marker"
+                    ? secretId
+                    : undefined,
+            },
+          },
+        },
+      };
+      await runMemorySearchHealth(provider, undefined, undefined, config);
+      if (keyKind === "store") {
+        expect(note).not.toHaveBeenCalled();
+      } else {
+        expect(firstNoteMessage()).toContain("no API key was found");
+      }
+      expect(resolveApiKeyForProviderCore).not.toHaveBeenCalled();
+    });
   });
 
   it.each([
@@ -1020,7 +1050,7 @@ describe("noteMemorySearchHealth", () => {
     ],
   ])("%s", async (_name, provider, options, scenario = {}) => {
     const { overrides, config, contains, noNote, noApiKeyLookup } = scenario;
-    await runConfiguredMemorySearch(provider, config ?? cfg, options, overrides);
+    await runMemorySearchHealth(provider, options, overrides, config ?? cfg);
     if (noNote) {
       expect(note).not.toHaveBeenCalled();
     }
@@ -1139,12 +1169,7 @@ describe("noteMemorySearchHealth", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    await runConfiguredMemorySearch(
-      "openai",
-      openaiCfg,
-      skippedGatewayOptions,
-      openAiEmbeddingModel,
-    );
+    await runMemorySearchHealth("openai", skippedGatewayOptions, openAiEmbeddingModel, openaiCfg);
 
     expectFirstNoteContains('provider is set to "openai"', "OPENAI_API_KEY");
     expect(resolveApiKeyForProviderCore).toHaveBeenCalledWith({

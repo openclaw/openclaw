@@ -20,6 +20,24 @@ fleet catalog, authenticated operator UI, session binding, and channel delivery.
 The feature belongs to the official `codex` plugin. There is no separate
 Supervisor plugin or second Codex protocol implementation.
 
+This spec uses these stage names:
+
+- **Gateway-local branch**: the new supervised Chat that OpenClaw creates from a
+  stored or idle local Codex source instead of resuming that source thread.
+- **Pending harness branch**: that branch before its first turn, when the bounded
+  history is projected but no canonical Codex thread exists yet.
+- **Chat mirror** (visible history mirror): the bounded copy of visible user and
+  assistant messages projected into the Chat.
+- **Visible-history branch**: an unmapped Gateway-local source that carries only
+  that mirrored history, so its canonical harness thread never resumes the
+  source.
+- **Canonical appServer-source branch**: the native Codex thread the plugin
+  creates with `threadSource: "appServer"` after pinning the source snapshot.
+- **Canonical full Codex harness thread**: that canonical thread once it runs
+  with OpenClaw's full harness tool surface; every later model turn runs on it.
+- **Supervised model-locked Chat**: an OpenClaw Chat bound to a supervised
+  thread under the Codex-only model and runtime lock.
+
 ## Product boundary
 
 The catalog registers whenever the Codex plugin is active unless native session
@@ -110,6 +128,12 @@ turns on the supervision connection. Live status and ownership remain
 process-local; a thread unknown to OpenClaw's supervision process is `notLoaded`
 even when Codex Desktop is actively running it.
 
+Catalog reads and pinned source leases explicitly select native authentication.
+They do not import or replace credentials in either OpenClaw's auth store or the
+selected Codex home. This also applies to a primary catalog source configured
+with agent home scope: its physical home and connection fingerprint remain
+unchanged. Ordinary managed inference keeps its agent-auth preflight.
+
 Codex has an experimental canonical local daemon with a separate
 installer-managed bootstrap contract. This feature must not bootstrap, claim,
 or assume that daemon implicitly.
@@ -142,6 +166,21 @@ nor command; direct invocation also fails closed. It must never expose the user
 Codex home for an agent-scoped configuration or substitute local stdio for an
 explicit endpoint.
 
+Headless node catalogs default to the node's native `CODEX_HOME` or `~/.codex`,
+independently of the Gateway's route agent and the node's agent roster. Native
+readers retain the configured command, arguments, and cleared environment
+variables. Catalog reads and native terminal resume use the same home as the
+node's existing CLI session listing and continuation commands.
+
+The Gateway still sends its optional agent id for released nodes: v2026.9.4
+uses it as a strict local source selector under the same command names. Updated
+native readers validate that field only as inert route context. Explicit
+agent-scoped and non-stdio source configurations keep their shipped local-owner
+selection, including rejection of missing or removed owners. Neither path
+silently substitutes a different source. Retire this compatibility only through
+a versioned node-source contract and an upgrade transition for those configured
+readers.
+
 The catalog projection normalizes identifiers, title, cwd, status, active wait
 flags, timestamps, source, model provider, Codex version, and Git branch. It
 does not return transcript previews, turns, rollout paths, Codex home paths,
@@ -153,6 +192,14 @@ Host failures remain local to each host result. An offline node or unavailable
 local App Server does not erase healthy hosts from the page. Connectivity is a
 host property, not a thread status: a failed host result contains no fresh
 session rows and does not project `offline` onto native threads.
+
+An empty catalog does not create a sidebar section, even when it has an error
+or a continuation cursor. When healthy cursor hosts have no visible rows under
+the current owner filter, the existing data owner advances one page per catalog
+between refreshes. Accepted pages retain their cursor and page-depth progress;
+later passes continue that search instead of restarting at the same first page.
+Discovery pauses while hidden and stops advancing on errors or cursor cycles.
+Catalogs containing visible sessions remain present when another host fails.
 
 The Control UI requests progressive catalog updates. Each local or paired host
 appears when its own App Server listing settles; the aggregate response remains
@@ -175,7 +222,7 @@ previews. The returned native cursor lets callers continue the scan.
 The plugin registers three Gateway-backed shell commands:
 
 ```text
-openclaw codex sessions [--search <text>] [--host <id>] [--limit <count>] [--cursor <cursor>] [--json] [gateway-options]
+openclaw codex sessions [--agent <id>] [--search <text>] [--host <id>] [--limit <count>] [--cursor <cursor>] [--json] [gateway-options]
 openclaw codex continue <thread-id> [--agent <id>] [--host <id>] [--json] [gateway-options]
 openclaw codex archive <thread-id> --confirm-no-other-runner [--agent <id>] [--host <id>] [--json] [gateway-options]
 ```
@@ -552,7 +599,7 @@ The standalone legacy MCP adapter resolves these same tools from the official
 plugin and is the only path that honors the retained legacy policy environment
 variables.
 
-The July catalog UI, Gateway method, node capability, and CLI registration had
+The 2026.8.1 catalog UI, Gateway method, node capability, and CLI registration had
 not shipped under the old plugin id. They move directly to `codex` ownership
 without a second runtime facade.
 
@@ -620,3 +667,7 @@ surfaces remain the recovery path for archived threads.
 - Legacy Supervisor config migrates to the canonical Codex config shape.
 - Legacy list is loaded-only by default, stored enumeration obeys its per-endpoint
   cap, and compatibility send never starts or resumes an idle thread.
+
+## Related
+
+- [Codex supervision](/plugins/codex-supervision) - the user-facing guide for this spec

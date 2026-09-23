@@ -143,6 +143,9 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
             `[${account.accountId}] Buzz history recovery incomplete: ${error.message}`,
           );
         },
+        onRoomUnavailable: (error) => {
+          ctx.log?.warn?.(`[${account.accountId}] Buzz room skipped: ${error.message}`);
+        },
         onPresenceError: (error) => {
           ctx.log?.warn?.(
             `[${account.accountId}] Buzz presence heartbeat failed: ${error.message}`,

@@ -6,20 +6,26 @@ import {
   openRootFileSync,
   readFileDescriptorBoundedSync,
 } from "../../infra/boundary-file-read.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { ParsedSkillFrontmatter } from "../types.js";
-import { parseSkillFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
-import {
-  createSyntheticSourceInfo,
-  resolveSkillDisplayName,
-  type Skill,
-} from "./skill-contract.js";
+import { parseSkillFrontmatter } from "./frontmatter.js";
+import type { Skill } from "./skill-contract.js";
+import { materializeSkill } from "./skill-materializer.js";
 
 export type LoadedLocalSkill = {
   skill: Skill;
   frontmatter: ParsedSkillFrontmatter;
+  content: string;
 };
 
+// Reuse parsing and hashing across checked-out copies, after each boundary-safe read.
+// Bound retained instruction text to 8 MiB plus parsed facts; large skills bypass reuse.
+const MAX_CACHED_SKILL_CONTENT_CHARS = 16 * 1024;
+const MAX_CACHED_SKILL_CONTENTS = 256;
+const localSkillContentCache = new Map<string, Omit<LoadedLocalSkill, "content">>();
+
 export type LocalSkillLoadDiagnostic = {
+  kind: "read" | "invalid";
   path: string;
   message: string;
 };
@@ -48,7 +54,11 @@ function readSkillFileSync(params: {
         opened.error instanceof Error
           ? opened.error.message
           : `failed to open skill file (${opened.reason})`;
-      params.onDiagnostic?.({ path: params.filePath, message });
+      params.onDiagnostic?.({
+        kind: opened.reason === "validation" ? "invalid" : "read",
+        path: params.filePath,
+        message,
+      });
     }
     return null;
   }
@@ -58,7 +68,11 @@ function readSkillFileSync(params: {
       : readFileDescriptorBoundedSync(opened.fd, params.maxBytes).toString("utf8");
   } catch (error) {
     const message = error instanceof Error ? error.message : "failed to read skill file";
-    params.onDiagnostic?.({ path: params.filePath, message });
+    params.onDiagnostic?.({
+      kind: error instanceof RangeError ? "invalid" : "read",
+      path: params.filePath,
+      message,
+    });
     return null;
   } finally {
     fs.closeSync(opened.fd);
@@ -85,118 +99,63 @@ export function loadSingleSkillDirectory(params: {
     return null;
   }
 
-  let frontmatter: Record<string, string>;
-  try {
-    frontmatter = parseSkillFrontmatter(raw);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "failed to parse skill frontmatter";
-    params.onDiagnostic?.({ path: skillFilePath, message });
-    return null;
-  }
-
   const fallbackName = path.basename(params.skillDir).trim();
-  const name = frontmatter.name?.trim() || fallbackName;
-  const description = frontmatter.description?.trim();
-  if (!name || !description) {
-    params.onDiagnostic?.({
-      path: skillFilePath,
-      message: !name ? "name is required" : "description is required",
-    });
-    return null;
-  }
-  const invocation = resolveSkillInvocationPolicy(frontmatter);
   const filePath = path.resolve(skillFilePath);
   const baseDir = path.resolve(params.skillDir);
+  let loaded = localSkillContentCache.get(raw);
+  // An omitted name is directory-derived, including its fallback display title.
+  if (loaded && !loaded.frontmatter.name?.trim() && loaded.skill.name !== fallbackName) {
+    loaded = undefined;
+  }
+  if (!loaded) {
+    let frontmatter: ParsedSkillFrontmatter;
+    try {
+      frontmatter = parseSkillFrontmatter(raw);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "failed to parse skill frontmatter";
+      params.onDiagnostic?.({ kind: "invalid", path: skillFilePath, message });
+      return null;
+    }
+    const name = frontmatter.name?.trim() || fallbackName;
+    const description = frontmatter.description?.trim();
+    if (!name || !description) {
+      params.onDiagnostic?.({
+        kind: "invalid",
+        path: skillFilePath,
+        message: !name ? "name is required" : "description is required",
+      });
+      return null;
+    }
+    loaded = {
+      skill: materializeSkill({
+        content: raw,
+        frontmatter,
+        name,
+        description,
+        filePath,
+        baseDir,
+        source: params.source,
+        sourceOptions: { source: params.source, scope: "project", origin: "top-level" },
+      }),
+      frontmatter,
+    };
+  }
+  if (raw.length <= MAX_CACHED_SKILL_CONTENT_CHARS) {
+    localSkillContentCache.delete(raw);
+    localSkillContentCache.set(raw, loaded);
+    pruneMapToMaxSize(localSkillContentCache, MAX_CACHED_SKILL_CONTENTS);
+  }
 
   return {
     skill: {
-      name,
-      displayName: resolveSkillDisplayName(raw, name),
-      description,
+      ...loaded.skill,
       filePath,
       baseDir,
       source: params.source,
-      sourceInfo: createSyntheticSourceInfo(filePath, {
-        source: params.source,
-        baseDir,
-        scope: "project",
-        origin: "top-level",
-      }),
-      disableModelInvocation: invocation.disableModelInvocation,
+      sourceInfo: { ...loaded.skill.sourceInfo, path: filePath, baseDir, source: params.source },
     },
-    frontmatter,
-  };
-}
-
-function listCandidateSkillDirs(dir: string): string[] {
-  try {
-    return fs
-      .readdirSync(dir, { withFileTypes: true })
-      .filter(
-        (entry) =>
-          entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "node_modules",
-      )
-      .map((entry) => path.join(dir, entry.name))
-      .toSorted((left, right) => left.localeCompare(right));
-  } catch {
-    return [];
-  }
-}
-
-/** Loads skills from a local directory while turning read/parse failures into diagnostics. */
-export function loadSkillsFromDirSafe(params: {
-  dir: string;
-  source: string;
-  maxBytes?: number;
-  rejectHardlinks?: boolean;
-  onDiagnostic?: (diagnostic: LocalSkillLoadDiagnostic) => void;
-}): {
-  skills: Skill[];
-  frontmatterByFilePath: ReadonlyMap<string, ParsedSkillFrontmatter>;
-} {
-  const rootDir = path.resolve(params.dir);
-  let rootRealPath: string;
-  try {
-    rootRealPath = fs.realpathSync(rootDir);
-  } catch {
-    return { skills: [], frontmatterByFilePath: new Map() };
-  }
-
-  const rootSkill = loadSingleSkillDirectory({
-    skillDir: rootDir,
-    source: params.source,
-    rootRealPath,
-    maxBytes: params.maxBytes,
-    rejectHardlinks: params.rejectHardlinks,
-    onDiagnostic: params.onDiagnostic,
-  });
-  if (rootSkill) {
-    return {
-      skills: [rootSkill.skill],
-      frontmatterByFilePath: new Map([[rootSkill.skill.filePath, rootSkill.frontmatter]]),
-    };
-  }
-
-  const loadedSkills = listCandidateSkillDirs(rootDir)
-    .map((skillDir) =>
-      loadSingleSkillDirectory({
-        skillDir,
-        source: params.source,
-        rootRealPath,
-        maxBytes: params.maxBytes,
-        rejectHardlinks: params.rejectHardlinks,
-        onDiagnostic: params.onDiagnostic,
-      }),
-    )
-    .filter((skill): skill is LoadedLocalSkill => skill !== null);
-  const frontmatterByFilePath = new Map<string, ParsedSkillFrontmatter>();
-  for (const loaded of loadedSkills) {
-    frontmatterByFilePath.set(loaded.skill.filePath, loaded.frontmatter);
-  }
-
-  return {
-    skills: loadedSkills.map((loaded) => loaded.skill),
-    frontmatterByFilePath,
+    frontmatter: { ...loaded.frontmatter },
+    content: raw,
   };
 }
 

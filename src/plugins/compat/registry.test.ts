@@ -40,7 +40,7 @@ const deprecationMarkingSurfaceCounts: Record<(typeof deprecationMarkingCodes)[n
   "agent-harness-terminal-result-aliases": 10,
   "official-plugin-export-aliases": 7,
   "memory-host-compatibility-aliases": 4,
-  "plugin-runtime-api-compat-aliases": 27,
+  "plugin-runtime-api-compat-aliases": 28,
   "plugin-provider-manifest-compat-aliases": 9,
 };
 function expectNonEmptyStringList(values: readonly string[], label: string) {
@@ -83,23 +83,26 @@ describe("plugin compatibility registry", () => {
       (record) =>
         record.status === "removal-pending" &&
         record.removeAfter !== undefined &&
-        record.removeAfter <= "2026-07-30",
+        record.removeAfter <= "2026-09-02",
     );
 
     expect(staleRemovalWindows).toEqual([]);
-    const septemberSubpaths = [...records.values()].filter(
-      (record) => record.code.startsWith("plugin-sdk-") && record.removeAfter === "2026-09-01",
-    );
-    expect(septemberSubpaths).toHaveLength(5);
-    for (const record of septemberSubpaths) {
+    for (const code of [
+      "plugin-sdk-config-runtime-subpath",
+      "plugin-sdk-channel-reply-pipeline-subpath",
+      "plugin-sdk-infra-runtime-subpath",
+      "plugin-sdk-channel-lifecycle-subpath",
+      "plugin-sdk-channel-message-subpath",
+    ] as const satisfies readonly PluginCompatCode[]) {
+      const record = records.get(code);
       expect(record).toMatchObject({
         status: "removal-pending",
         deprecated: "2026-07-06",
         warningStarts: "2026-07-06",
-        removeAfter: "2026-09-01",
+        removeAfter: "2026-10-01",
         docsPath: "/plugins/sdk-migration",
       });
-      expect(record.replacement).toMatch(
+      expect(record?.replacement).toMatch(
         /retain until supported external plugin migration is verified/u,
       );
     }
@@ -126,6 +129,22 @@ describe("plugin compatibility registry", () => {
       removalGate: "next-plugin-sdk-major",
       removeAfter: undefined,
     });
+    expect(records.get("plugin-state-sync-keyed-store")).toMatchObject({
+      status: "deprecated",
+      owner: "sdk",
+      deprecated: "2026-09-11",
+      warningStarts: "2026-09-11",
+      removalGate: "next-plugin-sdk-major",
+      docsPath: "/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration",
+      surfaces: [
+        "api.runtime.state.openSyncKeyedStore",
+        "PluginStateSyncKeyedStore",
+        "createPluginStateSyncKeyedStore",
+        "PluginStateKeyedStore.update",
+        "PluginStateKeyedStore.deleteIf",
+      ],
+    });
+    expect(records.get("plugin-state-sync-keyed-store")?.removeAfter).toBeUndefined();
     expect(records.get("agent-harness-sdk-alias")?.surfaces).toEqual([
       "openclaw/plugin-sdk/agent-harness",
       "openclaw/plugin-sdk/agent-harness-runtime",

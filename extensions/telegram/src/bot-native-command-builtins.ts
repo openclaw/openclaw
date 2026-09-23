@@ -1,4 +1,3 @@
-// Telegram plugin module implements built-in native command behavior.
 import {
   loadPreparedModelCatalog,
   resolveAgentConfig,
@@ -8,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import {
   buildCommandTextFromArgs,
+  canResolveCommandArgMenu,
   findCommandByNativeName,
   formatCommandArgMenuTitle,
   formatFastModeCurrentStatus,
@@ -28,7 +28,6 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
-  dispatchTelegramBuiltinTurn,
   prepareTelegramCommandDispatch,
   type TelegramCommandExecutorParams,
 } from "./bot-native-command-dispatch.js";
@@ -217,6 +216,7 @@ async function resolveTelegramThinkMenuCurrentLevel(params: {
   const defaultModel = resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
   return await resolveThinkingDefaultWithRuntimeCatalog({
     cfg: params.cfg,
+    agentId: params.agentId,
     provider: params.provider ?? defaultModel.provider,
     model: params.model ?? defaultModel.model,
     agentRuntime: params.agentRuntime,
@@ -246,13 +246,14 @@ function formatTelegramCommandArgMenuTitle(params: {
   return title;
 }
 
+export type TelegramBuiltinCommandResult = "handled" | "handled-clear-buttons" | "fall-through";
+
 export async function executeTelegramBuiltinCommand(
-  params: TelegramCommandExecutorParams & { commandName: string },
-): Promise<boolean> {
-  const dispatch = await prepareTelegramCommandDispatch({ ...params, requireAuth: true });
-  if (!dispatch) {
-    return false;
-  }
+  params: TelegramCommandExecutorParams & {
+    commandName: string;
+    shouldSkip?: () => boolean;
+  },
+): Promise<TelegramBuiltinCommandResult> {
   // Loaded-registry lookup only: Telegram defines no resolveNativeCommandName
   // hook, and the bundled fallback would jiti-load the plugin source in dev/test.
   const commandDefinition = findCommandByNativeName(params.commandName, "telegram", {
@@ -268,9 +269,38 @@ export async function executeTelegramBuiltinCommand(
     : params.rawText
       ? `/${params.commandName} ${params.rawText}`
       : `/${params.commandName}`;
+  if (
+    commandDefinition?.key !== "login" &&
+    (!commandDefinition ||
+      !canResolveCommandArgMenu({ command: commandDefinition, args: commandArgs }))
+  ) {
+    return "fall-through";
+  }
+  if (commandDefinition?.key === "login" && params.shouldSkip?.()) {
+    return "handled";
+  }
+  const dispatch = await prepareTelegramCommandDispatch({ ...params, requireAuth: true });
+  if (!dispatch) {
+    return "handled";
+  }
   if (commandDefinition?.key === "login") {
     const { executeTelegramLoginCommand } = await loadTelegramLoginCommandExecutor();
-    return await executeTelegramLoginCommand({ dispatch, commandArgs });
+    const currentProvider =
+      resolveTelegramCommandMenuModelContext({
+        cfg: dispatch.runtimeCfg,
+        agentId: dispatch.route.agentId,
+        sessionKey: dispatch.targetSessionKey,
+      }).provider ??
+      resolveDefaultModelForAgent({
+        cfg: dispatch.runtimeCfg,
+        agentId: dispatch.route.agentId,
+      }).provider;
+    const clearButtons = await executeTelegramLoginCommand({
+      dispatch,
+      commandText: prompt,
+      currentProvider,
+    });
+    return clearButtons ? "handled-clear-buttons" : "handled";
   }
 
   const menuNeedsModelContext =
@@ -321,11 +351,16 @@ export async function executeTelegramBuiltinCommand(
         command: commandDefinition,
         args: commandArgs,
         cfg: dispatch.runtimeCfg,
+        session: { agentId: dispatch.route.agentId, sessionKey: dispatch.targetSessionKey },
         ...menuModelContext,
-        ...(menuModelCatalog?.length ? { catalog: menuModelCatalog } : {}),
+        catalog: menuModelCatalog,
       })
     : null;
   if (menu && commandDefinition) {
+    // The tracker consumes the update; a menu with no choices must leave it for the pipeline.
+    if (params.shouldSkip?.()) {
+      return "handled";
+    }
     const title = formatTelegramCommandArgMenuTitle({
       command: commandDefinition,
       menu,
@@ -373,7 +408,7 @@ export async function executeTelegramBuiltinCommand(
           ...dispatch.threadParams,
         }),
     });
-    return false;
+    return "handled";
   }
-  return await dispatchTelegramBuiltinTurn({ dispatch, prompt, commandArgs });
+  return "fall-through";
 }

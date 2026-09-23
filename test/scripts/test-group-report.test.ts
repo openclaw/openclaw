@@ -3,9 +3,8 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   buildGroupedTestComparison,
   buildGroupedTestReport,
@@ -24,6 +23,10 @@ import {
   runReportPlans,
   spawnText,
 } from "../../scripts/test-group-report.mts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { withEnv } from "../../src/test-utils/env.js";
 import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
 import {
@@ -34,10 +37,12 @@ import {
   waitForPidFile,
 } from "../helpers/process-wait.js";
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
-import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import { cleanupTempDirs, makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { toolingProbeRuntimeEntrypoints } from "./tooling-probe-runtime.test-support.mts";
 
 const tempDirs = new Set<string>();
-const tsxImport = import.meta.resolve("tsx");
+const cliTempDirs = useAutoCleanupTempDirTracker(afterEach);
+const reportUrl = resolveRuntimeWorkerUrl(toolingProbeRuntimeEntrypoints.testGroupReport);
 
 afterAll(() => {
   cleanupTempDirs(tempDirs);
@@ -103,6 +108,42 @@ describe("scripts/test-group-report grouping", () => {
 });
 
 describe("scripts/test-group-report aggregation", () => {
+  it("profiles a selected test through the real Node wrapper", async () => {
+    const root = cliTempDirs.make("openclaw-test-group-report-cli-");
+    const output = path.join(root, "group-report.json");
+    const target = "src/shared/human-list.test.ts";
+    const result = await spawnText(
+      process.execPath,
+      [
+        ...resolveRuntimeWorkerArgv(reportUrl, process.execPath),
+        "--config",
+        "test/vitest/vitest.unit-fast.config.ts",
+        "--no-rss",
+        "--output",
+        output,
+        "--",
+        target,
+      ],
+      {
+        env: {
+          ...process.env,
+          NODE_OPTIONS: "--max-old-space-size=512",
+          OPENCLAW_VITEST_ENABLE_MAGLEV: "0",
+          OPENCLAW_VITEST_INCLUDE_FILE: undefined,
+          OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(root, "cache"),
+        },
+        timeoutMs: 60_000,
+      },
+    );
+
+    expect(result.status, result.output).toBe(0);
+    expect(JSON.parse(fs.readFileSync(output, "utf8"))).toMatchObject({
+      totals: { fileCount: 1, testCount: expect.any(Number) },
+      topFiles: [expect.objectContaining({ file: target })],
+      runs: [expect.objectContaining({ status: 0 })],
+    });
+  });
+
   it("aggregates file durations by group and config", () => {
     const report = buildGroupedTestReport({
       groupBy: "area",
@@ -166,9 +207,7 @@ describe("scripts/test-group-report aggregation", () => {
       const result = spawnSync(
         process.execPath,
         [
-          "--import",
-          tsxImport,
-          "scripts/test-group-report.mts",
+          ...resolveRuntimeWorkerArgv(reportUrl, process.execPath),
           "--report",
           missingReport,
           "--output",
@@ -200,9 +239,7 @@ describe("scripts/test-group-report aggregation", () => {
       const result = spawnSync(
         process.execPath,
         [
-          "--import",
-          tsxImport,
-          "scripts/test-group-report.mts",
+          ...resolveRuntimeWorkerArgv(reportUrl, process.execPath),
           "--report",
           reportPath,
           "--output",
@@ -231,9 +268,7 @@ describe("scripts/test-group-report aggregation", () => {
       const result = spawnSync(
         process.execPath,
         [
-          "--import",
-          tsxImport,
-          "scripts/test-group-report.mts",
+          ...resolveRuntimeWorkerArgv(reportUrl, process.execPath),
           "--config",
           missingConfig,
           "--allow-failures",
@@ -646,9 +681,7 @@ describe("scripts/test-group-report comparison", () => {
       const result = spawnSync(
         process.execPath,
         [
-          "--import",
-          tsxImport,
-          "scripts/test-group-report.mts",
+          ...resolveRuntimeWorkerArgv(reportUrl, process.execPath),
           "--compare",
           beforePath,
           afterPath,
@@ -691,9 +724,7 @@ describe("scripts/test-group-report comparison", () => {
       const result = spawnSync(
         process.execPath,
         [
-          "--import",
-          tsxImport,
-          "scripts/test-group-report.mts",
+          ...resolveRuntimeWorkerArgv(reportUrl, process.execPath),
           "--compare",
           beforePath,
           afterPath,
@@ -1044,7 +1075,6 @@ describe("scripts/test-group-report child process guard", () => {
 
     const tempDir = makeTempDir(tempDirs, "openclaw-test-group-report-");
     const childPidPath = path.join(tempDir, "child.pid");
-    const reportModuleUrl = pathToFileURL(path.resolve("scripts/test-group-report.mts")).href;
     let childPid: number | undefined;
     try {
       const childScript = [
@@ -1055,7 +1085,7 @@ describe("scripts/test-group-report child process guard", () => {
         "setInterval(() => {}, 1000);",
       ].join("\n");
       const runnerScript = [
-        `import { spawnText } from ${JSON.stringify(reportModuleUrl)};`,
+        `import { spawnText } from ${JSON.stringify(reportUrl.href)};`,
         "const result = await spawnText(",
         '  "/usr/bin/time",',
         `  [process.execPath, "--eval", ${JSON.stringify(childScript)}],`,
@@ -1065,7 +1095,12 @@ describe("scripts/test-group-report child process guard", () => {
       ].join("\n");
       const result = spawnSync(
         process.execPath,
-        ["--import", tsxImport, "--input-type=module", "--eval", runnerScript],
+        [
+          ...resolveRuntimeWorkerArgv(reportUrl, process.execPath).slice(0, -1),
+          "--input-type=module",
+          "--eval",
+          runnerScript,
+        ],
         {
           cwd: process.cwd(),
           encoding: "utf8",
@@ -1098,7 +1133,6 @@ describe("scripts/test-group-report child process guard", () => {
     const tempDir = makeTempDir(tempDirs, "openclaw-test-group-report-");
     const childPidPath = path.join(tempDir, "child.pid");
     const readyPath = path.join(tempDir, "child.ready");
-    const reportModuleUrl = pathToFileURL(path.resolve("scripts/test-group-report.mts")).href;
     let childPid: number | undefined;
     let runner: ReturnType<typeof spawn> | undefined;
     try {
@@ -1120,7 +1154,7 @@ describe("scripts/test-group-report child process guard", () => {
         "setInterval(() => {}, 1000);",
       ].join("\n");
       const runnerScript = [
-        `import { spawnText } from ${JSON.stringify(reportModuleUrl)};`,
+        `import { spawnText } from ${JSON.stringify(reportUrl.href)};`,
         "await spawnText(",
         "  process.execPath,",
         `  ["--eval", ${JSON.stringify(parentScript)}],`,
@@ -1130,7 +1164,12 @@ describe("scripts/test-group-report child process guard", () => {
 
       runner = spawn(
         process.execPath,
-        ["--import", tsxImport, "--input-type=module", "--eval", runnerScript],
+        [
+          ...resolveRuntimeWorkerArgv(reportUrl, process.execPath).slice(0, -1),
+          "--input-type=module",
+          "--eval",
+          runnerScript,
+        ],
         {
           cwd: process.cwd(),
           stdio: ["ignore", "ignore", "pipe"],
@@ -1394,21 +1433,36 @@ describe("scripts/test-group-report run plans", () => {
   });
 
   it("isolates Vitest filesystem module caches for parallel report configs", () => {
-    const args = parseTestGroupReportArgs(["--config", "a.ts", "--config", "b.ts"]);
+    const args = parseTestGroupReportArgs([
+      "--config",
+      "a.ts",
+      "--config",
+      "b.ts",
+      "--config",
+      "a.ts",
+    ]);
     const specs = resolveReportRunSpecs(
       args,
       [
         { config: "a.ts", forwardedArgs: [], label: "a" },
         { config: "b.ts", forwardedArgs: [], label: "b" },
+        { config: "a.ts", forwardedArgs: [], label: "a-again" },
       ],
       { cwd: "/repo", env: {} },
     );
 
-    expect(specs.map((spec) => spec.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH)).toEqual([
-      path.join("/repo", ".cache", "vitest", "0-a.ts"),
-      path.join("/repo", ".cache", "vitest", "1-b.ts"),
-    ]);
-    expect(specs.map((spec) => spec.vitestArgs)).toEqual([[], []]);
+    const cachePaths = specs.map((spec) =>
+      expectDefined(spec.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH, "report cache path"),
+    );
+    expect(new Set(cachePaths).size).toBe(3);
+    for (const cachePath of cachePaths) {
+      const relative = path.relative(path.join("/repo", ".cache", "vitest"), cachePath);
+      expect(relative).not.toBe("");
+      expect(path.isAbsolute(relative)).toBe(false);
+      expect(relative.split(path.sep)).not.toContain("..");
+      expect(cachePaths.filter((other) => other.startsWith(`${cachePath}${path.sep}`))).toEqual([]);
+    }
+    expect(specs.map((spec) => spec.vitestArgs)).toEqual([[], [], []]);
   });
 
   it("uses leaf configs for full-suite profiling without requiring parallel env", () => {

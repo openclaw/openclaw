@@ -1,4 +1,5 @@
 // Codex tests cover sandbox exec server plugin behavior.
+import { useIsolatedStateGuard, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
 import {
@@ -20,8 +21,9 @@ import {
   waitForSocketClose,
 } from "./sandbox-exec-server.test-helpers.js";
 
+useIsolatedStateGuard();
+
 afterEach(async () => {
-  vi.unstubAllEnvs();
   await sandboxExecServerRegistry.closeAll();
 });
 
@@ -229,7 +231,6 @@ describe("OpenClaw Codex sandbox exec-server", () => {
     );
     expect(buildExecSpec).toHaveBeenCalledWith(
       expect.objectContaining({
-        command: "'/bin/sh' '-lc' 'printf ok'",
         env: expect.objectContaining({
           CODEX_SANDBOX_EXEC_ID: expect.any(String),
           POLICY_ONLY: "1",
@@ -597,91 +598,212 @@ describe("OpenClaw Codex sandbox exec-server", () => {
     socket.close();
   });
 
-  it("keeps tty process starts pipe-backed for sandbox backends", async () => {
-    const buildExecSpec = vi.fn(async () => ({
-      argv: [process.execPath, "-e", echoFirstInputLineScript("tty:")],
-      env: testExecEnv(),
-      stdinMode: "pipe-open" as const,
-    }));
-    const sandbox = createSandboxContext({ buildExecSpec });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
+  it.runIf(process.platform !== "win32")(
+    "provides a real terminal and Ctrl-C for tty processes",
+    async () => {
+      const buildExecSpec = vi.fn(async () => ({
+        argv: [
+          process.execPath,
+          "-e",
+          [
+            "process.on('SIGINT', () => { console.log('INTERRUPTED'); process.exit(42); });",
+            "console.log('PID=' + process.pid + ' TTY=' + Boolean(process.stdin.isTTY && process.stdout.isTTY));",
+            "setInterval(() => {}, 1000);",
+          ].join(" "),
+        ],
+        env: testExecEnv(),
+        stdinMode: "pipe-open" as const,
+      }));
+      const sandbox = createSandboxContext({ buildExecSpec });
+      const client = createClient();
+      await ensureCodexSandboxExecServerEnvironment({
+        client: client as never,
+        sandbox,
+      });
+      const socket = await openSocket(execServerUrlFromClient(client));
+      await rpc(socket, "initialize", { clientName: "test" });
+      socket.send(JSON.stringify({ method: "initialized" }));
 
-    await rpc(socket, "process/start", {
-      processId: "proc-tty",
-      argv: ["/bin/sh", "-lc", "cat"],
-      cwd: "file:///workspace",
-      env: {},
-      tty: true,
-      pipeStdin: false,
-      arg0: null,
-    });
-    await expect(
-      rpc(socket, "process/write", {
+      await rpc(socket, "process/start", {
         processId: "proc-tty",
-        chunk: Buffer.from("hello\n").toString("base64"),
-      }),
-    ).resolves.toEqual({ status: "accepted" });
-    const read = await readUntilClosed(socket, "proc-tty");
+        argv: ["/bin/sh", "-lc", "cat"],
+        cwd: "file:///workspace",
+        env: {},
+        tty: true,
+        pipeStdin: false,
+        arg0: null,
+      });
+      await readStartedPid(socket, "proc-tty");
+      const initial = (await rpc(socket, "process/read", {
+        processId: "proc-tty",
+        afterSeq: 0,
+      })) as {
+        chunks: Array<{ chunk: string }>;
+      };
+      expect(
+        initial.chunks.map(({ chunk }) => Buffer.from(chunk, "base64").toString()).join(""),
+      ).toContain("TTY=true");
+      await expect(
+        rpc(socket, "process/write", {
+          processId: "proc-tty",
+          chunk: Buffer.from("\u0003").toString("base64"),
+        }),
+      ).resolves.toEqual({ status: "accepted" });
+      const read = await readUntilClosed(socket, "proc-tty");
 
-    expect(buildExecSpec).toHaveBeenCalledWith(expect.objectContaining({ usePty: false }));
-    expect(read.chunks?.[0]?.stream).toBe("pty");
-    expect(Buffer.from(read.chunks?.[0]?.chunk ?? "", "base64").toString("utf8")).toBe(
-      "tty:hello\n",
-    );
-    socket.close();
-  });
+      expect(buildExecSpec).toHaveBeenCalledWith(expect.objectContaining({ usePty: true }));
+      expect(read.chunks?.[0]?.stream).toBe("pty");
+      expect(
+        read.chunks?.map(({ chunk }) => Buffer.from(chunk, "base64").toString()).join(""),
+      ).toContain("INTERRUPTED");
+      expect(read.exitCode).toBe(42);
+      socket.close();
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "interrupts a non-tty process through the sandbox backend",
+    async () => {
+      let pid = 0;
+      let marker = "";
+      const sandbox = createSandboxContext({
+        buildExecSpec: async ({ env }) => {
+          marker = `CODEX_SANDBOX_EXEC_ID=${env.CODEX_SANDBOX_EXEC_ID}`;
+          return {
+            argv: [
+              process.execPath,
+              "-e",
+              [
+                "process.on('SIGINT', () => { console.log('INTERRUPTED'); process.exit(42); });",
+                "console.log('PID=' + process.pid); setInterval(() => {}, 1000);",
+              ].join(" "),
+            ],
+            env: testExecEnv(),
+            stdinMode: "pipe-closed",
+          };
+        },
+        runShellCommand: async ({ args, script }) => {
+          if (script.includes("kill -INT")) {
+            expect(args).toEqual([marker]);
+            process.kill(pid, "SIGINT");
+          }
+          return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), code: 0 };
+        },
+      });
+      const client = createClient();
+      await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
+      const socket = await openSocket(execServerUrlFromClient(client));
+      const notifications = collectNotifications(socket);
+      await rpc(socket, "initialize", {});
+      await rpc(socket, "process/start", {
+        processId: "proc-interrupt",
+        argv: ["ignored"],
+        cwd: "file:///workspace",
+        tty: false,
+      });
+      pid = await readStartedPid(socket, "proc-interrupt");
+      await expect(
+        rpc(socket, "process/signal", { processId: "proc-interrupt", signal: "interrupt" }),
+      ).resolves.toEqual({});
+      const read = await readUntilClosed(socket, "proc-interrupt");
+      expect(read.exitCode).toBe(42);
+      expect(
+        read.chunks?.map(({ chunk }) => Buffer.from(chunk, "base64").toString()).join(""),
+      ).toContain("INTERRUPTED");
+      expect(notifications).toContainEqual({
+        method: "process/exited",
+        params: expect.objectContaining({ exitCode: 42, sandboxDenied: false }),
+      });
+      await expect(
+        rpc(socket, "process/signal", { processId: "missing", signal: "interrupt" }),
+      ).resolves.toEqual({});
+      socket.close();
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "reports a signal-killed PTY as a failed process",
+    async () => {
+      const finalizeExec = vi.fn(async () => undefined);
+      const sandbox = createSandboxContext({
+        buildExecSpec: async () => ({
+          argv: [process.execPath, "-e", "process.kill(process.pid, 'SIGKILL')"],
+          env: testExecEnv(),
+          stdinMode: "pipe-open",
+        }),
+        finalizeExec,
+      });
+      const client = createClient();
+      await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
+      const socket = await openSocket(execServerUrlFromClient(client));
+      const notifications = collectNotifications(socket);
+      await rpc(socket, "initialize", {});
+      await rpc(socket, "process/start", {
+        processId: "killed-pty",
+        argv: ["ignored"],
+        cwd: "file:///workspace",
+        tty: true,
+      });
+      const read = await readUntilClosed(socket, "killed-pty");
+      expect(read.exitCode).toBe(1);
+      expect(notifications).toContainEqual({
+        method: "process/exited",
+        params: expect.objectContaining({ processId: "killed-pty", exitCode: 1 }),
+      });
+      await vi.waitFor(() =>
+        expect(finalizeExec).toHaveBeenCalledWith(expect.objectContaining({ exitCode: 1 })),
+      );
+      socket.close();
+    },
+  );
 
   it("does not let Codex env policy inherit host secret variables", async () => {
-    vi.stubEnv("HOME", "/gateway-home");
-    vi.stubEnv("USER", "gateway-user");
-    vi.stubEnv("TMPDIR", "/gateway-tmp");
-    vi.stubEnv("OPENCLAW_TEST_SECRET_TOKEN", "host-secret");
-    vi.stubEnv("OPENCLAW_TEST_DATABASE_PASSWORD", "host-password");
-    vi.stubEnv("OPENCLAW_TEST_PRIVATE_KEY", "host-private-key");
-    const buildExecSpec = vi.fn(async () => ({
-      argv: [process.execPath, "-e", ""],
-      env: {},
-      stdinMode: "pipe-closed" as const,
-    }));
-    const sandbox = createSandboxContext({ buildExecSpec });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
-
-    await rpc(socket, "process/start", {
-      processId: "proc-secret-env",
-      argv: ["/bin/sh", "-lc", "true"],
-      cwd: "file:///workspace",
-      env: {},
-      envPolicy: {
-        inherit: "all",
-        ignoreDefaultExcludes: true,
-        exclude: [],
-        set: {},
-        includeOnly: [],
+    await withEnvAsync(
+      {
+        OPENCLAW_TEST_SECRET_TOKEN: "host-secret",
+        OPENCLAW_TEST_DATABASE_PASSWORD: "host-password",
+        OPENCLAW_TEST_PRIVATE_KEY: "host-private-key",
       },
-      tty: false,
-      pipeStdin: false,
-      arg0: null,
-    });
+      async () => {
+        const buildExecSpec = vi.fn(async () => ({
+          argv: [process.execPath, "-e", ""],
+          env: {},
+          stdinMode: "pipe-closed" as const,
+        }));
+        const sandbox = createSandboxContext({ buildExecSpec });
+        const client = createClient();
+        await ensureCodexSandboxExecServerEnvironment({
+          client: client as never,
+          sandbox,
+        });
+        const socket = await openSocket(execServerUrlFromClient(client));
+        await rpc(socket, "initialize", { clientName: "test" });
+        socket.send(JSON.stringify({ method: "initialized" }));
 
-    const [{ env: execEnv }] = buildExecSpec.mock.calls[0] as unknown as [
-      { env: Record<string, string> },
-    ];
-    expect(execEnv).toEqual({ CODEX_SANDBOX_EXEC_ID: expect.any(String) });
-    socket.close();
+        await rpc(socket, "process/start", {
+          processId: "proc-secret-env",
+          argv: ["/bin/sh", "-lc", "true"],
+          cwd: "file:///workspace",
+          env: {},
+          envPolicy: {
+            inherit: "all",
+            ignoreDefaultExcludes: true,
+            exclude: [],
+            set: {},
+            includeOnly: [],
+          },
+          tty: false,
+          pipeStdin: false,
+          arg0: null,
+        });
+
+        const [{ env: execEnv }] = buildExecSpec.mock.calls[0] as unknown as [
+          { env: Record<string, string> },
+        ];
+        expect(execEnv).toEqual({ CODEX_SANDBOX_EXEC_ID: expect.any(String) });
+        socket.close();
+      },
+    );
   });
 
   it("keeps process/read cursors at the last returned byte-limited chunk", async () => {
@@ -771,7 +893,7 @@ describe("OpenClaw Codex sandbox exec-server", () => {
     await rpc(socket, "initialize", { clientName: "test" });
     socket.send(JSON.stringify({ method: "initialized" }));
 
-    for (const method of ["fs/walk", "process/signal", "unsupported/method"]) {
+    for (const method of ["fs/walk", "unsupported/method"]) {
       await expect(rpc(socket, method, {})).rejects.toMatchObject({
         code: -32601,
         message: `Unsupported OpenClaw sandbox exec-server method: ${method}`,

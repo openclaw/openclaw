@@ -17,7 +17,7 @@ import {
   resolveSessionTranscriptPathInDir,
 } from "../config/sessions/paths.js";
 import { resolveRealpathOrAbsolute as canonicalizePathForComparison } from "../infra/boundary-path.js";
-import { hasErrnoCode } from "../infra/errors.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { readFileWindowFully } from "../infra/file-read.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";

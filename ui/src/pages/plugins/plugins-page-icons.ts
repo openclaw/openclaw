@@ -1,0 +1,111 @@
+import type { ApplicationContext } from "../../app/context.ts";
+import {
+  resolveControlUiAuthCandidates,
+  type ControlUiAuthSource,
+} from "../../app/control-ui-auth.ts";
+import type { PluginDiscoveryDetailResult, PluginListResult } from "../../lib/plugins/index.ts";
+import type { PluginDiscoveryController } from "./plugin-discovery-controller.ts";
+import { PluginIconController } from "./plugin-icon-controller.ts";
+
+type PluginsPageIconsHost = {
+  getContext: () => ApplicationContext;
+  isConnected: () => boolean;
+  onInstalledUrlsChange: (urls: Record<string, string>) => void;
+  onCatalogUrlsChange: (urls: Record<string, string>) => void;
+};
+
+function renderedPluginIds(view: ParentNode): Set<string> {
+  return new Set(
+    Array.from(
+      view.querySelectorAll<HTMLElement>("[data-plugin-icon-id]"),
+      (tile) => tile.dataset.pluginIconId ?? "",
+    ).filter(Boolean),
+  );
+}
+
+export class PluginsPageIcons {
+  private authCandidates: string[] = [];
+  private readonly installed: PluginIconController;
+  private readonly catalog: PluginIconController;
+
+  constructor(host: PluginsPageIconsHost) {
+    const shared = {
+      getFetchContext: () => {
+        const context = host.getContext();
+        return {
+          resourceBasePath: context.resourceBasePath,
+          gatewayUrl: context.gateway.connection.gatewayUrl,
+          auth: {
+            hello: context.gateway.snapshot.hello,
+            settings: { token: context.gateway.connection.token },
+            password: context.gateway.connection.password,
+          },
+        };
+      },
+      isConnected: host.isConnected,
+    };
+    this.installed = new PluginIconController({
+      ...shared,
+      onUrlsChange: host.onInstalledUrlsChange,
+    });
+    this.catalog = new PluginIconController({
+      kind: "catalog",
+      ...shared,
+      onUrlsChange: host.onCatalogUrlsChange,
+    });
+  }
+
+  updateAuth(source: ControlUiAuthSource): boolean {
+    const next = resolveControlUiAuthCandidates(source);
+    const changed =
+      next.length !== this.authCandidates.length ||
+      next.some((candidate, index) => candidate !== this.authCandidates[index]);
+    this.authCandidates = next;
+    return changed;
+  }
+
+  syncInstalled(result: PluginListResult | null, view: ParentNode): void {
+    // Rendered tile markers preserve the inventory's sorting, filtering, and collapse policy.
+    this.installed.sync(result, renderedPluginIds(view));
+  }
+
+  reconcileInstalled(result: PluginListResult | null): void {
+    this.installed.reconcile(result);
+  }
+
+  invalidateInstalled(pluginId: string): void {
+    this.installed.invalidate(pluginId);
+  }
+
+  handleInstalledError(pluginId: string): void {
+    this.installed.handleError(pluginId);
+  }
+
+  syncCatalog(
+    discovery: Pick<PluginDiscoveryController, "result" | "featured" | "trending">,
+    view: ParentNode,
+    detail?: PluginDiscoveryDetailResult | null,
+  ): void {
+    const rendered = renderedPluginIds(view);
+    this.catalog.syncCatalog(
+      [
+        ...[
+          ...(discovery.result?.items ?? []),
+          ...discovery.featured,
+          ...discovery.trending,
+        ].filter((entry) => rendered.has(entry.id)),
+        ...(detail ? [detail.plugin] : []),
+      ],
+      detail?.detail.author?.imageUrl ? [detail.detail.author.imageUrl] : [],
+    );
+  }
+
+  resetInstalled(): void {
+    this.installed.reset();
+  }
+
+  reset(): void {
+    this.installed.reset();
+    this.catalog.reset();
+  }
+}

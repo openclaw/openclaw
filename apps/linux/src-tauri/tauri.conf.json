@@ -4,7 +4,12 @@
   "version": "0.1.0",
   "identifier": "ai.openclaw.linux",
   "build": {
-    "frontendDist": "../ui"
+    "frontendDist": [
+      "../ui",
+      "../../../ui/public/fonts/instrument-sans-latin.woff2",
+      "../../../ui/public/fonts/instrument-sans-latin-ext.woff2",
+      "../../../ui/public/fonts/instrument-sans-OFL.txt"
+    ]
   },
   "plugins": {
     "deep-link": {
@@ -43,11 +48,12 @@
           "identifier": "local-companion",
           "description": "Local setup screens can invoke app commands and receive installer progress.",
           "local": true,
-          "windows": ["main"],
+          "webviews": ["main"],
           "permissions": [
             "allow-bootstrap",
             "allow-build-info",
             "allow-check-for-updates",
+            "allow-close-connection-settings",
             "allow-connect-discovered-gateway",
             "allow-connect-remote-gateway",
             "allow-discover-gateways",
@@ -56,11 +62,38 @@
             "allow-open-release-page",
             "allow-relaunch",
             "allow-updater-ready",
+            "allow-window-chrome-request",
             "core:event:allow-listen",
             "core:event:allow-unlisten",
             "process:allow-restart",
             "updater:default"
           ]
+        },
+        {
+          "identifier": "local-companion-drag",
+          "description": "Local setup screens use native window dragging on Linux and Windows.",
+          "local": true,
+          "platforms": ["linux", "windows"],
+          "webviews": ["main"],
+          "permissions": ["allow-window-chrome-drag"]
+        },
+        {
+          "identifier": "gateway-settings",
+          "description": "The local Gateway editor manages saved desktop connections.",
+          "local": true,
+          "webviews": ["gateway-settings"],
+          "permissions": [
+            "allow-gateway-profile-request",
+            "allow-window-chrome-request"
+          ]
+        },
+        {
+          "identifier": "gateway-settings-drag",
+          "description": "The local Gateway editor uses native window dragging.",
+          "local": true,
+          "platforms": ["linux", "windows"],
+          "webviews": ["gateway-settings"],
+          "permissions": ["allow-window-chrome-drag"]
         },
         {
           "identifier": "quickchat",

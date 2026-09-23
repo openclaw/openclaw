@@ -4,7 +4,10 @@ import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snap
 import type { PluginLoadOptions } from "./loader.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { sortPluginEntriesById } from "./plugin-entry-order.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
+import type { PluginRegistry } from "./registry-types.js";
 
 type WebProviderContract = "webSearchProviders" | "webFetchProviders";
 type WebProviderConfigKey = "webSearch" | "webFetch";
@@ -183,16 +186,18 @@ export function resolveBundledWebProviderResolutionConfig(params: {
 
 /** Adds plugin ids to registry provider records, applies an optional plugin scope, then sorts. */
 export function mapRegistryProviders<TProvider extends { id: string }>(params: {
+  registry: PluginRegistry;
   entries: readonly { pluginId: string; provider: TProvider }[];
   onlyPluginIds?: readonly string[];
-  sortProviders: (
-    providers: Array<TProvider & { pluginId: string }>,
-  ) => Array<TProvider & { pluginId: string }>;
 }): Array<TProvider & { pluginId: string }> {
   const onlyPluginIdSet = createPluginIdScopeSet(normalizePluginIdScope(params.onlyPluginIds));
-  return params.sortProviders(
+  return sortPluginEntriesById(
     params.entries
       .filter((entry) => !onlyPluginIdSet || onlyPluginIdSet.has(entry.pluginId))
-      .map((entry) => Object.assign({}, entry.provider, { pluginId: entry.pluginId })),
+      .map(({ pluginId, provider }) => {
+        const record = params.registry.plugins.find((entry) => entry.id === pluginId);
+        const instance = record && getPluginInstance(record);
+        return Object.assign({}, instance?.wrap(provider) ?? provider, { pluginId });
+      }),
   );
 }

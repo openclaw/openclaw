@@ -1,7 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { logModelFallbackChainStopped } from "../model-fallback-observation.js";
+import { classifyEmbeddedAgentRunResultForModelFallback } from "./result-fallback-classifier.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./run/terminal-outcome.js";
 import { resolveEmbeddedRunTerminalTimeout } from "./run/terminal-timeout.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
+
+vi.mock("../model-fallback-observation.js", () => ({
+  logModelFallbackChainStopped: vi.fn(),
+}));
+
+beforeEach(() => vi.clearAllMocks());
 
 function makeTimedOutAttempt(
   overrides: Partial<EmbeddedRunAttemptResult> = {},
@@ -47,7 +55,6 @@ function makeTimeoutInput(
       failureSignal: undefined,
       ...preparedOverrides,
     },
-    shouldSurfaceCodexCompletionTimeout: false,
     attempt,
     terminalState: resolveEmbeddedRunAttemptTerminalState({
       attempt,
@@ -61,12 +68,44 @@ function makeTimeoutInput(
 }
 
 describe("resolveEmbeddedRunTerminalTimeout", () => {
-  it("returns an explicit default timeout payload when no reply was produced", () => {
-    const result = resolveEmbeddedRunTerminalTimeout(makeTimeoutInput(makeTimedOutAttempt()));
+  it.each(["runtime", "run_budget", "idle"] as const)(
+    "records a final %s timeout without reopening model fallback",
+    (source) => {
+      const earlierToolError = { text: "HTTP 401: Invalid API key", isError: true };
+      const result = resolveEmbeddedRunTerminalTimeout(
+        makeTimeoutInput(
+          makeTimedOutAttempt({
+            terminal: { kind: "timeout", phase: "prompt", source, aborted: true },
+          }),
+          { payloadsWithToolMedia: [earlierToolError] },
+        ),
+      );
+      const timeoutText = expect.stringContaining(
+        source === "idle" ? "model idle timeout" : "timed out",
+      );
 
-    expect(result?.payloads).toEqual([
-      { text: expect.stringContaining("timed out"), isError: true },
-    ]);
+      expect(result?.payloads).toEqual([earlierToolError, { text: timeoutText, isError: true }]);
+      expect(result?.meta.error).toEqual({
+        kind: "incomplete_turn",
+        message: timeoutText,
+        fallbackSafe: false,
+      });
+      expect(result?.meta.replayInvalid).toBe(false);
+      expect(result?.meta.modelFallbackStopReason).toBe("agent_run_terminal_timeout");
+      expect(
+        classifyEmbeddedAgentRunResultForModelFallback({
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          result,
+        }),
+      ).toBeNull();
+    },
+  );
+
+  it("does not report a fallback stop outside the fallback owner", () => {
+    const result = resolveEmbeddedRunTerminalTimeout(makeTimeoutInput(makeTimedOutAttempt()));
+    expect(result?.meta.error?.fallbackSafe).toBe(false);
+    expect(logModelFallbackChainStopped).not.toHaveBeenCalled();
   });
 
   it("preserves an accepted child spawn while surfacing the parent timeout", () => {
@@ -93,6 +132,7 @@ describe("resolveEmbeddedRunTerminalTimeout", () => {
         }),
       ),
     ).toBeUndefined();
+    expect(logModelFallbackChainStopped).not.toHaveBeenCalled();
   });
 
   it("prefers harness timeout metadata while retaining terminal attribution", () => {

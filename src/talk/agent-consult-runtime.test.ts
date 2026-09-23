@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
+import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   emitTrustedDiagnosticEvent,
@@ -11,12 +12,8 @@ import {
 } from "../infra/diagnostic-events.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
-import {
-  closeOpenClawAgentDatabaseByPath,
-  closeOpenClawAgentDatabasesForTest,
-} from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
   consultRealtimeVoiceAgent,
@@ -81,6 +78,8 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
       forkedFromParent?: boolean;
       totalTokens?: number;
       delivery?: SessionEntry["delivery"];
+      permissionMode?: SessionEntry["permissionMode"];
+      toolOverrides?: SessionEntry["toolOverrides"];
     }
   > = {};
   const runEmbeddedAgent = vi.fn(async (_params?: RunEmbeddedAgentParams) => ({
@@ -195,10 +194,8 @@ describe("realtime voice agent consult runtime", () => {
     const tempDir = testTempDir;
     testTempDir = undefined;
     if (tempDir) {
-      closeOpenClawAgentDatabaseByPath(path.join(tempDir, "openclaw-agent.sqlite"));
       clientVoiceSessionTesting.reset();
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
+      await cleanupSessionStateForTest({ stateDir: tempDir });
       envSnapshot.restore();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -322,7 +319,11 @@ describe("realtime voice agent consult runtime", () => {
   });
 
   it("runs an embedded agent using the shared session and prompt contract", async () => {
-    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
+    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime([
+      setReplyPayloadMetadata({ text: "Earlier answer." }, { precedingInputAnswer: true }),
+      { text: "Speak this." },
+      { text: "Then this." },
+    ]);
 
     const result = await consultRealtimeVoiceAgent({
       cfg: { agents: { list: [{ id: "operator", default: true }] } } as never,
@@ -347,7 +348,7 @@ describe("realtime voice agent consult runtime", () => {
       timeoutMs: 10_000,
     });
 
-    expect(result).toEqual({ text: "Speak this." });
+    expect(result).toEqual({ text: "Speak this.\n\nThen this." });
     const voiceSession = sessionStore["voice:15550001234"];
     if (!voiceSession) {
       throw new Error("Expected voice consult session entry");
@@ -391,6 +392,35 @@ describe("realtime voice agent consult runtime", () => {
     expect(call.extraSystemPrompt).toBe(
       "You are the configured OpenClaw agent receiving delegated requests from a live voice bridge. Act on behalf of the user, use available tools when appropriate, and return a brief speakable result.",
     );
+  });
+
+  it("carries current voice session permissions without enabling owner trace", async () => {
+    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
+    sessionStore["agent:main:voice"] = {
+      sessionId: "voice-session",
+      permissionMode: "workspace",
+      toolOverrides: { webSearch: false },
+    };
+    await consultRealtimeVoiceAgent({
+      cfg: {},
+      agentRuntime: runtime as never,
+      logger: { warn: vi.fn() },
+      agentId: "main",
+      sessionKey: "agent:main:voice",
+      messageProvider: "voice",
+      lane: "voice",
+      runIdPrefix: "voice-permissions",
+      args: { question: "Read the report" },
+      transcript: [],
+      surface: "a phone call",
+      userLabel: "Caller",
+      senderIsOwner: true,
+    });
+    expect(requireEmbeddedAgentCall(runEmbeddedAgent)).toMatchObject({
+      permissionMode: "workspace",
+      toolOverrides: { webSearch: false },
+      traceAuthorized: false,
+    });
   });
 
   it.each(["main", "other"])(
@@ -530,6 +560,37 @@ describe("realtime voice agent consult runtime", () => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
+  it("allows an independent consult when only the requester session is locked", async () => {
+    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
+    sessionStore["agent:main:main"] = {
+      sessionId: "locked-requester",
+      updatedAt: 1,
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+    };
+
+    await expect(
+      consultRealtimeVoiceAgent({
+        cfg: {} as never,
+        agentRuntime: runtime as never,
+        logger: { warn: vi.fn() },
+        agentId: "meet-consult",
+        sessionKey: "agent:meet-consult:subagent:google-meet:meet-independent",
+        spawnedBy: "agent:main:main",
+        contextMode: "fork",
+        messageProvider: "google-meet",
+        lane: "google-meet",
+        runIdPrefix: "google-meet:meet-independent",
+        args: { question: "Check the meeting." },
+        transcript: [],
+        surface: "a private Google Meet",
+        userLabel: "Participant",
+      }),
+    ).resolves.toEqual({ text: "Speak this." });
+    expect(sessionForkMocks.forkSessionEntryFromParent).not.toHaveBeenCalled();
+    expect(requireEmbeddedAgentCall(runEmbeddedAgent).agentId).toBe("meet-consult");
+  });
+
   it("fresh-checks archive state after a queued lifecycle mutation", async () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
     const sessionKey = "voice:archive-race";
@@ -603,9 +664,48 @@ describe("realtime voice agent consult runtime", () => {
     expect(call.agentId).toBe("voice");
   });
 
+  it.each([
+    { label: "cancellation", meta: { aborted: true }, errorName: "AbortError" },
+    {
+      label: "timeout",
+      meta: {
+        aborted: true,
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+      errorName: "TimeoutError",
+    },
+  ])("preserves $label instead of speaking a partial result", async ({ meta, errorName }) => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime();
+    const cleanup = vi.fn();
+    runEmbeddedAgent.mockResolvedValueOnce({ payloads: [{ text: "Partial answer." }], meta });
+
+    await expect(
+      consultRealtimeVoiceAgent({
+        cfg: {},
+        agentRuntime: runtime as never,
+        logger: { warn: vi.fn() },
+        sessionKey: "agent:main:voice-interruption",
+        messageProvider: "voice",
+        lane: "voice",
+        runIdPrefix: "voice-interruption",
+        args: { question: "Read the project." },
+        transcript: [],
+        surface: "a live voice session",
+        userLabel: "User",
+        onRunStarted: () => ({ cleanup }),
+      }),
+    ).rejects.toMatchObject({ name: errorName });
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
   it("returns a speakable fallback when the embedded agent has no visible text", async () => {
     const warn = vi.fn();
-    const { runtime } = createAgentRuntime([{ text: "hidden", isReasoning: true }]);
+    const { runtime } = createAgentRuntime([
+      setReplyPayloadMetadata({ text: "Earlier answer." }, { precedingInputAnswer: true }),
+      { text: "hidden", isReasoning: true },
+    ]);
 
     const result = await consultRealtimeVoiceAgent({
       cfg: {} as never,
@@ -628,11 +728,42 @@ describe("realtime voice agent consult runtime", () => {
     );
   });
 
+  it("returns a yielded acknowledgement immediately without waiting for a visible final", async () => {
+    const warn = vi.fn();
+    const { runtime, runEmbeddedAgent } = createAgentRuntime();
+    runEmbeddedAgent.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "  Working on it.   I will report back.  ",
+      },
+    });
+
+    const result = await consultRealtimeVoiceAgent({
+      cfg: {} as never,
+      agentRuntime: runtime as never,
+      logger: { warn },
+      sessionKey: "voice:yielded",
+      messageProvider: "voice",
+      lane: "voice",
+      runIdPrefix: "voice:yielded",
+      args: { question: "Investigate this" },
+      transcript: [],
+      surface: "a live voice session",
+      userLabel: "Caller",
+    });
+
+    expect(result).toEqual({
+      text: "Working on it. I will report back.",
+      yielded: true,
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("forks requester context and inherits its required creator isolation", async () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
     sessionStore["agent:main:main"] = {
       sessionId: "parent-session",
-      sessionFile: testTempPath("parent.jsonl"),
       totalTokens: 100,
       createdActor: { type: "human", source: "profile", id: "profile-required" },
       sandbox: "required",
@@ -670,7 +801,6 @@ describe("realtime voice agent consult runtime", () => {
           ...entry,
           ...params.patch?.({ entry, parentEntry: typedParentEntry, fork, decision }),
           sessionId: fork.sessionId,
-          sessionFile: fork.sessionFile,
           forkedFromParent: true,
         };
         sessionStore[params.sessionKey] = sessionEntry;
@@ -717,7 +847,6 @@ describe("realtime voice agent consult runtime", () => {
     }
     expect(forkedEntry).toStrictEqual({
       sessionId: "forked-session",
-      sessionFile: testTempPath("forked.jsonl"),
       spawnedBy: "agent:main:main",
       forkedFromParent: true,
       createdVia: "talk",

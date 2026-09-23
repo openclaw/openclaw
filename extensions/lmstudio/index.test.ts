@@ -1,11 +1,18 @@
 // Lmstudio tests cover index plugin behavior.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   OpenClawConfig,
   ProviderAuthMethod,
   ProviderPrepareDynamicModelContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  capturePluginRegistration,
+  createNonExitingRuntimeEnv,
+  createQueuedWizardPrompter,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
 import type {
   ModelDefinitionConfig,
@@ -138,6 +145,71 @@ describe("lmstudio plugin", () => {
       normalizeToolSchemas: expect.any(Function),
       inspectToolSchemas: expect.any(Function),
     });
+  });
+
+  it("prepares a supplied setup key and requested loaded model without prompts or auth-store writes", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "lmstudio-supplied-auth-"));
+    const agentDir = path.join(root, "agent");
+    const config: OpenClawConfig = {
+      models: { providers: { lmstudio: createRemoteProviderConfig() } },
+    };
+    const before = structuredClone(config);
+    const { prompter, text, confirm } = createQueuedWizardPrompter();
+    fetchLmstudioModelsMock.mockResolvedValue({
+      reachable: true,
+      status: 200,
+      models: [
+        {
+          type: "llm",
+          key: "qwen/qwen3.5-9b",
+          loaded_instances: [{ id: "qwen", config: { context_length: 32_768 } }],
+        },
+      ],
+    });
+    const method = registerProvider().auth[0];
+    if (!method) {
+      throw new Error("expected LM Studio auth method");
+    }
+    try {
+      const result = await method.run({
+        config,
+        agentDir,
+        prompter,
+        runtime: createNonExitingRuntimeEnv(),
+        opts: {
+          tokenProvider: "lmstudio",
+          token: "supplied-lmstudio-key",
+          customModelId: "qwen/qwen3.5-9b",
+        },
+        isRemote: true,
+        openUrl: vi.fn(),
+        oauth: { createVpsAwareHandlers: vi.fn() },
+      });
+
+      expect(result).toMatchObject({
+        profiles: [
+          {
+            profileId: "lmstudio:default",
+            credential: { type: "api_key", provider: "lmstudio", key: "supplied-lmstudio-key" },
+          },
+        ],
+        defaultModel: "lmstudio/qwen/qwen3.5-9b",
+        configPatch: {
+          models: { providers: { lmstudio: { baseUrl: "http://lmstudio.internal:1234/v1" } } },
+        },
+      });
+      expect(fetchLmstudioModelsMock).toHaveBeenCalledWith({
+        baseUrl: "http://lmstudio.internal:1234/v1",
+        apiKey: "supplied-lmstudio-key",
+        timeoutMs: 5000,
+      });
+      expect(text).not.toHaveBeenCalled();
+      expect(confirm).not.toHaveBeenCalled();
+      expect(config).toEqual(before);
+      await expect(fs.access(agentDir)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("keeps concurrent model preparations isolated when shared-endpoint profiles finish in reverse order", async () => {

@@ -2,10 +2,6 @@ import { Type, type Static, type TProperties } from "typebox";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../client-info.js";
 import { closedObject } from "./closed-object.js";
 import { FailoverReasonSchema } from "./failover-reason.js";
-import {
-  GitHubPublicationBodySchema,
-  GitHubPublicationTitleSchema,
-} from "./session-github-publication.js";
 import { withSince } from "./since.js";
 import { WORKER_COMPUTER_PROTOCOL_FEATURE } from "./worker-computer.js";
 import {
@@ -43,7 +39,6 @@ export const WORKER_PROTOCOL_METHODS = [
   "worker.live-event",
   "worker.sessions.spawn",
   "worker.sessions.send",
-  "worker.github.publish",
   "worker.portal",
   "worker.computer",
   "worker.skill-workshop",
@@ -52,8 +47,9 @@ export const WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE = "worker-transcript-comm
 export const WORKER_LIVE_EVENT_PROTOCOL_FEATURE = "worker-live-event-v1";
 export const WORKER_LAUNCH_V2_PROTOCOL_FEATURE = "worker-launch-v2";
 export const WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE = "worker-execution-context-v2";
+export const WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE = "worker-execution-authority-v1";
+export const WORKER_LINEAGE_START_PROTOCOL_FEATURE = "worker-lineage-start-v1";
 export const WORKER_SESSION_TOOLS_PROTOCOL_FEATURE = "worker-session-tools-v1";
-export const WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE = "worker-github-publication-v1";
 export const WORKER_PORTAL_PROTOCOL_FEATURE = "worker-portal-v1";
 export const WORKER_PROTOCOL_FEATURES = [
   "skill-resources-v1",
@@ -64,8 +60,9 @@ export const WORKER_PROTOCOL_FEATURES = [
   // Execution context is a build-bound V2 dialect. Do not advertise legacy
   // launch V2: an older gateway would adopt this worker and send the old shape.
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_LINEAGE_START_PROTOCOL_FEATURE,
   WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
-  WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE,
   WORKER_PORTAL_PROTOCOL_FEATURE,
   WORKER_COMPUTER_PROTOCOL_FEATURE,
   "worker-inference-v1",
@@ -234,12 +231,6 @@ export const WorkerSessionsSendParamsSchema = closedObject({
   timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0, maximum: 86_400 })),
 });
 
-export const WorkerGitHubPublishParamsSchema = closedObject({
-  toolCallId: WorkerSessionToolCallIdSchema,
-  title: Type.Optional(GitHubPublicationTitleSchema),
-  body: Type.Optional(GitHubPublicationBodySchema),
-});
-
 export const WorkerPortalParamsSchema = closedObject({
   toolCallId: WorkerSessionToolCallIdSchema,
   action: Type.Union([Type.Literal("open"), Type.Literal("list"), Type.Literal("close")]),
@@ -266,7 +257,6 @@ export const WorkerSessionToolResponseFrameSchema = Type.Union([
 
 export const WorkerSessionsSpawnResponseFrameSchema = WorkerSessionToolResponseFrameSchema;
 export const WorkerSessionsSendResponseFrameSchema = WorkerSessionToolResponseFrameSchema;
-export const WorkerGitHubPublishResponseFrameSchema = WorkerSessionToolResponseFrameSchema;
 export const WorkerPortalResponseFrameSchema = WorkerSessionToolResponseFrameSchema;
 
 const WorkerTranscriptTextContentSchema = closedObject({
@@ -732,16 +722,12 @@ export type WorkerHeartbeatRequestFrame = Static<typeof WorkerHeartbeatRequestFr
 export type WorkerHeartbeatResponseFrame = Static<typeof WorkerHeartbeatResponseFrameSchema>;
 export type WorkerSessionsSpawnParams = Static<typeof WorkerSessionsSpawnParamsSchema>;
 export type WorkerSessionsSendParams = Static<typeof WorkerSessionsSendParamsSchema>;
-export type WorkerGitHubPublishParams = Static<typeof WorkerGitHubPublishParamsSchema>;
 export type WorkerPortalParams = Static<typeof WorkerPortalParamsSchema>;
 export type WorkerSessionToolResult = Static<typeof WorkerSessionToolResultSchema>;
 export type WorkerSessionsSpawnResponseFrame = Static<
   typeof WorkerSessionsSpawnResponseFrameSchema
 >;
 export type WorkerSessionsSendResponseFrame = Static<typeof WorkerSessionsSendResponseFrameSchema>;
-export type WorkerGitHubPublishResponseFrame = Static<
-  typeof WorkerGitHubPublishResponseFrameSchema
->;
 export type WorkerPortalResponseFrame = Static<typeof WorkerPortalResponseFrameSchema>;
 export type WorkerTranscriptMessage = Static<typeof WorkerTranscriptMessageSchema>;
 export type WorkerProviderReplayState = Static<typeof WorkerProviderReplayStateSchema>;

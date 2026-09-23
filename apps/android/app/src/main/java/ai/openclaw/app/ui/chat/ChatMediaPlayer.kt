@@ -336,11 +336,14 @@ private fun ChatMediaPlayerCard(
     released: ExoPlayer,
     releasedFile: File?,
   ) {
-    if (player === released) player = null
+    if (player === released) {
+      player = null
+      loading = false
+      isPlaying = false
+      positionMs = 0L
+    }
     if (tempFile === releasedFile) tempFile = null
     releasedFile?.delete()
-    isPlaying = false
-    positionMs = 0L
   }
 
   fun disposeUnclaimedPlayer(
@@ -456,7 +459,6 @@ private fun ChatMediaPlayerCard(
           }
 
           override fun onPlayerError(playbackException: PlaybackException) {
-            loading = false
             if (!ChatMediaPlaybackArbiter.release(created)) {
               disposeUnclaimedPlayer(created, prepared.tempFile)
             }
@@ -718,7 +720,8 @@ private suspend fun prepareMediaSource(
         retryPreparingPlayback = false,
       )
     }
-    is GatewayLoadedMedia.Streaming ->
+
+    is GatewayLoadedMedia.Streaming -> {
       PreparedMediaSource(
         uri = loaded.url,
         mimeType = loaded.mimeType,
@@ -727,6 +730,7 @@ private suspend fun prepareMediaSource(
         tempFile = null,
         retryPreparingPlayback = loaded.retryPreparingPlayback,
       )
+    }
   }
 }
 

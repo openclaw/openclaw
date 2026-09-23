@@ -13,7 +13,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { PROFILE_OPTIONS } from "../../lib/agents/display.ts";
+import { PROFILE_OPTIONS } from "../../lib/agents/tool-catalog.ts";
 
 export type SecurityOverview = {
   gatewayAuth: string;
@@ -44,12 +44,15 @@ function renderSecurityOverview(props: SecurityViewProps) {
     toolProfile,
     toolProfileOverridden,
   } = props.security;
-  const normalizedToolProfile = toolProfile.trim() || "full";
+  const normalizedToolProfile = toolProfile.trim();
   const profileOptions = PROFILE_OPTIONS.map((profile) => ({
     value: profile.id as string,
     label: t(profile.labelKey),
   }));
-  if (!profileOptions.some((option) => option.value === normalizedToolProfile)) {
+  if (
+    normalizedToolProfile &&
+    !profileOptions.some((option) => option.value === normalizedToolProfile)
+  ) {
     profileOptions.push({ value: normalizedToolProfile, label: normalizedToolProfile });
   }
   return renderSettingsSection({ title: t("quickSettings.security.title") }, [
@@ -74,10 +77,9 @@ function renderSecurityOverview(props: SecurityViewProps) {
     }),
     renderSettingsRow({
       title: t("quickSettings.security.toolProfile"),
-      description: renderSettingsDefaultDescription(
-        t("agents.toolCatalog.profiles.full"),
-        toolProfileOverridden,
-      ),
+      description: toolProfileOverridden
+        ? undefined
+        : t("quickSettings.security.toolProfileDefault"),
       stacked: true,
       control: renderSettingsSegmented({
         value: normalizedToolProfile,

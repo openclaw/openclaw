@@ -2,11 +2,12 @@ import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceBrowserSession,
+  RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { expect, vi } from "vitest";
+import { expect, vi, type Mock } from "vitest";
 
 type Listener = (...args: unknown[]) => void;
 
@@ -73,11 +74,36 @@ export function createOpenAIRealtimeMockState() {
 
   return {
     FakeWebSocket: MockWebSocket,
-    execFileSyncMock: vi.fn(),
-    fetchWithSsrFGuardMock: vi.fn(),
-    isProviderAuthProfileConfiguredMock: vi.fn(),
-    resolveProviderAuthProfileApiKeyMock: vi.fn(),
+    execFileSyncMock: vi.fn() as Mock,
+    fetchWithSsrFGuardMock: vi.fn() as Mock,
+    isProviderAuthProfileConfiguredMock: vi.fn() as Mock,
+    resolveProviderAuthProfileApiKeyMock: vi.fn() as Mock,
   };
+}
+
+/** Native workers do not inherit Vitest's ws mock. Keep registered GPT-Live
+ * provider tests on the real media owner with fake wire I/O, without changing
+ * the legacy FakeWebSocket behavior relied on by the GA suites. */
+export async function createTestMediaSocketFactory(
+  FakeWebSocket: ReturnType<typeof createOpenAIRealtimeMockState>["FakeWebSocket"],
+) {
+  const [{ EventEmitter }, { fakeQuicksilverMediaSocket }] = await Promise.all([
+    import("node:events"),
+    import("./realtime-quicksilver-socket.test-support.js"),
+  ]);
+  return fakeQuicksilverMediaSocket((url, options) => {
+    const wire = new FakeWebSocket(url, options);
+    const socket = Object.assign(new EventEmitter(), {
+      readyState: wire.readyState,
+      send: (payload: string) => wire.send(payload),
+      close: (code?: number, reason?: string) => wire.close(code, reason),
+    });
+    Object.defineProperty(socket, "readyState", { get: () => wire.readyState });
+    for (const event of ["open", "message", "error", "close"]) {
+      wire.on(event, (...args) => socket.emit(event, ...args));
+    }
+    return socket;
+  });
 }
 
 type FakeWebSocketLike = {
@@ -108,6 +134,7 @@ type InternalRealtimeVoiceProviderApi = {
     providerConfig: Record<string, unknown>;
     agentId?: string;
     model?: string;
+    clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
   }) => {
     handlesAgentConsult?: boolean;
     supportsToolCalls?: boolean;
@@ -123,6 +150,13 @@ type InternalRealtimeVoiceProviderApi = {
     handlesAgentConsult?: boolean;
     supportsToolCalls?: boolean;
     transports?: string[];
+  };
+  projectPublicProjection: (ctx: {
+    providerConfig: Record<string, unknown>;
+    config: Record<string, unknown>;
+  }) => {
+    config: Record<string, unknown>;
+    clientHints?: { modelSource?: "gateway"; gatewayRelaySupported: boolean };
   };
   validateGatewayRelayLaunch: (ctx: {
     cfg?: object;

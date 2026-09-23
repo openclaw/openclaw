@@ -29,11 +29,12 @@ describe("openai gpt-live model detection", () => {
     expect(isOpenAIGptLiveModel("gpt-liveish")).toBe(false);
   });
 
-  it("advertises only curated /v1/live models", () => {
+  it("distinguishes released routes from unlisted family members", () => {
+    expect(isSupportedOpenAIGptLiveModel("gpt-live-1")).toBe(true);
+    expect(isSupportedOpenAIGptLiveModel(" GPT-Live-1 ")).toBe(true);
     expect(isSupportedOpenAIGptLiveModel("gpt-live-1-codex")).toBe(true);
-    expect(isSupportedOpenAIGptLiveModel(" Gpt-Live-1-Codex ")).toBe(true);
-    expect(isSupportedOpenAIGptLiveModel("gpt-live-1")).toBe(false);
-    expect(isSupportedOpenAIGptLiveModel("gpt-live-1-mini")).toBe(false);
+    expect(isSupportedOpenAIGptLiveModel(" GPT-Live-1-Codex ")).toBe(true);
+    expect(isSupportedOpenAIGptLiveModel("gpt-live-test-canary")).toBe(false);
   });
 });
 
@@ -70,16 +71,24 @@ describe("openai realtime voice provider gpt-live transport routing", () => {
     expect(
       provider.createBridge({
         ...callbacks,
-        providerConfig: { apiKey: "test-key", model: "gpt-live-1-codex" },
+        providerConfig: { apiKey: "test-key", model: "gpt-live-test-canary" },
       }),
-    ).toMatchObject({ supportsToolResultContinuation: true });
+    ).toMatchObject({
+      supportsToolResultContinuation: true,
+      handlesInputAudioBargeIn: true,
+      outputAudioMode: "continuous",
+    });
     expect(
       provider.createBridge({
         ...callbacks,
         providerConfig: { apiKey: "test-key", model: "gpt-live-1" },
         runAgentConsult: vi.fn(async () => ({ text: "done" })),
       }),
-    ).toMatchObject({ supportsToolResultContinuation: false });
+    ).toMatchObject({
+      supportsToolResultContinuation: false,
+      handlesInputAudioBargeIn: true,
+      outputAudioMode: "continuous",
+    });
     expect(() =>
       provider.createBridge({
         ...callbacks,
@@ -94,7 +103,7 @@ describe("openai realtime voice provider gpt-live transport routing", () => {
       provider.createBridge({
         providerConfig: {
           apiKey: "azure-test-key",
-          model: "gpt-live-1-codex",
+          model: "gpt-live-test-canary",
           azureEndpoint: "https://example.openai.azure.com",
           azureDeployment: "realtime",
         },

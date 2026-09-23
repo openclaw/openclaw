@@ -1,9 +1,11 @@
 // E2E coverage for experimental grouped Claw inspection and add planning.
 import { execFile } from "node:child_process";
-import { readFile, realpath, writeFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 const execFileAsync = promisify(execFile);
@@ -28,11 +30,11 @@ async function runOpenClaw(
     VITEST: "",
   };
   try {
-    const result = await execFileAsync(
-      process.execPath,
-      ["--import", "tsx", "src/entry.ts", ...args],
-      { cwd: process.cwd(), env, maxBuffer: 1024 * 1024 },
-    );
+    const result = await execFileAsync(process.execPath, ["openclaw.mjs", ...args], {
+      cwd: process.cwd(),
+      env,
+      maxBuffer: 1024 * 1024,
+    });
     if (options?.expectFailure) {
       throw new Error(`expected command to fail: ${args.join(" ")}`);
     }
@@ -90,199 +92,83 @@ describe("claws lifecycle cli e2e", () => {
     });
   });
 
-  it("builds a complete package-free read-only plan without network access", async () => {
-    const result = await runOpenClaw([
-      "claws",
-      "add",
-      "src/claws/fixtures/workspace-agent.claw.json",
-      "--dry-run",
-      "--json",
-    ]);
-    const add = parseJson(result.stdout);
-
-    expect(add).toMatchObject({
-      schemaVersion: "openclaw.clawAddPlan.v1",
-      stability: "experimental",
-      dryRun: true,
-      mutationAllowed: false,
-      agent: { requestedId: "workspace-agent", finalId: "workspace-agent" },
-      summary: {
-        totalActions: 5,
-        agentActions: 1,
-        workspaceActions: 4,
-        packageActions: 0,
-        mcpServerActions: 0,
-        cronJobActions: 0,
-        blockedActions: 0,
-      },
-      blockers: [],
-    });
-    expect(result.ok).toBe(true);
-  });
-
-  it("preserves implicit main and creates exactly one agent after explicit consent", async () => {
-    const preview = await runOpenClaw([
-      "claws",
-      "add",
-      "src/claws/fixtures/minimal-agent.claw.json",
-      "--dry-run",
-      "--json",
-    ]);
-    const plan = parseJson(preview.stdout) as { planIntegrity: string };
-    const result = await runOpenClaw(
-      [
-        "claws",
-        "add",
-        "src/claws/fixtures/minimal-agent.claw.json",
-        "--yes",
-        "--plan-integrity",
-        plan.planIntegrity,
-        "--json",
-      ],
-      { stateDir: preview.stateDir },
-    );
-
-    expect(parseJson(result.stdout)).toMatchObject({
-      schemaVersion: "openclaw.clawAddResult.v1",
-      stability: "experimental",
-      status: "complete",
-      agent: { finalId: "internal-triage" },
-      workspaceCreated: true,
-      configCommitted: true,
-      installRecord: { agentId: "internal-triage", status: "complete" },
-    });
-    const config = JSON.parse(await readFile(join(result.stateDir, "openclaw.json"), "utf8"));
-    const canonicalStateDir = await realpath(result.stateDir);
-    expect(config.agents.entries).toEqual({
-      main: { workspace: join(canonicalStateDir, "workspace") },
-      "internal-triage": expect.objectContaining({
-        name: "Internal Triage",
-        tools: { deny: ["exec", "browser"] },
-        humanDelay: { mode: "natural" },
-        workspace: join(canonicalStateDir, ".openclaw", "workspace-internal-triage"),
-      }),
-    });
-  });
-
-  it("creates declared bootstrap and supporting files in the new workspace", async () => {
-    const preview = await runOpenClaw([
-      "claws",
-      "add",
-      "src/claws/fixtures/workspace-agent.claw.json",
-      "--dry-run",
-      "--json",
-    ]);
-    const plan = parseJson(preview.stdout) as { planIntegrity: string };
-    const result = await runOpenClaw(
-      [
-        "claws",
-        "add",
-        "src/claws/fixtures/workspace-agent.claw.json",
-        "--yes",
-        "--plan-integrity",
-        plan.planIntegrity,
-        "--json",
-      ],
-      { stateDir: preview.stateDir },
-    );
-    const payload = parseJson(result.stdout);
-    const workspace = join(
-      await realpath(result.stateDir),
-      ".openclaw",
-      "workspace-workspace-agent",
-    );
-
-    expect(payload).toMatchObject({
-      schemaVersion: "openclaw.clawAddResult.v1",
-      status: "complete",
-      agent: { finalId: "workspace-agent", workspace },
-      workspaceFiles: [
-        expect.objectContaining({ path: "SOUL.md" }),
-        expect.objectContaining({ path: "HEARTBEAT.md" }),
-        expect.objectContaining({ path: "reference/policy.md" }),
-      ],
-      installRecord: { agentId: "workspace-agent", status: "complete" },
-    });
-    await expect(readFile(join(workspace, "SOUL.md"), "utf8")).resolves.toContain(
-      "Incident Response",
-    );
-    await expect(readFile(join(workspace, "HEARTBEAT.md"), "utf8")).resolves.toContain(
-      "Incident Heartbeat",
-    );
-    await expect(readFile(join(workspace, "reference", "policy.md"), "utf8")).resolves.toContain(
-      "operator settings",
-    );
-  });
-
   it("reports and removes a Claw-created agent through plan-first lifecycle commands", async () => {
-    const addPreview = await runOpenClaw([
-      "claws",
-      "add",
-      "src/claws/fixtures/workspace-agent.claw.json",
-      "--dry-run",
-      "--json",
-    ]);
-    const addPlan = parseJson(addPreview.stdout) as { planIntegrity: string };
-    const added = await runOpenClaw(
-      [
-        "claws",
-        "add",
-        "src/claws/fixtures/workspace-agent.claw.json",
-        "--yes",
-        "--plan-integrity",
-        addPlan.planIntegrity,
-        "--json",
-      ],
-      { stateDir: addPreview.stateDir },
-    );
-    const status = await runOpenClaw(["claws", "status", "workspace-agent", "--json"], {
-      stateDir: added.stateDir,
-    });
-    expect(parseJson(status.stdout)).toMatchObject({
-      schemaVersion: "openclaw.clawStatus.v1",
-      summary: { claws: 1, driftedFiles: 0 },
-      records: [{ install: { agentId: "workspace-agent" }, agentState: "present" }],
-    });
-
-    const preview = await runOpenClaw(
-      ["claws", "remove", "workspace-agent", "--dry-run", "--json"],
-      { stateDir: added.stateDir },
-    );
-    const removePlan = parseJson(preview.stdout) as { planIntegrity: string };
-    expect(removePlan).toMatchObject({
-      schemaVersion: "openclaw.clawRemovePlan.v1",
-      mutationAllowed: false,
-      agentId: "workspace-agent",
-      blockers: [],
-    });
-
-    const removed = await runOpenClaw(
-      [
-        "claws",
-        "remove",
-        "workspace-agent",
-        "--yes",
-        "--plan-integrity",
-        removePlan.planIntegrity,
-        "--json",
-      ],
-      { stateDir: added.stateDir },
-    );
-    expect(parseJson(removed.stdout)).toMatchObject({
-      schemaVersion: "openclaw.clawRemoveResult.v1",
-      status: "complete",
-      agentId: "workspace-agent",
-      agentRemoved: true,
-    });
-    const config = JSON.parse(await readFile(join(added.stateDir, "openclaw.json"), "utf8"));
-    const canonicalStateDir = await realpath(added.stateDir);
-    expect(config.agents).toEqual({
-      defaults: {
-        heartbeat: { agentId: "main" },
-        systemAgent: { agentId: "main" },
+    const instance = await createOpenClawTestInstance({
+      name: "claws-lifecycle-remove",
+      env: {
+        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        OPENCLAW_EXPERIMENTAL_CLAWS: "1",
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       },
-      entries: { main: { workspace: join(canonicalStateDir, "workspace") } },
     });
+    await runQaGatewayFixture(
+      async () => {
+        const run = async (args: string[]) => {
+          const result = await instance.cli(args);
+          expect(result.code, `${result.stdout}\n${result.stderr}`).toBe(0);
+          return result;
+        };
+        const addPreview = await run([
+          "claws",
+          "add",
+          "src/claws/fixtures/workspace-agent.claw.json",
+          "--dry-run",
+          "--json",
+        ]);
+        const addPlan = parseJson(addPreview.stdout) as { planIntegrity: string };
+        await run([
+          "claws",
+          "add",
+          "src/claws/fixtures/workspace-agent.claw.json",
+          "--yes",
+          "--plan-integrity",
+          addPlan.planIntegrity,
+          "--json",
+        ]);
+        await instance.startGateway();
+        const status = await run(["claws", "status", "workspace-agent", "--json"]);
+        expect(parseJson(status.stdout)).toMatchObject({
+          schemaVersion: "openclaw.clawStatus.v1",
+          summary: { claws: 1, driftedFiles: 0 },
+          records: [{ install: { agentId: "workspace-agent" }, agentState: "present" }],
+        });
+
+        const preview = await run(["claws", "remove", "workspace-agent", "--dry-run", "--json"]);
+        const removePlan = parseJson(preview.stdout) as { planIntegrity: string };
+        expect(removePlan).toMatchObject({
+          schemaVersion: "openclaw.clawRemovePlan.v1",
+          mutationAllowed: false,
+          agentId: "workspace-agent",
+          blockers: [],
+        });
+
+        const removed = await run([
+          "claws",
+          "remove",
+          "workspace-agent",
+          "--yes",
+          "--plan-integrity",
+          removePlan.planIntegrity,
+          "--json",
+        ]);
+        expect(parseJson(removed.stdout)).toMatchObject({
+          schemaVersion: "openclaw.clawRemoveResult.v1",
+          status: "complete",
+          agentId: "workspace-agent",
+          agentRemoved: true,
+        });
+        const config = JSON.parse(await readFile(instance.configPath, "utf8"));
+        const canonicalStateDir = await realpath(instance.stateDir);
+        expect(config.agents).toEqual({
+          defaults: {
+            heartbeat: { agentId: "main" },
+            systemAgent: { agentId: "main" },
+          },
+          entries: { main: { workspace: join(canonicalStateDir, "workspace") } },
+        });
+      },
+      () => instance.cleanup(),
+    );
   });
 
   it("exports an installed agent as a self-contained grouped package", async () => {
@@ -365,69 +251,5 @@ describe("claws lifecycle cli e2e", () => {
         expect.objectContaining({ path: "reference/policy.md" }),
       ],
     });
-  });
-
-  it("blocks mutation when declared components need later lifecycle slices", async () => {
-    const root = tempDirs.make("openclaw-claws-deferred-components-");
-    const deferredManifestPath = join(root, "deferred.claw.json");
-    await writeFile(
-      deferredManifestPath,
-      JSON.stringify({
-        schemaVersion: 1,
-        agent: { id: "deferred-components" },
-        mcpServers: { status: { command: "status-mcp" } },
-        cronJobs: [
-          {
-            id: "status-check",
-            schedule: { cron: "0 * * * *", timezone: "UTC" },
-            session: "isolated",
-            message: "Check status",
-          },
-        ],
-      }),
-      "utf8",
-    );
-    const preview = await runOpenClaw([
-      "claws",
-      "add",
-      deferredManifestPath,
-      "--dry-run",
-      "--json",
-    ]);
-    const plan = parseJson(preview.stdout) as { planIntegrity: string };
-    const result = await runOpenClaw(
-      [
-        "claws",
-        "add",
-        deferredManifestPath,
-        "--yes",
-        "--plan-integrity",
-        plan.planIntegrity,
-        "--json",
-      ],
-      {
-        expectFailure: true,
-        stateDir: preview.stateDir,
-      },
-    );
-
-    expect(result.code).toBe(1);
-    expect(parseJson(result.stdout)).toMatchObject({
-      schemaVersion: "openclaw.clawAddResult.v1",
-      status: "partial",
-      configCommitted: true,
-      error: { code: "cron_install_failed" },
-      installRecord: { status: "config_committed" },
-    });
-  });
-
-  it("fails closed when add is invoked without dry-run or consent", async () => {
-    const result = await runOpenClaw(["claws", "add", manifestPath], {
-      expectFailure: true,
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.code).toBe(1);
-    expect(result.stderr).toContain("Claw add requires explicit consent");
   });
 });

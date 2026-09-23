@@ -1,9 +1,9 @@
-/* =============================================
+/* ======================================}
+
    CHAT TEXT STYLING
    ============================================= */
 
 .chat-thinking {
-  margin-bottom: 10px;
   padding: 10px 12px;
   border-radius: var(--radius-md);
   border: 1px dashed rgba(255, 255, 255, 0.18);
@@ -18,22 +18,6 @@
   background: rgba(16, 24, 40, 0.04);
 }
 
-.chat-text {
-  font-family: var(--font-chat);
-  font-size: var(--chat-text-size);
-  line-height: 1.5;
-  color: var(--chat-text);
-  overflow-wrap: anywhere;
-  word-break: break-word;
-  /* Serif chat faces need macOS stem darkening to stay crisp at chat size:
-     the app-wide `antialiased` (base.css body) thins their hairlines into
-     gray smear. applyChatFontSmoothing (app/typography.ts) sets `auto` when
-     the resolved chat typeface is a serif; unset falls back to the inherited
-     app-wide smoothing. */
-  -webkit-font-smoothing: var(--chat-font-smoothing, inherit);
-  -moz-osx-font-smoothing: var(--chat-font-smoothing, inherit);
-}
-
 .chat-message-disclosure {
   position: relative;
 }
@@ -41,24 +25,53 @@
 .chat-message-disclosure:not(.is-expanded) .chat-message-disclosure__content {
   /* Legacy line clamp compresses hidden blocks that browser descendant reveal can
      expose as overlapping text. Clip the natural Markdown layout instead. */
-  max-height: calc(var(--chat-text-size) * 1.5 * 5);
+  max-height: var(--chat-disclosure-clamp, calc(var(--chat-text-size) * 1.5 * 5));
   overflow: hidden;
 }
 
+.chat-message-disclosure--forwarded:not(.is-expanded) > .chat-message-disclosure__content {
+  max-height: calc(var(--chat-text-size) * 1.5 * 2.5);
+}
+
+.chat-message-disclosure--forwarded:has(> .chat-message-disclosure__toggle[hidden])
+  > .chat-message-disclosure__content {
+  max-height: none;
+}
+
+.chat-message-disclosure:not(.is-expanded):has(> .chat-message-disclosure__toggle:not([hidden]))
+  > .chat-message-disclosure__content {
+  mask-image: linear-gradient(
+    to bottom,
+    black calc(100% - var(--chat-disclosure-fade-size, var(--chat-text-size) * 1.5 * 0.5)),
+    rgb(0 0 0 / 35%)
+  );
+}
+
 .chat-message-disclosure__toggle {
-  position: absolute;
-  top: -5px;
-  right: -5px;
-  display: grid;
-  width: 36px;
-  height: 36px;
+  position: relative;
+  top: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 8px;
   padding: 0;
-  place-items: center;
   border: 0;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
+  font: inherit;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1;
   cursor: var(--cursor-action);
+}
+
+.chat-bubble--with-images .chat-message-disclosure__toggle {
+  top: 3px;
+}
+
+/* Forwarded assistant cards have 13px padding instead of the user's 16px. */
+.chat-group.assistant .chat-message-disclosure--forwarded > .chat-message-disclosure__toggle {
+  top: 4.5px;
 }
 
 .chat-message-disclosure__toggle[hidden] {
@@ -66,7 +79,6 @@
 }
 
 .chat-message-disclosure__toggle:hover {
-  background: color-mix(in srgb, currentColor 8%, transparent);
   color: var(--text);
 }
 
@@ -76,12 +88,8 @@
 }
 
 .chat-message-disclosure__toggle svg {
-  width: 15px;
-  height: 15px;
-}
-
-.chat-message-disclosure.has-overflow .chat-message-disclosure__content {
-  padding-right: 30px;
+  width: 14px;
+  height: 14px;
 }
 
 /* Exhausted full-message load: quiet inline error + manual retry. */
@@ -121,14 +129,6 @@
   margin: 0;
 }
 
-/* Keep every adjacent top-level Markdown block on the same rhythm, including
-   special blocks that otherwise read as part of the preceding block. */
-.chat-text
-  > :where(p, ul, ol, pre, blockquote, table, details, .markdown-table)
-  + :where(p, ul, ol, pre, blockquote, table, details, .markdown-table) {
-  margin-top: 1em;
-}
-
 .chat-text
   :where(blockquote, details, li)
   > :where(p, ul, ol, pre, blockquote, table, details, .markdown-table)
@@ -136,8 +136,6 @@
   margin-top: 0.5em;
 }
 
-/* Tables retain top margin even when first; the adjacent-block rule above gives
-   tables the same rhythm when they follow another Markdown block. */
 .chat-text :where(table) {
   margin-top: 0.75em;
   border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
@@ -245,9 +243,14 @@
   max-height: 16px;
 }
 
+.markdown-table-modal {
+  --openclaw-modal-width: min(1200px, calc(100vw - 64px));
+  --openclaw-modal-backdrop-filter: blur(3px);
+  --wa-color-overlay-modal: color-mix(in srgb, var(--bg) 92%, transparent);
+}
+
 .markdown-table-dialog {
-  width: calc(100vw - 64px);
-  max-width: 1200px;
+  width: 100%;
   max-height: calc(100dvh - 64px);
   padding: 20px 28px;
   border: 0;
@@ -256,11 +259,6 @@
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 8%, transparent);
   color: var(--text);
   overflow: auto;
-}
-
-.markdown-table-dialog::backdrop {
-  background: color-mix(in srgb, var(--bg) 92%, transparent);
-  backdrop-filter: blur(3px);
 }
 
 .markdown-table-dialog.chat-text > table {
@@ -392,9 +390,10 @@
 }
 
 /* Keep bullets, checkboxes, and numbers in one marker column while their text
-   shares the same start edge. */
-:is(.chat-text, .chat-thinking) :where(ul > li:not(.task-list-item))::marker {
-  content: "";
+   shares the same start edge. Suppress native bullets on the item itself:
+   Safari does not reliably support content on ::marker. */
+:is(.chat-text, .chat-thinking) :where(ul > li:not(.task-list-item)) {
+  list-style: none;
 }
 
 :is(.chat-text, .chat-thinking) :where(ul > .task-list-item) {
@@ -422,28 +421,28 @@
   font-size: calc(1em + 1px);
 }
 
+/* Authored disclosures stay in the prose flow. Reserving the marker column on
+   the owner also indents expanded content and nested disclosures without boxes. */
 :is(.chat-text, .chat-thinking) :where(details) {
-  width: 100%;
-  padding: var(--space-4);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: transparent;
+  padding-inline-start: var(--space-6);
 }
-
-:is(.chat-text, .chat-thinking) :where(details details) {
-  width: calc(100% - var(--space-3));
-  margin-top: var(--space-3);
-  margin-inline-start: var(--space-3);
-}
-
-/* Authored disclosures are complete content surfaces; fenced code carries its own
-   reveal control inside the code-block wrapper instead. */
 :is(.chat-text, .chat-thinking) :where(details > summary) {
   position: relative;
-  min-height: var(--space-5);
+  margin-inline-start: calc(-1 * var(--space-6));
+  padding-block: 6px;
   padding-inline-start: var(--space-6);
+  border-radius: var(--radius-sm);
   list-style: none;
   cursor: var(--cursor-action);
+}
+
+:is(.chat-text, .chat-thinking) :where(details > summary:hover) {
+  background: var(--bg-hover);
+}
+
+:is(.chat-text, .chat-thinking) :where(details > summary:focus-visible) {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 :is(.chat-text, .chat-thinking) :where(details > summary)::-webkit-details-marker {
@@ -453,7 +452,7 @@
 :is(.chat-text, .chat-thinking) :where(details > summary)::before {
   position: absolute;
   content: "";
-  inset-block-start: calc((1lh - var(--space-4)) / 2);
+  inset-block-start: calc(6px + (1lh - var(--space-4)) / 2);
   inset-inline-start: 0;
   inline-size: var(--space-4);
   block-size: var(--space-4);
@@ -504,7 +503,6 @@
    opacity, which composited the link toward its background and cost another 1.1. */
 .chat-text :where(a) {
   color: var(--link);
-  text-decoration: underline;
   text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
   text-underline-offset: 2px;
 }
@@ -529,8 +527,8 @@
   text-decoration: none;
 }
 
-/* GitHub links carry the brand mark so a bare URL and a "[#3434]" shorthand read
-   as the same destination. Painted as a masked ::before rather than markup: it
+/* GitHub links carry a brand mark or an issue/pull-request icon. Painted as a
+   masked ::before rather than markup: it
    stays out of the accessibility tree and out of copied text, and currentColor
    keeps it on the link color in every theme. Sized in em so it tracks
    --chat-text-size (14px default) and the user's text-scale setting. */
@@ -570,10 +568,66 @@
   line-break: anywhere;
 }
 
+/* Item references share the titled session chip's surface. The whole chip is
+   atomic so its in-flow icon cannot wrap away from the number. */
+.chat-text a.markdown-github-item {
+  display: inline-block;
+  position: static;
+  padding: 0.08em 0.45em 0.08em 0.4em;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent-subtle) 72%, var(--bg-muted));
+  /* Unknown state must not imply an open pull request. */
+  color: var(--muted);
+  font-weight: 600;
+  line-height: 1.25;
+  text-decoration: none;
+  vertical-align: baseline;
+  white-space: nowrap;
+  line-break: auto;
+}
+
+.chat-text a.markdown-github-item[data-link-reader-tone="positive"] {
+  color: var(--ok);
+}
+
+.chat-text a.markdown-github-item[data-link-reader-tone="accent"] {
+  color: var(--pr-merged);
+}
+
+.chat-text a.markdown-github-item[data-link-reader-tone="negative"] {
+  color: var(--danger);
+}
+
+.chat-text a.markdown-github-item:hover,
+.chat-text a.markdown-github-item:focus-visible {
+  background: color-mix(in srgb, var(--accent-subtle) 92%, var(--bg-muted));
+  text-decoration: underline;
+}
+
+.chat-text a.markdown-github-item::before {
+  position: static;
+  display: inline-block;
+  margin-inline-end: 0.3em;
+  vertical-align: -0.12em;
+  mask: var(--github-item-icon) center / contain no-repeat;
+  -webkit-mask: var(--github-item-icon) center / contain no-repeat;
+}
+
+/* GitHub Octicons issue-opened-16 and git-pull-request-16 (MIT). */
+.chat-text a.markdown-github-item[data-github-kind="issue"]::before {
+  --github-item-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z'/%3E%3Cpath d='M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z'/%3E%3C/svg%3E");
+}
+
+.chat-text a.markdown-github-item[data-github-kind="pull"]::before {
+  --github-item-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z'/%3E%3C/svg%3E");
+}
+
 :is(.chat-text, .sidebar-markdown, .chat-reply-attribution) a.markdown-session-link {
+  position: relative;
   display: inline;
   padding: 0.1em 0.2em;
-  border: 1px solid var(--border-strong);
+  padding-inline-start: 1.5em;
+  border: 0;
   border-radius: var(--radius-sm);
   background: var(--bg-muted);
   color: var(--link);
@@ -585,24 +639,60 @@
   word-break: break-word;
 }
 
+/* Keep the static claw out of flow so it cannot wrap away from the label.
+   Empty generated content adds no accessible or copied text; em sizing and
+   currentColor follow the surrounding link. */
+:is(.chat-text, .sidebar-markdown, .chat-reply-attribution) a.markdown-session-link::before {
+  --session-link-mark: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M8.2 10A5.2 5.2 0 1 0 8.2 20.4 5.2 5.2 0 0 0 8.2 10ZM10.2 20c4.3.8 8.8-1.4 12.1-6.8-1.3-.3-2.6-.5-3.9-.4l-.9 1.8-1.5-1.7-1.7 1.6-.8-1.5-2 1.2ZM5.6 12.2C5.2 5.6 10.4 1.4 15.6 2c3.8.6 6.2 3.2 7 6.2-1.7-.5-3.4-.6-5-.3l-.7-1.6-1.7 2.2c-1.6.9-3 2.4-3.6 3.9l-4.8.6Z'/></svg>");
+
+  content: "";
+  background: currentColor;
+  mask: var(--session-link-mark) center / contain no-repeat;
+  -webkit-mask: var(--session-link-mark) center / contain no-repeat;
+}
+
+:is(.chat-text, .sidebar-markdown, .chat-reply-attribution) a.markdown-session-link::before,
+.chat-reply-attribution a.markdown-session-link > .session-link-icon {
+  position: absolute;
+  inset-inline-start: 0.2em;
+  top: calc((1lh - 1em) / 2);
+  width: 1em;
+  height: 1em;
+}
+
+.chat-reply-attribution a.markdown-session-link--automation::before {
+  content: none;
+}
+
+.chat-reply-attribution .session-link-icon > svg {
+  width: 100%;
+  height: 100%;
+}
+
 :is(.chat-text, .sidebar-markdown, .chat-reply-attribution) a.markdown-session-link:hover,
 :is(.chat-text, .sidebar-markdown, .chat-reply-attribution) a.markdown-session-link:focus-visible {
   text-decoration: underline;
 }
 
 :is(.chat-text, .sidebar-markdown, .chat-reply-attribution) a.markdown-session-link--titled {
-  display: inline-block;
+  display: inline-grid;
   max-width: min(28em, 100%);
   padding: 0.08em 0.45em;
+  padding-inline-start: 1.5em;
   background: color-mix(in srgb, var(--accent-subtle) 72%, var(--bg-muted));
-  color: var(--text-strong);
   font-family: var(--font-body);
   font-weight: 600;
   line-height: 1.25;
+  white-space: nowrap;
+}
+
+/* The grid supplies the text baseline; only its label clips for ellipsis. */
+:is(.chat-text, .sidebar-markdown, .chat-reply-attribution)
+  .markdown-session-link--titled
+  > .session-label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  vertical-align: -0.12em;
-  white-space: nowrap;
 }
 
 :is(.chat-text, .sidebar-markdown) a.markdown-session-link > code {
@@ -612,6 +702,72 @@
   color: inherit;
   font-family: inherit;
   font-size: inherit;
+}
+
+.chat-reply-attribution.chat-reply-attribution--forwarded {
+  gap: 6px;
+}
+
+.chat-reply-attribution a.markdown-session-link--automation,
+.chat-reply-attribution--forwarded a.markdown-session-link {
+  min-width: 0;
+  padding-block: 0;
+  padding-inline-end: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font: inherit;
+}
+
+.chat-reply-attribution a.markdown-session-link--automation:hover,
+.chat-reply-attribution a.markdown-session-link--automation:focus-visible,
+.chat-reply-attribution--forwarded a.markdown-session-link:hover,
+.chat-reply-attribution--forwarded a.markdown-session-link:focus-visible {
+  opacity: 0.75;
+  text-decoration: none;
+}
+
+.chat-reply-attribution--forwarded a.markdown-session-link--agent {
+  padding-inline-start: 0;
+}
+
+.chat-reply-attribution--forwarded a.markdown-session-link--agent::before {
+  content: none;
+}
+
+.chat-reply-attribution__agent {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.chat-reply-attribution__agent-avatar,
+.chat-reply-attribution__agent-avatar :is(.chat-avatar, .chat-avatar-slot) {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  border: 0;
+  border-radius: 50%;
+  box-shadow: none;
+}
+
+/* Keep inline identities visible on mobile without exposing an image's fallback. */
+.chat-reply-attribution__agent-avatar,
+.chat-reply-attribution__agent-avatar > :is(.chat-avatar, .chat-avatar-slot),
+.chat-reply-attribution__agent-avatar > .chat-avatar-slot:not(.is-fallback) > img {
+  display: inline-grid;
+}
+
+.chat-reply-attribution--forwarded .session-label {
+  display: block;
+}
+
+.chat-reply-attribution--forwarded .session-label::first-letter {
+  text-transform: uppercase;
 }
 
 /* Both chat Markdown renderers enable file links — message bubbles (.chat-text)
@@ -669,6 +825,11 @@
   --file-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20'/%3E%3C/svg%3E");
 }
 
+/* Same glyph as icons.pencilSparkles, using the file-kind mask convention. */
+:is(.chat-text, .sidebar-markdown) a.markdown-file-link[data-file-kind="skill"]::before {
+  --file-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 3H8'/%3E%3Cpath d='m15.007 5.008 3.987 3.986'/%3E%3Cpath d='M20 15v4'/%3E%3Cpath d='M21.174 6.813a2.82 2.82 0 0 0-3.986-3.987L3.842 16.175a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z'/%3E%3Cpath d='M22 17h-4'/%3E%3Cpath d='M4 5v4'/%3E%3Cpath d='M6 7H2'/%3E%3Cpath d='M9 2v2'/%3E%3C/svg%3E");
+}
+
 :is(.chat-text, .sidebar-markdown) a.markdown-file-link[data-file-kind="component"]::before {
   --file-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='7' height='7' x='3' y='3' rx='1'/%3E%3Crect width='7' height='7' x='14' y='3' rx='1'/%3E%3Crect width='7' height='7' x='14' y='14' rx='1'/%3E%3Crect width='7' height='7' x='3' y='14' rx='1'/%3E%3C/svg%3E");
 }
@@ -706,7 +867,7 @@
 }
 
 .chat-text :where(.markdown-inline-image-button:focus-visible) {
-  outline: 2px solid var(--focus-ring);
+  outline: 2px solid var(--ring);
   outline-offset: 3px;
 }
 
@@ -759,7 +920,6 @@
 :is(.chat-text, .sidebar-markdown) .markdown-external-image > a:hover {
   background: color-mix(in srgb, var(--text) 13%, transparent);
   color: var(--link-hover);
-  text-decoration: none;
 }
 
 /* Code surfaces must lift off the host bubble in every theme. --secondary equals
@@ -833,10 +993,11 @@
   line-height: var(--code-block-line-height);
 }
 
-/* The preview lines plus the code element's own 4px/8px/6px vertical box. */
-.code-block-wrapper.is-collapsible:not(.is-expanded) .code-block-viewport {
-  max-height: calc(var(--code-block-line-height) * var(--code-block-preview-lines) + 18px);
-  overflow-y: hidden;
+/* Clip the code itself so surrounding spacing cannot reveal another line.
+   The element-relative line height also preserves compact block-art previews. */
+.code-block-wrapper.is-collapsible:not(.is-expanded) .code-block-viewport :where(pre code) {
+  max-height: calc(1lh * var(--code-block-preview-lines));
+  overflow: hidden;
 }
 
 .code-block-wrapper.is-collapsible:not(.is-expanded) .code-block-wrap {
@@ -933,12 +1094,16 @@
 
 .code-block-expand:focus-visible,
 .code-block-wrap:focus-visible {
-  outline: 2px solid var(--focus-ring);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
+.code-block-expand:focus-visible {
+  /* Keep the bottom edge inside the clipped code wrapper. */
+  outline-offset: -2px;
+}
+
 .chat-group.user .chat-text :where(pre) {
-  margin-block: 1em;
   padding: 0;
   border: 0;
   border-radius: 0;
@@ -947,6 +1112,10 @@
   font: inherit;
   overflow: visible;
   white-space: pre-wrap;
+}
+
+.chat-group.user .chat-text :where(:not(.chat-text) > pre) {
+  margin-block: 1em;
 }
 
 /* A user fence carries no code chrome, so it reads as the message it was typed
@@ -1013,7 +1182,8 @@
   margin: 1em 0;
 }
 
-/* =============================================
+/* ======================================}
+
    RTL (Right-to-Left) SUPPORT
    ============================================= */
 
@@ -1040,4 +1210,71 @@
   .chat-text :where(blockquote) {
     padding: 6px 10px 6px 12px;
   }
+}
+
+/* Only top-level blocks share message rhythm; list/quote interiors keep their
+   own spacing. Reset edge margins so a first or last block adds no extra gap. */
+.chat-text > *,
+.chat-text > .markdown-external-image {
+  margin-block: 0;
+}
+
+/* renderBody is shared by normal bubbles and expanded tool output. */
+:is(.chat-bubble, .chat-tool-msg-body, .chat-message-avatar-anchor) {
+  > :is(
+    .chat-message-images,
+    .chat-assistant-attachments,
+    .chat-assistant-attachment-card,
+    .chat-pairing-qr-notices,
+    .chat-thinking,
+    .chat-tool-card__widget-host,
+    .chat-text,
+    .chat-message-disclosure,
+    .chat-message-avatar-anchor,
+    .chat-tools-inline
+  ) {
+    margin-block: 0;
+
+    + :is(
+      .chat-message-images,
+      .chat-assistant-attachments,
+      .chat-assistant-attachment-card,
+      .chat-pairing-qr-notices,
+      .chat-thinking,
+      .chat-tool-card__widget-host,
+      .chat-text,
+      .chat-message-disclosure,
+      .chat-message-avatar-anchor,
+      .chat-tools-inline
+    ) {
+      margin-block-start: var(--chat-block-gap);
+    }
+  }
+}
+
+/* Keep media close to its prompt without compressing the prompt's paragraphs. */
+.chat-group.user
+  .chat-bubble--with-images
+  > .chat-message-images
+  + :is(.chat-text, .chat-message-disclosure, .chat-message-avatar-anchor) {
+  margin-block-start: var(--space-2);
+}
+
+/* A display-contents anchor transfers its block gap to the first rendered box. */
+.chat-bubble:not(.chat-bubble--with-images) > .chat-message-avatar-anchor > :first-child {
+  margin-block-start: inherit;
+}
+
+.chat-text > * + *,
+.chat-text > * + .markdown-external-image {
+  margin-block-start: var(--chat-block-gap);
+}
+
+.chat-text > * + :where(h1, h2, h3, h4) {
+  margin-block-start: calc(var(--chat-block-gap) * 1.5);
+}
+
+/* Contain the preview's reserved toolbar space within its message block. */
+.chat-bubble > .chat-tool-card__widget-host {
+  display: flow-root;
 }

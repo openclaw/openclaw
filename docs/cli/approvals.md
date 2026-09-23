@@ -15,33 +15,6 @@ Alias: `openclaw exec-approvals`
 
 Related: [Exec approvals](/tools/exec-approvals), [Nodes](/nodes)
 
-## `openclaw exec-policy`
-
-`openclaw exec-policy` is the **local-only** convenience command that keeps requested `tools.exec.*` config and the local host approvals document in sync in one step:
-
-```bash
-openclaw exec-policy show
-openclaw exec-policy show --json
-
-openclaw exec-policy preset yolo
-openclaw exec-policy preset cautious --json
-
-openclaw exec-policy set --host gateway --security full --ask off --ask-fallback full --json
-```
-
-Presets (`yolo`, `cautious`, `deny-all`) apply `host`, `security`, `ask`, and `askFallback` together. `set` applies only the flags you pass; each accepted value is validated (`--host auto|sandbox|gateway|node`, `--security deny|allowlist|full`, `--ask off|on-miss|always`, `--ask-fallback deny|allowlist|full`).
-
-`show`, `preset`, and `set` accept `--json` and return the same requested,
-host, and effective policy facts as one JSON object.
-
-Scope:
-
-- Updates the local config file and local approvals document together; does not push policy to the gateway or a node host.
-- `--host node` is rejected: node exec approvals are fetched from the node at runtime, so local `exec-policy` cannot synchronize them. Use `openclaw approvals set --node <id|name|ip>` instead.
-- `exec-policy show` marks `host=node` scopes as node-managed at runtime instead of deriving an effective policy from the local approvals document.
-
-For remote host approvals, use `openclaw approvals set --gateway` or `openclaw approvals set --node <id|name|ip>` directly.
-
 ## Common commands
 
 ```bash
@@ -191,12 +164,15 @@ openclaw exec-policy preset yolo
 ## Allowlist helpers
 
 ```bash
-openclaw approvals allowlist add "~/Projects/**/bin/rg"
+openclaw approvals allowlist add "~/path/to/**/bin/rg"
 openclaw approvals allowlist add --agent main --node <id|name|ip> "/usr/bin/uptime"
 openclaw approvals allowlist add --agent "*" "/usr/bin/uname"
 
-openclaw approvals allowlist remove "~/Projects/**/bin/rg"
+openclaw approvals allowlist remove "~/path/to/**/bin/rg"
 ```
+
+Adding an existing pattern or removing a missing one succeeds without writing.
+With `--json`, these commands return the unchanged, redacted approvals snapshot.
 
 ## Common options
 
@@ -212,10 +188,37 @@ No target flag means the local approvals row in the shared state database.
 
 `pending` and `resolve` always use the Gateway because pending requests are live Gateway state. They support the shared Gateway connection options `--url`, `--token`, and `--timeout`; `pending` also supports `--json`.
 
+## `openclaw exec-policy`
+
+`openclaw exec-policy` is the **local-only** convenience command that keeps requested `tools.exec.*` config and the local host approvals document in sync in one step:
+
+```bash
+openclaw exec-policy show
+openclaw exec-policy show --json
+
+openclaw exec-policy preset yolo
+openclaw exec-policy preset cautious --json
+
+openclaw exec-policy set --host gateway --security full --ask off --ask-fallback full --json
+```
+
+Presets (`yolo`, `cautious`, `deny-all`) apply `host`, `security`, `ask`, and `askFallback` together. `set` applies only the flags you pass; each accepted value is validated (`--host auto|sandbox|gateway|node`, `--security deny|allowlist|full`, `--ask off|on-miss|always`, `--ask-fallback deny|allowlist|full`).
+
+`show`, `preset`, and `set` accept `--json` and return the same requested,
+host, and effective policy facts as one JSON object.
+
+Scope:
+
+- Updates the local config file and local approvals document together; does not push policy to the gateway or a node host.
+- `--host node` is rejected: node exec approvals are fetched from the node at runtime, so local `exec-policy` cannot synchronize them. Use `openclaw approvals set --node <id|name|ip>` instead.
+- `exec-policy show` marks `host=node` scopes as node-managed at runtime instead of deriving an effective policy from the local approvals document.
+
+For remote host approvals, use `openclaw approvals set --gateway` or `openclaw approvals set --node <id|name|ip>` directly.
+
 ## Notes
 
 - The node host must advertise `system.execApprovals.get/set` (macOS app, headless node host, or Windows companion).
-- After upgrading from an argv-only generated-grant version, run `openclaw doctor --fix` if the update did not already do so. Doctor removes only inactive generated grants; manual allowlist rules stay in place. Rerun affected workflows to approve them in the intended directory.
+- Generated grants became directory-bound in `2026.8.1`. After upgrading from `2026.7.1` or earlier, run `openclaw doctor --fix` if the update did not already do so. Doctor removes only inactive generated grants; manual allowlist rules stay in place. Rerun affected workflows to approve them in the intended directory.
 - Approvals are stored per host in
   `$OPENCLAW_STATE_DIR/state/openclaw.sqlite#exec_approvals_config`, or
   `~/.openclaw/state/openclaw.sqlite#exec_approvals_config` when the variable is

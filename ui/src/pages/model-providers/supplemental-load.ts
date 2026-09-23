@@ -12,6 +12,7 @@ type SupplementalGateway = {
 };
 
 type SupplementalOptions = {
+  isCoreLoading: () => boolean;
   getGateway: () => SupplementalGateway;
   getData: () => ModelProvidersData | null;
   getDataClient: () => GatewayBrowserClient | null;
@@ -60,11 +61,22 @@ export class ModelProviderSupplementalLoader {
     return this.pending.has("usage");
   }
 
-  adoptCoreData(client: GatewayBrowserClient | null, data: ModelProvidersData): void {
+  adoptCoreData(
+    client: GatewayBrowserClient | null,
+    data: ModelProvidersData,
+    options: { preserveCatalogDiagnostics?: boolean } = {},
+  ): void {
     const previous = client === this.options.getDataClient() ? this.options.getData() : null;
     // Keep the last supplemental snapshot visible until its replacement finishes.
     this.options.setData({
       ...data,
+      // A newer Retry owns its feedback even when an older auth read finishes afterward.
+      ...(options.preserveCatalogDiagnostics && previous
+        ? {
+            providerOutcomes: previous.providerOutcomes,
+            catalogError: previous.catalogError,
+          }
+        : {}),
       providerUsage: previous?.providerUsage ?? data.providerUsage,
       costByProvider: previous?.costByProvider ?? data.costByProvider,
     });
@@ -76,9 +88,15 @@ export class ModelProviderSupplementalLoader {
         this.options.getGateway().epoch,
       );
     }
-    // The same route data can be adopted more than once. Core refresh cancels
-    // the prior generation before its replacement reaches this boundary.
-    if (client && !this.loading && data.providerUsage === null && data.costByProvider === null) {
+    // Cached core data stays visible during route reloads; only the settled
+    // loader starts supplemental work, so adopting its result cannot duplicate it.
+    if (
+      client &&
+      !this.options.isCoreLoading() &&
+      !this.loading &&
+      data.providerUsage === null &&
+      data.costByProvider === null
+    ) {
       void this.load(client);
     }
   }

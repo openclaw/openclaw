@@ -3,6 +3,16 @@ import {
   validateFullReleaseCandidateBinding,
   validateFullReleaseCandidateRequest,
 } from "./full-release-candidate-contract.mjs";
+import {
+  FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT,
+  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT,
+  publicationIntentInputs,
+  validatePublicationAdmissionBinding,
+  validatePublicationSourceBinding,
+} from "./full-release-publication-contract.mjs";
+import { hasRequiredLinuxCrossOsSuites } from "./lib/cross-os-release-checks/suite-filter.mjs";
+import { changelogEntryPath, isReleaseChangelogPath } from "./lib/release-changelog.mjs";
+import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
 // Full profiles carry over 500 job records. Keep complete evidence under one
 // shared wire budget instead of letting producers exceed smaller reader limits.
@@ -16,6 +26,135 @@ export function serializeReleaseArtifact(payload) {
   return json;
 }
 
+export function buildReleaseValidationManifest({ plan, drain, context }) {
+  const childEvidence = Object.fromEntries(
+    Object.entries(drain?.children ?? {}).map(([key, child]) => [
+      key,
+      {
+        runId: child.runId,
+        plannedRunAttempt: child.plannedRunAttempt,
+        effectiveRunAttempt: child.runAttempt,
+        observedRunAttempts: child.observedRunAttempts,
+        compositeJobsSha256: child.compositeJobsSha256,
+        dispatchActor: child.dispatchActor,
+        triggeringActor: child.triggeringActor,
+        repository: child.repository,
+        jobs: child.timing.jobs.map(
+          ({ name, status, conclusion, acceptedRunAttempt, startedAt, completedAt, url }) => ({
+            name,
+            status,
+            conclusion,
+            acceptedRunAttempt,
+            startedAt,
+            completedAt,
+            url,
+          }),
+        ),
+      },
+    ]),
+  );
+  const current = {
+    version: 4,
+    runId: context.runId,
+    runAttempt: context.runAttempt,
+    workflowRef: context.workflowRef,
+    workflowSha: context.workflowSha,
+    workflowFullRef: context.workflowFullRef,
+    workflowRefType: context.workflowRefType,
+    targetRef: context.targetRef,
+    targetSha: plan.targetSha,
+    candidateBinding: plan.candidate,
+    publicationArtifacts: context.publicationArtifacts ?? { npmPreflight: null, docker: null },
+    childEvidence,
+    executionPlanSha256: plan.sha256,
+    sourceParentRunAttempt: Number(plan.parentRunAttempt),
+    ...(plan.sourceAdmissionContract
+      ? {
+          sourceAdmissionContract: plan.sourceAdmissionContract,
+          sourceAdmission: plan.sourceAdmission,
+          trustedWorkflow: plan.trustedWorkflow,
+        }
+      : {}),
+    ...(plan.publicationAdmissionContract
+      ? {
+          publicationAdmissionContract: plan.publicationAdmissionContract,
+          publicationAdmission: plan.publicationAdmission,
+        }
+      : {}),
+  };
+  const runs = Object.fromEntries(plan.children.map((child) => [child.key, child.runId]));
+  const root = plan.evidenceReuse.sourceManifest;
+  let rootPublication;
+  if (plan.evidenceReuse.requested && root?.publicationAdmissionContract !== undefined) {
+    rootPublication = {
+      sourceAdmissionContract: root.sourceAdmissionContract,
+      sourceAdmission: root.sourceAdmission,
+      publicationAdmissionContract: root.publicationAdmissionContract,
+      publicationAdmission: root.publicationAdmission,
+    };
+    validatePublicationAdmissionBinding(rootPublication);
+    if (
+      root.sourceAdmission.runId !== plan.evidenceReuse.rootRunId ||
+      root.sourceAdmission.candidateSha !== plan.evidenceReuse.evidenceSha
+    ) {
+      throw new Error("reused publication admission differs from the retained root identity");
+    }
+  }
+  const manifest = plan.evidenceReuse.requested
+    ? {
+        ...plan.evidenceReuse.sourceManifest,
+        ...current,
+        evidenceReuse: {
+          policy: plan.evidenceReuse.policy,
+          runId: plan.evidenceReuse.rootRunId,
+          selectedRunId: plan.evidenceReuse.selectedRunId,
+          evidenceSha: plan.evidenceReuse.evidenceSha,
+          changedPaths: plan.evidenceReuse.changedPaths ?? [],
+          ...(rootPublication ? { publication: rootPublication } : {}),
+        },
+        controls: {
+          ...plan.evidenceReuse.sourceManifest.controls,
+          performanceReportPublication: "artifact-only",
+        },
+      }
+    : {
+        ...current,
+        workflowName: "Full Release Validation",
+        releaseProfile: context.releaseProfile,
+        rerunGroup: context.rerunGroup,
+        runReleaseSoak: context.runReleaseSoak,
+        validationInputs: {
+          ...context.validationInputs,
+          ...(plan.sourceAdmissionContract
+            ? {
+                ...publicationIntentInputs(plan.sourceAdmission),
+              }
+            : {}),
+          ...(plan.coveragePolicy ? { coveragePolicy: plan.coveragePolicy } : {}),
+        },
+        controls: {
+          stableSoakRequired: ["stable", "full"].includes(context.releaseProfile),
+          performanceBlocking: context.releaseProfile !== "beta",
+          performanceReportPublication: "artifact-only",
+        },
+        childRuns: {
+          normalCi: runs.normalCi ?? "",
+          pluginPrereleaseIndependent: runs.pluginPrereleaseIndependent ?? "",
+          pluginPrereleaseCandidate: runs.pluginPrereleaseCandidate ?? "",
+          releaseChecksIndependent: runs.releaseChecksIndependent ?? "",
+          releaseChecksCandidate: runs.releaseChecksCandidate ?? "",
+          npmTelegram: runs.npmTelegram ?? "",
+          productPerformance: {
+            runId: runs.productPerformance ?? "",
+            conclusion: drain?.children?.productPerformance?.conclusion ?? "",
+            blocking: context.releaseProfile !== "beta",
+          },
+        },
+      };
+  serializeReleaseArtifact(manifest);
+  return manifest;
+}
+
 const SUCCESSFUL_JOB_CONCLUSIONS = new Set(["neutral", "skipped", "success"]);
 const MAX_REPORTED_ISSUES = 25;
 const MAX_SUMMARY_ISSUES = 5;
@@ -24,6 +163,105 @@ const MAX_MESSAGE_LENGTH = 500;
 const MAX_URL_LENGTH = 1024;
 const EXACT_TARGET_EVIDENCE_REUSE_POLICY = "exact-target-full-validation-v1";
 const CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY = "changelog-only-release-v1";
+export const SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY = "split-changelog-release-v1";
+
+export function assertReleasePublicationKnownBudget(plan, context) {
+  serializeReleaseArtifact(plan);
+  // Only these future fields have finite bounds in the existing plan normalizers.
+  // Complete future jobs/attempts and candidate receipts are not covered here.
+  const issue = normalizeIssue(
+    Object.fromEntries(
+      ["child", "conclusion", "job", "kind", "message", "runId", "url"].map((key) => [
+        key,
+        "\0".repeat(
+          key === "url"
+            ? MAX_URL_LENGTH
+            : key === "message"
+              ? MAX_MESSAGE_LENGTH
+              : MAX_LABEL_LENGTH,
+        ),
+      ]),
+    ),
+    "orchestration_error",
+  );
+  const reserved = {
+    ...plan,
+    children: plan.children.map((child) =>
+      child.selected
+        ? {
+            ...child,
+            result: "\0".repeat(MAX_LABEL_LENGTH),
+            runId: "9".repeat(MAX_LABEL_LENGTH),
+            runAttempt: Number.MAX_SAFE_INTEGER,
+            sourceParentAttempt: Number.MAX_SAFE_INTEGER,
+            url: "\0".repeat(MAX_URL_LENGTH),
+          }
+        : child,
+    ),
+    gates: plan.gates.map((gate) => ({ ...gate, result: "\0".repeat(MAX_LABEL_LENGTH) })),
+    blockers: Array.from({ length: MAX_REPORTED_ISSUES }, () => issue),
+    errors: Array.from({ length: MAX_REPORTED_ISSUES }, () => issue),
+  };
+  serializeReleaseArtifact(reserved);
+  buildReleaseValidationManifest({ plan: reserved, context });
+}
+
+// A split-layout receipt is bound to one selected release, never the directory.
+// Historical root-file receipts retain their original exact-path contract.
+export function isSplitChangelogEvidenceDelta(paths, version) {
+  if (typeof version !== "string" || !version || version === "Unreleased") {
+    return false;
+  }
+  try {
+    const targetVersion = version.replace(/^v/u, "");
+    const parsedVersion = parseReleaseVersion(targetVersion);
+    // Beta release notes and contribution records use the stable base section.
+    const sectionVersion =
+      parsedVersion?.channel === "beta" && parsedVersion.version === targetVersion
+        ? parsedVersion.baseVersion
+        : version;
+    return (
+      Array.isArray(paths) &&
+      paths.length > 0 &&
+      new Set(paths).size === paths.length &&
+      paths.includes(changelogEntryPath(sectionVersion)) &&
+      paths.every((name) => isReleaseChangelogPath(name, { version: sectionVersion }))
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function classifyReleaseChangelogEvidenceComparison(comparison, { baseSha, version }) {
+  const files = Array.isArray(comparison?.files) ? comparison.files : [];
+  const changedPaths = files.map((file) => file.filename);
+  const legacy = changedPaths.length === 1 && changedPaths[0] === "CHANGELOG.md";
+  const split = isSplitChangelogEvidenceDelta(changedPaths, version);
+  if (
+    comparison?.status !== "ahead" ||
+    comparison?.merge_base_commit?.sha !== baseSha ||
+    (!legacy && !split) ||
+    new Set(changedPaths).size !== changedPaths.length ||
+    files.some(
+      (file) =>
+        file.previous_filename ||
+        !(
+          split && file.filename !== "CHANGELOG.md" ? ["added", "modified"] : ["modified"]
+        ).includes(file.status),
+    )
+  ) {
+    throw new Error("changelog-only release evidence reuse failed commit comparison");
+  }
+  return {
+    changedPaths,
+    policy: split ? SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY : CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY,
+  };
+}
+const REVIEWED_TELEGRAM_WAIVERS = new Map([
+  ["2026.8.1-owner-approved", ["telegram"]],
+  ["2026.9.1-owner-approved", ["telegram"]],
+  ["2026.9.5-owner-approved", ["telegram", "matrix"]],
+]);
 const HARD_GH_TRANSPORT_PATTERN =
   /HTTP (?:400|401|403|404|410|422)\b|Bad credentials|authentication required|not authenticated|gh auth login|unknown (?:command|flag)|Usage: gh\b|ENOENT|EACCES/iu;
 const RATE_LIMITED_403_PATTERN =
@@ -278,7 +516,7 @@ function booleanValue(value) {
 }
 
 // Omission retains the historical full inventory. Reduced coverage is an
-// explicit release decision, bound to the exact beta version and sealed plan.
+// explicit release decision, bound to the exact version and sealed plan.
 export function normalizeReleaseCoveragePolicy({
   coveragePolicy,
   releaseProfile,
@@ -286,20 +524,35 @@ export function normalizeReleaseCoveragePolicy({
   runReleaseSoak,
   targetVersion,
   candidateVersion,
+  crossOsSuiteFilter = "",
 }) {
+  // All-group evidence may omit advisory OS lanes, never required Linux suites.
+  if (rerunGroup === "all" && !hasRequiredLinuxCrossOsSuites(crossOsSuiteFilter)) {
+    throw new Error("release coverage policy requires all Linux cross-OS suites");
+  }
   if (coveragePolicy === undefined) {
     return undefined;
   }
+  const target = parseReleaseVersion(stringValue(targetVersion));
+  const beta =
+    coveragePolicy === "npm-beta-v1" &&
+    releaseProfile === "beta" &&
+    (runReleaseSoak === false || runReleaseSoak === "false") &&
+    target?.channel === "beta";
+  const stable =
+    coveragePolicy === "npm-stable-v1" &&
+    releaseProfile === "stable" &&
+    (runReleaseSoak === true || runReleaseSoak === "true") &&
+    target !== null &&
+    classifyReleaseTrain(target) === "stable";
   if (
-    coveragePolicy !== "npm-beta-v1" ||
-    releaseProfile !== "beta" ||
+    (!beta && !stable) ||
     rerunGroup !== "all" ||
-    (runReleaseSoak !== false && runReleaseSoak !== "false") ||
-    !/^[0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*-beta\.[1-9][0-9]*$/u.test(targetVersion ?? "") ||
+    target?.version !== targetVersion ||
     (candidateVersion !== undefined && candidateVersion !== targetVersion)
   ) {
     throw new Error(
-      "release coverage policy requires the exact beta version, all group, and no soak",
+      "release coverage policy requires an exact beta without soak or regular stable with soak, the matching profile, and all group",
     );
   }
   return coveragePolicy;
@@ -320,8 +573,7 @@ export function validateReleaseCoveragePolicyBinding(plan, validationInputs = {}
   }
 }
 
-// The release owner approved only these Telegram integration omissions for
-// 2026.8.1. This declaration never turns a failed or unrun test into a pass.
+// Each omission requires a reviewed code change; waived or unrun never means passed.
 export function normalizeReleaseTelegramWaiver({
   telegramWaiver,
   targetVersion,
@@ -337,11 +589,12 @@ export function normalizeReleaseTelegramWaiver({
     return "";
   }
   if (
-    telegramWaiver !== "2026.8.1-owner-approved" ||
-    targetVersion !== "2026.8.1" ||
+    !REVIEWED_TELEGRAM_WAIVERS.has(telegramWaiver) ||
+    telegramWaiver !== `${targetVersion}-owner-approved` ||
+    parseReleaseVersion(stringValue(targetVersion))?.baseVersion !== stringValue(targetVersion) ||
     !["stable", "full"].includes(releaseProfile)
   ) {
-    throw new Error("Telegram waiver requires owner-approved 2026.8.1 stable/full validation");
+    throw new Error("Telegram waiver requires an exact stable/full owner declaration");
   }
   if (candidateVersion !== undefined && candidateVersion !== targetVersion) {
     throw new Error("Telegram waiver target version differs from the release candidate");
@@ -361,24 +614,32 @@ export function normalizeReleaseTelegramWaiver({
           "non-slack",
           "no-slack",
           "without-slack",
-          "qa-live-telegram",
-          "qa-telegram",
-          "telegram",
+          ...REVIEWED_TELEGRAM_WAIVERS.get(telegramWaiver).flatMap((channel) => [
+            `qa-live-${channel}`,
+            `qa-${channel}`,
+            channel,
+          ]),
         ].includes(lane.trim()),
       )
   ) {
-    throw new Error("Telegram waiver conflicts with explicitly requested Telegram validation");
+    throw new Error(
+      "Telegram waiver conflicts with explicitly requested waived-channel validation",
+    );
   }
   // Blank specs select the sealed SHA candidate. Registry overrides must name
   // the waived release exactly; a moving dist-tag does not establish version.
   if (
     [releasePackageSpec, packageAcceptancePackageSpec, npmTelegramPackageSpec].some(
-      (spec) => spec !== "" && spec !== "openclaw@2026.8.1",
+      (spec) => spec !== "" && spec !== `openclaw@${targetVersion}`,
     )
   ) {
-    throw new Error("Telegram waiver package overrides must be openclaw@2026.8.1");
+    throw new Error(`Telegram waiver package overrides must be openclaw@${targetVersion}`);
   }
   return telegramWaiver;
+}
+
+export function releaseWaivedIntegrationChannels(input) {
+  return [...(REVIEWED_TELEGRAM_WAIVERS.get(normalizeReleaseTelegramWaiver(input)) ?? [])];
 }
 
 export function validateReleaseTelegramWaiverBinding(plan, validationInputs = {}) {
@@ -588,10 +849,15 @@ export function validateReleaseChildDispatchBinding({
     const scopes = [...String(log).matchAll(/\bCI_RELEASE_SCOPE: ([^\s]+)/gu)].map(
       (match) => match[1],
     );
-    const expectedScope = coveragePolicy === "npm-beta-v1" ? "npm-beta" : "full";
+    const expectedScope =
+      coveragePolicy === "npm-beta-v1"
+        ? "npm-beta"
+        : coveragePolicy === "npm-stable-v1"
+          ? "npm-stable"
+          : "full";
     if (
       scopes.some((scope) => scope !== expectedScope) ||
-      (coveragePolicy === "npm-beta-v1" && scopes.length === 0)
+      (coveragePolicy !== undefined && scopes.length === 0)
     ) {
       throw new Error("release normal CI dispatch scope differs from its coverage policy");
     }
@@ -722,7 +988,8 @@ export function buildReleaseExecutionPlan(input) {
     },
     {
       name: "Verify Docker runtime image assets",
-      required: !reused && rerunGroup === "all",
+      required:
+        !reused && rerunGroup === "all" && stringValue(input.targetVersion).includes("-alpha."),
       result: stringValue(input.dockerPreflightResult, "skipped"),
     },
     {
@@ -781,7 +1048,13 @@ function validEvidenceReuseIdentity(evidenceReuse) {
       evidenceReuse.changedPaths.length === 0) ||
     (evidenceReuse.policy === CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY &&
       evidenceReuse.changedPaths.length === 1 &&
-      evidenceReuse.changedPaths[0] === "CHANGELOG.md");
+      evidenceReuse.changedPaths[0] === "CHANGELOG.md") ||
+    (evidenceReuse.policy === SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY &&
+      isSplitChangelogEvidenceDelta(
+        evidenceReuse.changedPaths,
+        evidenceReuse.sourceManifest?.candidateBinding?.package?.version ??
+          evidenceReuse.sourceManifest?.validationInputs?.targetVersion,
+      ));
   return (
     /^[a-f0-9]{40}$/u.test(evidenceReuse.evidenceSha) &&
     /^[1-9][0-9]*$/u.test(evidenceReuse.rootRunId) &&
@@ -825,6 +1098,12 @@ function releaseExecutionPlanShape(payload) {
       ...basePlanKeys,
       ...(Object.hasOwn(payload, "telegramWaiver") ? ["targetVersion", "telegramWaiver"] : []),
       ...(Object.hasOwn(payload, "coveragePolicy") ? ["targetVersion", "coveragePolicy"] : []),
+      ...(Object.hasOwn(payload, "sourceAdmissionContract")
+        ? ["sourceAdmissionContract", "sourceAdmission"]
+        : []),
+      ...(Object.hasOwn(payload, "publicationAdmissionContract")
+        ? ["publicationAdmissionContract", "publicationAdmission"]
+        : []),
     ]),
   ].toSorted((left, right) => left.localeCompare(right));
   const expectedChildKeys = hasAttemptEvidence
@@ -843,6 +1122,18 @@ function releaseExecutionPlanShape(payload) {
 }
 
 function executionPlanDigestPayload(plan) {
+  const source = Object.hasOwn(plan, "sourceAdmissionContract")
+    ? {
+        sourceAdmissionContract: plan.sourceAdmissionContract,
+        sourceAdmission: plan.sourceAdmission,
+      }
+    : {};
+  const publication = Object.hasOwn(plan, "publicationAdmissionContract")
+    ? {
+        publicationAdmissionContract: plan.publicationAdmissionContract,
+        publicationAdmission: plan.publicationAdmission,
+      }
+    : {};
   const waiver = Object.hasOwn(plan, "telegramWaiver")
     ? { targetVersion: plan.targetVersion, telegramWaiver: plan.telegramWaiver }
     : {};
@@ -851,6 +1142,8 @@ function executionPlanDigestPayload(plan) {
     : {};
   if (!Object.hasOwn(plan, "attemptEvidenceVersion")) {
     return {
+      ...source,
+      ...publication,
       ...waiver,
       blockers: plan.blockers,
       children: plan.children,
@@ -870,6 +1163,8 @@ function executionPlanDigestPayload(plan) {
     };
   }
   return {
+    ...source,
+    ...publication,
     ...waiver,
     ...coverage,
     attemptEvidenceVersion: plan.attemptEvidenceVersion,
@@ -910,6 +1205,10 @@ export function buildReleaseExecutionPlanArtifact({
   gates,
   releaseProfile,
   rerunGroup,
+  sourceAdmissionContract,
+  sourceAdmission,
+  publicationAdmissionContract,
+  publicationAdmission,
   targetVersion,
   telegramWaiver,
   trustedWorkflow,
@@ -964,6 +1263,10 @@ export function buildReleaseExecutionPlanArtifact({
     }
   }
   const basePlan = {
+    ...(sourceAdmissionContract !== undefined ? { sourceAdmissionContract, sourceAdmission } : {}),
+    ...(publicationAdmissionContract !== undefined
+      ? { publicationAdmissionContract, publicationAdmission }
+      : {}),
     ...(waiver ? { telegramWaiver: waiver, targetVersion } : {}),
     ...(coveragePolicy !== undefined ? { coveragePolicy, targetVersion } : {}),
     version: 1,
@@ -982,11 +1285,15 @@ export function buildReleaseExecutionPlanArtifact({
     blockers: normalizeIssues(blockers, "release_blocker"),
     errors: normalizeIssues(errors, "orchestration_error"),
   };
+  validatePlanSourceAdmission(basePlan, expected);
+  validatePlanPublicationAdmission(basePlan, expected);
   if (!attemptAware) {
     if (coveragePolicy !== undefined) {
       throw new Error("release coverage policy requires a phase-three execution plan");
     }
-    return { ...basePlan, sha256: releaseExecutionPlanSha256(basePlan) };
+    const result = { ...basePlan, sha256: releaseExecutionPlanSha256(basePlan) };
+    serializeReleaseArtifact(result);
+    return result;
   }
   const repository = boundedString(expected.repository, MAX_LABEL_LENGTH);
   const normalizedCandidateRequest = validateFullReleaseCandidateRequest(expected.candidateRequest);
@@ -998,7 +1305,48 @@ export function buildReleaseExecutionPlanArtifact({
     candidate: candidate === null ? null : validateFullReleaseCandidateBinding(candidate),
   };
   validateCandidatePlanBinding(plan, expected.candidateRequest);
-  return { ...plan, sha256: releaseExecutionPlanSha256(plan) };
+  const result = { ...plan, sha256: releaseExecutionPlanSha256(plan) };
+  serializeReleaseArtifact(result);
+  return result;
+}
+
+function validatePlanPublicationAdmission(plan, expected) {
+  if (
+    plan.publicationAdmissionContract === FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT &&
+    plan.publicationAdmission === null &&
+    plan.gates.some(
+      (gate) => gate.name === "Resolve target ref" && gate.required && gate.result !== "success",
+    )
+  ) {
+    if (
+      expected.publicationAdmissionContract !== undefined &&
+      expected.publicationAdmissionContract !== plan.publicationAdmissionContract
+    ) {
+      throw new Error("publication admission contract mismatch");
+    }
+    return;
+  }
+  validatePublicationAdmissionBinding(plan, expected);
+}
+
+function validatePlanSourceAdmission(plan, expected) {
+  // Failed resolution still seals an honest failure plan, never successful source evidence.
+  if (
+    plan.sourceAdmissionContract === FULL_RELEASE_SOURCE_ADMISSION_CONTRACT &&
+    plan.sourceAdmission === null &&
+    plan.gates.some(
+      (gate) => gate.name === "Resolve target ref" && gate.required && gate.result !== "success",
+    )
+  ) {
+    if (
+      expected.sourceAdmissionContract !== undefined &&
+      expected.sourceAdmissionContract !== plan.sourceAdmissionContract
+    ) {
+      throw new Error("source admission contract mismatch");
+    }
+    return;
+  }
+  validatePublicationSourceBinding(plan, expected);
 }
 
 function validateCandidatePlanBinding(plan, expectedCandidateRequest) {
@@ -1041,6 +1389,9 @@ export function validateReleaseExecutionPlanArtifact(payload, expected = {}) {
     throw new Error("release execution plan artifact is invalid");
   }
   const shape = releaseExecutionPlanShape(payload);
+  serializeReleaseArtifact(payload);
+  validatePlanSourceAdmission(payload, expected);
+  validatePlanPublicationAdmission(payload, expected);
   const sha256 = releaseExecutionPlanSha256(payload);
   if (payload.sha256 !== sha256) {
     throw new Error("release execution plan artifact digest is invalid");
@@ -1149,7 +1500,12 @@ function blockerIndex(issues) {
   return issues.map((issue) => jsonSha256(blockerEvidence(issue))).toSorted();
 }
 
-function isReleaseCheckJobAdvisory({ jobName, releaseProfile, workflowRef }) {
+export function isReleaseCheckJobAdvisory({ jobName, releaseProfile, workflowRef }) {
+  // Cross-OS Windows/macOS results remain evidence without gating npm publication.
+  // Match only execution lanes: Linux and shared preparation still block.
+  if (/^cross_os_release_checks \/ (?:Windows|macOS) \/ /u.test(jobName)) {
+    return true;
+  }
   if (
     jobName.startsWith("Run QA Lab parity lane (") ||
     jobName === "Run QA Lab parity report" ||
@@ -1973,7 +2329,13 @@ function verifyStateTransition(decision, drain, executionPlan) {
     (decision.state === "passed" && drain.state === "blocked_complete") ||
     (decision.state.startsWith("blocked_") && drain.state === "passed" && !reuseRecovery)
   ) {
-    throw new Error("release decision and diagnostic drain transition is invalid");
+    throw new Error(
+      "release decision and diagnostic drain transition is invalid: " +
+        `decision(parentRunAttempt=${decision.parentRunAttempt}, state=${decision.state}), ` +
+        `drain(parentRunAttempt=${drain.parentRunAttempt}, state=${drain.state}); ` +
+        `executionPlan(originalParentRunAttempt=${executionPlan.parentRunAttempt}, sha256=${executionPlan.sha256}); ` +
+        "compatible collector evidence for the same execution plan is required",
+    );
   }
   if (
     decision.state.startsWith("blocked_") &&

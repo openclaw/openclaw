@@ -2,7 +2,6 @@
 import { stripVTControlCharacters } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithRuntime } from "../cli/cli-utils.js";
-import type { RuntimeEnv } from "../runtime.js";
 import * as taskRegistryMaintenance from "../tasks/task-registry.maintenance.js";
 import * as taskRegistryReconcile from "../tasks/task-registry.reconcile.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
@@ -11,6 +10,7 @@ import type {
   TaskSystemAuditSeverity,
 } from "../tasks/task-system-audit.types.js";
 import { tasksAuditCommand, tasksListCommand } from "./tasks.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
@@ -19,14 +19,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
 }));
-
-function createRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
-}
 
 describe("tasks command filter validation", () => {
   it("keeps valid matching and empty filters successful", async () => {
@@ -45,8 +37,8 @@ describe("tasks command filter validation", () => {
     const query = vi
       .spyOn(taskRegistryReconcile, "reconcileInspectableTasks")
       .mockReturnValue([task]);
-    const matchingRuntime = createRuntime();
-    const emptyRuntime = createRuntime();
+    const matchingRuntime = createTestRuntime();
+    const emptyRuntime = createTestRuntime();
 
     try {
       await tasksListCommand({ json: true, status: "running" }, matchingRuntime);
@@ -90,7 +82,7 @@ describe("tasks command filter validation", () => {
       .mockImplementation(() => {
         throw new Error("task query performed");
       });
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
 
     try {
       await runCommandWithRuntime(runtime, () => tasksListCommand(options, runtime));
@@ -119,7 +111,7 @@ describe("tasks command filter validation", () => {
       .mockImplementation(() => {
         throw new Error("task audit query performed");
       });
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
 
     try {
       await runCommandWithRuntime(runtime, () => tasksAuditCommand(options, runtime));
@@ -225,7 +217,7 @@ describe("tasks list output", () => {
       const query = vi
         .spyOn(taskRegistryReconcile, "reconcileInspectableTasks")
         .mockReturnValue([task]);
-      const runtime = createRuntime();
+      const runtime = createTestRuntime();
       try {
         await tasksListCommand({}, runtime);
         const lines = vi

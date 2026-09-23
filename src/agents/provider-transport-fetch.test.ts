@@ -2,114 +2,22 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { Stream } from "openai/streaming";
 import type { Model } from "openclaw/plugin-sdk/llm";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
-import { mintSecretSentinel } from "../secrets/sentinel.js";
-import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
-import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
-
-type ProviderRequestPolicyConfigMockResult = {
-  allowPrivateNetwork: boolean;
-  trustConfiguredBaseUrlOrigin?: boolean;
-  policy?: {
-    endpointClass?: string;
-  };
-};
-
-const {
+import {
+  buildGuardedModelFetch,
   buildProviderRequestDispatcherPolicyMock,
-  fetchWithSsrFGuardMock,
   ensureModelProviderLocalServiceMock,
+  fetchWithSsrFGuardMock,
+  installProviderTransportFetchTestHooks,
+  latestGuardedFetchParams,
+  managedStreamCleanupRegistrations,
   mergeModelProviderRequestOverridesMock,
   resolveProviderRequestPolicyConfigMock,
   shouldUseEnvHttpProxyForUrlMock,
   withTrustedEnvProxyGuardedFetchModeMock,
-  managedStreamCleanupRegistrations,
-} = vi.hoisted(() => {
-  // Mock FinalizationRegistry so stream cleanup registrations are directly assertable.
-  const managedStreamCleanupRegistrationsLocal: Array<{
-    callback: (held: { finalize: () => Promise<void> }) => void;
-    held: { finalize: () => Promise<void> };
-    token: object;
-  }> = [];
-
-  class MockFinalizationRegistry {
-    constructor(private callback: (held: { finalize: () => Promise<void> }) => void) {}
-
-    register(_target: object, held: { finalize: () => Promise<void> }, token?: object) {
-      managedStreamCleanupRegistrationsLocal.push({
-        callback: this.callback,
-        held,
-        token: token ?? {},
-      });
-    }
-
-    unregister(token: object) {
-      const index = managedStreamCleanupRegistrationsLocal.findIndex(
-        (entry) => entry.token === token,
-      );
-      if (index >= 0) {
-        managedStreamCleanupRegistrationsLocal.splice(index, 1);
-      }
-    }
-  }
-
-  vi.stubGlobal("FinalizationRegistry", MockFinalizationRegistry);
-
-  return {
-    buildProviderRequestDispatcherPolicyMock: vi.fn<
-      (_request?: unknown) => { mode: "direct" } | undefined
-    >(() => undefined),
-    fetchWithSsrFGuardMock: vi.fn(),
-    ensureModelProviderLocalServiceMock: vi.fn(),
-    mergeModelProviderRequestOverridesMock: vi.fn((current, overrides) => ({
-      ...current,
-      ...overrides,
-    })),
-    resolveProviderRequestPolicyConfigMock: vi.fn<() => ProviderRequestPolicyConfigMockResult>(
-      () => ({
-        allowPrivateNetwork: false,
-      }),
-    ),
-    shouldUseEnvHttpProxyForUrlMock: vi.fn(() => false),
-    withTrustedEnvProxyGuardedFetchModeMock: vi.fn((params: Record<string, unknown>) => ({
-      ...params,
-      mode: "trusted_env_proxy",
-    })),
-    managedStreamCleanupRegistrations: managedStreamCleanupRegistrationsLocal,
-  };
-});
-
-vi.mock("../infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
-  withTrustedEnvProxyGuardedFetchMode: withTrustedEnvProxyGuardedFetchModeMock,
-}));
-
-vi.mock("../infra/net/proxy-env.js", () => ({
-  shouldUseEnvHttpProxyForUrl: shouldUseEnvHttpProxyForUrlMock,
-}));
-
-vi.mock("./provider-local-service.js", () => ({
-  ensureModelProviderLocalService: ensureModelProviderLocalServiceMock,
-}));
-
-vi.mock("./provider-request-config.js", () => ({
-  buildProviderRequestDispatcherPolicy: buildProviderRequestDispatcherPolicyMock,
-  getModelProviderRequestRouteFacts: vi.fn(() => undefined),
-  getModelProviderRequestTransport: vi.fn(() => undefined),
-  mergeModelProviderRequestOverrides: mergeModelProviderRequestOverridesMock,
-  resolveProviderRequestPolicyConfig: resolveProviderRequestPolicyConfigMock,
-}));
-
-function latestGuardedFetchParams(): Record<string, unknown> {
-  // All transport calls should pass through the SSRF-guarded fetch seam.
-  const calls = fetchWithSsrFGuardMock.mock.calls;
-  const params = calls[calls.length - 1]?.[0];
-  if (!params || typeof params !== "object") {
-    throw new Error("Expected guarded fetch call");
-  }
-  return params;
-}
+} from "./provider-transport-fetch.test-harness.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 function latestTrustedEnvProxyParams(): Record<string, unknown> {
   const calls = withTrustedEnvProxyGuardedFetchModeMock.mock.calls;
@@ -157,133 +65,7 @@ function openResponseStreamText(text: string): {
 }
 
 describe("buildGuardedModelFetch", () => {
-  beforeEach(() => {
-    managedStreamCleanupRegistrations.length = 0;
-    fetchWithSsrFGuardMock.mockReset().mockResolvedValue({
-      response: new Response("ok", { status: 200 }),
-      finalUrl: "https://api.openai.com/v1/responses",
-      release: vi.fn(async () => undefined),
-    });
-    ensureModelProviderLocalServiceMock.mockReset().mockResolvedValue(undefined);
-    buildProviderRequestDispatcherPolicyMock.mockClear().mockReturnValue(undefined);
-    mergeModelProviderRequestOverridesMock.mockClear();
-    resolveProviderRequestPolicyConfigMock
-      .mockClear()
-      .mockReturnValue({ allowPrivateNetwork: false });
-    shouldUseEnvHttpProxyForUrlMock.mockClear().mockReturnValue(false);
-    withTrustedEnvProxyGuardedFetchModeMock.mockClear();
-    delete process.env.OPENCLAW_DEBUG_PROXY_ENABLED;
-    delete process.env.OPENCLAW_DEBUG_PROXY_URL;
-    delete process.env.OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS;
-  });
-
-  afterEach(() => {
-    delete process.env.OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS;
-  });
-
-  function sentinelModel(): Model<"openai-responses"> {
-    return makeProviderModelFixture<"openai-responses">({
-      id: "gpt-5.5",
-      provider: "openai",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-    });
-  }
-
-  it("swaps sentinels in Request-form headers", async () => {
-    const sentinel = mintSecretSentinel("request-form-secret", { label: "request-form" });
-    const request = new Request("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${sentinel}` },
-    });
-
-    const response = await buildGuardedModelFetch(sentinelModel())(request);
-    await response.text();
-
-    const headers = new Headers((latestGuardedFetchParams().init as RequestInit).headers);
-    expect(headers.get("authorization")).toBe("Bearer request-form-secret");
-  });
-
-  it("swaps sentinels in record init headers", async () => {
-    const recordSentinel = mintSecretSentinel("record-header-secret", { label: "record-header" });
-    const response = await buildGuardedModelFetch(sentinelModel())(
-      "https://api.openai.com/v1/responses",
-      {
-        headers: { "x-api-key": recordSentinel },
-      },
-    );
-    await response.text();
-    expect(
-      new Headers((latestGuardedFetchParams().init as RequestInit).headers).get("x-api-key"),
-    ).toBe("record-header-secret");
-    expect(
-      new Headers(ensureModelProviderLocalServiceMock.mock.calls[0]?.[1] as HeadersInit).get(
-        "x-api-key",
-      ),
-    ).toBe(recordSentinel);
-  });
-
-  it("swaps sentinels in tuple init headers", async () => {
-    const tupleSentinel = mintSecretSentinel("tuple-header-secret", { label: "tuple-header" });
-    const response = await buildGuardedModelFetch(sentinelModel())(
-      "https://api.openai.com/v1/responses",
-      {
-        headers: [["x-api-key", tupleSentinel]],
-      },
-    );
-    await response.text();
-    expect(
-      new Headers((latestGuardedFetchParams().init as RequestInit).headers).get("x-api-key"),
-    ).toBe("tuple-header-secret");
-  });
-
-  it("swaps sentinels in Headers init and composed Cloudflare auth values", async () => {
-    const sentinel = mintSecretSentinel("cloudflare-upstream-secret", { label: "cloudflare" });
-    const response = await buildGuardedModelFetch(sentinelModel())(
-      "https://api.openai.com/v1/responses",
-      {
-        headers: new Headers({ "cf-aig-authorization": `Bearer ${sentinel}` }),
-      },
-    );
-    await response.text();
-
-    const headers = new Headers((latestGuardedFetchParams().init as RequestInit).headers);
-    expect(headers.get("cf-aig-authorization")).toBe("Bearer cloudflare-upstream-secret");
-  });
-
-  it("swaps sentinels in URL query parameters", async () => {
-    const sentinel = mintSecretSentinel("gemini&scope=two+#%", { label: "gemini-query" });
-    const response = await buildGuardedModelFetch(sentinelModel())(
-      `https://api.openai.com/v1/responses?key=${sentinel}`,
-    );
-    await response.text();
-
-    expect(latestGuardedFetchParams().url).toBe(
-      "https://api.openai.com/v1/responses?key=gemini%26scope%3Dtwo%2B%23%25",
-    );
-  });
-
-  it("rejects unknown sentinel-shaped values before guarded fetch", async () => {
-    const unknown = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
-    await expect(
-      buildGuardedModelFetch(sentinelModel())("https://api.openai.com/v1/responses", {
-        headers: { Authorization: `Bearer ${unknown}` },
-      }),
-    ).rejects.toThrow(
-      `Secret sentinel ${unknown} is not registered in this process; refusing to send request`,
-    );
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps the no-sentinel fast path request init untouched", async () => {
-    const init: RequestInit = { headers: { Authorization: "Bearer plain-env-key" } };
-    const response = await buildGuardedModelFetch(sentinelModel())(
-      "https://api.openai.com/v1/responses",
-      init,
-    );
-    await response.text();
-    expect(latestGuardedFetchParams().init).toStrictEqual(init);
-  });
+  installProviderTransportFetchTestHooks();
 
   it("pushes provider capture metadata into the shared guarded fetch seam", async () => {
     const model = makeProviderModelFixture<"openai-responses">({
@@ -528,6 +310,48 @@ describe("buildGuardedModelFetch", () => {
     expect(ensureModelProviderLocalServiceMock).toHaveBeenCalledWith(model, undefined, undefined);
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+  });
+
+  it("waits for local service reconciliation before starting the provider fetch", async () => {
+    let finishReconciliation: (() => void) | undefined;
+    ensureModelProviderLocalServiceMock.mockImplementation(
+      async () =>
+        await new Promise((resolve) => {
+          finishReconciliation = () => resolve({ release: vi.fn() });
+        }),
+    );
+    const model = makeProviderModelFixture<"openai-completions">({
+      id: "local-model",
+      provider: "local-provider",
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:18000/v1",
+    });
+
+    const pending = buildGuardedModelFetch(model)("http://127.0.0.1:18000/v1/chat/completions", {
+      method: "POST",
+    });
+    await vi.waitFor(() => expect(ensureModelProviderLocalServiceMock).toHaveBeenCalledOnce());
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    finishReconciliation?.();
+    await pending;
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not start the provider fetch when local service reconciliation fails", async () => {
+    ensureModelProviderLocalServiceMock.mockRejectedValue(new Error("reconciliation failed"));
+    const model = makeProviderModelFixture<"openai-completions">({
+      id: "local-model",
+      provider: "local-provider",
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:18000/v1",
+    });
+
+    await expect(
+      buildGuardedModelFetch(model)("http://127.0.0.1:18000/v1/chat/completions", {
+        method: "POST",
+      }),
+    ).rejects.toThrow("reconciliation failed");
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
   it("releases guarded fetch slots when streamed bodies are abandoned", async () => {
@@ -1199,97 +1023,6 @@ describe("buildGuardedModelFetch", () => {
     expect(mergeModelProviderRequestOverridesMock).toHaveBeenCalledWith(undefined, {
       proxy: undefined,
     });
-  });
-
-  it("drops event-only SSE frames before the OpenAI SDK stream parser sees them", async () => {
-    const encoder = new TextEncoder();
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(
-        new ReadableStream({
-          start(controller) {
-            controller.enqueue(encoder.encode("event: message\n\n"));
-            controller.enqueue(encoder.encode('data: {"ok": true}\n\n'));
-            controller.close();
-          },
-        }),
-        { headers: { "content-type": "text/event-stream" } },
-      ),
-      finalUrl: "https://api.openai.com/v1/responses",
-      release: vi.fn(async () => undefined),
-    });
-    const model = makeProviderModelFixture<"openai-responses">({
-      id: "gpt-5.4",
-      provider: "openrouter",
-      api: "openai-responses",
-      baseUrl: "https://openrouter.ai/api/v1",
-    });
-
-    const response = await buildGuardedModelFetch(model)("https://openrouter.ai/api/v1/responses", {
-      method: "POST",
-    });
-    const items = [];
-    for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
-      items.push(item);
-    }
-
-    expect(items).toEqual([{ ok: true }]);
-  });
-
-  it("leaves official OpenAI SSE streams unmodified", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response('event: response.created\n\ndata: {"ok": true}\n\n', {
-        headers: { "content-type": "text/event-stream" },
-      }),
-      finalUrl: "https://api.openai.com/v1/responses",
-      release: vi.fn(async () => undefined),
-    });
-    const model = makeProviderModelFixture<"openai-responses">({
-      id: "gpt-5.5",
-      provider: "openai",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-    });
-    const body = JSON.stringify({ model: "gpt-5.5", stream: true });
-    const parse = vi.spyOn(JSON, "parse");
-
-    const response = await buildGuardedModelFetch(model)("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body,
-    });
-
-    expect(parse).not.toHaveBeenCalled();
-    parse.mockRestore();
-    await expect(response.text()).resolves.toBe(
-      'event: response.created\n\ndata: {"ok": true}\n\n',
-    );
-  });
-
-  it("drops whitespace-only SSE data frames with CRLF delimiters", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response('event: message\r\ndata:   \r\n\r\ndata: {"ok": true}\r\n\r\n', {
-        headers: { "content-type": "text/event-stream" },
-      }),
-      finalUrl: "https://api.openai.com/v1/chat/completions",
-      release: vi.fn(async () => undefined),
-    });
-    const model = makeProviderModelFixture<"openai-completions">({
-      id: "gpt-5.4",
-      provider: "openrouter",
-      api: "openai-completions",
-      baseUrl: "https://openrouter.ai/api/v1",
-    });
-
-    const response = await buildGuardedModelFetch(model)(
-      "https://openrouter.ai/api/v1/chat/completions",
-      { method: "POST" },
-    );
-    const items = [];
-    for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
-      items.push(item);
-    }
-
-    expect(items).toEqual([{ ok: true }]);
   });
 
   it("continues reading until split SSE frames produce a parser-visible event", async () => {
@@ -1973,11 +1706,14 @@ describe("buildGuardedModelFetch", () => {
       expect(response.headers.get("x-should-retry")).toBe("false");
     });
 
-    it("parses retry-after-ms from OpenAI-compatible responses", async () => {
+    it.each<Record<string, string>>([
+      { "retry-after-ms": "90000" },
+      { "retry-after": "90", "retry-after-ms": "335" },
+    ])("caps SDK retries using both response floors: %j", async (headers) => {
       fetchWithSsrFGuardMock.mockResolvedValue({
         response: new Response(null, {
           status: 429,
-          headers: { "retry-after-ms": "90000" },
+          headers,
         }),
         finalUrl: "https://api.openai.com/v1/responses",
         release: vi.fn(async () => undefined),

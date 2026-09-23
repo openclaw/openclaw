@@ -1,17 +1,19 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
-  configureChannelAdmissionEvidenceCollection,
+  createChannelAdmissionAudit,
   consumeChannelAdmissionEvidence,
   readChannelContextAdmissionEvidence,
 } from "../channels/message-access/admission-evidence.js";
 import { importBundledChannelContractSourceArtifact } from "../channels/plugins/contracts/test-helpers/runtime-artifacts.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { runChannelInboundEvent } from "../plugin-sdk/channel-inbound.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import { markPluginRegistryActive, markPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createPluginRegistry } from "./registry.js";
+import { bindGatewayContextResolver } from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createPluginRecord } from "./status.test-helpers.js";
@@ -73,15 +75,15 @@ const transport = await vi.hoisted(async () => {
   return { ChatClient, createDeferred };
 });
 
-vi.mock("@twurple/chat", () => ({
-  ChatClient: transport.ChatClient,
-  LogLevel: { WARNING: "warning" },
-}));
-
 const { twitchPlugin, setTwitchRuntime } = await importBundledChannelContractSourceArtifact<{
   twitchPlugin: ChannelPlugin<unknown>;
   setTwitchRuntime: (runtime: PluginRuntime) => void;
-}>("twitch", "api.js");
+}>("twitch", "api.js", {
+  "@twurple/chat": () => ({
+    ChatClient: transport.ChatClient,
+    LogLevel: { WARNING: "warning" },
+  }),
+});
 
 type Policy = { allowFrom?: string[]; allowedRoles?: string[] };
 type EvidenceResult = ReturnType<typeof consumeChannelAdmissionEvidence>;
@@ -115,7 +117,13 @@ async function withTwitchMonitor(
     const evidence: EvidenceResult[] = [];
     const errors: string[] = [];
     const failure = transport.createDeferred<string>();
+    const audit = createChannelAdmissionAudit({ enabled: collectionEnabled });
+    const gateway = {
+      channelAdmissionAudit: audit,
+      getRuntimeConfig: () => cfg,
+    } as GatewayRequestContext;
     const runtime = createPluginRuntime();
+    bindGatewayContextResolver(runtime.subagent, () => gateway);
     runtime.channel.inbound.run = async (input) =>
       runChannelInboundEvent({
         ...input,
@@ -158,7 +166,6 @@ async function withTwitchMonitor(
     }
     setTwitchRuntime(api.runtime);
     const abort = new AbortController();
-    const cleanupCollection = configureChannelAdmissionEvidenceCollection(collectionEnabled);
     const ready = new Promise<InstanceType<typeof transport.ChatClient>>((resolve) => {
       transport.ChatClient.ready = resolve;
     });
@@ -212,7 +219,7 @@ async function withTwitchMonitor(
       await task;
       await stop(ctx);
       transport.ChatClient.ready = undefined;
-      cleanupCollection();
+      audit.close();
       markPluginRegistryRetired(builder.registry);
     }
   });

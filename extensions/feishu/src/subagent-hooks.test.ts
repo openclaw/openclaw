@@ -158,6 +158,53 @@ describe("feishu subagent hook handlers", () => {
     });
   });
 
+  it("keeps ambiguous requester topics unresolved unless the child has one route", async () => {
+    const { deliveryHandler, manager } = managedHookFixture();
+    const requesterSessionKey = "agent:main:requester";
+    const childSessionKey = "agent:main:subagent:child";
+    for (const sender of ["ou_a", "ou_b"]) {
+      manager.bindConversation({
+        conversationId: `oc_group:topic:om_topic:sender:${sender}`,
+        parentConversationId: "oc_group",
+        targetKind: "session",
+        targetSessionKey: requesterSessionKey,
+      });
+    }
+    for (const [chat, topic] of [
+      ["oc_group", "om_topic"],
+      ["oc_other", "om_other"],
+    ] as const) {
+      manager.bindConversation({
+        conversationId: `${chat}:topic:${topic}`,
+        parentConversationId: chat,
+        targetKind: "subagent",
+        targetSessionKey: childSessionKey,
+      });
+    }
+    const event = deliveryEvent({
+      childSessionKey,
+      requesterSessionKey,
+      requesterOrigin: {
+        channel: "feishu",
+        accountId: "work",
+        to: "chat:oc_group",
+        threadId: "om_topic",
+      },
+    });
+
+    await expect(deliveryHandler(event, {})).resolves.toBeUndefined();
+
+    manager.unbindConversation("oc_other:topic:om_other");
+    await expect(deliveryHandler(event, {})).resolves.toEqual({
+      origin: {
+        channel: "feishu",
+        accountId: "work",
+        to: "chat:oc_group",
+        threadId: "om_topic",
+      },
+    });
+  });
+
   it("removes bound routes on subagent_ended", async () => {
     const { deliveryHandler, endedHandler, manager } = managedHookFixture();
     manager.bindConversation({

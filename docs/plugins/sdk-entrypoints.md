@@ -12,526 +12,32 @@ Every plugin exports a default entry object. The SDK provides a helper for
 each entry shape: `defineToolPlugin`, `definePluginEntry`,
 `defineChannelPluginEntry`, `defineSetupPluginEntry`.
 
+All plugin APIs are [experimental](/plugins/sdk-overview#api-stability),
+including these entry helpers. Pin and test the OpenClaw host versions your
+plugin supports.
+
 <Tip>
   **Looking for a walkthrough?** See [Tool Plugins](/plugins/tool-plugins),
   [Channel Plugins](/plugins/sdk-channel-plugins), or
   [Provider Plugins](/plugins/sdk-provider-plugins) for step-by-step guides.
 </Tip>
 
-## Package entries
-
-Installed plugins point `package.json` `openclaw` fields at both source and
-built entries:
-
-```json
-{
-  "openclaw": {
-    "extensions": ["./src/index.ts"],
-    "runtimeExtensions": ["./dist/index.js"],
-    "setupEntry": "./src/setup-entry.ts",
-    "runtimeSetupEntry": "./dist/setup-entry.js"
-  }
-}
-```
-
-- `extensions` and `setupEntry` are source entries, used for workspace and git
-  checkout development.
-- `runtimeExtensions` and `runtimeSetupEntry` select the built entries instead
-  of the corresponding source entries.
-- `runtimeExtensions`, when present, must match `extensions` in array length
-  (entries pair positionally). `runtimeSetupEntry` requires `setupEntry`.
-- If a `runtimeExtensions`/`runtimeSetupEntry` artifact is declared but
-  missing, installation fails and discovery reports a packaging error for that
-  entry; OpenClaw does not silently fall back to source.
-- Without an explicit runtime entry, package discovery through
-  `plugins.load.paths` or global roots looks for matching JavaScript peers under
-  `dist/` first, then beside the TypeScript source entry. For `src/` entries,
-  it checks both flattened `dist/` output and output retaining `dist/src/`.
-  At each location, `.mts` prefers `.mjs` and `.cts` prefers `.cjs`; `.ts` and
-  `.tsx` try `.js`, `.mjs`, then `.cjs`. Installation, discovery, setup, runtime
-  loading, and published-package verification use the same candidate order.
-- A `plugins.load.paths` entry that resolves inside the host's own bundled
-  plugin tree is discovered as that bundled plugin, so it keeps the bundled
-  entry point and bundled provenance whether or not compiled output exists
-  beside the source. Selecting a bundled plugin's own path never reclassifies it.
-- Package installation and managed installed-package discovery require compiled
-  output for TypeScript extension and setup entries. Missing compiled output is
-  a packaging error, not a reason to fall back to TypeScript.
-- Trusted local/source development paths can use TypeScript when no runtime
-  entry is declared. These include workspace plugins, explicit local load paths,
-  untracked local plugin directories, and linked source checkouts. Workspace
-  discovery keeps the source entry rather than inferring built peers.
-- All entry paths must stay inside the plugin package directory. Runtime
-  entries and inferred built-JS peers do not make an escaping `extensions` or
-  `setupEntry` source path valid.
-
-## `defineToolPlugin`
-
-**Import:** `openclaw/plugin-sdk/tool-plugin`
-
-For plugins that only add agent tools. Keeps the source small, infers config
-and tool-parameter types from TypeBox schemas, wraps plain return values in
-the OpenClaw tool-result format, and exposes static metadata that
-`openclaw plugins build` writes into the plugin manifest (`contracts.tools`,
-`configSchema`).
-
-```typescript
-import { Type } from "typebox";
-import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
-
-export default defineToolPlugin({
-  id: "stock-quotes",
-  name: "Stock Quotes",
-  description: "Fetch stock quotes.",
-  configSchema: Type.Object({
-    apiKey: Type.Optional(Type.String({ description: "API key." })),
-  }),
-  tools: (tool) => [
-    tool({
-      name: "quote",
-      label: "Quote",
-      description: "Fetch a quote.",
-      parameters: Type.Object({
-        symbol: Type.String({ description: "Ticker symbol." }),
-      }),
-      outputSchema: Type.Object(
-        {
-          symbol: Type.String(),
-          hasKey: Type.Boolean(),
-        },
-        { additionalProperties: false },
-      ),
-      execute: async ({ symbol }, config) => ({ symbol, hasKey: Boolean(config.apiKey) }),
-    }),
-  ],
-});
-```
-
-- `configSchema` is optional; omitting it uses a strict empty object schema
-  (the generated manifest still includes `configSchema`).
-- `execute` returns a plain string or JSON-serializable value; the helper
-  wraps it as a text tool result with `details` set to the original
-  (unstringified) return value.
-- `outputSchema` optionally describes that original `details` value for Code
-  Mode and Tool Search. Catalog calls reject an invalid schema before execution
-  and validate the final value before returning it.
-- For custom tool results, `openclaw/plugin-sdk/tool-results` exports
-  `textResult` and `jsonResult`.
-- Tool names are static, so `openclaw plugins build` derives
-  `contracts.tools` from the declared tools without hand-duplicated names.
-- Runtime loading stays strict: installed plugins still need
-  `openclaw.plugin.json` and `package.json` `openclaw.extensions`. OpenClaw
-  never executes plugin code to infer missing manifest data.
-
-## `definePluginEntry`
-
-**Import:** `openclaw/plugin-sdk/plugin-entry`
-
-For provider plugins, advanced tool plugins, hook plugins, and anything that
-is **not** a messaging channel.
-
-```typescript
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-
-export default definePluginEntry({
-  id: "my-plugin",
-  name: "My Plugin",
-  description: "Short summary",
-  register(api) {
-    api.registerProvider({/* ... */});
-    api.registerTool({/* ... */});
-  },
-});
-```
-
-| Field                     | Type                                                             | Required | Default             |
-| ------------------------- | ---------------------------------------------------------------- | -------- | ------------------- |
-| `id`                      | `string`                                                         | Yes      | -                   |
-| `name`                    | `string`                                                         | Yes      | -                   |
-| `description`             | `string`                                                         | Yes      | -                   |
-| `kind`                    | `string` (deprecated, see below)                                 | No       | -                   |
-| `configSchema`            | `OpenClawPluginConfigSchema \| () => OpenClawPluginConfigSchema` | No       | Empty object schema |
-| `reload`                  | `OpenClawPluginReloadRegistration`                               | No       | -                   |
-| `nodeHostCommands`        | `OpenClawPluginNodeHostCommand[]`                                | No       | -                   |
-| `securityAuditCollectors` | `OpenClawPluginSecurityAuditCollector[]`                         | No       | -                   |
-| `register`                | `(api: OpenClawPluginApi) => void`                               | Yes      | -                   |
-
-- `id` must match your `openclaw.plugin.json` manifest.
-- External session catalogs use
-  `openclaw/plugin-sdk/session-catalog` and register a
-  `SessionCatalogProvider` with `api.registerSessionCatalog(...)`. Required
-  provider fields are `id`, `label`, `list`, and `read`; optional hooks are
-  `resolveCreateSession`, `continueSession`, `checkUpstreamActivity`, `archive`,
-  `openTerminal`, and `startTerminalSession`. Core owns the
-  `sessions.catalog.*` Gateway methods; providers return host, session,
-  transcript, and terminal-plan projections without registering RPCs. A list
-  provider should call the optional
-  `onHost(host)` callback as each host settles; the returned host array remains
-  required as the final compatibility snapshot.
-
-  Transcript items may include a `sender` with a qualified `SessionParticipant`
-  identity and optional display label or avatar. Supply only source-known
-  attribution; the viewer and the session adopter are not transcript authors.
-  Core resolves profile identities against current profile data, including merges.
-  User items without attribution display as **User**.
-
-  Native source titles are presentation, not unique session labels. When adopting
-  a new source, pass its title as `displayName` to the owner-authorized
-  [session creator](/plugins/sdk-runtime); the host bounds and stores that snapshot
-  with the new row. Keep source identity independent of naming, preserve existing
-  labels and snapshots on reuse or recovery, and do not resync native renames.
-
-  A provider may declare one readable transcript route with `shareRoute`. This
-  is a closed contract, not a free-form routing hint:
-
-  ```ts
-  const shareRoute = {
-    kind: "thread-id-prefix",
-    routeSegment: "my-sessions",
-    hostId: "gateway",
-    identifierAlphabet: "lowercase-hex",
-    fullLength: 32,
-    minPrefixLength: 12,
-    lookup: "catalog-list-search-by-thread-id-prefix",
-    ambiguity: "multiple-results-or-next-cursor",
-  } as const;
-  ```
-
-  The provider must return lowercase hexadecimal `threadId` values of exactly
-  32 characters on the declared host. When `list(...)` receives a `search`
-  value that is a valid 12-32 character prefix, that host must return only rows
-  whose `threadId` starts with the prefix. Return every match up to the requested
-  limit and set `nextCursor` when more may exist. The Control UI resolves only
-  one result with no next page; multiple rows or `nextCursor` are explicitly
-  ambiguous and never select the first row.
-
-  Named share links use `/<routeSegment>/<title-slug>-<id-prefix>` with the same
-  bounded slug as regular session links. Return the title in the catalog row's
-  `name`; the Control UI uses it to refresh the decorative slug. Only the id
-  suffix selects the transcript. Bare-id and stale-title links remain valid,
-  and titles never resolve an ambiguous id.
-
-  `routeSegment` must not use the first segment of a built-in Control UI route
-  or alias, and it must be unique across active session catalogs. Invalid,
-  unsupported, reserved, or multiply owned descriptors fail closed; catalog
-  sessions remain available through the generic
-  `/chat/<agent>?catalog=...&host=...&thread=...` URL. The shared session URL
-  contract owns the built-in reservation decision: its share-path builder
-  returns `null` for reserved segments, and the Gateway omits reserved
-  descriptors before publishing catalogs. Keep one plugin-owned descriptor
-  constant and reuse it for registration, prefix lookup, and URL generation so
-  those obligations cannot drift.
-
-  CLI-backed catalogs that expose the same local-plus-paired-node shape can use
-  `createSessionCatalogFamily(...)`. The family composer owns canonical cursor
-  validation, node payload validation, host projection, adopted-session
-  projection, per-host publication, read routing, single-flight continuation
-  per resolved agent and source, and terminal plan routing. Different agents
-  do not share in-flight adoption results; adopted-source lookup keys remain
-  host/thread pairs. The provider must supply its local store reads,
-  identifiers and commands, error text, capability projection, continuation
-  availability and persistence operations, upstream-activity check, and terminal
-  executable/arguments. There are no default continuation, capability-mutation,
-  or terminal authorities. Use `createSessionCatalogNodeHostBindings(...)` to
-  build the matching list/read/terminal node commands and terminal-only invoke
-  policy from those explicit provider inputs.
-
-  The same entrypoint exports `sessionCatalogPaging`, which groups the bounded
-  list/read parameter parsers, canonical base64url cursor codec, and bounded
-  UTF-8 transcript pager. Providers pass their own identifier pattern and
-  validation messages into `parseReadParams(...)` and `parseListParams(...)`.
-
-  `resolveCreateSession({ agentId })` must return a config-derived model/runtime
-  target before OpenClaw advertises creation or calls `startTerminalSession`.
-  Use
-  [`api.runtime.agent.resolveSessionCatalogCreateTarget(...)`](/plugins/sdk-runtime#api-runtime-agent)
-  to apply the host's runtime and model-allowlist policy instead of duplicating
-  it.
-
-  `startTerminalSession({ agentId, cwd, initialMessage?, nodeId? })` creates a
-  fresh CLI terminal plan. Return either a local plan (`kind: "local"`, `argv`,
-  and the exact `cwd`, plus optional `env`, `pathEnv`, and `title`) or a paired-node
-  plan (`kind: "node"`, `nodeId`, `command`, `paramsJSON`, and the exact `cwd`).
-  The `sessions.catalog.startTerminal` RPC requires `operator.admin` plus
-  `gateway.cliAgents.enabled` and `gateway.terminal.enabled`. The caller
-  provisions `cwd`; the Gateway requires an existing absolute local directory,
-  rejects a changed plan cwd or host, and applies the normal agent-sandbox,
-  node-pairing, deadline, and connection-ownership checks before opening the
-  PTY.
-
-- `kind` is deprecated: declare an exclusive slot (`"memory"` or
-  `"context-engine"`) in the `openclaw.plugin.json` manifest `kind` field
-  instead. Runtime-entry `kind` remains only as a compatibility fallback for
-  older plugins.
-- `configSchema` can be a function for lazy evaluation. OpenClaw resolves and
-  memoizes the schema on first access, so expensive schema builders only run
-  once.
-- A `nodeHostCommands` descriptor can define `isAvailable({ config, env })`.
-  Returning `false` omits that command and its capability from the headless
-  node's Gateway declaration. OpenClaw evaluates it against the node-local
-  startup config; command handlers should still validate availability when
-  invoked.
-
-### Computer Use providers
-
-**Import:** `openclaw/plugin-sdk/computer-use`
-
-Node-local Computer Use plugins register one provider through
-`registerComputerUseProvider(api, provider)`. The helper owns the
-`screen.snapshot` and dangerous `computer.act` command registrations and the
-matching Gateway invoke policy; the provider owns availability, execution,
-serialization, frame state, driver lifecycle, and cleanup.
-
-The same entry point exports the canonical TypeBox schemas, static types, and
-compiled validators for the two command payloads and the snapshot result. A
-node host accepts one provider for the command pair; registering another
-provider conflicts with the existing command registration instead of creating
-a fallback stack.
-
-## `defineChannelPluginEntry`
-
-**Import:** `openclaw/plugin-sdk/channel-core`
-
-Wraps `definePluginEntry` with channel-specific wiring: it automatically
-calls `api.registerChannel({ plugin })`, exposes an optional root-help CLI
-metadata seam, and gates capability and full-runtime callbacks on registration
-mode.
-
-```typescript
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
-
-export default defineChannelPluginEntry({
-  id: "my-channel",
-  name: "My Channel",
-  description: "Short summary",
-  plugin: myChannelPlugin,
-  setRuntime: setMyRuntime,
-  registerCliMetadata(api) {
-    api.registerCli(/* ... */);
-  },
-  registerFull(api) {
-    api.registerGatewayMethod(/* ... */);
-  },
-  registerCapabilities(api) {
-    api.registerTranscriptSourceProvider(/* ... */);
-  },
-});
-```
-
-| Field                  | Type                                                             | Required | Default             |
-| ---------------------- | ---------------------------------------------------------------- | -------- | ------------------- |
-| `id`                   | `string`                                                         | Yes      | -                   |
-| `name`                 | `string`                                                         | Yes      | -                   |
-| `description`          | `string`                                                         | Yes      | -                   |
-| `plugin`               | `ChannelPlugin`                                                  | Yes      | -                   |
-| `configSchema`         | `OpenClawPluginConfigSchema \| () => OpenClawPluginConfigSchema` | No       | Empty object schema |
-| `setRuntime`           | `(runtime: PluginRuntime) => void`                               | No       | -                   |
-| `registerCliMetadata`  | `(api: OpenClawPluginApi) => void`                               | No       | -                   |
-| `registerFull`         | `(api: OpenClawPluginApi) => void`                               | No       | -                   |
-| `registerCapabilities` | `(api: OpenClawPluginApi) => void`                               | No       | -                   |
-
-Callbacks run per registration mode (full table under
-[Registration mode](#registration-mode)):
-
-- `setRuntime` runs in every mode except `"cli-metadata"` and
-  `"tool-discovery"`. Store the runtime reference here, typically via
-  `createPluginRuntimeStore`.
-- `registerCliMetadata` runs for `"cli-metadata"`, `"discovery"`, and
-  `"full"`. Use it as the canonical place for channel-owned CLI descriptors
-  so root help stays non-activating, discovery snapshots include static
-  command metadata, and normal CLI registration stays compatible with full
-  plugin loads.
-- `registerFull` runs only for `"full"` and `"tool-discovery"`. For
-  `"tool-discovery"` it runs _instead of_ channel registration: OpenClaw
-  skips `registerChannel`/`setRuntime` entirely and calls the full-runtime
-  callback followed by the capability callback. Keep tool registration in
-  `registerFull` and capability providers in `registerCapabilities`.
-- `registerCapabilities` runs for `"discovery"`, `"full"`, and
-  `"tool-discovery"`. Register inert advertised providers here so read-only
-  capability discovery can find them without starting sockets, clients,
-  workers, or services.
-- Discovery registration is non-activating, not import-free: OpenClaw may
-  evaluate the trusted plugin entry and channel plugin module to build the
-  snapshot. Keep top-level imports side-effect-free and put sockets,
-  clients, workers, and services behind `"full"`-only paths.
-- Like `definePluginEntry`, `configSchema` can be a lazy factory; OpenClaw
-  memoizes the resolved schema on first access.
-
-CLI registration:
-
-- Use `api.registerCli(..., { descriptors: [...] })` for plugin-owned root
-  CLI commands you want lazy-loaded without disappearing from the root CLI
-  parse tree. Descriptor names must match letters, numbers, hyphen, and
-  underscore, starting with a letter or number; OpenClaw rejects other
-  shapes and strips terminal control sequences from descriptions before
-  rendering help. Cover every top-level command root the registrar exposes,
-  and declare the same name, description, and subcommand marker in the
-  plugin manifest's `cliCommands` field so root help does not import plugin code.
-  `commands` alone stays on the eager compatibility path.
-- Root descriptors may define a synchronous, pure
-  `machineOutput({ argv, stdoutIsTTY })` resolver for JSON, JSONL, or other
-  machine-readable stdout modes that are not selected solely by `--json`.
-  Parse command tokens with `getRootOptionAwareCommandPath` from
-  `openclaw/plugin-sdk/cli-argv`. Keep the descriptor in a lightweight
-  plugin-local module and reuse it from both `cli-metadata.ts` and full
-  registration; do not import runtime barrels to construct metadata.
-  Meeting runtime shells accept that descriptor through `cli.descriptor`.
-  Nested descriptors do not expose `machineOutput`.
-- Use `api.registerNodeCliFeature(...)` for paired-node feature commands so
-  they land under `openclaw nodes` (equivalent to
-  `registerCli(registrar, { parentPath: ["nodes"], ... })`).
-- For other nested plugin commands, add `parentPath` and register commands
-  on the `program` object passed to the registrar; OpenClaw resolves it to
-  the parent command before calling the plugin.
-- For channel plugins, register CLI descriptors from `registerCliMetadata`
-  and keep `registerFull` focused on runtime-only work.
-- If `registerFull` also registers gateway RPC methods, keep them on a
-  plugin-specific prefix. Reserved core admin namespaces (`config.*`,
-  `exec.approvals.*`, `wizard.*`, `update.*`) always coerce to
-  `operator.admin`.
-
-## `defineSetupPluginEntry`
-
-**Import:** `openclaw/plugin-sdk/channel-core`
-
-For the lightweight `setup-entry.ts` file. Returns just `{ plugin }` with no
-runtime or CLI wiring.
-
-```typescript
-import { defineSetupPluginEntry } from "openclaw/plugin-sdk/channel-core";
-
-export default defineSetupPluginEntry(myChannelPlugin);
-```
-
-OpenClaw loads this instead of the full entry when a channel is disabled or
-unconfigured. See
-[Setup and Config](/plugins/sdk-setup#setup-entry) for when this matters.
-
-Pair `defineSetupPluginEntry(...)` with the narrow setup helper families:
-
-| Import                                  | Use for                                                                                                                                                                            |
-| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `openclaw/plugin-sdk/setup-runtime`     | Runtime-safe setup helpers: `createSetupTranslator`, import-safe setup patch adapters, lookup-note output, `promptResolvedAllowFrom`, `splitSetupEntries`, delegated setup proxies |
-| `openclaw/plugin-sdk/channel-setup`     | Optional-install setup surfaces                                                                                                                                                    |
-| `openclaw/plugin-sdk/channel-dm-policy` | Account-aware DM policy descriptors for setup flows                                                                                                                                |
-| `openclaw/plugin-sdk/setup-tools`       | Setup/install CLI, archive, and docs helpers                                                                                                                                       |
-| `openclaw/plugin-sdk/archive`           | Bounded archive extraction and single-entry reads                                                                                                                                  |
-| `openclaw/plugin-sdk/root-walk`         | Budgeted, root-bounded directory walking                                                                                                                                           |
-| `openclaw/plugin-sdk/secret-file`       | Pinned secret reads and first-writer-wins creation                                                                                                                                 |
-
-Keep heavy SDKs, CLI registration, and long-lived runtime services in the
-full entry.
-
-Bundled workspace channels that split setup and runtime surfaces can use
-`defineBundledChannelSetupEntry(...)` from
-`openclaw/plugin-sdk/channel-entry-contract` instead. It lets the setup
-entry keep setup-safe plugin/secrets exports while still exposing a runtime
-setter:
-
-```typescript
-import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entry-contract";
-
-export default defineBundledChannelSetupEntry({
-  importMetaUrl: import.meta.url,
-  plugin: {
-    specifier: "./channel-plugin-api.js",
-    exportName: "myChannelPlugin",
-  },
-  runtime: {
-    specifier: "./runtime-api.js",
-    exportName: "setMyChannelRuntime",
-  },
-  registerSetupRuntime(api) {
-    api.registerHttpRoute({
-      path: "/my-channel/events",
-      auth: "plugin",
-      handler: async (req, res) => {
-        /* setup-safe route */
-      },
-    });
-  },
-});
-```
-
-Use this only when a setup flow truly needs a lightweight runtime setter or
-setup-safe gateway surface for an unconfigured channel.
-`registerSetupRuntime` runs only for `"setup-runtime"` loads; keep it
-limited to config-only routes or methods required by that setup flow.
-
-## Registration mode
-
-`api.registrationMode` tells your plugin how it was loaded:
-
-| Mode               | When                                               | Runtime     | What to register                                                                                                |
-| ------------------ | -------------------------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------- |
-| `"full"`           | Normal gateway startup                             | Live        | Everything                                                                                                      |
-| `"discovery"`      | Read-only capability discovery                     | Live        | Channel registration, static CLI descriptors, and inert providers; skip sockets, workers, clients, and services |
-| `"tool-discovery"` | Scoped load to list or run specific plugins' tools | Live        | Capability/tool registration only; no channel activation                                                        |
-| `"setup-only"`     | Disabled/unconfigured channel                      | Unavailable | Channel registration only                                                                                       |
-| `"setup-runtime"`  | Setup flow with runtime available                  | Live        | Channel registration plus only the lightweight runtime needed during setup                                      |
-| `"cli-metadata"`   | Root help / CLI metadata capture                   | Unavailable | CLI descriptors only                                                                                            |
-
-In `"cli-metadata"` and `"setup-only"` modes, accessing a runtime capability throws an error naming the plugin and mode. Defer runtime access out of `register()` or declare root commands in the manifest's `cliCommands` so CLI metadata can be collected without executing the plugin.
-
-`defineChannelPluginEntry` handles this split automatically. If you use
-`definePluginEntry` directly for a channel, check mode yourself and remember
-`"tool-discovery"` skips channel registration:
-
-```typescript
-register(api) {
-  if (
-    api.registrationMode === "cli-metadata" ||
-    api.registrationMode === "discovery" ||
-    api.registrationMode === "full"
-  ) {
-    api.registerCli(/* ... */);
-    if (api.registrationMode === "cli-metadata") return;
-  }
-
-  if (api.registrationMode === "tool-discovery") {
-    // Register capability-only surfaces (providers/tools), no channel.
-    return;
-  }
-
-  api.registerChannel({ plugin: myPlugin });
-  if (api.registrationMode !== "full") return;
-
-  // Heavy runtime-only registrations
-  api.registerService(/* ... */);
-}
-```
-
-Long-lived services may emit small invalidation or lifecycle events through
-their service context:
-
-```typescript
-api.registerService({
-  id: "index-events",
-  start(ctx) {
-    ctx.gatewayEvents?.emit("changed", { revision: 1 }, { scope: "operator.read" });
-  },
-});
-```
-
-OpenClaw namespaces this as `plugin.<plugin-id>.changed`. Event names are one
-lowercase segment, payloads must be bounded JSON, and the scope must be
-`operator.read`, `operator.write`, or `operator.admin`. The emitter exists only
-for the service lifetime and is revoked after stop or failed start. Prefer
-version or invalidation payloads over full records so authorized clients reread
-canonical state through the plugin's scoped Gateway methods.
-
-Discovery mode builds a non-activating registry snapshot. It may still
-evaluate the plugin entry and the channel plugin object so OpenClaw can
-register channel capabilities and static CLI descriptors. Treat module
-evaluation in discovery as trusted but lightweight: no network clients,
-subprocesses, listeners, database connections, background workers,
-credential reads, or other live runtime side effects at top level.
-
-Treat `"setup-runtime"` as the window where setup-only startup surfaces must
-exist without re-entering the full bundled channel runtime. Good fits are
-channel registration, setup-safe HTTP routes, setup-safe gateway methods,
-and delegated setup helpers. Heavy background services, CLI registrars, and
-provider/client SDK bootstraps still belong in `"full"`.
+## Where each section moved
+
+Every section of the single-page version now lives on this page or on one of
+the eight child pages below. The anchors from the single-page version still
+resolve here.
+
+- <a id="tool-policy-vocabulary" />[Tool policy vocabulary](/plugins/sdk-entrypoints/tool-policy-and-sandbox#tool-policy-vocabulary)
+- <a id="sandbox-bind-parsing" />[Sandbox bind parsing](/plugins/sdk-entrypoints/tool-policy-and-sandbox#sandbox-bind-parsing)
+- <a id="package-entries" />[Package entries](/plugins/sdk-entrypoints/package-entries#package-entries)
+- <a id="definetoolplugin" />[defineToolPlugin](/plugins/sdk-entrypoints/define-tool-plugin#definetoolplugin)
+- <a id="definepluginentry" />[definePluginEntry](/plugins/sdk-entrypoints/define-plugin-entry#definepluginentry)
+- <a id="native-provider-factories" />[Native provider factories](/plugins/sdk-entrypoints/native-providers#native-provider-factories)
+- <a id="computer-use-providers" />[Computer Use providers](/plugins/sdk-entrypoints/native-providers#computer-use-providers)
+- <a id="definechannelpluginentry" />[defineChannelPluginEntry](/plugins/sdk-entrypoints/define-channel-plugin-entry#definechannelpluginentry)
+- <a id="definesetuppluginentry" />[defineSetupPluginEntry](/plugins/sdk-entrypoints/define-setup-plugin-entry#definesetuppluginentry)
+- <a id="registration-mode" />[Registration mode](/plugins/sdk-entrypoints/registration-mode#registration-mode)
 
 ## Plugin shapes
 
@@ -548,8 +54,180 @@ Use `openclaw plugins inspect <id>` to see a plugin's shape.
 
 ## Related
 
-- [SDK Overview](/plugins/sdk-overview) - registration API and subpath reference
-- [Runtime Helpers](/plugins/sdk-runtime) - `api.runtime` and `createPluginRuntimeStore`
-- [Setup and Config](/plugins/sdk-setup) - manifest and setup entry loading
-- [Channel Plugins](/plugins/sdk-channel-plugins) - building the `ChannelPlugin` object
-- [Provider Plugins](/plugins/sdk-provider-plugins) - provider registration and hooks
+- [Plugin SDK overview](/plugins/sdk-overview) - registration API and subpath reference
+- [Plugin runtime helpers](/plugins/sdk-runtime) - `api.runtime` and `createPluginRuntimeStore`
+- [Plugin setup and config](/plugins/sdk-setup) - manifest and setup entry loading
+- [Building channel plugins](/plugins/sdk-channel-plugins) - building the `ChannelPlugin` object
+- [Building provider plugins](/plugins/sdk-provider-plugins) - provider registration and hooks
+- [Decision models](/plugins/sdk-overview/capabilities#decision-models-contract-version-1) - `openclaw/plugin-sdk/decisions` and the typed decision provider contract
+
+## Code Mode executor runtime
+
+Use `openclaw/plugin-sdk/code-mode-executor-runtime` to implement the `quickjs`
+executor choice. Code Mode has two selectable IDs: `node`, owned by core, and
+`quickjs`, supplied by an executor plugin. The plugin's installation ID can
+differ from its executor ID. Declare `quickjs` in `contracts.codeModeExecutors`
+and export `codeModeExecutor` from the plugin's top-level `code-mode-executor-api`
+artifact. The host resolves this artifact only when QuickJS is selected;
+ordinary plugin registration remains lightweight.
+
+Selected bundled executors preserve core runtime availability despite global
+plugin disablement or a restrictive allowlist. Explicit owner denies and
+disabled entries still apply. External executors retain the full plugin policy.
+
+`CodeModeExecutor.execute(input, options)` receives the guest source,
+tool declarations, namespace descriptors, resource limits, and a scoped host
+bridge. Return a bounded completion or failure, or a waiting result containing
+an executor-owned `CodeModeExecutorContinuation`. Its `resume` method transfers
+custody once, `retainedBytes` reports a diagnostic size estimate, and `dispose` joins
+cleanup and keeps failed cleanup retryable. Disposing an already consumed continuation has no effect. The selected
+executor stays attached to the continuation across configuration changes.
+
+The SDK supplies the common guest controller, source preparation, result
+capture, bounded error text, and worker protocol types. Executors own their
+engine and suspended state. Core owns permissions, approvals, tool dispatch,
+settlement receipts, output delivery, expiry, and cancellation. Missing or
+disabled executors fail explicitly; the host never substitutes a less isolated
+executor.
+
+## MCP subprocess runtime
+
+**Import:** `mcpStdioRuntime` from `openclaw/plugin-sdk/agent-harness-runtime` using dynamic `import()` when opening a connection. Its frozen object lazily loads one factory:
+
+```ts
+const { mcpStdioRuntime } = await import("openclaw/plugin-sdk/agent-harness-runtime");
+const { createMcpStdioClient } = await mcpStdioRuntime.load();
+```
+
+Use `createMcpStdioClient(params)` for a caller-owned MCP proxy subprocess fronting a stateful driver. OpenClaw owns the subprocess and its descendants, newline framing and JSON-RPC validation, initialization, request admission, deadlines, and shutdown. The client starts connecting when the factory returns. Keep this runtime out of plugin registration and paths that do not open MCP connections.
+
+Supply `command`, optional `args`, and an exact `env`. The child inherits no other environment variables. Set `clientInfo` (`name` and `version`), the required `protocolVersion`, `startupTimeoutMs`, `maxPendingRequests`, and `maxFrameBytes`. The server must return exactly the requested protocol version. OpenClaw retains a fixed 32 KiB stderr tail for unexpected-exit diagnostics. The decoder bounds pending bytes plus each incoming chunk before buffering, preserves fragmented UTF-8, skips empty lines, and requires safe integer response IDs.
+
+The caller supplies `errors.unavailable(message, cause?)` and `errors.protocol(message, cause?)`, each returning an `Error`. The first classifies process, lifecycle, admission, deadline, and cancellation failures. The second classifies malformed frames, non-timeout JSON-RPC errors, and handshake contract violations. Plugin-specific tool-result normalization stays with the caller.
+
+The returned client exposes three methods:
+
+- `isAvailable()` synchronously reports whether initialization completed and the connection remains usable.
+- `request(method, params, { timeoutMs, signal? })` waits for startup and returns the object result. An already-aborted signal or a full pending-request limit rejects only that call. After admission, cancellation or timeout retires the entire connection and rejects pending requests with the retained fatal error. The client suppresses SDK cancellation notifications because it terminates the process instead. A non-timeout JSON-RPC error response rejects only its matching request through `errors.protocol`.
+- `stop()` closes admission, retires pending requests, and awaits startup settlement and owned-process cleanup. It rejects through `errors.unavailable` with `proxy cleanup could not be confirmed` if cleanup is uncertain. It never stops a separately started service reached through the proxy's socket.
+
+After successful `stop()`, the optional read-only `cleanupResult` records forced relay retirement: `reason: "forced-relay-exit"`, `signalRequested`, the observed relay `exit` code and signal, `durationMs`, and `escalationAfterMs`. It retains `signalError` when signal delivery reported failure but exit was subsequently confirmed. It is absent for ordinary cleanup. Closed control/output/lineage pipes and a matching closing receipt admit escalation; pending force requests are reconsidered as closure and group-exit facts arrive. A live anchor is killed and reaped through its relay. Confirmed anchor-group absence permits direct native termination of an unresponsive relay. Actual relay exit and server-group disappearance must then be confirmed within the original hard deadline. Uncertain cleanup retains missing closure facts and timing or signal-delivery details in the error's cause chain.
+
+Malformed frames, incompatible initialization, write failures, and unexpected process exit also retire the whole connection. The first fatal error is retained. Create a new client to reconnect. Timeout classification follows the SDK error code, so a timeout-coded server error also retires the connection.
+
+## Workspace access
+
+Use `openclaw/plugin-sdk/agent-workspace-runtime` to declare, register, and acquire
+`AgentWorkspaceAccess` without loading the agent execution runtime. Declare a
+configured remote workspace during registration so callers cannot fall back to
+local files before its service starts. Register its bridge when ready and release
+it when the service stops. Callers keep their existing document authorization.
+
+`createWorkspaceBootstrapFilePolicy({ workspaceDir, config })` lets adapters
+restrict this bridge to native bootstrap documents and the configured
+`bootstrap-extra-files` patterns. Check `canList` for directory metadata,
+`canRead` for file bytes, and `canWrite` for the four owner-editable documents.
+Directory access does not grant reads of other files. The underlying bridge
+still enforces filesystem containment and returns the read's canonical source.
+
+Workspace access that has not started or has stopped throws
+`WorkspaceAccessUnavailableError`. Use `isWorkspaceAccessUnavailableError(error)`
+to recognize this condition through wrapped errors or separate SDK instances.
+The error code is `WORKSPACE_ACCESS_UNAVAILABLE`; do not match message text.
+
+The optional `memoryFiles` provider keeps workspace Memory files on the host while
+the native index, embedding providers and original sessions stay on Gateway. It
+supplies discovery, file inspection, reads and change notifications. Both indexing
+and `memory_get` use it; index publication rechecks the host file. The canonical
+source returned with a read supplies provenance, without resolving a stale Gateway
+copy. Stopping the workspace binding revokes retained file access and subscriptions.
+The Memory file worker supports `--files <workspace>` for native file
+operations without opening a host index or receiving embedding credentials. A
+provider can invoke it through its existing subprocess transport.
+`createWorkspaceMemoryFileClient` maps Gateway/host paths and preserves native
+errors for this worker. Supply `request` for one JSON exchange and `subscribe`
+for the `--watch-files` JSON-line stream, plus the binding's abort signal.
+Neither callback depends on Codex; providers own transport and authorization.
+
+`memoryFiles.maintenance` routes existing dreaming, promotion, corpus and forget
+file operations to the host. Compound writes reuse native atomic publication and
+conflict handling; maintenance decisions, locks and SQLite state stay on Gateway.
+A remote binding without maintenance support fails instead of using Gateway files.
+The file worker implements these operations and native change notifications.
+The paired-node file-transfer adapter connects these operations through the
+existing service-owned node channel and node file policy.
+
+Task-time Skill preparation uses remote discovery. Channel-native menus use
+Gateway-owned Skills without waiting for the Harness; remote menu support is
+tracked in [Enterprise #241](https://github.com/openclaw/openclaw-enterprise/issues/241).
+
+The optional `skillResources` provider handles Skill reads separately from Agent
+document access. Its `readInstructions` reads the selected instruction file for
+Code Mode; `readSkillFiles` supplies a bundle for worker delivery. Gateway-owned
+bundled, plugin, Library, Workshop and user-level sources keep their Gateway paths.
+Workspace-owned sources use the remote provider. Gateway preserves source precedence
+and uses existing resource delivery for workers. Discovery assigns file ownership; a provider cannot
+request Gateway-local reads by returning a source label or `fileHost` value.
+Stopping the binding revokes retained host readers.
+
+The Skills worker also runs install and ClawHub operations. Install/remove use
+an authenticated adapter's duplex channel so Gateway policy and mutation checks
+run before the native filesystem operation. The adapter admits source roots and
+uploads; the worker uses its host account's permissions.
+
+For a remote workspace, dependency installation uses `installSkillDependencies`.
+Gateway selects the recipe and runs install policy; the host runs the existing
+installer through the worker's `installDependencies` operation. Requests contain
+the Skill key, recipe, installation preferences and timeout. Recipe choices use
+the host's OS and binaries. Missing host support fails without installing on Gateway.
+File-inspecting Gateway policies receive a temporary tree from the existing Skill
+resource reader; Gateway-owned sources remain local. Resource bundle limits apply.
+
+`readWorkspaceSkillResources` lazily reuses the bounded native bundle reader.
+File-transfer adapters can check each file's requested and verified canonical paths
+before returning a bundle; admitting the Skill directory alone does not admit every child.
+
+Hosts can provide `watchSkills(request, onChange, signal)` to notify the existing
+snapshot cache when admitted Skill sources change. Keep the subscription alive
+until aborted, and send `change` after the initial scan and later edits. Send
+`unavailable` if file watching stops: preparation then refreshes on each call,
+without reopening the subscription. Hosts without `watchSkills` use that same
+fallback. `skills.load.watch: false` disables the subscription and this fallback.
+Gateway watches Workshop locally under the same snapshot invalidation lifecycle.
+
+The paired-node file-transfer adapter also connects Skill discovery, resource reads,
+watching and dependency installation through `workspace.skills`. Its native worker
+launcher uses `resolveWorkspaceWorkerArgv("memory" | "skills")` from
+`agent-workspace-runtime`, then appends the operation arguments. Use the same
+OpenClaw version on Gateway and node.
+
+This adapter does not implement remote Skill source install/update/remove or
+ClawHub lifecycle operations; those remain tracked in
+[Enterprise #242](https://github.com/openclaw/openclaw-enterprise/issues/242).
+
+## Tool failure diagnostics
+
+Agent harnesses can import `readToolOperatorHint(error)` from
+`openclaw/plugin-sdk/agent-harness-runtime` to read optional operator advice
+attached to a tool failure. Include it only in the operator log. Keep it out of
+model responses, tool-result callbacks, and serialized transcripts, and preserve
+the original error message. An unannotated or immutable error needs no substitute
+hint; the reader returns `undefined` when no advice is available.
+
+## ACP harness turns
+
+Pass optional `currentInboundContext` to `resolveAgentHarnessBeforePromptBuildResult` from
+`openclaw/plugin-sdk/agent-harness-runtime`. It combines the prompt with its inbound context
+and channel-provided joiner before prompt hooks run. Frame ordinary chat
+with prose section labels so a leading file path cannot become a native slash command. Keep
+one admitted user turn while assigning each provider attempt its own request and reply identity.
+
+Host `requestApproval` normalizes the title and description within the shared display bounds
+and preserves full action evidence in `detail`. Its response acknowledges the request with
+an ID. Call `waitForApproval` with
+that ID to obtain the decision, then recheck the turn's signal and authority before allowing
+the native operation.
+
+Use the plugin approval timeout independently of the agent-run timeout. Authenticated
+Control UI reviewers can inspect `detail`, while channel messages retain
+the bounded description. Oversized detail is rejected by the existing request schema.

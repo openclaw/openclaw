@@ -1,6 +1,12 @@
 // Tests bash command status replies and active-process cancellation.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  enqueueSystemEventEntry,
+  enqueueSystemEventWithReceipt,
+  peekSystemEventEntries,
+  resetSystemEventsForTest,
+} from "../../infra/system-events.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import type { MsgContext } from "../templating.js";
 
@@ -20,7 +26,8 @@ vi.mock("../../agents/bash-process-control.js", () => ({
   cancelBackgroundExecSession: cancelBackgroundExecSessionMock,
 }));
 
-vi.mock("../../agents/bash-process-registry.js", () => ({
+vi.mock("../../agents/bash-process-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/bash-process-registry.js")>()),
   getSession: getSessionMock,
   getFinishedSession: getFinishedSessionMock,
 }));
@@ -94,6 +101,8 @@ function backgroundExecResult(sessionId: string) {
 }
 
 describe("handleBashChatCommand", () => {
+  afterEach(() => resetSystemEventsForTest());
+
   beforeEach(() => {
     getSessionMock.mockReset();
     getFinishedSessionMock.mockReset();
@@ -124,19 +133,33 @@ describe("handleBashChatCommand", () => {
   it.each([
     { exitCode: null, exitSignal: "SIGTERM", label: "signal SIGTERM" },
     { exitCode: null, exitSignal: null, label: "unknown exit code" },
-  ])("reports a retained process's $label without assuming success", async (outcome) => {
+  ])("reports a retained process's $label without acknowledging delivery", async (outcome) => {
+    const eventOptions = {
+      sessionKey: "agent:main:session-key",
+      contextKey: "exec:finished-status",
+    };
+    const previous = enqueueSystemEventEntry("retained diagnostic", eventOptions);
     getFinishedSessionMock.mockReturnValue({
       id: "finished-status",
       scopeKey: "chat:bash",
       terminalStatus: "failed",
       aggregated: "retained diagnostic",
+      notifyOnExitRemoval: enqueueSystemEventWithReceipt("retained diagnostic", eventOptions, {
+        allowDuplicate: true,
+      }),
       ...outcome,
     });
+    expect(peekSystemEventEntries(eventOptions.sessionKey)).toHaveLength(2);
 
     const result = await handleBashChatCommand(buildParams("!poll finished-status"));
 
     expect(result.text).toContain(`Exit: ${outcome.label}`);
     expect(result.text).toContain("retained diagnostic");
+    expect(peekSystemEventEntries(eventOptions.sessionKey)).toHaveLength(2);
+    expect(peekSystemEventEntries(eventOptions.sessionKey)).toContainEqual(previous);
+
+    await handleBashChatCommand(buildParams("!poll finished-status"));
+    expect(peekSystemEventEntries(eventOptions.sessionKey)).toHaveLength(2);
   });
 
   it("returns immediately after canonical cancellation is admitted", async () => {

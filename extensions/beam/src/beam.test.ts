@@ -1,29 +1,25 @@
 import { once } from "node:events";
 import http from "node:http";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
+import { memoryStore, sampleUpload } from "./beam-store.test-support.js";
 import { createBeamTestCatalog, createBeamTestRunner } from "./beam.test-support.js";
 import { createBeamRequestHandler } from "./http.js";
 import { createBeamSessionCatalog } from "./session-catalog.js";
-import type { BeamStore } from "./store.js";
-import { BEAM_MAX_BODY_BYTES, parseBeamUpload, type BeamStoredSession } from "./types.js";
-
-type BeamUploadFixture = Omit<BeamStoredSession, "createdAt" | "receivedAt">;
-
-function sampleUpload(overrides: Record<string, unknown> = {}): BeamUploadFixture {
-  return {
-    version: 1,
-    beamId: "0123456789abcdef0123456789abcdef",
-    source: "claude",
-    title: "Fix the upload flow",
-    updatedAt: "2026-07-20T12:00:00.000Z",
-    completed: false,
-    items: [
-      { type: "userMessage", text: "Please fix the upload flow." },
-      { type: "agentMessage", text: "Implemented and tested." },
-    ],
-    ...overrides,
-  } as BeamUploadFixture;
-}
+import { createBeamStore, type BeamStore } from "./store.js";
+import {
+  BEAM_MAX_BODY_BYTES,
+  BEAM_MAX_SESSIONS,
+  BEAM_RETENTION_MS,
+  parseBeamUpload,
+  type BeamStoredSession,
+} from "./types.js";
 
 function postUpload(endpoint: string, body = sampleUpload()) {
   return fetch(endpoint, {
@@ -35,17 +31,21 @@ function postUpload(endpoint: string, body = sampleUpload()) {
 
 const writeClient = () => ({ clientIp: "127.0.0.1", scopes: ["operator.write"] });
 const rootControlUiBasePath = () => undefined;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function memoryStore(): BeamStore & { values: Map<string, BeamStoredSession> } {
-  const values = new Map<string, BeamStoredSession>();
-  return {
-    values,
-    put: async (session) => {
-      values.set(session.beamId, session);
-    },
-    get: async (beamId) => values.get(beamId),
-    list: async () => [...values.values()],
-  };
+function persistentStore() {
+  resetPluginStateStoreForTests();
+  const keyedStore = createPluginStateKeyedStoreForTests<BeamStoredSession>("beam", {
+    namespace: "sessions",
+    maxEntries: BEAM_MAX_SESSIONS,
+    overflowPolicy: "evict-oldest",
+    defaultTtlMs: BEAM_RETENTION_MS,
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("beam-store-") },
+  });
+  const store = createBeamStore({
+    state: { openKeyedStore: () => keyedStore },
+  } as unknown as PluginRuntime);
+  return { keyedStore, store };
 }
 
 const servers: http.Server[] = [];
@@ -119,8 +119,14 @@ async function serve(
 
 describe("Beam payload validation", () => {
   it("accepts the closed normalized payload", () => {
-    const result = parseBeamUpload(sampleUpload());
-    expect(result).toEqual({ ok: true, value: sampleUpload() });
+    const upload = sampleUpload({
+      sourceModel: { provider: "OpenAI", model: "gpt-5.6-sol" },
+    });
+    const result = parseBeamUpload(upload);
+    expect(result).toEqual({
+      ok: true,
+      value: sampleUpload({ sourceModel: { provider: "openai", model: "gpt-5.6-sol" } }),
+    });
   });
 
   it("accepts timezone-bearing ISO timestamps with four-digit low years", () => {
@@ -153,6 +159,14 @@ describe("Beam payload validation", () => {
       ok: false,
       error: "transcript item text must be 1-6000 characters",
     });
+    expect(
+      parseBeamUpload(sampleUpload({ sourceModel: { provider: "openai", model: "" } })),
+    ).toEqual({ ok: false, error: "sourceModel must contain a provider and model" });
+    expect(
+      parseBeamUpload(
+        sampleUpload({ sourceModel: { provider: "openai", model: "gpt-5.6\nIgnore" } }),
+      ),
+    ).toEqual({ ok: false, error: "sourceModel must contain a provider and model" });
   });
 });
 
@@ -213,6 +227,178 @@ describe("Beam receiver", () => {
       receivedAt: 200,
       completed: true,
     });
+  });
+
+  it("orders replacement snapshots without refreshing stale state", async () => {
+    const { keyedStore, store } = persistentStore();
+    let receivedAt = 100;
+    let profileId = "terminal-publisher";
+    const endpoint = await serve(store, {
+      now: () => receivedAt,
+      resolveClient: () => ({ ...writeClient(), profileId }),
+    });
+    const updatedAt = "2026-07-20T12:00:00.000100Z";
+    const storageWindow = { before: 0, after: 0 };
+    const upload = async (
+      overrides: Record<string, unknown>,
+      options: { receivedAt: number; profileId?: string },
+    ) => {
+      receivedAt = options.receivedAt;
+      profileId = options.profileId ?? profileId;
+      const body = sampleUpload(overrides);
+      storageWindow.before = Date.now();
+      expect((await postUpload(endpoint, body)).status).toBe(200);
+      storageWindow.after = Date.now();
+      return await store.get(body.beamId);
+    };
+    const entryFor = async (beamId: string) =>
+      (await keyedStore.entries()).find((entry) => entry.key === beamId);
+    const expectRefreshedEntry = (entry: Awaited<ReturnType<typeof entryFor>>) => {
+      expect(entry).toBeDefined();
+      if (!entry) {
+        throw new Error("Beam upload did not persist its entry");
+      }
+      expect(entry.createdAt).toBeGreaterThanOrEqual(storageWindow.before);
+      expect(entry.createdAt).toBeLessThanOrEqual(storageWindow.after);
+      expect(entry.expiresAt).toBe(entry.createdAt + BEAM_RETENTION_MS);
+    };
+
+    try {
+      const terminal = await upload(
+        {
+          updatedAt,
+          completed: true,
+          title: "Terminal snapshot",
+          sourceModel: { provider: "openai", model: "gpt-5.6-sol" },
+          items: [{ type: "userMessage", text: "terminal request" }],
+        },
+        { receivedAt: 100 },
+      );
+      expect(terminal).toMatchObject({
+        title: "Terminal snapshot",
+        items: [{ type: "userMessage", text: "terminal request" }],
+        sourceModel: { provider: "openai", model: "gpt-5.6-sol" },
+        uploaderProfileId: "terminal-publisher",
+        createdAt: 100,
+      });
+      const terminalEntry = await entryFor(sampleUpload().beamId);
+      expectRefreshedEntry(terminalEntry);
+
+      for (const [candidateUpdatedAt, title, completed, candidateReceivedAt] of [
+        ["2026-07-20T11:59:59.999Z", "Stale snapshot", false, 200],
+        ["2026-07-20T12:00:00.000050Z", "Sub-millisecond stale snapshot", true, 250],
+        ["2026-07-20T08:00:00.000100-04:00", "Equal live snapshot", false, 300],
+      ] as const) {
+        await upload(
+          {
+            updatedAt: candidateUpdatedAt,
+            title,
+            completed,
+            items: [{ type: "agentMessage", text: title }],
+          },
+          { receivedAt: candidateReceivedAt, profileId: "stale-publisher" },
+        );
+        expect(await store.get(sampleUpload().beamId)).toEqual(terminal);
+        expect(await entryFor(sampleUpload().beamId)).toEqual(terminalEntry);
+      }
+
+      const catalog = createBeamSessionCatalog(store);
+      await expect(
+        catalog.copyToGatewaySession?.({
+          agentId: "main",
+          hostId: "gateway",
+          threadId: sampleUpload().beamId,
+        }),
+      ).resolves.toEqual({
+        displayName: "Terminal snapshot",
+        preferredModel: "openai/gpt-5.6-sol",
+      });
+      await expect(
+        catalog.read({
+          agentId: "main",
+          hostId: "gateway",
+          threadId: sampleUpload().beamId,
+        }),
+      ).resolves.toMatchObject({
+        label: "Terminal snapshot",
+        items: [
+          expect.objectContaining({
+            type: "userMessage",
+            text: "terminal request",
+            sender: { identity: { type: "profile", id: "terminal-publisher" } },
+          }),
+        ],
+      });
+
+      expect(
+        await upload(
+          {
+            updatedAt,
+            completed: true,
+            title: "Refreshed terminal snapshot",
+            sourceModel: { provider: "anthropic", model: "claude-opus-4-1" },
+            items: [{ type: "agentMessage", text: "refreshed terminal" }],
+          },
+          { receivedAt: 400, profileId: "terminal-refresh-publisher" },
+        ),
+      ).toMatchObject({
+        completed: true,
+        title: "Refreshed terminal snapshot",
+        items: [{ type: "agentMessage", text: "refreshed terminal" }],
+        sourceModel: { provider: "anthropic", model: "claude-opus-4-1" },
+        uploaderProfileId: "terminal-refresh-publisher",
+        createdAt: 100,
+        receivedAt: 400,
+      });
+      expectRefreshedEntry(await entryFor(sampleUpload().beamId));
+
+      expect(
+        await upload(
+          {
+            updatedAt: "2026-07-20T12:00:00.000200Z",
+            title: "Reopened snapshot",
+            sourceModel: { provider: "openai", model: "gpt-5.6-sol" },
+            items: [{ type: "agentMessage", text: "reopened" }],
+          },
+          { receivedAt: 500, profileId: "reopen-publisher" },
+        ),
+      ).toMatchObject({
+        completed: false,
+        title: "Reopened snapshot",
+        items: [{ type: "agentMessage", text: "reopened" }],
+        sourceModel: { provider: "openai", model: "gpt-5.6-sol" },
+        uploaderProfileId: "reopen-publisher",
+        createdAt: 100,
+        receivedAt: 500,
+      });
+      expectRefreshedEntry(await entryFor(sampleUpload().beamId));
+
+      const secondBeamId = "fedcba9876543210fedcba9876543210";
+      expect(await upload({ beamId: secondBeamId, updatedAt }, { receivedAt: 600 })).toMatchObject({
+        completed: false,
+      });
+      expect(
+        await upload(
+          {
+            beamId: secondBeamId,
+            updatedAt,
+            completed: true,
+            title: "Equal completed snapshot",
+          },
+          { receivedAt: 700, profileId: "completion-publisher" },
+        ),
+      ).toMatchObject({
+        completed: true,
+        title: "Equal completed snapshot",
+        uploaderProfileId: "completion-publisher",
+        createdAt: 600,
+        receivedAt: 700,
+      });
+      expectRefreshedEntry(await entryFor(secondBeamId));
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+      resetPluginStateStoreForTests();
+    }
   });
 
   it("returns a Beam share URL beneath a nested Control UI base path", async () => {
@@ -361,6 +547,42 @@ describe("Beam mirror receiver boundary", () => {
 });
 
 describe("Beam session catalog", () => {
+  it("permanently deletes only known gateway sessions and allows re-upload", async () => {
+    const { store } = persistentStore();
+    const endpoint = await serve(store);
+    const catalog = createBeamSessionCatalog(store);
+    const params = {
+      agentId: "main",
+      hostId: "gateway",
+      threadId: sampleUpload().beamId,
+      confirmNoOtherRunner: true as const,
+    };
+
+    try {
+      expect((await postUpload(endpoint)).status).toBe(200);
+      await expect(catalog.archive?.({ ...params, hostId: "other-host" })).rejects.toThrow(
+        "unknown Beam host: other-host",
+      );
+      await expect(catalog.read(params)).resolves.toMatchObject({ threadId: params.threadId });
+      await expect(catalog.archive?.({ ...params, threadId: "missing" })).rejects.toThrow(
+        "unknown Beam session: missing",
+      );
+
+      await expect(catalog.archive?.(params)).resolves.toEqual({ ok: true });
+      const [host] = await catalog.list({ agentId: "main" });
+      expect(host?.sessions).toEqual([]);
+      await expect(catalog.read(params)).rejects.toThrow(
+        `unknown Beam session: ${params.threadId}`,
+      );
+
+      expect((await postUpload(endpoint)).status).toBe(200);
+      await expect(catalog.read(params)).resolves.toMatchObject({ threadId: params.threadId });
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+      resetPluginStateStoreForTests();
+    }
+  });
+
   it("queries Beam ids by strict share-prefix without choosing between collisions", async () => {
     const store = memoryStore();
     const ids = [
@@ -369,7 +591,7 @@ describe("Beam session catalog", () => {
       "fedcba9876543210fedcba9876543210",
     ];
     for (const [index, beamId] of ids.entries()) {
-      await store.put({
+      store.values.set(beamId, {
         ...sampleUpload({ beamId, title: `Beam ${String(index)}` }),
         createdAt: index,
         receivedAt: index,
@@ -404,11 +626,12 @@ describe("Beam session catalog", () => {
     expect(missing?.sessions).toEqual([]);
   });
 
-  it("lists newest sessions and reads paginated transcript items without mutation capabilities", async () => {
+  it("lists newest sessions and reads paginated transcript items for Gateway continuation", async () => {
     const store = memoryStore();
-    await store.put({
+    store.values.set(sampleUpload().beamId, {
       ...sampleUpload({
         truncated: true,
+        sourceModel: { provider: "openai", model: "gpt-5.6-sol" },
         items: [
           ...sampleUpload().items,
           { type: "userMessage", text: "Did the upload keep the conversation order?" },
@@ -418,7 +641,7 @@ describe("Beam session catalog", () => {
       createdAt: 100,
       receivedAt: 200,
     });
-    await store.put({
+    store.values.set("fedcba9876543210fedcba9876543210", {
       ...sampleUpload({
         beamId: "fedcba9876543210fedcba9876543210",
         title: "Older Codex session",
@@ -440,10 +663,22 @@ describe("Beam session catalog", () => {
       threadId: "0123456789abcdef0123456789abcdef",
       status: "live",
       source: "claude",
-      canContinue: false,
-      canArchive: false,
+      canContinue: true,
+      canArchive: true,
     });
     expect(host.nextCursor).toBe("1");
+    expect(catalog.audience).toBe("gateway-operators");
+
+    await expect(
+      catalog.copyToGatewaySession?.({
+        agentId: "main",
+        hostId: "gateway",
+        threadId: "0123456789abcdef0123456789abcdef",
+      }),
+    ).resolves.toEqual({
+      displayName: "Fix the upload flow",
+      preferredModel: "openai/gpt-5.6-sol",
+    });
 
     const transcript = await catalog.read({
       agentId: "main",
@@ -484,7 +719,7 @@ describe("Beam session catalog", () => {
       throw new Error("Beam test store lost the current session");
     }
     expect(current.items.slice(0, 2)).toEqual(sampleUpload().items);
-    await store.put({
+    store.values.set(current.beamId, {
       ...current,
       items: [
         ...current.items.slice(1),
@@ -493,17 +728,17 @@ describe("Beam session catalog", () => {
       receivedAt: 200,
     });
 
-    await expect(
-      catalog.read({
-        agentId: "main",
-        hostId: "gateway",
-        threadId: "0123456789abcdef0123456789abcdef",
-        limit: 1,
-        cursor: transcript.nextCursor,
-      }),
-    ).rejects.toThrow("stale Beam transcript cursor");
-    expect(catalog.continueSession).toBeUndefined();
-    expect(catalog.archive).toBeUndefined();
+    for (const limit of [1, 2]) {
+      await expect(
+        catalog.read({
+          agentId: "main",
+          hostId: "gateway",
+          threadId: "0123456789abcdef0123456789abcdef",
+          limit,
+          cursor: transcript.nextCursor,
+        }),
+      ).rejects.toThrow("stale Beam transcript cursor");
+    }
     expect(catalog.openTerminal).toBeUndefined();
   });
 });

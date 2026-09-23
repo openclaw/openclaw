@@ -1,6 +1,7 @@
 // Anthropic tests cover provider policy api plugin behavior.
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { describe, expect, it } from "vitest";
+import { parseAnthropicModelRef } from "./claude-model-refs.js";
 import {
   applyConfigDefaults,
   deprecatedProfileIds,
@@ -39,7 +40,28 @@ function levelIds(levels: readonly { id: string }[] | undefined): string[] {
   return (levels ?? []).map((level) => level.id);
 }
 
+const modelRefCases: Array<[string, string | null, string | null, boolean | null]> = [
+  ["", null, null, null],
+  ["claude-test", "anthropic", "claude-test", false],
+  ["/claude-test", "anthropic", "/claude-test", false],
+  ["anthropic/", null, null, null],
+  ["anthropic/team/claude-test", "anthropic", "team/claude-test", true],
+  ["  AnThRoPiC / claude-test  ", "anthropic", "claude-test", true],
+  ["anthropic/claude-test@anthropic:work", "anthropic", "claude-test@anthropic:work", true],
+  ["bedrock/anthropic.claude-test", "amazon-bedrock", "anthropic.claude-test", true],
+  ["AWS-BEDROCK/anthropic.claude-test", "amazon-bedrock", "anthropic.claude-test", true],
+];
+
 describe("anthropic provider policy public artifact", () => {
+  it.each(modelRefCases)(
+    "parses Anthropic model ref %s",
+    (raw, provider, model, explicitProvider) => {
+      expect(parseAnthropicModelRef(raw)).toEqual(
+        provider === null ? null : { provider, model, explicitProvider },
+      );
+    },
+  );
+
   it("publishes native Claude profiles retired from generic auth", () => {
     expect(deprecatedProfileIds).toEqual(["anthropic:claude-cli"]);
   });
@@ -141,35 +163,48 @@ describe("anthropic provider policy public artifact", () => {
     expect(profile?.defaultLevel).toBe("off");
   });
 
-  it.each(["claude-fable-5", "claude-mythos-5"])(
-    "exposes the mandatory-adaptive %s thinking profile",
-    (modelId) => {
+  it.each([
+    ["claude-opus-5-5", "medium"],
+    ["claude-fable-5", "medium"],
+    ["claude-fable-5-1", "medium"],
+    ["claude-mythos-5", "high"],
+  ])(
+    "exposes only native efforts for the mandatory-adaptive %s thinking profile",
+    (modelId, defaultLevel) => {
       const profile = resolveThinkingProfile({
         provider: "anthropic",
         modelId,
       });
 
       expect(profile).toEqual({
-        levels: [
-          { id: "minimal" },
-          { id: "low" },
-          { id: "medium" },
-          { id: "high" },
-          { id: "xhigh" },
-          { id: "adaptive" },
-          { id: "max" },
-        ],
-        defaultLevel: "high",
+        levels: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }, { id: "max" }],
+        defaultLevel,
         preserveWhenCatalogReasoningFalse: true,
       });
     },
   );
 
-  it("keeps the Fable thinking profile identical across API and CLI routes", () => {
-    const modelId = "claude-fable-5";
-    expect(resolveThinkingProfile({ provider: "claude-cli", modelId })).toEqual(
-      resolveThinkingProfile({ provider: "anthropic", modelId }),
-    );
+  it.each(["claude-opus-5-5", "claude-fable-5", "claude-fable-5-1"])(
+    "keeps the %s thinking profile identical across API and CLI routes",
+    (modelId) => {
+      expect(resolveThinkingProfile({ provider: "claude-cli", modelId })).toEqual(
+        resolveThinkingProfile({ provider: "anthropic", modelId }),
+      );
+    },
+  );
+
+  it("preserves separate effort controls for Opus 5 and Opus 5.5 deployments", () => {
+    const profile = resolveThinkingProfile({ provider: "anthropic", modelId: "claude-opus-5" });
+    expect(profile?.defaultLevel).toBe("high");
+    expect(levelIds(profile?.levels)).toContain("off");
+
+    const deploymentProfile = resolveThinkingProfile({
+      provider: "anthropic",
+      modelId: "deployment",
+      params: { canonicalModelId: "claude-opus-5-5" },
+    });
+    expect(deploymentProfile?.defaultLevel).toBe("medium");
+    expect(levelIds(deploymentProfile?.levels)).not.toContain("off");
   });
 
   it("keeps direct-only Mythos thinking disabled on the CLI route", () => {

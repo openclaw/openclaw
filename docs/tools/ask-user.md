@@ -22,14 +22,37 @@ You can answer from any supported conversation surface:
 - The web Control UI docks a question panel directly above the composer. For
   multi-question prompts, the panel shows one question at a time and advances
   through a short stepper. After resolution, the panel closes and the chat
-  keeps only a compact answer summary.
+  keeps the full question alongside your answer in a compact summary. Skipped
+  or expired questions keep their wording alongside the outcome.
+  Switching between pending questions preserves both selected choices and typed
+  answers, even when typed text matches an option label.
+- The TUI shows a question prompt in both Gateway and local modes. Use arrow
+  keys or number keys to choose an option, **Other…** to type an answer, or
+  **Skip**. Multi-select prompts let you toggle choices before confirming;
+  multi-question prompts advance one question at a time. Press Esc to return
+  to the composer without answering, then `/question` to reopen the prompt.
 - Telegram renders each choice as a full-width native button for one
   single-select question. **Other…** switches to Telegram's reply input without
   resolving the question.
-- Discord and Slack render native buttons for a single-choice, single-question
-  prompt.
-- A plain-text reply works on any channel. Reply with a number, an option label,
-  or your own answer. For multi-select questions, separate choices with commas.
+- Discord, Slack, and Mattermost render native buttons for a single-choice,
+  single-question prompt. Mattermost retires its prompt on the tap it accepts;
+  a question that ends elsewhere leaves the buttons in place until someone taps
+  one and is told it was already answered.
+- For a question created by an active OpenClaw run, a plain-text reply works on
+  any channel when your current permissions match the creator's. Reply with a
+  number, an option label, or your own answer. For multi-select questions,
+  separate choices with commas.
+
+Questions from a standalone [attached MCP client](/cli/attach) do not carry an
+OpenClaw run's creator binding. Answer those using the question controls in the
+Control UI, TUI, or native app, not an ordinary channel message.
+
+Guests with `operator.sessions.write` can answer ordinary questions from their
+own authorized agent run in a session they created. The Control UI restores
+those pending questions after reconnecting. Access to another person's session
+does not expose their questions or make them answerable. Secret, administrative,
+and sessionless questions keep their existing privileged access requirements.
+Answering a question does not grant the agent additional permissions.
 
 OpenClaw always enables a free-text **Other** answer. The agent must not add an
 `Other` option to the authored option list.
@@ -40,15 +63,53 @@ without it entering the chat, the transcript, or the model's context.
 
 ## Platform behavior
 
-Answers work on every supported conversation surface. The web Control UI uses a
-docked stepper that replaces the composer while expanded; collapsing it restores
-the full composer beneath a slim question bar. iOS, macOS, and Android show
+Answers work on every supported conversation surface. The web Control UI and
+TUI show one question at a time; collapsing the prompt restores the composer
+with a slim pending-question indicator. The TUI's `/question` command reopens
+it, and a plain reply still answers an eligible pending question. iOS, macOS, and Android show
 inline cards; multiple questions stay stacked as an intentional touch-friendly
-idiom. Every platform keeps the question-to-answer summary in the active chat
-timeline without timed eviction, and **Skip** is available everywhere.
+idiom. The TUI keeps a compact resolution notice in the chat; other platforms
+keep the question-to-answer summary without timed eviction. **Skip** is
+available everywhere and declines the entire prompt.
 
 Multi-question and multi-select prompts degrade to readable text on messaging
-channels. The Control UI keeps the full structured stepper.
+channels. The Control UI and TUI keep the full structured stepper. The TUI shows
+the time remaining, dismisses expired prompts, and restores pending questions
+for the selected session after reconnecting or switching sessions. Local mode
+keeps questions in the running process; they do not survive exiting the TUI.
+
+## Async questions
+
+Codex async questions use the same panel above the Control UI composer. They open
+without taking keyboard focus and leave the message box available while the agent
+continues working. Collapse the panel to keep a compact unanswered-question count
+and the current question visible. New messages, the question's own completed
+turn, and collapsed work history do not dismiss the question or reopen a minimized
+panel. When a later run completes successfully, older reminders leave the dock.
+Overlapping runs, commentary, interruptions, and failed runs do not retire a
+question. Successful restart recovery also moves older reminders into history;
+restarting alone does not.
+The transcript keeps the question with **No longer pending** and an **Answer**
+button to reopen it. Reopening preserves the draft until you submit, skip, or a
+later run completes. Moving a reminder into history never answers it, grants
+permission, or marks its underlying task complete.
+The question dock also stays available when a plugin replaces the composer.
+
+Use the panel's request arrows to switch between pending requests without losing
+answer drafts. A new blocking question takes priority; async questions remain
+available through the same navigation. Submitting an async answer sends an ordinary
+chat message, using the existing outbox and retry controls. Skipping removes that
+request from the dock without sending an answer. The transcript retains a summary.
+Minimizing alone neither answers nor skips a question.
+
+The question summary shows whether your answer is queued, sending, failed, or
+confirmed in saved conversation history. If delivery fails or becomes uncertain
+after reconnecting, **Retry answer** retries the existing outbox message instead
+of submitting a second answer. **Discard** removes that queued answer and reopens
+its preserved draft in the currently open panes for that conversation.
+Saved replies remain confirmed after reload, including answers edited in the
+outbox or containing quoted question headings. When those headings make individual
+answers ambiguous, the summary shows the saved reply text without splitting it.
 
 ## Timeout and no answer
 
@@ -99,6 +160,10 @@ Example answered result:
   }
 }
 ```
+
+The outer `answers` is the protocol's `QuestionAnswers` envelope; its inner
+`answers` map is keyed by `questionId`, with an array of selected values per
+question.
 
 ## Model guidance
 

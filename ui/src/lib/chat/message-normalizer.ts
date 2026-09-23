@@ -1,55 +1,50 @@
+import { mediaKindFromMime } from "@openclaw/media-core/constants";
 /**
  * Message normalization utilities for chat rendering.
  */
-
-import { mediaKindFromMime } from "@openclaw/media-core/constants";
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asFiniteNumber,
+  asNonNegativeFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { z } from "zod";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import {
   extractCanvasShortcodes,
   isCanvasBoardWidgetName,
 } from "../../../../src/chat/canvas-render.js";
+import { readMessageClientSources } from "../../../../src/chat/message-client-source.js";
 import { readTranscriptSenderIdentity } from "../../../../src/chat/sender-identity.js";
 import {
   isToolCallContentType,
   isToolResultContentType,
   resolveToolBlockArgs,
 } from "../../../../src/chat/tool-content.js";
-import {
-  isRelativeAssistantMediaReference,
-  splitMediaFromOutput,
-} from "../../../../src/media/parse.js";
+import { projectChatWorkContextForDisplay } from "../../../../src/chat/work-context.js";
+import { splitMediaFromOutput } from "../../../../src/media/parse.js";
+import { readClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
 import { getMediaFileExtension } from "../media-file-extension.ts";
 import type { NormalizedMessage, MessageContentItem } from "./chat-types.ts";
+import { projectImportedMessageForDisplay } from "./imported-message-display.ts";
 import { normalizeAttachmentContentBlock } from "./message-normalizer-attachments.ts";
-import { formatSenderLabel, normalizeSenderIdentity } from "./sender-label.ts";
+import { normalizeImageContentBlock } from "./message-normalizer-images.ts";
+import { formatSenderLabel, normalizeSenderIdentity, type SenderIdentity } from "./sender-label.ts";
 
 // Keep legacy labels readable without treating their UUID suffix as profile evidence.
 const OPAQUE_ID_LABEL_SUFFIX_RE =
   /\s+\(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)$/iu;
 
-const optionalMessageStringSchema = z.string().optional().catch(undefined);
-const optionalMessageNumberSchema = z.number().optional().catch(undefined);
-const rawAttachmentSchema = z
-  .looseObject({
-    code: optionalMessageStringSchema,
-    kind: optionalMessageStringSchema,
-    url: optionalMessageStringSchema,
-    label: optionalMessageStringSchema,
-    mimeType: optionalMessageStringSchema,
-    artifactId: optionalMessageStringSchema,
-    sizeBytes: optionalMessageNumberSchema,
-    durationMs: optionalMessageNumberSchema,
-    width: optionalMessageNumberSchema,
-    height: optionalMessageNumberSchema,
-  })
-  .optional()
-  .catch(undefined);
 type CanvasPreview = Extract<MessageContentItem, { type: "canvas" }>["preview"];
 type MessageDelivery = { audioAsVoice?: true; replyToCurrent?: true; replyToId?: string };
+
+export function canvasPreviewsMatch(
+  first: Pick<CanvasPreview, "viewId" | "url">,
+  second: Pick<CanvasPreview, "viewId" | "url">,
+): boolean {
+  return Boolean(
+    (first.viewId && first.viewId === second.viewId) || (first.url && first.url === second.url),
+  );
+}
 
 function readMessageDelivery(value: unknown): MessageDelivery | undefined {
   const delivery = asOptionalRecord(value);
@@ -67,19 +62,42 @@ function readMessageDelivery(value: unknown): MessageDelivery | undefined {
   };
 }
 
-function readSenderSession(value: unknown): NormalizedMessage["senderSession"] {
+export function readMessageSenderSession(value: unknown): NormalizedMessage["senderSession"] {
   const source = asOptionalRecord(value);
   if (!source) {
     return undefined;
   }
   const sessionKey = normalizeOptionalString(source.sessionKey);
   const agentId = normalizeOptionalString(source.agentId);
+  const label = normalizeOptionalString(source.label);
   return sessionKey || agentId
     ? {
         ...("sessionKey" in source ? { sessionKey } : {}),
         ...("agentId" in source ? { agentId } : {}),
+        ...(label ? { label } : {}),
       }
     : undefined;
+}
+
+function normalizeOmittedMediaContentBlock(
+  item: Record<string, unknown>,
+): Extract<MessageContentItem, { type: "omitted_media" }> | null {
+  if (
+    item.type !== "image" ||
+    item.omitted !== true ||
+    normalizeOptionalString(item.artifactId) !== undefined ||
+    normalizeOptionalString(item.url) !== undefined
+  ) {
+    return null;
+  }
+  const sizeBytes = asNonNegativeFiniteNumber(item.bytes);
+  return {
+    type: "omitted_media",
+    media: {
+      kind: "image",
+      ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+    },
+  };
 }
 
 export function normalizeRoleForGrouping(role: string): string {
@@ -93,6 +111,59 @@ export function normalizeRoleForGrouping(role: string): string {
   return role;
 }
 
+function hasToolMessageEnvelope(message: Record<string, unknown> | undefined): boolean {
+  return (
+    typeof message?.toolCallId === "string" ||
+    typeof message?.tool_call_id === "string" ||
+    typeof message?.toolUseId === "string" ||
+    typeof message?.tool_use_id === "string" ||
+    typeof message?.toolName === "string" ||
+    typeof message?.tool_name === "string"
+  );
+}
+
+export function resolveMessageRole(message: unknown): string {
+  const m = asOptionalRecord(message);
+  const content = m?.content;
+  const hasToolContent =
+    Array.isArray(content) &&
+    content.some((value) => {
+      const type = asOptionalRecord(value)?.type;
+      return isToolResultContentType(type) || isToolCallContentType(type);
+    });
+  return hasToolContent || hasToolMessageEnvelope(m)
+    ? "toolResult"
+    : (readStringField(m, "role") ?? "unknown");
+}
+
+export function resolveMessageSender(
+  metadata: Record<string, unknown> | undefined,
+): SenderIdentity | null {
+  const identity = readTranscriptSenderIdentity(metadata?.senderIdentity);
+  return normalizeSenderIdentity({
+    identity,
+    id: metadata?.senderId,
+    name: metadata?.senderName,
+    username: metadata?.senderUsername,
+    profileAvatarUrl: identity?.type === "profile" ? metadata?.senderProfileAvatarUrl : undefined,
+  });
+}
+
+export function resolveMessageSenderLabel(
+  message: unknown,
+  sender?: SenderIdentity | null,
+): string | null {
+  const m = asOptionalRecord(message);
+  const rawLabel = readStringField(m, "senderLabel")?.trim() ?? "";
+  if (rawLabel) {
+    return rawLabel.replace(OPAQUE_ID_LABEL_SUFFIX_RE, "").trim();
+  }
+  // Full normalization already prepared the sender; null is a known absence.
+  return formatSenderLabel(
+    sender === undefined ? resolveMessageSender(asOptionalRecord(m?.["__openclaw"])) : sender,
+  );
+}
+
 export function isToolResultMessage(message: unknown): boolean {
   const m = asOptionalRecord(message);
   const role = typeof m?.role === "string" ? m.role.toLowerCase() : "";
@@ -103,19 +174,18 @@ export function isStandaloneToolMessageForDisplay(message: unknown): boolean {
   // Tool classification needs envelope fields, not parsed content or media.
   const m = asOptionalRecord(message);
   const role = typeof m?.role === "string" ? normalizeRoleForGrouping(m.role) : "unknown";
-  return (
-    role === "tool" ||
-    typeof m?.toolCallId === "string" ||
-    typeof m?.tool_call_id === "string" ||
-    typeof m?.toolUseId === "string" ||
-    typeof m?.tool_use_id === "string" ||
-    typeof m?.toolName === "string" ||
-    typeof m?.tool_name === "string"
-  );
+  return role === "tool" || hasToolMessageEnvelope(m);
 }
 
-function coerceCanvasPreview(preview: Record<string, unknown>): CanvasPreview | null {
-  if (preview.kind !== "canvas" || preview.surface === "tool_card" || preview.render !== "url") {
+export function readCanvasContentPreview(content: unknown): CanvasPreview | null {
+  const item = asOptionalRecord(content);
+  const preview = item?.type === "canvas" ? asOptionalRecord(item.preview) : undefined;
+  if (
+    !preview ||
+    preview.kind !== "canvas" ||
+    preview.surface === "tool_card" ||
+    preview.render !== "url"
+  ) {
     return null;
   }
   const result: CanvasPreview = { kind: "canvas", surface: "assistant_message", render: "url" };
@@ -228,42 +298,22 @@ function coerceAudioContentBlock(
   const rawMediaType = readStringField(source, "media_type")?.trim();
   const mediaType = rawMediaType?.toLowerCase().startsWith("audio/") ? rawMediaType : "audio/mpeg";
   const type = source.type;
-  const rawData = readStringField(source, "data");
-  if (type === "base64" && rawData !== undefined) {
-    const data = rawData.trim();
-    if (!data) {
-      return null;
-    }
-    const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
-    return {
-      type: "attachment",
-      attachment: {
-        url,
-        kind: "audio",
-        label: readStringField(item, "label")?.trim() || "Audio",
-        mimeType: mediaType,
-        ...(item.isVoiceNote === true ? { isVoiceNote: true } : {}),
-      },
-    };
+  const data = readStringField(source, type === "base64" ? "data" : "url")?.trim();
+  if (!data || (type !== "base64" && type !== "url")) {
+    return null;
   }
-  const rawUrl = readStringField(source, "url");
-  if (type === "url" && rawUrl !== undefined) {
-    const url = rawUrl.trim();
-    if (!url) {
-      return null;
-    }
-    return {
-      type: "attachment",
-      attachment: {
-        url,
-        kind: "audio",
-        label: readStringField(item, "label")?.trim() || "Audio",
-        mimeType: mediaType,
-        ...(item.isVoiceNote === true ? { isVoiceNote: true } : {}),
-      },
-    };
-  }
-  return null;
+  const url =
+    type === "base64" && !data.startsWith("data:") ? `data:${mediaType};base64,${data}` : data;
+  return {
+    type: "attachment",
+    attachment: {
+      url,
+      kind: "audio",
+      label: readStringField(item, "label")?.trim() || "Audio",
+      mimeType: mediaType,
+      ...(item.isVoiceNote === true ? { isVoiceNote: true } : {}),
+    },
+  };
 }
 
 function coerceManagedMediaContentBlock(
@@ -336,6 +386,7 @@ function stripMessageDisplayMetadata(items: MessageContentItem[]): MessageConten
 function expandTextContent(
   text: string,
   delivery: MessageDelivery | undefined,
+  projectedCanvasPreviews: readonly CanvasPreview[],
 ): {
   content: MessageContentItem[];
   audioAsVoice: boolean;
@@ -355,10 +406,6 @@ function expandTextContent(
 
   for (const segment of segments) {
     if (segment.type === "media") {
-      if (isRelativeAssistantMediaReference(segment.url)) {
-        parts.push({ type: "text", text: `MEDIA:${segment.url}` });
-        continue;
-      }
       const inferred = inferAttachmentKind(segment.url);
       parts.push({
         type: "attachment",
@@ -377,7 +424,10 @@ function expandTextContent(
     }
   }
   for (const preview of extracted.previews) {
-    if (preview.surface !== "assistant_message") {
+    if (
+      preview.surface !== "assistant_message" ||
+      projectedCanvasPreviews.some((projected) => canvasPreviewsMatch(preview, projected))
+    ) {
       continue;
     }
     parts.push({
@@ -400,13 +450,9 @@ function expandTextContent(
     content:
       content.length > 0
         ? content
-        : (parsed.mediaUrls ?? []).some(isRelativeAssistantMediaReference)
-          ? (parsed.mediaUrls ?? [])
-              .filter(isRelativeAssistantMediaReference)
-              .map((url) => ({ type: "text" as const, text: `MEDIA:${url}` }))
-          : replyTarget === null && !audioAsVoice && parsed.text.trim().length > 0
-            ? [{ type: "text", text: parsed.text }]
-            : [],
+        : replyTarget === null && !audioAsVoice && parsed.text.trim().length > 0
+          ? [{ type: "text", text: parsed.text }]
+          : [],
     audioAsVoice,
     replyTarget,
   };
@@ -416,32 +462,20 @@ function expandTextContent(
  * Normalize a raw message object into a consistent structure.
  */
 export function normalizeMessage(message: unknown): NormalizedMessage {
-  const m = asOptionalRecord(message) ?? {};
-  let role = readStringField(m, "role") ?? "unknown";
-
-  // Detect tool messages by common gateway shapes.
-  // Some tool events come through as assistant role with tool_* items in the content array.
-  const hasToolId =
-    typeof m.toolCallId === "string" ||
-    typeof m.tool_call_id === "string" ||
-    typeof m.toolUseId === "string" ||
-    typeof m.tool_use_id === "string";
-
+  const m =
+    asOptionalRecord(projectChatWorkContextForDisplay(projectImportedMessageForDisplay(message))) ??
+    {};
+  const role = resolveMessageRole(m);
   const contentRaw = m.content;
   const contentItems = Array.isArray(contentRaw) ? contentRaw : null;
-  const hasToolContent =
-    contentItems?.some((value) => {
-      const type = asOptionalRecord(value)?.type;
-      return isToolResultContentType(type) || isToolCallContentType(type);
-    }) ?? false;
-
-  const hasToolName = typeof m.toolName === "string" || typeof m.tool_name === "string";
-
-  if (hasToolId || hasToolContent || hasToolName) {
-    role = "toolResult";
-  }
   const isAssistantMessage = role === "assistant";
   const delivery = isAssistantMessage ? readMessageDelivery(m.openclawDelivery) : undefined;
+  // History's structured blocks retain sandbox and dashboard metadata that
+  // an assistant shortcode cannot carry. Keep that representation when both exist.
+  const projectedCanvasPreviews = (contentItems ?? []).flatMap((value) => {
+    const preview = readCanvasContentPreview(value);
+    return preview ? [preview] : [];
+  });
 
   // Extract content
   let content: MessageContentItem[] = [];
@@ -450,7 +484,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
 
   if (typeof m.content === "string") {
     if (isAssistantMessage) {
-      const expanded = expandTextContent(m.content, delivery);
+      const expanded = expandTextContent(m.content, delivery, projectedCanvasPreviews);
       content = expanded.content;
       audioAsVoice = expanded.audioAsVoice;
       replyTarget = expanded.replyTarget;
@@ -463,8 +497,24 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       if (!item) {
         return [];
       }
+      const omittedMedia = normalizeOmittedMediaContentBlock(item);
+      if (omittedMedia) {
+        return [omittedMedia];
+      }
+      const image = normalizeImageContentBlock(item);
+      if (image) {
+        return [image];
+      }
       const type = item.type;
+      if (type === "clawhub") {
+        const recommendation = isAssistantMessage ? readClawHubRecommendation(item) : null;
+        return recommendation ? [recommendation] : [];
+      }
       const text = readStringField(item, "text");
+      if (type === "thinking") {
+        const thinking = readStringField(item, "thinking");
+        return thinking === undefined ? [] : [{ type, thinking }];
+      }
       if (isAssistantMessage) {
         const managedMediaAttachment = coerceManagedMediaContentBlock(item);
         if (managedMediaAttachment) {
@@ -478,16 +528,10 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
         return [];
       }
       if (type === "attachment" || type === "attachment_error") {
-        return (
-          normalizeAttachmentContentBlock({
-            type,
-            attachment: rawAttachmentSchema.parse(item.attachment),
-          }) ?? []
-        );
+        return normalizeAttachmentContentBlock(item) ?? [];
       }
-      const rawPreview = type === "canvas" ? asOptionalRecord(item.preview) : undefined;
-      if (rawPreview) {
-        const preview = coerceCanvasPreview(rawPreview);
+      if (type === "canvas") {
+        const preview = readCanvasContentPreview(item);
         if (!preview) {
           return [];
         }
@@ -506,7 +550,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
           (role === "assistant" && (type === "input_text" || type === "output_text")))
       ) {
         if (isAssistantMessage) {
-          const expanded = expandTextContent(text, delivery);
+          const expanded = expandTextContent(text, delivery, projectedCanvasPreviews);
           audioAsVoice = audioAsVoice || expanded.audioAsVoice;
           if (expanded.replyTarget?.kind === "id") {
             replyTarget = expanded.replyTarget;
@@ -539,7 +583,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     });
   } else if (typeof m.text === "string") {
     if (isAssistantMessage) {
-      const expanded = expandTextContent(m.text, delivery);
+      const expanded = expandTextContent(m.text, delivery, projectedCanvasPreviews);
       content = expanded.content;
       audioAsVoice = expanded.audioAsVoice;
       replyTarget = expanded.replyTarget;
@@ -558,23 +602,13 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const replyPreviewRecord = asOptionalRecord(openClawMeta?.replyToPreview);
   const replyPreviewText = readStringField(replyPreviewRecord, "text")?.trim() ?? "";
   const replyPreviewSender = readStringField(replyPreviewRecord, "senderLabel")?.trim() ?? "";
-  const identity = readTranscriptSenderIdentity(openClawMeta?.senderIdentity);
-  const metaSender = normalizeSenderIdentity({
-    identity,
-    id: openClawMeta?.senderId,
-    name: openClawMeta?.senderName,
-    username: openClawMeta?.senderUsername,
-    profileAvatarUrl:
-      identity?.type === "profile" ? openClawMeta?.senderProfileAvatarUrl : undefined,
-  });
-  const rawLabel = readStringField(m, "senderLabel")?.trim() ?? "";
-  const senderLabel = rawLabel
-    ? rawLabel.replace(OPAQUE_ID_LABEL_SUFFIX_RE, "").trim()
-    : formatSenderLabel(metaSender);
+  const metaSender = resolveMessageSender(openClawMeta);
+  const senderLabel = resolveMessageSenderLabel(m, metaSender);
   const sender = metaSender ?? (senderLabel ? { name: senderLabel } : null);
+  const sourceClients = role === "user" ? readMessageClientSources(m) : [];
 
   content = stripMessageDisplayMetadata(content);
-  const senderSession = readSenderSession(m.senderSession);
+  const senderSession = readMessageSenderSession(m.senderSession);
 
   return {
     role,
@@ -584,6 +618,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     senderLabel,
     ...(senderSession ? { senderSession } : {}),
     ...(sender ? { sender } : {}),
+    ...(sourceClients.length ? { sourceClients } : {}),
     ...(audioAsVoice ? { audioAsVoice: true } : {}),
     ...(replyPreviewText
       ? {

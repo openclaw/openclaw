@@ -1,7 +1,9 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
+  type CrabboxState,
   crabboxWarmImageRecoveryHint,
-  isCrabboxWarmImageCapturePaused,
+  CRABBOX_WARM_IMAGE_WAIT_HINT,
+  isCrabboxWarmImageCaptureUncertain,
   listCrabboxLegacyWarmLeases,
   listCrabboxWarmImages,
   recoverCrabboxWarmImageCapture,
@@ -9,7 +11,7 @@ import {
 
 type CliProgram = Parameters<Parameters<OpenClawPluginApi["registerCli"]>[0]>[0]["program"];
 
-export function registerCrabboxWarmImageCommands(program: CliProgram): void {
+export function registerCrabboxWarmImageCommands(program: CliProgram, state: CrabboxState): void {
   program
     .command("crabbox")
     .description("Manage Crabbox warm images")
@@ -25,20 +27,25 @@ export function registerCrabboxWarmImageCommands(program: CliProgram): void {
       "Confirm owning processes and recovered workers are stopped and provider artifacts are reconciled",
     )
     .action(
-      (options: { json?: boolean; recover?: string; acknowledgeProviderCleanup?: boolean }) => {
+      async (options: {
+        json?: boolean;
+        recover?: string;
+        acknowledgeProviderCleanup?: boolean;
+      }) => {
         if (options.acknowledgeProviderCleanup && !options.recover) {
           throw new Error(
             "--acknowledge-provider-cleanup requires --recover <selector> from warm-images inspection.",
           );
         }
         if (options.recover) {
-          recoverCrabboxWarmImageCapture(
+          await recoverCrabboxWarmImageCapture(
+            state,
             options.recover,
             options.acknowledgeProviderCleanup === true,
           );
         }
-        const images = listCrabboxWarmImages();
-        const legacyLeases = listCrabboxLegacyWarmLeases();
+        const images = await listCrabboxWarmImages(state);
+        const legacyLeases = await listCrabboxLegacyWarmLeases(state);
         const nextSteps =
           "Restart the Gateway after manual reconciliation; the next eligible worker can capture again.";
         if (options.json) {
@@ -67,10 +74,17 @@ export function registerCrabboxWarmImageCommands(program: CliProgram): void {
             `${image.profileKey}: ${image.checkpointId ?? "no checkpoint"} (${image.state})`,
           );
           if (image.capture) {
-            const paused = isCrabboxWarmImageCapturePaused(image.capture);
-            lines.push(`  Capture ${paused ? "paused" : "in progress"}: ${image.capture.selector}`);
-            if (paused) {
+            const uncertain = isCrabboxWarmImageCaptureUncertain(image.capture);
+            const label = uncertain
+              ? "paused"
+              : image.capture.stale
+                ? "still pending"
+                : "in progress";
+            lines.push(`  Capture ${label}: ${image.capture.selector}`);
+            if (uncertain) {
               lines.push(`  ${crabboxWarmImageRecoveryHint(image.capture.selector)}`);
+            } else if (image.capture.stale) {
+              lines.push(`  ${CRABBOX_WARM_IMAGE_WAIT_HINT}`);
             }
           }
           if (image.retirement) {

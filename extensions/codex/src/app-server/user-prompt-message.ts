@@ -3,7 +3,11 @@ import type {
   EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { attachCodexMirrorIdentity, attachUpstreamUserText } from "./upstream-prompt-provenance.js";
+import {
+  attachCodexMirrorIdentity,
+  attachUpstreamUserText,
+  readUpstreamUserText,
+} from "./upstream-prompt-provenance.js";
 
 type MirroredUserMessage = Extract<AgentMessage, { role: "user" }>;
 
@@ -25,7 +29,7 @@ function buildSenderLabel(params: {
 function buildFromPrepared(
   params: EmbeddedRunAttemptParams,
   preparedUserMessage: MirroredUserMessage | undefined,
-): AgentMessage {
+): MirroredUserMessage {
   const senderId = normalizeOptionalString(params.senderId);
   const senderName = normalizeOptionalString(params.senderName);
   const senderUsername = normalizeOptionalString(params.senderUsername);
@@ -48,10 +52,10 @@ function buildFromPrepared(
     role: "user",
     ...metadata,
     ...(preparedUserMessage ?? { content: params.transcriptPrompt ?? params.prompt }),
-  } as AgentMessage;
+  };
 }
 
-export function buildCodexUserPromptMessage(params: EmbeddedRunAttemptParams): AgentMessage {
+export function buildCodexUserPromptMessage(params: EmbeddedRunAttemptParams): MirroredUserMessage {
   return buildFromPrepared(params, params.userTurnTranscriptRecorder?.message);
 }
 
@@ -76,7 +80,36 @@ export function promptSnapshot(
 
 export async function buildResolvedCodexUserPromptMessage(
   params: EmbeddedRunAttemptParams,
-): Promise<AgentMessage> {
+): Promise<MirroredUserMessage> {
   const resolvedMessage = await params.userTurnTranscriptRecorder?.resolveMessage();
   return buildFromPrepared(params, resolvedMessage ?? params.userTurnTranscriptRecorder?.message);
+}
+
+export async function resolveFinalCodexMirrorMessages(params: {
+  params: EmbeddedRunAttemptParams;
+  messagesSnapshot: AgentMessage[];
+  turnId: string;
+}): Promise<AgentMessage[]> {
+  if (
+    params.params.suppressNextUserMessagePersistence ||
+    !params.params.userTurnTranscriptRecorder
+  ) {
+    return params.messagesSnapshot;
+  }
+  const previousPrompt = params.messagesSnapshot.find((message) => message.role === "user");
+  const resolvedBase = attachCodexMirrorIdentity(
+    await buildResolvedCodexUserPromptMessage(params.params),
+    `${params.turnId}:prompt`,
+  );
+  const upstreamUserText = readUpstreamUserText(previousPrompt);
+  const resolvedPrompt = upstreamUserText
+    ? attachUpstreamUserText(resolvedBase, upstreamUserText)
+    : resolvedBase;
+  const firstUserIndex = params.messagesSnapshot.findIndex((message) => message.role === "user");
+  if (firstUserIndex === -1) {
+    return [resolvedPrompt, ...params.messagesSnapshot];
+  }
+  const messages = params.messagesSnapshot.slice();
+  messages[firstUserIndex] = resolvedPrompt;
+  return messages;
 }

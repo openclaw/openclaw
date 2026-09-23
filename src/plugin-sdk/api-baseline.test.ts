@@ -9,6 +9,7 @@ import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeclarationClosureRenderer } from "./api-baseline-declaration-closure.js";
 import { formatPluginSdkApiTypeAlias } from "./api-baseline-declaration-print.js";
 import {
   listPluginSdkApiBaselineEntrypoints,
@@ -413,15 +414,54 @@ describe("Plugin SDK API baseline", () => {
 
   it("stores shared declaration detail once while retaining every affected export", async () => {
     const render = (field: string) =>
-      renderSourceFixture({
-        "fixture.ts": [
-          `type SharedOptions = { ${field}: string };`,
-          "export declare function preview(options: SharedOptions): void;",
-          "export declare function send(options: SharedOptions): void;",
-        ].join("\n"),
-      });
+      renderSourceFixture(
+        {
+          "fixture.ts": [
+            `type SharedOptions = { ${field}: string };`,
+            "export declare function preview(options: SharedOptions): void;",
+            "export declare function send(options: SharedOptions): void;",
+          ].join("\n"),
+          "pool-a.ts": [
+            "type PoolOptions = { value: string };",
+            "export declare function fixed(options: PoolOptions): void;",
+          ].join("\n"),
+          "pool-b.ts": [
+            "type PoolOptions = { value: number };",
+            "export declare function fixed(options: PoolOptions): void;",
+          ].join("\n"),
+        },
+        ["pool-b", "fixture", "pool-a"],
+      );
     const baseline = await render("text");
     const changed = await render("accountId");
+
+    for (const [surface, field] of [
+      [baseline, "text"],
+      [changed, "accountId"],
+    ] as const) {
+      expect(surface.declarationSections.map(({ name, text }) => [name, text])).toEqual([
+        ["PoolOptions", expect.stringContaining("value: number;")],
+        ["PoolOptions", expect.stringContaining("value: string;")],
+        ["SharedOptions", expect.stringContaining(`${field}: string;`)],
+        ["fixed", expect.stringContaining("function fixed(options: PoolOptions): void;")],
+        ["preview", expect.stringContaining("function preview(options: SharedOptions): void;")],
+        ["send", expect.stringContaining("function send(options: SharedOptions): void;")],
+      ]);
+      expect(
+        surface.modules.flatMap(({ entrypoint, exports }) =>
+          exports.map(({ exportName, closureSectionIds }) => [
+            entrypoint,
+            exportName,
+            closureSectionIds,
+          ]),
+        ),
+      ).toEqual([
+        ["fixture", "preview", [2, 4]],
+        ["fixture", "send", [2, 5]],
+        ["pool-a", "fixed", [1, 3]],
+        ["pool-b", "fixed", [0, 3]],
+      ]);
+    }
 
     const diff = diffPluginSdkApi(baseline, changed);
     expect(diff.exports.map(({ change, exportName }) => ({ change, exportName }))).toEqual([
@@ -598,6 +638,49 @@ describe("Plugin SDK API baseline", () => {
     const unrelated = await render("export type TelegramProbe = { ignored: boolean };\n");
 
     expect(unrelated).toEqual(baseline);
+  });
+
+  it("bounds repeated work inside a cyclic declaration fanout without sharing partial roots", () => {
+    const repoRoot = tempDirs.make("openclaw-plugin-sdk-cyclic-fanout-");
+    const files = Array.from({ length: 7 }, (_, index) =>
+      path.join(repoRoot, `cycle${index}.d.ts`),
+    );
+    for (const [index, file] of files.entries()) {
+      const siblings = files.map((_, other) => other).filter((other) => other !== index);
+      fs.writeFileSync(
+        file,
+        [
+          ...siblings.map((other) => `import type { C${other} } from "./cycle${other}.js";`),
+          `export interface C${index} { marker${index}: string; ${siblings.map((other) => `c${other}?: C${other};`).join(" ")} }`,
+        ].join("\n"),
+      );
+    }
+    const program = ts.createProgram(files, {
+      target: ts.ScriptTarget.ESNext,
+      module: ts.ModuleKind.NodeNext,
+      moduleResolution: ts.ModuleResolutionKind.NodeNext,
+    });
+    const printer = ts.createPrinter();
+    let printCount = 0;
+    const render = createDeclarationClosureRenderer({
+      program,
+      repoRoot,
+      printer: {
+        ...printer,
+        printNode(...args: Parameters<typeof printer.printNode>) {
+          printCount += 1;
+          return printer.printNode(...args);
+        },
+      },
+    });
+    const first = render(program.getSourceFile(files[0]!)!, "C0");
+    const second = render(program.getSourceFile(files[3]!)!, "C3");
+    expect(first?.sections.map((section) => section.name)).toEqual(
+      files.map((_, index) => `C${index}`),
+    );
+    expect(second).toEqual(first);
+    // A dense cycle previously printed 3,914 declarations for these two roots.
+    expect(printCount).toBeLessThan(100);
   });
 
   it("keeps cycle members complete across cached export walks", async () => {

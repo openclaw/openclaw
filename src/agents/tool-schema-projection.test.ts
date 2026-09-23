@@ -46,26 +46,36 @@ describe("runtime tool input schema projection", () => {
     ]);
   });
 
-  it("reports dynamic JSON Schema keywords", () => {
+  it("reports dynamic JSON Schema keywords in traversal order with exact paths", () => {
     expect(
       projectRuntimeToolInputSchema({
         type: "object",
-        anyOf: [{ $dynamicAnchor: "root" }],
+        $dynamicAnchor: "root",
+        $dynamicRef: "#root",
+        anyOf: [{ $dynamicAnchor: "branch" }, { properties: { "": { $dynamicRef: "#empty" } } }],
         properties: {
           target: { $dynamicRef: "#target" },
+          "literal.dot[0]": { $dynamicAnchor: "literal" },
         },
       }),
     ).toEqual({
       schema: {
         type: "object",
-        anyOf: [{ $dynamicAnchor: "root" }],
+        $dynamicAnchor: "root",
+        $dynamicRef: "#root",
+        anyOf: [{ $dynamicAnchor: "branch" }, { properties: { "": { $dynamicRef: "#empty" } } }],
         properties: {
           target: { $dynamicRef: "#target" },
+          "literal.dot[0]": { $dynamicAnchor: "literal" },
         },
       },
       violations: [
+        "parameters.$dynamicRef",
+        "parameters.$dynamicAnchor",
         "parameters.anyOf[0].$dynamicAnchor",
+        "parameters.anyOf[1].properties..$dynamicRef",
         "parameters.properties.target.$dynamicRef",
+        "parameters.properties.literal.dot[0].$dynamicAnchor",
       ],
     });
   });
@@ -132,6 +142,52 @@ describe("runtime tool input schema projection", () => {
       schema: {},
       violations: ["parameters.properties..maximum is not JSON-serializable"],
     });
+  });
+
+  it("tracks repeated descendants through each toJSON replacement without rereading getters", () => {
+    const reads: string[] = [];
+    let count = 0;
+    const shared = {
+      type: "number",
+      get maximum() {
+        reads.push("maximum");
+        return count++ === 0 ? 1 : Number.POSITIVE_INFINITY;
+      },
+    };
+    const replacement = {
+      toJSON(key: string) {
+        reads.push(key);
+        return { type: "array", items: [shared] };
+      },
+    };
+
+    expect(
+      projectRuntimeToolInputSchema({
+        type: "object",
+        properties: { first: replacement, second: replacement },
+      }),
+    ).toEqual({
+      schema: {},
+      violations: ["parameters.properties.second.items[0].maximum is not JSON-serializable"],
+    });
+    expect(reads).toEqual(["first", "maximum", "second", "maximum"]);
+  });
+
+  it("finishes JSON serialization after an invalid number and preserves later getter failures", () => {
+    let reads = 0;
+    expect(
+      projectRuntimeToolInputSchema({
+        type: "object",
+        properties: {
+          first: { default: Number.NaN },
+          get later() {
+            reads++;
+            throw new Error("unreadable schema");
+          },
+        },
+      }),
+    ).toEqual({ schema: {}, violations: ["parameters is not JSON-serializable"] });
+    expect(reads).toBe(1);
   });
 
   it("reports boxed non-finite numeric schema values", () => {
@@ -287,6 +343,27 @@ describe("runtime tool input schema projection", () => {
         },
       ],
     });
+  });
+
+  it("snapshots tool references before schema getters replace later array entries", () => {
+    const captured = { name: "captured", parameters: { type: "object" } };
+    const replacement = { name: "replacement", parameters: { type: "array" } };
+    const tools = [
+      {
+        name: "first",
+        get parameters() {
+          tools[1] = replacement;
+          return { type: "object" };
+        },
+      },
+      captured,
+    ];
+
+    expect(filterRuntimeCompatibleTools(tools)).toEqual({
+      tools: [tools[0], captured],
+      diagnostics: [],
+    });
+    expect(tools[1]).toBe(replacement);
   });
 
   it("keeps provider-normalizable object schemas for provider-specific cleanup", () => {

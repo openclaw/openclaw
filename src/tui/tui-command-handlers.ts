@@ -1,7 +1,6 @@
 // Implements TUI slash command handlers and backend action dispatch.
 import { randomUUID } from "node:crypto";
-import type { Component, OverlayHandle, SelectItem, TUI } from "@earendil-works/pi-tui";
-import type { Result } from "@openclaw/normalization-core/result";
+import type { Component, OverlayHandle, SelectItem } from "@earendil-works/pi-tui";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { modelKey } from "../agents/model-ref-shared.js";
 import { shouldForwardModelCommandToServer } from "../auto-reply/commands-registry.shared.js";
@@ -27,14 +26,15 @@ import {
   resolveTuiCommandDescriptor,
   type TuiCommandHandlerName,
 } from "./commands.js";
-import type { ChatLog } from "./components/chat-log.js";
 import {
   createFilterableSelectList,
   createSearchableSelectList,
   createSettingsList,
 } from "./components/selectors.js";
-import type { TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
+import type { TuiBackend } from "./tui-backend.js";
+import { runTuiBrowserSetup } from "./tui-browser-setup.js";
 import { addBlockedChatSubmitNotice } from "./tui-busy-notice.js";
+import type { CommandHandlerContext } from "./tui-command-context.js";
 import { formatTuiErrorMessage } from "./tui-formatters.js";
 import { buildSessionChoices, loadRecentSessions } from "./tui-session-picker.js";
 import {
@@ -53,53 +53,11 @@ import {
   type TuiChatSubmitBlock,
   type TuiChatSubmitSnapshot,
 } from "./tui-submit-state.js";
-import type {
-  AgentSummary,
-  GatewayStatusSummary,
-  TuiResult,
-  TuiOptions,
-  TuiStateAccess,
-} from "./tui-types.js";
+import type { AgentSummary, GatewayStatusSummary } from "./tui-types.js";
 
 function formatTuiFastMode(mode: unknown): "auto" | "on" | "off" {
   return mode === "auto" ? "auto" : mode === true ? "on" : "off";
 }
-
-type CommandHandlerContext = {
-  client: TuiBackend;
-  chatLog: ChatLog;
-  tui: TUI;
-  opts: TuiOptions;
-  state: TuiStateAccess;
-  deliverDefault: boolean;
-  openOverlay: (component: Component) => OverlayHandle;
-  closeOverlay: (handle?: OverlayHandle) => void;
-  refreshSessionInfo: () => Promise<void>;
-  loadHistory: () => Promise<unknown>;
-  setSession: (key: string, agentId?: string) => Promise<void>;
-  refreshAgents: (ownsRefresh?: () => boolean) => Promise<Result<void, string>>;
-  abortActive: (params?: { preferActive?: boolean }) => Promise<void>;
-  setActivityStatus: (text: string) => void;
-  formatSessionKey: (key: string) => string;
-  applySessionInfoFromPatch: (result: SessionsPatchResult) => void;
-  applySessionMutationResult: (
-    result?: TuiSessionMutationResult | null,
-    requestSelection?: { sessionKey: string; agentId: string },
-  ) => boolean;
-  noteLocalRunId?: (runId: string) => void;
-  noteLocalBtwRunId?: (runId: string) => void;
-  forgetLocalRunId?: (runId: string) => void;
-  forgetLocalBtwRunId?: (runId: string) => void;
-  consumeCompletedRunForPendingSend?: (runId: string) => boolean;
-  isRunObserved?: (runId: string) => boolean;
-  flushPendingHistoryRefreshIfIdle?: () => void;
-  runAuthFlow?: (params: { provider?: string }) => Promise<{
-    exitCode: number | null;
-    signal: NodeJS.Signals | null;
-    commandArgv: string;
-  }>;
-  requestExit: (result?: Partial<TuiResult>) => void;
-};
 
 function isBtwCommand(text: string): boolean {
   return /^\/(?:btw|side)(?::|\s|$)/i.test(text.trim());
@@ -311,19 +269,22 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   ) => {
     const { isCurrent } = captureSessionIncarnation();
     selector.onSelect = (item) => {
+      if (pickerRequest !== request) {
+        return;
+      }
+      // Close on first selection so a slow backend cannot leave the picker consuming draft input.
+      closeOverlayAndRender(overlayHandle);
       void (async () => {
         try {
           if (isCurrent()) {
             await onSelect(item.value);
           }
         } catch (err) {
-          // A rejected selection must not strand the overlay open with an
-          // unhandled rejection; close it and surface the cause in chat.
           if (isCurrent()) {
             chatLog.addSystem(`selection failed: ${formatTuiErrorMessage(err)}`);
           }
         }
-        closeOverlayAndRender(overlayHandle);
+        tui.requestRender();
       })();
     };
     selector.onCancel = () => closeOverlayAndRender(overlayHandle);
@@ -350,13 +311,30 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         return {
           value: ref,
           label: ref,
-          description: model.name && model.name !== model.id ? model.name : "",
+          description: [
+            model.name !== model.id ? model.name : "",
+            model.available === false ? (model.unavailableReason ?? "unavailable") : "",
+          ]
+            .filter(Boolean)
+            .join(" · "),
         };
       });
       openSelector(
         createSearchableSelectList(items, 9),
-        (value) =>
-          applySessionSetting({ model: value }, `model set to ${value}`, "model set failed"),
+        async (value) => {
+          const model = models.find((entry) => modelKey(entry.provider, entry.id) === value);
+          if (model?.available === false) {
+            const guidance =
+              model.unavailableReason === "cooldown"
+                ? "Wait and retry, or choose another model."
+                : "Run openclaw models auth login or choose another model.";
+            chatLog.addSystem(
+              `model unavailable: ${model.unavailableReason ?? "unavailable"}. ${guidance}`,
+            );
+            return;
+          }
+          await applySessionSetting({ model: value }, `model set to ${value}`, "model set failed");
+        },
         request,
       );
     } catch (err) {
@@ -472,6 +450,20 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           thinkingLevels: state.sessionInfo.thinkingLevels,
         }),
       );
+    },
+    "browser-setup": async (args) => {
+      if (!context.localCli) {
+        chatLog.addSystem("browser setup: local CLI runner unavailable; message not sent");
+        return;
+      }
+      await runTuiBrowserSetup({
+        args,
+        localCli: context.localCli,
+        report: (line) => {
+          chatLog.addSystem(line);
+          tui.requestRender();
+        },
+      });
     },
     auth: async (args) => {
       if (!runAuthFlow) {
@@ -838,13 +830,24 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         finishSessionTransition();
       }
     },
-    abort: async () => await abortActive(),
+    abort: async () => {
+      context.localCli?.cancel();
+      await abortActive();
+    },
     stop: async () => {
+      context.localCli?.cancel();
       // Queued client runs can terminalize before the followup executes, so
       // local run ids are not a complete stop target inventory.
       await abortActive({ preferActive: true });
     },
     settings: () => openSettings(),
+    question: async () => {
+      if (context.reopenQuestion) {
+        await context.reopenQuestion();
+      } else {
+        chatLog.addSystem("no pending question");
+      }
+    },
     exit: () => requestExit(),
   } satisfies Record<TuiCommandHandlerName, CommandHandler>;
 

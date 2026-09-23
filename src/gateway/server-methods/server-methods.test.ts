@@ -6,11 +6,20 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type TestContext,
+} from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
-import { validateExecApprovalRequestParams } from "../../../packages/gateway-protocol/src/index.js";
-import { STREAM_ERROR_FALLBACK_TEXT } from "../../agents/stream-message-shared.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
@@ -29,6 +38,7 @@ import {
   buildSystemRunApprovalEnvBinding,
 } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { waitForAgentJob } from "../agent-turn/agent-job.js";
 import {
@@ -39,13 +49,39 @@ import {
   resolveEffectiveChatHistoryMaxChars,
   sanitizeChatHistoryMessages,
 } from "../chat-display-projection.js";
-import { ExecApprovalManager } from "../exec-approval-manager.js";
+import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import type { HealthSummary } from "../health/types.js";
-import { createChatAbortMarker, createChatRunState } from "../server-chat-state.js";
+import { createChatAbortMarker } from "../server-chat-state.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
+import {
+  waitForApprovalAccepted,
+  waitForApprovalRequested,
+} from "./approval-request.test-support.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
+import {
+  type ExecApprovalRequestArgs,
+  type ExecApprovalResolveArgs,
+  createApprovalRuntimeClient,
+  createExecApprovalClient,
+  createExecApprovalFixture,
+  createForwardingExecApprovalFixture,
+  createIosPushDelivery,
+  createWebPushDelivery,
+  defaultExecApprovalRequestParams,
+  expectRejectedExecApprovalRequest,
+  getExecApproval,
+  getRequestedExecApprovalPayload,
+  listExecApprovals,
+  requestExecApproval,
+  requestExecApprovalForTest,
+  resolveExecApproval,
+  resolveExecApprovalForTest,
+  waitExecApproval,
+  withAcceptedExecApproval,
+  withRequestedExecApproval,
+} from "./exec-approval.test-support.js";
 import { logsHandlers } from "./logs.js";
 
 function waitForFast<T>(
@@ -1170,12 +1206,15 @@ describe("projectChatDisplayMessages", () => {
   const safeFailureContent = [
     { type: "text", text: "The agent run failed before producing a reply." },
   ];
+  const networkFailureText = "LLM request failed: network connection error.";
+  const networkFailureContent = (reply?: string, type = "text") => [
+    { type, text: [networkFailureText, reply].filter(Boolean).join("\n\n") },
+  ];
   const privateError = "private upstream at secret.internal.example failed";
   const displayErrorCases: Array<{
     name: string;
     message: Record<string, unknown>;
     content: Array<Record<string, unknown>>;
-    visibleText?: string;
   }> = [
     {
       name: "projects empty assistant error turns as a generic safe failure",
@@ -1183,9 +1222,9 @@ describe("projectChatDisplayMessages", () => {
       content: safeFailureContent,
     },
     {
-      name: "projects empty text-block assistant errors as a generic safe failure",
+      name: "projects empty text-block assistant errors as a safe network failure",
       message: { content: [{ type: "text", text: "" }], errorMessage: "Connection error." },
-      content: safeFailureContent,
+      content: networkFailureContent(),
     },
     {
       name: "projects provider refusals before classifying their explanation text",
@@ -1213,15 +1252,15 @@ describe("projectChatDisplayMessages", () => {
         content: [{ type: "output_text", text: "A partial reply before the run failed." }],
         errorMessage: "Connection error.",
       },
-      content: [{ type: "output_text", text: "A partial reply before the run failed." }],
+      content: networkFailureContent("A partial reply before the run failed.", "output_text"),
     },
     {
-      name: "projects thinking-only assistant errors as a generic safe failure",
+      name: "projects thinking-only assistant errors as a safe network failure",
       message: {
         content: [{ type: "thinking", thinking: "private upstream details" }],
         errorMessage: "Connection error.",
       },
-      content: safeFailureContent,
+      content: networkFailureContent(),
     },
     {
       name: "preserves a safe failure for a synthetic sentinel followed only by private thinking",
@@ -1251,24 +1290,23 @@ describe("projectChatDisplayMessages", () => {
       content: safeFailureContent,
     },
     {
-      name: "projects commentary-phase assistant errors as a visible generic safe failure",
+      name: "projects commentary-phase assistant errors as a visible safe network failure",
       message: {
         phase: "commentary",
         content: [],
         text: "private upstream details",
         errorMessage: "Connection error.",
       },
-      content: safeFailureContent,
+      content: networkFailureContent(),
     },
     {
-      name: "leaves legacy top-level assistant error text unchanged",
+      name: "preserves legacy top-level assistant text with safe network failure details",
       message: {
         content: [],
         text: "A real reply before the run failed.",
         errorMessage: "Connection error.",
       },
-      content: [],
-      visibleText: "A real reply before the run failed.",
+      content: networkFailureContent("A real reply before the run failed."),
     },
     {
       name: "preserves partial error replies without hidden reasoning or diagnostics",
@@ -1356,7 +1394,7 @@ describe("projectChatDisplayMessages", () => {
     },
   ];
 
-  it.each(displayErrorCases)("$name", ({ message, content, visibleText }) => {
+  it.each(displayErrorCases)("$name", ({ message, content }) => {
     const result = projectChatDisplayMessages([
       { role: "assistant", stopReason: "error", timestamp: 1, ...message },
     ]);
@@ -1366,7 +1404,6 @@ describe("projectChatDisplayMessages", () => {
         content,
         stopReason: "error",
         timestamp: 1,
-        ...(visibleText === undefined ? {} : { text: visibleText }),
       },
     ]);
     expect(JSON.stringify(result)).not.toContain("secret.internal.example");
@@ -1444,7 +1481,7 @@ describe("projectChatDisplayMessages", () => {
     ["output_text", "NO_REPLY"],
     ["input_text", ""],
     ["input_text", "NO_REPLY"],
-  ])("projects hidden %s assistant errors %j as a generic safe failure", (type, text) => {
+  ])("projects hidden %s assistant errors %j as a safe network failure", (type, text) => {
     const result = projectChatDisplayMessages([
       {
         role: "assistant",
@@ -1455,9 +1492,7 @@ describe("projectChatDisplayMessages", () => {
       },
     ]);
 
-    expect(result[0]?.content).toEqual([
-      { type: "text", text: "The agent run failed before producing a reply." },
-    ]);
+    expect(result[0]?.content).toEqual(networkFailureContent());
   });
 
   it.each(["NO_REPLY", STREAM_ERROR_FALLBACK_TEXT])(
@@ -1693,71 +1728,6 @@ describe("projectChatDisplayMessages", () => {
     expect(result).toEqual([projectedSessionsSendHistoryMessage("", 1)]);
   });
 
-  it("does not let sessions_send inter-session turns clear pending message-tool mirrors", () => {
-    const result = projectChatDisplayMessages([
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_call",
-            id: "call-message",
-            name: "message",
-            args: { action: "send", message: "visible via message tool" },
-          },
-        ],
-        __openclaw: { seq: 1 },
-        timestamp: 1,
-      },
-      sessionsSendHistoryMessage("inter-session update", 2, {
-        __openclaw: { seq: 2 },
-      }),
-      {
-        role: "toolResult",
-        toolName: "message",
-        toolCallId: "call-message",
-        content: JSON.stringify({ ok: true }),
-        details: { sourceReplySink: "internal-ui" },
-        timestamp: 3,
-      },
-      assistantHistoryMessage("NO_REPLY", { timestamp: 4 }),
-    ]);
-
-    expect(result).toEqual([
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_call",
-            id: "call-message",
-            name: "message",
-            args: { action: "send", message: "visible via message tool" },
-          },
-        ],
-        __openclaw: { seq: 1 },
-        timestamp: 1,
-      },
-      projectedSessionsSendHistoryMessage("inter-session update", 2, {
-        __openclaw: { seq: 2 },
-      }),
-      {
-        role: "toolResult",
-        toolName: "message",
-        toolCallId: "call-message",
-        content: JSON.stringify({ ok: true }),
-        timestamp: 3,
-      },
-      assistantHistoryMessage("visible via message tool", {
-        openclawMessageToolMirror: {
-          toolName: "message",
-          toolCallId: "call-message",
-          sourceReplySink: "internal-ui",
-          sourceMessageSeq: 1,
-        },
-        timestamp: 1,
-      }),
-    ]);
-  });
-
   it("keeps forwarded sessions_send control-token text visible after stripping provenance", () => {
     const result = projectChatDisplayMessages([
       {
@@ -1885,73 +1855,6 @@ describe("projectChatDisplayMessages", () => {
     ]);
   });
 
-  it("preserves structured trace alongside visible assistant progress text", () => {
-    const result = projectChatDisplayMessages(
-      [
-        userHistoryMessage("fix it", { timestamp: 1 }),
-        {
-          role: "assistant",
-          content: [
-            { type: "thinking", thinking: "private reasoning" },
-            {
-              type: "text",
-              text: "I will clean that up now.",
-              textSignature: JSON.stringify({
-                v: 1,
-                id: "msg-progress",
-                phase: "commentary",
-              }),
-            },
-            {
-              type: "toolCall",
-              id: "call-read",
-              name: "read",
-              arguments: { path: "AGENTS.md" },
-            },
-          ],
-          timestamp: 2,
-          __openclaw: { seq: 2 },
-        },
-        {
-          role: "toolResult",
-          toolCallId: "call-read",
-          toolName: "read",
-          content: [{ type: "text", text: "file contents" }],
-          timestamp: 3,
-        },
-      ],
-      { includeCommentaryFallbacks: true },
-    );
-
-    expect(result.slice(1, 3)).toEqual([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "I will clean that up now." }],
-        timestamp: 2,
-        __openclaw: { seq: 2 },
-        openclawStreamFallback: {
-          replacementText: "I will clean that up now.",
-          source: "segment",
-          itemId: "msg-progress",
-        },
-      },
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "private reasoning" },
-          {
-            type: "toolCall",
-            id: "call-read",
-            name: "read",
-            arguments: { path: "AGENTS.md" },
-          },
-        ],
-        timestamp: 2,
-        __openclaw: { seq: 2 },
-      },
-    ]);
-  });
-
   it("projects pure keyed commentary as a durable preamble", () => {
     const result = projectChatDisplayMessages(
       [
@@ -2018,11 +1921,7 @@ describe("projectChatDisplayMessages", () => {
 
   it("drops channel-final delivery mirrors that duplicate the preceding assistant reply", () => {
     const result = projectChatDisplayMessages([
-      {
-        role: "user",
-        content: "yo big boy",
-        timestamp: 1,
-      },
+      makeUserMessage("yo big boy", 1),
       assistantHistoryMessage("Yo Peter. I’m here.", {
         provider: "openai",
         model: "gpt-5.5",
@@ -2055,11 +1954,7 @@ describe("projectChatDisplayMessages", () => {
         __openclaw: { mirrorIdentity: "run-1:assistant" },
         timestamp: 1,
       }),
-      {
-        role: "user",
-        content: "",
-        timestamp: 2,
-      },
+      makeUserMessage("", 2),
       deliveryMirrorHistoryMessage("Repeated reply", "message-2", 3),
     ]);
 
@@ -2164,15 +2059,6 @@ describe("projectChatDisplayMessages", () => {
     {
       name: "type-only",
       message: { __openclaw: { media: [{ contentType: "image/png" }] } },
-      expectedPath: undefined,
-    },
-    {
-      name: "media-only",
-      message: {
-        __openclaw: {
-          media: [{ path: "/tmp/openclaw/media-only.png", contentType: "image/png" }],
-        },
-      },
       expectedPath: undefined,
     },
   ])("keeps $name media-only users through canonical display projection", (testCase) => {
@@ -2305,6 +2191,18 @@ describe("dropPreSessionStartAnnouncePairs (#85648)", () => {
       keptIndexes: [2],
     },
     {
+      name: "drops a pre-cutoff settlement wake and its adjacent synthesis",
+      messages: [
+        {
+          ...recordedMessage("user", "All children settled", 1, cutoff - 1_000),
+          provenance: { ...announceProvenance, sourceTool: "subagent_settle" },
+        },
+        recordedMessage("assistant", "old synthesis", 2, cutoff - 500),
+        recordedMessage("user", "fresh user turn", 3, cutoff + 1_000),
+      ],
+      keptIndexes: [2],
+    },
+    {
       name: "keeps a mid-session announce pair whose timestamp is at or after the cutoff",
       messages: [
         recordedMessage("user", announceText, 1, cutoff + 1_000, true),
@@ -2374,13 +2272,11 @@ describe("dropPreSessionStartAnnouncePairs (#85648)", () => {
 
 describe("resolveEffectiveChatHistoryMaxChars", () => {
   it("uses the RPC maxChars override when present", () => {
-    expect(resolveEffectiveChatHistoryMaxChars({}, 45)).toBe(45);
+    expect(resolveEffectiveChatHistoryMaxChars(45)).toBe(45);
   });
 
   it("falls back to the default hardcoded limit", () => {
-    expect(resolveEffectiveChatHistoryMaxChars({}, undefined)).toBe(
-      DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-    );
+    expect(resolveEffectiveChatHistoryMaxChars()).toBe(DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS);
   });
 });
 
@@ -2502,387 +2398,57 @@ describe("gateway chat transcript writes (guardrail)", () => {
 });
 
 describe("exec approval handlers", () => {
-  const execApprovalNoop = () => false;
-  type ExecApprovalHandlers = ReturnType<typeof createExecApprovalHandlers>;
-  type ExecApprovalGetArgs = Parameters<ExecApprovalHandlers["exec.approval.get"]>[0];
-  type ExecApprovalRequestArgs = Parameters<ExecApprovalHandlers["exec.approval.request"]>[0];
-  type ExecApprovalResolveArgs = Parameters<ExecApprovalHandlers["exec.approval.resolve"]>[0];
-  type ExecApprovalWaitArgs = Parameters<ExecApprovalHandlers["exec.approval.waitDecision"]>[0];
-
-  const defaultExecApprovalRequestParams = {
-    command: "echo ok",
-    commandArgv: ["echo", "ok"],
-    systemRunPlan: {
-      argv: ["/usr/bin/echo", "ok"],
-      cwd: "/tmp",
-      commandText: "/usr/bin/echo ok",
-      agentId: "main",
-      sessionKey: "agent:main:main",
-    },
-    cwd: "/tmp",
-    nodeId: "node-1",
-    host: "node",
-    timeoutMs: 2000,
-  } as const;
-
-  function createExecApprovalClient(params: {
-    connId: string;
-    clientId: string;
-    deviceId?: string;
-    scopes?: string[];
-    approvalRuntime?: boolean;
-    agentRuntimeIdentity?: { agentId: string; sessionKey: string };
-  }): ExecApprovalRequestArgs["client"] {
-    const internal = {
-      ...(params.approvalRuntime ? { approvalRuntime: true } : {}),
-      ...(params.agentRuntimeIdentity
-        ? {
-            agentRuntimeIdentity: { kind: "agentRuntime" as const, ...params.agentRuntimeIdentity },
-          }
-        : {}),
-    };
-    return {
-      connId: params.connId,
-      connect: {
-        client: { id: params.clientId },
-        device: params.deviceId ? { id: params.deviceId } : undefined,
-        scopes: params.scopes,
-      },
-      ...(Object.keys(internal).length > 0 ? { internal } : {}),
-    } as unknown as ExecApprovalRequestArgs["client"];
-  }
-
-  function createApprovalRuntimeClient(
-    connId: string,
-    deviceId?: string,
-    agentRuntimeIdentity?: { agentId: string; sessionKey: string },
-  ) {
-    return createExecApprovalClient({
-      connId,
-      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
-      deviceId,
-      scopes: ["operator.approvals"],
-      approvalRuntime: true,
-      agentRuntimeIdentity,
-    });
-  }
-
-  function toExecApprovalRequestContext(context: {
-    broadcast: (event: string, payload: unknown) => void;
-    hasExecApprovalClients?: () => boolean;
-    chatAbortedRuns?: Map<string, number>;
-  }): ExecApprovalRequestArgs["context"] {
-    return context as unknown as ExecApprovalRequestArgs["context"];
-  }
-
-  function toExecApprovalResolveContext(context: {
-    broadcast: (event: string, payload: unknown) => void;
-  }): ExecApprovalResolveArgs["context"] {
-    return context as unknown as ExecApprovalResolveArgs["context"];
-  }
-
-  async function getExecApproval(params: {
-    handlers: ExecApprovalHandlers;
-    id: string;
-    respond: ReturnType<typeof vi.fn>;
-    client?: ExecApprovalGetArgs["client"];
-  }) {
-    return expectDefined(
-      params.handlers["exec.approval.get"],
-      'params.handlers["exec.approval.get"] test invariant',
-    )({
-      params: { id: params.id } as ExecApprovalGetArgs["params"],
-      respond: params.respond as unknown as ExecApprovalGetArgs["respond"],
-      context: {} as ExecApprovalGetArgs["context"],
-      client: params.client ?? null,
-      req: { id: "req-get", type: "req", method: "exec.approval.get" },
-      isWebchatConnect: execApprovalNoop,
-    });
-  }
-
-  async function listExecApprovals(params: {
-    handlers: ExecApprovalHandlers;
-    respond: ReturnType<typeof vi.fn>;
-    client?: ExecApprovalResolveArgs["client"];
-  }) {
-    return expectDefined(
-      params.handlers["exec.approval.list"],
-      'params.handlers["exec.approval.list"] test invariant',
-    )({
-      params: {} as never,
-      respond: params.respond as never,
-      context: {} as never,
-      client: params.client ?? null,
-      req: { id: "req-list", type: "req", method: "exec.approval.list" },
-      isWebchatConnect: execApprovalNoop,
-    });
-  }
-
-  async function requestExecApproval(params: {
-    handlers: ExecApprovalHandlers;
-    respond: ReturnType<typeof vi.fn>;
-    context: { broadcast: (event: string, payload: unknown) => void };
-    params?: Record<string, unknown>;
-    client?: ExecApprovalRequestArgs["client"];
-  }) {
-    const requestParams = {
-      ...defaultExecApprovalRequestParams,
-      ...params.params,
-    } as unknown as ExecApprovalRequestArgs["params"];
-    const hasExplicitPlan =
-      params.params !== undefined && Object.hasOwn(params.params, "systemRunPlan");
-    if (
-      !hasExplicitPlan &&
-      (requestParams as { host?: string }).host === "node" &&
-      Array.isArray((requestParams as { commandArgv?: unknown }).commandArgv)
-    ) {
-      const commandArgv = (requestParams as { commandArgv: unknown[] }).commandArgv.map((entry) =>
-        String(entry),
-      );
-      const cwdValue =
-        typeof (requestParams as { cwd?: unknown }).cwd === "string"
-          ? ((requestParams as { cwd: string }).cwd ?? null)
-          : null;
-      const commandText =
-        typeof (requestParams as { command?: unknown }).command === "string"
-          ? ((requestParams as { command: string }).command ?? null)
-          : null;
-      requestParams.systemRunPlan = {
-        argv: commandArgv,
-        cwd: cwdValue,
-        commandText: commandText ?? commandArgv.join(" "),
-        agentId:
-          typeof (requestParams as { agentId?: unknown }).agentId === "string"
-            ? ((requestParams as { agentId: string }).agentId ?? null)
-            : null,
-        sessionKey:
-          typeof (requestParams as { sessionKey?: unknown }).sessionKey === "string"
-            ? ((requestParams as { sessionKey: string }).sessionKey ?? null)
-            : null,
-      };
-    }
-    return expectDefined(
-      params.handlers["exec.approval.request"],
-      'params.handlers["exec.approval.request"] test invariant',
-    )({
-      params: requestParams,
-      respond: params.respond as unknown as ExecApprovalRequestArgs["respond"],
-      context: toExecApprovalRequestContext({
-        hasExecApprovalClients: () => true,
-        ...params.context,
-      }),
-      client: params.client ?? null,
-      req: { id: "req-1", type: "req", method: "exec.approval.request" },
-      isWebchatConnect: execApprovalNoop,
-    });
-  }
-
-  async function resolveExecApproval(params: {
-    handlers: ExecApprovalHandlers;
-    id: string;
-    decision?: "allow-once" | "allow-always" | "deny";
-    respond: ReturnType<typeof vi.fn>;
-    context: { broadcast: (event: string, payload: unknown) => void };
-    client?: ExecApprovalResolveArgs["client"];
-  }) {
-    return expectDefined(
-      params.handlers["exec.approval.resolve"],
-      'params.handlers["exec.approval.resolve"] test invariant',
-    )({
-      params: {
-        id: params.id,
-        decision: params.decision ?? "allow-once",
-      } as ExecApprovalResolveArgs["params"],
-      respond: params.respond as unknown as ExecApprovalResolveArgs["respond"],
-      context: toExecApprovalResolveContext(params.context),
-      client: params.client ?? null,
-      req: { id: "req-2", type: "req", method: "exec.approval.resolve" },
-      isWebchatConnect: execApprovalNoop,
-    });
-  }
-
-  async function resolveExecApprovalForTest(
-    params: Omit<Parameters<typeof resolveExecApproval>[0], "respond">,
-  ) {
-    const respond = vi.fn();
-    await resolveExecApproval({ ...params, respond });
-    return respond;
-  }
-
-  async function waitExecApproval(params: {
-    handlers: ExecApprovalHandlers;
-    id: string;
-    respond: ReturnType<typeof vi.fn>;
-    context: object;
-  }) {
-    return expectDefined(
-      params.handlers["exec.approval.waitDecision"],
-      'params.handlers["exec.approval.waitDecision"] test invariant',
-    )({
-      params: { id: params.id },
-      respond: params.respond as unknown as ExecApprovalWaitArgs["respond"],
-      context: params.context as ExecApprovalWaitArgs["context"],
-      client: null,
-      req: { id: "req-wait", type: "req", method: "exec.approval.waitDecision" },
-      isWebchatConnect: execApprovalNoop,
-    });
-  }
-
-  function createExecApprovalFixture(opts?: { config?: OpenClawConfig }) {
-    const manager = new ExecApprovalManager();
-    const handlers = createExecApprovalHandlers(manager);
-    const broadcasts: Array<{ event: string; payload: unknown }> = [];
-    const respond = vi.fn();
-    const context = {
-      getRuntimeConfig: () => opts?.config ?? {},
-      broadcast: (event: string, payload: unknown) => {
-        broadcasts.push({ event, payload });
-      },
-      hasExecApprovalClients: () => true,
-      chatRunState: createChatRunState(),
-    };
-    return { manager, handlers, broadcasts, respond, context };
-  }
-
-  function getRequestedExecApprovalPayload(
-    broadcasts: Array<{ event: string; payload: unknown }>,
-  ): { approvalKind: "exec"; id: string; request: Record<string, unknown> } {
-    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
-    if (!requested) {
-      throw new Error("exec approval requested broadcast missing");
-    }
-    const payload = requested.payload as {
-      approvalKind?: unknown;
-      id?: unknown;
-      request?: Record<string, unknown>;
-    };
-    if (payload.approvalKind !== "exec") {
-      throw new Error("exec approval requested kind missing");
-    }
-    if (typeof payload.id !== "string" || payload.id.length === 0) {
-      throw new Error("exec approval requested id missing");
-    }
-    return {
-      approvalKind: payload.approvalKind,
-      id: payload.id,
-      request: payload.request ?? {},
-    };
-  }
-
-  async function waitForRequestedExecApprovalPayload(
-    broadcasts: Array<{ event: string; payload: unknown }>,
-  ): Promise<{ approvalKind: "exec"; id: string; request: Record<string, unknown> }> {
-    await waitForFast(
-      () => {
-        expect(broadcasts.some((entry) => entry.event === "exec.approval.requested")).toBe(true);
-      },
-      { timeout: 5_000 },
-    );
-    return getRequestedExecApprovalPayload(broadcasts);
-  }
-
-  async function createAcceptedExecApproval(params: {
-    request: Record<string, unknown>;
-    client?: ExecApprovalRequestArgs["client"];
-  }) {
-    const fixture = createExecApprovalFixture();
-    const requestPromise = requestExecApproval({
-      handlers: fixture.handlers,
-      respond: fixture.respond,
-      context: fixture.context,
-      params: params.request,
-      client: params.client,
-    });
-    await waitForFast(() => {
-      expect(fixture.respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
-    });
-    return {
-      ...fixture,
-      ...getRequestedExecApprovalPayload(fixture.broadcasts),
-      requestPromise,
-    };
-  }
-
-  async function createRequestedExecApproval(
-    params: {
-      request?: Record<string, unknown>;
-      client?: ExecApprovalRequestArgs["client"];
-      fixtureOptions?: Parameters<typeof createExecApprovalFixture>[0];
-    } = {},
-  ) {
-    const fixture = createExecApprovalFixture(params.fixtureOptions);
-    const requestPromise = requestExecApproval({
-      handlers: fixture.handlers,
-      respond: fixture.respond,
-      context: fixture.context,
-      params: params.request,
-      client: params.client,
-    });
-    const requested = await waitForRequestedExecApprovalPayload(fixture.broadcasts);
-    return { ...fixture, ...requested, requestPromise };
-  }
-
-  async function requestExecApprovalForTest(
-    request: Record<string, unknown>,
-    fixtureOptions?: Parameters<typeof createExecApprovalFixture>[0],
-  ) {
-    const fixture = createExecApprovalFixture(fixtureOptions);
-    await requestExecApproval({
-      handlers: fixture.handlers,
-      respond: fixture.respond,
-      context: fixture.context,
-      params: request,
-    });
-    return { ...fixture, ...getRequestedExecApprovalPayload(fixture.broadcasts) };
-  }
-
-  async function expectRejectedExecApprovalRequest(
-    params: Record<string, unknown>,
-    message: string,
-  ) {
-    const { handlers, respond, context } = createExecApprovalFixture();
-    await requestExecApproval({ handlers, respond, context, params });
-    expect(mockCallArg(respond)).toBe(false);
-    expect(mockCallArg(respond, 0, 1)).toBeUndefined();
-    expectRecordFields(mockCallArg(respond, 0, 2), { message });
-  }
-
   async function expectUnavailableAllowAlways(
+    testContext: TestContext,
     requestParams: Record<string, unknown>,
     fallbackDecision: "allow-once" | "deny",
   ) {
-    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
-    const requestPromise = requestExecApproval({
-      handlers,
-      respond,
-      context,
-      params: requestParams,
-    });
-    const { id } = await waitForRequestedExecApprovalPayload(broadcasts);
-    const resolveRespond = await resolveExecApprovalForTest({
-      handlers,
-      id,
-      decision: "allow-always",
-      context,
-    });
-    expect(mockCallArg(resolveRespond)).toBe(false);
-    expect(mockCallArg(resolveRespond, 0, 1)).toBeUndefined();
-    expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
-      message: "allow-always is unavailable for this command",
-    });
+    const fixture = await createExecApprovalFixture(testContext);
+    return await fixture.run(async () => {
+      const { handlers, broadcasts, respond, context } = fixture;
+      const { pending: requestPromise } = await waitForApprovalRequested(
+        context,
+        "exec.approval.requested",
+        () =>
+          fixture.track(
+            requestExecApproval({
+              handlers,
+              respond,
+              context,
+              params: requestParams,
+            }),
+          ),
+      );
+      const { id } = getRequestedExecApprovalPayload(broadcasts);
+      const resolveRespond = await resolveExecApprovalForTest({
+        handlers,
+        id,
+        decision: "allow-always",
+        context,
+      });
+      expect(mockCallArg(resolveRespond)).toBe(false);
+      expect(mockCallArg(resolveRespond, 0, 1)).toBeUndefined();
+      expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
+        message: "allow-always is unavailable for this command",
+      });
 
-    const fallbackRespond = await resolveExecApprovalForTest({
-      handlers,
-      id,
-      decision: fallbackDecision,
-      context,
+      const fallbackRespond = await resolveExecApprovalForTest({
+        handlers,
+        id,
+        decision: fallbackDecision,
+        context,
+      });
+      await requestPromise;
+      expect(fallbackRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
     });
-    await requestPromise;
-    expect(fallbackRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   }
 
-  async function expectDroppedApprovalCommandSpans(config?: OpenClawConfig) {
+  async function expectDroppedApprovalCommandSpans(
+    testContext: TestContext,
+    config?: OpenClawConfig,
+  ) {
     const { request } = await requestExecApprovalForTest(
+      testContext,
       {
         timeoutMs: 10,
         command: "ls | python -c 'print(1)'",
@@ -2897,125 +2463,25 @@ describe("exec approval handlers", () => {
     expect(request["commandSpans"]).toBeUndefined();
   }
 
-  function createForwardingExecApprovalFixture(opts?: {
-    webPushDelivery?: {
-      handleRequested: ReturnType<typeof vi.fn>;
-      handleResolved: ReturnType<typeof vi.fn>;
-      handleExpired: ReturnType<typeof vi.fn>;
-    };
-    iosPushDelivery?: {
-      handleRequested: ReturnType<typeof vi.fn>;
-      handleResolved: ReturnType<typeof vi.fn>;
-      handleExpired: ReturnType<typeof vi.fn>;
-    };
-  }) {
-    const manager = new ExecApprovalManager();
-    const forwarder = {
-      handleRequested: vi.fn(async () => false),
-      handleResolved: vi.fn(async () => {}),
-      stop: vi.fn(),
-    };
-    const handlers = createExecApprovalHandlers(manager, {
-      forwarder,
-      iosPushDelivery: opts?.iosPushDelivery as never,
-    });
-    const respond = vi.fn();
-    const context = {
-      getRuntimeConfig: () => ({}),
-      broadcast: (_eventValue: string, _payload: unknown) => {},
-      hasExecApprovalClients: () => false,
-      approvalWebPushDelivery: opts?.webPushDelivery,
-    };
-    return {
-      manager,
-      handlers,
-      forwarder,
-      webPushDelivery: opts?.webPushDelivery,
-      iosPushDelivery: opts?.iosPushDelivery,
-      respond,
-      context,
-    };
-  }
-
-  function createIosPushDelivery(
-    handleRequested: ReturnType<typeof vi.fn> = vi.fn(async () => true),
-  ) {
-    return {
-      handleRequested,
-      handleResolved: vi.fn(async () => {}),
-      handleExpired: vi.fn(async () => {}),
-    };
-  }
-
-  function createWebPushDelivery(
-    handleRequested: ReturnType<typeof vi.fn> = vi.fn(async () => true),
-  ) {
-    return {
-      handleRequested,
-      handleResolved: vi.fn(async () => {}),
-      handleExpired: vi.fn(async () => {}),
-    };
-  }
-
-  async function drainApprovalRequestTicks() {
-    for (let idx = 0; idx < 20; idx += 1) {
-      await Promise.resolve();
-    }
-  }
-
-  describe("ExecApprovalRequestParams validation", () => {
-    const baseParams = {
-      command: "echo hi",
-      cwd: "/tmp",
-      nodeId: "node-1",
-      host: "node",
-    };
-
-    it.each([
-      { label: "omitted", extra: {} },
-      { label: "string", extra: { resolvedPath: "/usr/bin/echo" } },
-      { label: "undefined", extra: { resolvedPath: undefined } },
-      { label: "null", extra: { resolvedPath: null } },
-    ])("accepts request with resolvedPath $label", ({ extra }) => {
-      const params = { ...baseParams, ...extra };
-      expect(validateExecApprovalRequestParams(params)).toBe(true);
-    });
-
-    it("accepts unavailable optional decisions", () => {
-      expect(
-        validateExecApprovalRequestParams({
-          ...baseParams,
-          unavailableDecisions: ["allow-always"],
-        }),
-      ).toBe(true);
-    });
-
-    it.each(["allow-once", "deny"])("rejects baseline unavailable decision %s", (decision) => {
-      expect(
-        validateExecApprovalRequestParams({
-          ...baseParams,
-          unavailableDecisions: [decision],
-        }),
-      ).toBe(false);
-    });
-  });
-
-  it("rejects host=node approval requests without nodeId", async () => {
+  it("rejects host=node approval requests without nodeId", async (testContext) => {
     await expectRejectedExecApprovalRequest(
+      testContext,
       { nodeId: undefined },
       "nodeId is required for host=node",
     );
   });
 
-  it("rejects host=node approval requests without systemRunPlan", async () => {
+  it("rejects host=node approval requests without systemRunPlan", async (testContext) => {
     await expectRejectedExecApprovalRequest(
+      testContext,
       { systemRunPlan: undefined },
       "systemRunPlan is required for host=node",
     );
   });
 
-  it("rejects whitespace-only approval commands without trimming display text", async () => {
+  it("rejects whitespace-only approval commands without trimming display text", async (testContext) => {
     await expectRejectedExecApprovalRequest(
+      testContext,
       {
         command: "   ",
         host: "gateway",
@@ -3026,211 +2492,241 @@ describe("exec approval handlers", () => {
     );
   });
 
-  it("rejects approval requests when the command display would be truncated", async () => {
-    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
-    await requestExecApproval({
-      handlers,
-      respond,
-      context,
-      params: {
-        command: `printf visible # ${"A".repeat(18 * 1024)}\nprintf hidden`,
-        host: "gateway",
-        nodeId: undefined,
-        systemRunPlan: undefined,
-      },
-    });
+  it("rejects approval requests when the command display would be truncated", async (testContext) => {
+    const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
+    return await fixture.run(async () => {
+      const { handlers, broadcasts, respond, context } = fixture;
+      await requestExecApproval({
+        handlers,
+        respond,
+        context,
+        params: {
+          command: `printf visible # ${"A".repeat(18 * 1024)}\nprintf hidden`,
+          host: "gateway",
+          nodeId: undefined,
+          systemRunPlan: undefined,
+        },
+      });
 
-    expect(mockCallArg(respond)).toBe(false);
-    expect(mockCallArg(respond, 0, 1)).toBeUndefined();
-    expectRecordFields(mockCallArg(respond, 0, 2), {
-      message: "command exceeds exec approval display limit",
+      expect(mockCallArg(respond)).toBe(false);
+      expect(mockCallArg(respond, 0, 1)).toBeUndefined();
+      expectRecordFields(mockCallArg(respond, 0, 2), {
+        message: "command exceeds exec approval display limit",
+      });
+      expectRecordFields((mockCallArg(respond, 0, 2) as { details?: unknown }).details, {
+        reason: "EXEC_APPROVAL_COMMAND_DISPLAY_LIMIT",
+      });
+      expect(broadcasts).toEqual([]);
     });
-    expectRecordFields((mockCallArg(respond, 0, 2) as { details?: unknown }).details, {
-      reason: "EXEC_APPROVAL_COMMAND_DISPLAY_LIMIT",
-    });
-    expect(broadcasts).toEqual([]);
   });
 
-  it("rejects approval registration after the owning run was aborted", async () => {
-    const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
-    context.chatRunState.getOrCreate("run-aborted").abortMarker = createChatAbortMarker();
+  it("rejects approval registration after the owning run was aborted", async (testContext) => {
+    const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
+    return await fixture.run(async () => {
+      const { manager, handlers, broadcasts, respond, context } = fixture;
+      context.chatRunState.getOrCreate("run-aborted").abortMarker = createChatAbortMarker();
 
-    await requestExecApproval({
-      handlers,
-      respond,
-      context,
-      params: {
-        runId: "run-aborted",
-        toolCallId: "tool-late",
-        host: "gateway",
-        command: "echo too-late",
-        commandArgv: ["echo", "too-late"],
-        systemRunPlan: undefined,
-        nodeId: undefined,
-      },
-    });
+      await requestExecApproval({
+        handlers,
+        respond,
+        context,
+        params: {
+          runId: "run-aborted",
+          toolCallId: "tool-late",
+          host: "gateway",
+          command: "echo too-late",
+          commandArgv: ["echo", "too-late"],
+          systemRunPlan: undefined,
+          nodeId: undefined,
+        },
+      });
 
-    expect(mockCallArg(respond)).toBe(false);
-    expectRecordFields(mockCallArg(respond, 0, 2), {
-      message: "approval run already aborted",
+      expect(mockCallArg(respond)).toBe(false);
+      expectRecordFields(mockCallArg(respond, 0, 2), {
+        message: "approval run already aborted",
+      });
+      expectRecordFields((mockCallArg(respond, 0, 2) as { details?: unknown }).details, {
+        reason: "EXEC_APPROVAL_RUN_ABORTED",
+      });
+      expect(await manager.listPendingRecords()).toEqual([]);
+      expect(broadcasts).toEqual([]);
     });
-    expectRecordFields((mockCallArg(respond, 0, 2) as { details?: unknown }).details, {
-      reason: "EXEC_APPROVAL_RUN_ABORTED",
-    });
-    expect(manager.listPendingRecords()).toEqual([]);
-    expect(broadcasts).toEqual([]);
   });
 
-  it("marks an allowed wait result run-aborted when abort wins before consumption", async () => {
-    const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
-    const requestPromise = requestExecApproval({
-      handlers,
-      respond,
-      context,
-      params: {
+  it("marks an allowed wait result run-aborted when abort wins before consumption", async (testContext) => {
+    const fixture = await createExecApprovalFixture(testContext);
+    return await fixture.run(async () => {
+      const { manager, handlers, broadcasts, respond, context } = fixture;
+      const { pending: requestPromise } = await waitForApprovalRequested(
+        context,
+        "exec.approval.requested",
+        () =>
+          fixture.track(
+            requestExecApproval({
+              handlers,
+              respond,
+              context,
+              params: {
+                id: "approval-allowed-before-abort",
+                runId: "run-allowed-before-abort",
+                toolCallId: "tool-allowed-before-abort",
+                twoPhase: true,
+                host: "gateway",
+                command: "echo allowed",
+                commandArgv: ["echo", "allowed"],
+                systemRunPlan: undefined,
+                nodeId: undefined,
+              },
+            }),
+          ),
+      );
+      expect(getRequestedExecApprovalPayload(broadcasts).id).toBe("approval-allowed-before-abort");
+      expect(await manager.resolve("approval-allowed-before-abort", "allow-once")).toBe(true);
+      context.chatRunState.getOrCreate("run-allowed-before-abort").abortMarker =
+        createChatAbortMarker();
+      await requestPromise;
+
+      const waitRespond = vi.fn();
+      await waitExecApproval({
+        handlers,
         id: "approval-allowed-before-abort",
-        runId: "run-allowed-before-abort",
-        toolCallId: "tool-allowed-before-abort",
-        twoPhase: true,
-        host: "gateway",
-        command: "echo allowed",
-        commandArgv: ["echo", "allowed"],
-        systemRunPlan: undefined,
-        nodeId: undefined,
-      },
+        respond: waitRespond,
+        context,
+      });
+
+      expect(mockCallArg(waitRespond)).toBe(true);
+      expectRecordFields(mockCallArg(waitRespond, 0, 1), {
+        decision: "allow-once",
+        terminalReason: "run-aborted",
+      });
     });
-    expect((await waitForRequestedExecApprovalPayload(broadcasts)).id).toBe(
-      "approval-allowed-before-abort",
+  });
+
+  it("returns pending approval details for exec.approval.get", async (testContext) => {
+    await withRequestedExecApproval(
+      testContext,
+      {
+        request: {
+          timeoutMs: 60_000,
+          twoPhase: true,
+          host: "gateway",
+          systemRunPlan: undefined,
+          nodeId: undefined,
+        },
+      },
+      async ({ handlers, context, requestPromise, id }) => {
+        const getRespond = vi.fn();
+        await getExecApproval({ handlers, id, respond: getRespond });
+
+        expect(mockCallArg(getRespond)).toBe(true);
+        const approval = mockCallArg(getRespond, 0, 1) as Record<string, unknown>;
+        expectRecordFields(approval, {
+          id,
+          commandText: "echo ok",
+          host: "gateway",
+          nodeId: null,
+          agentId: null,
+        });
+        expect(approval.allowedDecisions).toEqual(["allow-once", "allow-always", "deny"]);
+        expect(mockCallArg(getRespond, 0, 2)).toBeUndefined();
+
+        await resolveExecApprovalForTest({
+          handlers,
+          id,
+          context,
+        });
+        await requestPromise;
+      },
     );
-    expect(manager.resolve("approval-allowed-before-abort", "allow-once")).toBe(true);
-    context.chatRunState.getOrCreate("run-allowed-before-abort").abortMarker =
-      createChatAbortMarker();
-    await requestPromise;
-
-    const waitRespond = vi.fn();
-    await waitExecApproval({
-      handlers,
-      id: "approval-allowed-before-abort",
-      respond: waitRespond,
-      context,
-    });
-
-    expect(mockCallArg(waitRespond)).toBe(true);
-    expectRecordFields(mockCallArg(waitRespond, 0, 1), {
-      decision: "allow-once",
-      terminalReason: "run-aborted",
-    });
   });
 
-  it("returns pending approval details for exec.approval.get", async () => {
-    const { handlers, context, requestPromise, id } = await createRequestedExecApproval({
-      request: {
-        twoPhase: true,
-        host: "gateway",
-        command: "echo ok",
-        commandArgv: ["echo", "ok"],
-        systemRunPlan: undefined,
-        nodeId: undefined,
+  it("escapes unpaired surrogates before broadcasting an exec approval", async (testContext) => {
+    await withRequestedExecApproval(
+      testContext,
+      {
+        request: {
+          twoPhase: true,
+          host: "gateway",
+          command: "echo \uD83D \uDE00 😀",
+          commandArgv: ["echo", "\uD83D", "\uDE00", "😀"],
+          systemRunPlan: undefined,
+          nodeId: undefined,
+        },
       },
-    });
+      async ({ handlers, context, requestPromise, id, request }) => {
+        expect(request.command).toBe("echo \\u{D83D} \\u{DE00} 😀");
+        expect(() => encodeURIComponent(String(request.command))).not.toThrow();
 
-    const getRespond = vi.fn();
-    await getExecApproval({ handlers, id, respond: getRespond });
-
-    expect(mockCallArg(getRespond)).toBe(true);
-    const approval = mockCallArg(getRespond, 0, 1) as Record<string, unknown>;
-    expectRecordFields(approval, {
-      id,
-      commandText: "echo ok",
-      host: "gateway",
-      nodeId: null,
-      agentId: null,
-    });
-    expect(approval.allowedDecisions).toEqual(["allow-once", "allow-always", "deny"]);
-    expect(mockCallArg(getRespond, 0, 2)).toBeUndefined();
-
-    await resolveExecApprovalForTest({
-      handlers,
-      id,
-      context,
-    });
-    await requestPromise;
-  });
-
-  it("escapes unpaired surrogates before broadcasting an exec approval", async () => {
-    const { handlers, context, requestPromise, id, request } = await createRequestedExecApproval({
-      request: {
-        twoPhase: true,
-        host: "gateway",
-        command: "echo \uD83D \uDE00 😀",
-        commandArgv: ["echo", "\uD83D", "\uDE00", "😀"],
-        systemRunPlan: undefined,
-        nodeId: undefined,
+        await resolveExecApprovalForTest({ handlers, id, context });
+        await requestPromise;
       },
-    });
-
-    expect(request.command).toBe("echo \\u{D83D} \\u{DE00} 😀");
-    expect(() => encodeURIComponent(String(request.command))).not.toThrow();
-
-    await resolveExecApprovalForTest({ handlers, id, context });
-    await requestPromise;
+    );
   });
 
-  it("attaches shared command analysis to gateway exec approval requests", async () => {
-    const { handlers, context, requestPromise, id, request } = await createRequestedExecApproval({
-      request: {
-        twoPhase: true,
-        host: "gateway",
-        command: "python3 -c 'print(1)'",
-        commandArgv: ["python3", "script.py"],
-        systemRunPlan: undefined,
-        nodeId: undefined,
+  it("attaches shared command analysis to gateway exec approval requests", async (testContext) => {
+    await withRequestedExecApproval(
+      testContext,
+      {
+        request: {
+          twoPhase: true,
+          host: "gateway",
+          command: "python3 -c 'print(1)'",
+          commandArgv: ["python3", "script.py"],
+          systemRunPlan: undefined,
+          nodeId: undefined,
+        },
       },
-    });
-    const commandAnalysis = request.commandAnalysis as Record<string, unknown>;
-    expect(commandAnalysis.commandCount).toBe(1);
-    expect(commandAnalysis.riskKinds).toEqual(["inline-eval"]);
-    expect(commandAnalysis.warningLines).toEqual(["Contains inline-eval: python3 -c"]);
+      async ({ handlers, context, requestPromise, id, request }) => {
+        const commandAnalysis = request.commandAnalysis as Record<string, unknown>;
+        expect(commandAnalysis.commandCount).toBe(1);
+        expect(commandAnalysis.riskKinds).toEqual(["inline-eval"]);
+        expect(commandAnalysis.warningLines).toEqual(["Contains inline-eval: python3 -c"]);
 
-    await resolveExecApprovalForTest({
-      handlers,
-      id,
-      context,
-    });
-    await requestPromise;
-  });
-
-  it("lists pending exec approvals", async () => {
-    const { handlers, context, requestPromise } = await createAcceptedExecApproval({
-      request: {
-        id: "approval-list-1",
-        twoPhase: true,
-        host: "gateway",
-        systemRunPlan: undefined,
-        nodeId: undefined,
+        await resolveExecApprovalForTest({
+          handlers,
+          id,
+          context,
+        });
+        await requestPromise;
       },
-    });
-
-    const listRespond = vi.fn();
-    await listExecApprovals({ handlers, respond: listRespond });
-
-    expect(mockCallArg(listRespond)).toBe(true);
-    const approvals = mockCallArg(listRespond, 0, 1) as Array<Record<string, unknown>>;
-    const approval = approvals.find((entry) => entry.id === "approval-list-1");
-    expectRecordFields(approval, { approvalKind: "exec", id: "approval-list-1" });
-    expectRecordFields((approval as Record<string, unknown>).request, { command: "echo ok" });
-    expect(mockCallArg(listRespond, 0, 2)).toBeUndefined();
-
-    await resolveExecApprovalForTest({
-      handlers,
-      id: "approval-list-1",
-      context,
-    });
-    await requestPromise;
+    );
   });
 
-  it("lists and resolves only exec approvals owned by the caller", async () => {
-    const manager = new ExecApprovalManager();
+  it("lists pending exec approvals", async (testContext) => {
+    await withAcceptedExecApproval(
+      testContext,
+      {
+        request: {
+          id: "approval-list-1",
+          twoPhase: true,
+          host: "gateway",
+          systemRunPlan: undefined,
+          nodeId: undefined,
+        },
+      },
+      async ({ handlers, context, requestPromise }) => {
+        const listRespond = vi.fn();
+        await listExecApprovals({ handlers, respond: listRespond });
+
+        expect(mockCallArg(listRespond)).toBe(true);
+        const approvals = mockCallArg(listRespond, 0, 1) as Array<Record<string, unknown>>;
+        const approval = approvals.find((entry) => entry.id === "approval-list-1");
+        expectRecordFields(approval, { approvalKind: "exec", id: "approval-list-1" });
+        expectRecordFields((approval as Record<string, unknown>).request, { command: "echo ok" });
+        expect(mockCallArg(listRespond, 0, 2)).toBeUndefined();
+
+        await resolveExecApprovalForTest({
+          handlers,
+          id: "approval-list-1",
+          context,
+        });
+        await requestPromise;
+      },
+    );
+  });
+
+  it("lists and resolves only exec approvals owned by the caller", async (testContext) => {
+    const manager = createTestApprovalManager(testContext);
     const handlers = createExecApprovalHandlers(manager);
     const context = {
       broadcast: (_eventValue: string, _payload: unknown) => {},
@@ -3254,13 +2750,13 @@ describe("exec approval handlers", () => {
     visible.requestedByDeviceId = "device-owner";
     visible.requestedByConnId = "conn-owner";
     visible.requestedByClientId = "client-owner";
-    void manager.register(visible, 60_000);
+    await manager.register(visible, 60_000);
 
     const hidden = manager.create({ command: "echo hidden" }, 60_000, "approval-abcd-hidden");
     hidden.requestedByDeviceId = "device-other";
     hidden.requestedByConnId = "conn-other";
     hidden.requestedByClientId = "client-other";
-    void manager.register(hidden, 60_000);
+    await manager.register(hidden, 60_000);
 
     const listRespond = vi.fn();
     await listExecApprovals({ handlers, respond: listRespond, client: ownerClient });
@@ -3275,8 +2771,8 @@ describe("exec approval handlers", () => {
       client: ownerClient,
     });
     expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(manager.getSnapshot(visible.id)?.decision).toBe("allow-once");
-    expect(manager.getSnapshot(hidden.id)?.decision).toBeUndefined();
+    expect((await manager.getSnapshot(visible.id))?.decision).toBe("allow-once");
+    expect((await manager.getSnapshot(hidden.id))?.decision).toBeUndefined();
 
     const hiddenRespond = await resolveExecApprovalForTest({
       handlers,
@@ -3289,7 +2785,7 @@ describe("exec approval handlers", () => {
       code: "INVALID_REQUEST",
       message: "unknown or expired approval id",
     });
-    expect(manager.getSnapshot(hidden.id)?.decision).toBeUndefined();
+    expect((await manager.getSnapshot(hidden.id))?.decision).toBeUndefined();
 
     const otherRespond = await resolveExecApprovalForTest({
       handlers,
@@ -3300,7 +2796,7 @@ describe("exec approval handlers", () => {
     expect(otherRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
-  it("ignores approval reviewer devices from non-runtime approval request clients", async () => {
+  it("ignores approval reviewer devices from non-runtime approval request clients", async (testContext) => {
     const requesterClient = createExecApprovalClient({
       connId: "conn-gateway-client",
       clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
@@ -3314,46 +2810,54 @@ describe("exec approval handlers", () => {
       scopes: ["operator.approvals"],
     });
 
-    const { manager, handlers, requestPromise } = await createAcceptedExecApproval({
-      client: requesterClient,
-      request: {
-        id: "approval-reviewer-untrusted",
-        twoPhase: true,
-        approvalReviewerDeviceIds: ["device-ios-reviewer"],
+    await withAcceptedExecApproval(
+      testContext,
+      {
+        client: requesterClient,
+        request: {
+          id: "approval-reviewer-untrusted",
+          twoPhase: true,
+          approvalReviewerDeviceIds: ["device-ios-reviewer"],
+        },
       },
-    });
+      async ({ manager, handlers, requestPromise }) => {
+        const pending = await manager.getSnapshot("approval-reviewer-untrusted");
+        expect(pending).toMatchObject({
+          id: "approval-reviewer-untrusted",
+          requestedByDeviceId: "device-gateway-runtime",
+        });
+        expect(pending!.resolvedAtMs).toBeUndefined();
+        expect(pending!.approvalReviewerDeviceIds).toBeUndefined();
 
-    expect(
-      manager.getSnapshot("approval-reviewer-untrusted")?.approvalReviewerDeviceIds,
-    ).toBeUndefined();
+        const listRespond = vi.fn();
+        await listExecApprovals({
+          handlers,
+          respond: listRespond,
+          client: reviewerClient,
+        });
+        expect(mockCallArg(listRespond)).toBe(true);
+        expect(mockCallArg(listRespond, 0, 1)).toEqual([]);
 
-    const listRespond = vi.fn();
-    await listExecApprovals({
-      handlers,
-      respond: listRespond,
-      client: reviewerClient,
-    });
-    expect(mockCallArg(listRespond)).toBe(true);
-    expect(mockCallArg(listRespond, 0, 1)).toEqual([]);
+        const getRespond = vi.fn();
+        await getExecApproval({
+          handlers,
+          id: "approval-reviewer-untrusted",
+          respond: getRespond,
+          client: reviewerClient,
+        });
+        expect(mockCallArg(getRespond)).toBe(false);
+        expectRecordFields(mockCallArg(getRespond, 0, 2), {
+          code: "INVALID_REQUEST",
+          message: "unknown or expired approval id",
+        });
 
-    const getRespond = vi.fn();
-    await getExecApproval({
-      handlers,
-      id: "approval-reviewer-untrusted",
-      respond: getRespond,
-      client: reviewerClient,
-    });
-    expect(mockCallArg(getRespond)).toBe(false);
-    expectRecordFields(mockCallArg(getRespond, 0, 2), {
-      code: "INVALID_REQUEST",
-      message: "unknown or expired approval id",
-    });
-
-    expect(manager.resolve("approval-reviewer-untrusted", "deny")).toBe(true);
-    await requestPromise;
+        expect(await manager.resolve("approval-reviewer-untrusted", "deny")).toBe(true);
+        await requestPromise;
+      },
+    );
   });
 
-  it("allows the internal approval runtime to bind the initiating mobile approval reviewer device", async () => {
+  it("allows the internal approval runtime to bind the initiating mobile approval reviewer device", async (testContext) => {
     const requesterClient = createApprovalRuntimeClient(
       "conn-gateway-runtime",
       "device-gateway-runtime",
@@ -3365,55 +2869,61 @@ describe("exec approval handlers", () => {
       scopes: ["operator.approvals"],
     });
 
-    const { manager, handlers, context, requestPromise } = await createAcceptedExecApproval({
-      client: requesterClient,
-      request: {
-        id: "approval-reviewer-runtime",
-        twoPhase: true,
-        approvalReviewerDeviceIds: ["device-ios-reviewer"],
+    await withAcceptedExecApproval(
+      testContext,
+      {
+        client: requesterClient,
+        request: {
+          id: "approval-reviewer-runtime",
+          twoPhase: true,
+          approvalReviewerDeviceIds: ["device-ios-reviewer"],
+        },
       },
-    });
+      async ({ manager, handlers, context, requestPromise }) => {
+        expect(
+          (await manager.getSnapshot("approval-reviewer-runtime"))?.approvalReviewerDeviceIds,
+        ).toEqual(["device-ios-reviewer"]);
 
-    expect(manager.getSnapshot("approval-reviewer-runtime")?.approvalReviewerDeviceIds).toEqual([
-      "device-ios-reviewer",
-    ]);
+        const listRespond = vi.fn();
+        await listExecApprovals({
+          handlers,
+          respond: listRespond,
+          client: reviewerClient,
+        });
+        expect(mockCallArg(listRespond)).toBe(true);
+        const approvals = mockCallArg(listRespond, 0, 1) as Array<Record<string, unknown>>;
+        expect(approvals.map((entry) => entry.id)).toEqual(["approval-reviewer-runtime"]);
 
-    const listRespond = vi.fn();
-    await listExecApprovals({
-      handlers,
-      respond: listRespond,
-      client: reviewerClient,
-    });
-    expect(mockCallArg(listRespond)).toBe(true);
-    const approvals = mockCallArg(listRespond, 0, 1) as Array<Record<string, unknown>>;
-    expect(approvals.map((entry) => entry.id)).toEqual(["approval-reviewer-runtime"]);
+        const getRespond = vi.fn();
+        await getExecApproval({
+          handlers,
+          id: "approval-reviewer-runtime",
+          respond: getRespond,
+          client: reviewerClient,
+        });
+        expect(mockCallArg(getRespond)).toBe(true);
+        expectRecordFields(mockCallArg(getRespond, 0, 1), {
+          id: "approval-reviewer-runtime",
+          commandText: "echo ok",
+        });
 
-    const getRespond = vi.fn();
-    await getExecApproval({
-      handlers,
-      id: "approval-reviewer-runtime",
-      respond: getRespond,
-      client: reviewerClient,
-    });
-    expect(mockCallArg(getRespond)).toBe(true);
-    expectRecordFields(mockCallArg(getRespond, 0, 1), {
-      id: "approval-reviewer-runtime",
-      commandText: "echo ok",
-    });
+        const resolveRespond = await resolveExecApprovalForTest({
+          handlers,
+          id: "approval-reviewer-runtime",
+          context,
+          client: reviewerClient,
+        });
+        await requestPromise;
 
-    const resolveRespond = await resolveExecApprovalForTest({
-      handlers,
-      id: "approval-reviewer-runtime",
-      context,
-      client: reviewerClient,
-    });
-    await requestPromise;
-
-    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(manager.getSnapshot("approval-reviewer-runtime")?.decision).toBe("allow-once");
+        expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+        expect((await manager.getSnapshot("approval-reviewer-runtime"))?.decision).toBe(
+          "allow-once",
+        );
+      },
+    );
   });
 
-  it("allows admin clients to resolve reviewer-targeted runtime approvals", async () => {
+  it("allows admin clients to resolve reviewer-targeted runtime approvals", async (testContext) => {
     const requesterClient = createApprovalRuntimeClient(
       "conn-gateway-runtime",
       "device-gateway-runtime",
@@ -3425,28 +2935,34 @@ describe("exec approval handlers", () => {
       scopes: ["operator.admin"],
     });
 
-    const { manager, handlers, context, requestPromise } = await createAcceptedExecApproval({
-      client: requesterClient,
-      request: {
-        id: "approval-reviewer-runtime-admin",
-        twoPhase: true,
-        approvalReviewerDeviceIds: ["device-ios-reviewer"],
+    await withAcceptedExecApproval(
+      testContext,
+      {
+        client: requesterClient,
+        request: {
+          id: "approval-reviewer-runtime-admin",
+          twoPhase: true,
+          approvalReviewerDeviceIds: ["device-ios-reviewer"],
+        },
       },
-    });
+      async ({ manager, handlers, context, requestPromise }) => {
+        const resolveRespond = await resolveExecApprovalForTest({
+          handlers,
+          id: "approval-reviewer-runtime-admin",
+          context,
+          client: adminClient,
+        });
+        await requestPromise;
 
-    const resolveRespond = await resolveExecApprovalForTest({
-      handlers,
-      id: "approval-reviewer-runtime-admin",
-      context,
-      client: adminClient,
-    });
-    await requestPromise;
-
-    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(manager.getSnapshot("approval-reviewer-runtime-admin")?.decision).toBe("allow-once");
+        expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+        expect((await manager.getSnapshot("approval-reviewer-runtime-admin"))?.decision).toBe(
+          "allow-once",
+        );
+      },
+    );
   });
 
-  it("allows the internal approval runtime to resolve reviewer-targeted runtime approvals", async () => {
+  it("allows the internal approval runtime to resolve reviewer-targeted runtime approvals", async (testContext) => {
     const requesterClient = createApprovalRuntimeClient(
       "conn-gateway-runtime-requester",
       "device-gateway-runtime-requester",
@@ -3456,31 +2972,37 @@ describe("exec approval handlers", () => {
       "device-gateway-runtime-resolver",
     );
 
-    const { manager, handlers, context, requestPromise } = await createAcceptedExecApproval({
-      client: requesterClient,
-      request: {
-        id: "approval-reviewer-runtime-runtime",
-        twoPhase: true,
-        approvalReviewerDeviceIds: ["device-ios-reviewer"],
+    await withAcceptedExecApproval(
+      testContext,
+      {
+        client: requesterClient,
+        request: {
+          id: "approval-reviewer-runtime-runtime",
+          twoPhase: true,
+          approvalReviewerDeviceIds: ["device-ios-reviewer"],
+        },
       },
-    });
+      async ({ manager, handlers, context, requestPromise }) => {
+        const resolveRespond = await resolveExecApprovalForTest({
+          handlers,
+          id: "approval-reviewer-runtime-runtime",
+          context,
+          client: runtimeResolverClient,
+        });
+        await requestPromise;
 
-    const resolveRespond = await resolveExecApprovalForTest({
-      handlers,
-      id: "approval-reviewer-runtime-runtime",
-      context,
-      client: runtimeResolverClient,
-    });
-    await requestPromise;
-
-    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(manager.getSnapshot("approval-reviewer-runtime-runtime")?.decision).toBe("allow-once");
-    expect(manager.getSnapshot("approval-reviewer-runtime-runtime")?.resolutionSource).toBe(
-      "operator",
+        expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+        expect((await manager.getSnapshot("approval-reviewer-runtime-runtime"))?.decision).toBe(
+          "allow-once",
+        );
+        expect(
+          (await manager.getSnapshot("approval-reviewer-runtime-runtime"))?.resolutionSource,
+        ).toBe("operator");
+      },
     );
   });
 
-  it("records matching trusted agent-runtime resolutions with default agent binding", async () => {
+  it("records matching trusted agent-runtime resolutions with default agent binding", async (testContext) => {
     const requesterClient = createApprovalRuntimeClient(
       "conn-auto-review-requester",
       "device-auto-review-requester",
@@ -3490,34 +3012,38 @@ describe("exec approval handlers", () => {
       "device-auto-review-resolver",
       { agentId: "main", sessionKey: "agent:main:main" },
     );
-    const { manager, handlers, context, requestPromise } = await createAcceptedExecApproval({
-      client: requesterClient,
-      request: {
-        id: "approval-auto-review",
-        twoPhase: true,
-        systemRunPlan: {
-          ...defaultExecApprovalRequestParams.systemRunPlan,
-          agentId: null,
+    await withAcceptedExecApproval(
+      testContext,
+      {
+        client: requesterClient,
+        request: {
+          id: "approval-auto-review",
+          twoPhase: true,
+          systemRunPlan: {
+            ...defaultExecApprovalRequestParams.systemRunPlan,
+            agentId: null,
+          },
         },
       },
-    });
+      async ({ manager, handlers, context, requestPromise }) => {
+        const resolveRespond = await resolveExecApprovalForTest({
+          handlers,
+          id: "approval-auto-review",
+          context,
+          client: resolverClient,
+        });
+        await requestPromise;
 
-    const resolveRespond = await resolveExecApprovalForTest({
-      handlers,
-      id: "approval-auto-review",
-      context,
-      client: resolverClient,
-    });
-    await requestPromise;
-
-    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(manager.getSnapshot("approval-auto-review")).toMatchObject({
-      decision: "allow-once",
-      resolutionSource: "auto-review",
-    });
+        expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+        expect(await manager.getSnapshot("approval-auto-review")).toMatchObject({
+          decision: "allow-once",
+          resolutionSource: "auto-review",
+        });
+      },
+    );
   });
 
-  it("rejects auto-review resolution when trusted agent identity mismatches the request", async () => {
+  it("rejects auto-review resolution when trusted agent identity mismatches the request", async (testContext) => {
     const requesterClient = createApprovalRuntimeClient(
       "conn-auto-review-mismatch-requester",
       "device-auto-review-mismatch-requester",
@@ -3527,30 +3053,36 @@ describe("exec approval handlers", () => {
       undefined,
       { agentId: "other", sessionKey: "agent:other:main" },
     );
-    const { manager, handlers, context, requestPromise } = await createAcceptedExecApproval({
-      client: requesterClient,
-      request: { id: "approval-auto-review-mismatch", twoPhase: true },
-    });
+    await withAcceptedExecApproval(
+      testContext,
+      {
+        client: requesterClient,
+        request: { id: "approval-auto-review-mismatch", twoPhase: true },
+      },
+      async ({ manager, handlers, context, requestPromise }) => {
+        const resolveRespond = await resolveExecApprovalForTest({
+          handlers,
+          id: "approval-auto-review-mismatch",
+          context,
+          client: resolverClient,
+        });
 
-    const resolveRespond = await resolveExecApprovalForTest({
-      handlers,
-      id: "approval-auto-review-mismatch",
-      context,
-      client: resolverClient,
-    });
+        expect(mockCallArg(resolveRespond)).toBe(false);
+        expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
+          code: "INVALID_REQUEST",
+          message: "auto-review approval identity does not match request",
+        });
+        expect(
+          (await manager.getSnapshot("approval-auto-review-mismatch"))?.decision,
+        ).toBeUndefined();
 
-    expect(mockCallArg(resolveRespond)).toBe(false);
-    expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
-      code: "INVALID_REQUEST",
-      message: "auto-review approval identity does not match request",
-    });
-    expect(manager.getSnapshot("approval-auto-review-mismatch")?.decision).toBeUndefined();
-
-    expect(manager.resolve("approval-auto-review-mismatch", "deny")).toBe(true);
-    await requestPromise;
+        expect(await manager.resolve("approval-auto-review-mismatch", "deny")).toBe(true);
+        await requestPromise;
+      },
+    );
   });
 
-  it("does not allow reviewer devices without approval scope to resolve runtime approvals", async () => {
+  it("does not allow reviewer devices without approval scope to resolve runtime approvals", async (testContext) => {
     const requesterClient = createApprovalRuntimeClient(
       "conn-gateway-runtime",
       "device-gateway-runtime",
@@ -3562,179 +3094,192 @@ describe("exec approval handlers", () => {
       scopes: ["operator.read"],
     });
 
-    const { manager, handlers, context, requestPromise } = await createAcceptedExecApproval({
-      client: requesterClient,
-      request: {
-        id: "approval-reviewer-runtime-no-scope",
-        twoPhase: true,
-        approvalReviewerDeviceIds: ["device-ios-reviewer"],
+    await withAcceptedExecApproval(
+      testContext,
+      {
+        client: requesterClient,
+        request: {
+          id: "approval-reviewer-runtime-no-scope",
+          twoPhase: true,
+          approvalReviewerDeviceIds: ["device-ios-reviewer"],
+        },
       },
-    });
+      async ({ manager, handlers, context, requestPromise }) => {
+        const resolveRespond = await resolveExecApprovalForTest({
+          handlers,
+          id: "approval-reviewer-runtime-no-scope",
+          context,
+          client: reviewerClient,
+        });
 
-    const resolveRespond = await resolveExecApprovalForTest({
-      handlers,
-      id: "approval-reviewer-runtime-no-scope",
-      context,
-      client: reviewerClient,
-    });
+        expect(mockCallArg(resolveRespond)).toBe(false);
+        expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
+          code: "INVALID_REQUEST",
+          message: "unknown or expired approval id",
+        });
+        expect(
+          (await manager.getSnapshot("approval-reviewer-runtime-no-scope"))?.decision,
+        ).toBeUndefined();
 
-    expect(mockCallArg(resolveRespond)).toBe(false);
-    expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
-      code: "INVALID_REQUEST",
-      message: "unknown or expired approval id",
-    });
-    expect(manager.getSnapshot("approval-reviewer-runtime-no-scope")?.decision).toBeUndefined();
-
-    expect(manager.resolve("approval-reviewer-runtime-no-scope", "deny")).toBe(true);
-    await requestPromise;
-  });
-
-  it("returns not found for stale exec.approval.get ids", async () => {
-    const { handlers, context, requestPromise, id } = await createAcceptedExecApproval({
-      request: { twoPhase: true, host: "gateway", systemRunPlan: undefined, nodeId: undefined },
-    });
-
-    await resolveExecApprovalForTest({
-      handlers,
-      id,
-      context,
-    });
-    await requestPromise;
-
-    const getRespond = vi.fn();
-    await getExecApproval({ handlers, id, respond: getRespond });
-    expect(mockCallArg(getRespond)).toBe(false);
-    expect(mockCallArg(getRespond, 0, 1)).toBeUndefined();
-    expectRecordFields(mockCallArg(getRespond, 0, 2), {
-      code: "INVALID_REQUEST",
-      message: "unknown or expired approval id",
-    });
-  });
-
-  it("broadcasts request + resolve", async () => {
-    const { handlers, broadcasts, respond, context, requestPromise, id } =
-      await createRequestedExecApproval({ request: { twoPhase: true } });
-
-    expect(mockCallArg(respond)).toBe(true);
-    expectRecordFields(mockCallArg(respond, 0, 1), { status: "accepted", id });
-    expect(mockCallArg(respond, 0, 2)).toBeUndefined();
-
-    const resolveRespond = await resolveExecApprovalForTest({
-      handlers,
-      id,
-      context,
-    });
-
-    await requestPromise;
-
-    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(lastMockCallArg(respond)).toBe(true);
-    expectRecordFields(lastMockCallArg(respond, 1), { id, decision: "allow-once" });
-    expect(lastMockCallArg(respond, 2)).toBeUndefined();
-    expect(broadcasts.map((entry) => entry.event)).toContain("exec.approval.resolved");
-  });
-
-  it("treats duplicate same-decision exec resolves as idempotent during grace", async () => {
-    const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
-
-    const requestPromise = requestExecApproval({
-      handlers,
-      respond,
-      context,
-      params: { id: "approval-repeat-1", twoPhase: true },
-    });
-    await drainApprovalRequestTicks();
-
-    const firstResolveRespond = vi.fn();
-    await resolveExecApproval({
-      handlers,
-      id: "approval-repeat-1",
-      respond: firstResolveRespond,
-      context,
-    });
-    await requestPromise;
-    expect(manager.consumeAllowOnce("approval-repeat-1")).toBe(true);
-
-    const resolvedBroadcastCount = broadcasts.filter(
-      (entry) => entry.event === "exec.approval.resolved",
-    ).length;
-
-    const repeatResolveRespond = vi.fn();
-    await resolveExecApproval({
-      handlers,
-      id: "approval-repeat-1",
-      respond: repeatResolveRespond,
-      context,
-    });
-
-    const conflictingResolveRespond = vi.fn();
-    await resolveExecApproval({
-      handlers,
-      id: "approval-repeat-1",
-      decision: "deny",
-      respond: conflictingResolveRespond,
-      context,
-    });
-
-    expect(firstResolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(repeatResolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(countMatching(broadcasts, (entry) => entry.event === "exec.approval.resolved")).toBe(
-      resolvedBroadcastCount,
+        expect(await manager.resolve("approval-reviewer-runtime-no-scope", "deny")).toBe(true);
+        await requestPromise;
+      },
     );
-    expect(mockCallArg(conflictingResolveRespond)).toBe(false);
-    expect(mockCallArg(conflictingResolveRespond, 0, 1)).toBeUndefined();
-    const error = mockCallArg(conflictingResolveRespond, 0, 2) as Record<string, unknown>;
-    expect(error.message).toBe("approval already resolved");
-    expectRecordFields(error.details, { reason: "APPROVAL_ALREADY_RESOLVED" });
   });
 
-  it("rejects allow-always when the request ask mode is always", async () => {
-    await expectUnavailableAllowAlways({ twoPhase: true, ask: "always" }, "deny");
+  it("returns not found for stale exec.approval.get ids", async (testContext) => {
+    await withAcceptedExecApproval(
+      testContext,
+      {
+        request: { twoPhase: true, host: "gateway", systemRunPlan: undefined, nodeId: undefined },
+      },
+      async ({ handlers, context, requestPromise, id }) => {
+        await resolveExecApprovalForTest({
+          handlers,
+          id,
+          context,
+        });
+        await requestPromise;
+
+        const getRespond = vi.fn();
+        await getExecApproval({ handlers, id, respond: getRespond });
+        expect(mockCallArg(getRespond)).toBe(false);
+        expect(mockCallArg(getRespond, 0, 1)).toBeUndefined();
+        expectRecordFields(mockCallArg(getRespond, 0, 2), {
+          code: "INVALID_REQUEST",
+          message: "unknown or expired approval id",
+        });
+      },
+    );
   });
 
-  it("rejects allow-always when the request marks it unavailable", async () => {
+  it("broadcasts request + resolve", async (testContext) => {
+    await withAcceptedExecApproval(
+      testContext,
+      { request: { twoPhase: true } },
+      async ({ handlers, broadcasts, respond, context, requestPromise, id }) => {
+        expect(mockCallArg(respond)).toBe(true);
+        expectRecordFields(mockCallArg(respond, 0, 1), { status: "accepted", id });
+        expect(mockCallArg(respond, 0, 2)).toBeUndefined();
+
+        const resolveRespond = await resolveExecApprovalForTest({
+          handlers,
+          id,
+          context,
+        });
+
+        await requestPromise;
+
+        expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+        expect(lastMockCallArg(respond)).toBe(true);
+        expectRecordFields(lastMockCallArg(respond, 1), { id, decision: "allow-once" });
+        expect(lastMockCallArg(respond, 2)).toBeUndefined();
+        expect(broadcasts.map((entry) => entry.event)).toContain("exec.approval.resolved");
+      },
+    );
+  });
+
+  it("treats duplicate same-decision exec resolves as idempotent during grace", async (testContext) => {
+    const fixture = await createExecApprovalFixture(testContext);
+    return await fixture.run(async () => {
+      const { manager, handlers, broadcasts, respond, context } = fixture;
+
+      const { pending: requestPromise } = await waitForApprovalAccepted(
+        respond,
+        (observedRespond) =>
+          fixture.track(
+            requestExecApproval({
+              handlers,
+              respond: observedRespond,
+              context,
+              params: { id: "approval-repeat-1", twoPhase: true },
+            }),
+          ),
+      );
+
+      const firstResolveRespond = vi.fn();
+      await resolveExecApproval({
+        handlers,
+        id: "approval-repeat-1",
+        respond: firstResolveRespond,
+        context,
+      });
+      await requestPromise;
+      expect(await manager.consumeAllowOnce("approval-repeat-1")).toBe(true);
+
+      const resolvedBroadcastCount = broadcasts.filter(
+        (entry) => entry.event === "exec.approval.resolved",
+      ).length;
+
+      const repeatResolveRespond = vi.fn();
+      await resolveExecApproval({
+        handlers,
+        id: "approval-repeat-1",
+        respond: repeatResolveRespond,
+        context,
+      });
+
+      const conflictingResolveRespond = vi.fn();
+      await resolveExecApproval({
+        handlers,
+        id: "approval-repeat-1",
+        decision: "deny",
+        respond: conflictingResolveRespond,
+        context,
+      });
+
+      expect(firstResolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      expect(repeatResolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      expect(countMatching(broadcasts, (entry) => entry.event === "exec.approval.resolved")).toBe(
+        resolvedBroadcastCount,
+      );
+      expect(mockCallArg(conflictingResolveRespond)).toBe(false);
+      expect(mockCallArg(conflictingResolveRespond, 0, 1)).toBeUndefined();
+      const error = mockCallArg(conflictingResolveRespond, 0, 2) as Record<string, unknown>;
+      expect(error.message).toBe("approval already resolved");
+      expectRecordFields(error.details, { reason: "APPROVAL_ALREADY_RESOLVED" });
+    });
+  });
+
+  it("rejects allow-always when the request ask mode is always", async (testContext) => {
+    await expectUnavailableAllowAlways(testContext, { twoPhase: true, ask: "always" }, "deny");
+  });
+
+  it("rejects allow-always when the request marks it unavailable", async (testContext) => {
     await expectUnavailableAllowAlways(
+      testContext,
       { twoPhase: true, unavailableDecisions: ["allow-always"] },
       "allow-once",
     );
   });
 
-  it("keeps baseline decisions available when allow-always is unavailable", async () => {
-    const { handlers, context, requestPromise, id, request } = await createRequestedExecApproval({
-      request: {
-        twoPhase: true,
-        unavailableDecisions: ["allow-always"],
+  it("keeps baseline decisions available when allow-always is unavailable", async (testContext) => {
+    await withRequestedExecApproval(
+      testContext,
+      {
+        request: {
+          twoPhase: true,
+          unavailableDecisions: ["allow-always"],
+        },
       },
-    });
+      async ({ handlers, context, requestPromise, id, request }) => {
+        expect(request.allowedDecisions).toEqual(["allow-once", "deny"]);
 
-    expect(request.allowedDecisions).toEqual(["allow-once", "deny"]);
+        const denyRespond = await resolveExecApprovalForTest({
+          handlers,
+          id,
+          decision: "deny",
+          context,
+        });
 
-    const denyRespond = await resolveExecApprovalForTest({
-      handlers,
-      id,
-      decision: "deny",
-      context,
-    });
-
-    await requestPromise;
-    expect(denyRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+        await requestPromise;
+        expect(denyRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      },
+    );
   });
 
-  it("does not reuse a resolved exact id as a prefix for another pending approval", () => {
-    const manager = new ExecApprovalManager();
-    const resolvedRecord = manager.create({ command: "echo old", host: "gateway" }, 2_000, "abc");
-    void manager.register(resolvedRecord, 2_000);
-    expect(manager.resolve("abc", "allow-once")).toBe(true);
-
-    const pendingRecord = manager.create({ command: "echo new", host: "gateway" }, 2_000, "abcdef");
-    void manager.register(pendingRecord, 2_000);
-
-    expect(manager.lookupApprovalId("abc")).toEqual({ kind: "none" });
-    expect(manager.lookupApprovalId("abcdef")).toEqual({ kind: "exact", id: "abcdef" });
-  });
-
-  it("stores versioned system.run binding and sorted env keys on approval request", async () => {
-    const { request } = await requestExecApprovalForTest({
+  it("stores versioned system.run binding and sorted env keys on approval request", async (testContext) => {
+    const { request } = await requestExecApprovalForTest(testContext, {
       timeoutMs: 10,
       commandArgv: ["echo", "ok"],
       env: {
@@ -3752,8 +3297,8 @@ describe("exec approval handlers", () => {
     );
   });
 
-  it("includes Windows-compatible env keys in approval env bindings", async () => {
-    const { request } = await requestExecApprovalForTest({
+  it("includes Windows-compatible env keys in approval env bindings", async (testContext) => {
+    const { request } = await requestExecApprovalForTest(testContext, {
       timeoutMs: 10,
       commandArgv: ["cmd.exe", "/c", "echo", "ok"],
       command: "cmd.exe /c echo ok",
@@ -3774,8 +3319,8 @@ describe("exec approval handlers", () => {
     );
   });
 
-  it("stores sorted env keys for gateway approvals without node-only binding", async () => {
-    const { request } = await requestExecApprovalForTest({
+  it("stores sorted env keys for gateway approvals without node-only binding", async (testContext) => {
+    const { request } = await requestExecApprovalForTest(testContext, {
       timeoutMs: 10,
       host: "gateway",
       nodeId: undefined,
@@ -3791,8 +3336,8 @@ describe("exec approval handlers", () => {
     expect(request["systemRunBinding"]).toBeNull();
   });
 
-  it("prefers systemRunPlan canonical command/cwd when present", async () => {
-    const { request } = await requestExecApprovalForTest({
+  it("prefers systemRunPlan canonical command/cwd when present", async (testContext) => {
+    const { request } = await requestExecApprovalForTest(testContext, {
       timeoutMs: 10,
       command: "echo stale",
       commandArgv: ["echo", "stale"],
@@ -3836,8 +3381,8 @@ describe("exec approval handlers", () => {
     });
   });
 
-  it("derives a command preview from the fallback command for older node plans", async () => {
-    const { request } = await requestExecApprovalForTest({
+  it("derives a command preview from the fallback command for older node plans", async (testContext) => {
+    const { request } = await requestExecApprovalForTest(testContext, {
       timeoutMs: 10,
       command: "jq --version",
       commandArgv: ["./env", "sh", "-c", "jq --version"],
@@ -3856,8 +3401,8 @@ describe("exec approval handlers", () => {
     );
   });
 
-  it("sanitizes invisible Unicode format chars in approval display text without changing node bindings", async () => {
-    const { request } = await requestExecApprovalForTest({
+  it("sanitizes invisible Unicode format chars in approval display text without changing node bindings", async (testContext) => {
+    const { request } = await requestExecApprovalForTest(testContext, {
       timeoutMs: 10,
       command: "bash safe\u200B.sh",
       commandArgv: ["bash", "safe\u200B.sh"],
@@ -3875,8 +3420,8 @@ describe("exec approval handlers", () => {
     );
   });
 
-  it("preserves approval warning line breaks while sanitizing hidden characters", async () => {
-    const { request } = await requestExecApprovalForTest({
+  it("preserves approval warning line breaks while sanitizing hidden characters", async (testContext) => {
+    const { request } = await requestExecApprovalForTest(testContext, {
       timeoutMs: 10,
       warningText: "Diagnostics line one\r\n\r\nOpenAI Codex harness:\nSend feedback\u200B",
     });
@@ -3886,8 +3431,9 @@ describe("exec approval handlers", () => {
     expect(request["warningText"]).not.toContain("\\u{A}");
   });
 
-  it("preserves command analysis and normalizes command spans", async () => {
+  it("preserves command analysis and normalizes command spans", async (testContext) => {
     const { request } = await requestExecApprovalForTest(
+      testContext,
       {
         timeoutMs: 10,
         command: "ls | python -c 'print(1)'",
@@ -3908,18 +3454,19 @@ describe("exec approval handlers", () => {
     ]);
   });
 
-  it("drops command spans by default", async () => {
-    await expectDroppedApprovalCommandSpans();
+  it("drops command spans by default", async (testContext) => {
+    await expectDroppedApprovalCommandSpans(testContext);
   });
 
-  it("drops command spans when command highlighting is disabled", async () => {
-    await expectDroppedApprovalCommandSpans({
+  it("drops command spans when command highlighting is disabled", async (testContext) => {
+    await expectDroppedApprovalCommandSpans(testContext, {
       tools: { exec: { commandHighlighting: false } },
     });
   });
 
-  it("drops command spans when command display sanitization changes offsets", async () => {
+  it("drops command spans when command display sanitization changes offsets", async (testContext) => {
     const { request } = await requestExecApprovalForTest(
+      testContext,
       {
         timeoutMs: 10,
         command: "ls\u0000 | python -c 'print(1)'",
@@ -3934,9 +3481,8 @@ describe("exec approval handlers", () => {
     expect(request["commandSpans"]).toBeUndefined();
   });
 
-  it("accepts resolve during broadcast", async () => {
-    const manager = new ExecApprovalManager();
-    const handlers = createExecApprovalHandlers(manager);
+  it("accepts resolve during broadcast", async (testContext) => {
+    const { handlers } = await createExecApprovalFixture(testContext);
     const respond = vi.fn();
     const resolveRespond = vi.fn();
 
@@ -3971,29 +3517,34 @@ describe("exec approval handlers", () => {
     expect(lastMockCallArg(respond, 2)).toBeUndefined();
   });
 
-  it("accepts explicit approval ids", async () => {
-    const { handlers, respond, context, requestPromise, id } = await createRequestedExecApproval({
-      request: { id: "approval-123", host: "gateway" },
-    });
-    expect(id).toBe("approval-123");
+  it("accepts explicit approval ids", async (testContext) => {
+    await withRequestedExecApproval(
+      testContext,
+      {
+        request: { id: "approval-123", host: "gateway" },
+      },
+      async ({ handlers, respond, context, requestPromise, id }) => {
+        expect(id).toBe("approval-123");
 
-    const resolveRespond = await resolveExecApprovalForTest({
-      handlers,
-      id,
-      context,
-    });
+        const resolveRespond = await resolveExecApprovalForTest({
+          handlers,
+          id,
+          context,
+        });
 
-    await requestPromise;
-    expect(lastMockCallArg(respond)).toBe(true);
-    expectRecordFields(lastMockCallArg(respond, 1), {
-      id: "approval-123",
-      decision: "allow-once",
-    });
-    expect(lastMockCallArg(respond, 2)).toBeUndefined();
-    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+        await requestPromise;
+        expect(lastMockCallArg(respond)).toBe(true);
+        expectRecordFields(lastMockCallArg(respond, 1), {
+          id: "approval-123",
+          decision: "allow-once",
+        });
+        expect(lastMockCallArg(respond, 2)).toBeUndefined();
+        expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      },
+    );
   });
 
-  it.each([
+  it.for<[label: string, id: string]>([
     ["URL dot segment", ".."],
     ["ANSI escape", "approval-\u001b[31mred"],
     ["ASCII control", "approval-\u0000hidden"],
@@ -4004,66 +3555,74 @@ describe("exec approval handlers", () => {
     ["whitespace-only value", " "],
     ["embedded line feed", "approval-\nunsafe"],
     ["overlong value", "a".repeat(129)],
-  ])("rejects an unsafe explicit approval id containing an %s", async (_label, id) => {
-    const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
+  ])(
+    "rejects an unsafe explicit approval id containing an %s",
+    async ([_label, id], testContext) => {
+      const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
+      return await fixture.run(async () => {
+        const { manager, handlers, broadcasts, respond, context } = fixture;
 
-    await requestExecApproval({
-      handlers,
-      respond,
-      context,
-      params: { id, host: "gateway" },
-    });
+        await requestExecApproval({
+          handlers,
+          respond,
+          context,
+          params: { id, host: "gateway" },
+        });
 
-    expect(mockCallArg(respond)).toBe(false);
-    expect(mockCallArg(respond, 0, 1)).toBeUndefined();
-    expect(mockCallArg(respond, 0, 2)).toMatchObject({
-      code: "INVALID_REQUEST",
-      details: {
-        code: "EXEC_APPROVAL_ID_INVALID",
-        reason: "INVALID_APPROVAL_ID",
+        expect(mockCallArg(respond)).toBe(false);
+        expect(mockCallArg(respond, 0, 1)).toBeUndefined();
+        expect(mockCallArg(respond, 0, 2)).toMatchObject({
+          code: "INVALID_REQUEST",
+          details: {
+            code: "EXEC_APPROVAL_ID_INVALID",
+            reason: "INVALID_APPROVAL_ID",
+          },
+        });
+        expect(await manager.getSnapshot(id)).toBeNull();
+        expect(broadcasts).toEqual([]);
+      });
+    },
+  );
+
+  it("accepts an explicit approval id with a leading dash", async (testContext) => {
+    await withAcceptedExecApproval(
+      testContext,
+      { request: { id: "-approval-123", host: "gateway", twoPhase: true } },
+      async ({ manager, respond, requestPromise, id }) => {
+        expect(id).toBe("-approval-123");
+        expect(await manager.getSnapshot(id)).not.toBeNull();
+        expect(mockCallArg(respond)).toBe(true);
+
+        expect(await manager.resolve(id, "allow-once")).toBe(true);
+        await requestPromise;
+        expectRecordFields(lastMockCallArg(respond, 1), { id, decision: "allow-once" });
       },
-    });
-    expect(manager.getSnapshot(id)).toBeNull();
-    expect(broadcasts).toEqual([]);
+    );
   });
 
-  it("accepts an explicit approval id with a leading dash", async () => {
-    const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
+  it("rejects explicit approval ids with the reserved plugin prefix", async (testContext) => {
+    const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
+    return await fixture.run(async () => {
+      const { handlers, respond, context } = fixture;
 
-    const requestPromise = requestExecApproval({
-      handlers,
-      respond,
-      context,
-      params: { id: "-approval-123", host: "gateway", twoPhase: true },
-    });
+      await requestExecApproval({
+        handlers,
+        respond,
+        context,
+        params: { id: "plugin:approval-123", host: "gateway" },
+      });
 
-    const { id } = await waitForRequestedExecApprovalPayload(broadcasts);
-    await requestPromise;
-    expect(id).toBe("-approval-123");
-    expect(manager.getSnapshot(id)).not.toBeNull();
-    expect(mockCallArg(respond)).toBe(true);
-  });
-
-  it("rejects explicit approval ids with the reserved plugin prefix", async () => {
-    const { handlers, respond, context } = createExecApprovalFixture();
-
-    await requestExecApproval({
-      handlers,
-      respond,
-      context,
-      params: { id: "plugin:approval-123", host: "gateway" },
-    });
-
-    expect(mockCallArg(respond)).toBe(false);
-    expect(mockCallArg(respond, 0, 1)).toBeUndefined();
-    expectRecordFields(mockCallArg(respond, 0, 2), {
-      code: "INVALID_REQUEST",
-      message: "approval ids starting with plugin: are reserved",
+      expect(mockCallArg(respond)).toBe(false);
+      expect(mockCallArg(respond, 0, 1)).toBeUndefined();
+      expectRecordFields(mockCallArg(respond, 0, 2), {
+        code: "INVALID_REQUEST",
+        message: "approval ids starting with plugin: are reserved",
+      });
     });
   });
 
-  it("accepts unique short approval id prefixes", async () => {
-    const manager = new ExecApprovalManager();
+  it("accepts unique short approval id prefixes", async (testContext) => {
+    const manager = createTestApprovalManager(testContext);
     const handlers = createExecApprovalHandlers(manager);
     const respond = vi.fn();
     const context = {
@@ -4071,7 +3630,7 @@ describe("exec approval handlers", () => {
     };
 
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-12345678-aaaa");
-    void manager.register(record, 60_000);
+    await manager.register(record, 60_000);
 
     await resolveExecApproval({
       handlers,
@@ -4081,22 +3640,22 @@ describe("exec approval handlers", () => {
     });
 
     expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(manager.getSnapshot(record.id)?.decision).toBe("allow-once");
+    expect((await manager.getSnapshot(record.id))?.decision).toBe("allow-once");
   });
 
-  it("rejects ambiguous short approval id prefixes without leaking candidate ids", async () => {
-    const manager = new ExecApprovalManager();
+  it("rejects ambiguous short approval id prefixes without leaking candidate ids", async (testContext) => {
+    const manager = createTestApprovalManager(testContext);
     const handlers = createExecApprovalHandlers(manager);
     const respond = vi.fn();
     const context = {
       broadcast: (_eventValue: string, _payload: unknown) => {},
     };
 
-    void manager.register(
+    await manager.register(
       manager.create({ command: "echo one" }, 60_000, "approval-abcd-1111"),
       60_000,
     );
-    void manager.register(
+    await manager.register(
       manager.create({ command: "echo two" }, 60_000, "approval-abcd-2222"),
       60_000,
     );
@@ -4115,36 +3674,39 @@ describe("exec approval handlers", () => {
     });
   });
 
-  it("returns deterministic unknown/expired message for missing approval ids", async () => {
-    const { handlers, respond, context } = createExecApprovalFixture();
+  it("returns deterministic unknown/expired message for missing approval ids", async (testContext) => {
+    const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
+    return await fixture.run(async () => {
+      const { handlers, respond, context } = fixture;
 
-    await resolveExecApproval({
-      handlers,
-      id: "missing-approval-id",
-      respond,
-      context,
-    });
+      await resolveExecApproval({
+        handlers,
+        id: "missing-approval-id",
+        respond,
+        context,
+      });
 
-    expect(mockCallArg(respond)).toBe(false);
-    expect(mockCallArg(respond, 0, 1)).toBeUndefined();
-    const error = mockCallArg(respond, 0, 2) as Record<string, unknown>;
-    expectRecordFields(error, {
-      code: "INVALID_REQUEST",
-      message: "unknown or expired approval id",
+      expect(mockCallArg(respond)).toBe(false);
+      expect(mockCallArg(respond, 0, 1)).toBeUndefined();
+      const error = mockCallArg(respond, 0, 2) as Record<string, unknown>;
+      expectRecordFields(error, {
+        code: "INVALID_REQUEST",
+        message: "unknown or expired approval id",
+      });
+      expectRecordFields(error.details, { reason: "APPROVAL_NOT_FOUND" });
     });
-    expectRecordFields(error.details, { reason: "APPROVAL_NOT_FOUND" });
   });
 
-  it("resolves only the targeted approval id when multiple requests are pending", async () => {
-    const manager = new ExecApprovalManager();
+  it("resolves only the targeted approval id when multiple requests are pending", async (testContext) => {
+    const manager = createTestApprovalManager(testContext);
     const handlers = createExecApprovalHandlers(manager);
     const context = {
       getRuntimeConfig: () => ({}),
       broadcast: (_eventValue: string, _payload: unknown) => {},
       hasExecApprovalClients: () => true,
     };
-    void manager.register(manager.create({ command: "echo one" }, 60_000, "approval-one"), 60_000);
-    void manager.register(manager.create({ command: "echo two" }, 60_000, "approval-two"), 60_000);
+    await manager.register(manager.create({ command: "echo one" }, 60_000, "approval-one"), 60_000);
+    await manager.register(manager.create({ command: "echo two" }, 60_000, "approval-two"), 60_000);
 
     const resolveRespond = await resolveExecApprovalForTest({
       handlers,
@@ -4153,170 +3715,203 @@ describe("exec approval handlers", () => {
     });
 
     expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(manager.getSnapshot("approval-one")?.decision).toBe("allow-once");
-    expect(manager.getSnapshot("approval-two")?.decision).toBeUndefined();
-    expect(manager.getSnapshot("approval-two")?.resolvedAtMs).toBeUndefined();
+    expect((await manager.getSnapshot("approval-one"))?.decision).toBe("allow-once");
+    expect((await manager.getSnapshot("approval-two"))?.decision).toBeUndefined();
+    expect((await manager.getSnapshot("approval-two"))?.resolvedAtMs).toBeUndefined();
 
-    expect(manager.expire("approval-two", "test-expire")).toBe(true);
+    expect(await manager.expire("approval-two", "test-expire")).toBe(true);
   });
 
-  it("forwards turn-source metadata to exec approval forwarding", async () => {
-    vi.useFakeTimers();
+  it("forwards turn-source metadata to exec approval forwarding", async (testContext) => {
     try {
-      const { handlers, forwarder, respond, context } = createForwardingExecApprovalFixture();
+      const fixture = await createForwardingExecApprovalFixture(testContext);
+      vi.useFakeTimers();
+      return await fixture.run(async () => {
+        const { handlers, forwarder, respond, context } = fixture;
+        const forwardedRequest = createDeferredCore();
+        forwarder.handleRequested.mockImplementationOnce(async () => {
+          forwardedRequest.resolve();
+          return false;
+        });
 
-      const requestPromise = requestExecApproval({
-        handlers,
-        respond,
-        context,
-        params: {
-          timeoutMs: 60_000,
+        const requestPromise = fixture.track(
+          requestExecApproval({
+            handlers,
+            respond,
+            context,
+            params: {
+              timeoutMs: 60_000,
+              turnSourceChannel: "whatsapp",
+              turnSourceTo: "+15555550123",
+              turnSourceAccountId: "work",
+              turnSourceThreadId: "1739201675.123",
+            },
+          }),
+        );
+        await Promise.race([
+          forwardedRequest.promise,
+          requestPromise.then(() => {
+            throw new Error("Approval request ended before delivery");
+          }),
+        ]);
+        expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
+        const forwarded = mockCallArg(forwarder.handleRequested) as Record<string, unknown>;
+        expectRecordFields(forwarded.request, {
           turnSourceChannel: "whatsapp",
           turnSourceTo: "+15555550123",
           turnSourceAccountId: "work",
           turnSourceThreadId: "1739201675.123",
-        },
-      });
-      await drainApprovalRequestTicks();
-      expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
-      const forwarded = mockCallArg(forwarder.handleRequested) as Record<string, unknown>;
-      expectRecordFields(forwarded.request, {
-        turnSourceChannel: "whatsapp",
-        turnSourceTo: "+15555550123",
-        turnSourceAccountId: "work",
-        turnSourceThreadId: "1739201675.123",
-      });
+        });
 
-      await vi.runOnlyPendingTimersAsync();
-      await requestPromise;
+        await vi.runOnlyPendingTimersAsync();
+        await requestPromise;
+      });
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("resolves Control UI-style approvals by id while preserving stored turn-source metadata", async () => {
-    const { handlers, forwarder, respond, context } = createForwardingExecApprovalFixture();
-    const broadcasts: Array<{ event: string; payload: unknown }> = [];
-    const requestContext = {
-      ...context,
-      hasExecApprovalClients: () => true,
-      broadcast: (event: string, payload: unknown) => {
-        broadcasts.push({ event, payload });
-      },
-    };
+  it("resolves Control UI-style approvals by id while preserving stored turn-source metadata", async (testContext) => {
+    const fixture = await createForwardingExecApprovalFixture(testContext);
+    return await fixture.run(async () => {
+      const { handlers, forwarder, respond, context } = fixture;
+      const broadcasts: Array<{ event: string; payload: unknown }> = [];
+      const requestContext = {
+        ...context,
+        hasExecApprovalClients: () => true,
+        broadcast: (event: string, payload: unknown) => {
+          broadcasts.push({ event, payload });
+        },
+      };
 
-    const requestPromise = requestExecApproval({
-      handlers,
-      respond,
-      context: requestContext,
-      params: {
+      const { pending: requestPromise } = await waitForApprovalAccepted(
+        respond,
+        (observedRespond) =>
+          fixture.track(
+            requestExecApproval({
+              handlers,
+              respond: observedRespond,
+              context: requestContext,
+              params: {
+                id: "approval-control-ui-multichannel",
+                twoPhase: true,
+                timeoutMs: 60_000,
+                host: "gateway",
+                nodeId: undefined,
+                systemRunPlan: undefined,
+                sessionKey: "agent:main:feishu:chat-123",
+                turnSourceChannel: "feishu",
+                turnSourceTo: "chat-123",
+                turnSourceAccountId: "work",
+                turnSourceThreadId: "thread-456",
+              },
+            }),
+          ),
+      );
+      getRequestedExecApprovalPayload(broadcasts);
+      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
+
+      const resolveRespond = await resolveExecApprovalForTest({
+        handlers,
         id: "approval-control-ui-multichannel",
-        twoPhase: true,
-        timeoutMs: 60_000,
-        host: "gateway",
-        nodeId: undefined,
-        systemRunPlan: undefined,
+        context: requestContext,
+      });
+      await requestPromise;
+
+      expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      const resolved = mockCallArg(forwarder.handleResolved) as Record<string, unknown>;
+      expectRecordFields(resolved, {
+        id: "approval-control-ui-multichannel",
+        decision: "allow-once",
+      });
+      expectRecordFields(resolved.request, {
         sessionKey: "agent:main:feishu:chat-123",
         turnSourceChannel: "feishu",
         turnSourceTo: "chat-123",
         turnSourceAccountId: "work",
         turnSourceThreadId: "thread-456",
-      },
-    });
-    await waitForRequestedExecApprovalPayload(broadcasts);
-    await waitForFast(() => {
-      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
-    });
-
-    const resolveRespond = await resolveExecApprovalForTest({
-      handlers,
-      id: "approval-control-ui-multichannel",
-      context: requestContext,
-    });
-    await requestPromise;
-
-    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    const resolved = mockCallArg(forwarder.handleResolved) as Record<string, unknown>;
-    expectRecordFields(resolved, {
-      id: "approval-control-ui-multichannel",
-      decision: "allow-once",
-    });
-    expectRecordFields(resolved.request, {
-      sessionKey: "agent:main:feishu:chat-123",
-      turnSourceChannel: "feishu",
-      turnSourceTo: "chat-123",
-      turnSourceAccountId: "work",
-      turnSourceThreadId: "thread-456",
-    });
-    const resolvedBroadcast = broadcasts.find((entry) => entry.event === "exec.approval.resolved");
-    expect(resolvedBroadcast?.event).toBe("exec.approval.resolved");
-    const payload = resolvedBroadcast?.payload as Record<string, unknown>;
-    expect(payload.id).toBe("approval-control-ui-multichannel");
-    expectRecordFields(payload.request, {
-      turnSourceChannel: "feishu",
-      turnSourceTo: "chat-123",
+      });
+      const resolvedBroadcast = broadcasts.find(
+        (entry) => entry.event === "exec.approval.resolved",
+      );
+      expect(resolvedBroadcast?.event).toBe("exec.approval.resolved");
+      const payload = resolvedBroadcast?.payload as Record<string, unknown>;
+      expect(payload.id).toBe("approval-control-ui-multichannel");
+      expectRecordFields(payload.request, {
+        turnSourceChannel: "feishu",
+        turnSourceTo: "chat-123",
+      });
     });
   });
 
-  it("fast-fails approvals when no approver clients and no forwarding targets", async () => {
-    const { manager, handlers, forwarder, respond, context } =
-      createForwardingExecApprovalFixture();
-    const expireSpy = vi.spyOn(manager, "expire");
+  it("fast-fails approvals when no approver clients and no forwarding targets", async (testContext) => {
+    const fixture = await createForwardingExecApprovalFixture(testContext);
+    return await fixture.run(async () => {
+      const { manager, handlers, forwarder, respond, context } = fixture;
+      const expireSpy = vi.spyOn(manager, "expire");
 
-    await requestExecApproval({
-      handlers,
-      respond,
-      context,
-      params: { timeoutMs: 60_000, id: "approval-no-approver", host: "gateway" },
-    });
+      await requestExecApproval({
+        handlers,
+        respond,
+        context,
+        params: { timeoutMs: 60_000, id: "approval-no-approver", host: "gateway" },
+      });
 
-    expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
-    expect(expireSpy).toHaveBeenCalledWith("approval-no-approver", "no-approval-route");
-    expect(lastMockCallArg(respond)).toBe(true);
-    expectRecordFields(lastMockCallArg(respond, 1), {
-      id: "approval-no-approver",
-      decision: null,
+      expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
+      expect(expireSpy).toHaveBeenCalledWith("approval-no-approver", "no-approval-route");
+      expect(lastMockCallArg(respond)).toBe(true);
+      expectRecordFields(lastMockCallArg(respond, 1), {
+        id: "approval-no-approver",
+        decision: null,
+      });
+      expect(lastMockCallArg(respond, 2)).toBeUndefined();
     });
-    expect(lastMockCallArg(respond, 2)).toBeUndefined();
   });
 
-  it("keeps approvals pending when iOS push delivery accepted the request", async () => {
+  it("keeps approvals pending when iOS push delivery accepted the request", async (testContext) => {
     const iosPushDelivery = createIosPushDelivery();
-    const { manager, handlers, forwarder, respond, context } = createForwardingExecApprovalFixture({
+    const fixture = await createForwardingExecApprovalFixture(testContext, {
       iosPushDelivery,
     });
-    const expireSpy = vi.spyOn(manager, "expire");
+    return await fixture.run(async () => {
+      const { manager, handlers, forwarder, respond, context } = fixture;
+      const expireSpy = vi.spyOn(manager, "expire");
 
-    const requestPromise = requestExecApproval({
-      handlers,
-      respond,
-      context,
-      params: {
-        twoPhase: true,
-        timeoutMs: 60_000,
-        id: "approval-ios-push",
-        host: "gateway",
-      },
-    });
+      const { pending: requestPromise } = await waitForApprovalAccepted(
+        respond,
+        (observedRespond) =>
+          fixture.track(
+            requestExecApproval({
+              handlers,
+              respond: observedRespond,
+              context,
+              params: {
+                twoPhase: true,
+                timeoutMs: 60_000,
+                id: "approval-ios-push",
+                host: "gateway",
+              },
+            }),
+          ),
+      );
 
-    await waitForFast(() => {
       expect(lastMockCallArg(respond)).toBe(true);
       expectRecordFields(lastMockCallArg(respond, 1), {
         status: "accepted",
         id: "approval-ios-push",
       });
       expect(lastMockCallArg(respond, 2)).toBeUndefined();
+
+      expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
+      expectRecordFields(mockCallArg(iosPushDelivery.handleRequested), { id: "approval-ios-push" });
+      expect(expireSpy).not.toHaveBeenCalled();
+
+      await manager.resolve("approval-ios-push", "allow-once");
+      await requestPromise;
     });
-
-    expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
-    expectRecordFields(mockCallArg(iosPushDelivery.handleRequested), { id: "approval-ios-push" });
-    expect(expireSpy).not.toHaveBeenCalled();
-
-    manager.resolve("approval-ios-push", "allow-once");
-    await requestPromise;
   });
 
-  it("does not count iOS push delivery to hidden approval targets as a route", async () => {
+  it("does not count iOS push delivery to hidden approval targets as a route", async (testContext) => {
     const iosPushDelivery = createIosPushDelivery(
       vi.fn(
         async (
@@ -4331,124 +3926,175 @@ describe("exec approval handlers", () => {
           }) ?? true,
       ),
     );
-    const { manager, handlers, respond, context } = createForwardingExecApprovalFixture({
+    const fixture = await createForwardingExecApprovalFixture(testContext, {
       iosPushDelivery,
     });
-    const expireSpy = vi.spyOn(manager, "expire");
+    return await fixture.run(async () => {
+      const { manager, handlers, respond, context } = fixture;
+      const expireSpy = vi.spyOn(manager, "expire");
 
-    await requestExecApproval({
-      handlers,
-      respond,
-      context,
-      client: {
-        connId: "conn-owner",
-        connect: {
-          client: { id: "client-owner" },
-          device: { id: "device-owner" },
-          scopes: ["operator.approvals"],
-        },
-      } as unknown as ExecApprovalRequestArgs["client"],
-      params: {
-        timeoutMs: 60_000,
-        id: "approval-ios-hidden-push",
-        host: "gateway",
-      },
-    });
-
-    expect(iosPushDelivery.handleRequested).toHaveBeenCalledTimes(1);
-    expect(expireSpy).toHaveBeenCalledWith("approval-ios-hidden-push", "no-approval-route");
-    expect(lastMockCallArg(respond)).toBe(true);
-    expectRecordFields(lastMockCallArg(respond, 1), {
-      id: "approval-ios-hidden-push",
-      decision: null,
-    });
-    expect(lastMockCallArg(respond, 2)).toBeUndefined();
-  });
-
-  it("sends iOS cleanup delivery on resolve", async () => {
-    const iosPushDelivery = createIosPushDelivery();
-    const { handlers, respond, context } = createForwardingExecApprovalFixture({ iosPushDelivery });
-    const requestPromise = requestExecApproval({
-      handlers,
-      respond,
-      context,
-      params: { timeoutMs: 60_000, id: "approval-ios-cleanup", host: "gateway" },
-    });
-    await waitForFast(() => {
-      expect(iosPushDelivery.handleRequested).toHaveBeenCalledTimes(1);
-    });
-
-    await resolveExecApprovalForTest({
-      handlers,
-      id: "approval-ios-cleanup",
-      context,
-    });
-    await requestPromise;
-
-    await waitForFast(() => {
-      expectRecordFields(mockCallArg(iosPushDelivery.handleResolved), {
-        id: "approval-ios-cleanup",
-        decision: "allow-once",
-      });
-    });
-  });
-
-  it("sends Web Push terminal replacement on resolve", async () => {
-    const webPushDelivery = createWebPushDelivery();
-    const { handlers, respond, context } = createForwardingExecApprovalFixture({
-      webPushDelivery,
-    });
-    const requestPromise = requestExecApproval({
-      handlers,
-      respond,
-      context,
-      params: { timeoutMs: 60_000, id: "approval-web-push-cleanup", host: "gateway" },
-    });
-    await waitForFast(() => {
-      expect(webPushDelivery.handleRequested).toHaveBeenCalledTimes(1);
-    });
-
-    await resolveExecApprovalForTest({
-      handlers,
-      id: "approval-web-push-cleanup",
-      context,
-    });
-    await requestPromise;
-
-    await waitForFast(() => {
-      expectRecordFields(mockCallArg(webPushDelivery.handleResolved), {
-        id: "approval-web-push-cleanup",
-        decision: "allow-once",
-      });
-    });
-  });
-
-  it("sends iOS cleanup delivery on expiration", async () => {
-    vi.useFakeTimers();
-    try {
-      const iosPushDelivery = createIosPushDelivery();
-      const { handlers, respond, context } = createForwardingExecApprovalFixture({
-        iosPushDelivery,
-      });
-
-      const requestPromise = requestExecApproval({
+      await requestExecApproval({
         handlers,
         respond,
         context,
+        client: {
+          connId: "conn-owner",
+          connect: {
+            client: { id: "client-owner" },
+            device: { id: "device-owner" },
+            scopes: ["operator.approvals"],
+          },
+        } as unknown as ExecApprovalRequestArgs["client"],
         params: {
-          twoPhase: true,
-          timeoutMs: 250,
-          id: "approval-ios-expire",
+          timeoutMs: 60_000,
+          id: "approval-ios-hidden-push",
           host: "gateway",
         },
       });
-      await drainApprovalRequestTicks();
-      await vi.advanceTimersByTimeAsync(250);
+
+      expect(iosPushDelivery.handleRequested).toHaveBeenCalledTimes(1);
+      expect(expireSpy).toHaveBeenCalledWith("approval-ios-hidden-push", "no-approval-route");
+      expect(lastMockCallArg(respond)).toBe(true);
+      expectRecordFields(lastMockCallArg(respond, 1), {
+        id: "approval-ios-hidden-push",
+        decision: null,
+      });
+      expect(lastMockCallArg(respond, 2)).toBeUndefined();
+    });
+  });
+
+  it("sends iOS cleanup delivery on resolve", async (testContext) => {
+    const delivered = createDeferredCore();
+    const iosPushDelivery = createIosPushDelivery(
+      vi.fn(async () => {
+        delivered.resolve();
+        return true;
+      }),
+    );
+    const fixture = await createForwardingExecApprovalFixture(testContext, {
+      iosPushDelivery,
+    });
+    return await fixture.run(async () => {
+      const { handlers, respond, context } = fixture;
+      const requestPromise = fixture.track(
+        requestExecApproval({
+          handlers,
+          respond,
+          context,
+          params: { timeoutMs: 60_000, id: "approval-ios-cleanup", host: "gateway" },
+        }),
+      );
+      await Promise.race([
+        delivered.promise,
+        requestPromise.then(() => {
+          throw new Error("Approval request ended before delivery");
+        }),
+      ]);
+      expect(iosPushDelivery.handleRequested).toHaveBeenCalledTimes(1);
+
+      await resolveExecApprovalForTest({
+        handlers,
+        id: "approval-ios-cleanup",
+        context,
+      });
       await requestPromise;
 
       await waitForFast(() => {
-        expectRecordFields(mockCallArg(iosPushDelivery.handleExpired), {
-          id: "approval-ios-expire",
+        expectRecordFields(mockCallArg(iosPushDelivery.handleResolved), {
+          id: "approval-ios-cleanup",
+          decision: "allow-once",
+        });
+      });
+    });
+  });
+
+  it("sends Web Push terminal replacement on resolve", async (testContext) => {
+    const delivered = createDeferredCore();
+    const webPushDelivery = createWebPushDelivery(
+      vi.fn(async () => {
+        delivered.resolve();
+        return true;
+      }),
+    );
+    const fixture = await createForwardingExecApprovalFixture(testContext, {
+      webPushDelivery,
+    });
+    return await fixture.run(async () => {
+      const { handlers, respond, context } = fixture;
+      const requestPromise = fixture.track(
+        requestExecApproval({
+          handlers,
+          respond,
+          context,
+          params: { timeoutMs: 60_000, id: "approval-web-push-cleanup", host: "gateway" },
+        }),
+      );
+      await Promise.race([
+        delivered.promise,
+        requestPromise.then(() => {
+          throw new Error("Approval request ended before delivery");
+        }),
+      ]);
+      expect(webPushDelivery.handleRequested).toHaveBeenCalledTimes(1);
+
+      await resolveExecApprovalForTest({
+        handlers,
+        id: "approval-web-push-cleanup",
+        context,
+      });
+      await requestPromise;
+
+      await waitForFast(() => {
+        expectRecordFields(mockCallArg(webPushDelivery.handleResolved), {
+          id: "approval-web-push-cleanup",
+          decision: "allow-once",
+        });
+      });
+    });
+  });
+
+  it("sends iOS cleanup delivery on expiration", async (testContext) => {
+    try {
+      const delivered = createDeferredCore();
+      const iosPushDelivery = createIosPushDelivery(
+        vi.fn(async () => {
+          delivered.resolve();
+          return true;
+        }),
+      );
+      const fixture = await createForwardingExecApprovalFixture(testContext, {
+        iosPushDelivery,
+      });
+      vi.useFakeTimers();
+      return await fixture.run(async () => {
+        const { handlers, respond, context } = fixture;
+
+        const requestPromise = fixture.track(
+          requestExecApproval({
+            handlers,
+            respond,
+            context,
+            params: {
+              twoPhase: true,
+              timeoutMs: 250,
+              id: "approval-ios-expire",
+              host: "gateway",
+            },
+          }),
+        );
+        await Promise.race([
+          delivered.promise,
+          requestPromise.then(() => {
+            throw new Error("Approval request ended before delivery");
+          }),
+        ]);
+        await vi.advanceTimersByTimeAsync(250);
+        await requestPromise;
+
+        await waitForFast(() => {
+          expectRecordFields(mockCallArg(iosPushDelivery.handleExpired), {
+            id: "approval-ios-expire",
+          });
         });
       });
     } finally {
@@ -4456,77 +4102,95 @@ describe("exec approval handlers", () => {
     }
   });
 
-  it("keeps approvals pending when the originating chat can handle /approve directly", async () => {
-    vi.useFakeTimers();
+  it("keeps approvals pending when the originating chat can handle /approve directly", async (testContext) => {
     try {
-      const { manager, handlers, forwarder, respond, context } =
-        createForwardingExecApprovalFixture();
-      const expireSpy = vi.spyOn(manager, "expire");
+      const fixture = await createForwardingExecApprovalFixture(testContext);
+      vi.useFakeTimers();
+      return await fixture.run(async () => {
+        const { manager, handlers, forwarder, respond, context } = fixture;
+        const expireSpy = vi.spyOn(manager, "expire");
 
-      const requestPromise = requestExecApproval({
-        handlers,
-        respond,
-        context,
-        params: {
-          twoPhase: true,
-          timeoutMs: 60_000,
-          id: "approval-chat-route",
-          host: "gateway",
-          turnSourceChannel: "slack",
-          turnSourceTo: "D123",
-        },
-      });
+        const { pending: requestPromise } = await waitForApprovalAccepted(
+          respond,
+          (observedRespond) =>
+            fixture.track(
+              requestExecApproval({
+                handlers,
+                respond: observedRespond,
+                context,
+                params: {
+                  twoPhase: true,
+                  timeoutMs: 60_000,
+                  id: "approval-chat-route",
+                  host: "gateway",
+                  turnSourceChannel: "slack",
+                  turnSourceTo: "D123",
+                },
+              }),
+            ),
+        );
 
-      await waitForFast(() => {
         expect(lastMockCallArg(respond)).toBe(true);
         expectRecordFields(lastMockCallArg(respond, 1), {
           status: "accepted",
           id: "approval-chat-route",
         });
         expect(lastMockCallArg(respond, 2)).toBeUndefined();
+
+        expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
+        expect(expireSpy).not.toHaveBeenCalled();
+
+        await manager.resolve("approval-chat-route", "allow-once");
+        await requestPromise;
       });
-
-      expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
-      expect(expireSpy).not.toHaveBeenCalled();
-
-      manager.resolve("approval-chat-route", "allow-once");
-      await requestPromise;
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("keeps approvals pending when no approver clients but forwarding accepted the request", async () => {
-    const { manager, handlers, forwarder, respond, context } =
-      createForwardingExecApprovalFixture();
-    const expireSpy = vi.spyOn(manager, "expire");
-    forwarder.handleRequested.mockResolvedValueOnce(true);
+  it("keeps approvals pending when no approver clients but forwarding accepted the request", async (testContext) => {
+    const fixture = await createForwardingExecApprovalFixture(testContext);
+    return await fixture.run(async () => {
+      const { manager, handlers, forwarder, respond, context } = fixture;
+      const expireSpy = vi.spyOn(manager, "expire");
 
-    const requestPromise = requestExecApproval({
-      handlers,
-      respond,
-      context,
-      params: { timeoutMs: 60_000, id: "approval-forwarded", host: "gateway" },
-    });
-    await waitForFast(() => {
+      const delivered = createDeferredCore();
+      forwarder.handleRequested.mockImplementationOnce(async () => {
+        delivered.resolve();
+        return true;
+      });
+      const requestPromise = fixture.track(
+        requestExecApproval({
+          handlers,
+          respond,
+          context,
+          params: { timeoutMs: 60_000, id: "approval-forwarded", host: "gateway" },
+        }),
+      );
+      await Promise.race([
+        delivered.promise,
+        requestPromise.then(() => {
+          throw new Error("Approval request ended before delivery");
+        }),
+      ]);
       expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
-    });
-    expect(expireSpy).not.toHaveBeenCalled();
+      expect(expireSpy).not.toHaveBeenCalled();
 
-    const resolveRespond = await resolveExecApprovalForTest({
-      handlers,
-      id: "approval-forwarded",
-      context,
-    });
-    await requestPromise;
+      const resolveRespond = await resolveExecApprovalForTest({
+        handlers,
+        id: "approval-forwarded",
+        context,
+      });
+      await requestPromise;
 
-    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(lastMockCallArg(respond)).toBe(true);
-    expectRecordFields(lastMockCallArg(respond, 1), {
-      id: "approval-forwarded",
-      decision: "allow-once",
+      expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      expect(lastMockCallArg(respond)).toBe(true);
+      expectRecordFields(lastMockCallArg(respond, 1), {
+        id: "approval-forwarded",
+        decision: "allow-once",
+      });
+      expect(lastMockCallArg(respond, 2)).toBeUndefined();
     });
-    expect(lastMockCallArg(respond, 2)).toBeUndefined();
   });
 });
 
@@ -4543,14 +4207,17 @@ describe("gateway healthHandlers.status scope handling", () => {
     vi.mocked(statusModule.getStatusSummary).mockClear();
   });
 
-  async function runHealthStatus(scopes: string[]) {
+  async function runHealthStatus(
+    scopes: string[],
+    params: { includeChannelSummary?: boolean } = {},
+  ) {
     const respond = vi.fn();
 
     await expectDefined(healthHandlers.status, "healthHandlers.status test invariant").call(
       healthHandlers,
       {
         req: {} as never,
-        params: {} as never,
+        params,
         respond: respond as never,
         context: {} as never,
         client: { connect: { role: "operator", scopes } } as never,
@@ -4572,29 +4239,21 @@ describe("gateway healthHandlers.status scope handling", () => {
       expect(vi.mocked(statusModule.getStatusSummary)).toHaveBeenCalledWith({
         includeSensitive,
         includeChannelSummary: true,
+        includeCliProjection: false,
       });
       expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
     },
   );
 
   it("can skip channel summary work for liveness-only status requests", async () => {
-    const respond = vi.fn();
-
-    await expectDefined(healthHandlers.status, "healthHandlers.status test invariant").call(
-      healthHandlers,
-      {
-        req: {} as never,
-        params: { includeChannelSummary: false },
-        respond: respond as never,
-        context: {} as never,
-        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-        isWebchatConnect: () => false,
-      },
-    );
+    const respond = await runHealthStatus(["operator.read"], {
+      includeChannelSummary: false,
+    });
 
     expect(vi.mocked(statusModule.getStatusSummary)).toHaveBeenCalledWith({
       includeSensitive: false,
       includeChannelSummary: false,
+      includeCliProjection: false,
     });
     expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
   });
@@ -5010,8 +4669,8 @@ describe("gateway healthHandlers.health cache freshness", () => {
       prefix: "openclaw-health-cached-dq-",
     });
     try {
-      const { moveDeliveryQueueEntryToFailed, upsertDeliveryQueueEntry } =
-        await import("../../infra/delivery-queue-sqlite.js");
+      const queue = await import("../../infra/delivery-queue-sqlite.kernel.js");
+      const { openOpenClawStateDatabase } = await import("../../state/openclaw-state-db.js");
       const cachedPressure = [
         {
           channelId: "slack",
@@ -5026,11 +4685,20 @@ describe("gateway healthHandlers.health cache freshness", () => {
       const cached = createHealthSnapshot({
         deliveryQueues: { failed: [], ingressPressure: cachedPressure },
       });
-      upsertDeliveryQueueEntry({
-        queueName: "outbound",
-        entry: { id: "dead-1", enqueuedAt: 1_000, retryCount: 5, retainOnFailure: true },
-      });
-      moveDeliveryQueueEntryToFailed("outbound", "dead-1");
+      const entry = {
+        id: "dead-1",
+        enqueuedAt: 1_000,
+        retryCount: 5,
+        retainOnFailure: true as const,
+      };
+      const database = openOpenClawStateDatabase();
+      queue.upsertDeliveryQueueEntryInDatabase({ queueName: "outbound", entry }, database);
+      expect(
+        queue.terminalizePendingDeliveryQueueEntryInDatabase(
+          database,
+          queue.prepareDeliveryQueueTerminalEntry({ queueName: "outbound", id: entry.id, entry }),
+        ),
+      ).toMatchObject({ status: "terminalized" });
       const { createChannelIngressQueue } = await import("../../channels/message/ingress-queue.js");
       const { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } =
         await import("../../channels/message/ingress-retry-policy.js");

@@ -9,12 +9,12 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
-import * as pluginModuleRuntime from "../plugins/loader-module-runtime.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   resetPluginLoaderTestStateForTest,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import * as nativeModule from "../plugins/native-module-require.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createNonExitingRuntime } from "../runtime.js";
@@ -84,9 +84,16 @@ function writeCleanupPlugins(bundledRoot: string) {
 }
 
 beforeEach(() => {
-  // Reuse Vitest's real runtime graph; Jiti would compile a second host graph on first deletion.
-  vi.spyOn(pluginModuleRuntime, "createLazyPluginRuntime").mockImplementation(
-    ({ runtimeOptions }) => createPluginRuntime(runtimeOptions),
+  // Retain lazy initialization while using the harness's real mocked runtime graph.
+  const nativeLoad = nativeModule.tryNativeRequireModule;
+  const runtimePaths = new Set([
+    path.resolve("src/plugins/runtime/index.ts"),
+    path.resolve("dist/plugins/runtime/index.js"),
+  ]);
+  vi.spyOn(nativeModule, "tryNativeRequireModule").mockImplementation((modulePath, options) =>
+    runtimePaths.has(modulePath)
+      ? { ok: true, moduleExport: { createPluginRuntime } }
+      : nativeLoad(modulePath, options),
   );
 });
 
@@ -147,7 +154,7 @@ describe("offline sessions cleanup harness ownership", () => {
         };
         setRuntimeConfigSnapshot(cfg, cfg);
         const storePath = path.join(state.sessionsDir(), "sessions.json");
-        const sessionKey = "agent:main:cleanup-owned";
+        const sessionKey = "agent:main:hook:cleanup-owned";
         const siblingKey = "agent:main:cleanup-kept";
         const sessionId = "shared-physical-id";
         const scope = { agentId: "main", sessionKey, storePath };

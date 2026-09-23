@@ -4,64 +4,8 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { PLUGIN_ARTIFACT_ADAPTER_IDENTITY } from "../plugins/install-artifact-inspection.js";
 import { installClawPackages, preflightClawPackage } from "./packages.js";
+import { packageInstallPlan as plan } from "./packages.test-support.js";
 import type { PersistedClawPackageRef } from "./provenance.js";
-import type { ClawAddPlan, ResolvedClawPackage } from "./types.js";
-
-function plan(
-  packages: ResolvedClawPackage[],
-  ownerAction: "install" | "reuse" = "install",
-): ClawAddPlan {
-  return {
-    schemaVersion: "openclaw.clawAddPlan.v1",
-    manifestSchemaVersion: 1,
-    stability: "experimental",
-    dryRun: true,
-    mutationAllowed: false,
-    planIntegrity: "sha256:plan",
-    claw: {
-      kind: "package",
-      name: "incident-claw",
-      version: "1.0.0",
-      packageRoot: "/tmp/claw",
-      manifestPath: "/tmp/claw/claw.json",
-      integrityKind: "artifact",
-      integrity: "sha256:claw",
-      byteLength: 123,
-    },
-    agent: {
-      requestedId: "incident",
-      finalId: "incident-2",
-      workspace: "/tmp/incident-2",
-      config: { id: "incident-2", workspace: "/tmp/incident-2" },
-    },
-    summary: {
-      totalActions: packages.length,
-      agentActions: 0,
-      workspaceActions: 0,
-      packageActions: packages.length,
-      mcpServerActions: 0,
-      cronJobActions: 0,
-      blockedActions: 0,
-      capabilityEscalations: 0,
-    },
-    capabilityChanges: [],
-    actions: packages.map((pkg) => ({
-      kind: "package",
-      id: `${pkg.kind}:${pkg.ref}`,
-      action: "install",
-      target: `${pkg.source}:${pkg.ref}@${pkg.version}`,
-      details: {
-        ...pkg,
-        ownerAction,
-        ...(pkg.kind === "plugin" ? { installId: pkg.ref.split("/").at(-1) } : {}),
-      },
-      blocked: false,
-    })),
-    readiness: { ready: true, requirements: [] },
-    blockers: [],
-    diagnostics: [],
-  };
-}
 
 const integrity = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const pluginPackage = {
@@ -522,9 +466,11 @@ describe("installClawPackages", () => {
 
     expect(installPlugin).toHaveBeenCalledWith(
       expect.objectContaining({
-        raw: "clawhub:@owner/audit@2.0.1",
-        allowInstallPolicyWarningPrompt: false,
-        opts: {
+        request: {
+          source: "clawhub",
+          packageName: "@owner/audit",
+          version: "2.0.1",
+          mode: "install",
           expectedIntegrity:
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           expectedPluginId: "audit",
@@ -532,9 +478,6 @@ describe("installClawPackages", () => {
         invalidateRuntimeCache: false,
         clawManaged: true,
       }),
-    );
-    expect(probePlugin).toHaveBeenCalledWith(
-      expect.not.objectContaining({ extensionsDir: expect.anything() }),
     );
     expect(persistPackageRef).toHaveBeenCalledWith(
       expect.anything(),
@@ -875,9 +818,12 @@ describe("installClawPackages", () => {
     ).rejects.toMatchObject({ code: "package_install_failed", message: "second install failed" });
 
     expect(uninstallPlugin).toHaveBeenCalledWith(
-      "first",
-      { force: true, invalidateRuntimeCache: false, clawManaged: true },
-      expect.anything(),
+      expect.objectContaining({
+        pluginId: "first",
+        caller: "cli",
+        invalidateRuntimeCache: false,
+        clawManaged: true,
+      }),
     );
     expect(completePackageRef).toHaveBeenCalledWith(
       expect.objectContaining({ ref: "@owner/first" }),

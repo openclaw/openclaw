@@ -1,11 +1,9 @@
-// Signal plugin module implements monitor behavior.
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import type {
   OpenClawConfig,
-  ReplyToMode,
   SignalReactionNotificationMode,
 } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -14,7 +12,9 @@ import {
   estimateBase64DecodedBytes,
   saveMediaBuffer,
 } from "openclaw/plugin-sdk/media-runtime";
-import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+// Signal plugin module implements monitor behavior.
+import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
@@ -62,7 +62,7 @@ import type {
   SignalReactionMessage,
   SignalReactionTarget,
 } from "./monitor/event-handler.types.js";
-import { createSignalNativeReplyIdResolver } from "./native-reply.js";
+import { createSignalNativeReplyIdPlan } from "./native-reply.js";
 import { materializeSignalPresentationFallback } from "./presentation-fallback.js";
 import { registerSignalReactionTargetsForDeliveredPayload } from "./reaction-targets.js";
 import { sendMessageSignal } from "./send.js";
@@ -310,6 +310,7 @@ export async function deliverReplies(params: {
     accountId,
     chatType: params.chatType,
   });
+  const replyToAuthor = normalizeOptionalString(params.replyContext?.author);
   for (const payload of replies) {
     const deliveryResults: Array<{
       channel: "signal";
@@ -327,15 +328,31 @@ export async function deliverReplies(params: {
         targetAuthorUuid: accountUuid,
       }) ?? presentationPayload;
     const reply = resolveSendableOutboundReplyParts(deliveredPayload);
-    const nextNativeReply = createSignalNativeReplyResolver({
+    const replyPlan = createSignalNativeReplyIdPlan({
       payload: deliveredPayload,
       replyContext: params.replyContext,
       replyToMode,
     });
-    const recordDeliveryResult = (
-      result: Awaited<ReturnType<typeof sendMessageSignal>>,
-      visibleText: string,
-    ) => {
+    const send = async (visibleText: string, mediaUrl?: string) => {
+      const replyToId = replyPlan.peek();
+      const result = await sendMessageSignal(target, visibleText, {
+        cfg: params.cfg,
+        baseUrl,
+        account,
+        maxBytes,
+        accountId,
+        ...(mediaUrl ? { mediaUrl } : {}),
+        ...(replyToId
+          ? {
+              replyToId,
+              ...(replyToAuthor
+                ? { replyToAuthor, replyToBody: params.replyContext?.body ?? "" }
+                : {}),
+            }
+          : {}),
+      });
+      // Failed blocks must leave the shared first-reply slot available to the final reply.
+      replyPlan.markSent();
       const messageId =
         typeof result?.messageId === "string" && result.messageId.trim()
           ? result.messageId.trim()
@@ -352,37 +369,11 @@ export async function deliverReplies(params: {
       payload: deliveredPayload,
       text: reply.text,
       chunkText: (value) => chunkTextWithMode(value, textLimit, chunkMode),
-      sendText: async (chunk) => {
-        recordDeliveryResult(
-          await sendMessageSignal(target, chunk, {
-            cfg: params.cfg,
-            baseUrl,
-            account,
-            maxBytes,
-            accountId,
-            ...nextNativeReply(),
-          }),
-          chunk,
-        );
-      },
-      sendMedia: async ({ mediaUrl, caption }) => {
-        const visibleText = caption ?? "";
-        recordDeliveryResult(
-          await sendMessageSignal(target, visibleText, {
-            cfg: params.cfg,
-            baseUrl,
-            account,
-            mediaUrl,
-            maxBytes,
-            accountId,
-            ...nextNativeReply(),
-          }),
-          visibleText,
-        );
-      },
+      sendText: send,
+      sendMedia: ({ mediaUrl, caption }) => send(caption ?? "", mediaUrl),
     });
     if (delivered !== "empty") {
-      registerSignalReactionTargetsForDeliveredPayload({
+      await registerSignalReactionTargetsForDeliveredPayload({
         cfg: params.cfg,
         target: {
           channel: "signal",
@@ -399,28 +390,6 @@ export async function deliverReplies(params: {
   }
 }
 
-function createSignalNativeReplyResolver(params: {
-  payload: ReplyPayload;
-  replyContext?: SignalNativeReplyContext;
-  replyToMode: ReplyToMode;
-}): () => Pick<
-  Parameters<typeof sendMessageSignal>[2],
-  "replyToId" | "replyToAuthor" | "replyToBody"
-> {
-  const nextReplyToId = createSignalNativeReplyIdResolver(params);
-  return () => {
-    const replyToId = nextReplyToId();
-    if (!replyToId) {
-      return {};
-    }
-    const replyToAuthor = normalizeOptionalString(params.replyContext?.author);
-    return {
-      replyToId,
-      ...(replyToAuthor ? { replyToAuthor, replyToBody: params.replyContext?.body ?? "" } : {}),
-    };
-  };
-}
-
 export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promise<void> {
   const runtime = opts.runtime ?? createNonExitingRuntime();
   const cfg = opts.config ?? getRuntimeConfig();
@@ -428,11 +397,8 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     cfg,
     accountId: opts.accountId,
   });
-  const historyLimit = Math.max(
-    0,
-    accountInfo.config.historyLimit ??
-      cfg.messages?.groupChat?.historyLimit ??
-      DEFAULT_GROUP_HISTORY_LIMIT,
+  const historyLimit = resolvePromptHistoryLimit(
+    accountInfo.config.historyLimit ?? cfg.messages?.groupChat?.historyLimit,
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
   const textLimit = resolveTextChunkLimit(cfg, "signal", accountInfo.accountId);
@@ -468,6 +434,13 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const transportKind = accountInfo.transport.kind;
   const managedTransport =
     accountInfo.transport.kind === "managed-native" ? accountInfo.transport : undefined;
+  const socketPath = managedTransport?.socketPath;
+  if (
+    socketPath &&
+    (opts.baseUrl !== undefined || opts.httpHost !== undefined || opts.httpPort !== undefined)
+  ) {
+    throw new Error("Signal socket transport cannot be combined with HTTP endpoint overrides");
+  }
   const ignoreAttachments = opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments ?? false;
   const sendReadReceipts = Boolean(opts.sendReadReceipts ?? accountInfo.config.sendReadReceipts);
   const waitForTransportReadyFn = opts.waitForTransportReady ?? waitForTransportReady;
@@ -503,6 +476,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       await assertSignalDaemonEndpointAvailable({
         httpHost,
         httpPort,
+        ...(socketPath ? { socketPath } : {}),
         abortSignal: endpointProbeSignal,
       });
     } catch (error) {
@@ -533,6 +507,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       account,
       httpHost,
       httpPort,
+      ...(socketPath ? { socketPath } : {}),
       receiveMode: opts.receiveMode ?? managedTransport?.receiveMode,
       ignoreAttachments: opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments,
       ignoreStories: opts.ignoreStories ?? managedTransport?.ignoreStories,

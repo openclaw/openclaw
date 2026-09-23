@@ -4,6 +4,7 @@ import {
   type SqliteSchemaIssue,
 } from "../infra/sqlite-schema-contract.js";
 import {
+  ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS,
   CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS,
   CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS,
   CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS,
@@ -28,11 +29,14 @@ const CLAW_FIRST_USE_ADDITIVE_STATE_COLUMNS = CLAW_FIRST_USE_ADDITIVE_STATE_COLU
 const CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_SET = new Set<string>(
   CLAW_FIRST_USE_ADDITIVE_STATE_COLUMNS,
 );
-const CLAW_STARTUP_ADDITIVE_STATE_COLUMN_SET = new Set<string>(
-  CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
+const CLAW_STARTUP_ADDITIVE_STATE_COLUMN_SET = new Set<string>([
+  ...CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
     ({ columnName, tableName }) => `${tableName}.${columnName}`,
   ),
-);
+  ...Object.values(ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS)
+    .flat()
+    .map(([tableName, definition]) => `${tableName}.${definition.split(" ", 1)[0]}`),
+]);
 const CLAW_STARTUP_ADDITIVE_STATE_TABLES = [
   "worker_session_tool_operations",
   "worker_turn_tool_authorities",
@@ -40,6 +44,8 @@ const CLAW_STARTUP_ADDITIVE_STATE_TABLES = [
 const CLAW_STARTUP_ADDITIVE_STATE_TABLE_SET = new Set<string>(CLAW_STARTUP_ADDITIVE_STATE_TABLES);
 const CLAW_READONLY_OPTIONAL_STATE_INDEXES = [
   "idx_operator_approvals_source_run_resolved",
+  "idx_task_runs_requester_session_key",
+  "idx_worker_session_placements_environment",
 ] as const;
 let openClawStateCanonicalNamedIndexSet: ReadonlySet<string> | undefined;
 
@@ -50,15 +56,22 @@ function getOpenClawStateCanonicalNamedIndexSet(): ReadonlySet<string> {
   return openClawStateCanonicalNamedIndexSet;
 }
 
+const runtimeSchemaCache = new Map<boolean, string>();
+
 /** Project canonical SQL to the tables the shared runtime may create during this open. */
 export function getOpenClawStateRuntimeSchema(options: {
   includeVersionLazyAdditiveTables: boolean;
 }): string {
+  const { includeVersionLazyAdditiveTables } = options;
+  const cached = runtimeSchemaCache.get(includeVersionLazyAdditiveTables);
+  if (cached !== undefined) {
+    return cached;
+  }
   let schema = OPENCLAW_STATE_SCHEMA_SQL;
-  const omittedTables = options.includeVersionLazyAdditiveTables
+  const omittedTables = includeVersionLazyAdditiveTables
     ? FIRST_USE_STATE_TABLES
     : LAZY_ADDITIVE_STATE_TABLES;
-  const omittedIndexes = options.includeVersionLazyAdditiveTables
+  const omittedIndexes = includeVersionLazyAdditiveTables
     ? FIRST_USE_STATE_INDEXES
     : LAZY_ADDITIVE_STATE_INDEXES;
   for (const tableName of omittedTables) {
@@ -80,6 +93,7 @@ export function getOpenClawStateRuntimeSchema(options: {
     }
     schema = `${schema.slice(0, start)}${schema.slice(end + 1)}`;
   }
+  runtimeSchemaCache.set(includeVersionLazyAdditiveTables, schema);
   return schema;
 }
 

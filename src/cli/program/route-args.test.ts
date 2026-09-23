@@ -93,6 +93,17 @@ describe("route-args", () => {
     });
   });
 
+  it("defers command options placed before status or health to Commander", () => {
+    expect(parseStatusRouteArgs(["node", "openclaw", "--json", "status"])).toBeNull();
+    expect(parseHealthRouteArgs(["node", "openclaw", "--json", "health"])).toBeNull();
+    expect(parseHealthRouteArgs(["node", "openclaw", "--verbose", "health"])).toBeNull();
+    expect(parseHealthRouteArgs(["node", "openclaw", "--timeout=5000", "health"])).toBeNull();
+    expect(parseHealthRouteArgs(["node", "openclaw", "--timeout", "5000", "health"])).toBeNull();
+    expect(
+      parseStatusRouteArgs(["node", "openclaw", "--profile", "work", "status", "--json"]),
+    ).toMatchObject({ json: true });
+  });
+
   it.each([
     {
       name: "health unknown flag",
@@ -153,6 +164,36 @@ describe("route-args", () => {
       name: "bare agents unknown flag",
       parse: parseAgentsListRouteArgs,
       argv: ["node", "openclaw", "agents", "--wat"],
+    },
+    {
+      name: "config get empty excess operand",
+      parse: parseConfigGetRouteArgs,
+      argv: ["node", "openclaw", "config", "get", "gateway.port", ""],
+    },
+    {
+      name: "config get unknown flag after an empty operand",
+      parse: parseConfigGetRouteArgs,
+      argv: ["node", "openclaw", "config", "get", "gateway.port", "", "--unknown"],
+    },
+    {
+      name: "config get extra path after an empty operand",
+      parse: parseConfigGetRouteArgs,
+      argv: ["node", "openclaw", "config", "get", "gateway.port", "", "gateway.bind"],
+    },
+    {
+      name: "config unset empty excess operand",
+      parse: parseConfigUnsetRouteArgs,
+      argv: ["node", "openclaw", "config", "unset", "gateway.port", "", "--dry-run"],
+    },
+    {
+      name: "health empty excess operand",
+      parse: parseHealthRouteArgs,
+      argv: ["node", "openclaw", "health", ""],
+    },
+    {
+      name: "agents list empty excess operand",
+      parse: parseAgentsListRouteArgs,
+      argv: ["node", "openclaw", "agents", "list", ""],
     },
   ])("defers unsupported routed argv: $name", ({ parse, argv }) => {
     expect(parse(argv)).toBeNull();

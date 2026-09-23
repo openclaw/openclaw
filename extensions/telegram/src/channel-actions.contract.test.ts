@@ -18,6 +18,7 @@ describe("telegram actions contract", () => {
           },
         } as OpenClawConfig,
         expectedActions: [
+          "read",
           "send",
           "poll",
           "react",
@@ -38,8 +39,9 @@ describe("telegram actions contract", () => {
       "edit",
       "delete",
       "emoji-list",
+      "read",
     ]);
-    for (const action of ["react", "edit", "delete"] as const) {
+    for (const action of ["react", "edit", "delete", "read"] as const) {
       expect(telegramPlugin.actions?.messageActionTargetAliases?.[action]).toEqual({
         aliases: ["messageId"],
         deliveryTargetAliases: [],

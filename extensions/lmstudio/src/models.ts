@@ -1,4 +1,3 @@
-// Lmstudio plugin module implements models behavior.
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
@@ -127,13 +126,12 @@ function resolveLmstudioTransportReasoningEfforts(allowedOptions: readonly strin
   );
 }
 
-function buildLmstudioReasoningCompat(
-  allowedOptions: readonly string[],
+export function resolveLmstudioReasoningCompat(
+  entry: Pick<LmstudioModelWire, "capabilities">,
 ): ModelDefinitionConfig["compat"] | undefined {
-  const supportedReasoningEfforts = resolveLmstudioTransportReasoningEfforts(allowedOptions);
-  if (supportedReasoningEfforts.length === 0) {
-    return undefined;
-  }
+  const supportedReasoningEfforts = resolveLmstudioTransportReasoningEfforts(
+    normalizeReasoningOptions(entry.capabilities?.reasoning?.allowed_options),
+  );
   if (!supportedReasoningEfforts.some((option) => option !== "none")) {
     return undefined;
   }
@@ -142,20 +140,6 @@ function buildLmstudioReasoningCompat(
     supportedReasoningEfforts,
     reasoningEffortMap: buildLmstudioReasoningEffortMap(supportedReasoningEfforts),
   };
-}
-
-export function resolveLmstudioReasoningCompat(
-  entry: Pick<LmstudioModelWire, "capabilities">,
-): ModelDefinitionConfig["compat"] | undefined {
-  const reasoning = entry.capabilities?.reasoning;
-  if (reasoning === undefined || reasoning === null) {
-    return undefined;
-  }
-  const allowedOptions = normalizeReasoningOptions(reasoning.allowed_options);
-  if (allowedOptions.length === 0) {
-    return undefined;
-  }
-  return buildLmstudioReasoningCompat(allowedOptions);
 }
 
 /**
@@ -543,9 +527,13 @@ export function mapLmstudioWireEntry(entry: LmstudioModelWire): LmstudioModelBas
   const advertisedContextWindow = asPositiveSafeInteger(entry.max_context_length) ?? null;
   const contextWindow = advertisedContextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW;
   // ModelDefinitionConfig keeps the native maximum in contextWindow. Runtime
-  // budgeting and preload prefer contextTokens, so cap that to the loaded instance.
+  // budgeting reads contextTokens, so it must reflect what the server actually
+  // serves: a loaded instance is authoritative for its own context, while an
+  // unloaded model is budgeted at the length JIT loading will request — the
+  // same clamp ensureLmstudioModelLoaded applies when it triggers the load.
   const effectiveContextWindow = loadedContextWindow ?? contextWindow;
-  const contextTokens = Math.min(effectiveContextWindow, LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
+  const contextTokens =
+    loadedContextWindow ?? Math.min(contextWindow, LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
   const rawDisplayName = entry.display_name?.trim();
   const reasoningCompat = resolveLmstudioReasoningCompat(entry);
   const trainedForToolUse = entry.capabilities?.trained_for_tool_use;

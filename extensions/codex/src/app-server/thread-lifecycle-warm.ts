@@ -1,3 +1,5 @@
+import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isIncognitoSessionKey } from "../incognito-session.js";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
@@ -13,15 +15,16 @@ import {
 } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
 import { applyCodexNativeSkillIsolation } from "./native-skill-isolation.js";
-import { attestCodexPluginThreadApps } from "./plugin-thread-attestation.js";
+import { attestCodexThreadToolSurface } from "./plugin-thread-attestation.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   mergeCodexThreadConfigs,
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
+import type { CodexThread } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import {
-  captureExclusiveSharedCodexAppServerClient,
+  captureCodexAppServerClientLifetime,
   retainSharedCodexAppServerClientByInstanceId,
 } from "./shared-client.js";
 import { fingerprintCodexThreadConfig } from "./thread-fingerprints.js";
@@ -33,6 +36,14 @@ import type {
   CodexThreadRequestContext,
   CodexThreadFinalConfigPatchResult,
 } from "./thread-lifecycle-types.js";
+import {
+  isSameCodexAppServerThreadOwner,
+  retainCodexAppServerBindingSubscription,
+} from "./thread-ownership.js";
+import {
+  assertAdoptedCodexThreadResumeAllowed,
+  CodexIncognitoPolicyChangeError,
+} from "./thread-policy.js";
 import { buildThreadResumeParams } from "./thread-requests.js";
 
 type CodexWarmThreadReuseParams = CodexThreadRequestContext & {
@@ -137,7 +148,7 @@ export async function releaseCodexBoundLiveThread(
     const client = previous?.client ?? options.client;
     const assertPrevious =
       previous && options.assertCurrent
-        ? captureExclusiveSharedCodexAppServerClient(client)
+        ? captureCodexAppServerClientLifetime(client, "connection")
         : undefined;
     if (isCodexAppServerLiveThreadClaimed(client, options.threadId)) {
       throw new Error(`Codex thread ${options.threadId} is claimed by active work; stop it first.`);
@@ -173,20 +184,32 @@ export async function tryReuseCodexLiveThread(
     lifecycleTiming,
     nativeSkillIsolation,
     ringZeroActive,
+    restrictedToolSurface,
     restrictedToolSurfaceInheritedMcpServerNames,
     startModelProvider,
     startModelSelection,
     throwIfAborted,
     userMcpServersConfigPatch,
   } = options;
+  const incognito = isIncognitoSessionKey(params.params.sessionKey);
 
-  if (
-    !binding.clientId ||
-    binding.clientId !== clientId ||
-    binding.preserveNativeModel === true ||
-    binding.connectionScope === "supervision" ||
-    ringZeroActive
-  ) {
+  // These native-owned ephemeral lifetimes do not enter ordinary
+  // configuration ownership. Keep their existing live-only continuation path.
+  if (incognito && (binding.preserveNativeModel || binding.connectionScope === "supervision")) {
+    if (
+      binding.clientId === clientId &&
+      binding.clientId &&
+      ((await options.buildLoadedPluginThreadConfig(binding))?.fingerprint ??
+        binding.pluginAppsFingerprint) === binding.pluginAppsFingerprint
+    ) {
+      await params.buildFinalConfigPatch?.({ action: "resume", binding });
+      throwIfAborted();
+      return { kind: "ready", binding: { ...binding, lifecycle: { action: "resumed" } } };
+    }
+    return { kind: "rotate" };
+  }
+
+  if (!binding.clientId || binding.clientId !== clientId || (ringZeroActive && !incognito)) {
     return { kind: "resume" };
   }
 
@@ -194,28 +217,67 @@ export async function tryReuseCodexLiveThread(
   if (!retainedThread) {
     return { kind: "resume" };
   }
-  const assertCurrentClient = () => {
+  const assertWarmOwner = () => {
     throwIfAborted();
     // Startup attaches router abort after this lifecycle call. A closed client's
     // inventory failure must not be treated as revocation of the durable binding.
     if (!isCodexAppServerClientRuntimeLive(params.client)) {
       throw params.client.getCloseError() ?? new Error("codex app-server client is closed");
     }
+    try {
+      // Notifications can revoke this exact claim while its physical client stays
+      // healthy. Both subscription and host authority must survive policy awaits.
+      retainedThread.assertCurrent();
+      params.params.hostCapabilities.assertActive();
+      params.assertCurrent?.();
+    } catch (cause) {
+      throw new AgentHarnessPreflightError(
+        "Codex warm thread ownership changed before this turn could run. No turn was sent; reconnect before continuing, or start a new conversation if the original thread was closed.",
+        { cause },
+      );
+    }
   };
   let ownershipTransferred = false;
+  let preserveSubscription = false;
+  let nativeThread: CodexThread | undefined;
   try {
+    assertWarmOwner();
+    if (binding.preserveNativeModel || binding.connectionScope === "supervision") {
+      try {
+        nativeThread = await assertAdoptedCodexThreadResumeAllowed(
+          params,
+          binding.threadId,
+          options,
+          assertWarmOwner,
+        );
+      } catch (error) {
+        // This read-only preflight cannot change native configuration. Direct-input
+        // refusals and failed reads preserve it too, but revocation or cancellation cannot.
+        assertWarmOwner();
+        preserveSubscription = isSameCodexAppServerThreadOwner(
+          params.bindingStore.read(bindingIdentity),
+          binding,
+        );
+        throw error;
+      }
+      assertWarmOwner();
+      if (nativeThread.status?.type === "notLoaded") {
+        preserveSubscription = true;
+        return { kind: "resume" };
+      }
+    }
     const pluginThreadConfig = await options.buildLoadedPluginThreadConfig(binding);
-    assertCurrentClient();
+    assertWarmOwner();
     if (pluginThreadConfig && pluginThreadConfig.fingerprint !== binding.pluginAppsFingerprint) {
       return { kind: "rotate" };
     }
     // Engine identity, projection epoch, and policy were checked by the owner
     // before this call; compatible bootstrap threads must keep their session.
 
-    const prebuiltFinalConfigPatch = params.buildFinalConfigPatch?.({
+    const prebuiltFinalConfigPatch = (await params.buildFinalConfigPatch?.({
       action: "resume",
       binding,
-    }) ?? {
+    })) ?? {
       configPatch: params.finalConfigPatch,
       nativeHookRelayGeneration: params.nativeHookRelayGeneration,
     };
@@ -224,7 +286,10 @@ export async function tryReuseCodexLiveThread(
       (params.pluginThreadConfig?.enabled && binding.pluginAppPolicyContext
         ? buildCodexPluginAppsConfigPatchFromPolicyContext(binding.pluginAppPolicyContext)
         : undefined);
-    const resumeAuthProfileId = params.params.authProfileId ?? binding.authProfileId;
+    const resumeAuthProfileId =
+      binding.connectionScope === "supervision"
+        ? undefined
+        : (params.params.authProfileId ?? binding.authProfileId);
     const resumeConfig = mergeCodexThreadConfigs(
       params.config,
       userMcpServersConfigPatch,
@@ -238,7 +303,7 @@ export async function tryReuseCodexLiveThread(
         authProfileId: resumeAuthProfileId,
         model: startModelSelection.model,
         modelProvider: startModelProvider,
-        preserveNativeModel: false,
+        preserveNativeModel: binding.preserveNativeModel === true,
         appServer: params.appServer,
         dynamicTools: params.dynamicTools,
         developerInstructions: params.developerInstructions,
@@ -253,58 +318,85 @@ export async function tryReuseCodexLiveThread(
         disableLoginShell: params.disableLoginShell,
       }),
     );
-    const liveThreadConfigFingerprint = fingerprintCodexThreadConfig(
-      {
-        ...resumeParams,
-        // Keep the actual loaded provider separate from caller-selected
-        // overrides so account or provider changes always invalidate reuse.
-        model: binding.model ?? resumeParams.model ?? null,
-        requestedModel: resumeParams.model ?? null,
-        modelProvider: binding.modelProvider ?? resumeParams.modelProvider ?? null,
-        requestedModelProvider: resumeParams.modelProvider ?? binding.modelProvider ?? null,
-      },
-      resumeAuthProfileId,
-      dynamicToolsFingerprint,
-    );
-    if (retainedThread.configFingerprint !== liveThreadConfigFingerprint) {
-      // Loaded Codex threads ignore overrides; release the claimed subscription before resume.
+    const liveThreadConfigFingerprint = incognito
+      ? retainedThread.configFingerprint
+      : fingerprintCodexThreadConfig(
+          {
+            ...resumeParams,
+            // Keep the actual loaded provider separate from caller-selected
+            // overrides so account or provider changes always invalidate reuse.
+            model: binding.preserveNativeModel
+              ? null
+              : (binding.model ?? resumeParams.model ?? null),
+            requestedModel: binding.preserveNativeModel ? null : (resumeParams.model ?? null),
+            modelProvider: binding.preserveNativeModel
+              ? null
+              : (binding.modelProvider ?? resumeParams.modelProvider ?? null),
+            requestedModelProvider: binding.preserveNativeModel
+              ? null
+              : (resumeParams.modelProvider ?? binding.modelProvider ?? null),
+          },
+          resumeAuthProfileId,
+          dynamicToolsFingerprint,
+        );
+    if (incognito && retainedThread.ephemeralPolicy !== resumeParams.developerInstructions) {
+      preserveSubscription = true;
+      throw new CodexIncognitoPolicyChangeError();
+    }
+    if (!incognito && retainedThread.configFingerprint !== liveThreadConfigFingerprint) {
+      // Return the same owner first: cold-resume preparation must observe native teardown
+      // before releasing it, otherwise a loaded resume can silently ignore new policy.
+      preserveSubscription = true;
       return { kind: "resume", prebuiltFinalConfigPatch };
     }
-    await attestCodexPluginThreadApps({
+    await attestCodexThreadToolSurface({
       client: params.client,
       threadId: binding.threadId,
       appIds: pluginThreadConfig?.provisionalAppIds ?? [],
       signal: params.signal,
+      threadConfig: resumeParams.config,
+      restrictedToolSurface,
+      lifecycleTiming,
+      assertCurrent: assertWarmOwner,
     });
-    assertCurrentClient();
+    assertWarmOwner();
     const nativeHookRelayGeneration =
       prebuiltFinalConfigPatch.nativeHookRelayGeneration ?? binding.nativeHookRelayGeneration;
-    const model = startModelSelection.model;
+    // Older App Servers omit model metadata; newer ones report native changes between turns.
+    const model = binding.preserveNativeModel
+      ? nativeThread?.model?.trim() || binding.model
+      : startModelSelection.model;
+    const modelProvider = binding.preserveNativeModel
+      ? nativeThread?.modelProvider?.trim() || binding.modelProvider
+      : binding.modelProvider;
     // Validate ownership even when relay generation is unchanged; reset may
     // have replaced the persisted binding since it was first read. Model and
     // cwd are sticky turn settings, so future turns and /btw need current facts.
-    const committed = await lifecycleTiming.measure("warm-thread-write-binding", () =>
-      params.bindingStore.mutate(
-        bindingIdentity,
-        {
-          kind: "patch",
-          threadId: binding.threadId,
-          // Environment selection is sticky turn/start state, like cwd/model;
-          // recording its new value must not recreate the approval-bearing thread.
-          patch: {
-            cwd: params.cwd,
-            model,
-            nativeHookRelayGeneration,
-            environmentSelectionFingerprint,
+    const committed =
+      incognito ||
+      (await lifecycleTiming.measure("warm-thread-write-binding", () =>
+        params.bindingStore.mutate(
+          bindingIdentity,
+          {
+            kind: "patch",
+            threadId: binding.threadId,
+            // Environment selection is sticky turn/start state, like cwd/model;
+            // recording its new value must not recreate the approval-bearing thread.
+            patch: {
+              cwd: params.cwd,
+              model,
+              modelProvider,
+              nativeHookRelayGeneration,
+              environmentSelectionFingerprint,
+            },
           },
-        },
-        assertCurrentClient,
-      ),
-    );
+          assertWarmOwner,
+        ),
+      ));
     if (!committed) {
       throw new CodexThreadBindingConflictError(binding.threadId, "committing a reused thread");
     }
-    assertCurrentClient();
+    assertWarmOwner();
     lifecycleTiming.mark("thread-ready");
     lifecycleTiming.logSummary({
       runId: params.params.runId,
@@ -318,13 +410,19 @@ export async function tryReuseCodexLiveThread(
       kind: "ready",
       binding: {
         ...binding,
-        cwd: params.cwd,
-        model,
-        nativeHookRelayGeneration,
-        environmentSelectionFingerprint,
+        ...(!incognito
+          ? {
+              cwd: params.cwd,
+              model,
+              modelProvider,
+              nativeHookRelayGeneration,
+              environmentSelectionFingerprint,
+            }
+          : {}),
         liveThreadConfigFingerprint,
+        liveThreadEphemeralPolicy: retainedThread.ephemeralPolicy,
         liveThreadOwnership: retainedThread,
-        ...(retainedThread.serviceTier && resumeParams.serviceTier === undefined
+        ...(!incognito && retainedThread.serviceTier && resumeParams.serviceTier === undefined
           ? { clearInheritedServiceTier: true }
           : {}),
         lifecycle: { action: "resumed" },
@@ -332,10 +430,41 @@ export async function tryReuseCodexLiveThread(
     };
   } finally {
     if (!ownershipTransferred) {
+      let failure: { cause: unknown } | undefined;
       try {
-        // Keep the claim's generation fence across policy awaits and binding conflicts.
-        await retainedThread.release(binding.threadId);
-      } catch (error) {
+        if (preserveSubscription) {
+          // Recheck immediately before republishing: even a passive failure can
+          // race cancellation or replacement of the retained generation.
+          try {
+            assertWarmOwner();
+            preserveSubscription = isSameCodexAppServerThreadOwner(
+              params.bindingStore.read(bindingIdentity),
+              binding,
+            );
+          } catch {
+            preserveSubscription = false;
+          }
+        }
+        if (preserveSubscription) {
+          if (
+            !(await retainCodexAppServerBindingSubscription(
+              params.client,
+              binding.threadId,
+              retainedThread,
+            ))
+          ) {
+            failure = {
+              cause: new Error("Codex live thread ownership could not be returned to its session"),
+            };
+          }
+        } else {
+          // Keep the claim's generation fence across policy awaits and binding conflicts.
+          await retainedThread.release(binding.threadId);
+        }
+      } catch (cause) {
+        failure = { cause };
+      }
+      if (failure) {
         await abandonCodexLiveThreadRelease(
           {
             client: params.client,
@@ -343,7 +472,7 @@ export async function tryReuseCodexLiveThread(
             lifecycleTiming,
             threadId: binding.threadId,
           },
-          error,
+          failure.cause,
         );
       }
     }

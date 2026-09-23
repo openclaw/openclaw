@@ -13,6 +13,53 @@ import { loadSettings, saveSettings } from "./settings.ts";
 describe("sidebar preference persistence", () => {
   installSettingsStorageLifecycle();
 
+  it("defaults old or invalid agent modes to chip and persists explicit roster mode", () => {
+    setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
+    const gatewayUrl = expectedGatewayUrl("");
+    const key = `openclaw.control.settings.v1:${gatewayUrl}`;
+    expect(loadSettings().sidebarAgentsMode).toBe("chip");
+    for (const mode of ["roster", "chip"]) {
+      saveSettings(
+        makeUiSettings(gatewayUrl, { sidebarAgentsMode: mode === "roster" ? "roster" : "chip" }),
+      );
+      expect(loadSettings().sidebarAgentsMode).toBe(mode);
+    }
+    for (const mode of [undefined, true, "invalid", null]) {
+      localStorage.setItem(
+        key,
+        JSON.stringify({ ...makeUiSettings(gatewayUrl), sidebarAgentsMode: mode }),
+      );
+      expect(loadSettings().sidebarAgentsMode).toBe("chip");
+    }
+  });
+
+  it.each([
+    [" Research ", "research"],
+    [null, null],
+    [undefined, undefined],
+    [" ", undefined],
+    [true, undefined],
+    [42, undefined],
+    [{ agent: "research" }, undefined],
+  ])(
+    "normalizes remembered team scope %j without conflating all agents and unset",
+    (value, expected) => {
+      setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
+      const gatewayUrl = expectedGatewayUrl("");
+      const key = `openclaw.control.settings.v1:${gatewayUrl}`;
+      localStorage.setItem(
+        key,
+        JSON.stringify({ ...makeUiSettings(gatewayUrl), sidebarPreTeamScope: value }),
+      );
+      const settings = loadSettings();
+      expect(settings.sidebarPreTeamScope).toBe(expected);
+      saveSettings(settings);
+      expect(loadSettings().sidebarPreTeamScope).toBe(expected);
+      const persisted = JSON.parse(localStorage.getItem(key) ?? "{}") as Record<string, unknown>;
+      expect(Object.hasOwn(persisted, "sidebarPreTeamScope")).toBe(expected !== undefined);
+    },
+  );
+
   it("persists sidebar width without leaking tab-local visibility across reloads", () => {
     setTestLocation({ protocol: "https:", host: "gateway.example:8443", pathname: "/" });
     const gatewayUrl = expectedGatewayUrl("");
@@ -60,7 +107,13 @@ describe("sidebar preference persistence", () => {
     persisted.navWidth = 220;
     localStorage.setItem(scopedKey, JSON.stringify(persisted));
 
-    expect(loadSettings().sidebarEntries).toEqual(["route:cron", "route:plugins"]);
+    expect(loadSettings().sidebarEntries).toEqual([
+      "route:agents-home",
+      "route:dashboards",
+      "route:systems",
+      "route:cron",
+      "route:plugins",
+    ]);
     expect(loadSettings().navWidth).toBe(258);
   });
 
@@ -78,12 +131,16 @@ describe("sidebar preference persistence", () => {
     localStorage.setItem(scopedKey, JSON.stringify(legacy));
 
     expect(loadSettings().sidebarEntries).toEqual([
-      "route:workboard",
+      "plugin:workboard/workboard",
       "route:usage",
       "route:tasks",
     ]);
     const migrated = JSON.parse(localStorage.getItem(scopedKey) ?? "{}") as Record<string, unknown>;
-    expect(migrated.sidebarEntries).toEqual(["route:workboard", "route:usage", "route:tasks"]);
+    expect(migrated.sidebarEntries).toEqual([
+      "plugin:workboard/workboard",
+      "route:usage",
+      "route:tasks",
+    ]);
     expect(migrated).not.toHaveProperty("sidebarPinnedRoutes");
   });
 });

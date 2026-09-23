@@ -131,6 +131,22 @@ describe("resolveResumeSession", () => {
       },
     },
     {
+      name: "ambiguous substrings preserve order and exclude fuzzy-only candidates",
+      query: "plan",
+      rows: [
+        { key: "agent:main:one", displayName: "Annual planning" },
+        { key: "agent:main:two", displayName: "Plan" },
+        { key: "agent:main:three", displayName: "Personal learning" },
+      ],
+      expected: { kind: "ambiguous", keys: ["agent:main:one", "agent:main:two"] },
+    },
+    {
+      name: "ambiguous fuzzy matches retain score order",
+      query: "pln",
+      rows: sessions,
+      expected: { kind: "ambiguous", keys: ["agent:work:beta", "agent:main:alpha"] },
+    },
+    {
       name: "no match",
       query: "unrelated-session-name",
       rows: sessions,
@@ -181,7 +197,15 @@ describe("runResumeCommand", () => {
     expect(mocks.runTui).not.toHaveBeenCalled();
   });
 
-  it("passes an exact handoff target and explicit auth directly into the bound TUI", async () => {
+  it.each([
+    { name: "bare success", presentation: {} },
+    { name: "display name", presentation: { displayName: "Handoff session" } },
+    { name: "chat face", presentation: { boardFace: "chat" } },
+    {
+      name: "named dashboard face",
+      presentation: { displayName: "Handoff session", boardFace: "dashboard" },
+    },
+  ])("binds an exact handoff and explicit auth with canonical $name", async ({ presentation }) => {
     const sessionKey = "agent:main: hostile-'\"$&;|<>^()%![]{}\\`-%PATH% ";
     const url = "wss://gateway.example/openclaw/$&;=()+,![]{}'`/%25PATH%25";
     const handoff = encodeResumeHandoff({ sessionKey, gatewayUrl: url });
@@ -191,7 +215,12 @@ describe("runResumeCommand", () => {
       password: "explicit-password",
       tlsFingerprint: "sha256:explicit-pin",
     });
-    client.resolveSession.mockResolvedValue({ ok: true, key: sessionKey, agentId: "main" });
+    client.resolveSession.mockResolvedValue({
+      ok: true,
+      key: sessionKey,
+      agentId: "main",
+      ...presentation,
+    });
 
     await runResumeCommand(undefined, {
       handoff,
@@ -228,7 +257,11 @@ describe("runResumeCommand", () => {
   });
 
   it.each([
-    ["missing", { ok: true, missing: true }, "This session is no longer available."],
+    [
+      "internal missing shape",
+      { ok: true, missing: true },
+      "Could not resolve the session handoff.",
+    ],
     [
       "ambiguous",
       {
@@ -246,7 +279,10 @@ describe("runResumeCommand", () => {
     ["projected missing", { ok: false }, "Could not resolve the session handoff."],
     [
       "projected ambiguity",
-      { ok: false, candidates: [{ key: "agent:main:one" }] },
+      {
+        ok: false,
+        candidates: [{ key: "agent:main:one", agentId: "main", boardFace: "dashboard" }],
+      },
       "Could not resolve the session handoff.",
     ],
     ["malformed success", { ok: true }, "Could not resolve the session handoff."],
@@ -258,6 +294,16 @@ describe("runResumeCommand", () => {
     [
       "extra success field",
       { ok: true, key: "agent:main:alpha", agentId: "main", extra: true },
+      "Could not resolve the session handoff.",
+    ],
+    [
+      "invalid success display name",
+      { ok: true, key: "agent:main:alpha", agentId: "main", displayName: 42 },
+      "Could not resolve the session handoff.",
+    ],
+    [
+      "invalid success board face",
+      { ok: true, key: "agent:main:alpha", agentId: "main", boardFace: "grid" },
       "Could not resolve the session handoff.",
     ],
     [
@@ -282,6 +328,11 @@ describe("runResumeCommand", () => {
     [
       "mismatched returned agent",
       { ok: true, key: "agent:main:alpha", agentId: "work" },
+      "Could not resolve the session handoff.",
+    ],
+    [
+      "different but internally consistent returned owner",
+      { ok: true, key: "agent:work:alpha", agentId: "work" },
       "Could not resolve the session handoff.",
     ],
     [
@@ -323,6 +374,7 @@ describe("runResumeCommand", () => {
       await expect(runResumeCommand(undefined, { handoff })).rejects.toThrow(message);
       expect(client.listSessions).not.toHaveBeenCalled();
       expect(mocks.runTui).not.toHaveBeenCalled();
+      expect(client.stop).toHaveBeenCalledOnce();
     },
   );
 
@@ -427,15 +479,21 @@ describe("resume command registration", () => {
 
 describe("real Gateway session boundary", () => {
   let harness: Awaited<ReturnType<typeof startMinimalRealGateway>>;
+  let closeHarness: (() => Promise<void>) | undefined;
 
   beforeAll(async () => {
-    harness = await startMinimalRealGateway([
-      { agentId: "work", key: "agent:work:global", visibility: "shared" },
-      { agentId: "main", key: "agent:main:alpha" },
-    ]);
+    harness = await startMinimalRealGateway({
+      sessions: [
+        { agentId: "work", key: "agent:work:global", visibility: "shared" },
+        { agentId: "main", key: "agent:main:alpha" },
+      ],
+      registerCleanup: (cleanup) => {
+        closeHarness = cleanup;
+      },
+    });
   });
 
-  afterAll(() => harness.close());
+  afterAll(() => closeHarness?.());
 
   it("preserves an agent-qualified global session through the TUI handoff", async () => {
     const { GatewayChatClient } =
@@ -451,24 +509,79 @@ describe("real Gateway session boundary", () => {
     );
   });
 
-  it("canonicalizes a case-variant handoff through the real sessions.resolve boundary", async () => {
+  it("preserves real handoff wire outcomes and closes each client before returning", async () => {
     const { GatewayChatClient } =
       await vi.importActual<typeof import("../tui/gateway-chat.js")>("../tui/gateway-chat.js");
-    mocks.connect.mockImplementation((options) => GatewayChatClient.connect(options));
-    const rawSessionKey = "Agent:Main:ALPHA";
-    const handoff = encodeResumeHandoff({ sessionKey: rawSessionKey, gatewayUrl: harness.url });
-
-    await runResumeCommand(undefined, { handoff, token: harness.token });
-
-    expect(harness.sessionResolveRequests).toContainEqual({
-      key: rawSessionKey,
-      agentId: "main",
-      includeGlobal: true,
-      allowMissing: true,
+    const responses: unknown[] = [];
+    const errors: unknown[] = [];
+    const lifecycle: string[] = [];
+    const resolveStart = harness.sessionResolveRequests.length;
+    const listStart = harness.sessionListRequests.length;
+    mocks.connect.mockImplementation(async (options) => {
+      const client = await GatewayChatClient.connect(options);
+      const resolveSession = client.resolveSession.bind(client);
+      const stop = client.stop.bind(client);
+      vi.spyOn(client, "resolveSession").mockImplementation(async (params) => {
+        try {
+          const response = await resolveSession(params);
+          responses.push(response);
+          return response;
+        } catch (error) {
+          errors.push(error);
+          throw error;
+        }
+      });
+      vi.spyOn(client, "stop").mockImplementation(async () => {
+        await stop();
+        lifecycle.push("stopped");
+      });
+      return client;
     });
-    expect(mocks.runTui).toHaveBeenCalledWith(
+    mocks.runTui.mockImplementation(async () => {
+      lifecycle.push("tui");
+    });
+    const cases = [
+      { key: "Agent:Main:ALPHA", agentId: "main", found: true },
+      { key: "agent:main:resume-missing", agentId: "main", found: false },
+      {
+        key: "agent:resume-unconfigured:missing",
+        agentId: "resume-unconfigured",
+        found: false,
+      },
+    ];
+    for (const [index, scenario] of cases.entries()) {
+      const handoff = encodeResumeHandoff({ sessionKey: scenario.key, gatewayUrl: harness.url });
+      const result = runResumeCommand(undefined, { handoff, token: harness.token });
+      if (scenario.found) {
+        await result;
+      } else {
+        await expect(result).rejects.toThrow(
+          new Error(
+            "Could not resolve the session handoff. Copy a fresh command from the Control UI.",
+          ),
+        );
+      }
+      expect(lifecycle.filter((event) => event === "stopped")).toHaveLength(index + 1);
+    }
+
+    expect(responses).toEqual([
+      { ok: true, key: "agent:main:alpha", agentId: "main" },
+      { ok: false },
+    ]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({
+      gatewayCode: "INVALID_REQUEST",
+      message: 'Unknown agent id "resume-unconfigured"',
+    });
+    expect(harness.sessionResolveRequests.slice(resolveStart)).toEqual(
+      cases.map(({ key, agentId }) => ({ key, agentId, includeGlobal: true, allowMissing: true })),
+    );
+    expect(harness.sessionListRequests).toHaveLength(listStart);
+    expect(mocks.connect).toHaveBeenCalledTimes(3);
+    expect(mocks.runTui).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ session: "agent:main:alpha", forceProcessExitOnReturn: true }),
     );
+    expect(lifecycle).toEqual(["stopped", "tui", "stopped", "stopped"]);
   });
 
   it("accepts a bootstrap-signed identity and rejects a mismatched signature", async () => {
@@ -492,7 +605,7 @@ describe("real Gateway session boundary", () => {
     const storeDeviceAuthToken = vi.fn(({ token, scopes }: { token: string; scopes: string[] }) => {
       authState.value = { token, scopes };
     });
-    let helloCount = 0;
+    const authMethods: (string | undefined)[] = [];
     const client = new GatewayClient({
       url: harness.url,
       bootstrapToken: await harness.issueNodeBootstrapToken(),
@@ -503,18 +616,18 @@ describe("real Gateway session boundary", () => {
       clientVersion: "test",
       platform: "test",
       mode: GATEWAY_CLIENT_MODES.NODE,
-      deviceIdentity: harness.createDeviceIdentity("reconnect"),
+      deviceIdentity: await harness.createDeviceIdentity("reconnect"),
       hostDeps: {
         loadDeviceAuthToken: () => authState.value,
         storeDeviceAuthToken,
       },
-      onHelloOk: () => {
-        helloCount += 1;
+      onHelloOk: (hello) => {
+        authMethods.push(hello.auth?.method);
       },
     });
     client.start();
     try {
-      await vi.waitFor(() => expect(helloCount).toBe(1), { timeout: 5_000 });
+      await vi.waitFor(() => expect(authMethods).toEqual(["bootstrap-token"]), { timeout: 5_000 });
       expect(storeDeviceAuthToken).toHaveBeenCalledOnce();
       expect(storeDeviceAuthToken).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -524,8 +637,10 @@ describe("real Gateway session boundary", () => {
       );
       expect(authState.value?.token).toBeTruthy();
 
-      await harness.restart();
-      await vi.waitFor(() => expect(helloCount).toBe(2), { timeout: 5_000 });
+      client.updateNodeManifest({ caps: [], commands: [] });
+      await vi.waitFor(() => expect(authMethods).toEqual(["bootstrap-token", "device-token"]), {
+        timeout: 5_000,
+      });
     } finally {
       await client.stopAndWait();
     }

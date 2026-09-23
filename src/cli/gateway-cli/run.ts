@@ -14,7 +14,6 @@ import type {
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../../config/config.js";
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
-import { CONFIG_AUDIT_STORE_LABEL } from "../../config/io.audit.js";
 import {
   isDoctorRecoverableInvalidConfigError,
   isInvalidConfigError,
@@ -34,10 +33,14 @@ import {
   isLoopbackHost,
   resolveGatewayBindHost,
 } from "../../gateway/net.js";
+import { isGatewayEffectiveConfigConflictError } from "../../gateway/server-runtime-config.js";
+import { GatewayStartupCleanupError } from "../../gateway/server-shutdown.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
+import { isAbortError } from "../../infra/abort-signal.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
+import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   completeGatewayBootLifecycle,
@@ -50,7 +53,11 @@ import {
   type GatewayCrashLoopBreakerDecision,
   type GatewayBootLifecycleCompletion,
 } from "../../infra/gateway-boot-lifecycle.js";
-import { GatewayLockError } from "../../infra/gateway-lock.js";
+import {
+  GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS,
+  GatewayLockError,
+  isGatewayLifecycleContentionError,
+} from "../../infra/gateway-lock.js";
 import {
   findVerifiedGatewayListenerPidsOnPortSync,
   formatGatewayPidList,
@@ -58,7 +65,6 @@ import {
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { isTailscaleRouteOwnershipConflictError } from "../../infra/tailscale-route-ownership-error.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
-import { withDiagnosticPhase } from "../../logging/diagnostic-phase.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
 import { printClawBanner, type ClawBannerResult } from "../claw-banner.js";
@@ -71,24 +77,22 @@ import {
   isTerminalInteractive,
   NON_INTERACTIVE_GATEWAY_RUN_FORCE_MESSAGE,
 } from "../terminal-interactivity.js";
-import {
-  enforceGatewayRunFutureConfigGuard,
-  isGatewayRunFutureConfigAllowed,
-} from "./future-config-guard.js";
+import { enforceGatewayRunFutureConfigGuard } from "./future-config-guard.js";
+import { getGatewayStartGuardErrors } from "./pre-bootstrap.js";
 import { installQaParentWatchdog } from "./qa-parent-watchdog.js";
 import { runGatewayLoop } from "./run-loop.js";
 import type { GatewayRunOpts } from "./run-options.js";
 import type { GatewayRunRuntimeHooks } from "./runtime-hooks.js";
 import { resolveGatewayStartupMaintenanceReason } from "./startup-maintenance.js";
+import { createGatewayCliStartupTrace } from "./startup-trace.js";
+import { triageGatewayStartupFailure } from "./startup-triage.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
 
 const SUPERVISED_GATEWAY_LOCK_RETRY_MS = 5000;
-const SUPERVISED_GATEWAY_LOCK_RETRY_TIMEOUT_MS = 30_000;
 const SUPERVISED_GATEWAY_HEALTH_PROBE_TIMEOUT_MS = 1000;
 const GATEWAY_SHELL_ENV_CONVERGENCE_MAX_READS = 4;
 
-type Awaitable<T> = T | Promise<T>;
 type GatewayRunLogger = Pick<ReturnType<typeof createSubsystemLogger>, "info" | "warn">;
 
 /**
@@ -133,62 +137,6 @@ function extractGatewayMiskeys(parsed: unknown): {
   const hasRemoteToken =
     remote && typeof remote === "object" ? "token" in (remote as Record<string, unknown>) : false;
   return { hasGatewayToken, hasRemoteToken };
-}
-
-function createGatewayCliStartupTrace() {
-  const enabled = isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE);
-  const started = performance.now();
-  let last = started;
-  const emit = (name: string, durationMs: number, totalMs: number) => {
-    if (enabled) {
-      gatewayLog.info(
-        `startup trace: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms`,
-      );
-    }
-  };
-  const startMeasure = <T>(name: string, run: () => Awaitable<T>) => {
-    const before = performance.now();
-    let completedAt = before;
-    let emitted = false;
-    const result = withDiagnosticPhase(name, run).finally(() => {
-      completedAt = performance.now();
-    });
-    // Attach both outcomes immediately so callers can finish terminal UI before
-    // consuming or rethrowing the measured result without an unhandled rejection.
-    const settled = result.then(
-      () => {},
-      () => {},
-    );
-    return {
-      result,
-      settled,
-      emit() {
-        if (emitted) {
-          return;
-        }
-        emitted = true;
-        emit(name, completedAt - before, completedAt - started);
-        last = completedAt;
-      },
-    };
-  };
-  return {
-    mark(name: string) {
-      const now = performance.now();
-      emit(name, now - last, now - started);
-      last = now;
-    },
-    startMeasure,
-    async measure<T>(name: string, run: () => Awaitable<T>): Promise<T> {
-      const measurement = startMeasure(name, run);
-      try {
-        return await measurement.result;
-      } finally {
-        await measurement.settled;
-        measurement.emit();
-      }
-    },
-  };
 }
 
 function warnInlinePasswordFlag() {
@@ -246,39 +194,8 @@ function shouldBlockGatewayBindWithoutExplicitAuth(params: {
   );
 }
 
-function getGatewayStartGuardErrors(params: {
-  allowUnconfigured?: boolean;
-  configExists: boolean;
-  configAuditLocation: string;
-  mode: string | undefined;
-}): string[] {
-  if (params.allowUnconfigured || params.mode === "local") {
-    return [];
-  }
-  if (!params.configExists) {
-    return [
-      `Missing config. Run \`${formatCliCommand("openclaw setup")}\` or set gateway.mode=local (or pass --allow-unconfigured).`,
-    ];
-  }
-  if (params.mode === undefined) {
-    return [
-      [
-        "Gateway start blocked: existing config is missing gateway.mode.",
-        "Treat this as suspicious or clobbered config.",
-        `Re-run \`${formatCliCommand("openclaw onboard --mode local")}\` or \`${formatCliCommand("openclaw setup")}\`, set gateway.mode=local manually, or pass --allow-unconfigured.`,
-      ].join(" "),
-      `Config write audit: ${params.configAuditLocation}`,
-    ];
-  }
-  return [
-    `Gateway start blocked: set gateway.mode=local (current: ${params.mode}) or pass --allow-unconfigured.`,
-    `Config write audit: ${params.configAuditLocation}`,
-  ];
-}
-
 async function readGatewayStartupConfig(params: {
   lowerPrecedenceEnv: Readonly<Record<string, string>>;
-  opts: GatewayRunOpts;
   startupTrace: ReturnType<typeof createGatewayCliStartupTrace>;
 }): Promise<{
   cfg: OpenClawConfig;
@@ -286,35 +203,16 @@ async function readGatewayStartupConfig(params: {
   startupConfigSnapshotRead?: ReadConfigFileSnapshotWithPluginMetadataResult;
 }> {
   const { readConfigFileSnapshotWithPluginMetadata } = await import("../../config/config.js");
-  let blockedRecoveryConfig: OpenClawConfig | null = null;
   const snapshotRead: ReadConfigFileSnapshotWithPluginMetadataResult | null =
     await params.startupTrace.measure("cli.config-snapshot", () =>
       readConfigFileSnapshotWithPluginMetadata({
         isolateEnv: true,
+        observe: false,
         ...(Object.keys(params.lowerPrecedenceEnv).length > 0
           ? { lowerPrecedenceEnv: params.lowerPrecedenceEnv }
           : {}),
-        recoverSuspicious: true,
-        allowSuspiciousRecovery: (config, current) => {
-          const blockedConfig = [current, config].find(
-            (candidate) =>
-              !isGatewayRunFutureConfigAllowed({ opts: params.opts, config: candidate }),
-          );
-          if (!blockedConfig) {
-            return true;
-          }
-          blockedRecoveryConfig = blockedConfig;
-          return false;
-        },
       }).catch(() => null),
     );
-  if (blockedRecoveryConfig) {
-    enforceGatewayRunFutureConfigGuard({
-      opts: params.opts,
-      runtime: defaultRuntime,
-      config: blockedRecoveryConfig,
-    });
-  }
   const snapshot: ConfigFileSnapshot | null = snapshotRead?.snapshot ?? null;
   const cfg = snapshot?.config ?? {};
   return {
@@ -397,7 +295,6 @@ function gatewayRunShellEnvFallbackPlanSignature(plan: GatewayRunShellEnvFallbac
 }
 
 async function readGatewayStartupConfigWithShellEnv(params: {
-  opts: GatewayRunOpts;
   startupTrace: ReturnType<typeof createGatewayCliStartupTrace>;
 }): Promise<
   Awaited<ReturnType<typeof readGatewayStartupConfig>> & {
@@ -410,7 +307,6 @@ async function readGatewayStartupConfigWithShellEnv(params: {
     for (let readCount = 0; readCount < GATEWAY_SHELL_ENV_CONVERGENCE_MAX_READS; readCount += 1) {
       const startupConfig = await readGatewayStartupConfig({
         lowerPrecedenceEnv,
-        opts: params.opts,
         startupTrace: params.startupTrace,
       });
       const plan = await resolveGatewayRunShellEnvFallbackPlan(
@@ -452,11 +348,12 @@ function isGatewayLockError(err: unknown): err is GatewayLockError {
   );
 }
 
-function isGatewayAlreadyRunningLockError(err: unknown): boolean {
+function isGatewayRetryableLockError(err: unknown): boolean {
   if (!isGatewayLockError(err) || typeof err.message !== "string") {
     return false;
   }
   return (
+    isGatewayLifecycleContentionError(err) ||
     err.message.includes("gateway already running") ||
     err.message.includes("another gateway instance is already listening")
   );
@@ -479,6 +376,7 @@ function resolveGatewayLockErrorExitCode(err: unknown): number {
 function resolveGatewayStartupFailureExitCode(err: unknown): number {
   return isInvalidConfigError(err) ||
     isTailscaleRouteOwnershipConflictError(err) ||
+    isGatewayEffectiveConfigConflictError(err) ||
     resolveGatewayStartupMaintenanceReason(err)
     ? EXIT_CONFIG_ERROR
     : 1;
@@ -526,7 +424,7 @@ function createConfiguredGatewayHealthProbe(cfg: OpenClawConfig) {
 }
 
 async function runGatewayLoopWithSupervisedLockRecovery(params: {
-  startLoop: () => Promise<void>;
+  startLoop: (lifecycleDeadlineMs?: number) => Promise<void>;
   supervisor: RespawnSupervisor | null;
   port: number;
   healthHost: string;
@@ -543,7 +441,7 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
     return;
   }
 
-  const now = params.now ?? Date.now;
+  const now = params.now ?? performance.now.bind(performance);
   const sleep =
     params.sleep ??
     (async (ms: number) =>
@@ -552,19 +450,24 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
       }));
   const probeHealth = params.probeHealth ?? ((probeParams) => probeGatewayHealthz(probeParams));
   const retryMs = params.retryMs ?? SUPERVISED_GATEWAY_LOCK_RETRY_MS;
-  const timeoutMs = params.timeoutMs ?? SUPERVISED_GATEWAY_LOCK_RETRY_TIMEOUT_MS;
+  const timeoutMs = params.timeoutMs ?? GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS;
   const startedAt = now();
 
   for (;;) {
     try {
-      await params.startLoop();
+      // Acquisition and supervised recovery spend the same monotonic budget.
+      await params.startLoop(startedAt + timeoutMs);
       return;
     } catch (err) {
-      if (!isGatewayAlreadyRunningLockError(err)) {
+      if (!isGatewayRetryableLockError(err)) {
         throw err;
       }
 
-      if (await probeHealth({ host: params.healthHost, port: params.port })) {
+      const lifecycleContention = isGatewayLifecycleContentionError(err);
+      if (
+        !lifecycleContention &&
+        (await probeHealth({ host: params.healthHost, port: params.port }))
+      ) {
         if (supervisor === "systemd") {
           throw new SupervisedGatewayLockError(
             "gateway already running under systemd; existing gateway is healthy, exiting with code 78 to prevent a systemd Restart=always loop",
@@ -580,6 +483,9 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
 
       const elapsedMs = now() - startedAt;
       if (elapsedMs >= timeoutMs) {
+        if (lifecycleContention) {
+          throw err;
+        }
         throw new SupervisedGatewayLockError(
           `gateway already running under ${supervisor}; existing gateway did not become healthy after ${timeoutMs}ms`,
           err,
@@ -589,7 +495,7 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
 
       const waitMs = Math.min(retryMs, Math.max(0, timeoutMs - elapsedMs));
       params.log.warn(
-        `gateway already running under ${supervisor}; waiting ${waitMs}ms before retrying startup`,
+        `${lifecycleContention ? "gateway-lifecycle ownership held by another OpenClaw process" : "gateway already running"} under ${supervisor}; waiting ${waitMs}ms before retrying startup`,
       );
       await sleep(waitMs);
     }
@@ -655,7 +561,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     process.env.OPENCLAW_RAW_STREAM_PATH = rawStreamPath;
   }
 
-  const startupTrace = createGatewayCliStartupTrace();
+  const startupTrace = createGatewayCliStartupTrace(gatewayLog);
 
   // The heaviest part of gateway startup is loading the server module tree
   // (channels, plugins, HTTP stack, etc.). Start it before the foreground TTY
@@ -711,7 +617,6 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   gatewayLog.info("loading configuration…");
   const { cfg, lowerPrecedenceEnv, snapshot, startupConfigSnapshotRead } =
     await readGatewayStartupConfigWithShellEnv({
-      opts,
       startupTrace,
     });
   if (
@@ -759,6 +664,10 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   }
   if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
     process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV] = String(process.pid);
+    if (process.platform === "darwin") {
+      const { warnAboutGatewayRestartStorm } = await import("../../daemon/restart-storm.js");
+      await warnAboutGatewayRestartStorm(process.env, (message) => gatewayLog.warn(message));
+    }
   }
   await hooks.refreshManagedProxy?.(cfg.proxy);
   const portOverride = parsePort(opts.port);
@@ -937,7 +846,6 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   const guardErrors = getGatewayStartGuardErrors({
     allowUnconfigured: opts.allowUnconfigured,
     configExists,
-    configAuditLocation: CONFIG_AUDIT_STORE_LABEL,
     mode,
   });
   if (guardErrors.length > 0) {
@@ -1053,6 +961,36 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   let channelAutostartSuppression: { reason: "crash-loop-breaker"; message: string } | undefined;
   let tryRecoverChannelAutostartSuppression: (() => boolean) | undefined;
   let activeBootId: string | undefined;
+  let bootRecorded = false;
+  let triageAttempted = false;
+  const triageStartupFailure = async (error: unknown, signal?: AbortSignal) => {
+    if (
+      triageAttempted ||
+      !bootRecorded ||
+      signal?.aborted ||
+      isAbortError(error) ||
+      isGatewayLockError(error) ||
+      isInvalidConfigError(error) ||
+      isTailscaleRouteOwnershipConflictError(error) ||
+      isGatewayEffectiveConfigConflictError(error) ||
+      collectNestedErrorCandidates(error).some(
+        (candidate) => candidate instanceof GatewayStartupCleanupError,
+      ) ||
+      resolveGatewayStartupMaintenanceReason(error)
+    ) {
+      return;
+    }
+    // Unconfirmed startup cleanup retains its generation; never overlap it with a fixer.
+    // Supervised retries reuse the persisted breaker transition to avoid agent storms.
+    if (
+      (supervisor || process.env.OPENCLAW_SERVICE_MARKER) &&
+      !crashLoopDecision?.shouldWriteStabilityBundle
+    ) {
+      return;
+    }
+    triageAttempted = true;
+    await triageGatewayStartupFailure(defaultRuntime, error, signal);
+  };
   const beginBoot = async (startedAtMs: number) => {
     // run-loop calls beginBoot before every startGatewayServer invocation, so
     // in-process restarts re-evaluate breaker state instead of reusing stale mode.
@@ -1067,6 +1005,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     // Shared-state schema failures make this write fail open, so no lifecycle
     // row exists for Doctor to reconcile after it repairs the schema.
     activeBootId = recordGatewayBootStart(process.env, startedAtMs, bootStartReason);
+    bootRecorded = activeBootId !== undefined;
     channelAutostartSuppression = undefined;
     tryRecoverChannelAutostartSuppression = undefined;
     if (crashLoopDecision.recovered) {
@@ -1111,28 +1050,39 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     completeGatewayBootLifecycle(activeBootId, completion, process.env);
     activeBootId = undefined;
   };
-  const startLoop = async () =>
+  const startLoop = async (lifecycleLockDeadlineMs?: number) =>
     await runGatewayLoop({
       runtime: defaultRuntime,
       ownsProcessLifecycle: true,
       lockPort: port,
+      lifecycleLockDeadlineMs,
       healthHost,
       beginBoot,
       completeBoot,
-      start: async ({ processStartedAt, startupStartedAt, requestHotReloadRecovery } = {}) => {
+      onRestartStartupFailure: triageStartupFailure,
+      start: async ({
+        processStartedAt,
+        startupStartedAt,
+        requestHotReloadRecovery,
+        hostLifecycle,
+        startupOperation,
+      } = {}) => {
+        const snapshotPreparation = await import("../../config/io.snapshot-preparation.js");
         const startupConfigSnapshotReadForThisStart = startupConfigSnapshotReadForNextStart;
         startupConfigSnapshotReadForNextStart = undefined;
         return await startGatewayServer(port, {
           bind,
+          ...(opts.updateCanary ? { updateCanary: true } : {}),
           ...(activeBootId ? { bootId: activeBootId } : {}),
           auth: authOverride,
           tailscale: tailscaleOverride,
           ...(processStartedAt !== undefined ? { processStartedAt } : {}),
           startupStartedAt,
+          hostLifecycle,
+          startupOperation,
+          prepareConfigSnapshot: snapshotPreparation.prepareHostConfigSnapshot,
           ...(requestHotReloadRecovery ? { hotReloadRecovery: requestHotReloadRecovery } : {}),
-          ...(startupConfigSnapshotReadForThisStart
-            ? { startupConfigSnapshotRead: startupConfigSnapshotReadForThisStart }
-            : {}),
+          startupConfigSnapshotRead: startupConfigSnapshotReadForThisStart,
           ...(envSidecarStartupMode !== "start" ? { sidecarStartup: envSidecarStartupMode } : {}),
           ...(channelAutostartSuppression ? { channelAutostartSuppression } : {}),
           ...(channelAutostartSuppression ? { tryRecoverChannelAutostartSuppression } : {}),
@@ -1187,6 +1137,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     defaultRuntime.error(
       `Gateway failed to start: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} for diagnostics.`,
     );
+    await triageStartupFailure(err);
     defaultRuntime.exit(resolveGatewayStartupFailureExitCode(err));
   }
 }

@@ -72,7 +72,7 @@ async function recordUpdateTraffic(page: Page): Promise<MockGatewayRequest[]> {
 
 suite.define(() => {
   it.each(["manual", "automatic", "missing triage module"])(
-    "takes a %s failure into diagnosis without replaying the update",
+    "takes a pre-ledger %s failure into diagnosis without replaying the update",
     async (source) => {
       const artifactDir = createControlUiE2eArtifactDir(
         `update-triage-${source.replaceAll(" ", "-")}`,
@@ -203,6 +203,13 @@ suite.define(() => {
             expect(question).toMatchObject({
               message: expect.stringContaining("Do not retry the update"),
             });
+            if (source === "manual") {
+              const dialog = page.locator("openclaw-modal-dialog");
+              await dialog.getByRole("button", { name: "Retry update", exact: true }).waitFor();
+              expect(await dialog.textContent()).toContain("ENOSPC");
+              await page.screenshot({ path: path.join(artifactDir, "2-retained-failure.png") });
+              await dialog.getByRole("button", { name: "Close", exact: true }).click();
+            }
             expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
             await panel.getByText(DIAGNOSTIC_REPLY, { exact: true }).waitFor();
             expect(await panel.getByText(DIAGNOSTIC_REPLY, { exact: true }).count()).toBe(1);
@@ -221,7 +228,11 @@ suite.define(() => {
             await status.getByText("openclaw triage", { exact: false }).waitFor();
             expect(await status.textContent()).toContain("ENOSPC");
             expect(await page.locator(".custodian__alert-card").count()).toBe(0);
-            expect(await page.locator("openclaw-assistant-panel .assistant-panel").count()).toBe(0);
+            expect(
+              await page.locator("openclaw-assistant-panel .assistant-panel").isVisible(),
+            ).toBe(false);
+            expect(await page.locator("openclaw-assistant-panel-content").count()).toBe(0);
+            await expectRequestCountStable(gateway, "openclaw.chat", 0);
             expect(questions()).toHaveLength(1);
             expect(updateRuns()).toHaveLength(source === "automatic" ? 0 : 1);
             await page.screenshot({

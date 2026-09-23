@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "CLI reference for `openclaw skills` (search/install/update/verify/list/info/check/library/workshop)"
 read_when:
   - You want to see which skills are available and ready to run
@@ -6,7 +7,7 @@ read_when:
   - You need to remove an installed ClawHub skill
   - You want to verify a ClawHub skill with ClawHub
   - You want to debug missing binaries/env/config for skills
-title: "Skills"
+title: "Skills CLI"
 ---
 
 # `openclaw skills`
@@ -14,12 +15,16 @@ title: "Skills"
 Inspect local skills, search ClawHub, install skills from ClawHub/Git/local
 directories, verify ClawHub skills, and update ClawHub-tracked installs.
 
+Use [`openclaw plugins`](/cli/plugins) for plugin packages. The standalone
+[ClawHub CLI](/clawhub/cli) handles [publishing](/clawhub/publishing), registry
+maintenance, and [removing ClawHub skills](/cli/skills#remove-a-clawhub-skill).
+
 Related:
 
 - Skills system: [Skills](/tools/skills)
+- Skill authoring: [Creating skills](/tools/creating-skills)
 - Skill Workshop: [Skill Workshop](/tools/skill-workshop)
 - Skills config: [Skills config](/tools/skills-config)
-- ClawHub installs: [ClawHub](/clawhub/cli)
 
 ## Commands
 
@@ -93,6 +98,19 @@ commands resolve the target workspace from `--agent <id>`, then the current
 working directory when it is inside a configured agent workspace, then the
 default agent.
 
+Search results add `v` only to numeric version labels, preserving existing prefixes
+and build names. JSON output keeps the registry's original version values.
+
+The skills table renders horizontal tabs as single spaces so descriptions
+stay aligned with the neighboring columns.
+JSON output preserves tabs and line endings in descriptions and paths as escaped
+characters.
+
+`info` resolves an exact skill name before a metadata key. Key, case-insensitive,
+and separator-normalized matches must identify one skill; ambiguous selectors
+fail instead of choosing discovery order. Workshop reads and update targeting
+use the same lookup.
+
 `check` reports missing prerequisites independently of agent exclusion: a skill
 excluded by the agent allowlist can also appear under **Missing requirements**.
 Disabled skills and skills blocked by the bundled allowlist keep their separate
@@ -131,7 +149,7 @@ Notes:
 
 | Flag/behavior                    | Description                                                                                                                                                                                                                                                                                                                       |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `search [query...]`              | Optional query; omit it to browse the default ClawHub search feed.                                                                                                                                                                                                                                                                |
+| `search [query...]`              | Optional query; omit it to browse the ClawHub Trending skills feed.                                                                                                                                                                                                                                                               |
 | `search --limit <n>`             | Caps returned results.                                                                                                                                                                                                                                                                                                            |
 | `install git:owner/repo[@ref]`   | Installs a Git skill. Branch refs may contain slashes, such as `git:owner/repo@feature/foo`.                                                                                                                                                                                                                                      |
 | `install ./path/to/skill`        | Installs a local directory whose root contains `SKILL.md`.                                                                                                                                                                                                                                                                        |
@@ -154,8 +172,33 @@ Notes:
 | `curator --json`                 | Accepted before or after a Curator leaf command, for example `curator --json status` or `curator status --json`.                                                                                                                                                                                                                  |
 | `list`                           | Default action when no subcommand is provided.                                                                                                                                                                                                                                                                                    |
 | `list`/`info`/`check` output     | Rendered output goes to stdout. With `--json`, the machine-readable payload stays on stdout for pipes and scripts.                                                                                                                                                                                                                |
-| `curator status --json`          | Reports live Workshop skill usage recorded from trusted `skill.used` events and the latest collection and experience review outcomes per workspace.                                                                                                                                                                               |
+| `curator status --json`          | Reports live Workshop skill usage recorded from trusted `skill.used` events, collection review outcomes per agent, and experience review outcomes per agent and workspace.                                                                                                                                                        |
 | `curator pin`/`unpin`/`restore`  | Retired commands remain registered but return an error explaining that weekly collection review manages the skill collection.                                                                                                                                                                                                     |
+
+### Workshop inventory and upgrades
+
+`openclaw skills curator status` requests current Workshop inventory from the
+selected Gateway. With a compatible Gateway, JSON includes
+`"inventory": "live-workshop"`. Local status uses the current configuration too.
+Missing usage displays as `not recorded`, not proof that a skill was never used.
+
+An older Gateway can return an unmarked legacy response. The CLI accepts it
+without switching to local state and prints a limited-coverage notice in text
+output. JSON preserves the absence of the marker. See
+[Workshop inventory and usage](/tools/skill-workshop/reference#workshop-inventory-and-usage)
+for membership, tracking limits, unknown dates, and upgrade behavior.
+
+On servers supporting full scanner reports, verification JSON includes `security.scannerReports.aig` (the full upstream SARIF report)
+and `security.scannerReports.skillspector` (the full upstream JSON report) when ClawHub
+has retained them. Nested scanner fields pass through unchanged, including
+coverage and incomplete-analysis details. A report is `null` when unavailable,
+including older scans whose full output was not retained; summaries are not
+substituted. Older servers may omit `security.scannerReports` entirely. `verify`
+reads the stored scan and does not start another scan. Verification responses
+can be up to 64 MiB; larger responses fail explicitly without printing partial
+reports. Other ClawHub JSON requests retain their 16 MiB limit.
+
+## Release trust
 
 Community ClawHub skill installs and updates check trust before downloading.
 Versioned community archive releases use exact-release trust metadata.
@@ -280,10 +323,11 @@ you can attach, without changing the session. `read --session <session-key>`
 also requires `--revision <hash>` and reads only that exact selected revision;
 it does not expose other private revisions or grant permission to edit them.
 
-Personal operations require an authenticated Gateway profile. A shared token
-or password alone does not identify a person; use the existing workspace
-commands when operating a solo Gateway without a profile. An explicitly
-selected remote Gateway never falls back to a client-local personal library.
+Personal operations require an authenticated Gateway profile. The Control UI on a
+single-user Gateway uses a durable owner profile, but ephemeral CLI connections
+do not inherit it. A CLI shared token or password alone still has no personal
+profile; use the existing workspace commands in that case. An explicitly selected
+remote Gateway never falls back to a client-local personal library.
 
 Sharing makes a skill available to teammates but does not grant edit access.
 Transfer to team ownership requires administrator authority. Saving affects
@@ -293,8 +337,8 @@ existing session. Removal preserves already selected revisions. See
 
 ## Skill Workshop
 
-`openclaw skills workshop` manages pending skill proposals in the selected
-workspace. Proposals are not active skills until applied. For proposal
+`openclaw skills workshop` manages pending skill proposals for the selected
+agent. Proposals are not active skills until applied. For proposal
 storage, support-file safeguards, Gateway methods, and approval policy, see
 [Skill Workshop](/tools/skill-workshop).
 

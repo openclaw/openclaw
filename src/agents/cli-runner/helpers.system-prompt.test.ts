@@ -1,6 +1,8 @@
+import { Type } from "typebox";
 // Verifies CLI system-prompt construction without loading the full runner.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
+import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import { buildCliAgentSystemPrompt } from "./helpers.js";
 
 vi.mock("../../tts/tts-settings.js", () => ({
@@ -13,6 +15,57 @@ describe("buildCliAgentSystemPrompt", () => {
   afterEach(() => {
     clearPluginCommands();
   });
+
+  it("includes the OpenClaw skills prompt in CLI system prompts", () => {
+    const preparedModelRuntime = {
+      isCurrent: vi.fn(() => true),
+      configuredModelAliases: [{ alias: "Current", provider: "fixture", model: "current" }],
+    };
+    const params = {
+      workspaceDir: "/tmp",
+      modelDisplay: "claude-cli/sonnet",
+      config: { agents: { defaults: { model: "fixture/current" } } },
+      preparedModelRuntime,
+      tools: [],
+      skillsPrompt: [
+        "<available_skills>",
+        "  <skill>",
+        "    <name>weather</name>",
+        "    <description>Use weather tools.</description>",
+        "    <location>/tmp/skills/weather/SKILL.md</location>",
+        "  </skill>",
+        "</available_skills>",
+      ].join("\n"),
+    };
+    const systemPrompt = buildCliAgentSystemPrompt(params);
+
+    expect(systemPrompt).toContain("## Skills");
+    expect(systemPrompt).toContain("<name>weather</name>");
+    expect(systemPrompt).toContain("/tmp/skills/weather/SKILL.md");
+    expect(systemPrompt).toContain("- Current: fixture/current");
+    preparedModelRuntime.isCurrent.mockReturnValue(false);
+    expect(buildCliAgentSystemPrompt(params)).not.toContain("## Model Aliases");
+  });
+
+  it.each([true, false])(
+    "gates ClawHub guidance on the CLI tool schema (available=%s)",
+    (available) => {
+      const message = createStubTool("message");
+      message.parameters = Type.Object(
+        available ? { clawhub: Type.Object({ query: Type.String() }) } : {},
+      );
+      const prompt = buildCliAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        tools: [message],
+        runtimeChannel: "webchat",
+        modelDisplay: "test/model",
+      });
+
+      expect(
+        prompt.includes("For explicit plugin/skill search/install or missing capability"),
+      ).toBe(available);
+    },
+  );
 
   it("uses config-backed sub-agent delegation mode", () => {
     const prompt = buildCliAgentSystemPrompt({
@@ -68,7 +121,7 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).not.toContain("pty available");
   });
 
-  it("uses cwd, not bootstrap workspace, for CLI workspace guidance", () => {
+  it("distinguishes the CLI working directory from the agent workspace", () => {
     const prompt = buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw-agent",
       cwd: "/tmp/task-repo",
@@ -76,7 +129,10 @@ describe("buildCliAgentSystemPrompt", () => {
       modelDisplay: "test/model",
     });
 
+    expect(prompt).toContain("## Directory Roles");
     expect(prompt).toContain("Working directory: /tmp/task-repo");
+    expect(prompt).toContain("Agent workspace: /tmp/openclaw-agent");
+    expect(prompt).not.toContain("## Workspace\n");
     expect(prompt).not.toContain("Working directory: /tmp/openclaw-agent");
   });
 

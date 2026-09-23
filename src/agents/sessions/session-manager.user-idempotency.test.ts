@@ -8,9 +8,18 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { SessionManager } from "./session-manager.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const dir of tempDirs.dirs) {
+      await closeOpenClawAgentDatabasesAsync(dir);
+    }
+    cleanup();
+  }),
+);
 
 function buildAssistantMessage(text: string) {
   return {
@@ -19,14 +28,7 @@ function buildAssistantMessage(text: string) {
     api: "messages" as const,
     provider: "anthropic" as const,
     model: "sonnet-4.6" as const,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop" as const,
     timestamp: Date.now(),
   };
@@ -63,53 +65,67 @@ describe("SessionManager user idempotency", () => {
     );
   });
 
-  it("rejects a keyed user collision outside the current SQLite append parent", async () => {
-    const dir = tempDirs.make("openclaw-session-manager-user-idempotency-");
-    const scope = {
-      agentId: "main",
-      sessionId: "sqlite-runtime-user-ancestor",
-      sessionKey: "agent:main:dashboard:sqlite-runtime-user-ancestor",
-      storePath: path.join(dir, "sessions.json"),
-    };
-    const userMessage = {
-      role: "user" as const,
-      content: "question",
-      idempotencyKey: "runtime-user-ancestor:user",
-      timestamp: 1,
-    };
-    await upsertSessionEntryCore(scope, {
-      sessionFile: formatSqliteSessionFileMarker(scope),
-      sessionId: scope.sessionId,
-      updatedAt: 1,
-    });
-    await appendTranscriptMessage(scope, {
-      cwd: dir,
-      eventId: "pre-persisted-user",
-      message: userMessage,
-      now: 1,
-    });
-    await appendTranscriptMessage(scope, {
-      cwd: dir,
-      eventId: "persisted-assistant",
-      message: buildAssistantMessage("answer"),
-      parentId: "pre-persisted-user",
-    });
-    const sessionManager = SessionManager.open(scope, dir);
+  it.each([false, true])(
+    "rejects a keyed user collision outside the current SQLite append parent (excluded: %s)",
+    async (excludeFromContext) => {
+      const dir = tempDirs.make("openclaw-session-manager-user-idempotency-");
+      const scope = {
+        agentId: "main",
+        sessionId: "sqlite-runtime-user-ancestor",
+        sessionKey: "agent:main:dashboard:sqlite-runtime-user-ancestor",
+        storePath: path.join(dir, "sessions.json"),
+      };
+      const userMessage = {
+        role: "user" as const,
+        content: "question",
+        idempotencyKey: "runtime-user-ancestor:user",
+        ...(excludeFromContext ? { excludeFromContext: true } : {}),
+        timestamp: 1,
+      };
+      await upsertSessionEntryCore(scope, {
+        sessionFile: formatSqliteSessionFileMarker(scope),
+        sessionId: scope.sessionId,
+        updatedAt: 1,
+      });
+      await appendTranscriptMessage(scope, {
+        cwd: dir,
+        eventId: "pre-persisted-user",
+        message: userMessage,
+        now: 1,
+      });
+      await appendTranscriptMessage(scope, {
+        cwd: dir,
+        eventId: "persisted-assistant",
+        message: {
+          ...buildAssistantMessage("answer"),
+          ...(excludeFromContext ? { excludeFromContext: true } : {}),
+        },
+        parentId: "pre-persisted-user",
+      });
+      const sessionManager = SessionManager.openBounded(scope, {
+        cwd: dir,
+        maxBytes: 100_000,
+        maxEvents: 100,
+      });
 
-    expect(() => sessionManager.appendMessage(userMessage)).toThrow(
-      "Session transcript keyed user is outside the current turn",
-    );
-    expect(sessionManager.getLeafId()).toBe("persisted-assistant");
-    expect(
-      (await loadTranscriptEvents(scope)).filter(
-        (event) =>
-          (event as { message?: { role?: string; idempotencyKey?: string } }).message?.role ===
-            "user" &&
-          (event as { message?: { idempotencyKey?: string } }).message?.idempotencyKey ===
-            userMessage.idempotencyKey,
-      ),
-    ).toHaveLength(1);
-  });
+      expect(() => sessionManager.appendMessage(userMessage)).toThrow(
+        "Session transcript keyed user is outside the current turn",
+      );
+      expect(sessionManager.getAppendParentId()).toBe("persisted-assistant");
+      expect(sessionManager.resolveCurrentTurnEntryId(() => true)).toBe(
+        excludeFromContext ? "persisted-assistant" : null,
+      );
+      expect(
+        (await loadTranscriptEvents(scope)).filter(
+          (event) =>
+            (event as { message?: { role?: string; idempotencyKey?: string } }).message?.role ===
+              "user" &&
+            (event as { message?: { idempotencyKey?: string } }).message?.idempotencyKey ===
+              userMessage.idempotencyKey,
+        ),
+      ).toHaveLength(1);
+    },
+  );
 
   it("adopts a keyed user persisted after the manager loaded", async () => {
     const dir = tempDirs.make("openclaw-session-manager-user-idempotency-");
@@ -144,8 +160,8 @@ describe("SessionManager user idempotency", () => {
       now: 2,
       parentId: "existing-assistant",
     });
-    const modelChangeId = sessionManager.appendModelChange("openai", "gpt-5.5");
-    const thinkingId = sessionManager.appendThinkingLevelChange("off");
+    const modelChangeId = await sessionManager.appendModelChange("openai", "gpt-5.5");
+    const thinkingId = await sessionManager.appendThinkingLevelChange("off");
     const metadataId = sessionManager.appendCustomEntry("model-snapshot", {
       modelApi: "openai-responses",
       modelId: "gpt-5.5",
@@ -180,59 +196,73 @@ describe("SessionManager user idempotency", () => {
     ).toHaveLength(1);
   });
 
-  it("adopts a persisted user across context-free session setup metadata", async () => {
-    const dir = tempDirs.make("openclaw-session-manager-user-idempotency-");
-    const scope = {
-      agentId: "main",
-      sessionId: "sqlite-runtime-user-setup-metadata",
-      sessionKey: "agent:main:dashboard:sqlite-runtime-user-setup-metadata",
-      storePath: path.join(dir, "sessions.json"),
-    };
-    const userMessage = {
-      role: "user" as const,
-      content: "question",
-      idempotencyKey: "runtime-user-setup-metadata:user",
-      timestamp: 1,
-    };
-    await upsertSessionEntryCore(scope, {
-      sessionFile: formatSqliteSessionFileMarker(scope),
-      sessionId: scope.sessionId,
-      updatedAt: 1,
-    });
-    await appendTranscriptMessage(scope, {
-      cwd: dir,
-      eventId: "pre-persisted-user",
-      message: userMessage,
-      now: 1,
-    });
+  it.each([false, true])(
+    "adopts a persisted user across context-free session setup metadata (excluded: %s)",
+    async (excludeFromContext) => {
+      const dir = tempDirs.make("openclaw-session-manager-user-idempotency-");
+      const scope = {
+        agentId: "main",
+        sessionId: "sqlite-runtime-user-setup-metadata",
+        sessionKey: "agent:main:dashboard:sqlite-runtime-user-setup-metadata",
+        storePath: path.join(dir, "sessions.json"),
+      };
+      const userMessage = {
+        role: "user" as const,
+        content: "question",
+        idempotencyKey: "runtime-user-setup-metadata:user",
+        ...(excludeFromContext ? { excludeFromContext: true } : {}),
+        timestamp: 1,
+      };
+      await upsertSessionEntryCore(scope, {
+        sessionFile: formatSqliteSessionFileMarker(scope),
+        sessionId: scope.sessionId,
+        updatedAt: 1,
+      });
+      await appendTranscriptMessage(scope, {
+        cwd: dir,
+        eventId: "pre-persisted-user",
+        message: userMessage,
+        now: 1,
+      });
 
-    const sessionManager = SessionManager.open(scope, dir);
-    sessionManager.appendModelChange("openai", "gpt-5.5");
-    sessionManager.appendThinkingLevelChange("off");
-    const metadataId = sessionManager.appendCustomEntry("model-snapshot", {
-      modelApi: "openai-responses",
-      modelId: "gpt-5.5",
-      provider: "openai",
-    });
+      const sessionManager = SessionManager.openBounded(scope, {
+        cwd: dir,
+        maxBytes: 100_000,
+        maxEvents: 100,
+      });
+      await sessionManager.appendModelChange("openai", "gpt-5.5");
+      await sessionManager.appendThinkingLevelChange("off");
+      const metadataId = sessionManager.appendCustomEntry("model-snapshot", {
+        modelApi: "openai-responses",
+        modelId: "gpt-5.5",
+        provider: "openai",
+      });
 
-    expect(sessionManager.appendMessage(userMessage)).toBe("pre-persisted-user");
-    expect(sessionManager.getAppendParentId()).toBe(metadataId);
+      expect(
+        sessionManager.appendMessageWithTranscriptAnchor({ ...userMessage, timestamp: 2 }),
+      ).toMatchObject({
+        entryId: "pre-persisted-user",
+        message: userMessage,
+        anchor: { entryId: "pre-persisted-user", idempotencyKey: userMessage.idempotencyKey },
+      });
+      expect(sessionManager.getAppendParentId()).toBe(metadataId);
 
-    const assistantId = sessionManager.appendMessage(buildAssistantMessage("answer"));
-    const events = await loadTranscriptEvents(scope);
-    expect(events.find((event) => (event as { id?: string }).id === assistantId)).toMatchObject({
-      parentId: metadataId,
-    });
-    expect(
-      events.filter(
-        (event) =>
-          (event as { message?: { role?: string; idempotencyKey?: string } }).message?.role ===
-            "user" &&
-          (event as { message?: { idempotencyKey?: string } }).message?.idempotencyKey ===
-            userMessage.idempotencyKey,
-      ),
-    ).toHaveLength(1);
-  });
+      const assistantId = sessionManager.appendMessage(buildAssistantMessage("answer"));
+      const events = await loadTranscriptEvents(scope);
+      expect(events.find((event) => (event as { id?: string }).id === assistantId)).toMatchObject({
+        parentId: metadataId,
+      });
+      expect(
+        events.filter(
+          (event) =>
+            (event as { message?: { role?: string; idempotencyKey?: string } }).message?.role ===
+              "user" &&
+            (event as { message?: { idempotencyKey?: string } }).message?.idempotencyKey ===
+              userMessage.idempotencyKey,
+        ),
+      ).toHaveLength(1);
+    },
+  );
 
   it("adopts the current keyed user across a compaction boundary", async () => {
     const dir = tempDirs.make("openclaw-session-manager-user-idempotency-");

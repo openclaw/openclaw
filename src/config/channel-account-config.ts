@@ -1,5 +1,9 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveAccountEntry, resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
+import {
+  resolveAccountKey,
+  resolveChannelAccountKey,
+  type ChannelAccountKeyPolicy,
+} from "../routing/account-lookup.js";
 
 type AccountMergeOptions = {
   omitKeys?: string[];
@@ -64,10 +68,24 @@ export function resolveMergedAccountConfig<TConfig extends Record<string, unknow
     accounts: Record<string, Partial<TConfig>> | undefined;
     accountId: string;
     normalizeAccountId?: (accountId: string) => string;
+    channelId?: string;
+    accountKeyPolicy?: ChannelAccountKeyPolicy;
   },
 ): TConfig {
-  const accountConfig = params.normalizeAccountId
-    ? resolveNormalizedAccountEntry(params.accounts, params.accountId, params.normalizeAccountId)
-    : resolveAccountEntry(params.accounts, params.accountId);
+  const accountKey = params.channelId
+    ? resolveChannelAccountKey(
+        params.accounts,
+        params.accountId,
+        params.channelId,
+        params.normalizeAccountId,
+        params.accountKeyPolicy,
+      )
+    : resolveAccountKey(
+        params.accounts,
+        params.accountId,
+        params.normalizeAccountId,
+        params.accountKeyPolicy,
+      );
+  const accountConfig = accountKey === undefined ? undefined : params.accounts?.[accountKey];
   return mergeAccountConfig({ ...params, accountConfig });
 }

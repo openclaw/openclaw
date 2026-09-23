@@ -3,7 +3,7 @@ import os from "node:os";
 import type { OpenClawConfig } from "./types.js";
 
 const MIN_AGENT_MAX_CONCURRENT = 8;
-const MAX_AGENT_MAX_CONCURRENT = 16;
+const AGENT_RUNS_PER_CPU = 4;
 let defaultAgentMaxConcurrent: number | undefined;
 
 function resolveDefaultAgentMaxConcurrent(): number {
@@ -12,9 +12,9 @@ function resolveDefaultAgentMaxConcurrent(): number {
     // for runtimes where availableParallelism is absent.
     const availableParallelism =
       typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length;
-    defaultAgentMaxConcurrent = Math.min(
-      MAX_AGENT_MAX_CONCURRENT,
-      Math.max(MIN_AGENT_MAX_CONCURRENT, availableParallelism),
+    defaultAgentMaxConcurrent = Math.max(
+      MIN_AGENT_MAX_CONCURRENT,
+      availableParallelism * AGENT_RUNS_PER_CPU,
     );
   }
   return defaultAgentMaxConcurrent;
@@ -26,8 +26,14 @@ export const DEFAULT_SUBAGENT_MAX_CONCURRENT = 8;
 export const DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT = 5;
 /** Default age before completed subagent state is archived. */
 export const DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES = 60;
-// Keep depth-1 subagents as leaves unless config explicitly opts into nesting.
-export const DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH = 1;
+// Allow recursive delegation by default while bounding each spawn lineage.
+export const DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH = 5;
+export function isSubagentSpawnDepthAllowed(
+  depth: number,
+  maxSpawnDepth = DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
+): boolean {
+  return depth < maxSpawnDepth;
+}
 
 /** Resolves top-level agent concurrency, flooring finite values and clamping to at least one. */
 export function resolveAgentMaxConcurrent(cfg?: OpenClawConfig): number {

@@ -1,10 +1,22 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString as normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeQueueMode } from "../../../../src/auto-reply/reply/queue/normalize.js";
+import { readChatWorkContext } from "../../../../src/chat/work-context.js";
+import { t } from "../../i18n/index.ts";
+import { registerChatMessageMetadataEnglish } from "../../i18n/locales/en-chat-message-metadata.ts";
 import { normalizeAgentId } from "../sessions/session-key.ts";
-import type { ChatAttachment, ChatGoalDraftMode, ChatQueueItem } from "./chat-types.ts";
+import type {
+  ChatAttachment,
+  ChatGoalDraftMode,
+  ChatQueueItem,
+  HumanMention,
+} from "./chat-types.ts";
 import { isChatGoalDraftMode } from "./goal-draft.ts";
+import { readHumanMentions } from "./human-mentions.ts";
+import { readChatSelectionAnnotation } from "./selection-annotation.ts";
 import { normalizeSenderIdentity } from "./sender-label.ts";
+
+registerChatMessageMetadataEnglish();
 
 export const MAX_STORED_SESSIONS = 20;
 export const MAX_STORED_QUEUE_ITEMS = 50;
@@ -18,6 +30,7 @@ export const INTERRUPTED_SETTINGS_WAIT_ERROR =
 export type StoredComposerSession = {
   awaitingDefaults?: true;
   draft?: string;
+  draftMentions?: readonly HumanMention[];
   goalMode?: ChatGoalDraftMode;
   draftRevision?: number;
   queue?: ChatQueueItem[];
@@ -27,6 +40,11 @@ export type StoredComposerSession = {
 export function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueItem): boolean {
   return (
     left.id === right.id &&
+    left.asyncQuestionItemId === right.asyncQuestionItemId &&
+    left.text === right.text &&
+    left.workContextUnavailable === right.workContextUnavailable &&
+    JSON.stringify(left.workContext) === JSON.stringify(right.workContext) &&
+    JSON.stringify(left.mentions ?? []) === JSON.stringify(right.mentions ?? []) &&
     left.sendRunId === right.sendRunId &&
     left.sendAttempts === right.sendAttempts &&
     left.sendState === right.sendState &&
@@ -52,6 +70,13 @@ function normalizeChatAttachment(value: unknown): ChatAttachment | null {
     return null;
   }
   const restored: ChatAttachment = { id, mimeType };
+  if (entry.origin === "paste" || entry.origin === "file") {
+    restored.origin = entry.origin;
+  }
+  const selectionAnnotation = readChatSelectionAnnotation(entry.selectionAnnotation);
+  if (selectionAnnotation) {
+    restored.selectionAnnotation = selectionAnnotation;
+  }
   const fileName = normalizeOptionalString(entry.fileName);
   if (fileName) {
     restored.fileName = fileName;
@@ -92,6 +117,20 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
         .filter((item): item is ChatAttachment => item !== null)
     : [];
   const item: ChatQueueItem = { id, text, createdAt };
+  const asyncQuestionItemId = normalizeOptionalString(entry.asyncQuestionItemId);
+  if (asyncQuestionItemId && asyncQuestionItemId.length <= 256) {
+    item.asyncQuestionItemId = asyncQuestionItemId;
+  }
+  if (entry.workContext !== undefined) {
+    item.workContext = readChatWorkContext(entry.workContext);
+    if (!item.workContext) {
+      item.workContextUnavailable = true;
+    }
+  }
+  const mentions = readHumanMentions(text, entry.mentions);
+  if (mentions) {
+    item.mentions = mentions;
+  }
   if (entry.attachmentPayload !== undefined) {
     const payload = entry.attachmentPayload;
     if (
@@ -138,13 +177,13 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
       return null;
     }
     item.intent = { kind: intent.kind, version: intent.version, issuedAtMs: intent.issuedAtMs };
-    const sessionId = normalizeOptionalString(entry.sessionId);
-    if (sessionId) {
-      item.sessionId = sessionId;
-    }
     if (entry.expectedLeafEntryId === null || typeof entry.expectedLeafEntryId === "string") {
       item.expectedLeafEntryId = entry.expectedLeafEntryId;
     }
+  }
+  const sessionId = normalizeOptionalString(entry.sessionId);
+  if (sessionId) {
+    item.sessionId = sessionId;
   }
   if (typeof entry.orderKey === "number" && Number.isFinite(entry.orderKey)) {
     item.orderKey = entry.orderKey;
@@ -176,11 +215,14 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   }
   if (entry.sendState === "steering" || entry.sendState === "executing-command") {
     item.sendState = "unconfirmed";
+  } else if (entry.sendState === "submitting") {
+    item.sendState = "waiting-idle";
   } else if (entry.sendState === "sending") {
     item.sendState = "waiting-reconnect";
   } else if (
     entry.sendState === "failed" ||
     entry.sendState === "unconfirmed" ||
+    entry.sendState === "held" ||
     entry.sendState === "waiting-idle" ||
     entry.sendState === "waiting-reconnect"
   ) {
@@ -216,6 +258,19 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   if (agentId) {
     item.agentId = normalizeAgentId(agentId);
   }
+  if (
+    entry.mentions !== undefined &&
+    (!Array.isArray(entry.mentions) || entry.mentions.length !== (mentions?.length ?? 0))
+  ) {
+    // A reconnect must not send a different recipient selection after losing its binding.
+    item.sendState = item.sendState === "held" ? "held" : "failed";
+    item.sendError = t("chat.mentions.restoreFailed");
+  }
+  if (entry.workContextUnavailable === true || item.workContextUnavailable) {
+    item.workContextUnavailable = true;
+    item.sendState = item.sendState === "held" ? "held" : "failed";
+    item.sendError = t("chat.messages.attachedContext.restoreFailed");
+  }
   return item;
 }
 
@@ -225,6 +280,7 @@ export function normalizeStoredSession(value: unknown): StoredComposerSession | 
   }
   const entry = value;
   const draft = typeof entry.draft === "string" ? entry.draft : undefined;
+  const draftMentions = draft ? readHumanMentions(draft, entry.draftMentions) : undefined;
   if (entry.goalMode !== undefined && !isChatGoalDraftMode(entry.goalMode)) {
     return null;
   }
@@ -264,6 +320,7 @@ export function normalizeStoredSession(value: unknown): StoredComposerSession | 
   return {
     ...(entry.awaitingDefaults === true ? { awaitingDefaults: true } : {}),
     ...(draft ? { draft } : {}),
+    ...(draftMentions ? { draftMentions } : {}),
     ...(goalMode ? { goalMode } : {}),
     ...(draftRevision !== undefined ? { draftRevision } : {}),
     ...(queue && queue.length > 0 ? { queue } : {}),

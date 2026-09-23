@@ -45,8 +45,7 @@ export function createManagedWorktreeOwnerPolicy(
         }
         // Missing session metadata cannot erase a durable remote worker's ownership.
         const related = () =>
-          store.listForReconcile!()
-            .filter((placement) => placement.sessionKey === target.canonicalKey)
+          store.listForReconcile!(target.canonicalKey)
             .map((placement) => placement.sessionId)
             .toSorted();
         const initial = related();

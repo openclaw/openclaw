@@ -5,7 +5,6 @@ import {
   isAutoLinkedMarkdownLink,
   type MarkdownAnnotationSpan,
 } from "./ir-spans.js";
-// Markdown Core module implements render behavior.
 import type { MarkdownIR, MarkdownLinkSpan, MarkdownStyle, MarkdownStyleSpan } from "./ir.js";
 
 /** Marker pair used to wrap a styled Markdown span in the target renderer. */
@@ -84,19 +83,22 @@ const STRUCTURAL_STYLES = new Set<MarkdownStyle>([
   "heading_6",
 ]);
 
-function sortStyleSpans(spans: MarkdownStyleSpan[]): MarkdownStyleSpan[] {
-  return [...spans].toSorted((a, b) => {
-    if (a.start !== b.start) {
-      return a.start - b.start;
-    }
-    if (a.end !== b.end) {
-      return b.end - a.end;
-    }
-    return (STYLE_RANK.get(a.style) ?? 0) - (STYLE_RANK.get(b.style) ?? 0);
-  });
-}
-
 type TextRange = { start: number; end: number };
+
+function addSpanStart<T extends TextRange>(
+  starts: Map<number, T[]>,
+  boundaries: Set<number>,
+  span: T,
+): void {
+  boundaries.add(span.start);
+  boundaries.add(span.end);
+  const bucket = starts.get(span.start);
+  if (bucket) {
+    bucket.push(span);
+  } else {
+    starts.set(span.start, [span]);
+  }
+}
 
 function mergeRanges(ranges: readonly TextRange[]): TextRange[] {
   const merged: TextRange[] = [];
@@ -217,35 +219,26 @@ export function renderMarkdownWithMarkers(
   const annotationBoundaries = [
     ...new Set(annotated.flatMap((span) => [span.start, span.end])),
   ].toSorted((a, b) => a - b);
-  const styled = sortStyleSpans(
-    projected.styles
-      .filter((span) => Boolean(styleMarkers[span.style]))
-      .flatMap((span) => {
-        if (STRUCTURAL_STYLES.has(span.style)) {
-          return [span];
-        }
-        return subtractRanges(span, dominantAnnotationRanges).flatMap((piece) =>
-          splitAtBoundaries(piece, annotationBoundaries),
-        );
-      }),
-  );
-
   const boundaries = new Set<number>();
   boundaries.add(0);
   boundaries.add(text.length);
 
   const startsAt = new Map<number, MarkdownStyleSpan[]>();
-  for (const span of styled) {
-    if (span.start === span.end) {
+  for (const span of projected.styles) {
+    if (!styleMarkers[span.style]) {
       continue;
     }
-    boundaries.add(span.start);
-    boundaries.add(span.end);
-    const bucket = startsAt.get(span.start);
-    if (bucket) {
-      bucket.push(span);
-    } else {
-      startsAt.set(span.start, [span]);
+    const pieces =
+      annotated.length === 0 || STRUCTURAL_STYLES.has(span.style)
+        ? [span]
+        : subtractRanges(span, dominantAnnotationRanges).flatMap((piece) =>
+            splitAtBoundaries(piece, annotationBoundaries),
+          );
+    for (const piece of pieces) {
+      if (piece.start === piece.end) {
+        continue;
+      }
+      addSpanStart(startsAt, boundaries, piece);
     }
   }
   for (const spans of startsAt.values()) {
@@ -262,29 +255,27 @@ export function renderMarkdownWithMarkers(
     if (span.start === span.end) {
       continue;
     }
-    boundaries.add(span.start);
-    boundaries.add(span.end);
-    const bucket = annotationStarts.get(span.start);
-    if (bucket) {
-      bucket.push(span);
-    } else {
-      annotationStarts.set(span.start, [span]);
-    }
+    addSpanStart(annotationStarts, boundaries, span);
   }
 
   const linkStarts = new Map<number, RenderLink[]>();
   if (options.buildLink) {
-    const links = projected.links.flatMap((span) =>
-      subtractRanges(span, dominantAnnotationRanges)
-        .flatMap((piece) => splitAtBoundaries(piece, annotationBoundaries))
-        .map((piece) =>
-          copyMarkdownLinkSpan(span, {
-            start: piece.start,
-            end: piece.end,
-            href: piece.href,
-          }),
-        ),
-    );
+    const links =
+      annotated.length === 0
+        ? projected.links.map((span) =>
+            copyMarkdownLinkSpan(span, { start: span.start, end: span.end, href: span.href }),
+          )
+        : projected.links.flatMap((span) =>
+            subtractRanges(span, dominantAnnotationRanges)
+              .flatMap((piece) => splitAtBoundaries(piece, annotationBoundaries))
+              .map((piece) =>
+                copyMarkdownLinkSpan(span, {
+                  start: piece.start,
+                  end: piece.end,
+                  href: piece.href,
+                }),
+              ),
+          );
     for (const link of links) {
       if (link.start === link.end) {
         continue;
@@ -293,14 +284,7 @@ export function renderMarkdownWithMarkers(
       if (!rendered) {
         continue;
       }
-      boundaries.add(rendered.start);
-      boundaries.add(rendered.end);
-      const openBucket = linkStarts.get(rendered.start);
-      if (openBucket) {
-        openBucket.push(rendered);
-      } else {
-        linkStarts.set(rendered.start, [rendered]);
-      }
+      addSpanStart(linkStarts, boundaries, rendered);
     }
   }
 
@@ -308,15 +292,14 @@ export function renderMarkdownWithMarkers(
   // Links and styles share one stack so equal-end spans close in exact reverse open order.
   const stack: { open: string; close: string; end: number }[] = [];
   type OpeningItem =
-    | { end: number; open: string; close: string; kind: "annotation"; index: number }
-    | { end: number; open: string; close: string; kind: "link"; index: number }
+    | { end: number; open: string; close: string; kind: "annotation" }
+    | { end: number; open: string; close: string; kind: "link" }
     | {
         end: number;
         open: string;
         close: string;
         kind: "style";
         style: MarkdownStyle;
-        index: number;
       };
   let out = "";
 
@@ -341,7 +324,7 @@ export function renderMarkdownWithMarkers(
 
     const openingAnnotations = annotationStarts.get(pos);
     if (openingAnnotations) {
-      for (const [index, span] of openingAnnotations.entries()) {
+      for (const span of openingAnnotations) {
         const marker = annotationMarkers[span.type];
         if (!marker) {
           continue;
@@ -351,14 +334,13 @@ export function renderMarkdownWithMarkers(
           open: typeof marker.open === "function" ? marker.open(span) : marker.open,
           close: marker.close,
           kind: "annotation",
-          index,
         });
       }
     }
 
     const openingLinks = linkStarts.get(pos);
     if (openingLinks && openingLinks.length > 0) {
-      for (const [index, link] of openingLinks.entries()) {
+      for (const link of openingLinks) {
         // A renderer can collapse a link to terminal text. Emit the insertion
         // before new spans open; it must never enter the reopenable marker stack.
         if (link.start === link.end) {
@@ -370,14 +352,13 @@ export function renderMarkdownWithMarkers(
           open: link.open,
           close: link.close,
           kind: "link",
-          index,
         });
       }
     }
 
     const openingStyles = startsAt.get(pos);
     if (openingStyles) {
-      for (const [index, span] of openingStyles.entries()) {
+      for (const span of openingStyles) {
         const marker = styleMarkers[span.style];
         if (!marker) {
           continue;
@@ -388,7 +369,6 @@ export function renderMarkdownWithMarkers(
           close: marker.close,
           kind: "style",
           style: span.style,
-          index,
         });
       }
     }
@@ -409,7 +389,8 @@ export function renderMarkdownWithMarkers(
         if (a.kind === "style" && b.kind === "style") {
           return (STYLE_RANK.get(a.style) ?? 0) - (STYLE_RANK.get(b.style) ?? 0);
         }
-        return a.index - b.index;
+        // Stable sorting preserves source order for equal annotations and links.
+        return 0;
       });
 
       // Open outer spans first (larger end) so LIFO closes stay valid for same-start overlaps.

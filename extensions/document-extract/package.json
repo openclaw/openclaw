@@ -1,16 +1,21 @@
 {
   "name": "@openclaw/document-extract-plugin",
-  "version": "2026.8.1",
+  "version": "2026.9.5",
   "private": true,
   "description": "OpenClaw local document extraction plugin",
   "type": "module",
   "dependencies": {
-    "clawpdf": "0.3.1"
+    "clawpdf": "0.3.2"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
+    "build": {
+      "workerEntries": [
+        "./document-extractor.worker.ts"
+      ]
+    },
     "extensions": [
       "./index.ts"
     ]

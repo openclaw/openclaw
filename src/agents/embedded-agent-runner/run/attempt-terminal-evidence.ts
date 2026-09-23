@@ -1,5 +1,4 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
-/** Records attempt replay safety and terminal side-effect evidence. */
 import {
   hasAcceptedSessionSpawn,
   hasCompletionMessageSessionSpawn,
@@ -89,12 +88,8 @@ type TerminalAttemptState = Pick<
   };
 
 export function hasAttemptTerminalState(attempt: TerminalAttemptState): boolean {
-  return Boolean(attempt.lastToolError || hasNonToolTerminalState(attempt));
-}
-
-/** Projects terminal evidence whose ownership does not depend on a tool failure. */
-export function hasNonToolTerminalState(attempt: TerminalAttemptState): boolean {
   return Boolean(
+    attempt.lastToolError ||
     attempt.clientToolCalls ||
     attempt.yieldDetected ||
     attempt.didSendDeterministicApprovalPrompt ||

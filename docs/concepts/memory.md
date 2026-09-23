@@ -154,7 +154,21 @@ The agent has three tools for working with memory:
 - **`intent`** — creates, lists, or explicitly cancels event-conditioned
   standing intents. Time-based reminders continue to use scheduled tasks.
 
-Both tools are provided by the active memory plugin (default: `memory-core`).
+All three tools are provided by the active memory plugin (default: `memory-core`).
+
+When session indexing is enabled, `memory_search` can also return session
+transcript hits. Their `sessions/...jsonl` paths are search references, not files
+that `memory_get` can read. Use `sessions_search` with distinctive text from the
+snippet (optionally scope `sessionKey` to the transcript ID), then pass its returned
+`sessionKey`, `messageId`, and `sessionId` to `sessions_history` for a bounded,
+sanitized excerpt. These tools enforce session visibility independently on each
+request. Memory-search line numbers are not session-history offsets.
+
+The recall prompt recommends only enabled tools. Without session-history tools,
+report the excerpt limitation instead of reading raw transcript files.
+`memory_get` reports unsupported paths as read errors, not missing arguments or a
+globally disabled memory service. Memory-file reads and optional wiki reads keep
+their existing range, continuation, and partial-corpus semantics.
 
 ## Memory search
 
@@ -219,6 +233,10 @@ OpenClaw runs a silent turn that reminds the agent to save important context
 to memory files. This is on by default; set
 `agents.defaults.compaction.memoryFlush.enabled: false` to turn it off.
 
+The flush uses a private copy of the conversation, so its housekeeping messages
+never appear in later user turns, even if interrupted. Its writes to memory files
+are still saved normally.
+
 Memory flushing requires writable workspace access. Sessions whose sandbox
 requires read-only or no workspace access skip the flush, including sessions
 with a persisted sandbox requirement that overrides the agent's configuration.
@@ -259,9 +277,9 @@ owner or agent-derived items into long-term memory (`MEMORY.md`):
   job for a full dreaming sweep.
 - **Thresholded**: promotions must pass score, recall-frequency, and
   query-diversity gates.
-- **Consolidated**: a bounded subagent rewrite merges duplicates and
-  supersedes stale entries after the deterministic gate. Invalid or
-  unavailable rewrites use append-only fallback.
+- **Consolidated**: a tool-free completion selects merges and supersessions
+  after the deterministic gate. The memory writer composes the result from
+  validated source evidence; invalid or unavailable decisions use append-only fallback.
 - **Taint gated**: untrusted and system-derived candidates never enter the
   consolidation prompt or durable promotion path.
 - **Reviewable**: phase summaries and diary entries are written to
@@ -318,6 +336,7 @@ openclaw memory index --force   # Rebuild the index
 
 ## Further reading
 
+- [Memory architecture](/concepts/memory-architecture): the storage, indexing, and retrieval layers behind every memory feature.
 - [Memory search](/concepts/memory-search): search pipeline, providers, and tuning.
 - [Builtin memory engine](/concepts/memory-builtin): default SQLite backend.
 - [Honcho memory](/concepts/memory-honcho): AI-native cross-session memory.
@@ -330,3 +349,7 @@ openclaw memory index --force   # Rebuild the index
 - [Active memory](/concepts/active-memory): sub-agent memory for interactive chat sessions.
 - [User model](/concepts/user-model): directive-based durable preferences and profile facts.
 - [Standing intents](/concepts/standing-intents): event-conditioned prospective memory.
+
+## Related
+
+- [`openclaw memory`](/cli/memory) — command reference for inspecting and editing memory

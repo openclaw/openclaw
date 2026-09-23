@@ -8,6 +8,7 @@ import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/e
 import {
   fetchClawHubSkillInstallResolution,
   fetchClawHubSkillSecurityVerdicts,
+  fetchClawHubSkillVerification,
   searchClawHubSkills,
 } from "./clawhub-skills.js";
 
@@ -477,39 +478,42 @@ describe("clawhub client", () => {
     expect(finalResponse?.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
   });
 
-  it("bounds oversized successful ClawHub JSON responses and cancels the stream", async () => {
-    const cancel = vi.fn();
-    const chunk = new Uint8Array(512 * 1024).fill("x".charCodeAt(0));
-    const overshootChunks = 34; // 34 * 512 KiB = 17 MiB > 16 MiB cap
-    let emitted = 0;
-    const body = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        if (emitted >= overshootChunks) {
-          controller.close();
-          return;
-        }
-        emitted += 1;
-        controller.enqueue(chunk);
-      },
-      cancel() {
-        cancel();
-      },
-    });
+  it.each([
+    { kind: "metadata", maxMiB: 16, requestPath: "/api/v1/search" },
+    { kind: "verification", maxMiB: 64, requestPath: "/api/v1/skills/weather/verify" },
+  ])(
+    "bounds oversized $kind JSON and cancels the stream",
+    async ({ kind, maxMiB, requestPath }) => {
+      const cancel = vi.fn();
+      const chunk = new Uint8Array(512 * 1024).fill("x".charCodeAt(0));
+      let emitted = 0;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (emitted >= (maxMiB + 1) * 2) {
+            controller.close();
+            return;
+          }
+          emitted += 1;
+          controller.enqueue(chunk);
+        },
+        cancel() {
+          cancel();
+        },
+      });
+      const fetchImpl = async () =>
+        new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+      const result =
+        kind === "verification"
+          ? fetchClawHubSkillVerification({ slug: "weather", fetchImpl })
+          : searchClawHubSkills({ query: "calendar", fetchImpl });
 
-    await expect(
-      searchClawHubSkills({
-        query: "calendar",
-        fetchImpl: async () =>
-          new Response(body, {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          }),
-      }),
-    ).rejects.toThrow(/ClawHub \/api\/v1\/search response exceeded 16777216 bytes/);
-    // The reader is cancelled at the cap so the oversized stream releases its
-    // socket/buffer instead of being drained into memory.
-    expect(cancel).toHaveBeenCalledTimes(1);
-  });
+      await expect(result).rejects.toThrow(
+        `ClawHub ${requestPath} response exceeded ${maxMiB * 1024 * 1024} bytes`,
+      );
+      // Cancel at the cap before allocating a contiguous copy of the oversized body.
+      expect(cancel).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("bounds oversized ClawHub error bodies to a short collapsed snippet", async () => {
     const oversized = "boom ".repeat(64 * 1024); // ~320 KiB error body

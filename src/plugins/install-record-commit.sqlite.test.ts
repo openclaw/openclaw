@@ -5,6 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
+import { replaceConfigFile, type OpenClawConfig } from "../config/config.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -12,7 +13,10 @@ import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import { resolvePluginCapabilityConsent } from "./capability-consent.js";
 import { computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { enablePluginWithCapabilityConsent } from "./enable.js";
-import { commitConfigWriteWithPendingPluginInstalls } from "./install-record-commit.js";
+import {
+  commitConfigWithPendingPluginInstalls,
+  commitConfigWriteWithPendingPluginInstalls,
+} from "./install-record-commit.js";
 import { writePersistedInstalledPluginIndexInstallRecordsWithLease } from "./installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index.js";
@@ -144,8 +148,9 @@ describe("plugin install record commit rollback", () => {
                   },
                 },
               },
-              commit: async () => {
+              commit: async (nextConfig) => {
                 commits += 1;
+                return await replaceConfigFile({ sourceConfig: nextConfig });
               },
             });
             expect(commits).toBe(1);
@@ -162,8 +167,9 @@ describe("plugin install record commit rollback", () => {
             );
           });
           let commits = 0;
-          const commit = async () => {
+          const commit = async (nextConfig: OpenClawConfig) => {
             commits += 1;
+            return await replaceConfigFile({ sourceConfig: nextConfig });
           };
           await expect(
             commitConfigWriteWithPendingPluginInstalls({
@@ -316,4 +322,39 @@ describe("plugin install record commit rollback", () => {
       expect(persisted?.policyHash).toBe(resolveInstalledPluginIndexPolicyHash({}));
     });
   });
+});
+
+describe("committed plugin configuration", () => {
+  it.each([false, true])(
+    "returns committed source separately from authored configuration (pending records: %s)",
+    async (pending) => {
+      await withOpenClawTestState({ label: "committed-plugin-config" }, async (state) => {
+        await state.writeConfig({ gateway: { mode: "local" } });
+        const nextConfig: OpenClawConfig = {
+          gateway: { mode: "local" },
+          ...(pending
+            ? {
+                plugins: {
+                  installs: { fixture: { source: "npm" as const, spec: "fixture@1.0.0" } },
+                },
+              }
+            : {}),
+        };
+
+        const result = await commitConfigWithPendingPluginInstalls({ nextConfig });
+        const persisted = JSON.parse(await fs.promises.readFile(state.configPath, "utf8"));
+
+        const { meta: _meta, ...authoredConfig } = persisted;
+        expect(authoredConfig).toEqual({ gateway: { mode: "local" } });
+        // The committed source resolves the implicit roster without writing it into authored JSON.
+        const resolvedSource = { ...persisted, agents: { entries: { main: {} } } };
+        expect(result.path).toBe(state.configPath);
+        expect(result.nextConfig).toEqual(resolvedSource);
+        expect(result.persistedSourceConfig).toEqual(resolvedSource);
+        expect(result.nextConfig.meta?.lastTouchedVersion).toEqual(expect.any(String));
+        expect(result.movedInstallRecords).toBe(pending);
+        expect(result.nextConfig.plugins?.installs).toBeUndefined();
+      });
+    },
+  );
 });

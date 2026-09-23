@@ -120,6 +120,7 @@ export async function resetReplyRunSession(params: {
       nextEntry,
       nextSessionFile,
       previousEntry: prevEntry,
+      workspaceDir: params.followupRun.run.workspaceDir,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
     });
@@ -136,6 +137,7 @@ export async function resetReplyRunSession(params: {
   try {
     if (nextEntry.sessionDiffBaselineCapture) {
       settledEntry = await ensureSessionDiffBaseline({
+        agentId,
         cwd:
           nextEntry.spawnedCwd ??
           nextEntry.spawnedWorkspaceDir ??
@@ -149,6 +151,7 @@ export async function resetReplyRunSession(params: {
   } catch (error) {
     // Storage won the generation race; never retain this reset's stale pending snapshot.
     const authoritative = loadSessionEntry({
+      agentId,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
     });

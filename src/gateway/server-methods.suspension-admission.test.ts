@@ -1,18 +1,30 @@
 // Proves dispatcher root-work accounting and fail-closed suspension behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resumeGatewaySuspend } from "../infra/gateway-suspend-coordinator.js";
+import { createGatewayHostLifecycle } from "../cli/gateway-cli/host-lifecycle.js";
 import {
+  consumeGatewaySuspendHandoff,
+  prepareGatewaySuspend,
+  resumeGatewaySuspend,
+} from "../infra/gateway-suspend-coordinator.js";
+import {
+  beginGatewayRestartSignalAdmission,
   getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
   resetGatewayWorkAdmission,
   retainGatewayRootWorkAdmissionContinuation,
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { createCoreGatewayMethodDescriptors } from "./methods/core-method-policy.js";
 import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
+import { getGatewayProcessInstanceId } from "./process-instance.js";
 import { handleGatewayRequest, runWithGatewayRequestEnvelope } from "./server-methods.js";
+import { createLazyCoreHandlers } from "./server-methods/lazy-core-handlers.js";
 import { suspendHandlers } from "./server-methods/suspend.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
+import { GatewayRequestEntryLifetime } from "./server-request-entry.js";
 import { TerminalSessionManager } from "./terminal/session-manager.js";
 import { baseOpenRequest, makeFakePty } from "./terminal/session-manager.test-helpers.js";
 
@@ -30,16 +42,22 @@ function dispatch(params: {
   handler: GatewayRequestHandler;
   requestParams?: unknown;
   context?: Parameters<typeof handleGatewayRequest>[0]["context"];
+  core?: boolean;
+  clientScopes?: string[];
 }) {
   const respond = vi.fn();
-  const methodRegistry = createGatewayMethodRegistry([
-    createPluginGatewayMethodDescriptor({
-      pluginId: "suspend-proof",
-      name: params.method,
-      handler: params.handler,
-      scope: params.scope,
-    }),
-  ]);
+  const methodRegistry = createGatewayMethodRegistry(
+    params.core
+      ? createCoreGatewayMethodDescriptors({ [params.method]: params.handler })
+      : [
+          createPluginGatewayMethodDescriptor({
+            pluginId: "suspend-proof",
+            name: params.method,
+            handler: params.handler,
+            scope: params.scope,
+          }),
+        ],
+  );
   const request = handleGatewayRequest({
     req: {
       type: "req",
@@ -52,7 +70,7 @@ function dispatch(params: {
       connId: "conn-suspend-proof",
       connect: {
         role: "operator",
-        scopes: [params.scope],
+        scopes: params.clientScopes ?? [params.scope],
         client: { id: "cli", version: "test", platform: "linux", mode: "cli" },
         minProtocol: 1,
         maxProtocol: 1,
@@ -78,6 +96,193 @@ afterEach(() => {
 });
 
 describe("gateway request suspension admission", () => {
+  it("refuses a committed service-stop read when close overtakes lazy preparation", async () => {
+    markGatewayRestartDraining("stop (SIGTERM)");
+    const preparing = deferred();
+    const prepared = deferred();
+    const requestEntryLifetime = new GatewayRequestEntryLifetime();
+    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { run: null }));
+    const handlers = createLazyCoreHandlers({
+      methods: ["update.runs.get"],
+      loadHandlers: async () => {
+        preparing.resolve();
+        await prepared.promise;
+        return { "update.runs.get": handler };
+      },
+    });
+    const read = dispatch({
+      method: "update.runs.get",
+      scope: "operator.admin",
+      core: true,
+      handler: expectDefined(handlers["update.runs.get"], "lazy update-run handler"),
+      context: { requestEntryLifetime, logGateway: { warn: vi.fn() } } as unknown as Parameters<
+        typeof handleGatewayRequest
+      >[0]["context"],
+    });
+    await preparing.promise;
+    requestEntryLifetime.beginClose();
+    prepared.resolve();
+    await expect(read.request).rejects.toThrow("Gateway request entry is closed");
+    await requestEntryLifetime.sealAndJoin();
+    expect(handler).not.toHaveBeenCalled();
+    expect(read.respond).not.toHaveBeenCalled();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it.each(["signal", "drain"] as const)(
+    "keeps only authorized update-run reads available during restart %s",
+    async (phase) => {
+      if (phase === "signal") {
+        expect(beginGatewayRestartSignalAdmission()).not.toBeNull();
+      } else {
+        markGatewayRestartDraining();
+      }
+      const handler = vi.fn<GatewayRequestHandler>(({ respond }) => {
+        respond(true, { run: null });
+      });
+      const read = dispatch({
+        method: "update.runs.get",
+        scope: "operator.admin",
+        core: true,
+        handler,
+      });
+      await read.request;
+      if (phase === "signal") {
+        expect(read.respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "UNAVAILABLE" }),
+        );
+        expect(handler).not.toHaveBeenCalled();
+      } else {
+        expect(read.respond).toHaveBeenCalledWith(true, { run: null });
+        expect(handler).toHaveBeenCalledOnce();
+      }
+
+      for (const method of ["update.status", "update.run", "update.hold"]) {
+        const blocked = dispatch({ method, scope: "operator.admin", core: true, handler });
+        await blocked.request;
+        expect(blocked.respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "UNAVAILABLE" }),
+        );
+      }
+      const unauthorized = dispatch({
+        method: "update.runs.get",
+        scope: "operator.admin",
+        core: true,
+        clientScopes: ["operator.read"],
+        handler,
+      });
+      await unauthorized.request;
+      expect(unauthorized.respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ message: expect.stringContaining("operator.admin") }),
+      );
+      expect(handler).toHaveBeenCalledTimes(phase === "signal" ? 0 : 1);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    },
+  );
+
+  it.each(["preparing", "draining", "prepared"] as const)(
+    "refuses update-run reads during %s suspension",
+    async (phase) => {
+      const suspension = tryBeginGatewaySuspendAdmission(() => {});
+      expect(suspension).not.toBeNull();
+      if (phase === "draining") {
+        expect(suspension?.drain()).toBe(true);
+      } else if (phase === "prepared") {
+        expect(suspension?.commit()).toBe(true);
+      }
+      const handler = vi.fn<GatewayRequestHandler>();
+      const result = dispatch({
+        method: "update.runs.get",
+        scope: "operator.admin",
+        core: true,
+        handler,
+      });
+      await result.request;
+      expect(result.respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "UNAVAILABLE" }),
+      );
+      expect(handler).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["armed", "read-scope", "other-pid", "new-process-same-pid", "retired-host"])(
+    "binds an external handoff to the authenticated live owner: %s",
+    async (mode) => {
+      const host = createGatewayHostLifecycle({
+        processOwner: { ownsProcessLifecycle: true, supervisor: "external" },
+        isCurrent: () => true,
+        isServing: () => true,
+        acceptStop: () => {},
+      });
+      const lease = prepareGatewaySuspend({
+        requestId: "handoff-route",
+        drain: true,
+        pauseScheduling: () => {},
+        resumeScheduling: () => {},
+        inspect: { getRootRequests: () => 1, getTerminalPersistence: () => 0 },
+      });
+      if (lease.status !== "draining") {
+        throw new Error("expected a held drain");
+      }
+      try {
+        const result = dispatch({
+          method: "gateway.suspend.handoff",
+          scope: "operator.admin",
+          core: true,
+          clientScopes: [mode === "read-scope" ? "operator.read" : "operator.admin"],
+          handler: suspendHandlers["gateway.suspend.handoff"]!,
+          requestParams: {
+            suspensionId: lease.suspensionId,
+            target: {
+              pid: mode === "other-pid" ? process.pid + 1 : process.pid,
+              processInstanceId:
+                mode === "new-process-same-pid"
+                  ? "different-process"
+                  : getGatewayProcessInstanceId(),
+            },
+          },
+          context: {
+            hostLifecycle: host.capability,
+            logGateway: { warn: vi.fn() },
+          } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
+        });
+        // The request has crossed an async dispatch boundary, but the original
+        // host must still own its iteration when the synchronous handler commits.
+        if (mode === "retired-host") {
+          await host.retire();
+        }
+        await result.request;
+        if (mode === "armed") {
+          expect(result.respond).toHaveBeenCalledWith(true, {
+            status: "armed",
+            suspensionId: lease.suspensionId,
+            expiresAtMs: lease.expiresAtMs,
+          });
+          expect(consumeGatewaySuspendHandoff(host.capability.externalRestart)).toEqual({
+            ok: true,
+            value: true,
+          });
+        } else {
+          expect(result.respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+          expect(consumeGatewaySuspendHandoff(host.capability.externalRestart)).toEqual({
+            ok: true,
+            value: false,
+          });
+        }
+      } finally {
+        await host.retire();
+        resumeGatewaySuspend(lease.suspensionId);
+      }
+    },
+  );
   it("keeps a facade continuation on the same admitted root", async () => {
     const methodRegistry = createGatewayMethodRegistry([
       createPluginGatewayMethodDescriptor({
@@ -395,6 +600,7 @@ describe("gateway request suspension admission", () => {
           expiresAtMs: expect.any(Number),
           retryAfterMs: 20_000,
           activeCount: preservingTerminals ? 3 : 2,
+          writeCustody: [{ phase: "terminal-persistence", count: 1 }],
           blockers: expect.arrayContaining([
             expect.objectContaining({ kind: "root-request", count: 1 }),
             expect.objectContaining({ kind: "terminal-persistence", count: 1 }),
@@ -449,6 +655,7 @@ describe("gateway request suspension admission", () => {
           retryAfterMs: 20_000,
           activeCount: 1,
           blockers: [expect.objectContaining({ kind: "terminal-persistence", count: 1 })],
+          writeCustody: [{ phase: "terminal-persistence", count: 1 }],
         });
 
         chatAbortControllers.clear();
@@ -463,6 +670,7 @@ describe("gateway request suspension admission", () => {
         expect(ready.respond).toHaveBeenCalledWith(true, {
           status: "ready",
           expiresAtMs: result.expiresAtMs,
+          writeCustody: [],
         });
         expect(cron.resumeScheduling).not.toHaveBeenCalled();
 

@@ -2,21 +2,23 @@ import { readSessionMessageSequence } from "@openclaw/gateway-client/browser";
 import type {
   ChatInputReceipts,
   ChatPendingInputsPage,
+  ChatHistoryActivity,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { GatewaySessionRow, GatewaySessionsDefaults } from "../../api/types.ts";
-import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-store.ts";
+import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-cache.ts";
 import {
   isUiSelectedGlobalSessionKey,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
-import type { ChatState } from "./chat-state-contract.ts";
+import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
+import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
 import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
 
 export type ChatHistoryResult = {
+  activity?: ChatHistoryActivity[];
   pendingInputs?: ChatPendingInputsPage;
   inputReceipts?: ChatInputReceipts;
-  sourceCanonicalListRevision?: number;
   deltaCursor?: string;
   messages?: Array<unknown>;
   offset?: number;
@@ -49,6 +51,7 @@ export type ChatHistoryResult = {
 };
 
 export type ChatHistoryDeltaResult = {
+  activity?: ChatHistoryActivity[];
   pendingInputs?: ChatPendingInputsPage;
   inputReceipts?: ChatInputReceipts;
   kind: "delta";
@@ -65,6 +68,20 @@ export type ChatHistoryResponse =
   | ChatHistoryResult
   | ChatHistoryDeltaResult
   | ChatHistoryResetResult;
+
+export type ChatHistoryObservation = {
+  owner: ChatHistorySessions;
+  reconcile: ReturnType<ChatHistorySessions["captureReconcile"]>;
+  run?: ChatHistoryRunObservation;
+};
+
+export type ObservedChatHistoryResult = ChatHistoryResult & {
+  observation: ChatHistoryObservation;
+};
+
+export type ObservedChatHistoryResponse = ChatHistoryResponse & {
+  observation: ChatHistoryObservation;
+};
 
 export function isHistoryCursor(
   result: ChatHistoryResponse,

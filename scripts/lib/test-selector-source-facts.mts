@@ -3,10 +3,9 @@ import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+// File URLs also carry fixture dependencies into generated native-child imports.
 const IMPORT_SPECIFIER_PATTERN =
-  /\b(?:import|export)\s+(?:type\s+)?(?:[^'"]*?\s+from\s+)?["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)/gu;
-const REEXPORT_SPECIFIER_PATTERN =
-  /\bexport\s+(?:type\s+)?(?:\*\s+(?:as\s+\w+\s+)?from\s+|[^"']+?\s+from\s+)["']([^"']+)["']/gu;
+  /\b(?:import|export)\s+(?:type\s+)?(?:[^'"]*?\s+from\s+)?["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)|\bnew\s+URL\s*\(\s*["']([^"']+)["']\s*,\s*import\.meta\.url\s*,?\s*\)/gu;
 type SourceFile = { file: string; parseImports: boolean };
 
 function parseStrings(value: unknown): string[] {
@@ -21,7 +20,6 @@ function parseFacts(value: unknown) {
     !value ||
     typeof value !== "object" ||
     !("imports" in value) ||
-    !("reexports" in value) ||
     !("matches" in value) ||
     !("references" in value)
   ) {
@@ -29,7 +27,6 @@ function parseFacts(value: unknown) {
   }
   return {
     imports: parseStrings(value.imports),
-    reexports: parseStrings(value.reexports),
     matches: parseStrings(value.matches),
     references: parseStrings(value.references),
   };
@@ -116,7 +113,7 @@ async function readSourceFacts() {
         ? [
             ...new Set(
               [...source.matchAll(pattern)]
-                .map((match) => match[1] ?? match[2] ?? "")
+                .map((match) => match[1] ?? match[2] ?? match[3]?.replace(/[?#].*$/u, "") ?? "")
                 .filter((specifier) => specifier.startsWith(".")),
             ),
           ]
@@ -125,7 +122,6 @@ async function readSourceFacts() {
     const tokens = matches.length > 0 ? new Set(source.match(/[A-Za-z0-9_.@+/-]{4,}/gu)) : null;
     return {
       imports: specifiers(IMPORT_SPECIFIER_PATTERN),
-      reexports: specifiers(REEXPORT_SPECIFIER_PATTERN),
       matches,
       references: matches.filter((term) => tokens?.has(term)),
     };

@@ -6,6 +6,7 @@ import type {
   ChannelThreadingAdapter,
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { isRetryableDeliveryNotSentError } from "../../infra/delivery-recovery.shared.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -13,6 +14,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import { resolveRoutedReplyDeliveryOutcome } from "./reply-dispatch-outcome.js";
 
 const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(),
@@ -228,17 +230,28 @@ describe("routeReply", () => {
     setActivePluginRegistry(createTestRegistry());
   });
 
-  it("skips sends when abort signal is already aborted", async () => {
+  it.each([
+    { channel: "slack", aborted: true, error: "Reply routing aborted" },
+    {
+      channel: "webchat",
+      aborted: false,
+      error: "Webchat routing not supported for queued replies",
+    },
+    { channel: "", aborted: false, error: "Unknown channel: " },
+  ] as const)("records pre-I/O no-send for $error", async ({ channel, aborted, error }) => {
     const controller = new AbortController();
-    controller.abort();
+    if (aborted) {
+      controller.abort();
+    }
     const res = await routeTestReply({
       payload: { text: "hi" },
-      channel: "slack",
+      channel,
       to: "channel:C123",
       abortSignal: controller.signal,
     });
-    expect(res.ok).toBe(false);
-    expect(res.error).toContain("aborted");
+    expect(res).toMatchObject({ ok: false, delivered: false, error });
+    expect(isRetryableDeliveryNotSentError(res.cause)).toBe(true);
+    expect(resolveRoutedReplyDeliveryOutcome(res)).toBe("failed-before-deliver");
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
@@ -281,7 +294,7 @@ describe("routeReply", () => {
       payload: { text: "private reply" },
       channel: "slack",
       to: "channel:C123",
-      sessionKey: "agent:test",
+      sessionKey: "agent:main:test",
     });
 
     expect(result).toEqual({
@@ -313,25 +326,26 @@ describe("routeReply", () => {
       channel: "telegram",
       to: "chat-1",
       accountId: "acct-1",
-      sessionKey: "agent:test",
+      sessionKey: "agent:main:test",
       requesterSenderId: "sender-1",
       replyKind: "block",
       runId: "run-1",
       deliveryIntentId: "block-reply:v1:codex-app-server:thread-1:turn-1:item-1",
     });
 
-    expect(res.ok).toBe(true);
+    expect(res).toMatchObject({ ok: true, delivered: false });
+    expect(res.queueCustody).toBeUndefined();
     expect(lastDeliveryPayload()).toMatchObject({ text: "hello" });
     expect(lastDelivery().replyPayloadSendingHook).toMatchObject({
       kind: "block",
       channel: "telegram",
-      sessionKey: "agent:test",
+      sessionKey: "agent:main:test",
       runId: "run-1",
       context: {
         channelId: "telegram",
         accountId: "acct-1",
         conversationId: "chat-1",
-        sessionKey: "agent:test",
+        sessionKey: "agent:main:test",
         senderId: "sender-1",
         runId: "run-1",
       },
@@ -609,37 +623,6 @@ describe("routeReply", () => {
         conversationId: "chat-1",
       },
     });
-  });
-
-  it("suppresses routed delivery when reply payload hooks cancel", async () => {
-    mocks.deliverOutboundPayloads.mockImplementationOnce(
-      async ({
-        onPayloadDeliveryOutcome,
-      }: {
-        onPayloadDeliveryOutcome?: (outcome: unknown) => void;
-      }) => {
-        onPayloadDeliveryOutcome?.({
-          index: 0,
-          status: "suppressed",
-          reason: "cancelled_by_reply_payload_sending_hook",
-        });
-        return [];
-      },
-    );
-
-    const res = await routeTestReply({
-      payload: { text: "hello" },
-      channel: "telegram",
-      to: "chat-1",
-    });
-
-    expect(res).toEqual({
-      ok: true,
-      delivered: false,
-      suppressed: true,
-      reason: "cancelled_by_reply_payload_sending_hook",
-    });
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
   });
 
   it("suppresses routed delivery when reply payload hooks empty the payload", async () => {

@@ -44,8 +44,8 @@ type SystemRunParamsLike = {
 };
 
 type ApprovalLookup = {
-  getSnapshot: (recordId: string) => ExecApprovalRecord | null;
-  consumeAllowOnce?: (recordId: string) => boolean;
+  getSnapshot: (recordId: string) => Promise<ExecApprovalRecord | null>;
+  consumeAllowOnce?: (recordId: string) => Promise<boolean>;
   consumeAskFallback?: (recordId: string) => boolean;
   projectDecisionIfActive?: (
     recordId: string,
@@ -245,19 +245,20 @@ function resolveForwardedRawCommand(plan: SystemRunApprovalPlan): string {
  * `exec.approval.*` record. This prevents users with only `operator.write` from
  * bypassing node-host approvals by injecting control fields into `node.invoke`.
  */
-export function sanitizeSystemRunParamsForForwarding(opts: {
+export async function sanitizeSystemRunParamsForForwarding(opts: {
   nodeId?: string | null;
   rawParams: unknown;
   client: ApprovalClient | null;
   execApprovalManager?: ApprovalLookup;
   nowMs?: number;
-}):
+}): Promise<
   | {
       ok: true;
       params: unknown;
       approvalAuthority?: { recordId: string; decision: "allow-once" | "allow-always" };
     }
-  | { ok: false; message: string; details?: Record<string, unknown> } {
+  | { ok: false; message: string; details?: Record<string, unknown> }
+> {
   const obj = asNullableRecord(opts.rawParams);
   if (!obj) {
     return { ok: true, params: opts.rawParams };
@@ -317,7 +318,7 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
     });
   }
 
-  const snapshot = manager.getSnapshot(runId);
+  const snapshot = await manager.getSnapshot(runId);
   if (!snapshot) {
     return systemRunApprovalGuardError({
       code: "UNKNOWN_APPROVAL_ID",
@@ -492,7 +493,10 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
         });
       }
     }
-    if (typeof manager.consumeAllowOnce !== "function" || !manager.consumeAllowOnce(runId)) {
+    if (
+      typeof manager.consumeAllowOnce !== "function" ||
+      !(await manager.consumeAllowOnce(runId))
+    ) {
       return systemRunApprovalRequired(runId);
     }
     if (recordedResolutionSource === "auto-review") {

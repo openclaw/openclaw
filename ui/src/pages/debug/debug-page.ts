@@ -12,13 +12,14 @@ import { formatUiError } from "../../lib/format-error.ts";
 import {
   type CommandLaneDynamicSummary,
   type CommandLaneSnapshot,
+  loadCommandLaneDiagnostics,
   loadGatewayDiagnostics,
 } from "../../lib/gateway-diagnostics.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import "../../styles/debug.css";
+import "../../styles/debug-data.css";
 import { requestDebugOverlayToggle } from "./debug-overlay-contract.ts";
 import { renderDebug } from "./view.ts";
 
@@ -39,31 +40,35 @@ class DebugPage extends OpenClawLightDomElement {
   @state() private debugCallResult: string | null = null;
   @state() private debugCallError: string | null = null;
   @state() private debugDiagnosticsError: string | null = null;
+  @state() private debugLiveError: string | null = null;
   @state() private eventLog: readonly EventLogEntry[] = [];
 
   private readonly polling = new PollController(
     this,
     DEBUG_POLL_INTERVAL_MS,
     () => {
-      void this.loadDiagnostics();
+      void this.loadLiveDiagnostics();
     },
     false,
+    "visible",
   );
   private callEpoch = 0;
   private diagnosticsTaskActiveClient: GatewayBrowserClient | null = null;
   private diagnosticsAgentId: string | null = null;
+  private diagnosticsNeedsRefresh = true;
   private readonly diagnosticsTask = new Task(this, {
     autoRun: false,
     args: () =>
       [
         this.gateway.connected ? this.gateway.client : null,
-        this.context?.agentSelection.state.selectedId ?? null,
+        this.context?.settingsAgentSelection.state.selectedId ?? null,
       ] as const,
     task: ([client, agentId], { signal }) =>
       client ? loadGatewayDiagnostics(client, agentId, signal) : initialState,
     onComplete: (result) => {
       this.diagnosticsTaskActiveClient = null;
       this.debugDiagnosticsError = null;
+      this.debugLiveError = null;
       this.debugStatus = result.status;
       this.debugHealth = result.health;
       this.debugModels = result.models;
@@ -74,6 +79,28 @@ class DebugPage extends OpenClawLightDomElement {
     onError: (error) => {
       this.diagnosticsTaskActiveClient = null;
       this.debugDiagnosticsError = formatUiError(error);
+    },
+  });
+  private readonly liveTask = new Task(this, {
+    autoRun: false,
+    task: async ([client]: readonly [GatewayBrowserClient | null], { signal }) => {
+      if (!client) {
+        return initialState;
+      }
+      const [heartbeat, lanes] = await Promise.all([
+        client.request("last-heartbeat", {}, { signal }),
+        loadCommandLaneDiagnostics(client, signal),
+      ]);
+      return { heartbeat, ...lanes };
+    },
+    onComplete: (result) => {
+      this.debugHeartbeat = result.heartbeat;
+      this.debugLanes = result.lanes;
+      this.debugDynamic = result.dynamic;
+      this.debugLiveError = null;
+    },
+    onError: (error) => {
+      this.debugLiveError = formatUiError(error);
     },
   });
   private readonly gateway = new GatewayPageController(this, {
@@ -88,10 +115,13 @@ class DebugPage extends OpenClawLightDomElement {
       this.debugCallResult = null;
       this.debugCallError = null;
       this.debugDiagnosticsError = null;
+      this.debugLiveError = null;
     },
     invalidateRequests: () => {
       void this.diagnosticsTask.run([null, null]);
+      void this.liveTask.run([null]);
       this.diagnosticsTaskActiveClient = null;
+      this.diagnosticsNeedsRefresh = true;
       this.callEpoch += 1;
     },
     onSnapshot: () => {
@@ -108,7 +138,7 @@ class DebugPage extends OpenClawLightDomElement {
       },
     )
     .watch(
-      () => this.context?.agentSelection,
+      () => this.context?.settingsAgentSelection,
       (selection, notify) => selection.subscribe(notify),
       (selection) => {
         const agentId = selection.state.selectedId;
@@ -119,6 +149,7 @@ class DebugPage extends OpenClawLightDomElement {
         this.debugModels = [];
         void this.diagnosticsTask.run([null, null]);
         this.diagnosticsTaskActiveClient = null;
+        this.diagnosticsNeedsRefresh = true;
         void this.loadDiagnostics();
       },
     );
@@ -126,8 +157,10 @@ class DebugPage extends OpenClawLightDomElement {
   override disconnectedCallback() {
     this.subscriptions.clear();
     void this.diagnosticsTask.run([null, null]);
+    void this.liveTask.run([null]);
     this.diagnosticsTaskActiveClient = null;
     this.diagnosticsAgentId = null;
+    this.diagnosticsNeedsRefresh = true;
     this.callEpoch += 1;
     super.disconnectedCallback();
   }
@@ -144,7 +177,7 @@ class DebugPage extends OpenClawLightDomElement {
     if (
       !this.gateway.connected ||
       !this.gateway.client ||
-      this.debugStatus ||
+      !this.diagnosticsNeedsRefresh ||
       this.diagnosticsTaskActiveClient
     ) {
       return;
@@ -157,8 +190,23 @@ class DebugPage extends OpenClawLightDomElement {
     if (!client || this.diagnosticsTaskActiveClient) {
       return Promise.resolve();
     }
+    void this.liveTask.run([null]);
     this.diagnosticsTaskActiveClient = client;
-    return this.diagnosticsTask.run([client, this.context.agentSelection.state.selectedId]);
+    this.diagnosticsNeedsRefresh = false;
+    this.diagnosticsAgentId = this.context.settingsAgentSelection.state.selectedId;
+    return this.diagnosticsTask.run([client, this.context.settingsAgentSelection.state.selectedId]);
+  }
+
+  private loadLiveDiagnostics(): Promise<void> {
+    const client = this.gateway.connected ? this.gateway.client : null;
+    if (
+      !client ||
+      this.diagnosticsTaskActiveClient ||
+      this.liveTask.status === TaskStatus.PENDING
+    ) {
+      return Promise.resolve();
+    }
+    return this.liveTask.run([client]);
   }
 
   private async callDebugMethod() {
@@ -193,6 +241,8 @@ class DebugPage extends OpenClawLightDomElement {
 
   override render() {
     const debugView = renderDebug({
+      connected: this.gateway.connected,
+      offlineStable: this.gateway.snapshot?.offlineStable ?? false,
       loading: this.diagnosticsTask.status === TaskStatus.PENDING,
       status: this.debugStatus,
       health: this.debugHealth,
@@ -200,7 +250,7 @@ class DebugPage extends OpenClawLightDomElement {
       heartbeat: this.debugHeartbeat,
       lanes: this.debugLanes,
       dynamic: this.debugDynamic,
-      diagnosticsError: this.debugDiagnosticsError,
+      diagnosticsError: this.debugDiagnosticsError ?? this.debugLiveError,
       eventLog: this.eventLog,
       methods: (this.context.gateway.snapshot.hello?.features?.methods ?? []).toSorted(),
       callMethod: this.debugCallMethod,

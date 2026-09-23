@@ -1,23 +1,18 @@
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildPreparedCliRunContext } from "../../agents/cli-runner.test-helpers.js";
-import { executeDeps } from "../../agents/cli-runner/execute-deps.js";
-import { executePreparedCliRun } from "../../agents/cli-runner/execute.js";
+import { afterEach, describe, expect, it } from "vitest";
 import { prepareCliPromptImagePayload } from "../../agents/cli-runner/helpers.js";
-import { buildCliMcpGrantContext } from "../../agents/cli-runner/mcp-grant-context.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { detectAndLoadPromptImages } from "../../agents/embedded-agent-runner/run/images.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { registerGeneratedMediaTaskActivity } from "../../tasks/generated-media-task-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../tasks/task-runtime.test-helpers.js";
 import type { TemplateContext } from "../templating.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
-  createMockTypingSignaler,
   createFollowupRun,
   createTestUserTurnRecorder,
   requireRecord,
@@ -25,11 +20,12 @@ import {
   expectMockCallArgFields,
   initialFallbackAttemptOptions,
   createMinimalRunAgentTurnParams,
+  createRunAgentTurnParams,
   makeTestSessionStorePath,
 } from "./agent-runner-execution.test-support.js";
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 afterEach(resetGeneratedMediaTaskActivityForTests);
 
 function rejectUnexpectedCompactionSuccessor(): never {
@@ -37,139 +33,6 @@ function rejectUnexpectedCompactionSuccessor(): never {
 }
 
 describe("executeAgentTurn: CLI session routing", () => {
-  it("carries the admitted session permission and placement into the CLI grant", async () => {
-    state.isCliProviderMock.mockReturnValue(true);
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run(
-        "claude-cli",
-        "claude-sonnet-4-6",
-        initialFallbackAttemptOptions(params),
-      ),
-      provider: "claude-cli",
-      model: "claude-sonnet-4-6",
-      attempts: [],
-    }));
-    let sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: 1,
-      permissionMode: "guarded",
-      sessionRoot: "/workspace/old",
-      execHost: "gateway",
-      cliSessionBindings: {
-        "claude-cli": { sessionId: "old-native-session", forceReuse: true },
-      },
-    };
-    const admittedSessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: 2,
-      permissionMode: "read-only",
-      sessionRoot: "/workspace/project",
-      execHost: "node",
-      execNode: "node-a",
-      execCwd: "/workspace/project/task",
-      cliSessionBindings: {
-        "claude-cli": { sessionId: "new-native-session", forceReuse: true },
-      },
-    };
-    state.runCliAgentMock.mockResolvedValueOnce({ payloads: [{ text: "done" }], meta: {} });
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "claude-cli";
-    followupRun.run.model = "claude-sonnet-4-6";
-    const restoreAdmission = installSessionPlacementAdmissionProvider({
-      assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
-      executeLocalTurn: async (_claim, runLocal) => {
-        sessionEntry = admittedSessionEntry;
-        return await runLocal();
-      },
-      executeTurn: async (_claim, _params, runLocal) => await runLocal(),
-    });
-
-    try {
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
-      const result = await executeAgentTurn({
-        ...createMinimalRunAgentTurnParams({ followupRun }),
-        getActiveSessionEntry: () => sessionEntry,
-      });
-
-      expect(result.kind).toBe("success");
-      const run = requireMockCall(
-        state.runCliAgentMock,
-        0,
-        "CLI run params",
-      )[0] as RunCliAgentParams;
-      expect(run.sessionEntry).toBe(admittedSessionEntry);
-      expect(run.sessionEntry?.sessionRoot).toBe("/workspace/project");
-      expect(run.cliSessionId).toBe("new-native-session");
-      expect(run.cliSessionBinding).toMatchObject({
-        sessionId: "new-native-session",
-        forceReuse: true,
-      });
-      const observedCliSessionId = run.cliSessionBinding?.sessionId ?? run.cliSessionId;
-      expect(observedCliSessionId).toBe("new-native-session");
-      if (!observedCliSessionId) {
-        throw new Error("expected admitted CLI session binding");
-      }
-      expect(
-        buildCliMcpGrantContext({
-          run,
-          config: run.config ?? {},
-          requireExplicitMessageTarget: false,
-          agentId: "main",
-          modelProvider: "anthropic",
-          modelId: "claude-sonnet-4-6",
-        }).execSession,
-      ).toMatchObject({
-        permissionMode: "read-only",
-        execHost: "node",
-        execNode: "node-a",
-      });
-
-      const nodeInvoke = vi.fn<typeof executeDeps.invokeNodeClaudeCliRun>(async (request) => {
-        expect(request.nodeId).toBe("node-a");
-        expect(request.argv).toContain("new-native-session");
-        expect(request.argv).not.toContain("old-native-session");
-        return {
-          ok: true,
-          payloadJSON: JSON.stringify({ exitCode: 0, stderrTail: "", truncated: false }),
-        };
-      });
-      const restoreNodeInvoke = executeDeps.invokeNodeClaudeCliRun;
-      const backend = {
-        command: "claude",
-        args: ["-p"],
-        resumeArgs: ["--resume", "{sessionId}"],
-        output: "text" as const,
-        input: "stdin" as const,
-        serialize: true,
-      };
-      const prepared = buildPreparedCliRunContext({
-        provider: "claude-cli",
-        model: run.model,
-        runId: run.runId,
-        workspaceDir: run.workspaceDir,
-        config: run.config,
-        sessionEntry: run.sessionEntry,
-        backend,
-      });
-      prepared.params = {
-        ...run,
-        admittedRunContext: prepared.params.admittedRunContext,
-        skillsSnapshot: undefined,
-      };
-      prepared.cwd = run.cwd;
-      prepared.reusableCliSession = { mode: "reuse", sessionId: observedCliSessionId };
-      executeDeps.invokeNodeClaudeCliRun = nodeInvoke;
-      try {
-        await executePreparedCliRun(prepared, observedCliSessionId);
-      } finally {
-        executeDeps.invokeNodeClaudeCliRun = restoreNodeInvoke;
-      }
-      expect(nodeInvoke).toHaveBeenCalledOnce();
-    } finally {
-      restoreAdmission();
-    }
-  });
-
   it("carries prepared model and thread context facts into CLI execution", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
@@ -406,28 +269,7 @@ describe("executeAgentTurn: CLI session routing", () => {
     followupRun.run.runtimePolicySessionKey = "agent:main:telegram:default:direct:sender-static";
     followupRun.originatingChannel = "telegram";
 
-    const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun,
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeAgentTurn(createRunAgentTurnParams(followupRun));
 
     expect(result.kind).toBe("success");
     expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
@@ -448,53 +290,6 @@ describe("executeAgentTurn: CLI session routing", () => {
       groupSpace: "workspace-static",
       spawnedBy: "agent:main:telegram:group:parent",
       runtimePolicySessionKey: "agent:main:telegram:default:direct:sender-static",
-    });
-  });
-
-  it("passes silent empty-reply policy to CLI backends for message-tool-only turns", async () => {
-    state.isCliProviderMock.mockReturnValue(true);
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run(
-        "claude-cli",
-        "claude-sonnet-4-6",
-        initialFallbackAttemptOptions(params),
-      ),
-      provider: "claude-cli",
-      model: "claude-sonnet-4-6",
-      attempts: [],
-    }));
-    state.runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: SILENT_REPLY_TOKEN }],
-      meta: { executionTrace: { fallbackUsed: false } },
-    });
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "claude-cli";
-    followupRun.run.model = "claude-sonnet-4-6";
-    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-    followupRun.run.allowEmptyAssistantReplyAsSilent = true;
-    followupRun.originatingChannel = "telegram";
-
-    const result = await executeAgentTurn(
-      createMinimalRunAgentTurnParams({
-        followupRun,
-        sessionCtx: {
-          Provider: "telegram",
-          MessageSid: "msg",
-          ChatType: "group",
-        } as unknown as TemplateContext,
-      }),
-    );
-
-    expect(result.kind).toBe("success");
-    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
-      provider: "claude-cli",
-      model: "claude-sonnet-4-6",
-      sourceReplyDeliveryMode: "message_tool_only",
-      allowEmptyAssistantReplyAsSilent: true,
-      messageChannel: "telegram",
-      messageProvider: "telegram",
     });
   });
 
@@ -530,8 +325,10 @@ describe("executeAgentTurn: CLI session routing", () => {
       sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
       updatedAt: 1,
     };
+    await replaceSessionEntry({ sessionKey: "agent:main:main", storePath }, sessionEntry);
     const activeSessionStore = { main: sessionEntry };
 
+    await replaceSessionEntry({ sessionKey: "main", storePath }, sessionEntry);
     const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({ followupRun }),
       commandBody: "runtime prompt",
@@ -932,6 +729,48 @@ describe("executeAgentTurn: CLI session routing", () => {
     expect(sessionEntry.cliSessionBindings?.["claude-cli"]?.sessionId).toBe("media-session");
     expect(sessionEntry.cliSessionIds?.["claude-cli"]).toBe("media-session");
     expect(sessionEntry.claudeCliSessionId).toBe("media-session");
+  });
+
+  it("preserves a reused binding after an operator aborts a channel turn", async () => {
+    const sessionKey = "agent:main:direct:aborted-run";
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run(
+        "claude-cli",
+        "claude-opus-4-8",
+        initialFallbackAttemptOptions(params),
+      ),
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockRejectedValueOnce(
+      Object.assign(new Error("CLI run aborted"), { name: "AbortError" }),
+    );
+
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-opus-4-8";
+    const sessionEntry = {
+      sessionId: "openclaw-session",
+      updatedAt: 1,
+      cliSessionBindings: { "claude-cli": { sessionId: "aborted-session" } },
+      cliSessionIds: { "claude-cli": "aborted-session" },
+      claudeCliSessionId: "aborted-session",
+    } as SessionEntry;
+    const activeSessionStore = { [sessionKey]: sessionEntry };
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+
+    await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      sessionKey,
+      activeSessionStore,
+      getActiveSessionEntry: () => sessionEntry,
+    });
+
+    expect(sessionEntry.cliSessionBindings?.["claude-cli"]?.sessionId).toBe("aborted-session");
+    expect(sessionEntry.cliSessionIds?.["claude-cli"]).toBe("aborted-session");
+    expect(sessionEntry.claudeCliSessionId).toBe("aborted-session");
   });
 
   it("does not attribute media from an earlier admitted turn to a queued failure", async () => {

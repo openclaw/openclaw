@@ -1,10 +1,11 @@
 import type { lookup as dnsLookupCb } from "node:dns";
 import { asOptionalRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { Browser, ConnectOverCDPTransport } from "playwright-core";
-import WebSocket from "ws";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isWebSocketUrl, openCdpWebSocket } from "./cdp.helpers.js";
+import { createLightpandaCdpNormalizer } from "./lightpanda-cdp.js";
 import { getPlaywrightCore } from "./playwright-core.runtime.js";
 type CdpSocketLookup = typeof dnsLookupCb;
 // Playwright allocates positive command IDs and reserves -9999 for Browser.close.
@@ -13,7 +14,9 @@ const FIRST_INTERNAL_COMMAND_ID = -10_000;
 
 // Playwright's browser-root handler requires browserContextId for non-browser targets.
 // Release only those root targets; nested sessions belong to Playwright's frame handler.
-function contextlessTargetSession(message: Record<string, unknown>): string | undefined {
+function contextlessTargetParams(
+  message: Record<string, unknown>,
+): Record<string, unknown> | undefined {
   if (readStringField(message, "method") !== "Target.attachedToTarget") {
     return undefined;
   }
@@ -26,7 +29,7 @@ function contextlessTargetSession(message: Record<string, unknown>): string | un
   ) {
     return undefined;
   }
-  return readStringField(params, "sessionId");
+  return params ?? {};
 }
 
 type CdpTransportOptions = {
@@ -35,6 +38,7 @@ type CdpTransportOptions = {
   lookup?: CdpSocketLookup;
   resolveWebSocketUrl?: () => Promise<string | undefined>;
   preparedTransport?: ConnectOverCDPTransport;
+  engine?: "chromium" | "lightpanda";
 };
 
 async function openCdpTransportSocket(
@@ -97,6 +101,7 @@ export async function connectOverCdpTransport(
   opts: CdpTransportOptions,
 ): Promise<Browser> {
   const wire = opts.preparedTransport ?? (await openCdpTransportSocket(connectionUrl, opts));
+  const lightpanda = opts.engine === "lightpanda" ? createLightpandaCdpNormalizer() : undefined;
   try {
     let onMessage: ((message: object) => void) | undefined;
     let onClose: ((reason?: string) => void) | undefined;
@@ -112,6 +117,7 @@ export async function connectOverCdpTransport(
         return;
       }
       transportClosed = true;
+      lightpanda?.clear();
       if (onClose) {
         onClose(reason);
         return;
@@ -130,6 +136,7 @@ export async function connectOverCdpTransport(
     };
     const closeTransportSocket = (reason = "CDP socket closed") => {
       closingReason = reason;
+      lightpanda?.clear();
       // Borrowed streams close only after the real owner acknowledges native cleanup.
       wire.close();
     };
@@ -142,7 +149,14 @@ export async function connectOverCdpTransport(
       wire.send({ id, method, ...(params ? { params } : {}), sessionId });
       return id;
     };
-    const releaseContextlessTarget = (sessionId: string) => {
+    const releaseContextlessTarget = (params: Record<string, unknown>) => {
+      const sessionId = readStringField(params, "sessionId");
+      if (!sessionId) {
+        // A root attach without a session cannot use the session command path.
+        // Consume only that malformed event so Playwright cannot crash before the
+        // shared browser transport handles the next valid message.
+        return;
+      }
       // Chrome dispatches session and root commands independently. Wait for the
       // resume response before detach so the hidden target cannot stay paused.
       const resumeId = sendInternalCommand("Runtime.runIfWaitingForDebugger", undefined, sessionId);
@@ -158,7 +172,9 @@ export async function connectOverCdpTransport(
           return;
         }
         try {
-          onMessage(message);
+          void Promise.resolve(onMessage(message)).catch((error: unknown) => {
+            closeTransportSocket(formatErrorMessage(error));
+          });
         } catch (error) {
           closeTransportSocket(formatErrorMessage(error));
         }
@@ -169,7 +185,12 @@ export async function connectOverCdpTransport(
         if (closingReason || transportClosed) {
           throw new Error("CDP transport closed");
         }
-        wire.send(message);
+        try {
+          wire.send(lightpanda?.send(message) ?? message);
+        } catch (error) {
+          closeTransportSocket(formatErrorMessage(error));
+          throw error;
+        }
       },
       close: () => {
         closeTransportSocket();
@@ -204,9 +225,13 @@ export async function connectOverCdpTransport(
     Object.assign(wire, {
       onmessage: (message: object) => {
         try {
-          const parsed = asOptionalRecord(message);
-          if (!parsed) {
+          const received = asOptionalRecord(message);
+          if (!received) {
             closeTransportSocket();
+            return;
+          }
+          const parsed = lightpanda ? lightpanda.receive(received) : received;
+          if (!parsed) {
             return;
           }
           const id = parsed.id;
@@ -218,9 +243,9 @@ export async function connectOverCdpTransport(
             }
             return;
           }
-          const contextlessSessionId = contextlessTargetSession(parsed);
-          if (contextlessSessionId) {
-            releaseContextlessTarget(contextlessSessionId);
+          const contextlessParams = contextlessTargetParams(parsed);
+          if (contextlessParams) {
+            releaseContextlessTarget(contextlessParams);
             return;
           }
           scheduleMessage(parsed);
@@ -233,6 +258,7 @@ export async function connectOverCdpTransport(
     });
     return await getPlaywrightCore().chromium.connectOverCDP(transport, { timeout: opts.timeout });
   } catch (error) {
+    lightpanda?.clear();
     wire.close();
     throw error;
   }

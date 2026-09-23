@@ -14,8 +14,9 @@ import { configFieldId } from "./config-form.shared.ts";
 export function renderJsonTextarea(params: ConfigNodeRenderParams): TemplateResult {
   const { schema, value, path, hints, disabled, onPatch } = params;
   const showLabel = params.showLabel ?? true;
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
-  const helpId = showLabel && help ? configFieldId(path, "description") : undefined;
+  const { label, help } = resolveFieldMeta(path, schema, hints);
+  const helpId =
+    params.descriptionId ?? (showLabel && help ? configFieldId(path, "description") : undefined);
   const fallback = jsonValue(value !== undefined ? value : schema.default);
   const sensitiveState = getSensitiveRenderState({
     path,
@@ -30,7 +31,6 @@ export function renderJsonTextarea(params: ConfigNodeRenderParams): TemplateResu
     ariaLabel: label,
     descriptionId: helpId,
     sourceValue: params.sourceIdentity ?? value,
-    rowIdentity: params.rowIdentity,
     fallback,
     rows: 3,
     sensitiveState,
@@ -47,7 +47,6 @@ export function renderJsonTextarea(params: ConfigNodeRenderParams): TemplateResu
     defaultDescription: sensitiveState.isRedacted
       ? nothing
       : renderSchemaDefaultDescription(schema, value),
-    tags,
     showLabel,
     stacked: true,
     control,

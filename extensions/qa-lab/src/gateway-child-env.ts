@@ -1,7 +1,9 @@
 // Qa Lab plugin module owns gateway child runtime environment behavior.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { SUPERVISOR_HINT_ENV_VARS } from "openclaw/plugin-sdk/process-runtime";
 import { buildQaCodexAppServerArgs } from "./codex-app-server-args.js";
 import type { QaProviderMode } from "./model-selection.js";
 import {
@@ -18,6 +20,11 @@ import { listMockCodexModelInfos } from "./providers/shared/mock-model-config.js
 import type { RuntimeId } from "./runtime-parity.js";
 
 const QA_GATEWAY_CHILD_BLOCKED_ENV_VARS = Object.freeze([
+  // QA owns this child; parent service and test-runner markers describe a different process.
+  ...SUPERVISOR_HINT_ENV_VARS,
+  "VITEST",
+  "VITEST_POOL_ID",
+  "VITEST_WORKER_ID",
   "BASH_ENV",
   "BASHOPTS",
   "ENV",
@@ -40,15 +47,6 @@ function scrubQaGatewayChildEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
       delete env[envKey];
     }
   }
-  return env;
-}
-
-function scrubQaGatewayChildTestRunnerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  // The Gateway is a product child, not a nested Vitest worker. Leaking runner
-  // markers makes the dist launcher select test-only startup behavior.
-  delete env.VITEST;
-  delete env.VITEST_POOL_ID;
-  delete env.VITEST_WORKER_ID;
   if (env.NODE_ENV === "test") {
     delete env.NODE_ENV;
   }
@@ -68,6 +66,7 @@ export function buildQaRuntimeEnv(params: {
   bundledPluginsDir?: string;
   stagedBundledPluginsRoot?: string | null;
   compatibilityHostVersion?: string;
+  developmentSourceRoot: string | null;
   providerMode?: QaProviderMode;
   baseEnv?: NodeJS.ProcessEnv;
   runtimeEnvPatch?: NodeJS.ProcessEnv;
@@ -122,12 +121,25 @@ export function buildQaRuntimeEnv(params: {
   delete normalizedEnv.OPENCLAW_SKIP_CHANNELS;
   delete normalizedEnv.OPENCLAW_SKIP_PROVIDERS;
   Object.assign(normalizedEnv, params.runtimeEnvPatch);
+  // Path isolation alone still lets CLI bootstrap discover the operator's service.
+  normalizedEnv.OPENCLAW_PROFILE = `qa-${createHash("sha256")
+    .update(params.tempRoot)
+    .digest("hex")
+    .slice(0, 24)}`;
+  if (params.developmentSourceRoot === null) {
+    delete normalizedEnv.OPENCLAW_DEV_SOURCE_ROOT;
+  } else {
+    normalizedEnv.OPENCLAW_DEV_SOURCE_ROOT = params.developmentSourceRoot;
+  }
+  // Direct Gateway launches need the same private-QA build and SDK admission
+  // as the QA CLI; caller patches cannot disable either half of that contract.
+  normalizedEnv.OPENCLAW_BUILD_PRIVATE_QA = "1";
+  normalizedEnv.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
   // Parent shell startup controls must be removed after caller patches so no
   // launcher or runtime child can import them before its own allowlist runs.
-  normalizedEnv.OPENCLAW_BUILD_PRIVATE_QA = "1";
   delete normalizedEnv[QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV];
   delete normalizedEnv[QA_LIVE_SETUP_TOKEN_VALUE_ENV];
-  return scrubQaGatewayChildEnv(scrubQaGatewayChildTestRunnerEnv(normalizedEnv));
+  return scrubQaGatewayChildEnv(normalizedEnv);
 }
 
 export async function stageQaCodexMockModelCatalog(params: {
@@ -136,6 +148,7 @@ export async function stageQaCodexMockModelCatalog(params: {
   providerMode: QaProviderMode;
   primaryModel?: string;
   alternateModel?: string;
+  autoCompactTokenLimit?: number;
 }): Promise<string | undefined> {
   if (params.forcedRuntime !== "codex" || params.providerMode !== "mock-openai") {
     return undefined;
@@ -144,11 +157,16 @@ export async function stageQaCodexMockModelCatalog(params: {
   const selectedModelRefs = [params.primaryModel, params.alternateModel].filter(
     (model): model is string => typeof model === "string" && model.length > 0,
   );
-  await fs.writeFile(
-    modelCatalogPath,
-    `${JSON.stringify({ models: listMockCodexModelInfos(selectedModelRefs) }, null, 2)}\n`,
-    { encoding: "utf8", mode: 0o600 },
-  );
+  const models = listMockCodexModelInfos(selectedModelRefs);
+  if (params.autoCompactTokenLimit !== undefined) {
+    for (const model of models) {
+      Object.assign(model, { auto_compact_token_limit: params.autoCompactTokenLimit });
+    }
+  }
+  await fs.writeFile(modelCatalogPath, `${JSON.stringify({ models }, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
   return modelCatalogPath;
 }
 

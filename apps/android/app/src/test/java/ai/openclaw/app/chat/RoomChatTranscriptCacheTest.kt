@@ -1,9 +1,14 @@
 package ai.openclaw.app.chat
 
-import androidx.room.Room
+import ai.openclaw.app.ui.chat.ChatTimelineItem
+import ai.openclaw.app.ui.chat.buildTimeline
+import ai.openclaw.app.ui.chat.latestChatMessageUsage
+import ai.openclaw.app.ui.chat.prepareChatHistory
+import androidx.room3.Room
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -14,21 +19,64 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import java.util.concurrent.Executor
 
 @RunWith(RobolectricTestRunner::class)
 @OptIn(ExperimentalCoroutinesApi::class)
 class RoomChatTranscriptCacheTest {
-  private var deferTransactions = false
-  private val deferredTransactions = ArrayDeque<Runnable>()
+  private var deferNextDatabaseOperation = false
+  private var deferredDatabaseOperation: Runnable? = null
   private val database: GatewayCacheDatabase =
     Room
       .inMemoryDatabaseBuilder(RuntimeEnvironment.getApplication(), GatewayCacheDatabase::class.java)
       .allowMainThreadQueries()
-      .setQueryExecutor { it.run() }
-      .setTransactionExecutor {
-        if (deferTransactions) deferredTransactions.addLast(it) else it.run()
-      }.build()
+      .setQueryCoroutineContext(
+        Executor { operation ->
+          if (deferNextDatabaseOperation) {
+            deferNextDatabaseOperation = false
+            deferredDatabaseOperation = operation
+          } else {
+            operation.run()
+          }
+        }.asCoroutineDispatcher(),
+      ).build()
   private val store = RoomChatTranscriptCache(database = database)
+
+  @Test
+  fun completedWorkKeepsExplicitAnswersAndUnresolvedErrorsAfterOfflineReload() =
+    runTest {
+      val controller =
+        createChatController { method, _ ->
+          if (method == "chat.history") {
+            """{"messages":[
+            {"role":"user","content":"Check the draft","timestamp":1000},
+            {"role":"assistant","content":"Checking","phase":"commentary","timestamp":2000},
+            {"role":"assistant","content":[{"type":"text","text":"Draft is ready","textSignature":"{\"v\":1,\"phase\":\"final_answer\"}"}],"timestamp":3000},
+            {"role":"assistant","content":"Finishing notes","phase":"commentary","timestamp":4000},
+            {"role":"assistant","content":"The follow-up failed","stopReason":"error","timestamp":5000}
+          ]}"""
+          } else {
+            emptyChatGatewayResponse(method)
+          }
+        }
+      controller.load("agent:main:dashboard:test")
+      advanceUntilIdle()
+      val live = controller.messages.value
+      saveTranscript(live)
+      for (history in listOf(live, loadTranscript())) {
+        val timeline =
+          prepareChatHistory(history, "agent:main:dashboard:test", "agent:main:main").buildTimeline(0, emptyList(), null)
+        assertEquals(
+          listOf("The follow-up failed", "Draft is ready", "Check the draft"),
+          timeline.items.filterIsInstance<ChatTimelineItem.Message>().map {
+            it.message.content
+              .first()
+              .text
+          },
+        )
+        assertEquals(1, timeline.items.filterIsInstance<ChatTimelineItem.WorkedSummary>().size)
+      }
+    }
 
   @After
   fun tearDown() {
@@ -90,6 +138,7 @@ class RoomChatTranscriptCacheTest {
           val text = if (++historyRequests == 1) "history A" else "history B"
           historyResponse("session-1", listOf(ReplayHistoryMessage("assistant", text, historyRequests.toLong())))
         }
+
         "health" -> {
           if (++healthRequests == 1) {
             healthStarted?.complete(Unit)
@@ -97,11 +146,141 @@ class RoomChatTranscriptCacheTest {
           }
           "{}"
         }
-        "sessions.list" -> """{"sessions":[{"key":"main"},{"key":"other"}]}"""
-        else -> "{}"
+
+        "sessions.list" -> {
+          """{"sessions":[{"key":"main"},{"key":"other"}]}"""
+        }
+
+        else -> {
+          "{}"
+        }
       }
     }
   }
+
+  @Test
+  fun toolOnlyAssistantKeepsUnknownUsageAfterOfflineReload() =
+    runTest {
+      val controller =
+        createChatController(transcriptCache = store, cacheScope = { ChatCacheScope("gateway-a", 1) }) { method, _ ->
+          when (method) {
+            "chat.history" -> """{"sessionId":"session-1","sessionInfo":{"key":"main"},"messages":[{"role":"assistant","content":"older","usage":{"output":123}},{"role":"assistant","provider":"openai","model":"gpt-5.2","content":[{"type":"toolCall","id":"read-1","name":"read","arguments":{}}],"__openclaw":{"id":"entry-2"}}]}"""
+            "sessions.list" -> error("list unavailable")
+            else -> emptyChatGatewayResponse(method)
+          }
+        }
+      controller.load("main")
+      advanceUntilIdle()
+      assertEquals(2, controller.messages.value.size)
+      assertEquals(
+        "read",
+        controller.messages.value
+          .last()
+          .content
+          .single()
+          .toolActivity
+          ?.name,
+      )
+      assertEquals(
+        "entry-2",
+        controller.messages.value
+          .last()
+          .entryId,
+      )
+      assertEquals(null, latestChatMessageUsage(controller.messages.value))
+
+      val offline = createChatController(transcriptCache = store, cacheScope = { ChatCacheScope("gateway-a", 2) }) { _, _ -> error("offline") }
+      offline.load("main")
+      advanceUntilIdle()
+      assertTrue(offline.messagesFromCache.value)
+      assertEquals(null, latestChatMessageUsage(offline.messages.value))
+      assertEquals(2, offline.messages.value.size)
+      assertEquals(
+        "read",
+        offline.messages.value
+          .last()
+          .content
+          .single()
+          .toolActivity
+          ?.name,
+      )
+    }
+
+  @Test
+  fun canonicalSessionInfoKeepsRequestedAliasTranscriptReachable() =
+    runTest {
+      val controller =
+        createChatController(transcriptCache = store, cacheScope = { ChatCacheScope("gateway-a", 1) }) { method, _ ->
+          when (method) {
+            "chat.history" -> """{"sessionId":"alias-session","sessionInfo":{"key":"agent:main:review-alias"},"messages":[{"role":"assistant","content":"alias transcript"}]}"""
+            "sessions.list" -> error("list unavailable")
+            else -> emptyChatGatewayResponse(method)
+          }
+        }
+      controller.load("review-alias", "main")
+      advanceUntilIdle()
+      assertEquals(
+        "alias transcript",
+        controller.messages.value
+          .single()
+          .content
+          .single()
+          .text,
+      )
+      assertEquals(listOf("alias transcript"), loadTranscript(sessionKey = "review-alias").map { it.content.single().text })
+      assertEquals(listOf("review-alias"), loadSessions().map { it.key })
+      assertTrue(loadTranscript(sessionKey = "agent:main:review-alias").isEmpty())
+    }
+
+  @Test
+  fun fullHistoryUsageClearSurvivesOfflineReopenWithoutAListResponse() =
+    runTest {
+      saveSessions(listOf(ChatSessionEntry(key = "main", updatedAtMs = 1L, outputTokens = 840L)))
+      saveTranscript(listOf(message("before", role = "assistant")))
+      val controller =
+        createChatController(transcriptCache = store, cacheScope = { ChatCacheScope("gateway-a", 1) }) { method, _ ->
+          when (method) {
+            "chat.history" -> {
+              """{"sessionId":"session-1","messages":[{"role":"system","content":[],"__openclaw":{"kind":"compaction"}}],"sessionInfo":{"key":"main","totalTokens":24700,"totalTokensFresh":true,"contextTokens":272000}}"""
+            }
+
+            "sessions.list" -> {
+              error("list unavailable")
+            }
+
+            else -> {
+              emptyChatGatewayResponse(method)
+            }
+          }
+        }
+      controller.load("main")
+      advanceUntilIdle()
+      assertEquals(
+        null,
+        controller.sessions.value
+          .single()
+          .outputTokens,
+      )
+
+      val reopened =
+        createChatController(transcriptCache = store, cacheScope = { ChatCacheScope("gateway-a", 2) }) { _, _ -> error("offline") }
+      reopened.load("main")
+      advanceUntilIdle()
+      assertTrue(reopened.messagesFromCache.value)
+      assertEquals(
+        "compaction",
+        reopened.messages.value
+          .single()
+          .transcriptMarker
+          ?.kind,
+      )
+      assertEquals(
+        null,
+        reopened.sessions.value
+          .single()
+          .outputTokens,
+      )
+    }
 
   @Test
   fun oldHistoryPostPublicationHealthWaitCannotOverwriteNewerCachedTranscript() =
@@ -131,11 +310,12 @@ class RoomChatTranscriptCacheTest {
   fun queuedTranscriptWriteSurvivesSwitchToADifferentSession() =
     runTest {
       val controller = cachedController()
-      // Keep the cache mutation queue busy with a real Room session-list transaction.
-      deferTransactions = true
+      // Hold the session-list Room operation while it owns the cache mutation queue.
+      // Later reads can proceed, but transcript writes must wait across the session switch.
+      deferNextDatabaseOperation = true
       controller.refreshSessions()
       runCurrent()
-      assertEquals(1, deferredTransactions.size)
+      val releaseSessionWrite = requireNotNull(deferredDatabaseOperation)
 
       controller.load("main")
       runCurrent()
@@ -148,8 +328,7 @@ class RoomChatTranscriptCacheTest {
       assertEquals(listOf("history B"), controller.messages.value.map { it.content.single().text })
       assertTrue(loadTranscript(sessionKey = "other").isEmpty())
 
-      deferTransactions = false
-      deferredTransactions.removeFirst().run()
+      releaseSessionWrite.run()
       advanceUntilIdle()
 
       assertEquals(listOf("history B"), controller.messages.value.map { it.content.single().text })
@@ -312,38 +491,99 @@ class RoomChatTranscriptCacheTest {
     }
 
   @Test
+  fun transcriptRoundTripKeepsObservedAssistantUsage() =
+    runTest {
+      val usage = ChatMessageUsage(input = 12_000, output = 300, cacheRead = 438_400)
+      val cost = ChatMessageCost(input = 0.003, output = 0.018, cacheRead = 0.0015, total = 0.0225)
+      saveTranscript(
+        messages =
+          listOf(
+            message("Usage-backed reply").copy(
+              role = "assistant",
+              provider = "openai",
+              model = "gpt-5.2",
+              usage = usage,
+              cost = cost,
+              runId = "run-1",
+              steerTargetRunId = "run-parent",
+            ),
+            message("Delivery copy").copy(
+              role = "assistant",
+              deliveryMirror = ChatDeliveryMirror(kind = "channel-final"),
+              usage = ChatMessageUsage(input = 0, output = 0),
+            ),
+            message("discarded display text").copy(
+              role = "assistant",
+              content = emptyList(),
+              provider = "anthropic",
+              model = "claude-opus-4-1",
+              usage = ChatMessageUsage(input = 7_500, output = 450),
+              cost = ChatMessageCost(total = 0.031),
+            ),
+            message("Synthetic fallback").copy(role = "assistant", isSyntheticDisplay = true),
+          ),
+      )
+
+      val loaded = loadTranscript()
+
+      assertEquals("openai", loaded[0].provider)
+      assertEquals("gpt-5.2", loaded[0].model)
+      assertEquals(usage, loaded[0].usage)
+      assertEquals(cost, loaded[0].cost)
+      assertEquals("run-1", loaded[0].runId)
+      assertEquals("run-parent", loaded[0].steerTargetRunId)
+      assertEquals(ChatDeliveryMirror(kind = "channel-final"), loaded[1].deliveryMirror)
+      assertTrue(loaded[2].content.isEmpty())
+      assertEquals(ChatMessageUsage(input = 7_500, output = 450), loaded[2].usage)
+      assertEquals(ChatMessageCost(total = 0.031), loaded[2].cost)
+      assertTrue(loaded[3].isSyntheticDisplay)
+      assertEquals(ChatMessageUsage(input = 7_500, output = 450), latestChatMessageUsage(loaded))
+    }
+
+  @Test
   fun legacyTranscriptRowsRemainReadable() =
     runTest {
-      database.dao().insertMessages(
+      val encoded =
         listOf(
+          """["legacy one","legacy two"]""",
+          """[{"type":"text","text":"structured legacy"}]""",
+          """{"content":[],"provenance":{"kind":"internal_system","sourceTool":"restart-sentinel"},"__openclaw":{"kind":"compaction","id":"checkpoint-1","tokensBefore":42500.0,"tokensAfter":2000.0}}""",
+          """{"content":[],"provenance":{"kind":"internal_system"},"__openclaw":{"kind":"compaction"}}""",
+        )
+      database.dao().insertMessages(
+        encoded.mapIndexed { index, payload ->
           CachedMessageEntity(
             gatewayId = "gateway-a",
             agentId = "main",
             sessionKey = "main",
-            rowOrder = 0,
+            rowOrder = index,
             role = "assistant",
-            textPartsJson = """["legacy one","legacy two"]""",
-            timestampMs = 10,
+            textPartsJson = payload,
+            timestampMs = 10L + index,
             idempotencyKey = null,
-          ),
-          CachedMessageEntity(
-            gatewayId = "gateway-a",
-            agentId = "main",
-            sessionKey = "main",
-            rowOrder = 1,
-            role = "assistant",
-            textPartsJson = """[{"type":"text","text":"structured legacy"}]""",
-            timestampMs = 11,
-            idempotencyKey = null,
-          ),
-        ),
+          )
+        },
       )
 
       val loaded = loadTranscript()
 
       assertEquals(listOf("legacy one", "legacy two"), loaded[0].content.map { it.text })
       assertEquals(listOf("structured legacy"), loaded[1].content.map { it.text })
-      assertEquals(listOf(null, null), loaded.map { it.senderLabel })
+      assertTrue(loaded.all { it.senderLabel == null })
+      assertEquals(ChatMessageProvenance("internal_system", "restart-sentinel"), loaded[2].provenance)
+      assertEquals(ChatTranscriptMarker("compaction", "checkpoint-1", 42_500.0, 2_000.0), loaded[2].transcriptMarker)
+      assertEquals(ChatMessageProvenance("internal_system"), loaded[3].provenance)
+      assertEquals(ChatTranscriptMarker("compaction"), loaded[3].transcriptMarker)
+
+      saveTranscript(messages = loaded)
+      assertEquals(
+        encoded.drop(2),
+        database
+          .dao()
+          .messages("gateway-a", "main", "main")
+          .drop(2)
+          .map { it.textPartsJson },
+      )
     }
 
   @Test
@@ -362,13 +602,25 @@ class RoomChatTranscriptCacheTest {
     }
 
   @Test
-  fun transcriptRoundTripDropsInternalRoleRows() =
+  fun transcriptRoundTripKeepsBoundedToolRowsAndDropsInternalRoles() =
     runTest {
       saveTranscript(
         messages =
           listOf(
             message("hello", role = "user"),
-            message("private tool output", role = "toolResult"),
+            ChatMessage(
+              id = "tool-result",
+              role = "toolresult",
+              content =
+                listOf(
+                  ChatMessageContent(
+                    type = "toolResult",
+                    toolActivity = ChatToolActivity("call-1", "read", null, "bounded output", false),
+                  ),
+                ),
+              timestampMs = 2,
+            ),
+            message("private reasoning", role = "internal"),
             message("visible plugin notice", role = "custom"),
             message("reply", role = "assistant"),
           ),
@@ -376,8 +628,15 @@ class RoomChatTranscriptCacheTest {
 
       val loaded = loadTranscript()
 
-      assertEquals(listOf("hello", "visible plugin notice", "reply"), loaded.map { it.content.single().text })
-      assertEquals(listOf("user", "custom", "assistant"), loaded.map { it.role })
+      assertEquals(listOf("user", "toolresult", "custom", "assistant"), loaded.map { it.role })
+      assertEquals(
+        "bounded output",
+        loaded[1]
+          .content
+          .single()
+          .toolActivity
+          ?.result,
+      )
     }
 
   @Test

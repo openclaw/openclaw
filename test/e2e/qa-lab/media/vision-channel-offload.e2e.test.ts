@@ -10,6 +10,7 @@ import {
   startQaMockOpenAiServer,
 } from "../../../../extensions/qa-lab/api.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { createQaPreparedRepoCliCommand } from "../../../helpers/qa-prepared-repo-cli.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 const ACTIVE_MODEL_ID = "gpt-5.6-luna";
@@ -134,7 +135,7 @@ describe("QA-channel vision offload", () => {
     cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
     const gateway = await gatewayOwner.start({
       repoRoot: REPO_ROOT,
-      useRepoCli: true,
+      command: createQaPreparedRepoCliCommand(REPO_ROOT),
       providerBaseUrl: `${mock.baseUrl}/v1`,
       providerMode: "mock-openai",
       primaryModel: ACTIVE_MODEL_REF,

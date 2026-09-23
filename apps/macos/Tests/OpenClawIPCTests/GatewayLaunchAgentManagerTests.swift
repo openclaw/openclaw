@@ -264,6 +264,49 @@ struct GatewayLaunchAgentManagerTests {
         }
     }
 
+    @Test(arguments: ["load-state", "runtime"])
+    func `unknown service inspection preserves structured diagnostics`(_ scenario: String) async {
+        await TestIsolation.withIsolatedState {
+            defer {
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            }
+
+            let expected = switch scenario {
+            case "load-state": "launchctl inspection failed; run openclaw gateway status --deep"
+            default: "launchd runtime inspection failed; retry from a GUI login"
+            }
+            let payload = switch scenario {
+            case "load-state":
+                """
+                {"ok":true,"service":{"loaded":null,
+                "loadState":{"status":"unknown","detail":"\(expected)"},
+                "runtime":{"status":"unknown","detail":"Runtime status is unavailable."}}}
+                """
+            default:
+                """
+                {"ok":true,"service":{"loaded":true,
+                "loadState":{"status":"loaded"},
+                "runtime":{"status":"unknown","detail":"\(expected)"}}}
+                """
+            }
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(payload)
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+
+            do {
+                _ = try await GatewayLaunchAgentManager.loadedGatewayState(port: 18789)
+                Issue.record("Expected the service inspection diagnostic")
+            } catch {
+                #expect(error.localizedDescription == expected)
+            }
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == [
+                ["status", "--json", "--no-probe"],
+            ])
+        }
+    }
+
     @Test func `launch agent plist snapshot parses args and env`() throws {
         let url = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-launchd-\(UUID().uuidString).plist")
@@ -364,5 +407,39 @@ struct GatewayLaunchAgentManagerTests {
         let snapshot = try #require(LaunchAgentPlist.snapshot(url: url))
         #expect(snapshot.port == 18789)
         #expect(snapshot.bind == nil)
+    }
+}
+
+@Suite(.serialized)
+struct GatewayLaunchAgentLocalRoutingTests {
+    @Test func `all daemon actions resolve locally before the execution intercept`() async {
+        await TestIsolationLock.shared.acquire()
+        do {
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(
+                true, resolveCLI: { _, _ in .executable(["/fixture/managed/openclaw"]) })
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+            defer {
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+            }
+            let actions = [
+                ["install", "--force", "--port", "51845", "--runtime", "node", "--allow-unconfigured"],
+                ["uninstall"],
+                ["restart"],
+                ["status", "--json", "--no-probe"],
+            ]
+            for action in actions {
+                let error = await GatewayLaunchAgentManager.runDaemonCommand(action)
+                #expect(error == nil)
+            }
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == actions)
+            let prefix = ["/fixture/managed/openclaw"] + AppProfile.current.cliRootArguments + ["gateway"]
+            #expect(GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot() == actions.map {
+                prefix + $0 + ($0.contains("--json") ? [] : ["--json"])
+            })
+        }
+        await TestIsolationLock.shared.release()
     }
 }

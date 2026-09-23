@@ -1,33 +1,211 @@
+import { buildAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
+import { hasSubagentSessionRecoveryOwner } from "../agents/subagents/registry/subagent-session-reconciliation.js";
+import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { readSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-store.js";
+import {
+  hasSessionEntriesByStatus,
+  readSessionEntriesByStatus,
+} from "../config/sessions/session-accessor.sqlite-status.js";
 import {
   runSessionStartupMigration,
   type SessionStartupMigrationLogger,
 } from "../config/sessions/startup-migration.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
+import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
+import { hasGatewayLifecycleCoordinator } from "../infra/state-database-coordinator.js";
+import {
+  isSubagentSessionKey,
+  isIncognitoSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../routing/session-key.js";
+import { isSessionWorkAdmissionActive } from "../sessions/session-lifecycle-admission.js";
+import { recordGatewaySessionRunFailure } from "../sessions/session-run-error.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
+import {
+  openOpenClawAgentDatabase,
+  type OpenClawAgentDatabaseOptions,
+} from "../state/openclaw-agent-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 
 type SessionMigrationDeps = Parameters<typeof runSessionStartupMigration>[0]["deps"] & {
   reconcileSessionTranscriptIndexes?: typeof import("../config/sessions/session-transcript-reconcile.js").reconcileSessionTranscriptIndexes;
 };
 
+function isUnsettledPredecessor(entry: InternalSessionEntry): boolean {
+  // Age selects the predecessor boundary; it is never sufficient evidence of lost ownership.
+  return (
+    entry.status === "running" &&
+    !entry.incognito &&
+    !entry.abortedLastRun &&
+    typeof entry.startedAt === "number" &&
+    Number.isFinite(entry.startedAt) &&
+    entry.startedAt < performance.timeOrigin &&
+    Number.isFinite(entry.updatedAt) &&
+    entry.updatedAt < performance.timeOrigin &&
+    !entry.restartRecoveryRuns?.length &&
+    !entry.restartRecoveryForceSafeTools &&
+    !entry.subagentRecovery &&
+    !entry.mainRestartRecovery &&
+    !entry.pendingFinalDelivery &&
+    !entry.pendingDeliveryNotice &&
+    !entry.initializationPending &&
+    !entry.restartRecoveryBeforeAgentReplyState &&
+    !entry.restartRecoveryDeliveryReceiptState &&
+    !entry.restartRecoveryDeliveryRunId &&
+    !entry.restartRecoveryDeliverySourceRunId
+  );
+}
+
+async function reconcileStartupOrphans(
+  database: OpenClawAgentDatabaseOptions,
+  log: SessionStartupMigrationLogger,
+  assertCurrent?: () => void,
+) {
+  const env = database.env ?? process.env;
+  const statePath = resolveOpenClawStateSqlitePath(env);
+  if (!hasGatewayLifecycleCoordinator({ databasePath: statePath })) {
+    return;
+  }
+  try {
+    const running = withOpenClawAgentDatabaseReadOnly(
+      (connection) => hasSessionEntriesByStatus(connection, ["running"]),
+      database,
+    );
+    if (running.found && !running.value) {
+      return;
+    }
+  } catch {
+    // The writable owner retains schema repair and integrity diagnosis for uncertain reads.
+  }
+  const lock = await readActiveGatewayLockIdentity({ env, requireInspection: true });
+  if (lock?.pid !== process.pid || !lock.ownerId) {
+    return;
+  }
+  const assertGatewayOwner = () => {
+    assertCurrent?.();
+    const lease = readGatewayOwnerLease({ env, current: true });
+    if (
+      !hasGatewayLifecycleCoordinator({ databasePath: statePath }) ||
+      lease?.state !== "live" ||
+      lease.pid !== process.pid ||
+      lease.owner !== lock.ownerId
+    ) {
+      throw new Error("startup Gateway ownership changed or could not be verified");
+    }
+  };
+  assertGatewayOwner();
+  // Consume this admitted physical database, not a second global target scan.
+  const connection = openOpenClawAgentDatabase(database);
+  const selected = readSessionEntriesByStatus(connection, ["running"]);
+  let count = 0;
+  for (const { entry, sessionKey } of selected) {
+    if (
+      !isSubagentSessionKey(sessionKey) ||
+      isIncognitoSessionKey(sessionKey) ||
+      !isUnsettledPredecessor(entry)
+    ) {
+      continue;
+    }
+    const identity = { sessionKey, sessionId: entry.sessionId, env };
+    const target = {
+      agentId: resolveAgentIdFromSessionKey(sessionKey),
+      env,
+      sessionKey,
+      storePath: connection.path,
+    };
+    const matchesPredecessor = (current: InternalSessionEntry | undefined) =>
+      current !== undefined &&
+      current.sessionId === entry.sessionId &&
+      current.lifecycleRevision === entry.lifecycleRevision &&
+      current.lifecycleRunId === entry.lifecycleRunId &&
+      current.updatedAt === entry.updatedAt &&
+      current.startedAt === entry.startedAt &&
+      isUnsettledPredecessor(current);
+    const assertOwnerless = () => {
+      assertGatewayOwner();
+      if (
+        hasSubagentSessionRecoveryOwner(identity) ||
+        isSessionWorkAdmissionActive(connection.path, [sessionKey, entry.sessionId])
+      ) {
+        throw new Error("a current or retained run/task owns this session");
+      }
+    };
+    try {
+      assertOwnerless();
+      const outcome = buildAgentRunTerminalOutcome({
+        status: "error",
+        error: "subagent run was interrupted before a terminal lifecycle event was persisted",
+        startedAt: entry.startedAt,
+        // This is the repair observation, not a reconstructed execution finish time.
+        endedAt: Date.now(),
+      });
+      await recordGatewaySessionRunFailure({
+        target: {
+          ...target,
+          sessionId: entry.sessionId,
+          expectedLifecycleRevision: entry.lifecycleRevision,
+        },
+        // A recovery-only receipt identity must not suppress the notice after partial output.
+        runId: `startup-orphan:${entry.sessionId}:${entry.lifecycleRunId ?? entry.startedAt}`,
+        error: outcome.error,
+        assertCommitAllowed: assertOwnerless,
+        settleSession: () => {
+          const current = readSessionEntryRow(connection, sessionKey)?.entry;
+          if (!current || !matchesPredecessor(current)) {
+            throw new Error("startup subagent session changed before interruption receipt");
+          }
+          // The receipt owner holds the outer transaction; either both writes commit or neither does.
+          replaceSessionEntrySync(target, {
+            ...current,
+            status: "interrupted",
+            abortedLastRun: true,
+            endedAt: outcome.endedAt,
+            lastRunError: outcome.error,
+          });
+        },
+      });
+      count++;
+    } catch (error) {
+      log.warn(`session: retained startup subagent ${sessionKey}: ${String(error)}`);
+    }
+  }
+  if (count > 0) {
+    log.info(`session: marked ${count} prior-process subagent run(s) interrupted`);
+  }
+}
+
 /** Await SQLite maintenance and projection repair before serving session history. */
 export async function runStartupSessionMigration(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  agentIds?: ReadonlySet<string>;
+  assertCurrent?: () => void;
   log: SessionStartupMigrationLogger;
   deps?: SessionMigrationDeps;
 }): Promise<void> {
-  const databases = await runSessionStartupMigration(params);
-  if (databases.length === 0) {
-    return;
-  }
-  const reconcile =
-    params.deps?.reconcileSessionTranscriptIndexes ??
-    (await import("../config/sessions/session-transcript-reconcile.js"))
-      .reconcileSessionTranscriptIndexes;
+  let reconcile = params.deps?.reconcileSessionTranscriptIndexes;
   let reconciledSessions = 0;
-  for (const database of databases) {
-    const result = await reconcile(database);
-    reconciledSessions += result.reconciledSessions;
-  }
+  await runSessionStartupMigration({
+    ...params,
+    handoffDatabase: async (database) => {
+      try {
+        await reconcileStartupOrphans(database, params.log, params.assertCurrent);
+      } catch (error) {
+        params.assertCurrent?.();
+        params.log.warn(
+          `session: retained startup orphans because ownership could not be verified: ${String(error)}`,
+        );
+      }
+      reconcile ??= (await import("../config/sessions/session-transcript-reconcile.js"))
+        .reconcileSessionTranscriptIndexes;
+      params.assertCurrent?.();
+      const result = await reconcile(database);
+      params.assertCurrent?.();
+      reconciledSessions += result.reconciledSessions;
+    },
+  });
   if (reconciledSessions > 0) {
     params.log.info(
       `session: rebuilt ${reconciledSessions} transcript projection(s) before serving history`,

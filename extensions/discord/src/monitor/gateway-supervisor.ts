@@ -1,4 +1,3 @@
-// Discord plugin module implements gateway supervisor behavior.
 import type { EventEmitter } from "node:events";
 import { createSubsystemLogger, danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";

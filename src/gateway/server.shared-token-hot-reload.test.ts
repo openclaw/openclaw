@@ -4,9 +4,9 @@
 import fs from "node:fs/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { openAuthenticatedGatewayWs, waitForGatewayWsClose } from "./shared-auth.test-helpers.js";
 import {
-  getGatewayTestPort,
   installGatewayTestHooks,
   rpcReq,
   startTestGatewayServer,
@@ -42,7 +42,6 @@ beforeAll(async () => {
   if (!configPath) {
     throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
   }
-  port = await getGatewayTestPort();
   testState.gatewayAuth = undefined;
   setTestEnvValue(SECRET_REF_TOKEN_ID, OLD_TOKEN);
   await fs.writeFile(
@@ -50,7 +49,9 @@ beforeAll(async () => {
     `${JSON.stringify(buildSharedTokenReloadConfig(), null, 2)}\n`,
     "utf-8",
   );
-  server = await startTestGatewayServer(port, { controlUiEnabled: true });
+  const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+  port = portClaim.port;
+  server = await startTestGatewayServer(portClaim, { controlUiEnabled: true });
 });
 
 beforeEach(() => {
@@ -69,17 +70,13 @@ describe("gateway shared token hot reload rotation", () => {
     try {
       const closed = waitForGatewayWsClose(ws);
       setTestEnvValue(SECRET_REF_TOKEN_ID, NEW_TOKEN);
-      const reload = await rpcReq<{ warningCount?: number }>(ws, "secrets.reload", {}).catch(
-        (err: unknown) => (err instanceof Error ? err : new Error(String(err))),
-      );
+      const reload = await rpcReq<{ warningCount?: number }>(ws, "secrets.reload", {});
 
       await expect(closed).resolves.toEqual({
         code: 4001,
         reason: "gateway auth changed",
       });
-      if (!(reload instanceof Error)) {
-        expect(reload.ok).toBe(true);
-      }
+      expect(reload.ok).toBe(true);
 
       const freshWs = await openAuthenticatedGatewayWs(port, NEW_TOKEN);
       freshWs.close();

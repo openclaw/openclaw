@@ -1,230 +1,33 @@
-import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
-// Whatsapp tests cover approval native plugin behavior.
-import type {
-  ExecApprovalRequest,
-  PluginApprovalRequest,
-} from "openclaw/plugin-sdk/approval-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createNativeApprovalTestFixture } from "openclaw/plugin-sdk/channel-test-helpers";
 import { describe, expect, it } from "vitest";
 import { whatsappApprovalCapability } from "./approval-native.js";
 
-type WhatsAppConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["whatsapp"]>;
-
-function buildConfig(
-  params: {
-    whatsapp?: Partial<WhatsAppConfig>;
-    approvals?: OpenClawConfig["approvals"];
-  } = {},
-): OpenClawConfig {
-  return {
-    channels: {
-      whatsapp: {
-        enabled: true,
-        ...params.whatsapp,
-      },
-    },
-    approvals: params.approvals,
-  } as OpenClawConfig;
-}
-
-function buildExecRequest(
-  turnSourceTo: string,
-  overrides: Partial<ExecApprovalRequest["request"]> = {},
-): ExecApprovalRequest {
-  return {
-    id: "exec-1",
-    request: {
-      command: "echo hi",
-      agentId: "main",
-      turnSourceChannel: "whatsapp",
-      turnSourceTo,
-      turnSourceAccountId: "default",
-      sessionKey: `agent:main:whatsapp:${turnSourceTo}`,
-      ...overrides,
-    },
-    createdAtMs: 0,
-    expiresAtMs: 1000,
-  };
-}
-
-function buildPluginRequest(
-  turnSourceTo: string,
-  overrides: Partial<PluginApprovalRequest["request"]> = {},
-): PluginApprovalRequest {
-  return {
-    id: "plugin:approval-1",
-    request: {
-      title: "Plugin approval",
-      description: "Allow plugin action",
-      agentId: "main",
-      turnSourceChannel: "whatsapp",
-      turnSourceTo,
-      turnSourceAccountId: "default",
-      sessionKey: `agent:main:whatsapp:${turnSourceTo}`,
-      ...overrides,
-    },
-    createdAtMs: 0,
-    expiresAtMs: 1000,
-  };
-}
-
-function nativeShouldHandle(params: {
-  cfg: OpenClawConfig;
-  approvalKind: ChannelApprovalKind;
-  request: ExecApprovalRequest | PluginApprovalRequest;
-  accountId?: string | null;
-}) {
-  return whatsappApprovalCapability.nativeRuntime?.availability.shouldHandle({
-    cfg: params.cfg,
-    accountId: params.accountId ?? "default",
-    context: {},
-    approvalKind: params.approvalKind,
-    request: params.request,
-  });
-}
+const fixture = createNativeApprovalTestFixture({
+  channel: "whatsapp",
+  capability: whatsappApprovalCapability,
+  buildConfig: ({ channel, approvals } = {}) => ({
+    channels: { whatsapp: { enabled: true, ...channel } },
+    approvals,
+  }),
+});
+const { buildConfig, buildExecRequest, buildPluginRequest, checks } = fixture;
 
 describe("whatsapp approval capability", () => {
-  it("subscribes the native runtime to system-agent approval events", () => {
-    expect(whatsappApprovalCapability.nativeRuntime?.eventKinds).toContain("system-agent");
-  });
+  it("subscribes the native runtime to system-agent approval events", checks.systemAgentEvents);
 
-  it("does not enable exec or plugin native approvals from WhatsApp account readiness alone", () => {
-    const cfg = buildConfig();
-    const execRequest = buildExecRequest("+15551230000");
-    const pluginRequest = buildPluginRequest("+15551230000");
+  it(
+    "does not enable exec or plugin native approvals from WhatsApp account readiness alone",
+    checks.disabledByDefault,
+  );
 
-    expect(
-      whatsappApprovalCapability?.getActionAvailabilityState?.({
-        cfg,
-        accountId: "default",
-        action: "approve",
-        approvalKind: "exec",
-      }),
-    ).toEqual({ kind: "disabled" });
-    expect(
-      whatsappApprovalCapability?.getActionAvailabilityState?.({
-        cfg,
-        accountId: "default",
-        action: "approve",
-        approvalKind: "plugin",
-      }),
-    ).toEqual({ kind: "disabled" });
-    expect(
-      whatsappApprovalCapability.native?.describeDeliveryCapabilities({
-        cfg,
-        accountId: "default",
-        approvalKind: "exec",
-        request: execRequest,
-      }).enabled,
-    ).toBe(false);
-    expect(nativeShouldHandle({ cfg, approvalKind: "exec", request: execRequest })).toBe(false);
-    expect(nativeShouldHandle({ cfg, approvalKind: "plugin", request: pluginRequest })).toBe(false);
-  });
+  it("allows session-mode exec delivery for matching WhatsApp origins", checks.sessionDelivery);
 
-  it("allows session-mode exec delivery for matching WhatsApp origins", () => {
-    const cfg = buildConfig({ approvals: { exec: { enabled: true } } });
-    const request = buildExecRequest("+15551230000");
+  it("keeps exec and plugin forwarding gates independent", checks.independentKinds);
 
-    expect(
-      whatsappApprovalCapability.native?.describeDeliveryCapabilities({
-        cfg,
-        accountId: "default",
-        approvalKind: "exec",
-        request,
-      }),
-    ).toEqual({
-      enabled: true,
-      preferredSurface: "origin",
-      supportsOriginSurface: true,
-      supportsApproverDmSurface: false,
-      notifyOriginWhenDmOnly: true,
-    });
-    expect(nativeShouldHandle({ cfg, approvalKind: "exec", request })).toBe(true);
-  });
+  it("does not use session mode for non-WhatsApp-origin requests", checks.foreignOrigin);
 
-  it("keeps exec and plugin forwarding gates independent", () => {
-    const execOnly = buildConfig({ approvals: { exec: { enabled: true } } });
-    const pluginOnly = buildConfig({ approvals: { plugin: { enabled: true } } });
-
-    expect(
-      nativeShouldHandle({
-        cfg: execOnly,
-        approvalKind: "plugin",
-        request: buildPluginRequest("+15551230000"),
-      }),
-    ).toBe(false);
-    expect(
-      nativeShouldHandle({
-        cfg: pluginOnly,
-        approvalKind: "exec",
-        request: buildExecRequest("+15551230000"),
-      }),
-    ).toBe(false);
-    expect(
-      nativeShouldHandle({
-        cfg: pluginOnly,
-        approvalKind: "plugin",
-        request: buildPluginRequest("+15551230000"),
-      }),
-    ).toBe(true);
-  });
-
-  it("does not use session mode for non-WhatsApp-origin requests", () => {
-    const cfg = buildConfig({ approvals: { exec: { enabled: true } } });
-    const request = buildExecRequest("", {
-      turnSourceChannel: "slack",
-      turnSourceTo: "C123",
-      sessionKey: "agent:main:slack:channel:c123",
-    });
-
-    expect(nativeShouldHandle({ cfg, approvalKind: "exec", request })).toBe(false);
-    expect(
-      whatsappApprovalCapability.native?.describeDeliveryCapabilities({
-        cfg,
-        accountId: "default",
-        approvalKind: "exec",
-        request,
-      }).enabled,
-    ).toBe(false);
-  });
-
-  it("uses target-mode config for requestless availability without native runtime handling", () => {
-    const cfg = buildConfig({
-      approvals: {
-        exec: {
-          enabled: true,
-          mode: "targets",
-          targets: [{ channel: "whatsapp", to: "+15551230000" }],
-        },
-      },
-    });
-    const request = buildExecRequest("+15551230000");
-
-    expect(
-      whatsappApprovalCapability?.getActionAvailabilityState?.({
-        cfg,
-        accountId: "default",
-        action: "approve",
-        approvalKind: "exec",
-      }),
-    ).toEqual({ kind: "enabled" });
-    expect(
-      whatsappApprovalCapability.nativeRuntime?.availability.isConfigured({
-        cfg,
-        accountId: "default",
-        context: {},
-      }),
-    ).toBe(false);
-    expect(nativeShouldHandle({ cfg, approvalKind: "exec", request })).toBe(false);
-    expect(
-      whatsappApprovalCapability.native?.describeDeliveryCapabilities({
-        cfg,
-        accountId: "default",
-        approvalKind: "exec",
-        request,
-      }).enabled,
-    ).toBe(false);
-  });
+  it("uses target-mode config for requestless availability without native runtime handling", () =>
+    checks.targetMode());
 
   it("renders target-mode exec prompts with concrete thumbs-only reaction choices", () => {
     const cfg = buildConfig({
@@ -353,189 +156,43 @@ describe("whatsapp approval capability", () => {
     });
   });
 
-  it("does not report target-mode availability when no WhatsApp target matches", () => {
-    const cfg = buildConfig({
-      approvals: {
-        exec: {
-          enabled: true,
-          mode: "targets",
-          targets: [{ channel: "slack", to: "C123" }],
-        },
-      },
-    });
+  it(
+    "does not report target-mode availability when no WhatsApp target matches",
+    checks.noMatchingTarget,
+  );
 
-    expect(
-      whatsappApprovalCapability?.getActionAvailabilityState?.({
-        cfg,
-        accountId: "default",
-        action: "approve",
-        approvalKind: "exec",
-      }),
-    ).toEqual({ kind: "disabled" });
-  });
+  it("applies agent and session filters to native handling", checks.requestFilters);
 
-  it("applies agent and session filters to native handling", () => {
-    const request = buildExecRequest("+15551230000", {
-      agentId: "main",
-      sessionKey: "agent:main:whatsapp:+15551230000",
-    });
-    const blockedByAgent = buildConfig({
-      approvals: { exec: { enabled: true, agentFilter: ["other"] } },
-    });
-    const blockedBySession = buildConfig({
-      approvals: { exec: { enabled: true, sessionFilter: ["telegram"] } },
-    });
+  it(
+    "matches account-scoped top-level WhatsApp targets only for that account",
+    checks.accountScopedTargets,
+  );
 
-    expect(nativeShouldHandle({ cfg: blockedByAgent, approvalKind: "exec", request })).toBe(false);
-    expect(nativeShouldHandle({ cfg: blockedBySession, approvalKind: "exec", request })).toBe(
-      false,
-    );
-  });
+  it(
+    "suppresses forwarding fallback only when the exact session-origin native target matches",
+    checks.exactSessionTarget,
+  );
 
-  it("matches account-scoped top-level WhatsApp targets only for that account", () => {
-    const cfg = buildConfig({
-      whatsapp: {
-        accounts: {
-          work: { enabled: true },
-        },
-      } as Partial<WhatsAppConfig>,
-      approvals: {
-        exec: {
-          enabled: true,
-          mode: "targets",
-          targets: [{ channel: "whatsapp", to: "+15551230000", accountId: "work" }],
-        },
-      },
-    });
+  it(
+    "does not suppress target-only forwarding when native delivery cannot bind that target",
+    checks.targetOnlyFallback,
+  );
 
-    expect(
-      whatsappApprovalCapability?.getActionAvailabilityState?.({
-        cfg,
-        accountId: "default",
-        action: "approve",
-        approvalKind: "exec",
-      }),
-    ).toEqual({ kind: "disabled" });
-    expect(
-      whatsappApprovalCapability?.getActionAvailabilityState?.({
-        cfg,
-        accountId: "work",
-        action: "approve",
-        approvalKind: "exec",
-      }),
-    ).toEqual({ kind: "enabled" });
-  });
+  it(
+    "suppresses both-mode explicit targets that omit the origin account id",
+    checks.unscopedBothTarget,
+  );
 
-  it("suppresses forwarding fallback only when the exact session-origin native target matches", () => {
-    const cfg = buildConfig({ approvals: { exec: { enabled: true } } });
-    const request = buildExecRequest("+15551230000");
-    const shouldSuppress = whatsappApprovalCapability.delivery?.shouldSuppressForwardingFallback;
-
-    expect(
-      shouldSuppress?.({
-        cfg,
-        approvalKind: "exec",
-        target: {
-          channel: "whatsapp",
-          to: "+15551230000",
-          accountId: "default",
-          source: "session",
-        },
-        request,
-      }),
-    ).toBe(true);
-    expect(
-      shouldSuppress?.({
-        cfg,
-        approvalKind: "exec",
-        target: {
-          channel: "whatsapp",
-          to: "+15550000000",
-          accountId: "default",
-          source: "session",
-        },
-        request,
-      }),
-    ).toBe(false);
-  });
-
-  it("does not suppress target-only forwarding when native delivery cannot bind that target", () => {
-    const cfg = buildConfig({
-      approvals: {
-        exec: {
-          enabled: true,
-          mode: "targets",
-          targets: [{ channel: "whatsapp", to: "+15550000000" }],
-        },
-      },
-    });
-
-    expect(
-      whatsappApprovalCapability.delivery?.shouldSuppressForwardingFallback?.({
-        cfg,
-        approvalKind: "exec",
-        target: { channel: "whatsapp", to: "+15550000000", source: "target" },
-        request: buildExecRequest("+15551230000"),
-      }),
-    ).toBe(false);
-  });
-
-  it("suppresses both-mode explicit targets that omit the origin account id", () => {
-    const cfg = buildConfig({
-      approvals: {
-        exec: {
-          enabled: true,
-          mode: "both",
-          targets: [{ channel: "whatsapp", to: "+15551230000" }],
-        },
-      },
-    });
-
-    expect(
-      whatsappApprovalCapability.delivery?.shouldSuppressForwardingFallback?.({
-        cfg,
-        approvalKind: "exec",
-        target: { channel: "whatsapp", to: "+15551230000", source: "target" },
-        request: buildExecRequest("+15551230000"),
-      }),
-    ).toBe(true);
-  });
-
-  it("suppresses both-mode unscoped targets through the configured default WhatsApp account", () => {
-    const cfg = buildConfig({
-      whatsapp: {
-        defaultAccount: "work",
-        accounts: {
-          default: { enabled: true },
-          work: { enabled: true },
-        },
-      } as Partial<WhatsAppConfig>,
-      approvals: {
-        exec: {
-          enabled: true,
-          mode: "both",
-          targets: [{ channel: "whatsapp", to: "+15551230000" }],
-        },
-      },
-    });
-
-    expect(
-      whatsappApprovalCapability.delivery?.shouldSuppressForwardingFallback?.({
-        cfg,
-        approvalKind: "exec",
-        target: { channel: "whatsapp", to: "+15551230000", source: "target" },
-        request: buildExecRequest("+15551230000", {
-          turnSourceAccountId: "work",
-        }),
-      }),
-    ).toBe(true);
-  });
+  it(
+    "suppresses both-mode unscoped targets through the configured default WhatsApp account",
+    checks.defaultAccountBothTarget,
+  );
 
   it("allows group-origin emoji approvals only after exec forwarding and approvers are configured", () => {
     const request = buildExecRequest("120363401234567890@g.us");
     const withoutApprovers = buildConfig({ approvals: { exec: { enabled: true } } });
     const withApprovers = buildConfig({
-      whatsapp: { allowFrom: ["+15551230000"] },
+      channel: { allowFrom: ["+15551230000"] },
       approvals: { exec: { enabled: true } },
     });
 

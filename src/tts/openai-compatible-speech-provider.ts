@@ -1,15 +1,13 @@
 // OpenAI-compatible speech provider sends speech synthesis requests to OpenAI-style APIs.
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { asFiniteNumber, trimToUndefined } from "../agents/provider-http-errors.js";
 import {
-  assertOkOrThrowHttpError,
-  postJsonRequest,
-  readProviderBinaryResponse,
-  resolveProviderHttpRequestConfig,
-} from "../plugin-sdk/provider-http.js";
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString as trimToUndefined,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
+import { appendConfigPathSegment } from "../shared/dot-path.js";
 import type {
   SpeechDirectiveTokenParseContext,
   SpeechProviderConfig,
@@ -226,7 +224,7 @@ export function createOpenAiCompatibleSpeechProvider<
       voice: options.defaultVoice,
       apiKey: normalizeResolvedSecretInputString({
         value: raw?.apiKey,
-        path: `tts.providers.${providerConfigKey}.apiKey`,
+        path: `${appendConfigPathSegment("tts.providers", providerConfigKey)}.apiKey`,
       }),
     });
   }
@@ -267,7 +265,7 @@ export function createOpenAiCompatibleSpeechProvider<
       params.providerConfig.apiKey ??
       normalizeResolvedSecretInputString({
         value: readModelProviderConfig(params.cfg, providerConfigKey)?.apiKey,
-        path: `models.providers.${providerConfigKey}.apiKey`,
+        path: `${appendConfigPathSegment("models.providers", providerConfigKey)}.apiKey`,
       }) ??
       trimToUndefined(process.env[options.envKey])
     );
@@ -306,7 +304,7 @@ export function createOpenAiCompatibleSpeechProvider<
       if (talkProviderConfig.apiKey !== undefined) {
         next.apiKey = normalizeResolvedSecretInputString({
           value: talkProviderConfig.apiKey,
-          path: `talk.providers.${providerConfigKey}.apiKey`,
+          path: `${appendConfigPathSegment("talk.providers", providerConfigKey)}.apiKey`,
         });
       }
       const baseUrl = trimToUndefined(talkProviderConfig.baseUrl);
@@ -354,6 +352,12 @@ export function createOpenAiCompatibleSpeechProvider<
       const baseUrl = resolveBaseUrl({ cfg: req.cfg, providerConfig: config });
       const responseFormat = config.responseFormat ?? options.defaultResponseFormat;
       const speed = overrides.speed ?? config.speed;
+      const {
+        assertOkOrThrowHttpError,
+        postJsonRequest,
+        readProviderBinaryResponse,
+        resolveProviderHttpRequestConfig,
+      } = await import("../plugin-sdk/provider-http.js");
       const { allowPrivateNetwork, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
         baseUrl,
         defaultBaseUrl: options.defaultBaseUrl,

@@ -12,8 +12,6 @@ import type { StatusScanResult } from "./status.scan-result.ts";
 type StatusOverviewRowInput = Parameters<typeof buildStatusOverviewSurfaceRows>[0];
 type StatusOverviewFormatOptions = Pick<
   StatusOverviewRowInput,
-  | "tailscaleBackendState"
-  | "includeBackendStateWhenOff"
   | "includeBackendStateWhenOn"
   | "includeDnsNameWhenOff"
   | "decorateTailscaleOff"

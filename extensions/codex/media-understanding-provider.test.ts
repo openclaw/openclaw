@@ -1,4 +1,5 @@
 // Codex tests cover media understanding provider plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
@@ -10,10 +11,14 @@ const sharedClientMocks = vi.hoisted(() => ({
   createIsolatedCodexAppServerClient: vi.fn(),
 }));
 
-vi.mock("./src/app-server/shared-client.js", () => ({
-  createIsolatedCodexAppServerClient: sharedClientMocks.createIsolatedCodexAppServerClient,
-  retireSharedCodexAppServerClientIfCurrent: () => undefined,
-}));
+vi.mock("./src/app-server/shared-client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./src/app-server/shared-client.js")>();
+  return {
+    ...actual,
+    createIsolatedCodexAppServerClient: sharedClientMocks.createIsolatedCodexAppServerClient,
+    retireSharedCodexAppServerClientIfCurrent: () => undefined,
+  };
+});
 
 function codexModel(inputModalities: string[] = ["text", "image"]) {
   return {
@@ -92,13 +97,18 @@ function createFakeClient(options?: {
   approvalRequestMethod?: string;
   responseText?: string;
   onTurnStart?: () => void;
+  beforeRequest?: (method: string) => Promise<void>;
 }) {
   const notifications = new Set<(notification: CodexServerNotification) => void>();
-  const requestHandlers = new Set<(request: { method: string }) => JsonValue | undefined>();
+  type RequestHandler = Parameters<CodexAppServerClient["addRequestHandler"]>[0];
+  const requestHandlers = new Set<RequestHandler>();
   const requests: Array<{ method: string; params?: JsonValue }> = [];
   const approvalResponses: JsonValue[] = [];
   const request = vi.fn(async (method: string, params?: JsonValue) => {
     requests.push({ method, params });
+    if (options?.beforeRequest) {
+      await options.beforeRequest(method);
+    }
     if (method === "model/list") {
       return {
         data: [codexModel(options?.inputModalities)],
@@ -124,50 +134,68 @@ function createFakeClient(options?: {
     }
     if (method === "turn/start") {
       options?.onTurnStart?.();
+      const approvals: Promise<void>[] = [];
       if (options?.approvalRequestMethod) {
         for (const handler of requestHandlers) {
-          const response = handler({ method: options.approvalRequestMethod });
-          if (response !== undefined) {
-            approvalResponses.push(response);
-          }
+          approvals.push(
+            Promise.resolve(
+              handler({
+                id: "approval-1",
+                method: options.approvalRequestMethod,
+                params: { threadId: "thread-1", turnId: "turn-1" },
+              }),
+            ).then((response) => {
+              if (response !== undefined) {
+                approvalResponses.push(response);
+              }
+            }),
+          );
         }
       }
-      if (options?.notifyError) {
-        for (const notify of notifications) {
-          notify({
-            method: "error",
-            params: {
-              threadId: "thread-1",
-              turnId: "turn-1",
-              error: {
-                message: options.notifyError,
-                codexErrorInfo: null,
-                additionalDetails: null,
+      const completeTurn = () => {
+        if (options?.notifyError) {
+          for (const notify of notifications) {
+            notify({
+              method: "error",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                error: {
+                  message: options.notifyError,
+                  codexErrorInfo: null,
+                  additionalDetails: null,
+                },
+                willRetry: false,
               },
-              willRetry: false,
-            },
-          });
+            });
+          }
+        } else if (!options?.completeWithItems && !options?.deferTurnCompletion) {
+          for (const notify of notifications) {
+            notify({
+              method: "item/agentMessage/delta",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                itemId: "msg-1",
+                delta: options?.responseText ?? "A red square.",
+              },
+            });
+            notify({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                turn: turnStartResult("completed").turn,
+              },
+            });
+          }
         }
-      } else if (!options?.completeWithItems && !options?.deferTurnCompletion) {
-        for (const notify of notifications) {
-          notify({
-            method: "item/agentMessage/delta",
-            params: {
-              threadId: "thread-1",
-              turnId: "turn-1",
-              itemId: "msg-1",
-              delta: options?.responseText ?? "A red square.",
-            },
-          });
-          notify({
-            method: "turn/completed",
-            params: {
-              threadId: "thread-1",
-              turnId: "turn-1",
-              turn: turnStartResult("completed").turn,
-            },
-          });
-        }
+      };
+      // Return turn/start before waiting for keyed approvals; complete only after their replies.
+      if (approvals.length > 0) {
+        void Promise.all(approvals).then(completeTurn);
+      } else {
+        completeTurn();
       }
       return turnStartResult(
         options?.completeWithItems ? "completed" : "inProgress",
@@ -187,21 +215,22 @@ function createFakeClient(options?: {
     return {};
   });
 
+  const closeAndWait = vi.fn(async () => true);
   const client = {
     request,
     addNotificationHandler(handler: (notification: CodexServerNotification) => void) {
       notifications.add(handler);
       return () => notifications.delete(handler);
     },
-    addRequestHandler(handler: (request: { method: string }) => JsonValue | undefined) {
+    addRequestHandler(handler: RequestHandler) {
       requestHandlers.add(handler);
       return () => requestHandlers.delete(handler);
     },
     addCloseHandler: () => () => undefined,
-    close: vi.fn(),
+    closeAndWait,
   } as unknown as CodexAppServerClient;
 
-  return { client, requests, approvalResponses };
+  return { client, requests, approvalResponses, closeAndWait };
 }
 
 describe("codex media understanding provider", () => {
@@ -235,6 +264,7 @@ describe("codex media understanding provider", () => {
   });
 
   it("abandons app-server startup when the media request aborts", async () => {
+    const startupReady = createDeferred<void>();
     const clientFactory = vi.fn<CodexAppServerClientFactory>(
       async (options) =>
         await new Promise<never>((_, reject) => {
@@ -246,6 +276,7 @@ describe("codex media understanding provider", () => {
             },
             { once: true },
           );
+          startupReady.resolve();
         }),
     );
     const provider = buildCodexMediaUnderstandingProvider({ clientFactory });
@@ -262,9 +293,11 @@ describe("codex media understanding provider", () => {
       agentDir: "/tmp/openclaw-agent",
     });
 
-    await vi.waitFor(() => expect(clientFactory).toHaveBeenCalledOnce());
+    const rejection = expect(result).rejects.toThrow("caller cancelled Codex startup");
+    await startupReady.promise;
+    expect(clientFactory).toHaveBeenCalledOnce();
     controller.abort(new Error("caller cancelled Codex startup"));
-    await expect(result).rejects.toThrow("caller cancelled Codex startup");
+    await rejection;
     expect(clientFactory.mock.calls[0]?.[0]?.abandonSignal).toBe(controller.signal);
   });
 
@@ -347,7 +380,6 @@ describe("codex media understanding provider", () => {
         { type: "image", url: "data:image/png;base64,aW1hZ2UtYnl0ZXM=" },
       ],
       approvalPolicy: "on-request",
-      model: "gpt-5.4",
       effort: "low",
     });
   });
@@ -463,7 +495,7 @@ describe("codex media understanding provider", () => {
   });
 
   it("passes the scoped auth store into isolated app-server startup", async () => {
-    const { client } = createFakeClient();
+    const { client, closeAndWait } = createFakeClient();
     sharedClientMocks.createIsolatedCodexAppServerClient.mockResolvedValue(client);
     const provider = buildCodexMediaUnderstandingProvider();
     const authStore = {
@@ -494,12 +526,135 @@ describe("codex media understanding provider", () => {
     expect(sharedClientMocks.createIsolatedCodexAppServerClient).toHaveBeenCalledWith(
       expect.objectContaining({ authProfileStore: authStore }),
     );
+    expect(closeAndWait).toHaveBeenCalledOnce();
   });
+
+  it.each([0, 200, -200])(
+    "keeps one media-turn budget through selection retry after a %s ms clock step",
+    async (clockStepMs) => {
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      let wallOffsetMs = 0;
+      vi.spyOn(Date, "now").mockImplementation(
+        () => 1_700_000_000_000 + performance.now() + wallOffsetMs,
+      );
+
+      const firstStartup = createDeferred<void>();
+      const releaseFirstStartup = createDeferred<void>();
+      const selectionCheck = createDeferred<void>();
+      const releaseSelectionCheck = createDeferred<void>();
+      const retryStartup = createDeferred<void>();
+      const releaseRetryStartup = createDeferred<void>();
+      const turnStarted = createDeferred<void>();
+      const caller = new AbortController();
+      const selectionChanged = Object.assign(new Error("managed executable selection changed"), {
+        code: "CODEX_APP_SERVER_START_SELECTION_CHANGED",
+      });
+      const first = createFakeClient({
+        beforeRequest: async (method) => {
+          if (method === "thread/start") {
+            selectionCheck.resolve();
+            await releaseSelectionCheck.promise;
+            throw selectionChanged;
+          }
+        },
+      });
+      const second = createFakeClient({
+        deferTurnCompletion: true,
+        onTurnStart: () => turnStarted.resolve(),
+      });
+      sharedClientMocks.createIsolatedCodexAppServerClient
+        .mockImplementationOnce(async () => {
+          firstStartup.resolve();
+          await releaseFirstStartup.promise;
+          return first.client;
+        })
+        .mockImplementationOnce(async () => {
+          retryStartup.resolve();
+          await releaseRetryStartup.promise;
+          return second.client;
+        });
+
+      const provider = buildCodexMediaUnderstandingProvider();
+      if (!provider.describeImage) {
+        throw new Error("media provider must expose image understanding");
+      }
+      let settled = false;
+      const observed = provider
+        .describeImage({
+          buffer: Buffer.from("image-bytes"),
+          fileName: "image.png",
+          mime: "image/png",
+          provider: "codex",
+          model: "gpt-5.4",
+          timeoutMs: 1_000,
+          signal: caller.signal,
+          cfg: {},
+          agentDir: "/tmp/openclaw-agent",
+        })
+        .then(
+          (value) => {
+            settled = true;
+            return value;
+          },
+          (error: unknown) => {
+            settled = true;
+            return error;
+          },
+        );
+      const reach = async (boundary: Promise<void>) => {
+        const reached = await Promise.race([boundary.then(() => true), observed.then(() => false)]);
+        expect(reached, "operation settled before the required scenario boundary").toBe(true);
+      };
+
+      try {
+        await reach(firstStartup.promise);
+        await vi.advanceTimersByTimeAsync(100);
+        releaseFirstStartup.resolve();
+        await reach(selectionCheck.promise);
+        await vi.advanceTimersByTimeAsync(200);
+        wallOffsetMs = clockStepMs;
+        releaseSelectionCheck.resolve();
+
+        await reach(retryStartup.promise);
+        expect(first.closeAndWait).toHaveBeenCalledOnce();
+        await vi.advanceTimersByTimeAsync(100);
+        releaseRetryStartup.resolve();
+        await reach(turnStarted.promise);
+
+        await vi.advanceTimersByTimeAsync(599);
+        expect(settled).toBe(false);
+        expect(second.requests.filter(({ method }) => method === "turn/interrupt")).toEqual([]);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(settled).toBe(true);
+        expect(await observed).toMatchObject({
+          name: "TimeoutError",
+          message: "codex app-server image understanding turn timed out after 1s",
+        });
+        expect(second.requests.filter(({ method }) => method === "turn/interrupt")).toEqual([
+          { method: "turn/interrupt", params: { threadId: "thread-1", turnId: "turn-1" } },
+        ]);
+        expect(first.requests.some(({ method }) => method === "turn/start")).toBe(false);
+        expect(first.requests.some(({ method }) => method === "turn/interrupt")).toBe(false);
+        expect(second.closeAndWait).toHaveBeenCalledOnce();
+        expect(caller.signal.aborted).toBe(false);
+        expect(sharedClientMocks.createIsolatedCodexAppServerClient).toHaveBeenCalledTimes(2);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        releaseFirstStartup.resolve();
+        releaseSelectionCheck.resolve();
+        releaseRetryStartup.resolve();
+        caller.abort("retry proof cleanup");
+        await observed;
+        vi.restoreAllMocks();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("clamps oversized image understanding turn timeouts", async () => {
     // The bounded timer subtracts startup time from its clamped deadline.
     // Freeze the clock so the clamp assertion cannot lose a real millisecond.
-    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    const clockSpy = vi.spyOn(performance, "now").mockReturnValue(1_000);
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       const { client } = createFakeClient();
@@ -521,7 +676,7 @@ describe("codex media understanding provider", () => {
       expect(result?.text).toBe("A red square.");
       expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     } finally {
-      dateNowSpy.mockRestore();
+      clockSpy.mockRestore();
       vi.restoreAllMocks();
       vi.clearAllTimers();
       vi.useRealTimers();
@@ -691,14 +846,13 @@ describe("codex media understanding provider", () => {
       | {
           threadId?: unknown;
           approvalPolicy?: unknown;
-          model?: unknown;
           input?: Array<{ type?: unknown; text?: unknown; text_elements?: unknown; url?: unknown }>;
           effort?: unknown;
         }
       | undefined;
     expect(turnParams?.threadId).toBe("thread-1");
     expect(turnParams?.approvalPolicy).toBe("on-request");
-    expect(turnParams?.model).toBe("gpt-5.4");
+    expect(turnParams).not.toHaveProperty("model");
     expect(turnParams).not.toHaveProperty("cwd");
     expect(turnParams?.effort).toBe("low");
     expect(turnParams?.input).toHaveLength(3);

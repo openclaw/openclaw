@@ -17,7 +17,8 @@ Run one OpenClaw installation behind a Cloudflare Worker and a named Durable Obj
 
 - A Cloudflare account with Workers, Containers, and R2 available
 - Docker Buildx with `linux/amd64` support
-- A public Docker Hub repository for the derived image
+- A public Docker Hub repository for the derived image, and a `docker login` session that can push to it
+- An S3-compatible CLI such as the AWS CLI, used later to verify Litestream replication
 - Node.js and npm
 - Provider and channel credentials for your OpenClaw setup
 
@@ -179,7 +180,7 @@ Measured on this template against a real R2 bucket: about 2.4 seconds from write
 
 Run these checks after the first bootstrap, before you depend on this deployment.
 
-Confirm the Gateway answers. `/healthz` reports that the listener is up. `/startupz` additionally reports that startup work finished while ignoring channel health, so it stays green when one channel account is broken; it is served only by images built from the release that added it:
+Confirm the Gateway answers. `/healthz` reports that the listener is up. `/startupz` additionally reports that startup work finished while ignoring channel health, so it stays green when one channel account is broken; it is served only by images built from v2026.8.1 or newer:
 
 ```bash
 curl -sS https://<worker-subdomain>.workers.dev/healthz

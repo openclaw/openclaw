@@ -1,4 +1,4 @@
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
@@ -79,10 +79,10 @@ function enableAmbientChannelReplies(replyToMode: "all" | "off" = "all"): void {
 }
 
 describe("Slack thread failure notices", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     resetInboundDedupe();
     clearSlackThreadParticipationCache();
-    resetSlackTestState({
+    await resetSlackTestState({
       messages: { groupChat: { visibleReplies: "automatic" } },
       channels: {
         slack: {
@@ -122,7 +122,7 @@ describe("Slack thread failure notices", () => {
 
   it("announces the first failure for participation restored after a restart", async () => {
     const threadTs = "101.100000";
-    const openKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
+    const openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
       createPluginStateKeyedStoreForTests<T>("slack", options);
     const persistedStore = openKeyedStore<{ repliedAt: number }>({
       namespace: "slack.thread-participation",
@@ -272,9 +272,12 @@ describe("Slack thread failure notices", () => {
     );
 
     await dispatchEvent({ text: "<@bot-user> please help", ts: "105.040000" });
-    slackTestState.sendMock.mockRejectedValueOnce(new Error("Slack delivery unavailable"));
+    const failure = new Error("Slack delivery unavailable");
+    slackTestState.sendMock.mockRejectedValueOnce(failure);
 
-    await dispatchEvent({ ts: "105.040001", thread_ts: "105.040000", parent_user_id: "U1" });
+    await expect(
+      dispatchEvent({ ts: "105.040001", thread_ts: "105.040000", parent_user_id: "U1" }),
+    ).rejects.toBe(failure);
     await dispatchEvent({ ts: "105.040002", thread_ts: "105.040000", parent_user_id: "U1" });
 
     expect(slackTestState.sendMock).toHaveBeenCalledTimes(2);

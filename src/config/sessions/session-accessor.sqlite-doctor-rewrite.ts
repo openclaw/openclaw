@@ -5,12 +5,13 @@ import { chunkItems } from "../../utils/chunk-items.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryChannel,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import type { DoctorSessionScanScope } from "./session-accessor.sqlite-canonical-inventory.js";
 import {
   publishSessionEntryCacheInvalidation,
   trackSessionEntryCacheWrite,
 } from "./session-accessor.sqlite-entry-cache.js";
+import { invalidateSessionEntryMaintenanceAgeFact } from "./session-accessor.sqlite-maintenance-age.js";
 import {
   getSessionKysely,
   resolveSqliteScope,
@@ -67,6 +68,7 @@ export function rewriteDoctorSessionEntries(params: {
           if (!parseSqliteSessionEntryRecord({ ...row, entry_json: entryJson })) {
             continue;
           }
+          invalidateSessionEntryMaintenanceAgeFact(database.db);
           const writeGeneration = trackSessionEntryCacheWrite(database, () => {
             executeSqliteQuerySync(
               database.db,
@@ -97,7 +99,7 @@ export function rewriteDoctorSessionEntries(params: {
           });
           publishSessionEntryCacheInvalidation(
             database,
-            { ...row, entry_json: entryJson },
+            { sessionKey, entry: nextEntry },
             writeGeneration,
           );
           batchRewritten += 1;

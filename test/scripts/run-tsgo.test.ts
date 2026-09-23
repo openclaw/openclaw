@@ -1,6 +1,7 @@
 // Run Tsgo tests cover run tsgo script behavior.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
@@ -15,6 +16,7 @@ import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 import { isProcessAlive, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
 import { withTestTimeout } from "../helpers/promise.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
+import { overrideNativeFixtureExecutable } from "./native-boundary-fixture.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -28,8 +30,58 @@ it("runs the installed compiler version through the real tsgo wrapper", () => {
 
   expect(result.error).toBeUndefined();
   expect(result.status).toBe(0);
-  expect(result.stdout).toMatch(/^Version \d/m);
+  const nativeManifest = createRequire(import.meta.url).resolve("typescript-native/package.json");
+  const nativePackage: { version: string } = JSON.parse(fs.readFileSync(nativeManifest, "utf8"));
+  expect(result.stdout.trim()).toBe(`Version ${nativePackage.version}`);
 }, 30_000);
+
+it.each([false, true])(
+  "refuses a shared install without creating dependency links (linked=%s)",
+  (linked) => {
+    const primary = fs.realpathSync.native(createTempDir("native-primary-install-"));
+    const root = path.join(primary, ".claude/worktrees/validation");
+    fs.mkdirSync(root, { recursive: true });
+    expect(spawnSync("git", ["init", "-q"], { cwd: primary }).status).toBe(0);
+    fs.writeFileSync(path.join(root, ".git"), `gitdir: ${path.join(primary, ".git")}\n`);
+    fs.writeFileSync(path.join(root, "package.json"), '{"private":true}\n');
+    fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: []\n");
+    const sharedInstall = fs.realpathSync.native(createTempDir("native-shared-install-"));
+    const nativeRoot = path.join(sharedInstall, "node_modules/typescript-native");
+    const resolverExecuted = path.join(primary, "resolver-executed");
+    fs.mkdirSync(path.join(nativeRoot, "lib"), { recursive: true });
+    fs.writeFileSync(path.join(nativeRoot, "package.json"), '{"type":"module"}\n');
+    fs.writeFileSync(
+      path.join(nativeRoot, "lib/getExePath.js"),
+      `import fs from "node:fs";
+fs.writeFileSync(${JSON.stringify(resolverExecuted)}, "executed");
+export default () => process.execPath;\n`,
+    );
+    fs.symlinkSync(
+      path.join(sharedInstall, "node_modules"),
+      path.join(primary, "node_modules"),
+      "junction",
+    );
+    const localModules = path.join(root, "node_modules");
+    if (linked) {
+      fs.symlinkSync(path.join(primary, "node_modules"), localModules, "junction");
+    }
+    const result = spawnSync(
+      process.execPath,
+      [path.resolve("scripts/run-tsgo.mjs"), "--version"],
+      {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 20_000,
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stderr).toContain("Declaration input escapes checkout");
+    expect(result.stderr).toContain("shared installs and external symlinks are unsupported");
+    expect(fs.existsSync(localModules)).toBe(linked);
+    expect(fs.existsSync(resolverExecuted)).toBe(false);
+  },
+);
 
 describe("run-tsgo sparse guard", () => {
   it("ends sparse-checkout failures with the stable failure trailer", () => {
@@ -221,6 +273,22 @@ describe("run-tsgo sparse guard", () => {
     `);
   });
 
+  it.each([
+    "tsconfig.ui.json",
+    "test/tsconfig/tsconfig.core.test.json",
+    "test/tsconfig/tsconfig.core.test.ui-other.json",
+  ])("does not require plugin browser sources for %s", (project) => {
+    const cwd = createTempDir("openclaw-run-tsgo-");
+    const options = {
+      cwd,
+      fileExists: () => true,
+      isSparseCheckoutEnabled: () => true,
+      sparseCheckoutPatterns: ["/packages/", "/src/", "/ui/config/", "/ui/src/"],
+    };
+
+    expect(getSparseTsgoGuardError(["-p", project], options)).toBeNull();
+  });
+
   it("returns a helpful message for sparse core-test worktrees missing ui and packages files", () => {
     const cwd = createTempDir("openclaw-run-tsgo-");
 
@@ -265,6 +333,7 @@ describe.skipIf(process.platform === "win32")("run-tsgo watchdog", () => {
     const fakeTsgo = path.join(binDir, "tsgo");
     fs.writeFileSync(fakeTsgo, body, "utf8");
     fs.chmodSync(fakeTsgo, 0o755);
+    overrideNativeFixtureExecutable(cwd, fakeTsgo);
   }
 
   // The fake compiler is a grandchild in its own process group, so spawnSync's
@@ -293,7 +362,11 @@ describe.skipIf(process.platform === "win32")("run-tsgo watchdog", () => {
     }
   }
 
-  function withSupervisorClock(cwd: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  function withSupervisorClock(
+    cwd: string,
+    env: NodeJS.ProcessEnv,
+    preloads: string[] = [],
+  ): NodeJS.ProcessEnv {
     const preloadPath = path.join(cwd, "supervisor-clock.mjs");
     // Scale both cleanup owners so an outer cutoff that races inner reaping still fails.
     // Compiler/watchdog timers, readiness checks, and OS signals retain real time.
@@ -309,9 +382,14 @@ describe.skipIf(process.platform === "win32")("run-tsgo watchdog", () => {
     realSetTimeout(callback, delay / 5, ...args);
 }\n`,
     );
+    const imports = [...preloads, preloadPath]
+      .map((preload) => `--import=${pathToFileURL(preload).href}`)
+      .join(" ");
+    // Both supervisor processes need the fixtures through their runtime's inherited options.
     return {
       ...env,
-      NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(preloadPath).href}`,
+      NODE_OPTIONS: [env.NODE_OPTIONS, imports].filter(Boolean).join(" "),
+      BUN_OPTIONS: [env.BUN_OPTIONS, imports].filter(Boolean).join(" "),
     };
   }
 
@@ -507,10 +585,7 @@ syncBuiltinESMExports();
           {
             cwd,
             stdio: ["ignore", "ignore", "pipe"],
-            env: withSupervisorClock(cwd, {
-              ...process.env,
-              NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""}${phase === "spawn" ? ` --import=${pathToFileURL(preloadPath).href}` : ""}`,
-            }),
+            env: withSupervisorClock(cwd, process.env, phase === "spawn" ? [preloadPath] : []),
           },
         );
         retainFixture = true;

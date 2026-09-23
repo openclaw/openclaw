@@ -390,6 +390,22 @@ describe("edit tool", () => {
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("after\n");
   });
 
+  it("repairs string edits without reinterpreting valid control escapes", async () => {
+    const filePath = await createTempFile("alpha\nbeta\nC:\npath\nliteral\\n\n");
+    const tool = createEditTool(tmpDir);
+    const prepared = tool.prepareArguments?.({
+      path: filePath,
+      edits: `[{"oldText":"alpha\nbeta","newText":"ALPHA\nBETA"},${JSON.stringify({ oldText: "C:\npath", newText: "C:\nPATH" })},${JSON.stringify({ oldText: "literal\\n", newText: "LITERAL\\n" })}]`,
+    });
+    if (!Value.Check(tool.parameters, prepared)) {
+      throw new Error("Prepared replacements did not satisfy the edit schema");
+    }
+    await tool.execute("call-repaired-string", prepared, undefined);
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+      "ALPHA\nBETA\nC:\nPATH\nLITERAL\\n\n",
+    );
+  });
+
   it.each(["local", "injected"] as const)(
     "renders @ previews through %s operations",
     async (backend) => {
@@ -572,7 +588,7 @@ describe("edit tool", () => {
     );
   });
 
-  it("returns terminal no-op when oldText equals newText", async () => {
+  it("returns a non-terminal no-op when oldText equals newText", async () => {
     const filePath = await createTempFile("unchanged content\n");
     const tool = createEditTool(tmpDir);
 
@@ -587,7 +603,7 @@ describe("edit tool", () => {
 
     const tc0 = expectDefined(result.content[0], "result.content[0] test invariant");
     expect("text" in tc0 ? tc0.text : "").toContain("No changes made");
-    expect((result as { terminate?: boolean }).terminate).toBe(true);
+    expect((result as { terminate?: boolean }).terminate).toBeUndefined();
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("unchanged content\n");
   });
 
@@ -718,7 +734,7 @@ describe("edit tool", () => {
       undefined,
     );
 
-    expect((result as { terminate?: boolean }).terminate).toBe(true);
+    expect((result as { terminate?: boolean }).terminate).toBeUndefined();
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("foo\n");
   });
 

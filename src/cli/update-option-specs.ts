@@ -14,5 +14,10 @@ export const UPDATE_OPTION_SPECS: readonly [
   ],
   ["--timeout <seconds>", "Timeout for each update step in seconds (default: 1800)"],
   ["--yes", "Skip confirmation prompts (non-interactive)", false],
+  [
+    "--reapply-local-overrides",
+    "Replay trusted packaged dist edits when the target baseline is unchanged",
+    false,
+  ],
   ["--accept-capabilities", "Accept widened plugin capabilities", false],
 ];

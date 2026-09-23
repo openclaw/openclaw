@@ -1,10 +1,8 @@
 // @vitest-environment node
-import { createRouter, type RouteLoaderOptions } from "@openclaw/uirouter";
+import { createRouter } from "@openclaw/uirouter";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
-import type { ApplicationContext } from "../../app/context.ts";
 import {
   createGatewayStoreTestStore,
   GATEWAY_STORE_TEST_HELLO,
@@ -14,17 +12,31 @@ import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { page } from "./route.ts";
 import type { UsageRouteData } from "./usage-page.ts";
 
-const usageMethods = ["sessions.usage", "usage.cost", "usage.status"];
-const payload = { sessions: [], daily: [], providers: [] };
-const cleanups: Array<() => void> = [];
-const loaderOptions: RouteLoaderOptions = {
-  signal: new AbortController().signal,
-  shouldRun: () => true,
-  revalidating: false,
-  location: { pathname: "/usage", search: "", hash: "" },
-  deps: "",
-  cause: "navigation",
+const usageMethods = ["sessions.usage", "usage.status"];
+const totals = {
+  input: 100,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 100,
+  totalCost: 1,
+  inputCost: 1,
+  outputCost: 0,
+  cacheReadCost: 0,
+  cacheWriteCost: 0,
+  missingCostEntries: 0,
 };
+const payload = {
+  updatedAt: 1,
+  startDate: "2026-07-09",
+  endDate: "2026-08-07",
+  sessions: [],
+  totals,
+  aggregates: { costDaily: [{ date: "2026-08-07", ...totals }] },
+  cacheStatus: { status: "refreshing", cachedFiles: 1, pendingFiles: 1, staleFiles: 0 },
+  providers: [],
+};
+const cleanups: Array<() => void> = [];
 
 function createUsageRouter() {
   const store = createGatewayStoreTestStore();
@@ -36,8 +48,11 @@ function createUsageRouter() {
     subscribe: () => () => {},
   });
   selection.set("main");
-  const context = { gateway: store.gateway, agentSelection: selection } as ApplicationContext;
-  const router = createRouter<"usage" | "other", ApplicationContext, null, UsageRouteData>({
+  const context = {
+    gateway: store.gateway,
+    agentSelection: selection,
+  } satisfies Parameters<NonNullable<typeof page.loader>>[0];
+  const router = createRouter<"usage" | "other", typeof context, null, UsageRouteData>({
     routes: [
       { ...page, component: () => null },
       { id: "other", path: "/other", component: () => null },
@@ -45,6 +60,7 @@ function createUsageRouter() {
   });
   cleanups.push(() => {
     router.stop();
+    selection.dispose();
     store.gateway.stop();
   });
   return {
@@ -53,7 +69,10 @@ function createUsageRouter() {
     selection,
     router,
     request,
-    usageCalls: () => request.mock.calls.filter(([method]) => usageMethods.includes(method)),
+    usageCalls: () =>
+      request.mock.calls.filter(
+        ([method]) => method === "sessions.usage" || method.startsWith("usage."),
+      ),
   };
 }
 
@@ -125,7 +144,7 @@ describe("usage route", () => {
         if (!usageMethods.includes(method)) {
           return {};
         }
-        if (++requests === 3) {
+        if (++requests === 2) {
           started.resolve();
         }
         return response.promise;
@@ -154,10 +173,20 @@ describe("usage route", () => {
       expect(data?.result).toEqual(payload);
       expect(data?.query).toEqual({
         startDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
-        endDate: data?.query.startDate,
+        endDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
         scope: "family",
         timeZone: "local",
         agentId: "main",
+      });
+      expect(
+        (Date.parse(data!.query.endDate) - Date.parse(data!.query.startDate)) / 86_400_000,
+      ).toBe(29);
+      expect(data?.costSummary).toEqual({
+        updatedAt: 1,
+        days: 30,
+        totals,
+        daily: [{ date: "2026-08-07", ...totals }],
+        cacheStatus: payload.cacheStatus,
       });
       expect(calls.find(([method]) => method === "sessions.usage")?.[1]).toMatchObject({
         startDate: data?.query.startDate,
@@ -173,58 +202,38 @@ describe("usage route", () => {
   );
 
   it("records a provider usage request failure separately from an empty response", async () => {
-    const request = vi.fn(async (method: string) => {
+    const { router, context, request } = createUsageRouter();
+    request.mockImplementation(async (method) => {
       switch (method) {
         case "sessions.usage":
-          return { sessions: [], totals: null };
-        case "usage.cost":
-          return { daily: [] };
+          return payload;
         case "usage.status":
           throw new Error("gateway transport unavailable");
         default:
           return {};
       }
     });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const gateway = { snapshot: { phase: "connected", client } };
-    const context = {
-      gateway,
-      agentSelection: { state: { scopeId: "main" } },
-    } as unknown as ApplicationContext;
+    await router.navigate("usage", context);
+    const result = router.getState().matches[0]?.data;
 
-    const result = (await page.loader?.(context, loaderOptions)) as UsageRouteData;
-
-    expect(result.error).toBeNull();
-    expect(result.providerUsage).toEqual({
+    expect(result?.error).toBeNull();
+    expect(result?.providerUsage).toEqual({
       state: "settled",
       result: { ok: false, error: { kind: "request-failed" } },
     });
   });
 
   it("redacts secrets in displayed loader failures", async () => {
-    const request = vi.fn(async (method: string) => {
+    const { router, context, request } = createUsageRouter();
+    request.mockImplementation(async (method) => {
       if (method === "sessions.usage") {
         throw new Error("OPENAI_API_KEY=sk-1234567890abcdef");
       }
       return {};
     });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const gateway = { snapshot: { phase: "connected", client } };
-    const context = {
-      gateway,
-      agentSelection: { state: { scopeId: "main" } },
-    } as unknown as ApplicationContext;
-    const options = {
-      signal: new AbortController().signal,
-      shouldRun: () => true,
-      revalidating: false,
-      location: { pathname: "/usage", search: "", hash: "" },
-      deps: "",
-      cause: "navigation",
-    } satisfies RouteLoaderOptions;
+    await router.navigate("usage", context);
+    const result = router.getState().matches[0]?.data;
 
-    const result = (await page.loader?.(context, options)) as UsageRouteData;
-
-    expect(result.error).toBe("OPENAI_API_KEY=sk-123...cdef");
+    expect(result?.error).toBe("OPENAI_API_KEY=sk-123...cdef");
   });
 });

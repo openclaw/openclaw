@@ -8,6 +8,7 @@ import {
   tempWorkspaceSync,
   type TempWorkspaceSync,
 } from "openclaw/plugin-sdk/temp-path";
+import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedRaftAccount } from "./accounts.js";
@@ -152,6 +153,68 @@ afterEach(() => {
 });
 
 describe("Raft wake gateway", () => {
+  it.each(["claim", "commit"] as const)(
+    "joins an admitted wake during shutdown while %s is pending",
+    async (phase) => {
+      const { ctx, controller, run, wakeDedupe } = createContext();
+      Object.defineProperty(ctx, "abortSignal", { value: controller.signal });
+      const bridge = new FakeBridge();
+      const pending = createDeferred<void>();
+      const reached = createDeferred<void>();
+      let processing: Promise<unknown> | undefined;
+      const processGuarded = wakeDedupe.processGuarded.bind(wakeDedupe);
+      wakeDedupe.processGuarded = (event, process, options) => {
+        const operation = processGuarded(
+          event,
+          async () => {
+            if (phase === "claim") {
+              reached.resolve();
+              await pending.promise;
+            }
+            const result = await process();
+            if (phase === "commit") {
+              reached.resolve();
+              await pending.promise;
+            }
+            return result;
+          },
+          options,
+        );
+        processing = operation;
+        return operation;
+      };
+      let stopped = false;
+      const start = startRaftGatewayAccount(ctx, { wakeDedupe, spawnBridge: bridge.spawn }).finally(
+        () => {
+          stopped = true;
+        },
+      );
+      try {
+        const { endpoint, token } = await bridge.started.promise;
+        const request = fetch(endpoint, {
+          method: "POST",
+          headers: { "x-raft-bridge-token": token },
+          body: JSON.stringify({ eventId: "wake-settlement" }),
+        }).catch(() => undefined);
+        await reached.promise;
+        controller.abort();
+        await request;
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(stopped).toBe(false);
+        pending.resolve();
+        await start;
+        expect(run).toHaveBeenCalledTimes(phase === "commit" ? 1 : 0);
+      } finally {
+        pending.resolve();
+        controller.abort();
+        await start;
+        await processing?.catch(() => undefined);
+      }
+    },
+  );
+
   it("marks the internal wake path explicitly unsupported", async () => {
     const { ctx, buildContext } = createContext();
     await dispatchRaftWake({ ctx });
@@ -180,6 +243,46 @@ describe("Raft wake gateway", () => {
       });
       expect(settled).toBe(false);
       expect(spawnBridge).not.toHaveBeenCalled();
+    } finally {
+      controller.abort();
+      await start;
+    }
+  });
+
+  // Raft already answered this case through its own close-after-response teardown; the
+  // wire behavior must survive replacing that teardown with the shared transport owner.
+  it("keeps delivering 413 for an over-limit wake payload and closing the connection", async () => {
+    const { ctx, controller, wakeDedupe } = createContext();
+    Object.defineProperty(ctx, "abortSignal", { value: controller.signal });
+    const bridge = new FakeBridge();
+    const start = startRaftGatewayAccount(ctx, {
+      spawnBridge: bridge.spawn,
+      wakeDedupe,
+    });
+    void start.catch(bridge.started.reject);
+
+    try {
+      const { endpoint: wakeEndpoint, token: bridgeToken } = await withTimeout(
+        bridge.started.promise,
+        500,
+        "Raft bridge startup",
+      );
+
+      // Declared and sent in one write: the shape whose rejection used to race the flush.
+      const result = await postRawWebhook({
+        url: wakeEndpoint,
+        body: JSON.stringify({ deliveryId: "x".repeat(16 * 1024) }),
+        headers: {
+          "content-type": "application/json",
+          "x-raft-bridge-token": bridgeToken,
+        },
+      });
+
+      expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
+      expect(JSON.parse(result.body)).toEqual({
+        error: "Wake payload exceeds the 16 KiB limit.",
+      });
+      expect(result.closedByServer).toBe(true);
     } finally {
       controller.abort();
       await start;

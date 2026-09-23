@@ -27,6 +27,45 @@ function expectSchemaFailurePath(result: SchemaParseResult, expectedPathPrefix: 
 }
 
 describe("agent defaults schema", () => {
+  it("accepts bounded explicit picker runtimes only on exact model refs", () => {
+    const models = {
+      "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" }, pickerRuntimes: ["codex"] },
+    };
+    expect(AgentDefaultsSchema.parse({ models })?.models).toEqual(models);
+    expect(AgentEntrySchema.parse({ id: "ops", models }).models).toEqual(models);
+    for (const pickerRuntimes of [["auto"], [""], ["unknown runtime"], Array(9).fill("codex")]) {
+      expectSchemaFailurePath(
+        AgentDefaultsSchema.safeParse({ models: { "openai/gpt-5.6-sol": { pickerRuntimes } } }),
+        "models.openai/gpt-5.6-sol.pickerRuntimes",
+      );
+    }
+    for (const key of ["openai/*", "model"]) {
+      expectSchemaFailurePath(
+        AgentEntrySchema.safeParse({ id: "ops", models: { [key]: { pickerRuntimes: ["codex"] } } }),
+        `models.${key}.pickerRuntimes`,
+      );
+    }
+  });
+
+  it("preserves separate run directories through config validation and list projection", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: { workspace: "/agent-workspace", cwd: "/default-repo" },
+        entries: { worker: { cwd: "/agent-repo" } },
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(JSON.stringify(result.issues));
+    }
+    expect(result.config.agents?.defaults).toMatchObject({
+      workspace: "/agent-workspace",
+      cwd: "/default-repo",
+    });
+    expect(result.config.agents?.entries?.worker?.cwd).toBe("/agent-repo");
+    expect(result.config.agents?.list?.[0]?.cwd).toBe("/agent-repo");
+  });
+
   it.each([true, false])("rejects Code Mode %s without an exact model entry", (codeMode) => {
     for (const key of ["openai/*", "openrouter/provider/*", "*", "model", "provider/", "/model"]) {
       const models = { [key]: { codeMode } };
@@ -308,7 +347,7 @@ describe("agent defaults schema", () => {
     );
   });
 
-  it("accepts experimental.localModelLean", () => {
+  it("accepts experimental agent flags", () => {
     const result = AgentDefaultsSchema.parse({
       experimental: {
         localModelLean: true,
@@ -587,9 +626,8 @@ describe("agent defaults schema", () => {
         tools: {
           codeMode: {
             enabled: true,
-            runtime: "quickjs-wasi",
+            executor: "quickjs",
             timeoutMs: 5000,
-            languages: ["javascript"],
           },
         },
       }),
@@ -597,11 +635,19 @@ describe("agent defaults schema", () => {
     expectSchemaFailurePath(
       AgentEntrySchema.safeParse({
         id: "ops",
-        tools: { codeMode: { unknownKey: 1 } },
+        tools: { codeMode: { languages: ["javascript"] } },
       }),
       "tools.codeMode",
     );
   });
+
+  it.each([undefined, {}, { maxConcurrent: 3 }, false, { enabled: false }])(
+    "preserves per-agent Swarm config %j for inherited enablement",
+    (swarm) => {
+      const tools = swarm === undefined ? {} : { swarm };
+      expect(AgentEntrySchema.parse({ id: "ops", tools }).tools?.swarm).toEqual(swarm);
+    },
+  );
 
   it("accepts per-agent tools.swarm config", () => {
     expectSchemaSuccess(

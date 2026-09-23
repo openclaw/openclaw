@@ -18,21 +18,34 @@ function plannedSegments(plan: Awaited<ReturnType<typeof planShellAuthorization>
     : [];
 }
 
+function createPersistenceFixture(binaries: string[]) {
+  const dir = makeExecApprovalsTempDir();
+  for (const executable of binaries) {
+    makeExecutable(dir, executable);
+  }
+  const env = makePathEnv(dir);
+  return {
+    dir,
+    decide: async (command: string) => {
+      const plan = await planShellAuthorization({ command, cwd: dir, env });
+      return resolveAllowAlwaysPersistenceDecision({
+        segments: plannedSegments(plan),
+        commandText: command,
+        cwd: dir,
+        env,
+        platform: process.platform,
+        authorizationPlan: plan,
+      });
+    },
+  };
+}
+
 describe("resolveAllowAlwaysPersistenceDecision", () => {
   it("chooses reusable patterns for allow-always planner candidates", async () => {
-    const dir = makeExecApprovalsTempDir();
+    const { dir, decide } = createPersistenceFixture([]);
     const gitPath = makeExecutable(dir, "git");
-    const env = makePathEnv(dir);
-    const plan = await planShellAuthorization({ command: "git status", cwd: dir, env });
 
-    const decision = resolveAllowAlwaysPersistenceDecision({
-      segments: plannedSegments(plan),
-      commandText: "git status",
-      cwd: dir,
-      env,
-      platform: process.platform,
-      authorizationPlan: plan,
-    });
+    const decision = await decide("git status");
 
     expect(decision).toEqual({
       kind: "patterns",
@@ -42,21 +55,11 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   });
 
   it("persists package-manager exec approvals against the inner executable", async () => {
-    const dir = makeExecApprovalsTempDir();
-    makeExecutable(dir, "pnpm");
+    const { dir, decide } = createPersistenceFixture(["pnpm"]);
     const tsxPath = makeExecutable(dir, "tsx");
-    const env = makePathEnv(dir);
     const command = "pnpm --reporter silent exec -- tsx ./run.ts";
-    const plan = await planShellAuthorization({ command, cwd: dir, env });
 
-    const decision = resolveAllowAlwaysPersistenceDecision({
-      segments: plannedSegments(plan),
-      commandText: command,
-      cwd: dir,
-      env,
-      platform: process.platform,
-      authorizationPlan: plan,
-    });
+    const decision = await decide(command);
 
     expect(decision).toEqual({
       kind: "patterns",
@@ -66,21 +69,10 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   });
 
   it("keeps pnpm cwd exec approvals one-shot", async () => {
-    const dir = makeExecApprovalsTempDir();
-    makeExecutable(dir, "pnpm");
-    makeExecutable(dir, "tsx");
-    const env = makePathEnv(dir);
+    const { decide } = createPersistenceFixture(["pnpm", "tsx"]);
     const command = "pnpm -C ./package exec -- tsx ./run.ts";
-    const plan = await planShellAuthorization({ command, cwd: dir, env });
 
-    const decision = resolveAllowAlwaysPersistenceDecision({
-      segments: plannedSegments(plan),
-      commandText: command,
-      cwd: dir,
-      env,
-      platform: process.platform,
-      authorizationPlan: plan,
-    });
+    const decision = await decide(command);
 
     expect(decision).toEqual({
       kind: "one-shot",
@@ -91,23 +83,11 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   it.each(["env --", "nice"])(
     "persists dispatch-wrapped package-manager exec approvals against the inner executable: %s",
     async (wrapper) => {
-      const dir = makeExecApprovalsTempDir();
-      for (const executable of ["env", "nice", "pnpm"]) {
-        makeExecutable(dir, executable);
-      }
+      const { dir, decide } = createPersistenceFixture(["env", "nice", "pnpm"]);
       const tsxPath = makeExecutable(dir, "tsx");
-      const env = makePathEnv(dir);
       const command = `${wrapper} pnpm exec -- tsx ./run.ts`;
-      const plan = await planShellAuthorization({ command, cwd: dir, env });
 
-      const decision = resolveAllowAlwaysPersistenceDecision({
-        segments: plannedSegments(plan),
-        commandText: command,
-        cwd: dir,
-        env,
-        platform: process.platform,
-        authorizationPlan: plan,
-      });
+      const decision = await decide(command);
 
       expect(decision).toEqual({
         kind: "patterns",
@@ -120,21 +100,10 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   it.each(["--package=tsx", "--package tsx", "--workspace=a", "--workspace a", "--workspaces"])(
     "keeps npm workspace exec approvals one-shot: %s",
     async (workspaceOption) => {
-      const dir = makeExecApprovalsTempDir();
-      makeExecutable(dir, "npm");
-      makeExecutable(dir, "tsx");
-      const env = makePathEnv(dir);
+      const { decide } = createPersistenceFixture(["npm", "tsx"]);
       const command = `npm ${workspaceOption} exec -- tsx ./run.ts`;
-      const plan = await planShellAuthorization({ command, cwd: dir, env });
 
-      const decision = resolveAllowAlwaysPersistenceDecision({
-        segments: plannedSegments(plan),
-        commandText: command,
-        cwd: dir,
-        env,
-        platform: process.platform,
-        authorizationPlan: plan,
-      });
+      const decision = await decide(command);
 
       expect(decision).toEqual({
         kind: "one-shot",
@@ -144,21 +113,10 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   );
 
   it("keeps npm cwd exec approvals one-shot", async () => {
-    const dir = makeExecApprovalsTempDir();
-    makeExecutable(dir, "npm");
-    makeExecutable(dir, "tsx");
-    const env = makePathEnv(dir);
+    const { decide } = createPersistenceFixture(["npm", "tsx"]);
     const command = "npm -C ./package exec -- tsx ./run.ts";
-    const plan = await planShellAuthorization({ command, cwd: dir, env });
 
-    const decision = resolveAllowAlwaysPersistenceDecision({
-      segments: plannedSegments(plan),
-      commandText: command,
-      cwd: dir,
-      env,
-      platform: process.platform,
-      authorizationPlan: plan,
-    });
+    const decision = await decide(command);
 
     expect(decision).toEqual({
       kind: "one-shot",
@@ -174,21 +132,10 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     "exec tsx ./run.ts -C ./package",
     "x --workspaces --",
   ])("keeps npm post-subcommand context approvals one-shot: %s", async (npmExec) => {
-    const dir = makeExecApprovalsTempDir();
-    makeExecutable(dir, "npm");
-    makeExecutable(dir, "tsx");
-    const env = makePathEnv(dir);
+    const { decide } = createPersistenceFixture(["npm", "tsx"]);
     const command = `npm ${npmExec} tsx ./run.ts`;
-    const plan = await planShellAuthorization({ command, cwd: dir, env });
 
-    const decision = resolveAllowAlwaysPersistenceDecision({
-      segments: plannedSegments(plan),
-      commandText: command,
-      cwd: dir,
-      env,
-      platform: process.platform,
-      authorizationPlan: plan,
-    });
+    const decision = await decide(command);
 
     expect(decision).toEqual({
       kind: "one-shot",
@@ -197,21 +144,10 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   });
 
   it("keeps pnpm dlx allow-build approvals one-shot", async () => {
-    const dir = makeExecApprovalsTempDir();
-    makeExecutable(dir, "pnpm");
-    makeExecutable(dir, "tsx");
-    const env = makePathEnv(dir);
+    const { decide } = createPersistenceFixture(["pnpm", "tsx"]);
     const command = "pnpm dlx --allow-build=tsx tsx ./run.ts";
-    const plan = await planShellAuthorization({ command, cwd: dir, env });
 
-    const decision = resolveAllowAlwaysPersistenceDecision({
-      segments: plannedSegments(plan),
-      commandText: command,
-      cwd: dir,
-      env,
-      platform: process.platform,
-      authorizationPlan: plan,
-    });
+    const decision = await decide(command);
 
     expect(decision).toEqual({
       kind: "one-shot",
@@ -222,21 +158,10 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   it.each(["-C ./package", "--workspace-root", "-w"])(
     "keeps post-dlx pnpm context approvals one-shot: %s",
     async (contextOption) => {
-      const dir = makeExecApprovalsTempDir();
-      makeExecutable(dir, "pnpm");
-      makeExecutable(dir, "tsx");
-      const env = makePathEnv(dir);
+      const { decide } = createPersistenceFixture(["pnpm", "tsx"]);
       const command = `pnpm dlx ${contextOption} tsx ./run.ts`;
-      const plan = await planShellAuthorization({ command, cwd: dir, env });
 
-      const decision = resolveAllowAlwaysPersistenceDecision({
-        segments: plannedSegments(plan),
-        commandText: command,
-        cwd: dir,
-        env,
-        platform: process.platform,
-        authorizationPlan: plan,
-      });
+      const decision = await decide(command);
 
       expect(decision).toEqual({
         kind: "one-shot",
@@ -248,21 +173,10 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   it.each(["--allow-build=tsx", "--package=tsx", "--config ./npmrc"])(
     "keeps leading pnpm dlx context approvals one-shot: %s",
     async (contextOption) => {
-      const dir = makeExecApprovalsTempDir();
-      makeExecutable(dir, "pnpm");
-      makeExecutable(dir, "tsx");
-      const env = makePathEnv(dir);
+      const { decide } = createPersistenceFixture(["pnpm", "tsx"]);
       const command = `pnpm ${contextOption} dlx tsx ./run.ts`;
-      const plan = await planShellAuthorization({ command, cwd: dir, env });
 
-      const decision = resolveAllowAlwaysPersistenceDecision({
-        segments: plannedSegments(plan),
-        commandText: command,
-        cwd: dir,
-        env,
-        platform: process.platform,
-        authorizationPlan: plan,
-      });
+      const decision = await decide(command);
 
       expect(decision).toEqual({
         kind: "one-shot",
@@ -272,21 +186,11 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   );
 
   it("persists npm x approvals against the inner executable", async () => {
-    const dir = makeExecApprovalsTempDir();
-    makeExecutable(dir, "npm");
+    const { dir, decide } = createPersistenceFixture(["npm"]);
     const tsxPath = makeExecutable(dir, "tsx");
-    const env = makePathEnv(dir);
     const command = "npm x -- tsx ./run.ts";
-    const plan = await planShellAuthorization({ command, cwd: dir, env });
 
-    const decision = resolveAllowAlwaysPersistenceDecision({
-      segments: plannedSegments(plan),
-      commandText: command,
-      cwd: dir,
-      env,
-      platform: process.platform,
-      authorizationPlan: plan,
-    });
+    const decision = await decide(command);
 
     expect(decision).toEqual({
       kind: "patterns",
@@ -296,23 +200,11 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   });
 
   it("persists chained package-manager exec approvals against the final inner executable", async () => {
-    const dir = makeExecApprovalsTempDir();
-    for (const executable of ["pnpm", "npm"]) {
-      makeExecutable(dir, executable);
-    }
+    const { dir, decide } = createPersistenceFixture(["pnpm", "npm"]);
     const tsxPath = makeExecutable(dir, "tsx");
-    const env = makePathEnv(dir);
     const command = "pnpm exec -- npm x -- tsx ./run.ts";
-    const plan = await planShellAuthorization({ command, cwd: dir, env });
 
-    const decision = resolveAllowAlwaysPersistenceDecision({
-      segments: plannedSegments(plan),
-      commandText: command,
-      cwd: dir,
-      env,
-      platform: process.platform,
-      authorizationPlan: plan,
-    });
+    const decision = await decide(command);
 
     expect(decision).toEqual({
       kind: "patterns",
@@ -324,21 +216,11 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   it.each(["exec --", "dlx"])(
     "persists yarn %s approvals against the inner executable",
     async (subcommand) => {
-      const dir = makeExecApprovalsTempDir();
-      makeExecutable(dir, "yarn");
+      const { dir, decide } = createPersistenceFixture(["yarn"]);
       const tsxPath = makeExecutable(dir, "tsx");
-      const env = makePathEnv(dir);
       const command = `yarn ${subcommand} tsx ./run.ts`;
-      const plan = await planShellAuthorization({ command, cwd: dir, env });
 
-      const decision = resolveAllowAlwaysPersistenceDecision({
-        segments: plannedSegments(plan),
-        commandText: command,
-        cwd: dir,
-        env,
-        platform: process.platform,
-        authorizationPlan: plan,
-      });
+      const decision = await decide(command);
 
       expect(decision).toEqual({
         kind: "patterns",
@@ -349,22 +231,10 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   );
 
   it("keeps package-manager shell carriers one-shot", async () => {
-    const dir = makeExecApprovalsTempDir();
-    makeExecutable(dir, "pnpm");
-    makeExecutable(dir, "sh");
-    makeExecutable(dir, "echo");
-    const env = makePathEnv(dir);
+    const { decide } = createPersistenceFixture(["pnpm", "sh", "echo"]);
     const command = "pnpm exec sh -c 'echo warmup-ok'";
-    const plan = await planShellAuthorization({ command, cwd: dir, env });
 
-    const decision = resolveAllowAlwaysPersistenceDecision({
-      segments: plannedSegments(plan),
-      commandText: command,
-      cwd: dir,
-      env,
-      platform: process.platform,
-      authorizationPlan: plan,
-    });
+    const decision = await decide(command);
 
     expect(decision).toEqual({
       kind: "one-shot",
@@ -379,22 +249,10 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   it.each(["--workspace=a", "--workspace a", "--workspaces"])(
     "keeps npm workspace shell carriers one-shot: %s",
     async (workspaceOption) => {
-      const dir = makeExecApprovalsTempDir();
-      for (const executable of ["npm", "sh", "echo"]) {
-        makeExecutable(dir, executable);
-      }
-      const env = makePathEnv(dir);
+      const { decide } = createPersistenceFixture(["npm", "sh", "echo"]);
       const command = `npm ${workspaceOption} exec sh -c 'echo warmup-ok'`;
-      const plan = await planShellAuthorization({ command, cwd: dir, env });
 
-      const decision = resolveAllowAlwaysPersistenceDecision({
-        segments: plannedSegments(plan),
-        commandText: command,
-        cwd: dir,
-        env,
-        platform: process.platform,
-        authorizationPlan: plan,
-      });
+      const decision = await decide(command);
 
       expect(decision).toEqual({
         kind: "one-shot",
@@ -404,22 +262,10 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   );
 
   it("keeps npm x shell carriers one-shot", async () => {
-    const dir = makeExecApprovalsTempDir();
-    for (const executable of ["npm", "sh", "echo"]) {
-      makeExecutable(dir, executable);
-    }
-    const env = makePathEnv(dir);
+    const { decide } = createPersistenceFixture(["npm", "sh", "echo"]);
     const command = "npm x sh -c 'echo warmup-ok'";
-    const plan = await planShellAuthorization({ command, cwd: dir, env });
 
-    const decision = resolveAllowAlwaysPersistenceDecision({
-      segments: plannedSegments(plan),
-      commandText: command,
-      cwd: dir,
-      env,
-      platform: process.platform,
-      authorizationPlan: plan,
-    });
+    const decision = await decide(command);
 
     expect(decision).toEqual({
       kind: "one-shot",
@@ -428,22 +274,10 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   });
 
   it("keeps chained package-manager shell carriers one-shot", async () => {
-    const dir = makeExecApprovalsTempDir();
-    for (const executable of ["pnpm", "npm", "sh", "echo"]) {
-      makeExecutable(dir, executable);
-    }
-    const env = makePathEnv(dir);
+    const { decide } = createPersistenceFixture(["pnpm", "npm", "sh", "echo"]);
     const command = "pnpm exec -- npm x sh -c 'echo warmup-ok'";
-    const plan = await planShellAuthorization({ command, cwd: dir, env });
 
-    const decision = resolveAllowAlwaysPersistenceDecision({
-      segments: plannedSegments(plan),
-      commandText: command,
-      cwd: dir,
-      env,
-      platform: process.platform,
-      authorizationPlan: plan,
-    });
+    const decision = await decide(command);
 
     expect(decision).toEqual({
       kind: "one-shot",
@@ -454,22 +288,9 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   it.each(["yarn run sh -c 'echo warmup-ok'", "yarn sh -c 'echo warmup-ok'"])(
     "keeps yarn script or bin fallback carriers one-shot: %s",
     async (command) => {
-      const dir = makeExecApprovalsTempDir();
-      makeExecutable(dir, "yarn");
-      for (const executable of ["sh", "echo"]) {
-        makeExecutable(dir, executable);
-      }
-      const env = makePathEnv(dir);
-      const plan = await planShellAuthorization({ command, cwd: dir, env });
+      const { decide } = createPersistenceFixture(["yarn", "sh", "echo"]);
 
-      const decision = resolveAllowAlwaysPersistenceDecision({
-        segments: plannedSegments(plan),
-        commandText: command,
-        cwd: dir,
-        env,
-        platform: process.platform,
-        authorizationPlan: plan,
-      });
+      const decision = await decide(command);
 
       expect(decision).toEqual({
         kind: "one-shot",
@@ -481,23 +302,10 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   it.each(["env --", "nice"])(
     "keeps dispatch-wrapped package-manager shell carriers one-shot: %s",
     async (wrapper) => {
-      const dir = makeExecApprovalsTempDir();
-      for (const executable of ["env", "nice", "pnpm", "sh"]) {
-        makeExecutable(dir, executable);
-      }
-      makeExecutable(dir, "echo");
-      const env = makePathEnv(dir);
+      const { decide } = createPersistenceFixture(["env", "nice", "pnpm", "sh", "echo"]);
       const command = `${wrapper} pnpm exec sh -c 'echo warmup-ok'`;
-      const plan = await planShellAuthorization({ command, cwd: dir, env });
 
-      const decision = resolveAllowAlwaysPersistenceDecision({
-        segments: plannedSegments(plan),
-        commandText: command,
-        cwd: dir,
-        env,
-        platform: process.platform,
-        authorizationPlan: plan,
-      });
+      const decision = await decide(command);
 
       expect(decision).toEqual({
         kind: "one-shot",
@@ -514,22 +322,10 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   ])(
     "keeps pnpm shell-mode exec approvals one-shot: $wrapper pnpm exec $flag",
     async ({ flag, wrapper }) => {
-      const dir = makeExecApprovalsTempDir();
-      for (const executable of ["env", "pnpm"]) {
-        makeExecutable(dir, executable);
-      }
-      const env = makePathEnv(dir);
+      const { decide } = createPersistenceFixture(["env", "pnpm"]);
       const command = `${wrapper} pnpm exec ${flag} "sh -c 'echo warmup-ok'"`.trim();
-      const plan = await planShellAuthorization({ command, cwd: dir, env });
 
-      const decision = resolveAllowAlwaysPersistenceDecision({
-        segments: plannedSegments(plan),
-        commandText: command,
-        cwd: dir,
-        env,
-        platform: process.platform,
-        authorizationPlan: plan,
-      });
+      const decision = await decide(command);
 
       expect(decision).toEqual({
         kind: "one-shot",
@@ -539,20 +335,10 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   );
 
   it("keeps package-manager shell-call modes one-shot", async () => {
-    const dir = makeExecApprovalsTempDir();
-    makeExecutable(dir, "npx");
-    const env = makePathEnv(dir);
+    const { decide } = createPersistenceFixture(["npx"]);
     const command = "npx --call \"sh -c 'echo warmup-ok'\"";
-    const plan = await planShellAuthorization({ command, cwd: dir, env });
 
-    const decision = resolveAllowAlwaysPersistenceDecision({
-      segments: plannedSegments(plan),
-      commandText: command,
-      cwd: dir,
-      env,
-      platform: process.platform,
-      authorizationPlan: plan,
-    });
+    const decision = await decide(command);
 
     expect(decision).toEqual({
       kind: "one-shot",

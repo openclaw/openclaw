@@ -23,6 +23,150 @@ import {
 registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector native tool finalization", () => {
+  const mcpItem = {
+    type: "mcpToolCall",
+    id: "mcp-grant-item",
+    server: "docs/raw-name",
+    tool: "lookup.raw",
+    arguments: { query: "exact argument", limit: 3 },
+    status: "inProgress",
+    appContext: null,
+    pluginId: null,
+    readOnlyHint: false,
+    result: null,
+    error: null,
+    durationMs: null,
+  };
+
+  it("correlates only a unique active MCP item using raw server and tool identities", async () => {
+    const projector = await createProjector();
+    expect(projector.getActiveMcpToolCall(mcpItem.server)).toBeUndefined();
+    await projector.handleNotification(forCurrentTurn("item/started", { item: mcpItem }));
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { ...mcpItem, id: "other-server-item", server: "other-server" },
+      }),
+    );
+    expect(projector.getActiveMcpToolCall(mcpItem.server)).toEqual({
+      id: mcpItem.id,
+      server: mcpItem.server,
+      tool: mcpItem.tool,
+      arguments: mcpItem.arguments,
+    });
+
+    const concurrentItem = { ...mcpItem, id: "concurrent-item", tool: "different.tool" };
+    await projector.handleNotification(forCurrentTurn("item/started", { item: concurrentItem }));
+    expect(projector.getActiveMcpToolCall(mcpItem.server)).toBeUndefined();
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", { item: { ...concurrentItem, status: "completed" } }),
+    );
+    expect(projector.getActiveMcpToolCall(mcpItem.server)?.id).toBe(mcpItem.id);
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", { item: { ...mcpItem, status: "completed" } }),
+    );
+    expect(projector.getActiveMcpToolCall(mcpItem.server)).toBeUndefined();
+  });
+
+  it.each(["receipt", "projection"] as const)(
+    "preserves active MCP correlation after a nonterminal completion at %s",
+    async (phase) => {
+      const projector = await createProjector();
+      await projector.handleNotification(forCurrentTurn("item/started", { item: mcpItem }));
+      const activeCall = {
+        id: mcpItem.id,
+        server: mcpItem.server,
+        tool: mcpItem.tool,
+        arguments: mcpItem.arguments,
+      };
+      expect(projector.getActiveMcpToolCall(mcpItem.server)).toEqual(activeCall);
+
+      const invalid = forCurrentTurn("turn/completed", {
+        turn: { id: TURN_ID, status: "inProgress", items: [] },
+      });
+      if (phase === "receipt") {
+        projector.recordMcpToolCallReceipt(invalid);
+      } else {
+        await projector.handleNotification(invalid);
+      }
+      expect(projector.getActiveMcpToolCall(mcpItem.server)).toEqual(activeCall);
+      expect(projector.getCompletedTurnStatus()).toBeUndefined();
+
+      const completed = turnCompleted();
+      if (phase === "receipt") {
+        projector.recordMcpToolCallReceipt(completed);
+      } else {
+        await projector.handleNotification(completed);
+      }
+      expect(projector.getActiveMcpToolCall(mcpItem.server)).toBeUndefined();
+    },
+  );
+
+  it.each([
+    { label: "another thread", params: { threadId: "other-thread" } },
+    { label: "another turn", params: { turnId: "other-turn" } },
+    { label: "completed status", item: { status: "completed" } },
+    { label: "missing raw arguments", item: { arguments: undefined } },
+    { label: "blank raw tool", item: { tool: " " } },
+    { label: "app context", item: { appContext: { resourceUri: "ui://app/view" } } },
+    { label: "plugin context", item: { pluginId: "external-plugin" } },
+  ])("does not correlate an MCP item from $label", async (testCase) => {
+    const projector = await createProjector();
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        ...("params" in testCase ? testCase.params : {}),
+        item: { ...mcpItem, ...("item" in testCase ? testCase.item : {}) },
+      }),
+    );
+    expect(projector.getActiveMcpToolCall(mcpItem.server)).toBeUndefined();
+  });
+
+  it.each([
+    { label: "plugin", item: { pluginId: "external-plugin" } },
+    { label: "app", item: { appContext: { resourceUri: "ui://app/view" } } },
+    { label: "missing tool", item: { tool: undefined } },
+  ])(
+    "counts a $label item before deciding whether same-server correlation is unique",
+    async ({ item }) => {
+      const projector = await createProjector();
+      await projector.handleNotification(forCurrentTurn("item/started", { item: mcpItem }));
+      await projector.handleNotification(
+        forCurrentTurn("item/started", {
+          item: { ...mcpItem, ...item, id: "other-item" },
+        }),
+      );
+      expect(projector.getActiveMcpToolCall(mcpItem.server)).toBeUndefined();
+      await projector.handleNotification(
+        forCurrentTurn("item/completed", {
+          item: { ...mcpItem, ...item, id: "other-item", status: "completed" },
+        }),
+      );
+      expect(projector.getActiveMcpToolCall(mcpItem.server)?.id).toBe(mcpItem.id);
+    },
+  );
+
+  it.each(["closed", "finalized", "turn completed", "aborted", "timed out"])(
+    "does not correlate MCP items after the turn is %s",
+    async (ending) => {
+      const projector = await createProjector();
+      await projector.handleNotification(forCurrentTurn("item/started", { item: mcpItem }));
+      if (ending === "closed") {
+        await projector.closeProjection();
+      } else if (ending === "finalized") {
+        projector.buildResult(buildEmptyToolTelemetry());
+      } else if (ending === "turn completed") {
+        await projector.handleNotification(turnCompleted());
+      } else if (ending === "aborted") {
+        projector.markAborted();
+      } else {
+        projector.markTimedOut();
+      }
+      await projector.handleNotification(
+        forCurrentTurn("item/started", { item: { ...mcpItem, id: "late-item" } }),
+      );
+      expect(projector.getActiveMcpToolCall(mcpItem.server)).toBeUndefined();
+    },
+  );
+
   it("marks only explicitly completed native tool metadata with false", async () => {
     const projector = await createProjector();
     const command = {
@@ -399,7 +543,7 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
     });
   });
 
-  it("caps oversized native command output before transcript, trajectory, and progress projection", async () => {
+  it("preserves oversized native transcripts while bounding trajectory and progress projection", async () => {
     const trajectoryRecorder = {
       filePath: "trajectory.jsonl",
       recordEvent: vi.fn(),
@@ -447,13 +591,19 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
     const toolResultMessage = result.messagesSnapshot.find(
       (message) => requireRecord(message, "message").role === "toolResult",
     );
+    expect(toolResultMessage).toMatchObject({
+      role: "toolResult",
+      toolCallId: "cmd-large",
+      toolName: "bash",
+      isError: false,
+    });
     const toolResultContent = requireArray(
       requireRecord(toolResultMessage, "tool result message").content,
       "tool result content",
     );
+    expect(toolResultContent).toEqual([{ type: "text", text: expect.any(String) }]);
     const toolResultContentItem = requireRecord(toolResultContent[0], "tool result content item");
-    expect(toolResultContentItem.content).toHaveLength(10_000);
-    expect(toolResultContentItem.content).toContain("OpenClaw truncated Codex native tool output");
+    expect(toolResultContentItem.text).toBe(largeOutput);
   });
 
   it("delivers completed assistant text when a native tool call finishes without a matching result", async () => {
@@ -510,8 +660,9 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
     expect(toolResultMessage.toolName).toBe("bash");
     expect(toolResultMessage.isError).toBe(true);
     expect(toolResultMessage.details).toEqual({ reason: "missing_tool_result" });
-    const toolResultContent = requireArray(toolResultMessage.content, "tool result content");
-    expect(JSON.stringify(toolResultContent)).toContain("matching tool.result");
+    expect(toolResultMessage.content).toEqual([
+      { type: "text", text: expect.stringContaining("matching tool.result") },
+    ]);
     const finalAssistant = requireRecord(result.messagesSnapshot[3], "final assistant message");
     expect(finalAssistant.content).toEqual([
       {

@@ -191,12 +191,6 @@ function createGatewayCallModuleMock() {
   };
 }
 
-function createInProcessGatewayModuleMock() {
-  return {
-    callAgentToolGatewayRequest: (opts: unknown) => agentToolGatewayCallMock(opts),
-  };
-}
-
 function createConfigModuleMock() {
   return {
     getRuntimeConfig: () => mockConfig,
@@ -208,7 +202,7 @@ function createModelCatalogModuleMock() {
     loadProviderScopedThinkingCatalog: async () => [],
     // A run's captured config goes stale after any Gateway config republish; the exact
     // loader then throws, and session_status must read the published owner instead.
-    loadPreparedModelCatalog: async () => {
+    readPreparedModelCatalog: async () => {
       throw new Error("prepared model catalog owner config was replaced during the read (/tmp)");
     },
     loadPublishedPreparedModelCatalog: async () => [
@@ -252,7 +246,6 @@ function createProviderUsageModuleMock() {
       updatedAt: Date.now(),
       providers: [],
     }),
-    formatUsageSummaryLine: () => null,
   };
 }
 
@@ -327,7 +320,10 @@ function createCommandsStatusRuntimeModuleMock() {
 
 vi.mock("../config/sessions.js", createSessionsModuleMock);
 vi.mock("../gateway/call.js", createGatewayCallModuleMock);
-vi.mock("./tools/in-process-gateway.js", createInProcessGatewayModuleMock);
+vi.mock("./tools/in-process-gateway.js", () => ({
+  callAgentToolGatewayRequest: (opts: unknown) => agentToolGatewayCallMock(opts),
+  hasGatewayToolRoutingContext: () => false,
+}));
 vi.mock("../config/config.js", createConfigModuleMock);
 vi.mock("../agents/prepared-model-catalog.js", createModelCatalogModuleMock);
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
@@ -357,16 +353,13 @@ vi.mock("../plugins/providers.runtime.js", () => ({
 vi.mock("../agents/auth-profiles.js", createAuthProfilesModuleMock);
 vi.mock("../agents/model-auth.js", createModelAuthModuleMock);
 vi.mock("../infra/provider-usage.js", createProviderUsageModuleMock);
-vi.mock("./tools/session-status.runtime.js", createCommandsStatusRuntimeModuleMock);
+vi.mock("../status/status-text.js", createCommandsStatusRuntimeModuleMock);
 vi.mock("../auto-reply/group-activation.js", () => ({
   normalizeGroupActivation: (value: unknown) => value ?? "always",
 }));
 vi.mock("../auto-reply/reply/queue.js", () => ({
   getFollowupQueueDepth: () => 0,
   resolveQueueSettings: resolveQueueSettingsMock,
-}));
-vi.mock("../auto-reply/status.js", () => ({
-  buildStatusMessage: buildStatusMessageMock,
 }));
 vi.mock("../tasks/task-owner-access.js", () => ({
   listTasksForRelatedSessionKeyForOwner: (params: {
@@ -2275,7 +2268,7 @@ describe("session_status tool", () => {
     expect(details.sessionKey).toBe("temp:slug-generator");
   });
 
-  it("blocks cross-agent session_status without agent-to-agent access", async () => {
+  it("blocks cross-agent session_status when agent-to-agent access is disabled", async () => {
     resetSessionStore({
       "agent:other:main": {
         sessionId: "s2",
@@ -2286,8 +2279,31 @@ describe("session_status tool", () => {
     const tool = getSessionStatusTool("agent:main:main");
 
     await expect(tool.execute("call5", { sessionKey: "agent:other:main" })).rejects.toThrow(
-      "Session status visibility is restricted",
+      "Agent-to-agent status is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent access.",
     );
+  });
+
+  it("returns another agent's session status by default with no tools configuration", async () => {
+    resetSessionStore({
+      "agent:other:main": {
+        sessionId: "s2",
+        updatedAt: 10,
+      },
+    });
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {},
+        },
+      },
+    };
+
+    const tool = getSessionStatusTool("agent:main:main");
+
+    const result = await tool.execute("call5-default", { sessionKey: "agent:other:main" });
+    expect((result.details as { ok?: boolean }).ok).toBe(true);
   });
 
   it.each([
@@ -2702,8 +2718,44 @@ describe("session_status tool", () => {
     const saved = savedStore.main as Record<string, unknown>;
     expect(saved.providerOverride).toBeUndefined();
     expect(saved.modelOverride).toBeUndefined();
+    expect(saved.modelOverrideSource).toBe("default");
     expect(saved.authProfileOverride).toBeUndefined();
     expect(saved.liveModelSwitchPending).toBe(true);
+  });
+
+  it("rejects a colliding provider-wildcard model change without writing the session", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+        providerOverride: "custom/team",
+        modelOverride: "Reader",
+        modelOverrideSource: "user",
+      },
+    });
+    mockConfig = {
+      ...createMockConfig(),
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {},
+          modelPolicy: { allow: ["custom/*"] },
+        },
+      },
+    };
+
+    await expect(
+      getSessionStatusTool().execute("literal-denied", { model: "Reader" }),
+    ).rejects.toThrow('Model "custom/team/Reader" is not allowed.');
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
+
+    await getSessionStatusTool().execute("literal-allowed", { model: "custom/team/Reader" });
+    const saved = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, SessionEntry>;
+    expect(saved.main).toMatchObject({
+      providerOverride: "custom",
+      modelOverride: "team/Reader",
+      modelOverrideSource: "user",
+    });
   });
 
   it("resolves a model alias configured only on the target agent", async () => {

@@ -19,16 +19,17 @@ import {
   normalizeAgentModelMapForConfig,
   normalizeAgentModelSelectionForConfig,
 } from "./model-input.js";
+import { materializeConfiguredProviderModelRows } from "./model-provider-rows.js";
 import {
   applyProviderConfigDefaultsForConfig,
   normalizeProviderConfigForConfigDefaults,
 } from "./provider-policy.js";
-import { normalizeTalkConfig } from "./talk.js";
 import type { ModelDefinitionConfig } from "./types.models.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 type WarnState = { warned: boolean };
 type ProviderPolicyDefaultsOptions = {
+  env?: NodeJS.ProcessEnv;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   loadManifestRegistry?: () => Pick<PluginManifestRegistry, "plugins"> | undefined;
 };
@@ -154,10 +155,6 @@ export function applySessionDefaults(
   return next;
 }
 
-export function applyTalkConfigNormalization(config: OpenClawConfig): OpenClawConfig {
-  return normalizeTalkConfig(config);
-}
-
 /** Catalog metadata eligible to fill fields the operator did not author. */
 type CatalogSeedModel = Pick<
   ModelDefinitionConfig,
@@ -180,6 +177,7 @@ type CatalogSeedModel = Pick<
 function buildManifestCatalogModelLookup(
   manifestRegistry: Pick<PluginManifestRegistry, "plugins"> | undefined,
   policies: ReturnType<typeof collectManifestModelIdNormalizationPolicies> | undefined,
+  configuredProviderIds: ReadonlySet<string>,
 ): (providerId: string, modelId: string) => Partial<CatalogSeedModel> | undefined {
   const plugins = manifestRegistry?.plugins;
   if (!plugins || plugins.length === 0) {
@@ -197,6 +195,9 @@ function buildManifestCatalogModelLookup(
         for (const [catalogProviderId, provider] of Object.entries(
           plugin.modelCatalog?.providers ?? {},
         )) {
+          if (!configuredProviderIds.has(normalizeProviderId(catalogProviderId))) {
+            continue;
+          }
           for (const model of provider.models) {
             const key = keyFor(catalogProviderId, model.id);
             if (!index.has(key)) {
@@ -227,14 +228,23 @@ export function applyModelDefaults(
     const resolveCatalogModel = buildManifestCatalogModelLookup(
       manifestRegistry,
       modelIdNormalizationPolicies,
+      new Set(Object.keys(providerConfig).map(normalizeProviderId)),
     );
     const nextProviders = { ...providerConfig };
     for (const [providerId, provider] of Object.entries(providerConfig)) {
-      const normalizedProvider = normalizeProviderConfigForConfigDefaults({
-        provider: providerId,
-        providerConfig: provider,
-        manifestRegistry,
-      });
+      const normalizedProvider = materializeConfiguredProviderModelRows(
+        normalizeProviderConfigForConfigDefaults({
+          provider: providerId,
+          providerConfig: provider,
+          manifestRegistry,
+        }),
+        (modelId) =>
+          normalizeConfiguredProviderCatalogModelId(
+            providerId,
+            modelId,
+            modelIdNormalizationPolicies,
+          ),
+      );
       const models = normalizedProvider.models;
       if (!Array.isArray(models) || models.length === 0) {
         if (normalizedProvider !== provider) {
@@ -252,11 +262,7 @@ export function applyModelDefaults(
       let providerMutated = false;
       const nextModels = models.map((model) => {
         const raw = model as ModelDefinitionLike;
-        const id = normalizeConfiguredProviderCatalogModelId(
-          providerId,
-          raw.id,
-          modelIdNormalizationPolicies,
-        );
+        const id = raw.id;
 
         // Config entries are overrides, not full definitions: authored fields
         // win, the owning catalog row fills omitted fields, and only then do
@@ -310,7 +316,6 @@ export function applyModelDefaults(
             ? catalogModel.compat
             : undefined;
         const modelMutated =
-          id !== raw.id ||
           raw.reasoning !== reasoning ||
           raw.input === undefined ||
           costMutated ||
@@ -328,7 +333,6 @@ export function applyModelDefaults(
           {},
           raw,
           {
-            id,
             reasoning,
             input,
             cost,
@@ -479,25 +483,17 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
     return cfg;
   }
 
-  let mutated = false;
   const nextDefaults = defaults ? { ...defaults } : {};
   if (!hasMax) {
     nextDefaults.maxConcurrent = resolveAgentMaxConcurrent();
-    mutated = true;
   }
 
   const nextSubagents = defaults?.subagents ? { ...defaults.subagents } : {};
   if (!hasSubMax) {
     nextSubagents.maxConcurrent = DEFAULT_SUBAGENT_MAX_CONCURRENT;
-    mutated = true;
   }
   if (!hasSubArchive) {
     nextSubagents.archiveAfterMinutes = DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES;
-    mutated = true;
-  }
-
-  if (!mutated) {
-    return cfg;
   }
 
   return {
@@ -512,15 +508,7 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
-export function applyCronDefaults(cfg: OpenClawConfig): OpenClawConfig {
-  return cfg;
-}
-
-export function applyLoggingDefaults(cfg: OpenClawConfig): OpenClawConfig {
-  return cfg;
-}
-
-function hasAnthropicDefaultSignal(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+export function hasAnthropicDefaultSignal(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
   if (env.ANTHROPIC_API_KEY?.trim() || env.ANTHROPIC_OAUTH_TOKEN?.trim()) {
     return true;
   }
@@ -553,14 +541,15 @@ export function applyContextPruningDefaults(
   if (!cfg.agents?.defaults) {
     return cfg;
   }
-  if (!hasAnthropicDefaultSignal(cfg, process.env)) {
+  const env = options.env ?? process.env;
+  if (!hasAnthropicDefaultSignal(cfg, env)) {
     return cfg;
   }
   return (
     applyProviderConfigDefaultsForConfig({
       provider: "anthropic",
       config: cfg,
-      env: process.env,
+      env,
       manifestRegistry: options.manifestRegistry,
       loadManifestRegistry: options.loadManifestRegistry,
     }) ?? cfg

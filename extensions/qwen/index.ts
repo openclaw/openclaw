@@ -1,6 +1,6 @@
 // Qwen plugin entrypoint registers its OpenClaw integration.
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { buildOpenAICompatibleLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { buildOpenAICompatibleLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildQwenMediaUnderstandingProvider } from "./media-understanding-provider.js";
@@ -261,18 +261,19 @@ export default defineSingleProviderPluginEntry({
           return null;
         }
         const baseUrl = resolveConfiguredQwenBaseUrl(ctx.config) ?? QWEN_BASE_URL;
-        return {
-          provider: await buildOpenAICompatibleLiveModelProviderConfig({
-            providerId: PROVIDER_ID,
-            providerConfig: buildQwenProvider({ baseUrl }),
-            apiKey: auth.apiKey,
-            discoveryApiKey: auth.discoveryApiKey,
-          }),
-        };
+        return await buildOpenAICompatibleLiveProviderCatalog({
+          discoveryMode: "strict",
+          providerId: PROVIDER_ID,
+          providerConfig: buildQwenProvider({ baseUrl }),
+          apiKey: auth.apiKey,
+          discoveryApiKey: auth.discoveryApiKey,
+          profileId: auth.profileId,
+        });
       },
       staticRun: async () => ({ provider: buildQwenProvider() }),
     },
     wrapStreamFn: wrapQwenProviderStream,
+    wrapSimpleCompletionStreamFn: wrapQwenProviderStream,
     resolveThinkingProfile: ({ modelId }) => resolveQwenThinkingProfile(modelId),
     normalizeConfig: ({ providerConfig }) => {
       if (!isQwenCodingPlanBaseUrl(providerConfig.baseUrl)) {
@@ -299,14 +300,14 @@ export default defineSingleProviderPluginEntry({
             return null;
           }
           const baseUrl = resolveConfiguredQwenTokenPlanBaseUrl(ctx.config);
-          return {
-            provider: await buildOpenAICompatibleLiveModelProviderConfig({
-              providerId: QWEN_TOKEN_PLAN_PROVIDER_ID,
-              providerConfig: buildQwenTokenPlanProvider({ baseUrl }),
-              apiKey: auth.apiKey,
-              discoveryApiKey: auth.discoveryApiKey,
-            }),
-          };
+          return await buildOpenAICompatibleLiveProviderCatalog({
+            discoveryMode: "strict",
+            providerId: QWEN_TOKEN_PLAN_PROVIDER_ID,
+            providerConfig: buildQwenTokenPlanProvider({ baseUrl }),
+            apiKey: auth.apiKey,
+            discoveryApiKey: auth.discoveryApiKey,
+            profileId: auth.profileId,
+          });
         },
       },
       staticCatalog: {
@@ -316,6 +317,7 @@ export default defineSingleProviderPluginEntry({
         }),
       },
       wrapStreamFn: wrapQwenProviderStream,
+      wrapSimpleCompletionStreamFn: wrapQwenProviderStream,
       resolveThinkingProfile: ({ modelId }) => resolveQwenTokenPlanThinkingProfile(modelId),
     });
     api.registerProvider({
@@ -324,6 +326,7 @@ export default defineSingleProviderPluginEntry({
       docsPath: "/providers/qwen",
       auth: [],
       wrapStreamFn: wrapQwenProviderStream,
+      wrapSimpleCompletionStreamFn: wrapQwenProviderStream,
     });
     api.registerMediaUnderstandingProvider(buildQwenMediaUnderstandingProvider());
     api.registerVideoGenerationProvider(qwenVideoGenerationProvider);

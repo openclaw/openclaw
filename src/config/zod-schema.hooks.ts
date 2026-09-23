@@ -73,6 +73,8 @@ export const HookMappingSchema = z
   .strict()
   .optional();
 
+export type HookMappingConfigInput = NonNullable<z.input<typeof HookMappingSchema>>;
+
 const HookConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -96,6 +98,8 @@ export const InternalHooksSchema = z
   })
   .strict()
   .optional();
+
+export type InternalHooksConfigInput = NonNullable<z.input<typeof InternalHooksSchema>>;
 
 export const HooksGmailSchema = z
   .object({
@@ -138,3 +142,5 @@ export const HooksGmailSchema = z
   })
   .strict()
   .optional();
+
+export type HooksGmailConfigInput = NonNullable<z.input<typeof HooksGmailSchema>>;

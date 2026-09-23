@@ -1,4 +1,3 @@
-// Discord plugin module implements runtime.presence behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { ActionGate } from "openclaw/plugin-sdk/channel-actions";
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";
@@ -8,14 +7,14 @@ import { resolveDefaultDiscordAccountId } from "../accounts.js";
 import type { Activity, UpdatePresenceData } from "../internal/gateway.js";
 import { getGateway } from "../monitor/gateway-registry.js";
 
-const ACTIVITY_TYPE_MAP: Record<string, number> = {
-  playing: 0,
-  streaming: 1,
-  listening: 2,
-  watching: 3,
-  custom: 4,
-  competing: 5,
-};
+const ACTIVITY_TYPE_MAP = new Map<string, number>([
+  ["playing", 0],
+  ["streaming", 1],
+  ["listening", 2],
+  ["watching", 3],
+  ["custom", 4],
+  ["competing", 5],
+]);
 
 const VALID_STATUSES = new Set(["online", "dnd", "idle", "invisible"]);
 
@@ -61,13 +60,13 @@ export async function handleDiscordPresenceAction(
     if (!activityTypeRaw) {
       throw new Error(
         "activityType is required when activityName is provided. " +
-          `Valid types: ${Object.keys(ACTIVITY_TYPE_MAP).join(", ")}`,
+          `Valid types: ${[...ACTIVITY_TYPE_MAP.keys()].join(", ")}`,
       );
     }
-    const typeNum = ACTIVITY_TYPE_MAP[normalizeLowercaseStringOrEmpty(activityTypeRaw)];
+    const typeNum = ACTIVITY_TYPE_MAP.get(normalizeLowercaseStringOrEmpty(activityTypeRaw));
     if (typeNum === undefined) {
       throw new Error(
-        `Invalid activityType "${activityTypeRaw}". Must be one of: ${Object.keys(ACTIVITY_TYPE_MAP).join(", ")}`,
+        `Invalid activityType "${activityTypeRaw}". Must be one of: ${[...ACTIVITY_TYPE_MAP.keys()].join(", ")}`,
       );
     }
 

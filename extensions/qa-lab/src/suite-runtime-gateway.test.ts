@@ -120,7 +120,7 @@ describe("qa suite gateway helpers", () => {
       env: runtimeEnv,
       targetPid: 43_123,
       reason: "config.patch",
-      intent: { force: true },
+      intent: { force: true, waitMs: 0 },
     });
     expect(writeGatewayRestartIntentSyncMock).toHaveBeenCalledOnce();
     expect(writeGatewayRestartIntentSyncMock.mock.invocationCallOrder[0]).toBeGreaterThan(
@@ -141,6 +141,28 @@ describe("qa suite gateway helpers", () => {
     });
     expect(release).toHaveBeenCalled();
     expect(restartAfterStateMutation).not.toHaveBeenCalled();
+  });
+
+  it("does not signal a restart when the immediate drain intent cannot be persisted", async () => {
+    writeGatewayRestartIntentSyncMock.mockReturnValue(false);
+    const gatewayCall = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return { hash: "hash-1", config: {} };
+      }
+      return method === "system.info" ? { pid: 43_123 } : { ok: true };
+    });
+    const { env, waitReady } = createConfigMutationEnv(gatewayCall);
+
+    await expect(
+      restartGatewayWithConfigPatch({ env, patch: { tools: { codeMode: { enabled: true } } } }),
+    ).rejects.toThrow("could not persist a forced restart intent");
+    expect(gatewayCall.mock.calls.map(([method]) => method)).toEqual([
+      "config.get",
+      "system.info",
+      "config.patch",
+    ]);
+    expect(waitReady).not.toHaveBeenCalled();
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
   it("bounds oversized suite gateway JSON responses", async () => {

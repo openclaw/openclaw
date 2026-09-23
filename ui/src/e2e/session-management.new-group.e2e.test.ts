@@ -49,9 +49,9 @@ suite.define(() => {
       const row = page.locator('.sidebar-recent-session[data-session-key="agent:main:move-me"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await row.hover();
-      await row.getByRole("button", { name: "Open session menu" }).click();
+      await row.click({ button: "right" });
       await openSessionMenuSubmenu(page, "Move to group");
-      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "New group…" }));
+      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "New group" }));
       const field = page.getByLabel("New group name");
       await field.waitFor({ state: "visible" });
       return field;

@@ -17,7 +17,6 @@ import {
   requireRecord,
   expectRecordFields,
   expectNoMockCallWithFields,
-  requireMockCallArgWithFields,
   createMinimalRunAgentTurnParams,
 } from "./agent-runner-execution.test-support.js";
 import type {
@@ -42,7 +41,22 @@ vi.mock("../../agents/embedded-agent-helpers/sanitize-user-facing-text.js", asyn
   };
 });
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
+const executeAgentTurn = await getExecuteAgentTurnForTest();
+
+function terminalEventsForRun(
+  calls: Parameters<typeof import("../../infra/agent-events.js").emitAgentEvent>[],
+  runId: string,
+) {
+  return calls
+    .map(([event]) => event)
+    .filter(
+      (event) =>
+        event.runId === runId &&
+        event.stream === "lifecycle" &&
+        (event.data.phase === "end" || event.data.phase === "error"),
+    );
+}
 
 beforeEach(() => {
   sanitizerState.sanitizeUserFacingText.mockClear();
@@ -53,7 +67,6 @@ async function executeTestTurn(
   params?: Parameters<typeof createMinimalRunAgentTurnParams>[0],
   overrides?: Partial<AgentTurnParams>,
 ) {
-  const executeAgentTurn = await getExecuteAgentTurnForTest();
   return executeAgentTurn({ ...createMinimalRunAgentTurnParams(params), ...overrides });
 }
 
@@ -142,7 +155,7 @@ describe("executeAgentTurn: lifecycle progress", () => {
     });
   });
 
-  it("skips channel item progress when a matching tool event carries the progress", async () => {
+  it("forwards suppression facts alongside the matching raw tool event", async () => {
     const onItemEvent = vi.fn();
     const onToolStart = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
@@ -177,7 +190,9 @@ describe("executeAgentTurn: lifecycle progress", () => {
     });
 
     expect(result.kind).toBe("success");
-    expect(onItemEvent).not.toHaveBeenCalled();
+    expect(onItemEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ itemId: "cmd-1", suppressChannelProgress: true }),
+    );
     expect(onToolStart).toHaveBeenCalledWith({
       itemId: "cmd-1",
       toolCallId: "cmd-1",
@@ -233,7 +248,7 @@ describe("executeAgentTurn: lifecycle progress", () => {
     });
   });
 
-  it("hides internal lifecycle events while preserving visible tool progress", async () => {
+  it("forwards quiet item facts while keeping hidden raw tool starts private", async () => {
     const onItemEvent = vi.fn();
     const onToolStart = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
@@ -300,9 +315,12 @@ describe("executeAgentTurn: lifecycle progress", () => {
     expect(onToolStart).toHaveBeenCalledWith(
       expect.objectContaining({ name: "wait", phase: "start" }),
     );
-    expect(onItemEvent).toHaveBeenCalledTimes(1);
+    expect(onItemEvent).toHaveBeenCalledTimes(2);
     expect(onItemEvent).toHaveBeenCalledWith(
       expect.objectContaining({ name: "exec", phase: "start" }),
+    );
+    expect(onItemEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "wait", hideFromChannelProgress: true }),
     );
   });
 
@@ -611,49 +629,136 @@ describe("executeAgentTurn: lifecycle progress", () => {
     });
   });
 
-  it("emits an embedded lifecycle terminal backstop when the runner returns without one", async () => {
+  it("publishes the timeout explanation and records failed dispatch through the lifecycle backstop", async () => {
     const agentEvents = await import("../../infra/agent-events.js");
     const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
+    const onAgentRunTerminalOutcome = vi.fn();
+    const timeoutText = "Request timed out before a response was generated. Please try again.";
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       await params.onAgentEvent?.({
         stream: "lifecycle",
         data: { phase: "start", startedAt: 1_000 },
       });
       return {
-        payloads: [{ text: "Request timed out before a response was generated.", isError: true }],
-        meta: { aborted: true, livenessState: "blocked", replayInvalid: true },
+        payloads: [
+          { text: "An earlier tool failed.", isError: true },
+          { text: timeoutText, isError: true },
+        ],
+        meta: {
+          error: { kind: "incomplete_turn", message: timeoutText, fallbackSafe: false },
+          aborted: false,
+          stopReason: "timeout",
+          timeoutPhase: "provider",
+          providerStarted: true,
+          livenessState: "blocked",
+          replayInvalid: false,
+        },
       };
     });
 
     const result = await executeTestTurn(
-      { opts: { runId: "run-timeout" } as GetReplyOptions },
+      { opts: { runId: "run-timeout", onAgentRunTerminalOutcome } },
       { commandBody: "hello" },
     );
 
     expect(result.kind).toBe("success");
-    const lifecycleEvent = requireRecord(
-      requireMockCallArgWithFields(
-        emitAgentEvent,
-        { runId: "run-timeout", sessionKey: "main", stream: "lifecycle" },
-        "agent event",
-      ),
-      "agent event",
-    );
-    expectRecordFields(lifecycleEvent, {
-      runId: "run-timeout",
-      sessionKey: "main",
-      stream: "lifecycle",
-    });
+    expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("failed");
+    const terminalEvents = terminalEventsForRun(emitAgentEvent.mock.calls, "run-timeout");
+    expect(terminalEvents).toHaveLength(1);
+    const lifecycleEvent = requireRecord(terminalEvents[0], "terminal event");
+    expectRecordFields(lifecycleEvent, { sessionKey: "main" });
     const lifecycleData = requireRecord(lifecycleEvent.data, "lifecycle data");
     expectRecordFields(lifecycleData, {
-      phase: "end",
+      phase: "error",
+      error: timeoutText,
       startedAt: 1_000,
-      aborted: true,
+      aborted: false,
+      stopReason: "timeout",
+      timeoutPhase: "provider",
+      providerStarted: true,
       livenessState: "blocked",
-      replayInvalid: true,
+      replayInvalid: false,
     });
     expect(typeof lifecycleData.endedAt).toBe("number");
   });
+
+  it.each(["timeout", "failure"] as const)(
+    "preserves explicit deferred guidance over distinct %s metadata and payload errors",
+    async (kind) => {
+      const agentEvents = await import("../../infra/agent-events.js");
+      const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
+      const deferredError = "Reconnect the selected provider, then try again.";
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+        await params.onAgentEvent?.({
+          stream: "lifecycle",
+          data: { phase: "finishing", error: deferredError, livenessState: "blocked" },
+        });
+        return {
+          payloads: [{ text: "Rendered payload diagnostic.", isError: true }],
+          meta: {
+            error: { kind: "incomplete_turn", message: "Internal provider diagnostic." },
+            ...(kind === "timeout" ? { stopReason: "timeout", timeoutPhase: "provider" } : {}),
+          },
+        };
+      });
+
+      await executeTestTurn({ opts: { runId: "run-deferred-diagnostic" } });
+
+      const terminalEvents = terminalEventsForRun(
+        emitAgentEvent.mock.calls,
+        "run-deferred-diagnostic",
+      );
+      expect(terminalEvents).toHaveLength(1);
+      const lifecycleEvent = requireRecord(terminalEvents[0], "terminal event");
+      expectRecordFields(requireRecord(lifecycleEvent.data, "lifecycle data"), {
+        phase: "error",
+        error: deferredError,
+      });
+      expect(JSON.stringify(lifecycleEvent)).not.toContain("Internal provider diagnostic.");
+      expect(JSON.stringify(lifecycleEvent)).not.toContain("Rendered payload diagnostic.");
+    },
+  );
+
+  it.each([
+    { name: "successful run", stopReason: "completed", aborted: false },
+    { name: "explicit cancellation", stopReason: "stop", aborted: true },
+  ])(
+    "does not turn a tool error into terminal failure for $name",
+    async ({ stopReason, aborted }) => {
+      const agentEvents = await import("../../infra/agent-events.js");
+      const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
+      const onAgentRunTerminalOutcome = vi.fn();
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+        return {
+          payloads: [
+            { text: "A tool timed out before the run settled.", isError: true },
+            { text: "Settled output." },
+          ],
+          meta: { stopReason, aborted, replayInvalid: false },
+        };
+      });
+
+      const result = await executeTestTurn({
+        opts: { runId: "run-tool-diagnostic", onAgentRunTerminalOutcome },
+      });
+
+      expect(result.kind).toBe("success");
+      expect(onAgentRunTerminalOutcome).not.toHaveBeenCalledWith("failed");
+      const terminalEvents = terminalEventsForRun(emitAgentEvent.mock.calls, "run-tool-diagnostic");
+      expect(terminalEvents).toHaveLength(1);
+      const lifecycleEvent = requireRecord(terminalEvents[0], "terminal event");
+      const lifecycleData = requireRecord(lifecycleEvent.data, "lifecycle data");
+      expectRecordFields(lifecycleData, {
+        phase: "end",
+        stopReason,
+        aborted,
+        replayInvalid: false,
+      });
+      expect(lifecycleData).not.toHaveProperty("error");
+    },
+  );
 
   it("shows only the successful reply after a transient provider retry", async () => {
     const agentEvents = await import("../../infra/agent-events.js");
@@ -697,14 +802,10 @@ describe("executeAgentTurn: lifecycle progress", () => {
       expect(result.runResult.payloads).toEqual([{ text: "recovered" }]);
     }
     expect(onBlockReply).not.toHaveBeenCalled();
-    const lifecycleEvent = requireRecord(
-      requireMockCallArgWithFields(
-        emitAgentEvent,
-        { runId: "run-recovered", sessionKey: "main", stream: "lifecycle" },
-        "agent event",
-      ),
-      "agent event",
-    );
+    const terminalEvents = terminalEventsForRun(emitAgentEvent.mock.calls, "run-recovered");
+    expect(terminalEvents).toHaveLength(1);
+    const lifecycleEvent = requireRecord(terminalEvents[0], "terminal event");
+    expectRecordFields(lifecycleEvent, { sessionKey: "main" });
     expectRecordFields(requireRecord(lifecycleEvent.data, "lifecycle data"), {
       phase: "end",
       startedAt: 2_000,
@@ -774,10 +875,8 @@ describe("executeAgentTurn: lifecycle progress", () => {
     );
 
     expect(result.kind).toBe("success");
-    expectNoMockCallWithFields(emitAgentEvent, {
-      runId: "run-complete",
-      stream: "lifecycle",
-    });
+    const terminalEvents = terminalEventsForRun(emitAgentEvent.mock.calls, "run-complete");
+    expect(terminalEvents).toEqual([]);
   });
 
   it("preserves GPT ack-turn final prose without reply-side truncation", async () => {

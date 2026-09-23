@@ -5,22 +5,26 @@ import {
   validateChatMessageGetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { readSessionPendingInput } from "../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import {
   augmentChatHistoryWithCanvasBlocks,
   dropPreSessionStartAnnouncePairs,
+  isPendingAssistantError,
   projectChatDisplayMessage,
 } from "../chat-display-projection.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
-import { readSessionMessagesAroundIdWithStatsAsync } from "../session-transcript-anchor-reader.js";
-import { readSessionMessageByIdAsync } from "../session-transcript-readers.js";
+import { readChatHistoryMessageId } from "../session-history-tail.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { hiddenSessionNotFound } from "../session-sharing-policy.js";
+import { createSessionListEntryFilter } from "../session-sharing.js";
+import {
+  readSessionMessagesAroundIdWithStatsAsync,
+  readSessionMessageByIdAsync,
+} from "../session-transcript-readers.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
-import { readChatHistoryMessageId } from "./chat-history-pages.js";
-import { resolveRequestedChatAgentId, validateChatSelectedAgent } from "./chat-origin-routing.js";
+import { readChatHistoryPage } from "./chat-history-pages.js";
 import { projectPendingInputMessage } from "./chat-pending-inputs.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -29,13 +33,33 @@ import { assertValidParams } from "./validation.js";
 async function isChatMessageIdVisibleAfterHistoryFilters(params: {
   sessionId: string;
   storePath: string | undefined;
-  sessionEntry?: { sessionFile?: string; sessionId?: string };
+  sessionEntry: ReturnType<typeof loadGatewaySessionEntryReadOnly>["entry"];
   sessionKey: string;
-  agentId?: string;
+  agentId: string;
+  message: unknown;
   messageId: string;
   sessionStartedAt?: number;
   allowResetArchiveFallback?: boolean;
 }): Promise<boolean> {
+  if (isPendingAssistantError(params.message)) {
+    // A recovered attempt remains stored but no longer belongs to visible history.
+    // Reuse the anchored history owner; ordinary message lookups stay on the exact-ID path.
+    const page = await readChatHistoryPage({
+      entry: params.sessionEntry,
+      provider: undefined,
+      sessionId: params.sessionId,
+      storePath: params.storePath,
+      sessionAgentId: params.agentId,
+      canonicalKey: params.sessionKey,
+      max: 1,
+      maxHistoryBytes: MAX_PAYLOAD_BYTES,
+      effectiveMaxChars: MAX_PAYLOAD_BYTES,
+      offset: undefined,
+      messageId: params.messageId,
+      ignoreCliSessionImports: true,
+    });
+    return page.messages.some((message) => readChatHistoryMessageId(message) === params.messageId);
+  }
   if (params.sessionStartedAt === undefined) {
     return true;
   }
@@ -61,52 +85,57 @@ async function isChatMessageIdVisibleAfterHistoryFilters(params: {
 }
 
 export const chatMessageGetHandlers: GatewayRequestHandlers = {
-  "chat.message.get": async ({ params, respond, context }) => {
+  "chat.message.get": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateChatMessageGetParams, "chat.message.get", respond)) {
       return;
     }
-    const { sessionKey, messageId, maxChars } = params as {
-      sessionKey: string;
-      agentId?: string;
-      messageId: string;
-      maxChars?: number;
-    };
-    const agentIdOverride = normalizeOptionalText((params as { agentId?: string }).agentId);
-    const requestedAgent = resolveRequestedChatAgentId({
-      cfg: (context as { getRuntimeConfig?: () => OpenClawConfig }).getRuntimeConfig?.(),
-      requestedSessionKey: sessionKey,
-      agentId: agentIdOverride,
-    });
+    const { sessionKey, messageId, maxChars } = params;
+    const agentIdOverride = normalizeOptionalText(params.agentId);
+    const cfg = context.getRuntimeConfig();
+    const requestedAgent = resolveRequestedSessionAgentId(cfg, sessionKey, agentIdOverride);
     if (!requestedAgent.ok) {
       respond(false, undefined, requestedAgent.error);
       return;
     }
     const requestedAgentId = requestedAgent.agentId;
-    const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
-    const { cfg, storePath, entry, canonicalKey } = loadGatewaySessionEntryReadOnly(
-      sessionKey,
-      sessionLoadOptions,
-    );
-    const selectedAgent = validateChatSelectedAgent({
-      cfg,
-      requestedSessionKey: sessionKey,
-      explicitAgentId: agentIdOverride,
-    });
-    if (!selectedAgent.ok) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
-      return;
-    }
+    const session = loadGatewaySessionEntryReadOnly(sessionKey, { agentId: requestedAgentId }, cfg);
+    const { agentId: sessionAgentId, storePath, entry, canonicalKey } = session;
     const sessionId = entry?.sessionId;
     if (!sessionId) {
       respond(true, { ok: false, unavailableReason: "not_found" });
       return;
     }
+    const canReadSession = (current: typeof session): boolean => {
+      if (
+        !current.entry ||
+        current.agentId !== session.agentId ||
+        current.canonicalKey !== canonicalKey ||
+        current.storePath !== storePath ||
+        current.entry.sessionId !== sessionId ||
+        current.entry.lifecycleRevision !== entry.lifecycleRevision
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            "session changed while reading history; reload the conversation",
+            { retryable: true },
+          ),
+        );
+        return false;
+      }
+      const entryFilter = createSessionListEntryFilter({ client, cfg: current.cfg });
+      if (entryFilter?.(current.canonicalKey, current.entry) === false) {
+        respond(false, undefined, hiddenSessionNotFound(canonicalKey));
+        return false;
+      }
+      return true;
+    };
+    if (!canReadSession(session)) {
+      return;
+    }
 
-    const sessionAgentId = resolveSessionAgentId({
-      sessionKey,
-      config: cfg,
-      agentId: selectedAgent.agentId,
-    });
     const effectiveMaxChars =
       typeof maxChars === "number" ? maxChars : Math.min(MAX_PAYLOAD_BYTES, 1_000_000);
     if (messageId.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)) {
@@ -149,21 +178,33 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       messageId,
       { allowResetArchiveFallback: true },
     );
-    if (!resolved.found) {
-      respond(true, { ok: false, unavailableReason: "not_found" });
+    const visible =
+      resolved.found &&
+      (await isChatMessageIdVisibleAfterHistoryFilters({
+        sessionId,
+        storePath,
+        sessionEntry: entry,
+        sessionKey,
+        agentId: sessionAgentId,
+        message: resolved.message,
+        messageId,
+        sessionStartedAt:
+          typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
+        allowResetArchiveFallback: true,
+      }));
+    // Async transcript/archive reads cannot publish under a stale sharing or
+    // physical-session snapshot. Pending input reads above are synchronous.
+    if (
+      !canReadSession(
+        loadGatewaySessionEntryReadOnly(sessionKey, {
+          agentId: requestedAgentId,
+          clone: false,
+          projection: "list",
+        }),
+      )
+    ) {
       return;
     }
-    const visible = await isChatMessageIdVisibleAfterHistoryFilters({
-      sessionId,
-      storePath,
-      sessionEntry: entry,
-      sessionKey,
-      agentId: sessionAgentId,
-      messageId,
-      sessionStartedAt:
-        typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
-      allowResetArchiveFallback: true,
-    });
     if (!visible) {
       respond(true, { ok: false, unavailableReason: "not_found" });
       return;
@@ -187,9 +228,13 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    respond(true, {
-      ok: true,
-      message: projected,
-    });
+    // maxChars bounds individual text fields, not the serialized message: many
+    // blocks or structured output must not bypass the WebSocket payload limit.
+    respond(
+      true,
+      jsonUtf8Bytes(projected) > MAX_PAYLOAD_BYTES - 1024
+        ? { ok: false, unavailableReason: "oversized" }
+        : { ok: true, message: projected },
+    );
   },
 };

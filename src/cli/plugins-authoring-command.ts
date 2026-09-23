@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { jsonSchemaValuesEqual } from "@openclaw/normalization-core/json-schema";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { replaceFileAtomic } from "../infra/replace-file.js";
 import { formatCwdRelativePathOrAbsolute as formatOutputPath } from "../infra/safe-cwd.js";
 import { getToolPluginMetadata, type ToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
 import {
@@ -11,12 +12,16 @@ import {
   resolvePackageExtensionEntries,
 } from "../plugins/manifest.js";
 import { unwrapDefaultModuleExport } from "../plugins/module-export.js";
+import { controlUiSource } from "../plugins/package-manifest.js";
 import { getCachedPluginModuleLoader } from "../plugins/plugin-module-loader-cache.js";
 import { buildPluginLoaderAliasMap } from "../plugins/sdk-alias.js";
 import { defaultRuntime } from "../runtime.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { isRecord, shortenHomeInString } from "../utils.js";
 import { VERSION } from "../version.js";
+import { formatCliOperatorError } from "./failure-output.js";
+import { buildPluginControlUi, writePluginBuildManifest } from "./plugins-control-ui-build.js";
+import { writeFeaturePluginScaffold } from "./plugins-feature-scaffold.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -43,7 +48,7 @@ export type PluginsInitOptions = {
   type?: string;
 };
 
-type PluginScaffoldType = "tool" | "provider";
+type PluginScaffoldType = "tool" | "provider" | "feature";
 
 type LoadedToolPlugin = {
   entry: unknown;
@@ -53,6 +58,7 @@ type LoadedToolPlugin = {
 const SUPPORTED_PLUGIN_SCAFFOLD_TYPES = [
   "tool",
   "provider",
+  "feature",
 ] as const satisfies readonly PluginScaffoldType[];
 const CLAWHUB_PACKAGE_PUBLISH_WORKFLOW_REF = "9d49df109d4ad3dc8a6ecf05d26b39f46d294721";
 const TOOL_PLUGIN_API_RANGE = ">=2026.5.17";
@@ -110,10 +116,9 @@ function readPackageManifest(rootDir: string): JsonObject {
   return readJsonFile(packagePath);
 }
 
-async function importToolPluginEntry(entryPath: string, rootDir: string): Promise<unknown> {
+async function importToolPluginEntry(entryPath: string): Promise<unknown> {
   const loader = getCachedPluginModuleLoader({
     modulePath: entryPath,
-    rootDir,
     importerUrl: import.meta.url,
     loaderFilename: entryPath,
     aliasMap: buildPluginLoaderAliasMap(entryPath, process.argv[1], import.meta.url),
@@ -133,17 +138,17 @@ export async function loadToolPlugin(params: {
   rootDir: string;
   entryPath: string;
 }): Promise<LoadedToolPlugin> {
-  // Authoring validation imports the entry once and requires SDK metadata from defineToolPlugin.
+  // Tool and feature helpers publish the same static authoring metadata.
   if (!fs.existsSync(params.entryPath)) {
     throw new Error(
       `plugin entry not found: ${normalizeRelativePath(params.rootDir, params.entryPath)}`,
     );
   }
-  const entry = await importToolPluginEntry(params.entryPath, params.rootDir);
+  const entry = await importToolPluginEntry(params.entryPath);
   const metadata = getToolPluginMetadata(entry);
   if (!metadata) {
     throw new Error(
-      `plugin entry does not expose defineToolPlugin metadata: ${normalizeRelativePath(
+      `plugin entry does not expose tool or feature authoring metadata: ${normalizeRelativePath(
         params.rootDir,
         params.entryPath,
       )}`,
@@ -298,6 +303,14 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
     packageManifest,
     existingManifest: currentManifest,
   });
+  const browserSource = controlUiSource(packageManifest);
+  if (browserSource) {
+    manifest.controlUi = await buildPluginControlUi({
+      rootDir,
+      source: browserSource,
+      check: opts.check,
+    });
+  }
   const nextPackageManifest = buildToolPluginPackageManifest({
     packageManifest,
     entry: entryRelative,
@@ -316,13 +329,21 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
     return;
   }
 
-  writeJsonFile(manifestPath, manifest);
-  writeJsonFile(packagePath, nextPackageManifest);
+  const realRootDir = fs.realpathSync(rootDir);
+  await replaceFileAtomic({
+    filePath: path.join(realRootDir, "package.json"),
+    content: `${JSON.stringify(nextPackageManifest, null, 2)}\n`,
+    preserveExistingMode: true,
+    dirMode: (await fs.promises.stat(realRootDir)).mode & 0o7777,
+    syncTempFile: true,
+    syncParentDir: true,
+  });
+  await writePluginBuildManifest(realRootDir, manifest);
   defaultRuntime.log(`Wrote ${formatOutputPath(manifestPath, PLUGIN_MANIFEST_FILENAME)}`);
   defaultRuntime.log(`Updated ${formatOutputPath(packagePath, "package.json")}`);
 }
 
-async function collectPluginsValidationResult(
+export async function collectPluginsValidationResult(
   opts: PluginsValidateOptions,
 ): Promise<PluginsValidationResult> {
   const rootDir = resolveRootDir(opts.root);
@@ -341,6 +362,13 @@ async function collectPluginsValidationResult(
     packageManifest,
     entry: entryRelative,
   });
+  const browserSource = controlUiSource(packageManifest);
+  if (browserSource) {
+    const declaration = await buildPluginControlUi({ rootDir, source: browserSource, check: true });
+    if (!jsonSchemaValuesEqual(manifest.controlUi, declaration)) {
+      errors.push("Control UI manifest is stale. Run openclaw plugins build.");
+    }
+  }
   if (errors.length > 0) {
     return { valid: false, pluginId: metadata.id, errors };
   }
@@ -356,10 +384,8 @@ export async function runPluginsValidateCommand(opts: PluginsValidateOptions): P
     if (!opts.json) {
       throw err;
     }
-    result = {
-      valid: false,
-      errors: [err instanceof Error ? err.message : String(err)],
-    };
+    const failure = err instanceof Error ? err : String(err);
+    result = { valid: false, errors: [formatCliOperatorError(failure)] };
   }
 
   if (!result.valid) {
@@ -462,7 +488,7 @@ function buildScaffoldTsconfig(type: PluginScaffoldType): JsonObject {
       outDir: "dist",
       skipLibCheck: true,
     },
-    include: type === "provider" ? ["src/index.ts"] : ["src/**/*.ts"],
+    include: type === "feature" ? ["src/**/*.ts"] : ["src/index.ts"],
   };
 }
 
@@ -881,13 +907,17 @@ export async function runPluginsInitCommand(
   fs.mkdirSync(path.join(rootDir, "src"), { recursive: true });
   const tsconfig = buildScaffoldTsconfig(type);
 
-  if (type === "provider") {
+  if (type === "feature") {
+    writeFeaturePluginScaffold({ rootDir, id, name });
+  } else if (type === "provider") {
     writeProviderPluginScaffold({ rootDir, id, name });
   } else {
     writeToolPluginScaffold({ rootDir, id, name });
   }
   writeJsonFile(path.join(rootDir, "tsconfig.json"), tsconfig);
-  writeScaffoldVitestConfig(rootDir);
+  if (type !== "feature") {
+    writeScaffoldVitestConfig(rootDir);
+  }
   defaultRuntime.log(`Created ${formatOutputPath(rootDir, ".")}`);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

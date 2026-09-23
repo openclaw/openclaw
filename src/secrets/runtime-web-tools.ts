@@ -5,18 +5,17 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js";
 import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
   WebFetchCredentialResolutionSource,
   WebSearchCredentialResolutionSource,
 } from "../plugins/types.js";
-import { sortWebFetchProvidersForAutoDetect } from "../plugins/web-fetch-providers.shared.js";
 import {
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
 } from "../plugins/web-provider-public-artifacts.explicit.js";
-import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { secretRefKey } from "./ref-contract.js";
@@ -589,7 +588,11 @@ async function resolveBundledWebSearchProviders(params: {
   // Narrow plugin hints can use explicit public artifacts first; broad custom-plugin risk still
   // routes through runtime discovery because installed or path-loaded providers may participate.
   if (onlyPluginIds && onlyPluginIds.length > 0) {
-    const bundled = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({ onlyPluginIds });
+    const bundled = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
+      onlyPluginIds,
+      env,
+      manifestRecords: params.context.manifestRegistry?.plugins,
+    });
     if (bundled && bundled.length > 0) {
       return bundled;
     }
@@ -641,6 +644,8 @@ async function resolveBundledWebFetchProviders(params: {
   if (params.configuredBundledPluginId) {
     const bundled = resolveBundledExplicitWebFetchProvidersFromPublicArtifacts({
       onlyPluginIds: [params.configuredBundledPluginId],
+      env,
+      manifestRecords: params.context.manifestRegistry?.plugins,
     });
     if (bundled && bundled.length > 0) {
       return bundled;
@@ -695,14 +700,6 @@ function readConfiguredProviderCredential(params: {
   );
 }
 
-function readConfiguredProviderCredentialFallback(params: {
-  provider: PluginWebSearchProviderEntry;
-  config: OpenClawConfig;
-  search: Record<string, unknown> | undefined;
-}): { path: string; value: unknown } | undefined {
-  return params.provider.getConfiguredCredentialFallback?.(params.config);
-}
-
 function inactivePathsForProvider(provider: PluginWebSearchProviderEntry): string[] {
   if (provider.requiresCredential === false) {
     return [];
@@ -736,14 +733,6 @@ function readConfiguredFetchProviderCredential(params: {
     params.provider.getConfiguredCredentialValue?.(params.config) ??
     params.provider.getCredentialValue(params.fetch)
   );
-}
-
-function readConfiguredFetchProviderCredentialFallback(params: {
-  provider: PluginWebFetchProviderEntry;
-  config: OpenClawConfig;
-  fetch: Record<string, unknown> | undefined;
-}): { path: string; value: unknown } | undefined {
-  return params.provider.getConfiguredCredentialFallback?.(params.config);
 }
 
 function inactivePathsForFetchProvider(provider: PluginWebFetchProviderEntry): string[] {
@@ -868,19 +857,15 @@ export async function resolveRuntimeWebTools(params: {
           configuredBundledPluginId,
           hasCustomWebSearchPluginRisk: await getHasCustomWebSearchRisk(),
         }),
-      sortProviders: sortWebSearchProvidersForAutoDetect,
+      sortProviders: sortPluginEntriesForAutoDetect,
       readConfiguredCredential: ({ provider, config, toolConfig }) =>
         readConfiguredProviderCredential({
           provider,
           config,
           search: toolConfig,
         }),
-      readConfiguredCredentialFallback: ({ provider, config, toolConfig }) =>
-        readConfiguredProviderCredentialFallback({
-          provider,
-          config,
-          search: toolConfig,
-        }),
+      readConfiguredCredentialFallback: ({ provider, config }) =>
+        provider.getConfiguredCredentialFallback?.(config),
       ignoreKeylessProvidersForConfiguredSurface: true,
       emptyProvidersWhenSurfaceMissing: true,
       normalizeConfiguredProviderAgainstActiveProviders: true,
@@ -919,12 +904,8 @@ export async function resolveRuntimeWebTools(params: {
           config,
           search: toolConfig,
         }),
-      readConfiguredCredentialFallback: ({ provider, config, toolConfig }) =>
-        readConfiguredProviderCredentialFallback({
-          provider,
-          config,
-          search: toolConfig,
-        }),
+      readConfiguredCredentialFallback: ({ provider, config }) =>
+        provider.getConfiguredCredentialFallback?.(config),
       resolveSecretInput: ({ providerId, value, path, envVars, contractDigest }) =>
         resolveSecretInputWithEnvFallback({
           kind: "search",
@@ -1012,19 +993,15 @@ export async function resolveRuntimeWebTools(params: {
           configuredBundledPluginId,
           hasCustomWebFetchPluginRisk: await getHasCustomWebFetchRisk(),
         }),
-      sortProviders: sortWebFetchProvidersForAutoDetect,
+      sortProviders: sortPluginEntriesForAutoDetect,
       readConfiguredCredential: ({ provider, config, toolConfig }) =>
         readConfiguredFetchProviderCredential({
           provider,
           config,
           fetch: toolConfig,
         }),
-      readConfiguredCredentialFallback: ({ provider, config, toolConfig }) =>
-        readConfiguredFetchProviderCredentialFallback({
-          provider,
-          config,
-          fetch: toolConfig,
-        }),
+      readConfiguredCredentialFallback: ({ provider, config }) =>
+        provider.getConfiguredCredentialFallback?.(config),
     });
 
     const fetchSelection = await resolveRuntimeWebProviderSelection({
@@ -1060,12 +1037,8 @@ export async function resolveRuntimeWebTools(params: {
           config,
           fetch: toolConfig,
         }),
-      readConfiguredCredentialFallback: ({ provider, config, toolConfig }) =>
-        readConfiguredFetchProviderCredentialFallback({
-          provider,
-          config,
-          fetch: toolConfig,
-        }),
+      readConfiguredCredentialFallback: ({ provider, config }) =>
+        provider.getConfiguredCredentialFallback?.(config),
       resolveSecretInput: ({ providerId, value, path, envVars, contractDigest }) =>
         resolveSecretInputWithEnvFallback({
           kind: "fetch",

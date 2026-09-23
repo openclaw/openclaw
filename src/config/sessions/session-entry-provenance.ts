@@ -1,3 +1,4 @@
+import { SESSION_EXPANDED_PARTICIPANT_LIMIT } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import type { SkillLibrarySelection } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import type { HookExternalContentSource } from "../../security/external-content.js";
 
@@ -19,13 +20,73 @@ export function sessionCreatorProfileId(
 }
 
 export type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
-export const MAX_SESSION_PARTICIPANTS = 32;
+export const MAX_SESSION_PARTICIPANTS = SESSION_EXPANDED_PARTICIPANT_LIMIT;
 
 export type SessionOwnerAssignment = {
   actor: SessionActor;
   assignedBy?: SessionActor;
   assignedAt?: number;
 };
+/** Personal preferences follow the assigned human, otherwise the authenticated human creator. */
+export function sessionPersonalProfileId(
+  entry: { owner?: SessionOwnerAssignment; createdActor?: SessionCreatedActor } | undefined,
+): string | undefined {
+  const assigned = entry?.owner?.actor;
+  return assigned?.type === "human" ? assigned.id : sessionCreatorProfileId(entry?.createdActor);
+}
+
+/** Visible spawns keep the matching verified human parent owner without changing creator attribution. */
+export function inheritSpawnSessionOwner(
+  source: { owner?: SessionOwnerAssignment; createdActor?: SessionCreatedActor } | undefined,
+  assignedBy: SessionActor | undefined,
+  requesterProfileId: string | undefined,
+  now = Date.now(),
+  resolveProfileId: (profileId: string) => string | undefined = (profileId) => profileId,
+): SessionOwnerAssignment | undefined {
+  const assigned = source?.owner?.actor;
+  const owner = assigned
+    ? assigned.type === "human"
+      ? assigned
+      : undefined
+    : source?.createdActor?.type === "human" && source.createdActor.source === "profile"
+      ? source.createdActor
+      : undefined;
+  const directMatch = owner?.id && requesterProfileId && owner.id === requesterProfileId;
+  const resolvedOwnerId = !directMatch && owner?.id ? resolveProfileId(owner.id) : owner?.id;
+  const resolvedRequesterId =
+    !directMatch && requesterProfileId ? resolveProfileId(requesterProfileId) : requesterProfileId;
+  const assignmentActor =
+    resolvedOwnerId && resolvedOwnerId === resolvedRequesterId
+      ? {
+          type: "human" as const,
+          id: resolvedRequesterId,
+          ...(owner?.label ? { label: owner.label } : {}),
+        }
+      : assignedBy?.type === "agent" && assignedBy.id
+        ? {
+            type: "agent" as const,
+            id: assignedBy.id,
+            ...(assignedBy.label ? { label: assignedBy.label } : {}),
+          }
+        : undefined;
+  if (!assignmentActor) {
+    return undefined;
+  }
+  return {
+    actor: assignmentActor,
+    ...(assignedBy?.id
+      ? {
+          assignedBy: {
+            type: assignedBy.type,
+            id: assignedBy.id,
+            ...(assignedBy.label ? { label: assignedBy.label } : {}),
+          },
+        }
+      : {}),
+    assignedAt: now,
+  };
+}
+
 export type SessionCreatedVia =
   | "operator" // gateway sessions.create (Control UI / operator clients)
   | "spawn" // sessions_spawn native or ACP subagent spawn

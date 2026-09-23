@@ -13,11 +13,18 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { runExec } from "../process/exec.js";
 import { signalProcessTree } from "../process/kill-tree.js";
+import { extractTailscaleServeGatewayUrls } from "../shared/tailscale-status.js";
 import { isVitestRuntimeEnv } from "./env.js";
 import { toErrorObject } from "./errors.js";
+import { resolveExecutableFromPathEnv } from "./executable-path.js";
 import { retryAsync } from "./retry.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import {
+  isTransientTailscaleStatusError,
+  parsePossiblyNoisyJsonObject,
+  waitForTailscaleBackendReady,
+} from "./tailscale-backend-ready.js";
 import {
   TAILSCALE_ROUTE_OWNER_ARG,
   type TailscaleRouteOwnerMessage,
@@ -28,16 +35,10 @@ const TAILSCALE_STATUS_ATTEMPTS = 3;
 const TAILSCALE_STATUS_RETRY_DELAY_MS = 500;
 const TAILSCALE_ROUTE_START_TIMEOUT_MS = 15_000;
 const TAILSCALE_ROUTE_STOP_TIMEOUT_MS = 4_000;
-
-function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
-  const trimmed = stdout.trim();
-  const start = trimmed.indexOf("{");
-  const end = trimmed.lastIndexOf("}");
-  if (start >= 0 && end > start) {
-    return JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>;
-  }
-  return JSON.parse(trimmed) as Record<string, unknown>;
-}
+// Sudo versions phrase `-n` credential failures differently. Require its prefix
+// so an authorized Tailscale retry keeps ownership of every operational error.
+const SUDO_NONINTERACTIVE_AUTH_ERROR =
+  /^sudo: (?:a password is required|no password was provided|a terminal is required|no tty present|no askpass program specified)/im;
 
 function tailnetHostnameFromStatus(parsed: Record<string, unknown>): string {
   const self =
@@ -58,32 +59,11 @@ function tailnetHostnameFromStatus(parsed: Record<string, unknown>): string {
   throw new Error("Could not determine Tailscale DNS or IP");
 }
 
-function isTransientTailscaleStatusError(error: unknown): boolean {
-  const record = readRecord(error);
-  const detail = [
-    error instanceof Error ? error.message : undefined,
-    typeof record?.stderr === "string" ? record.stderr : undefined,
-    typeof record?.stdout === "string" ? record.stdout : undefined,
-  ]
-    .filter((value): value is string => Boolean(value))
-    .join("\n")
-    .toLowerCase();
-
-  return (
-    record?.timedOut === true ||
-    detail.includes("failed to connect to local tailscale daemon") ||
-    detail.includes("failed to connect to local tailscale service") ||
-    detail.includes("connection refused") ||
-    detail.includes("503 service unavailable")
-  );
-}
-
 /**
  * Locate Tailscale binary using multiple strategies:
- * 1. PATH lookup (via which command)
+ * 1. Filesystem PATH lookup
  * 2. Known macOS app path
- * 3. find /Applications for Tailscale.app
- * 4. locate database (if available)
+ * 3. locate database (if available)
  *
  * @returns Path to Tailscale binary or null if not found
  */
@@ -94,22 +74,29 @@ export async function findTailscaleBinary(): Promise<string | null> {
       return false;
     }
     try {
-      await runExec(filePath, ["--version"], { timeoutMs: 3000 });
+      await runExec(filePath, ["version"], { timeoutMs: 3000 });
       return true;
     } catch {
       return false;
     }
   };
 
-  // Strategy 1: which command
+  // Strategy 1: PATH lookup
   try {
-    const { stdout } = await runExec("which", ["tailscale"]);
-    const fromPath = stdout.trim();
+    const fromPath = resolveExecutableFromPathEnv(
+      "tailscale",
+      process.env.PATH ?? "",
+      process.env,
+      {
+        cwd: process.cwd(),
+        useCache: false,
+      },
+    );
     if (fromPath && (await checkBinary(fromPath))) {
       return fromPath;
     }
   } catch {
-    // which failed, continue
+    // PATH lookup failed, continue
   }
 
   // Strategy 2: Known macOS app path
@@ -118,30 +105,7 @@ export async function findTailscaleBinary(): Promise<string | null> {
     return macAppPath;
   }
 
-  // Strategy 3: find command in /Applications
-  try {
-    const { stdout } = await runExec(
-      "find",
-      [
-        "/Applications",
-        "-maxdepth",
-        "3",
-        "-name",
-        "Tailscale",
-        "-path",
-        "*/Tailscale.app/Contents/MacOS/Tailscale",
-      ],
-      { timeoutMs: 5000 },
-    );
-    const found = stdout.trim().split("\n")[0];
-    if (found && (await checkBinary(found))) {
-      return found;
-    }
-  } catch {
-    // find failed, continue
-  }
-
-  // Strategy 4: locate command
+  // Strategy 3: locate command
   try {
     const { stdout } = await runExec("locate", ["Tailscale.app"]);
     const candidates = stdout
@@ -215,24 +179,36 @@ async function getTailscaleBinary(): Promise<string> {
   return cachedTailscaleBinary ?? "tailscale";
 }
 
-type TailscaleRouteClaim = {
+export type TailscaleRouteClaim = {
   exited: Promise<void>;
   isActive: () => boolean;
   stop: () => Promise<void>;
 };
+
+// Foreground startups replace the daemon's shared Serve config using an ETag.
+// Serialize our starts and owned stops, not the lifetime of each claim.
+let tailscaleRouteOperation: Promise<void> = Promise.resolve();
+
+function serializeTailscaleRouteOperation<T>(operation: () => Promise<T>): Promise<T> {
+  const result = tailscaleRouteOperation.then(operation);
+  tailscaleRouteOperation = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
 
 type TailscaleRouteOwnerFailure = Pick<
   Extract<TailscaleRouteOwnerMessage, { type: "failed" }>,
   "code" | "stdout" | "stderr"
 >;
 
-function isPort443RouteConflict(message: TailscaleRouteOwnerFailure): boolean {
-  return /listener already exists for port 443/i.test(`${message.stderr}\n${message.stdout}`);
-}
-
-function routeClaimError(message: TailscaleRouteOwnerFailure): Error {
-  if (isPort443RouteConflict(message)) {
-    return new TailscaleRouteOwnershipConflictError();
+function routeClaimError(message: TailscaleRouteOwnerFailure, serveStatus: string): Error {
+  const conflict = /listener already exists for port (\d+)/i.exec(
+    `${message.stderr}\n${message.stdout}`,
+  );
+  if (conflict) {
+    return new TailscaleRouteOwnershipConflictError(Number(conflict[1]), serveStatus);
   }
   const detail = [message.stderr.trim(), message.stdout.trim()].find(Boolean);
   return Object.assign(new Error(detail || "Tailscale route owner exited before claiming route"), {
@@ -259,7 +235,10 @@ function waitWithTimeout(promise: Promise<void>, timeoutMs: number): Promise<boo
   });
 }
 
-async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteClaim> {
+async function startTailscaleRouteOwner(
+  argv: string[],
+  serveStatus: string,
+): Promise<TailscaleRouteClaim> {
   const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.tailscaleRouteOwner);
   const execArgv = workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined;
   const worker = fork(
@@ -267,6 +246,7 @@ async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteC
     [TAILSCALE_ROUTE_OWNER_ARG, JSON.stringify({ argv })],
     {
       execArgv,
+      detached: process.platform !== "win32",
       stdio: ["ignore", "ignore", "ignore", "ipc"],
     },
   );
@@ -274,7 +254,6 @@ async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteC
   let ready = false;
   let active = false;
   let stopping = false;
-  let startupSettled = false;
   let failure: Error | undefined;
   let resolveExit!: () => void;
   const exited = new Promise<void>((resolve) => {
@@ -283,10 +262,6 @@ async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteC
 
   const startup = new Promise<void>((resolve, reject) => {
     const settle = (error?: Error) => {
-      if (startupSettled) {
-        return;
-      }
-      startupSettled = true;
       clearTimeout(startupTimer);
       if (error) {
         reject(error);
@@ -322,11 +297,14 @@ async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteC
         ) {
           return;
         }
-        failure = routeClaimError({
-          code: event.code,
-          stdout: event.stdout,
-          stderr: event.stderr,
-        });
+        failure = routeClaimError(
+          {
+            code: event.code,
+            stdout: event.stdout,
+            stderr: event.stderr,
+          },
+          serveStatus,
+        );
         if (!ready) {
           settle(failure);
         }
@@ -381,20 +359,128 @@ async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteC
   }
 }
 
+/** Claim the Gateway route, adopting only its recognized legacy root handler. */
 export async function claimTailscaleRoute(
   mode: "serve" | "funnel",
-  target: number | string,
+  target: number,
+  gatewayPort: number,
+  info: (message: string) => void,
 ): Promise<TailscaleRouteClaim> {
-  const tailscaleBin = await getTailscaleBinary();
-  const args = [mode, "--yes", "--bg=false", `${target}`];
-  try {
-    return await startTailscaleRouteOwner([tailscaleBin, ...args]);
-  } catch (error) {
-    if (!isPermissionDeniedError(error)) {
+  return serializeTailscaleRouteOperation(() =>
+    claimTailscaleRouteOwned({ mode, target, gatewayPort, info }),
+  );
+}
+
+/** Claim a private HTTPS Serve port without adopting or clearing existing routes. */
+export async function claimTailscaleServePort(
+  target: number,
+  httpsPort: number,
+  assertCurrent: () => void,
+): Promise<TailscaleRouteClaim> {
+  for (const [name, port] of [
+    ["target", target],
+    ["httpsPort", httpsPort],
+  ] as const) {
+    if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+      throw new RangeError(`Tailscale ${name} must be an integer port between 1 and 65535`);
+    }
+  }
+  return serializeTailscaleRouteOperation(() =>
+    claimTailscaleRouteOwned({
+      mode: "serve",
+      target,
+      httpsPort,
+      assertCurrent,
+      info: () => undefined,
+    }),
+  );
+}
+
+// Startup failure cleanup stays inside the queued operation. Only a returned
+// claim's stop reenters the queue, so cleanup cannot deadlock its own startup.
+async function claimTailscaleRouteOwned(
+  params: { target: number; info: (message: string) => void; assertCurrent?: () => void } & (
+    | { mode: "serve" | "funnel"; gatewayPort: number; httpsPort?: never }
+    | { mode: "serve"; httpsPort: number; gatewayPort?: never }
+  ),
+): Promise<TailscaleRouteClaim> {
+  const { mode, target, info } = params;
+  let authorityDenied = false;
+  const assertCurrent = () => {
+    try {
+      params.assertCurrent?.();
+    } catch (error) {
+      // An owner denial must never be retried as a local CLI permission failure.
+      authorityDenied = true;
       throw error;
     }
-    return await startTailscaleRouteOwner(["sudo", "-n", tailscaleBin, ...args]);
+  };
+  assertCurrent();
+  const tailscaleBin = await getTailscaleBinary();
+  let adopted = false;
+  const start = async (bin: string, prefix: string[] = []) => {
+    assertCurrent();
+    const exec = (args: string[]) =>
+      runExec(bin, [...prefix, ...args], { timeoutMs: 5000, maxBuffer: 400_000 });
+    await waitForTailscaleBackendReady({ bin, prefix, info });
+    assertCurrent();
+    const { stdout } = await exec(["serve", "status", "--json"]);
+    const routes =
+      params.gatewayPort === undefined
+        ? undefined
+        : extractTailscaleServeGatewayUrls(stdout, params.gatewayPort, true);
+    // Foreground claims require a free port. Never clear sibling handlers or
+    // infer ownership from the new ephemeral backend instead of the Gateway port.
+    if (routes?.some((url) => !new URL(url).port)) {
+      await exec(["serve", "--yes", "--https=443", "--set-path=/", "off"]);
+      adopted = true;
+    }
+    assertCurrent();
+    return startTailscaleRouteOwner(
+      [
+        bin,
+        ...prefix,
+        mode,
+        "--yes",
+        "--bg=false",
+        ...(params.httpsPort === undefined ? [] : [`--https=${params.httpsPort}`]),
+        `${target}`,
+      ],
+      stdout,
+    );
+  };
+  let claim: TailscaleRouteClaim;
+  try {
+    claim = await start(tailscaleBin);
+  } catch (error) {
+    if (authorityDenied || !isPermissionDeniedError(error)) {
+      throw error;
+    }
+    try {
+      claim = await start("sudo", ["-n", tailscaleBin]);
+    } catch (sudoError) {
+      if (authorityDenied) {
+        throw sudoError;
+      }
+      const { stderr, message } = extractExecErrorText(sudoError);
+      const detail = stderr.trim() || message.trim();
+      if (!SUDO_NONINTERACTIVE_AUTH_ERROR.test(detail)) {
+        throw sudoError;
+      }
+      throw new Error(
+        `Tailscale ${mode} needs elevated access and non-interactive sudo failed: ${detail}. ` +
+          "Run `sudo tailscale set --operator=$USER` once so the unprivileged path succeeds.",
+        { cause: sudoError },
+      );
+    }
   }
+  if (adopted) {
+    info("Tailscale route adopted from a previous OpenClaw release");
+  }
+  return {
+    ...claim,
+    stop: () => serializeTailscaleRouteOperation(claim.stop),
+  };
 }
 
 /** Resolve the hostname after Serve startup, while the local daemon may still be settling. */
@@ -609,14 +695,16 @@ export async function readTailscaleWhoisIdentity(
   if (!normalized) {
     return null;
   }
-  const now = Date.now();
-  const cached = readCachedWhois(normalized, now);
-  if (cached !== undefined) {
-    return cached;
-  }
-
   const cacheTtlMs = opts?.cacheTtlMs ?? 60_000;
   const errorTtlMs = opts?.errorTtlMs ?? 5_000;
+  const now = Date.now();
+  if (cacheTtlMs > 0) {
+    const cached = readCachedWhois(normalized, now);
+    if (cached !== undefined) {
+      return cached;
+    }
+  }
+
   try {
     const tailscaleBin = await getTailscaleBinary();
     const result = await exec(tailscaleBin, ["whois", "--json", normalized], {
@@ -625,10 +713,14 @@ export async function readTailscaleWhoisIdentity(
     });
     const parsed = result.stdout ? parsePossiblyNoisyJsonObject(result.stdout) : {};
     const identity = parseWhoisIdentity(parsed);
-    writeCachedWhois(normalized, identity, cacheTtlMs);
+    if (cacheTtlMs > 0) {
+      writeCachedWhois(normalized, identity, cacheTtlMs);
+    }
     return identity;
   } catch {
-    writeCachedWhois(normalized, null, errorTtlMs);
+    if (errorTtlMs > 0) {
+      writeCachedWhois(normalized, null, errorTtlMs);
+    }
     return null;
   }
 }

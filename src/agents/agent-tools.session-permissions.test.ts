@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import * as logger from "../logger.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
@@ -60,6 +62,58 @@ async function withAliasedWorkspace(
 }
 
 describe("session permission filesystem tools", () => {
+  it.each([undefined, "guarded", "full"] as const)(
+    "logs required-root containment without exposing policy advice to the model (mode=%s)",
+    async (mode) => {
+      await withTempDir("openclaw-required-root-hint-", async (dir) => {
+        const parent = await fs.realpath(dir);
+        const root = path.join(parent, "workspace");
+        const outside = path.join(parent, "outside.txt");
+        await fs.mkdir(root);
+        await fs.writeFile(outside, "original\n");
+        const patch = createOpenClawCodingTools({
+          workspaceDir: root,
+          requireWorkspaceOnly: true,
+          sessionPermissionPolicy: mode ? { root, mode } : undefined,
+          config: {
+            tools: { fs: { workspaceOnly: false }, exec: { applyPatch: { workspaceOnly: false } } },
+          },
+        }).find((tool) => tool.name === "apply_patch");
+        if (!patch) {
+          throw new Error("expected apply_patch tool");
+        }
+        const [definition] = toToolDefinitions([patch]);
+        if (!definition) {
+          throw new Error("expected apply_patch definition");
+        }
+        // SAFETY: this core tool does not consume extension context; no extension hooks are installed.
+        const context = {} as Parameters<typeof definition.execute>[4];
+        const logError = vi.spyOn(logger, "logError").mockImplementation(() => {});
+        try {
+          const result = await definition.execute(
+            "required-root-hint",
+            {
+              input: `*** Begin Patch\n*** Update File: ${outside}\n@@\n-original\n+changed\n*** End Patch`,
+            },
+            undefined,
+            undefined,
+            context,
+          );
+          expect(logError).toHaveBeenCalledWith(expect.stringContaining("required workspace root"));
+          expect(logError.mock.calls[0]?.[0]).not.toContain("Only a full");
+          expect(result.details).toEqual({
+            status: "error",
+            tool: "apply_patch",
+            error: `Path escapes sandbox root (${root}): ${outside}`,
+          });
+          await expect(fs.readFile(outside, "utf8")).resolves.toBe("original\n");
+        } finally {
+          logError.mockRestore();
+        }
+      });
+    },
+  );
+
   describe.runIf(process.platform !== "win32")(
     "guarded canonical root with alias workspace",
     () => {
@@ -192,7 +246,7 @@ describe("session permission filesystem tools", () => {
               patch.execute("alias-patch-parent", {
                 input: `*** Begin Patch\n*** Add File: ${target}\n+created\n*** End Patch`,
               }),
-            ).rejects.toThrow(/Path alias under sandbox root/i);
+            ).rejects.toMatchObject({ name: "FsSafeError", code: "symlink" });
           }
           await expect(fs.readdir(path.join(root, "real"))).resolves.toEqual([]);
           await patch.execute("alias-patch-create", {
@@ -357,24 +411,69 @@ describe("session permission filesystem tools", () => {
     });
   });
 
-  it("keeps full mode filesystem access unrestricted", async () => {
-    await withTempDir("openclaw-permission-full-", async (root) => {
-      const outside = path.join(path.dirname(root), `outside-${path.basename(root)}.txt`);
-      await fs.writeFile(outside, "outside", "utf8");
-      try {
-        const tools = createOpenClawCodingTools({
+  describe.each([undefined, true] as const)("full mode with required root=%s", (required) => {
+    it("lists directories without granting access beyond a required root", async () => {
+      await withTempDir("openclaw-listing-root-", async (parent) => {
+        const root = path.join(await fs.realpath(parent), "workspace");
+        const outside = path.join(await fs.realpath(parent), "other-agent");
+        await fs.mkdir(path.join(root, "nested"), { recursive: true });
+        await fs.mkdir(outside);
+        await fs.writeFile(path.join(outside, "private.txt"), "private");
+        const ls = createOpenClawCodingTools({
           workspaceDir: root,
+          requireWorkspaceOnly: required,
           sessionPermissionPolicy: { root, mode: "full" },
-        });
-        const { readTool, writeTool } = expectReadWriteEditTools(tools);
-        expect(getTextContent(await readTool.execute("full-read", { path: outside }))).toContain(
-          "outside",
-        );
-        await writeTool.execute("full-write", { path: outside, content: "changed" });
-        await expect(fs.readFile(outside, "utf8")).resolves.toBe("changed");
-      } finally {
-        await fs.rm(outside, { force: true });
-      }
+        }).find((tool) => tool.name === "ls");
+        if (!ls) {
+          throw new Error("Expected directory discovery tool.");
+        }
+        expect(getTextContent(await ls.execute("inside", { path: "." }))).toBe('"nested/"');
+        if (required) {
+          await expect(ls.execute("outside", { path: outside })).rejects.toThrow(/sandbox root/i);
+        } else {
+          expect(getTextContent(await ls.execute("outside", { path: outside }))).toBe(
+            '"private.txt"',
+          );
+        }
+      });
+    });
+
+    it.each(fileToolCases)("preserves $name authority and final file effects", async (testCase) => {
+      await withTempDir("openclaw-permission-full-", async (parent) => {
+        const root = path.join(await fs.realpath(parent), "workshop");
+        const inside = path.join(root, "proof.txt");
+        const outside = path.join(parent, "other-agent.txt");
+        await fs.mkdir(root);
+        await fs.writeFile(outside, "original\n");
+        if (testCase.initial !== undefined) {
+          await fs.writeFile(inside, testCase.initial);
+        }
+        const tool = createOpenClawCodingTools({
+          workspaceDir: root,
+          requireWorkspaceOnly: required,
+          sessionPermissionPolicy: { root, mode: "full" },
+        }).find((entry) => entry.name === testCase.name);
+        if (!tool) {
+          throw new Error(`expected ${testCase.name} tool`);
+        }
+        const result = await tool.execute("inside", testCase.args(inside));
+        if (testCase.name === "read") {
+          expect(getTextContent(result)).toContain(testCase.expected);
+        }
+        await expect(fs.readFile(inside, "utf8")).resolves.toBe(testCase.expected);
+        if (required) {
+          await expect(tool.execute("outside", testCase.args(outside))).rejects.toThrow(
+            /sandbox root/i,
+          );
+          await expect(fs.readFile(outside, "utf8")).resolves.toBe("original\n");
+        } else {
+          const outsideResult = await tool.execute("outside", testCase.args(outside));
+          if (testCase.name === "read") {
+            expect(getTextContent(outsideResult)).toContain(testCase.expected);
+          }
+          await expect(fs.readFile(outside, "utf8")).resolves.toBe(testCase.expected);
+        }
+      });
     });
   });
 });

@@ -11,46 +11,84 @@ import {
   parseAssistantTextSignature,
   type AssistantPhase,
 } from "../shared/chat-message-content.js";
+import { assistantVisibleTextFilters } from "../shared/text/assistant-visible-text.js";
 import {
-  sanitizeAssistantFinalAnswerText,
-  sanitizeAssistantVisibleText,
-} from "../shared/text/assistant-visible-text.js";
-import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
+  applyTextFilters,
+  createTextProjection,
+  trimTextFilter,
+  trimTextPreservingCode,
+} from "../shared/text/text-projection.js";
+import {
+  sanitizeUserFacingText,
+  userFacingTextFilters,
+} from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderUserFacingText } from "./embedded-agent-helpers/user-facing-text.js";
 import type { AgentMessage } from "./runtime/index.js";
 
-export { stripDowngradedToolCallText } from "../shared/text/assistant-visible-text.js";
+export { stripDowngradedToolCallText } from "../shared/text/downgraded-tool-call-text.js";
 
 /** Narrow an agent message to an assistant message. */
 export function isAssistantMessage(msg: AgentMessage | undefined): msg is AssistantMessage {
   return msg?.role === "assistant";
 }
 
-function sanitizeAssistantText(text: string, phase?: AssistantPhase): string {
-  return phase === "final_answer"
-    ? sanitizeAssistantFinalAnswerText(text)
-    : sanitizeAssistantVisibleText(text);
+function sanitizeAssistantText(
+  text: string,
+  phase?: AssistantPhase,
+  streaming = false,
+  options?: { preserveTrailingWhitespace?: boolean },
+): string {
+  return applyTextFilters(
+    text,
+    assistantVisibleTextFilters(
+      phase === "final_answer" ? "final-answer-delivery" : "delivery",
+      streaming && phase === "final_answer",
+      options,
+    ),
+  );
 }
 
 function isAssistantTextContentBlockType(value: unknown): boolean {
   return value === "text" || value === "input_text" || value === "output_text";
 }
 
-export function sanitizeAssistantVisibleStreamText(text: string): string {
-  return sanitizeUserFacingText(sanitizeAssistantText(text), { errorContext: false });
+export function sanitizeAssistantVisibleStreamText(
+  text: string,
+  phase?: AssistantPhase,
+  options?: { preserveTrailingWhitespace?: boolean },
+): string {
+  return sanitizeUserFacingText(sanitizeAssistantText(text, phase, true, options), {
+    errorContext: false,
+  });
 }
 
-function finalizeAssistantExtraction(msg: AssistantMessage, extracted: string): string {
-  const errorContext = msg.stopReason === "error";
+export function createAssistantVisibleStreamText(phase?: AssistantPhase) {
+  return createTextProjection([
+    ...assistantVisibleTextFilters(
+      phase === "final_answer" ? "final-answer-delivery" : "delivery",
+      phase === "final_answer",
+    ),
+    ...userFacingTextFilters(),
+    trimTextFilter("both", { preserveCodeIndentation: true }),
+  ]);
+}
+
+function finalizeAssistantExtraction(errorContext: boolean, extracted: string): string {
   return errorContext
     ? renderUserFacingText(extracted, { errorContext: true })
     : sanitizeUserFacingText(extracted);
 }
 
-function extractEmbeddedAssistantTextForPhase(
+function prepareEmbeddedAssistantTextForPhase(
   msg: AssistantMessage,
   requestedPhase: AssistantPhase,
-): string {
+  prepareText?: (
+    text: string,
+    final: boolean,
+    phase?: AssistantPhase,
+    contentIndex?: number,
+  ) => string,
+): () => string {
   const messagePhase = normalizeAssistantPhase((msg as { phase?: unknown }).phase);
   if (typeof msg.content === "string") {
     const selectedPhase =
@@ -58,13 +96,20 @@ function extractEmbeddedAssistantTextForPhase(
         ? undefined
         : requestedPhase;
     if (messagePhase !== selectedPhase) {
-      return "";
+      return () => "";
     }
-    const text = finalizeAssistantExtraction(msg, sanitizeAssistantText(msg.content, messagePhase));
-    return selectedPhase === "final_answer" && !text.trim() ? "" : text;
+    const preparedText = prepareText ? prepareText(msg.content, true, messagePhase) : msg.content;
+    const errorContext = msg.stopReason === "error";
+    return () => {
+      const text = finalizeAssistantExtraction(
+        errorContext,
+        sanitizeAssistantText(preparedText, messagePhase),
+      );
+      return selectedPhase === "final_answer" && !text.trim() ? "" : text;
+    };
   }
   if (!Array.isArray(msg.content)) {
-    return "";
+    return () => "";
   }
 
   let hasExplicitPhasedTextBlocks = false;
@@ -91,8 +136,8 @@ function extractEmbeddedAssistantTextForPhase(
     (hasExplicitPhasedTextBlocks || messagePhase !== "final_answer")
       ? undefined
       : requestedPhase;
-  const parts: string[] = [];
-  for (const block of msg.content) {
+  const parts: { text: string; phase?: AssistantPhase; contentIndex: number }[] = [];
+  for (const [contentIndex, block] of msg.content.entries()) {
     if (!block || typeof block !== "object") {
       continue;
     }
@@ -109,23 +154,52 @@ function extractEmbeddedAssistantTextForPhase(
     const sanitizerPhase =
       resolvedPhase ??
       (requestedPhase === "final_answer" && signature?.id ? "final_answer" : undefined);
-    const text = sanitizeAssistantText(record.text, sanitizerPhase);
-    if (text.trim()) {
-      parts.push(text);
+    parts.push({ text: record.text, phase: sanitizerPhase, contentIndex });
+  }
+  if (prepareText) {
+    for (const [index, part] of parts.entries()) {
+      part.text = prepareText(part.text, index === parts.length - 1, part.phase, part.contentIndex);
     }
   }
-  const extracted = finalizeAssistantExtraction(msg, parts.join("\n").trim());
-  return selectedPhase === "final_answer" && !extracted.trim() ? "" : extracted;
+  const errorContext = msg.stopReason === "error";
+  return () => {
+    const extracted = finalizeAssistantExtraction(
+      errorContext,
+      // A native block boundary can divide markup; finalize only the selected snapshot.
+      parts
+        .map(({ text, phase }) => sanitizeAssistantText(text, phase))
+        .filter((text) => text.trim())
+        .join("\n")
+        .trimEnd(),
+    );
+    return selectedPhase === "final_answer" && !extracted.trim() ? "" : extracted;
+  };
+}
+
+/** Prepare selected source parts now; render their visible text only when requested. */
+export function prepareAssistantVisibleText(
+  msg: AssistantMessage,
+  prepareText?: (
+    text: string,
+    final: boolean,
+    phase?: AssistantPhase,
+    contentIndex?: number,
+  ) => string,
+): () => string {
+  return prepareEmbeddedAssistantTextForPhase(msg, "final_answer", prepareText);
 }
 
 /** Extract text intended for users, preferring explicit final-answer phase blocks. */
-export function extractAssistantVisibleText(msg: AssistantMessage): string {
-  return extractEmbeddedAssistantTextForPhase(msg, "final_answer");
+export function extractAssistantVisibleText(
+  msg: AssistantMessage,
+  prepareText?: Parameters<typeof prepareAssistantVisibleText>[1],
+): string {
+  return prepareAssistantVisibleText(msg, prepareText)();
 }
 
 /** Extract the commentary/narration text of a commentary-phase assistant message. */
 export function extractAssistantCommentaryText(msg: AssistantMessage): string {
-  return extractEmbeddedAssistantTextForPhase(msg, "commentary");
+  return prepareEmbeddedAssistantTextForPhase(msg, "commentary")();
 }
 
 /** Extract sanitized assistant text across all text content blocks. */
@@ -134,13 +208,13 @@ export function extractEmbeddedAssistantText(msg: AssistantMessage): string {
     extractTextFromChatContent(msg.content, {
       sanitizeText: (text) => sanitizeAssistantText(text),
       joinWith: "\n",
-      normalizeText: (text) => text.trim(),
+      normalizeText: (text) => text.trimEnd(),
     }) ?? "";
   // Only apply keyword-based error rewrites when the assistant message is actually an error.
   // Otherwise normal prose that *mentions* errors (e.g. "context overflow") can get clobbered.
   // Gate on stopReason only — a non-error response with an errorMessage set (e.g. from a
   // background tool failure) should not have its content rewritten (#13935).
-  return finalizeAssistantExtraction(msg, extracted);
+  return finalizeAssistantExtraction(msg.stopReason === "error", extracted);
 }
 
 /** Extract native thinking block text; signature-only blocks (no summary) surface nothing. */
@@ -320,7 +394,7 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
       if (part.type === "thinking") {
         next.push({ type: "thinking", thinking: part.thinking });
       } else if (part.type === "text") {
-        const cleaned = part.text.trimStart();
+        const cleaned = trimTextPreservingCode(part.text, "start");
         if (cleaned) {
           next.push({ type: "text", text: cleaned });
         }
@@ -359,9 +433,15 @@ export function extractThinkingFromTaggedText(text: string): string {
 export function extractThinkingFromTaggedStream(
   text: string,
   state: ThinkingTagStreamState,
+  delta: string,
 ): string {
-  for (let index = state.scannedOffset; index < text.length; index += 1) {
-    const char = text[index];
+  // Indexing the growing rope flattens the entire reply on each token. Scan the
+  // appended chunk directly; a checkpoint reset still needs its unscanned prefix.
+  const unscanned =
+    text.length - state.scannedOffset === delta.length ? delta : text.slice(state.scannedOffset);
+  for (let offset = 0; offset < unscanned.length; offset += 1) {
+    const index = state.scannedOffset + offset;
+    const char = unscanned[offset];
     if (char === "<") {
       state.pendingTagStart = index;
       continue;

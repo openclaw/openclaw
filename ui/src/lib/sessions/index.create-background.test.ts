@@ -2,10 +2,10 @@ import { expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { createSessionCapability } from "./index.ts";
 import {
   createGatewayHarness,
   createSessionCapabilityHarness,
+  createTestSessionCapability,
   sessionsResult,
 } from "./session-capability.test-support.ts";
 
@@ -155,7 +155,7 @@ it.each([
     }
     throw new Error(`Unexpected request: ${method}`);
   });
-  const { sessions } = createSessionCapabilityHarness(
+  const { sessions, emitEvent } = createSessionCapabilityHarness(
     request as unknown as GatewayBrowserClient["request"],
   );
   const created = vi.fn();
@@ -175,14 +175,16 @@ it.each([
   expect(sessions.think(key)).toBe("xhigh");
   const stateChanged = vi.fn();
   const stopState = sessions.subscribe(stateChanged);
-  expect(
-    sessions.reconcileChanged({
+  emitEvent({
+    type: "event",
+    event: "sessions.changed",
+    payload: {
       sessionKey: key,
       key,
       kind: "direct",
       ...testCase.event,
-    }).applied,
-  ).toBe(true);
+    },
+  });
   expect(sessions.think(key)).toBe("medium");
   expect(stateChanged).toHaveBeenCalledOnce();
 
@@ -207,15 +209,17 @@ it.each([
   );
   expect(sessions.think(key)).toBe("medium");
   if (testCase.settleWithEvent) {
-    expect(
-      sessions.reconcileChanged({
+    emitEvent({
+      type: "event",
+      event: "sessions.changed",
+      payload: {
         sessionKey: key,
         key,
         kind: "direct",
         thinkingLevel: "medium",
         updatedAt: 3,
-      }).applied,
-    ).toBe(true);
+      },
+    });
     expect(sessions.think(key)).toBeUndefined();
   } else {
     const appendRefresh = sessions.refresh({ append: true, offset: 1, force: true });
@@ -282,18 +286,20 @@ it.each([
       }
       throw new Error(`Unexpected request: ${method}`);
     });
-    const { sessions } = createSessionCapabilityHarness(
+    const { sessions, emitEvent } = createSessionCapabilityHarness(
       request as unknown as GatewayBrowserClient["request"],
     );
 
+    if (archivedFilter) {
+      await sessions.refresh({ agentId: "main", archivedFilter, force: true });
+    }
     await sessions.createResult({ agentId: "main" });
     expect(sessions.think(key)).toBe("xhigh");
-    expect(
-      sessions.reconcileChanged(
-        { sessionKey: key, key, kind: "direct", ...event },
-        archivedFilter ? { archivedFilter } : undefined,
-      ).applied,
-    ).toBe(true);
+    emitEvent({
+      type: "event",
+      event: "sessions.changed",
+      payload: { sessionKey: key, key, kind: "direct", ...event },
+    });
     expect(sessions.state.result?.sessions).toHaveLength(expectedCount);
     expect(sessions.think(key)).toBe(expectedClaim);
     sessions.dispose();
@@ -315,7 +321,7 @@ it("retires a created thinking claim before replacement state is published", asy
     throw new Error(`Unexpected request: ${method}`);
   });
   const { gateway, publish } = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-  const sessions = createSessionCapability(gateway);
+  const sessions = createTestSessionCapability(gateway);
 
   await sessions.createResult({ agentId: "main" });
   expect(sessions.think(key)).toBe("xhigh");
@@ -346,7 +352,7 @@ it("isolates delayed raw-global thinking claims by agent", async () => {
     }
     throw new Error(`Unexpected request: ${method}`);
   });
-  const sessions = createSessionCapability({
+  const sessions = createTestSessionCapability({
     snapshot: {
       client: { request } as unknown as GatewayBrowserClient,
       phase: "connected",

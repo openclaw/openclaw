@@ -26,40 +26,47 @@ const authStoreMocks = vi.hoisted(() => {
     routeResolutions: new Map(),
     store: { version: 1, profiles: {} },
   };
+  const ensureAuthProfileStore = vi.fn(() => state.store);
+  const hasAnyAuthProfileStoreSource = vi.fn(() => state.hasSource);
+  const isProfileInCooldown = vi.fn((_store: AuthProfileStore, _profileId: string) => false);
+  const resolveProviderModelRoutes = vi.fn(
+    ({ provider, modelId }: { provider: string; modelId?: string }) =>
+      state.routeResolutions.get(`${provider}\0${modelId ?? ""}`) ?? null,
+  );
   return {
     state,
-    ensureAuthProfileStore: vi.fn(() => state.store),
-    hasAnyAuthProfileStoreSource: vi.fn(() => state.hasSource),
-    isProfileInCooldown: vi.fn((_store: AuthProfileStore, _profileId: string) => false),
-    resolveProviderModelRoutes: vi.fn(
-      ({ provider, modelId }: { provider: string; modelId?: string }) =>
-        state.routeResolutions.get(`${provider}\0${modelId ?? ""}`) ?? null,
-    ),
-    resolveProviderIdForAuth: vi.fn((provider: string) => {
-      const normalized = provider.trim().toLowerCase();
-      return (
-        {
-          "claude-cli": "anthropic",
-          "codex-cli": "openai",
-          "z.ai": "zai",
-        }[normalized] ?? normalized
-      );
-    }),
+    ensureAuthProfileStore,
+    hasAnyAuthProfileStoreSource,
+    isProfileInCooldown,
+    resolveProviderModelRoutes,
     reset() {
       state.hasSource = false;
       state.routeResolutions.clear();
       state.store = { version: 1, profiles: {} };
+      ensureAuthProfileStore.mockReset().mockImplementation(() => state.store);
+      hasAnyAuthProfileStoreSource.mockReset().mockImplementation(() => state.hasSource);
+      isProfileInCooldown
+        .mockReset()
+        .mockImplementation((_store: AuthProfileStore, _profileId: string) => false);
+      resolveProviderModelRoutes
+        .mockReset()
+        .mockImplementation(
+          ({ provider, modelId }: { provider: string; modelId?: string }) =>
+            state.routeResolutions.get(`${provider}\0${modelId ?? ""}`) ?? null,
+        );
     },
   };
 });
 
-vi.mock("./store.js", () => ({
-  ensureAuthProfileStore: authStoreMocks.ensureAuthProfileStore,
+vi.mock("./store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./store.js")>()),
+  getRuntimeAuthProfileStoreSnapshot: () => authStoreMocks.state.store,
+  findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
+    authStoreMocks.state.store.profiles[profileId],
   hasAnyAuthProfileStoreSource: authStoreMocks.hasAnyAuthProfileStoreSource,
 }));
-
-vi.mock("../provider-auth-aliases.js", () => ({
-  resolveProviderIdForAuth: authStoreMocks.resolveProviderIdForAuth,
+vi.mock("./store-runtime.js", () => ({
+  ensureAuthProfileStore: authStoreMocks.ensureAuthProfileStore,
 }));
 
 vi.mock("./usage.js", () => ({
@@ -67,6 +74,10 @@ vi.mock("./usage.js", () => ({
 }));
 
 vi.mock("../../plugins/provider-model-routes.js", () => ({
+  // Synthetic route IDs in this fixture are already canonical.
+  createProviderModelCatalogIdNormalizer: () => (modelId: string) => modelId,
+  resolveProviderModelCatalogId: ({ modelId }: { modelId: string }) => modelId,
+  resolveProviderModelPolicySurface: () => null,
   resolveProviderModelRoutes: authStoreMocks.resolveProviderModelRoutes,
 }));
 
@@ -87,18 +98,6 @@ export async function withAuthState<T>(run: (state: OpenClawTestState) => Promis
     },
     run,
   );
-}
-
-export function createAuthStore(): AuthProfileStore {
-  return {
-    version: 1,
-    profiles: {
-      "zai:work": { type: "api_key", provider: "zai", key: "sk-test" },
-    },
-    order: {
-      zai: ["zai:work"],
-    },
-  };
 }
 
 export function createAuthStoreWithProfiles(params: {
@@ -172,6 +171,7 @@ export async function resolveSession(params: {
 }): Promise<string | undefined> {
   return (
     await resolveSessionAuthSelection({
+      agentId: "main",
       cfg: params.cfg ?? ({} as OpenClawConfig),
       provider: params.provider ?? "openai",
       modelId: params.sessionEntry.model ?? "model-x",

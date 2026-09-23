@@ -63,6 +63,8 @@ const ClickClackAccountConfigSchema = z
   })
   .strict();
 
+export type ClickClackAccountConfigInput = z.input<typeof ClickClackAccountConfigSchema>;
+
 const ClickClackConfigSchema = buildMultiAccountChannelSchema(
   ClickClackAccountConfigSchema.extend({ historyLimit: z.number().int().min(0).optional() }),
   { accountSchema: ClickClackAccountConfigSchema.partial() },

@@ -241,6 +241,51 @@ describe("handleFileFetch — happy path", () => {
 });
 
 describe("handleFileFetch — size enforcement", () => {
+  it("bounds bytes consumed when a file grows after the size check", async () => {
+    const target = path.join(tmpRoot, "growing.txt");
+    await fs.writeFile(target, "small");
+    const realOpen = fs.open.bind(fs);
+    let bytesRead = 0;
+    let grown = false;
+    const grow = async () => {
+      if (!grown) {
+        grown = true;
+        await fs.appendFile(target, Buffer.alloc(1024));
+      }
+    };
+    vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
+      const handle = await realOpen(file, flags, mode);
+      if (String(file) === target) {
+        const read = handle.read.bind(handle);
+        const readFile = handle.readFile.bind(handle);
+        // Keep real filesystem reads; append only after the handler has checked size.
+        handle.read = (async (
+          buffer: Buffer,
+          offset: number,
+          length: number,
+          position: number | null,
+        ) => {
+          await grow();
+          const result = await read(buffer, offset, length, position);
+          bytesRead += result.bytesRead;
+          return result;
+        }) as typeof handle.read;
+        handle.readFile = (async (...args: Parameters<typeof handle.readFile>) => {
+          await grow();
+          const result = await readFile(...args);
+          bytesRead += Buffer.byteLength(result);
+          return result;
+        }) as typeof handle.readFile;
+      }
+      return handle;
+    });
+
+    expectFailureCode(await handleFileFetch({ path: target, maxBytes: 8 }), "FILE_TOO_LARGE");
+    expect(grown).toBe(true);
+    expect(bytesRead).toBeGreaterThan(8);
+    expect(bytesRead).toBeLessThanOrEqual(9);
+  });
+
   it("returns FILE_TOO_LARGE when stat size exceeds the cap", async () => {
     const target = path.join(tmpRoot, "big.bin");
     const data = Buffer.alloc(2048, 0xab);

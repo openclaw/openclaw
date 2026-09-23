@@ -122,7 +122,6 @@ function messageCanOwnCompletedFrame(message: unknown, explicitOnly: boolean): b
     phase === "commentary" ||
     stopReason === "toolUse" ||
     stopReason === "error" ||
-    metadata?.runtimeActivityKind === "context_compaction" ||
     (metadata?.mirrorOrigin === "codex-app-server" && metadata.runTerminal !== true)
   ) {
     return false;
@@ -184,6 +183,8 @@ export function coalesceAgentRunFrames(
   }
   const result: Array<AgentRunFrameInput | AgentRunFrameRenderItem> = [];
   let boundaryId: string | undefined;
+  let presentationBoundaryKey: string | undefined;
+  const emittedFrameKeys = new Set<string>();
   let segmentId: string | undefined;
   let runId: string | undefined;
   let parts: AgentRunFramePart[] = [];
@@ -191,9 +192,16 @@ export function coalesceAgentRunFrames(
     if (!runId || !boundaryId || parts.length === 0) {
       return;
     }
+    const semanticKey = frameKey(runId, boundaryId, frameSegmentId(parts, segmentId));
+    // A peer input can split one causal run into separate presentation rows.
+    // Reopening it must not reuse the earlier row’s DOM or measured height.
+    const key = emittedFrameKeys.has(semanticKey)
+      ? frameKey(runId, boundaryId, JSON.stringify([presentationBoundaryKey, parts[0]!.key]))
+      : semanticKey;
+    emittedFrameKeys.add(semanticKey);
     result.push({
       kind: "agent-run-frame",
-      key: frameKey(runId, boundaryId, frameSegmentId(parts, segmentId)),
+      key,
       runId,
       boundaryId,
       outcome: failed
@@ -217,6 +225,7 @@ export function coalesceAgentRunFrames(
     const boundaryGroup = itemGroups(item)[0];
     if (boundaryGroup && chatItemStartsUserTurn(boundaryGroup)) {
       flush();
+      presentationBoundaryKey = boundaryGroup.key;
       segmentId = undefined;
       const nextBoundaryId = groupBoundaryId(boundaryGroup);
       if (

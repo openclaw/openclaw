@@ -33,6 +33,7 @@ describe("coercion helper declaration AST guard", () => {
       "};",
       "function normalizeAgentId() {}",
       "const isValidAgentId = () => true;",
+      "function containsAsciiControlCharacter() {}",
     ].join("\n");
 
     expect(findBannedCoercionHelperDeclarations(source, "src/example.ts")).toEqual([
@@ -46,6 +47,7 @@ describe("coercion helper declaration AST guard", () => {
       { file: "src/example.ts", kind: "property", line: 11, name: "readBoolean" },
       { file: "src/example.ts", kind: "function", line: 13, name: "normalizeAgentId" },
       { file: "src/example.ts", kind: "variable", line: 14, name: "isValidAgentId" },
+      { file: "src/example.ts", kind: "function", line: 15, name: "containsAsciiControlCharacter" },
     ]);
   });
 
@@ -65,6 +67,20 @@ describe("coercion helper declaration AST guard", () => {
     ].join("\n");
 
     expect(findBannedCoercionHelperDeclarations(source, "src/example.ts")).toEqual([]);
+  });
+
+  it("keeps substring admission independent across source files", () => {
+    const source = String.raw`// xreadStringx
+function read\u0053tring() {}`;
+
+    expect(
+      ["src/first.ts", "src/second.ts"].map((file) =>
+        findBannedCoercionHelperDeclarations(source, file),
+      ),
+    ).toEqual([
+      [{ file: "src/first.ts", kind: "function", line: 2, name: "readString" }],
+      [{ file: "src/second.ts", kind: "function", line: 2, name: "readString" }],
+    ]);
   });
 
   it("allows one exact declaration and reports duplicate, unowned, and stale entries", () => {
@@ -224,7 +240,7 @@ describe("coercion helper declaration AST guard", () => {
     expect(audit.staleClassifications).toEqual([removed, blank]);
   });
 
-  it("scans a temporary repository and reports sorted, owner-specific diagnostics", () => {
+  it("scans a temporary repository and reports sorted, owner-specific diagnostics", async () => {
     const repoRoot = tempDirs.make("coercion-helper-guard-");
     fs.mkdirSync(path.join(repoRoot, "src"), { recursive: true });
     fs.mkdirSync(path.join(repoRoot, "extensions", "demo"), { recursive: true });
@@ -241,7 +257,7 @@ describe("coercion helper declaration AST guard", () => {
     const stdout: string[] = [];
     const stderr: string[] = [];
     expect(
-      runCoercionHelperDeclarationGuard({
+      await runCoercionHelperDeclarationGuard({
         carveOuts: [
           {
             file: "src/z.ts",
@@ -279,7 +295,7 @@ describe("coercion helper declaration AST guard", () => {
     expect(output).toContain("Dependency-free, copied, generated, or serialized code");
   });
 
-  it("scans only tracked files when the repository has a Git index", () => {
+  it("scans only tracked files when the repository has a Git index", async () => {
     const repoRoot = tempDirs.make("coercion-helper-tracked-guard-");
     fs.mkdirSync(path.join(repoRoot, "src"), { recursive: true });
     fs.writeFileSync(path.join(repoRoot, "src", "tracked.ts"), "function readString() {}\n");
@@ -289,7 +305,7 @@ describe("coercion helper declaration AST guard", () => {
     const stderr: string[] = [];
 
     expect(
-      runCoercionHelperDeclarationGuard({
+      await runCoercionHelperDeclarationGuard({
         carveOuts: [],
         repoRoot,
         io: {

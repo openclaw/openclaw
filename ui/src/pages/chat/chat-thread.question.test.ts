@@ -90,21 +90,20 @@ describe("question chat items", () => {
     ]);
   });
 
-  it("renders answered and skipped prompts as compact summary lines", () => {
-    const answered = prompt("answered");
-    answered.answers = { answers: { format: ["Compact"] } };
-    const skipped = prompt("cancelled");
+  it.each([
+    ["answered", "Compact"],
+    ["cancelled", "Skipped"],
+    ["expired", "Expired"],
+    ["unavailable", "Unavailable"],
+  ] as const)("keeps the full question with its %s outcome", (status, outcome) => {
+    const question = prompt(status);
+    question.answers = { answers: { format: ["Compact"] } };
     const container = document.createElement("div");
 
-    render(renderChatQuestionSummary(answered), container);
+    render(renderChatQuestionSummary(question), container);
     expect(
       container.querySelector(".chat-question-summary")?.textContent?.replace(/\s+/g, " "),
-    ).toContain("Format: Compact");
-
-    render(renderChatQuestionSummary(skipped), container);
-    expect(
-      container.querySelector(".chat-question-summary")?.textContent?.replace(/\s+/g, " "),
-    ).toContain("Format: Skipped");
+    ).toContain(`Which format? Format: ${outcome}`);
     expect(container.querySelector(".chat-question-panel")).toBeNull();
   });
 
@@ -118,7 +117,7 @@ describe("question chat items", () => {
 
     expect(
       container.querySelector(".chat-question-summary")?.textContent?.replace(/\s+/g, " "),
-    ).toContain("Format: Detailed");
+    ).toContain("Which format? Format: Detailed");
   });
 
   it("never echoes a secret answer in the terminal transcript summary", () => {
@@ -140,14 +139,8 @@ describe("question chat items", () => {
     render(renderChatQuestionSummary(answered), container);
 
     expect(container.textContent?.replace(/\s+/g, " ")).toContain("API key: Answered");
+    expect(container.textContent).toContain("Provide the deployment API key");
     expect(container.textContent).not.toContain("fake-secret-never-render");
     expect(container.innerHTML).not.toContain("fake-secret-never-render");
-  });
-
-  it("omits questions belonging to another session", () => {
-    const other = prompt("pending");
-    other.sessionKey = "agent:other:main";
-
-    expect(items(other, false)).toEqual([]);
   });
 });

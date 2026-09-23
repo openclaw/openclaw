@@ -1,17 +1,48 @@
 // Legacy config migration validation tests cover schema validation after doctor migrations.
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
+import { prepareLegacyConfigMigrationRuntime } from "./legacy-config-migrate.test-support.js";
+
+let restoreMigrationRuntime: (() => void) | undefined;
+
+beforeAll(async () => {
+  restoreMigrationRuntime = await prepareLegacyConfigMigrationRuntime();
+});
+afterAll(() => restoreMigrationRuntime?.());
 
 describe("legacy config migrate validation", () => {
+  it.each([0, 1000.9, 7_200_000])("preserves restored MCP idle TTL %s", (sessionIdleTtlMs) => {
+    const raw = {
+      mcp: { sessionIdleTtlMs },
+      cron: { maxConcurrentRuns: 2 },
+    };
+    const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
+    expect(result.config?.mcp?.sessionIdleTtlMs).toBe(sessionIdleTtlMs);
+    expect(result.partiallyValid).toBeUndefined();
+  });
+
+  it("restores a schema-valid ambient owner after explicit roster normalization", () => {
+    const raw = {
+      agents: { ownership: "explicit", entries: { main: {}, ops: {} } },
+    };
+    const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
+    expect(result.partiallyValid).toBeUndefined();
+    expect(result.config?.agents?.defaults?.systemAgent?.agentId).toBe("main");
+    expect(result.config?.agents?.defaults?.heartbeat?.agentId).toBe("main");
+  });
+
   let profileConfiguredToolAllowResult: ReturnType<typeof migrateLegacyConfig>;
 
   beforeAll(() => {
-    profileConfiguredToolAllowResult = migrateLegacyConfig({
+    const raw = {
       tools: {
         profile: "messaging",
         allow: ["message", "exec", "process"],
         exec: { security: "allowlist" },
       },
+    };
+    profileConfiguredToolAllowResult = migrateLegacyConfig(raw, {
+      sourceConfigBeforeMigrations: raw,
     });
   });
 
@@ -29,7 +60,7 @@ describe("legacy config migrate validation", () => {
   });
 
   it("returns schema-valid config after removing unsupported OTel grpc", () => {
-    const res = migrateLegacyConfig({
+    const raw = {
       diagnostics: {
         otel: {
           enabled: true,
@@ -37,7 +68,8 @@ describe("legacy config migrate validation", () => {
           protocol: "grpc",
         },
       },
-    });
+    };
+    const res = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
 
     expect(res.partiallyValid).toBeUndefined();
     expect(res.config?.diagnostics?.otel).toEqual({
@@ -73,8 +105,11 @@ describe("legacy config migrate validation", () => {
     };
 
     const res = migrateLegacyConfig(authored, {
-      authoredRaw: authored,
-      resolvedRaw: resolved,
+      sourceConfigBeforeMigrations: resolved,
+      context: {
+        authoredRaw: authored,
+        resolvedRaw: resolved,
+      },
     });
 
     expect(res.partiallyValid).toBeUndefined();

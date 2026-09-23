@@ -1,12 +1,31 @@
 // Chat log component lays out conversation messages for the TUI viewport.
 import type { Component } from "@earendil-works/pi-tui";
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
+import type { AgentActivityItem as AgentItemEventData } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { tuiTheme as theme } from "../theme/theme.js";
 import { sanitizeRenderableText } from "../tui-formatters.js";
+import type { TuiImageSource } from "../tui-images.js";
 import { AssistantMessageComponent } from "./assistant-message.js";
 import { BtwInlineMessage } from "./btw-inline-message.js";
+import { TuiImageRenderer, type TuiImageRendererOptions } from "./message-images.js";
 import { ToolExecutionComponent } from "./tool-execution.js";
 import { UserMessageComponent } from "./user-message.js";
+
+/** Event consumers use chat operations without depending on returned UI components. */
+export type ChatLogOperations = {
+  [
+    Method in
+      | "addLiveUser"
+      | "startTool"
+      | "updateToolResult"
+      | "addSystem"
+      | "addPendingSystem"
+      | "dismissPendingSystem"
+      | "updateAssistant"
+      | "finalizeAssistant"
+      | "dropAssistant"
+  ]: (...args: Parameters<ChatLog[Method]>) => void;
+};
 
 type RepeatableSystemMessage = {
   component: Container;
@@ -18,7 +37,6 @@ type RepeatableSystemMessage = {
 type TrackedTool = {
   component: ToolExecutionComponent;
   runId?: string;
-  active: boolean;
 };
 
 type TrackedAssistantRun = {
@@ -32,6 +50,7 @@ type TrackedAssistantRun = {
 /** Scrollback container that tracks pending users, streaming assistant runs, tools, and notices. */
 export class ChatLog extends Container {
   private readonly maxComponents: number;
+  private readonly imageRenderer?: TuiImageRenderer;
   private tools = new Map<string, TrackedTool>();
   private assistantRuns = new Map<string, TrackedAssistantRun>();
   private userComponents = new Map<string, UserMessageComponent>();
@@ -47,9 +66,25 @@ export class ChatLog extends Container {
   private toolsExpanded = false;
   private repeatableSystemMessage: RepeatableSystemMessage | null = null;
 
-  constructor(maxComponents = 180) {
+  constructor(maxComponents = 180, imageOptions?: TuiImageRendererOptions) {
     super();
     this.maxComponents = Math.max(20, Math.floor(maxComponents));
+    this.imageRenderer = imageOptions ? new TuiImageRenderer(imageOptions) : undefined;
+  }
+
+  override removeChild(component: Component) {
+    if (
+      component instanceof AssistantMessageComponent ||
+      component instanceof UserMessageComponent ||
+      component instanceof ToolExecutionComponent
+    ) {
+      component.dispose();
+    }
+    super.removeChild(component);
+  }
+
+  dispose() {
+    this.imageRenderer?.dispose();
   }
 
   // Pruning must clear side maps so future stream/tool updates do not target detached components.
@@ -122,7 +157,7 @@ export class ChatLog extends Container {
     const streaming = runId ? this.assistantRuns.get(runId)?.streaming : undefined;
     const completedTools = new Set<ToolExecutionComponent>();
     for (const tool of this.tools.values()) {
-      if (!tool.active) {
+      if (!tool.component.isActive) {
         completedTools.add(tool.component);
       }
     }
@@ -171,6 +206,7 @@ export class ChatLog extends Container {
   }
 
   clearAll() {
+    this.dispose();
     this.clear();
     this.tools.clear();
     this.assistantRuns.clear();
@@ -186,13 +222,6 @@ export class ChatLog extends Container {
       this.removeChild(tool.component);
     }
     this.tools.clear();
-  }
-
-  clearPendingUsers() {
-    for (const entry of this.pendingUsers.values()) {
-      this.removeChild(entry.component);
-    }
-    this.pendingUsers.clear();
   }
 
   private formatSystemText(text: string, count = 1) {
@@ -251,13 +280,15 @@ export class ChatLog extends Container {
     return true;
   }
 
-  addUser(text: string, options?: { messageId?: string }) {
+  addUser(text: string, options?: { messageId?: string; images?: readonly TuiImageSource[] }) {
     const previous = options?.messageId ? this.userComponents.get(options.messageId) : undefined;
     if (previous) {
       previous.setText(text);
+      previous.setImages(options?.images ?? []);
       return previous;
     }
-    const component = new UserMessageComponent(text);
+    const component = new UserMessageComponent(text, this.imageRenderer);
+    component.setImages(options?.images ?? []);
     if (options?.messageId) {
       this.userComponents.set(options.messageId, component);
     }
@@ -265,10 +296,19 @@ export class ChatLog extends Container {
     return component;
   }
 
-  addLiveUser(text: string, options: { messageId: string; runId?: string; sendId?: string }) {
+  addLiveUser(
+    text: string,
+    options: {
+      messageId: string;
+      runId?: string;
+      sendId?: string;
+      images?: readonly TuiImageSource[];
+    },
+  ) {
     const existing = this.userComponents.get(options.messageId);
     if (existing) {
       existing.setText(text);
+      existing.setImages(options.images ?? []);
       return existing;
     }
 
@@ -277,12 +317,14 @@ export class ChatLog extends Container {
     const pending = options.sendId ? this.pendingUsers.get(options.sendId) : undefined;
     if (pending && options.sendId && pending.text === text) {
       pending.component.setText(text);
+      pending.component.setImages(options.images ?? []);
       this.pendingUsers.delete(options.sendId);
       this.userComponents.set(options.messageId, pending.component);
       return pending.component;
     }
 
-    const component = new UserMessageComponent(text);
+    const component = new UserMessageComponent(text, this.imageRenderer);
+    component.setImages(options.images ?? []);
     this.userComponents.set(options.messageId, component);
     const protectedComponents = new Set<Component>([component]);
     if (options.runId) {
@@ -327,7 +369,7 @@ export class ChatLog extends Container {
       existing.component.setText(text);
       return existing.component;
     }
-    const component = new UserMessageComponent(text);
+    const component = new UserMessageComponent(text, this.imageRenderer);
     this.pendingUsers.set(runId, { component, text });
     this.appendNonSystem(component);
     return component;
@@ -455,7 +497,7 @@ export class ChatLog extends Container {
       existing.setText(segmentText);
       return existing;
     }
-    const component = new AssistantMessageComponent(segmentText);
+    const component = new AssistantMessageComponent(segmentText, this.imageRenderer);
     run.streaming = component;
     this.appendNonSystem(component);
     return component;
@@ -486,7 +528,7 @@ export class ChatLog extends Container {
     existing.setText(segmentText);
   }
 
-  finalizeAssistant(text: string, runId?: string) {
+  finalizeAssistant(text: string, runId?: string, images: readonly TuiImageSource[] = []) {
     const effectiveRunId = this.resolveRunId(runId);
     const run = this.getAssistantRun(effectiveRunId);
     const segmentText = this.resolveAssistantSegment(effectiveRunId, text);
@@ -497,20 +539,21 @@ export class ChatLog extends Container {
     run.committedText = undefined;
     run.latestText = undefined;
     if (existing) {
-      if (segmentText) {
+      if (segmentText || images.length > 0) {
         existing.setText(segmentText);
         lastAssistant = existing;
       } else {
         this.removeChild(existing);
       }
       run.streaming = undefined;
-    } else if (segmentText) {
-      const component = new AssistantMessageComponent(segmentText);
+    } else if (segmentText || images.length > 0) {
+      const component = new AssistantMessageComponent(segmentText, this.imageRenderer);
       this.appendNonSystem(component);
       lastAssistant = component;
     }
 
     if (lastAssistant) {
+      lastAssistant.setImages(images);
       finalized.add(lastAssistant);
     }
     for (const segment of finalized) {
@@ -569,17 +612,31 @@ export class ChatLog extends Container {
     return this.btwMessage !== null;
   }
 
-  startTool(toolCallId: string, toolName: string, args: unknown, runId?: string) {
+  startTool(
+    toolCallId: string,
+    toolName: string,
+    args: unknown,
+    runId?: string,
+    activity?: AgentItemEventData | null,
+  ) {
     const existing = this.tools.get(toolCallId);
     if (existing) {
-      existing.component.setArgs(args);
+      if (args !== undefined) {
+        existing.component.setArgs(args);
+      }
+      if (activity !== undefined) {
+        existing.component.setActivity(activity);
+      }
       return existing.component;
     }
     const owningRunId = runId ?? this.resolveSingleStreamingRunId();
     this.freezeStreamingAssistants();
-    const component = new ToolExecutionComponent(toolName, args);
+    const component = new ToolExecutionComponent(toolName, args, this.imageRenderer);
+    if (activity !== undefined) {
+      component.setActivity(activity);
+    }
     component.setExpanded(this.toolsExpanded);
-    this.tools.set(toolCallId, { component, runId: owningRunId, active: true });
+    this.tools.set(toolCallId, { component, runId: owningRunId });
     this.appendNonSystem(component);
     return component;
   }
@@ -594,11 +651,9 @@ export class ChatLog extends Container {
       return;
     }
     if (opts?.partial) {
-      existing.active = true;
       existing.component.setPartialResult(result as Record<string, unknown>);
       return;
     }
-    existing.active = false;
     existing.component.setResult(result as Record<string, unknown>, {
       isError: opts?.isError,
     });

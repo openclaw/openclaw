@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
@@ -11,7 +12,6 @@ import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import {
-  validateWorkerGitHubPublishParams,
   validateWorkerComputerParams,
   validateWorkerPortalParams,
   validateWorkerSessionsSendParams,
@@ -28,7 +28,6 @@ import {
   WORKER_PORTAL_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
-  type WorkerGitHubPublishParams,
   type WorkerPortalParams,
   type WorkerSessionsSendParams,
   type WorkerSessionsSpawnParams,
@@ -56,9 +55,15 @@ import {
   deleteSession,
   listRunningSessions,
   markBackgrounded,
+  waitForExecScope,
 } from "../agents/bash-process-registry.js";
 import { runExecProcess } from "../agents/bash-tools.exec-runtime.js";
+import { hasModelFallbackStop } from "../agents/failover-error.js";
+import * as agentSessionSdk from "../agents/sessions/sdk.js";
+import * as boundaryFileRead from "../infra/boundary-file-read.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { saveExecApprovals, type ExecApprovalsFile } from "../infra/exec-approvals.js";
+import { runExec } from "../process/exec.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import {
   buildWorkerConnectParams,
@@ -78,6 +83,8 @@ import {
   WorkerLiveEventClient,
   WorkerTranscriptCommitClient,
 } from "./worker-rpc-clients.js";
+import { registerWorkerBackgroundExecLifecycleTests } from "./worker-runtime-background-exec.suite.js";
+import { registerWorkerPermissionTests } from "./worker-runtime-permissions.suite.js";
 import { createWorkerRuntimeEnvironment, runWorkerDescriptor } from "./worker.runtime.js";
 
 const browserRuntimeMocks = vi.hoisted(() => ({
@@ -98,6 +105,10 @@ vi.mock("./browser-runtime.js", () => {
   }));
   return { createWorkerBrowserToolRuntime: browserRuntimeMocks.createWorkerBrowserToolRuntime };
 });
+
+// Compile the real lazy runtimes during collection, not inside the first turn.
+// Cold imports must not consume these integration cases' lifecycle deadlines.
+await Promise.all([import("./embedded-agent.runtime.js"), import("../agents/bash-tools.js")]);
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -141,12 +152,14 @@ type InferencePlan =
   | "burst-text"
   | "oversized-text"
   | "oversized-error"
-  | "empty-terminal";
+  | "empty-terminal"
+  | { args: Record<string, unknown>; toolCallId: string; toolName: string };
 type WorkerDoneMessage = Extract<WorkerInferenceTerminalOutcome, { type: "done" }>["message"];
 
 type FakeGatewayOptions = {
   admissionFailure?: "gateway-unavailable" | "invalid-credential" | "owner-epoch-mismatch";
   backgroundCommand?: string;
+  execCommand?: string;
   execApprovals?: ExecApprovalsFile;
   inferencePlans?: InferencePlan[];
   outageOnInferenceCancel?: boolean;
@@ -155,7 +168,7 @@ type FakeGatewayOptions = {
   silenceFirstTranscript?: boolean;
   silenceFirstLiveEvent?: boolean;
   silenceFirstInference?: boolean;
-  silenceSessionToolResponses?: number;
+  dropSessionToolResponses?: number;
   transcriptFailureAtRequest?: number;
   liveResyncAckedSeq?: number;
   liveResyncResponses?: number;
@@ -212,7 +225,6 @@ class FakeWorkerGateway {
   readonly inferenceRequests: WorkerInferenceStartParams[] = [];
   readonly sessionSpawnRequests: WorkerSessionsSpawnParams[] = [];
   readonly sessionSendRequests: WorkerSessionsSendParams[] = [];
-  readonly githubPublishRequests: WorkerGitHubPublishParams[] = [];
   readonly portalRequests: WorkerPortalParams[] = [];
   readonly computerRequests: WorkerComputerParams[] = [];
   readonly applicationOrder: string[] = [];
@@ -336,12 +348,9 @@ class FakeWorkerGateway {
           : parsed.method === "worker.sessions.send" &&
               validateWorkerSessionsSendParams(parsed.params)
             ? parsed.method
-            : parsed.method === "worker.github.publish" &&
-                validateWorkerGitHubPublishParams(parsed.params)
+            : parsed.method === "worker.portal" && validateWorkerPortalParams(parsed.params)
               ? parsed.method
-              : parsed.method === "worker.portal" && validateWorkerPortalParams(parsed.params)
-                ? parsed.method
-                : undefined;
+              : undefined;
       if (sessionToolMethod) {
         this.handleSessionTool(socket, {
           id: parsed.id,
@@ -349,7 +358,6 @@ class FakeWorkerGateway {
           params: parsed.params as
             | WorkerSessionsSpawnParams
             | WorkerSessionsSendParams
-            | WorkerGitHubPublishParams
             | WorkerPortalParams,
         });
         return;
@@ -451,16 +459,8 @@ class FakeWorkerGateway {
     socket: WebSocket,
     frame: {
       id: string;
-      method:
-        | "worker.sessions.spawn"
-        | "worker.sessions.send"
-        | "worker.github.publish"
-        | "worker.portal";
-      params:
-        | WorkerSessionsSpawnParams
-        | WorkerSessionsSendParams
-        | WorkerGitHubPublishParams
-        | WorkerPortalParams;
+      method: "worker.sessions.spawn" | "worker.sessions.send" | "worker.portal";
+      params: WorkerSessionsSpawnParams | WorkerSessionsSendParams | WorkerPortalParams;
     },
   ): void {
     this.methods.push(frame.method);
@@ -468,17 +468,16 @@ class FakeWorkerGateway {
       this.sessionSpawnRequests.push(structuredClone(frame.params as WorkerSessionsSpawnParams));
     } else if (frame.method === "worker.sessions.send") {
       this.sessionSendRequests.push(structuredClone(frame.params as WorkerSessionsSendParams));
-    } else if (frame.method === "worker.github.publish") {
-      this.githubPublishRequests.push(structuredClone(frame.params as WorkerGitHubPublishParams));
     } else {
       this.portalRequests.push(structuredClone(frame.params as WorkerPortalParams));
     }
     const requestCount =
       this.sessionSpawnRequests.length +
       this.sessionSendRequests.length +
-      this.githubPublishRequests.length +
       this.portalRequests.length;
-    if (requestCount <= (this.options.silenceSessionToolResponses ?? 0)) {
+    if (requestCount <= (this.options.dropSessionToolResponses ?? 0)) {
+      // Lose the response after recording its request, without a heartbeat race.
+      socket.terminate();
       return;
     }
     this.send(socket, {
@@ -602,6 +601,10 @@ class FakeWorkerGateway {
     });
     const plan = this.options.inferencePlans?.[this.inferencePlanIndex] ?? "text";
     this.inferencePlanIndex += 1;
+    if (typeof plan === "object") {
+      this.sendToolCallTurn(socket, frame.params, plan);
+      return;
+    }
     if (plan === "read-image") {
       this.sendToolCallTurn(socket, frame.params, {
         args: { path: "attachment.png" },
@@ -774,7 +777,9 @@ class FakeWorkerGateway {
           background: true,
         }
       : {
-          command: options.safe ? "wc -c" : "printf worker-local > local-proof.txt",
+          command:
+            this.options.execCommand ??
+            (options.safe ? "wc -c" : "printf worker-local > local-proof.txt"),
         };
     this.sendToolCallTurn(socket, identity, {
       args,
@@ -911,6 +916,7 @@ function descriptor(socketPath: string, workspaceDir: string): WorkerLaunchDescr
       liveEvents: { ackedSeq: 0, nextSeq: 1 },
       toolAuthority: {
         allowedToolNames: ["read", "write", "edit", "apply_patch", "exec", "process"],
+        exec: { host: "gateway", security: "full", ask: "off" },
       },
     },
   };
@@ -944,6 +950,14 @@ afterEach(async () => {
 });
 
 describe("worker runtime", () => {
+  registerWorkerBackgroundExecLifecycleTests({
+    setup,
+    waitForFast,
+    bundleHash: BUNDLE_HASH,
+    sessionId: SESSION_ID,
+    inferenceStartTimeoutMs: WORKER_INFERENCE_START_TIMEOUT_MS,
+  });
+
   it("sends current image and scanned PDF page content through remote inference exactly once", async () => {
     const { gateway, launch } = await setup();
     const images = [
@@ -1076,10 +1090,14 @@ describe("worker runtime", () => {
 
   it.each([false, true])("uses only prepared prompt inputs (Gateway extra: %s)", async (extra) => {
     const { gateway, workspaceDir, launch } = await setup();
+    const canonicalWorkspaceDir = await realpath(workspaceDir);
     const promptDir = path.join(workspaceDir, ".openclaw");
     const literalPrompt = path.join(workspaceDir, "not-a-prompt-file.md");
     await mkdir(promptDir);
     await writeFile(path.join(workspaceDir, "AGENTS.md"), "prepared-worker-context");
+    for (const name of ["SOUL.md", "IDENTITY.md", "USER.md", "BOOTSTRAP.md", "MEMORY.md"]) {
+      await writeFile(path.join(workspaceDir, name), "unselected-workspace-bootstrap-marker");
+    }
     await writeFile(path.join(promptDir, "SYSTEM.md"), "ambient-system-marker");
     await writeFile(path.join(promptDir, "APPEND_SYSTEM.md"), "ambient-append-marker");
     await writeFile(literalPrompt, "unrequested-file-contents");
@@ -1087,7 +1105,17 @@ describe("worker runtime", () => {
       launch.assignment.systemPrompt = literalPrompt;
     }
 
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+    const openedFiles = vi.spyOn(boundaryFileRead, "openRootFile");
+    try {
+      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+      expect(
+        openedFiles.mock.calls
+          .map(([params]) => params.absolutePath)
+          .filter((filePath) => path.dirname(filePath) === canonicalWorkspaceDir),
+      ).toEqual([path.join(canonicalWorkspaceDir, "AGENTS.md")]);
+    } finally {
+      openedFiles.mockRestore();
+    }
 
     const prompt = gateway.inferenceRequests[0]?.context.systemPrompt;
     expect(prompt).toContain("prepared-worker-context");
@@ -1095,6 +1123,7 @@ describe("worker runtime", () => {
     expect.soft(prompt).not.toContain("ambient-system-marker");
     expect.soft(prompt).not.toContain("ambient-append-marker");
     expect.soft(prompt).not.toContain("unrequested-file-contents");
+    expect.soft(prompt).not.toContain("unselected-workspace-bootstrap-marker");
     if (extra) {
       expect.soft(prompt).toContain(literalPrompt);
     }
@@ -1143,8 +1172,11 @@ describe("worker runtime", () => {
     expect(gateway.inferenceRequests[0]?.context.tools ?? []).toEqual([]);
   });
 
-  it("materializes exactly the Browser tool for a browser-only assignment", async () => {
+  it("materializes exactly the Browser tool and disposes it before finishing", async () => {
     const { gateway, launch } = await setup();
+    browserRuntimeMocks.dispose.mockImplementationOnce(async () => {
+      gateway.applicationOrder.push("browser:dispose");
+    });
     launch.assignment.toolAuthority.allowedToolNames = ["browser"];
     launch.assignment.browser = {
       cdpUrl: "http://127.0.0.1:9222",
@@ -1163,15 +1195,73 @@ describe("worker runtime", () => {
       workspaceDir: await realpath(launch.assignment.workspaceDir),
     });
     expect(browserRuntimeMocks.dispose).toHaveBeenCalledOnce();
+    expect(gateway.applicationOrder.indexOf("browser:dispose")).toBeLessThan(
+      gateway.applicationOrder.indexOf("live:lifecycle:finishing"),
+    );
   });
 
-  it.each([false, true])(
-    "keeps desktop images through RPC, transcript, and inference before closing (cleanup failure: %s)",
-    async (computerCleanupFailure) => {
+  it.each(["text", "error", "setup"] as const)(
+    "retains browser disposal failure together with the %s outcome",
+    async (outcome) => {
+      const { gateway, launch } = await setup({
+        inferencePlans: [outcome === "error" ? "error" : "text"],
+      });
+      launch.assignment.toolAuthority.allowedToolNames = ["browser"];
+      launch.assignment.browser = {
+        cdpUrl: "http://127.0.0.1:9222",
+        launcherPath: "/usr/local/bin/openclaw-worker-browser",
+      };
+      const createSession =
+        outcome === "setup"
+          ? vi
+              .spyOn(agentSessionSdk, "createAgentSession")
+              .mockRejectedValueOnce(new Error("fixture setup failed"))
+          : undefined;
+      browserRuntimeMocks.dispose.mockRejectedValueOnce(
+        new Error("fixture browser cleanup failed"),
+      );
+      try {
+        if (outcome === "setup") {
+          const error = await runWorkerDescriptor(launch).catch((cause: unknown) => cause);
+          expect(formatErrorMessage(error)).toContain("fixture setup failed");
+          expect(formatErrorMessage(error)).toContain("fixture browser cleanup failed");
+          expect(hasModelFallbackStop(error)).toBe(true);
+          expect(gateway.liveEventRequests).toHaveLength(0);
+        } else {
+          await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "failed" });
+          expect(gateway.liveEventRequests.at(-1)?.event.payload).toMatchObject({
+            phase: "finishing",
+            stopReason: "error",
+            error: expect.stringContaining("fixture browser cleanup failed"),
+            replayInvalid: true,
+          });
+          if (outcome === "error") {
+            expect(gateway.liveEventRequests.at(-1)?.event.payload).toMatchObject({
+              error: expect.stringContaining("fixture provider failed"),
+            });
+          }
+        }
+        expect(browserRuntimeMocks.dispose).toHaveBeenCalledOnce();
+      } finally {
+        createSession?.mockRestore();
+      }
+    },
+  );
+
+  it.each([
+    { computerCleanupFailure: false, terminal: "text" },
+    { computerCleanupFailure: false, terminal: "error" },
+    { computerCleanupFailure: false, terminal: "cancelled" },
+    { computerCleanupFailure: true, terminal: "text" },
+    { computerCleanupFailure: true, terminal: "error" },
+    { computerCleanupFailure: true, terminal: "cancelled" },
+  ] as const)(
+    "keeps desktop images through RPC, transcript, and inference before closing (cleanup failure: $computerCleanupFailure, terminal: $terminal)",
+    async ({ computerCleanupFailure, terminal }) => {
       const computerSnapshot = createNoisyPngBuffer(512, 512).toString("base64");
       expect(computerSnapshot.length).toBeGreaterThan(64 * 1024);
       const { gateway, launch } = await setup({
-        inferencePlans: ["computer", "text"],
+        inferencePlans: ["computer", terminal],
         computerSnapshot,
         computerCleanupFailure,
       });
@@ -1190,7 +1280,7 @@ describe("worker runtime", () => {
       };
 
       await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({
-        status: computerCleanupFailure ? "failed" : "completed",
+        status: computerCleanupFailure || terminal !== "text" ? "failed" : "completed",
       });
 
       expect(gateway.computerRequests.map((request) => request.command)).toEqual([
@@ -1219,14 +1309,35 @@ describe("worker runtime", () => {
         gateway.applicationOrder.indexOf("live:lifecycle:finishing"),
       );
       if (computerCleanupFailure) {
+        expect(gateway.liveEventRequests.at(-1)?.event.payload).toHaveProperty(
+          "replayInvalid",
+          true,
+        );
+      } else {
+        expect(gateway.liveEventRequests.at(-1)?.event.payload).not.toHaveProperty("replayInvalid");
+      }
+      if (terminal === "cancelled") {
+        expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
+          kind: "lifecycle",
+          payload: { phase: "finishing", stopReason: "aborted" },
+        });
+        expect(gateway.liveEventRequests.at(-1)?.event.payload).not.toHaveProperty("error");
+      } else if (computerCleanupFailure) {
         expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
           kind: "lifecycle",
           payload: {
             phase: "finishing",
             stopReason: "error",
-            error: "computer: session desktop cleanup failed",
+            error: expect.stringContaining(
+              "computer: session desktop cleanup failed | fixture desktop cleanup failed",
+            ),
           },
         });
+        if (terminal === "error") {
+          expect(gateway.liveEventRequests.at(-1)?.event.payload).toMatchObject({
+            error: expect.stringContaining("fixture provider failed"),
+          });
+        }
       }
     },
   );
@@ -1303,68 +1414,54 @@ describe("worker runtime", () => {
         message: "status",
       },
     },
-    {
-      name: "publish",
-      invoke: (connection: ReturnType<typeof createWorkerConnection>) =>
-        connection.requestGitHubPublish({
-          toolCallId: "call-durable-publish",
-          title: "Publish the fix",
-        }),
-      requests: (gateway: FakeWorkerGateway) => gateway.githubPublishRequests,
-      request: { toolCallId: "call-durable-publish", title: "Publish the fix" },
-    },
   ])("replays the same durable $name operation across response loss", async (testCase) => {
-    const { gateway, launch } = await setup({
-      heartbeatIntervalMs: 1,
-      ignoreHeartbeat: true,
-      silenceSessionToolResponses: 2,
-    });
+    const { gateway, launch } = await setup({ dropSessionToolResponses: 2 });
     const connection = createWorkerConnection({
       endpoint: { kind: "unix", socketPath: gateway.socketPath },
       connectParams: buildWorkerConnectParams(launch),
-      requestTimeoutMs: 25,
       reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
     });
     const states: WorkerConnectionState["kind"][] = [];
     connection.onStateChange((state) => states.push(state.kind));
-    await connection.start();
+    try {
+      await connection.start();
 
-    const response = await testCase.invoke(connection);
+      const response = await testCase.invoke(connection);
 
-    expect(response).toMatchObject({
-      ok: true,
-      payload: { resultJson: expect.stringContaining("child accepted") },
-    });
-    expect(gateway.connectionCount).toBe(3);
-    expect(states).toContain("reconnecting");
-    expect(testCase.requests(gateway)).toEqual([
-      testCase.request,
-      testCase.request,
-      testCase.request,
-    ]);
-    await connection.stop();
+      expect(response).toMatchObject({
+        ok: true,
+        payload: { resultJson: expect.stringContaining("child accepted") },
+      });
+      expect(gateway.connectionCount).toBe(3);
+      expect(states.filter((state) => state === "ready")).toHaveLength(3);
+      expect(testCase.requests(gateway)).toEqual([
+        testCase.request,
+        testCase.request,
+        testCase.request,
+      ]);
+    } finally {
+      await connection.stop();
+    }
   });
 
   it("never replays a portal operation after its response is lost", async () => {
-    const { gateway, launch } = await setup({
-      heartbeatIntervalMs: 1,
-      ignoreHeartbeat: true,
-      silenceSessionToolResponses: 1,
-    });
+    const { gateway, launch } = await setup({ dropSessionToolResponses: 1 });
     const connection = createWorkerConnection({
       endpoint: { kind: "unix", socketPath: gateway.socketPath },
       connectParams: buildWorkerConnectParams(launch),
-      requestTimeoutMs: 25,
       reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
     });
-    await connection.start();
-    const request = { toolCallId: "call-portal-once", action: "open" as const, port: 3000 };
+    try {
+      await connection.start();
+      const request = { toolCallId: "call-portal-once", action: "open" as const, port: 3000 };
 
-    await expect(connection.requestPortal(request)).rejects.toMatchObject({
-      name: "WorkerConnectionInterruptedError",
-    });
-    expect(gateway.portalRequests).toEqual([request]);
-    await connection.stop();
+      await expect(connection.requestPortal(request)).rejects.toMatchObject({
+        name: "WorkerConnectionInterruptedError",
+      });
+      expect(gateway.portalRequests).toEqual([request]);
+    } finally {
+      await connection.stop();
+    }
   });
 
   it("fail-stops a stale mid-run transcript without duplicating or rebasing the paid tail", async () => {
@@ -1597,6 +1694,7 @@ describe("worker runtime", () => {
       expect(lifecycle).toMatchObject({
         payload: { phase: lifecyclePhase, stopReason },
       });
+      expect(lifecycle?.payload).not.toHaveProperty("replayInvalid");
     },
   );
 
@@ -1731,7 +1829,7 @@ describe("worker runtime", () => {
         expect(settled).not.toHaveBeenCalled();
         if (processState === "completed") {
           await writeFile(path.join(workspaceDir, "finish-marker"), "finish");
-          await supervisor.waitForScope?.(scopeKey);
+          await waitForExecScope(scopeKey);
           await waitForFast(() =>
             expect(
               listRunningSessions().filter((session) => session.scopeKey === scopeKey),
@@ -1796,7 +1894,7 @@ describe("worker runtime", () => {
           await command;
         } finally {
           supervisor.cancelScope(scopeKey, "manual-cancel");
-          await supervisor.waitForScope?.(scopeKey);
+          await waitForExecScope(scopeKey);
         }
       }
       expect(listRunningSessions().filter((session) => session.scopeKey === scopeKey)).toHaveLength(
@@ -1804,46 +1902,6 @@ describe("worker runtime", () => {
       );
     },
   );
-
-  it("joins retained background processes before closing the managed owner on EOF", async () => {
-    const { launch } = await setup({ inferencePlans: ["background-tool", "text"] });
-    const input = new PassThrough();
-    const output = new PassThrough();
-    const result = createDeferred<WorkerProcessResult>();
-    output.on("data", (chunk: Buffer) => {
-      const parsed = parseWorkerProcessResult(JSON.parse(chunk.toString("utf8")));
-      if (parsed) {
-        result.resolve(parsed);
-      }
-    });
-    const command = runWorkerCommand({ managed: true, input, output });
-    const scopeKey = `worker:${SESSION_ID}`;
-    const supervisor = getProcessSupervisor();
-    try {
-      input.write(
-        `${JSON.stringify({ type: "turn", turnId: launch.assignment.turnId, descriptor: launch })}\n`,
-      );
-      await expect(result.promise).resolves.toMatchObject({ retainWorker: true });
-      const running = listRunningSessions().filter((session) => session.scopeKey === scopeKey);
-      expect(running).toHaveLength(1);
-      const pid = running[0]!.pid!;
-      expect(pid).toBeGreaterThan(0);
-      input.end();
-      await command;
-      expect(() => process.kill(pid, 0)).toThrow();
-      expect(listRunningSessions().filter((session) => session.scopeKey === scopeKey)).toHaveLength(
-        0,
-      );
-    } finally {
-      input.end();
-      try {
-        await command;
-      } finally {
-        supervisor.cancelScope(scopeKey, "manual-cancel");
-        await supervisor.waitForScope?.(scopeKey);
-      }
-    }
-  });
 
   it.each(["foreground", "hidden-background"] as const)(
     "keeps environment state until %s exec finalization settles",
@@ -1890,7 +1948,6 @@ describe("worker runtime", () => {
           deleteSession(run.session.id);
         }
         await finalizing.promise;
-        await getProcessSupervisor().waitForScope?.(scopeKey);
         const closing = environment.close();
         await Promise.resolve();
 
@@ -1996,86 +2053,272 @@ describe("worker runtime", () => {
     ).toBe(true);
   });
 
-  it.each([
-    {
-      mode: "read-only" as const,
-      omittedTools: ["write", "edit", "apply_patch"],
-      denial: /host=gateway security=deny/u,
-    },
-    {
-      mode: "guarded" as const,
-      omittedTools: [],
-      denial:
-        /approval_required.*worker guarded permission mode.*run this command locally.*interactive approval.*administrator.*clear the session permission mode/isu,
-    },
-    {
-      mode: "workspace" as const,
-      omittedTools: [],
-      denial:
-        /approval_required.*worker workspace permission mode.*run this command locally.*interactive approval.*administrator.*clear the session permission mode/isu,
-    },
-    { mode: "full" as const, omittedTools: [], denial: null },
-  ])("applies the $mode worker permission clamp", async ({ mode, omittedTools, denial }) => {
-    const { gateway, workspaceDir, launch } = await setup({
-      inferencePlans: ["tool", "text"],
-      ...(mode === "full"
-        ? {
-            execApprovals: {
-              version: 1,
-              defaults: { security: "full", ask: "always" },
-              agents: {},
-            },
-          }
-        : {}),
-    });
-    launch.assignment.permissionMode = mode;
-    launch.assignment.workerContainmentRoot = workspaceDir;
+  // The probe uses a POSIX shell; Windows launches exec through PowerShell.
+  it.skipIf(process.platform === "win32")(
+    "binds the turn GitHub identity and checkout to real exec without publishing its token",
+    async () => {
+      const { gateway, workspaceDir, launch } = await setup({
+        inferencePlans: ["tool", "text"],
+        execCommand: [
+          'printf "%s" "$GH_TOKEN" | if command -v shasum >/dev/null; then shasum -a 256; else sha256sum; fi | cut -d " " -f1',
+          'printf "github-token=%s\\n" "$GITHUB_TOKEN"',
+          'printf "helpers-start\\n"',
+          "git config --get-all credential.helper",
+          'printf "helpers-end\\n"',
+          "git config --show-scope --get-all credential.helper",
+          "git symbolic-ref HEAD",
+          "git remote get-url origin",
+          'printf "profile=%s\\n" "$GH_CONFIG_DIR"',
+        ].join("; "),
+      });
+      const binding = {
+        token: "worker-turn-fixture-token",
+        login: "worker-fixture",
+        branch: "openclaw/session-fixture",
+        remoteUrl: "https://github.com/openclaw/worker-fixture.git",
+      };
+      launch.assignment.github = binding;
+      const environment = await createWorkerRuntimeEnvironment(SESSION_ID);
+      try {
+        const git = async (args: string[]) =>
+          await runExec("git", ["-C", workspaceDir, ...args], {
+            timeoutMs: 10_000,
+            maxBuffer: 4_096,
+            logOutput: false,
+          });
+        await git(["init", "--quiet", "--initial-branch=openclaw-worker"]);
+        await git([
+          "-c",
+          "user.name=Worker Fixture",
+          "-c",
+          "user.email=worker@openclaw.invalid",
+          "commit",
+          "--quiet",
+          "--allow-empty",
+          "--no-gpg-sign",
+          "-m",
+          "Worker base",
+        ]);
+        const baseCommit = (await git(["rev-parse", "HEAD"])).stdout.trim();
+        await writeFile(path.join(workspaceDir, ".git", "shallow"), `${baseCommit}\n`);
 
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+        await expect(
+          runWorkerDescriptor(launch, { environmentStateDir: environment.stateDir }),
+        ).resolves.toMatchObject({ status: "completed" });
 
-    const toolNames = gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name) ?? [];
-    for (const toolName of omittedTools) {
-      expect(toolNames).not.toContain(toolName);
-    }
-    const toolResult = JSON.stringify(
-      gateway.inferenceRequests[1]?.context.messages.find(
-        (message) => message.role === "toolResult",
-      ),
-    );
-    if (denial) {
-      expect(toolResult).toMatch(denial);
+        const toolResult = gateway.inferenceRequests[1]?.context.messages
+          .filter((message) => message.role === "toolResult")
+          .find((message) => message.toolName === "exec");
+        expect(toolResult).toMatchObject({ isError: false });
+        const profileDir = path.join(
+          environment.stateDir,
+          "github-profiles",
+          createHash("sha256").update(launch.assignment.runId).digest("hex").slice(0, 16),
+        );
+        const output =
+          toolResult?.content
+            .filter((block) => block.type === "text")
+            .map((block) => block.text)
+            .join("\n") ?? "";
+        expect(output).toContain(
+          [
+            createHash("sha256").update(binding.token).digest("hex"),
+            "github-token=",
+            "helpers-start",
+          ].join("\n"),
+        );
+        expect(output).toContain(
+          [`refs/heads/${binding.branch}`, binding.remoteUrl, `profile=${profileDir}`].join("\n"),
+        );
+        expect(
+          output
+            .split("\n")
+            .filter((line) => line.startsWith("command\t"))
+            .map((line) => line.slice("command\t".length)),
+        ).toEqual(["", "!gh auth git-credential"]);
+        const helpers = output.split("helpers-start\n")[1]?.split("\nhelpers-end")[0]?.split("\n");
+        // Git lists inherited helpers too; an empty value resets the effective helper list.
+        expect(helpers?.slice(helpers.lastIndexOf(""))).toEqual(["", "!gh auth git-credential"]);
+        expect((await stat(profileDir)).mode & 0o777).toBe(0o700);
+        const hostsPath = path.join(profileDir, "hosts.yml");
+        expect((await stat(hostsPath)).mode & 0o777).toBe(0o600);
+        expect(await readFile(hostsPath, "utf8")).toContain(binding.login);
+        expect(JSON.stringify(gateway.transcriptRequests)).not.toContain(binding.token);
+        expect(JSON.stringify(gateway.liveEventRequests)).not.toContain(binding.token);
+      } finally {
+        await environment.close();
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "prevents retained processes from reading a later turn's GitHub profile",
+    async () => {
+      const { gateway, launch, workspaceDir } = await setup({
+        inferencePlans: ["background-tool", "text", "tool", "text"],
+        backgroundCommand: [
+          'printf "%s" "$GH_CONFIG_DIR" > retained-profile.txt',
+          "while [ ! -e retained-marker ]; do sleep 0.01; done",
+          '{ cat "$GH_CONFIG_DIR/hosts.yml"; printf "exit=%s\\n" "$?"; } > retained-read.tmp 2>&1',
+          "mv retained-read.tmp retained-read.txt",
+        ].join("; "),
+        execCommand: "printf turn-b-completed",
+      });
+      launch.assignment.github = {
+        login: "worker-a",
+        token: "worker-turn-a-token",
+        branch: "openclaw/session-fixture",
+      };
+      const input = new PassThrough();
+      const output = new PassThrough();
+      const results: WorkerProcessResult[] = [];
+      output.on("data", (chunk: Buffer) => {
+        const result = parseWorkerProcessResult(JSON.parse(chunk.toString("utf8")));
+        if (result) {
+          results.push(result);
+        }
+      });
+      const command = runWorkerCommand({ managed: true, input, output });
+      const settled = vi.fn();
+      void command.then(settled, settled);
+      const scopeKey = `worker:${SESSION_ID}`;
+      const supervisor = getProcessSupervisor();
+      try {
+        input.write(
+          `${JSON.stringify({ type: "turn", turnId: launch.assignment.turnId, descriptor: launch })}\n`,
+        );
+        await waitForFast(() => expect(results).toHaveLength(1), { timeout: 30_000 });
+        expect(results[0]).toMatchObject({
+          turnId: launch.assignment.turnId,
+          result: { status: "completed" },
+          retainWorker: true,
+        });
+        const previousProfileDir = await waitForFast(async () => {
+          const profileDir = await readFile(
+            path.join(workspaceDir, "retained-profile.txt"),
+            "utf8",
+          );
+          expect(profileDir).not.toBe("");
+          return profileDir;
+        });
+        const stateDir = process.env.OPENCLAW_STATE_DIR!;
+        const next = structuredClone(launch);
+        next.assignment.runId = "worker-next-run-2";
+        next.assignment.turnId = "worker-next-turn-2";
+        next.assignment.operationalRunInstance = createOperationalRunInstanceRef(
+          next.assignment.runId,
+        );
+        next.assignment.agentRuntimeIdentityToken = "next-test-runtime-token-2";
+        next.admission.credential = "next-test-worker-credential-2";
+        next.assignment.initialMessages = gateway.acceptedTranscriptRequests.flatMap(
+          (request) => request.messages,
+        );
+        next.assignment.github = {
+          login: "worker-b",
+          token: "worker-turn-b-token",
+          branch: "openclaw/session-fixture",
+        };
+        input.write(
+          `${JSON.stringify({ type: "turn", turnId: next.assignment.turnId, descriptor: next })}\n`,
+        );
+        await waitForFast(() => expect(results).toHaveLength(2), { timeout: 30_000 });
+        expect(results[1]).toMatchObject({
+          turnId: next.assignment.turnId,
+          result: { status: "completed" },
+          retainWorker: true,
+        });
+        const execResult = gateway.acceptedTranscriptRequests
+          .flatMap((request) => request.messages)
+          .findLast((message) => message.role === "toolResult" && message.toolName === "exec");
+        expect(execResult).toMatchObject({
+          isError: false,
+          content: [{ type: "text", text: expect.stringContaining("turn-b-completed") }],
+        });
+        expect(settled).not.toHaveBeenCalled();
+
+        await writeFile(path.join(workspaceDir, "retained-marker"), "read");
+        const retainedRead = await waitForFast(() =>
+          readFile(path.join(workspaceDir, "retained-read.txt"), "utf8"),
+        );
+        expect(retainedRead).not.toContain(launch.assignment.github.token);
+        expect(retainedRead).not.toContain(next.assignment.github.token);
+        expect(retainedRead).toMatch(/No such file|ENOENT/u);
+        expect(retainedRead).toMatch(/exit=[1-9]\d*/u);
+        await expect(stat(previousProfileDir)).rejects.toMatchObject({ code: "ENOENT" });
+        const nextProfileDir = path.join(
+          stateDir,
+          "github-profiles",
+          createHash("sha256").update(next.assignment.runId).digest("hex").slice(0, 16),
+        );
+        const hosts = await readFile(path.join(nextProfileDir, "hosts.yml"), "utf8");
+        expect(hosts).toContain("worker-b");
+        expect(hosts).not.toContain("worker-a");
+        expect(hosts).not.toContain(launch.assignment.github.token);
+      } finally {
+        input.end();
+        try {
+          await command;
+        } finally {
+          supervisor.cancelScope(scopeKey, "manual-cancel");
+          await waitForExecScope(scopeKey);
+        }
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "keeps exec unbound and creates no GitHub profile without a turn identity",
+    async () => {
+      const { gateway, launch } = await setup({
+        inferencePlans: ["tool", "text"],
+        execCommand: 'printf "profile=%s\\n" "${GH_CONFIG_DIR-unset}"',
+      });
+      const environment = await createWorkerRuntimeEnvironment(SESSION_ID);
+      try {
+        await expect(
+          runWorkerDescriptor(launch, { environmentStateDir: environment.stateDir }),
+        ).resolves.toMatchObject({ status: "completed" });
+
+        const toolResult = gateway.inferenceRequests[1]?.context.messages.find(
+          (message) => message.role === "toolResult" && message.toolName === "exec",
+        );
+        expect(toolResult).toMatchObject({
+          isError: false,
+          content: [{ type: "text", text: expect.stringContaining("profile=unset") }],
+        });
+        await expect(
+          stat(path.join(environment.stateDir, "github-profiles")),
+        ).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      } finally {
+        await environment.close();
+      }
+    },
+  );
+
+  it("reports a GitHub profile write failure before running inference", async () => {
+    const { gateway, launch } = await setup();
+    launch.assignment.github = {
+      token: "worker-profile-write-fixture-token",
+      login: "worker-fixture",
+      branch: "openclaw/session-fixture",
+    };
+    const environment = await createWorkerRuntimeEnvironment(SESSION_ID);
+    try {
+      // A file in the root's parent path cannot be repaired by removing github-profiles.
+      const blockedStateDir = path.join(environment.stateDir, "obstruction");
+      await writeFile(blockedStateDir, "obstruction");
       await expect(
-        readFile(path.join(workspaceDir, "local-proof.txt"), "utf8"),
-      ).rejects.toMatchObject({ code: "ENOENT" });
-    } else {
-      await expect(readFile(path.join(workspaceDir, "local-proof.txt"), "utf8")).resolves.toBe(
-        "worker-local",
-      );
-      expect(toolResult).not.toMatch(/approval_required|approval-pending/iu);
-      expect(gateway.methods.some((method) => method.includes("approval"))).toBe(false);
+        runWorkerDescriptor(launch, { environmentStateDir: blockedStateDir }),
+      ).rejects.toThrow("Worker GitHub identity profile could not be written:");
+      expect(gateway.inferenceRequests).toHaveLength(0);
+    } finally {
+      await environment.close();
     }
   });
 
-  it.each(["guarded", "workspace"] as const)(
-    "keeps the %s worker allowlist fast path",
-    async (mode) => {
-      const { gateway, workspaceDir, launch } = await setup({
-        inferencePlans: ["safe-tool", "text"],
-      });
-      launch.assignment.permissionMode = mode;
-      launch.assignment.workerContainmentRoot = workspaceDir;
-
-      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-
-      const toolResult = JSON.stringify(
-        gateway.inferenceRequests[1]?.context.messages.find(
-          (message) => message.role === "toolResult",
-        ),
-      );
-      expect(toolResult).not.toContain("approval_required");
-      expect(toolResult).toMatch(/\b0\b/u);
-    },
-  );
+  registerWorkerPermissionTests({ setup });
 
   it("canonicalizes an in-root worker workspace before enforcing containment", async () => {
     const { workspaceDir, launch } = await setup();

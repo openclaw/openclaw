@@ -5,9 +5,17 @@ import {
   type GatewayGuildCreateDispatchData,
 } from "discord-api-types/v10";
 import { reportChannelRoomJoin } from "openclaw/plugin-sdk/channel-join-intro-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 import type { Client } from "../internal/discord.js";
 import { DiscordGuildJoinIntroductionListener } from "./listeners.guild-join.js";
+import { createDiscordLivePolicyReader } from "./live-policy.js";
+import { cleanupDiscordProviderStartup } from "./provider.cleanup.js";
+import { registerDiscordMonitorListeners } from "./provider.startup.js";
+import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 const mocks = vi.hoisted(() => ({
   reportChannelRoomJoin: vi.fn(async () => ({ kind: "posted" as const })),
@@ -90,15 +98,120 @@ function createListener(
 }
 
 function createClient(): Client {
-  return { rest: {}, fetchUser: vi.fn() } as unknown as Client;
+  return { rest: {}, listeners: [], fetchUser: vi.fn() } as unknown as Client;
+}
+
+function registerGuildJoinListener() {
+  const client = createClient();
+  const runtime = createRuntimeSpies();
+  const stopMonitorListeners = registerDiscordMonitorListeners({
+    cfg: {},
+    client,
+    accountId: "work",
+    discordConfig: {},
+    runtime,
+    botUserId: "bot-1",
+    dmEnabled: false,
+    groupDmEnabled: false,
+    dmPolicy: "disabled",
+    groupPolicy: "open",
+    logger: createSubsystemLogger("discord/test"),
+    messageHandler: async () => {},
+  });
+  const listener = client.listeners.find(
+    (entry): entry is DiscordGuildJoinIntroductionListener =>
+      entry instanceof DiscordGuildJoinIntroductionListener,
+  );
+  if (!listener) {
+    throw new Error("Guild introduction listener was not registered");
+  }
+  const dispose = vi.fn();
+  return {
+    client,
+    listener,
+    dispose,
+    cleanup: () =>
+      cleanupDiscordProviderStartup({
+        stopMonitorListeners,
+        lifecycleStarted: true,
+        threadBindings: createNoopThreadBindingManager(),
+        runtime,
+        gatewaySupervisor: { dispose },
+      }),
+  };
 }
 
 describe("Discord guild join introductions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.reportChannelRoomJoin.mockReset().mockResolvedValue({ kind: "posted" });
     mocks.canViewDiscordGuildChannel.mockReset().mockResolvedValue(true);
     mocks.hasAnyChannelPermissionDiscord.mockReset().mockResolvedValue(true);
     mocks.readMessagesDiscord.mockReset().mockResolvedValue([]);
+  });
+
+  it("retires permission reads without accepting a report after provider cleanup", async () => {
+    const entered = createDeferred<void>();
+    const permission = createDeferred<boolean>();
+    mocks.canViewDiscordGuildChannel.mockImplementationOnce(() => {
+      entered.resolve();
+      return permission.promise;
+    });
+    const { client, listener, cleanup, dispose } = registerGuildJoinListener();
+    const pending = listener.handle(guildCreateEvent(), client);
+    try {
+      await entered.promise;
+      await cleanup();
+      expect(dispose).toHaveBeenCalledOnce();
+    } finally {
+      permission.resolve(true);
+      await pending;
+    }
+    await listener.handle(guildCreateEvent(), client);
+    expect(reportChannelRoomJoin).not.toHaveBeenCalled();
+  });
+
+  it("joins accepted report delivery and durable settlement before provider cleanup completes", async () => {
+    const deliveryEntered = createDeferred<void>();
+    const delivery = createDeferred<void>();
+    const commitEntered = createDeferred<void>();
+    const commit = createDeferred<void>();
+    mocks.reportChannelRoomJoin.mockImplementationOnce(async () => {
+      deliveryEntered.resolve();
+      await delivery.promise;
+      commitEntered.resolve();
+      await commit.promise;
+      return { kind: "posted" };
+    });
+    const { client, listener, cleanup, dispose } = registerGuildJoinListener();
+    const pending = listener.handle(guildCreateEvent(), client);
+    await deliveryEntered.promise;
+    let cleaned = false;
+    const stopped = cleanup().then(() => {
+      cleaned = true;
+    });
+    try {
+      // Drain a full event-loop turn so premature cleanup is observable at both awaits.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(cleaned).toBe(false);
+      delivery.resolve();
+      await commitEntered.promise;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(cleaned).toBe(false);
+      expect(dispose).not.toHaveBeenCalled();
+      await listener.handle(guildCreateEvent(), client);
+      expect(reportChannelRoomJoin).toHaveBeenCalledOnce();
+    } finally {
+      delivery.resolve();
+      commit.resolve();
+      await pending;
+      await stopped;
+    }
+    expect(dispose).toHaveBeenCalledOnce();
   });
 
   it("introduces the bot in the permitted system channel using readable room context", async () => {
@@ -142,6 +255,34 @@ describe("Discord guild join introductions", () => {
         { sender: "Casey", text: "Newest deployment" },
       ],
     });
+  });
+
+  it("rejects a guild introduction whose policy changes during permission lookup", async () => {
+    const guilds = { "guild-1": { channels: { "system-channel": { enabled: true } } } };
+    let cfg: OpenClawConfig = { channels: { discord: { groupPolicy: "allowlist", guilds } } };
+    const readPolicy = createDiscordLivePolicyReader({
+      cfg,
+      accountId: "work",
+      readConfig: () => cfg,
+      resolvedAllowlist: { guildEntries: guilds, allowFrom: [] },
+    });
+    const entered = createDeferred<void>();
+    const permission = createDeferred<boolean>();
+    mocks.canViewDiscordGuildChannel.mockImplementationOnce(() => {
+      entered.resolve();
+      return permission.promise;
+    });
+    const listener = createListener({ cfg, readPolicy });
+    const pending = listener.handle(guildCreateEvent(), createClient());
+    await entered.promise;
+    cfg = { channels: { discord: { groupPolicy: "disabled", guilds: {} } } };
+    permission.resolve(true);
+    await pending;
+    expect(reportChannelRoomJoin).not.toHaveBeenCalled();
+    await listener.handle(guildCreateEvent(), createClient());
+    expect(reportChannelRoomJoin).toHaveBeenCalledWith(
+      expect.objectContaining({ roomAllowed: false }),
+    );
   });
 
   it("never introduces the bot for a stale guild-create reconnect snapshot", async () => {

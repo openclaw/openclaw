@@ -21,12 +21,13 @@ import { normalizeToolPolicyName } from "../tool-policy.js";
 import { isToolResultError } from "../tool-result-error.js";
 import { resolveEmbeddedCliBackendDispatchEligibility } from "./cli-backend-dispatch-eligibility.js";
 import { createCliDispatchTranscriptRecorder } from "./cli-backend-dispatch-transcript.js";
+import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
 import type { RunEmbeddedAgentParams } from "./run/params.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
 const log = createSubsystemLogger("agents/embedded-cli-dispatch");
 
-type CliBackendDispatchParams = RunEmbeddedAgentParams & {
+type CliBackendDispatchParams = RunEmbeddedAgentInternalParams & {
   sessionTarget: SessionTranscriptRuntimeTarget;
 };
 
@@ -198,16 +199,16 @@ async function runEmbeddedAgentViaCliBackend(
   // Reply/cron callers advance lifecycle state and arm execution-phase
   // watchdogs on this signal; dispatched runs emit it at the same
   // post-admission boundary where the native path does.
-  params.onExecutionStarted?.(
-    params.lifecycleGeneration !== undefined
-      ? { lifecycleGeneration: params.lifecycleGeneration }
-      : undefined,
-  );
   log.info(
     `dispatching embedded run through CLI backend: runId=${params.runId} provider=${dispatch.provider} model=${params.model ?? ""}`,
   );
   let finalAssistantText: string | undefined;
   try {
+    await params.onExecutionStarted?.(
+      params.lifecycleGeneration !== undefined
+        ? { lifecycleGeneration: params.lifecycleGeneration }
+        : undefined,
+    );
     const result = await runCliAgent({
       admittedRunContext,
       sessionManager: params.sessionManager,
@@ -231,9 +232,16 @@ async function runEmbeddedAgentViaCliBackend(
       media: params.media,
       provider: dispatch.provider,
       model: params.model,
+      ...(params.requestedRouteResolution === "resolved" && params.provider && params.model
+        ? { requesterModel: { provider: params.provider, model: params.model } }
+        : {}),
+      authProfileId: params.authProfileId,
       modelHasVision: params.modelHasVision,
       contextWindow: params.contextWindow,
       thinkLevel: params.thinkLevel,
+      fastMode: params.fastMode,
+      fastModeStartedAtMs: params.fastModeStartedAtMs,
+      fastModeAutoOnSeconds: params.fastModeAutoOnSeconds,
       timeoutMs: params.timeoutMs,
       runTimeoutOverrideMs: params.runTimeoutOverrideMs ?? params.timeoutMs,
       runId: params.runId,
@@ -254,10 +262,7 @@ async function runEmbeddedAgentViaCliBackend(
       disableCliLiveSession: true,
       cleanupCliLiveSessionOnRunEnd: true,
       requireExplicitMessageTarget: true,
-      // Deliberately NOT forwarding cleanupBundleMcpOnRunEnd: on the CLI
-      // runner it closes the process-wide loopback MCP server, which a
-      // concurrent main turn or overlapping recall may still be using.
-      // Session-scoped MCP runtimes are retired below instead.
+      cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
     });
     finalAssistantText = result.payloads?.find(
       (payload) => payload.isReasoning !== true && typeof payload.text === "string",
@@ -269,47 +274,6 @@ async function runEmbeddedAgentViaCliBackend(
     // Flush before the promise settles: timeout salvage reads the session
     // file as soon as the caller observes the rejection.
     await transcript?.finalize(finalAssistantText);
-    if (params.cleanupBundleMcpOnRunEnd === true) {
-      await retireDispatchSessionMcpRuntime(params);
-    }
-  }
-}
-
-/**
- * Mirrors the embedded runner's cleanupBundleMcpOnRunEnd semantics for the
- * CLI dispatch path: retire only this run's session-scoped MCP runtimes so
- * stdio children do not idle until the TTL reaper, without touching the
- * process-wide loopback server shared with concurrent CLI turns.
- */
-async function retireDispatchSessionMcpRuntime(params: {
-  sessionId: string;
-  sessionKey?: string;
-  runId: string;
-}): Promise<void> {
-  try {
-    const { retireSessionMcpRuntime, retireSessionMcpRuntimeForSessionKey } =
-      await import("../agent-bundle-mcp-tools.js");
-    const onError = (error: unknown, sessionId: string) => {
-      log.warn(
-        `bundle-mcp cleanup failed after CLI dispatch run: runId=${params.runId} sessionId=${sessionId} error=${String(error)}`,
-      );
-    };
-    const retiredBySessionKey = await retireSessionMcpRuntimeForSessionKey({
-      sessionKey: params.sessionKey,
-      reason: "embedded-cli-dispatch-run-end",
-      onError,
-    });
-    if (!retiredBySessionKey) {
-      await retireSessionMcpRuntime({
-        sessionId: params.sessionId,
-        reason: "embedded-cli-dispatch-run-end",
-        onError,
-      });
-    }
-  } catch (error) {
-    log.warn(
-      `bundle-mcp cleanup unavailable after CLI dispatch run: runId=${params.runId} error=${String(error)}`,
-    );
   }
 }
 

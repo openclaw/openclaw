@@ -12,6 +12,9 @@ import ai.openclaw.wear.shared.WearRealtimeTalkEntry
 import ai.openclaw.wear.shared.WearRealtimeTalkRole
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
 import ai.openclaw.wear.shared.WearRealtimeTalkStatus
+import ai.openclaw.wear.shared.WearReplyText
+import ai.openclaw.wear.shared.WearReplyTextPage
+import ai.openclaw.wear.shared.WearReplyTextStatus
 import android.os.SystemClock
 import android.util.Base64
 import android.util.Log
@@ -131,6 +134,9 @@ internal class WearRealtimeTalkController(
   private var eventDispatchScope: CoroutineScope? = null
 
   private var playbackEndsAtMillis = 0L
+
+  // The relay owns full text; the public snapshot is only its bounded wire projection.
+  private var conversation = emptyList<WearRealtimeTalkEntry>()
   private var userEntryId: String? = null
   private var assistantEntryId: String? = null
   private val realtimeAgentCoordinator =
@@ -175,6 +181,10 @@ internal class WearRealtimeTalkController(
             return@synchronized lifecycleGeneration.get()
           }
 
+          conversation = emptyList()
+          userEntryId = null
+          assistantEntryId = null
+          _snapshot.value = WearRealtimeTalkSnapshot()
           activeOwner = owner
           ownerSessionKey = sessionKey
           val generation = lifecycleGeneration.get()
@@ -309,12 +319,22 @@ internal class WearRealtimeTalkController(
           val owner = activeOwner
           val identityMatches =
             when {
-              owner != null ->
+              owner != null -> {
                 (nodeId == null || owner.nodeId == nodeId) &&
                   (attemptId == null || owner.attemptId == attemptId)
-              nodeId != null && attemptId != null -> true
-              nodeId == null && attemptId == null -> true
-              else -> false
+              }
+
+              nodeId != null && attemptId != null -> {
+                true
+              }
+
+              nodeId == null && attemptId == null -> {
+                true
+              }
+
+              else -> {
+                false
+              }
             }
           if (!identityMatches) {
             null
@@ -433,7 +453,7 @@ internal class WearRealtimeTalkController(
       }
 
     when (obj["type"].asStringOrNull()) {
-      "ready", "inputAudio" ->
+      "ready", "inputAudio" -> {
         updateStateIfCurrent(
           owner = owner,
           sessionId = currentSessionId,
@@ -443,6 +463,8 @@ internal class WearRealtimeTalkController(
           status = WearRealtimeTalkStatus.LISTENING,
           statusText = "Listening",
         )
+      }
+
       "audio" -> {
         val encoded = obj["audioBase64"].asStringOrNull() ?: return
         if (encoded.length > OUTPUT_QUEUE_BASE64_CHAR_CAPACITY) {
@@ -475,23 +497,37 @@ internal class WearRealtimeTalkController(
           statusText = "Speaking…",
         )
       }
+
       "clear" -> {
         enqueueOutput(owner, currentSessionId, WearRealtimeAudioFrameType.CLEAR_OUTPUT, byteArrayOf())
       }
+
       "mark" -> {
         val markName = obj["markName"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty) ?: return
         acknowledgeMark(owner, currentSessionId, markName)
       }
-      "transcript" -> handleTranscriptEvent(owner, currentSessionId, obj)
-      "toolCall" -> handleToolCallEvent(owner, currentSessionId, obj)
-      "toolResult" -> Unit
-      "error" ->
+
+      "transcript" -> {
+        handleTranscriptEvent(owner, currentSessionId, obj)
+      }
+
+      "toolCall" -> {
+        handleToolCallEvent(owner, currentSessionId, obj)
+      }
+
+      "toolResult" -> {}
+
+      "error" -> {
         fail(
           obj["message"].asStringOrNull() ?: "Real-Time Talk failed",
           expectedOwner = owner,
           expectedSessionId = currentSessionId,
         )
-      "close" -> abort(owner, currentSessionId)
+      }
+
+      "close" -> {
+        abort(owner, currentSessionId)
+      }
     }
   }
 
@@ -526,7 +562,7 @@ internal class WearRealtimeTalkController(
   ) {
     synchronized(lifecycleStateLock) {
       if (!isCurrent(owner, activeSessionId)) return
-      val text = obj["text"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty) ?: return
+      val text = obj["text"].asStringOrNull()?.takeIf(String::isNotBlank) ?: return
       val final = obj["final"].asBooleanOrNull() == true
       when (obj["role"].asStringOrNull()) {
         "user" -> {
@@ -541,7 +577,10 @@ internal class WearRealtimeTalkController(
             )
           }
         }
-        "assistant" -> upsertConversation(WearRealtimeTalkRole.ASSISTANT, text, final)
+
+        "assistant" -> {
+          upsertConversation(WearRealtimeTalkRole.ASSISTANT, text, final)
+        }
       }
     }
   }
@@ -616,11 +655,15 @@ internal class WearRealtimeTalkController(
                   delivered = false
                 }
               }
+
               WearRealtimeAudioFrameType.CLEAR_OUTPUT -> {
                 sendWatchFrame(owner, message.type, message.payload)
                 delivered = isCurrentOutput(owner, activeSessionId)
               }
-              WearRealtimeAudioFrameType.INPUT_PCM -> error("Phone cannot emit Watch input audio")
+
+              WearRealtimeAudioFrameType.INPUT_PCM -> {
+                error("Phone cannot emit Watch input audio")
+              }
             }
           } catch (err: Throwable) {
             if (err is CancellationException) throw err
@@ -643,6 +686,7 @@ internal class WearRealtimeTalkController(
             WearRealtimeAudioFrameType.OUTPUT_PCM -> {
               schedulePlaybackIdle(owner, activeSessionId)
             }
+
             WearRealtimeAudioFrameType.CLEAR_OUTPUT -> {
               playbackEndsAtMillis = 0L
               playbackIdleJob?.cancel()
@@ -656,7 +700,10 @@ internal class WearRealtimeTalkController(
                 statusText = "Listening",
               )
             }
-            WearRealtimeAudioFrameType.INPUT_PCM -> error("Phone cannot emit Watch input audio")
+
+            WearRealtimeAudioFrameType.INPUT_PCM -> {
+              error("Phone cannot emit Watch input audio")
+            }
           }
         }
       }
@@ -769,6 +816,24 @@ internal class WearRealtimeTalkController(
       }
   }
 
+  fun readReply(
+    nodeId: String,
+    sessionKey: String,
+    attemptId: String,
+    entryId: String,
+    offset: Int,
+    revision: String?,
+  ): WearReplyTextPage =
+    synchronized(lifecycleStateLock) {
+      val owner = activeOwner
+      if (owner?.nodeId != nodeId || owner.attemptId != attemptId || ownerSessionKey != sessionKey) {
+        return@synchronized WearReplyTextPage(WearReplyTextStatus.Unavailable)
+      }
+      val entry = conversation.firstOrNull { it.id == entryId } ?: return@synchronized WearReplyTextPage(WearReplyTextStatus.Unavailable)
+      if (!entry.fullTextAvailable) return@synchronized WearReplyTextPage(WearReplyTextStatus.TooLarge)
+      WearReplyText.page(entry.text, "$nodeId:$sessionKey:$attemptId:$entryId", offset, revision)
+    }
+
   private fun upsertConversation(
     role: WearRealtimeTalkRole,
     text: String,
@@ -779,15 +844,18 @@ internal class WearRealtimeTalkController(
         WearRealtimeTalkRole.USER -> userEntryId
         WearRealtimeTalkRole.ASSISTANT -> assistantEntryId
       }
-    val entries = _snapshot.value.conversation.toMutableList()
+    val entries = conversation.toMutableList()
     val entryId = currentId ?: UUID.randomUUID().toString()
     val index = entries.indexOfFirst { entry -> entry.id == entryId }
     val entry =
       WearRealtimeTalkEntry(
         id = entryId,
         role = role,
-        text = text.take(MAX_TRANSCRIPT_LENGTH),
+        text = if (text.length <= WearReplyText.MAX_TEXT_LENGTH) text else WearReplyText.preview(text),
         streaming = !final,
+        textTruncated = text.length > WearReplyText.MAX_TEXT_LENGTH,
+        fullTextAvailable = text.length <= WearReplyText.MAX_TEXT_LENGTH,
+        textRevision = (entries.getOrNull(index)?.textRevision ?: 0L) + 1L,
       )
     if (index >= 0) {
       entries[index] = entry
@@ -798,9 +866,27 @@ internal class WearRealtimeTalkController(
       WearRealtimeTalkRole.USER -> userEntryId = if (final) null else entryId
       WearRealtimeTalkRole.ASSISTANT -> assistantEntryId = if (final) null else entryId
     }
+    conversation = entries.takeLast(MAX_CONVERSATION_ENTRIES)
+    // Keep the existing count bound and at most two full maximum-sized replies in RAM.
+    var remaining = WearReplyText.MAX_TEXT_LENGTH * 2
+    conversation =
+      conversation
+        .asReversed()
+        .map { item ->
+          if (item.text.length <= remaining) {
+            remaining -= item.text.length
+            item
+          } else {
+            item.copy(text = WearReplyText.preview(item.text), textTruncated = true, fullTextAvailable = false)
+          }
+        }.asReversed()
     setSnapshot(
       _snapshot.value.copy(
-        conversation = entries.takeLast(MAX_CONVERSATION_ENTRIES),
+        conversation =
+          conversation.map { item ->
+            val preview = WearReplyText.preview(item.text)
+            item.copy(text = preview, textTruncated = item.textTruncated || preview != item.text)
+          },
       ),
     )
   }
@@ -868,11 +954,13 @@ internal class WearRealtimeTalkController(
             speaking = false,
             status = WearRealtimeTalkStatus.ERROR,
             statusText = message.take(MAX_STATUS_LENGTH),
+            conversation = _snapshot.value.conversation.map { it.copy(fullTextAvailable = false) },
           ),
         )
         sessionId = null
         activeOwner = null
         ownerSessionKey = null
+        conversation = emptyList()
         audioFrames?.close()
         audioFrames = null
         appendJob?.cancel()
@@ -922,6 +1010,7 @@ internal class WearRealtimeTalkController(
     playbackEndsAtMillis = 0L
     userEntryId = null
     assistantEntryId = null
+    conversation = emptyList()
     setSnapshot(WearRealtimeTalkSnapshot(attemptId = closingAttemptId))
   }
 
@@ -934,7 +1023,6 @@ internal class WearRealtimeTalkController(
     const val TAG = "WearRealtimeTalk"
     const val MAX_CONVERSATION_ENTRIES = 20
     const val MAX_CANCELED_ATTEMPTS = 32
-    const val MAX_TRANSCRIPT_LENGTH = 1_500
     const val MAX_STATUS_LENGTH = 160
     const val INPUT_QUEUE_CAPACITY = 64
     const val OUTPUT_QUEUE_CAPACITY = 64

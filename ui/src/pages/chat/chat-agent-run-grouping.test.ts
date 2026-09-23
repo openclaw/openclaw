@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
+import { groupMessages } from "./chat-thread-grouping.ts";
 import type {
   ActivityRunRenderItem,
   StreamRunRenderItem,
@@ -13,21 +14,22 @@ function group(
   runId: string | undefined,
   overrides: Record<string, unknown> = {},
 ): MessageGroup {
+  const message = {
+    role: role === "tool" ? "toolResult" : role,
+    content: key,
+    timestamp: 1,
+    ...overrides,
+  };
+  const [prepared] = groupMessages([{ kind: "message", key, message }]);
+  if (prepared?.kind !== "group") {
+    throw new Error("expected a prepared message group");
+  }
   return {
     kind: "group",
     key: `group:${key}`,
     role,
-    messages: [
-      {
-        key,
-        message: {
-          role: role === "tool" ? "toolResult" : role,
-          content: key,
-          timestamp: 1,
-          ...overrides,
-        },
-      },
-    ],
+    visibleContent: "text",
+    messages: prepared.messages,
     timestamp: 1,
     isStreaming: false,
     ...(runId ? { runId } : {}),
@@ -259,9 +261,21 @@ describe("coalesceAgentRunFrames", () => {
     expect(items).toContain(divider);
   });
 
-  it("gives a restored run segment a unique key after a hard boundary", () => {
+  it.each([
+    {
+      name: "notice",
+      boundary: { kind: "notice" as const, key: "notice", text: "Notice", timestamp: 2 },
+    },
+    { name: "peer user", boundary: userBoundary("peer-send") },
+    { name: "metadata-less peer", boundary: group("user", "peer", undefined) },
+    {
+      name: "peer sharing execution ownership",
+      boundary: group("user", "peer", undefined, {
+        __openclaw: { id: "peer", runId: "send-1", idempotencyKey: "peer-send:user" },
+      }),
+    },
+  ])("gives a restored run segment a unique key after a $name boundary", ({ boundary }) => {
     const runId = "run-1";
-    const notice = { kind: "notice" as const, key: "notice", text: "Notice", timestamp: 2 };
     const restoredStream: StreamRunRenderItem = {
       kind: "stream-run",
       key: "stream-run:restored",
@@ -280,7 +294,7 @@ describe("coalesceAgentRunFrames", () => {
     const items = coalesceAgentRunFrames([
       userBoundary(),
       group("assistant", "before", runId),
-      notice,
+      boundary,
       restoredStream,
     ]);
     const frames = items.filter(
@@ -289,7 +303,10 @@ describe("coalesceAgentRunFrames", () => {
 
     expect(frames).toHaveLength(2);
     expect(frames[0]?.key).not.toBe(frames[1]?.key);
-    expect(frames[1]?.key).toContain("notice");
+    expect(frames[0]?.key).toBe(
+      requireFrame(coalesceAgentRunFrames([userBoundary(), group("assistant", "before", runId)])[1])
+        .key,
+    );
   });
 
   it("marks active frames active and tool-only terminal frames terminal", () => {
@@ -395,6 +412,16 @@ describe("coalesceAgentRunFrames", () => {
         }),
       ],
       outcome: { kind: "completed", actionOwner: { key: "final-image" } },
+    },
+    {
+      name: "omitted-image-only final",
+      parts: [
+        group("assistant", "final-omitted-image", "run-1", {
+          stopReason: "stop",
+          content: [{ type: "image", omitted: true, bytes: 12 * 1024 }],
+        }),
+      ],
+      outcome: { kind: "completed", actionOwner: { key: "final-omitted-image" } },
     },
     {
       name: "empty final",

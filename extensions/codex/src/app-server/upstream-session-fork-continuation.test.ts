@@ -10,11 +10,9 @@ import { createCodexCatalogHomeResolver } from "../session-catalog-homes.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
+import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config-runtime.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
-import {
-  buildCodexAppServerConnectionFingerprint,
-  replaceCodexCatalogConnectionHomes,
-} from "./plugin-app-cache-key.js";
+import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import { isJsonObject } from "./protocol.js";
 import {
   createCodexAppServerBindingStore,
@@ -90,6 +88,12 @@ describe("persistent upstream fork continuation", () => {
     const clients: ReturnType<typeof createFakeCodexAppServerClient>[] = [];
     const createClient = (home: "secondary" | "ordinary") => {
       const client = createFakeCodexAppServerClient(async (method, requestParams) => {
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
+        }
+        if (method === "configRequirements/read") {
+          return { requirements: null };
+        }
         if (method === "skills/list") {
           return { data: [] };
         }
@@ -176,14 +180,15 @@ describe("persistent upstream fork continuation", () => {
       await Promise.all(
         [agentDir, secondaryHome, env.CODEX_HOME].map((dir) => fs.mkdir(dir, { recursive: true })),
       );
-      const sourceHome = createCodexCatalogHomeResolver({
-        config,
-        getRuntimeConfig: () => config,
-        getPluginConfig: () => pluginConfig,
-        env,
-      })
-        .forAgent("main")
-        .find((home) => home.appServer.start.env?.CODEX_HOME === secondaryHome);
+      const sourceHome = (
+        await createCodexCatalogHomeResolver({
+          resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
+          config,
+          getRuntimeConfig: () => config,
+          getPluginConfig: () => pluginConfig,
+          env,
+        }).forAgent("main")
+      ).find((home) => home.appServer.start.env?.CODEX_HOME === secondaryHome);
       expect(sourceHome).toBeDefined();
       const fingerprint = buildCodexAppServerConnectionFingerprint(sourceHome!.appServer, agentDir);
       params.upstream.ref = { connectionFingerprint: fingerprint, threadId: "thread-source" };
@@ -268,8 +273,8 @@ describe("persistent upstream fork continuation", () => {
       ];
       const developerInstructions = "Follow the child agent's current instructions.";
       const continueFork = async (store: CodexAppServerBindingStore, nativeClient = native) => {
-        const connection = resolveCodexBindingAppServerConnection({
-          binding: await store.read(identity),
+        const connection = await resolveCodexBindingAppServerConnection({
+          binding: store.read(identity),
           pluginConfig,
           config,
           agentDir,
@@ -341,7 +346,6 @@ describe("persistent upstream fork continuation", () => {
       for (const client of clients) {
         client.close();
       }
-      replaceCodexCatalogConnectionHomes([]);
       await fs.rm(root, { recursive: true, force: true });
     }
   });

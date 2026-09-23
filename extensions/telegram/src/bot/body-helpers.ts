@@ -293,28 +293,32 @@ export function getTelegramTextParts(msg: TelegramTextMessage): {
 
 export function joinTelegramTextParts(
   messages: readonly Message[],
-  separator: string,
+  separator: string | ((previous: Message) => string),
 ): { text: string; entities: TelegramTextEntity[] } {
   const textParts: string[] = [];
   const entities: TelegramTextEntity[] = [];
   let offset = 0;
+  let previous: Message | undefined;
 
   for (const message of messages) {
     const textPart = getTelegramTextParts(message);
     if (!textPart.text) {
       continue;
     }
-    if (textParts.length > 0) {
-      offset += separator.length;
+    if (previous) {
+      const gap = typeof separator === "string" ? separator : separator(previous);
+      textParts.push(gap);
+      offset += gap.length;
     }
     entities.push(
       ...textPart.entities.map((entity) => ({ ...entity, offset: entity.offset + offset })),
     );
     textParts.push(textPart.text);
     offset += textPart.text.length;
+    previous = message;
   }
 
-  return { text: textParts.join(separator), entities };
+  return { text: textParts.join(""), entities };
 }
 
 function isTelegramMentionWordChar(char: string | undefined): boolean {
@@ -347,7 +351,7 @@ function isBotCommandAddressedToMention(command: string, mention: string): boole
   return atIndex > 1;
 }
 
-export function hasBotMention(msg: Message, botUsername: string) {
+export function hasBotMention(msg: Message, botUsername: string, botId?: number) {
   const { text, entities } = getTelegramTextParts(msg);
   const mention = normalizeLowercaseStringOrEmpty(`@${botUsername}`);
   if (hasStandaloneTelegramMention(normalizeLowercaseStringOrEmpty(text), mention)) {
@@ -359,6 +363,12 @@ export function hasBotMention(msg: Message, botUsername: string) {
       return true;
     }
     if (ent.type === "bot_command" && isBotCommandAddressedToMention(slice, mention)) {
+      return true;
+    }
+    // A `text_mention` entity tags a user by id (the entity text is the display
+    // name, not `@username`), so the `mention` branch above never matches it.
+    // When it resolves to this bot, it is still an explicit mention of us.
+    if (ent.type === "text_mention" && botId !== undefined && ent.user?.id === botId) {
       return true;
     }
   }

@@ -4,6 +4,8 @@ import type { ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveClickClackAccount } from "./accounts.js";
+import type { CoreConfig } from "./types.js";
 
 const claimClickClackSetupCode = vi.hoisted(() => vi.fn());
 const verifyClickClackAccountAfterSetup = vi.hoisted(() => vi.fn());
@@ -476,6 +478,53 @@ describe("ClickClack setup adapter", () => {
           },
         },
       },
+    });
+  });
+
+  it("clickClackSetupContract.applyAccountConfig preserves the active collision winner", () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          baseUrl: "https://old.clickclack.example",
+          workspace: "old",
+          token: "root-token",
+          defaultAccount: "ops",
+          accounts: {
+            Ops: { name: "Other spelling" },
+            ops: { name: "Active" },
+          },
+        },
+      },
+    } satisfies CoreConfig;
+    const input = {
+      baseUrl: "https://work.clickclack.example",
+      workspace: "work",
+      token: "work-token",
+    } satisfies ClickClackSetupInput;
+
+    expect(resolveClickClackAccount({ cfg, accountId: "ops" })).toMatchObject({
+      name: "Active",
+      token: "root-token",
+      configured: true,
+    });
+    expect(validate({ cfg, accountId: "work", input })).toBeNull();
+    const next = clickClackSetupContract.applyAccountConfig({
+      cfg,
+      accountId: "work",
+      input,
+    });
+
+    expect(resolveClickClackAccount({ cfg: next, accountId: "ops" })).toMatchObject({
+      name: "Active",
+      token: "root-token",
+      configured: true,
+    });
+    expect(next.channels?.clickclack?.accounts?.Ops).toEqual({ name: "Other spelling" });
+    expect(resolveClickClackAccount({ cfg: next, accountId: "work" })).toMatchObject({
+      baseUrl: "https://work.clickclack.example",
+      workspace: "work",
+      token: "work-token",
+      configured: true,
     });
   });
 

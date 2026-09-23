@@ -20,23 +20,6 @@ enum CommandResolver {
         await RuntimeLocator.resolve(searchPaths: searchPaths ?? self.preferredPaths())
     }
 
-    static func makeRuntimeCommand(
-        runtime: RuntimeResolution,
-        entrypoint: String,
-        subcommand: String,
-        extraArgs: [String],
-        profile: AppProfile = .current) -> [String]
-    {
-        profile.localCLICommand(
-            prefix: [runtime.path, entrypoint],
-            arguments: [subcommand] + extraArgs)
-    }
-
-    static func runtimeErrorCommand(_ error: RuntimeResolutionError) -> [String] {
-        let message = RuntimeLocator.describeFailure(error)
-        return self.errorCommand(with: message)
-    }
-
     static func errorCommand(with message: String) -> [String] {
         let script = """
         cat <<'__OPENCLAW_ERR__' >&2
@@ -274,12 +257,13 @@ enum CommandResolver {
     static func nodeHostWorkerLaunch(
         bundle: Bundle = .main,
         projectRoot: URL? = nil,
-        searchPaths: [String]? = nil) async throws -> MacNodeHostWorkerLaunch
+        searchPaths: [String]? = nil,
+        desktopSharingEnabled: Bool? = nil) async throws -> MacNodeHostWorkerLaunch
     {
         // Packaging and optimization are independent: even DEBUG apps must use
         // their signed payload, including after relocation or checkout removal.
         if bundle.bundleURL.pathExtension == "app" {
-            return try BundledNodeWorker.launch(bundle: bundle)
+            return try BundledNodeWorker.launch(bundle: bundle, desktopSharingEnabled: desktopSharingEnabled)
         }
         #if DEBUG
         let root = projectRoot ?? self.projectRoot()
@@ -291,7 +275,8 @@ enum CommandResolver {
         case let .success(runtime):
             return MacNodeHostWorkerLaunch(
                 command: self.nodeHostWorkerCommand(
-                    prefix: [runtime.path, sourceRunner.path]),
+                    prefix: [runtime.path, sourceRunner.path],
+                    desktopSharingEnabled: desktopSharingEnabled),
                 currentDirectoryURL: root)
         case let .failure(error):
             throw error
@@ -303,72 +288,22 @@ enum CommandResolver {
 
     static func nodeHostWorkerCommand(
         prefix: [String],
-        profile: AppProfile = .current) -> [String]
+        profile: AppProfile = .current,
+        desktopSharingEnabled: Bool? = nil) -> [String]
     {
-        profile.localCLICommand(prefix: prefix, arguments: ["node", "worker"])
+        var arguments = ["node", "worker"]
+        if let desktopSharingEnabled {
+            arguments.append(desktopSharingEnabled ? "--desktop-sharing" : "--no-desktop-sharing")
+        }
+        return profile.localCLICommand(prefix: prefix, arguments: arguments)
     }
 
-    static func openclawNodeCommand(
-        subcommand: String,
-        extraArgs: [String] = [],
-        defaults: UserDefaults = AppDefaults.standard,
-        configRoot: [String: Any]? = nil,
-        searchPaths: [String]? = nil,
-        projectRoot: URL? = nil,
-        profile: AppProfile = .current) async -> [String]
-    {
-        let settings = self.connectionSettings(defaults: defaults, configRoot: configRoot)
-        if settings.mode == .remote, settings.transport == .ssh {
-            guard let ssh = sshNodeCommand(
-                subcommand: subcommand,
-                extraArgs: extraArgs,
-                settings: settings)
-            else {
-                return self.errorCommand(with: "Remote SSH gateway target is missing or invalid.")
-            }
-            return ssh
-        }
-
-        let root = projectRoot ?? self.projectRoot()
-        if let openclawPath = projectOpenClawExecutable(projectRoot: root) {
-            return profile.localCLICommand(prefix: [openclawPath], arguments: [subcommand] + extraArgs)
-        }
-        if let openclawPath = openclawExecutable(searchPaths: searchPaths) {
-            return profile.localCLICommand(prefix: [openclawPath], arguments: [subcommand] + extraArgs)
-        }
-
-        let runtimeResult = await self.runtimeResolution(searchPaths: searchPaths)
-        switch runtimeResult {
-        case let .success(runtime):
-            if let entry = gatewayEntrypoint(in: root) {
-                return self.makeRuntimeCommand(
-                    runtime: runtime,
-                    entrypoint: entry,
-                    subcommand: subcommand,
-                    extraArgs: extraArgs,
-                    profile: profile)
-            }
-        case .failure:
-            break
-        }
-
-        if let pnpm = findExecutable(named: "pnpm", searchPaths: searchPaths) {
-            // Use --silent to avoid pnpm lifecycle banners that would corrupt JSON outputs.
-            return profile.localCLICommand(
-                prefix: [pnpm, "--silent", "openclaw"],
-                arguments: [subcommand] + extraArgs)
-        }
-
-        switch runtimeResult {
-        case .success:
-            let missingEntry = """
-            openclaw CLI not found. Install the CLI, or run pnpm build in an OpenClaw source checkout.
-            """
-            return self.errorCommand(with: missingEntry)
-        case let .failure(error):
-            return self.runtimeErrorCommand(error)
-        }
+    enum LocalCLIResolution {
+        case executable([String])
+        case unavailable(String)
     }
+
+    typealias LocalCLIResolver = @Sendable ([String]?, URL?) async -> LocalCLIResolution
 
     static func openclawCommand(
         subcommand: String,
@@ -379,14 +314,71 @@ enum CommandResolver {
         projectRoot: URL? = nil,
         profile: AppProfile = .current) async -> [String]
     {
-        await self.openclawNodeCommand(
+        await self.openclawCommand(
             subcommand: subcommand,
             extraArgs: extraArgs,
-            defaults: defaults,
-            configRoot: configRoot,
-            searchPaths: searchPaths,
-            projectRoot: projectRoot,
-            profile: profile)
+            settings: self.connectionSettings(defaults: defaults, configRoot: configRoot),
+            localCommand: {
+                await self.localOpenclawCommand(
+                    subcommand: subcommand,
+                    extraArgs: extraArgs,
+                    searchPaths: searchPaths,
+                    projectRoot: projectRoot,
+                    profile: profile)
+            })
+    }
+
+    static func openclawCommand(
+        subcommand: String,
+        extraArgs: [String],
+        settings: RemoteSettings,
+        localCommand: () async -> [String]) async -> [String]
+    {
+        if settings.mode == .remote, settings.transport == .ssh {
+            return self.sshNodeCommand(subcommand: subcommand, extraArgs: extraArgs, settings: settings)
+                ?? self.errorCommand(with: "Remote SSH gateway target is missing or invalid.")
+        }
+        return await localCommand()
+    }
+
+    static func localOpenclawCommand(
+        subcommand: String,
+        extraArgs: [String] = [],
+        searchPaths: [String]? = nil,
+        projectRoot: URL? = nil,
+        profile: AppProfile = .current,
+        resolveCLI: LocalCLIResolver = resolveLocalCLI) async -> [String]
+    {
+        switch await resolveCLI(searchPaths, projectRoot) {
+        case let .executable(prefix):
+            profile.localCLICommand(prefix: prefix, arguments: [subcommand] + extraArgs)
+        case let .unavailable(message):
+            self.errorCommand(with: message)
+        }
+    }
+
+    static func resolveLocalCLI(searchPaths: [String]?, projectRoot: URL?) async -> LocalCLIResolution {
+        let root = projectRoot ?? self.projectRoot()
+        if let openclawPath = projectOpenClawExecutable(projectRoot: root) {
+            return .executable([openclawPath])
+        }
+        if let openclawPath = openclawExecutable(searchPaths: searchPaths) {
+            return .executable([openclawPath])
+        }
+        let runtimeResult = await self.runtimeResolution(searchPaths: searchPaths)
+        if case let .success(runtime) = runtimeResult, let entry = gatewayEntrypoint(in: root) {
+            return .executable([runtime.path, entry])
+        }
+        if let pnpm = findExecutable(named: "pnpm", searchPaths: searchPaths) {
+            return .executable([pnpm, "--silent", "openclaw"])
+        }
+        switch runtimeResult {
+        case .success:
+            return .unavailable(
+                "openclaw CLI not found. Install the CLI, or run pnpm build in an OpenClaw source checkout.")
+        case let .failure(error):
+            return .unavailable(RuntimeLocator.describeFailure(error))
+        }
     }
 
     // MARK: - SSH helpers

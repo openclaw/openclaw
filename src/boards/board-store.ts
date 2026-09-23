@@ -11,11 +11,15 @@ import type {
 import { boardDeclarationIsSubset, normalizeBoardWidgetDeclared } from "./board-capabilities.js";
 import {
   BOARD_SIZE_PRESETS,
+  BOARD_WIDGET_PROPS_MAX_BYTES,
   BoardValidationError,
   insertBoardWidget,
   normalizeBoardLayout,
   type BoardSize,
 } from "./board-layout.js";
+import { BOARD_REPORT_WIDGET_KIND, parseBoardReport } from "./board-report.js";
+import { BOARD_WEBSITE_WIDGET_KIND, parseBoardWebsite } from "./board-website.js";
+import { GITHUB_ACTIONS_GRANT_PREFIX } from "./github-actions-capability.js";
 
 export type BoardWidgetHtmlDocument = {
   html: string;
@@ -56,29 +60,57 @@ export type BoardSnapshotWithHtmlViewMetadata = {
 
 export type BoardSessionTarget = { sessionKey: string; agentId?: string };
 
+export type BoardWriteOptions = {
+  /** Recheck the caller after write admission, inside the synchronous mutation. */
+  assertCurrent?: () => void;
+};
+
+export type BoardWidgetWriteOptions = BoardWriteOptions & {
+  /** Refresh source permission under writer admission before persisting an interactive MCP pin. */
+  resolveMcpAppInteraction?: () => Promise<boolean>;
+};
+
 export interface BoardStore {
-  getSnapshot(target: BoardSessionTarget): BoardSnapshot;
-  getSnapshotWithHtmlViewMetadata(target: BoardSessionTarget): BoardSnapshotWithHtmlViewMetadata;
-  applyOps(target: BoardSessionTarget, ops: readonly BoardOp[]): BoardSnapshot;
-  putWidget(params: BoardWidgetMaterializedPutParams): BoardWidgetPutResult;
+  /** Start consumption in the authoritative read turn; release the database before awaiting its result. */
+  useSnapshot<T>(
+    target: BoardSessionTarget,
+    consume: (snapshot: BoardSnapshot) => T,
+  ): Promise<Awaited<T>>;
+  useWidgetDocument<T>(
+    target: BoardSessionTarget,
+    name: string,
+    consume: (document: BoardWidgetDocument | undefined) => T,
+  ): Promise<Awaited<T>>;
+
+  getSnapshot(target: BoardSessionTarget): Promise<BoardSnapshot>;
+  getSnapshotWithHtmlViewMetadata(
+    target: BoardSessionTarget,
+  ): Promise<BoardSnapshotWithHtmlViewMetadata>;
+  applyOps(
+    target: BoardSessionTarget,
+    ops: readonly BoardOp[],
+    options?: BoardWriteOptions,
+  ): Promise<BoardSnapshot>;
+  putWidget(
+    params: BoardWidgetMaterializedPutParams,
+    options?: BoardWidgetWriteOptions,
+  ): Promise<BoardWidgetPutResult>;
   grant(
     target: BoardSessionTarget,
     name: string,
     decision: "granted" | "rejected",
     revision: number,
     instanceId?: string,
-  ): BoardSnapshot;
-  readWidgetHtml(target: BoardSessionTarget, name: string): BoardWidgetHtmlDocument | undefined;
-  readWidgetRegistered(
+    options?: BoardWriteOptions,
+  ): Promise<BoardSnapshot>;
+  readWidgetMcpApp(
     target: BoardSessionTarget,
     name: string,
-  ): BoardWidgetRegisteredDocument | undefined;
-  readWidgetMcpApp(target: BoardSessionTarget, name: string): BoardWidgetMcpAppDocument | undefined;
+  ): Promise<BoardWidgetMcpAppDocument | undefined>;
 }
 
 const BOARD_MAX_WIDGETS = 48;
 const BOARD_MAX_WIDGET_HTML_BYTES = 256 * 1024;
-const BOARD_MAX_WIDGET_PLUGIN_PROPS_BYTES = 8 * 1024;
 type BoardWidgetGeneratedIdentityMarker = Pick<BoardWidgetGeneratedIdentity, "source" | "key"> & {
   kind: "generated";
 };
@@ -117,7 +149,11 @@ export function createBoardDeclaredSummary(
 ): string[] | undefined {
   const lines = [
     ...(declared?.netOrigins ?? []).map((origin) => `Network access: ${origin}`),
-    ...(declared?.tools ?? []).map((tool) => `Tool access: ${tool}`),
+    ...(declared?.tools ?? []).map((tool) =>
+      tool.startsWith(GITHUB_ACTIONS_GRANT_PREFIX)
+        ? `GitHub Actions metadata: ${tool.slice(GITHUB_ACTIONS_GRANT_PREFIX.length)} (including private repository data accessible to the agent; shared with this widget/session audience)`
+        : `Tool access: ${tool}`,
+    ),
   ];
   return lines.length > 0 ? lines : undefined;
 }
@@ -202,12 +238,19 @@ function validatePluginContent(params: BoardWidgetMaterializedPutParams): void {
       "trusted plugin widgets do not accept sandbox capability declarations",
     );
   }
+  if (params.content.pluginKind === BOARD_REPORT_WIDGET_KIND) {
+    parseBoardReport(params.content.props);
+    return;
+  }
   const propsBytes = Buffer.byteLength(JSON.stringify(params.content.props ?? {}), "utf8");
-  if (propsBytes > BOARD_MAX_WIDGET_PLUGIN_PROPS_BYTES) {
+  if (propsBytes > BOARD_WIDGET_PROPS_MAX_BYTES) {
     throw new BoardValidationError(
       "invalid_operation",
-      `board plugin widget props exceed ${BOARD_MAX_WIDGET_PLUGIN_PROPS_BYTES} UTF-8 bytes`,
+      `board plugin widget props exceed ${BOARD_WIDGET_PROPS_MAX_BYTES} UTF-8 bytes`,
     );
+  }
+  if (params.content.pluginKind === BOARD_WEBSITE_WIDGET_KIND) {
+    parseBoardWebsite(params.content.props);
   }
 }
 
@@ -344,7 +387,11 @@ export function createBoardWidgetPutSnapshot(
                 ? "pending"
                 : "none",
       revision: widgetRevision,
-      ...(params.content.kind !== "plugin" ? { instanceId: context.instanceId } : {}),
+      // Native widget resources follow the insertion; document grants follow each put.
+      instanceId:
+        params.content.kind === "plugin"
+          ? (existing?.instanceId ?? context.instanceId)
+          : context.instanceId,
       ...(declaredSummary ? { declaredSummary } : {}),
       ...(declared ? { declared } : {}),
     },
@@ -354,11 +401,6 @@ export function createBoardWidgetPutSnapshot(
       move: params.placement?.tabId !== undefined || params.placement?.after !== undefined,
     },
   );
-  if (!declaredSummary) {
-    const widget = layout.widgets.find((candidate) => candidate.name === params.name)!;
-    delete widget.declaredSummary;
-    delete widget.declared;
-  }
   return {
     sessionKey: params.sessionKey,
     revision: prior.revision + 1,

@@ -7,10 +7,103 @@ import {
 import type { PluginCompatRecord } from "./types.js";
 
 export const PLUGIN_COMPAT_RECORDS = [
+  {
+    code: "conversation-binding-sync-mutations",
+    status: "deprecated",
+    owner: "channel",
+    introduced: "2026-09-20",
+    deprecated: "2026-09-20",
+    warningStarts: "2026-09-20",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Await getSessionBindingService().inspectByConversationAsync, resolveByConversationAsync, touchAsync, resolveRuntimeConversationBindingRouteAsync, and the Async-suffixed thread-binding lifecycle setters. Project prepared inspection facts with inspectRuntimeConversationBindingRoute. Async dispatch retains an explicit synchronous fallback for legacy external adapters; remaining bind/unbind and other storage operations are separate migration work.",
+    docsPath: "/plugins/sdk-runtime/channel#awaited-conversation-binding-mutations",
+    surfaces: [
+      "SessionBindingService.touch",
+      "SessionBindingService.resolveByConversation",
+      "SessionBindingAdapter.touch",
+      "SessionBindingAdapter.resolveByConversation",
+      "resolveRuntimeConversationBindingRoute",
+      "ChannelConversationBindingSupport.setIdleTimeoutBySessionKey",
+      "ChannelConversationBindingSupport.setMaxAgeBySessionKey",
+      "api.runtime.channel.threadBindings.setIdleTimeoutBySessionKey",
+      "api.runtime.channel.threadBindings.setMaxAgeBySessionKey",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations on synchronous methods; resolver migration is recorded here and in docs while its broad barrel remains deprecated; no runtime warnings",
+    ],
+    tests: [
+      "src/infra/outbound/session-binding-service.test.ts",
+      "src/channels/plugins/binding-routing.test.ts",
+      "src/channels/plugins/conversation-bindings.test.ts",
+    ],
+    releaseNote:
+      "Plugins can expose explicitly awaited binding mutations and pure ownership inspection; synchronous public methods remain supported while callers and persistence owners migrate.",
+  },
   ...PLUGIN_SDK_SUBPATH_RECORDS,
   ...BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS,
   ...DEPRECATION_MARKING_COMPAT_RECORDS,
   MEDIA_LEGACY_PROJECTION_COMPAT_RECORD,
+  {
+    code: "plugin-tasks-sync-reads",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-09-12",
+    deprecated: "2026-09-12",
+    warningStarts: "2026-09-12",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Await the 14 read methods on api.runtime.tasks.async.runs, flows, and managedFlows, plus createManaged, tryCreateManaged, setWaiting, resume, finish, fail, requestCancel, and runTask on api.runtime.tasks.async.managedFlows. Reconcile outcome-unknown errors before retrying creation or child linkage. Retain synchronous methods until supported external-plugin migration and explicit breaking-release approval; native cancellation remains on the existing surface.",
+    docsPath: "/plugins/sdk-runtime/background-work",
+    surfaces: [
+      "api.runtime.tasks.runs get/list/findLatest/resolve",
+      "api.runtime.tasks.flows get/list/findLatest/resolve/getTaskSummary",
+      "api.runtime.tasks.managedFlows get/list/findLatest/resolve/getTaskSummary",
+      "api.runtime.tasks.managedFlows createManaged/tryCreateManaged/setWaiting/resume/finish/fail/requestCancel/runTask",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations and migration documentation; no runtime warnings",
+    ],
+    tests: [
+      "src/infra/sqlite-worker-task-runtime.test.ts",
+      "src/infra/sqlite-worker-managed-task-link.test.ts",
+      "extensions/webhooks/index.test.ts",
+    ],
+    releaseNote:
+      "Plugins can opt into worker-backed task and flow reads plus managed-flow writes and child linkage through tasks.async while synchronous methods remain available for external compatibility. Cold registry and configuration preparation remains synchronous.",
+  },
+  {
+    code: "plugin-state-sync-keyed-store",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-05-29",
+    deprecated: "2026-09-11",
+    warningStarts: "2026-09-11",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "`api.runtime.state.openKeyedStore` and `PluginStateKeyedStore`; await operations while keeping transactional callbacks synchronous. Retain the sync adapter until a supported external-plugin migration and explicit breaking-release approval.",
+    docsPath: "/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration",
+    surfaces: [
+      "api.runtime.state.openSyncKeyedStore",
+      "PluginStateSyncKeyedStore",
+      "createPluginStateSyncKeyedStore",
+      "PluginStateKeyedStore.update",
+      "PluginStateKeyedStore.deleteIf",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations and state-store migration documentation",
+      "plugin compatibility inventory; no new runtime warnings",
+    ],
+    tests: [
+      "src/plugins/compat/registry.test.ts",
+      "src/plugin-state/plugin-state-store.test.ts",
+      "src/plugin-state/plugin-state-store.runtime.test.ts",
+      "src/plugin-sdk/plugin-state-store-runtime.test.ts",
+      "src/plugins/loader.runtime-registry.test.ts",
+    ],
+    releaseNote:
+      "Synchronous plugin keyed stores remain supported through the next Plugin SDK major while plugins migrate to awaited keyed-store operations; trust eligibility and transactional callbacks are unchanged.",
+  },
   {
     code: "memory-read-result-statusless-success",
     status: "deprecated",
@@ -171,6 +264,24 @@ export const PLUGIN_COMPAT_RECORDS = [
       "Legacy Plugin SDK session-agent resolver names preserve ambient system-agent fallback while published plugins migrate to strict owner-required aliases.",
   },
   {
+    code: "agent-harness-credential-prompt-string-argument",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-08-08",
+    deprecated: "2026-09-09",
+    warningStarts: "2026-09-09",
+    removeAfter: "2026-11-30",
+    replacement: "options object `{ controlToolsAvailable }`",
+    docsPath: "/plugins/sdk-migration/removed-surfaces#credential-prompt-builder",
+    surfaces: [
+      "openclaw/plugin-sdk/agent-harness-runtime buildCredentialSafetyPrompt string argument",
+    ],
+    diagnostics: ["JSDoc parameter deprecation", "plugin compatibility registry"],
+    tests: ["src/agents/credential-safety-prompt.test.ts"],
+    releaseNote:
+      "The credential prompt helper remains available with private login-code handoff and capability-aware terminal setup guidance; its ignored legacy string argument is supported through 2026-11-30.",
+  },
+  {
     code: "removed-session-transcript-file-api",
     status: "removed",
     owner: "sdk",
@@ -282,14 +393,14 @@ export const PLUGIN_COMPAT_RECORDS = [
   },
   {
     code: "sdk-untrusted-context-identifier-aliases",
-    status: "deprecated",
+    status: "removal-pending",
     owner: "sdk",
     introduced: "2026-07-22",
     deprecated: "2026-07-22",
     warningStarts: "2026-07-22",
     removeAfter: "2026-09-08",
     replacement:
-      "`MsgContext.ChannelPromptContext`, `MsgContext.ChannelStructuredContext`, `ChannelStructuredContextEntry`, `SupplementalContextFacts.channelStructuredContext`, and `buildChannelMetadata`",
+      "`MsgContext.ChannelPromptContext`, `MsgContext.ChannelStructuredContext`, `ChannelStructuredContextEntry`, `SupplementalContextFacts.channelStructuredContext`, and `buildChannelMetadata`; retain the aliases until migration of published plugin readers is verified and explicit breaking-release approval is granted",
     docsPath: "/plugins/compatibility",
     surfaces: [
       "openclaw/plugin-sdk reply-runtime MsgContext.UntrustedContext and UntrustedStructuredContext",
@@ -534,7 +645,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     owner: "setup",
     introduced: "2026-04-24",
     replacement: "`setup.requiresRuntime: false` with complete setup descriptors",
-    docsPath: "/plugins/manifest#setup-reference",
+    docsPath: "/plugins/manifest/setup-and-auth#setup-reference",
     surfaces: ["setup-api runtime fallback", "setup.requiresRuntime omitted"],
     diagnostics: ["setup registry runtime diagnostic"],
     tests: ["src/plugins/setup-registry.test.ts", "src/plugins/setup-registry.runtime.test.ts"],

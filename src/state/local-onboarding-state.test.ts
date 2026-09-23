@@ -53,13 +53,19 @@ describe("local onboarding state", () => {
         workspace: state.workspaceDir,
         securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT,
         runId: "first-run",
+        teamCoordinatorId: " Project Lead ",
         database,
+      });
+      closeOpenClawStateDatabaseForTest();
+      expect(readLocalOnboardingState(state.configPath, database)).toMatchObject({
+        teamCoordinatorId: "project-lead",
       });
       const second = beginLocalOnboarding({
         configPath: state.configPath,
         workspace: state.path("other-workspace"),
         securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT,
         runId: "second-run",
+        teamCoordinatorId: "different-coordinator",
         database,
       });
 
@@ -81,6 +87,23 @@ describe("local onboarding state", () => {
         status: "completed",
         completedAtMs: 200,
       });
+    });
+  });
+
+  it("rejects an unrepresentable team coordinator before creating a receipt", async () => {
+    await withOpenClawTestState({ label: "local-onboarding-invalid-team" }, async (state) => {
+      const database = { env: state.env };
+      expect(() =>
+        beginLocalOnboarding({
+          configPath: state.configPath,
+          workspace: state.workspaceDir,
+          securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT,
+          runId: "invalid-team",
+          teamCoordinatorId: "!!!",
+          database,
+        }),
+      ).toThrow("coordinator");
+      expect(readLocalOnboardingState(state.configPath, database)).toBeUndefined();
     });
   });
 

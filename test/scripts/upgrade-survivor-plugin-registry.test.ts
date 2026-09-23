@@ -1,7 +1,15 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -31,7 +39,7 @@ function writeExecutable(path: string, source: string): void {
   chmodSync(path, 0o755);
 }
 
-function runSurvivor(overrides: NodeJS.ProcessEnv = {}, shell = "bash") {
+function runSurvivor(overrides: NodeJS.ProcessEnv = {}, shell = "bash", targetVersion?: string) {
   const root = tempDirs.make("openclaw-upgrade-survivor-registry-");
   const binDir = join(root, "bin");
   const captureDir = join(root, "capture");
@@ -39,6 +47,46 @@ function runSurvivor(overrides: NodeJS.ProcessEnv = {}, shell = "bash") {
   mkdirSync(binDir);
   mkdirSync(captureDir);
   writeFileSync(packageTarball, "candidate");
+  const targetEnv: NodeJS.ProcessEnv = {};
+  if (targetVersion) {
+    const selectedRoot = join(root, "selected");
+    for (const file of [
+      "scripts/e2e/lib/upgrade-survivor/run.sh",
+      "scripts/lib/openclaw-test-state.mts",
+      "scripts/lib/npm-publish-plan.mjs",
+      "scripts/windows-cmd-helpers.mjs",
+      "scripts/e2e/lib/plugin-index-sqlite.mjs",
+      "scripts/e2e/lib/env-limits.mjs",
+      "scripts/e2e/lib/text-file-utils.mjs",
+    ]) {
+      mkdirSync(dirname(join(selectedRoot, file)), { recursive: true });
+      cpSync(file, join(selectedRoot, file));
+    }
+    writeFileSync(join(selectedRoot, "package.json"), JSON.stringify({ version: targetVersion }));
+    const git = (...args: string[]) =>
+      execFileSync(
+        "git",
+        ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", ...args],
+        { cwd: selectedRoot, encoding: "utf8" },
+      ).trim();
+    git("init", "-q");
+    git("add", ".");
+    git(
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.invalid",
+      "commit",
+      "-qm",
+      "fixture",
+    );
+    Object.assign(targetEnv, {
+      OPENCLAW_DOCKER_E2E_REPO_ROOT: selectedRoot,
+      OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
+      OPENCLAW_SELECTED_SHA: git("rev-parse", "HEAD"),
+      OPENCLAW_TOOLING_SHA: SOURCE_SHA,
+    });
+  }
   writeExecutable(
     join(binDir, "node"),
     `#!/usr/bin/env bash
@@ -64,6 +112,19 @@ printf '{"dir":"%s"}\n' "$OPENCLAW_DOCKER_ALL_LOG_DIR/prepublish-plugin-registry
 set -euo pipefail
 printf '%s\n' "$*" >>"$CAPTURE_DIR/docker-args"
 if [ "\${1:-}" = run ]; then
+  for arg in "$@"; do
+    case "$arg" in
+      *:/tmp/openclaw-worker-cleanup)
+        printf '%s\\0' "$@" >"$CAPTURE_DIR/docker-cleanup-args"
+        test -f "$CAPTURE_DIR/main-run-finished"
+        if [ "\${FIXTURE_CLEANUP_EXIT:-0}" != 0 ]; then
+          exit "$FIXTURE_CLEANUP_EXIT"
+        fi
+        rm -rf "\${arg%%:*}/runtime"
+        exit 0
+        ;;
+    esac
+  done
   printf '%s\\0' "$@" >"$CAPTURE_DIR/docker-run-args"
   if [ -n "\${FIXTURE_PAYLOAD_SHELL:-}" ]; then
     exec "$FIXTURE_PAYLOAD_SHELL" -c "\${!#}"
@@ -71,12 +132,21 @@ if [ "\${1:-}" = run ]; then
 fi
 previous=""
 for arg in "$@"; do
+  case "$arg" in
+    */worker-runtime.*:*)
+      mkdir -p "\${arg%%:*}/runtime"
+      printf 'synthetic state' >"\${arg%%:*}/runtime/state-marker"
+      ;;
+  esac
   if [ "$previous" = "--cidfile" ]; then
     printf 'fake-container\n' >"$arg"
   fi
   previous="$arg"
 done
-[ "\${1:-}" != run ] || exit "\${FIXTURE_RUN_EXIT:-0}"
+if [ "\${1:-}" = run ]; then
+  touch "$CAPTURE_DIR/main-run-finished"
+  exit "\${FIXTURE_RUN_EXIT:-0}"
+fi
 `,
   );
 
@@ -100,6 +170,7 @@ done
       OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE: "1",
       PATH: `${binDir}:${process.env.PATH ?? ""}`,
       TMPDIR: root,
+      ...targetEnv,
       ...overrides,
     },
     timeout: 30_000,
@@ -108,6 +179,41 @@ done
 }
 
 describe("standalone upgrade survivor plugin registry", () => {
+  it("keeps synthetic state through inner finalization until the Docker owner joins", () => {
+    const root = tempDirs.make("worker-cell-inner-finalization-");
+    const runtime = join(root, "runtime");
+    mkdirSync(runtime);
+    const marker = join(runtime, "state-marker");
+    writeFileSync(marker, "synthetic state");
+    const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
+    const firstPhase = source.indexOf("phase storage-preflight");
+    expect(firstPhase).toBeGreaterThan(0);
+    const runner = join(root, "inner.sh");
+    writeFileSync(
+      runner,
+      `${source.slice(0, firstPhase)}
+cleanup() { :; }
+write_summary() { :; }
+run_completed=1
+on_exit 0
+`,
+    );
+    const result = spawnSync("bash", [runner], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.9.4",
+        OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "projects-doctor",
+        OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI: "0",
+        OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: runtime,
+        OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: join(root, "artifacts", "summary.json"),
+      },
+      timeout: 30_000,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(marker, "utf8")).toBe("synthetic state");
+  });
+
   // macOS /bin/bash is 3.2; PATH may select a newer Bash. Exercise both owners.
   describe.each(process.platform === "darwin" ? ["/bin/bash", "bash"] : ["bash"])(
     "%s wrapper",
@@ -241,6 +347,24 @@ describe("standalone upgrade survivor plugin registry", () => {
     );
   });
 
+  it.each([
+    ["custom-plugin-siblings", "openclaw@2026.9.4"],
+    ["abandoned-update", "openclaw@2026.9.4"],
+    ["workshop-doctor-recovery", "openclaw@2026.9.4"],
+  ])("follows the planner's no-registry decision for %s", (scenario, baseline) => {
+    const { captureDir, result } = runSurvivor({
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: baseline,
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(existsSync(join(captureDir, "node-args"))).toBe(false);
+    expect(existsSync(join(captureDir, "docker-run-args"))).toBe(true);
+    expect(readFileSync(join(captureDir, "docker-args"), "utf8")).not.toContain(
+      "/tmp/openclaw-prepublish-plugin-registry",
+    );
+  });
+
   it("does not prepare a registry for a published candidate", () => {
     const { captureDir, packageTarball, result } = runSurvivor({
       OPENCLAW_CURRENT_PACKAGE_TGZ: undefined,
@@ -255,9 +379,201 @@ describe("standalone upgrade survivor plugin registry", () => {
     );
     expect(existsSync(packageTarball)).toBe(true);
   });
+
+  it.each(["projects-doctor", "taskflow-restoration"])(
+    "isolates each %s run from retained evidence and preserves a failed runtime",
+    (scenario) => {
+      const artifacts = tempDirs.make("worker-cell-retained-artifacts-");
+      const retained = join(artifacts, "projects-inventory.json");
+      writeFileSync(retained, "previous evidence");
+      const directories = [];
+      for (const exitCode of ["0", "42"]) {
+        const { captureDir, result } = runSurvivor({
+          OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR: artifacts,
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@2026.9.4",
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
+          OPENCLAW_UPGRADE_SURVIVOR_E2E_IMAGE: "worker-cleanup-fixture",
+          FIXTURE_RUN_EXIT: exitCode,
+        });
+        expect(result.status, result.stderr).toBe(Number(exitCode));
+        expect(existsSync(join(captureDir, "node-args"))).toBe(false);
+        const directory = result.stdout.match(/Worker survivor artifacts: ([^\n]+)/u)?.[1] ?? "";
+        expect(existsSync(directory)).toBe(true);
+        directories.push(directory);
+        const runtimes = readdirSync(directory).filter((name) =>
+          name.startsWith("worker-runtime."),
+        );
+        expect(runtimes).toHaveLength(exitCode === "0" ? 0 : 1);
+        const cleanupArgsPath = join(captureDir, "docker-cleanup-args");
+        expect(existsSync(cleanupArgsPath)).toBe(exitCode === "0");
+        if (exitCode === "0") {
+          const args = readFileSync(cleanupArgsPath, "utf8").split("\0").slice(0, -1);
+          expect(args[args.indexOf("--network") + 1]).toBe("none");
+          expect(args[args.indexOf("--entrypoint") + 1]).toBe("rm");
+          expect(args).not.toContain("--user");
+          expect(args.filter((arg) => arg === "-v")).toHaveLength(1);
+          expect(args[args.indexOf("-v") + 1]).toMatch(
+            /\/worker-runtime\.[^:]+:\/tmp\/openclaw-worker-cleanup$/u,
+          );
+          expect(args.slice(-4)).toEqual([
+            "worker-cleanup-fixture",
+            "-rf",
+            "--",
+            "/tmp/openclaw-worker-cleanup/runtime",
+          ]);
+          expect(readFileSync(join(captureDir, "docker-run-args"), "utf8")).toContain(
+            "worker-cleanup-fixture\0",
+          );
+        }
+        if (exitCode !== "0") {
+          expect(result.stderr).toContain("Preserved failed synthetic worker-cell state:");
+          for (const runtime of runtimes) {
+            expect(readFileSync(join(directory, runtime, "runtime", "state-marker"), "utf8")).toBe(
+              "synthetic state",
+            );
+          }
+        }
+      }
+      expect(new Set(directories).size).toBe(2);
+      expect(readFileSync(retained, "utf8")).toBe("previous evidence");
+    },
+  );
+
+  it("fails and retains state when container-owned cleanup fails", () => {
+    const { captureDir, result } = runSurvivor({
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@2026.9.4",
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "taskflow-restoration",
+      FIXTURE_CLEANUP_EXIT: "43",
+    });
+    expect(result.status, result.stderr).toBe(1);
+    expectFinalFailure(result.stderr, 1);
+    expect(result.stderr).toContain("Worker-cell runtime cleanup failed:");
+    const args = readFileSync(join(captureDir, "docker-cleanup-args"), "utf8").split("\0");
+    const mount = args[args.indexOf("-v") + 1];
+    if (!mount) {
+      throw new Error("Cleanup did not mount the synthetic runtime");
+    }
+    const runtimeRoot = mount.slice(0, mount.lastIndexOf(":"));
+    expect(readFileSync(join(runtimeRoot, "runtime", "state-marker"), "utf8")).toBe(
+      "synthetic state",
+    );
+  });
 });
 
 describe("standalone upgrade survivor live OpenAI probe", () => {
+  it("runs each selected model with its recipe thinking default and isolated live key", () => {
+    const root = tempDirs.make("upgrade-survivor-live-turns-");
+    const bin = join(root, "bin");
+    const calls = join(root, "calls.jsonl");
+    mkdirSync(bin);
+    writeExecutable(
+      join(bin, "openclaw"),
+      `#!/usr/bin/env node
+const assert = require("node:assert/strict"), fs = require("node:fs");
+const args = process.argv.slice(2);
+assert(!args.includes("--thinking"), "Honor the configured model's supported thinking default");
+assert(args.includes("--local"));
+const model = args[args.indexOf("--model") + 1];
+const provider = model.split("/")[0];
+for (const [id, key] of Object.entries({openai:"OPENAI_API_KEY",anthropic:"ANTHROPIC_API_KEY",google:"GEMINI_API_KEY"})) {
+  assert.equal(process.env[key] === "live-fixture-" + id, id === provider);
+}
+fs.appendFileSync(process.env.FIXTURE_CALLS, JSON.stringify({model, session:args[args.indexOf("--session-id") + 1]}) + "\\n");
+console.log(JSON.stringify({payloads:[{text:"OPENCLAW_UPGRADE_SURVIVOR_LIVE_OK"}]}));
+`,
+    );
+    const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
+    const firstPhase = source.indexOf("\nphase storage-preflight");
+    expect(firstPhase).toBeGreaterThan(0);
+    const runner = join(root, "live-turns.sh");
+    writeFileSync(
+      runner,
+      `${source.slice(0, firstPhase)}
+trap - ERR EXIT HUP INT TERM
+stop_gateway() { :; }
+run_live_models
+`,
+    );
+    const models = ["openai/gpt-5.5", "anthropic/claude-opus-5", "google/gemini-3.1-pro-preview"];
+    const result = spawnSync("bash", [runner], {
+      encoding: "utf8",
+      env: {
+        PATH: [bin, process.env.PATH].join(delimiter),
+        HOME: root,
+        OPENAI_API_KEY: "live-fixture-openai",
+        ANTHROPIC_API_KEY: "live-fixture-anthropic",
+        GEMINI_API_KEY: "live-fixture-google",
+        OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS: models.join(" "),
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.9.5",
+        OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: join(root, "runtime"),
+        OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: join(root, "summary.json"),
+        FIXTURE_CALLS: calls,
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const turns: { model: string; session: string }[] = readFileSync(calls, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(turns.map(({ model }) => model)).toEqual(models);
+    expect(new Set(turns.map(({ session }) => session)).size).toBe(3);
+    const summary = JSON.parse(readFileSync(join(root, "live-models.json"), "utf8"));
+    expect(
+      summary.models.map(({ model, ok }: { model: string; ok: boolean }) => ({ model, ok })),
+    ).toEqual(models.map((model) => ({ model, ok: true })));
+    for (const entry of summary.models) {
+      expect(entry.latencyMs).toBeGreaterThanOrEqual(0);
+      expect(existsSync(join(root, `${entry.artifact}.json`))).toBe(true);
+      expect(existsSync(join(root, `${entry.artifact}.err`))).toBe(true);
+    }
+  });
+
+  it.each([
+    { OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI: "1" },
+    {
+      OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS:
+        "openai/gpt-5.5 anthropic/claude-opus-5 google/gemini-3.1-pro-preview",
+    },
+  ])("initializes watchOS live results before clearing fixture credentials: %j", (liveEnv) => {
+    const root = tempDirs.make("upgrade-survivor-watch-live-");
+    const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
+    const firstPhase = source.indexOf("\nphase storage-preflight");
+    expect(firstPhase).toBeGreaterThan(0);
+    const runner = join(root, "watch-live-init.sh");
+    writeFileSync(
+      runner,
+      `${source.slice(0, firstPhase)}
+trap - ERR EXIT HUP INT TERM
+test -z "\${OPENAI_API_KEY+x}"
+test -z "\${ANTHROPIC_API_KEY+x}"
+test -z "\${GEMINI_API_KEY+x}"
+test "$LIVE_OPENAI_API_KEY" = fixture-openai
+test "$LIVE_ANTHROPIC_API_KEY" = fixture-anthropic
+test "$LIVE_GEMINI_API_KEY" = fixture-google
+`,
+    );
+    const result = spawnSync("bash", [runner], {
+      encoding: "utf8",
+      env: {
+        PATH: process.env.PATH,
+        HOME: root,
+        OPENAI_API_KEY: "fixture-openai",
+        ANTHROPIC_API_KEY: "fixture-anthropic",
+        GEMINI_API_KEY: "fixture-google",
+        OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "watchos-direct-node",
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.9.5",
+        OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: join(root, "runtime"),
+        OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: join(root, "summary.json"),
+        ...liveEnv,
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const receipt = JSON.parse(readFileSync(join(root, "live-models.json"), "utf8"));
+    expect(receipt.models.map((entry: { model: string }) => entry.model)).toEqual(
+      liveEnv.OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS?.split(" ") ?? ["openai/gpt-5.5"],
+    );
+  });
+
   it("fails closed before Docker when the opted-in key is missing", () => {
     const { captureDir, result } = runSurvivor({
       OPENAI_API_KEY: undefined,
@@ -271,6 +587,50 @@ describe("standalone upgrade survivor live OpenAI probe", () => {
     );
     expect(existsSync(join(captureDir, "docker-args"))).toBe(false);
   });
+
+  it.each(
+    ["2026.7.35", "2026.9.4"].flatMap((version) =>
+      ["", "OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS", "OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI"].map(
+        (liveVariable) => ({ version, liveVariable }),
+      ),
+    ),
+  )(
+    "checks selected target $version before forwarding $liveVariable",
+    ({ version, liveVariable }) => {
+      const liveValue = liveVariable.endsWith("MODELS") ? "openai/gpt-5.5" : "1";
+      const frozen = version === "2026.7.35";
+      const { captureDir, result, root } = runSurvivor(
+        {
+          OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS: "",
+          OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI: "0",
+          OPENAI_API_KEY: frozen ? undefined : "fixture-openai",
+          ...(liveVariable ? { [liveVariable]: liveValue } : {}),
+        },
+        "bash",
+        version,
+      );
+      if (frozen && liveVariable) {
+        expect(result.status, result.stderr).toBe(2);
+        expect(result.stderr).toContain(
+          `Selected extended-stable target does not support ${liveVariable} with its frozen upgrade survivor runner.`,
+        );
+        expect(existsSync(join(captureDir, "docker-args"))).toBe(false);
+        return;
+      }
+      expect(result.status, result.stderr).toBe(0);
+      const args = readFileSync(join(captureDir, "docker-run-args"), "utf8").split("\0");
+      const runnerRoot = frozen ? join(root, "selected") : process.cwd();
+      expect(args).toContain(
+        `${runnerRoot}/scripts/e2e/lib/upgrade-survivor/run.sh:/tmp/openclaw-upgrade-survivor-run.sh:ro`,
+      );
+      if (liveVariable) {
+        expect(args).toContain(`${liveVariable}=${liveValue}`);
+        expect(args).toContain("OPENAI_API_KEY");
+      } else {
+        expect(args).not.toContain("OPENAI_API_KEY");
+      }
+    },
+  );
 
   it("forwards the opted-in key by environment name without putting it in Docker arguments", () => {
     const key = "live-openai-key-must-not-appear-in-arguments";
@@ -286,4 +646,136 @@ describe("standalone upgrade survivor live OpenAI probe", () => {
     expect(args).toContain("-e OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_MODEL=openai/test-model");
     expect(args).not.toContain(key);
   });
+});
+
+describe("legacy operator baseline plugin cohort", () => {
+  it.each([
+    ["2026.7.1-1", "2026.7.1", "latest", ""],
+    ["2026.7.1-2", "2026.7.1", "latest", ""],
+    ["2026.8.1", "2026.8.1", "latest", ""],
+    ["2026.7.2-beta.7", "2026.7.2-beta.7", "beta", ""],
+    ["2026.8.1-alpha.3", "2026.8.1-alpha.3", "alpha", ""],
+    ["2026.8.1-beta.1", "2026.8.1-beta.1", "beta", "E404"],
+    ["2026.8.1-beta.1", "2026.8.1-beta.1", "beta", "ECONNRESET"],
+  ])(
+    "checks the published plugin cohort for core %s (%s, %s, %s)",
+    (baseline, pluginVersion, tag, errorCode) => {
+      const root = tempDirs.make("openclaw-survivor-plugin-cohort-");
+      const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
+      const runner = join(root, "run.sh");
+      // Exercise registry preparation and installation together; only external
+      // npm/CLI operations are replaced so a corrected core never pins a nonexistent plugin.
+      writeFileSync(
+        runner,
+        `${source.slice(0, source.indexOf("phase storage-preflight"))}
+trap - EXIT ERR HUP INT TERM
+baseline_version="$BASELINE_VERSION"
+candidate_version=2026.9.4
+npm() {
+  if [ -n "$NPM_LOOKUP_ERROR" ]; then
+    printf '%s\\n' "$NPM_LOOKUP_RESULT"
+    return 1
+  fi
+  if [ "$1" = view ]; then
+    printf '%s\\n' "$NPM_LOOKUP_RESULT"
+    return
+  fi
+  printf '%s\\n' "$2" >"$CAPTURE_DIR/packed-spec"
+  printf 'discord.tgz\\n'
+}
+openclaw_e2e_maybe_timeout() { shift; "$@"; }
+openclaw_prepublish_plugin_registry_start() {
+  printf '%s\\n' "$@" >"$CAPTURE_DIR/registry-args"
+  printf '%s\\n' "$OPENCLAW_NPM_REGISTRY_DIST_TAGS" >"$CAPTURE_DIR/dist-tags"
+}
+openclaw_e2e_fixture_plugin_command() {
+  printf '%s\\n' "$@" >"$CAPTURE_DIR/install-args"
+}
+node() {
+  if [ "$1" = scripts/e2e/lib/upgrade-survivor/assertions.mjs ]; then
+    printf '%s\\n' "$@" >"$CAPTURE_DIR/assert-args"
+  else
+    command node "$@"
+  fi
+}
+configure_plugin_registry baseline
+cp "$CAPTURE_DIR/dist-tags" "$CAPTURE_DIR/baseline-dist-tags"
+cp "$CAPTURE_DIR/registry-args" "$CAPTURE_DIR/baseline-registry-args"
+install_companion_plugins
+configure_plugin_registry
+if [ "$baseline_companion_availability" = unavailable ]; then
+  assert_prepublish_plugin_install
+fi
+write_summary passed ""
+printf '%s\\n' "$baseline_version" >"$CAPTURE_DIR/core-version"
+`,
+      );
+      const result = spawnSync("bash", [runner], {
+        encoding: "utf8",
+        timeout: 30_000,
+        env: {
+          ...process.env,
+          BASELINE_VERSION: baseline,
+          CAPTURE_DIR: root,
+          NPM_LOOKUP_ERROR: errorCode ?? "",
+          NPM_LOOKUP_RESULT: JSON.stringify(
+            errorCode ? { error: { code: errorCode } } : pluginVersion,
+          ),
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE: `openclaw@${baseline}`,
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "legacy-operator-state",
+          OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: join(root, "runtime"),
+          OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: join(root, "artifacts", "summary.json"),
+          OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC: join(root, "candidate.tgz"),
+        },
+      });
+      if (errorCode === "ECONNRESET") {
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("Could not verify published companion");
+        expect(existsSync(join(root, "install-args"))).toBe(false);
+        return;
+      }
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      const unavailable = errorCode === "E404";
+      const summary = JSON.parse(readFileSync(join(root, "artifacts", "summary.json"), "utf8"));
+      expect(summary.baselineCompanion).toEqual({
+        package: "@openclaw/discord",
+        version: pluginVersion,
+        availability: unavailable ? "unavailable" : "available",
+        reason: unavailable ? "Exact companion version is not published on npm (E404)." : null,
+      });
+      if (unavailable) {
+        expect(result.stdout).toContain("Skipping baseline companion");
+        expect(existsSync(join(root, "packed-spec"))).toBe(false);
+        expect(existsSync(join(root, "install-args"))).toBe(false);
+        expect(existsSync(join(root, "assert-args"))).toBe(false);
+        expect(readFileSync(join(root, "registry-args"), "utf8")).toContain("openclaw\n2026.9.4\n");
+        return;
+      }
+      expect(readFileSync(join(root, "packed-spec"), "utf8")).toBe(
+        `@openclaw/discord@${pluginVersion}\n`,
+      );
+      for (const { file, expectedVersion } of [
+        { file: "baseline-dist-tags", expectedVersion: pluginVersion },
+        { file: "dist-tags", expectedVersion: "2026.9.4" },
+      ]) {
+        const tags = Object.fromEntries(
+          readFileSync(join(root, file), "utf8")
+            .trim()
+            .split(",")
+            .map((entry) => entry.split("=")),
+        );
+        expect(tags[tag]).toBe(expectedVersion);
+      }
+      expect(readFileSync(join(root, "baseline-registry-args"), "utf8")).toContain(
+        `@openclaw/discord\n${pluginVersion}\n`,
+      );
+      expect(readFileSync(join(root, "assert-args"), "utf8")).toBe(
+        `scripts/e2e/lib/upgrade-survivor/assertions.mjs\nassert-baseline-plugin\n${pluginVersion}\ndiscord\n${tag}\n`,
+      );
+      expect(readFileSync(join(root, "install-args"), "utf8")).toBe(
+        `openclaw\n--\nplugins\ninstall\n@openclaw/discord@${tag}\n--force\n`,
+      );
+      expect(readFileSync(join(root, "core-version"), "utf8")).toBe(`${baseline}\n`);
+    },
+  );
 });

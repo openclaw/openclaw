@@ -3,17 +3,26 @@ import "../../../components/elapsed-time.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
-import { formatDurationCompact, formatMs, formatRelativeTimestamp } from "../../../lib/format.ts";
+import { registerBackgroundTasksEnglish } from "../../../i18n/locales/en-background-tasks.ts";
+import { formatMs, formatRelativeTimestamp } from "../../../lib/format.ts";
 import {
   isActiveTask,
   taskDetail,
+  taskFinishedDuration,
   taskRuntimeLabel,
   taskTimestampMs,
   taskTitle,
 } from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
-import { backgroundTaskStatusLabel, STATUS_TONES } from "./chat-background-tasks-shared.ts";
+import {
+  backgroundTaskDeliveryLabel,
+  backgroundTaskIsExecuting,
+  backgroundTaskStatusLabel,
+  STATUS_TONES,
+} from "./chat-background-tasks-shared.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
+
+registerBackgroundTasksEnglish();
 
 type TaskDisplayFacts = {
   active: boolean;
@@ -27,13 +36,9 @@ type TaskDisplayFacts = {
 function taskDisplayFacts(task: TaskSummary): TaskDisplayFacts {
   const active = isActiveTask(task);
   const startedMs = taskTimestampMs(task.startedAt ?? task.createdAt);
-  const endedMs = taskTimestampMs(task.endedAt);
   return {
     active,
-    finishedDuration:
-      !active && endedMs > startedMs && startedMs > 0
-        ? formatDurationCompact(endedMs - startedMs)
-        : undefined,
+    finishedDuration: taskFinishedDuration(task),
     startedMs,
     timestamp: taskTimestampMs(task.updatedAt ?? task.createdAt),
     title: taskTitle(task),
@@ -50,36 +55,51 @@ function renderTaskMeta(task: TaskSummary, facts: TaskDisplayFacts): TemplateRes
       >
       <span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
       <span>${taskRuntimeLabel(task)}</span>
-      ${facts.active && facts.startedMs > 0
-        ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
-            <span
-              ><openclaw-elapsed-time .startMs=${facts.startedMs}></openclaw-elapsed-time
-            ></span>`
-        : nothing}
-      ${facts.finishedDuration
-        ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
-            <span>${facts.finishedDuration}</span>`
-        : nothing}
-      ${!facts.active && facts.timestamp > 0
-        ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
-            <span title=${formatMs(facts.timestamp)}
-              >${formatRelativeTimestamp(facts.timestamp)}</span
-            >`
-        : nothing}
-      ${facts.toolUseCount > 0
-        ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
-            <span
-              >${facts.toolUseCount === 1
-                ? t("chat.backgroundTasks.toolUseOne")
-                : t("chat.backgroundTasks.toolUseMany", {
-                    count: String(facts.toolUseCount),
-                  })}</span
-            >`
-        : nothing}
-      ${facts.active && task.lastToolName
-        ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
-            <span class="chat-tasks-rail__task-tool">${task.lastToolName}</span>`
-        : nothing}
+      ${
+        facts.active && facts.startedMs > 0
+          ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
+              <span
+                ><openclaw-elapsed-time .startMs=${facts.startedMs}></openclaw-elapsed-time
+              ></span>`
+          : nothing
+      }
+      ${
+        facts.finishedDuration
+          ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
+              <span>${facts.finishedDuration}</span>`
+          : nothing
+      }
+      ${
+        !facts.active && facts.timestamp > 0
+          ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
+              <span title=${formatMs(facts.timestamp)}
+                >${formatRelativeTimestamp(facts.timestamp)}</span
+              >`
+          : nothing
+      }
+      ${
+        facts.toolUseCount > 0
+          ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
+              <span
+                >${
+                  facts.toolUseCount === 1
+                    ? t("chat.backgroundTasks.toolUseOne")
+                    : t("chat.backgroundTasks.toolUseMany", {
+                        count: String(facts.toolUseCount),
+                      })
+                }</span
+              >`
+          : nothing
+      }
+      ${
+        facts.active && (task.execution?.currentTool || task.lastToolName)
+          ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
+              <span class="chat-tasks-rail__task-tool"
+                >${t(task.execution?.currentTool ? "chat.backgroundTasks.currentTool" : "chat.backgroundTasks.lastTool")}:
+                ${task.execution?.currentTool?.name ?? task.lastToolName}</span
+              >`
+          : nothing
+      }
     </div>
   `;
 }
@@ -87,14 +107,13 @@ function renderTaskMeta(task: TaskSummary, facts: TaskDisplayFacts): TemplateRes
 export function renderTaskRow(task: TaskSummary, props: BackgroundTasksProps): TemplateResult {
   const facts = taskDisplayFacts(task);
   const detail = taskDetail(task);
+  const delivery = backgroundTaskDeliveryLabel(task);
   const cancelling = props.cancellingTaskIds.has(task.id);
-  const open = props.openTaskId === task.id;
   return html`
     <div
-      class="chat-tasks-rail__task ${open ? "chat-tasks-rail__task--open" : ""}"
+      class="chat-tasks-rail__task"
       role="listitem"
       data-task-id=${task.id}
-      aria-current=${open ? "true" : nothing}
       @click=${(event: MouseEvent) => {
         const target = event.target;
         if (target instanceof Element && target.closest("button, a")) {
@@ -109,35 +128,40 @@ export function renderTaskRow(task: TaskSummary, props: BackgroundTasksProps): T
           type="button"
           @click=${() => props.onOpenTaskDetail?.(task)}
         >
-          ${task.status === "running"
-            ? html`<span class="chat-tasks-rail__task-pulse" aria-hidden="true"></span>`
-            : nothing}
+          ${
+            backgroundTaskIsExecuting(task)
+              ? html`<span class="chat-tasks-rail__task-pulse" aria-hidden="true"></span>`
+              : nothing
+          }
           <openclaw-tooltip .content=${facts.title}>
             <span class="chat-tasks-rail__task-title">${facts.title}</span>
           </openclaw-tooltip>
         </button>
-        ${facts.active && props.canCancel
-          ? html`
-              <openclaw-tooltip
-                .content=${t("chat.backgroundTasks.stopTask", { title: facts.title })}
-              >
-                <button
-                  class="chat-tasks-rail__task-stop"
-                  type="button"
-                  aria-label=${t("chat.backgroundTasks.stopTask", { title: facts.title })}
-                  ?disabled=${cancelling || !props.connected}
-                  @click=${(event: MouseEvent) => {
-                    event.stopPropagation();
-                    props.onCancel(task.id);
-                  }}
+        ${
+          facts.active && props.canCancel
+            ? html`
+                <openclaw-tooltip
+                  .content=${t("chat.backgroundTasks.stopTask", { title: facts.title })}
                 >
-                  ${cancelling ? icons.loader : icons.stop}
-                </button>
-              </openclaw-tooltip>
-            `
-          : nothing}
+                  <button
+                    class="chat-tasks-rail__task-stop"
+                    type="button"
+                    aria-label=${t("chat.backgroundTasks.stopTask", { title: facts.title })}
+                    ?disabled=${cancelling || !props.connected}
+                    @click=${(event: MouseEvent) => {
+                      event.stopPropagation();
+                      props.onCancel(task.id);
+                    }}
+                  >
+                    ${cancelling ? icons.loader : icons.stop}
+                  </button>
+                </openclaw-tooltip>
+              `
+            : nothing
+        }
       </div>
       ${renderTaskMeta(task, facts)}
+      ${delivery ? html`<div class="chat-tasks-rail__task-detail">${delivery}</div>` : nothing}
       ${detail ? html`<div class="chat-tasks-rail__task-detail">${detail}</div>` : nothing}
     </div>
   `;

@@ -1,4 +1,3 @@
-// Whatsapp plugin module owns inbound debounce batching and flush lifecycle.
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { getPrimaryIdentityId } from "../identity.js";
@@ -16,15 +15,14 @@ export type WhatsAppQueuedInboundMessage = AdmittedWebInboundCallbackMessage & {
 };
 
 export function createWhatsAppInboundMessageDebouncer(options: {
-  debounceMs?: number;
+  resolveDebounceMs: () => number;
   onMessage: (msg: AdmittedWebInboundCallbackMessage) => Promise<void>;
   shouldDebounce?: (msg: AdmittedWebInboundCallbackMessage) => boolean;
   markRead: (target: WhatsAppReadReceiptTarget | undefined) => Promise<void>;
   onPendingWorkChanged: () => void;
   onError: (error: unknown) => void;
 }) {
-  const debounceMs = Math.max(0, Math.trunc(options.debounceMs ?? 0));
-  const pendingKeys = new Map<string, number>();
+  const pendingKeys = new Map<string, { count: number; senderKey: string }>();
   const activeFlushes = new Set<Promise<void>>();
   // Close waits wake as soon as a queued key becomes flushable, avoiding
   // timer polling and preserving fake-timer shutdown behavior.
@@ -36,7 +34,11 @@ export function createWhatsAppInboundMessageDebouncer(options: {
       resolve();
     }
   };
-  const buildKey = (msg: WhatsAppQueuedInboundMessage): string | null => {
+  const buildKey = (msg: WhatsAppQueuedInboundMessage): string => {
+    const admission = requireWhatsAppInboundAdmission(msg);
+    return `${admission.accountId}:${admission.conversation.id}`;
+  };
+  const resolveSenderKey = (msg: WhatsAppQueuedInboundMessage): string => {
     const admission = requireWhatsAppInboundAdmission(msg);
     const sender = msg.platform.sender;
     const senderKey =
@@ -47,20 +49,20 @@ export function createWhatsAppInboundMessageDebouncer(options: {
           msg.platform.senderName ??
           admission.sender.id)
         : admission.conversation.id;
-    return senderKey ? `${admission.accountId}:${admission.conversation.id}:${senderKey}` : null;
+    return senderKey;
   };
   const shouldDebounce = (msg: AdmittedWebInboundCallbackMessage): boolean =>
     options.shouldDebounce?.(msg) ?? true;
-  const trackKey = (key: string) => {
-    pendingKeys.set(key, (pendingKeys.get(key) ?? 0) + 1);
+  const trackKey = (key: string, senderKey: string) => {
+    pendingKeys.set(key, { count: (pendingKeys.get(key)?.count ?? 0) + 1, senderKey });
   };
   const releaseKey = (entry: WhatsAppQueuedInboundMessage) => {
     if (!entry.debounceKey || entry.debounceKeyTracked !== true) {
       return;
     }
-    const remaining = (pendingKeys.get(entry.debounceKey) ?? 0) - 1;
-    if (remaining > 0) {
-      pendingKeys.set(entry.debounceKey, remaining);
+    const pending = pendingKeys.get(entry.debounceKey);
+    if (pending && pending.count > 1) {
+      pending.count -= 1;
     } else {
       pendingKeys.delete(entry.debounceKey);
     }
@@ -71,8 +73,9 @@ export function createWhatsAppInboundMessageDebouncer(options: {
       return timestampDiff !== 0 ? timestampDiff : (a.receiveOrder ?? 0) - (b.receiveOrder ?? 0);
     });
 
-  const debouncer = createInboundDebouncer<WhatsAppQueuedInboundMessage>({
-    debounceMs,
+  const debouncer = createInboundDebouncer<WhatsAppQueuedInboundMessage & { debounceMs: number }>({
+    debounceMs: options.resolveDebounceMs(),
+    resolveDebounceMs: (entry) => entry.debounceMs,
     buildKey: (msg) => msg.debounceKey ?? buildKey(msg),
     shouldDebounce,
     onFlush: (entries, createFlush) => {
@@ -155,13 +158,22 @@ export function createWhatsAppInboundMessageDebouncer(options: {
     onError: options.onError,
   });
 
-  const enqueue = async (message: WhatsAppQueuedInboundMessage) => {
+  const enqueue = async (input: WhatsAppQueuedInboundMessage) => {
+    // Use one timing fact for both queue admission and shutdown tracking.
+    const message = { ...input, debounceMs: options.resolveDebounceMs() };
     const key = buildKey(message);
     if (key) {
       message.debounceKey = key;
-      if (debounceMs > 0 && shouldDebounce(message)) {
+      const senderKey = resolveSenderKey(message);
+      const pending = pendingKeys.get(key);
+      // One conversation lane orders dispatch; sender changes end the current
+      // batch so payloads and attribution never combine across participants.
+      if (pending && pending.senderKey !== senderKey) {
+        await debouncer.flushKey(key);
+      }
+      if (message.debounceMs > 0 && shouldDebounce(message)) {
         message.debounceKeyTracked = true;
-        trackKey(key);
+        trackKey(key, senderKey);
         options.onPendingWorkChanged();
         notifyWork();
       }

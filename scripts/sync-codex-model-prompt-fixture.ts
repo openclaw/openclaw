@@ -261,7 +261,7 @@ export async function runCodexModelPromptFixtureSync(
     );
     return { status: "skipped" as const, candidates: defaultCatalog?.candidates ?? [] };
   }
-  const model = parseArgValue(argv, "--model") ?? "gpt-5.6-sol";
+  const model = parseArgValue(argv, "--model") ?? "gpt-6-astra";
   const personality = parsePersonality(parseArgValue(argv, "--personality"));
   const catalogGitHead = parseArgValue(argv, "--catalog-git-head");
   const catalogLabel = parseArgValue(argv, "--source-label");

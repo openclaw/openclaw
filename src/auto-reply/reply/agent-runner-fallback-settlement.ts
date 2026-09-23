@@ -1,3 +1,4 @@
+import { classifyAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { isContextOverflowError } from "../../agents/embedded-agent-helpers.js";
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
@@ -34,6 +35,7 @@ export async function settleAgentFallbackCycle(params: {
   // run-entry owns the canonical reply/receipt facts. Carry them through the
   // fallback backstop so downstream waiters never have to rederive them.
   const terminalMetadata = fallbackResult.terminal.metadata;
+  const terminalOutcome = fallbackResult.terminal.outcome;
   const settledLifecycleTerminal =
     cycle.state.pendingLifecycleTerminal?.provider === fallbackProvider &&
     cycle.state.pendingLifecycleTerminal.model === fallbackModel
@@ -68,9 +70,10 @@ export async function settleAgentFallbackCycle(params: {
   const userFacingErrorPayload = runResult.payloads?.find(
     (payload) => payload.isError === true && typeof payload.text === "string",
   )?.text;
+  // The timeout owner distinguishes its diagnostic from earlier tool failures.
   const terminalErrorMessage =
     deferredLifecycleError ??
-    userFacingErrorPayload ??
+    (terminalOutcome.status === "timeout" ? terminalOutcome.error : userFacingErrorPayload) ??
     (embeddedError ? "Agent run failed" : undefined);
   const emitSettledLifecycleError = (error: Error, extraData?: Record<string, unknown>) => {
     if (settledLifecycleTerminal) {
@@ -82,7 +85,13 @@ export async function settleAgentFallbackCycle(params: {
       lifecycleGeneration: cycle.state.lifecycleGeneration,
       ...(turn.sessionKey ? { sessionKey: turn.sessionKey } : {}),
       stream: "lifecycle",
-      data: { phase: "error", error: error.message, endedAt: Date.now(), ...extraData },
+      data: {
+        phase: "error",
+        error: error.message,
+        endedAt: Date.now(),
+        ...extraData,
+        executionSettled: true,
+      },
     });
   };
   if (embeddedError && isContextOverflowError(embeddedError.message)) {
@@ -157,13 +166,15 @@ export async function settleAgentFallbackCycle(params: {
     if (cycle.modelPatch.captureFallbackFailure(fallbackAttempts) === undefined) {
       cycle.modelPatch.captureFailure(embeddedError ?? exhaustionError);
     }
-    emitSettledLifecycleError(exhaustionError, {
-      ...terminalMetadata,
-      fallbackExhaustedFailure: true,
-    });
+    emitSettledLifecycleError(exhaustionError, terminalMetadata);
     turn.replyOperation?.retainFailureUntilComplete();
     turn.replyOperation?.fail("run_failed", exhaustionError);
-  } else if (deferredLifecycleError || embeddedError) {
+  } else if (
+    deferredLifecycleError ||
+    embeddedError ||
+    terminalOutcome.status === "timeout" ||
+    classifyAgentRunTerminalOutcome(terminalOutcome) === "failure"
+  ) {
     const terminalError = new Error(terminalErrorMessage ?? "Agent run failed");
     terminalRunFailed = true;
     cycle.modelPatch.captureFailure(embeddedError ?? terminalError);

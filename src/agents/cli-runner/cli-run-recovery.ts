@@ -56,6 +56,16 @@ function shouldRetryForkedCliSessionAfterFailover(error: FailoverError): boolean
   return error.reason === "timeout" && error.code === "cli_no_output_timeout";
 }
 
+/**
+ * Remaining retry budget measured against the run's monotonic anchor. Elapsed
+ * monotonic time is fractional, so the result is floored to a whole millisecond:
+ * this keeps the retry within the operator-configured budget and satisfies the
+ * paired-node remote decoder's `Number.isInteger` timeout contract.
+ */
+function remainingCliRecoveryBudgetMs(timeoutMs: number, startedMonotonicMs: number): number {
+  return Math.floor(timeoutMs - (performance.now() - startedMonotonicMs));
+}
+
 export async function runCliRecovery<TAttempt>(params: {
   context: PreparedCliRunContext;
   executeAttempt: (cliSessionIdToUse?: string, options?: CliRecoveryOptions) => Promise<TAttempt>;
@@ -98,6 +108,7 @@ export async function runCliRecovery<TAttempt>(params: {
     if (deliveredFailure) {
       return deliveredFailure;
     }
+    runParams.assertCurrent?.();
     let recoveryError = err;
     if (isFailoverError(recoveryError)) {
       if (
@@ -111,7 +122,12 @@ export async function runCliRecovery<TAttempt>(params: {
         runParams.onBeforeForkedCliSessionRetry
       ) {
         try {
-          const retryTimeoutMs = runParams.timeoutMs - (Date.now() - context.started);
+          // Elapsed time is monotonic so a wall-clock step cannot consume or
+          // extend the operator-configured retry budget.
+          const retryTimeoutMs = remainingCliRecoveryBudgetMs(
+            runParams.timeoutMs,
+            context.startedMonotonicMs,
+          );
           if (retryTimeoutMs <= 0) {
             throw recoveryError;
           }
@@ -141,6 +157,7 @@ export async function runCliRecovery<TAttempt>(params: {
           if (deliveredForkFailure) {
             return deliveredForkFailure;
           }
+          runParams.assertCurrent?.();
           recoveryError =
             isFailoverError(forkError) && forkError.code === "cli_resume_at_unsupported"
               ? err
@@ -158,7 +175,10 @@ export async function runCliRecovery<TAttempt>(params: {
         runParams.sessionKey
       ) {
         try {
-          const retryTimeoutMs = runParams.timeoutMs - (Date.now() - context.started);
+          const retryTimeoutMs = remainingCliRecoveryBudgetMs(
+            runParams.timeoutMs,
+            context.startedMonotonicMs,
+          );
           if (retryTimeoutMs <= 0) {
             throw recoveryError;
           }

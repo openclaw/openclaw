@@ -6,6 +6,7 @@ import {
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { finalizeInboundContext as finalizeCoreInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { vi, type Mock } from "vitest";
 import type {
   MatrixConfig,
@@ -18,9 +19,12 @@ import { createMatrixRoomMessageHandler } from "./handler.js";
 import { EventType, type MatrixRawEvent, type RoomMessageEventContent } from "./types.js";
 
 type MatrixMonitorHandlerParams = Parameters<typeof createMatrixRoomMessageHandler>[0];
+type MatrixDispatchInput = Parameters<
+  typeof import("openclaw/plugin-sdk/reply-runtime").dispatchInboundMessage
+>[0];
 type MatrixDispatchInboundMessage = (params: {
-  ctx: unknown;
-  cfg: unknown;
+  ctx: MatrixDispatchInput["ctx"];
+  cfg: MatrixDispatchInput["cfg"];
   dispatcher: unknown;
   replyOptions?: Record<string, unknown>;
 }) => Promise<{
@@ -51,6 +55,7 @@ const DEFAULT_ROUTE = {
 };
 
 type MatrixHandlerTestHarnessOptions = {
+  system?: Pick<MatrixMonitorHandlerParams["core"]["system"], "enqueueSystemEvent">;
   accountId?: string;
   accountConfig?: MatrixConfig;
   cfg?: unknown;
@@ -109,8 +114,7 @@ type MatrixHandlerTestHarnessOptions = {
   runChannelInboundEvent?: MatrixMonitorHandlerParams["core"]["channel"]["inbound"]["run"];
   runPrepared?: MatrixRunPreparedMock;
   inboundDeduper?: MatrixMonitorHandlerParams["inboundDeduper"];
-  shouldAckReaction?: () => boolean;
-  enqueueSystemEvent?: (...args: unknown[]) => void;
+  shouldAckReaction?: MatrixMonitorHandlerParams["core"]["channel"]["reactions"]["shouldAckReaction"];
   getRoomInfo?: MatrixMonitorHandlerParams["getRoomInfo"];
   getMemberDisplayName?: MatrixMonitorHandlerParams["getMemberDisplayName"];
   resolveLiveUserAllowlist?: MatrixMonitorHandlerParams["resolveLiveUserAllowlist"];
@@ -118,7 +122,6 @@ type MatrixHandlerTestHarnessOptions = {
 
 type MatrixHandlerTestHarness = {
   dispatchInboundMessage: MatrixDispatchInboundMessage;
-  enqueueSystemEvent: (...args: unknown[]) => void;
   finalizeInboundContext: (ctx: unknown) => unknown;
   handler: ReturnType<typeof createMatrixRoomMessageHandler>;
   readAllowFromStore: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["readAllowFromStore"];
@@ -161,17 +164,14 @@ export function createMatrixHandlerTestHarness(
       markDispatchIdle: () => {},
       markRunComplete: () => {},
     }));
-  const dispatchInboundMessageWithBufferedDispatcher = (async ({
+  const dispatchInboundMessageWithBufferedDispatcher = async ({
     ctx,
     cfg,
     dispatcherOptions,
     replyOptions,
-  }: {
-    ctx: unknown;
-    cfg: unknown;
-    dispatcherOptions: Record<string, unknown>;
-    replyOptions?: Record<string, unknown>;
-  }) => {
+  }: Parameters<
+    typeof import("openclaw/plugin-sdk/reply-runtime").dispatchInboundMessageWithBufferedDispatcher
+  >[0]) => {
     const prepared = createReplyDispatcherWithTyping(dispatcherOptions);
     try {
       return await dispatchInboundMessage({
@@ -179,7 +179,7 @@ export function createMatrixHandlerTestHarness(
         cfg,
         dispatcher: prepared.dispatcher,
         replyOptions: { ...replyOptions, ...prepared.replyOptions },
-      } as never);
+      });
     } finally {
       const dispatcher = prepared.dispatcher as {
         markComplete?: () => void;
@@ -187,16 +187,15 @@ export function createMatrixHandlerTestHarness(
       };
       dispatcher.markComplete?.();
       await dispatcher.waitForIdle?.();
-      await (dispatcherOptions.onSettled as (() => Promise<void> | void) | undefined)?.();
+      await dispatcherOptions.onSettled?.();
       prepared.markRunComplete();
       prepared.markDispatchIdle();
     }
-  }) as typeof import("openclaw/plugin-sdk/reply-runtime").dispatchInboundMessageWithBufferedDispatcher;
+  };
   const createChannelInboundEnvelopeBuilder = (() => (input: { body: string }) =>
     (options.formatAgentEnvelope ?? (({ body }: { body: string }) => body))({
       body: input.body,
     })) as NonNullable<MatrixMonitorHandlerParams["createChannelInboundEnvelopeBuilder"]>;
-  const enqueueSystemEvent = options.enqueueSystemEvent ?? vi.fn();
   const runPrepared =
     options.runPrepared ??
     vi.fn<MatrixRunPreparedMockFn>(async (turn) => {
@@ -299,6 +298,7 @@ export function createMatrixHandlerTestHarness(
       ...options.client,
     } as never,
     core: {
+      system: options.system ?? { enqueueSystemEvent },
       config: {
         current: options.currentConfig ?? (() => options.liveCfg ?? cfgForHandler),
       },
@@ -343,9 +343,6 @@ export function createMatrixHandlerTestHarness(
         reactions: {
           shouldAckReaction: options.shouldAckReaction ?? (() => false),
         },
-      },
-      system: {
-        enqueueSystemEvent,
       },
     } as never,
     cfg: cfgForHandler as never,
@@ -402,7 +399,6 @@ export function createMatrixHandlerTestHarness(
 
   return {
     dispatchInboundMessage,
-    enqueueSystemEvent,
     finalizeInboundContext,
     handler,
     readAllowFromStore,

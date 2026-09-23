@@ -1,5 +1,5 @@
 import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getIMessageRuntime } from "../runtime.js";
 import {
@@ -12,7 +12,7 @@ import {
 } from "../state-contract.js";
 import { stripLeadingEchoTextCorruptionMarkers } from "./echo-text-corruption.js";
 
-type PersistedEchoStore = PluginStateSyncKeyedStore<PersistedEchoEntry>;
+type PersistedEchoStore = PluginStateKeyedStore<PersistedEchoEntry>;
 
 function normalizeText(text: string | undefined): string | undefined {
   if (!text) {
@@ -34,7 +34,6 @@ function normalizeMessageId(messageId: string | undefined): string | undefined {
   return normalized;
 }
 
-let mirror: PersistedEchoEntry[] | null = null;
 let persistenceFailureLogged = false;
 function reportFailure(scope: string, err: unknown): void {
   if (persistenceFailureLogged) {
@@ -57,7 +56,7 @@ function normalizeMedia(
 }
 
 function openPersistedEchoStore(): PersistedEchoStore {
-  return getIMessageRuntime().state.openSyncKeyedStore<PersistedEchoEntry>({
+  return getIMessageRuntime().state.openKeyedStore<PersistedEchoEntry>({
     namespace: IMESSAGE_SENT_ECHOES_NAMESPACE,
     maxEntries: IMESSAGE_SENT_ECHOES_MAX_ENTRIES,
   });
@@ -80,33 +79,30 @@ function isLiveEntry(entry: PersistedEchoEntry, now = Date.now()): boolean {
   return entry.timestamp >= cutoff && (entry.expiresAt == null || entry.expiresAt > now);
 }
 
-function loadMirrorFromStore(): void {
+async function readRecentEntries(): Promise<PersistedEchoEntry[]> {
   try {
-    mirror = openPersistedEchoStore()
-      .entries()
+    return (await openPersistedEchoStore().entries())
       .map(({ value }) => value)
       .filter((entry) => isLiveEntry(entry))
       .toSorted((a, b) => a.timestamp - b.timestamp)
       .slice(-IMESSAGE_SENT_ECHOES_MAX_ENTRIES);
   } catch (err) {
     reportFailure("read", err);
-    mirror = [];
+    return [];
   }
 }
 
-function readRecentEntries(): PersistedEchoEntry[] {
-  loadMirrorFromStore();
-  return mirror ?? [];
-}
-
-function persistEntry(entry: PersistedEchoEntry, ttlMs?: number): string | undefined {
+async function persistEntry(
+  entry: PersistedEchoEntry,
+  ttlMs?: number,
+): Promise<string | undefined> {
   const effectiveTtlMs = resolveEntryTtlMs(entry, ttlMs);
   if (!effectiveTtlMs) {
     return undefined;
   }
   const key = resolveIMessageSentEchoEntryKey(entry);
   try {
-    openPersistedEchoStore().register(key, entry, {
+    await openPersistedEchoStore().register(key, entry, {
       ttlMs: effectiveTtlMs,
     });
   } catch (err) {
@@ -116,14 +112,14 @@ function persistEntry(entry: PersistedEchoEntry, ttlMs?: number): string | undef
   return key;
 }
 
-export function rememberPersistedIMessageEcho(params: {
+export async function rememberPersistedIMessageEcho(params: {
   scope: string;
   text?: string;
   media?: MediaPlaceholderTextFact;
   messageId?: string;
   ttlMs?: number;
   pending?: boolean;
-}): string | undefined {
+}): Promise<string | undefined> {
   const text = normalizeText(params.text);
   const media = normalizeMedia(params.media);
   const messageId = normalizeMessageId(params.messageId);
@@ -141,41 +137,35 @@ export function rememberPersistedIMessageEcho(params: {
   if (!entry.text && !entry.media && !entry.messageId) {
     return undefined;
   }
-  loadMirrorFromStore();
-  const key = persistEntry(entry, params.ttlMs);
-  mirror = [...(mirror ?? []), entry]
-    .filter((candidate) => isLiveEntry(candidate))
-    .slice(-IMESSAGE_SENT_ECHOES_MAX_ENTRIES);
-  return key;
+  return await persistEntry(entry, params.ttlMs);
 }
 
-export function forgetPersistedIMessageEchoKey(key: string | undefined): void {
+export async function forgetPersistedIMessageEchoKey(key: string | undefined): Promise<void> {
   if (!key) {
     return;
   }
   try {
-    openPersistedEchoStore().delete(key);
+    await openPersistedEchoStore().delete(key);
   } catch (err) {
     reportFailure("delete", err);
   }
-  mirror = (mirror ?? []).filter((entry) => resolveIMessageSentEchoEntryKey(entry) !== key);
 }
 
-export function hasPersistedIMessageEcho(params: {
+export async function hasPersistedIMessageEcho(params: {
   scope: string;
   text?: string;
   media?: MediaPlaceholderTextFact;
   messageId?: string;
   skipIdShortCircuit?: boolean;
   includePendingText?: boolean;
-}): boolean {
+}): Promise<boolean> {
   const text = normalizeText(params.text);
   const mediaKey = resolveIMessageEchoMediaKey(params.media);
   const messageId = normalizeMessageId(params.messageId);
   if (!text && !mediaKey && !messageId) {
     return false;
   }
-  for (const entry of readRecentEntries()) {
+  for (const entry of await readRecentEntries()) {
     if (entry.scope !== params.scope) {
       continue;
     }

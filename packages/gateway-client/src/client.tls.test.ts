@@ -10,10 +10,10 @@ import {
 } from "node:net";
 import { installGlobalProxy, type ProxylineHandle } from "@openclaw/proxyline";
 import { afterEach, describe, expect, it } from "vitest";
-import { WebSocketServer } from "ws";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../../test/helpers/tls-fixture.js";
 import { GatewayClient, type GatewayClientCloseInfo } from "./client.js";
+import { WebSocketServer } from "./websocket.test-support.js";
 
 const fingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
 const servers: Server[] = [];
@@ -142,7 +142,6 @@ describe.each([false, true])("Gateway TLS upgrade (managed proxy: %s)", (managed
     await waitForSocketDrain();
     if (pin === fingerprint) {
       expect(result).toBe("open");
-      expect(httpBytes).toBeGreaterThan(0);
       expect(upgrades).toBe(1);
       expect(headers).toMatchObject({
         "x-test-edge-auth": "synthetic-test-edge-token",

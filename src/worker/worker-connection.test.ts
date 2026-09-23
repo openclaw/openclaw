@@ -2,14 +2,16 @@ import { EventEmitter, once } from "node:events";
 import { createServer as createHttpsServer } from "node:https";
 import net from "node:net";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
-import { WebSocketServer, type WebSocket } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import {
   type WorkerConnectParams,
+  WorkerConnectRequestFrameSchema,
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
   WORKER_PUBLIC_INGRESS_PATH,
@@ -18,10 +20,12 @@ import type {
   WorkerInferenceEventFrame,
   WorkerInferenceTerminalFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import {
   toWorkerConnectionError,
   WorkerAdmissionDeadlineExceededError,
+  WorkerAdmissionError,
   WorkerConnectionStoppedError,
   WorkerFencedError,
 } from "./worker-connection-contract.js";
@@ -58,31 +62,235 @@ function createIdleConnection() {
   return createWorkerConnection({
     endpoint: { kind: "unix", socketPath: "/tmp/worker-listener-isolation.sock" },
     connectParams: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: {
-        id: GATEWAY_CLIENT_IDS.WORKER,
-        version: "listener-isolation-test",
-        platform: process.platform,
-        mode: GATEWAY_CLIENT_MODES.WORKER,
-      },
-      role: "worker",
+      ...FRAME_CONNECT_PARAMS,
       admission: {
-        environmentId: "listener-isolation-test",
-        credential: "listener-isolation-credential",
-        ownerEpoch: 1,
-        rpcSetVersion: WORKER_RPC_SET_VERSION,
-        handshake: {
-          bundleHash: "a".repeat(64),
-          openclawVersion: "listener-isolation-test",
-          protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
-        },
+        ...FRAME_CONNECT_PARAMS.admission,
         sessionId: null,
         runId: null,
       },
     },
   });
 }
+
+function sendWorkerHello(
+  socket: WebSocket,
+  id: string,
+  admission: WorkerConnectParams["admission"],
+) {
+  socket.send(
+    JSON.stringify({
+      type: "res",
+      id,
+      ok: true,
+      payload: {
+        type: "worker-hello-ok",
+        environmentId: admission.environmentId,
+        sessionId: admission.sessionId,
+        ownerEpoch: admission.ownerEpoch,
+        rpcSetVersion: admission.rpcSetVersion,
+        protocolFeatures: [...admission.handshake.protocolFeatures],
+        credentialExpiresAtMs: Date.now() + 60_000,
+        policy: { heartbeatIntervalMs: 60_000, maxPayload: 25 * 1024 * 1024 },
+      },
+    }),
+  );
+}
+
+async function createAdmissionWriteFixture(onAdmissionRequestSent: () => void) {
+  type WriteCallback = NonNullable<Parameters<WebSocket["send"]>[2]>;
+  type WriteOptions = Parameters<WebSocket["send"]>[1];
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("test gateway did not allocate a TCP port");
+  }
+  const slot = () => ({
+    written: createDeferred<WriteCallback>(),
+    received: createDeferred<{ peer: WebSocket; id: string }>(),
+  });
+  let expected: ReturnType<typeof slot> | undefined;
+  const connection = createWorkerConnection({
+    endpoint: {
+      kind: "websocket",
+      url: `ws://127.0.0.1:${address.port}${WORKER_PUBLIC_INGRESS_PATH}`,
+    },
+    connectParams: FRAME_CONNECT_PARAMS,
+    reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
+    onAdmissionRequestSent,
+    createSocket: (url, options) => {
+      const attempt = expected;
+      if (!attempt) {
+        throw new Error("unexpected worker connection attempt");
+      }
+      expected = undefined;
+      const socket = new WebSocket(url, options);
+      const send = socket.send.bind(socket);
+      socket.send = (
+        data: Parameters<WebSocket["send"]>[0],
+        optionsOrCallback?: WriteOptions | WriteCallback,
+        callback?: WriteCallback,
+      ) => {
+        const onWritten = typeof optionsOrCallback === "function" ? optionsOrCallback : callback;
+        const holdCompletion: WriteCallback = (error) => {
+          if (error) {
+            onWritten?.(error);
+            attempt.written.reject(error);
+            return;
+          }
+          // Bytes really crossed the socket; admission observes completion only when released.
+          attempt.written.resolve((writeError) => onWritten?.(writeError));
+        };
+        if (typeof optionsOrCallback === "function" || optionsOrCallback === undefined) {
+          send(data, holdCompletion);
+        } else {
+          send(data, optionsOrCallback, holdCompletion);
+        }
+      };
+      return socket;
+    },
+  });
+  const nextAttempt = () => {
+    if (expected) {
+      throw new Error("worker connection attempt is already expected");
+    }
+    const attempt = slot();
+    expected = attempt;
+    server.once("connection", (peer) => {
+      peer.once("message", (data) => {
+        try {
+          const frame: unknown = JSON.parse(rawDataToString(data));
+          if (!Value.Check(WorkerConnectRequestFrameSchema, frame)) {
+            throw new Error("expected the worker admission request");
+          }
+          attempt.received.resolve({ peer, id: frame.id });
+        } catch (error) {
+          attempt.received.reject(error);
+        }
+      });
+    });
+    return Promise.all([attempt.written.promise, attempt.received.promise]).then(
+      ([completeWrite, received]) => ({ completeWrite, ...received }),
+    );
+  };
+  const first = nextAttempt();
+  const starting = connection.start();
+  const settled = starting.catch((error: unknown) => error);
+  return {
+    connection,
+    first,
+    starting,
+    settled,
+    nextAttempt,
+    async close() {
+      await connection.stop();
+      for (const peer of server.clients) {
+        peer.terminate();
+      }
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+      await settled;
+    },
+  };
+}
+
+describe("worker admission write completion", () => {
+  it.each([false, true])(
+    "notifies only after the request write completes, isolating observer failure: %s",
+    async (throws) => {
+      const sent = vi.fn(() => {
+        if (throws) {
+          throw new Error("induced admission observer failure");
+        }
+      });
+      const f = await createAdmissionWriteFixture(sent);
+      try {
+        const attempt = await f.first;
+        expect(sent).not.toHaveBeenCalled();
+        expect(f.connection.state.kind).toBe("admitting");
+        expect(() => attempt.completeWrite()).not.toThrow();
+        expect(sent).toHaveBeenCalledOnce();
+        expect(f.connection.state.kind).toBe("admitting");
+        sendWorkerHello(attempt.peer, attempt.id, FRAME_CONNECT_PARAMS.admission);
+        await f.starting;
+        expect(f.connection.state.kind).toBe("ready");
+        expect(sent).toHaveBeenCalledOnce();
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  it.each(["stop", "denied hello", "accepted hello"] as const)(
+    "ignores late request-write completion after %s",
+    async (boundary) => {
+      const sent = vi.fn();
+      const f = await createAdmissionWriteFixture(sent);
+      try {
+        const attempt = await f.first;
+        if (boundary === "stop") {
+          await f.connection.stop();
+          expect(await f.settled).toBeInstanceOf(WorkerConnectionStoppedError);
+        } else if (boundary === "denied hello") {
+          attempt.peer.send(
+            JSON.stringify({
+              type: "res",
+              id: attempt.id,
+              ok: false,
+              error: {
+                code: "INVALID_REQUEST",
+                message: "invalid admission",
+                details: { reason: "invalid-handshake" },
+                retryable: false,
+              },
+            }),
+          );
+          expect(await f.settled).toBeInstanceOf(WorkerAdmissionError);
+        } else {
+          sendWorkerHello(attempt.peer, attempt.id, FRAME_CONNECT_PARAMS.admission);
+          await f.starting;
+          expect(f.connection.state.kind).toBe("ready");
+        }
+        expect(() => attempt.completeWrite()).not.toThrow();
+        expect(sent).not.toHaveBeenCalled();
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  it.each(["failed write", "replaced socket"] as const)(
+    "only notifies for the current successful attempt after %s",
+    async (interruption) => {
+      const sent = vi.fn();
+      const f = await createAdmissionWriteFixture(sent);
+      try {
+        const first = await f.first;
+        const replacement = f.nextAttempt();
+        if (interruption === "failed write") {
+          first.completeWrite(new Error("induced admission write failure"));
+        } else {
+          first.peer.close(1012, "gateway-unavailable");
+        }
+        const second = await replacement;
+        expect(second.peer).not.toBe(first.peer);
+        expect(f.connection.state).toEqual({ kind: "admitting", attempt: 1 });
+        if (interruption === "replaced socket") {
+          first.completeWrite();
+        }
+        expect(sent).not.toHaveBeenCalled();
+        second.completeWrite();
+        expect(sent).toHaveBeenCalledOnce();
+        sendWorkerHello(second.peer, second.id, FRAME_CONNECT_PARAMS.admission);
+        await f.starting;
+        expect(f.connection.state.kind).toBe("ready");
+      } finally {
+        await f.close();
+      }
+    },
+  );
+});
 
 function createFrameDispatcher() {
   return new WorkerConnectionFrameDispatcher({
@@ -438,6 +646,100 @@ describe("worker connection endpoint failures", () => {
       });
     }
   });
+
+  it.each([
+    ...(["stopped", "fenced"] as const).flatMap((terminal) =>
+      (["late hello", "ready state observer", "ready observer", "completed startup"] as const).map(
+        (boundary) => ({ terminal, boundary }),
+      ),
+    ),
+    { terminal: "failed", boundary: "invalid frame" } as const,
+  ])("keeps $terminal workers closed after $boundary", async ({ terminal, boundary }) => {
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("test gateway did not allocate a TCP port");
+    }
+    let clientClosed = Promise.resolve();
+    let peerClosed = Promise.resolve();
+    const connection = createWorkerConnection({
+      endpoint: {
+        kind: "websocket",
+        url: `ws://127.0.0.1:${address.port}${WORKER_PUBLIC_INGRESS_PATH}`,
+      },
+      connectParams: FRAME_CONNECT_PARAMS,
+      createSocket: (url, options) => {
+        const socket = new WebSocket(url, options);
+        clientClosed = once(socket, "close").then(() => {});
+        return socket;
+      },
+    });
+    const terminate = () => {
+      if (terminal === "stopped") {
+        void connection.stop();
+      } else {
+        connection.fence("owner-epoch-mismatch");
+      }
+    };
+    if (boundary === "ready state observer") {
+      connection.onStateChange((state) => {
+        if (state.kind === "ready") {
+          terminate();
+        }
+      });
+    } else if (boundary === "ready observer") {
+      connection.onReady(terminate);
+    }
+    const ready = vi.fn();
+    connection.onReady(ready);
+    server.on("connection", (socket, request) => {
+      peerClosed = once(socket, "close").then(() => {});
+      socket.once("message", (data) => {
+        const frame = JSON.parse(rawDataToString(data)) as { id: string };
+        // Coalesce the invalid frame and hello to exercise already-buffered delivery.
+        request.socket.cork();
+        if (boundary === "late hello") {
+          terminate();
+        } else if (boundary === "invalid frame") {
+          socket.send("{");
+        }
+        // The real socket can deliver this in-flight hello before its close handshake ends.
+        sendWorkerHello(socket, frame.id, FRAME_CONNECT_PARAMS.admission);
+        request.socket.uncork();
+      });
+    });
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      if (boundary === "completed startup") {
+        await connection.start();
+        ready.mockClear();
+        terminate();
+      }
+      const result = await connection.start().catch((error: unknown) => error);
+      await Promise.all([clientClosed, peerClosed]);
+      expect.soft(result).toBeInstanceOf(
+        {
+          stopped: WorkerConnectionStoppedError,
+          fenced: WorkerFencedError,
+          failed: WorkerAdmissionError,
+        }[terminal],
+      );
+      expect.soft(connection.state.kind).toBe(terminal);
+      expect.soft(ready).not.toHaveBeenCalled();
+      expect.soft(vi.getTimerCount()).toBe(0);
+    } finally {
+      await connection.stop();
+      for (const socket of server.clients) {
+        socket.terminate();
+      }
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("worker connection reconnect backoff", () => {
@@ -480,23 +782,7 @@ describe("worker connection reconnect backoff", () => {
         if (transportInterrupted) {
           recoveredWorkers.add(admission.environmentId);
         }
-        socket.send(
-          JSON.stringify({
-            type: "res",
-            id: frame.id,
-            ok: true,
-            payload: {
-              type: "worker-hello-ok",
-              environmentId: admission.environmentId,
-              sessionId: admission.sessionId,
-              ownerEpoch: admission.ownerEpoch,
-              rpcSetVersion: admission.rpcSetVersion,
-              protocolFeatures: [...admission.handshake.protocolFeatures],
-              credentialExpiresAtMs: Date.now() + 60_000,
-              policy: { heartbeatIntervalMs: 60_000, maxPayload: 25 * 1024 * 1024 },
-            },
-          }),
-        );
+        sendWorkerHello(socket, frame.id, admission);
       });
     });
 

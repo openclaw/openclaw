@@ -20,7 +20,7 @@ async function withTelegramCrablineTransport(
     try {
       await run(transport);
     } finally {
-      await transport.cleanup?.();
+      await transport.cleanupAfterGatewayStop?.();
     }
   });
 }

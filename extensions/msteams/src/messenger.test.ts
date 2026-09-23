@@ -9,6 +9,7 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { StoredConversationReference } from "./conversation-store.js";
+import { teamsMarkdownDeliveryCases } from "./format.test-fixtures.js";
 const graphUploadMockState = vi.hoisted(() => ({
   uploadAndShareSharePoint: vi.fn(),
   getDriveItemProperties: vi.fn(),
@@ -330,31 +331,33 @@ describe("msteams messenger", () => {
       expect(ids).toEqual(["id:one", "id:two"]);
     });
 
-    it("sends top-level messages via proactive send context", async () => {
-      const texts: string[] = [];
-      let capturedConversationId: string | undefined;
+    it.each(teamsMarkdownDeliveryCases)(
+      "sends $name via proactive send context",
+      async ({ source, expected }) => {
+        const texts: string[] = [];
+        let capturedConversationId: string | undefined;
 
-      const ids = await sendMSTeamsMessages({
-        replyStyle: "top-level",
-        app: createMockApp({
-          createFn: async (activity: unknown) => {
-            const text = (activity as Record<string, unknown>)?.text;
-            texts.push(typeof text === "string" ? text : "");
-            return { id: typeof text === "string" ? `id:${text}` : "created" };
-          },
-          onClientCreated: (_serviceUrl, conversationId) => {
-            capturedConversationId = conversationId;
-          },
-        }),
-        appId: "app123",
-        conversationRef: baseRef,
-        messages: [{ text: "hello" }],
-      });
+        const ids = await sendMSTeamsMessages({
+          replyStyle: "top-level",
+          app: createMockApp({
+            createFn: createRecordedSendActivity(texts),
+            onClientCreated: (_serviceUrl, conversationId) => {
+              capturedConversationId = conversationId;
+            },
+          }),
+          appId: "app123",
+          conversationRef: baseRef,
+          messages: renderReplyPayloadsToMessages([{ text: source }], {
+            textChunkLimit: 4000,
+            tableMode: "off",
+          }),
+        });
 
-      expect(texts).toEqual(["hello"]);
-      expect(ids).toEqual(["id:hello"]);
-      expect(capturedConversationId).toBe("19:abc@thread.tacv2");
-    });
+        expect(texts).toEqual([expected]);
+        expect(ids).toEqual([`id:${expected}`]);
+        expect(capturedConversationId).toBe("19:abc@thread.tacv2");
+      },
+    );
 
     it("requires SharePoint storage for channel files", async () => {
       const tmpDir = await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "msteams-storage-"));

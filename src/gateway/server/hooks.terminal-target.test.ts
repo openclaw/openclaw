@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveSystemEventOptionsOwnerAgentId } from "../../infra/system-event-ownership.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 
 const enqueueSystemEventMock = vi.fn();
@@ -90,8 +89,7 @@ function dispatch(value: HookPayload): Promise<unknown> {
 
 function expectOwnedEvent(text: string, agentId: string): void {
   const call = enqueueSystemEventMock.mock.calls.find(([actual]) => actual === text);
-  expect(call?.[1]).toEqual({ sessionKey: "global" });
-  expect(resolveSystemEventOptionsOwnerAgentId(call?.[1] as object)).toBe(agentId);
+  expect(call?.[1]).toEqual({ sessionKey: `agent:${agentId}:global` });
 }
 
 async function startGatedRun(

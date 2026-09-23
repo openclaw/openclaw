@@ -51,7 +51,7 @@ extension OpenClawChatViewModel {
             // Replace stale local ownership so only that run consumes later events.
             clearPendingRuns(reason: nil)
             self.pendingRuns.insert(runId)
-            self.pendingToolCallsById = [:]
+            self.turnToolCallsById = [:]
             self.updateStreamingAssistantText(nil)
         }
         if self.runMessageScopesByRunID[runId] == nil {
@@ -60,7 +60,8 @@ extension OpenClawChatViewModel {
         if self.pendingRunOwnerArmIDs[runId] == nil {
             armPendingRunOwner(runId: runId)
         }
-        if !bufferedText.isEmpty {
+        // Chat snapshots concatenate model turns; agent text owns the current item once observed.
+        if self.liveRunStateByRunID[runId]?.hasAgentAssistantText != true, !bufferedText.isEmpty {
             self.updateStreamingAssistantText(bufferedText)
         }
         self.logDiagnostic(

@@ -22,11 +22,6 @@ export function isAnnounceSkip(text?: string) {
   return (text ?? "").trim() === ANNOUNCE_SKIP_TOKEN;
 }
 
-/** Returns true when text is exactly the reply-skip sentinel. */
-export function isReplySkip(text?: string) {
-  return (text ?? "").trim() === REPLY_SKIP_TOKEN;
-}
-
 /** Returns true when text is any non-deliverable sessions reply sentinel. */
 export function isNonDeliverableSessionsReply(text?: string) {
   return NON_DELIVERABLE_REPLY_TOKENS.some((token) => isSilentReplyText(text, token));

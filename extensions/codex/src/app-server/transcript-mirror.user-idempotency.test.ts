@@ -75,7 +75,7 @@ vi.mock("openclaw/plugin-sdk/codex-session-transcript-runtime", async (importOri
             if (appended && message?.role === "user") {
               transcriptRace.userAnchor = appended.anchor;
             }
-            return result;
+            return { ...result, lifecycleRevision: "committed-mirror-lifecycle" };
           },
         };
         return await run(intercepted);
@@ -177,7 +177,7 @@ it("adopts a competing indexed user without duplicating writes or slowing assist
 
     expect(messages.filter((message) => message.role === "user")).toHaveLength(1);
     expect(messages.filter((message) => message.role === "assistant")).toHaveLength(1);
-    expect(result.userMessagesPresent).toEqual([
+    expect(result.userMessageReceipts.map((receipt) => receipt.message)).toEqual([
       expect.objectContaining({
         role: "user",
         content: [{ type: "text", text: "[redacted by hook]" }],
@@ -189,7 +189,8 @@ it("adopts a competing indexed user without duplicating writes or slowing assist
       }),
     ]);
     expect(result.userMessageReceipts).toHaveLength(1);
-    expect(result.userMessageReceipts[0]?.message).toBe(result.userMessagesPresent[0]);
+    expect(result.userMessageReceipts[0]?.appended).toBe(false);
+    expect(result.userMessageReceipts[0]?.message).toBe(result.messagesPresent[0]);
     expect(result.userMessageReceipts[0]?.anchor).toBe(transcriptRace.userAnchor);
     expect(result.userMessageReceipts[0]?.anchor.entryId).toBe(
       messageEvents.find((event) => event.message.role === "user")?.id,
@@ -200,6 +201,7 @@ it("adopts a competing indexed user without duplicating writes or slowing assist
     expect(transcriptRace.publish).toHaveBeenCalledWith(
       expect.objectContaining({
         update: expect.objectContaining({
+          lifecycleRevision: "committed-mirror-lifecycle",
           message: expect.objectContaining({ role: "assistant" }),
           messageSeq: 2,
         }),

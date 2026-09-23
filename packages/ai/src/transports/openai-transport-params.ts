@@ -1,4 +1,4 @@
-import type { Context, Model } from "@openclaw/llm-core";
+import type { CacheRetention, Context, Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getAiTransportHost } from "../host.js";
@@ -10,14 +10,23 @@ import {
   resolveOpenAIProjectedToolsStrictToolFlag,
 } from "../providers/openai-tool-schema.js";
 import { resolveModelRequestTimeoutMs, resolveProviderRequestPolicyConfig } from "./host-policy.js";
-import { resolveOpenAICompletionsCompat } from "./openai-completions-compat.js";
+import {
+  resolveOpenAICompletionsCompat,
+  usesNativeOpenAICodexResponsesBackend,
+} from "./openai-completions-compat.js";
 import { resolveOpenAIReasoningEffortMap } from "./openai-reasoning-compat.js";
+import { OPENAI_RESPONSES_APIS } from "./openai-responses-contracts.js";
 import type { OpenAIModeModel } from "./openai-transport-shared.js";
+import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 import { isCodeModeModelVisibleToolName, sha256Hex } from "./transport-utils.js";
 
 const MAX_OPENAI_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS = 256;
-const OPENAI_CODEX_RESPONSES_PROVIDERS = new Set(["openai"]);
 const loggedOpenAIStrictToolDowngradeDiagnosticKeys = new Set<string>();
+
+const OPENAI_COMPLETIONS_APIS: ReadonlySet<string> = new Set([
+  "openai-completions",
+  "openclaw-openai-completions-transport",
+]);
 
 function readToolPayloadField(record: Record<string, unknown>, field: string): unknown {
   try {
@@ -236,42 +245,6 @@ export function assertCodeModeResponsesToolSurface(
   );
 }
 
-function buildOpenAIStrictToolDowngradeDiagnosticKey(
-  diagnostics: ReturnType<typeof findOpenAIStrictToolProjectionDiagnostics>,
-  context: { transport: "responses" | "completions"; model: OpenAIModeModel },
-): string {
-  return sha256Hex(
-    JSON.stringify({
-      transport: context.transport,
-      provider: context.model.provider ?? null,
-      model: context.model.id ?? null,
-      diagnostics: diagnostics.map((entry) => ({
-        toolIndex: entry.toolIndex,
-        toolName: entry.toolName ?? null,
-        violations: entry.violations,
-      })),
-    }),
-  );
-}
-
-function shouldLogOpenAIStrictToolDowngradeDiagnostic(
-  diagnostics: ReturnType<typeof findOpenAIStrictToolProjectionDiagnostics>,
-  context: { transport: "responses" | "completions"; model: OpenAIModeModel },
-): boolean {
-  const key = buildOpenAIStrictToolDowngradeDiagnosticKey(diagnostics, context);
-  if (loggedOpenAIStrictToolDowngradeDiagnosticKeys.has(key)) {
-    return false;
-  }
-  if (
-    loggedOpenAIStrictToolDowngradeDiagnosticKeys.size >=
-    MAX_OPENAI_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS
-  ) {
-    loggedOpenAIStrictToolDowngradeDiagnosticKeys.clear();
-  }
-  loggedOpenAIStrictToolDowngradeDiagnosticKeys.add(key);
-  return true;
-}
-
 export function resolveOpenAIStrictToolFlagWithDiagnostics(
   projection: OpenAIToolProjection,
   strictSetting: boolean | null | undefined,
@@ -279,11 +252,30 @@ export function resolveOpenAIStrictToolFlagWithDiagnostics(
 ): boolean | undefined {
   const strict = resolveOpenAIProjectedToolsStrictToolFlag(projection, strictSetting);
   if (strictSetting === true && strict === false) {
-    const diagnostics = findOpenAIStrictToolProjectionDiagnostics(projection);
     getAiTransportHost().logDebug("openai-transport", () => {
-      if (!shouldLogOpenAIStrictToolDowngradeDiagnostic(diagnostics, context)) {
+      const diagnostics = findOpenAIStrictToolProjectionDiagnostics(projection);
+      const key = sha256Hex(
+        JSON.stringify({
+          transport: context.transport,
+          provider: context.model.provider ?? null,
+          model: context.model.id ?? null,
+          diagnostics: diagnostics.map((entry) => ({
+            toolIndex: entry.toolIndex,
+            toolName: entry.toolName ?? null,
+            violations: entry.violations,
+          })),
+        }),
+      );
+      if (loggedOpenAIStrictToolDowngradeDiagnosticKeys.has(key)) {
         return null;
       }
+      if (
+        loggedOpenAIStrictToolDowngradeDiagnosticKeys.size >=
+        MAX_OPENAI_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS
+      ) {
+        loggedOpenAIStrictToolDowngradeDiagnosticKeys.clear();
+      }
+      loggedOpenAIStrictToolDowngradeDiagnosticKeys.add(key);
       const sample = diagnostics.slice(0, 5).map((entry) => ({
         tool: entry.toolName ?? `tool[${entry.toolIndex}]`,
         violations: entry.violations.slice(0, 8),
@@ -306,49 +298,13 @@ export function resolveOpenAIStrictToolFlagWithDiagnostics(
   return strict;
 }
 
-export function isOpenAICodexResponsesModel(model: Model): boolean {
-  return (
-    OPENAI_CODEX_RESPONSES_PROVIDERS.has(model.provider) &&
-    (model.api === "openai-chatgpt-responses" ||
-      model.api === "openclaw-openai-chatgpt-responses-transport")
-  );
-}
-
-function isNativeOpenAICodexResponsesBaseUrl(baseUrl?: string): boolean {
-  const trimmed = typeof baseUrl === "string" ? baseUrl.trim() : "";
-  if (!trimmed) {
-    return false;
-  }
-  try {
-    const url = new URL(trimmed);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      return false;
-    }
-    if (url.hostname.toLowerCase() !== "chatgpt.com") {
-      return false;
-    }
-    const pathname = url.pathname.replace(/\/+$/u, "").toLowerCase();
-    return [
-      "/backend-api",
-      "/backend-api/v1",
-      "/backend-api/codex",
-      "/backend-api/codex/v1",
-    ].includes(pathname);
-  } catch {
-    return false;
-  }
-}
-
-export function usesNativeOpenAICodexResponsesBackend(model: Model): boolean {
-  return isOpenAICodexResponsesModel(model) && isNativeOpenAICodexResponsesBaseUrl(model.baseUrl);
-}
-
 export function buildOpenAIClientHeaders(
   model: Model,
   context: Context,
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
   sessionId?: string,
+  cacheRetention?: CacheRetention,
 ): Record<string, string> {
   const providerHeaders = { ...model.headers };
   if (model.provider === "github-copilot") {
@@ -356,6 +312,24 @@ export function buildOpenAIClientHeaders(
       providerHeaders,
       getAiTransportHost().buildCopilotDynamicHeaders(context.messages),
     );
+  }
+  if (OPENAI_COMPLETIONS_APIS.has(model.api) && sessionId && cacheRetention !== "none") {
+    const { sessionAffinity } = resolveOpenAICompletionsCompat(model);
+    if (sessionAffinity !== "none") {
+      const affinityValue = clampOpenAIPromptCacheKey(sessionId) ?? sessionId;
+      const affinityHeaders =
+        sessionAffinity === "openrouter"
+          ? ["x-session-id"]
+          : ["session_id", "x-client-request-id", "x-session-affinity"];
+      const configuredHeaders = new Set(
+        Object.keys(providerHeaders).map((key) => key.toLowerCase()),
+      );
+      for (const name of affinityHeaders) {
+        if (!configuredHeaders.has(name)) {
+          providerHeaders[name] = affinityValue;
+        }
+      }
+    }
   }
   const callerHeaders = { ...optionHeaders, ...turnHeaders };
   const headers = resolveProviderRequestPolicyConfig(model, {
@@ -369,28 +343,33 @@ export function buildOpenAIClientHeaders(
     precedence: "caller-wins",
   }).headers;
   const resolvedHeaders = headers ?? {};
-  // Preserve ChatGPT Responses session affinity; the native backend accepts this spelling.
+  const configuredSessionHeaderPolicy =
+    OPENAI_RESPONSES_APIS.has(model.api) && model.compat && "sendSessionIdHeader" in model.compat
+      ? model.compat?.sendSessionIdHeader
+      : undefined;
+  const sendSessionIdHeader =
+    configuredSessionHeaderPolicy ?? usesNativeOpenAICodexResponsesBackend(model);
+  // Preserve Responses session affinity for native routes and explicitly compatible proxies.
   if (
     sessionId &&
+    cacheRetention !== "none" &&
+    sendSessionIdHeader &&
     !Object.keys(resolvedHeaders).some(
       (key) => normalizeLowercaseStringOrEmpty(key) === "session_id",
-    ) &&
-    usesNativeOpenAICodexResponsesBackend(model)
+    )
   ) {
     // The backend derives its prompt cache key from this header and enforces
     // OpenAI's 64-char limit server-side; long internal session ids
     // (companion/btw effects sessions) 400 without this clamp.
     resolvedHeaders.session_id = clampOpenAIPromptCacheKey(sessionId) ?? sessionId;
   }
-  return resolvedHeaders;
-}
-
-function resolveOpenAISdkTimeoutMs(model: Model, timeoutMs?: number): number | undefined {
-  return resolveModelRequestTimeoutMs(model, timeoutMs);
+  return (
+    resolveOpencodeSessionHeaders(model, { sessionId, headers: resolvedHeaders }) ?? resolvedHeaders
+  );
 }
 
 export function buildOpenAISdkClientOptions(model: Model): { timeout?: number; maxRetries: 0 } {
-  const timeout = resolveOpenAISdkTimeoutMs(model);
+  const timeout = resolveModelRequestTimeoutMs(model);
   return { ...(timeout === undefined ? {} : { timeout }), maxRetries: 0 };
 }
 
@@ -408,7 +387,7 @@ export function buildOpenAISdkRequestOptions(
       headers?: Record<string, string>;
     }
   | undefined {
-  const timeout = resolveOpenAISdkTimeoutMs(model, options?.timeoutMs);
+  const timeout = resolveModelRequestTimeoutMs(model, options?.timeoutMs);
   const headers =
     options?.stream === true && usesNativeOpenAICodexResponsesBackend(model)
       ? { Accept: "text/event-stream" }

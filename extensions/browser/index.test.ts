@@ -146,8 +146,13 @@ describe("browser plugin", () => {
     });
   });
 
-  it("initializes the shared durable session-tab registry without loading browser control", () => {
+  it("initializes the durable tab registry without loading browser control or Gateway runtime", () => {
     const { api, openSyncKeyedStore } = createApi();
+    Object.defineProperty(api.runtime, "gateway", {
+      get() {
+        throw new Error("Gateway runtime must stay lazy during Browser registration");
+      },
+    });
     registerBrowserPlugin(api);
 
     expect(openSyncKeyedStore).toHaveBeenCalledWith({
@@ -161,7 +166,19 @@ describe("browser plugin", () => {
   it("exposes static browser metadata on the plugin definition", () => {
     expect(browserPluginReload).toEqual({
       restartPrefixes: ["browser"],
-      hotPrefixes: ["browser.profiles"],
+      hotPrefixes: [
+        "browser.profiles",
+        "browser.defaultProfile",
+        "browser.headless",
+        "browser.executablePath",
+        "browser.attachOnly",
+        "browser.cdpUrl",
+        "browser.noSandbox",
+        "browser.extraArgs",
+        "browser.snapshotDefaults",
+        "browser.tabCleanup",
+        "browser.allowSystemProfileImport",
+      ],
     });
     expect(browserPluginNodeHostCommands.map((entry) => entry.command)).toEqual([
       "browser.proxy",

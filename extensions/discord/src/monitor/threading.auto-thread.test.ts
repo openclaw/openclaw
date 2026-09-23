@@ -23,7 +23,7 @@ const mockClient = {
   rest: { post: postMock, get: getMock, patch: patchMock },
 } as unknown as Parameters<MaybeCreateDiscordAutoThreadFn>[0]["client"];
 const mockMessage = {
-  id: "msg1",
+  id: "1001",
   timestamp: "123",
 } as unknown as Parameters<MaybeCreateDiscordAutoThreadFn>[0]["message"];
 

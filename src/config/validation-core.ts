@@ -33,6 +33,7 @@ import {
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { createModelPolicyRefValidator } from "./model-policy-ref.js";
+import { isBuiltInModelProviderOverlayId } from "./model-provider-overlay-ids.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 import { collectRawBundledChannelConfigIssues } from "./validation-channel-rules.js";
 import {
@@ -41,7 +42,6 @@ import {
   mergeUnsupportedMutableSecretRefIssues,
   withConfigIssuePath,
 } from "./validation-issues.js";
-import { isBuiltInModelProviderOverlayId } from "./zod-schema.core.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import { McpServerNameSchema, NodeHostMcpServerNameSchema } from "./zod-schema.root-support.js";
 
@@ -256,9 +256,13 @@ function collectModelPolicyAllowIssues(config: OpenClawConfig): ConfigValidation
   const validateRefs = (
     refs: readonly string[] | undefined,
     configPath: string,
-    isValidRef: (raw: string) => boolean,
+    agentModels?: typeof defaultModels,
   ) => {
-    for (const [index, raw] of (refs ?? []).entries()) {
+    if (!refs?.length) {
+      return;
+    }
+    const isValidRef = createModelPolicyRefValidator(defaultModels, agentModels);
+    for (const [index, raw] of refs.entries()) {
       if (isValidRef(raw)) {
         continue;
       }
@@ -271,19 +275,11 @@ function collectModelPolicyAllowIssues(config: OpenClawConfig): ConfigValidation
     }
   };
 
-  validateRefs(
-    config.agents?.defaults?.modelPolicy?.allow,
-    "agents.defaults.modelPolicy.allow",
-    createModelPolicyRefValidator(defaultModels),
-  );
+  validateRefs(config.agents?.defaults?.modelPolicy?.allow, "agents.defaults.modelPolicy.allow");
   for (const { entry: agent, source } of listAgentEntriesWithSource(config)) {
     const pathPrefix =
       source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list.${source.index}`;
-    validateRefs(
-      agent.modelPolicy?.allow,
-      `${pathPrefix}.modelPolicy.allow`,
-      createModelPolicyRefValidator(defaultModels, agent.models),
-    );
+    validateRefs(agent.modelPolicy?.allow, `${pathPrefix}.modelPolicy.allow`, agent.models);
   }
   return issues;
 }
@@ -373,6 +369,7 @@ export function validateConfigObjectRaw(
     validateBundledChannels?: boolean;
     preservedLegacyRootKeys?: readonly string[];
     env?: NodeJS.ProcessEnv;
+    homedir?: () => string;
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
   const legacyDefaultAgentId = isRecord(raw)
@@ -445,7 +442,7 @@ export function validateConfigObjectRaw(
   if (sandboxContainerEnvIssues.length > 0) {
     return { ok: false, issues: sandboxContainerEnvIssues };
   }
-  const duplicates = findDuplicateAgentDirs(validatedConfig);
+  const duplicates = findDuplicateAgentDirs(validatedConfig, opts);
   if (duplicates.length > 0) {
     return {
       ok: false,

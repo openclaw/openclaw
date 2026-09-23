@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import net from "node:net";
@@ -6,13 +6,27 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  resolveDistArtifactLockPath,
+  withDistArtifactOwnership,
+} from "../../scripts/lib/dist-artifact-ownership.mts";
+import { BOUNDARY_PLUGIN_UNITS } from "../../scripts/lib/extension-boundary-inputs.mts";
+import {
   TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
+import { TSGO_CORE_TEST_SHARDS } from "../../scripts/lib/tsgo-core-test-shards.mts";
+import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { waitForDead } from "../helpers/process-wait.js";
+import {
+  materializeNativeCompiler,
+  overrideNativeFixtureExecutable,
+} from "./native-boundary-fixture.js";
+import { createFixture as createDeclarationFixture } from "./tsdown-declaration-fixture.js";
 
 const fixture = createFixtureLifetime();
+const testNodeExecPath = resolveTestNodeExecPath();
 afterEach(() => fixture.cleanup());
 const sourceRoot = process.cwd();
 const declarationPath = "dist/plugin-sdk/src/plugin-sdk/qa-channel-protocol.d.ts";
@@ -26,8 +40,8 @@ function write(root: string, relative: string, content: string) {
   return target;
 }
 
-function createCheckout() {
-  const root = fs.realpathSync(fixture.createTempDir("openclaw-dist-owner-"));
+function createCheckout(prefix = "openclaw-dist-owner-") {
+  const root = fs.realpathSync(fixture.createTempDir(prefix));
   write(root, "package.json", '{"type":"module"}');
   write(root, "pnpm-workspace.yaml", "packages: []\n");
   write(root, "src/plugin-sdk/qa-channel-protocol.ts", "export interface Channel { id: string }\n");
@@ -54,19 +68,24 @@ function createCheckout() {
 }
 
 function installCompiler(root: string, afterEmit = "") {
+  const launcher = path.join(root, "node_modules/.bin/tsgo");
+  fs.rmSync(launcher, { force: true });
+  const native = materializeNativeCompiler(root);
+  fs.unlinkSync(launcher);
   const compiler = write(
     root,
     "node_modules/.bin/tsgo",
     `#!/usr/bin/env node
     const { spawnSync } = require('node:child_process');
     console.error('[fixture tsgo] starting', ...process.argv.slice(2));
-    const result = spawnSync(process.execPath, [${JSON.stringify(path.join(sourceRoot, "node_modules/@typescript/native-preview/bin/tsgo"))}, ...process.argv.slice(2)], { stdio: 'inherit' });
+    const result = spawnSync(${JSON.stringify(native)}, process.argv.slice(2), { stdio: 'inherit' });
     console.error('[fixture tsgo] finished', result.status, result.signal);
     if (result.status !== 0) process.exit(result.status ?? 1);
     ${afterEmit}
   `,
   );
   fs.chmodSync(compiler, 0o755);
+  overrideNativeFixtureExecutable(root, compiler);
 }
 
 function installBuildCheckpoint(root: string, checkpoint: string) {
@@ -81,42 +100,39 @@ function installBuildCheckpoint(root: string, checkpoint: string) {
   write(root, "pnpm.cjs", 'import("./node_modules/tsdown/dist/run.mjs");\n');
 }
 
-function installScripts(root: string, scripts: string[]) {
-  for (const script of scripts) {
+function installScripts(
+  root: string,
+  scripts: string[],
+  { compiler = true, dependencies = ["tsx", "@openclaw/fs-safe"] } = {},
+) {
+  // Keep the checkpoint launcher when installCompiler already owns this toolchain.
+  if (compiler && !fs.existsSync(path.join(root, "node_modules/typescript/package.json"))) {
+    materializeNativeCompiler(root);
+  }
+  for (const script of ["tsx.mjs", ...scripts]) {
     write(
       root,
       `scripts/${script}`,
       fs.readFileSync(path.join(sourceRoot, "scripts", script), "utf8"),
     );
   }
-  fs.mkdirSync(path.join(root, "scripts/lib"), { recursive: true });
-  for (const entry of fs.readdirSync(path.join(sourceRoot, "scripts/lib"))) {
-    if (entry === "plugin-sdk-entrypoints.json") {
-      continue;
-    }
-    if (entry === "plugin-sdk-entries.mts") {
-      fs.copyFileSync(
-        path.join(sourceRoot, "scripts/lib", entry),
-        path.join(root, "scripts/lib", entry),
-      );
-    } else {
-      fs.symlinkSync(
-        path.join(sourceRoot, "scripts/lib", entry),
-        path.join(root, "scripts/lib", entry),
-      );
-    }
+  for (const file of [
+    "scripts/lib",
+    "scripts/windows-cmd-helpers.mjs",
+    "packages/normalization-core/src",
+    "packages/normalization-core/package.json",
+  ]) {
+    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+    fs.cpSync(path.join(sourceRoot, file), path.join(root, file), { recursive: true });
   }
   write(root, "scripts/lib/plugin-sdk-entrypoints.json", '["qa-channel-protocol"]');
-  fs.symlinkSync(
-    path.join(sourceRoot, "scripts/windows-cmd-helpers.mjs"),
-    path.join(root, "scripts/windows-cmd-helpers.mjs"),
-  );
   fs.mkdirSync(path.join(root, "node_modules"), { recursive: true });
-  for (const name of ["tsx", "typescript", "@typescript", "@openclaw/fs-safe"]) {
+  for (const name of dependencies) {
     fs.mkdirSync(path.dirname(path.join(root, "node_modules", name)), { recursive: true });
     fs.symlinkSync(
       path.join(sourceRoot, "node_modules", name),
       path.join(root, "node_modules", name),
+      process.platform === "win32" ? "junction" : "dir",
     );
   }
 }
@@ -133,6 +149,7 @@ async function runWithProcesses(
       root: string,
       script: string,
       args?: string[],
+      resourceOwner?: ReturnType<typeof createVitestResourceOwner>,
     ) => {
       waiting: Promise<void>;
       done: Promise<{ code: unknown; output: string }>;
@@ -227,16 +244,23 @@ async function runWithProcesses(
         socket.on('data', () => socket.end());
       `,
       waitEvent,
-      start: (root, script, args = []) => {
+      start: (root, script, args, resourceOwner) => {
         signal.throwIfAborted();
-        const child = spawn(process.execPath, [script, ...args], {
+        const commandArgs = [script, ...(args ?? [])];
+        const child = spawn(testNodeExecPath, commandArgs, {
           cwd: root,
-          env: { ...process.env, npm_execpath: path.join(root, "pnpm.cjs") },
+          env: {
+            ...process.env,
+            ...(resourceOwner
+              ? { TMPDIR: resourceOwner.root, TMP: resourceOwner.root, TEMP: resourceOwner.root }
+              : {}),
+            npm_execpath: path.join(root, "pnpm.cjs"),
+          },
           stdio: ["ignore", "pipe", "pipe"],
         });
         children.push(child);
         let output = "";
-        diagnostics.push(() => `[fixture ${root}] ${script} ${args.join(" ")}\n${output}`);
+        diagnostics.push(() => `[fixture ${root}] ${commandArgs.join(" ")}\n${output}`);
         let announceWait!: () => void;
         const waiting = new Promise<void>((resolve) => {
           announceWait = resolve;
@@ -279,42 +303,342 @@ async function runWithProcesses(
   }
 }
 
+describe("native check launchers in paths with spaces", () => {
+  it.for(
+    ["run-tsgo-core-test-shards.mts", "run-oxlint.mts", "run-oxlint-shards.mts"].flatMap((script) =>
+      [0, 7].map((exitCode) => ({ script, exitCode })),
+    ),
+  )(
+    "joins $script children before releasing artifacts (exit $exitCode)",
+    async ({ script, exitCode }, { signal }) => {
+      await withProcesses(async ({ checkpoint, start }) => {
+        const root = createCheckout("openclaw check launchers ");
+        installScripts(
+          root,
+          ["run-tsgo-core-test-shards.mts", "run-oxlint.mts", "run-oxlint-shards.mts"],
+          { compiler: false, dependencies: ["tsx", "@openclaw/fs-safe", "p-map", "koffi"] },
+        );
+        const nativeJob = "src/process/supervisor/service-child-windows-job-native.ts";
+        write(root, nativeJob, fs.readFileSync(path.join(sourceRoot, nativeJob), "utf8"));
+        const compiler = script === "run-tsgo-core-test-shards.mts";
+        const workload = compiler
+          ? "run-tsgo.mts"
+          : "prepare-extension-package-boundary-artifacts.mts";
+        const observed = path.join(root, "child.json");
+        const settled = path.join(root, "child-settled");
+        const consumed = path.join(root, "lint-consumed");
+        // Keep the real CLI, artifact handoff and managed process owner. Only the
+        // terminal compiler/preparation workload waits at this completion barrier.
+        write(
+          root,
+          `scripts/${workload}`,
+          `
+        import fs from 'node:fs';
+        import { createRequire } from 'node:module';
+        const require = createRequire(import.meta.url);
+        fs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify({ argv: process.argv.slice(2), pid: process.pid }));
+        await new Promise(resolve => {
+          ${checkpoint("child-running")}
+          socket.on('close', resolve);
+        });
+        fs.writeFileSync(${JSON.stringify(settled)}, 'settled');
+        process.exitCode = ${exitCode};
+      `,
+        );
+        const lint = write(
+          root,
+          "node_modules/.bin/oxlint",
+          `#!/usr/bin/env node
+        require('node:fs').writeFileSync(${JSON.stringify(consumed)}, 'consumed');
+      `,
+        );
+        fs.chmodSync(lint, 0o755);
+        if (process.platform === "win32") {
+          write(
+            root,
+            "node_modules/.bin/oxlint.cmd",
+            `@"${testNodeExecPath}" "%~dp0oxlint" %*\r\n`,
+          );
+        }
+        const args = compiler
+          ? ["--stripe", `1/${TSGO_CORE_TEST_SHARDS.length}`]
+          : script === "run-oxlint.mts"
+            ? ["--tsconfig", "extensions/tsconfig.json", "extensions"]
+            : ["--only", "extensions"];
+        const command = start(root, path.join(root, "scripts", script), args);
+        const gate = await command.event("child-running");
+        const child: { argv: string[]; pid: number } = JSON.parse(
+          fs.readFileSync(observed, "utf8"),
+        );
+        expect(child.argv).toEqual(
+          compiler
+            ? ["-p", TSGO_CORE_TEST_SHARDS[0].config, "--incremental"]
+            : ["--mode=package-boundary"],
+        );
+        const lock = resolveDistArtifactLockPath(root);
+        expect(fs.existsSync(path.join(lock, "owner.json"))).toBe(true);
+        expect(fs.readdirSync(lock)).toContain(`child-${child.pid}`);
+        expect(fs.existsSync(settled)).toBe(false);
+        expect(fs.existsSync(consumed)).toBe(false);
+        gate.write("continue");
+        const result = await command.done;
+        expect(result.code, result.output).toBe(
+          script === "run-oxlint.mts" && exitCode !== 0 ? 1 : exitCode,
+        );
+        expect(fs.readFileSync(settled, "utf8")).toBe("settled");
+        expect(fs.existsSync(consumed)).toBe(!compiler && exitCode === 0);
+        expect(() => process.kill(child.pid, 0)).toThrow();
+        expect(fs.readdirSync(lock)).toEqual([]);
+      }, signal);
+    },
+  );
+});
+
 // Native TypeScript emits the declarations. Only
 // process completion is gated; ordering never depends on sleeps or host speed.
 describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
   it.for([
-    { script: "prepare-extension-package-boundary-artifacts.mts", failStagingCleanup: false },
-    { script: "write-plugin-sdk-entry-dts.ts", failStagingCleanup: false },
-    { script: "write-plugin-sdk-entry-dts.ts", failStagingCleanup: true },
-    { script: "write-unified-entry-dts.ts", failStagingCleanup: false },
-    { script: "write-unified-entry-dts.ts", failStagingCleanup: true },
+    { signalName: "SIGINT" as const, exitCode: 130 },
+    { signalName: "SIGTERM" as const, exitCode: 143 },
   ])(
-    "retains nested $script cleanup metadata (staging cleanup failure=$failStagingCleanup)",
-    async ({ script, failStagingCleanup }, { signal }) => {
-      await withProcesses(async ({ start }) => {
+    "joins a singleton smoke import before releasing ownership after $signalName",
+    async ({ signalName, exitCode }, { signal }) => {
+      await withProcesses(async ({ checkpoint, waitEvent, start }) => {
         const root = createCheckout();
-        installScripts(root, [script, "run-tsgo.mts", "tsdown-build.mts", "pnpm-runner.mts"]);
-        write(root, "tsconfig.json", '{"extends":"./tsconfig.plugin-sdk.dts.json"}');
-        fs.mkdirSync(path.join(root, "packages"), { recursive: true });
-        fs.symlinkSync(
-          path.join(sourceRoot, "packages/normalization-core"),
-          path.join(root, "packages/normalization-core"),
+        const smokeScript = write(
+          root,
+          "scripts/test-built-plugin-singleton.mts",
+          fs.readFileSync(path.join(sourceRoot, "scripts/test-built-plugin-singleton.mts"), "utf8"),
         );
-        const scriptUrl = pathToFileURL(path.join(root, "scripts", script)).href;
-        const moduleUrl = (name: string) =>
-          pathToFileURL(path.join(sourceRoot, "scripts/lib", name)).href;
+        for (const entry of [
+          "lib",
+          "process-warning-filter.mts",
+          "stage-bundled-plugin-runtime.mts",
+        ]) {
+          fs.symlinkSync(
+            path.join(sourceRoot, "scripts", entry),
+            path.join(root, "scripts", entry),
+          );
+        }
+        const importJoined = path.join(root, "import-joined");
+        const smokePid = path.join(root, "smoke.pid");
         write(
           root,
-          "tsdown.config.ts",
-          `export default ${JSON.stringify([...TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS, ...TSDOWN_NON_SDK_DTS_CONFIG_GROUPS])}.map(name => ({ name, dts: { entry: ['fixture.ts'] }, entry: { 'plugin-sdk/fixture': 'fixture.ts' } }));`,
+          "dist/plugins/build-smoke-entry.js",
+          `
+        import fs from 'node:fs';
+        import { createRequire } from 'node:module';
+        const require = createRequire(import.meta.url);
+        fs.writeFileSync(${JSON.stringify(smokePid)}, String(process.pid));
+        if (process.listenerCount(${JSON.stringify(signalName)}) > 0) {
+          process.once(${JSON.stringify(signalName)}, () => {
+            ${checkpoint("smoke-signal-received")}
+          });
+        }
+        await new Promise(resolve => {
+          ${checkpoint("smoke-import-ready")}
+          socket.on('close', resolve);
+        });
+        fs.writeFileSync(${JSON.stringify(importJoined)}, 'joined');
+      `,
         );
+        const smoke = start(root, smokeScript);
+        const importGate = await smoke.event("smoke-import-ready");
+        const pid = Number(fs.readFileSync(smokePid, "utf8"));
+        expect(Number.isSafeInteger(pid) && pid > 1).toBe(true);
+        const writerStarted = path.join(root, "writer-started");
+        const writerScript = write(
+          root,
+          "writer.mts",
+          `
+        import fs from 'node:fs';
+        import { createRequire } from 'node:module';
+        import { withDistArtifactOwnership } from ${JSON.stringify(path.join(sourceRoot, "scripts/lib/dist-artifact-ownership.mts"))};
+        const require = createRequire(import.meta.url);
+        await withDistArtifactOwnership(process.cwd(), () => new Promise(resolve => {
+          fs.writeFileSync(${JSON.stringify(writerStarted)}, 'started');
+          ${checkpoint("smoke-contender-ready")}
+          socket.on('close', resolve);
+        }));
+      `,
+        );
+        const writer = start(root, writerScript);
+        await Promise.race([writer.waiting, writer.event("smoke-contender-ready")]);
+        process.kill(pid, signalName);
+        const acknowledgment = await Promise.race([
+          waitEvent("smoke-signal-received"),
+          smoke.done.then((result) => {
+            throw new Error(`Smoke exited before signal acknowledgment: ${JSON.stringify(result)}`);
+          }),
+        ]);
+        acknowledgment.write("continue");
+        expect(fs.existsSync(importJoined)).toBe(false);
+        expect(
+          fs.existsSync(writerStarted),
+          "cancellation must join the pending artifact reader",
+        ).toBe(false);
+
+        importGate.write("continue");
+        const contenderGate = await writer.event("smoke-contender-ready");
+        expect(fs.readFileSync(importJoined, "utf8")).toBe("joined");
+        const cancelled = await smoke.done;
+        expect(cancelled.code, cancelled.output).toBe(exitCode);
+        expect(fs.existsSync(path.join(root, "dist/extensions/build-smoke-plugin"))).toBe(false);
+        contenderGate.write("continue");
+        expect(await writer.done).toMatchObject({ code: 0 });
+        let reacquired = false;
+        await withDistArtifactOwnership(root, async () => {
+          reacquired = true;
+        });
+        expect(reacquired).toBe(true);
+      }, signal);
+    },
+  );
+
+  it("keeps source-run postbuild behind the shared artifact writer", async ({ signal }) => {
+    await withProcesses(async ({ checkpoint, waitEvent, start }) => {
+      const root = createCheckout();
+      write(root, "dist/entry.js", "export {};\n");
+      write(root, "dist/.buildstamp", JSON.stringify({ head: "fixture-head", inputsClean: true }));
+      const marker = path.join(root, "dist/postbuild-finished");
+      const writerScript = write(
+        root,
+        "writer.mjs",
+        `
+        import { createRequire } from 'node:module';
+        import { withDistArtifactOwnership } from ${JSON.stringify(path.join(sourceRoot, "scripts/lib/dist-artifact-ownership.mts"))};
+        const require = createRequire(import.meta.url);
+        await withDistArtifactOwnership(process.cwd(), () => new Promise(resolve => {
+          ${checkpoint("artifact-writer-ready")}
+          socket.on('close', resolve);
+        }));
+      `,
+      );
+      const writer = start(root, writerScript);
+      const writerGate = await writer.event("artifact-writer-ready");
+      const runnerScript = write(
+        root,
+        "source-runner.mjs",
+        `
+        import ${JSON.stringify(path.join(sourceRoot, "scripts/tsx.mjs"))};
+        import fs from 'node:fs';
+        import { createRequire } from 'node:module';
+        const require = createRequire(import.meta.url);
+        const { runNodeMain } = await import(${JSON.stringify(path.join(sourceRoot, "scripts/run-node.mts"))});
+        process.exitCode = await runNodeMain({
+          cwd: process.cwd(), args: ['artifact-fixture'],
+          env: { ...process.env, OPENCLAW_FORCE_BUILD: '0', OPENCLAW_BUILD_PRIVATE_QA: '0' },
+          spawnSync: (_command, args) => ({ status: 0, stdout: args.includes('rev-parse') ? 'fixture-head' : '' }),
+          spawn: (_command, args) => {
+            if (args.includes('scripts/build-all.mts')) throw new Error('Expected postbuild-only path');
+            return { on: (event, listener) => {
+              if (event === 'exit') queueMicrotask(() => listener(0, null));
+            }};
+          },
+          runRuntimePostBuild: () => new Promise(resolve => {
+            fs.writeFileSync(${JSON.stringify(marker)}, 'complete');
+            ${checkpoint("source-postbuild-ready")}
+            socket.on('close', resolve);
+          }),
+        });
+      `,
+      );
+      const runner = start(root, runnerScript);
+      await Promise.race([runner.waiting, waitEvent("source-postbuild-ready"), runner.done]);
+      expect(fs.existsSync(marker), "postbuild must wait for the current artifact writer").toBe(
+        false,
+      );
+      writerGate.write("continue");
+      expect(await writer.done).toMatchObject({ code: 0 });
+      (await runner.event("source-postbuild-ready")).write("continue");
+      const result = await runner.done;
+      expect(result.code, result.output).toBe(0);
+      expect(fs.readFileSync(marker, "utf8")).toBe("complete");
+    }, signal);
+  });
+
+  it("releases ownership after a native execFileSync ENOENT error", async () => {
+    const root = createCheckout();
+    const error = await withDistArtifactOwnership(root, async () =>
+      execFileSync(path.join(root, "absent-command"), [], { stdio: "pipe" }),
+    ).catch((cause: unknown) => cause);
+    expect(error).toHaveProperty("code", "ENOENT");
+    expect((error as { error?: unknown }).error ?? error).toBe(error);
+    expect(fs.existsSync(path.join(resolveDistArtifactLockPath(root), "owner.json"))).toBe(false);
+    expect(fs.existsSync(path.join(resolveDistArtifactLockPath(root), "unjoined"))).toBe(false);
+  });
+
+  it.for(["cause", "error", "cyclic aggregate"])(
+    "retains ownership for unjoined work nested in %s",
+    async (kind, { signal }) => {
+      // Retention deliberately keeps lock handles open; a joined child owns
+      // their disposal rather than leaking them into the shared Vitest worker.
+      await withProcesses(async ({ start }) => {
+        const root = createCheckout();
+        const probe = write(
+          root,
+          "retained-error.mts",
+          `
+          import assert from 'node:assert/strict';
+          import { withDistArtifactOwnership } from ${JSON.stringify(path.join(sourceRoot, "scripts/lib/dist-artifact-ownership.mts"))};
+          const kind = ${JSON.stringify(kind)};
+          const uncertainty = { processTreeState: 'indeterminate' };
+          const aggregate = new AggregateError([], 'sibling cleanup');
+          aggregate.errors.push(aggregate, new Error('command failed', { cause: uncertainty }));
+          const error = kind === 'cyclic aggregate' ? aggregate
+            : new Error('command failed', { cause: kind === 'cause' ? uncertainty : { error: uncertainty } });
+          const outcome = await withDistArtifactOwnership(process.cwd(), async () => {
+            throw error;
+          }).catch(cause => cause);
+          assert.equal(outcome, error);
+        `,
+        );
+        const result = await start(root, probe).done;
+        const directory = resolveDistArtifactLockPath(root);
+        expect(fs.existsSync(path.join(directory, "owner.json"))).toBe(true);
+        expect(fs.existsSync(path.join(directory, "unjoined"))).toBe(true);
+        expect(result.code, result.output).toBe(0);
+      }, signal);
+    },
+  );
+
+  it.for([
+    { script: "prepare-extension-package-boundary-artifacts.mts" },
+    { script: "write-plugin-sdk-entry-dts.ts" },
+    { script: "write-unified-entry-dts.ts" },
+  ])(
+    "retains nested $script unjoined work without staging cleanup",
+    async ({ script }, { signal }) => {
+      await withProcesses(async ({ start }) => {
+        const groups =
+          script === "write-plugin-sdk-entry-dts.ts"
+            ? TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS
+            : script === "write-unified-entry-dts.ts"
+              ? TSDOWN_NON_SDK_DTS_CONFIG_GROUPS
+              : undefined;
+        // Declaration writers need their real generator graph; this lifetime still
+        // owns the root so timed-out children are joined before inputs are removed.
+        const root = groups
+          ? createDeclarationFixture(
+              groups,
+              path.join(fs.realpathSync(fixture.createTempDir("openclaw-dist-owner-")), "Project"),
+            ).root
+          : createCheckout();
+        if (!groups) {
+          installScripts(root, [script, "run-tsgo.mts", "tsdown-build.mts", "pnpm-runner.mts"]);
+          write(root, "tsconfig.json", '{"extends":"./tsconfig.plugin-sdk.dts.json"}');
+        }
+        const scriptUrl = pathToFileURL(path.join(root, "scripts", script)).href;
+        const moduleUrl = (name: string) =>
+          pathToFileURL(path.join(root, "scripts/lib", name)).href;
+        const cleanupAttempt = path.join(root, "staging-cleanup-attempted");
+        const previousOutput = write(root, "dist/preserved.d.ts", "previous generation");
         const failure = `throw new AggregateError([new Error('child failed', { cause: Object.assign(new Error('cleanup unverified'), { processTreeState: 'indeterminate' }) })], 'fixture failure');`;
         const replacements = {
           [scriptUrl]: {
             "./lib/extension-boundary-inputs.mts": `export * from ${JSON.stringify(moduleUrl("extension-boundary-inputs.mts"))}; export class BoundaryInputSnapshot { constructor() { ${failure} } }`,
           },
           [moduleUrl("tsdown-declaration-writer.mts")]: {
-            "../tsdown-build.mts": `export * from ${JSON.stringify(pathToFileURL(path.join(sourceRoot, "scripts/tsdown-build.mts")).href)}; export const prepareTsdownBuildExecution = () => ({});`,
             "./declaration-stage.mts": `export async function publishStagedDeclarations() { ${failure} }`,
           },
         };
@@ -324,13 +648,14 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           `
           import fs from 'node:fs';
           import { registerHooks } from 'node:module';
-          if (${failStagingCleanup}) {
-            const remove = fs.rmSync;
-            fs.rmSync = (file, ...args) => {
-              if (String(file).startsWith(${JSON.stringify(path.join(root, ".artifacts/plugin-sdk-staging-"))})) throw new Error('fixture staging cleanup failure');
-              return remove(file, ...args);
-            };
-          }
+          const remove = fs.rmSync;
+          fs.rmSync = (file, ...args) => {
+            if (String(file).startsWith(${JSON.stringify(path.join(root, ".artifacts/plugin-sdk-staging-"))})) {
+              fs.writeFileSync(${JSON.stringify(cleanupAttempt)}, 'attempted');
+              throw new Error('fixture attempted unsafe staging cleanup');
+            }
+            return remove(file, ...args);
+          };
           const replacements = ${JSON.stringify(replacements)};
           registerHooks({ resolve(specifier, context, next) {
             const sources = replacements[context.parentURL];
@@ -350,6 +675,8 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           process.exitCode = await withDistArtifactOwnership(process.cwd(), () => runManagedCommand({
             bin: process.execPath,
             args: ['--import', ${JSON.stringify(pathToFileURL(hook).href)}, ...distArtifactEntryArgs(${JSON.stringify(path.join(root, "scripts", script))})],
+            // Use the synthetic declaration fixture's existing heap budget with real plans.
+            env: { ...process.env, OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: '1024' },
             requireProcessTreeExit: true,
           }));
         `,
@@ -357,9 +684,9 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         const result = await start(root, runner).done;
         expect(result.code, result.output).toBe(1);
         expect(result.output).toContain("fixture failure");
-        if (failStagingCleanup) {
-          expect(result.output).toContain("fixture staging cleanup failure");
-        }
+        expect(result.output).toContain("cleanup unverified");
+        expect(fs.existsSync(cleanupAttempt), result.output).toBe(false);
+        expect(fs.readFileSync(previousOutput, "utf8")).toBe("previous generation");
         expect(fs.existsSync(path.join(root, ".artifacts/dist-artifacts.lock/owner.json"))).toBe(
           true,
         );
@@ -370,7 +697,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           fs
             .readdirSync(path.join(root, ".artifacts"))
             .filter((name) => name.startsWith("plugin-sdk-staging-")),
-        ).toHaveLength(failStagingCleanup ? 1 : 0);
+        ).toHaveLength(groups ? groups.length + 1 : 0);
       }, signal);
     },
   );
@@ -385,6 +712,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
     async ({ owner, unjoined }, { signal }) => {
       await withProcesses(async ({ start }) => {
         const root = createCheckout();
+        materializeNativeCompiler(root);
         const ownerPath = write(root, ".artifacts/dist-artifacts.lock/owner.json", owner);
         if (unjoined) {
           write(root, ".artifacts/dist-artifacts.lock/unjoined", "unverified cleanup");
@@ -542,6 +870,9 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
   it("retains ownership when a supervisor exits before its compiler joins", async ({ signal }) => {
     await withProcesses(async ({ checkpoint, waitEvent, start }) => {
       const root = createCheckout();
+      // This fixture deliberately loses the managed owner. Its independent
+      // checkpoint census below still joins the compiler before disposing inputs.
+      const resourceOwner = createVitestResourceOwner(root);
       installCompiler(
         root,
         `require('node:fs').writeFileSync('compiler.pid', String(process.pid)); ${checkpoint("orphan-ready")}`,
@@ -558,7 +889,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           `await import(${JSON.stringify(path.join(sourceRoot, "scripts/run-tsgo.mts"))});`,
         ].join("\n"),
       );
-      const supervisor = start(root, owner);
+      const supervisor = start(root, owner, [], resourceOwner);
       const compilerGate = await supervisor.event("orphan-ready");
       const compilerPid = Number(fs.readFileSync(path.join(root, "compiler.pid"), "utf8"));
       (await waitEvent("exit-owner")).write("exit");
@@ -576,6 +907,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
       expect(fs.existsSync(path.join(root, ".artifacts/dist-artifacts.lock/owner.json"))).toBe(
         true,
       );
+      expect(() => resourceOwner.assertReleased()).toThrow("Unreleased Vitest resource claim");
       compilerGate.write("continue");
       await waitForDead(compilerPid, 2_000);
     }, signal);
@@ -586,6 +918,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
   }) => {
     await withProcesses(async ({ checkpoint, waitEvent, start }) => {
       const root = createCheckout();
+      const resourceOwner = createVitestResourceOwner(root);
       installCompiler(
         root,
         `require('node:fs').writeFileSync('compiler.json', JSON.stringify({ pid: process.pid, wrapper: process.ppid })); ${checkpoint("nested-compiler-ready")}`,
@@ -605,7 +938,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           `bin: process.execPath, args: distArtifactEntryArgs(${JSON.stringify(path.join(sourceRoot, "scripts/run-tsgo.mts"))}, ${JSON.stringify(tsgoArgs)}), requireProcessTreeExit: true }));`,
         ].join("\n"),
       );
-      const supervisor = start(root, owner);
+      const supervisor = start(root, owner, [], resourceOwner);
       const compilerGate = await supervisor.event("nested-compiler-ready");
       const compiler = JSON.parse(fs.readFileSync(path.join(root, "compiler.json"), "utf8"));
       try {
@@ -617,6 +950,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           fs.existsSync(path.join(root, declarationPath)),
           "a killed nested wrapper cannot certify compiler completion",
         ).toBe(true);
+        expect(() => resourceOwner.assertReleased()).toThrow("Unreleased Vitest resource claim");
       } finally {
         compilerGate.write("continue");
         await waitForDead(compiler.pid, 2_000);
@@ -624,10 +958,14 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
     }, signal);
   }, 30_000);
 
-  it("preserves compiler shard concurrency inside one checkout owner", async ({ signal }) => {
+  it("preserves compiler shard concurrency without the tsx loader", async ({ signal }) => {
     await withProcesses(async ({ checkpoint, waitEvent, start }) => {
       const root = createCheckout();
-      installScripts(root, ["run-tsgo-core-test-shards.mts", "run-tsgo.mts"]);
+      installScripts(root, ["run-tsgo-core-test-shards.mts", "run-tsgo.mts"], {
+        dependencies: ["@openclaw/fs-safe"],
+      });
+      fs.unlinkSync(path.join(root, "scripts/tsx.mjs"));
+      fs.unlinkSync(path.join(root, "node_modules/.bin/tsgo"));
       const compiler = write(
         root,
         "node_modules/.bin/tsgo",
@@ -637,6 +975,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
       `,
       );
       fs.chmodSync(compiler, 0o755);
+      overrideNativeFixtureExecutable(root, compiler);
       installBuildCheckpoint(root, checkpoint("shard-build-started"));
       write(root, "dist/still-consumed.txt", "owned");
       const shards = start(root, path.join(root, "scripts/run-tsgo-core-test-shards.mts"), [
@@ -672,10 +1011,6 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         "run-tsgo.mts",
         "prepare-extension-package-boundary-artifacts.mts",
       ]);
-      for (const name of ["normalization-core", "acp-core", "ai"]) {
-        fs.mkdirSync(path.join(root, "packages"), { recursive: true });
-        fs.symlinkSync(path.join(sourceRoot, "packages", name), path.join(root, "packages", name));
-      }
       write(root, "tsconfig.json", "{}");
       write(
         root,
@@ -685,16 +1020,8 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           compilerOptions: { outDir: "dist", tsBuildInfoFile: "dist/.tsbuildinfo" },
         }),
       );
-      for (const name of [
-        "qa-channel",
-        "memory-core",
-        "matrix",
-        "discord",
-        "slack",
-        "telegram",
-        "whatsapp",
-      ]) {
-        const entry = name === "matrix" ? "test-api.ts" : "api.ts";
+      for (const [name, entryName] of BOUNDARY_PLUGIN_UNITS) {
+        const entry = `${entryName}.ts`;
         write(root, `extensions/${name}/${entry}`, "export interface Plugin { id: string }\n");
         write(
           root,

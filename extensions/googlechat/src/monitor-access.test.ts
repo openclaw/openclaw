@@ -1,4 +1,5 @@
 // Googlechat tests cover monitor access plugin behavior.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const createChannelPairingController = vi.hoisted(() => vi.fn());
@@ -24,6 +25,7 @@ vi.mock("./api.js", () => ({
 function createCore() {
   return {
     channel: {
+      inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress },
       commands: {
         shouldComputeCommandAuthorized: vi.fn(() => false),
         resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),

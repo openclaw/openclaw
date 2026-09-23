@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as acpSessionMeta from "../../acp/runtime/session-meta-readonly.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import * as sessionStoreLookup from "../session-utils-store-lookup.js";
 import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
 import { createAgentTurnService } from "./agent-turn-service.js";
 import { createAgentTurnIo } from "./io.js";
@@ -55,13 +57,14 @@ function runPreflight(
     getRuntimeConfig: () =>
       options?.requesterOnlyEnabled
         ? {
+            tools: { swarm: false },
             agents: {
-              list: [{ id: "main", tools: { swarm: true } }, { id: "worker" }],
+              entries: { main: { tools: { swarm: true } }, worker: {} },
             },
           }
-        : options?.enabled
-          ? { tools: { swarm: true } }
-          : {},
+        : options?.enabled === undefined
+          ? {}
+          : { tools: { swarm: options.enabled } },
     dedupe: options?.cached
       ? new Map([
           [
@@ -113,7 +116,68 @@ describe("agent request Swarm preflight", () => {
   beforeEach(() => {
     subagentRuns.clear();
     vi.spyOn(sessionAccessor, "loadSessionEntry").mockReturnValue(undefined);
+    vi.spyOn(acpSessionMeta, "readAcpSessionMetaForEntry").mockReturnValue(undefined);
   });
+
+  it.each([
+    {
+      entry: { sessionId: "source", updatedAt: 1, spawnDepth: 1 },
+      sourceAcp: undefined,
+      expectedRole: "subagent",
+    },
+    {
+      entry: { sessionId: "source", updatedAt: 1, parentSessionKey: "agent:main:root" },
+      sourceAcp: undefined,
+      expectedRole: undefined,
+    },
+    {
+      entry: {
+        sessionId: "source",
+        updatedAt: 1,
+        parentSessionKey: "agent:main:root",
+        spawnDepth: 0,
+      },
+      sourceAcp: {
+        backend: "acpx",
+        agent: "worker",
+        runtimeSessionName: "worker",
+        mode: "persistent" as const,
+        state: "idle" as const,
+        lastActivityAt: 1,
+      },
+      expectedRole: "subagent",
+    },
+  ])(
+    "derives coordination source role from canonical spawn lineage ($expectedRole)",
+    ({ entry, sourceAcp, expectedRole }) => {
+      const sourceKey = "agent:main:visible-worker";
+      vi.spyOn(sessionStoreLookup, "resolveGatewaySessionStoreTargetWithStore").mockReturnValue({
+        agentId: "main",
+        canonicalKey: sourceKey,
+        storePath: "/source-store",
+        storeKeys: [sourceKey],
+        store: { [sourceKey]: entry },
+      });
+      vi.mocked(acpSessionMeta.readAcpSessionMetaForEntry).mockReturnValue(sourceAcp);
+      const result = prepareAgentRequestPreflight({
+        request: {
+          message: "Worker progress",
+          sessionKey: "agent:main:root",
+          idempotencyKey: "coordination-run",
+          inputProvenance: {
+            kind: "inter_session",
+            sourceSessionKey: sourceKey,
+            sourceTool: "sessions_send",
+            sourceRole: "subagent",
+          },
+        },
+        context: { getRuntimeConfig: () => ({}), dedupe: new Map() },
+        client: null,
+        io: createAgentTurnIo(vi.fn()),
+      } as never);
+      expect(result?.inputProvenance?.sourceRole).toBe(expectedRole);
+    },
+  );
 
   it("rejects malformed and non-object structured output schemas", () => {
     for (const schema of [
@@ -144,6 +208,7 @@ describe("agent request Swarm preflight", () => {
 
   it("rejects collector flags while Swarm is disabled", () => {
     const { respond, result } = runPreflight(undefined, true, {
+      enabled: false,
       backend: true,
       register: true,
     });
@@ -175,16 +240,19 @@ describe("agent request Swarm preflight", () => {
     }
   });
 
-  it("accepts an enabled backend request for a registered collector", () => {
-    const { respond, result } = runPreflight({ type: "object" }, true, {
-      enabled: true,
-      backend: true,
-      register: true,
-    });
+  it.each([undefined, true])(
+    "accepts a registered backend collector with Swarm enabled=%s",
+    (enabled) => {
+      const { respond, result } = runPreflight({ type: "object" }, true, {
+        enabled,
+        backend: true,
+        register: true,
+      });
 
-    expect(result).toBeDefined();
-    expect(respond).not.toHaveBeenCalled();
-  });
+      expect(result).toBeDefined();
+      expect(respond).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects ordinary turns and mismatched launch identities for an active collector", () => {
     for (const options of [
@@ -291,6 +359,7 @@ describe("agent request Swarm preflight", () => {
 
   it("allows an exact cached collector replay after Swarm is disabled", async () => {
     const replayed = runPreflight({ type: "object" }, true, {
+      enabled: false,
       backend: true,
       register: true,
       launchPending: false,

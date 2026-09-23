@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -22,6 +22,7 @@ import {
 } from "../chat-abort.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { canReceiveSessionEvent } from "../session-sharing.js";
 import {
@@ -42,6 +43,10 @@ import type { GatewayClient } from "./types.js";
 
 installQuestionTestHooks();
 
+const publicationOptions = {
+  questionRecipient: expect.any(Function),
+};
+
 function mockReferencedStoreSnapshot() {
   vi.spyOn(secretsRuntimeState, "getActiveSecretsRuntimeSnapshotState").mockReturnValue({
     sourceConfig: {
@@ -58,6 +63,7 @@ function mockReferencedStoreSnapshot() {
     config: {},
     authStores: [],
     authStoreCredentialsRevision: 0,
+    authStoreSnapshotsRevision: 0,
     warnings: [],
     webTools: {
       search: { providerSource: "none", diagnostics: [] },
@@ -246,7 +252,11 @@ describe("question gateway methods", () => {
       const viewerClient = makeQuestionClient(viewer, "question-viewer");
       const guestClient = makeQuestionClient(guest, "question-guest");
       const gatewayBroadcaster = createGatewayBroadcaster({
-        clients: new Set([ownerClient.client, viewerClient.client, guestClient.client]),
+        clients: new GatewayClientRegistry([
+          ownerClient.client,
+          viewerClient.client,
+          guestClient.client,
+        ]),
         canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
           canReceiveSessionEvent({ cfg, client, sessionKeys, agentId, event, payload }),
       });
@@ -258,7 +268,11 @@ describe("question gateway methods", () => {
       });
       const id = (request[1] as { id: string }).id;
       const answers = { answers: { destination: ["Home"] } };
-      const sessionScope = { sessionKeys: [requestParams.sessionKey], agentId: "main" };
+      const sessionScope = {
+        sessionKeys: [requestParams.sessionKey],
+        agentId: "main",
+        ...publicationOptions,
+      };
 
       expect(ownerClient.socket.send).toHaveBeenCalledTimes(1);
       expect(viewerClient.socket.send).toHaveBeenCalledTimes(1);
@@ -270,6 +284,7 @@ describe("question gateway methods", () => {
       );
 
       await call("question.resolve", { id, answers }, { cfg, client: ownerClient.client });
+      await manager.drain();
 
       expect(broadcast).toHaveBeenCalledWith(
         "question.resolved",
@@ -282,34 +297,65 @@ describe("question gateway methods", () => {
     });
   });
 
-  it("requests questions, then gets and lists them", async () => {
-    const requested = await call("question.request", {
-      ...requestParams,
-      id: "client-question-id",
-    });
-    expect(requested[0]).toBe(true);
-    const id = (requested[1] as { id: string }).id;
-    expect(id).toBe("client-question-id");
-    expect(broadcast).toHaveBeenCalledWith(
-      "question.requested",
-      expect.objectContaining({
-        id,
-        runId: "run-main",
-        questions: [expect.objectContaining({ header: "Destination" })],
-        status: "pending",
-      }),
-    );
+  it.each([undefined, "https://example.test/connect", "http://localhost:8080/connect"])(
+    "requests questions with browser URL %s, then gets and lists them",
+    async (url) => {
+      const questions = [{ ...requestParams.questions[0], ...(url ? { url } : {}) }];
+      const requested = await call("question.request", {
+        ...requestParams,
+        id: "client-question-id",
+        questions,
+      });
+      expect(requested[0]).toBe(true);
+      const id = (requested[1] as { id: string }).id;
+      expect(id).toBe("client-question-id");
+      expect(broadcast).toHaveBeenCalledWith(
+        "question.requested",
+        expect.objectContaining({
+          id,
+          runId: "run-main",
+          questions,
+          status: "pending",
+        }),
+        publicationOptions,
+      );
 
-    expect(await call("question.get", { id })).toEqual([
-      true,
-      { question: expect.objectContaining({ id, runId: "run-main", status: "pending" }) },
-      undefined,
-    ]);
-    expect(await call("question.list", {})).toEqual([
-      true,
-      { questions: [expect.objectContaining({ id, runId: "run-main" })] },
-      undefined,
-    ]);
+      expect(await call("question.get", { id })).toEqual([
+        true,
+        {
+          question: expect.objectContaining({
+            id,
+            questions,
+            runId: "run-main",
+            status: "pending",
+          }),
+        },
+        undefined,
+      ]);
+      expect(await call("question.list", {})).toEqual([
+        true,
+        { questions: [expect.objectContaining({ id, questions, runId: "run-main" })] },
+        undefined,
+      ]);
+    },
+  );
+
+  it.each([
+    ["script", "javascript:alert(1)"],
+    ["data", "data:text/html,hello"],
+    ["relative", "/connect"],
+    ["ambiguous scheme", "https:example.test/connect"],
+    ["credentials", "https://fixture-user:fixture-password@example.test/connect"],
+    ["over-limit", "https://example.test/" + "x".repeat(2048)],
+  ])("rejects a %s browser URL before publishing", async (_name, url) => {
+    expect(
+      await call("question.request", {
+        ...requestParams,
+        questions: [{ ...requestParams.questions[0], url }],
+      }),
+    ).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
+    expect(manager.list()).toEqual([]);
+    expect(broadcast).not.toHaveBeenCalled();
   });
 
   it("broadcasts answered and expired terminal states", async () => {
@@ -322,19 +368,47 @@ describe("question gateway methods", () => {
       { status: "answered", answers },
       undefined,
     ]);
-    expect(broadcast).toHaveBeenCalledWith("question.resolved", {
-      id,
-      status: "answered",
-      answers,
-    });
+    await manager.drain();
+    expect(broadcast).toHaveBeenCalledWith(
+      "question.resolved",
+      { id, status: "answered", answers },
+      publicationOptions,
+    );
 
     const expiring = await call("question.request", { ...requestParams, timeoutMs: 10 });
     const expiringId = (expiring[1] as { id: string }).id;
     await vi.advanceTimersByTimeAsync(10);
-    expect(broadcast).toHaveBeenCalledWith("question.resolved", {
-      id: expiringId,
-      status: "expired",
-    });
+    await manager.drain();
+    expect(broadcast).toHaveBeenCalledWith(
+      "question.resolved",
+      { id: expiringId, status: "expired" },
+      publicationOptions,
+    );
+  });
+
+  it("returns committed resolution receipts only to opted-in question waiters", async () => {
+    const requested = await call("question.request", requestParams);
+    const id = (requested[1] as { id: string }).id;
+    const legacy = call("question.waitAnswer", { id });
+    const tracked = call("question.waitAnswer", { id, includeResolutionId: true });
+    const answers = { answers: { destination: ["Home"] } };
+    const resolutionId = "plain-text-submission";
+
+    expect(await call("question.resolve", { id, answers, resolutionId })).toEqual([
+      true,
+      { status: "answered", answers },
+      undefined,
+    ]);
+    expect(await legacy).toEqual([true, { status: "answered", answers }, undefined]);
+    expect(await tracked).toEqual([true, { status: "answered", answers, resolutionId }, undefined]);
+    await manager.drain();
+    expect(broadcast).toHaveBeenCalledWith(
+      "question.resolved",
+      { id, status: "answered", answers },
+      publicationOptions,
+    );
+    expect((await call("question.get", { id }))[1]).toEqual({ question: manager.get(id) });
+    expect(manager.get(id)).not.toHaveProperty("resolutionId");
   });
 
   it("rejects duplicate ids and one-option questions at the request boundary", async () => {
@@ -545,7 +619,12 @@ describe("question gateway methods", () => {
           expect(reloadSecrets).not.toHaveBeenCalled();
           expect(manager.get(id)?.status).toBe("cancelled");
           await expect(waiting).resolves.toEqual({ status: "cancelled" });
-          expect(broadcast).toHaveBeenCalledWith("question.resolved", { id, status: "cancelled" });
+          await manager.drain();
+          expect(broadcast).toHaveBeenCalledWith(
+            "question.resolved",
+            { id, status: "cancelled" },
+            publicationOptions,
+          );
           expect(
             (
               await call("question.resolve", {
@@ -628,7 +707,7 @@ describe("question gateway methods", () => {
       const id = await requestSecretQuestion();
       const value = "test-secret-value-gateway-diversion-123";
       const client = {
-        connect: { client: { displayName: "Trusted Operator" } },
+        connect: { client: { displayName: "Trusted Operator" }, scopes: ["operator.questions"] },
       } as GatewayClient;
 
       const resolved = await call(
@@ -653,11 +732,12 @@ describe("question gateway methods", () => {
         { status: "answered", answers: safeAnswers },
         undefined,
       ]);
-      expect(broadcast).toHaveBeenCalledWith("question.resolved", {
-        id,
-        status: "answered",
-        answers: safeAnswers,
-      });
+      await manager.drain();
+      expect(broadcast).toHaveBeenCalledWith(
+        "question.resolved",
+        { id, status: "answered", answers: safeAnswers },
+        publicationOptions,
+      );
       expect(JSON.stringify([resolved, manager.get(id), broadcast.mock.calls])).not.toContain(
         value,
       );
@@ -781,7 +861,11 @@ describe("question gateway methods", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         mockReferencedStoreSnapshot();
         const reload = createDeferred<{ warningCount: number }>();
-        reloadSecrets.mockReturnValue(reload.promise);
+        const reloadStarted = createDeferred();
+        reloadSecrets.mockImplementation(() => {
+          reloadStarted.resolve();
+          return reload.promise;
+        });
         const id = await requestSecretQuestion();
         const firstValue = "test-secret-committed-first";
         const pending = call("question.resolve", {
@@ -789,19 +873,25 @@ describe("question gateway methods", () => {
           answers: { answers: { secret_value: [firstValue] } },
         });
         const competitors: Array<ReturnType<typeof call>> = [];
-        if (racer === "second answer") {
-          competitors.push(
-            call("question.resolve", {
-              id,
-              answers: { answers: { secret_value: ["test-secret-late-overwrite"] } },
-            }),
-          );
-        } else if (racer === "cancel") {
-          competitors.push(call("question.resolve", { id, cancel: true }));
-        } else {
-          await vi.advanceTimersByTimeAsync(secretRequestParams.timeoutMs);
-        }
         try {
+          await Promise.race([
+            reloadStarted.promise,
+            pending.then(() => {
+              throw new Error("Question resolve settled before entering its deferred refresh");
+            }),
+          ]);
+          if (racer === "second answer") {
+            competitors.push(
+              call("question.resolve", {
+                id,
+                answers: { answers: { secret_value: ["test-secret-late-overwrite"] } },
+              }),
+            );
+          } else if (racer === "cancel") {
+            competitors.push(call("question.resolve", { id, cancel: true }));
+          } else {
+            await vi.advanceTimersByTimeAsync(secretRequestParams.timeoutMs);
+          }
           expect(
             readSecretStoreValue({ scope: { kind: "team" }, name: "SERVICE_API_KEY" }),
           ).toEqual({ ok: true, value: firstValue });
@@ -829,9 +919,11 @@ describe("question gateway methods", () => {
       reloadSecrets.mockRejectedValue(new Error("synthetic refresh failure"));
       const id = await requestSecretQuestion();
       const value = "test-secret-refresh-failed";
+      const resolutionId = "committed-before-refresh";
       const result = await call("question.resolve", {
         id,
         answers: { answers: { secret_value: [value] } },
+        resolutionId,
       });
       expect(result).toMatchObject([
         false,
@@ -839,10 +931,15 @@ describe("question gateway methods", () => {
         { code: "UNAVAILABLE", message: expect.stringContaining("was saved") },
       ]);
       expect(manager.get(id)?.status).toBe("answered");
-      expect(await manager.waitAnswer(id)).toMatchObject({
+      expect(await manager.waitAnswer(id)).toEqual({
         status: "answered",
         answers: { answers: { secret_value: ["stored"] } },
       });
+      expect(await call("question.waitAnswer", { id, includeResolutionId: true })).toEqual([
+        true,
+        { status: "answered", answers: { answers: { secret_value: ["stored"] } }, resolutionId },
+        undefined,
+      ]);
       expect(
         (
           await call("question.resolve", {

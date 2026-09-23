@@ -14,6 +14,7 @@ import { waitForGatewayLockReplacement } from "./restart-lock-replacement.js";
 
 export async function waitForGatewayHealthyListener(params: {
   port: number;
+  env?: NodeJS.ProcessEnv;
   attempts?: number;
   delayMs?: number;
   previousLockIdentity?: GatewayLockIdentity;
@@ -23,7 +24,7 @@ export async function waitForGatewayHealthyListener(params: {
   const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
   const previousLockIdentity = params.previousLockIdentity;
 
-  const probeContext = await resolveGatewayRestartProbeContext(undefined).catch(() => ({
+  const probeContext = await resolveGatewayRestartProbeContext(params.env).catch(() => ({
     auth: undefined,
     config: {},
   }));
@@ -44,6 +45,7 @@ export async function waitForGatewayHealthyListener(params: {
     : await inspectGatewayPortHealth({
         port: params.port,
         auth: probeContext.auth,
+        config: probeContext.config,
         configuredProbe,
       });
 
@@ -52,6 +54,7 @@ export async function waitForGatewayHealthyListener(params: {
   if (previousLockIdentity) {
     const replacement = await waitForGatewayLockReplacement({
       previousLockIdentity,
+      env: params.env,
       attempts,
       delayMs,
       waitIndefinitelyForPreviousOwner: params.waitIndefinitelyForPreviousOwner === true,
@@ -64,6 +67,7 @@ export async function waitForGatewayHealthyListener(params: {
     snapshot = await inspectGatewayPortHealth({
       port: params.port,
       auth: probeContext.auth,
+      config: probeContext.config,
       configuredProbe,
       expectedListenerPid,
     });
@@ -78,6 +82,7 @@ export async function waitForGatewayHealthyListener(params: {
     snapshot = await inspectGatewayPortHealth({
       port: params.port,
       auth: probeContext.auth,
+      config: probeContext.config,
       configuredProbe,
       expectedListenerPid,
     });

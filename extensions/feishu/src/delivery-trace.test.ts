@@ -38,21 +38,19 @@ type FeishuTraceState = {
   wireFaults: Array<{ fault: "rate-limit"; retryAfterMs: number }>;
 };
 
-const traceState = vi.hoisted(
-  (): FeishuTraceState => ({
-    recordWireCall: () => {},
-    account: null,
-    larkClient: null,
-    cardKitFetch: null,
-    messageCount: 0,
-    reactionCount: 0,
-    cardCount: 0,
-    setupCount: 0,
-    loadedMedia: null,
-    omitNextMessageReceipt: false,
-    wireFaults: [],
-  }),
-);
+const traceState = vi.hoisted((): FeishuTraceState => ({
+  recordWireCall: () => {},
+  account: null,
+  larkClient: null,
+  cardKitFetch: null,
+  messageCount: 0,
+  reactionCount: 0,
+  cardCount: 0,
+  setupCount: 0,
+  loadedMedia: null,
+  omitNextMessageReceipt: false,
+  wireFaults: [],
+}));
 
 vi.mock("./accounts.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./accounts.js")>();
@@ -397,7 +395,14 @@ function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenari
         await created.delivery.deliver({ text: step.text }, { kind: "block" });
         break;
       case "tool-progress":
-        created.replyOptions.onToolStart?.({ name: step.name, phase: step.phase });
+        created.replyOptions.onItemEvent?.({
+          itemId: `tool:${step.name}`,
+          kind: "tool",
+          name: step.name,
+          title: step.name,
+          phase: step.phase === "start" ? "start" : "end",
+          status: step.phase === "start" ? "running" : "completed",
+        });
         break;
       case "final":
         await created.delivery.deliver(

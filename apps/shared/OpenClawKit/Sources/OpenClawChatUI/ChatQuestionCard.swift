@@ -402,10 +402,10 @@ struct OpenClawQuestionCard: View {
                     .textFieldStyle(.roundedBorder)
                     .autocorrectionDisabled()
                     #if os(iOS)
-                        .textInputAutocapitalization(.never)
+                    .textInputAutocapitalization(.never)
                     #endif
-                        .disabled(self.model.status(at: now) != .pending)
-                        .accessibilityLabel("Secret value")
+                    .disabled(self.model.status(at: now) != .pending)
+                    .accessibilityLabel("Secret value")
                 } else {
                     TextField(
                         "Other answer",
@@ -422,19 +422,19 @@ struct OpenClawQuestionCard: View {
         }
         #if os(macOS)
         .focusable()
-        .focused(self.$focusedQuestionID, equals: question.questionid)
-        .onKeyPress(characters: .decimalDigits) { keyPress in
-            guard self.focusedQuestionID == question.questionid else { return .ignored }
-            return self.handleNumberKey(keyPress, question: question, now: now)
-        }
-        .onKeyPress(.return) {
-            guard self.focusedQuestionID == question.questionid,
-                  self.model.status(at: now) == .pending,
-                  self.model.canSubmit
-            else { return .ignored }
-            Task { await self.onSubmit(self.model) }
-            return .handled
-        }
+            .focused(self.$focusedQuestionID, equals: question.questionid)
+            .onKeyPress(characters: .decimalDigits) { keyPress in
+                guard self.focusedQuestionID == question.questionid else { return .ignored }
+                return self.handleNumberKey(keyPress, question: question, now: now)
+            }
+            .onKeyPress(.return) {
+                guard self.focusedQuestionID == question.questionid,
+                      self.model.status(at: now) == .pending,
+                      self.model.canSubmit
+                else { return .ignored }
+                Task { await self.onSubmit(self.model) }
+                return .handled
+            }
         #endif
     }
 
@@ -477,10 +477,10 @@ struct OpenClawQuestionCard: View {
                 .textFieldStyle(.roundedBorder)
                 .autocorrectionDisabled()
                 #if os(iOS)
-                    .textInputAutocapitalization(.never)
+                .textInputAutocapitalization(.never)
                 #endif
-                    .disabled(self.model.status(at: now) != .pending)
-                    .accessibilityLabel("Allowed HTTPS hosts")
+                .disabled(self.model.status(at: now) != .pending)
+                .accessibilityLabel("Allowed HTTPS hosts")
                 Text("Exact HTTPS hosts, separated by commas or spaces. Empty allows config SecretRefs only.")
                     .font(OpenClawChatTypography.caption)
                     .foregroundStyle(.secondary)
@@ -613,6 +613,26 @@ private struct QuestionRefreshApplyResult {
 }
 
 extension OpenClawChatViewModel {
+    /// Retained attachment controls may outlive a Gateway account, but its questions cannot.
+    public func retireQuestionAuthority() {
+        guard !self.isQuestionAuthorityRetired else { return }
+        self.isQuestionAuthorityRetired = true
+        self.questionRefreshGeneration &+= 1
+        self.questionStateRevision &+= 1
+        self.questionRefreshRetryTask?.cancel()
+        self.questionRefreshRetryTask = nil
+        for task in self.questionExpiryTasks.values {
+            task.cancel()
+        }
+        self.questionExpiryTasks.removeAll()
+        self.questionExpiryDeadlines.removeAll()
+        for card in self.questionCards {
+            card.markRecoveryUnavailable()
+        }
+        self.questionCards.removeAll()
+        self.markTimelineChanged()
+    }
+
     public var visibleQuestionCards: [OpenClawQuestionCardModel] {
         self.questionCards.filter { card in
             guard let key = card.record.sessionkey else { return true }
@@ -624,6 +644,7 @@ extension OpenClawChatViewModel {
     }
 
     func refreshQuestions() async {
+        guard !self.isQuestionAuthorityRetired else { return }
         self.questionRefreshGeneration &+= 1
         let refreshGeneration = self.questionRefreshGeneration
         self.questionRefreshRetryTask?.cancel()
@@ -759,6 +780,7 @@ extension OpenClawChatViewModel {
     }
 
     private func questionRefreshSnapshotIsCurrent(generation: UInt64, stateRevision: UInt64) -> Bool {
+        guard !self.isQuestionAuthorityRetired else { return false }
         guard generation == self.questionRefreshGeneration else { return false }
         guard stateRevision == self.questionStateRevision else {
             self.restartQuestionRefreshAfterStateChange(generation: generation)
@@ -783,7 +805,7 @@ extension OpenClawChatViewModel {
     }
 
     private func scheduleQuestionRefreshRetry(generation: UInt64, retryIndex: Int) {
-        guard generation == self.questionRefreshGeneration else { return }
+        guard !self.isQuestionAuthorityRetired, generation == self.questionRefreshGeneration else { return }
         guard self.questionRefreshRetryDelaysMs.indices.contains(retryIndex) else {
             self.questionRefreshRetryTask = nil
             return
@@ -803,6 +825,7 @@ extension OpenClawChatViewModel {
     }
 
     func upsertQuestion(_ record: QuestionRecord) {
+        guard !self.isQuestionAuthorityRetired else { return }
         if let model = self.questionCards.first(where: { $0.id == record.id }) {
             guard model.apply(record: record) else { return }
         } else {
@@ -814,6 +837,7 @@ extension OpenClawChatViewModel {
     }
 
     func resolveQuestionEvent(_ event: OpenClawQuestionResolvedEvent) {
+        guard !self.isQuestionAuthorityRetired else { return }
         self.questionCards.first(where: { $0.id == event.id })?.apply(resolved: event)
         self.questionStateRevision &+= 1
         self.syncQuestionExpirations()
@@ -821,6 +845,7 @@ extension OpenClawChatViewModel {
     }
 
     func reconcileQuestionsAfterEvent() {
+        guard !self.isQuestionAuthorityRetired else { return }
         // Invalidate a list snapshot captured before this event, then fetch the
         // authoritative set so other pending cards from that snapshot are not lost.
         self.questionRefreshGeneration &+= 1
@@ -830,19 +855,24 @@ extension OpenClawChatViewModel {
     }
 
     func submitQuestion(_ model: OpenClawQuestionCardModel) async {
-        guard let answers = model.beginSubmission() else { return }
+        guard !self.isQuestionAuthorityRetired,
+              self.questionCards.contains(where: { $0 === model }),
+              let answers = model.beginSubmission()
+        else { return }
         self.questionStateRevision &+= 1
         do {
             let resolvedAnswers = try await self.transport.resolveQuestion(
                 id: model.id,
                 answers: answers,
                 secretStoreAllowedHosts: model.secretStoreAllowedHosts)
+            guard !self.isQuestionAuthorityRetired else { return }
             // Only Gateway-normalized answers may outlive the request, including stored-secret markers.
             model.markAnsweredLocally(answers: resolvedAnswers)
             self.questionStateRevision &+= 1
             self.syncQuestionExpirations()
             self.markTimelineChanged()
         } catch {
+            guard !self.isQuestionAuthorityRetired else { return }
             let responseError = error as? GatewayResponseError
             model.failSubmission(
                 error.localizedDescription,
@@ -853,15 +883,20 @@ extension OpenClawChatViewModel {
     }
 
     func skipQuestion(_ model: OpenClawQuestionCardModel) async {
-        guard model.beginSkip() else { return }
+        guard !self.isQuestionAuthorityRetired,
+              self.questionCards.contains(where: { $0 === model }),
+              model.beginSkip()
+        else { return }
         self.questionStateRevision &+= 1
         do {
             try await self.transport.cancelQuestion(id: model.id)
+            guard !self.isQuestionAuthorityRetired else { return }
             model.markSkippedLocally()
             self.questionStateRevision &+= 1
             self.syncQuestionExpirations()
             self.markTimelineChanged()
         } catch {
+            guard !self.isQuestionAuthorityRetired else { return }
             model.failSubmission(error.localizedDescription)
             self.questionStateRevision &+= 1
         }
@@ -871,7 +906,9 @@ extension OpenClawChatViewModel {
         _ model: OpenClawQuestionCardModel,
         at date: Date = Date())
     {
-        guard self.questionCards.first(where: { $0.id == model.id }) === model else { return }
+        guard !self.isQuestionAuthorityRetired,
+              self.questionCards.first(where: { $0.id == model.id }) === model
+        else { return }
         if model.observeLocalExpiry(at: date) {
             self.questionStateRevision &+= 1
             self.syncQuestionExpirations(at: date)

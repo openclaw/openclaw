@@ -1,6 +1,9 @@
 // Gateway run command option registration and lazy handoff to runtime startup.
 import { Option, type Command } from "commander";
-import { WINDOWS_TASK_SUPERVISOR_FLAG } from "../../daemon/windows-task-supervisor-contract.js";
+import {
+  WINDOWS_TASK_SUPERVISOR_CHILD_FLAG,
+  WINDOWS_TASK_SUPERVISOR_FLAG,
+} from "../../daemon/windows-task-supervisor-contract.js";
 import type { GatewayRunOpts } from "./run-options.js";
 import { resolveGatewayRunOptions } from "./run-options.js";
 import { getGatewayRunRuntimeHooks } from "./runtime-hooks.js";
@@ -53,6 +56,8 @@ export function addGatewayRunCommand(cmd: Command, hooks: GatewayRunCommandHooks
       false,
     )
     .addOption(new Option(WINDOWS_TASK_SUPERVISOR_FLAG).hideHelp())
+    .addOption(new Option(`${WINDOWS_TASK_SUPERVISOR_CHILD_FLAG} <restart-code>`).hideHelp())
+    .addOption(new Option("--update-canary").hideHelp())
     .option("--force", "Kill any existing listener on the target port before starting", false)
     .option("--verbose", "Verbose logging to stdout/stderr", false)
     .option(
@@ -67,15 +72,19 @@ export function addGatewayRunCommand(cmd: Command, hooks: GatewayRunCommandHooks
     .option("--raw-stream-path <path>", "Raw stream jsonl path")
     .action(async (opts, command) => {
       const resolved = resolveGatewayRunOptions(opts, command);
-      try {
-        await hooks.beforeRun?.(resolved);
-        const { runGatewayCommand } = await import("./run.js");
-        await runGatewayCommand(resolved, getGatewayRunRuntimeHooks());
-      } catch (error) {
-        const { handleGatewayStartupMaintenance } = await import("./startup-maintenance.js");
-        if (!(await handleGatewayStartupMaintenance(error))) {
-          throw error;
+      const { withAgentDatabaseStartupAdmission } =
+        await import("../../state/agent-database-startup.js");
+      return withAgentDatabaseStartupAdmission(async () => {
+        try {
+          await hooks.beforeRun?.(resolved);
+          const { runGatewayCommand } = await import("./run.js");
+          await runGatewayCommand(resolved, getGatewayRunRuntimeHooks());
+        } catch (error) {
+          const { handleGatewayStartupMaintenance } = await import("./startup-maintenance.js");
+          if (!(await handleGatewayStartupMaintenance(error))) {
+            throw error;
+          }
         }
-      }
+      });
     });
 }

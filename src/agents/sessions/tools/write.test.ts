@@ -173,9 +173,9 @@ describe("write tool", () => {
         tool.execute("call-1", { path: filePath, content }, undefined),
       ).resolves.toMatchObject({ details: { changed: true, created: true } });
       await expect(fs.readFile(filePath)).resolves.toEqual(Buffer.from(content, "utf8"));
-      await expect(
-        tool.execute("call-2", { path: filePath, content }, undefined),
-      ).resolves.toMatchObject({ details: { changed: false }, terminate: true });
+      const noOpResult = await tool.execute("call-2", { path: filePath, content }, undefined);
+      expect(noOpResult).toMatchObject({ details: { changed: false } });
+      expect((noOpResult as { terminate?: boolean }).terminate).toBeUndefined();
     },
   );
 
@@ -216,7 +216,7 @@ describe("write tool", () => {
   });
 
   it.each(["hello\n", "café 🦀\r\n日本語 e\u0301\r\n", "\uFFFD\r\n"])(
-    "returns terminal no-op for identical UTF-8 content: %j",
+    "returns a non-terminal no-op for identical UTF-8 content: %j",
     async (content) => {
       const filePath = await createTempPath("identical.txt");
       await fs.writeFile(filePath, content, "utf-8");
@@ -226,7 +226,7 @@ describe("write tool", () => {
 
       const tc0 = expectDefined(result.content[0], "result.content[0] test invariant");
       expect("text" in tc0 ? tc0.text : "").toContain("No changes made");
-      expect((result as { terminate?: boolean }).terminate).toBe(true);
+      expect((result as { terminate?: boolean }).terminate).toBeUndefined();
       expect(result.details).toEqual({ changed: false });
       await expect(fs.readFile(filePath)).resolves.toEqual(Buffer.from(content, "utf8"));
     },
@@ -282,6 +282,70 @@ describe("write tool", () => {
     });
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(content);
   });
+
+  it.each([
+    { name: "insert at start", oldContent: "a\nb\n", content: "first\na\nb\n" },
+    { name: "delete at end", oldContent: "a\nb\nlast\n", content: "a\nb\n" },
+    { name: "empty overwrite", oldContent: "last\n", content: "" },
+    { name: "remove final newline", oldContent: "last\n", content: "last" },
+    { name: "add final newline", oldContent: "last", content: "last\n" },
+    {
+      name: "CRLF and Unicode without final newline",
+      oldContent: "café 🦀\r\n日本語 e\u0301\r\nlast",
+      content: "café 😀\r\n日本語 é\r\nlast",
+    },
+    ...[7, 8, 9].map((gap) => {
+      const middle = Array.from({ length: gap }, (_, i) => `context-${i}\n`).join("");
+      return {
+        name: `${gap} context lines between edits`,
+        oldContent: `before\n${middle}after\n`,
+        content: `BEFORE\n${middle}AFTER\n`,
+      };
+    }),
+  ])("preserves both receipt formats for $name", async ({ oldContent, content }) => {
+    const filePath = await createTempPath("receipt.txt");
+    await fs.writeFile(filePath, oldContent, "utf8");
+    const tool = createWriteTool(tmpDir);
+
+    const result = await tool.execute("call-1", { path: "receipt.txt", content }, undefined);
+    const diffResult = generateDiffString(oldContent, content);
+
+    expect(result.details).toEqual({
+      changed: true,
+      created: false,
+      diff: diffResult.diff,
+      patch: generateUnifiedPatch("receipt.txt", oldContent, content),
+      firstChangedLine: diffResult.firstChangedLine,
+    });
+    await expect(fs.readFile(filePath)).resolves.toEqual(Buffer.from(content, "utf8"));
+  });
+
+  it.each([1999, 2000, 2001])(
+    "preserves the overwrite receipt budget at edit distance %i",
+    async (editDistance) => {
+      const filePath = await createTempPath("edit-limit.txt");
+      const oldContent = "anchor\n";
+      const content = oldContent + "added\n".repeat(editDistance);
+      await fs.writeFile(filePath, oldContent, "utf8");
+      const tool = createWriteTool(tmpDir);
+
+      const result = await tool.execute("call-1", { path: "edit-limit.txt", content }, undefined);
+
+      if (editDistance <= 2000) {
+        const diffResult = generateDiffString(oldContent, content);
+        expect(result.details).toEqual({
+          changed: true,
+          created: false,
+          diff: diffResult.diff,
+          patch: generateUnifiedPatch("edit-limit.txt", oldContent, content),
+          firstChangedLine: diffResult.firstChangedLine,
+        });
+      } else {
+        expect(result.details).toEqual({ changed: true, created: false });
+      }
+      await expect(fs.readFile(filePath)).resolves.toEqual(Buffer.from(content, "utf8"));
+    },
+  );
 
   it("omits the diff when the old content is not valid UTF-8 text", async () => {
     const filePath = await createTempPath("binary.bin");

@@ -62,8 +62,9 @@ jobs:
               if output="$(gh api "$@" 2>&1)"; then
                 printf '%s\n' "$output"
                 return 0
+              else
+                status=$?
               fi
-              status=$?
               lower_output="${output,,}"
               if [[ "$lower_output" != *"rate limit"* && "$output" != *"HTTP 429"* ]]; then
                 printf '%s\n' "$output" >&2
@@ -283,6 +284,13 @@ jobs:
           else
             echo "::warning::Skipping GitHub activity dispatch because the configured credential could not dispatch to openclaw/clawsweeper."
           fi
+
+      - name: Setup supported Node runtime
+        if: ${{ github.event_name == 'issues' || github.event_name == 'pull_request_target' }}
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
 
       - name: Dispatch exact ClawSweeper review
         if: ${{ github.event_name == 'issues' || github.event_name == 'pull_request_target' }}

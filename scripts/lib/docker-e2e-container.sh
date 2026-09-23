@@ -134,7 +134,7 @@ child.on("error", (error) => {
   process.exit(127);
 });
 ' "$timeout_value" "$@"
-      return
+      return "$?"
     fi
     echo "timeout command not found; cannot bound Docker command after ${timeout_value}" >&2
     return 127
@@ -152,9 +152,15 @@ docker_e2e_docker_cmd() {
     shift
     docker_e2e_docker_run_resource_args "$@" || return $?
     docker_e2e_docker_run_with_resource_diagnostics "$timeout_value" "$@"
-    return
+    # A bare return in an EXIT trap can restore the trap's original status.
+    return "$?"
   fi
   docker_e2e_timeout_cmd "$timeout_value" docker "$@"
+}
+
+docker_e2e_cleanup_container_run() {
+  docker_e2e_docker_cmd rm -f "$1" >/dev/null 2>&1 || true
+  rm -f "$2"
 }
 
 docker_e2e_docker_run_cmd() {
@@ -163,7 +169,7 @@ docker_e2e_docker_run_cmd() {
     shift
     docker_e2e_docker_run_resource_args "$@" || return $?
     docker_e2e_docker_run_with_resource_diagnostics "$timeout_value" "$@"
-    return
+    return "$?"
   fi
   docker_e2e_timeout_cmd "$timeout_value" docker "$@"
 }

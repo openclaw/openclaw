@@ -16,6 +16,7 @@ export type QueuedChatTurnEntry = {
   sessionKey: string;
   /** False once collect-mode transfers cancellation to the aggregate owner. */
   abortable?: boolean;
+  abortListener?: () => void;
   agentId?: string;
   ownerConnId?: string;
   ownerDeviceId?: string;
@@ -32,6 +33,8 @@ type RegisterQueuedChatTurnParams = {
   agentId?: string;
   ownerConnId?: string;
   ownerDeviceId?: string;
+  /** Record cancellation while the exact queued entry is still current. */
+  onAborted?: () => void;
 };
 
 function resolveExactRunId(runId: string): string | undefined {
@@ -48,6 +51,14 @@ function createQueuedChatAbortSignalReason(stopReason: string | undefined): Erro
   return stopReason ? new Error(`queued turn aborted: ${stopReason}`) : undefined;
 }
 
+function detachQueuedChatTurnAbortListener(entry: QueuedChatTurnEntry): void {
+  // Queue settlement or collect transfer can precede the caller releasing its signal.
+  if (entry.abortListener) {
+    entry.controller.signal.removeEventListener("abort", entry.abortListener);
+    entry.abortListener = undefined;
+  }
+}
+
 // Queue callbacks can outlive their map entry, and protocol run IDs may be reused.
 // Mutate only the exact entry captured by the callback or abort operation.
 function deleteQueuedChatTurnEntry(
@@ -58,6 +69,7 @@ function deleteQueuedChatTurnEntry(
   if (chatQueuedTurns.get(runId) !== entry) {
     return false;
   }
+  detachQueuedChatTurnAbortListener(entry);
   return chatQueuedTurns.delete(runId);
 }
 
@@ -86,17 +98,17 @@ export function registerQueuedChatTurn(params: RegisterQueuedChatTurnParams): bo
     ownerDeviceId: normalizeOptionalString(params.ownerDeviceId),
   };
   params.chatQueuedTurns.set(runId, entry);
-  params.controller.signal.addEventListener(
-    "abort",
-    () => {
-      // Queued entries can outlive active-run cleanup. Retired collect entries
-      // stay as idempotency guards until aggregate completion removes them.
-      if (entry.abortable !== false) {
+  entry.abortListener = () => {
+    // Retired collect entries remain idempotency guards until aggregate completion.
+    if (entry.abortable !== false && params.chatQueuedTurns.get(runId) === entry) {
+      try {
+        params.onAborted?.();
+      } finally {
         deleteQueuedChatTurnEntry(params.chatQueuedTurns, runId, entry);
       }
-    },
-    { once: true },
-  );
+    }
+  };
+  params.controller.signal.addEventListener("abort", entry.abortListener, { once: true });
   return true;
 }
 
@@ -124,23 +136,14 @@ export function retireQueuedChatTurnCancellation(
   runId: string,
   controller: AbortController,
 ): boolean {
-  const entry = getQueuedChatTurn(chatQueuedTurns, runId);
+  const key = resolveExactRunId(runId);
+  const entry = key ? chatQueuedTurns.get(key) : undefined;
   if (!entry || entry.controller !== controller) {
     return false;
   }
   entry.abortable = false;
+  detachQueuedChatTurnAbortListener(entry);
   return true;
-}
-
-function getQueuedChatTurn(
-  chatQueuedTurns: QueuedChatTurnMap,
-  runId: string,
-): QueuedChatTurnEntry | undefined {
-  const key = resolveExactRunId(runId);
-  if (!key) {
-    return undefined;
-  }
-  return chatQueuedTurns.get(key);
 }
 
 /**
@@ -189,6 +192,8 @@ export function listQueuedChatTurnsForSession(params: {
   chatQueuedTurns: QueuedChatTurnMap;
   sessionKeys: Iterable<string>;
   sessionIds?: Iterable<string | undefined>;
+  /** A narrow caller needs both the key and the originally admitted incarnation. */
+  requiredSessionId?: string;
   agentId?: string;
   defaultAgentId?: string;
 }): QueuedChatTurnMatch[] {
@@ -210,6 +215,12 @@ export function listQueuedChatTurnsForSession(params: {
       continue;
     }
     if (!sessionKeys.has(entry.sessionKey) && !sessionIds.has(entry.sessionId)) {
+      continue;
+    }
+    if (
+      params.requiredSessionId !== undefined &&
+      (!sessionKeys.has(entry.sessionKey) || entry.sessionId !== params.requiredSessionId)
+    ) {
       continue;
     }
     if (

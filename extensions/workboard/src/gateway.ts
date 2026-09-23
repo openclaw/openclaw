@@ -7,7 +7,9 @@ import {
   createWorkboardDispatchHandler,
   listWorkboardCards,
   readId,
+  readExpectedUpdatedAt,
   registerWorkboardResultMethods,
+  respondError,
 } from "./gateway-helpers.js";
 import {
   registerWorkboardWorkspaceBoardMethod,
@@ -15,6 +17,8 @@ import {
   registerWorkboardWorkspaceCardMethods,
   registerWorkboardWorkspaceWorkflowMethods,
 } from "./gateway-workspace-methods.js";
+import { resolveWorkboardSqliteWorkerModuleUrl } from "./sqlite-store-paths.js";
+import { registerWorkboardStoreLifecycle } from "./store-lifecycle.js";
 import { WorkboardStore } from "./store.js";
 
 const READ_SCOPE = "operator.read" as const;
@@ -38,8 +42,28 @@ export function registerWorkboardGatewayMethods(params: {
   api: OpenClawPluginApi;
   store?: WorkboardStore;
 }) {
-  const { api } = params;
-  const store = params.store ?? WorkboardStore.openSqlite();
+  const { api: hostApi } = params;
+  const store =
+    params.store ??
+    WorkboardStore.openSqlite(resolveWorkboardSqliteWorkerModuleUrl(hostApi.runtimeSource));
+  if (!params.store) {
+    registerWorkboardStoreLifecycle(hostApi, store);
+  }
+  const api: OpenClawPluginApi = {
+    ...hostApi,
+    registerGatewayMethod: (method, handler, options) =>
+      hostApi.registerGatewayMethod(
+        method,
+        async (request) => {
+          try {
+            return await store.runOperation(() => handler(request));
+          } catch (error) {
+            respondError(request.respond, error);
+          }
+        },
+        options,
+      ),
+  };
   const dispatchCards = createWorkboardDispatchHandler({
     api,
     store,
@@ -69,13 +93,24 @@ export function registerWorkboardGatewayMethods(params: {
       WRITE_SCOPE,
       ({ params: requestParams }) =>
         redactCardResult(
-          store.move(readId(requestParams), requestParams.status, requestParams.position),
+          store.move(
+            readId(requestParams),
+            requestParams.status,
+            requestParams.position,
+            undefined,
+            {
+              expectedUpdatedAt: readExpectedUpdatedAt(requestParams),
+            },
+          ),
         ),
     ],
     [
       "workboard.cards.delete",
       WRITE_SCOPE,
-      ({ params: requestParams }) => store.delete(readId(requestParams)),
+      ({ params: requestParams }) =>
+        store.delete(readId(requestParams), {
+          expectedUpdatedAt: readExpectedUpdatedAt(requestParams),
+        }),
     ],
     [
       "workboard.cards.comment",
@@ -316,7 +351,11 @@ export function registerWorkboardGatewayMethods(params: {
       "workboard.cards.archive",
       WRITE_SCOPE,
       ({ params: requestParams }) =>
-        redactCardResult(store.archive(readId(requestParams), requestParams.archived)),
+        redactCardResult(
+          store.archive(readId(requestParams), requestParams.archived, {
+            expectedUpdatedAt: readExpectedUpdatedAt(requestParams),
+          }),
+        ),
     ],
     [
       "workboard.cards.export",

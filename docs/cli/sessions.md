@@ -27,27 +27,38 @@ openclaw sessions --store ./tmp/sessions.json
 openclaw sessions --json
 ```
 
+`openclaw sessions list` is an explicit spelling of the default listing action and
+accepts the same flags.
+
 Human-readable lists and cleanup previews use terminal-width tables. Long model
 names and flags wrap without being truncated, and Unicode keys stay aligned.
 Long keys show their beginning and end; use `openclaw sessions --json` for complete
 session keys.
 
+Token counts below 1,000 appear as whole numbers; larger counts use compact `k`
+or `m` labels. JSON output retains exact numeric counts.
+
 Flags:
 
-| Flag                 | Description                                                                   |
-| -------------------- | ----------------------------------------------------------------------------- |
-| `--agent <id>`       | One configured agent store (required for multiple explicit agents).           |
-| `--all-agents`       | Aggregate all configured agent stores.                                        |
-| `--store <path>`     | Legacy store selector path (cannot combine with `--agent` or `--all-agents`). |
-| `--active <minutes>` | Only show sessions updated within the past N minutes.                         |
-| `--limit <n\|all>`   | Max rows to output (default `100`; `all` restores full output).               |
-| `--json`             | Machine-readable output.                                                      |
-| `--verbose`          | Verbose logging.                                                              |
+| Flag                 | Description                                                         |
+| -------------------- | ------------------------------------------------------------------- |
+| `--agent <id>`       | One configured agent store (required for multiple explicit agents). |
+| `--all-agents`       | Aggregate all configured agent stores.                              |
+| `--store <path>`     | Legacy store selector path (cannot combine with `--all-agents`).    |
+| `--active <minutes>` | Only show sessions updated within the past N minutes.               |
+| `--limit <n\|all>`   | Max rows to output (default `100`; `all` restores full output).     |
+| `--json`             | Machine-readable output.                                            |
+| `--verbose`          | Verbose logging.                                                    |
 
 `--store` accepts the documented legacy selector form, including `sessions.json`
 and suffixless custom selectors. OpenClaw resolves that selector to its physical
 SQLite target, verifies the target exists and is usable, and reports the physical
-path it actually read.
+path it actually read. Combine it with `--agent <id>` when you must select the
+configured agent that owns the store.
+
+`--agent` and `--store` require non-blank values. Selection errors exit non-zero
+and use the standard [CLI JSON failure envelope](/cli#json-failures) when `--json`
+is set.
 
 `openclaw sessions` and the Gateway `sessions.list` RPC are bounded by default
 so large long-lived stores cannot monopolize the CLI process or Gateway event
@@ -87,7 +98,7 @@ skipped.
   "hasMore": false,
   "activeMinutes": null,
   "sessions": [
-    { "agentId": "main", "key": "agent:main:main", "model": "openai/gpt-5.6-sol" },
+    { "agentId": "main", "key": "agent:main:main", "model": "openai/gpt-6-astra" },
     { "agentId": "work", "key": "agent:work:main", "model": "anthropic/claude-sonnet-4-6" }
   ]
 }
@@ -115,6 +126,13 @@ wait for the placement to settle, then retry. Agent main sessions remain
 protected. Already archived sessions are successful no-ops. Use `--dry-run` to
 validate every key and preview the result without changing session state.
 
+Archive reasons are assigned automatically and displayed as human-readable text
+in the Control UI. Explicit archive commands record `manual`; maintenance-owned
+archives record their owning trigger. Missing reasons remain protected as legacy
+state. Age-retention archives also remain protected under disk pressure. Only
+sessions explicitly archived by `maxEntries` are eligible for automatic deletion
+after cheaper cleanup tiers are exhausted.
+
 ## Delete sessions
 
 Delete one or more sessions through the running Gateway:
@@ -138,8 +156,17 @@ with transcript cleanup enabled. The Gateway removes the live session row,
 transcript generations, session-owned runtime state, bindings, boards, and
 other lifecycle artifacts. For ordinary sessions it retains the transcript as
 a verified `.jsonl.deleted.<timestamp>` archive; incognito transcripts are
-removed without an archive. If a managed worktree cannot be removed safely,
-the command reports the preserved branch and path for manual cleanup.
+removed without an archive. Retained deleted-session archives can remain
+eligible for memory search. To remove indexed memories, run
+`openclaw memory forget --agent <agent-id> --session <id-or-key>` on the Gateway
+host or container using that Gateway's state and configuration. Select the agent
+that owned the deleted session, including for `global` keys. Memory cleanup runs
+locally; deleting through `--url` or a configured remote Gateway does not forward
+the cleanup command to that Gateway. See [Memory forget](/cli/memory#memory-forget)
+for preview and deletion details.
+
+If a managed worktree cannot be removed safely, the command reports the preserved
+branch and path for manual cleanup.
 
 Both lifecycle commands:
 
@@ -152,6 +179,13 @@ Both lifecycle commands:
   still processing the other valid keys;
 - emit one stable JSON envelope with `ok`, `operation`, `dryRun`, and `results`
   when `--json` is set.
+
+Dry-run uses the Gateway's session list to report protected agent-main sessions
+as failed, even when the CLI uses different local session settings. Already
+archived sessions remain successful archive no-ops. Dry-run does not execute all
+Gateway lifecycle checks: `global` previews can still show an archive or delete
+action that the Gateway refuses. Explicitly selected non-default global deletion
+remains supported. The real archive or delete request is authoritative.
 
 Example mixed-result JSON:
 
@@ -190,10 +224,17 @@ print before follow mode; default `80`, and `0` starts at the current end.
 fixed-width terminal columns, with long keys truncated at whole grapheme boundaries
 so CJK characters, combining accents, and joined emoji keep progress lines aligned.
 
+A fully qualified `--session-key` selects its agent only when `--agent`, `--store`,
+and `--all-agents` are absent. An explicitly empty or whitespace-only `--agent`
+is rejected instead of selecting an inferred agent.
+
 The progress view is intentionally conservative: prompt text, tool arguments,
 and tool result bodies are not printed. Tool calls show the tool name with
 `{...redacted...}`; tool results show status such as `ok`, `error`, or `done`;
-model completion lines show provider/model and terminal status.
+model completion lines show provider/model and terminal status. Provider failures
+and turns without delivery show `error`; cancellation shows `aborted`, timeouts
+show `timeout`, and successful completions (including delivered partial replies)
+show `done`.
 
 ## Export a trajectory bundle
 
@@ -205,6 +246,7 @@ openclaw sessions export-trajectory --session-key "agent:main:telegram:direct:12
 This is the command path used by the `/export-trajectory` slash command after
 the owner approves the exec request. The output directory is always resolved
 inside `.openclaw/trajectory-exports/` under the selected workspace.
+The file list in text and JSON output reports only artifacts written to the bundle.
 
 ## Cleanup maintenance
 
@@ -221,7 +263,7 @@ openclaw sessions cleanup --json
 ```
 
 `openclaw sessions cleanup` uses `session.maintenance` settings from config
-([Configuration reference](/gateway/config-agents#session)):
+([Configuration reference](/gateway/config-agents/sessions#session)):
 
 - Scope note: `openclaw sessions cleanup` maintains session stores,
   transcripts, trajectory rows, and legacy trajectory sidecars. It does not
@@ -240,12 +282,24 @@ openclaw sessions cleanup --json
   pressure-gated: it only removes stale probe rows when session-entry
   maintenance/cap pressure is reached. When it runs, model-run cleanup
   happens before global stale cleanup and capping.
-- `maxEntries` caps the total live session row count. Protected rows are
-  reported as `keep` and count toward the cap, but they are never automatic
-  eviction targets. If protected rows prevent cleanup from reaching the cap,
-  the store remains above it. `--enforce` does not remove that protection;
-  unarchive, unpin, wait for active work to finish, or explicitly delete
-  sessions you no longer want to retain.
+- `pruneAfter` archives eligible durable sessions in place, preserving their IDs
+  and all transcript generations. Cleanup reports `archive-age`; the stored
+  `archiveReason` is `age-retention`. Disposable automation rows still delete.
+- `maxEntries` defaults to 5000 and caps the unarchived session row count;
+  archived rows do not consume it. Eligible ordinary overflow is reported as `archive-cap` and
+  archived, while synthetic runtime overflow remains disposable. Protected
+  unarchived rows are reported as `keep` and still consume the cap. If those
+  protected rows prevent cleanup from reaching the cap, the unarchived store
+  remains above it. `--enforce` does not remove that protection; unpin, wait
+  for active work to finish, or explicitly delete sessions you no longer want
+  to retain.
+
+Optional cold transcript extraction has its own background worker and
+**Run now** action in
+[Settings → Agent Defaults → Session](/gateway/config-agents/sessions#cold-storage).
+It uses `session.maintenance.coldStorage.afterDays` and preserves inactive
+transcripts in authoritative compressed files. The cleanup command's
+reset/deletion archive retention does not delete those cold files.
 
 Flags:
 
@@ -258,13 +312,19 @@ Flags:
 | `--active-key <key>` | Protect a specific active key from automatic maintenance. It still counts toward `maxEntries`. Durable external conversation pointers, such as group sessions and thread-scoped chat sessions, are also kept by age/count/disk-budget maintenance.                                                         |
 | `--agent <id>`       | Run cleanup for one configured agent store.                                                                                                                                                                                                                                                                |
 | `--all-agents`       | Run cleanup for all configured agent stores.                                                                                                                                                                                                                                                               |
-| `--store <path>`     | Run against a specific legacy store selector path.                                                                                                                                                                                                                                                         |
+| `--store <path>`     | Run locally against a specific SQLite database or legacy store selector path.                                                                                                                                                                                                                              |
 | `--json`             | Print a JSON summary. With `--all-agents`, output includes one summary per store.                                                                                                                                                                                                                          |
 
 When a Gateway is reachable, non-dry-run cleanup for configured agent stores is
 sent through the Gateway so it shares the same session-store writer as runtime
-traffic. Use `--store <path>` for explicit offline repair of a legacy store
-selector.
+traffic. Use `--store <path>` for explicit offline repair of a SQLite database or
+legacy store selector.
+
+When the selected store's parent directory is named `agent`, transcript artifacts
+live in the sibling `sessions` directory. This also applies to custom paths:
+`/backup/agent/sessions.json` selects `/backup/agent/openclaw-agent.sqlite`, whose
+archives live in `/backup/sessions`. Cleanup measures and prunes that same artifact
+directory whether you select the legacy path or the SQLite file.
 
 Offline cleanup loads trusted, permitted harness plugins so their session-owned
 resources are reclaimed with the deleted rows, even if the agent now uses a
@@ -289,7 +349,7 @@ check filesystem permissions and retry after resolving the deletion failure.
   "stores": [
     {
       "agentId": "main",
-      "storePath": "/home/user/.openclaw/agents/main/sessions/sessions.json",
+      "storePath": "/home/user/.openclaw/agents/main/agent/openclaw-agent.sqlite",
       "beforeCount": 120,
       "afterCount": 80,
       "missing": 0,
@@ -299,7 +359,7 @@ check filesystem permissions and retry after resolving the deletion failure.
     },
     {
       "agentId": "work",
-      "storePath": "/home/user/.openclaw/agents/work/sessions/sessions.json",
+      "storePath": "/home/user/.openclaw/agents/work/agent/openclaw-agent.sqlite",
       "beforeCount": 18,
       "afterCount": 18,
       "missing": 0,
@@ -310,6 +370,59 @@ check filesystem permissions and retry after resolving the deletion failure.
   ]
 }
 ```
+
+### Test cleanup on a copy
+
+Use a separate state directory to measure cleanup before changing a live
+installation. Create a WAL-aware SQLite backup or a coordinated stopped-state
+copy; copying only a live database's main `.sqlite` file can omit committed WAL
+data. Preserve the agent ID, directory layout, and relevant session artifacts
+when preparing the copy. Use ordinary copied files, not symlinks or hard links
+to live state.
+
+Prepare `openclaw.json` inside the copy with the maintenance settings you want
+to test and the copied agent's configuration. Keep its paths and plugin
+configuration isolated from the live installation. The following example
+selects the copied `main` agent database explicitly; adjust the directory and
+agent ID to match your copy:
+
+```bash
+(
+  export OPENCLAW_STATE_DIR="$HOME/openclaw-state-copy"
+  export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
+  copied_db="$OPENCLAW_STATE_DIR/agents/main/agent/openclaw-agent.sqlite"
+
+  openclaw sessions cleanup --store "$copied_db" --dry-run --json
+)
+```
+
+Review the preview, then apply cleanup and compact the copied database:
+
+```bash
+(
+  export OPENCLAW_STATE_DIR="$HOME/openclaw-state-copy"
+  export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
+  copied_db="$OPENCLAW_STATE_DIR/agents/main/agent/openclaw-agent.sqlite"
+
+  openclaw sessions cleanup --store "$copied_db" --enforce --json
+  openclaw doctor --session-sqlite compact --session-sqlite-agent main --session-sqlite-store "$copied_db" --json
+)
+```
+
+Explicit `--store` cleanup stays local. Doctor requires its target inside `OPENCLAW_STATE_DIR`
+and no Gateway using that state directory; the live Gateway can continue using
+its separate original state. Set `--session-sqlite-agent` to the copied database's
+owner; an explicit Doctor store selector otherwise defaults to `main`.
+
+`archive-age`, `archive-dashboard`, and `archive-cap` change session metadata
+while retaining transcript rows. Disk-budget cleanup can replace eligible
+history with compressed archives, whose canonical payload remains in SQLite.
+Doctor's `compact` step then reclaims free database pages with `VACUUM` and
+reports before/after database and WAL sizes. It does not choose more history
+to delete. Compare physical sizes and retained history, not only session counts;
+protected data can keep usage above the configured budget. See
+[store maintenance and retention](/reference/session-management-compaction/maintenance)
+for the archive ownership and protection rules.
 
 ## Compact a session
 
@@ -377,7 +490,9 @@ Example truncate response (`--max-lines 200`):
 
 ## Related
 
-- [Session config](/gateway/config-agents#session)
+- [Session config](/gateway/config-agents/sessions#session)
 - [Session management](/concepts/session)
 - [Compaction](/concepts/compaction)
 - [CLI reference](/cli)
+- [`openclaw resume`](/cli/resume) — attach the TUI to a recent Gateway session
+- [Cloud Workers](/gateway/cloud-workers) — sessions hosted on remote workers

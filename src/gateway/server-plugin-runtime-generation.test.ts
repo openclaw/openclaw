@@ -37,7 +37,10 @@ describe("Gateway plugin runtime generation", () => {
     expect(acceptedReplacement.claim.publish(published)).toBe(true);
     expect(published).toHaveBeenCalledTimes(2);
 
-    const winningServices: PluginServicesHandle = { stop: vi.fn(async () => {}) };
+    const winningServices: PluginServicesHandle = {
+      reload: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+    };
     expect(owner.publishServices(startupClaim, winningServices)).toBe(false);
     expect(owner.publishServices(acceptedReplacement.claim, winningServices)).toBe(true);
     expect(owner.currentServices()).toBe(winningServices);
@@ -60,7 +63,10 @@ describe("Gateway plugin runtime generation", () => {
       committed.commit();
       const pendingSuccessor = owner.reserve();
       const discoveryStop = vi.fn();
-      const services: PluginServicesHandle = { stop: vi.fn(async () => {}) };
+      const services: PluginServicesHandle = {
+        reload: vi.fn(async () => {}),
+        stop: vi.fn(async () => {}),
+      };
       let settled = false;
       const publication = committed.claim.waitForUnblocked().then((isCurrent) => {
         settled = true;

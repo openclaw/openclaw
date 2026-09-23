@@ -58,6 +58,8 @@ function fullReceipt(input = launchInput()): NodeWorkerLaunchReceipt {
     state: "running",
     supervisor: { pid: 100, startTime: 1 },
     worker: { pid: 101, startTime: 2 },
+    workerCleanupMode: "owned-anchor",
+    workerLineageSettled: true,
     resultJson: null,
     errorText: null,
     completedAtMs: null,
@@ -260,8 +262,8 @@ describe("node-host worker supervisor commands", () => {
       descriptor: { id: "terminal", executablePath: "openclaw-worker-terminal" },
     },
     {
-      name: "terminal arguments",
-      descriptor: { id: "terminal", executablePath: process.execPath, args: ["--unsafe"] },
+      name: "NUL argument",
+      descriptor: { id: "terminal", executablePath: process.execPath, args: ["bad\0"] },
     },
     {
       name: "terminal CDP port",
@@ -287,31 +289,32 @@ describe("node-host worker supervisor commands", () => {
     expect(result).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
   });
 
-  it.runIf(process.platform !== "win32").each(["browser", "terminal"] as const)(
-    "runs one absolute zero-argument %s launcher without replay after failure",
+  it.each(["browser", "terminal"] as const)(
+    "runs provider-attested %s arguments literally without replay after failure",
     async (appId) => {
       const root = tempDirs.make("node-worker-desktop-launch-");
-      const executablePath = path.join(root, "launcher");
-      const markerPath = `${executablePath}.marker`;
-      fs.writeFileSync(
-        executablePath,
-        '#!/bin/sh\nprintf \'%s\\n\' "$#" >> "$0.marker"\nexit 7\n',
-        { mode: 0o755 },
-      );
+      const markerPath = path.join(root, "marker");
+      const args = ["spaces stay together", "literal;$(text)"];
       const supervisor = supervisorWith(fullReceipt());
 
       const { result } = await invokePrivate({
         command: NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
         paramsJSON: JSON.stringify({
           id: appId,
-          executablePath,
+          executablePath: process.execPath,
+          args: [
+            "-e",
+            "require('node:fs').appendFileSync(process.argv[1], JSON.stringify(process.argv.slice(2)) + '\\n');process.exit(7)",
+            markerPath,
+            ...args,
+          ],
           ...(appId === "browser" ? { cdpPort: 9222 } : {}),
         }),
         supervisor,
       });
 
       expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
-      expect(fs.readFileSync(markerPath, "utf8")).toBe("0\n");
+      expect(fs.readFileSync(markerPath, "utf8")).toBe(`${JSON.stringify(args)}\n`);
     },
   );
 
@@ -846,10 +849,15 @@ describe("node-host worker supervisor commands", () => {
   });
 
   it("preserves a typed workspace transfer failure across node invoke", async () => {
+    const cause = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
     const workspace = {
       exec: vi.fn(async () => {
-        throw new NodeWorkerWorkspaceTransferError(
-          "workspace-transfer-failed: gateway TLS fingerprint mismatch",
+        throw Object.assign(
+          new NodeWorkerWorkspaceTransferError(
+            "workspace-transfer-failed: transfer did not complete",
+            { cause },
+          ),
+          { operation: "upload", stage: "reconcile" },
         );
       }),
     } as unknown as NodeWorkerWorkspaceRuntime;
@@ -870,8 +878,43 @@ describe("node-host worker supervisor commands", () => {
       ok: false,
       error: {
         code: NODE_WORKSPACE_TRANSFER_ERROR_CODE,
-        message: "workspace-transfer-failed: gateway TLS fingerprint mismatch",
+        message:
+          "workspace-transfer-failed: operation=upload stage=reconcile: socket hang up | ECONNRESET",
       },
     });
+  });
+
+  it("bounds and redacts serialized workspace transfer diagnostics", async () => {
+    const secret = "sk-abcdefghijklmnopqrstuv";
+    const cause = Object.assign(
+      new Error(`socket hang up ${"detail ".repeat(300)} Authorization: Bearer ${secret}`),
+      { code: "ECONNRESET" },
+    );
+    const workspace = {
+      exec: vi.fn(async () => {
+        throw new NodeWorkerWorkspaceTransferError(
+          "workspace-transfer-failed: transfer did not complete",
+          { cause, operation: "upload", stage: "reconcile" },
+        );
+      }),
+    } as unknown as NodeWorkerWorkspaceRuntime;
+
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+      paramsJSON: JSON.stringify({
+        gatewayNamespace: "gateway-1",
+        environmentId: "environment-1",
+        sessionId: "session-1",
+        generation: 4,
+        argv: ["openclaw-internal-workspace-transfer"],
+      }),
+      workspace,
+    });
+
+    const message = result?.error?.message ?? "";
+    expect(message).toContain("operation=upload stage=reconcile");
+    expect(message).toContain("ECONNRESET");
+    expect(message).not.toContain(secret);
+    expect(message.length).toBeLessThanOrEqual(1_024);
   });
 });

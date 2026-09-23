@@ -10,8 +10,22 @@ extension OnboardingAISetupModel {
     /// alive long enough for approval plus the post-login inference probe.
     static let providerAuthRequestTimeoutMs: Double = 1_200_000
 
+    enum SetupIntent {
+        case inspectOnly
+        case resumePending
+        case startSetup
+    }
+
+    enum ModelTarget: String, Decodable {
+        case utility
+    }
+
+    struct ProviderAuthReconciliation {
+        let modelTarget: ModelTarget?
+    }
+
     enum ActivationRequest {
-        case candidate(kind: String, modelRef: String, label: String, tryNextOnFailure: Bool)
+        case candidate(kind: String, modelRef: String, label: String, modelTarget: ModelTarget? = nil)
         case manual(key: String, provider: ManualProvider)
 
         var kind: String {
@@ -35,6 +49,13 @@ extension OnboardingAISetupModel {
             }
         }
 
+        var modelTarget: ModelTarget? {
+            switch self {
+            case let .candidate(_, _, _, modelTarget): modelTarget
+            case let .manual(_, provider): provider.modelTarget
+            }
+        }
+
         var isManual: Bool {
             if case .manual = self {
                 true
@@ -43,23 +64,25 @@ extension OnboardingAISetupModel {
             }
         }
 
-        var tryNextOnFailure: Bool {
-            switch self {
-            case let .candidate(_, _, _, tryNext): tryNext
-            case .manual: false
-            }
-        }
-
         @MainActor
         func params(supportsExactModel: Bool) -> [String: AnyCodable] {
             switch self {
-            case let .candidate(kind, modelRef, _, _):
-                OnboardingAISetupModel.activationParams(
+            case let .candidate(kind, modelRef, _, modelTarget):
+                return OnboardingAISetupModel.activationParams(
                     kind: kind,
                     modelRef: modelRef,
-                    supportsExactModel: supportsExactModel)
+                    supportsExactModel: supportsExactModel,
+                    modelTarget: modelTarget)
             case let .manual(key, provider):
-                ["kind": AnyCodable("api-key"), "authChoice": AnyCodable(provider.id), "apiKey": AnyCodable(key)]
+                var params = [
+                    "kind": AnyCodable("api-key"),
+                    "authChoice": AnyCodable(provider.id),
+                    "apiKey": AnyCodable(key),
+                ]
+                if let modelTarget = provider.modelTarget {
+                    params["modelTarget"] = AnyCodable(modelTarget.rawValue)
+                }
+                return params
             }
         }
     }
@@ -67,6 +90,7 @@ extension OnboardingAISetupModel {
     struct PersistedActivationState: Equatable {
         let setupComplete: Bool
         let configuredModel: String?
+        let utilityModel: String?
     }
 
     struct AttemptContext: Equatable {
@@ -107,6 +131,67 @@ extension OnboardingAISetupModel {
         }
     }
 
+    @MainActor
+    struct PersistedActivationVerification {
+        let expectedModel: String
+        let modelTarget: ModelTarget?
+        let routeIdentity: String
+        let activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner
+        let before: PersistedActivationState?
+
+        func reconcile(
+            gateway: GatewayConnection,
+            defaults: UserDefaults,
+            serverLease: GatewayConnection.ServerLease,
+            deadline: ReconciliationDeadline,
+            isCurrentAttempt: () -> Bool,
+            onVerified: (ActivateResult) -> Bool) async -> Bool
+        {
+            let detectTimeoutMs = deadline.remainingMilliseconds(
+                cappedAt: OnboardingAISetupModel.setupDetectionRequestTimeoutMs)
+            guard detectTimeoutMs > 0,
+                  isCurrentAttempt(),
+                  !Task.isCancelled,
+                  OnboardingSystemAgentResumeStore.isOwned(
+                      by: self.activationOwner,
+                      for: self.routeIdentity,
+                      defaults: defaults),
+                  await gateway.activationOwnershipFingerprint(ifCurrentServerLease: serverLease) ==
+                  self.activationOwner.routeFingerprint
+            else { return false }
+            guard let detectData = try? await gateway.request(
+                method: "openclaw.setup.detect",
+                params: [:],
+                timeoutMs: Double(detectTimeoutMs),
+                ifCurrentServerLease: serverLease),
+                await gateway.isCurrentServerLease(serverLease),
+                isCurrentAttempt(),
+                !Task.isCancelled,
+                let detection = try? JSONDecoder().decode(DetectResult.self, from: detectData),
+                OnboardingAISetupModel.activationTransitionWasPersisted(
+                    expectedModel: self.expectedModel,
+                    modelTarget: self.modelTarget,
+                    before: self.before,
+                    after: detection.persistedActivationState)
+            else { return false }
+            let verifyTimeoutMs = deadline.remainingMilliseconds(
+                cappedAt: OnboardingAISetupModel.setupDetectionRequestTimeoutMs)
+            guard verifyTimeoutMs > 0 else { return false }
+            guard let verifyData = try? await gateway.request(
+                method: "openclaw.setup.verify",
+                params: self.modelTarget == .utility ? ["modelTarget": AnyCodable("utility")] : [:],
+                timeoutMs: Double(verifyTimeoutMs),
+                ifCurrentServerLease: serverLease),
+                await gateway.isCurrentServerLease(serverLease),
+                isCurrentAttempt(),
+                !Task.isCancelled,
+                let result = try? JSONDecoder().decode(ActivateResult.self, from: verifyData),
+                result.verifies(modelRef: self.expectedModel, modelTarget: self.modelTarget)
+            else { return false }
+            return onVerified(result)
+        }
+    }
+
     struct DetectResult: Decodable {
         struct DetectedCandidate: Decodable {
             let brandId: String?
@@ -117,6 +202,7 @@ extension OnboardingAISetupModel {
             let detail: String
             let modelRef: String
             let credentials: Bool?
+            let modelTarget: ModelTarget?
         }
 
         let candidates: [DetectedCandidate]
@@ -125,14 +211,19 @@ extension OnboardingAISetupModel {
         let authOptions: [AuthOption]?
         let prepareOptions: [PrepareOption]?
         let recommendedInstalls: [RecommendedInstall]?
+        let nativeSessionCatalogs: [NativeSessionCatalog]?
+        let nativeSessionCatalogPreferenceRequired: Bool?
         let configuredModel: String?
+        let utilityModel: String?
+        let setupModel: String?
         let setupComplete: Bool?
 
         var persistedActivationState: PersistedActivationState? {
             self.setupComplete.map {
                 PersistedActivationState(
                     setupComplete: $0,
-                    configuredModel: self.configuredModel)
+                    configuredModel: self.configuredModel,
+                    utilityModel: self.utilityModel ?? self.setupModel)
             }
         }
     }
@@ -143,29 +234,63 @@ extension OnboardingAISetupModel {
         let status: String?
         let error: String?
         let gatewayRestartRequired: Bool?
+        let modelTarget: ModelTarget?
+
+        func handoff(for kind: String) -> OnboardingDashboardHandoff {
+            kind == "existing-model" && self.modelTarget != .utility ? .dashboard : .custodianOnboarding
+        }
+
+        func verifies(modelRef: String?, modelTarget: ModelTarget?) -> Bool {
+            self.ok && self.modelRef?.isEmpty == false &&
+                (modelRef == nil || self.modelRef == modelRef) && self.modelTarget == modelTarget
+        }
     }
 
     static func activationWizardResult(
+        done: Bool,
         status: String?,
         error: String?,
-        modelActivation: [String: AnyCodable]?) -> Result<ActivateResult, Error>
+        preparedModelRef: String?,
+        modelActivation: [String: AnyCodable]?,
+        activationRejection: [String: AnyCodable]?) -> Result<ActivateResult, Error>
     {
-        if status == "done",
+        if status == "done", activationRejection == nil,
            let modelRef = modelActivation?["modelRef"]?.value as? String,
            !modelRef.isEmpty
         {
+            let modelTarget: ModelTarget?
+            if let value = modelActivation?["modelTarget"] {
+                guard let rawValue = value.value as? String,
+                      let target = ModelTarget(rawValue: rawValue)
+                else { return .failure(OnboardingAISetupError.activationOutcomeUnavailable) }
+                modelTarget = target
+            } else {
+                modelTarget = nil
+            }
             return .success(ActivateResult(
                 ok: true,
                 modelRef: modelRef,
                 status: nil,
                 error: nil,
-                gatewayRestartRequired: modelActivation?["gatewayRestartRequired"]?.value as? Bool))
+                gatewayRestartRequired: modelActivation?["gatewayRestartRequired"]?.value as? Bool,
+                modelTarget: modelTarget))
         }
-        if status == "cancelled" {
+        if status == "cancelled", modelActivation == nil, activationRejection == nil {
             return .failure(OnboardingAISetupError.activationCancelled)
         }
-        return .failure(OnboardingAISetupError
-            .activationFailed(error ?? "The Gateway did not return a verified model."))
+        // A settled runner can have failed after promotion. Only its explicit,
+        // complete pre-promotion rejection permits another setup mutation.
+        if done, status == "error", modelActivation == nil, preparedModelRef == nil,
+           let rejection = activationRejection, rejection.count == 2,
+           rejection["disposition"]?.value as? String == "rejected-before-promotion",
+           let failureStatus = rejection["status"]?.value as? String,
+           ["auth", "rate_limit", "billing", "timeout", "format", "unavailable", "unknown"].contains(failureStatus)
+        {
+            return .failure(OnboardingAISetupError.activationRejected(status: failureStatus, error: error))
+        }
+        return .failure(status == "error"
+            ? OnboardingAISetupError.activationFailed(error ?? "AI setup failed.")
+            : OnboardingAISetupError.activationOutcomeUnavailable)
     }
 
     struct Candidate: Identifiable, Equatable {
@@ -174,6 +299,7 @@ extension OnboardingAISetupModel {
         let detail: String
         let modelRef: String
         let credentials: Bool?
+        let modelTarget: ModelTarget?
 
         var id: String {
             self.kind
@@ -218,7 +344,7 @@ extension OnboardingAISetupModel {
 
     enum PendingVerificationOutcome: Equatable {
         case connected
-        case freshSetupAllowed
+        case freshSetupAllowed(AttemptContext)
         case notConnected
         case superseded
     }
@@ -230,20 +356,10 @@ extension OnboardingAISetupModel {
         let hint: String?
         let icon: String?
         let website: String?
+        let modelTarget: ModelTarget?
     }
 
     struct AuthOption: Identifiable, Equatable, Decodable {
-        static let activation = AuthOption(
-            id: "activation",
-            brandId: nil,
-            label: "Connect your AI",
-            hint: nil,
-            groupLabel: nil,
-            icon: nil,
-            website: nil,
-            kind: "activation",
-            featured: false)
-
         let id: String
         let brandId: String?
         let label: String
@@ -253,6 +369,7 @@ extension OnboardingAISetupModel {
         let website: String?
         let kind: String
         let featured: Bool
+        let modelTarget: ModelTarget?
     }
 
     struct RecommendedInstall: Identifiable, Equatable, Decodable {
@@ -264,6 +381,16 @@ extension OnboardingAISetupModel {
         let brandId: String?
     }
 
+    struct NativeSessionCatalog: Identifiable, Equatable, Decodable {
+        let pluginId: String
+        let label: String
+        let detail: String?
+
+        var id: String {
+            self.pluginId
+        }
+    }
+
     struct PrepareOption: Identifiable, Equatable, Decodable {
         let id: String
         let label: String
@@ -272,6 +399,38 @@ extension OnboardingAISetupModel {
         let brandId: String?
         let icon: String?
         let website: String?
+        let modelTarget: ModelTarget?
+    }
+
+    /// Unconfirmed requests still carry cancellation intent when admission replies late.
+    enum ProviderAuthCancellation: Equatable {
+        case requesting
+        case unconfirmed
+    }
+
+    func activationAuthOption(for request: ActivationRequest) -> AuthOption {
+        let id: String
+        let presentation: CandidatePresentation?
+        switch request {
+        case let .candidate(kind, _, _, _):
+            id = kind
+            presentation = self.candidatePresentation[kind]
+        case let .manual(_, provider):
+            id = provider.id
+            presentation = CandidatePresentation(
+                brandId: provider.brandId, icon: provider.icon, website: provider.website)
+        }
+        return AuthOption(
+            id: id,
+            brandId: presentation?.brandId,
+            label: request.label,
+            hint: nil,
+            groupLabel: nil,
+            icon: presentation?.icon,
+            website: presentation?.website,
+            kind: "activation",
+            featured: false,
+            modelTarget: request.modelTarget)
     }
 
     enum ProviderWizardKind: Equatable {
@@ -318,6 +477,25 @@ extension OnboardingAISetupModel {
         return false
     }
 
+    var nativeSessionCatalogSummary: String {
+        self.nativeSessionCatalogs.map(\.label).formatted(.list(type: .and))
+    }
+
+    var busyReason: String? {
+        // Every connection attempt must make quitting mid-setup confirmable.
+        if self.phase == .testing || self.manualTesting ||
+            self.phase == .detecting && self.pendingActivationVerification
+        {
+            "OpenClaw is testing your AI connection."
+        } else if self.activeAuthOption != nil {
+            self.isPreparingModel
+                ? "OpenClaw is preparing a local model."
+                : "OpenClaw is completing provider sign-in."
+        } else {
+            nil
+        }
+    }
+
     var isBusy: Bool {
         self.phase == .detecting || self.phase == .testing || self.manualTesting || self.authBusy ||
             self.pendingActivationVerification
@@ -333,7 +511,7 @@ extension OnboardingAISetupModel {
     }
 
     func continueProviderAuth() {
-        guard let step = authStep else { return }
+        guard let step = authStep, wizardStepExecutor(step) != "gateway" else { return }
         let value: AnyCodable? = switch wizardStepType(step) {
         case "text": AnyCodable(self.authText)
         case "select": self.selectedAuthWizardOption?.value
@@ -341,20 +519,6 @@ extension OnboardingAISetupModel {
         default: nil
         }
         self.advanceProviderAuth(stepID: step.id, value: value)
-    }
-
-    /// Candidates the automatic ladder may try: skip definitively logged-out
-    /// installs and anything already attempted.
-    func autoCandidateAfter(kind: String?) -> Candidate? {
-        let startIndex: Int = if let kind, let index = candidates.firstIndex(where: { $0.kind == kind }) {
-            index + 1
-        } else {
-            0
-        }
-        guard startIndex <= self.candidates.count else { return nil }
-        return self.candidates[startIndex...].first { candidate in
-            candidate.credentials != false && self.statuses[candidate.kind] == .untried
-        }
     }
 
     func startProviderPrepare(_ option: PrepareOption) {
@@ -368,7 +532,8 @@ extension OnboardingAISetupModel {
                 icon: option.icon,
                 website: option.website,
                 kind: "prepare",
-                featured: false),
+                featured: false,
+                modelTarget: option.modelTarget),
             kind: .prepare)
     }
 
@@ -401,7 +566,8 @@ extension OnboardingAISetupModel {
                 actionLabel: nil,
                 brandId: "ollama",
                 icon: nil,
-                website: nil),
+                website: nil,
+                modelTarget: nil),
             PrepareOption(
                 id: "llama-cpp",
                 label: "Local model (llama.cpp)",
@@ -409,7 +575,8 @@ extension OnboardingAISetupModel {
                 actionLabel: nil,
                 brandId: "llama-cpp",
                 icon: nil,
-                website: nil),
+                website: nil,
+                modelTarget: nil),
         ]
         return (advertisedOptions ?? legacyOptions).filter { choice in
             let providerKind = self.providerAutoSetupKind(choiceID: choice.id)
@@ -423,11 +590,14 @@ extension OnboardingAISetupModel {
     }
 
     static func canAcceptProviderAuthReconciliation(
-        pending: Bool,
-        setupComplete: Bool,
-        configuredModel: String?) -> Bool
+        pending: ProviderAuthReconciliation?,
+        state: PersistedActivationState?) -> Bool
     {
-        pending && setupComplete && configuredModel?.isEmpty == false
+        guard let pending, let state else { return false }
+        if pending.modelTarget == .utility {
+            return state.utilityModel?.isEmpty == false
+        }
+        return state.setupComplete && state.configuredModel?.isEmpty == false
     }
 
     /// Transport/protocol failures deserve plain language, not RPC codes.
@@ -459,16 +629,23 @@ extension OnboardingAISetupModel {
             : 150_000
     }
 
-    static func activationFailure(_ error: Error) -> Failure {
-        if case OnboardingAISetupError.activationCancelled = error {
-            return Failure(summary: error.localizedDescription, detail: nil)
+    static func activationFailure(_ error: Error, label: String) -> Failure {
+        switch error {
+        case OnboardingAISetupError.activationCancelled:
+            Failure(summary: error.localizedDescription, detail: nil)
+        case let OnboardingAISetupError.activationRejected(status, detail):
+            self.failure(label: label, status: status, error: detail)
+        default:
+            self.transportFailure(error.localizedDescription)
         }
-        return self.transportFailure(error.localizedDescription)
     }
 
     static func activationFailureIsDefinitive(_ error: Error) -> Bool {
-        if case OnboardingAISetupError.activationCancelled = error {
+        switch error {
+        case OnboardingAISetupError.activationCancelled, OnboardingAISetupError.activationRejected:
             return true
+        default:
+            break
         }
         if let response = error as? GatewayResponseError {
             let code = response.code.uppercased()
@@ -500,11 +677,15 @@ extension OnboardingAISetupModel {
     static func activationParams(
         kind: String,
         modelRef: String,
-        supportsExactModel: Bool) -> [String: AnyCodable]
+        supportsExactModel: Bool,
+        modelTarget: ModelTarget? = nil) -> [String: AnyCodable]
     {
         var params = ["kind": AnyCodable(kind)]
         if supportsExactModel {
             params["modelRef"] = AnyCodable(modelRef)
+        }
+        if let modelTarget {
+            params["modelTarget"] = AnyCodable(modelTarget.rawValue)
         }
         return params
     }
@@ -567,10 +748,14 @@ extension OnboardingAISetupModel {
 
     static func activationTransitionWasPersisted(
         expectedModel: String,
+        modelTarget: ModelTarget? = nil,
         before: PersistedActivationState?,
         after: PersistedActivationState?) -> Bool
     {
         guard let before, let after else { return false }
+        if modelTarget == .utility {
+            return before.utilityModel != expectedModel && after.utilityModel == expectedModel
+        }
         let wasAlreadyPersisted = before.setupComplete && before.configuredModel == expectedModel
         return !wasAlreadyPersisted && after.setupComplete && after.configuredModel == expectedModel
     }
@@ -591,6 +776,7 @@ enum OnboardingAISetupError: LocalizedError {
     case activationCancelled
     case activationOutcomeUnavailable
     case activationFailed(String)
+    case activationRejected(status: String, error: String?)
 
     var errorDescription: String? {
         switch self {
@@ -600,6 +786,8 @@ enum OnboardingAISetupError: LocalizedError {
             "AI setup ended before its result was received. OpenClaw will verify the Gateway before trying again."
         case let .activationFailed(message):
             message
+        case let .activationRejected(_, error):
+            error ?? "AI setup failed."
         case .providerCatalogUnavailable:
             "The Gateway is running an older OpenClaw version that doesn’t provide the " +
                 "supported provider list. Update OpenClaw on the gateway, then try again."

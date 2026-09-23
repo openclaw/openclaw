@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import { renderProviderBrandIcon } from "./provider-icon.ts";
+import { providerDisplayLabel, renderProviderBrandIcon } from "./provider-icon.ts";
 import { renderPicker } from "./select-picker.ts";
 
 export type ModelPickerOption = {
@@ -19,6 +19,9 @@ type ModelPickerParams = {
   title?: string;
   className?: string;
   placement?: "top" | "bottom";
+  showSelectedDetail?: boolean;
+  groupByProvider?: boolean;
+  searchPlaceholder?: string;
   custom?: {
     label: string;
     placeholder?: string;
@@ -52,6 +55,22 @@ export function renderModelPicker(params: ModelPickerParams) {
         disabled: params.disabled,
         title: params.title,
         placement: params.placement,
+        searchable: true,
+        searchPlaceholder: params.searchPlaceholder,
+        groupBy: params.groupByProvider
+          ? (option) =>
+              option.provider
+                ? {
+                    id: option.provider,
+                    label: providerDisplayLabel(option.provider),
+                    leading: renderProviderBrandIcon(option.provider, {
+                      className: "model-picker__provider-icon",
+                    }),
+                  }
+                : undefined
+          : undefined,
+        showOptionTooltips: false,
+        showSelectedDescription: params.showSelectedDetail,
         className: `model-picker__select ${params.className ?? ""}`,
         onOpen: params.onOpen,
         renderLeading: (option) =>
@@ -73,29 +92,31 @@ export function renderModelPicker(params: ModelPickerParams) {
           params.onChange(value);
         },
       })}
-      ${params.custom
-        ? html`<input
-            id=${params.custom.id ?? nothing}
-            class="settings-input model-picker__custom"
-            aria-label=${params.custom.label}
-            aria-invalid=${params.custom.invalid ? "true" : "false"}
-            aria-describedby=${params.custom.describedBy ?? nothing}
-            placeholder=${params.custom.placeholder ?? ""}
-            .value=${params.value}
-            ?hidden=${currentIsKnown}
-            ?disabled=${params.disabled}
-            @input=${(event: InputEvent) => {
-              if (params.custom?.commit !== "change") {
-                params.onChange((event.currentTarget as HTMLInputElement).value);
-              }
-            }}
-            @change=${(event: Event) => {
-              if (params.custom?.commit === "change") {
-                params.onChange((event.currentTarget as HTMLInputElement).value);
-              }
-            }}
-          />`
-        : nothing}
+      ${
+        params.custom
+          ? html`<input
+              id=${params.custom.id ?? nothing}
+              class="settings-input model-picker__custom"
+              aria-label=${params.custom.label}
+              aria-invalid=${params.custom.invalid ? "true" : "false"}
+              aria-describedby=${params.custom.describedBy ?? nothing}
+              placeholder=${params.custom.placeholder ?? ""}
+              .value=${params.value}
+              ?hidden=${currentIsKnown}
+              ?disabled=${params.disabled}
+              @input=${(event: InputEvent) => {
+                if (params.custom?.commit !== "change") {
+                  params.onChange((event.currentTarget as HTMLInputElement).value);
+                }
+              }}
+              @change=${(event: Event) => {
+                if (params.custom?.commit === "change") {
+                  params.onChange((event.currentTarget as HTMLInputElement).value);
+                }
+              }}
+            />`
+          : nothing
+      }
     </div>
   `;
 }

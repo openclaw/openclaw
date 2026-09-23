@@ -237,3 +237,103 @@ describe.runIf(browserMode)("file preview modal responsive layout", () => {
     expect(style.animationDuration).toBe("0.2s");
   });
 });
+
+describe.runIf(browserMode)("skill bundle file preview", () => {
+  it.each([390, 768, 1174, 1440])(
+    "renders complete Markdown and navigable folders without search or Copy at %dpx",
+    async (width) => {
+      const { page, userEvent } = await import("vitest/browser");
+      await page.viewport(width, 844);
+      const trigger = document.createElement("button");
+      trigger.textContent = "Open skill";
+      document.body.append(trigger);
+      trigger.focus();
+      const preview = document.createElement("openclaw-file-preview-modal");
+      preview.layout = "document";
+      preview.label = "Operator guide";
+      preview.activePath = "SKILL.md";
+      const long =
+        "# Full reference\n" +
+        "Complete instructions.\n".repeat(3000) +
+        "Last complete instruction.";
+      preview.files = [
+        {
+          path: "SKILL.md",
+          size: "100 B",
+          contents:
+            "# Guide\n[Reference](references/guide.md)\n```js\nwindow.untrusted = true;\n```\n<script>window.untrusted=true</script>",
+        },
+        { path: "references/guide.md", size: "64 KB", contents: long },
+        { path: "scripts/unlinked.py", size: "20 B", contents: "print('read only')" },
+        {
+          path: "assets/image.png",
+          size: "4 B",
+          contents: "",
+          message: "Binary file cannot be previewed",
+        },
+      ];
+      preview.addEventListener("file-preview-select", (event: Event) => {
+        preview.activePath = (event as CustomEvent<string>).detail;
+      });
+      preview.addEventListener("file-preview-close", () => preview.remove());
+      document.body.append(preview);
+      await preview.updateComplete;
+      const owner =
+        preview.shadowRoot!.querySelector<OpenClawModalDialog>("openclaw-modal-dialog")!;
+      const dialog = await resolveRenderedDialog(owner);
+      expect(preview.shadowRoot!.querySelector(".search")).toBeNull();
+      expect(
+        preview.shadowRoot!.querySelector(
+          ".chips, .item-meta, .state, .list-section, .detail-head, .foot",
+        ),
+      ).toBeNull();
+      const close = preview.shadowRoot!.querySelector<HTMLButtonElement>('[aria-label="Close"]')!;
+      expect(close.getBoundingClientRect().right).toBeLessThanOrEqual(width);
+      expect(
+        preview.shadowRoot!.querySelector(".chat-copy-btn, .code-block-copy, script"),
+      ).toBeNull();
+      expect(preview.shadowRoot!.querySelectorAll(".item")).toHaveLength(4);
+      expect(preview.shadowRoot!.querySelectorAll("details")).toHaveLength(3);
+      const referenceLink = preview.shadowRoot!.querySelector<HTMLAnchorElement>(".markdown a")!;
+      referenceLink.click();
+      await preview.updateComplete;
+      expect(preview.activePath).toBe("references/guide.md");
+      expect(preview.shadowRoot!.querySelector(".markdown")!.textContent).toContain(
+        "Last complete instruction.",
+      );
+      expect(preview.shadowRoot!.querySelector(".markdown")!.textContent).not.toContain(
+        "truncated",
+      );
+      const binary = preview.shadowRoot!.querySelector<HTMLButtonElement>(
+        '[data-path="assets/image.png"]',
+      )!;
+      binary.click();
+      await preview.updateComplete;
+      expect(preview.shadowRoot!.querySelector(".detail-body")!.textContent).toContain(
+        "Binary file cannot be previewed",
+      );
+      const list = preview.shadowRoot!.querySelector<HTMLElement>(".list")!.getBoundingClientRect();
+      const detail = preview
+        .shadowRoot!.querySelector<HTMLElement>(".detail")!
+        .getBoundingClientRect();
+      expect(dialog.getBoundingClientRect().right).toBeLessThanOrEqual(width + 1);
+      expect(detail.width).toBeGreaterThan(200);
+      if (width <= 640) {
+        expect(detail.top).toBeGreaterThanOrEqual(list.bottom - 1);
+      } else {
+        expect(detail.left).toBeGreaterThanOrEqual(list.right - 1);
+      }
+      binary.focus();
+      await userEvent.keyboard("{ArrowDown}");
+      await preview.updateComplete;
+      expect(preview.activePath).toBe("references/guide.md");
+      if (width === 390) {
+        close.click();
+      } else {
+        await userEvent.keyboard("{Escape}");
+      }
+      await expect.poll(() => preview.isConnected).toBe(false);
+      await expect.poll(() => document.activeElement).toBe(trigger);
+    },
+  );
+});

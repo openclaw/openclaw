@@ -28,6 +28,7 @@ vi.mock("./attempt-stream-settle.js", () => ({
   settleEmbeddedAttemptStream: mocks.settleStream,
 }));
 
+import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import { createSubscribedSessionHarness } from "../../embedded-agent-subscribe.e2e-harness.js";
 import { SessionManager } from "../../sessions/index.js";
 import { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
@@ -122,11 +123,8 @@ function createFixture(overrides: FixtureOverrides = {}) {
         agentSession: {
           activeSession,
           clientToolCallSlots: [],
-          coreReadAuthorized: true,
-          getCodeModeRecoveryCandidate: vi.fn(() => undefined),
           hasDeliveredSourceReply: vi.fn(() => false),
           hookRunner: {},
-          setCodeModeReconciliationReadAuthorized: vi.fn(),
           setActiveSessionSystemPrompt: vi.fn(),
           settingsManager: { getCompactionReserveTokens: vi.fn(() => 1_000) },
         },
@@ -148,6 +146,7 @@ function createFixture(overrides: FixtureOverrides = {}) {
         state: sessionRuntimeState,
         toolResultPromptProjectionState: {},
         trajectoryRecorder: {},
+        transcriptPolicy: { appendOnlyRuntimeContext: false },
         transport: {
           effectiveAgentTransport: "sse",
           effectiveExtraParams: {},
@@ -187,7 +186,7 @@ function createFixture(overrides: FixtureOverrides = {}) {
     getRepairedRejectedProviderReplay: () => overrides.repairedRejectedProviderReplay ?? true,
     preparedStreamRuntime: {
       abortable: async <T>(promise: Promise<T>) => await promise,
-      cache: { observabilityEnabled: false, promptTools: [] },
+      cache: {},
       history: {
         contextEnginePromptAuthority: "assembled",
         contextEngineAssemblySucceeded: true,
@@ -209,8 +208,10 @@ function createFixture(overrides: FixtureOverrides = {}) {
     },
   } as unknown as SettledInput;
 
-  mocks.runPrompt.mockImplementation(async (promptInput) => {
-    markYieldAborted = promptInput.lifecycle.markYieldAborted;
+  mocks.runPrompt.mockImplementation(async (_promptInput, promptState) => {
+    markYieldAborted = () => {
+      promptState.yieldAborted = true;
+    };
     return { promptStartedAt: 100 };
   });
   mocks.settleStream.mockResolvedValue({
@@ -224,18 +225,17 @@ function createFixture(overrides: FixtureOverrides = {}) {
     currentAttemptAssistant: undefined,
     currentAttemptCompletedAssistant: undefined,
     attemptUsage: undefined,
-    cacheBreak: null,
     lastCallUsage: undefined,
     promptCache: undefined,
   });
-  mocks.completeAfterTurn.mockResolvedValue({
-    sessionIdUsed: "session-1",
-    sessionFileUsed: "session.jsonl",
-  });
-  mocks.completeResult.mockImplementation((resultInput) => ({
-    sessionIdUsed: resultInput.state.sessionIdUsed,
-    sessionFileUsed: resultInput.state.sessionFileUsed,
-  }));
+  mocks.completeAfterTurn.mockResolvedValue(undefined);
+  mocks.completeResult.mockImplementation(
+    (
+      _input,
+      _settled,
+      prompt: Parameters<typeof import("./attempt-result.js").completeEmbeddedAttemptResult>[2],
+    ) => ({ sessionIdUsed: prompt.sessionIdUsed, sessionFileUsed: prompt.sessionFileUsed }),
+  );
   mocks.clearActiveEmbeddedRun.mockReturnValue(undefined);
 
   return {
@@ -299,11 +299,10 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
       currentAttemptAssistant: failedAssistant,
       currentAttemptCompletedAssistant: failedAssistant,
       attemptUsage: undefined,
-      cacheBreak: null,
       lastCallUsage: undefined,
       promptCache: undefined,
     });
-    mocks.completeAfterTurn.mockResolvedValue({ sessionIdUsed: "session-1" });
+    mocks.completeAfterTurn.mockResolvedValue(undefined);
 
     const finalize = runEmbeddedAttemptSettledPhase(fixture.input);
     await vi.waitFor(() => expect(onPartialReply).toHaveBeenCalledOnce());
@@ -317,11 +316,7 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
 
   it("rewinds the exact rejected branch before the hidden retry can choose NO_REPLY", async () => {
     const sessionManager = SessionManager.inMemory();
-    const promptId = sessionManager.appendMessage({
-      role: "user",
-      content: "Original request",
-      timestamp: 1,
-    });
+    const promptId = sessionManager.appendMessage(makeUserMessage("Original request", 1));
     const rejectedId = sessionManager.appendMessage({
       role: "assistant",
       content: [{ type: "text", text: "Rejected first answer" }],
@@ -353,7 +348,6 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
       currentAttemptAssistant: undefined,
       currentAttemptCompletedAssistant: undefined,
       attemptUsage: undefined,
-      cacheBreak: null,
       lastCallUsage: undefined,
       promptCache: undefined,
     };
@@ -362,10 +356,7 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
       expect(sessionManager.getLeafId()).toBe(promptId);
       return settledStream;
     });
-    mocks.completeAfterTurn.mockResolvedValue({
-      sessionIdUsed: "session-1",
-      sessionFileUsed: "session.jsonl",
-    });
+    mocks.completeAfterTurn.mockResolvedValue(undefined);
 
     await runEmbeddedAttemptSettledPhase(fixture.input);
 
@@ -419,7 +410,6 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
       currentAttemptAssistant: undefined,
       currentAttemptCompletedAssistant: undefined,
       attemptUsage: undefined,
-      cacheBreak: null,
       lastCallUsage: undefined,
       promptCache: { published: true },
     };
@@ -433,33 +423,28 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
     mocks.completeAfterTurn.mockImplementation(async () => {
       expect(fixture.sessionRuntimeState.promptCache).toEqual({ published: true });
       fixture.order.push("settled-published", "after-turn");
-      return { sessionIdUsed: "after-session", sessionFileUsed: "after.jsonl" };
     });
 
     await expect(runEmbeddedAttemptSettledPhase(fixture.input)).resolves.toEqual({
-      sessionIdUsed: "after-session",
-      sessionFileUsed: "after.jsonl",
+      sessionIdUsed: "settled-session",
+      sessionFileUsed: "initial.jsonl",
     });
 
     expect(fixture.activeSession.agent.state.messages).toBe(fixture.repairedMessages);
     expect(fixture.order).toEqual(["pending-events", "settle", "settled-published", "after-turn"]);
     expect(mocks.settleStream).toHaveBeenCalledWith(
       expect.objectContaining({
-        runAbortDeadlineAtMs: 123,
+        getRunAbortDeadlineAtMs:
+          fixture.input.preparedStreamRuntime.timeout.getRunAbortDeadlineAtMs,
         shouldFlushForContextEngine: true,
       }),
     );
     expect(mocks.completeAfterTurn).toHaveBeenCalledWith(
+      fixture.input,
+      settledStream,
       expect.objectContaining({
-        state: expect.objectContaining({
-          beforeAgentFinalizeRevisionReason: "revision changed",
-          compactionOccurredThisAttempt: true,
-          contextEngineAfterTurnCheckpoint: 7,
-          messagesSnapshot: settledStream.messagesSnapshot,
-          prePromptMessageCount: 3,
-          sessionIdUsed: "settled-session",
-          yieldAborted: true,
-        }),
+        beforeAgentFinalizeRevisionReason: "revision changed",
+        yieldAborted: true,
       }),
     );
   });
@@ -481,14 +466,10 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
         currentAttemptAssistant: undefined,
         currentAttemptCompletedAssistant: undefined,
         attemptUsage: undefined,
-        cacheBreak: null,
         lastCallUsage: undefined,
         promptCache: undefined,
       });
-      mocks.completeAfterTurn.mockResolvedValue({
-        sessionIdUsed: "session-1",
-        sessionFileUsed: "session.jsonl",
-      });
+      mocks.completeAfterTurn.mockResolvedValue(undefined);
 
       const finalize = runEmbeddedAttemptSettledPhase(fixture.input);
       await vi.advanceTimersByTimeAsync(119_999);
@@ -496,7 +477,7 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
       await vi.advanceTimersByTimeAsync(1);
       await expect(finalize).resolves.toEqual({
         sessionIdUsed: "session-1",
-        sessionFileUsed: "session.jsonl",
+        sessionFileUsed: "initial.jsonl",
       });
       expect(mocks.settleStream).toHaveBeenCalledOnce();
     } finally {
@@ -523,18 +504,14 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
       currentAttemptAssistant: undefined,
       currentAttemptCompletedAssistant: undefined,
       attemptUsage: undefined,
-      cacheBreak: null,
       lastCallUsage: undefined,
       promptCache: undefined,
     });
-    mocks.completeAfterTurn.mockResolvedValue({
-      sessionIdUsed: "session-1",
-      sessionFileUsed: "session.jsonl",
-    });
+    mocks.completeAfterTurn.mockResolvedValue(undefined);
 
     await expect(runEmbeddedAttemptSettledPhase(fixture.input)).resolves.toEqual({
       sessionIdUsed: "session-1",
-      sessionFileUsed: "session.jsonl",
+      sessionFileUsed: "initial.jsonl",
     });
     expect(mocks.settleStream).toHaveBeenCalledOnce();
   });
@@ -558,19 +535,15 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
         currentAttemptAssistant: undefined,
         currentAttemptCompletedAssistant: undefined,
         attemptUsage: undefined,
-        cacheBreak: null,
         lastCallUsage: undefined,
         promptCache: undefined,
       };
     });
-    mocks.completeAfterTurn.mockResolvedValue({
-      sessionIdUsed: "session-1",
-      sessionFileUsed: "session.jsonl",
-    });
+    mocks.completeAfterTurn.mockResolvedValue(undefined);
 
     await expect(runEmbeddedAttemptSettledPhase(fixture.input)).resolves.toEqual({
       sessionIdUsed: "session-1",
-      sessionFileUsed: "session.jsonl",
+      sessionFileUsed: "initial.jsonl",
     });
     expect(mocks.settleStream).toHaveBeenCalledOnce();
     expect(mocks.completeAfterTurn).toHaveBeenCalledOnce();
@@ -598,11 +571,7 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
 
   it("restores the rewound in-memory branch when settlement fails", async () => {
     const sessionManager = SessionManager.inMemory();
-    const promptId = sessionManager.appendMessage({
-      role: "user",
-      content: "Original request",
-      timestamp: 1,
-    });
+    const promptId = sessionManager.appendMessage(makeUserMessage("Original request", 1));
     const rejectedId = sessionManager.appendMessage({
       role: "assistant",
       content: [{ type: "text", text: "Rejected first answer" }],
@@ -654,7 +623,7 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
 
     await expect(runEmbeddedAttemptSettledPhase(fixture.input)).resolves.toEqual({
       sessionIdUsed: "session-1",
-      sessionFileUsed: "session.jsonl",
+      sessionFileUsed: "initial.jsonl",
     });
 
     // The queued-event drain must run (and complete) BEFORE the re-flush reads
@@ -687,7 +656,7 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
 
     await expect(runEmbeddedAttemptSettledPhase(fixture.input)).resolves.toEqual({
       sessionIdUsed: "session-1",
-      sessionFileUsed: "session.jsonl",
+      sessionFileUsed: "initial.jsonl",
     });
 
     // The drain still ran (bounded, abort-independent), but the superseded
@@ -724,7 +693,7 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
 
     await expect(runEmbeddedAttemptSettledPhase(fixture.input)).resolves.toEqual({
       sessionIdUsed: "session-1",
-      sessionFileUsed: "session.jsonl",
+      sessionFileUsed: "initial.jsonl",
     });
 
     // The drain still ran (bounded, abort-independent), but the attached
@@ -777,14 +746,10 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
       currentAttemptAssistant: undefined,
       currentAttemptCompletedAssistant: undefined,
       attemptUsage: undefined,
-      cacheBreak: null,
       lastCallUsage: undefined,
       promptCache: undefined,
     });
-    mocks.completeAfterTurn.mockResolvedValue({
-      sessionIdUsed: "session-1",
-      sessionFileUsed: "session.jsonl",
-    });
+    mocks.completeAfterTurn.mockResolvedValue(undefined);
 
     // Settlement must resolve immediately without entering the bounded drain.
     // A 120s wall-clock guard ensures pre-fix (which would drain the wedged
@@ -801,7 +766,7 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
       ]),
     ).resolves.toEqual({
       sessionIdUsed: "session-1",
-      sessionFileUsed: "session.jsonl",
+      sessionFileUsed: "initial.jsonl",
     });
 
     // The bounded drain was skipped: the wedged serialized chain was never
@@ -851,7 +816,7 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
 
     await expect(settlePromise).resolves.toEqual({
       sessionIdUsed: "session-1",
-      sessionFileUsed: "session.jsonl",
+      sessionFileUsed: "initial.jsonl",
     });
 
     // The abort-aware join resolved on abort without draining; the bounded
@@ -874,7 +839,7 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
 
     await expect(runEmbeddedAttemptSettledPhase(fixture.input)).resolves.toEqual({
       sessionIdUsed: "session-1",
-      sessionFileUsed: "session.jsonl",
+      sessionFileUsed: "initial.jsonl",
     });
 
     expect(fixture.flushPartialAssistantText).not.toHaveBeenCalled();

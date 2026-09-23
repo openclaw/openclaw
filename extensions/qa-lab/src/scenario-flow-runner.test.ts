@@ -12,7 +12,12 @@ import {
   type QaSeedScenarioWithSource,
 } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
-import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
+import {
+  runLoadedScenarioFlow,
+  assertTelegramRichObservationFlow,
+  telegramRichObservationCases,
+} from "./scenario-flow-runner.test-support.js";
+import type { QaSuiteStep } from "./suite-types.js";
 
 function readWebchatTranscriptWaitFlow() {
   const scenario = readQaScenarioById("webchat-direct-reply-routing");
@@ -298,6 +303,11 @@ const planningEvidenceFixtures = readQaScenarioPack()
   .map(createPlanningEvidenceFixture);
 
 describe("scenario-flow-runner", () => {
+  it.each(telegramRichObservationCases)(
+    "correlates Telegram rich observations without crossing account IDs: %s",
+    assertTelegramRichObservationFlow,
+  );
+
   it("ignores stale provider prompt mismatches when the current run matches", async () => {
     const currentObservation = {
       egress: "responses-sdk",
@@ -743,13 +753,10 @@ describe("scenario-flow-runner", () => {
           execution: { kind: "flow" },
         },
         config: {},
-        runScenario: async (
-          _name: string,
-          steps: Array<{ name: string; run: () => Promise<string | void> }>,
-        ) => {
+        runScenario: async (_name: string, steps: QaSuiteStep[]) => {
           const stepResults = [];
           for (const step of steps) {
-            const details = await step.run();
+            const details = (await step.run())?.details;
             stepResults.push({
               name: step.name,
               status: "pass" as const,
@@ -802,7 +809,7 @@ describe("scenario-flow-runner", () => {
     });
   });
 
-  it("loads bundled QA fixture modules through qaImport", async () => {
+  it("loads bundled QA runtime modules through qaImport", async () => {
     const result = await runScenarioFlow({
       api: {
         state: createQaBusState(),
@@ -816,13 +823,10 @@ describe("scenario-flow-runner", () => {
           execution: { kind: "flow" },
         },
         config: {},
-        runScenario: async (
-          _name: string,
-          steps: Array<{ name: string; run: () => Promise<string | void> }>,
-        ) => {
+        runScenario: async (_name: string, steps: QaSuiteStep[]) => {
           const stepResults = [];
           for (const step of steps) {
-            const details = await step.run();
+            const details = (await step.run())?.details;
             stepResults.push({
               name: step.name,
               status: "pass" as const,
@@ -849,8 +853,19 @@ describe("scenario-flow-runner", () => {
                 },
               },
               {
+                set: "artifacts",
+                value: { expr: 'await qaImport("./suite-artifacts.js")' },
+              },
+              {
+                set: "redaction",
+                value: { expr: 'await qaImport("./gateway-log-redaction.js")' },
+              },
+              {
                 assert: {
-                  expr: 'typeof plugin.evaluateCodexPluginLifecycle === "function"',
+                  expr:
+                    'typeof plugin.evaluateCodexPluginLifecycle === "function" && ' +
+                    'typeof artifacts.publishQaSuiteArtifactFiles === "function" && ' +
+                    'typeof redaction.redactQaGatewayDebugText === "function"',
                 },
               },
             ],
@@ -881,10 +896,7 @@ describe("scenario-flow-runner", () => {
           execution: { kind: "flow" },
         },
         config: {},
-        runScenario: async (
-          _name: string,
-          steps: Array<{ name: string; run: () => Promise<string | void> }>,
-        ) => {
+        runScenario: async (_name: string, steps: QaSuiteStep[]) => {
           try {
             await steps[0]?.run();
           } catch (error) {

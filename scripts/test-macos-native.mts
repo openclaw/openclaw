@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { root as openCaptureRoot } from "@openclaw/fs-safe/root";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 
@@ -38,9 +39,11 @@ await runWithFailedTrailer("macos-native", async () => {
     const home = path.join(root, "home");
     const state = path.join(root, "state");
     const tmp = path.join(root, "tmp");
-    for (const dir of [home, state, tmp]) {
+    const menuCaptures = path.join(root, "menu-captures");
+    for (const dir of [home, state, tmp, menuCaptures]) {
       fs.mkdirSync(dir, { mode: 0o700 });
     }
+    const captureRoot = await openCaptureRoot(menuCaptures);
     const childEnv: NodeJS.ProcessEnv = {};
     for (const key of [
       "PATH",
@@ -69,11 +72,17 @@ await runWithFailedTrailer("macos-native", async () => {
       TMPDIR: `${tmp}/`,
       TMP: tmp,
       TEMP: tmp,
+      // macOS defaults to terminal-only backtraces; CI must never wait for crash interaction.
+      SWIFT_BACKTRACE:
+        "enable=yes,interactive=no,color=no,sanitize=yes,threads=crashed,registers=none,images=mentioned",
+      // SwiftPM forwards test output through buffered print calls, including stalled diagnostics.
+      NSUnbufferedIO: "YES",
       // The full suite protects default-profile lifecycle behavior. Named-profile
       // construction is exercised separately; both use the disposable runner's account.
       OPENCLAW_PROFILE: profileMode === "named" ? `test-${randomUUID()}` : "default",
       OPENCLAW_STATE_DIR: state,
       OPENCLAW_CONFIG_PATH: path.join(state, "openclaw.json"),
+      OPENCLAW_TEST_MENU_CAPTURE_DIR: menuCaptures,
     });
 
     // Keep SwiftPM's build cache available without inheriting the runner's app state.
@@ -94,6 +103,7 @@ await runWithFailedTrailer("macos-native", async () => {
         bin,
         args: commandArgs,
         env: childEnv,
+        stdio: "inherit",
         requireProcessTreeExit: true,
         timeoutMs,
       });
@@ -116,7 +126,150 @@ await runWithFailedTrailer("macos-native", async () => {
           return;
         }
       }
-      process.exitCode = await run("swift", ["test", ...args]);
+      const eventStreamPath = path.join(root, "swift-testing-events.jsonl");
+      process.exitCode = await run("swift", [
+        "test",
+        ...args,
+        "--event-stream-output-path",
+        eventStreamPath,
+        "--event-stream-version",
+        "6.3",
+      ]);
+      // Export synthetic images after every child/output closes and before resource cleanup.
+      try {
+        const exported = fs.mkdtempSync(
+          path.join(env.RUNNER_TEMP, `openclaw-menu-${profileMode}-`),
+        );
+        const names =
+          profileMode === "default"
+            ? [
+                "catalog",
+                "selected",
+                "effort",
+                "fast",
+                "inherited",
+                "browser-sign-in-before",
+                "browser-sign-in-after",
+              ]
+            : ["thread-reasoning", "thread-tool-activity", "model-initial", "thread-restored"];
+        const allowed = new RegExp(
+          `^(?:${names.join("|")})(?:-window\\.png|-menu-[0-9]+\\.png|-capture-status\\.json)$`,
+        );
+        const files: string[] = [];
+        for (const entry of fs.readdirSync(menuCaptures, { withFileTypes: true })) {
+          if (!entry.isFile() || !allowed.test(entry.name)) {
+            continue;
+          }
+          const source = await captureRoot.open(entry.name, {
+            hardlinks: "reject",
+            symlinks: "reject",
+          });
+          try {
+            const before = await source.handle.stat({ bigint: true });
+            const bytes = await source.handle.readFile();
+            const after = await source.handle.stat({ bigint: true });
+            const current = await fs.promises.lstat(path.join(menuCaptures, entry.name), {
+              bigint: true,
+            });
+            if (
+              BigInt(bytes.byteLength) !== before.size ||
+              [before, after, current].some(
+                (stat) =>
+                  !stat.isFile() ||
+                  stat.nlink !== 1n ||
+                  stat.dev !== before.dev ||
+                  stat.ino !== before.ino ||
+                  stat.size !== before.size ||
+                  stat.mtimeNs !== before.mtimeNs ||
+                  stat.ctimeNs !== before.ctimeNs,
+              )
+            ) {
+              throw new Error(`Menu capture changed before export: ${entry.name}`);
+            }
+            fs.writeFileSync(path.join(exported, entry.name), bytes, { flag: "wx", mode: 0o600 });
+            files.push(entry.name);
+          } finally {
+            await source.handle.close();
+          }
+        }
+        fs.writeFileSync(
+          path.join(exported, "capture-export.json"),
+          JSON.stringify(
+            {
+              profileMode,
+              source: "ordinary-swift-run",
+              swiftExitCode: process.exitCode,
+              files,
+              missingCaptureStatus: names.filter(
+                (name) => !files.includes(`${name}-capture-status.json`),
+              ),
+              requiresVisualInspection: true,
+            },
+            null,
+            2,
+          ) + "\n",
+        );
+        if (env.GITHUB_OUTPUT) {
+          fs.appendFileSync(env.GITHUB_OUTPUT, `menu-${profileMode}-artifact-path=${exported}\n`);
+        }
+        console.error(`[macos-native] Synthetic menu capture artifacts: ${exported}`);
+      } catch (captureError) {
+        console.error(
+          "[macos-native] Menu capture export unavailable; preserving test outcome",
+          captureError,
+        );
+      }
+      if (process.exitCode === 0) {
+        try {
+          let phase: "pending" | "running" | "ended" = "pending";
+          const lines = fs.readFileSync(eventStreamPath, "utf8").split("\n");
+          if (lines.at(-1) === "") {
+            lines.pop();
+          }
+          for (const line of lines) {
+            const record: unknown = JSON.parse(line);
+            if (typeof record !== "object" || record === null || !("kind" in record)) {
+              throw new Error("Invalid Swift Testing event record");
+            }
+            // Swift Testing permits new record and event kinds without a schema change.
+            if (record.kind !== "event" && record.kind !== "test") {
+              continue;
+            }
+            if (!("version" in record) || record.version !== "6.3.0") {
+              throw new Error("Expected Swift Testing event schema 6.3.0");
+            }
+            if (record.kind !== "event") {
+              continue;
+            }
+            if (
+              !("payload" in record) ||
+              typeof record.payload !== "object" ||
+              record.payload === null ||
+              !("kind" in record.payload) ||
+              typeof record.payload.kind !== "string"
+            ) {
+              throw new Error("Invalid Swift Testing event payload");
+            }
+            if (record.payload.kind === "runStarted") {
+              if (phase !== "pending") {
+                throw new Error("Unexpected Swift Testing runStarted");
+              }
+              phase = "running";
+            } else if (record.payload.kind === "runEnded") {
+              if (phase !== "running") {
+                throw new Error("Unexpected Swift Testing runEnded");
+              }
+              phase = "ended";
+            }
+          }
+          if (phase !== "ended") {
+            throw new Error("Swift Testing did not finish its run");
+          }
+        } catch (error) {
+          process.exitCode = 1;
+          console.error("[macos-native] Swift exited 0 without valid test completion", error);
+        }
+      }
     } finally {
       // A completed failed create may leave a database. Never delete it until every child closed.
       if (canRemove && fs.existsSync(keychain)) {

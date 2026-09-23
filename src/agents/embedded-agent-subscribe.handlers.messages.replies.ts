@@ -12,18 +12,8 @@ export function hasReplyDirectiveMetadata(
 ): boolean {
   return Boolean(
     parsed &&
-    ((parsed.mediaUrls?.length ?? 0) > 0 ||
-      parsed.audioAsVoice ||
-      parsed.replyToId ||
-      parsed.replyToTag ||
-      parsed.replyToCurrent),
+    (parsed.audioAsVoice || parsed.replyToId || parsed.replyToTag || parsed.replyToCurrent),
   );
-}
-
-function hasReplyDirectiveMetadataResult(
-  parsed: ReplyDirectiveParseResult | null | undefined,
-): parsed is ReplyDirectiveParseResult {
-  return hasReplyDirectiveMetadata(parsed);
 }
 
 export function mergeReplyDirectiveResults(
@@ -36,10 +26,8 @@ export function mergeReplyDirectiveResults(
   if (!second) {
     return first;
   }
-  const mediaUrls = uniqueStrings([...(first.mediaUrls ?? []), ...(second.mediaUrls ?? [])]);
   return {
     text: `${first.text ?? ""}${second.text ?? ""}`,
-    mediaUrls: mediaUrls.length ? mediaUrls : undefined,
     replyToId: second.replyToId ?? first.replyToId,
     replyToCurrent: first.replyToCurrent || second.replyToCurrent,
     replyToTag: first.replyToTag || second.replyToTag,
@@ -223,20 +211,32 @@ export function readPendingToolMediaReply(
 export function recordPendingAssistantReplyDirectives(
   state: Pick<EmbeddedAgentSubscribeState, "pendingAssistantReplyDirectives">,
   parsed: ReplyDirectiveParseResult | null | undefined,
+  audioDirectiveCounts?: { previous: number; current: number },
 ) {
-  if (!hasReplyDirectiveMetadataResult(parsed)) {
+  if (!parsed) {
     return;
   }
   const current = state.pendingAssistantReplyDirectives;
-  const mediaUrls = Array.from(
-    new Set([...(current?.mediaUrls ?? []), ...(parsed.mediaUrls ?? [])]),
+  // Closing an inline span can retract provisional tags. Keep only source
+  // occurrences after the first still-unconsumed voice directive's boundary.
+  const audioAsVoice = Boolean(
+    parsed.audioAsVoice ||
+    (current?.audioAsVoice &&
+      audioDirectiveCounts &&
+      audioDirectiveCounts.current > (current.audioDirectiveStart ?? 0)),
   );
+  if (!audioAsVoice && !hasReplyDirectiveMetadata(parsed)) {
+    state.pendingAssistantReplyDirectives = undefined;
+    return;
+  }
   state.pendingAssistantReplyDirectives = {
-    mediaUrls: mediaUrls.length ? mediaUrls : undefined,
-    audioAsVoice: current?.audioAsVoice || parsed?.audioAsVoice || undefined,
-    replyToId: parsed?.replyToId ?? current?.replyToId,
-    replyToTag: current?.replyToTag || parsed.replyToTag || undefined,
-    replyToCurrent: current?.replyToCurrent || parsed.replyToCurrent || undefined,
+    audioAsVoice: audioAsVoice || undefined,
+    ...(audioAsVoice && audioDirectiveCounts
+      ? { audioDirectiveStart: current?.audioDirectiveStart ?? audioDirectiveCounts.previous }
+      : {}),
+    replyToId: parsed.replyToId,
+    replyToTag: parsed.replyToTag || undefined,
+    replyToCurrent: parsed.replyToCurrent || undefined,
   };
 }
 
@@ -249,13 +249,9 @@ export function consumePendingAssistantReplyDirectivesIntoReply(
     return payload;
   }
   const pending = state.pendingAssistantReplyDirectives;
-  const mediaUrls = Array.from(
-    new Set([...(payload.mediaUrls ?? []), ...(pending.mediaUrls ?? [])]),
-  );
   state.pendingAssistantReplyDirectives = undefined;
   return {
     ...payload,
-    mediaUrls: mediaUrls.length ? mediaUrls : undefined,
     audioAsVoice: payload.audioAsVoice || pending.audioAsVoice || undefined,
     replyToId: payload.replyToId ?? pending.replyToId,
     replyToTag: Boolean(payload.replyToTag || pending.replyToTag) || undefined,
@@ -282,5 +278,3 @@ export function resolveManagedStreamMediaUrls(
     mediaUrls.filter((url) => state.pendingToolMediaTrustByUrl.get(url.trim()) === true),
   );
 }
-
-/** Builds normalized stream payload data for assistant visible output. */

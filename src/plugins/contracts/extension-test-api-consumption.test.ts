@@ -180,7 +180,7 @@ describe("extension test API consumption", () => {
         export { helper } from "../test-api.js";
         type TestApi = typeof import("./test-api.js");
         loadQaRunnerBundledPluginTestApi("matrix");
-        loadBundledPluginPublicSurface({ pluginId: "codex", artifactBasename: "test-api.js" });
+        loadBundledPluginFacade({ pluginId: "codex", artifactBasename: "test-api.js" });
       `),
     ).toStrictEqual({
       moduleSpecifiers: ["../test-api.js", "./test-api.js", "@openclaw/example/test-api.js"],

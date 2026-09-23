@@ -22,15 +22,22 @@ type OpenAICompletionsToolCallFinalizationOptions<TBlock extends object> = {
 
 /** Keep encrypted provider reasoning attached to the first matching tool call. */
 export function createOpenAIEncryptedToolCallReasoningTracker() {
-  const firstBlocks = new Map<string, ToolCall>();
+  const firstBlocks = new Map<string, { block: ToolCall; signature?: string }>();
   const pendingDetails = new Map<string, string>();
   return {
-    rememberToolCall(id: string, block: ToolCall) {
+    rememberToolCall(id: string, block: ToolCall, previousId = id) {
+      const previous = firstBlocks.get(previousId);
+      if (previousId !== id && previous?.block === block) {
+        firstBlocks.delete(previousId);
+        if (previous.signature && block.thoughtSignature === previous.signature) {
+          delete block.thoughtSignature;
+        }
+      }
       if (!id || firstBlocks.has(id)) {
         return;
       }
-      firstBlocks.set(id, block);
       const pendingDetail = pendingDetails.get(id);
+      firstBlocks.set(id, { block, signature: pendingDetail });
       if (pendingDetail) {
         block.thoughtSignature = pendingDetail;
         pendingDetails.delete(id);
@@ -54,7 +61,8 @@ export function createOpenAIEncryptedToolCallReasoningTracker() {
         const serializedDetail = JSON.stringify(detail);
         const matchingBlock = firstBlocks.get(detail.id);
         if (matchingBlock) {
-          matchingBlock.thoughtSignature = serializedDetail;
+          matchingBlock.signature = serializedDetail;
+          matchingBlock.block.thoughtSignature = serializedDetail;
         } else {
           pendingDetails.set(detail.id, serializedDetail);
         }
@@ -158,7 +166,7 @@ export function createOpenAICompletionsToolCallDeltaNormalizer(): (
     }
 
     const functionCall = delta.function_call;
-    if (sawModernToolCall) {
+    if (sawModernToolCall || (!functionCall && !pendingLegacyToolCall)) {
       return [{ delta: ordinaryDelta, toolCalls: [] }];
     }
 

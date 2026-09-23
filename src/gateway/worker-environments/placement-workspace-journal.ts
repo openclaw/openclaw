@@ -5,6 +5,7 @@ import type { DB as StateDatabase } from "../../state/openclaw-state-db.generate
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import { find, getRequired } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import { MAX_RECONCILIATION_PACK_BYTES } from "./workspace-manifest.js";
 import {
   parseWorkerWorkspaceReconciliationPlan,
   serializeWorkerWorkspaceReconciliationPlan,
@@ -31,7 +32,7 @@ function isCurrentJournalOwner(
   db: DatabaseSync,
   placement: WorkerSessionPlacementRecord | undefined,
   owner: WorkerWorkspaceJournalOwner,
-): boolean {
+): placement is Extract<WorkerSessionPlacementRecord, { state: "active" | "draining" }> {
   if (
     (placement?.state !== "active" && placement?.state !== "draining") ||
     placement.environmentId !== owner.environmentId ||
@@ -106,6 +107,12 @@ export function clearWorkerWorkspaceReconciliation(
 export function createPlacementWorkspaceJournalOps(runtime: PlacementStoreRuntime) {
   const { now, read, write } = runtime;
   return {
+    getWorkspaceReconciliationPlacement(owner: WorkerWorkspaceJournalOwner) {
+      const db = read();
+      const placement = find(db, owner.sessionId);
+      return isCurrentJournalOwner(db, placement, owner) ? placement : undefined;
+    },
+
     listWorkspaceReconciliationOwners(): WorkerWorkspaceJournalOwner[] {
       const db = read();
       return executeSqliteQuerySync(
@@ -203,7 +210,7 @@ export function createPlacementWorkspaceJournalOps(runtime: PlacementStoreRuntim
         throw new Error(`Worker workspace journal metadata is inconsistent for ${owner.sessionId}`);
       }
       if (
-        row.base_pack.byteLength > 256 * 1024 * 1024 ||
+        row.base_pack.byteLength > MAX_RECONCILIATION_PACK_BYTES ||
         createHash("sha256").update(row.base_pack).digest("hex") !== plan.basePackSha256
       ) {
         throw new Error(`Worker workspace journal snapshot is invalid for ${owner.sessionId}`);

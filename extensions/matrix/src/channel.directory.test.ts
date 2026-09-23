@@ -285,7 +285,7 @@ describe("matrix directory", () => {
     ).toEqual([
       {
         checkId: "channels.matrix.groups.open",
-        severity: "critical",
+        severity: "warn",
         title: "Matrix security warning",
         detail:
           'Matrix rooms: groupPolicy="open" allows any room to trigger (mention-gated). Set channels.matrix.groupPolicy="allowlist" + channels.matrix.groups (and optionally channels.matrix.groupAllowFrom) to restrict rooms.',
@@ -325,7 +325,7 @@ describe("matrix directory", () => {
     ).toEqual([
       {
         checkId: "channels.matrix.groups.open",
-        severity: "critical",
+        severity: "warn",
         title: "Matrix security warning",
         detail:
           'Matrix rooms: groupPolicy="open" allows any room to trigger (mention-gated). Set channels.matrix.accounts.assistant.groupPolicy="allowlist" + channels.matrix.accounts.assistant.groups (and optionally channels.matrix.accounts.assistant.groupAllowFrom) to restrict rooms.',

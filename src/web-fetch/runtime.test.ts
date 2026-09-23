@@ -58,13 +58,16 @@ function createFirecrawlProvider(
   });
 }
 
-function createThirdPartyFetchProvider(): PluginWebFetchProviderEntry {
+function createThirdPartyFetchProvider(
+  overrides: Partial<WebFetchTestProviderParams> = {},
+): PluginWebFetchProviderEntry {
   return createWebFetchTestProvider({
     pluginId: "third-party-fetch",
     id: "thirdparty",
     credentialPath: "plugins.entries.third-party-fetch.config.webFetch.apiKey",
     autoDetectOrder: 0,
     getConfiguredCredentialValue: () => "runtime-key",
+    ...overrides,
   });
 }
 
@@ -100,17 +103,14 @@ function requireResolvedWebFetch(
 
 describe("web fetch runtime", () => {
   let resolveWebFetchDefinition: typeof import("./runtime.js").resolveWebFetchDefinition;
-  let clearWebFetchRuntimeCachesForTest: typeof import("./runtime.js").clearWebFetchRuntimeCachesForTest;
   let clearSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").clearSecretsRuntimeSnapshot;
 
   beforeAll(async () => {
-    ({ clearWebFetchRuntimeCachesForTest, resolveWebFetchDefinition } =
-      await import("./runtime.js"));
+    ({ resolveWebFetchDefinition } = await import("./runtime.js"));
     ({ clearSecretsRuntimeSnapshot } = await import("../secrets/runtime.js"));
   });
 
   beforeEach(() => {
-    clearWebFetchRuntimeCachesForTest();
     getActivePluginRegistryVersionMock.mockReset();
     getActivePluginRegistryVersionMock.mockReturnValue(1);
     resolvePluginWebFetchProvidersMock.mockReset();
@@ -121,7 +121,6 @@ describe("web fetch runtime", () => {
 
   afterEach(() => {
     clearSecretsRuntimeSnapshot();
-    clearWebFetchRuntimeCachesForTest();
   });
 
   it("does not auto-detect providers from plugin-owned env SecretRefs without runtime metadata", () => {
@@ -142,6 +141,11 @@ describe("web fetch runtime", () => {
   });
 
   it("prefers the runtime-selected provider when metadata is available", async () => {
+    const unrelated = createThirdPartyFetchProvider({
+      getConfiguredCredentialValue: () => {
+        throw new Error("selected provider resolution probed unrelated credentials");
+      },
+    });
     const provider = createFirecrawlProvider({
       createTool: ({ runtimeMetadata }) => ({
         description: "firecrawl",
@@ -152,8 +156,8 @@ describe("web fetch runtime", () => {
         }),
       }),
     });
-    resolvePluginWebFetchProvidersMock.mockReturnValue([provider]);
-    resolveRuntimeWebFetchProvidersMock.mockReturnValue([provider]);
+    resolvePluginWebFetchProvidersMock.mockReturnValue([unrelated, provider]);
+    resolveRuntimeWebFetchProvidersMock.mockReturnValue([unrelated, provider]);
 
     const runtimeWebFetch: RuntimeWebFetchMetadata = {
       providerSource: "auto-detect",

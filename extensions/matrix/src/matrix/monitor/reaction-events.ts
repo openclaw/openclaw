@@ -1,4 +1,3 @@
-// Matrix plugin module implements reaction events behavior.
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
@@ -12,10 +11,11 @@ import {
 import type { CoreConfig } from "../../types.js";
 import { resolveMatrixAccountConfig } from "../account-config.js";
 import { extractMatrixReactionAnnotation } from "../reaction-common.js";
+import { resolveMatrixThreadRootId } from "../relations.js";
 import type { MatrixClient } from "../sdk.js";
 import { resolveMatrixInboundRoute } from "./route.js";
 import type { PluginRuntime } from "./runtime-api.js";
-import { resolveMatrixThreadRootId, resolveMatrixThreadRouting } from "./threads.js";
+import { resolveMatrixThreadRouting } from "./threads.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 
 const loadApprovalReactionAuth = createLazyRuntimeModule(
@@ -239,12 +239,7 @@ export async function handleInboundMatrixReaction(params: {
     targetEvent && targetEvent.content && typeof targetEvent.content === "object"
       ? (targetEvent.content as RoomMessageEventContent)
       : undefined;
-  const threadRootId = targetContent
-    ? resolveMatrixThreadRootId({
-        event: targetEvent as MatrixRawEvent,
-        content: targetContent,
-      })
-    : undefined;
+  const threadRootId = targetContent ? resolveMatrixThreadRootId(targetContent) : undefined;
   const accountConfig = resolveMatrixAccountConfig({
     cfg: params.cfg,
     accountId: params.accountId,
@@ -275,6 +270,7 @@ export async function handleInboundMatrixReaction(params: {
   const text = `Matrix reaction added: ${reaction.key} by ${params.senderLabel} on msg ${reaction.eventId}`;
   params.core.system.enqueueSystemEvent(text, {
     sessionKey: route.sessionKey,
+    agentId: route.agentId,
     contextKey: `matrix:reaction:add:${params.roomId}:${reaction.eventId}:${params.senderId}:${reaction.key}`,
   });
   params.logVerboseMessage(

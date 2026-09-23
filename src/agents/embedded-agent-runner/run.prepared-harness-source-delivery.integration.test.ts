@@ -1,5 +1,6 @@
 import * as agentHarnessToolRuntime from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { settleReplyDispatcher } from "../../auto-reply/dispatch-dispatcher.js";
 import * as replyPayloadRuntime from "../../auto-reply/reply-payload.js";
 import {
@@ -31,6 +32,7 @@ import {
 import { buildTestCtx } from "../../auto-reply/reply/test-ctx.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../../auto-reply/types.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { FailoverReason } from "../failover/signal.js";
@@ -40,7 +42,10 @@ import {
   getPreparedModelRuntimeBorrowedSnapshot,
   withPreparedModelRuntimePluginGenerationScope,
 } from "../prepared-model-runtime-generation-scope.js";
-import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
+import type {
+  PreparedModelRuntimeLeaseOptions,
+  PreparedModelRuntimePluginGeneration,
+} from "../prepared-model-runtime.types.js";
 import { markCoreTtsAttemptResult } from "../tools/tts-tool-result-provenance.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -55,7 +60,7 @@ import {
 import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
 import { buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
-const runnerState = setupAgentRunnerExecutionTestState();
+const runnerState = await setupAgentRunnerExecutionTestState();
 
 type TestRouteStage = { stage: "initial" } | { stage: "fallback"; fallbackReason: FailoverReason };
 
@@ -609,6 +614,87 @@ describe("prepared harness source delivery", () => {
     }
   });
 
+  it.each([
+    { name: "configured input", selection: {} },
+    { name: "unmarked raw pair", selection: { provider: "openai", model: "legacy-model" } },
+    {
+      name: "marked raw pair",
+      selection: { provider: "openai", model: "legacy-model", requestedRouteResolution: "raw" },
+    },
+    {
+      name: "resolved pair",
+      selection: { provider: "openai", model: "gpt-5.4", requestedRouteResolution: "resolved" },
+    },
+  ] as const)("prepares $name with one manifest normalization pass", async ({ selection }) => {
+    const { runEmbeddedAgent } = await loadSourceDeliveryHarness();
+    mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "primary" }]);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ assistantTexts: ["primary"] }),
+    );
+    useOpenAIPlatformAuthFixture();
+    const metadataSnapshot = {
+      ...createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "openai",
+            providers: ["openai"],
+            modelIdNormalization: {
+              providers: {
+                openai: {
+                  aliases: { "legacy-model": "gpt-5.4", "gpt-5.4": "unexpected-second-pass" },
+                },
+              },
+            },
+          },
+        ],
+      }),
+      workspaceDir: state.workspaceDir,
+    };
+    const config = { agents: { defaults: { model: { primary: "openai/legacy-model" } } } };
+    const pluginRegistry = createEmptyPluginRegistry();
+    const baseLease = await mockedAcquireAgentRunPreparedModelRuntime({
+      config,
+      agentId: "worker",
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+    });
+    mockedAcquireAgentRunPreparedModelRuntime.mockClear();
+    mockedAcquireAgentRunPreparedModelRuntime.mockResolvedValueOnce({
+      ...baseLease,
+      snapshot: {
+        ...baseLease.snapshot,
+        metadataSnapshot,
+        pluginRegistry,
+      },
+    });
+
+    await runEmbeddedAgent({
+      agentId: "worker",
+      sessionId: "manifest-model-preparation",
+      workspaceDir: state.workspaceDir,
+      prompt: "hello",
+      runId: "manifest-model-preparation",
+      timeoutMs: 30_000,
+      modelFallbacksOverride: [],
+      config,
+      pluginGeneration: {
+        pluginMetadataSnapshot: metadataSnapshot,
+        pluginRegistry,
+        configuredCatalogEntries: [],
+        inlineProviderModels: [],
+      },
+      ...selection,
+    });
+
+    expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5.4", agentId: "worker" }],
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("prepares a Codex primary without pinning a plugin-owned fallback", async () => {
     const { runEmbeddedAgent, registerPreparedAgentHarness } = await loadSourceDeliveryHarness();
     registerPreparedAgentHarness({
@@ -706,7 +792,7 @@ describe("prepared harness source delivery", () => {
       metadataSnapshot: admittedMetadataSnapshot,
     } as NonNullable<ReturnType<typeof getPreparedModelRuntimeBorrowedSnapshot>>;
     let publishedMetadataSnapshot = admittedMetadataSnapshot;
-    const release = vi.fn();
+    const release = vi.fn(async () => {});
     let servedMetadataSnapshot: unknown;
     let publishedMetadataAtAcquire: unknown;
     mockedAcquireAgentRunPreparedModelRuntime.mockClear();
@@ -729,7 +815,7 @@ describe("prepared harness source delivery", () => {
         return {
           ...baseLease,
           snapshot: borrowed as typeof baseLease.snapshot,
-          release,
+          [Symbol.asyncDispose]: release,
         };
       },
     );
@@ -762,73 +848,132 @@ describe("prepared harness source delivery", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("starts an isolated probe outside its caller's admitted generation", async () => {
-    const { runEmbeddedAgent } = await loadSourceDeliveryHarness();
-    const config = {};
-    const workspaceDir = state.workspaceDir;
-    const baseLease = await mockedAcquireAgentRunPreparedModelRuntime({
-      agentId: "openclaw",
-      agentDir: state.agentDir("openclaw"),
-      workspaceDir,
-    });
-    const admittedGeneration: PreparedModelRuntimePluginGeneration = {
-      configuredCatalogEntries: [],
-      inlineProviderModels: [],
-      pluginMetadataSnapshot: {
+  it.each(["complete", "parent abort", "queue timeout"] as const)(
+    "starts an isolated probe outside its caller's admitted generation (%s)",
+    async (outcome) => {
+      const { runEmbeddedAgent } = await loadSourceDeliveryHarness();
+      const config = {};
+      const workspaceDir = state.workspaceDir;
+      const baseLease = await mockedAcquireAgentRunPreparedModelRuntime({
+        agentId: "openclaw",
+        agentDir: state.agentDir("openclaw"),
+        workspaceDir,
+      });
+      const admittedGeneration: PreparedModelRuntimePluginGeneration = {
+        configuredCatalogEntries: [],
+        inlineProviderModels: [],
+        pluginMetadataSnapshot: {
+          ...baseLease.snapshot.metadataSnapshot,
+          policyHash: "admitted",
+          workspaceDir,
+        },
+        pluginRegistry: createEmptyPluginRegistry(),
+      };
+      const isolatedMetadataSnapshot = {
         ...baseLease.snapshot.metadataSnapshot,
-        policyHash: "admitted",
+        policyHash: "isolated",
         workspaceDir,
-      },
-      pluginRegistry: createEmptyPluginRegistry(),
-    };
-    const isolatedMetadataSnapshot = {
-      ...baseLease.snapshot.metadataSnapshot,
-      policyHash: "isolated",
-      workspaceDir,
-    };
-    const release = vi.fn();
-    mockedAcquireAgentRunPreparedModelRuntime.mockClear();
-    mockedAcquireAgentRunPreparedModelRuntime.mockResolvedValueOnce({
-      ...baseLease,
-      snapshot: {
-        ...baseLease.snapshot,
+      };
+      const release = vi.fn(async () => {});
+      const acquisitionStarted = createDeferred();
+      const resumeAcquisition = createDeferred();
+      const queueTimeout = createDeferred<never>();
+      const queuedTasks: Promise<unknown>[] = [];
+      let acquisitionSignal: AbortSignal | undefined;
+      mockedAcquireAgentRunPreparedModelRuntime.mockClear();
+      mockedAcquireAgentRunPreparedModelRuntime.mockImplementationOnce(
+        async (_input, options?: PreparedModelRuntimeLeaseOptions) => {
+          const signal = options?.abortSignal;
+          acquisitionSignal = signal;
+          acquisitionStarted.resolve();
+          await resumeAcquisition.promise;
+          signal?.throwIfAborted();
+          return {
+            ...baseLease,
+            snapshot: {
+              ...baseLease.snapshot,
+              config,
+              workspaceDir,
+              metadataSnapshot: isolatedMetadataSnapshot,
+            },
+            [Symbol.asyncDispose]: release,
+          };
+        },
+      );
+      mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "ok" }]);
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["ok"] }));
+      useOpenAIPlatformAuthFixture();
+      const parentAbort = new AbortController();
+
+      const isolatedProbeParams: RunEmbeddedAgentInternalParams = {
+        ...createOverflowRunParams(state),
+        agentId: "openclaw",
+        agentDir: state.agentDir("openclaw"),
         config,
+        provider: "openai",
+        model: "gpt-5.4",
+        preparedModelRuntimeMode: "isolated-read-only",
+        runId: "isolated-probe-generation",
+        sessionKey: undefined,
+        abortSignal: parentAbort.signal,
         workspaceDir,
-        metadataSnapshot: isolatedMetadataSnapshot,
-      },
-      release,
-    });
-    mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "ok" }]);
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["ok"] }));
-    useOpenAIPlatformAuthFixture();
-    const abortSignal = new AbortController().signal;
+        enqueue:
+          outcome === "queue timeout"
+            ? async (task, options) => {
+                const pending = task();
+                queuedTasks.push(pending);
+                // Reject the global queue while its acquisition callback still owns work.
+                return options?.taskTimeoutAbortSignal
+                  ? await Promise.race([pending, queueTimeout.promise])
+                  : await pending;
+              }
+            : undefined,
+      };
+      const run = withPreparedModelRuntimePluginGenerationScope(
+        admittedGeneration,
+        async () => await runEmbeddedAgent(isolatedProbeParams),
+      );
+      const observed = run.catch(() => undefined);
+      try {
+        await Promise.race([acquisitionStarted.promise, run]);
+        expect(acquisitionSignal?.aborted).toBe(false);
+        expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+        expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ config, loadRuntimePlugins: true, workspaceDir }),
+          { abortSignal: acquisitionSignal, catalogMode: "static" },
+        );
 
-    const isolatedProbeParams: RunEmbeddedAgentInternalParams = {
-      ...createOverflowRunParams(state),
-      agentId: "openclaw",
-      agentDir: state.agentDir("openclaw"),
-      config,
-      provider: "openai",
-      model: "gpt-5.4",
-      preparedModelRuntimeMode: "isolated-read-only",
-      runId: "isolated-probe-generation",
-      sessionKey: undefined,
-      abortSignal,
-      workspaceDir,
-    };
-    const result = await withPreparedModelRuntimePluginGenerationScope(
-      admittedGeneration,
-      async () => await runEmbeddedAgent(isolatedProbeParams),
-    );
-
-    expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({ config, loadRuntimePlugins: true, workspaceDir }),
-      abortSignal,
-      "static",
-    );
-    expect(result.payloads).toEqual([{ text: "ok" }]);
-    expect(release).toHaveBeenCalledOnce();
-  });
+        if (outcome === "complete") {
+          resumeAcquisition.resolve();
+          expect((await run).payloads).toEqual([{ text: "ok" }]);
+          expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+          expect(release).toHaveBeenCalledOnce();
+        } else {
+          const reason = new Error(`isolated probe: ${outcome}`);
+          if (outcome === "parent abort") {
+            parentAbort.abort(reason);
+          } else {
+            reason.name = "CommandLaneTaskTimeoutError";
+            queueTimeout.reject(reason);
+            await observed;
+          }
+          expect(acquisitionSignal?.aborted).toBe(true);
+          expect(acquisitionSignal?.reason).toBe(reason);
+          expect(parentAbort.signal.aborted).toBe(outcome === "parent abort");
+          resumeAcquisition.resolve();
+          await expect(run).rejects.toBe(reason);
+          await Promise.allSettled(queuedTasks);
+          expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+          expect(release).not.toHaveBeenCalled();
+        }
+      } finally {
+        resumeAcquisition.resolve();
+        await observed;
+        // Queue rejection can precede callback cleanup; join it before fixture disposal.
+        await Promise.allSettled(queuedTasks);
+      }
+    },
+  );
 
   it.each([
     ["agentHarnessId", { agentHarnessId: "codex" }],

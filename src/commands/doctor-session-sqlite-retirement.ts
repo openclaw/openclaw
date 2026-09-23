@@ -1,4 +1,4 @@
-/** Explicit retirement of producer-verified rollback originals; never a suffix deletion policy. */
+/** Retirement of producer-verified originals; never a suffix deletion policy. */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -13,11 +13,14 @@ import {
   statMigrationPath,
   type MigrationArtifact,
 } from "./doctor-session-sqlite-artifact.js";
+import { collectHistoricalArchiveSources } from "./doctor-session-sqlite-discovery.js";
+import { coalesceSessionSqliteArchiveReferences } from "./doctor-session-sqlite-migration-coalesce.js";
 import {
   hasSymbolicLinkInDirectoryPath,
   readSessionSqliteMigrationManifest,
   writeSessionSqliteMigrationManifest,
   type ActiveSessionSqliteMigrationRun,
+  type SessionSqliteMigrationTargetInput,
 } from "./doctor-session-sqlite-migration-run.js";
 import {
   collectRecoveryInventory,
@@ -27,6 +30,7 @@ import {
   type RecoveryArtifactReference,
   type RecoveryCleanupReport,
 } from "./doctor-session-sqlite-recovery-inventory.js";
+import type { DoctorSessionSqliteIssue } from "./doctor-session-sqlite-types.js";
 import {
   createRecoveryDestinationVerifier,
   verifyHistoricalMigrationArtifact,
@@ -54,6 +58,108 @@ function assertRecoveryOriginal(archivePath: string, artifact: MigrationArtifact
   ) {
     throw new Error("artifact identity or contents changed");
   }
+}
+
+/** Coalesce only exact raw copies; the surviving original preserves every rollback byte. */
+export async function settleDuplicateSessionSqliteArchives(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  targets: readonly SessionSqliteMigrationTargetInput[];
+}) {
+  const {
+    claims,
+    inventory: { report, references },
+  } = collectHistoricalArchiveSources(params);
+  const failures: Array<{
+    target: SessionSqliteMigrationTargetInput;
+    issues: DoctorSessionSqliteIssue[];
+  }> = [];
+  const survivors = new Map<string, RecoveryArtifactReference[]>();
+  const selected: RecoveryCleanupReport["artifacts"] = [];
+  const replacements = new Map<string, RecoveryArtifactReference["move"]>();
+  const assertSurvivor = (refs: RecoveryArtifactReference[]) => {
+    const move = survivors.get(refs[0]!.move.archivePath)![0]!.move;
+    if (hasSymbolicLinkInDirectoryPath(path.dirname(move.archivePath))) {
+      throw new Error("Retained duplicate archive directory changed.");
+    }
+    assertRecoveryOriginal(move.archivePath, move.artifact!);
+  };
+  for (const group of claims) {
+    const target = group[0]![0]!.target;
+    if (
+      !params.targets.some(
+        (candidate) =>
+          candidate.agentId === target.agentId &&
+          candidate.storePath === target.storePath &&
+          candidate.sqlitePath === target.sqlitePath,
+      )
+    ) {
+      continue;
+    }
+    const survivor = group.find((refs) =>
+      refs.every((ref) => ref.move.artifact!.disposal.state === "retained"),
+    );
+    if (!survivor) {
+      continue;
+    }
+    for (const refs of group.filter((candidate) => candidate !== survivor)) {
+      const item = report.artifacts.find(
+        (candidate) => candidate.path === refs[0]!.move.archivePath,
+      )!;
+      survivors.set(item.path, survivor);
+      try {
+        assertSurvivor(refs);
+        const artifact = resolveRecoveryArtifact(refs)!;
+        if (
+          refs.some((ref) => ref.move.artifact!.disposal.state === "disposed") &&
+          statMigrationPath(item.path)
+        ) {
+          throw new Error("Archive was recreated after disposal.");
+        }
+        if (artifact.disposal.state !== "disposed") {
+          assertRecoveryOriginal(item.path, artifact);
+          item.outcome = "candidate";
+          selected.push(item);
+        }
+        replacements.set(item.path, survivor[0]!.move);
+      } catch (error) {
+        failures.push({
+          target,
+          issues: [
+            {
+              code: "historical_transcript_deferred",
+              message: `${item.path}: ${String(error)}; original retained.`,
+            },
+          ],
+        });
+      }
+    }
+  }
+  await disposeRecoveryArtifacts({ selected, references, assertDestinations: assertSurvivor });
+  for (const [archivePath] of replacements) {
+    const refs = references.get(archivePath)!;
+    if (refs.every((ref) => ref.move.artifact!.disposal.state === "disposed")) {
+      assertSurvivor(refs);
+    } else {
+      replacements.delete(archivePath);
+      const item = selected.find((candidate) => candidate.path === archivePath)!;
+      failures.push({
+        target: refs[0]!.target,
+        issues: [
+          {
+            code: "historical_transcript_deferred",
+            message: `${archivePath}: ${item.detail ?? item.reason}; original retained.`,
+          },
+        ],
+      });
+    }
+  }
+  return [
+    ...failures,
+    ...coalesceSessionSqliteArchiveReferences(replacements, [
+      ...new Set([...references.values()].flatMap((refs) => refs.map((ref) => ref.run))),
+    ]),
+  ];
 }
 
 /** The CLI supplies source-only configuration again under authority before exact confirmation. */
@@ -199,145 +305,21 @@ export async function retireSessionSqliteRecovery(params: {
         if (!selected.some((item) => item.path === ref.move.archivePath)) {
           continue;
         }
-        ref.run.manifest.manifestVersion = 3;
+        if (ref.run.manifest.manifestVersion !== 4) {
+          ref.run.manifest.manifestVersion = 3;
+        }
         for (const move of [...ref.target.plannedMoves, ...ref.target.completedMoves]) {
           if (move.archivePath === ref.move.archivePath) {
             move.artifact = artifact;
           }
         }
       }
-      const runs = new Set<ActiveSessionSqliteMigrationRun>();
-      for (const item of selected) {
-        const refs = references.get(item.path)!;
-        const pending = refs
-          .map(({ move }) => move.artifact!.disposal)
-          .find((receipt) => receipt.state === "pending-disposal");
-        const disposal: MigrationArtifact["disposal"] = pending ?? {
-          state: "pending-disposal",
-          intendedAt: new Date().toISOString(),
-          phase: "intent",
-          claimPath: path.join(path.dirname(item.path), `.cleanup-${randomUUID()}`),
-        };
-        for (const ref of refs) {
-          for (const move of [...ref.target.plannedMoves, ...ref.target.completedMoves]) {
-            if (move.archivePath === item.path && move.artifact) {
-              move.artifact.disposal = disposal;
-            }
-          }
-          runs.add(ref.run);
-        }
-      }
-      // Every referencing manifest is durable before the first artifact in this selection moves.
-      for (const run of runs) {
-        writeSessionSqliteMigrationManifest(run);
-      }
-      let activeItem: (typeof selected)[number] | undefined;
-      const claims = selected.map((item) => {
-        const refs = references.get(item.path)!;
-        const artifact = refs[0]!.move.artifact!;
-        const disposal = artifact.disposal;
-        if (
-          disposal.state !== "pending-disposal" ||
-          path.dirname(disposal.claimPath) !== path.dirname(item.path) ||
-          !path.basename(disposal.claimPath).startsWith(".cleanup-")
-        ) {
-          throw new Error("invalid disposal claim");
-        }
-        return { item, refs, artifact, disposal, present: false };
+      await disposeRecoveryArtifacts({
+        selected,
+        references,
+        assertDestinations,
+        assertCurrent: () => authority.assertCurrent(),
       });
-      try {
-        // Claim the entire selection before retiring any member: a changed later transcript
-        // must not lose its index or siblings. Durable intent also owns partially moved claims.
-        for (const claim of claims) {
-          const { item, refs, artifact, disposal } = claim;
-          activeItem = item;
-          authority.assertCurrent();
-          assertDestinations(refs);
-          if (hasSymbolicLinkInDirectoryPath(path.dirname(item.path))) {
-            throw new Error("archive directory changed");
-          }
-          if (statMigrationPath(item.path)) {
-            if (disposal.phase === "unlink-pending") {
-              throw new Error("archive was recreated after claim");
-            }
-            await moveMigrationArtifact(item.path, disposal.claimPath, artifact.identity);
-          }
-          authority.assertCurrent();
-          assertDestinations(refs);
-          assertRecoveryOriginal(item.path, artifact);
-          claim.present = statMigrationPath(disposal.claimPath) !== undefined;
-          disposal.phase = "unlink-pending";
-        }
-        // All claims, including their unlink intents, must survive a crash before disposal starts.
-        for (const run of runs) {
-          writeSessionSqliteMigrationManifest(run);
-        }
-        for (const { item, artifact, disposal, present } of claims) {
-          activeItem = item;
-          if (hasSymbolicLinkInDirectoryPath(path.dirname(item.path))) {
-            throw new Error("archive directory changed");
-          }
-          if (statMigrationPath(item.path)) {
-            throw new Error("archive was recreated after claim");
-          }
-          assertRecoveryOriginal(item.path, artifact);
-          if (present !== (statMigrationPath(disposal.claimPath) !== undefined)) {
-            throw new Error("disposal claim changed after intent");
-          }
-        }
-        authority.assertCurrent();
-        for (const { item, refs } of claims) {
-          activeItem = item;
-          assertDestinations(refs);
-        }
-        // No awaits between selection validation and its unlinks. Completion I/O comes after
-        // this commit section; durable unlink-pending receipts make every partial failure retryable.
-        for (const { item, artifact, disposal } of claims) {
-          activeItem = item;
-          const claim = statMigrationPath(disposal.claimPath);
-          if (claim) {
-            fs.unlinkSync(disposal.claimPath);
-            item.removedBytes = artifact.identity.size;
-          }
-          item.outcome = claim ? "removed" : "disposed";
-          item.bytes = claim ? artifact.identity.size : 0;
-          item.reason = claim ? "rollback-original-retired" : "completed-interrupted-disposal";
-        }
-        for (const { item, refs } of claims) {
-          activeItem = item;
-          if (item.outcome === "removed") {
-            requireDirectorySync(
-              await syncDirectory(path.dirname(item.path)),
-              "Recovery artifact removal",
-            );
-          }
-          for (const ref of refs) {
-            for (const move of [...ref.target.plannedMoves, ...ref.target.completedMoves]) {
-              if (move.archivePath === item.path && move.artifact) {
-                move.artifact.disposal = {
-                  state: "disposed",
-                  disposedAt: new Date().toISOString(),
-                };
-              }
-            }
-          }
-          for (const run of new Set(refs.map((ref) => ref.run))) {
-            writeSessionSqliteMigrationManifest(run);
-          }
-        }
-      } catch (error) {
-        if (activeItem) {
-          activeItem.outcome = "failed";
-          activeItem.reason = "artifact-retirement-failed";
-          activeItem.detail = String(error);
-        }
-        for (const item of selected) {
-          if (item.outcome === "candidate") {
-            item.outcome = "blocked";
-            item.reason = "retirement-stopped";
-          }
-        }
-      }
       return summarizeRecoveryCleanup(
         report.stateDir,
         report.artifacts,
@@ -347,4 +329,151 @@ export async function retireSessionSqliteRecovery(params: {
       );
     },
   });
+}
+
+async function disposeRecoveryArtifacts({
+  selected,
+  references,
+  assertDestinations,
+  assertCurrent,
+}: {
+  selected: RecoveryCleanupReport["artifacts"];
+  references: Map<string, RecoveryArtifactReference[]>;
+  assertDestinations: (refs: RecoveryArtifactReference[]) => void;
+  assertCurrent?: () => void;
+}): Promise<void> {
+  const runs = new Set<ActiveSessionSqliteMigrationRun>();
+  for (const item of selected) {
+    const refs = references.get(item.path)!;
+    const pending = refs
+      .map(({ move }) => move.artifact!.disposal)
+      .find((receipt) => receipt.state === "pending-disposal");
+    const disposal: MigrationArtifact["disposal"] = pending ?? {
+      state: "pending-disposal",
+      intendedAt: new Date().toISOString(),
+      phase: "intent",
+      claimPath: path.join(path.dirname(item.path), `.cleanup-${randomUUID()}`),
+    };
+    for (const ref of refs) {
+      for (const move of [...ref.target.plannedMoves, ...ref.target.completedMoves]) {
+        if (move.archivePath === item.path && move.artifact) {
+          move.artifact.disposal = disposal;
+        }
+      }
+      runs.add(ref.run);
+    }
+  }
+  // Every referencing manifest is durable before the first artifact in this selection moves.
+  for (const run of runs) {
+    writeSessionSqliteMigrationManifest(run);
+  }
+  let activeItem: (typeof selected)[number] | undefined;
+  const claims = selected.map((item) => {
+    const refs = references.get(item.path)!;
+    const artifact = refs[0]!.move.artifact!;
+    const disposal = artifact.disposal;
+    if (
+      disposal.state !== "pending-disposal" ||
+      path.dirname(disposal.claimPath) !== path.dirname(item.path) ||
+      !path.basename(disposal.claimPath).startsWith(".cleanup-")
+    ) {
+      throw new Error("invalid disposal claim");
+    }
+    return { item, refs, artifact, disposal, present: false };
+  });
+  try {
+    // Claim the entire selection before retiring any member: a changed later transcript
+    // must not lose its index or siblings. Durable intent also owns partially moved claims.
+    for (const claim of claims) {
+      const { item, refs, artifact, disposal } = claim;
+      activeItem = item;
+      assertCurrent?.();
+      assertDestinations(refs);
+      if (hasSymbolicLinkInDirectoryPath(path.dirname(item.path))) {
+        throw new Error("archive directory changed");
+      }
+      if (statMigrationPath(item.path)) {
+        if (disposal.phase === "unlink-pending") {
+          throw new Error("archive was recreated after claim");
+        }
+        await moveMigrationArtifact(item.path, disposal.claimPath, artifact.identity);
+      }
+      assertCurrent?.();
+      assertDestinations(refs);
+      assertRecoveryOriginal(item.path, artifact);
+      claim.present = statMigrationPath(disposal.claimPath) !== undefined;
+      disposal.phase = "unlink-pending";
+    }
+    // All claims, including their unlink intents, must survive a crash before disposal starts.
+    for (const run of runs) {
+      writeSessionSqliteMigrationManifest(run);
+    }
+    for (const { item, artifact, disposal, present } of claims) {
+      activeItem = item;
+      if (hasSymbolicLinkInDirectoryPath(path.dirname(item.path))) {
+        throw new Error("archive directory changed");
+      }
+      if (statMigrationPath(item.path)) {
+        throw new Error("archive was recreated after claim");
+      }
+      assertRecoveryOriginal(item.path, artifact);
+      if (present !== (statMigrationPath(disposal.claimPath) !== undefined)) {
+        throw new Error("disposal claim changed after intent");
+      }
+    }
+    assertCurrent?.();
+    for (const { item, refs } of claims) {
+      activeItem = item;
+      assertDestinations(refs);
+    }
+    // No awaits between selection validation and its unlinks. Completion I/O comes after
+    // this commit section; durable unlink-pending receipts make every partial failure retryable.
+    for (const { item, artifact, disposal } of claims) {
+      activeItem = item;
+      const claim = statMigrationPath(disposal.claimPath);
+      if (claim) {
+        fs.unlinkSync(disposal.claimPath);
+        item.removedBytes = artifact.identity.size;
+      }
+      item.outcome = claim ? "removed" : "disposed";
+      item.bytes = claim ? artifact.identity.size : 0;
+      item.reason = claim ? "rollback-original-retired" : "completed-interrupted-disposal";
+    }
+    const syncedDirectories = new Set<string>();
+    for (const { item, refs } of claims) {
+      activeItem = item;
+      const directory = path.dirname(item.path);
+      if (item.outcome === "removed" && !syncedDirectories.has(directory)) {
+        requireDirectorySync(await syncDirectory(directory), "Recovery artifact removal");
+        syncedDirectories.add(directory);
+      }
+      assertCurrent?.();
+      assertDestinations(refs);
+      for (const ref of refs) {
+        for (const move of [...ref.target.plannedMoves, ...ref.target.completedMoves]) {
+          if (move.archivePath === item.path && move.artifact) {
+            move.artifact.disposal = {
+              state: "disposed",
+              disposedAt: new Date().toISOString(),
+            };
+          }
+        }
+      }
+    }
+    for (const run of runs) {
+      writeSessionSqliteMigrationManifest(run);
+    }
+  } catch (error) {
+    if (activeItem) {
+      activeItem.outcome = "failed";
+      activeItem.reason = "artifact-retirement-failed";
+      activeItem.detail = String(error);
+    }
+    for (const item of selected) {
+      if (item.outcome === "candidate") {
+        item.outcome = "blocked";
+        item.reason = "retirement-stopped";
+      }
+    }
+  }
 }

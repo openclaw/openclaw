@@ -6,7 +6,7 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { noteDispatchProcessedOutcome } from "../../auto-reply/reply/dispatch-processed-outcome.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
-import { getReplySystemEventSessionKey } from "../../auto-reply/reply/system-event-session-key.js";
+import { getReplySystemEventContext } from "../../auto-reply/reply/system-event-session-key.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -28,6 +28,7 @@ import { outboundMessageIdentities } from "../message/outbound-echo-state.js";
 import type { RecordInboundSession } from "../session.types.js";
 import { runPreparedChannelTurn } from "./execution.js";
 import { dispatchAssembledChannelTurn } from "./lifecycle.js";
+import { createReplyDispatchReceipt } from "./run-channel-turn.delivery.test-helpers.js";
 import type { ChannelTurnResult, PreparedChannelTurn } from "./types.js";
 
 const deliverOutboundPayloads = vi.hoisted(() => vi.fn());
@@ -119,32 +120,7 @@ vi.mock("../../config/sessions/transcript.js", () => ({
 const cfg = {} as OpenClawConfig;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let storePath: string;
-const visibleFinalReceipt = {
-  counts: {
-    tool: {
-      delivered: 0,
-      deliveredNotVisible: 0,
-      cancelled: 0,
-      failedBeforeSend: 0,
-      failedAfterSend: 0,
-    },
-    block: {
-      delivered: 0,
-      deliveredNotVisible: 0,
-      cancelled: 0,
-      failedBeforeSend: 0,
-      failedAfterSend: 0,
-    },
-    final: {
-      delivered: 1,
-      deliveredNotVisible: 0,
-      cancelled: 0,
-      failedBeforeSend: 0,
-      failedAfterSend: 0,
-    },
-  },
-  anyVisibleDelivered: true,
-} as const;
+const visibleFinalReceipt = createReplyDispatchReceipt({ final: { delivered: 1 } });
 
 function createCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
   return {
@@ -315,7 +291,9 @@ describe("channel turn pipeline", () => {
     const { channel, routeSessionKey, dispatchSessionKey } = scenario;
     const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async (params) => {
       expect(params.ctx).not.toHaveProperty("SystemEventSessionKey");
-      expect(getReplySystemEventSessionKey({ ...params.replyOptions })).toBe(routeSessionKey);
+      expect(getReplySystemEventContext({ ...params.replyOptions })?.sessionKey).toBe(
+        routeSessionKey,
+      );
       await params.dispatcherOptions.deliver({ text: "reply" }, { kind: "final" });
       return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
     }) as DispatchReplyWithBufferedBlockDispatcher;

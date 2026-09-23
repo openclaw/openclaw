@@ -1,8 +1,23 @@
+import { setTimeout as delay } from "node:timers/promises";
+import {
+  createBoundedResponseTooLargeError,
+  readBoundedResponseBytes,
+} from "./bounded-response.mjs";
 import {
   classifyReleaseTrain,
   compareReleaseVersions,
   parseReleaseVersion,
 } from "./release-version.mjs";
+
+// npm may accept a publish before its exact version becomes readable. Publication
+// callers keep their one-shot probes; only postpublish readback uses this budget.
+export function npmRegistryReadbackDeadline() {
+  const timeoutMs = Number(process.env.OPENCLAW_NPM_READBACK_TIMEOUT_MS ?? 15 * 60_000);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) {
+    throw new Error("OPENCLAW_NPM_READBACK_TIMEOUT_MS must be a positive integer <= 2147483647.");
+  }
+  return Date.now() + timeoutMs;
+}
 
 /**
  * @typedef {object} NpmPublishPlan
@@ -45,88 +60,224 @@ async function cancelNpmRegistryResponseBody(response) {
 }
 
 /**
- * Fetches and consumes an npm packument within one timeout per attempt. Keeping
- * body transfer inside the retry loop prevents a headers-only success from
- * bypassing the retry budget when the registry stream stalls or truncates.
- *
- * @param {{
+ * @typedef {{
  *   packageName: string;
  *   packageUrl: string;
  *   attempts?: number;
  *   timeoutMs?: number;
+ *   deadlineMs?: number;
  *   fetchImpl?: (input: string, init: RequestInit) => Promise<Response>;
  *   sleep?: (delayMs: number) => Promise<void>;
  *   createSignal?: (timeoutMs: number) => AbortSignal;
- * }} params
- * @returns {Promise<NpmRegistryPackumentResult>}
+ *   signal?: AbortSignal;
+ * }} NpmRegistryReadOptions
  */
-export async function fetchNpmRegistryPackumentWithRetry(params) {
-  const attempts = params.attempts ?? 3;
-  const timeoutMs = params.timeoutMs ?? 20_000;
+
+export class NpmRegistryUnavailableError extends Error {}
+
+class RetryableNpmRegistryError extends Error {
+  constructor(message, retryAfterMs = 0) {
+    super(message);
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+function boundedReadLimit(value, fallback, maximum, label) {
+  const result = value ?? fallback;
+  if (!Number.isSafeInteger(result) || result <= 0 || result > maximum) {
+    throw new Error(`Invalid npm ${label}.`);
+  }
+  return result;
+}
+
+function retryAfterMilliseconds(response) {
+  const value = response.headers?.get("retry-after")?.trim();
+  if (!value) {
+    return 0;
+  }
+  if (/^[0-9]+$/u.test(value)) {
+    return Number(value) * 1000;
+  }
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? Math.max(0, timestamp - Date.now()) : 0;
+}
+
+/**
+ * Both headers and body belong to one attempt. Successful byte/identity
+ * comparisons stay with callers and never enter this transport retry loop.
+ * @template T
+ * @param {NpmRegistryReadOptions} params
+ * @param {{ label: string; headers?: Record<string, string>; redirect?: RequestRedirect;
+ *   read: (response: Response, signal: AbortSignal) => Promise<T> }} reader
+ * @returns {Promise<{ status: number; ok: boolean; body: T | null }>}
+ */
+async function fetchNpmRegistryWithRetry(params, reader) {
+  const attempts = boundedReadLimit(params.attempts, 3, 5, "read attempts");
+  const timeoutMs = boundedReadLimit(params.timeoutMs, 20_000, 60_000, "read timeout");
+  const deadlineMs = Math.min(
+    boundedReadLimit(
+      params.deadlineMs,
+      Date.now() + 180_000,
+      Number.MAX_SAFE_INTEGER,
+      "read deadline",
+    ),
+    Date.now() + 180_000,
+  );
   const fetchImpl = params.fetchImpl ?? globalThis.fetch;
-  const sleep =
-    params.sleep ??
-    ((delayMs) =>
-      new Promise((resolve) => {
-        setTimeout(resolve, delayMs);
-      }));
+  const sleep = params.sleep ?? delay;
   const createSignal = params.createSignal ?? ((delayMs) => AbortSignal.timeout(delayMs));
   let lastError;
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    params.signal?.throwIfAborted();
     let response;
+    const remainingMs = deadlineMs - Date.now();
+    if (remainingMs <= 0) {
+      throw new NpmRegistryUnavailableError(`${reader.label} deadline exceeded.`);
+    }
     try {
+      const attemptSignal = createSignal(Math.min(timeoutMs, remainingMs));
+      const signal = params.signal
+        ? AbortSignal.any([params.signal, attemptSignal])
+        : attemptSignal;
       response = await fetchImpl(params.packageUrl, {
-        headers: { accept: "application/vnd.npm.install-v1+json" },
-        signal: createSignal(timeoutMs),
+        headers: reader.headers,
+        redirect: reader.redirect,
+        signal,
       });
+      if (Date.now() >= deadlineMs) {
+        await cancelNpmRegistryResponseBody(response);
+        throw new NpmRegistryUnavailableError(`${reader.label} deadline exceeded.`);
+      }
+      if ([408, 429, 500, 502, 503, 504].includes(response.status)) {
+        await cancelNpmRegistryResponseBody(response);
+        throw new RetryableNpmRegistryError(
+          `HTTP ${response.status}`,
+          retryAfterMilliseconds(response),
+        );
+      }
+      if (!response.ok) {
+        await cancelNpmRegistryResponseBody(response);
+        return { status: response.status, ok: false, body: null };
+      }
+      const body = await reader.read(response, signal);
+      params.signal?.throwIfAborted();
+      if (Date.now() >= deadlineMs) {
+        throw new NpmRegistryUnavailableError(`${reader.label} deadline exceeded.`);
+      }
+      return { status: response.status, ok: true, body };
     } catch (error) {
+      if (response?.ok) {
+        await cancelNpmRegistryResponseBody(response);
+      }
+      // An owning collection's cancellation is not a transient attempt timeout.
+      params.signal?.throwIfAborted();
+      if (
+        !(error instanceof RetryableNpmRegistryError) &&
+        !["AbortError", "TimeoutError", "TypeError"].includes(error?.name) &&
+        !["ECONNRESET", "ETIMEDOUT", "EAI_AGAIN", "UND_ERR_SOCKET"].includes(error?.code)
+      ) {
+        throw error;
+      }
       lastError = error;
     }
-
-    if (response) {
-      if (response.status === 429 || response.status >= 500) {
-        await cancelNpmRegistryResponseBody(response);
-        lastError = new Error(`HTTP ${response.status}`);
-      } else if (!response.ok) {
-        await cancelNpmRegistryResponseBody(response);
-        return { status: response.status, ok: false, packument: null };
-      } else {
-        let body;
-        try {
-          body = await response.text();
-        } catch (error) {
-          await cancelNpmRegistryResponseBody(response);
-          lastError = error;
-          body = undefined;
-        }
-        if (body !== undefined) {
-          try {
-            return {
-              status: response.status,
-              ok: true,
-              packument: JSON.parse(body),
-            };
-          } catch (error) {
-            await cancelNpmRegistryResponseBody(response);
-            const message = error instanceof Error ? error.message : String(error);
-            lastError = new Error(
-              `${params.packageName}: npm publication-route probe returned invalid JSON: ${message}.`,
-            );
-          }
-        }
-      }
-    }
-
     if (attempt < attempts) {
-      await sleep(attempt * 1000);
+      const retryDelayMs = Math.max(attempt * 1000, lastError?.retryAfterMs ?? 0);
+      if (retryDelayMs >= deadlineMs - Date.now()) {
+        throw new NpmRegistryUnavailableError(
+          `${reader.label} deadline would be exceeded before the permitted retry.`,
+          {
+            cause: lastError,
+          },
+        );
+      }
+      if (params.signal && !params.sleep) {
+        await delay(retryDelayMs, undefined, { signal: params.signal });
+      } else {
+        await sleep(retryDelayMs);
+      }
+      params.signal?.throwIfAborted();
     }
   }
 
   const message = lastError instanceof Error ? lastError.message : String(lastError);
-  throw new Error(
-    `${params.packageName}: npm publication-route probe did not return a stable response: ${message}.`,
+  throw new NpmRegistryUnavailableError(
+    `${reader.label} did not return a stable response: ${message}.`,
+    {
+      cause: lastError,
+    },
   );
+}
+
+/**
+ * @param {NpmRegistryReadOptions & { maxBytes?: number; redirect?: RequestRedirect }} params
+ * @returns {Promise<NpmRegistryPackumentResult>}
+ */
+export async function fetchNpmRegistryPackumentWithRetry(params) {
+  const maxBytes =
+    params.maxBytes === undefined
+      ? undefined
+      : boundedReadLimit(params.maxBytes, undefined, 16 * 1024 * 1024, "packument byte limit");
+  const result = await fetchNpmRegistryWithRetry(params, {
+    label: `${params.packageName}: npm publication-route probe`,
+    headers: { accept: "application/vnd.npm.install-v1+json" },
+    redirect: params.redirect,
+    read: async (response, signal) => {
+      const body =
+        maxBytes === undefined
+          ? await response.text()
+          : (
+              await readBoundedResponseBytes(
+                response,
+                `${params.packageName}: npm packument`,
+                maxBytes,
+                {
+                  signal,
+                  createTooLargeError: createBoundedResponseTooLargeError,
+                },
+              )
+            ).toString("utf8");
+      try {
+        return JSON.parse(body);
+      } catch (error) {
+        throw new RetryableNpmRegistryError(
+          `${params.packageName}: npm publication-route probe returned invalid JSON: ${error instanceof Error ? error.message : String(error)}.`,
+        );
+      }
+    },
+  });
+  return { status: result.status, ok: result.ok, packument: result.body };
+}
+
+/** @param {NpmRegistryReadOptions & { maxBytes: number }} params */
+export async function fetchNpmRegistryTarballWithRetry(params) {
+  const maxBytes = boundedReadLimit(
+    params.maxBytes,
+    undefined,
+    256 * 1024 * 1024,
+    "tarball byte limit",
+  );
+  const label = `${params.packageName}: npm tarball readback`;
+  const result = await fetchNpmRegistryWithRetry(
+    { ...params, timeoutMs: params.timeoutMs ?? 60_000 },
+    {
+      label,
+      // Redirects cannot change the registry owner selected by the verified packument.
+      redirect: "manual",
+      read: (response, signal) =>
+        readBoundedResponseBytes(response, label, maxBytes, {
+          signal,
+          createTooLargeError: createBoundedResponseTooLargeError,
+        }),
+    },
+  );
+  if (result.status === 404) {
+    throw new NpmRegistryUnavailableError(`${label} returned HTTP 404.`);
+  }
+  if (!result.ok || result.body === null) {
+    throw new Error(`${label} returned HTTP ${result.status}.`);
+  }
+  return result.body;
 }
 
 /**
@@ -240,7 +391,7 @@ export function resolvePublishedNpmVersionRoute(params) {
  * @param {string} targetVersion
  * @returns {NpmDistTagVersionState}
  */
-function classifyNpmDistTagVersion(currentVersion, targetVersion) {
+export function classifyNpmDistTagVersion(currentVersion, targetVersion) {
   if (currentVersion === undefined) {
     return "missing";
   }

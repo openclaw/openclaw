@@ -42,6 +42,9 @@ env:
   OPENCLAW_VITEST_MAX_WORKERS: "2"
   OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
   OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}
+  OPENCLAW_SELECTED_SHA: ${{ inputs.ref }}
+  OPENCLAW_TOOLING_SHA: ${{ inputs.workflow_sha }}
+  OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
   OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: ${{ github.workspace }}
 
 jobs:
@@ -69,7 +72,12 @@ jobs:
           path: .release-harness
           fetch-depth: 1
           persist-credentials: false
-          sparse-checkout: scripts
+          # The native artifact entrypoint imports the shared private-plugin policy.
+          sparse-checkout: |
+            /package.json
+            /scripts/
+            /src/shared/non-packaged-plugin-dirs.ts
+          sparse-checkout-cone-mode: false
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -157,3 +165,16 @@ jobs:
             exit 0
           fi
           ${{ matrix.command }}
+
+      # This fixture uses synthetic documents and a mocked Gateway; exclude other UI artifacts.
+      - name: Upload synthetic widget prompt failure evidence
+        if: failure() && hashFiles('.artifacts/control-ui-e2e/control-ui-authenticated-widget-sandbox-*/widget-prompt-failure.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: widget-sandbox-repo-e2e-${{ strategy.job-index }}-${{ github.run_attempt }}
+          path: |
+            .artifacts/control-ui-e2e/control-ui-authenticated-widget-sandbox-*/widget-prompt-failure.json
+            .artifacts/control-ui-e2e/control-ui-authenticated-widget-sandbox-*/*.png
+            .artifacts/control-ui-e2e/control-ui-authenticated-widget-sandbox-*/*.webm
+          if-no-files-found: error
+          retention-days: 7

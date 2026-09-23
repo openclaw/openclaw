@@ -14,6 +14,80 @@ function levelIds(params: {
 }
 
 describe("OpenAI thinking route provenance", () => {
+  it.each(["gpt-6-sol", "gpt-6-luna"])("offers supported reasoning for %s", (modelId) => {
+    for (const runtime of ["openclaw", "codex", "auto"]) {
+      const profile = resolveUnifiedOpenAIThinkingProfile(modelId, runtime);
+      expect(profile.defaultLevel).toBe("medium");
+      expect(profile.levels.map((level) => level.id)).toEqual([
+        ...(runtime === "codex" ? [] : ["off"]),
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        ...(runtime === "codex" ? [] : ["ultra"]),
+      ]);
+    }
+    const accountProfile = resolveUnifiedOpenAIThinkingProfile(modelId, "codex", {
+      supportedReasoningEfforts: ["low", "high"],
+    });
+    expect(accountProfile.levels.map((level) => level.id)).toEqual(["low", "high"]);
+    expect(accountProfile.defaultLevel).toBe("low");
+    const explicitOffProfile = resolveUnifiedOpenAIThinkingProfile(modelId, "codex", {
+      supportedReasoningEfforts: ["none", "low"],
+    });
+    expect(explicitOffProfile.levels.map((level) => level.id)).toEqual(["off", "low"]);
+  });
+
+  it.each(["openclaw", "codex", "auto"])(
+    "offers Astra's supported efforts on the %s runtime",
+    (runtime) => {
+      expect(
+        resolveUnifiedOpenAIThinkingProfile("gpt-6-astra", runtime).levels.map((level) => level.id),
+      ).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+    },
+  );
+
+  it.each(["openclaw", "codex", "auto"])(
+    "retains Astra Ultra with scalar API metadata on the %s runtime",
+    (runtime) => {
+      expect(
+        resolveUnifiedOpenAIThinkingProfile(
+          "gpt-6-astra",
+          runtime,
+          { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+          "openai-responses",
+        ).levels.map((level) => level.id),
+      ).toContain("ultra");
+    },
+  );
+
+  it.each([
+    { efforts: [], defaultLevel: undefined },
+    { efforts: ["high"], defaultLevel: undefined },
+    { efforts: ["low", "high"], defaultLevel: "low" },
+    { efforts: ["medium", "high"], defaultLevel: "medium" },
+  ])("retains Astra account efforts $efforts", ({ efforts, defaultLevel }) => {
+    const profile = resolveUnifiedOpenAIThinkingProfile("gpt-6-astra", "codex", {
+      supportedReasoningEfforts: efforts,
+    });
+    expect(profile.levels.map((level) => level.id)).toEqual(efforts);
+    expect(profile.defaultLevel).toBe(defaultLevel);
+  });
+
+  it.each([
+    { efforts: ["low", "high", "ultra"], expected: ["low", "high", "ultra"] },
+    { efforts: ["low", "high", "max"], expected: ["low", "high", "max"] },
+    { efforts: ["none", "low", "high"], expected: ["off", "low", "high"] },
+    { efforts: [], expected: [] },
+  ])("uses native account efforts without a host transport: $efforts", ({ efforts, expected }) => {
+    expect(
+      resolveUnifiedOpenAIThinkingProfile("account-model", "codex", {
+        supportedReasoningEfforts: efforts,
+      }).levels.map((level) => level.id),
+    ).toEqual(expected);
+  });
+
   it("keeps native fallback capabilities for a direct OpenAI route", () => {
     expect(
       levelIds({
@@ -29,6 +103,6 @@ describe("OpenAI thinking route provenance", () => {
         api: "openai-chatgpt-responses",
         efforts: ["low", "high"],
       }),
-    ).toEqual(["off", "low", "medium", "high", "xhigh", "max", "ultra"]);
+    ).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
   });
 });

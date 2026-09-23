@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { z } from "zod";
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import {
@@ -6,10 +7,9 @@ import {
   type WorkerLaunchDescriptor,
   type WorkerLaunchPlan,
 } from "./launch-descriptor.js";
-import { hasExactOwnKeys } from "./protocol-record.js";
-import { parseWorkerAdmissionDeadlineResult } from "./worker-connection-contract.js";
+import { hasExactOwnKeys, workerProtocolObject } from "./protocol-record.js";
+import { WorkerAdmissionDeadlineResultSchema } from "./worker-connection-contract.js";
 import { WORKER_CONNECTION_ENDPOINT_MAX_JSON_BYTES } from "./worker-connection-endpoint.js";
-import type { WorkerRuntimeResult } from "./worker.runtime.js";
 
 /** Private JSONL protocol between one node supervisor and its environment-owned worker. */
 export type WorkerProcessInput =
@@ -40,12 +40,39 @@ export function serializeWorkerProcessInput(message: WorkerProcessInput): string
   return `${json}\n`;
 }
 
-export type WorkerProcessResult = {
-  type: "result";
-  turnId: string;
-  result: WorkerRuntimeResult;
-  retainWorker: boolean;
+const TranscriptResultFields = {
+  transcriptLeafId: z.string().nullable(),
+  transcriptNextSeq: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
 };
+const RuntimeResultSchema = z.union([
+  WorkerAdmissionDeadlineResultSchema,
+  workerProtocolObject({
+    status: z.literal("fenced"),
+    reason: z.enum(["credential-replaced", "owner-epoch-mismatch"]),
+  }),
+  workerProtocolObject({ status: z.literal("completed"), ...TranscriptResultFields }),
+  workerProtocolObject({
+    status: z.literal("failed"),
+    reason: z.literal("turn-failed"),
+    ...TranscriptResultFields,
+  }),
+]);
+const ProcessResultSchema = workerProtocolObject({
+  type: z.literal("result"),
+  turnId: z
+    .string()
+    .refine(
+      (value) => Boolean(value.trim()) && value.length <= WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
+    ),
+  result: RuntimeResultSchema,
+  retainWorker: z.boolean(),
+}).refine(
+  ({ result, retainWorker }) =>
+    !retainWorker || result.status === "completed" || result.status === "failed",
+);
+
+export type WorkerRuntimeResult = z.infer<typeof RuntimeResultSchema>;
+export type WorkerProcessResult = z.infer<typeof ProcessResultSchema>;
 
 export function parseWorkerProcessRequest(value: unknown): WorkerProcessInput {
   if (
@@ -70,65 +97,11 @@ export function parseWorkerProcessRequest(value: unknown): WorkerProcessInput {
 }
 
 export function parseWorkerRuntimeResult(value: unknown): WorkerRuntimeResult | null {
-  const admissionFailure = parseWorkerAdmissionDeadlineResult(value);
-  if (admissionFailure) {
-    return admissionFailure;
-  }
-  if (!isRecord(value)) {
-    return null;
-  }
-  if (
-    value.status === "fenced" &&
-    (value.reason === "credential-replaced" || value.reason === "owner-epoch-mismatch") &&
-    hasExactOwnKeys(value, ["status", "reason"])
-  ) {
-    return { status: value.status, reason: value.reason };
-  }
-  if (
-    (value.transcriptLeafId === null || typeof value.transcriptLeafId === "string") &&
-    typeof value.transcriptNextSeq === "number" &&
-    Number.isSafeInteger(value.transcriptNextSeq) &&
-    value.transcriptNextSeq >= 1
-  ) {
-    const transcript = {
-      transcriptLeafId: value.transcriptLeafId,
-      transcriptNextSeq: value.transcriptNextSeq,
-    };
-    if (
-      value.status === "completed" &&
-      hasExactOwnKeys(value, ["status", "transcriptLeafId", "transcriptNextSeq"])
-    ) {
-      return { status: value.status, ...transcript };
-    }
-    if (
-      value.status === "failed" &&
-      value.reason === "turn-failed" &&
-      hasExactOwnKeys(value, ["status", "reason", "transcriptLeafId", "transcriptNextSeq"])
-    ) {
-      return { status: value.status, reason: value.reason, ...transcript };
-    }
-  }
-  return null;
+  const parsed = RuntimeResultSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 export function parseWorkerProcessResult(value: unknown): WorkerProcessResult | null {
-  if (
-    !isRecord(value) ||
-    !hasExactOwnKeys(value, ["type", "turnId", "result", "retainWorker"]) ||
-    value.type !== "result" ||
-    typeof value.turnId !== "string" ||
-    !value.turnId.trim() ||
-    value.turnId.length > WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH ||
-    typeof value.retainWorker !== "boolean"
-  ) {
-    return null;
-  }
-  const result = parseWorkerRuntimeResult(value.result);
-  if (
-    !result ||
-    (value.retainWorker && result.status !== "completed" && result.status !== "failed")
-  ) {
-    return null;
-  }
-  return { type: "result", turnId: value.turnId, result, retainWorker: value.retainWorker };
+  const parsed = ProcessResultSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }

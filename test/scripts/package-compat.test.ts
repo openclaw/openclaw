@@ -11,7 +11,13 @@ const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
 
 function writeCandidate(
   root: string,
-  options: { commands?: string[]; helpStatus?: number; hang?: boolean; exitCode?: number } = {},
+  options: {
+    commands?: string[];
+    helpStatus?: number;
+    hang?: boolean;
+    exitCode?: number;
+    preserveUninstallIntent?: boolean;
+  } = {},
   name = "candidate.cjs",
 ) {
   const entry = path.join(root, name);
@@ -29,6 +35,17 @@ if (args.includes('--help')) {
   if (options.hang) setInterval(() => {}, 1000);
   else process.exit(options.helpStatus ?? 0);
 } else {
+  if (options.preserveUninstallIntent) {
+    const marker = process.env.ARGV_LOG + '.disabled';
+    if (args[0] === 'plugins' && args[2] === 'demo-plugin-npm') {
+      if (args[1] === 'uninstall') fs.writeFileSync(marker, 'disabled');
+      if (args[1] === 'enable') fs.rmSync(marker, { force: true });
+    }
+    if (args[0] === 'demo-npm' && fs.existsSync(marker)) {
+      console.error('OpenClaw does not know the command "demo-npm".');
+      process.exit(43);
+    }
+  }
   const accepted = args.includes('--accept-capabilities');
   if (accepted && !supported) {
     console.error('unknown option --accept-capabilities');
@@ -140,7 +157,10 @@ describe("package fixture consent compatibility", () => {
     "runs the plugin sweep with selective consent (supported=%s)",
     (supported) => {
       const root = tempDirs.make("openclaw-consent-sweep-");
-      const entry = writeCandidate(root, { commands: supported ? undefined : [] });
+      const entry = writeCandidate(root, {
+        commands: supported ? undefined : [],
+        preserveUninstallIntent: true,
+      });
       const result = runShell(root, entry, sweepFixtureLoader);
       expect(result.status, result.stderr).toBe(0);
       const mutations = result.calls.filter(
@@ -158,7 +178,10 @@ describe("package fixture consent compatibility", () => {
         expect(args.includes(consent), args.join(" ")).toBe(supported && positive);
       }
       expect(mutations.filter((args) => args[1] === "update")).toHaveLength(5);
-      expect(mutations.find((args) => args[1] === "enable")).toContain("claude-bundle-e2e");
+      expect(mutations.filter((args) => args[1] === "enable").map((args) => args[2])).toEqual([
+        "demo-plugin-npm",
+        "claude-bundle-e2e",
+      ]);
     },
   );
 
@@ -251,6 +274,70 @@ run_plugins_clawhub_scenario
       expect(result.calls.find((args) => args[1] === "update")).not.toContain(consent);
     },
   );
+
+  it.each([
+    {
+      environment: `
+export OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB=0
+unset OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC OPENCLAW_PLUGINS_E2E_CLAWHUB_ID
+`,
+      expectedId: "openclaw-kitchen-sink-fixture",
+      expectedSpec: "clawhub:@openclaw/plugin-e2e-fixture",
+      name: "fixture default",
+    },
+    {
+      environment: `
+export OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB=1
+unset OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC OPENCLAW_PLUGINS_E2E_CLAWHUB_ID
+`,
+      expectedId: "openclaw-kitchen-sink-fixture",
+      expectedSpec: "clawhub:@openclaw/kitchen-sink",
+      name: "live default",
+    },
+    {
+      environment: `
+export OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB=1
+export OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC=clawhub:@example/custom-plugin
+export OPENCLAW_PLUGINS_E2E_CLAWHUB_ID=custom-plugin
+`,
+      expectedId: "custom-plugin",
+      expectedSpec: "clawhub:@example/custom-plugin",
+      name: "explicit override",
+    },
+  ])("selects the ClawHub identity for $name", ({ environment, expectedId, expectedSpec }) => {
+    const root = tempDirs.make("openclaw-clawhub-identity-");
+    const result = runShell(
+      root,
+      writeCandidate(root),
+      `
+export OPENCLAW_PLUGINS_SWEEP_SOURCE_ONLY=1
+export OPENCLAW_PLUGINS_E2E_CLAWHUB=1
+${environment}
+source scripts/e2e/lib/plugins/sweep.sh
+node() {
+  case "$1" in
+    scripts/e2e/lib/clawhub-fixture-server.cjs)
+      printf '12345\\n' > "$3"
+      while true; do sleep 1; done
+      ;;
+    scripts/e2e/lib/plugins/assertions.mjs) return 0 ;;
+    *) command node "$@" ;;
+  esac
+}
+run_plugins_clawhub_scenario
+`,
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    const install = result.calls.find((args) => args[1] === "install" && !args.includes("--help"));
+    expect(install?.[2]).toBe(expectedSpec);
+    expect(result.calls.filter((args) => args[1] === "inspect").map((args) => args[2])).toEqual([
+      expectedId,
+      expectedId,
+    ]);
+    expect(result.calls.find((args) => args[1] === "update")?.[2]).toBe(expectedId);
+    expect(result.calls.find((args) => args[1] === "uninstall")?.[2]).toBe(expectedSpec);
+  });
 
   it.each([
     ["  --accept-capabilities  Accept\n", [consent]],

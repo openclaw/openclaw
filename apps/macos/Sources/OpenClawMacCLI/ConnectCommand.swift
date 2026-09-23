@@ -133,7 +133,7 @@ actor SnapshotStore {
     }
 }
 
-func runConnect(_ args: [String]) async {
+func runConnect(_ args: [String], configURL: URL) async {
     let opts = ConnectOptions.parse(args)
     if opts.help {
         print("""
@@ -146,6 +146,7 @@ func runConnect(_ args: [String]) async {
                                [--role <role>] [--scopes <a,b,c>]
 
         Options:
+          --profile <name>  App profile; overrides OPENCLAW_PROFILE (default: default)
           --url <url>        Gateway WebSocket URL (overrides config)
           --token <token>    Gateway token (if required)
           --password <pw>    Gateway password (if required)
@@ -163,7 +164,7 @@ func runConnect(_ args: [String]) async {
         return
     }
 
-    let config = loadGatewayConfig()
+    let config = loadGatewayConfig(from: configURL)
     do {
         let endpoint = try resolveGatewayEndpoint(opts: opts, config: config)
         let displayName = opts.displayName ?? Host.current().localizedName ?? "OpenClaw macOS Debug CLI"
@@ -299,8 +300,16 @@ func resolveGatewayEndpoint(opts: ConnectOptions, config: GatewayConfig) throws 
     }
     return GatewayEndpoint(
         url: url,
-        token: resolvedToken(opts: opts, mode: resolvedMode, config: config),
-        password: resolvedPassword(opts: opts, mode: resolvedMode, config: config),
+        token: resolvedCredential(
+            opts.token,
+            mode: resolvedMode,
+            local: config.token,
+            remote: config.remoteToken),
+        password: resolvedCredential(
+            opts.password,
+            mode: resolvedMode,
+            local: config.password,
+            remote: config.remotePassword),
         mode: resolvedMode)
 }
 
@@ -320,45 +329,31 @@ private func gatewayEndpoint(
     }
     return GatewayEndpoint(
         url: url,
-        token: resolvedToken(
-            opts: opts,
+        token: resolvedCredential(
+            opts.token,
             mode: mode,
-            config: config,
+            local: config.token,
+            remote: config.remoteToken,
             inheritConfigCredentials: inheritConfigCredentials),
-        password: resolvedPassword(
-            opts: opts,
+        password: resolvedCredential(
+            opts.password,
             mode: mode,
-            config: config,
+            local: config.password,
+            remote: config.remotePassword,
             inheritConfigCredentials: inheritConfigCredentials),
         mode: mode)
 }
 
-private func resolvedToken(
-    opts: ConnectOptions,
+private func resolvedCredential(
+    _ explicit: String?,
     mode: String,
-    config: GatewayConfig,
+    local: String?,
+    remote: String?,
     inheritConfigCredentials: Bool = true) -> String?
 {
-    if let token = opts.token, !token.isEmpty { return token }
+    if let explicit, !explicit.isEmpty { return explicit }
     guard inheritConfigCredentials else { return nil }
-    if mode == "remote" {
-        return config.remoteToken
-    }
-    return config.token
-}
-
-private func resolvedPassword(
-    opts: ConnectOptions,
-    mode: String,
-    config: GatewayConfig,
-    inheritConfigCredentials: Bool = true) -> String?
-{
-    if let password = opts.password, !password.isEmpty { return password }
-    guard inheritConfigCredentials else { return nil }
-    if mode == "remote" {
-        return config.remotePassword
-    }
-    return config.password
+    return mode == "remote" ? remote : local
 }
 
 func makeGatewayConnectOptions(

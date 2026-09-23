@@ -2,11 +2,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import {
-  readConfigMachineStateWithMetadata,
-  writeConfigMachineState,
-} from "../state/config-machine-state.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as configMachineState from "../state/config-machine-state-write.js";
+import { readConfigMachineStateWithMetadata } from "../state/config-machine-state.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   buildTuiLastSessionScopeKey,
@@ -177,7 +175,7 @@ describe("tui last session state", () => {
       sessionKey: "agent:main:main",
       stateDir,
     });
-    writeConfigMachineState("unrelated.sessionReference", "agent:main:main", {
+    configMachineState.writeConfigMachineState("unrelated.sessionReference", "agent:main:main", {
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     });
 
@@ -208,23 +206,31 @@ describe("tui last session state", () => {
       sessionKey: "agent:main:retired",
       stateDir,
     });
-    // A replacement lands before the delete phase; the in-transaction
-    // compare-and-delete must preserve it instead of erasing the live pointer.
-    await writeTuiLastSessionKey({
-      scopeKey: "terminal",
-      sessionKey: "agent:main:live",
-      stateDir,
-    });
+    const updateMachineState = configMachineState.updateConfigMachineState;
+    const replaceBeforeUpdate = vi
+      .spyOn(configMachineState, "updateConfigMachineState")
+      .mockImplementationOnce((stateKey, update, options) => {
+        expect(stateKey).toBe("tui.lastSession.terminal");
+        // The real scan selected the retired key. Commit its replacement before
+        // delegating to the real transaction that must recheck the current value.
+        configMachineState.writeConfigMachineState(stateKey, "agent:main:live", options);
+        return updateMachineState(stateKey, update, options);
+      });
 
-    expect(
-      clearTuiLastSessionPointers({
-        stateDir,
-        sessionKeys: new Set(["agent:main:retired"]),
-      }),
-    ).toBe(0);
-    await expect(readTuiLastSessionKey({ scopeKey: "terminal", stateDir })).resolves.toBe(
-      "agent:main:live",
-    );
+    try {
+      expect(
+        clearTuiLastSessionPointers({
+          stateDir,
+          sessionKeys: new Set(["agent:main:retired"]),
+        }),
+      ).toBe(0);
+      expect(replaceBeforeUpdate).toHaveBeenCalledOnce();
+      await expect(readTuiLastSessionKey({ scopeKey: "terminal", stateDir })).resolves.toBe(
+        "agent:main:live",
+      );
+    } finally {
+      replaceBeforeUpdate.mockRestore();
+    }
   });
 });
 

@@ -1,6 +1,6 @@
-// Memory Core plugin module implements cli.host behavior.
 export {
   defaultRuntime,
+  formatCliJsonFailure,
   formatErrorMessage,
   getMemoryEmbeddingCommandSecretTargetIds,
   resolveCommandSecretRefsViaGateway,

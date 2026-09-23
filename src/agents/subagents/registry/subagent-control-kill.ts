@@ -8,11 +8,16 @@ import {
 } from "../../../infra/agent-events.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
+import {
+  captureTaskCancellationControl,
+  type TaskCancellationControl,
+} from "../../../tasks/task-cancellation-context.js";
 import type {
   SubagentAdminKillResult,
-  TaskRegistryControlRuntime,
+  SubagentAdminKillParams,
 } from "../../../tasks/task-registry-control.types.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
+import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import {
   killSubagentRun,
@@ -28,7 +33,10 @@ import {
   type ResolvedSubagentController,
 } from "./subagent-control-scope.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { listSubagentRunsForController } from "./subagent-registry-read.js";
+import {
+  listSubagentRunsForController,
+  listSubagentRunsForRequester,
+} from "./subagent-registry-read.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 
@@ -40,8 +48,6 @@ type KillBinding = {
 };
 
 type KillTree = KillBinding & {
-  bind: (entry: SubagentRunRecord) => KillBinding;
-  successor: () => SubagentRunRecord | undefined;
   session?: ReturnType<typeof resolveSubagentKillSession>;
   children: KillTree[];
   errors: Set<string>;
@@ -53,20 +59,37 @@ type KillSelection = {
   cfg: OpenClawConfig;
   runs: Iterable<SubagentRunRecord>;
   assertCurrent?: () => void;
+  ownsRoot?: (entry: SubagentRunRecord) => boolean;
   controller?: Pick<ResolvedSubagentController, "controllerSessionKey" | "controllerAgentId">;
 };
 
 type KillScope = {
-  refresh: () => void;
-  retarget: (tree: KillTree, successor: SubagentRunRecord) => boolean;
+  cancellationControl: TaskCancellationControl | undefined;
+  refresh: () => number;
+};
+
+type KillPublicationPreparation = {
+  prepare: () => Promise<void>;
+  needsPreparation: () => boolean;
 };
 
 async function withSubagentKillScope<T>(
   params: KillSelection,
   run: (scope: KillScope, trees: KillTree[]) => Promise<T>,
   publish?: (result: T, trees: KillTree[]) => T,
+  preparePublication?: KillPublicationPreparation,
 ): Promise<T> {
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
+  const taskControl = captureTaskCancellationControl();
+  const cancellationControl = params.assertCurrent
+    ? {
+        prepareRead: taskControl?.prepareRead,
+        assertCurrent: () => {
+          taskControl?.assertCurrent();
+          params.assertCurrent?.();
+        },
+      }
+    : taskControl;
   const selected = new Set<string>();
   const releaseRetirements: Array<() => void> = [];
   const holds: Array<NonNullable<ReturnType<typeof holdQueuedSwarmRun>>> = [];
@@ -83,9 +106,11 @@ async function withSubagentKillScope<T>(
     trees: KillTree[],
     owner?: KillSelection["controller"],
     isParentCurrent?: () => boolean,
+    ownsRoot?: (entry: SubagentRunRecord) => boolean,
   ): void => {
     const controller = owner ? { ...owner } : undefined;
     for (const snapshot of runs) {
+      params.assertCurrent?.();
       const entry = getLatestOwnedSubagentRun(
         snapshot.childSessionKey,
         snapshot.requesterAgentId,
@@ -98,15 +123,12 @@ async function withSubagentKillScope<T>(
       ) {
         continue;
       }
-      const ownerCurrent = (candidate: SubagentRunRecord) => {
-        params.assertCurrent?.();
-        return (
-          isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
-          isParentCurrent?.() !== false &&
-          (!controller ||
-            !ensureSubagentControllerOwnsRun({ cfg: params.cfg, controller, entry: candidate }))
-        );
-      };
+      const ownerCurrent = (candidate: SubagentRunRecord) =>
+        isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
+        isParentCurrent?.() !== false &&
+        ownsRoot?.(candidate) !== false &&
+        (!controller ||
+          !ensureSubagentControllerOwnsRun({ cfg: params.cfg, controller, entry: candidate }));
       if (!ownerCurrent(entry) || !isCurrentSubagentRun(entry, params.cfg)) {
         continue;
       }
@@ -120,8 +142,7 @@ async function withSubagentKillScope<T>(
         const sessionId = session.entry?.sessionId;
         const lifecycleRevision = session.entry?.lifecycleRevision;
         const present = session.entry !== undefined;
-        // Recovery replaces run ownership, never the logical session selected by Stop.
-        // Keep the original target and incarnation even across a receipt-matched rebind.
+        // Stop remains bound to the selected session incarnation throughout its awaits.
         const { childSessionKey } = entry;
         ownsSessionIncarnation = () => {
           const stored = loadExactSessionEntryReadOnly({
@@ -178,8 +199,6 @@ async function withSubagentKillScope<T>(
       const tree: KillTree = {
         ...bind(entry),
         session,
-        bind,
-        successor: () => retirement.observation.entry,
         children: [],
         errors,
         discoveryFailed: errors.size > 0,
@@ -194,6 +213,7 @@ async function withSubagentKillScope<T>(
       return;
     }
     try {
+      params.assertCurrent?.();
       if (!tree.canTraverse()) {
         return;
       }
@@ -220,31 +240,43 @@ async function withSubagentKillScope<T>(
       tree.errors.add(formatErrorMessage(error));
     }
   };
+  let outcome: { ok: true; value: T } | { ok: false; error: unknown };
   try {
+    params.assertCurrent?.();
     const trees: KillTree[] = [];
-    select(params.runs, trees, params.controller);
+    select(params.runs, trees, params.controller, undefined, params.ownsRoot);
     const scope: KillScope = {
-      refresh: () => trees.forEach(refreshTree),
-      retarget(tree, successor) {
-        const binding = tree.bind(successor);
-        if (!binding.canTraverse()) {
-          return false;
-        }
-        // The lexical observer follows only committed receipts, including retirement
-        // before this visit. Retired bindings preserve captured work, never discovery.
-        Object.assign(tree, binding);
-        tree.dispatchHold = undefined;
-        scope.refresh();
-        return true;
+      cancellationControl,
+      refresh: () => {
+        trees.forEach(refreshTree);
+        return selected.size;
       },
     };
     scope.refresh();
     const result = await run(scope, trees);
-    return publish ? publish(result, trees) : result;
-  } finally {
-    holds.forEach((reservation) => reservation.release());
-    releaseRetirements.forEach((release) => release());
+    if (preparePublication) {
+      do {
+        await preparePublication.prepare();
+      } while (preparePublication.needsPreparation());
+    }
+    if (publish) {
+      params.assertCurrent?.();
+    }
+    outcome = { ok: true, value: publish ? publish(result, trees) : result };
+  } catch (error) {
+    outcome = { ok: false, error };
   }
+  const released = await Promise.allSettled(holds.map((reservation) => reservation.release()));
+  const retired = await Promise.allSettled(releaseRetirements.map(async (release) => release()));
+  if (!outcome.ok) {
+    throw outcome.error;
+  }
+  for (const result of [...released, ...retired]) {
+    if (result.status === "rejected") {
+      throw result.reason;
+    }
+  }
+  return outcome.value;
 }
 
 async function killLatestSubagentRun(params: {
@@ -262,64 +294,46 @@ async function killLatestSubagentRun(params: {
   result: Awaited<ReturnType<typeof killSubagentRun>>;
 }> {
   const { tree, scope } = params;
+  for (
+    let pending = scope.cancellationControl?.prepareRead?.();
+    pending;
+    pending = scope.cancellationControl?.prepareRead?.()
+  ) {
+    await pending;
+  }
   const matchesExpected = (entry: SubagentRunRecord) =>
     (params.expectedGeneration === undefined || entry.generation === params.expectedGeneration) &&
     (!params.expectedOwnerKey || entry.requesterSessionKey === params.expectedOwnerKey);
-  for (let attempt = 0; ; attempt += 1) {
-    const entry = tree.entry;
-    const session = tree.session;
-    if (!session) {
-      return { entry, result: { killed: false } };
-    }
-    if (!matchesExpected(entry)) {
-      return { entry, session, result: { killed: false, superseded: true } };
-    }
-    const result = tree.isCurrent(entry)
-      ? await killSubagentRun({
-          ...params,
-          entry,
-          session,
-          isCurrent: (candidate) => tree.isCurrent(candidate) && matchesExpected(candidate),
-          withdrawQueuedReservation: () => tree.dispatchHold?.withdraw(),
-          refreshDescendants: scope.refresh,
-        })
-      : { killed: false, superseded: true };
-    // A committed retirement ends mutation/discovery of this ancestor, but not
-    // cancellation of its captured descendants. Refusals on a live row stay fenced.
-    if (
-      result.superseded &&
-      !tree.isCurrent(entry) &&
-      tree.canTraverse() &&
-      matchesExpected(entry)
-    ) {
-      return {
-        entry,
-        session,
-        result: { killed: false, targetState: resolveSubagentKillTargetState(entry) },
-      };
-    }
-    if (!result.superseded) {
-      return { entry, session, result };
-    }
-    const successor = tree.successor();
-    if (!successor || successor === entry || params.expectedRunId) {
-      return { entry, session, result };
-    }
-    if (attempt === 2) {
-      return {
-        entry,
-        session,
-        result: {
-          killed: false,
-          superseded: true,
-          error: "Subagent changed generations repeatedly during kill; retry in a moment.",
-        },
-      };
-    }
-    if (!scope.retarget(tree, successor)) {
-      return { entry, session, result };
-    }
+  scope.cancellationControl?.assertCurrent();
+  const entry = tree.entry;
+  const session = tree.session;
+  if (!session) {
+    return { entry, result: { killed: false } };
   }
+  if (!matchesExpected(entry)) {
+    return { entry, session, result: { killed: false, superseded: true } };
+  }
+  const result = tree.isCurrent(entry)
+    ? await killSubagentRun({
+        ...params,
+        entry,
+        session,
+        cancellationControl: scope.cancellationControl,
+        isCurrent: (candidate) => tree.isCurrent(candidate) && matchesExpected(candidate),
+        withdrawQueuedReservation: () => tree.dispatchHold?.withdraw(),
+        refreshDescendants: scope.refresh,
+      })
+    : { killed: false, superseded: true };
+  // A committed retirement ends mutation/discovery of this ancestor, but not
+  // cancellation of its captured descendants. Refusals on a live row stay fenced.
+  if (result.superseded && !tree.isCurrent(entry) && tree.canTraverse() && matchesExpected(entry)) {
+    return {
+      entry,
+      session,
+      result: { killed: false, targetState: resolveSubagentKillTargetState(entry) },
+    };
+  }
+  return { entry, session, result };
 }
 
 function collectKillErrors(trees: KillTree[], unlabeledRoot?: KillTree) {
@@ -337,7 +351,7 @@ function collectKillErrors(trees: KillTree[], unlabeledRoot?: KillTree) {
     tree.children.forEach(collect);
   };
   // No authority checks or I/O here: a later sibling can fault an already-visited node.
-  // Failures count stable selected nodes, independent of recovery rekeys and killed counts.
+  // Failures count stable selected nodes, independent of later replacements and killed counts.
   trees.forEach(collect);
   return { errors, failed };
 }
@@ -348,52 +362,55 @@ type KillTraversal = {
   suppressTaskDelivery?: boolean;
 };
 
-async function killSubagentDescendants(
-  params: KillTraversal & { tree: KillTree },
-): ReturnType<typeof killSubagentRunTree> {
-  const { tree, scope } = params;
-  if (!tree.canTraverse()) {
-    return { killed: 0, labels: [] };
-  }
-  scope.refresh();
-  // Exact admin constraints belong only to its selected root, not each descendant.
-  return killSubagentRunTree({
-    cfg: params.cfg,
-    suppressTaskDelivery: params.suppressTaskDelivery,
-    scope,
-    trees: tree.children,
-  });
-}
-
 async function killSubagentRunTree(
   params: KillTraversal & { trees: KillTree[] },
 ): Promise<{ killed: number; labels: string[] }> {
-  let killed = 0;
-  const labels: string[] = [];
-  for (const tree of params.trees) {
+  const visits = new Map<KillTree, { label?: string; descendants: boolean }>();
+  const visit = async (tree: KillTree): Promise<void> => {
+    let result = visits.get(tree);
     try {
-      if (!tree.entry.execution.endedAt || tree.entry.pauseReason === "sessions_yield") {
-        const stopped = await killLatestSubagentRun({ ...params, tree });
-        if (stopped.result.error) {
-          tree.errors.add(stopped.result.error);
+      if (!result) {
+        result = { descendants: false };
+        visits.set(tree, result);
+        if (!tree.entry.execution.endedAt || tree.entry.pauseReason === "sessions_yield") {
+          const stopped = await killLatestSubagentRun({ ...params, tree });
+          if (stopped.result.error) {
+            tree.errors.add(stopped.result.error);
+          }
+          if (stopped.result.killed) {
+            result.label = resolveSubagentLabel(stopped.entry);
+          }
+          if (stopped.result.superseded) {
+            return;
+          }
         }
-        if (stopped.result.killed) {
-          killed += 1;
-          labels.push(resolveSubagentLabel(stopped.entry));
-        }
-        if (stopped.result.superseded) {
-          continue;
-        }
+        result.descendants = true;
       }
-      // Resolve recovery before checking traversal; ended ancestors need the same fence.
-      const cascade = await killSubagentDescendants({ ...params, tree });
-      killed += cascade.killed;
-      labels.push(...cascade.labels);
+      if (result.descendants && tree.canTraverse()) {
+        await Promise.all(tree.children.map(visit));
+      }
     } catch (error) {
       tree.errors.add(formatErrorMessage(error));
+      if (result) {
+        result.descendants = false;
+      }
     }
-  }
-  return { killed, labels };
+  };
+  let selected: number;
+  do {
+    selected = params.scope.refresh();
+    // First visits interrupt siblings together; descendants still wait for their parent.
+    await Promise.all(params.trees.map(visit));
+    // A sibling's drain can capture children beneath an already visited branch.
+    // Complete that frontier before releasing holds, without stopping a session twice.
+  } while (params.scope.refresh() !== selected);
+  const collectLabels = (trees: KillTree[]): string[] =>
+    trees.flatMap((tree) => {
+      const label = visits.get(tree)?.label;
+      return [...(label === undefined ? [] : [label]), ...collectLabels(tree.children)];
+    });
+  const labels = collectLabels(params.trees);
+  return { killed: labels.length, labels };
 }
 
 async function killSubagentRoot(params: Parameters<typeof killLatestSubagentRun>[0]) {
@@ -408,8 +425,14 @@ async function killSubagentRoot(params: Parameters<typeof killLatestSubagentRun>
     if (stopped.result.error) {
       params.tree.errors.add(stopped.result.error);
     }
-    if (!stopped.result.superseded && !stopped.result.declined) {
-      cascade = await killSubagentDescendants(params);
+    if (!stopped.result.superseded && !stopped.result.declined && params.tree.canTraverse()) {
+      // Exact admin constraints belong only to its selected root, not each descendant.
+      cascade = await killSubagentRunTree({
+        cfg: params.cfg,
+        suppressTaskDelivery: params.suppressTaskDelivery,
+        scope: params.scope,
+        trees: params.tree.children,
+      });
     }
   } catch (error) {
     params.tree.errors.add(formatErrorMessage(error));
@@ -422,6 +445,7 @@ export async function killAllControlledSubagentRuns(params: {
   cfg: OpenClawConfig;
   controller: ResolvedSubagentController;
   runs: SubagentRunRecord[];
+  assertCurrent?: () => void;
   suppressTaskDelivery?: boolean;
   /** False declines traversal; the scope still releases every reservation hold. */
   beforeKill?: () => boolean | Promise<boolean>;
@@ -435,6 +459,40 @@ export async function killAllControlledSubagentRuns(params: {
       labels: [],
     };
   }
+  return killSelectedSubagentRuns(params);
+}
+
+/** Lifecycle cleanup owns both the completion requester and its separately scoped controller. */
+export async function killSessionSubagentRuns(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId: string;
+  assertCurrent?: () => void;
+}) {
+  const controller = { controllerSessionKey: params.sessionKey, controllerAgentId: params.agentId };
+  return killSelectedSubagentRuns({
+    cfg: params.cfg,
+    assertCurrent: params.assertCurrent,
+    runs: [
+      ...listSubagentRunsForRequester(params.sessionKey, { requesterAgentId: params.agentId }),
+      ...listSubagentRunsForController(params.sessionKey, params.agentId),
+    ],
+    // Ordinary controller mutations retain their narrower authority. Only an admitted
+    // lifecycle boundary can retire work whose completion belongs to this session.
+    ownsRoot: (entry) =>
+      !ensureSubagentControllerOwnsRun({ cfg: params.cfg, controller, entry }) ||
+      (entry.requesterSessionKey === params.sessionKey &&
+        resolveSubagentRequesterAgentId(params.cfg, entry) === params.agentId),
+    suppressTaskDelivery: true,
+  });
+}
+
+async function killSelectedSubagentRuns(
+  params: KillSelection & {
+    suppressTaskDelivery?: boolean;
+    beforeKill?: () => boolean | Promise<boolean>;
+  },
+) {
   const result = await withSubagentKillScope(params, async (scope, trees) => {
     const accepted = params.beforeKill ? await params.beforeKill() : true;
     if (accepted) {
@@ -464,8 +522,12 @@ export async function killAllControlledSubagentRuns(params: {
 
 /** Admin kill path for a subagent session key, bypassing caller ownership checks. */
 export async function killSubagentRunAdmin(
-  params: Parameters<TaskRegistryControlRuntime["killSubagentRunAdmin"]>[0],
-  control?: { assertCurrent: () => void; beforeSessionKill?: () => boolean },
+  params: SubagentAdminKillParams,
+  control?: {
+    assertCurrent: () => void;
+    beforeSessionKill?: () => boolean;
+    preparePublication?: KillPublicationPreparation;
+  },
 ): Promise<SubagentAdminKillResult> {
   const publish = (result: SubagentAdminKillResult): SubagentAdminKillResult => {
     if (params.onResult?.(result) !== undefined) {
@@ -481,7 +543,12 @@ export async function killSubagentRunAdmin(
   if (!entry) {
     return publish({ found: false as const, killed: false as const });
   }
-  if (params.expectedRunId?.trim() && entry.runId !== params.expectedRunId.trim()) {
+  const expectedRunId = params.expectedRunId?.trim();
+  const expectedTaskRunId = params.expectedTaskRunId?.trim();
+  if (
+    (expectedRunId && entry.runId !== expectedRunId) ||
+    (expectedTaskRunId && (entry.taskRunId ?? entry.runId) !== expectedTaskRunId)
+  ) {
     return publish({ found: false as const, killed: false as const });
   }
   if (
@@ -504,7 +571,8 @@ export async function killSubagentRunAdmin(
         tree,
         scope,
         beforeSessionKill: control?.beforeSessionKill,
-        expectedRunId: params.expectedRunId?.trim() || undefined,
+        // Resolve stable task identity once; a later replacement must not inherit this Stop.
+        expectedRunId: expectedRunId || (expectedTaskRunId ? entry.runId : undefined),
         expectedGeneration: params.expectedGeneration,
         expectedOwnerKey: params.expectedOwnerKey?.trim() || undefined,
       });
@@ -564,5 +632,6 @@ export async function killSubagentRunAdmin(
         ...(errors.length > 0 ? { error: errors.join("; ") } : {}),
       });
     },
+    control?.preparePublication,
   );
 }

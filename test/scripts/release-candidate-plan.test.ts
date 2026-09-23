@@ -24,6 +24,7 @@ type Plan = ReturnType<typeof resolveDockerE2ePlan>["plan"];
 function runPlanningStep(
   releaseProfile: "beta" | "stable" | "full",
   mode: "prepare" | "release" | "targeted",
+  upgradeSurvivorScenarios = mode === "targeted" ? "" : "reported-issues",
 ) {
   const root = tempDirs.make("openclaw-candidate-plan-");
   const output = join(root, "github-output");
@@ -44,7 +45,7 @@ function runPlanningStep(
       OPENCLAW_DOCKER_ALL_TIMINGS: "0",
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "",
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: "",
-      OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: mode === "targeted" ? "" : "reported-issues",
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: upgradeSurvivorScenarios,
     },
   });
   return {
@@ -90,5 +91,11 @@ describe("shared release candidate preparation", () => {
     const { plan } = runPlanningStep("full", "targeted");
     expect(plan.lanes.map((lane) => lane.name)).toEqual(["npm-onboard-channel-agent"]);
     expect(plan.requiredPrepublishPluginPackages).toEqual(["@openclaw/codex"]);
+  });
+
+  it("prepares the default non-soak survivor companion packages", () => {
+    const { plan } = runPlanningStep("beta", "prepare", "");
+
+    expect(plan.requiredPrepublishPluginPackages).toContain("@openclaw/duckduckgo-plugin");
   });
 });

@@ -12,11 +12,15 @@ import type {
   PluginManifestProviderRequestProvider,
 } from "./manifest.js";
 import { listOfficialExternalProviderEndpointManifests } from "./official-external-provider-endpoints.js";
-import type { PluginProviderAuthAliasCandidate } from "./plugin-metadata-snapshot.types.js";
+import type {
+  PluginProviderAuthAliasCandidate,
+  PluginProviderAuthContribution,
+} from "./plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import { listSetupProviderIds } from "./setup-descriptors.js";
 
 const PROVIDER_ENDPOINT_CLASSES = new Set(
-  "anthropic-public cerebras-native chutes-native deepseek-native github-copilot-native groq-native meta-native mistral-public minimax-native moonshot-native modelstudio-native nvidia-native openai-public openai opencode-native azure-openai openrouter xai-native xiaomi-native zai-native google-generative-ai google-vertex".split(
+  "anthropic-public cerebras-native chutes-native deepseek-native github-copilot-native groq-native meta-native mistral-public minimax-native moonshot-native modelstudio-native nvidia-native openai-public openai opencode-native opencode-go-native azure-openai openrouter xai-native xiaomi-native zai-native google-generative-ai google-vertex".split(
     " ",
   ),
 );
@@ -42,35 +46,66 @@ export function normalizePluginProviderBaseUrl(value: string): string | undefine
   return normalizeOptionalLowercaseString(url.toString().replace(/\/+$/, ""));
 }
 
+function hostMatchesSuffix(host: string, suffix: string): boolean {
+  if (!suffix) {
+    return false;
+  }
+  return suffix.startsWith(".") || suffix.startsWith("-")
+    ? host.endsWith(suffix)
+    : host === suffix || host.endsWith(`.${suffix}`);
+}
+
+/** Shares declared endpoint matching between request classification and catalog eligibility. */
+export function matchesPluginProviderEndpoint(
+  endpoint: PluginManifestProviderEndpoint,
+  params: {
+    host: string;
+    normalizedBaseUrl?: string;
+  },
+): boolean {
+  return (
+    (endpoint.hosts ?? []).includes(params.host) ||
+    (endpoint.hostSuffixes ?? []).some((suffix) => hostMatchesSuffix(params.host, suffix)) ||
+    Boolean(
+      params.normalizedBaseUrl &&
+      (endpoint.baseUrls ?? []).some(
+        (baseUrl) =>
+          baseUrl === params.normalizedBaseUrl ||
+          normalizePluginProviderBaseUrl(baseUrl) === params.normalizedBaseUrl,
+      ),
+    )
+  );
+}
+
 function prepareProviderEndpoints(value: unknown): PluginManifestProviderEndpoint[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value
-    .filter(isRecord)
-    .filter((endpoint) => {
-      const endpointClass = normalizeOptionalString(endpoint.endpointClass);
-      return endpointClass ? PROVIDER_ENDPOINT_CLASSES.has(endpointClass) : false;
-    })
-    .map((endpoint) => {
-      const endpointClass = normalizeOptionalString(endpoint.endpointClass)!;
-      const googleVertexRegion = normalizeOptionalString(endpoint.googleVertexRegion);
-      const googleVertexRegionHostSuffix = normalizeOptionalString(
-        endpoint.googleVertexRegionHostSuffix,
-      )?.toLowerCase();
-      return Object.assign(
-        {
-          endpointClass,
-          hosts: normalizeProviderHosts(endpoint.hosts),
-          hostSuffixes: normalizeProviderHosts(endpoint.hostSuffixes),
-          baseUrls: normalizeProviderHosts(endpoint.baseUrls)
-            .map(normalizePluginProviderBaseUrl)
-            .filter((baseUrl): baseUrl is string => baseUrl !== undefined),
-        },
-        googleVertexRegion ? { googleVertexRegion } : {},
-        googleVertexRegionHostSuffix ? { googleVertexRegionHostSuffix } : {},
-      );
+  const endpoints: PluginManifestProviderEndpoint[] = [];
+  for (const endpoint of value) {
+    if (!isRecord(endpoint)) {
+      continue;
+    }
+    const endpointClass = normalizeOptionalString(endpoint.endpointClass);
+    if (!endpointClass || !PROVIDER_ENDPOINT_CLASSES.has(endpointClass)) {
+      continue;
+    }
+    const googleVertexRegion = normalizeOptionalString(endpoint.googleVertexRegion);
+    const googleVertexRegionHostSuffix = normalizeOptionalString(
+      endpoint.googleVertexRegionHostSuffix,
+    )?.toLowerCase();
+    endpoints.push({
+      endpointClass,
+      hosts: normalizeProviderHosts(endpoint.hosts),
+      hostSuffixes: normalizeProviderHosts(endpoint.hostSuffixes),
+      baseUrls: normalizeProviderHosts(endpoint.baseUrls)
+        .map(normalizePluginProviderBaseUrl)
+        .filter((baseUrl): baseUrl is string => baseUrl !== undefined),
+      ...(googleVertexRegion ? { googleVertexRegion } : {}),
+      ...(googleVertexRegionHostSuffix ? { googleVertexRegionHostSuffix } : {}),
     });
+  }
+  return endpoints;
 }
 
 const PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
@@ -95,12 +130,19 @@ export function buildPluginMetadataProviderAuthAliases(plugins: readonly PluginM
     ];
     for (const [rawAlias, rawTarget] of entries) {
       const alias = normalizeProviderId(rawAlias);
-      const target = normalizeProviderId(rawTarget);
+      const target = normalizeProviderId(
+        typeof rawTarget === "string" ? rawTarget : rawTarget.provider,
+      );
       if (!alias || !target) {
         continue;
       }
       const candidates = aliases.get(alias) ?? [];
-      candidates.push({ plugin, target, order: order++ });
+      candidates.push({
+        plugin,
+        target,
+        ...(typeof rawTarget === "string" ? {} : { baseUrls: rawTarget.baseUrls }),
+        order: order++,
+      });
       aliases.set(alias, candidates);
     }
   }
@@ -119,7 +161,27 @@ export function buildPluginMetadataProviderFacts(plugins: readonly PluginManifes
     prepareProviderEndpoints(plugin.providerEndpoints),
   );
   const providerRequests = new Map<string, PluginManifestProviderRequestProvider>();
+  const providerAuthContributions: PluginProviderAuthContribution[] = [];
   for (const plugin of plugins) {
+    // Package declarations are stable; readers still decide eligibility against current config.
+    const envProviders = (plugin.setup?.providers ?? []).filter(
+      (provider) => provider.envVars?.length,
+    );
+    const evidenceProviders = (plugin.setup?.providers ?? []).filter(
+      (provider) => provider.authEvidence?.length,
+    );
+    const fallbackProviderRefs =
+      plugin.setup?.requiresRuntime !== false
+        ? listSetupProviderIds(plugin).map(normalizeProviderId).filter(Boolean)
+        : [];
+    if (envProviders.length || evidenceProviders.length || fallbackProviderRefs.length) {
+      providerAuthContributions.push({
+        plugin,
+        envProviders,
+        evidenceProviders,
+        fallbackProviderRefs,
+      });
+    }
     const requests = isRecord(plugin.providerRequest?.providers)
       ? plugin.providerRequest.providers
       : {};
@@ -153,6 +215,7 @@ export function buildPluginMetadataProviderFacts(plugins: readonly PluginManifes
   return {
     providerEndpoints,
     providerRequests,
+    providerAuthContributions,
     modelIdNormalizationPolicies: collectManifestModelIdNormalizationPolicies(plugins),
     providerAuthAliases: buildPluginMetadataProviderAuthAliases(plugins),
   };

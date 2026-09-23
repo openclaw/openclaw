@@ -272,18 +272,12 @@ describe("openai transport stream", () => {
 
   it("embeds the system prompt in input by default for an unverified custom proxy route", () => {
     const params = buildOpenAIResponsesParams(
-      {
+      makeResponsesModel({
         id: "custom-model",
         name: "Custom Model",
-        api: "openai-responses",
         provider: "custom-provider",
         baseUrl: "https://proxy.example.com/v1",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
-      } as never,
+      }),
       emptyContext(),
       undefined,
     ) as { instructions?: string; input?: Array<{ role?: string }> };
@@ -294,19 +288,13 @@ describe("openai transport stream", () => {
 
   it("carries the system prompt via instructions for an unverified proxy route with an explicit opt-in", () => {
     const params = buildOpenAIResponsesParams(
-      {
+      makeResponsesModel({
         id: "custom-model",
         name: "Custom Model",
-        api: "openai-responses",
         provider: "custom-provider",
         baseUrl: "https://proxy.example.com/v1",
         compat: { supportsInstructions: true },
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
-      } as never,
+      }),
       emptyContext(),
       undefined,
     ) as { instructions?: string };

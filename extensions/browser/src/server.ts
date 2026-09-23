@@ -19,7 +19,6 @@ import {
 } from "./browser/control-auth.js";
 import { listenBrowserHttpServer } from "./browser/http-listen.js";
 import { registerBrowserRoutes } from "./browser/routes/index.js";
-import type { BrowserRouteRegistrar } from "./browser/routes/types.js";
 import type { BrowserServerState } from "./browser/server-context.js";
 import {
   installBrowserAuthMiddleware,
@@ -27,7 +26,7 @@ import {
 } from "./browser/server-middleware.js";
 import { getRuntimeConfig } from "./config/config.js";
 import { createSubsystemLogger } from "./logging/subsystem.js";
-import { isDefaultBrowserPluginEnabled } from "./plugin-enabled.js";
+import { resolveBrowserPluginEnableState } from "./plugin-enabled.js";
 
 const log = createSubsystemLogger("browser");
 const logServer = log.child("server");
@@ -40,7 +39,7 @@ async function startBrowserControlServerUnlocked(): Promise<BrowserServerState |
 
   const cfg = getRuntimeConfig();
   const browserCfg = loadBrowserConfigForRuntimeRefresh();
-  if (!isDefaultBrowserPluginEnabled(browserCfg)) {
+  if (!resolveBrowserPluginEnableState(cfg).enabled) {
     return null;
   }
   const resolved = resolveBrowserConfig(browserCfg.browser, browserCfg);
@@ -82,7 +81,7 @@ async function startBrowserControlServerUnlocked(): Promise<BrowserServerState |
   installBrowserAuthMiddleware(app, browserAuth);
 
   const ctx = createBrowserControlContext();
-  registerBrowserRoutes(app as unknown as BrowserRouteRegistrar, ctx);
+  registerBrowserRoutes(app, ctx);
 
   const port = resolved.controlPort;
   const server = await listenBrowserHttpServer(app, port, "127.0.0.1").catch((err: unknown) => {

@@ -50,6 +50,12 @@ describe("Slack preparation rejection records", () => {
     {
       reason: "dm-disabled",
       change: ({ ctx }: ReturnType<typeof fixture>) => {
+        ctx.dmPolicy = "disabled";
+      },
+    },
+    {
+      reason: "channel-not-allowed",
+      change: ({ ctx }: ReturnType<typeof fixture>) => {
         ctx.dmEnabled = false;
       },
     },

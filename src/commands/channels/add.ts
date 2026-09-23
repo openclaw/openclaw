@@ -1,8 +1,6 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 // Implements guided and non-interactive `openclaw channels add` account setup.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentOperationAgentId } from "../../agents/agent-scope-config.js";
-import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import {
   applyPreparedChannelAccountConfiguration,
   type ChannelAccountMutationPlugin,
@@ -23,55 +21,45 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { commitConfigWithPendingPluginInstalls } from "../../plugins/install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../../wizard/prompts.js";
 import { normalizeExternalChannelSetupConfig } from "../channel-setup/config-compatibility.js";
+import { resolveChannelSetupOwner } from "../channel-setup/owner.js";
+import { withCommandPluginMetadata, type ConfigWriteSnapshot } from "../config-validation.js";
+import { parseAccountSelector } from "./account-selector.js";
 import { channelLabel } from "./runtime-label.js";
-import { requireValidConfigFileSnapshot, shouldUseWizard } from "./shared.js";
+import { requireValidConfigForWrite, shouldUseWizard } from "./shared.js";
 
-type ChannelSetupPluginInstallModule = typeof import("../channel-setup/plugin-install.js");
-type OnboardChannelsModule = typeof import("../onboard-channels.js");
-
-const channelSetupPluginInstallLoader = createLazyImportLoader<ChannelSetupPluginInstallModule>(
+const loadChannelSetupPluginInstall = createLazyPromise(
   () => import("../channel-setup/plugin-install.js"),
 );
-const onboardChannelsLoader = createLazyImportLoader<OnboardChannelsModule>(
-  () => import("../onboard-channels.js"),
-);
-
-function loadChannelSetupPluginInstall(): Promise<ChannelSetupPluginInstallModule> {
-  return channelSetupPluginInstallLoader.load();
-}
-
-function loadOnboardChannels(): Promise<OnboardChannelsModule> {
-  return onboardChannelsLoader.load();
-}
+const loadOnboardChannels = createLazyPromise(() => import("../onboard-channels.js"));
 
 export type ChannelsAddOptions = {
+  agent?: string;
   channel?: string;
   account?: string;
 } & Record<string, unknown>;
 
-const CHANNEL_ADD_CONTROL_OPTION_KEYS = new Set(["channel", "account"]);
+const CHANNEL_ADD_CONTROL_OPTION_KEYS = new Set(["agent", "channel", "account"]);
 
-async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
+async function resolveCatalogChannelEntry(
+  raw: string,
+  cfg: OpenClawConfig,
+  resolveWorkspaceDir: () => string,
+) {
   const trimmed = normalizeOptionalLowercaseString(raw);
   if (!trimmed) {
     return undefined;
   }
-  const entries = cfg
-    ? await import("../channel-setup/trusted-catalog.js").then(
-        ({ listTrustedChannelPluginCatalogEntries }) =>
-          listTrustedChannelPluginCatalogEntries({
-            cfg,
-            workspaceDir: resolveAgentWorkspaceDir(cfg, resolveAgentOperationAgentId(cfg)),
-          }),
-      )
-    : await import("../../channels/plugins/catalog.js").then(
-        ({ listRawChannelPluginCatalogEntries }) =>
-          listRawChannelPluginCatalogEntries({ excludeWorkspace: true }),
-      );
+  const entries = await import("../channel-setup/trusted-catalog.js").then(
+    ({ listTrustedChannelPluginCatalogEntries }) =>
+      listTrustedChannelPluginCatalogEntries({
+        cfg,
+        workspaceDir: resolveWorkspaceDir(),
+      }),
+  );
   return entries.find((entry) => {
     if (normalizeOptionalLowercaseString(entry.id) === trimmed) {
       return true;
@@ -99,7 +87,7 @@ function buildChannelSetupInput(opts: ChannelsAddOptions): ChannelSetupInput {
           : value;
       continue;
     }
-    if (value === null || value === "") {
+    if (value === null) {
       input[key] = undefined;
       continue;
     }
@@ -112,9 +100,9 @@ function buildChannelSetupInput(opts: ChannelsAddOptions): ChannelSetupInput {
   return input as ChannelSetupInput;
 }
 
-// Safe to forward every defined key: CLI registration is selection-scoped and
-// resolveChannelsAddOptions drops non-user-authored values (Commander defaults),
-// so no other channel's options or defaults can reach the selected contract.
+// Safe to forward every defined key: CLI registration is selection-scoped.
+// Modern setup drops Commander defaults in resolveChannelsAddOptions; legacy
+// setup keeps manifest defaults and drops empty-string defaults only for ints.
 function buildChannelOwnedSetupInput(opts: ChannelsAddOptions): Record<string, unknown> {
   return Object.fromEntries(
     Object.entries(opts).filter(
@@ -145,25 +133,29 @@ async function channelsAddCommandImpl(
   runtime: RuntimeEnv,
   params?: { hasFlags?: boolean; beforePersistentEffect?: () => Promise<void> },
 ) {
-  const configSnapshot = await requireValidConfigFileSnapshot(runtime);
-  if (!configSnapshot) {
+  parseAccountSelector(opts.account);
+  const writeSnapshot = await requireValidConfigForWrite(runtime);
+  if (!writeSnapshot) {
     return;
   }
-  const cfg = (configSnapshot.sourceConfig ?? configSnapshot.config) as OpenClawConfig;
-  const baseHash = configSnapshot.hash;
+  return configureChannelAccount(writeSnapshot, opts, runtime, params);
+}
+
+async function configureChannelAccount(
+  writeSnapshot: ConfigWriteSnapshot,
+  opts: ChannelsAddOptions,
+  runtime: RuntimeEnv,
+  params?: { hasFlags?: boolean; beforePersistentEffect?: () => Promise<void> },
+) {
+  const cfg = writeSnapshot.snapshot.sourceConfig;
   let nextConfig = cfg;
   let pluginRegistrySourceChanged = false;
 
   const useWizard = shouldUseWizard(params);
   if (useWizard) {
-    const { resolveInitialWizardChannelTarget, runChannelsAddWizardFlow } =
+    const { resolveInitialWizardChannelTarget, runChannelsAddWizardFlow, selectChannelSetupOwner } =
       await import("./add-wizard.js");
-    const target = await resolveInitialWizardChannelTarget(opts.channel, cfg);
-    if (target.kind === "unresolved") {
-      runtime.error(target.message);
-      runtime.exit(1);
-      return;
-    }
+    const prompter = createClackPrompter();
     if (!isTerminalInteractive()) {
       runtime.error(
         "Interactive channel setup requires a TTY. Use `openclaw channels add --channel <id> --use-env` or pass the channel's credential flags for non-interactive setup.",
@@ -171,11 +163,23 @@ async function channelsAddCommandImpl(
       runtime.exit(1);
       return;
     }
+    const { agentId, workspaceDir } = await selectChannelSetupOwner(
+      writeSnapshot,
+      prompter,
+      opts.agent,
+    );
+    const target = await resolveInitialWizardChannelTarget(opts.channel, cfg, workspaceDir);
+    if (target.kind === "unresolved") {
+      runtime.error(target.message);
+      runtime.exit(1);
+      return;
+    }
     await runChannelsAddWizardFlow({
-      cfg,
-      ...(baseHash !== undefined ? { baseHash } : {}),
+      writeSnapshot,
+      agentId,
       runtime,
-      prompter: createClackPrompter(),
+      prompter,
+      workspaceDir,
       ...(target.kind === "resolved" ? { initialChannel: target.channel } : {}),
       ...(params?.beforePersistentEffect
         ? { beforePersistentEffect: params.beforePersistentEffect }
@@ -186,9 +190,10 @@ async function channelsAddCommandImpl(
 
   const rawChannel = opts.channel ?? "";
   let channel = normalizeChannelId(rawChannel);
-  let catalogEntry = await resolveCatalogChannelEntry(rawChannel, nextConfig);
+  let preparedWorkspaceDir: string | undefined;
   const resolveWorkspaceDir = () =>
-    resolveAgentWorkspaceDir(nextConfig, resolveAgentOperationAgentId(nextConfig));
+    (preparedWorkspaceDir ??= resolveChannelSetupOwner(cfg, opts.agent).workspaceDir);
+  let catalogEntry = await resolveCatalogChannelEntry(rawChannel, nextConfig, resolveWorkspaceDir);
   // May load a scoped plugin when the channel is not already registered.
   const loadScopedPlugin = async (
     channelId: ChannelId,
@@ -265,91 +270,99 @@ async function channelsAddCommandImpl(
     return;
   }
 
-  const plugin = await loadScopedPlugin(channel, catalogEntry?.pluginId);
-  if (!plugin) {
-    runtime.error(
-      `${formatUnsupportedChannelActionMessage({
-        channel,
-        action: "non-interactive add",
-      })} Run ${formatCliCommand("openclaw channels add")} with no flags for guided setup.`,
-    );
-    runtime.exit(1);
-    return;
-  }
-  const prepared = await prepareChannelAccountConfiguration({
-    cfg: nextConfig,
-    plugin,
-    requestedAccountId: opts.account,
-    resolveInput: () =>
-      plugin.setupContract ? buildChannelOwnedSetupInput(opts) : buildChannelSetupInput(opts),
-    runtime,
-    ...(params?.beforePersistentEffect
-      ? { beforePersistentEffect: params.beforePersistentEffect }
-      : {}),
-  });
-  if (!prepared.ok) {
-    runtime.error(
-      prepared.error.kind === "unsupported"
-        ? `${formatUnsupportedChannelActionMessage({
-            channel,
+  const selectedChannel = channel;
+  return withCommandPluginMetadata(
+    { config: nextConfig, workspaceDir: resolveWorkspaceDir() },
+    async () => {
+      const plugin = await loadScopedPlugin(selectedChannel, catalogEntry?.pluginId);
+      if (!plugin) {
+        runtime.error(
+          `${formatUnsupportedChannelActionMessage({
+            channel: selectedChannel,
             action: "non-interactive add",
-          })} Run ${formatCliCommand("openclaw channels add")} with no flags for guided setup.`
-        : prepared.error.message,
-    );
-    runtime.exit(1);
-    return;
-  }
-  const applied = await applyPreparedChannelAccountConfiguration({
-    cfg: nextConfig,
-    channel,
-    prepared: prepared.value,
-    runtime,
-    ...(params?.beforePersistentEffect
-      ? { beforePersistentEffect: params.beforePersistentEffect }
-      : {}),
-  });
-  nextConfig = normalizeExternalChannelSetupConfig({ cfg: applied.nextConfig, channel });
+          })} Run ${formatCliCommand("openclaw channels add")} with no flags for guided setup.`,
+        );
+        runtime.exit(1);
+        return;
+      }
+      const prepared = await prepareChannelAccountConfiguration({
+        cfg: nextConfig,
+        plugin,
+        requestedAccountId: opts.account,
+        resolveInput: () =>
+          plugin.setupContract ? buildChannelOwnedSetupInput(opts) : buildChannelSetupInput(opts),
+        runtime,
+        ...(params?.beforePersistentEffect
+          ? { beforePersistentEffect: params.beforePersistentEffect }
+          : {}),
+      });
+      if (!prepared.ok) {
+        runtime.error(
+          prepared.error.kind === "unsupported"
+            ? `${formatUnsupportedChannelActionMessage({
+                channel: selectedChannel,
+                action: "non-interactive add",
+              })} Run ${formatCliCommand("openclaw channels add")} with no flags for guided setup.`
+            : prepared.error.message,
+        );
+        runtime.exit(1);
+        return;
+      }
+      const applied = await applyPreparedChannelAccountConfiguration({
+        cfg: nextConfig,
+        channel: selectedChannel,
+        prepared: prepared.value,
+        runtime,
+        ...(params?.beforePersistentEffect
+          ? { beforePersistentEffect: params.beforePersistentEffect }
+          : {}),
+      });
+      nextConfig = normalizeExternalChannelSetupConfig({
+        cfg: applied.nextConfig,
+        channel: selectedChannel,
+      });
 
-  await params?.beforePersistentEffect?.();
-  const committed = await commitConfigWithPendingPluginInstalls({
-    nextConfig,
-    ...(baseHash !== undefined ? { baseHash } : {}),
-  });
-  const writtenConfig = committed.config;
-  if (committed.movedInstallRecords || pluginRegistrySourceChanged) {
-    await refreshPluginRegistryAfterConfigMutation({
-      config: writtenConfig,
-      reason: "source-changed",
-      ...(committed.movedInstallRecords ? { installRecords: committed.installRecords } : {}),
-      logger: { warn: (message) => runtime.log(message) },
-    });
-  }
-  runtime.log(
-    `Added ${plugin.meta.label ?? channelLabel(channel)} account "${applied.accountId}".`,
-  );
-  const afterAccountConfigWritten = applied.afterAccountConfigWritten;
-  if (afterAccountConfigWritten) {
-    const { runCollectedChannelOnboardingPostWriteHooks } = await loadOnboardChannels();
-    await runCollectedChannelOnboardingPostWriteHooks({
-      hooks: [
-        {
-          channel,
-          accountId: applied.accountId,
-          run: async ({ cfg: writtenCfg, runtime: hookRuntime }) =>
-            await afterAccountConfigWritten({
-              previousCfg: cfg,
-              cfg: writtenCfg,
+      await params?.beforePersistentEffect?.();
+      const committed = await commitConfigWithPendingPluginInstalls({
+        sourceConfig: nextConfig,
+        writeOptions: writeSnapshot.writeOptions,
+        baseHash: writeSnapshot.snapshot.hash,
+      });
+      if (committed.movedInstallRecords || pluginRegistrySourceChanged) {
+        await refreshPluginRegistryAfterConfigMutation({
+          reason: "source-changed",
+          ...(committed.movedInstallRecords ? { installRecords: committed.installRecords } : {}),
+          logger: { warn: (message) => runtime.log(message) },
+        });
+      }
+      runtime.log(
+        `Added ${plugin.meta.label ?? channelLabel(selectedChannel)} account "${applied.accountId}".`,
+      );
+      const afterAccountConfigWritten = applied.afterAccountConfigWritten;
+      if (afterAccountConfigWritten) {
+        const { runCollectedChannelOnboardingPostWriteHooks } = await loadOnboardChannels();
+        await runCollectedChannelOnboardingPostWriteHooks({
+          hooks: [
+            {
+              channel: selectedChannel,
               accountId: applied.accountId,
-              input: applied.input,
-              runtime: hookRuntime,
-            }),
-        },
-      ],
-      cfg: writtenConfig,
-      runtime,
-      ...(params?.beforePersistentEffect
-        ? { beforePersistentEffect: params.beforePersistentEffect }
-        : {}),
-    });
-  }
+              run: async ({ cfg: writtenCfg, runtime: hookRuntime }) =>
+                await afterAccountConfigWritten({
+                  previousCfg: cfg,
+                  cfg: writtenCfg,
+                  accountId: applied.accountId,
+                  input: applied.input,
+                  runtime: hookRuntime,
+                }),
+            },
+          ],
+          configPath: committed.path,
+          runtime,
+          ...(params?.beforePersistentEffect
+            ? { beforePersistentEffect: params.beforePersistentEffect }
+            : {}),
+        });
+      }
+    },
+  );
 }

@@ -14,39 +14,47 @@ const cfg = {
 } satisfies OpenClawConfig;
 
 describe("resolveGatewayModelSelectionPolicy", () => {
-  it("discloses the effective write target to an admin", () => {
+  it("keeps an admin's ordinary selection session-only", () => {
     expect(
       resolveGatewayModelSelectionPolicy({
-        agentId: "main",
         callerScopes: ["operator.admin"],
         cfg,
       }).target,
-    ).toBe("global");
+    ).toBe("session");
+  });
+
+  it("discloses an explicitly requested agent target to an admin", () => {
     expect(
       resolveGatewayModelSelectionPolicy({
-        agentId: "work",
         callerScopes: ["operator.admin"],
         cfg,
+        scope: "agent",
       }).target,
     ).toBe("agent");
   });
 
-  it("discloses session-only selection without writable config", () => {
+  it("discloses session-only selection without admin scope", () => {
     expect(
       resolveGatewayModelSelectionPolicy({
-        agentId: "work",
         callerScopes: ["operator.write"],
         cfg,
+        scope: "global",
       }).target,
     ).toBe("session");
-    expect(
-      withEnv({ OPENCLAW_NIX_MODE: "1" }, () =>
-        resolveGatewayModelSelectionPolicy({
-          agentId: "work",
-          callerScopes: ["operator.admin"],
-          cfg,
-        }),
-      ).target,
-    ).toBe("session");
   });
+
+  it.each(["OPENCLAW_NIX_MODE", "OPENCLAW_CONFIG_READONLY"])(
+    "discloses session-only selection without writable config in %s",
+    (mode) => {
+      expect(
+        withEnv({ [mode]: "1" }, () =>
+          resolveGatewayModelSelectionPolicy({
+            callerScopes: ["operator.admin"],
+            cfg,
+            scope: "global",
+          }),
+        ).target,
+      ).toBe("session");
+    },
+  );
 });

@@ -13,11 +13,9 @@ import {
 } from "@earendil-works/pi-tui";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { iterateAnsiSegments } from "../../../packages/terminal-core/src/ansi-sequences.js";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { sanitizeRenderableLine } from "../tui-formatters.js";
-
-const ANSI_ESCAPE = String.fromCharCode(27);
-const ANSI_SGR_REGEX = new RegExp(`${ANSI_ESCAPE}\\[[0-9;]*m`, "g");
 
 export interface SearchableSelectListTheme extends SelectListTheme {
   searchPrompt: (text: string) => string;
@@ -45,11 +43,10 @@ export class SearchableSelectList implements Component, Focusable {
   private maxVisible: number;
   private theme: SearchableSelectListTheme;
   private searchInput: Input;
-  private regexCache = new Map<string, RegExp>();
+  private highlightPatterns?: RegExp[];
 
   onSelect?: (item: SearchableSelectItem) => void;
   onCancel?: () => void;
-  onSelectionChange?: (item: SearchableSelectItem) => void;
 
   private static readonly DESCRIPTION_LAYOUT_MIN_WIDTH = 40;
   private static readonly DESCRIPTION_MIN_WIDTH = 12;
@@ -63,6 +60,7 @@ export class SearchableSelectList implements Component, Focusable {
     this.maxVisible = maxVisible;
     this.theme = theme;
     this.searchInput = new Input();
+    this.searchInput.onEscape = () => this.onCancel?.();
   }
 
   get focused(): boolean {
@@ -71,15 +69,6 @@ export class SearchableSelectList implements Component, Focusable {
 
   set focused(value: boolean) {
     this.searchInput.focused = value;
-  }
-
-  private getCachedRegex(pattern: string): RegExp {
-    let regex = this.regexCache.get(pattern);
-    if (!regex) {
-      regex = new RegExp(this.escapeRegex(pattern), "gi");
-      this.regexCache.set(pattern, regex);
-    }
-    return regex;
   }
 
   private updateFilter() {
@@ -93,7 +82,6 @@ export class SearchableSelectList implements Component, Focusable {
 
     // Reset selection when filter changes
     this.selectedIndex = 0;
-    this.notifySelectionChange();
   }
 
   /**
@@ -166,60 +154,30 @@ export class SearchableSelectList implements Component, Focusable {
     return item.label || item.value;
   }
 
-  private splitAnsiParts(text: string): Array<{ text: string; isAnsi: boolean }> {
-    const parts: Array<{ text: string; isAnsi: boolean }> = [];
-    ANSI_SGR_REGEX.lastIndex = 0;
-    let lastIndex = 0;
-    let match: RegExpExecArray | null;
-
-    while ((match = ANSI_SGR_REGEX.exec(text)) !== null) {
-      if (match.index > lastIndex) {
-        parts.push({ text: text.slice(lastIndex, match.index), isAnsi: false });
-      }
-      parts.push({ text: match[0], isAnsi: true });
-      lastIndex = match.index + match[0].length;
-    }
-    if (lastIndex < text.length) {
-      parts.push({ text: text.slice(lastIndex), isAnsi: false });
-    }
-    return parts;
-  }
-
-  private highlightMatch(text: string, query: string): string {
-    const tokens = query
-      .trim()
-      .split(/\s+/)
-      .map((token) => normalizeLowercaseStringOrEmpty(token))
-      .filter((token) => token.length > 0);
-    if (tokens.length === 0) {
+  private highlightMatch(text: string, patterns: RegExp[]): string {
+    if (patterns.length === 0) {
       return text;
     }
 
-    const uniqueTokens = uniqueStrings(tokens).toSorted((a, b) => b.length - a.length);
-    let parts = this.splitAnsiParts(text);
-    for (const token of uniqueTokens) {
-      const regex = this.getCachedRegex(token);
-      const nextParts: Array<{ text: string; isAnsi: boolean }> = [];
+    let parts = [...iterateAnsiSegments(text)];
+    for (const regex of patterns) {
+      const nextParts: typeof parts = [];
       for (const part of parts) {
-        if (part.isAnsi) {
+        if (part.kind === "ansi") {
           nextParts.push(part);
           continue;
         }
         regex.lastIndex = 0;
-        const replaced = part.text.replace(regex, (match) => this.theme.matchHighlight(match));
-        if (replaced === part.text) {
+        const replaced = part.value.replace(regex, (match) => this.theme.matchHighlight(match));
+        if (replaced === part.value) {
           nextParts.push(part);
           continue;
         }
-        nextParts.push(...this.splitAnsiParts(replaced));
+        nextParts.push(...iterateAnsiSegments(replaced));
       }
       parts = nextParts;
     }
-    return parts.map((part) => part.text).join("");
-  }
-
-  setSelectedIndex(index: number) {
-    this.selectedIndex = Math.max(0, Math.min(index, this.filteredItems.length - 1));
+    return parts.map((part) => part.value).join("");
   }
 
   invalidate() {
@@ -247,6 +205,16 @@ export class SearchableSelectList implements Component, Focusable {
       return lines;
     }
 
+    // One query owns these patterns; a render keeps its snapshot through theme callbacks.
+    const patterns = (this.highlightPatterns ??= uniqueStrings(
+      query
+        .split(/\s+/)
+        .map((token) => normalizeLowercaseStringOrEmpty(token))
+        .filter((token) => token.length > 0),
+    )
+      .toSorted((a, b) => b.length - a.length)
+      .map((token) => new RegExp(this.escapeRegex(token), "gi")));
+
     // Calculate visible range with scrolling
     const startIndex = Math.max(
       0,
@@ -265,7 +233,7 @@ export class SearchableSelectList implements Component, Focusable {
       }
       const isSelected = i === this.selectedIndex;
       lines.push(
-        truncateToWidth(this.renderItemLine(item, isSelected, safeWidth, query), safeWidth, ""),
+        truncateToWidth(this.renderItemLine(item, isSelected, safeWidth, patterns), safeWidth, ""),
       );
     }
 
@@ -282,7 +250,7 @@ export class SearchableSelectList implements Component, Focusable {
     item: SearchableSelectItem,
     isSelected: boolean,
     width: number,
-    query: string,
+    patterns: RegExp[],
   ): string {
     const prefix = isSelected ? "→ " : "  ";
     const prefixWidth = prefix.length;
@@ -296,7 +264,7 @@ export class SearchableSelectList implements Component, Focusable {
       const descriptionLayout = this.getDescriptionLayout(width, prefixWidth);
       if (descriptionLayout) {
         const truncatedValue = truncateToWidth(displayValue, descriptionLayout.maxValueWidth, "");
-        const valueText = this.highlightMatch(truncatedValue, query);
+        const valueText = this.highlightMatch(truncatedValue, patterns);
 
         const usedByValue = visibleWidth(valueText);
         const remainingWidth = descriptionLayout.availableWidth - usedByValue;
@@ -306,7 +274,7 @@ export class SearchableSelectList implements Component, Focusable {
           const spacing = " ".repeat(descriptionLayout.spacingWidth);
           const truncatedDesc = truncateToWidth(description, descriptionWidth, "");
           // Highlight plain text first, then apply theme styling to avoid corrupting ANSI codes
-          const highlightedDesc = this.highlightMatch(truncatedDesc, query);
+          const highlightedDesc = this.highlightMatch(truncatedDesc, patterns);
           const descText = isSelected ? highlightedDesc : this.theme.description(highlightedDesc);
           const line = `${prefix}${valueText}${spacing}${descText}`;
           return isSelected ? this.theme.selectedText(line) : line;
@@ -316,7 +284,7 @@ export class SearchableSelectList implements Component, Focusable {
 
     const maxWidth = width - prefixWidth - 2;
     const truncatedValue = truncateToWidth(displayValue, maxWidth, "");
-    const valueText = this.highlightMatch(truncatedValue, query);
+    const valueText = this.highlightMatch(truncatedValue, patterns);
     const line = `${prefix}${valueText}`;
     return isSelected ? this.theme.selectedText(line) : line;
   }
@@ -357,13 +325,11 @@ export class SearchableSelectList implements Component, Focusable {
     // Navigation keys
     if (matchesKey(keyData, "up") || matchesKey(keyData, "ctrl+p")) {
       this.selectedIndex = Math.max(0, this.selectedIndex - 1);
-      this.notifySelectionChange();
       return;
     }
 
     if (matchesKey(keyData, "down") || matchesKey(keyData, "ctrl+n")) {
       this.selectedIndex = Math.min(this.filteredItems.length - 1, this.selectedIndex + 1);
-      this.notifySelectionChange();
       return;
     }
 
@@ -375,13 +341,6 @@ export class SearchableSelectList implements Component, Focusable {
       return;
     }
 
-    if (matchesKey(keyData, "escape") || keyData === "\u0003") {
-      if (this.onCancel) {
-        this.onCancel();
-      }
-      return;
-    }
-
     // Pass other keys to search input
     const prevValue = this.searchInput.getValue();
     this.searchInput.handleInput(keyData);
@@ -389,19 +348,8 @@ export class SearchableSelectList implements Component, Focusable {
 
     if (prevValue !== newValue) {
       // Only current-query patterns are reusable; retaining older edits grows without bound.
-      this.regexCache.clear();
+      this.highlightPatterns = undefined;
       this.updateFilter();
     }
-  }
-
-  private notifySelectionChange() {
-    const item = this.filteredItems[this.selectedIndex];
-    if (item && this.onSelectionChange) {
-      this.onSelectionChange(item);
-    }
-  }
-
-  getSelectedItem(): SearchableSelectItem | null {
-    return this.filteredItems[this.selectedIndex] ?? null;
   }
 }

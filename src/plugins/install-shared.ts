@@ -10,7 +10,7 @@ import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import type { InstallSecurityScanResult } from "./install-security-scan.js";
 import {
   attachPluginInstallTransaction,
-  isPluginInstallCommitDeferred,
+  resolvePluginInstallTransactionRequest,
 } from "./install-transaction.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
@@ -213,13 +213,6 @@ export function emitSuccessfulPluginInstallSecurityEvent(
   });
 }
 
-export function hasPackageRuntimeDependencies(manifest: PackageManifest): boolean {
-  return (
-    Object.keys(manifest.dependencies ?? {}).length > 0 ||
-    Object.keys(manifest.optionalDependencies ?? {}).length > 0
-  );
-}
-
 function buildBlockedInstallResult(params: {
   blocked: NonNullable<NonNullable<InstallSecurityScanResult>["blocked"]>;
 }): Extract<InstallPluginResult, { ok: false }> {
@@ -378,6 +371,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
   extensionsDir?: string;
   logger: PluginInstallLogger;
   timeoutMs: number;
+  workTimeoutMs?: number | null;
   mode: "install" | "update";
   dryRun: boolean;
   copyErrorPrefix: string;
@@ -432,9 +426,11 @@ export async function installPluginDirectoryIntoExtensions(params: {
     targetDir,
     mode: params.mode,
     timeoutMs: params.timeoutMs,
+    workTimeoutMs: params.workTimeoutMs,
     logger: params.logger,
     copyErrorPrefix: params.copyErrorPrefix,
     hasDeps: params.hasDeps,
+    omitOpenClawHostDependency: true,
     sourceHardlinks: params.sourceHardlinks ?? "reject",
     depsLogMessage: params.depsLogMessage,
     afterCopy: params.afterCopy,
@@ -460,9 +456,10 @@ export async function installPluginDirectoryIntoExtensions(params: {
       return { ok: true as const };
     },
   };
+  const transactionRequest = resolvePluginInstallTransactionRequest(params);
   const installRes = await runtime.installPackageDir(
-    isPluginInstallCommitDeferred(params)
-      ? requestDeferredPackageDirInstall(packageInstallParams)
+    transactionRequest
+      ? requestDeferredPackageDirInstall(packageInstallParams, transactionRequest.assertOwned)
       : packageInstallParams,
   );
   if (!installRes.ok) {

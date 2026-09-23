@@ -172,13 +172,6 @@ function scanTranscriptHeartbeatMessages(
   return summary.inspectedMessages > 0 ? summary : null;
 }
 
-function summarizeTranscriptHeartbeatMessages(
-  transcriptPath: string,
-): TranscriptHeartbeatSummary | null {
-  const scan = scanTranscriptHeartbeatMessages(transcriptPath);
-  return scan === "record-too-large" ? null : scan;
-}
-
 /**
  * Detects main-session entries that are safe to archive because they only contain heartbeat turns.
  *
@@ -258,17 +251,6 @@ function moveHeartbeatMainSessionEntry(params: {
   params.store[params.recoveredKey] = entry;
   delete params.store[params.mainKey];
   return true;
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.doctorHeartbeatMainSessionRepairTestApi")
-  ] = {
-    TRANSCRIPT_RECORD_MAX_CHARS,
-    moveHeartbeatMainSessionEntry,
-    resolveHeartbeatMainSessionRepairCandidate,
-    summarizeTranscriptHeartbeatMessages,
-  };
 }
 
 /**

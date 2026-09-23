@@ -1,53 +1,52 @@
-// Control UI helpers preserve repeated-row draft ownership across array edits.
-const arrayRowIdentities = new WeakMap<unknown[], readonly unknown[]>();
+import { configValuesEqual } from "./config-form.constraints.ts";
 
-function primitiveRowIdentity(value: unknown, occurrence: number): string {
-  const normalized =
-    typeof value === "number" && Object.is(value, -0)
-      ? "-0"
-      : typeof value === "number" && Number.isNaN(value)
-        ? "NaN"
-        : String(value);
-  return `${typeof value}:${normalized}:${occurrence}`;
-}
+/** One rendered array owns row DOM identity, including unchanged cloned snapshots. */
+export class ConfigFormArrayIdentity {
+  private readonly identities = new WeakMap<unknown[], readonly symbol[]>();
+  private previous: unknown[] = [];
 
-export function rowIdentitiesForArray(value: unknown[]): readonly unknown[] {
-  const existing = arrayRowIdentities.get(value);
-  if (existing?.length === value.length) {
-    return existing;
-  }
-  const occurrences = new Map<string, number>();
-  const created = value.map((entry) => {
-    if (entry && typeof entry === "object") {
-      return entry;
+  read(value: unknown[]): readonly symbol[] {
+    const existing = this.identities.get(value);
+    if (existing?.length === value.length) {
+      this.previous = value;
+      return existing;
     }
-    const base = primitiveRowIdentity(entry, 0);
-    const occurrence = occurrences.get(base) ?? 0;
-    occurrences.set(base, occurrence + 1);
-    return primitiveRowIdentity(entry, occurrence);
-  });
-  arrayRowIdentities.set(value, created);
-  return created;
-}
+    const previousKeys = this.identities.get(this.previous) ?? [];
+    // Reserve unchanged positions so a new equal value cannot steal a survivor's key.
+    const remaining = new Set(
+      this.previous.flatMap((entry, index) =>
+        configValuesEqual(entry, value[index]) ? [] : [index],
+      ),
+    );
+    const keys = value.map((entry, index) => {
+      const match = configValuesEqual(entry, this.previous[index])
+        ? index
+        : [...remaining].find((candidate) => configValuesEqual(entry, this.previous[candidate]));
+      if (match === undefined) {
+        return Symbol("array-row");
+      }
+      remaining.delete(match);
+      return previousKeys[match]!;
+    });
+    this.identities.set(value, keys);
+    this.previous = value;
+    return keys;
+  }
 
-export function preserveArrayRowIdentities(
-  nextValue: unknown[],
-  identities: readonly unknown[],
-): void {
-  arrayRowIdentities.set(nextValue, identities);
-}
-
-export function discardArrayRowIdentities(value: unknown[]): void {
-  arrayRowIdentities.delete(value);
-}
-
-export function appendArrayRowIdentities(
-  nextValue: unknown[],
-  identities: readonly unknown[],
-  count: number,
-): void {
-  // Appended rows need fresh tokens even when their values equal preserved rows.
-  // Re-deriving occurrence labels can duplicate a survivor's token after removal.
-  const appended = Array.from({ length: count }, () => Symbol("array-row"));
-  preserveArrayRowIdentities(nextValue, [...identities, ...appended]);
+  patch(
+    value: unknown[],
+    keys: readonly symbol[],
+    onPatch: (value: unknown[]) => boolean | void,
+  ): boolean {
+    // Publish tokens before a synchronous render; rejected candidates must not
+    // replace the original array's ownership, even when its values are equal.
+    const previous = this.previous;
+    this.identities.set(value, keys);
+    const accepted = onPatch(value) !== false;
+    if (!accepted) {
+      this.identities.delete(value);
+      this.previous = previous;
+    }
+    return accepted;
+  }
 }

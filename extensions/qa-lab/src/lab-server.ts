@@ -1,6 +1,6 @@
-// Qa Lab plugin module implements lab server behavior.
+import { once } from "node:events";
 import fs from "node:fs";
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -85,8 +85,12 @@ export type {
   QaLabServerStartParams,
 } from "./lab-server.types.js";
 
-function writeQaLabServerError(res: Parameters<typeof writeError>[0], error: unknown): void {
-  if (writeQaRequestBodyLimitError(res, error)) {
+async function writeQaLabServerError(
+  req: IncomingMessage,
+  res: Parameters<typeof writeError>[0],
+  error: unknown,
+): Promise<void> {
+  if (await writeQaRequestBodyLimitError(req, res, error)) {
     return;
   }
   if (isQaMalformedJsonBodyError(error)) {
@@ -791,16 +795,7 @@ export async function startQaLabServer(
             // Keep generated artifacts visible when authenticated verdict validation fails.
             let artifacts: ReturnType<typeof createIdleQaRunnerSnapshot>["artifacts"] = null;
             try {
-              const [{ runQaSuite }, channelDriverSelection] = await Promise.all([
-                import("./suite-launch.runtime.js"),
-                selection.channelDriver === "crabline" && selection.channel
-                  ? import("@openclaw/crabline").then((module) =>
-                      module.resolveOpenClawCrablineChannelDriverSelection({
-                        channel: selection.channel!,
-                      }),
-                    )
-                  : Promise.resolve(undefined),
-              ]);
+              const { runQaSuite } = await import("./suite-launch.runtime.js");
               const runtimeResult = await runQaSuite({
                 lab: labHandle ?? undefined,
                 startLab: startQaLabServer,
@@ -809,10 +804,7 @@ export async function startQaLabServer(
                 outputDir: createQaRunOutputDir(repoRoot),
                 channelDriver: selection.channelDriver,
                 ...(adapterFactories ? { adapterFactories } : {}),
-                ...(selection.channelDriver === "live" && selection.channel
-                  ? { channelId: selection.channel }
-                  : {}),
-                ...(channelDriverSelection ? { channelDriverSelection } : {}),
+                ...(selection.channel ? { channelId: selection.channel } : {}),
                 evidenceMode: selection.evidenceMode,
                 providerMode: selection.providerMode,
                 primaryModel: selection.primaryModel,
@@ -928,7 +920,7 @@ export async function startQaLabServer(
         }
         res.end(body);
       } catch (error) {
-        writeQaLabServerError(res, error);
+        await writeQaLabServerError(req, res, error);
       }
     });
   });
@@ -958,10 +950,7 @@ export async function startQaLabServer(
   };
 
   try {
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(params?.port ?? 0, params?.host ?? "127.0.0.1", () => resolve());
-    });
+    await once(server.listen(params?.port ?? 0, params?.host ?? "127.0.0.1"), "listening");
     serverListening = true;
     const address = server.address();
     if (!address || typeof address === "string") {

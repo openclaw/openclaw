@@ -1,4 +1,3 @@
-// Tracks host hook state and scheduled turn identifiers.
 import { randomUUID } from "node:crypto";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -20,7 +19,7 @@ import {
   type PluginSessionExtensionProjection,
   type PluginSessionExtensionRegistration,
 } from "./host-hooks.js";
-import { getActivePluginRegistry, getActivePluginSessionExtensionRegistry } from "./runtime.js";
+import { getPluginRegistryForContext } from "./runtime/gateway-request-scope.js";
 import { normalizeSessionEntrySlotKey } from "./session-entry-slot-keys.js";
 
 const log = createSubsystemLogger("plugins/host-hook-state");
@@ -196,54 +195,56 @@ async function drainPluginNextTurnInjections(
     return [];
   }
   const scope = { cfg: params.cfg, sessionKey, agentId: params.agentId };
-  const target = resolveSessionEntryAccessTarget(scope);
-  if (!target.entry) {
-    return [];
-  }
-  // Avoid a locked session-entry rewrite when there is nothing queued.
-  // Drain runs once per prompt build; the common case is no injections, so a
-  // pre-flight read keeps prompt-build off the session-store write path.
-  // (Concurrently-enqueued injections during this gap land on the next turn.)
+  const { entry: selectedEntry } = resolveSessionEntryAccessTarget(scope);
+  // Empty queues need no qualified mutation target. Concurrent enqueues wait for the next turn.
   if (
-    !target.entry.pluginNextTurnInjections ||
-    Object.keys(target.entry.pluginNextTurnInjections).length === 0
+    !selectedEntry?.pluginNextTurnInjections ||
+    Object.keys(selectedEntry.pluginNextTurnInjections).length === 0
   ) {
     return [];
   }
+  const target = resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
   const now = params.now ?? Date.now();
-  const updated = await updateResolvedSessionEntry(scope, (entry) => {
-    if (!entry?.pluginNextTurnInjections) {
-      return [];
-    }
-    const activePluginIds = new Set(
-      (getActivePluginRegistry()?.plugins ?? [])
-        .filter((plugin) => plugin.status === "loaded")
-        .map((plugin) => plugin.id),
-    );
-    const drained: PluginNextTurnInjectionRecord[] = [];
-    for (const [pluginId, entries] of Object.entries(entry.pluginNextTurnInjections)) {
-      if (!activePluginIds.has(pluginId) || !isPluginPromptInjectionEnabled(params.cfg, pluginId)) {
-        continue;
+  const updated = await updateResolvedSessionEntry(
+    scope,
+    (entry) => {
+      if (!entry?.pluginNextTurnInjections) {
+        return [];
       }
-      // Guard against malformed/hand-edited persisted state — a non-array value
-      // here would crash .filter and break prompt-building for the session.
-      if (!Array.isArray(entries)) {
-        continue;
-      }
-      const liveEntries = entries.filter(
-        (candidate): candidate is PluginNextTurnInjectionRecord => !isExpired(candidate, now),
+      const activePluginIds = new Set(
+        (getPluginRegistryForContext()?.plugins ?? [])
+          .filter((plugin) => plugin.status === "loaded")
+          .map((plugin) => plugin.id),
       );
-      drained.push(...liveEntries);
-    }
-    drained.sort((left, right) => left.createdAt - right.createdAt);
-    // A drain is the consume boundary for this session queue. Inactive plugin
-    // records are stale owner state and are discarded with expired records.
-    delete entry.pluginNextTurnInjections;
-    if (drained.length > 0) {
-      entry.updatedAt = now;
-    }
-    return drained;
-  });
+      const drained: PluginNextTurnInjectionRecord[] = [];
+      for (const [pluginId, entries] of Object.entries(entry.pluginNextTurnInjections)) {
+        if (
+          !activePluginIds.has(pluginId) ||
+          !isPluginPromptInjectionEnabled(params.cfg, pluginId)
+        ) {
+          continue;
+        }
+        // Guard against malformed/hand-edited persisted state — a non-array value
+        // here would crash .filter and break prompt-building for the session.
+        if (!Array.isArray(entries)) {
+          continue;
+        }
+        const liveEntries = entries.filter(
+          (candidate): candidate is PluginNextTurnInjectionRecord => !isExpired(candidate, now),
+        );
+        drained.push(...liveEntries);
+      }
+      drained.sort((left, right) => left.createdAt - right.createdAt);
+      // A drain is the consume boundary for this session queue. Inactive plugin
+      // records are stale owner state and are discarded with expired records.
+      delete entry.pluginNextTurnInjections;
+      if (drained.length > 0) {
+        entry.updatedAt = now;
+      }
+      return drained;
+    },
+    { target },
+  );
   return updated.found ? updated.result : [];
 }
 
@@ -307,7 +308,7 @@ export async function patchPluginSessionExtension(params: {
     return { ok: false, error: "plugin session extension value is required unless unset is true" };
   }
   const nextPluginValue = params.value as PluginJsonValue;
-  const registry = getActivePluginSessionExtensionRegistry();
+  const registry = getPluginRegistryForContext();
   const registration = (registry?.sessionExtensions ?? []).find(
     (entry) => entry.pluginId === pluginId && entry.extension.namespace === namespace,
   );
@@ -435,7 +436,7 @@ function collectPluginSessionExtensionProjections(params: {
   sessionKey: string;
   entry: SessionEntry;
 }): PluginSessionExtensionProjection[] {
-  const registry = getActivePluginSessionExtensionRegistry();
+  const registry = getPluginRegistryForContext();
   const extensions = registry?.sessionExtensions ?? [];
   if (extensions.length === 0) {
     return [];

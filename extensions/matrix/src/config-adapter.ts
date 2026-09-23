@@ -1,5 +1,5 @@
 // Matrix helper module supports config adapter behavior.
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import "openclaw/plugin-sdk/account-id";
 import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
@@ -12,8 +12,7 @@ import {
   type ResolvedMatrixAccount,
 } from "./matrix/accounts.js";
 import { normalizeMatrixAllowList } from "./matrix/monitor/allowlist.js";
-
-export { DEFAULT_ACCOUNT_ID };
+export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 
 export const matrixConfigAdapter = createScopedChannelConfigAdapter<
   ResolvedMatrixAccount,

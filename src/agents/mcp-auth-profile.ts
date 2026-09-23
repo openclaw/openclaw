@@ -12,8 +12,7 @@ import {
   withoutMcpAuthorizationHeader,
   withSameOriginMcpHttpHeaders,
 } from "./mcp-http-fetch.js";
-import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
-import { resolveMcpOAuthAccessToken, type McpOAuthConfig } from "./mcp-oauth.js";
+import type { McpOAuthConfig } from "./mcp-oauth.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 
 type McpAuthProfileOptions = {
@@ -68,6 +67,10 @@ async function resolveMcpBearerToken(params: {
   if (!resolved || resolved.kind !== "http") {
     return undefined;
   }
+  const [{ operatorMcpOAuthIdentity }, { resolveMcpOAuthAccessToken }] = await Promise.all([
+    import("./mcp-oauth-identity.js"),
+    import("./mcp-oauth.js"),
+  ]);
   const fetchFn = withSameOriginMcpHttpHeaders({
     fetchFn: buildMcpHttpFetch({
       sslVerify: resolved.sslVerify,

@@ -1,20 +1,19 @@
-// Builds transcript summaries and normalized transcript metadata.
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeStringEntries,
+  normalizeUniqueStringEntries,
+} from "@openclaw/normalization-core/string-normalization";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { isTranscriptArtifactText } from "../media-understanding/transcription-text.js";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 
-/**
- * Lightweight transcript summarization and markdown rendering.
- *
- * This is a deterministic heuristic summary used for captured/imported
- * transcripts when no model-backed summarizer is involved.
- */
-/** Summary artifact written alongside transcript sessions. */
 export type TranscriptsSummary = {
   sessionId: string;
   title: string;
   generatedAt: string;
   overview: string;
+  participants: string[];
+  source: "model" | "heuristic";
+  model?: string;
   transcript: string[];
   decisions: string[];
   actionItems: string[];
@@ -30,16 +29,29 @@ const RISK_PATTERNS =
 
 function firstSentences(utterances: TranscriptUtterance[], limit: number): string {
   const text = normalizeStringEntries(utterances.map((utterance) => utterance.text)).join(" ");
-  const sentences = text.match(/[^.!?]+[.!?]?/g) ?? [];
-  return normalizeStringEntries(sentences.slice(0, limit)).join(" ");
+  const sentences: string[] = [];
+  for (const match of text.matchAll(/[^.!?]+[.!?]?/g)) {
+    sentences.push(match[0]);
+    // Whitespace-only matches count toward the limit before normalization.
+    if (sentences.length >= limit) {
+      break;
+    }
+  }
+  return normalizeStringEntries(sentences).join(" ");
 }
 
 function collectMatches(utterances: TranscriptUtterance[], pattern: RegExp): string[] {
-  return utterances
-    .filter((utterance) => pattern.test(utterance.text))
-    .map(formatSpeakerLine)
-    .filter(Boolean)
-    .slice(0, 12);
+  const matches: string[] = [];
+  utterances.some((utterance) => {
+    if (pattern.test(utterance.text)) {
+      const line = formatSpeakerLine(utterance);
+      if (line) {
+        matches.push(line);
+      }
+    }
+    return matches.length >= 12;
+  });
+  return matches;
 }
 
 function sanitizeUtterance(utterance: TranscriptUtterance): TranscriptUtterance {
@@ -65,24 +77,26 @@ function formatSpeakerLine(utterance: TranscriptUtterance): string {
   return speaker ? `${speaker}: ${text}` : text;
 }
 
-function formatTranscript(utterances: TranscriptUtterance[]): string[] {
-  return utterances.map(formatSpeakerLine).filter(Boolean);
-}
-
 /** Build a deterministic summary from transcript utterances. */
 export function summarizeTranscripts(params: {
   session: TranscriptSessionDescriptor;
   utterances: TranscriptUtterance[];
 }): TranscriptsSummary {
   const title = sanitizeTerminalText(params.session.title ?? "").trim() || "Transcripts";
-  const utterances = params.utterances.map(sanitizeUtterance);
+  const utterances = params.utterances
+    .map(sanitizeUtterance)
+    .filter((utterance) => !isTranscriptArtifactText(utterance.text));
   const overview = firstSentences(utterances, 4) || "No transcript captured yet.";
   return {
     sessionId: params.session.sessionId,
     title,
     generatedAt: new Date().toISOString(),
     overview,
-    transcript: formatTranscript(utterances),
+    participants: normalizeUniqueStringEntries(
+      utterances.map((utterance) => utterance.speaker?.label ?? ""),
+    ),
+    source: "heuristic",
+    transcript: utterances.map(formatSpeakerLine).filter(Boolean),
     decisions: collectMatches(utterances, DECISION_PATTERNS),
     actionItems: collectMatches(utterances, ACTION_PATTERNS),
     risks: collectMatches(utterances, RISK_PATTERNS),
@@ -105,8 +119,9 @@ export function renderTranscriptsMarkdown(summary: TranscriptsSummary): string {
     "## Overview",
     summary.overview,
     "",
-    "## Transcript",
-    renderList(summary.transcript),
+    "## Participants",
+    // Persisted summaries from before participant metadata remain renderable.
+    renderList(summary.participants ?? []),
     "",
     "## Decisions",
     renderList(summary.decisions),
@@ -116,6 +131,10 @@ export function renderTranscriptsMarkdown(summary: TranscriptsSummary): string {
     "",
     "## Risks",
     renderList(summary.risks),
+    "",
+    // Keep notes ahead of the transcript for bounded readers such as tool show.
+    "## Transcript",
+    renderList(summary.transcript),
     "",
     `Transcript utterances: ${summary.utteranceCount}`,
   ].join("\n");

@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements tool coverage report behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   isRecord,
@@ -6,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   isRuntimeParityCellPassable,
+  normalizeRuntimePair,
   type RuntimeId,
   type RuntimeParityDrift,
   type RuntimeParityResult,
@@ -85,15 +85,6 @@ type ToolFixtureGroup = {
 };
 
 const PASSING_DRIFTS: ReadonlySet<QaToolCoverageDrift> = new Set(["none", "text-only"]);
-
-function normalizeRuntimePair(
-  pair: [RuntimeId, RuntimeId] | null | undefined,
-): [RuntimeId, RuntimeId] {
-  if (pair?.[0] && pair?.[1]) {
-    return pair;
-  }
-  return ["openclaw", "codex"];
-}
 
 function cellStatus(
   cell: RuntimeParityResult["cells"][RuntimeId] | undefined,

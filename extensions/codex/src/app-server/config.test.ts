@@ -3,12 +3,10 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
-// Codex tests cover config plugin behavior.
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
+import { codexAppServerStartOptionsKey } from "./config-runtime.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
-  codexAppServerStartOptionsKey,
   codexSandboxPolicyForTurn,
   isCodexSandboxExecServerEnabled,
   readCodexPluginConfig,
@@ -23,12 +21,13 @@ import {
   shouldAutoApproveCodexAppServerApprovals,
   withMcpElicitationsApprovalPolicy,
 } from "./config.js";
+import { expectFields, expectRuntimePolicy, resolveRuntimeForTest } from "./config.test-support.js";
 
-type RuntimeOptionsParams = NonNullable<Parameters<typeof resolveCodexAppServerRuntimeOptions>[0]>;
-
-function resolveRuntimeForTest(params: RuntimeOptionsParams = {}) {
-  return resolveCodexAppServerRuntimeOptions({ env: {}, requirementsToml: null, ...params });
-}
+const retiredTurnIdleTimeoutKeys = [
+  "turnCompletionIdleTimeoutMs",
+  "turnAssistantCompletionIdleTimeoutMs",
+  "postToolRawAssistantCompletionIdleTimeoutMs",
+];
 
 describe("withMcpElicitationsApprovalPolicy", () => {
   it("preserves managed per-command approvals that already allow MCP elicitation", () => {
@@ -50,31 +49,6 @@ describe("withMcpElicitationsApprovalPolicy", () => {
 
 function envRef(id: string) {
   return { source: "env" as const, provider: "default", id };
-}
-
-const requireRecord = createRequireRecord("record", "expected-label-capitalized");
-
-function expectFields(
-  value: unknown,
-  label: string,
-  fields: Record<string, unknown>,
-): Record<string, unknown> {
-  const record = requireRecord(value, label);
-  for (const [key, expected] of Object.entries(fields)) {
-    expect(record[key]).toEqual(expected);
-  }
-  return record;
-}
-
-function expectRuntimePolicy(
-  runtime: unknown,
-  fields: {
-    approvalPolicy: string;
-    sandbox: string;
-    approvalsReviewer: string;
-  },
-) {
-  expectFields(runtime, "runtime policy", fields);
 }
 
 describe("Codex app-server config", () => {
@@ -128,9 +102,6 @@ describe("Codex app-server config", () => {
           serviceTier: "flex",
           codeModeOnly: true,
           loopDetectionPreToolUseRelay: false,
-          turnCompletionIdleTimeoutMs: 120_000,
-          turnAssistantCompletionIdleTimeoutMs: 30_000,
-          postToolRawAssistantCompletionIdleTimeoutMs: 180_000,
         },
       },
       env: {
@@ -147,9 +118,6 @@ describe("Codex app-server config", () => {
       serviceTier: "flex",
       codeModeOnly: true,
       loopDetectionPreToolUseRelay: false,
-      turnCompletionIdleTimeoutMs: 120_000,
-      turnAssistantCompletionIdleTimeoutMs: 30_000,
-      postToolRawAssistantCompletionIdleTimeoutMs: 180_000,
     });
     expectFields(runtime.start, "runtime start", {
       transport: "websocket",
@@ -160,10 +128,6 @@ describe("Codex app-server config", () => {
 
   it("keeps the Codex loop-detection PreToolUse relay enabled by default", () => {
     expect(resolveRuntimeForTest().loopDetectionPreToolUseRelay).toBe(true);
-  });
-
-  it("keeps the existing assistant completion idle timeout by default", () => {
-    expect(resolveRuntimeForTest().turnAssistantCompletionIdleTimeoutMs).toBe(10_000);
   });
 
   it("builds Codex permissions-profile config for app-server network proxy", () => {
@@ -221,7 +185,7 @@ describe("Codex app-server config", () => {
               },
               unix_sockets: {
                 "/tmp/mock-proxy.sock": "allow",
-                "/tmp/blocked.sock": "none",
+                "/tmp/blocked.sock": "deny",
               },
               proxy_url: "http://127.0.0.1:3128",
               socks_url: "socks5h://127.0.0.1:8081",
@@ -264,18 +228,12 @@ describe("Codex app-server config", () => {
       pluginConfig: {
         appServer: {
           requestTimeoutMs: Number.MAX_SAFE_INTEGER,
-          turnCompletionIdleTimeoutMs: Number.MAX_SAFE_INTEGER,
-          turnAssistantCompletionIdleTimeoutMs: Number.MAX_SAFE_INTEGER,
-          postToolRawAssistantCompletionIdleTimeoutMs: Number.MAX_SAFE_INTEGER,
         },
       },
     });
 
     expectFields(runtime, "runtime", {
       requestTimeoutMs: MAX_TIMER_TIMEOUT_MS,
-      turnCompletionIdleTimeoutMs: MAX_TIMER_TIMEOUT_MS,
-      turnAssistantCompletionIdleTimeoutMs: MAX_TIMER_TIMEOUT_MS,
-      postToolRawAssistantCompletionIdleTimeoutMs: MAX_TIMER_TIMEOUT_MS,
     });
   });
 
@@ -284,16 +242,12 @@ describe("Codex app-server config", () => {
       pluginConfig: {
         appServer: {
           requestTimeoutMs: 0,
-          turnCompletionIdleTimeoutMs: -1,
-          turnAssistantCompletionIdleTimeoutMs: 0,
         },
       },
     });
 
     expectFields(runtime, "runtime", {
       requestTimeoutMs: 60_000,
-      turnCompletionIdleTimeoutMs: 60_000,
-      turnAssistantCompletionIdleTimeoutMs: 10_000,
     });
   });
 
@@ -411,16 +365,16 @@ describe("Codex app-server config", () => {
     );
   });
 
-  it("rejects unknown app-server fields", () => {
-    expect(
-      readCodexPluginConfig({
-        appServer: {
-          postToolRawAssistantCompletionIdleTimeoutMs: 180_000,
-          unknownTimeoutMs: 1,
-        },
-      }),
-    ).toStrictEqual({});
-  });
+  it.each(["unknownTimeoutMs", ...retiredTurnIdleTimeoutKeys])(
+    "rejects unknown or retired app-server field %s",
+    (key) => {
+      expect(
+        readCodexPluginConfig({
+          appServer: { requestTimeoutMs: 120_000, [key]: 1 },
+        }),
+      ).toStrictEqual({});
+    },
+  );
 
   it("rejects removed app-server topology fields", () => {
     expect(
@@ -1159,6 +1113,22 @@ describe("Codex app-server config", () => {
     });
   });
 
+  it.each([
+    'openai_base_url = """https://api.openai.com/v1"""\n',
+    "chatgpt_base_url = '''https://chatgpt.com/backend-api/'''\n",
+    '[model_providers.openai]\nbase_url = """https://api.openai.com/v1"""\n',
+    String.raw`openai_base_url = "https://api.\u006fpenai.com/v1"`,
+  ])("keeps automatic review for native TOML endpoint syntax: %s", (codexConfigToml) => {
+    const runtime = resolveRuntimeForTest({
+      execMode: "auto",
+      modelProvider: "openai",
+      model: "gpt-5.5",
+      codexConfigToml,
+    });
+
+    expect(runtime.approvalsReviewer).toBe("auto_review");
+  });
+
   it("forces prompting when explicit no-prompt config cannot use model-backed review", () => {
     const runtime = resolveRuntimeForTest({
       pluginConfig: {
@@ -1179,309 +1149,6 @@ describe("Codex app-server config", () => {
       approvalsReviewer: "user",
     });
     expect(shouldAutoApproveCodexAppServerApprovals(runtime)).toBe(false);
-  });
-
-  it("uses user approvals when requirements force prompting but model provider is unknown", () => {
-    const runtime = resolveRuntimeForTest({
-      pluginConfig: {},
-      requirementsToml: 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n',
-    });
-
-    expectRuntimePolicy(runtime, {
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-      approvalsReviewer: "user",
-    });
-  });
-
-  it("defaults native OpenAI Codex approvals to guardian when requirements disallow full access", () => {
-    const runtime = resolveRuntimeForTest({
-      pluginConfig: {},
-      modelProvider: "openai",
-      requirementsToml: 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n',
-    });
-
-    expectRuntimePolicy(runtime, {
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-      approvalsReviewer: "auto_review",
-    });
-  });
-
-  it("uses read-only sandbox for guardian defaults when requirements only allow read-only", () => {
-    const runtime = resolveRuntimeForTest({
-      pluginConfig: {},
-      modelProvider: "openai",
-      requirementsToml: 'allowed_sandbox_modes = ["read-only"]\n',
-    });
-
-    expectRuntimePolicy(runtime, {
-      approvalPolicy: "on-request",
-      sandbox: "read-only",
-      approvalsReviewer: "auto_review",
-    });
-  });
-
-  it("defaults native Codex approvals to guardian when requirements disallow never approval", () => {
-    const runtime = resolveRuntimeForTest({
-      pluginConfig: {},
-      modelProvider: "openai",
-      requirementsToml: 'allowed_approval_policies = ["on-request"]\n',
-    });
-
-    expectRuntimePolicy(runtime, {
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-      approvalsReviewer: "auto_review",
-    });
-  });
-
-  it.each([
-    { policies: ["untrusted"], description: "only the managed internal policy" },
-    { policies: ["untrusted", "never"], description: "managed and unrestricted policies" },
-  ])("preserves $description without weakening Codex approvals", ({ policies }) => {
-    const runtime = resolveRuntimeForTest({
-      pluginConfig: {},
-      modelProvider: "openai",
-      requirementsToml: `allowed_approval_policies = [${policies
-        .map((policy) => `"${policy}"`)
-        .join(", ")}]\n`,
-    });
-
-    expectRuntimePolicy(runtime, {
-      approvalPolicy: "untrusted",
-      sandbox: "workspace-write",
-      approvalsReviewer: "auto_review",
-    });
-    expect(runtime.approvalPolicySource).toBe("requirements");
-    expect(withMcpElicitationsApprovalPolicy(runtime.approvalPolicy)).toBe("untrusted");
-  });
-
-  it("normalizes the deprecated requirements on-failure alias to on-request", () => {
-    const runtime = resolveRuntimeForTest({
-      pluginConfig: {},
-      modelProvider: "openai",
-      requirementsToml: 'allowed_approval_policies = ["on-failure"]\n',
-    });
-
-    expectRuntimePolicy(runtime, {
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-      approvalsReviewer: "auto_review",
-    });
-  });
-
-  it("keeps native Codex approvals unchained when requirements allow never approval", () => {
-    const runtime = resolveRuntimeForTest({
-      pluginConfig: {},
-      requirementsToml: 'allowed_approval_policies = ["never"]\n',
-    });
-
-    expectRuntimePolicy(runtime, {
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
-      approvalsReviewer: "user",
-    });
-  });
-
-  it("defaults native Codex approvals to guardian when requirements disallow user reviewer", () => {
-    const runtime = resolveRuntimeForTest({
-      pluginConfig: {},
-      modelProvider: "openai",
-      requirementsToml: 'allowed_approvals_reviewers = ["auto_review"]\n',
-    });
-
-    expectRuntimePolicy(runtime, {
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-      approvalsReviewer: "auto_review",
-    });
-  });
-
-  it("selects an allowed reviewer when sandbox requirements force guardian defaults", () => {
-    const runtime = resolveRuntimeForTest({
-      pluginConfig: {},
-      requirementsToml:
-        'allowed_sandbox_modes = ["read-only", "workspace-write"]\nallowed_approvals_reviewers = ["user"]\n',
-    });
-
-    expectRuntimePolicy(runtime, {
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-      approvalsReviewer: "user",
-    });
-  });
-
-  it("ignores quoted sandbox modes inside requirements comments", () => {
-    const runtime = resolveRuntimeForTest({
-      pluginConfig: {},
-      modelProvider: "openai",
-      requirementsToml: `allowed_sandbox_modes = [
-  "read-only",
-  # "danger-full-access",
-  "workspace-write",
-]
-`,
-    });
-
-    expectRuntimePolicy(runtime, {
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-      approvalsReviewer: "auto_review",
-    });
-  });
-
-  it("applies the first matching remote sandbox requirements before resolving local stdio defaults", () => {
-    const runtime = resolveRuntimeForTest({
-      pluginConfig: {},
-      modelProvider: "openai",
-      hostName: "BUILD-01.EXAMPLE.COM.",
-      requirementsToml: `[[remote_sandbox_config]]
-hostname_patterns = ["build-*.example.com"]
-allowed_sandbox_modes = ["read-only", "workspace-write"]
-
-[[remote_sandbox_config]]
-hostname_patterns = ["build-01.example.com"]
-allowed_sandbox_modes = ["read-only", "danger-full-access"]
-`,
-    });
-
-    expectRuntimePolicy(runtime, {
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-      approvalsReviewer: "auto_review",
-    });
-  });
-
-  it("ignores non-matching remote-only sandbox requirements when resolving local stdio defaults", () => {
-    const runtime = resolveRuntimeForTest({
-      pluginConfig: {},
-      hostName: "laptop.example.com",
-      requirementsToml: `[[remote_sandbox_config]]
-hostname_patterns = ["build-*.example.com"]
-allowed_sandbox_modes = ["read-only", "workspace-write"]
-`,
-    });
-
-    expectRuntimePolicy(runtime, {
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
-      approvalsReviewer: "user",
-    });
-  });
-
-  it("reads local requirements policy from the configured requirements path", () => {
-    const readPaths: string[] = [];
-    const runtime = resolveCodexAppServerRuntimeOptions({
-      pluginConfig: {},
-      env: {},
-      modelProvider: "openai",
-      requirementsPath: "/custom/codex/requirements.toml",
-      readRequirementsFile: (requirementsPath) => {
-        readPaths.push(requirementsPath);
-        return 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n';
-      },
-    });
-
-    expect(readPaths).toEqual(["/custom/codex/requirements.toml"]);
-    expectRuntimePolicy(runtime, {
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-      approvalsReviewer: "auto_review",
-    });
-  });
-
-  it("reads local requirements policy from the Codex Windows requirements path", () => {
-    const readPaths: string[] = [];
-    const runtime = resolveCodexAppServerRuntimeOptions({
-      pluginConfig: {},
-      env: { ProgramData: "D:\\ManagedData" },
-      modelProvider: "openai",
-      platform: "win32",
-      readRequirementsFile: (requirementsPath) => {
-        readPaths.push(requirementsPath);
-        return 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n';
-      },
-    });
-
-    expect(readPaths).toEqual(["D:\\ManagedData\\OpenAI\\Codex\\requirements.toml"]);
-    expectRuntimePolicy(runtime, {
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-      approvalsReviewer: "auto_review",
-    });
-  });
-
-  it("keeps native Codex approvals unchained when requirements allow full access", () => {
-    const runtime = resolveRuntimeForTest({
-      pluginConfig: {},
-      requirementsToml:
-        'allowed_sandbox_modes = ["ReadOnly", "WorkspaceWrite", "DangerFullAccess"]\n',
-    });
-
-    expectRuntimePolicy(runtime, {
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
-      approvalsReviewer: "user",
-    });
-  });
-
-  it("keeps native Codex approvals unchained when requirements are malformed", () => {
-    const runtime = resolveRuntimeForTest({
-      pluginConfig: {},
-      requirementsToml: "allowed_sandbox_modes = [read-only]\n",
-    });
-
-    expectRuntimePolicy(runtime, {
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
-      approvalsReviewer: "user",
-    });
-  });
-
-  it("does not apply local requirements policy to websocket app-server transports", () => {
-    const runtime = resolveRuntimeForTest({
-      pluginConfig: {
-        appServer: {
-          transport: "websocket",
-          url: "ws://127.0.0.1:39175",
-        },
-      },
-      requirementsToml: 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n',
-    });
-
-    expectRuntimePolicy(runtime, {
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
-      approvalsReviewer: "user",
-    });
-  });
-
-  it("keeps explicit yolo mode when requirements disallow full access", () => {
-    const requirementsToml = 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n';
-    expectRuntimePolicy(
-      resolveRuntimeForTest({
-        pluginConfig: { appServer: { mode: "yolo" } },
-        requirementsToml,
-      }),
-      {
-        approvalPolicy: "never",
-        sandbox: "danger-full-access",
-        approvalsReviewer: "user",
-      },
-    );
-    expectRuntimePolicy(
-      resolveRuntimeForTest({
-        pluginConfig: {},
-        env: { OPENCLAW_CODEX_APP_SERVER_MODE: "yolo" },
-        requirementsToml,
-      }),
-      {
-        approvalPolicy: "never",
-        sandbox: "danger-full-access",
-        approvalsReviewer: "user",
-      },
-    );
   });
 
   it("parses dynamic tool controls", () => {
@@ -2621,7 +2288,6 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
           mode: "yolo",
           transport: "stdio",
           requestTimeoutMs: 60_000,
-          turnCompletionIdleTimeoutMs: 60_000,
         },
         codexDynamicToolsLoading: "searchable",
         codexDynamicToolsExclude: [],
@@ -3268,7 +2934,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     const first = codexAppServerStartOptionsKey(startOptions);
 
     vi.resetModules();
-    const reloaded = await import("./config.js");
+    const reloaded = await import("./config-runtime.js");
 
     expect(reloaded.codexAppServerStartOptionsKey(startOptions)).toEqual(first);
     expect(first).not.toContain("tok_reload");
@@ -3312,8 +2978,15 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
           };
         };
       };
+      uiHints: Record<string, unknown>;
     };
     const appServerProperties = manifest.configSchema.properties.appServer.properties;
+    const runtime = resolveRuntimeForTest();
+    for (const key of retiredTurnIdleTimeoutKeys) {
+      expect(appServerProperties).not.toHaveProperty(key);
+      expect(manifest.uiHints).not.toHaveProperty([`appServer.${key}`]);
+      expect(runtime).not.toHaveProperty(key);
+    }
 
     expect(appServerProperties.mode?.default).toBeUndefined();
     expect(appServerProperties.command?.default).toBeUndefined();

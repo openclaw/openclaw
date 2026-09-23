@@ -5,7 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { promisify } from "node:util";
+import { promisify, stripVTControlCharacters } from "node:util";
+import { validateArtifactProducerRun } from "./full-release-artifacts.mjs";
+import {
+  publicationAdmissionContract,
+  publicationSourceContract,
+  validatePublicationAdmissionBinding,
+  validatePublicationSourceBinding,
+} from "./full-release-publication-contract.mjs";
 import {
   classifyReleaseGhTransportError,
   composeReleaseChildAttemptEvidence,
@@ -17,7 +24,16 @@ import {
   validateReleaseChildRunProvenance,
   validateReleaseExecutionPlanArtifact,
 } from "./full-release-validation-policy.mjs";
-import { plainGhAuthenticatedEnv, resolvePlainGhBin } from "./lib/plain-gh.mjs";
+import {
+  inspectActionsArtifactZipWithPolicy,
+  sha256Digest,
+} from "./lib/actions-artifact-archive.mjs";
+import { execPlainGh, plainGhAuthenticatedEnv, resolvePlainGhBin } from "./lib/plain-gh.mjs";
+import {
+  createReleaseEvidenceClient,
+  releaseExecutionPlanRestoreContract,
+  restoreOriginalPublicationAdmission,
+} from "./release-ci-summary.mjs";
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_REPOSITORY = "openclaw/openclaw";
@@ -79,10 +95,18 @@ function parseArgs(argv) {
     repository: DEFAULT_REPOSITORY,
     runId: "",
   };
+  const publicationRequested = argv.includes("--publication-run");
+  const seen = new Set();
   for (let index = 1; index < argv.length; index += 1) {
     const argument = argv[index];
+    if (publicationRequested && seen.has(argument)) {
+      throw new Error("duplicate publication status argument");
+    }
+    seen.add(argument);
     if (argument === "--run") {
       options.runId = requiredValue(argv[++index], "--run");
+    } else if (argument === "--publication-run") {
+      options.publicationRunId = requiredValue(argv[++index], "--publication-run");
     } else if (argument === "--repo") {
       options.repository = requiredValue(argv[++index], "--repo");
     } else if (argument === "--failed") {
@@ -106,6 +130,21 @@ function parseArgs(argv) {
   }
   if (command !== "continue" && (options.failedOnly || options.dryRun)) {
     throw new Error("--failed and --dry-run are valid only with continue");
+  }
+  if (publicationRequested) {
+    if (
+      !(
+        command === "status" &&
+        /^[1-9][0-9]*$/u.test(options.publicationRunId) &&
+        Number.isSafeInteger(Number(options.publicationRunId)) &&
+        Number.isSafeInteger(Number(options.runId)) &&
+        /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(options.repository) &&
+        options.repository.split("/").every((part) => part !== "." && part !== "..") &&
+        options.repository.length <= 200
+      )
+    ) {
+      throw new Error("invalid publication status arguments");
+    }
   }
   return options;
 }
@@ -138,6 +177,16 @@ function verifierEvidenceNeedsRefresh(error) {
   } catch {
     return false;
   }
+}
+
+function isUnknownAllowEscapeSequencesFlag(error) {
+  return (
+    typeof error?.stderr === "string" &&
+    error.stderr
+      .replace(/\r\n?/gu, "\n")
+      .split("\n")
+      .includes("unknown flag: --allow-escape-sequences")
+  );
 }
 
 async function sleep(milliseconds) {
@@ -228,6 +277,15 @@ function selectedChildren(plan) {
   return plan.children.filter((child) => child.selected);
 }
 
+function hasExactChildRunIdentity(child) {
+  return (
+    typeof child.runId === "string" &&
+    /^[1-9][0-9]*$/u.test(child.runId) &&
+    Number.isSafeInteger(child.runAttempt) &&
+    child.runAttempt > 0
+  );
+}
+
 function assertChildRunIdentity(child, run, repository = DEFAULT_REPOSITORY) {
   return validateReleaseChildRunProvenance(run, {
     ...child,
@@ -250,6 +308,110 @@ function exactParentJob(parentJobs, child, sourceParentAttempt) {
     throw new Error(`source parent dispatch job is missing or ambiguous: ${child.key}`);
   }
   return matches[0];
+}
+
+async function inspectArtifactProducers(producers, client) {
+  return Promise.all(
+    producers.map(async ({ request, runId, runAttempt }) => {
+      const run = validateArtifactProducerRun(
+        request,
+        await client.getRun(runId),
+        runId,
+        runAttempt,
+        {
+          allowFailure: true,
+          allowNewerAttempts: true,
+        },
+      );
+      const active = run.status !== "completed";
+      const passed = !active && run.conclusion === "success";
+      return {
+        key: `artifact:${request.stage}`,
+        runId,
+        plannedRunAttempt: Number(runAttempt),
+        effectiveRunAttempt: Number(run.run_attempt),
+        conclusion: String(run.conclusion ?? ""),
+        status: active ? "active" : passed ? "passed" : "failed",
+        passed,
+        url: run.html_url,
+      };
+    }),
+  );
+}
+
+async function inspectRecovery(plan, producers, client) {
+  const [diagnostics, artifacts] = await Promise.all([
+    inspectContinuation(plan, client),
+    inspectArtifactProducers(producers, client),
+  ]);
+  const children = [...diagnostics.children, ...artifacts];
+  return {
+    children,
+    failed: children.filter((child) => child.status === "failed"),
+    active: children.filter((child) => child.status === "active"),
+    missing: children.filter((child) => child.status === "missing"),
+    passed: children.filter((child) => child.status === "passed"),
+  };
+}
+
+async function recheckArtifactProducers(producers, status, client) {
+  const current = await inspectArtifactProducers(producers, client);
+  for (const observed of current) {
+    const expected = status.children.find((child) => child.runId === observed.runId);
+    if (
+      !expected ||
+      observed.effectiveRunAttempt !== expected.effectiveRunAttempt ||
+      observed.status !== expected.status ||
+      observed.conclusion !== expected.conclusion
+    ) {
+      throw new Error(`Artifact producer changed during recovery: ${observed.runId}`);
+    }
+  }
+}
+
+async function npmRecoveryProducers(plan, parentJobs, client, repository, workflow) {
+  // Older workflow revisions did not dispatch npm qualification independently.
+  if (!workflow.includes("node scripts/full-release-artifacts.mjs resolve")) {
+    return [];
+  }
+  const matches = parentJobs.filter(
+    (job) =>
+      job.name === "Prepare release npm artifacts" &&
+      Number(job.run_attempt) === plan.parentRunAttempt,
+  );
+  if (matches.length !== 1) {
+    throw new Error("Original npm dispatch job is missing or ambiguous");
+  }
+  const [job] = matches;
+  if (job.conclusion === "skipped") {
+    return [];
+  }
+  const log = stripVTControlCharacters(await client.getJobLog(job.id));
+  const dispatches = [
+    ...log.matchAll(
+      /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?Dispatched full-release-artifacts\.yml: https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)\r?(?=\n|$)/gu,
+    ),
+  ];
+  if (
+    dispatches.length !== 1 ||
+    dispatches[0][1] !== repository ||
+    !log.includes(`TARGET_SHA: ${plan.targetSha}`)
+  ) {
+    throw new Error("Original npm dispatch identity is unavailable or ambiguous");
+  }
+  return [
+    {
+      request: {
+        stage: "npm",
+        repository,
+        dispatchId: `full-release-validation-${plan.parentRunId}-${plan.parentRunAttempt}-artifacts-npm`,
+        toolingSha: plan.workflowSha,
+        workflowRef: plan.workflowRef,
+      },
+      runId: dispatches[0][2],
+      runAttempt: dispatches[0][3],
+    },
+  ];
 }
 
 export async function preflightContinuation(
@@ -290,6 +452,29 @@ export async function preflightContinuation(
     throw new Error("source full release parent identity changed");
   }
   const parentJobs = await client.getParentJobs(source.sourceRunId);
+  if (
+    parentJobs.some(
+      (job) =>
+        Number(job.run_attempt) === source.sourceRunAttempt &&
+        job.conclusion !== "skipped" &&
+        /^(?:Prepare release npm artifacts|Prepare release Docker artifacts) \/ /u.test(
+          job.name ?? "",
+        ),
+    )
+  ) {
+    throw new Error(
+      "parent-owned publication artifacts do not survive parent reruns; start a fresh all-group FRV",
+    );
+  }
+  const missingChildren = selectedChildren(plan)
+    .filter((child) => !hasExactChildRunIdentity(child))
+    .map((child) => child.key)
+    .toSorted();
+  if (missingChildren.length > 0) {
+    throw new Error(
+      `selected FRV children did not record exact run IDs and attempts: ${missingChildren.join(", ")}; start a fresh all-group FRV`,
+    );
+  }
   const resolveJobs = parentJobs.filter(
     (job) =>
       job.name === "Resolve target ref" &&
@@ -306,6 +491,53 @@ export async function preflightContinuation(
   ) {
     throw new Error("source full release root is not an exact fail-fast-disabled all-group target");
   }
+  const evidenceClient = client.getReleaseEvidenceClient();
+  const workflow = evidenceClient.getWorkflowSource(plan.workflowSha);
+  const sourceContract = publicationSourceContract(workflow);
+  const registryContract = publicationAdmissionContract(workflow);
+  if (
+    plan.sourceAdmissionContract !== sourceContract ||
+    plan.publicationAdmissionContract !== registryContract
+  ) {
+    throw new Error("continuation admission differs from its immutable source workflow contract");
+  }
+  const sourceAdmission = validatePublicationSourceBinding(plan, {
+    sourceAdmissionContract: sourceContract,
+    parentRunId: String(rootRunId),
+    repository,
+    targetSha: plan.targetSha,
+  });
+  validatePublicationAdmissionBinding(plan, { publicationAdmissionContract: registryContract });
+  if (registryContract) {
+    if (!releaseExecutionPlanRestoreContract(workflow)) {
+      throw new Error(
+        "frozen workflow cannot restore publication admission after a parent rerun; use a fresh parent",
+      );
+    }
+    const original = await restoreOriginalPublicationAdmission({
+      request: sourceAdmission,
+      client: {
+        ...evidenceClient,
+        getWorkflowSource: (sha) =>
+          sha === plan.workflowSha ? workflow : evidenceClient.getWorkflowSource(sha),
+      },
+    });
+    const validated = validateReleaseExecutionPlanArtifact(plan, {
+      parentRunId: String(rootRunId),
+      sourceAdmissionContract: sourceContract,
+      publicationAdmissionContract: registryContract,
+    });
+    if (validated.sha256 !== original.plan.sha256) {
+      throw new Error("continuation differs from the authenticated original publication plan");
+    }
+  }
+  const artifactProducers = await npmRecoveryProducers(
+    plan,
+    parentJobs,
+    client,
+    repository,
+    workflow,
+  );
   const childObservations = await Promise.all(
     selectedChildren(plan).map(async (child) => {
       const sourceParentAttempt = child.sourceParentAttempt ?? source.sourceRunAttempt;
@@ -321,6 +553,7 @@ export async function preflightContinuation(
     validateReleaseChildDispatchBinding({
       child,
       log: parentLog,
+      coveragePolicy: plan.coveragePolicy,
       plannedRunAttempt: child.runAttempt,
       repository,
       targetSha: plan.targetSha,
@@ -329,12 +562,25 @@ export async function preflightContinuation(
   for (const { child, childRun } of childObservations) {
     assertChildRunIdentity(child, childRun, repository);
   }
-  return sourceRun;
+  return { ...sourceRun, artifactProducers };
 }
 
 export async function inspectContinuation(plan, client) {
   const children = await Promise.all(
     selectedChildren(plan).map(async (child) => {
+      if (!hasExactChildRunIdentity(child)) {
+        return {
+          compositeJobsSha256: "",
+          conclusion: "",
+          effectiveRunAttempt: null,
+          key: child.key,
+          passed: false,
+          plannedRunAttempt: child.runAttempt ?? null,
+          runId: String(child.runId ?? ""),
+          status: "missing",
+          url: String(child.url ?? ""),
+        };
+      }
       const run = await client.getRun(child.runId);
       assertChildRunIdentity(child, run, client.repository ?? DEFAULT_REPOSITORY);
       const effectiveRunAttempt = positiveInteger(run.run_attempt, `${child.key} run attempt`);
@@ -405,15 +651,18 @@ export async function inspectContinuation(plan, client) {
     children,
     failed: children.filter((child) => child.status === "failed"),
     active: children.filter((child) => child.status === "active"),
+    missing: children.filter((child) => child.status === "missing"),
     passed: children.filter((child) => child.status === "passed"),
   };
 }
 
 export function createClient(repository, dependencies = {}) {
+  let releaseEvidenceClient;
   const apiJson = dependencies.apiJson ?? ((path) => ghJson(repository, path));
   const apiText =
     dependencies.apiText ??
-    ((path, jq) => readFreshGhApi(repository, path, jq ? ["--paginate", "--jq", jq] : []));
+    ((path, jq, extraArgs = []) =>
+      readFreshGhApi(repository, path, [...(jq ? ["--paginate", "--jq", jq] : []), ...extraArgs]));
   const mutate = dependencies.mutate ?? ((args) => execGh(args));
   const rerun = (runId, action) =>
     mutate(["api", "-X", "POST", `repos/${repository}/actions/runs/${runId}/${action}`]);
@@ -456,6 +705,10 @@ export function createClient(repository, dependencies = {}) {
   };
   return {
     repository,
+    getReleaseEvidenceClient() {
+      releaseEvidenceClient ??= createReleaseEvidenceClient(repository);
+      return releaseEvidenceClient;
+    },
     getAttemptJobs(runId, runAttempt) {
       return attemptJobs(runId, runAttempt);
     },
@@ -477,8 +730,19 @@ export function createClient(repository, dependencies = {}) {
             .map((line) => JSON.parse(line))
         : [];
     },
-    getJobLog(jobId) {
-      return apiText(`actions/jobs/${jobId}/logs`);
+    async getJobLog(jobId) {
+      // Octopool's gh shim refuses log bodies with terminal escape sequences even off a TTY;
+      // real gh ignores the flag off-TTY, so the controller works with either binary.
+      const path = `actions/jobs/${jobId}/logs`;
+      try {
+        return await apiText(path, undefined, ["--allow-escape-sequences"]);
+      } catch (error) {
+        // gh before 2.97 rejects this flag before issuing the protected request.
+        if (!isUnknownAllowEscapeSequencesFlag(error)) {
+          throw error;
+        }
+        return apiText(path);
+      }
     },
     rerunFailed: (runId) => rerun(runId, "rerun-failed-jobs"),
     rerunParent: (runId) => rerun(runId, "rerun"),
@@ -628,8 +892,13 @@ function exactTerminalRunState(run, runId) {
 }
 
 async function freezeVerificationAttempts(plan, rootRunId, status, client) {
+  // Artifact producers are checked independently around verification; the
+  // manifest verifier consumes only parent and selected diagnostic run IDs.
+  const diagnosticRunIds = new Set(selectedChildren(plan).map((child) => child.runId));
   const expectedRunAttempts = new Map(
-    status.children.map((child) => [child.runId, child.effectiveRunAttempt]),
+    status.children
+      .filter((child) => diagnosticRunIds.has(child.runId))
+      .map((child) => [child.runId, child.effectiveRunAttempt]),
   );
   // Reuse verification rereads its root and selected parent manifests too.
   const parentRunIds = new Set([
@@ -661,15 +930,25 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
       ? createOperationDeadline()
       : validateOperationDeadline(options.operationDeadline);
   const ownedAttempts = new Map();
-  await preflightContinuation(plan, rootRunId, client, client.repository ?? DEFAULT_REPOSITORY);
-  let status = await inspectContinuation(plan, client);
+  const { artifactProducers } = await preflightContinuation(
+    plan,
+    rootRunId,
+    client,
+    client.repository ?? DEFAULT_REPOSITORY,
+  );
+  // Do not replace any observed child attempt while the original diagnostic
+  // drain is still collecting it. A terminal parent closes that collection.
+  if ((await client.getRun(rootRunId)).status !== "completed") {
+    await waitForTerminal([rootRunId], client, operationDeadline);
+  }
+  let status = await inspectRecovery(plan, artifactProducers, client);
   if (status.active.length > 0) {
     await waitForTerminal(
       status.active.map((child) => child.runId),
       client,
       operationDeadline,
     );
-    status = await inspectContinuation(plan, client);
+    status = await inspectRecovery(plan, artifactProducers, client);
   }
   if (status.failed.length > 0) {
     if (options.dryRun) {
@@ -679,6 +958,22 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
       await Promise.all(
         status.failed.map(async (child) => {
           const run = await client.getRun(child.runId);
+          const producer = artifactProducers.find((entry) => entry.runId === child.runId);
+          if (producer) {
+            validateArtifactProducerRun(
+              producer.request,
+              run,
+              producer.runId,
+              child.effectiveRunAttempt,
+              { allowFailure: true },
+            );
+          } else {
+            assertChildRunIdentity(
+              selectedChildren(plan).find((entry) => entry.runId === child.runId),
+              run,
+              client.repository ?? DEFAULT_REPOSITORY,
+            );
+          }
           const terminal = exactTerminalRunState(run, child.runId);
           if (
             terminal.runAttempt !== child.effectiveRunAttempt ||
@@ -693,6 +988,7 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
     const minimumAttempts = new Map(
       status.failed.map((child) => [child.runId, child.effectiveRunAttempt + 1]),
     );
+    await recheckArtifactProducers(artifactProducers, status, client);
     remainingOperationTime(operationDeadline);
     const mutationResults = await Promise.allSettled(
       status.failed.map((child) => client.rerunFailed(child.runId)),
@@ -711,7 +1007,7 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
       operationDeadline,
       minimumAttempts,
     );
-    status = await inspectContinuation(plan, client);
+    status = await inspectRecovery(plan, artifactProducers, client);
     for (const child of status.children) {
       const expectedAttempt = ownedAttempts.get(child.runId);
       if (expectedAttempt !== undefined) {
@@ -745,12 +1041,14 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
     client.verifySeal !== undefined
   ) {
     verificationAttempts = await freezeVerificationAttempts(plan, rootRunId, status, client);
+    await recheckArtifactProducers(artifactProducers, status, client);
     parentSealed = await client.verifySeal(
       rootRunId,
       plan,
       operationDeadline,
       verificationAttempts,
     );
+    await recheckArtifactProducers(artifactProducers, status, client);
     if (!parentSealed) {
       const verifiedParent = exactTerminalRunState(completedParent, rootRunId);
       completedParent = await client.getRun(rootRunId);
@@ -763,6 +1061,7 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
   if (!parentSealed && (completedParent.conclusion !== "success" || childEvidenceAdvanced)) {
     const terminalParent = exactTerminalRunState(completedParent, rootRunId);
     const minimumAttempts = new Map([[rootRunId, terminalParent.runAttempt + 1]]);
+    await recheckArtifactProducers(artifactProducers, status, client);
     remainingOperationTime(operationDeadline);
     const mutationResults = await Promise.allSettled([client.rerunParent(rootRunId)]);
     await reconcileAttemptStarts(
@@ -778,7 +1077,9 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
   if (!parentSealed) {
     await waitForTerminal([...ownedAttempts.keys()], client, operationDeadline, ownedAttempts);
     verificationAttempts = await freezeVerificationAttempts(plan, rootRunId, status, client);
+    await recheckArtifactProducers(artifactProducers, status, client);
     await client.verify(rootRunId, plan, operationDeadline, verificationAttempts);
+    await recheckArtifactProducers(artifactProducers, status, client);
   }
   return {
     action: ownedAttempts.has(rootRunId) ? "reran-parent" : "verified-parent",
@@ -802,6 +1103,557 @@ export async function loadPlan(options, loadExecutionPlan = downloadExecutionPla
   return plan;
 }
 
+async function createPublicationReader(repository) {
+  const {
+    PUBLICATION_LIMITS: limits,
+    requirePublication,
+    PublicationStatusError,
+    parsePublicationRun,
+    bindPublicationWorkflow,
+    parsePublicationJobs,
+    assertPublicationRunUnchanged,
+    publicationFailure,
+  } = await import("./frv-publication-status.mts");
+  const deadline = Date.now() + limits.deadlineMs;
+  let requests = 0;
+  let totalBytes = 0;
+  const runs = new Map();
+  const workflows = new Map();
+  const artifactLists = new Map();
+  const remaining = () => {
+    const value = deadline - Date.now();
+    requirePublication(value > 0, "deadline");
+    return value;
+  };
+  function bytes(path, maxBytes = limits.jsonBytes) {
+    const timeout = Math.min(limits.requestMs, remaining());
+    requirePublication(++requests <= limits.requests, "limits");
+    let result;
+    try {
+      result = execPlainGh(
+        [
+          "api",
+          "--hostname",
+          "github.com",
+          "--method",
+          "GET",
+          `repos/${repository}/${path}`,
+          "-H",
+          "Cache-Control: max-age=0",
+          "-H",
+          "X-GitHub-Api-Version: 2026-03-10",
+        ],
+        {
+          encoding: "buffer",
+          stdio: ["ignore", "pipe", "pipe"],
+          timeout,
+          killSignal: "SIGKILL",
+          maxBuffer: maxBytes,
+        },
+      );
+    } catch (error) {
+      throw new PublicationStatusError(
+        error?.code === "ENOBUFS"
+          ? "limits"
+          : error?.code === "ETIMEDOUT"
+            ? "deadline"
+            : "transport",
+      );
+    }
+    requirePublication(
+      Buffer.isBuffer(result) && result.length > 0 && result.length <= maxBytes,
+      "limits",
+    );
+    totalBytes += result.length;
+    requirePublication(totalBytes <= limits.totalBytes, "limits");
+    remaining();
+    return result;
+  }
+  function json(path) {
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes(path)));
+  }
+  function collection(path, key) {
+    const entries = [];
+    const ids = new Set();
+    let total;
+    for (let page = 1; page <= limits.pages; page += 1) {
+      const value = json(`${path}?per_page=${limits.pageSize}&page=${page}`);
+      requirePublication(
+        Number.isSafeInteger(value?.total_count) &&
+          value.total_count >= 0 &&
+          value.total_count <= limits.pages * limits.pageSize,
+        "limits",
+      );
+      total ??= value.total_count;
+      requirePublication(
+        total === value.total_count &&
+          Array.isArray(value[key]) &&
+          value[key].length <= limits.pageSize,
+        "incomplete",
+      );
+      for (const entry of value[key]) {
+        requirePublication(
+          Number.isSafeInteger(entry?.id) && entry.id > 0 && !ids.has(entry.id),
+          "incomplete",
+        );
+        ids.add(entry.id);
+        entries.push(entry);
+      }
+      requirePublication(entries.length <= total, "incomplete");
+      if (entries.length === total) {
+        return entries;
+      }
+      requirePublication(value[key].length === limits.pageSize, "incomplete");
+    }
+    throw new PublicationStatusError("limits");
+  }
+  async function getRun(runId) {
+    const key = String(runId);
+    requirePublication(/^[1-9][0-9]*$/u.test(key) && Number.isSafeInteger(Number(key)), "limits");
+    if (!runs.has(key)) {
+      requirePublication(runs.size < limits.runs, "limits");
+      runs.set(key, parsePublicationRun(json(`actions/runs/${key}`), repository, key));
+    }
+    return runs.get(key);
+  }
+  async function authenticate(run, path) {
+    if (!workflows.has(run.workflow_id)) {
+      workflows.set(run.workflow_id, json(`actions/workflows/${run.workflow_id}`));
+    }
+    bindPublicationWorkflow(run, workflows.get(run.workflow_id), path);
+  }
+  async function getRunAttempt(runId, attempt) {
+    const current = await getRun(runId);
+    requirePublication(
+      Number.isSafeInteger(attempt) && attempt > 0 && attempt <= current.run_attempt,
+    );
+    const observed = parsePublicationRun(
+      json(`actions/runs/${runId}/attempts/${attempt}`),
+      repository,
+      String(runId),
+    );
+    requirePublication(
+      observed.run_attempt === attempt &&
+        observed.workflow_id === current.workflow_id &&
+        observed.path === current.path &&
+        observed.head_sha === current.head_sha &&
+        observed.head_branch === current.head_branch,
+    );
+    return observed;
+  }
+  async function listArtifacts(runId) {
+    if (!artifactLists.has(runId)) {
+      artifactLists.set(runId, collection(`actions/runs/${runId}/artifacts`, "artifacts"));
+    }
+    return artifactLists.get(runId);
+  }
+  function artifactTuple(metadata, run, name) {
+    requirePublication(
+      metadata &&
+        Number.isSafeInteger(metadata.id) &&
+        metadata.id > 0 &&
+        metadata.name === name &&
+        metadata.workflow_run?.id === run.id &&
+        metadata.workflow_run?.head_sha === run.head_sha &&
+        typeof metadata.digest === "string" &&
+        /^sha256:[a-f0-9]{64}$/u.test(metadata.digest) &&
+        Number.isSafeInteger(metadata.size_in_bytes) &&
+        metadata.size_in_bytes > 0 &&
+        metadata.size_in_bytes <= limits.archiveBytes &&
+        typeof metadata.expired === "boolean" &&
+        typeof metadata.expires_at === "string" &&
+        Number.isFinite(Date.parse(metadata.expires_at)),
+    );
+    return JSON.stringify([
+      metadata.id,
+      metadata.name,
+      metadata.digest,
+      metadata.size_in_bytes,
+      metadata.expired,
+      metadata.expires_at,
+      metadata.workflow_run.id,
+      metadata.workflow_run.head_sha,
+    ]);
+  }
+  async function readArtifact(run, name, filename, maxBytes = limits.expandedBytes) {
+    const all = await listArtifacts(String(run.id));
+    const matches = all.filter((item) => item.name === name);
+    requirePublication(matches.length <= 1);
+    if (!matches.length) {
+      return { state: "missing" };
+    }
+    const selected = matches[0];
+    const tuple = artifactTuple(selected, run, name);
+    if (selected.expired || Date.parse(selected.expires_at) <= Date.now()) {
+      return { state: "expired" };
+    }
+    const fresh = json(`actions/artifacts/${selected.id}`);
+    requirePublication(artifactTuple(fresh, run, name) === tuple);
+    const archive = bytes(`actions/artifacts/${selected.id}/zip`, limits.archiveBytes);
+    requirePublication(
+      archive.length === selected.size_in_bytes && sha256Digest(archive) === selected.digest,
+    );
+    const files = inspectActionsArtifactZipWithPolicy(archive, {
+      expectedEntries: [filename],
+      maxArchiveBytes: limits.archiveBytes,
+      maxExpandedBytes: maxBytes,
+      maxEntryBytes: () => maxBytes,
+    });
+    const entry = files.get(filename);
+    requirePublication(entry, "malformed-evidence");
+    const after = json(`actions/artifacts/${selected.id}`);
+    requirePublication(
+      artifactTuple(after, run, name) === tuple && Date.parse(after.expires_at) > Date.now(),
+    );
+    return {
+      state: "available",
+      artifactId: selected.id,
+      value: JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(entry)),
+    };
+  }
+  return {
+    repository,
+    getRun,
+    getRunAttempt,
+    authenticate,
+    readArtifact,
+    listArtifacts,
+    async getAttemptJobs(runId, attempt) {
+      return parsePublicationJobs(
+        collection(`actions/runs/${runId}/attempts/${attempt}/jobs`, "jobs"),
+        String(runId),
+        attempt,
+      );
+    },
+    finish() {
+      for (const [runId, run] of runs) {
+        try {
+          assertPublicationRunUnchanged(
+            run,
+            parsePublicationRun(json(`actions/runs/${runId}`), repository, runId),
+          );
+        } catch (error) {
+          throw new PublicationStatusError(publicationFailure(error), runId);
+        }
+      }
+      remaining();
+    },
+  };
+}
+
+async function inspectPublicationStatus(options) {
+  const policy = await import("./frv-publication-status.mts");
+  const {
+    FRV_WORKFLOW,
+    PUBLICATION_WORKFLOW,
+    PUBLICATION_LIMITS,
+    PUBLICATION_DIAGNOSTIC,
+    PUBLICATION_CHILDREN,
+    requirePublication,
+    newPublicationObservation,
+    compactPublicationObservation,
+    publicationFailure,
+    observePublicationJobs,
+    observePublicationDiagnostic,
+    parsePublicationDiagnostic,
+    boundPublicationManifest,
+    joinPublicationValidation,
+    observePublicationChild,
+    parseWindowsDispatch,
+    observeWindowsMarker,
+    parseClawHubDispatch,
+  } = policy;
+  const { validateParentManifest } = await import("./release-ci-summary.mjs");
+  const publication = newPublicationObservation(
+    options.repository,
+    options.runId,
+    options.publicationRunId,
+  );
+  let status;
+  let reader;
+  let authenticatingRelationship = true;
+  function recordFailure(error) {
+    const code = publicationFailure(error);
+    const joinedRun = [options.runId, options.publicationRunId].includes(error?.runId);
+    publication.collection = { complete: false, error: code };
+    if (
+      (code === "identity-mismatch" || code === "attempt-changed") &&
+      (authenticatingRelationship || joinedRun)
+    ) {
+      publication.relationship.status = "invalid";
+      publication.relationship.reason = code;
+    } else if (joinedRun && publication.relationship.status === "verified") {
+      publication.relationship.status = "unverified";
+      publication.relationship.reason = code;
+    }
+    process.exitCode = 1;
+  }
+  try {
+    reader = await createPublicationReader(options.repository);
+    const root = await reader.getRun(options.runId);
+    await reader.authenticate(root, FRV_WORKFLOW);
+    const publisher = await reader.getRun(options.publicationRunId);
+    await reader.authenticate(publisher, PUBLICATION_WORKFLOW);
+    publication.publisher = {
+      runId: String(publisher.id),
+      runAttempt: publisher.run_attempt,
+      workflowSha: publisher.head_sha,
+      status: publisher.status,
+      conclusion: publisher.conclusion,
+    };
+    const plan = await loadPlan(options, async () => {
+      const artifact = await reader.readArtifact(
+        root,
+        `full-release-execution-plan-${root.id}`,
+        PLAN_FILENAME,
+      );
+      requirePublication(artifact.state === "available", "incomplete");
+      return validateReleaseExecutionPlanArtifact(artifact.value, {
+        parentRunId: options.runId,
+        repository: options.repository,
+        workflowRef: root.head_branch,
+        workflowSha: root.head_sha,
+        maxParentRunAttempt: root.run_attempt,
+      });
+    });
+    // Authenticate the publication link before unrelated child observations can fail.
+    const jobs = await reader.getAttemptJobs(String(publisher.id), publisher.run_attempt);
+    observePublicationJobs(publication, publisher, jobs);
+    const evidence = await reader.readArtifact(
+      publisher,
+      `openclaw-release-postpublish-diagnostics-${publisher.id}-${publisher.run_attempt}`,
+      PUBLICATION_DIAGNOSTIC,
+      PUBLICATION_LIMITS.diagnosticBytes,
+    );
+    publication.diagnostics.state = evidence.state;
+    let diagnostic;
+    if (evidence.state === "available") {
+      // Failed publishers can upload diagnostics. Their job need not pass; its exact upload must.
+      const owner = jobs.filter((job) => job.name === "Publish plugins, then OpenClaw");
+      requirePublication(
+        owner.length === 1 &&
+          owner[0].steps?.filter(
+            (step) =>
+              step.name === "Upload postpublish diagnostics" &&
+              step.status === "completed" &&
+              step.conclusion === "success",
+          ).length === 1,
+      );
+      diagnostic = parsePublicationDiagnostic(evidence.value, publisher);
+      if (!diagnostic) {
+        publication.diagnostics.state = "unsupported";
+      } else {
+        observePublicationDiagnostic(publication, diagnostic, evidence.artifactId);
+        const validation = diagnostic.context.validationEvidence;
+        if (
+          validation.mode === "full-release-validation" &&
+          validation.runId &&
+          validation.runAttempt
+        ) {
+          requirePublication(validation.runId === options.runId);
+          const attempt = Number(validation.runAttempt);
+          const selected = await reader.getRunAttempt(options.runId, attempt);
+          const manifestArtifact = await reader.readArtifact(
+            selected,
+            `full-release-validation-${selected.id}-${attempt}`,
+            "full-release-validation-manifest.json",
+          );
+          if (manifestArtifact.state === "available") {
+            boundPublicationManifest(manifestArtifact.value);
+            const manifest = validateParentManifest(manifestArtifact.value, {
+              runId: options.runId,
+              runAttempt: attempt,
+              repository: options.repository,
+              workflowRef: root.head_branch,
+              workflowSha: root.head_sha,
+              candidateBinding: plan.candidate,
+            });
+            joinPublicationValidation(
+              publication,
+              diagnostic,
+              plan,
+              manifest,
+              manifestArtifact.value,
+            );
+          } else {
+            publication.relationship.reason = `validation-manifest-${manifestArtifact.state}`;
+          }
+        } else {
+          publication.relationship.reason = "unsupported-or-incomplete-validation-link";
+        }
+        authenticatingRelationship = false;
+        for (const [name, spec] of Object.entries(PUBLICATION_CHILDREN)) {
+          const child = diagnostic.children[name];
+          if (child.suppliedRunId) {
+            const run = await reader.getRun(child.suppliedRunId);
+            await reader.authenticate(run, spec.workflow);
+            const attempt = child.runAttempt === null ? null : Number(child.runAttempt);
+            requirePublication(attempt === null || attempt <= run.run_attempt);
+            observePublicationChild(publication, spec.surface, run, attempt);
+          }
+        }
+      }
+    } else if (evidence.state === "missing") {
+      const artifacts = await reader.listArtifacts(String(publisher.id));
+      if (
+        artifacts.some((item) => item.name?.startsWith("openclaw-release-postpublish-evidence-"))
+      ) {
+        publication.diagnostics.state = "legacy-only";
+      }
+    }
+    authenticatingRelationship = false;
+    const clawHub = await reader.readArtifact(
+      publisher,
+      `openclaw-release-children-${publisher.id}-${publisher.run_attempt}`,
+      "dispatch.json",
+      PUBLICATION_LIMITS.diagnosticBytes,
+    );
+    if (clawHub.state === "available") {
+      const dispatch = parseClawHubDispatch(clawHub.value, publisher, plan.targetSha);
+      const supplied = diagnostic?.children.pluginClawHub.suppliedRunId;
+      requirePublication(!supplied || supplied === dispatch.normalClawHubRunId);
+      publication.dispatches.push({
+        scope: "normal-clawhub",
+        state: dispatch.normalClawHubRunId ? "acknowledged" : "not-dispatched",
+        runId: String(publisher.id),
+        runAttempt: publisher.run_attempt,
+        artifactId: clawHub.artifactId,
+      });
+      if (dispatch.normalClawHubRunId) {
+        const run = await reader.getRun(dispatch.normalClawHubRunId);
+        await reader.authenticate(run, PUBLICATION_CHILDREN.pluginClawHub.workflow);
+        const recordedRef = diagnostic?.selection.clawHubWorkflowRef?.replace(
+          /^refs\/(?:heads|tags)\//u,
+          "",
+        );
+        requirePublication(
+          run.head_sha === publisher.head_sha &&
+            (!recordedRef || run.head_branch === recordedRef) &&
+            run.run_attempt >= Number(dispatch.normalClawHubRunAttempt),
+        );
+        observePublicationChild(
+          publication,
+          "clawHub",
+          run,
+          Number(dispatch.normalClawHubRunAttempt),
+          "dispatch-record",
+        );
+      }
+    }
+    const windows = await reader.readArtifact(
+      publisher,
+      `windows-release-dispatch-${publisher.id}-${publisher.run_attempt}`,
+      "windows-dispatch.json",
+      PUBLICATION_LIMITS.diagnosticBytes,
+    );
+    if (windows.state === "available") {
+      const owner = jobs.filter((job) => job.name === "Dispatch Windows assets after publication");
+      requirePublication(
+        owner.length === 1 &&
+          owner[0].steps?.filter(
+            (step) =>
+              step.name === "Upload Windows dispatch evidence" &&
+              step.status === "completed" &&
+              step.conclusion === "success",
+          ).length === 1,
+      );
+      const dispatch = parseWindowsDispatch(windows.value);
+      requirePublication(
+        !diagnostic?.context.releaseTag || dispatch.tag === diagnostic.context.releaseTag,
+      );
+      publication.surfaces.nativeWindows.selection = "selected";
+      publication.dispatches.push({
+        scope: "windows",
+        state: dispatch.state === "dispatched" ? "acknowledged" : "unknown",
+        runId: String(publisher.id),
+        runAttempt: publisher.run_attempt,
+        artifactId: windows.artifactId,
+      });
+      if (dispatch.state === "dispatched") {
+        const run = await reader.getRun(dispatch.childRunId);
+        await reader.authenticate(run, ".github/workflows/windows-node-release.yml");
+        requirePublication(
+          run.head_branch === publisher.head_branch && run.head_sha === publisher.head_sha,
+        );
+        observePublicationChild(publication, "nativeWindows", run, null, "dispatch-record");
+        const terminal = await reader.readArtifact(
+          run,
+          `windows-release-promotion-${run.id}-${run.run_attempt}`,
+          "windows-promotion.json",
+          PUBLICATION_LIMITS.diagnosticBytes,
+        );
+        if (terminal.state === "available") {
+          const nativeJobs = await reader.getAttemptJobs(String(run.id), run.run_attempt);
+          const nativeOwner = nativeJobs.filter(
+            (job) => job.name === "Promote signed Windows installers",
+          );
+          requirePublication(
+            nativeOwner.length === 1 &&
+              nativeOwner[0].steps?.filter(
+                (step) =>
+                  step.name === "Upload Windows promotion evidence" &&
+                  step.status === "completed" &&
+                  step.conclusion === "success",
+              ).length === 1,
+          );
+          observeWindowsMarker(
+            publication,
+            terminal.value,
+            dispatch,
+            run,
+            terminal.artifactId,
+            nativeOwner[0],
+          );
+        }
+      }
+    }
+    const children = selectedChildren(plan);
+    requirePublication(children.length <= PUBLICATION_LIMITS.runs - 2, "limits");
+    // Bound attempt fanout before inspectContinuation allocates its attempt array.
+    for (const child of children) {
+      if (!hasExactChildRunIdentity(child)) {
+        continue;
+      }
+      const run = await reader.getRun(child.runId);
+      await reader.authenticate(run, `.github/workflows/${child.workflow}`);
+      requirePublication(
+        run.run_attempt >= child.runAttempt &&
+          run.run_attempt - child.runAttempt < PUBLICATION_LIMITS.attempts,
+        "limits",
+      );
+    }
+    status = await inspectContinuation(plan, reader);
+    for (const child of status.children) {
+      child.url = child.runId
+        ? `https://github.com/${options.repository}/actions/runs/${child.runId}`
+        : "";
+    }
+    requirePublication(!publication.diagnostics.truncated, "incomplete");
+    publication.collection.complete = true;
+  } catch (error) {
+    recordFailure(error);
+  }
+  // Partial collection still requires final identity checks within the original budget.
+  try {
+    reader?.finish();
+  } catch (error) {
+    recordFailure(error);
+  }
+  const value = { ...status, publication };
+  if (Buffer.byteLength(JSON.stringify(value, null, 2)) + 1 > PUBLICATION_LIMITS.outputBytes) {
+    process.exitCode = 1;
+    const compact = {
+      publication: compactPublicationObservation(publication, status !== undefined),
+    };
+    requirePublication(
+      Buffer.byteLength(JSON.stringify(compact, null, 2)) + 1 <= PUBLICATION_LIMITS.outputBytes,
+      "limits",
+    );
+    return compact;
+  }
+  return value;
+}
+
 function print(value, json) {
   if (json) {
     console.log(JSON.stringify(value, null, 2));
@@ -822,6 +1674,15 @@ function print(value, json) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  if (options.publicationRunId) {
+    const value = await inspectPublicationStatus(options);
+    print(value, options.json);
+    if (!options.json) {
+      const { formatPublicationObservation } = await import("./frv-publication-status.mts");
+      console.log(formatPublicationObservation(value.publication));
+    }
+    return;
+  }
   const client = createClient(options.repository);
   if (options.command === "verify") {
     const plan = await loadPlan(options);
@@ -846,7 +1707,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try {
     await main();
   } catch (error) {
-    console.error(`[frv] ${error instanceof Error ? error.message : String(error)}`);
+    console.error(
+      process.argv.includes("--publication-run")
+        ? "[frv] publication observation: usage"
+        : `[frv] ${error instanceof Error ? error.message : String(error)}`,
+    );
     console.error("[frv] FAILED (exit 1)");
     process.exitCode = 1;
   }

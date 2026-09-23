@@ -1,4 +1,3 @@
-// Slack plugin module implements prepare content behavior.
 import type { WebClient as SlackWebClient } from "@slack/web-api";
 import { formatInboundMediaUnavailableText } from "openclaw/plugin-sdk/channel-inbound";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
@@ -15,6 +14,8 @@ import type { SlackThreadStarter } from "../thread.js";
 type SlackResolvedMessageContent = {
   rawBody: string;
   effectiveDirectMedia: SlackMediaResult[] | null;
+  commandSourceText: string;
+  mentionStripPatterns: string[];
 };
 
 const SLACK_MENTION_RESOLUTION_CONCURRENCY = 4;
@@ -117,6 +118,7 @@ export async function resolveSlackMessageContent(params: {
   mediaReadIdleTimeoutMs?: number;
   mediaTotalTimeoutMs?: number;
   abortSignal?: AbortSignal;
+  assertCurrent?: () => void;
   preloadedMedia?: ReadonlyMap<SlackFile, SlackMediaResult>;
 }): Promise<SlackResolvedMessageContent | null> {
   const ownFiles = filterInheritedParentFiles({
@@ -137,6 +139,7 @@ export async function resolveSlackMessageContent(params: {
             readIdleTimeoutMs: params.mediaReadIdleTimeoutMs,
             totalTimeoutMs: params.mediaTotalTimeoutMs,
             abortSignal: params.abortSignal,
+            assertCurrent: params.assertCurrent,
             preloadedMedia: params.preloadedMedia,
           }),
         )
@@ -191,6 +194,8 @@ export async function resolveSlackMessageContent(params: {
   const renderedMessageText = renderSlackUserMentions(textParts[0], renderedMentions);
   const renderedAttachmentText = renderSlackUserMentions(textParts[1], renderedMentions);
   const renderedBotAttachmentText = renderSlackUserMentions(textParts[2], renderedMentions);
+  const commandSourceText =
+    renderSlackUserMentions(normalizeOptionalString(params.message.text), renderedMentions) ?? "";
 
   const body =
     [renderedMessageText, renderedAttachmentText, renderedBotAttachmentText, mediaPlaceholder]
@@ -201,5 +206,10 @@ export async function resolveSlackMessageContent(params: {
     files: attachmentContent?.files,
     unavailableMediaCount: attachmentContent?.unavailableMediaCount ?? 0,
   });
-  return rawBody ? { rawBody, effectiveDirectMedia } : null;
+  const mentionStripPatterns = [...renderedMentions.values()].flatMap((rendered) =>
+    rendered ? [rendered] : [],
+  );
+  return rawBody
+    ? { rawBody, effectiveDirectMedia, commandSourceText, mentionStripPatterns }
+    : null;
 }

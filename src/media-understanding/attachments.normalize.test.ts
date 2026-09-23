@@ -178,6 +178,10 @@ describe("normalizeAttachments", () => {
       fact: { fileName: "diagram.svg", contentType: "application/octet-stream" },
     },
     {
+      name: "SVG source before a raster display filename",
+      fact: { path: "/tmp/diagram.svg", fileName: "photo.png" },
+    },
+    {
       name: "authoritative document kind",
       fact: { fileName: "photo.png", kind: "document" as const },
     },
@@ -193,21 +197,29 @@ describe("normalizeAttachments", () => {
     expect(selectAttachments({ capability: "image", attachments }).selected).toEqual([]);
   });
 
-  it("prefers the source extension over a conflicting display filename", () => {
-    const attachments = normalizeAttachments({
-      media: [
-        {
-          path: "/tmp/opaque",
-          url: "https://cdn.example.test/download/voice.ogg",
-          fileName: "photo.png",
-          contentType: "application/octet-stream",
-        },
-      ],
-    });
+  it.each([
+    ["audio", "ogg", undefined],
+    ["audio", "ogg", "photo.png"],
+    ["video", "mp4", undefined],
+    ["video", "mp4", "photo.png"],
+  ] as const)(
+    "selects the %s .%s URL with display filename %s",
+    (capability, extension, fileName) => {
+      const attachments = normalizeAttachments({
+        media: [
+          {
+            path: "/tmp/opaque",
+            url: `https://cdn.example.test/download/media.${extension}`,
+            fileName,
+            contentType: "application/octet-stream",
+          },
+        ],
+      });
 
-    expect(selectAttachments({ capability: "audio", attachments }).selected).toEqual(attachments);
-    expect(selectAttachments({ capability: "image", attachments }).selected).toEqual([]);
-  });
+      expect(selectAttachments({ capability, attachments }).selected).toEqual(attachments);
+      expect(selectAttachments({ capability: "image", attachments }).selected).toEqual([]);
+    },
+  );
 });
 
 describe("resolveAttachmentKind", () => {
@@ -217,6 +229,8 @@ describe("resolveAttachmentKind", () => {
     { source: "/tmp/photo.heif", expected: "image" },
     { source: "/tmp/scan.tif", expected: "image" },
     { source: "/tmp/scan.TIFF", expected: "image" },
+    { source: " /tmp/photo.png ", expected: "image" },
+    { source: " /tmp/scan.TIFF ", expected: "image" },
     { source: "/tmp/clip.flv", expected: "video" },
     { source: "/tmp/clip.m4v", expected: "video" },
     { source: "/tmp/clip.wmv", expected: "video" },

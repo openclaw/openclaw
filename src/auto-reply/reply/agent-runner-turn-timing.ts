@@ -1,3 +1,5 @@
+import type { ChatRunStartupPhase } from "../../../packages/gateway-protocol/src/index.js";
+import type { EmbeddedAgentExecutionPhase } from "../../agents/embedded-agent-runner/execution-phase.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createReplyTimingTracker } from "./reply-timing-tracker.js";
 
@@ -15,9 +17,48 @@ type AgentTurnLogParams = AgentTurnTerminalLogParams | AgentTurnMilestoneLogPara
 
 const agentTurnTimingLog = createSubsystemLogger("auto-reply/agent-turn-timing");
 
+export function resolveRunStartupPhase(
+  phase: EmbeddedAgentExecutionPhase,
+): ChatRunStartupPhase | undefined {
+  switch (phase) {
+    case "runner_entered":
+    case "workspace":
+    case "runtime_plugins":
+      return "preparing_workspace";
+    case "before_agent_reply":
+    case "model_resolution":
+    case "auth":
+    case "context_engine":
+    case "attempt_dispatch":
+    case "context_assembled":
+      return "preparing_context";
+    case "turn_accepted":
+    case "process_spawned":
+    case "model_call_started":
+      return "starting_model";
+    case "tool_execution_started":
+    case "assistant_output_started":
+      return undefined;
+  }
+  return undefined;
+}
+
 export function createAgentTurnTimingTracker(options: { profilerEnabled?: boolean } = {}) {
+  const observedExecutionPhases = new Set<EmbeddedAgentExecutionPhase>();
   const timing = createReplyTimingTracker<AgentTurnLogParams>({
-    log: agentTurnTimingLog,
+    log: {
+      warn(message, details) {
+        const isOutputMilestone =
+          details?.milestone === "assistant_output_started" ||
+          details?.milestone === "tool_execution_started";
+        // Provider and tool latency is useful context, not a startup warning.
+        if (isOutputMilestone && !options.profilerEnabled) {
+          agentTurnTimingLog.info(message, details);
+        } else {
+          agentTurnTimingLog.warn(message, details);
+        }
+      },
+    },
     enabled: options.profilerEnabled === true,
     formatMessage: (params, summary, stages) => {
       const identity = `runId=${params.runId} sessionId=${params.sessionId ?? "unknown"} sessionKey=${params.sessionKey ?? "unknown"}`;
@@ -34,11 +75,26 @@ export function createAgentTurnTimingTracker(options: { profilerEnabled?: boolea
     measure: timing.measure,
     measureSync: timing.measureSync,
     logIfSlow(params: AgentTurnTerminalLogParams) {
+      // The terminal duration includes inference and tools; default warnings
+      // belong to the preparation and first-activity milestones below.
+      if (!options.profilerEnabled) {
+        return;
+      }
       const { runId, sessionId, sessionKey, outcome, error } = params;
       timing.logIfSlow({ runId, sessionId, sessionKey, outcome, error });
     },
     logMilestoneIfSlow(params: AgentTurnMilestoneLogParams) {
       const { runId, sessionId, sessionKey, milestone } = params;
+      timing.logIfSlow({ runId, sessionId, sessionKey, milestone }, { repeat: true });
+    },
+    logExecutionPhaseIfSlow(params: AgentTurnLogContext & { phase: EmbeddedAgentExecutionPhase }) {
+      // Each phase is a first-observation boundary, not a log for every tool
+      // or retry. The fixed phase vocabulary bounds this per-turn state.
+      if (observedExecutionPhases.has(params.phase)) {
+        return;
+      }
+      observedExecutionPhases.add(params.phase);
+      const { runId, sessionId, sessionKey, phase: milestone } = params;
       timing.logIfSlow({ runId, sessionId, sessionKey, milestone }, { repeat: true });
     },
   };

@@ -1327,6 +1327,46 @@ describe("scripts/lib/kova-report-gate.mts", () => {
     });
   }
 
+  it.each([
+    ["repeated", "peakRssMb", [650, 650], 650, 0],
+    ["reordered RSS", "peakRssMb", [640, 650], 640, 0],
+    ["reordered CPU", "cpuPercentMax", [70, 80], 70, 0],
+    ["reused RSS", "peakRssMb", [640, 650], 650, 1],
+    ["reused CPU", "cpuPercentMax", [70, 80], 80, 1],
+  ] as const)(
+    "checks %s measurement samples at the CLI boundary",
+    (_name, id, samples, second, code) => {
+      const report = partialReport();
+      duplicatePassingRecord(report);
+      setAt(report, ["records", 1, "measurements", id], second);
+      const [min, max] = samples;
+      setAt(report, ["performance", "groups", 0, "metrics", id], {
+        classification: "stable",
+        count: 2,
+        max,
+        median: (min + max) / 2,
+        min,
+        p95: min + (max - min) * 0.95,
+        samples,
+      });
+      const result = spawnSync(
+        process.execPath,
+        [SCRIPT_PATH, writeReport(report), "--require-instrumented-performance-contract"],
+        { cwd: process.cwd(), encoding: "utf8" },
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.signal).toBeNull();
+      expect(result.status).toBe(code);
+      if (code === 0) {
+        expect(result.stdout).toContain("filtered-partial");
+      } else {
+        const label = id === "peakRssMb" ? "RSS" : "CPU";
+        expect(result.stderr).toContain(`record ${label} samples did not match`);
+      }
+    },
+  );
+
   it("exits zero for profiling-only resource failures", () => {
     const result = spawnSync(
       process.execPath,

@@ -143,7 +143,7 @@ describe("tool display details", () => {
       resolveToolDisplay({
         name: "sessions_spawn",
         args: {
-          task: "double-message-bug-gpt",
+          taskName: "double-message-bug-gpt",
           label: 0,
           runTimeoutSeconds: 0,
         },
@@ -479,15 +479,54 @@ describe("tool display details", () => {
     ).toBe("print text -> search text in .");
   });
 
-  it("moves cd path to context suffix and appends raw command", () => {
+  it.each<[name: string, command: string, expected: string]>([
+    [
+      "moves cd path to context suffix and appends raw command",
+      "cd ~/my-project && npm install",
+      "install dependencies (in ~/my-project), `cd ~/my-project && npm install`",
+    ],
+    [
+      "moves cd path to context suffix with multiple stages and raw command",
+      "cd ~/my-project && npm install && npm test",
+      "install dependencies → run tests (in ~/my-project), `cd ~/my-project && npm install && npm test`",
+    ],
+    [
+      "moves pushd path to context suffix and appends raw command",
+      "pushd /tmp && git status",
+      "check git status (in /tmp), `pushd /tmp && git status`",
+    ],
+    [
+      "clears inferred cwd when popd is stripped from preamble",
+      "pushd /tmp && popd && npm install",
+      "install dependencies, `pushd /tmp && popd && npm install`",
+    ],
+    [
+      "summarizes all stages and appends raw command",
+      "git fetch && git rebase origin/main",
+      "fetch git changes → rebase git branch, `git fetch && git rebase origin/main`",
+    ],
+    [
+      "falls back to raw command for unknown binaries",
+      "jj rebase -s abc -d main",
+      "jj rebase -s abc -d main",
+    ],
+    // standalone cd (no following command) — treated as raw since it's generic
+    ["handles standalone cd as raw command", "cd /tmp", "cd /tmp"],
+    // both cd's are preamble; last path wins
+    [
+      "handles chained cd commands using last path",
+      "cd /tmp && cd /app",
+      "cd /tmp && cd /app (in /app)",
+    ],
+  ])("%s", (_name, command, expected) => {
     const detail = formatToolDetail(
       resolveToolDisplay({
         name: "exec",
-        args: { command: "cd ~/my-project && npm install" },
+        args: { command },
       }),
     );
 
-    expect(detail).toBe("install dependencies (in ~/my-project), `cd ~/my-project && npm install`");
+    expect(detail).toBe(expected);
   });
 
   it("omits raw command details in explain mode", () => {
@@ -558,41 +597,6 @@ describe("tool display details", () => {
     ).toBe('🔎 Web Search: for "OpenClaw docs"');
   });
 
-  it("moves cd path to context suffix with multiple stages and raw command", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: { command: "cd ~/my-project && npm install && npm test" },
-      }),
-    );
-
-    expect(detail).toBe(
-      "install dependencies → run tests (in ~/my-project), `cd ~/my-project && npm install && npm test`",
-    );
-  });
-
-  it("moves pushd path to context suffix and appends raw command", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: { command: "pushd /tmp && git status" },
-      }),
-    );
-
-    expect(detail).toBe("check git status (in /tmp), `pushd /tmp && git status`");
-  });
-
-  it("clears inferred cwd when popd is stripped from preamble", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: { command: "pushd /tmp && popd && npm install" },
-      }),
-    );
-
-    expect(detail).toBe("install dependencies, `pushd /tmp && popd && npm install`");
-  });
-
   it("moves cd path to context suffix with || separator", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
@@ -617,30 +621,6 @@ describe("tool display details", () => {
     expect(detail).toBe("install dependencies (in /app), `cd /tmp && npm install`");
   });
 
-  it("summarizes all stages and appends raw command", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: { command: "git fetch && git rebase origin/main" },
-      }),
-    );
-
-    expect(detail).toBe(
-      "fetch git changes → rebase git branch, `git fetch && git rebase origin/main`",
-    );
-  });
-
-  it("falls back to raw command for unknown binaries", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: { command: "jj rebase -s abc -d main" },
-      }),
-    );
-
-    expect(detail).toBe("jj rebase -s abc -d main");
-  });
-
   it("falls back to raw command for unknown binary with cwd", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
@@ -662,30 +642,6 @@ describe("tool display details", () => {
 
     // "run cargo build" is generic, but "run tests" is known — keep joined summary
     expect(detail).toMatch(/^run cargo build → run tests/);
-  });
-
-  it("handles standalone cd as raw command", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: { command: "cd /tmp" },
-      }),
-    );
-
-    // standalone cd (no following command) — treated as raw since it's generic
-    expect(detail).toBe("cd /tmp");
-  });
-
-  it("handles chained cd commands using last path", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: { command: "cd /tmp && cd /app" },
-      }),
-    );
-
-    // both cd's are preamble; last path wins
-    expect(detail).toBe("cd /tmp && cd /app (in /app)");
   });
 
   it("respects quotes when splitting preamble separators", () => {
@@ -1105,7 +1061,7 @@ describe("coerceDisplayValue middle truncation", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
         name: "sessions_spawn",
-        args: { task: longPath },
+        args: { label: longPath },
       }),
     );
     // Should contain the start of the path
@@ -1114,17 +1070,6 @@ describe("coerceDisplayValue middle truncation", () => {
     expect(detail).toContain("important-file.txt");
     // Should contain the ellipsis for middle truncation
     expect(detail).toContain("…");
-  });
-
-  it("does not truncate short string values", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "sessions_spawn",
-        args: { task: "short-task-name" },
-      }),
-    );
-    expect(detail).toBe("short-task-name");
-    expect(detail).not.toContain("…");
   });
 
   it("redacts credential-like values in long generic string details", () => {
@@ -1138,7 +1083,7 @@ describe("coerceDisplayValue middle truncation", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
         name: "sessions_spawn",
-        args: { task: longValue },
+        args: { label: longValue },
       }),
     );
     // The ghp_ token must be redacted before truncation
@@ -1153,7 +1098,7 @@ describe("coerceDisplayValue middle truncation", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
         name: "sessions_spawn",
-        args: { task: longValue },
+        args: { label: longValue },
       }),
     );
 

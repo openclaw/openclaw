@@ -5,7 +5,11 @@ import { isResetAuthorizedForContext } from "../command-auth.js";
 import { normalizeCommandBody } from "../commands-registry.js";
 import type { MsgContext } from "../templating.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
-import { CURRENT_MESSAGE_MARKER, HISTORY_CONTEXT_MARKER } from "./history.js";
+import {
+  CURRENT_MESSAGE_MARKER,
+  HISTORY_CONTEXT_MARKER,
+  RECENT_HISTORY_CONTEXT_MARKER,
+} from "./history.js";
 import { stripMentions } from "./mentions.js";
 
 type ResolvedSessionResetCommand = {
@@ -35,6 +39,7 @@ function skipHorizontalWhitespace(source: string, start: number): number {
 function startsWithHistoryMarker(source: string, start: number): boolean {
   return (
     source.startsWith(HISTORY_CONTEXT_MARKER, start) ||
+    source.startsWith(RECENT_HISTORY_CONTEXT_MARKER, start) ||
     source.startsWith(CURRENT_MESSAGE_MARKER, start)
   );
 }
@@ -275,8 +280,12 @@ export function resolveSessionResetCommand(params: {
     const triggerLower = normalizeLowercaseStringOrEmpty(trigger);
     if (
       !triggerLower ||
-      (normalizedResetBodyLower !== triggerLower &&
-        !normalizedResetBodyLower.startsWith(`${triggerLower} `))
+      ![triggerLower, normalizeLowercaseStringOrEmpty(normalizeCommandBody(trigger))].some(
+        (candidate) =>
+          normalizedResetBodyLower === candidate ||
+          (normalizedResetBodyLower.startsWith(candidate) &&
+            /\s/.test(normalizedResetBodyLower.charAt(candidate.length))),
+      )
     ) {
       continue;
     }

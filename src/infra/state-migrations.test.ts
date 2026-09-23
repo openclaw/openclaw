@@ -5,17 +5,21 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
 import { AgentSelectionRequiredError, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { assertWorkspaceStateMigrationReady } from "../agents/workspace-legacy-state.js";
+import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
+import * as channelRegistry from "../channels/plugins/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { readExactSessionEntryRowForCanonicalRepair } from "../config/sessions/session-accessor.sqlite-canonical-repair.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
+import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { readMemoryHostEventRecords } from "../memory-host-sdk/events.js";
 import { loadNodeHostConfig } from "../node-host/config.js";
 import { readChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
@@ -26,7 +30,9 @@ import type {
 } from "../plugins/doctor-contract-module.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { readConfigMachineState, writeConfigMachineState } from "../state/config-machine-state.js";
+import { proposeCreateSkill } from "../skills/workshop/service.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -42,16 +48,14 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import {
+  closeDatabaseTestCohorts,
+  closeStateDatabaseForTest,
+} from "../test-utils/database-cleanup.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { loadApnsRegistration } from "./push-apns.js";
-import {
-  createWebPushVapidKeyPair,
-  hashWebPushEndpoint,
-  listWebPushSubscriptions,
-  readPersistedVapidKeyPair,
-} from "./push-web-store.js";
 import { readRestartSentinel } from "./restart-sentinel.js";
 import { acquireStartupMigrationLease } from "./startup-migration-checkpoint.js";
 import {
@@ -60,6 +64,7 @@ import {
   runLegacyStateMigrations as runLegacyStateMigrationsWithSurfaces,
 } from "./state-migrations.doctor.js";
 import * as sessionStore from "./state-migrations.legacy-session-store.js";
+import { throwIfDoctorStateMigrationRefused } from "./state-migrations.messages.js";
 import { autoMigrateLegacyPluginDoctorState } from "./state-migrations.plugin-doctor.js";
 import {
   migrateLegacyCurrentConversationBindings,
@@ -76,35 +81,27 @@ type DetectLegacyStateParams = Parameters<typeof detectLegacyStateMigrationsWith
 type RunLegacyStateParams = Parameters<typeof runLegacyStateMigrationsWithSurfaces>[0];
 type AutoMigrateLegacyStateParams = Parameters<typeof autoMigrateLegacyStateWithSurfaces>[0];
 
+type CoreMigrationParams<T> = Omit<T, "legacySessionSurfaces"> & {
+  legacySessionSurfaces?: DetectLegacyStateParams["legacySessionSurfaces"];
+};
+
 // This broad core suite intentionally exercises migration mechanics without plugin-owned keys.
 // Package-shaped coverage owns configured plugin resolution and setup-sidecar loading.
-function detectLegacyStateMigrations(
-  params: Omit<DetectLegacyStateParams, "legacySessionSurfaces"> & {
-    legacySessionSurfaces?: DetectLegacyStateParams["legacySessionSurfaces"];
-  },
-) {
+function detectLegacyStateMigrations(params: CoreMigrationParams<DetectLegacyStateParams>) {
   return detectLegacyStateMigrationsWithSurfaces({
     legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
     ...params,
   });
 }
 
-function runLegacyStateMigrations(
-  params: Omit<RunLegacyStateParams, "legacySessionSurfaces"> & {
-    legacySessionSurfaces?: RunLegacyStateParams["legacySessionSurfaces"];
-  },
-) {
+function runLegacyStateMigrations(params: CoreMigrationParams<RunLegacyStateParams>) {
   return runLegacyStateMigrationsWithSurfaces({
     legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
     ...params,
   });
 }
 
-function autoMigrateLegacyState(
-  params: Omit<AutoMigrateLegacyStateParams, "legacySessionSurfaces"> & {
-    legacySessionSurfaces?: AutoMigrateLegacyStateParams["legacySessionSurfaces"];
-  },
-) {
+function autoMigrateLegacyState(params: CoreMigrationParams<AutoMigrateLegacyStateParams>) {
   return autoMigrateLegacyStateWithSurfaces({
     legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
     ...params,
@@ -114,21 +111,16 @@ function autoMigrateLegacyState(
 // Static helpers can retain earlier cohorts after resetModules; close every cohort at teardown.
 const migrationDatabaseClosers = new Set([
   closeOpenClawAgentDatabasesForTest,
-  closeOpenClawStateDatabaseForTest,
+  closeStateDatabaseForTest,
 ]);
 
-function closeMigrationDatabases() {
-  for (const close of migrationDatabaseClosers) {
-    close();
-  }
-}
-
 async function rerunAutomaticMigrationAfterRestart(params: AutoMigrateLegacyStateParams) {
-  closeMigrationDatabases();
+  await closeDatabaseTestCohorts(migrationDatabaseClosers);
   vi.resetModules();
-  const [agentDb, stateDb] = await Promise.all([
+  const [agentDb, stateDb, agentDbTest] = await Promise.all([
     import("../state/openclaw-agent-db.js"),
     import("../state/openclaw-state-db.js"),
+    import("../state/openclaw-agent-db.test-support.js"),
   ]);
   migrationDatabaseClosers.add(agentDb.closeOpenClawAgentDatabasesForTest);
   migrationDatabaseClosers.add(stateDb.closeOpenClawStateDatabaseForTest);
@@ -139,8 +131,8 @@ async function rerunAutomaticMigrationAfterRestart(params: AutoMigrateLegacyStat
       ...params,
     });
   } finally {
-    closeMigrationDatabases();
-    expect(agentDb.listOpenClawAgentDatabasesForTest()).toEqual([]);
+    await closeDatabaseTestCohorts(migrationDatabaseClosers);
+    expect(agentDbTest.listOpenClawAgentDatabasesForTest()).toEqual([]);
     expect(stateDb.isOpenClawStateDatabaseOpen()).toBe(false);
   }
 }
@@ -216,12 +208,29 @@ const legacyChannelStateMigrationEntries = vi.hoisted(() => ({
 
 vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>();
+  const buildStateMigrationInventory = (params?: { config?: OpenClawConfig }) => ({
+    knownPluginIds: actual.collectRelevantDoctorPluginIds(params?.config ?? {}),
+    sessionStoreOwnerPluginIds: [],
+    descriptors: [
+      ...pluginDoctorStateMigrationEntries.entries,
+      ...legacyChannelStateMigrationEntries.entries,
+    ].map((entry) =>
+      Object.assign(
+        { pluginId: entry.pluginId, id: entry.migration.id },
+        entry.migration.doctorOnly === true ? { doctorOnly: true as const } : {},
+        entry.migration.phase ? { phase: entry.migration.phase } : {},
+      ),
+    ),
+    unresolvedPluginIds: [],
+  });
   return {
     ...actual,
     listPluginDoctorStateMigrationEntries: vi.fn(() => [
       ...pluginDoctorStateMigrationEntries.entries,
       ...legacyChannelStateMigrationEntries.entries,
     ]),
+    resolveLivePluginDoctorStateMigrationInventory: vi.fn(buildStateMigrationInventory),
+    resolvePluginDoctorStateMigrationInventory: vi.fn(buildStateMigrationInventory),
   };
 });
 
@@ -490,6 +499,12 @@ function createEnv(stateDir: string): NodeJS.ProcessEnv {
   };
 }
 
+function createMigrationContext(root: string) {
+  const stateDir = path.join(root, ".openclaw");
+  const env = createEnv(stateDir);
+  return { root, stateDir, env };
+}
+
 function seedSchemaOnlyLegacyAgentDatabase(
   stateDir: string,
   options: { agentId?: string | null } = {},
@@ -538,9 +553,7 @@ type MixedCommitFailureFixture = {
 };
 
 async function createMixedPluginBindingCommitFailureFixture(): Promise<MixedCommitFailureFixture> {
-  const root = await createTempDir();
-  const stateDir = path.join(root, ".openclaw");
-  const env = createEnv(stateDir);
+  const { stateDir, env } = createMigrationContext(await createTempDir());
   const sourcePath = path.join(stateDir, "plugin-binding-approvals.json");
   insertPluginBindingApprovalRow(env, {
     plugin_root: "/plugins/conflict",
@@ -592,9 +605,7 @@ async function createMixedPluginBindingCommitFailureFixture(): Promise<MixedComm
 }
 
 async function createMixedCurrentConversationCommitFailureFixture(): Promise<MixedCommitFailureFixture> {
-  const root = await createTempDir();
-  const stateDir = path.join(root, ".openclaw");
-  const env = createEnv(stateDir);
+  const { stateDir, env } = createMigrationContext(await createTempDir());
   const bindingsDir = path.join(stateDir, "bindings");
   const sourcePath = path.join(bindingsDir, "current-conversations.json");
   const conflictingKey = "workspace\u241fdefault\u241f\u241fuser:U123";
@@ -721,10 +732,29 @@ async function createLegacyAuditLedger(stateDir: string): Promise<string> {
   return databasePath;
 }
 
+function createLegacyAcpSessionEntry(
+  sessionId: string,
+  updatedAt: number,
+  agent: string,
+  runtimeSessionName: string,
+  lastActivityAt: number,
+) {
+  return {
+    sessionId,
+    updatedAt,
+    acp: {
+      backend: "test",
+      agent,
+      runtimeSessionName,
+      mode: "persistent",
+      state: "idle",
+      lastActivityAt,
+    } satisfies SessionAcpMeta,
+  };
+}
+
 async function createLegacyStateFixture(params?: { includePreKey?: boolean }) {
-  const root = await createTempDir();
-  const stateDir = path.join(root, ".openclaw");
-  const env = createEnv(stateDir);
+  const { root, stateDir, env } = createMigrationContext(await createTempDir());
   const cfg = createConfig();
 
   await fs.mkdir(path.join(stateDir, "sessions"), { recursive: true });
@@ -774,12 +804,12 @@ async function createLegacyStateFixture(params?: { includePreKey?: boolean }) {
   };
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
   pluginDoctorStateMigrationEntries.entries = [];
   resetAutoMigrateLegacyTaskStateSidecarsForTest();
   resetAutoMigrateLegacyStateDirForTest();
-  closeMigrationDatabases();
+  await closeDatabaseTestCohorts(migrationDatabaseClosers);
   resetPluginRuntimeStateForTest();
 });
 
@@ -788,6 +818,37 @@ afterAll(async () => {
 });
 
 describe("state migrations", () => {
+  it("migrates workspace setup during Doctor preflight before runtime consumers", async () => {
+    const { root, env } = createMigrationContext(await createTempDir());
+    const workspaceDir = path.join(root, "workspace");
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: { default: true, workspace: workspaceDir } } },
+    };
+    const sourcePath = path.join(workspaceDir, ".openclaw", "workspace-state.json");
+    const completedAt = "2026-07-15T10:01:00.000Z";
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, JSON.stringify({ version: 1, setupCompletedAt: completedAt }));
+    const assertReady = () =>
+      assertWorkspaceStateMigrationReady({ workspaceDirs: [workspaceDir], env });
+
+    await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    expect(assertReady).toThrow("Legacy workspace setup state requires migration");
+
+    const repaired = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+
+    expect(repaired.warnings).toEqual([]);
+    expect(assertReady).not.toThrow();
+    expect(fsSync.existsSync(sourcePath)).toBe(false);
+    expect((await readWorkspaceStateSnapshot(workspaceDir, { env })).setup.setupCompletedAt).toBe(
+      completedAt,
+    );
+  });
+
   let detectionCase: Awaited<ReturnType<typeof detectLegacyStateMigrations>> & {
     stateDir: string;
     env: NodeJS.ProcessEnv;
@@ -804,10 +865,44 @@ describe("state migrations", () => {
     detectionCase = { ...detected, stateDir, env };
   });
 
+  describe.each(["automatic", "doctor"] as const)("%s pairing detection", (mode) => {
+    it.each(["missing", "empty", "irrelevant", "pairing-only"])(
+      "does not request channel runtime for %s credentials",
+      async (input) => {
+        const root = await createTempDir();
+        const stateDir = path.join(root, ".openclaw");
+        const sourceDir = path.join(stateDir, "credentials");
+        if (input !== "missing") {
+          await fs.mkdir(sourceDir, { recursive: true });
+        }
+        if (input === "irrelevant") {
+          await fs.writeFile(path.join(sourceDir, "oauth.json"), "{}");
+          await fs.mkdir(path.join(sourceDir, "chatapp-allowFrom.json"));
+        }
+        if (input === "pairing-only") {
+          await fs.writeFile(path.join(sourceDir, "chatapp-pairing.json"), '{"requests":[]}');
+        }
+        const getChannelPlugin = vi.spyOn(channelRegistry, "getChannelPlugin");
+        try {
+          const detected = await detectLegacyStateMigrations({
+            cfg: createConfig(),
+            mode,
+            env: createEnv(stateDir),
+            homedir: () => root,
+          });
+          expect(detected.channelPairing.files).toEqual(
+            input === "pairing-only" ? ["chatapp-pairing.json"] : [],
+          );
+          expect(getChannelPlugin).not.toHaveBeenCalled();
+        } finally {
+          getChannelPlugin.mockRestore();
+        }
+      },
+    );
+  });
+
   it("does not treat wildcard route bindings as pairing account ids", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     cfg.bindings = [
       {
@@ -844,9 +939,7 @@ describe("state migrations", () => {
   });
 
   it("uses the retained migration owner for channel pairing account selection", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = retainLegacyDefaultAgentId(
       {
         agents: {
@@ -879,11 +972,13 @@ describe("state migrations", () => {
     });
     setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]));
 
+    const authoredConfig = structuredClone(cfg);
     const detected = await detectLegacyStateMigrations({
       cfg,
       env,
       homedir: () => root,
     });
+    expect(cfg).toEqual(authoredConfig);
     const result = await runLegacyStateMigrations({ detected, config: cfg, env });
 
     expect(result.warnings).toEqual([]);
@@ -892,10 +987,56 @@ describe("state migrations", () => {
     });
   });
 
+  it.each([
+    { bound: "Bound.Acct", explicit: "alpha", expected: "bound.acct", entries: ["unscoped"] },
+    { bound: undefined, explicit: "alpha", expected: "alpha", entries: ["unscoped", "scoped"] },
+    { bound: undefined, explicit: undefined, expected: "plugin.default", entries: ["unscoped"] },
+  ])("preserves loaded plugin accounts with $expected as the default", async (selection) => {
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
+    const cfg = createConfig();
+    cfg.channels = {
+      chatapp: { accounts: { beta: {}, alpha: {} }, defaultAccount: selection.explicit },
+    };
+    if (selection.bound) {
+      cfg.bindings = [
+        { agentId: "worker-1", match: { channel: "chatapp", accountId: selection.bound } },
+      ];
+    }
+    const plugin = createChannelTestPluginBase({
+      id: "chatapp",
+      config: {
+        listAccountIds: (config) => {
+          expect(config).toBe(cfg);
+          return ["Plugin.Acct"];
+        },
+        defaultAccountId: () => "Plugin.Default",
+      },
+    });
+    setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]));
+    const sourceDir = path.join(stateDir, "credentials");
+    await fs.mkdir(sourceDir, { recursive: true });
+    for (const suffix of ["", "-plugin.acct", "-alpha", "-beta"]) {
+      await fs.writeFile(
+        path.join(sourceDir, `chatapp${suffix}-allowFrom.json`),
+        suffix ? '["scoped"]' : '["unscoped"]',
+      );
+    }
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    // Import uses captured detection facts even if the caller replaces its config later.
+    const result = await runLegacyStateMigrations({ detected, config: {}, env });
+
+    expect(result.warnings).toEqual([]);
+    expect(readChannelPairingStateSnapshot("chatapp", env).allowFrom).toEqual({
+      "plugin.acct": ["scoped"],
+      alpha: ["scoped"],
+      beta: ["scoped"],
+      [selection.expected]: selection.entries,
+    });
+    expect(await fs.readdir(sourceDir)).toEqual([]);
+  });
+
   it("preserves ambiguous pairing ownership when only the session fallback exists", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg: OpenClawConfig = {
       agents: { ownership: "explicit", entries: { main: {}, ops: {} } },
       channels: { chatapp: {} },
@@ -918,58 +1059,128 @@ describe("state migrations", () => {
     ).rejects.toBeInstanceOf(AgentSelectionRequiredError);
   });
 
-  it("keeps automatic migration read-only when the shared schema is current", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
-    const databasePath = openOpenClawStateDatabase({ env }).path;
-    closeOpenClawStateDatabaseForTest();
-
-    const writer = new DatabaseSync(databasePath);
-    writer.exec("PRAGMA journal_mode = WAL; BEGIN IMMEDIATE;");
-    try {
+  it.each(["present", "absent", "present with a retained bundle"] as const)(
+    "keeps automatic migration read-only with a current schema and Workshop tables %s",
+    async (workshopTables) => {
+      const { root, stateDir, env } = createMigrationContext(await createTempDir());
       const cfg = createConfig();
       cfg.agents = { list: [{ id: "main" }] };
-      await expect(
-        autoMigrateLegacyState({ cfg, env, homedir: () => root }),
-      ).resolves.toMatchObject({ changes: [], warnings: [] });
-    } finally {
-      writer.exec("ROLLBACK;");
-      writer.close();
-    }
-  });
+      const databasePath = openOpenClawStateDatabase({ env }).path;
+      let bundle: { path: string; content: string } | undefined;
+      if (workshopTables === "present with a retained bundle") {
+        const proposal = await proposeCreateSkill({
+          workspaceDir: path.join(root, "workspace"),
+          config: cfg,
+          agentId: "main",
+          env,
+          name: "retained-procedure",
+          description: "Keep a current proposal through no-op migration",
+          content: "# Retained procedure\n\nKeep this modern draft intact.\n",
+        });
+        const proposalDir = path.join(stateDir, "skill-workshop", "proposals", proposal.record.id);
+        bundle = {
+          path: path.join(proposalDir, proposal.record.draftFile),
+          content: proposal.content,
+        };
+        await expect(fs.access(path.join(proposalDir, "proposal.json"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      }
+      closeOpenClawStateDatabaseForTest();
 
-  it("runs legacy-main session migration when the other automatic detectors are empty", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
-    const cfg = createConfig();
-    runOpenClawAgentWriteTransaction(
-      (database) => {
-        writeSessionEntry(
-          database,
-          "agent:main:chat",
-          { sessionId: "legacy-main-session", updatedAt: 100 },
-          { allowStoredAliases: true, previousEntry: null },
-        );
-      },
-      { agentId: "main", env },
-    );
+      const writer = new DatabaseSync(databasePath);
+      if (workshopTables === "absent") {
+        writer.exec(`
+        DROP TABLE skill_workshop_proposal_events;
+        DROP TABLE skill_workshop_proposal_rollbacks;
+        DROP TABLE skill_workshop_collection_reviews;
+        DROP TABLE skill_workshop_proposals;
+      `);
+      }
+      writer.exec("PRAGMA journal_mode = WAL; BEGIN IMMEDIATE;");
+      try {
+        const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+        expect(result).toMatchObject({ changes: [], warnings: [] });
+        const ids = result.stepReceipts.map((receipt) => receipt.id);
+        expect(ids).not.toContain("skill-workshop");
+        if (bundle) {
+          await expect(fs.readFile(bundle.path, "utf8")).resolves.toBe(bundle.content);
+        }
+      } finally {
+        writer.exec("ROLLBACK;");
+        writer.close();
+      }
+    },
+  );
 
-    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
-    const source = runOpenClawAgentWriteTransaction(
-      (database) => readExactSessionEntryRowForCanonicalRepair(database, "agent:main:chat"),
-      { agentId: "main", env },
-    );
-    const destination = runOpenClawAgentWriteTransaction(
-      (database) => readExactSessionEntryRowForCanonicalRepair(database, "agent:worker-1:chat"),
-      { agentId: "worker-1", env },
-    );
-
-    expect(result.changes).toContain("Migrated legacy main session claim agent:worker-1:chat.");
-    expect(source).toBeUndefined();
-    expect(destination?.entry.sessionId).toBe("legacy-main-session");
-  });
+  it.each(["automatic", "doctor", "doctor-refusal"] as const)(
+    "records Workshop work after mutation and respects the prior refusal in %s mode",
+    async (mode) => {
+      const { root, stateDir, env } = createMigrationContext(await createTempDir());
+      const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+      const databasePath = openOpenClawStateDatabase({ env }).path;
+      closeOpenClawStateDatabaseForTest();
+      const workshopRoot = path.join(stateDir, "skill-workshop");
+      const indexPath = path.join(workshopRoot, "proposals.json");
+      await fs.mkdir(workshopRoot, { recursive: true });
+      await fs.writeFile(indexPath, "{}\n");
+      if (mode === "doctor-refusal") {
+        await fs.mkdir(path.join(stateDir, "tui"), { recursive: true });
+        await fs.writeFile(path.join(stateDir, "tui", "last-session.json"), "{broken");
+      }
+      const callbackSamples: boolean[] = [];
+      const result = await autoMigrateLegacyState({
+        cfg,
+        env,
+        homedir: () => root,
+        doctorOnlyStateMigrations: mode !== "automatic",
+        onStepReceipt: (receipt) => {
+          if (receipt.id === "skill-workshop") {
+            callbackSamples.push(fsSync.existsSync(indexPath));
+          }
+        },
+      });
+      const workshop = result.stepReceipts.find((receipt) => receipt.id === "skill-workshop");
+      if (mode === "automatic") {
+        expect(result.warnings).toEqual([]);
+        expect(workshop).toBeUndefined();
+        expect(callbackSamples).toEqual([]);
+        await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("{}\n");
+        return;
+      }
+      expect(workshop).toMatchObject({
+        phase: "final",
+        source: [
+          { kind: "sqlite", path: databasePath },
+          { kind: "path", path: workshopRoot },
+          { kind: "owner", id: "core:skill-workshop" },
+        ],
+        target: [
+          { kind: "sqlite", path: databasePath },
+          { kind: "owner", id: "core:skill-workshop" },
+        ],
+        requiredness: "conditional",
+        reversibility: "checkpoint-required",
+      });
+      if (mode === "doctor-refusal") {
+        expect(workshop).toMatchObject({
+          outcome: "refused",
+          refusal: { code: "blocked-by-prior-refusal" },
+          changes: [],
+        });
+        expect(callbackSamples).toEqual([true]);
+        await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("{}\n");
+      } else {
+        expect(result.warnings).toEqual([]);
+        expect(workshop).toMatchObject({
+          outcome: "completed",
+          changes: ["Removed the empty legacy Skill Workshop proposal index."],
+        });
+        expect(callbackSamples).toEqual([false]);
+        await expect(fs.access(indexPath)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+    },
+  );
 
   it.each([
     { location: "inside", doctorOnlyStateMigrations: false },
@@ -1028,7 +1239,11 @@ describe("state migrations", () => {
           database
             .prepare("SELECT agent_id, app_version FROM schema_meta WHERE meta_key = ?")
             .get("historical-transcript-directives-v1"),
-        ).toEqual({ agent_id: "main", app_version: JSON.stringify({ phase: "complete" }) });
+        ).toEqual(
+          doctorOnlyStateMigrations
+            ? { agent_id: "main", app_version: JSON.stringify({ phase: "complete" }) }
+            : undefined,
+        );
         expect(
           database.prepare("SELECT session_key FROM session_nodes ORDER BY session_key").all(),
         ).toEqual([{ session_key: "agent:qa:proof" }]);
@@ -1039,9 +1254,7 @@ describe("state migrations", () => {
   );
 
   it("reports unresolved legacy-main ownership as a nonblocking automatic notice", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, env } = createMigrationContext(await createTempDir());
     const cfg: OpenClawConfig = {
       agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
     };
@@ -1065,9 +1278,7 @@ describe("state migrations", () => {
   });
 
   it("starts a new explicit-ownership fleet without a legacy-main owner notice", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, env } = createMigrationContext(await createTempDir());
     const cfg: OpenClawConfig = {
       agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
     };
@@ -1080,10 +1291,41 @@ describe("state migrations", () => {
     );
   });
 
+  it("preserves retired config locators before an advisory transcript migration return", async () => {
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
+    const databasePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    fsSync.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const database = new DatabaseSync(databasePath);
+    try {
+      ensureOpenClawAgentDatabaseSchema(database, {
+        agentId: "main",
+        env,
+        path: databasePath,
+        register: false,
+      });
+      database
+        .prepare(
+          "INSERT INTO schema_meta(meta_key,role,schema_version,agent_id,app_version,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+        )
+        .run("historical-transcript-directives-v1", "agent", 1, "main", "invalid-json", 1, 1);
+    } finally {
+      database.close();
+    }
+    const store = path.join(root, "legacy-jobs.json");
+    const cfg: OpenClawConfig & { cron: { store: string } } = {
+      agents: { ownership: "explicit", entries: { main: {} } },
+      cron: { store },
+    };
+    const result = await autoMigrateLegacyState({ cfg, env, invocationPurpose: "doctor" });
+    expect(result.warnings).toContainEqual(
+      expect.stringContaining("invalid historical transcript migration cursor"),
+    );
+    expect(readConfigMachineState("cron.store", { env })).toBe(store);
+    expect(result.changes).toContain("Migrated cron.store → shared SQLite state");
+  });
+
   it("ignores a schema-only legacy agent database without selecting an owner", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg: OpenClawConfig = {
       agents: { ownership: "explicit", entries: { main: {}, blocker: {}, digest: {} } },
     };
@@ -1114,24 +1356,17 @@ describe("state migrations", () => {
   });
 
   it.each([null, "", "   "])(
-    "keeps a schema-only legacy agent database with invalid owner %j blocking",
+    "preserves a schema-only legacy agent database with invalid owner %j as advisory",
     async (agentId) => {
-      const root = await createTempDir();
-      const stateDir = path.join(root, ".openclaw");
-      const env = createEnv(stateDir);
+      const { root, stateDir, env } = createMigrationContext(await createTempDir());
       const cfg: OpenClawConfig = {
         agents: { ownership: "explicit", entries: { main: {}, blocker: {}, digest: {} } },
       };
       const databasePath = seedSchemaOnlyLegacyAgentDatabase(stateDir, { agentId });
 
       const automatic = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
-
-      expect(automatic.skipped).toBe(false);
       expect(automatic.warnings).toContainEqual(
         expect.stringContaining("agent schema owner is missing or blank"),
-      );
-      expect(automatic.notices ?? []).not.toContain(
-        "Deferred legacy agent/session migration: select an agent owner",
       );
       expect(fsSync.existsSync(databasePath)).toBe(true);
       expect(fsSync.existsSync(path.join(stateDir, "agents", "main", "agent"))).toBe(false);
@@ -1158,9 +1393,7 @@ describe("state migrations", () => {
   ] as const)(
     "keeps unresolved legacy agent files advisory at startup and actionable in Doctor %s",
     async (_label, defaults) => {
-      const root = await createTempDir();
-      const stateDir = path.join(root, ".openclaw");
-      const env = createEnv(stateDir);
+      const { root, stateDir, env } = createMigrationContext(await createTempDir());
       const cfg: OpenClawConfig = {
         agents: {
           ownership: "explicit",
@@ -1198,68 +1431,71 @@ describe("state migrations", () => {
     },
   );
 
-  it("leaves legacy session files for Doctor repair with the configured system agent", async () => {
-    const targetAgentId = "main";
-    const cfg = {
-      agents: {
-        ownership: "explicit",
-        defaults: { systemAgent: { agentId: targetAgentId } },
-        entries: { main: {}, blocker: {}, digest: {} },
-      },
-    } satisfies OpenClawConfig;
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
-    const legacySessionsDir = path.join(stateDir, "sessions");
-    const legacyAgentDir = path.join(stateDir, "agent");
-    await fs.mkdir(legacySessionsDir, { recursive: true });
-    await fs.mkdir(legacyAgentDir, { recursive: true });
-    await fs.writeFile(
-      path.join(legacySessionsDir, "sessions.json"),
-      JSON.stringify({ legacy: { sessionId: "legacy-session", updatedAt: 1 } }),
-      "utf8",
-    );
-    await fs.writeFile(path.join(legacySessionsDir, "legacy-session.jsonl"), "{}\n", "utf8");
-    await fs.writeFile(path.join(legacyAgentDir, "settings.json"), '{"legacy":true}\n', "utf8");
-    const legacyStorePath = path.join(legacySessionsDir, "sessions.json");
-    const legacyBytes = await fs.readFile(legacyStorePath);
-    await autoMigrateLegacyState({ cfg, env, homedir: () => root });
-    await expect(fs.readFile(legacyStorePath)).resolves.toEqual(legacyBytes);
-    await expect(
-      fs.readFile(path.join(legacySessionsDir, "legacy-session.jsonl"), "utf8"),
-    ).resolves.toBe("{}\n");
-
-    const result = await autoMigrateLegacyState({
-      cfg,
-      env,
-      homedir: () => root,
-      now: () => 1234,
-      doctorOnlyStateMigrations: true,
-    });
-
-    expect(result.warnings).not.toContain(
-      "Deferred legacy agent/session migration: select an agent owner",
-    );
-    expect(result.notices ?? []).not.toContain(
-      "Deferred legacy agent/session migration: select an agent owner",
-    );
-    await expect(
-      fs.readFile(
-        path.join(stateDir, "agents", targetAgentId, "sessions", "legacy-session.jsonl"),
+  it.each(["system agent", "retained migration context"])(
+    "leaves legacy files for Doctor repair with the %s",
+    async (ownerSource) => {
+      const targetAgentId = "digest";
+      const cfg = {
+        agents: {
+          ownership: "explicit",
+          defaults:
+            ownerSource === "system agent" ? { systemAgent: { agentId: targetAgentId } } : {},
+          entries: { main: {}, blocker: {}, digest: {} },
+        },
+      } satisfies OpenClawConfig;
+      if (ownerSource === "retained migration context") {
+        retainLegacyDefaultAgentId(cfg, targetAgentId);
+      }
+      const { root, stateDir, env } = createMigrationContext(await createTempDir());
+      const legacySessionsDir = path.join(stateDir, "sessions");
+      const legacyAgentDir = path.join(stateDir, "agent");
+      await fs.mkdir(legacySessionsDir, { recursive: true });
+      await fs.mkdir(legacyAgentDir, { recursive: true });
+      await fs.writeFile(
+        path.join(legacySessionsDir, "sessions.json"),
+        JSON.stringify({ legacy: { sessionId: "legacy-session", updatedAt: 1 } }),
         "utf8",
-      ),
-    ).resolves.toBe("{}\n");
-    await expect(
-      fs.readFile(path.join(stateDir, "agents", targetAgentId, "agent", "settings.json"), "utf8"),
-    ).resolves.toContain('"legacy":true');
-    await expectMissingPath(path.join(legacySessionsDir, "sessions.json"));
-    await expectMissingPath(legacyAgentDir);
-  });
+      );
+      await fs.writeFile(path.join(legacySessionsDir, "legacy-session.jsonl"), "{}\n", "utf8");
+      await fs.writeFile(path.join(legacyAgentDir, "settings.json"), '{"legacy":true}\n', "utf8");
+      const legacyStorePath = path.join(legacySessionsDir, "sessions.json");
+      const legacyBytes = await fs.readFile(legacyStorePath);
+      await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+      await expect(fs.readFile(legacyStorePath)).resolves.toEqual(legacyBytes);
+      await expect(
+        fs.readFile(path.join(legacySessionsDir, "legacy-session.jsonl"), "utf8"),
+      ).resolves.toBe("{}\n");
+
+      const result = await autoMigrateLegacyState({
+        cfg,
+        env,
+        homedir: () => root,
+        now: () => 1234,
+        doctorOnlyStateMigrations: true,
+      });
+
+      expect(result.warnings).not.toContain(
+        "Deferred legacy agent/session migration: select an agent owner",
+      );
+      expect(result.notices ?? []).not.toContain(
+        "Deferred legacy agent/session migration: select an agent owner",
+      );
+      await expect(
+        fs.readFile(
+          path.join(stateDir, "agents", targetAgentId, "sessions", "legacy-session.jsonl"),
+          "utf8",
+        ),
+      ).resolves.toBe("{}\n");
+      await expect(
+        fs.readFile(path.join(stateDir, "agents", targetAgentId, "agent", "settings.json"), "utf8"),
+      ).resolves.toContain('"legacy":true');
+      await expectMissingPath(path.join(legacySessionsDir, "sessions.json"));
+      await expectMissingPath(legacyAgentDir);
+    },
+  );
 
   it("keeps unreadable legacy agent databases blocking", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg: OpenClawConfig = {
       agents: { ownership: "explicit", entries: { main: {}, blocker: {}, digest: {} } },
     };
@@ -1282,9 +1518,7 @@ describe("state migrations", () => {
   });
 
   it("detects no plugin-state migration warnings after the startup lease creates fresh state", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, env } = createMigrationContext(await createTempDir());
     const detectLegacyState = vi.fn(async ({ context }: { context: unknown }) => {
       const pluginState = (context as PluginDoctorStateMigrationContext).openPluginStateKeyedStore({
         namespace: "fresh-start-detection",
@@ -1368,9 +1602,7 @@ describe("state migrations", () => {
   });
 
   it("scopes doctor channel ingress queue access to the plugin's own channels", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const discovered: string[] = [];
     const offeredChannelIds: string[][] = [];
     const detectionMutableLanes: unknown[] = [];
@@ -1483,9 +1715,7 @@ describe("state migrations", () => {
   });
 
   it("revokes migration ingress queue access once the repair section returns", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     let retainedOpen:
       | ((options?: { accountId?: string }) => { enqueue: (...args: never[]) => unknown })
       | undefined;
@@ -1534,10 +1764,10 @@ describe("state migrations", () => {
     // so a post-section mutation would have to surface as a changed digest.
     const sqlitePath = resolveOpenClawStateSqlitePath(env);
     // Hash the write-ahead log alongside the main file: committed rows can sit in the
-    // WAL, so hashing only the .sqlite file would be vacuously stable and prove nothing.
+    // WAL. The SHM file is coordination state and can change during a read-only query.
     const digest = () => {
       const hash = createHash("sha256");
-      for (const suffix of ["", "-wal", "-shm"]) {
+      for (const suffix of ["", "-wal"]) {
         const file = `${sqlitePath}${suffix}`;
         hash.update(suffix);
         hash.update(fsSync.existsSync(file) ? fsSync.readFileSync(file) : Buffer.alloc(0));
@@ -1553,8 +1783,8 @@ describe("state migrations", () => {
         }).listPending({ limit: "all", orderBy: "received" })
       ).map((row) => row.id);
 
-    const beforeDigest = digest();
     const beforeIds = await readPendingIds();
+    const beforeDigest = digest();
     // The write the locked section DID make is on disk, so the file is a live witness.
     expect(beforeIds).toContain("inside-section");
 
@@ -1567,14 +1797,13 @@ describe("state migrations", () => {
       /ingress queue access has expired/i,
     );
 
+    const afterIds = await readPendingIds();
+    expect(afterIds).toStrictEqual(beforeIds);
     expect(digest()).toBe(beforeDigest);
-    expect(await readPendingIds()).toStrictEqual(beforeIds);
   });
 
   it("withholds ingress queue access from an untrusted plugin owner", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, env } = createMigrationContext(await createTempDir());
     const detectionLanes: unknown[] = [];
     const migrationLanes: unknown[] = [];
     pluginDoctorStateMigrationEntries.entries = [
@@ -1616,20 +1845,12 @@ describe("state migrations", () => {
   });
 
   it("rejects a recovery predicate that resolves after the repair section returns", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     // The latch keeps the predicate pending until the migration has returned and the
     // section has closed, which is the exact window the guard has to cover.
-    let releasePredicate!: () => void;
-    const predicateGate = new Promise<void>((resolve) => {
-      releasePredicate = resolve;
-    });
+    const { promise: predicateGate, resolve: releasePredicate } = createDeferred();
     let recoveryOutcome: string | undefined;
-    let recoverySettled!: () => void;
-    const recoveryDone = new Promise<void>((resolve) => {
-      recoverySettled = resolve;
-    });
+    const { promise: recoveryDone, resolve: recoverySettled } = createDeferred();
 
     const seeded = createChannelIngressQueue<{ note: string }>({
       channelId: "line",
@@ -1700,9 +1921,7 @@ describe("state migrations", () => {
   });
 
   it("runs doctor-only plugin file imports only during explicit Doctor repair", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     const detectLegacyState = vi.fn(() => ({ preview: ["doctor-only plugin state"] }));
     const migrateLegacyState = vi.fn(() => ({
@@ -1743,14 +1962,30 @@ describe("state migrations", () => {
     const repaired = await runLegacyStateMigrations({ detected, config: cfg, env });
     expect(repaired.warnings).toStrictEqual([]);
     expect(repaired.changes).toContain("doctor-only plugin state migrated");
+    expect(repaired.stepReceipts.find((receipt) => receipt.id === "state-schema")).toMatchObject({
+      source: [{ kind: "sqlite", path: resolveOpenClawStateSqlitePath(env) }],
+      target: [{ kind: "sqlite", path: resolveOpenClawStateSqlitePath(env) }],
+    });
+    expect(
+      repaired.stepReceipts.find((receipt) => receipt.id === "plugin-doctor-state"),
+    ).toMatchObject({
+      source: [
+        { kind: "owner", id: "plugin:memory-core:memory-core-doctor-only-test" },
+        { kind: "owner", id: "plugin:mobileauth:mobileauth-legacy-state" },
+      ],
+      target: [
+        { kind: "owner", id: "plugin:memory-core:doctor-state" },
+        { kind: "owner", id: "plugin:mobileauth:doctor-state" },
+      ],
+      requiredness: "conditional",
+      outcome: "completed",
+    });
     expect(detectLegacyState).toHaveBeenCalledTimes(2);
     expect(migrateLegacyState).toHaveBeenCalledOnce();
   });
 
   it("excludes post-session plugin repair from legacy migration detection and execution", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg: OpenClawConfig = {
       agents: {
         ownership: "explicit",
@@ -1868,7 +2103,7 @@ describe("state migrations", () => {
               ...params,
               context: params.context as PluginDoctorStateMigrationContext,
             });
-            return { changes: result.changes, warnings: result.warnings };
+            return result;
           },
         },
       },
@@ -1899,12 +2134,29 @@ describe("state migrations", () => {
     await expect(readMemoryHostEventRecords({ workspaceDir, env })).resolves.toEqual([event]);
     await expectMissingPath(eventPath);
     await expect(fs.stat(`${eventPath}.migrated`)).resolves.toBeDefined();
+
+    const rewritten = `${JSON.stringify({ ...event, query: "rewritten archive" })}\n`;
+    await fs.writeFile(`${eventPath}.migrated`, rewritten);
+    const continued = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+    expect(
+      continued.stepReceipts.find((receipt) => receipt.id === "plugin-doctor-state"),
+    ).toMatchObject({
+      outcome: "warning",
+      warnings: [expect.stringContaining("changed other than by append")],
+    });
+    expect(() => throwIfDoctorStateMigrationRefused(continued.stepReceipts)).not.toThrow();
+    expect(continued.stepReceipts.some((receipt) => receipt.outcome === "refused")).toBe(false);
+    await expect(readMemoryHostEventRecords({ workspaceDir, env })).resolves.toEqual([event]);
+    await expect(fs.readFile(`${eventPath}.migrated`, "utf8")).resolves.toBe(rewritten);
   });
 
   it("runs doctor-only repairs after the automatic migration check", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     const detectLegacyState = vi.fn(() => ({ preview: ["doctor-only repair"] }));
     const migrateLegacyState = vi.fn(() => ({
@@ -1934,7 +2186,16 @@ describe("state migrations", () => {
       homedir: () => root,
       doctorOnlyStateMigrations: true,
     });
+    expect(repaired.warnings).toEqual([]);
     expect(repaired.changes).toContain("doctor-only repair migrated");
+    expect(repaired.stepReceipts.find((step) => step.id === "plugin-doctor-state")).toMatchObject({
+      source: [
+        { kind: "owner", id: "plugin:memory-core:memory-core-doctor-only-latch-test" },
+        { kind: "owner", id: "plugin:mobileauth:mobileauth-legacy-state" },
+      ],
+      outcome: "completed",
+      changes: ["doctor-only repair migrated"],
+    });
     expect(detectLegacyState).toHaveBeenCalledTimes(2);
     expect(migrateLegacyState).toHaveBeenCalledOnce();
   });
@@ -1998,30 +2259,20 @@ describe("state migrations", () => {
       unknown
     >;
     targetStore["agent:main:desk"] = { sessionId: "explicit-foreign", updatedAt: 30 };
-    targetStore["voice:15550001111"] = {
-      sessionId: "shared-voice",
-      updatedAt: 20,
-      acp: {
-        backend: "test",
-        agent: "worker-1",
-        runtimeSessionName: "shared-runtime",
-        mode: "persistent",
-        state: "idle",
-        lastActivityAt: 20,
-      },
-    };
-    targetStore["agent:worker-1:acp:task"] = {
-      sessionId: "canonical-acp",
-      updatedAt: 15,
-      acp: {
-        backend: "test",
-        agent: "worker-1",
-        runtimeSessionName: "canonical-runtime",
-        mode: "persistent",
-        state: "idle",
-        lastActivityAt: 15,
-      },
-    };
+    targetStore["voice:15550001111"] = createLegacyAcpSessionEntry(
+      "shared-voice",
+      20,
+      "worker-1",
+      "shared-runtime",
+      20,
+    );
+    targetStore["agent:worker-1:acp:task"] = createLegacyAcpSessionEntry(
+      "canonical-acp",
+      15,
+      "worker-1",
+      "canonical-runtime",
+      15,
+    );
     await fs.writeFile(targetStorePath, `${JSON.stringify(targetStore, null, 2)}\n`, "utf8");
     cfg.session = { ...cfg.session, store: targetStorePath };
     const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
@@ -2065,6 +2316,18 @@ describe("state migrations", () => {
       "Migrated 2 ACP session metadata rows → shared SQLite state",
       "Moved agent file settings.json → agents/worker-1/agent",
     ]);
+    expect(result.stepReceipts.find((receipt) => receipt.id === "sessions")).toMatchObject({
+      outcome: "warning",
+      warnings: [
+        `Preserved 1 ambiguous session key(s) while importing legacy sessions into ${targetStorePath}`,
+      ],
+    });
+    expect(
+      result.stepReceipts.find((receipt) => receipt.id === "acp-session-metadata"),
+    ).toMatchObject({ outcome: "completed" });
+    expect(result.stepReceipts.find((receipt) => receipt.id === "agent-dir")).toMatchObject({
+      outcome: "completed",
+    });
 
     const mergedStore = JSON.parse(
       await fs.readFile(
@@ -2121,9 +2384,7 @@ describe("state migrations", () => {
   });
 
   it("canonicalizes parsed owners before removing the legacy store", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
     await fs.mkdir(path.dirname(legacyStorePath), { recursive: true });
     await fs.writeFile(
@@ -2152,9 +2413,7 @@ describe("state migrations", () => {
   });
 
   it("defers non-main owner merges across hard-linked stores", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const targetStorePath = path.join(stateDir, "agents", "ops", "sessions", "sessions.json");
     await fs.mkdir(path.dirname(targetStorePath), { recursive: true });
     await fs.writeFile(
@@ -2200,9 +2459,7 @@ describe("state migrations", () => {
   });
 
   it("defers an unambiguous legacy merge through a final store symlink", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const outsideStorePath = path.join(root, "outside-sessions.json");
     await fs.writeFile(outsideStorePath, "{}\n", "utf8");
     const targetStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
@@ -2231,9 +2488,7 @@ describe("state migrations", () => {
   });
 
   it("defers legacy migration when configured store identity is inaccessible", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const targetStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     await fs.mkdir(path.dirname(targetStorePath), { recursive: true });
     await fs.writeFile(targetStorePath, "{}\n", "utf8");
@@ -2275,9 +2530,7 @@ describe("state migrations", () => {
   });
 
   it("keeps the legacy source when its store write fails", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const targetStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     await fs.mkdir(path.dirname(targetStorePath), { recursive: true });
     await fs.writeFile(targetStorePath, "{}\n", "utf8");
@@ -2304,9 +2557,12 @@ describe("state migrations", () => {
         await realSaveSessionStore(storePath, store, options);
       });
     try {
-      await expect(
-        runLegacyStateMigrations({ detected, config: cfg, now: () => 1234 }),
-      ).rejects.toThrow("simulated alias write failure");
+      const result = await runLegacyStateMigrations({ detected, config: cfg, now: () => 1234 });
+      expect(result.warnings).toContain("simulated alias write failure");
+      expect(result.stepReceipts.find((receipt) => receipt.id === "sessions")).toMatchObject({
+        outcome: "refused",
+        refusal: { code: "step-threw", message: "simulated alias write failure" },
+      });
     } finally {
       saveSpy.mockRestore();
     }
@@ -2316,9 +2572,7 @@ describe("state migrations", () => {
   });
 
   it("preserves shared ownership through missing parent-symlink store paths", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const agentsDir = path.join(stateDir, "agents");
     await fs.mkdir(agentsDir, { recursive: true });
     const aliasAgentsDir = path.join(root, "agents-alias");
@@ -2367,32 +2621,25 @@ describe("state migrations", () => {
     let result: Awaited<ReturnType<typeof autoMigrateLegacyState>>;
 
     beforeAll(async () => {
-      const root = await createTempDir();
-      const stateDir = path.join(root, ".openclaw");
-      const env = createEnv(stateDir);
+      const { root, stateDir, env } = createMigrationContext(await createTempDir());
       targetStorePath = path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json");
       await fs.mkdir(path.dirname(targetStorePath), { recursive: true });
       await fs.writeFile(
         targetStorePath,
         JSON.stringify({
           "agent:main:desk": { sessionId: "foreign-main", updatedAt: 30 },
-          "agent:worker-1:main": {
-            sessionId: "worker-main",
-            updatedAt: 20,
-            acp: {
-              backend: "test",
-              agent: "worker-1",
-              runtimeSessionName: "legacy-runtime",
-              mode: "persistent",
-              state: "idle",
-              lastActivityAt: 20,
-            },
-          },
+          "agent:worker-1:main": createLegacyAcpSessionEntry(
+            "worker-main",
+            20,
+            "worker-1",
+            "legacy-runtime",
+            20,
+          ),
           "voice:15550001111": { sessionId: "legacy-voice", updatedAt: 10 },
         }),
         "utf8",
       );
-      configuredStorePath = path.join(root, "configured-sessions.json");
+      configuredStorePath = path.join(stateDir, "configured-sessions.json");
       await fs.link(targetStorePath, configuredStorePath);
       const cfg = {
         agents: { list: [{ id: "worker-1", default: true }] },
@@ -2416,26 +2663,47 @@ describe("state migrations", () => {
       >;
     });
 
-    it("preserves plugin ownership captured before an aliased store rewrite", () => {
+    it("preserves plugin ownership and receipts the alias refusal before dependent ACP work", () => {
       expect(targetStore["agent:main:desk"]?.sessionId).toBe("foreign-main");
       expect(targetStore["agent:worker-1:main"]?.sessionId).toBe("worker-main");
       expect(targetStore["agent:worker-1:desk"]).toBeUndefined();
       expect(targetStore["agent:worker-1:main"]).toHaveProperty("acp");
       expect(fsSync.statSync(configuredStorePath).ino).toBe(fsSync.statSync(targetStorePath).ino);
-      expect(result.warnings).toEqual(
-        expect.arrayContaining([
-          expect.stringContaining(`aliased store ${configuredStorePath}`),
-          expect.stringContaining(`aliased store ${targetStorePath}`),
-          expect.stringContaining("Deferred ACP metadata migration"),
-        ]),
+      const blockerIndex = result.stepReceipts.findIndex(
+        (receipt) => receipt.id === "orphan-session-keys",
       );
+      expect(blockerIndex).toBeGreaterThanOrEqual(0);
+      expect(result.stepReceipts[blockerIndex]).toMatchObject({
+        outcome: "refused",
+        refusal: { code: "step-refused" },
+      });
+      for (const receipt of result.stepReceipts.slice(blockerIndex + 1)) {
+        expect(receipt).toMatchObject({
+          outcome: "refused",
+          refusal: { code: "blocked-by-prior-refusal" },
+        });
+      }
+      expect(result.stepReceipts.find((receipt) => receipt.id === "sessions")).toMatchObject({
+        outcome: "refused",
+        requiredness: "conditional",
+        source: [],
+        target: [],
+        refusal: { code: "blocked-by-prior-refusal" },
+      });
+      expect(
+        result.stepReceipts.find((receipt) => receipt.id === "acp-session-metadata"),
+      ).toMatchObject({
+        outcome: "refused",
+        refusal: { code: "blocked-by-prior-refusal" },
+      });
+      expect(result.warnings).toEqual([
+        expect.stringContaining(`aliased store ${configuredStorePath}`),
+      ]);
     });
   });
 
   it("preserves a singleton final symlink through all session migration phases", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const outsideStorePath = path.join(root, "outside-sessions.json");
     await fs.writeFile(
       outsideStorePath,
@@ -2462,33 +2730,34 @@ describe("state migrations", () => {
       { sessionId: string }
     >;
     expect(outsideStore["voice:15550001111"]?.sessionId).toBe("outside-voice");
+    const blockerIndex = result.stepReceipts.findIndex(
+      (receipt) => receipt.id === "orphan-session-keys",
+    );
+    expect(blockerIndex).toBeGreaterThanOrEqual(0);
+    expect(
+      result.stepReceipts
+        .filter((receipt) => receipt.refusal?.code === "step-refused")
+        .map((receipt) => receipt.id),
+    ).toEqual(["orphan-session-keys"]);
+    for (const receipt of result.stepReceipts.slice(blockerIndex + 1)) {
+      expect(receipt).toMatchObject({
+        outcome: "refused",
+        refusal: { code: "blocked-by-prior-refusal" },
+      });
+    }
     expect(result.warnings).toEqual([
       `Deferred session key migration in final-component symlink store ${storePath}; configure one canonical session.store path, then rerun openclaw doctor --fix`,
-      `Deferred legacy session migration in final-component symlink store ${storePath}; configure one canonical session.store path, then rerun openclaw doctor --fix`,
     ]);
   });
 
   it("preserves ACP metadata through a singleton fixed-store symlink", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, env } = createMigrationContext(await createTempDir());
     const outsideStorePath = path.join(root, "outside-sessions.json");
     const pendingKey = "agent:main:task";
     await fs.writeFile(
       outsideStorePath,
       JSON.stringify({
-        [pendingKey]: {
-          sessionId: pendingKey,
-          updatedAt: 10,
-          acp: {
-            backend: "test",
-            agent: "main",
-            runtimeSessionName: "outside-runtime",
-            mode: "persistent",
-            state: "idle",
-            lastActivityAt: 10,
-          },
-        },
+        [pendingKey]: createLegacyAcpSessionEntry(pendingKey, 10, "main", "outside-runtime", 10),
       }),
       "utf8",
     );
@@ -2529,26 +2798,19 @@ describe("state migrations", () => {
   });
 
   it("defers ACP metadata migration across hard-linked store paths", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const targetStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     await fs.mkdir(path.dirname(targetStorePath), { recursive: true });
     await fs.writeFile(
       targetStorePath,
       JSON.stringify({
-        "agent:main:task": {
-          sessionId: "canonical-acp",
-          updatedAt: 10,
-          acp: {
-            backend: "test",
-            agent: "main",
-            runtimeSessionName: "hardlink-runtime",
-            mode: "persistent",
-            state: "idle",
-            lastActivityAt: 10,
-          },
-        },
+        "agent:main:task": createLegacyAcpSessionEntry(
+          "canonical-acp",
+          10,
+          "main",
+          "hardlink-runtime",
+          10,
+        ),
       }),
       "utf8",
     );
@@ -2582,26 +2844,19 @@ describe("state migrations", () => {
   });
 
   it("defers global main aliases across hard-linked store paths", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const targetStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     await fs.mkdir(path.dirname(targetStorePath), { recursive: true });
     await fs.writeFile(
       targetStorePath,
       JSON.stringify({
-        "agent:main:main": {
-          sessionId: "legacy-global",
-          updatedAt: 20,
-          acp: {
-            backend: "test",
-            agent: "main",
-            runtimeSessionName: "global-runtime",
-            mode: "persistent",
-            state: "idle",
-            lastActivityAt: 20,
-          },
-        },
+        "agent:main:main": createLegacyAcpSessionEntry(
+          "legacy-global",
+          20,
+          "main",
+          "global-runtime",
+          20,
+        ),
       }),
       "utf8",
     );
@@ -2640,9 +2895,7 @@ describe("state migrations", () => {
     { name: "default", templated: false },
     { name: "templated plugin", templated: true },
   ])("preserves foreign ACP aliases in $name stores", async ({ templated }) => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const storeTemplate = path.join(root, "stores", "{agentId}", "sessions.json");
     const storePath = templated
       ? path.join(root, "stores", "voice", "sessions.json")
@@ -2651,18 +2904,13 @@ describe("state migrations", () => {
     await fs.writeFile(
       storePath,
       JSON.stringify({
-        "agent:main:main": {
-          sessionId: "foreign-main",
-          updatedAt: 20,
-          acp: {
-            backend: "test",
-            agent: "voice",
-            runtimeSessionName: "foreign-runtime",
-            mode: "persistent",
-            state: "idle",
-            lastActivityAt: 20,
-          },
-        },
+        "agent:main:main": createLegacyAcpSessionEntry(
+          "foreign-main",
+          20,
+          "voice",
+          "foreign-runtime",
+          20,
+        ),
       }),
       "utf8",
     );
@@ -2693,17 +2941,28 @@ describe("state migrations", () => {
     expect(result.changes).not.toContain(
       "Migrated 1 ACP session metadata row → shared SQLite state",
     );
+    const orphanWarning = `Preserved 1 ambiguous session key(s) in potentially shared store ${storePath}`;
+    const orphanReceipt = result.stepReceipts.find(
+      (receipt) => receipt.id === "orphan-session-keys",
+    );
+    expect(orphanReceipt).toMatchObject({ outcome: "warning", warnings: [orphanWarning] });
+    expect(orphanReceipt?.refusal).toBeUndefined();
     const acpWarningPrefix =
       "Preserved ACP metadata for 1 ambiguous session key(s) in potentially shared store ";
     expect(result.warnings.filter((warning) => warning.startsWith(acpWarningPrefix))).toHaveLength(
       1,
     );
+    expect(
+      result.stepReceipts.find((receipt) => receipt.id === "acp-session-metadata"),
+    ).toMatchObject({
+      outcome: "refused",
+      warnings: [`${acpWarningPrefix}${storePath}`],
+      refusal: { code: "step-refused" },
+    });
   });
 
   it("migrates malformed agent-shaped rows in single-owner plugin stores", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, env } = createMigrationContext(await createTempDir());
     const storeTemplate = path.join(root, "stores", "{agentId}", "sessions.json");
     const storePath = path.join(root, "stores", "voice", "sessions.json");
     const cases = [
@@ -2727,18 +2986,7 @@ describe("state migrations", () => {
         Object.fromEntries(
           cases.map(({ legacyKey, sessionId, runtimeSessionName }) => [
             legacyKey,
-            {
-              sessionId,
-              updatedAt: 10,
-              acp: {
-                backend: "test",
-                agent: "voice",
-                runtimeSessionName,
-                mode: "persistent",
-                state: "idle",
-                lastActivityAt: 10,
-              },
-            },
+            createLegacyAcpSessionEntry(sessionId, 10, "voice", runtimeSessionName, 10),
           ]),
         ),
       ),
@@ -2789,12 +3037,20 @@ describe("state migrations", () => {
     }
     expect(result.changes).toContain("Migrated 2 ACP session metadata rows → shared SQLite state");
     expect(result.warnings).toHaveLength(0);
+    const receipt = result.stepReceipts.find((entry) => entry.id === "acp-session-metadata");
+    expect(receipt).toMatchObject({ outcome: "completed" });
+    expect(receipt?.source).toEqual(expect.arrayContaining([{ kind: "path", path: storePath }]));
+    expect(receipt?.target).toEqual(
+      expect.arrayContaining([
+        { kind: "path", path: storePath },
+        { kind: "sqlite", path: resolveOpenClawStateSqlitePath(env) },
+      ]),
+    );
+    expect(receipt?.source).not.toContainEqual(expect.objectContaining({ kind: "sqlite" }));
   });
 
   it("preserves multi-owner rows through coalesced templated-store migration", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const storeTemplate = path.join(
       stateDir,
       "agents",
@@ -2809,42 +3065,27 @@ describe("state migrations", () => {
     await fs.writeFile(
       storePath,
       JSON.stringify({
-        "voice:15550001111": {
-          sessionId: "shared-voice",
-          updatedAt: 20,
-          acp: {
-            backend: "test",
-            agent: "voice",
-            runtimeSessionName: "shared-runtime",
-            mode: "persistent",
-            state: "idle",
-            lastActivityAt: 20,
-          },
-        },
-        "agent:voice::matrix:channel:!room:example.org": {
-          sessionId: "malformed-owner",
-          updatedAt: 10,
-          acp: {
-            backend: "test",
-            agent: "voice",
-            runtimeSessionName: "malformed-runtime",
-            mode: "persistent",
-            state: "idle",
-            lastActivityAt: 10,
-          },
-        },
-        "agent:_bad:opaque": {
-          sessionId: "invalid-owner",
-          updatedAt: 5,
-          acp: {
-            backend: "test",
-            agent: "voice",
-            runtimeSessionName: "invalid-runtime",
-            mode: "persistent",
-            state: "idle",
-            lastActivityAt: 5,
-          },
-        },
+        "voice:15550001111": createLegacyAcpSessionEntry(
+          "shared-voice",
+          20,
+          "voice",
+          "shared-runtime",
+          20,
+        ),
+        "agent:voice::matrix:channel:!room:example.org": createLegacyAcpSessionEntry(
+          "malformed-owner",
+          10,
+          "voice",
+          "malformed-runtime",
+          10,
+        ),
+        "agent:_bad:opaque": createLegacyAcpSessionEntry(
+          "invalid-owner",
+          5,
+          "voice",
+          "invalid-runtime",
+          5,
+        ),
       }),
       "utf8",
     );
@@ -2882,33 +3123,39 @@ describe("state migrations", () => {
     expect(result.changes).not.toContain(
       "Migrated 1 ACP session metadata row → shared SQLite state",
     );
+    const orphanWarning = `Preserved 3 ambiguous session key(s) in potentially shared store ${storePath}`;
+    const orphanReceipt = result.stepReceipts.find(
+      (receipt) => receipt.id === "orphan-session-keys",
+    );
+    expect(orphanReceipt).toMatchObject({ outcome: "warning", warnings: [orphanWarning] });
+    expect(orphanReceipt?.refusal).toBeUndefined();
     const acpWarningPrefix =
       "Preserved ACP metadata for 3 ambiguous session key(s) in potentially shared store ";
     expect(result.warnings.filter((warning) => warning.startsWith(acpWarningPrefix))).toHaveLength(
       1,
     );
+    expect(
+      result.stepReceipts.find((receipt) => receipt.id === "acp-session-metadata"),
+    ).toMatchObject({
+      outcome: "refused",
+      warnings: [`${acpWarningPrefix}${storePath}`],
+      refusal: { code: "step-refused" },
+    });
   });
 
   it("does not process ACP stores rejected by target validation", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const outsideStorePath = path.join(root, "outside-sessions.json");
     await fs.writeFile(
       outsideStorePath,
       JSON.stringify({
-        "agent:main:opaque": {
-          sessionId: "outside-session",
-          updatedAt: 10,
-          acp: {
-            backend: "test",
-            agent: "main",
-            runtimeSessionName: "outside-runtime",
-            mode: "persistent",
-            state: "idle",
-            lastActivityAt: 10,
-          },
-        },
+        "agent:main:opaque": createLegacyAcpSessionEntry(
+          "outside-session",
+          10,
+          "main",
+          "outside-runtime",
+          10,
+        ),
       }),
       "utf8",
     );
@@ -2936,9 +3183,7 @@ describe("state migrations", () => {
   });
 
   it("leaves standalone ACP session metadata unchanged until Doctor repair", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     const pendingKey = "agent:main:existing";
     await fs.mkdir(path.dirname(storePath), { recursive: true });
@@ -3037,9 +3282,7 @@ describe("state migrations", () => {
   });
 
   it("migrates existing and imported ACP metadata in one canonical session phase", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const storeTemplate = path.join(
       stateDir,
       "agents",
@@ -3054,18 +3297,13 @@ describe("state migrations", () => {
     await fs.writeFile(
       storePath,
       JSON.stringify({
-        "agent:main:existing": {
-          sessionId: "existing-main",
-          updatedAt: 20,
-          acp: {
-            backend: "test",
-            agent: "main",
-            runtimeSessionName: "existing-runtime",
-            mode: "persistent",
-            state: "idle",
-            lastActivityAt: 20,
-          },
-        },
+        "agent:main:existing": createLegacyAcpSessionEntry(
+          "existing-main",
+          20,
+          "main",
+          "existing-runtime",
+          20,
+        ),
       }),
       "utf8",
     );
@@ -3074,18 +3312,13 @@ describe("state migrations", () => {
     await fs.writeFile(
       legacyStorePath,
       JSON.stringify({
-        "agent:voice:main": {
-          sessionId: "voice-main",
-          updatedAt: 10,
-          acp: {
-            backend: "test",
-            agent: "voice",
-            runtimeSessionName: "voice-runtime",
-            mode: "persistent",
-            state: "idle",
-            lastActivityAt: 10,
-          },
-        },
+        "agent:voice:main": createLegacyAcpSessionEntry(
+          "voice-main",
+          10,
+          "voice",
+          "voice-runtime",
+          10,
+        ),
       }),
       "utf8",
     );
@@ -3126,9 +3359,9 @@ describe("state migrations", () => {
   });
 
   it("migrates legacy delivery queue files into shared SQLite state", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(1_000);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     await fs.mkdir(path.join(stateDir, "delivery-queue"), { recursive: true });
     await fs.mkdir(path.join(stateDir, "delivery-queue", "failed"), { recursive: true });
@@ -3213,19 +3446,19 @@ describe("state migrations", () => {
     expect(rows).toEqual([
       {
         queue_name: "outbound",
-        id: "outbound-1",
-        status: "pending",
-        channel: "telegram",
-        target: "123",
-        retry_count: 2,
-      },
-      {
-        queue_name: "outbound",
         id: "outbound-failed",
         status: "failed",
         channel: null,
         target: null,
         retry_count: 3,
+      },
+      {
+        queue_name: "outbound-prepared-v1",
+        id: "outbound-1",
+        status: "pending",
+        channel: "telegram",
+        target: "123",
+        retry_count: 2,
       },
       {
         queue_name: "session",
@@ -3279,14 +3512,16 @@ describe("state migrations", () => {
         failed_at: 30,
       },
     ]);
-    await expectMissingPath(path.join(stateDir, "delivery-queue"));
-    await expectMissingPath(path.join(stateDir, "session-delivery-queue"));
+    await expect(
+      fs.readFile(path.join(stateDir, "delivery-queue", "outbound-1.json.migrated"), "utf8"),
+    ).resolves.toContain("hi");
+    await expect(
+      fs.readFile(path.join(stateDir, "session-delivery-queue", "session-1.json.migrated"), "utf8"),
+    ).resolves.toContain("resume");
   });
 
   it("migrates legacy voice wake JSON settings into shared SQLite state", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     const settingsDir = path.join(stateDir, "settings");
     const triggersPath = path.join(settingsDir, "voicewake.json");
@@ -3336,9 +3571,7 @@ describe("state migrations", () => {
   });
 
   it("archives legacy voice wake JSON when shared SQLite already matches", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     const settingsDir = path.join(stateDir, "settings");
     const triggersPath = path.join(settingsDir, "voicewake.json");
@@ -3448,7 +3681,7 @@ describe("state migrations", () => {
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toContain("Failed reading legacy voice wake triggers");
     expect(result.notices).toBeUndefined();
-    await expect(fs.access(triggersPath)).resolves.toBeUndefined();
+    await fs.access(triggersPath);
     await expectMissingPath(`${triggersPath}.migrated`);
   });
 
@@ -3548,14 +3781,12 @@ describe("state migrations", () => {
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toContain("Failed reading legacy voice wake routing");
     expect(result.notices).toBeUndefined();
-    await expect(fs.access(routingPath)).resolves.toBeUndefined();
+    await fs.access(routingPath);
     await expectMissingPath(`${routingPath}.migrated`);
   });
 
   it("auto-migrates standalone legacy JSON settings", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     const settingsDir = path.join(stateDir, "settings");
     await fs.mkdir(settingsDir, { recursive: true });
@@ -3591,62 +3822,8 @@ describe("state migrations", () => {
     await expectMissingPath(restartSentinelPath);
   });
 
-  it("runs plugin doctor migrations after repairing shared state schema", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
-    const cfg = createConfig();
-    const stateDbPath = path.join(stateDir, "state", "openclaw.sqlite");
-    await fs.mkdir(path.dirname(stateDbPath), { recursive: true });
-    const db = new DatabaseSync(stateDbPath);
-    try {
-      db.exec(`
-        CREATE TABLE agent_databases (
-          agent_id TEXT PRIMARY KEY,
-          path TEXT NOT NULL,
-          schema_version INTEGER NOT NULL,
-          last_seen_at INTEGER NOT NULL,
-          size_bytes INTEGER
-        );
-        INSERT INTO agent_databases VALUES ('main', 'agent.sqlite', 1, 10, 20);
-      `);
-    } finally {
-      db.close();
-    }
-    const migrateLegacyState = vi.fn(() => ({
-      changes: ["plugin state migrated"],
-      warnings: [],
-    }));
-    pluginDoctorStateMigrationEntries.entries = [
-      {
-        pluginId: "memory-core",
-        migration: {
-          id: "memory-core-test",
-          label: "Memory Core test migration",
-          detectLegacyState: () => ({ preview: ["plugin state"] }),
-          migrateLegacyState,
-        },
-      },
-    ];
-
-    const result = await autoMigrateLegacyPluginDoctorState({
-      config: cfg,
-      env,
-      homedir: () => root,
-    });
-
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.changes).toContain(
-      "Migrated shared state agent database registry primary key → agent_id,path",
-    );
-    expect(result.changes).toContain("plugin state migrated");
-    expect(migrateLegacyState).toHaveBeenCalledOnce();
-  });
-
   it("previews and repairs the released audit ledger before other state migrations", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const databasePath = await createLegacyAuditLedger(stateDir);
     const cfg = createConfig();
 
@@ -3701,9 +3878,7 @@ describe("state migrations", () => {
   });
 
   it("repairs shared SQLite before discarding retired commitments JSON", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     await createLegacyAuditLedger(stateDir);
     const sourcePath = path.join(stateDir, "commitments", "commitments.json");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
@@ -3747,27 +3922,51 @@ describe("state migrations", () => {
     ).toEqual({ removed_source: 1 });
   });
 
-  it("doctor discards worktree rows that predate the provisioned-file ledger", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+  it("doctor receipts each worktree row discarded before the provisioned-file ledger", async () => {
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     const db = openOpenClawStateDatabase({ env }).db;
-    db.prepare(
+    const insertWorktree = db.prepare(
       `INSERT INTO worktrees (
         id, repo_fingerprint, repo_root, path, branch, base_ref, owner_kind,
         created_at, last_active_at, provisioned_paths_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
-    ).run(
-      "legacy-worktree",
-      "legacy-fingerprint",
-      path.join(root, "repo"),
-      path.join(stateDir, "worktrees", "legacy"),
-      "openclaw/legacy",
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insertWorktree.run(
+      "legacy-z",
+      "legacy-z-fingerprint",
+      path.join(root, "repo-z"),
+      path.join(stateDir, "worktrees", "legacy-z"),
+      "openclaw/legacy-z",
       "HEAD",
       "session",
       1,
       1,
+      null,
+    );
+    insertWorktree.run(
+      "legacy-a",
+      "legacy-a-fingerprint",
+      path.join(root, "repo-a"),
+      path.join(stateDir, "worktrees", "legacy-a"),
+      "openclaw/legacy-a",
+      "HEAD",
+      "session",
+      2,
+      2,
+      null,
+    );
+    insertWorktree.run(
+      "current",
+      "current-fingerprint",
+      path.join(root, "repo-current"),
+      path.join(stateDir, "worktrees", "current"),
+      "openclaw/current",
+      "HEAD",
+      "session",
+      3,
+      3,
+      "[]",
     );
 
     const runtime = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
@@ -3783,20 +3982,127 @@ describe("state migrations", () => {
     expect(detected.preview).toContain(
       "- Managed worktrees: discard rows without provisioned-file ledgers",
     );
+    insertWorktree.run(
+      "unplanned",
+      "unplanned-fingerprint",
+      path.join(root, "repo-unplanned"),
+      path.join(stateDir, "worktrees", "unplanned"),
+      "openclaw/unplanned",
+      "HEAD",
+      "session",
+      4,
+      4,
+      null,
+    );
 
     const result = await runLegacyStateMigrations({ detected, config: cfg, env });
     expect(result.changes).toContain(
-      "Discarded 1 legacy managed worktree row; affected worktrees will provision fresh on next use",
+      "Discarded 2 legacy managed worktree rows; affected worktrees will provision fresh on next use",
+    );
+    const databaseEndpoint = { kind: "sqlite", path: resolveOpenClawStateSqlitePath(env) };
+    expect(result.stepReceipts.find((receipt) => receipt.id === "managed-worktrees")).toMatchObject(
+      {
+        outcome: "completed",
+        source: [
+          databaseEndpoint,
+          { kind: "owner", id: "core:managed-worktree:legacy-a" },
+          { kind: "owner", id: "core:managed-worktree:legacy-z" },
+        ],
+        target: [databaseEndpoint],
+      },
     );
     expect(
-      db.prepare("SELECT id FROM worktrees WHERE id = ?").get("legacy-worktree"),
-    ).toBeUndefined();
+      openOpenClawStateDatabase({ env }).db.prepare("SELECT id FROM worktrees ORDER BY id").all(),
+    ).toEqual([{ id: "current" }, { id: "unplanned" }]);
+  });
+
+  it("keeps the managed-worktrees receipt owner-free when no legacy row exists", async () => {
+    const { root, env } = createMigrationContext(await createTempDir());
+    const cfg = createConfig();
+    openOpenClawStateDatabase({ env });
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+
+    const result = await runLegacyStateMigrations({ detected, config: cfg, env });
+
+    const databaseEndpoint = { kind: "sqlite", path: resolveOpenClawStateSqlitePath(env) };
+    expect(result.stepReceipts.find((receipt) => receipt.id === "managed-worktrees")).toMatchObject(
+      {
+        outcome: "skipped",
+        source: [databaseEndpoint],
+        target: [databaseEndpoint],
+      },
+    );
+  });
+
+  it("refuses managed-worktree deletion atomically with every planned owner receipted", async () => {
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
+    const cfg = createConfig();
+    const db = openOpenClawStateDatabase({ env }).db;
+    const insertWorktree = db.prepare(
+      `INSERT INTO worktrees (
+        id, repo_fingerprint, repo_root, path, branch, base_ref, owner_kind,
+        created_at, last_active_at, provisioned_paths_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+    );
+    for (const id of ["legacy-b", "legacy-a"]) {
+      insertWorktree.run(
+        id,
+        `${id}-fingerprint`,
+        path.join(root, `repo-${id}`),
+        path.join(stateDir, "worktrees", id),
+        `openclaw/${id}`,
+        "HEAD",
+        "session",
+        1,
+        1,
+      );
+    }
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+    const result = await runLegacyStateMigrations({
+      detected,
+      config: cfg,
+      env,
+      onStepReceipt: (receipt) => {
+        if (receipt.id === "plugin-install-index") {
+          openOpenClawStateDatabase({ env }).db.exec("PRAGMA query_only = ON;");
+        }
+      },
+    });
+
+    expect(result.stepReceipts.find((receipt) => receipt.id === "managed-worktrees")).toMatchObject(
+      {
+        outcome: "refused",
+        source: [
+          { kind: "sqlite", path: resolveOpenClawStateSqlitePath(env) },
+          { kind: "owner", id: "core:managed-worktree:legacy-a" },
+          { kind: "owner", id: "core:managed-worktree:legacy-b" },
+        ],
+        refusal: { code: "step-threw" },
+      },
+    );
+    expect(result.stepReceipts.find((receipt) => receipt.id === "shared-auth-store")).toMatchObject(
+      {
+        outcome: "refused",
+        refusal: { code: "blocked-by-prior-refusal" },
+      },
+    );
+    expect(
+      openOpenClawStateDatabase({ env }).db.prepare("SELECT id FROM worktrees ORDER BY id").all(),
+    ).toEqual([{ id: "legacy-a" }, { id: "legacy-b" }]);
   });
 
   it("does not run plugin doctor migrations after shared state schema repair fails", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     const stateDbPath = path.join(stateDir, "state", "openclaw.sqlite");
     await fs.mkdir(path.dirname(stateDbPath), { recursive: true });
@@ -3823,23 +4129,19 @@ describe("state migrations", () => {
       },
     ];
 
-    const result = await autoMigrateLegacyPluginDoctorState({
-      config: cfg,
-      env,
-      homedir: () => root,
-    });
-
-    expect(result.changes).toStrictEqual([]);
-    expect(result.warnings).toHaveLength(1);
-    expect(result.warnings[0]).toContain("Failed migrating shared state database schema");
+    await expect(
+      autoMigrateLegacyPluginDoctorState({
+        config: cfg,
+        env,
+        homedir: () => root,
+      }),
+    ).rejects.toThrow("Failed migrating shared state database schema");
     expect(detectLegacyState).not.toHaveBeenCalled();
     expect(migrateLegacyState).not.toHaveBeenCalled();
   });
 
   it("does not mutate other legacy state after shared schema repair fails", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     const stateDbPath = path.join(stateDir, "state", "openclaw.sqlite");
     const voiceWakePath = path.join(stateDir, "settings", "voicewake.json");
@@ -3853,21 +4155,15 @@ describe("state migrations", () => {
       db.close();
     }
 
-    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
-
-    expect(result.migrated).toBe(false);
-    expect(result.skipped).toBe(false);
-    expect(result.changes).toStrictEqual([]);
-    expect(result.warnings).toHaveLength(1);
-    expect(result.warnings[0]).toContain("Failed migrating shared state database schema");
+    await expect(autoMigrateLegacyState({ cfg, env, homedir: () => root })).rejects.toThrow(
+      "Failed migrating shared state database schema",
+    );
     await expect(fs.readFile(voiceWakePath, "utf8")).resolves.toContain("leave-me");
     await expect(fs.stat(`${voiceWakePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("reports plugin detector failures in read-only legacy state detection", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, env } = createMigrationContext(await createTempDir());
     const cfg = { ...createConfig(), agents: { list: 42 } } as unknown as OpenClawConfig;
     pluginDoctorStateMigrationEntries.entries = [
       {
@@ -3892,9 +4188,7 @@ describe("state migrations", () => {
   });
 
   it("continues plugin doctor migrations when one detector rejects malformed config", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, env } = createMigrationContext(await createTempDir());
     const cfg = { ...createConfig(), agents: { list: 42 } } as unknown as OpenClawConfig;
     const migrateLegacyState = vi.fn(() => ({
       changes: ["healthy plugin state migrated"],
@@ -3937,9 +4231,7 @@ describe("state migrations", () => {
   });
 
   it("requires exclusive state ownership before plugin doctor migrations", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     openOpenClawStateDatabase({ env });
     closeOpenClawStateDatabaseForTest();
@@ -3986,9 +4278,7 @@ describe("state migrations", () => {
   });
 
   it("skips stale plugin doctor plans when refresh detection fails", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     const migrateLegacyState = vi.fn(() => ({
       changes: ["stale plugin state migrated"],
@@ -4070,13 +4360,11 @@ describe("state migrations", () => {
     expect(result.changes).toContain("plugin state migrated");
     expect(detectedStateDirs).toStrictEqual([canonicalStateDir]);
     expect(migratedStateDirs).toStrictEqual([canonicalStateDir]);
-    await expect(fs.access(path.join(canonicalStateDir, "legacy.txt"))).resolves.toBeUndefined();
+    await fs.access(path.join(canonicalStateDir, "legacy.txt"));
   });
 
   it("routes explicit Doctor repair through the APNs SQLite importer", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     const pushDir = path.join(stateDir, "push");
     const sourcePath = path.join(pushDir, "apns-registrations.json");
@@ -4117,9 +4405,7 @@ describe("state migrations", () => {
   });
 
   it("routes explicit Doctor repair through the ACP replay SQLite importer", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     const sourcePath = path.join(stateDir, "acp", "event-ledger.json");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
@@ -4190,66 +4476,8 @@ describe("state migrations", () => {
     await expectMissingPath(sourcePath);
   });
 
-  it("routes explicit Doctor repair through the Web Push SQLite importer", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
-    const cfg = createConfig();
-    const endpoint = "https://push.example.com/doctor-integration";
-    const subscription = {
-      subscriptionId: "c0a80101-0000-4000-8000-000000000001",
-      endpoint,
-      keys: { p256dh: "doctor-p256dh", auth: "doctor-auth" },
-      createdAtMs: 1,
-      updatedAtMs: 2,
-    };
-    const pushDir = path.join(stateDir, "push");
-    const subscriptionsPath = path.join(pushDir, "web-push-subscriptions.json");
-    const vapidKeysPath = path.join(pushDir, "vapid-keys.json");
-    await fs.mkdir(pushDir, { recursive: true });
-    await fs.writeFile(
-      subscriptionsPath,
-      JSON.stringify({
-        subscriptionsByEndpointHash: {
-          [hashWebPushEndpoint(endpoint)]: subscription,
-        },
-      }),
-      "utf8",
-    );
-    await fs.writeFile(
-      vapidKeysPath,
-      JSON.stringify(
-        createWebPushVapidKeyPair("doctor-public", "doctor-private", "https://openclaw.ai"),
-      ),
-      "utf8",
-    );
-
-    const detected = await detectLegacyStateMigrations({
-      cfg,
-      env,
-      homedir: () => root,
-      doctorOnlyStateMigrations: true,
-    });
-    expect(detected.webPush.hasLegacy).toBe(true);
-    expect(detected.preview).toContain(
-      "- Web Push subscriptions and VAPID identity: legacy JSON → shared SQLite state",
-    );
-
-    const result = await runLegacyStateMigrations({ detected, config: cfg, env });
-
-    expect(result.warnings).toStrictEqual([]);
-    expect(listWebPushSubscriptions(stateDir)).toStrictEqual([subscription]);
-    expect(readPersistedVapidKeyPair(stateDir)).toStrictEqual(
-      createWebPushVapidKeyPair("doctor-public", "doctor-private", "https://openclaw.ai"),
-    );
-    await expectMissingPath(subscriptionsPath);
-    await expectMissingPath(vapidKeysPath);
-  });
-
   it("routes explicit Doctor repair through the node-host SQLite importer", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     const sourcePath = path.join(stateDir, "node.json");
     const fixtureDigest = ["fixture", "digest"].join("-");
@@ -4304,9 +4532,7 @@ describe("state migrations", () => {
   });
 
   it("previews retired subagent JSON as discard-only transient state", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const sourcePath = path.join(stateDir, "subagents", "runs.json");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, JSON.stringify({ version: 2, runs: {} }), "utf8");
@@ -4324,9 +4550,7 @@ describe("state migrations", () => {
   });
 
   it("migrates legacy update-check JSON into shared SQLite state", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     const sourcePath = path.join(stateDir, "update-check.json");
     await fs.mkdir(stateDir, { recursive: true });
@@ -4384,9 +4608,7 @@ describe("state migrations", () => {
   });
 
   it("migrates legacy config health JSON into shared SQLite state", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     const configPath = path.join(stateDir, "openclaw.json");
     const logsDir = path.join(stateDir, "logs");
@@ -4444,9 +4666,7 @@ describe("state migrations", () => {
   });
 
   it("reconciles missing promoted config health state without replacing current SQLite fields", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     const configPath = path.join(stateDir, "openclaw.json");
     const importedConfigPath = path.join(stateDir, "imported.json");
@@ -4503,9 +4723,7 @@ describe("state migrations", () => {
   });
 
   it("keeps complete SQLite config health state when legacy fingerprints differ", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     const configPath = path.join(stateDir, "openclaw.json");
     const sourcePath = path.join(stateDir, "logs", "config-health.json");
@@ -4544,13 +4762,11 @@ describe("state migrations", () => {
       },
     ]);
     await expectMissingPath(sourcePath);
-    await expect(fs.access(`${sourcePath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${sourcePath}.migrated`);
   });
 
   it("removes a regenerated config health source when its archive already exists", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     const configPath = path.join(stateDir, "openclaw.json");
     const sourcePath = path.join(stateDir, "logs", "config-health.json");
@@ -4595,14 +4811,12 @@ describe("state migrations", () => {
 
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toContain("Failed reading legacy config health state");
-    await expect(fs.access(sourcePath)).resolves.toBeUndefined();
+    await fs.access(sourcePath);
     await expectMissingPath(`${sourcePath}.migrated`);
   });
 
   it("migrates legacy current-conversation bindings JSON into shared SQLite state", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     const bindingsDir = path.join(stateDir, "bindings");
     const sourcePath = path.join(bindingsDir, "current-conversations.json");
@@ -4661,9 +4875,7 @@ describe("state migrations", () => {
   });
 
   it("migrates legacy plugin binding approvals JSON into shared SQLite state", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     const sourcePath = path.join(stateDir, "plugin-binding-approvals.json");
     await fs.mkdir(stateDir, { recursive: true });
@@ -4712,9 +4924,7 @@ describe("state migrations", () => {
   });
 
   it("archives conflicting plugin binding approvals without overwriting shared SQLite", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     const sourcePath = path.join(stateDir, "plugin-binding-approvals.json");
     insertPluginBindingApprovalRow(env, {
@@ -4783,9 +4993,7 @@ describe("state migrations", () => {
   });
 
   it("archives a legacy plugin binding approvals file when every approval conflicts", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     const sourcePath = path.join(stateDir, "plugin-binding-approvals.json");
     insertPluginBindingApprovalRow(env, {
@@ -4838,9 +5046,7 @@ describe("state migrations", () => {
   });
 
   it("keeps a failed plugin binding approvals archive blocking and converges on retry", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     const sourcePath = path.join(stateDir, "plugin-binding-approvals.json");
     insertPluginBindingApprovalRow(env, {
@@ -4891,9 +5097,7 @@ describe("state migrations", () => {
   });
 
   it("leaves malformed plugin binding approvals in place with a warning", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     const sourcePath = path.join(stateDir, "plugin-binding-approvals.json");
     await fs.mkdir(stateDir, { recursive: true });
@@ -4905,7 +5109,7 @@ describe("state migrations", () => {
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toContain("Failed reading legacy plugin binding approvals");
     expect(result.notices).toBeUndefined();
-    await expect(fs.access(sourcePath)).resolves.toBeUndefined();
+    await fs.access(sourcePath);
     await expectMissingPath(`${sourcePath}.migrated`);
   });
 
@@ -4990,8 +5194,8 @@ describe("state migrations", () => {
     const result = await runLegacyStateMigrations({ detected, config: cfg, env });
     expect(result.changes.some((change) => change.includes("exec approvals"))).toBe(false);
     expect(result.changes.some((change) => change.includes("plugin binding approval"))).toBe(false);
-    await expect(fs.access(execApprovalsPath)).resolves.toBeUndefined();
-    await expect(fs.access(pluginApprovalsPath)).resolves.toBeUndefined();
+    await fs.access(execApprovalsPath);
+    await fs.access(pluginApprovalsPath);
     await expectMissingPath(path.join(stateDir, "exec-approvals.json"));
     expect(readPluginBindingApprovalRows(env)).toEqual([]);
   });
@@ -4999,9 +5203,7 @@ describe("state migrations", () => {
   it.each(["agent:codex:acp:legacy-missing", "plugin-binding:fixture:legacy-missing"])(
     "imports non-conflicting legacy target %s when SQLite has a conflict",
     async (targetSessionKey) => {
-      const root = await createTempDir();
-      const stateDir = path.join(root, ".openclaw");
-      const env = createEnv(stateDir);
+      const { root, stateDir, env } = createMigrationContext(await createTempDir());
       const cfg = createConfig();
       const bindingsDir = path.join(stateDir, "bindings");
       const sourcePath = path.join(bindingsDir, "current-conversations.json");
@@ -5119,9 +5321,7 @@ describe("state migrations", () => {
   });
 
   it("archives a legacy current-conversation file when every binding conflicts", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     const sourcePath = path.join(stateDir, "bindings", "current-conversations.json");
     const bindingKey = "workspace\u241fdefault\u241f\u241fuser:U123";
@@ -5188,9 +5388,7 @@ describe("state migrations", () => {
   });
 
   it("keeps a failed current-conversation bindings archive blocking and converges on retry", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     const sourcePath = path.join(stateDir, "bindings", "current-conversations.json");
     const bindingKey = "workspace\u241fdefault\u241f\u241fuser:U123";
@@ -5258,9 +5456,7 @@ describe("state migrations", () => {
   });
 
   it("leaves malformed current-conversation bindings in place with a warning", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     const sourcePath = path.join(stateDir, "bindings", "current-conversations.json");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
@@ -5272,14 +5468,12 @@ describe("state migrations", () => {
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toContain("Failed reading legacy current-conversation bindings");
     expect(result.notices).toBeUndefined();
-    await expect(fs.access(sourcePath)).resolves.toBeUndefined();
+    await fs.access(sourcePath);
     await expectMissingPath(`${sourcePath}.migrated`);
   });
 
   it("keeps legacy delivery queue files when shared SQLite already has a conflicting row", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
+    const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();
     const queueDir = path.join(stateDir, "delivery-queue");
     await fs.mkdir(path.join(queueDir, "failed"), { recursive: true });
@@ -5295,7 +5489,11 @@ describe("state migrations", () => {
       }),
       "utf8",
     );
-    await fs.writeFile(path.join(queueDir, "outbound-1.delivered"), '{"id":"done"}\n', "utf8");
+    await fs.writeFile(
+      path.join(queueDir, "outbound-completed.delivered"),
+      '{"id":"done"}\n',
+      "utf8",
+    );
     await fs.writeFile(
       path.join(queueDir, "outbound-2.json"),
       JSON.stringify({
@@ -5344,35 +5542,28 @@ describe("state migrations", () => {
     expect(result.changes).toContain(
       "Migrated 2 outbound delivery queue entries → shared SQLite state",
     );
-    expect(result.changes).toContain("Removed 1 outbound delivery queue delivered marker");
+    expect(result.changes).toContain(
+      `Archived outbound delivery queue legacy source → ${path.join(queueDir, "outbound-completed.delivered.migrated")}`,
+    );
     expect(result.warnings).toStrictEqual([
       "Left outbound delivery queue in place because 1 entry already existed in shared state: outbound-1",
     ]);
     await expect(fs.readFile(path.join(queueDir, "outbound-1.json"), "utf8")).resolves.toContain(
       '"retryCount":2',
     );
-    await expectMissingPath(path.join(queueDir, "outbound-1.delivered"));
+    await expectMissingPath(path.join(queueDir, "outbound-completed.delivered"));
+    const migratedDb = openOpenClawStateDatabase({ env }).db;
     expect(
-      db
+      migratedDb
         .prepare(
-          "SELECT retry_count FROM delivery_queue_entries WHERE queue_name = 'outbound' AND id = 'outbound-1'",
+          "SELECT id, retry_count, failed_at FROM delivery_queue_entries WHERE queue_name = 'outbound' ORDER BY id",
         )
-        .get(),
-    ).toEqual({ retry_count: 0 });
-    expect(
-      db
-        .prepare(
-          "SELECT retry_count FROM delivery_queue_entries WHERE queue_name = 'outbound' AND id = 'outbound-2'",
-        )
-        .get(),
-    ).toEqual({ retry_count: 1 });
-    expect(
-      db
-        .prepare(
-          "SELECT retry_count, failed_at FROM delivery_queue_entries WHERE queue_name = 'outbound' AND id = 'outbound-failed'",
-        )
-        .get(),
-    ).toEqual({ retry_count: 3, failed_at: 12 });
+        .all(),
+    ).toEqual([
+      { id: "outbound-1", retry_count: 0, failed_at: null },
+      { id: "outbound-2", retry_count: 1, failed_at: null },
+      { id: "outbound-failed", retry_count: 3, failed_at: 12 },
+    ]);
 
     vi.setSystemTime(2_000);
     const rerunDetected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
@@ -5677,6 +5868,7 @@ describe("state migrations", () => {
         doctorOnlyStateMigrations: true,
       });
 
+      expect(result.warnings).toEqual([]);
       expect(result.changes).toContain(`Merged sessions store → ${targetStorePath}`);
       expect(result.changes).toContain("Moved trace.jsonl → agents/worker-1/sessions");
       expect(result.changes).toContain(`Moved ${pendingKey}.jsonl → agents/worker-1/sessions`);

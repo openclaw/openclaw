@@ -1,11 +1,13 @@
 // Voice Call tests cover webhook.hangup once.lifecycle plugin behavior.
 import crypto from "node:crypto";
 import fs from "node:fs";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateSyncKeyedStoreForTests,
+  createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
 import { CallManager } from "./manager.js";
@@ -23,11 +25,8 @@ function installStateRuntime(): void {
   setVoiceCallStateRuntime({
     state: {
       resolveStateDir: () => "",
-      openKeyedStore: (() => {
-        throw new Error("openKeyedStore is not used by voice-call webhook lifecycle tests");
-      }) as never,
-      openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
-        createPluginStateSyncKeyedStoreForTests("voice-call", options),
+      openKeyedStore: (options: OpenAsyncKeyedStoreOptions) =>
+        createPluginStateKeyedStoreForTests("voice-call", options),
       openChannelIngressQueue: (() => {
         throw new Error(
           "openChannelIngressQueue is not used by voice-call webhook lifecycle tests",
@@ -159,7 +158,8 @@ describe("Voice-call webhook hangup-once lifecycle", () => {
     installStateRuntime();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     vi.restoreAllMocks();
   });
@@ -241,12 +241,12 @@ describe("Voice-call webhook hangup-once lifecycle", () => {
       if (!state) {
         throw new Error("expected fixture SQLite runtime");
       }
-      const openStore = state.openSyncKeyedStore.bind(state);
+      const openStore = state.openKeyedStore.bind(state);
       const fault = vi
-        .spyOn(state, "openSyncKeyedStore")
-        .mockImplementation(<T>(options: OpenKeyedStoreOptions) => {
+        .spyOn(state, "openKeyedStore")
+        .mockImplementation(<T>(options: OpenAsyncKeyedStoreOptions) => {
           const store = openStore<T>(options);
-          store.entries = () => {
+          store.entries = async () => {
             throw new Error("synthetic signed callback history failure");
           };
           return store;
@@ -266,7 +266,8 @@ describe("Voice-call webhook hangup-once lifecycle", () => {
       try {
         await server.stop();
       } finally {
-        finalizeTestManagerCalls(manager);
+        await finalizeTestManagerCalls(manager);
+        await closeOpenClawStateDatabaseAsync();
         resetPluginStateStoreForTests();
         fs.rmSync(storePath, { recursive: true, force: true });
       }
@@ -325,5 +326,45 @@ describe("Voice-call webhook hangup-once lifecycle", () => {
 
     expect(secondProvider.hangupCalls).toHaveLength(0);
     expect(secondManager.getCallByProviderCallId("provider-inbound-1")).toBeUndefined();
+  });
+});
+
+describe("Voice-call webhook body limits", () => {
+  beforeEach(() => {
+    resetPluginStateStoreForTests();
+    installStateRuntime();
+  });
+
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests();
+  });
+
+  it("answers an over-limit webhook with 413 and then closes the connection", async () => {
+    // Driven over a real socket: the server answers while the sender is still uploading
+    // and then closes, so a mocked response cannot show whether either half happened.
+    const provider = new FakeProvider();
+    const config = createConfig();
+    const manager = new CallManager(config, createTestStorePath());
+    await manager.initialize(provider, "https://example.com/voice/webhook");
+    const server = new VoiceCallWebhookServer(config, manager, provider);
+
+    try {
+      const baseUrl = await server.start();
+      const result = await postRawWebhook({
+        url: baseUrl,
+        body: `CallSid=CA123&From=%2B15552222222&Padding=${"x".repeat(2 * 1024 * 1024)}`,
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          "x-plivo-signature-v2": "sig",
+          "x-plivo-signature-v2-nonce": "nonce",
+        },
+      });
+
+      expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
+      expect(result.closedByServer).toBe(true);
+    } finally {
+      await server.stop();
+    }
   });
 });

@@ -440,23 +440,65 @@ describe("session transcript projection", () => {
     ]);
   });
 
-  it("keeps the durable assistant identity when its run's terminal projection replays", () => {
-    const persisted = createMessage("assistant", "persisted final", {
-      id: "assistant-final",
-      seq: 2,
-    });
-    const synthetic = createMessage("assistant", "persisted final");
-    let state = projectLiveSessionMessage(createSessionProjection(primaryScope), persisted, {
-      runId: "final-run",
-    });
+  it.each([false, true])(
+    "keeps durable assistant identity across terminal replay (hydrated: %s)",
+    (hydrate) => {
+      const persisted = createMessage("assistant", "persisted final", {
+        id: "assistant-final",
+        seq: 2,
+        runId: "final-run",
+      });
+      const synthetic = createMessage("assistant", "persisted final");
+      let state = projectLiveSessionMessage(createSessionProjection(primaryScope), persisted, {
+        runId: "final-run",
+      });
+      if (hydrate) {
+        state = reconcileSessionProjectionSnapshot(
+          state,
+          [structuredClone(persisted)],
+          primaryScope,
+        );
+      }
 
-    state = projectLiveSessionMessage(state, synthetic, { runId: "final-run" });
+      state = projectLiveSessionMessage(state, synthetic, { runId: "final-run" });
 
-    expect(state.messages).toEqual([persisted]);
-    expect(reconcileSessionProjectionSnapshot(state, [persisted], primaryScope).messages).toEqual([
-      persisted,
-    ]);
-  });
+      expect(state.messages).toEqual([persisted]);
+      expect(reconcileSessionProjectionSnapshot(state, [persisted], primaryScope).messages).toEqual(
+        [persisted],
+      );
+    },
+  );
+
+  it.each(["live", "history"])(
+    "keeps a post-boundary tail until its own durable row arrives through %s",
+    (arrival) => {
+      const prefix = createMessage("assistant", "saved prefix", {
+        id: "prefix",
+        seq: 2,
+        runId: "active-run",
+      });
+      const steer = createMessage("user", "continue", { id: "steer", seq: 3 });
+      const tail = createMessage("assistant", "unseen tail");
+      const savedTail = createMessage("assistant", "unseen tail", {
+        id: "tail",
+        seq: 4,
+        runId: "active-run",
+      });
+      let state = projectLiveSessionMessage(
+        createSessionProjection(primaryScope, [prefix, steer]),
+        tail,
+        { runId: "active-run", afterSequence: 3 },
+      );
+      state = reconcileSessionProjectionSnapshot(state, [prefix, steer], primaryScope);
+      expect(state.messages).toEqual([prefix, steer, tail]);
+
+      state =
+        arrival === "live"
+          ? projectLiveSessionMessage(state, savedTail)
+          : reconcileSessionProjectionSnapshot(state, [prefix, steer, savedTail], primaryScope);
+      expect(state.messages).toEqual([prefix, steer, savedTail]);
+    },
+  );
 
   it("does not adopt an ambiguous synthetic final across distinct same-run assistants", () => {
     const synthetic = createMessage("assistant", "delta-only final", {
@@ -477,6 +519,16 @@ describe("session transcript projection", () => {
     expect(
       reconcileSessionProjectionSnapshot(state, [first, second], primaryScope).messages,
     ).toEqual([first, second, synthetic]);
+    expect(
+      projectLiveSessionMessage(createSessionProjection(primaryScope, [first, second]), synthetic)
+        .messages,
+    ).toEqual([first, second, synthetic]);
+    const ambiguous = reconcileSessionProjectionSnapshot(state, [first, second], primaryScope);
+    expect(projectLiveSessionMessage(ambiguous, structuredClone(first)).messages).toEqual([
+      first,
+      second,
+      synthetic,
+    ]);
   });
 
   it("promotes a native sequence-only live row to its durable snapshot identity", () => {
@@ -588,20 +640,24 @@ describe("session transcript projection", () => {
     expect(state.messages).toEqual([first, second]);
   });
 
-  it("does not merge native messages with colliding imported provider-local IDs", () => {
-    const native = createMessage("user", "native", { id: "provider-local", seq: 1 });
-    const imported = createMessage("user", "imported", {
-      id: "provider-local",
-      seq: 2,
-      importedFrom: "claude-cli",
-      cliSessionId: "cli-session",
-      externalId: "provider-local",
-    });
-    let state = projectLiveSessionMessage(createSessionProjection(primaryScope), native);
-    state = projectLiveSessionMessage(state, imported);
+  it.each([undefined, { source: "", rawSeq: 1 }, { source: "foreign", rawSeq: -1 }])(
+    "keeps imported ID collisions separate without valid placement (%j)",
+    (transcriptPosition) => {
+      const native = createMessage("user", "native", { id: "provider-local", seq: 1 });
+      const imported = createMessage("user", "imported", {
+        id: "provider-local",
+        seq: 2,
+        importedFrom: "claude-cli",
+        cliSessionId: "cli-session",
+        externalId: "provider-local",
+        transcriptPosition,
+      });
+      let state = projectLiveSessionMessage(createSessionProjection(primaryScope), native);
+      state = projectLiveSessionMessage(state, imported);
 
-    expect(state.messages).toEqual([native, imported]);
-  });
+      expect(state.messages).toEqual([native, imported]);
+    },
+  );
 
   it("does not merge incomplete imported source tuples", () => {
     const first = createMessage("user", "same words", {

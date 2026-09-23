@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { getUserProfileDisplay } from "../state/user-profiles.js";
+import { getUserProfileDisplay } from "../state/user-profile-list.js";
 import { buildControlUiUserAvatarPath } from "./control-ui-contract.js";
 
 export type CurrentUserProfileDisplay =

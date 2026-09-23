@@ -101,3 +101,45 @@ export function collectLiveRunLeases(
     ...(removingToken !== undefined ? { removingToken } : {}),
   };
 }
+
+const WORKTREE_RUN_LEASE_SCOPE_PREFIX = "worktree-run:";
+
+export class WorktreeRemovalContentionError extends Error {
+  constructor(
+    readonly kind: "busy" | "finalized",
+    message: string,
+  ) {
+    super(message);
+    this.name = "WorktreeRemovalContentionError";
+  }
+}
+
+export function worktreeRunLeaseScope(worktreeId: string): string {
+  return `${WORKTREE_RUN_LEASE_SCOPE_PREFIX}${worktreeId}`;
+}
+
+/** Removed exact snapshots retain exclusive lifecycle custody during destructive expiry. */
+export function assertRegistryMutationCustody(
+  db: DatabaseSync,
+  k: ReturnType<typeof getNodeSqliteKysely<WorktreeLeaseDatabase>>,
+  id: string,
+  token?: string,
+) {
+  const record = executeSqliteQuerySync(
+    db,
+    k.selectFrom("worktrees").select(["removed_at", "snapshot_ref"]).where("id", "=", id),
+  ).rows[0];
+  if (
+    record?.removed_at == null ||
+    !record.snapshot_ref?.startsWith("refs/openclaw/snapshots/exact-")
+  ) {
+    return;
+  }
+  const { removingToken } = collectLiveRunLeases(db, k, worktreeRunLeaseScope(id), {});
+  if (removingToken !== undefined && removingToken !== token) {
+    throw new WorktreeRemovalContentionError(
+      "busy",
+      "Exact-state snapshot expiration owns this lifecycle",
+    );
+  }
+}

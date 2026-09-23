@@ -8,7 +8,12 @@ import {
   installMockGateway,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
-import { activateChatHeaderPanelAction } from "./chat-side-panel.test-support.ts";
+import {
+  activateChatHeaderPanelAction,
+  dockChatSidePanel,
+  focusChatSidePanel,
+  restoreChatAsMain,
+} from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -55,6 +60,7 @@ function scenario(): ControlUiMockGatewayScenario {
       "browser.request",
       "desktop.observe",
       "environments.list",
+      "environments.status",
       "sessions.diff",
       "tasks.list",
       "terminal.open",
@@ -72,9 +78,7 @@ function scenario(): ControlUiMockGatewayScenario {
         control: false,
         auth: "vnc-password",
       },
-      "environments.list": {
-        environments: [{ id: "gateway", type: "local", status: "available", desktop: true }],
-      },
+      "environments.status": { id: "gateway", type: "local", status: "available", desktop: true },
       "sessions.diff": {
         sessionKey,
         root: "/workspace/openclaw",
@@ -221,12 +225,13 @@ function sidePanel(page: Page): Locator {
   return page.locator(".sidebar-region__right-runtime .side-panel");
 }
 
-// Scope tab queries to the panel's own header: Terminal and Browser render the
-// same strip inside the panel body, so an unscoped descendant match would also
-// collect their inner rails. Match descendants of that header rather than a
-// direct child, so header layout wrappers can change without silently emptying
-// every tab assertion.
-const sidePanelTabLabelSelector = ":scope > .side-panel__header .tabstrip-tab__label";
+function sidePanelBody(page: Page): Locator {
+  return page.locator('.sidebar-region [data-region="side"]:not([hidden])');
+}
+
+// Scope tab queries to the side header so a panel promoted to main cannot add
+// its own strip to the side-panel assertions.
+const sidePanelTabLabelSelector = '[data-region-header="side"] .tabstrip-tab__label';
 
 async function openFromEmpty(page: Page, label: string) {
   const button = sidePanel(page).locator(".side-panel-empty__type").filter({ hasText: label });
@@ -268,19 +273,24 @@ async function narrowestRailTabLabel(page: Page): Promise<number> {
 }
 
 async function expectExpandedSidePanelFillsRegion(page: Page): Promise<void> {
-  const geometry = await sidePanel(page).evaluate((element) => {
-    const panel = element.getBoundingClientRect();
-    const region = element.closest(".sidebar-region")?.getBoundingClientRect();
-    if (!region) {
-      throw new Error("Expanded side panel has no sidebar region");
-    }
-    return {
-      bottom: Math.abs(panel.bottom - region.bottom),
-      left: Math.abs(panel.left - region.left),
-      right: Math.abs(panel.right - region.right),
-      top: Math.abs(panel.top - region.top),
-    };
-  });
+  const geometry = await page
+    .locator('.sidebar-region [data-region="main"]')
+    .evaluate((element) => {
+      const panel = element.getBoundingClientRect();
+      const shell = element.closest(".sidebar-region");
+      const region = shell?.getBoundingClientRect();
+      const header = shell?.querySelector(".chat-pane__header")?.getBoundingClientRect();
+      if (!region || !header) {
+        throw new Error("Focused panel requires its task toolbar and sidebar region");
+      }
+      return {
+        bottom: Math.abs(panel.bottom - region.bottom),
+        left: Math.abs(panel.left - region.left),
+        right: Math.abs(panel.right - region.right),
+        top: Math.abs(header.top - region.top),
+        headerGap: Math.abs(panel.top - header.bottom),
+      };
+    });
   for (const delta of Object.values(geometry)) {
     expect(delta).toBeLessThanOrEqual(1);
   }
@@ -294,7 +304,7 @@ async function captureRichPanel(page: Page, name: string) {
     const elements = [
       document.querySelector<HTMLElement>(".chat-pane__header"),
       document.querySelector<HTMLElement>(".agent-chat__scroll"),
-      document.querySelector<HTMLElement>(".side-panel"),
+      document.querySelector<HTMLElement>(".sidebar-region"),
     ].filter((element): element is HTMLElement => element !== null);
     if (elements.length === 0) {
       throw new Error("No chat panel geometry found for evidence clip");
@@ -342,7 +352,9 @@ suite.define(() => {
             .toEqual({ marginRight: "0px", reservation: "0px" });
           await expect
             .poll(() =>
-              sidePanel(page).evaluate((panel) => panel.classList.contains("side-panel--bottom")),
+              page
+                .locator(".sidebar-region")
+                .evaluate((panel) => panel.classList.contains("sidebar-region--bottom")),
             )
             .toBe(dock === "bottom");
 
@@ -352,7 +364,9 @@ suite.define(() => {
             .poll(() =>
               page.evaluate(() => {
                 const content = document.querySelector<HTMLElement>(".content--chat")!;
-                const panel = document.querySelector<HTMLElement>(".side-panel")!;
+                const panel = document.querySelector<HTMLElement>(
+                  '[data-region="side"]:not([hidden])',
+                )!;
                 const region = document.querySelector<HTMLElement>(".sidebar-region")!;
                 return {
                   marginRight: getComputedStyle(content).marginRight,
@@ -482,20 +496,14 @@ suite.define(() => {
           expect(desktopObserve.params).toEqual({ source: { kind: "host" }, control: false });
           await sidePanel(page).getByLabel("VNC password", { exact: true }).waitFor();
           await captureRichPanel(page, `rails-tabs-desktop-${themeMode}`);
-          expect(await tabLabels(page)).toEqual([
-            "Files",
-            "Review",
-            "Terminal",
-            "Tasks",
-            "Browser",
-            "Side chat",
-            "Desktop",
-          ]);
+          await expect
+            .poll(() => tabLabels(page))
+            .toEqual(["Files", "Review", "zsh", "Tasks", "Browser", "Side chat", "Desktop"]);
           await expect.poll(() => narrowestRailTabLabel(page)).toBeGreaterThanOrEqual(24);
           await expect
             .poll(() =>
               sidePanel(page)
-                .locator(":scope > .side-panel__header .tabstrip-tab__icon")
+                .locator('[data-region-header="side"] .tabstrip-tab__icon')
                 .evaluateAll((icons) => {
                   const geometry = icons.map((icon) => {
                     const iconRect = icon.getBoundingClientRect();
@@ -625,7 +633,7 @@ suite.define(() => {
           await expect
             .poll(() =>
               sidePanel(page)
-                .locator(":scope > .side-panel__header wa-tab-group.tabstrip")
+                .locator('[data-region-header="side"] wa-tab-group.tabstrip')
                 .evaluate((group) => {
                   const tabsPart = group.shadowRoot?.querySelector<HTMLElement>('[part~="tabs"]');
                   if (!tabsPart) {
@@ -650,7 +658,7 @@ suite.define(() => {
           await selectTab(page, "Files");
           await captureRichPanel(page, `rails-tabs-rich-${themeMode}`);
 
-          const panelWidth = await sidePanel(page).evaluate(
+          const panelWidth = await sidePanelBody(page).evaluate(
             (element) => element.getBoundingClientRect().width,
           );
           const divider = page.locator(".sidebar-column__divider");
@@ -662,25 +670,21 @@ suite.define(() => {
           await page.mouse.up();
           await expect
             .poll(() =>
-              sidePanel(page).evaluate((element) => element.getBoundingClientRect().width),
+              sidePanelBody(page).evaluate((element) => element.getBoundingClientRect().width),
             )
             .toBeGreaterThan(panelWidth + 70);
-          const resizedWidth = await sidePanel(page).evaluate(
+          const resizedWidth = await sidePanelBody(page).evaluate(
             (element) => element.getBoundingClientRect().width,
           );
 
-          await sidePanel(page).getByRole("button", { name: "Dock to bottom" }).click();
-          await expect
-            .poll(() =>
-              sidePanel(page).evaluate((element) =>
-                element.classList.contains("side-panel--bottom"),
-              ),
-            )
-            .toBe(true);
+          await dockChatSidePanel(page, "bottom");
+          await expect.poll(() => page.locator(".sidebar-region--bottom").count()).toBe(1);
           await expect
             .poll(() =>
               page.evaluate(() => {
-                const panel = document.querySelector<HTMLElement>(".side-panel");
+                const panel = document.querySelector<HTMLElement>(
+                  '[data-region="side"]:not([hidden])',
+                );
                 const region = document.querySelector<HTMLElement>(".sidebar-region");
                 return Math.abs(
                   (panel?.getBoundingClientRect().width ?? 0) -
@@ -695,7 +699,7 @@ suite.define(() => {
             )
             .toBe("horizontal");
           await expect.poll(() => narrowestRailTabLabel(page)).toBeGreaterThanOrEqual(24);
-          const bottomHeight = await sidePanel(page).evaluate(
+          const bottomHeight = await sidePanelBody(page).evaluate(
             (element) => element.getBoundingClientRect().height,
           );
           const bottomDividerBox = await divider.boundingBox();
@@ -712,10 +716,10 @@ suite.define(() => {
           await page.mouse.up();
           await expect
             .poll(() =>
-              sidePanel(page).evaluate((element) => element.getBoundingClientRect().height),
+              sidePanelBody(page).evaluate((element) => element.getBoundingClientRect().height),
             )
             .toBeGreaterThan(bottomHeight + 50);
-          const resizedHeight = await sidePanel(page).evaluate(
+          const resizedHeight = await sidePanelBody(page).evaluate(
             (element) => element.getBoundingClientRect().height,
           );
           await page.mouse.move(80, 80);
@@ -727,40 +731,28 @@ suite.define(() => {
 
           await sidePanel(page).getByRole("button", { name: "Close", exact: true }).click();
           await page.locator(".chat-side-panel-toggle").click();
+          await expect.poll(() => page.locator(".sidebar-region--bottom").count()).toBe(1);
           await expect
             .poll(() =>
-              sidePanel(page).evaluate((element) =>
-                element.classList.contains("side-panel--bottom"),
-              ),
-            )
-            .toBe(true);
-          await expect
-            .poll(() =>
-              sidePanel(page).evaluate((element) => element.getBoundingClientRect().height),
+              sidePanelBody(page).evaluate((element) => element.getBoundingClientRect().height),
             )
             .toBeCloseTo(resizedHeight, 0);
 
           await page.reload();
           await page.locator(".chat-group").first().waitFor();
+          await expect.poll(() => page.locator(".sidebar-region--bottom").count()).toBe(1);
           await expect
             .poll(() =>
-              sidePanel(page).evaluate((element) =>
-                element.classList.contains("side-panel--bottom"),
-              ),
-            )
-            .toBe(true);
-          await expect
-            .poll(() =>
-              sidePanel(page).evaluate((element) => element.getBoundingClientRect().height),
+              sidePanelBody(page).evaluate((element) => element.getBoundingClientRect().height),
             )
             .toBeCloseTo(resizedHeight, 0);
 
-          await sidePanel(page).getByRole("button", { name: "Dock to right" }).click();
+          await dockChatSidePanel(page, "right");
           await expect
             .poll(() =>
-              sidePanel(page).evaluate((element) =>
-                element.classList.contains("side-panel--bottom"),
-              ),
+              page
+                .locator(".sidebar-region")
+                .evaluate((element) => element.classList.contains("sidebar-region--bottom")),
             )
             .toBe(false);
           await expect
@@ -770,11 +762,11 @@ suite.define(() => {
             .toBe("vertical");
           await expect
             .poll(() =>
-              sidePanel(page).evaluate((element) => element.getBoundingClientRect().width),
+              sidePanelBody(page).evaluate((element) => element.getBoundingClientRect().width),
             )
             .toBeCloseTo(resizedWidth, 0);
 
-          await sidePanel(page).getByRole("button", { name: "Expand side panel" }).click();
+          await focusChatSidePanel(page);
           await expect
             .poll(() =>
               page
@@ -784,37 +776,37 @@ suite.define(() => {
             .toBe("none");
           await expectExpandedSidePanelFillsRegion(page);
           await captureRichPanel(page, `rails-tabs-expanded-${themeMode}`);
-          await sidePanel(page).getByRole("button", { name: "Restore side panel" }).click();
+          await page
+            .locator(".chat-pane__header")
+            .getByRole("button", { name: "Restore split", exact: true })
+            .click();
+          await restoreChatAsMain(page);
 
           await sidePanel(page).getByRole("button", { name: "Close", exact: true }).click();
-          await expect.poll(() => sidePanel(page).count()).toBe(0);
+          await expect
+            .poll(() => sidePanel(page).locator('[data-region-header="side"]').isVisible())
+            .toBe(false);
           await page.locator(".chat-side-panel-toggle").click();
           await expect
             .poll(() =>
-              sidePanel(page).evaluate((element) => element.getBoundingClientRect().width),
+              sidePanelBody(page).evaluate((element) => element.getBoundingClientRect().width),
             )
             .toBeCloseTo(resizedWidth, 0);
 
           await page.reload();
           await page.locator(".chat-group").first().waitFor();
-          await sidePanel(page).waitFor();
-          expect(await tabLabels(page)).toEqual([
-            "Files",
-            "Review",
-            "Terminal",
-            "Tasks",
-            "Browser",
-            "Side chat",
-            "Desktop",
-          ]);
+          await sidePanel(page).locator('[data-region-header="side"]').waitFor();
+          await expect
+            .poll(() => tabLabels(page))
+            .toEqual(["Files", "Review", "zsh", "Tasks", "Browser", "Side chat", "Desktop"]);
           await expect
             .poll(() =>
-              sidePanel(page).evaluate((element) => element.getBoundingClientRect().width),
+              sidePanelBody(page).evaluate((element) => element.getBoundingClientRect().width),
             )
             .toBeCloseTo(resizedWidth, 0);
           expect(
             await sidePanel(page)
-              .locator(":scope > .side-panel__header wa-tab[active] .tabstrip-tab__label")
+              .locator('[data-region-header="side"] wa-tab[active] .tabstrip-tab__label')
               .textContent(),
           ).toContain("Files");
 
@@ -826,23 +818,27 @@ suite.define(() => {
           await expect
             .poll(() =>
               sidePanel(page)
-                .locator(":scope > .side-panel__header wa-tab[active] .tabstrip-tab__label")
+                .locator('[data-region-header="side"] wa-tab[active] .tabstrip-tab__label')
                 .textContent(),
             )
-            .toContain("Terminal");
+            .toBe("zsh");
           await page.keyboard.press("Control+Backquote");
-          await expect.poll(async () => (await tabLabels(page)).includes("Terminal")).toBe(false);
+          await expect.poll(async () => (await tabLabels(page)).includes("zsh")).toBe(false);
 
           for (const label of ["Review", "Tasks", "Browser", "Side chat", "Desktop", "Files"]) {
             await sidePanel(page)
-              .locator(":scope > .side-panel__header")
+              .locator('[data-region-header="side"]')
               .getByRole("button", { name: `Close ${label}`, exact: true })
               .click();
           }
-          await expect.poll(() => sidePanel(page).count()).toBe(0);
+          await expect
+            .poll(() => sidePanel(page).locator('[data-region-header="side"]').isVisible())
+            .toBe(false);
           await page.reload();
           await page.locator(".chat-group").first().waitFor();
-          await expect.poll(() => sidePanel(page).count()).toBe(0);
+          await expect
+            .poll(() => sidePanel(page).locator('[data-region-header="side"]').isVisible())
+            .toBe(false);
           await page.locator(".chat-side-panel-toggle").click();
           await sidePanel(page).locator(".side-panel-empty--selector").waitFor();
           expect(await sidePanel(page).locator("wa-tab").count()).toBe(0);
@@ -853,17 +849,18 @@ suite.define(() => {
             emptyDividerBox!.y + emptyDividerBox!.height / 2,
           );
           await page.mouse.down();
+          // Shrink here: the wider Browser default can leave this saved column near its maximum.
           await page.mouse.move(
-            emptyDividerBox!.x - 70,
+            emptyDividerBox!.x + 70,
             emptyDividerBox!.y + emptyDividerBox!.height / 2,
           );
           await page.mouse.up();
           await expect
             .poll(() =>
-              sidePanel(page).evaluate((element) => element.getBoundingClientRect().width),
+              sidePanelBody(page).evaluate((element) => element.getBoundingClientRect().width),
             )
-            .toBeGreaterThan(resizedWidth + 50);
-          const emptyResizedWidth = await sidePanel(page).evaluate(
+            .toBeLessThan(resizedWidth - 50);
+          const emptyResizedWidth = await sidePanelBody(page).evaluate(
             (element) => element.getBoundingClientRect().width,
           );
           await divider.evaluate((element) => element.blur());
@@ -875,18 +872,18 @@ suite.define(() => {
           expect(await divider.boundingBox()).not.toBeNull();
           await expect
             .poll(() =>
-              sidePanel(page).evaluate((element) => element.getBoundingClientRect().width),
+              sidePanelBody(page).evaluate((element) => element.getBoundingClientRect().width),
             )
             .toBeCloseTo(emptyResizedWidth, 0);
           await openFromEmpty(page, "Terminal");
           await expect
             .poll(() =>
-              sidePanel(page).evaluate((element) => element.getBoundingClientRect().width),
+              sidePanelBody(page).evaluate((element) => element.getBoundingClientRect().width),
             )
             .toBeCloseTo(emptyResizedWidth, 0);
           const terminalLabel = sidePanel(page)
             .locator(sidePanelTabLabelSelector)
-            .filter({ hasText: "Terminal" });
+            .filter({ hasText: "shell 1" });
           await expect
             .poll(() =>
               terminalLabel.evaluate((label) => {
@@ -921,6 +918,9 @@ suite.define(() => {
           ).toBe(false);
           await openFromPlus(page, "Review");
           await openFromPlus(page, "Tasks");
+          await sidePanel(page)
+            .getByRole("button", { name: "Close tab: shell 1", exact: true })
+            .click();
           await sidePanel(page)
             .getByRole("button", { name: "Close Terminal", exact: true })
             .click();
@@ -970,10 +970,10 @@ suite.define(() => {
         await openFromPlus(page, "Terminal");
         await openFromPlus(page, "Side chat");
         await selectTab(page, "Side chat");
-        await expect.poll(async () => tabLabels(page)).toEqual(["Files", "Terminal", "Side chat"]);
+        await expect.poll(async () => tabLabels(page)).toEqual(["Files", "zsh", "Side chat"]);
         await expect.poll(() => narrowestRailTabLabel(page)).toBeGreaterThanOrEqual(24);
 
-        const geometry = await sidePanel(page).evaluate((element) => {
+        const geometry = await sidePanelBody(page).evaluate((element) => {
           const rect = element.getBoundingClientRect();
           return { left: rect.left, right: rect.right, width: rect.width, viewport: innerWidth };
         });
@@ -983,7 +983,7 @@ suite.define(() => {
 
         const companion = sidePanel(page).locator("openclaw-chat-session-rail");
         const companionGeometry = await companion.locator(".chat-session-rail").evaluate((rail) => {
-          const body = rail.closest(".side-panel__body");
+          const body = rail.closest(".side-panel__panel");
           const bodyRect = body?.getBoundingClientRect();
           const railRect = rail.getBoundingClientRect();
           return {
@@ -996,7 +996,7 @@ suite.define(() => {
         expect(companionGeometry.railTop).toBeGreaterThanOrEqual(companionGeometry.bodyTop - 1);
         expect(companionGeometry.railBottom).toBeLessThanOrEqual(companionGeometry.bodyBottom + 1);
 
-        const mainComposer = page.getByRole("textbox", { name: "Message OpenClaw", exact: true });
+        const mainComposer = page.getByRole("textbox", { name: "Chat composer", exact: true });
         await mainComposer.click();
         expect(await mainComposer.evaluate((element) => element === document.activeElement)).toBe(
           true,
@@ -1018,7 +1018,7 @@ suite.define(() => {
           .waitFor();
         await captureRichPanel(page, "rails-side-chat-mobile-light");
 
-        await sidePanel(page).getByRole("button", { name: "Expand side panel" }).click();
+        await focusChatSidePanel(page);
         await expect
           .poll(() =>
             page

@@ -2,10 +2,10 @@
 import fs from "node:fs";
 import {
   normalizeOptionalString,
-  normalizeStringifiedOptionalString,
+  readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import JSON5 from "json5";
-import { rejectConfigNonFiniteNumbers } from "../config/io.read-helpers.js";
+import { rejectConfigNonFiniteNumbers } from "../config/value-tree.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errors.js";
 
@@ -36,6 +36,8 @@ export type ConfigSetOptions = {
   providerTrustedDir?: string[];
   batchJson?: string;
   batchFile?: string;
+  expectCurrentAbsent?: boolean;
+  expectCurrentJson?: string;
 };
 
 export type ConfigSetBatchEntry = {
@@ -44,6 +46,8 @@ export type ConfigSetBatchEntry = {
   ref?: unknown;
   provider?: unknown;
 };
+
+export type ConfigSetCurrentExpectation = { kind: "absent" } | { kind: "json"; value: unknown };
 
 const CONFIG_MUTATION_FILE_MAX_BYTES = 8 * 1024 * 1024;
 
@@ -87,9 +91,7 @@ export function readConfigMutationFileSync(
 }
 
 export function hasBatchMode(opts: ConfigSetOptions): boolean {
-  return Boolean(
-    normalizeOptionalString(opts.batchJson) || normalizeOptionalString(opts.batchFile),
-  );
+  return opts.batchJson !== undefined || opts.batchFile !== undefined;
 }
 
 export function hasRefBuilderOptions(opts: ConfigSetOptions): boolean {
@@ -163,12 +165,53 @@ function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntr
   return out;
 }
 
+export function parseConfigSetCurrentExpectation(
+  opts: ConfigSetOptions,
+): ConfigSetCurrentExpectation | undefined {
+  const expectAbsent = opts.expectCurrentAbsent === true;
+  const hasExpectedJson = opts.expectCurrentJson !== undefined;
+  if (!expectAbsent && !hasExpectedJson) {
+    return undefined;
+  }
+  if (expectAbsent && hasExpectedJson) {
+    throw new Error(
+      "config set mode error: choose either --expect-current-absent or --expect-current-json, not both.",
+    );
+  }
+  if (opts.dryRun) {
+    throw new Error(
+      "config set mode error: conditional expectations cannot be combined with --dry-run.",
+    );
+  }
+  if (opts.batchJson !== undefined || opts.batchFile !== undefined) {
+    throw new Error(
+      "config set mode error: conditional expectations require one path operation and cannot be combined with batch mode.",
+    );
+  }
+  if (expectAbsent) {
+    return { kind: "absent" };
+  }
+  const expectedJson = opts.expectCurrentJson;
+  if (expectedJson === undefined) {
+    throw new Error("config set mode error: missing conditional expectation.");
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(expectedJson) as unknown;
+    rejectConfigNonFiniteNumbers(value);
+  } catch (error) {
+    throw new Error("config set mode error: --expect-current-json must be valid JSON.", {
+      cause: error,
+    });
+  }
+  return { kind: "json", value };
+}
+
 export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] | null {
   // Batch mode is exclusive because each entry carries its own value/ref/provider mode.
-  const batchJson = normalizeOptionalString(opts.batchJson);
-  const batchFile = normalizeOptionalString(opts.batchFile);
-  const hasInline = Boolean(batchJson);
-  const hasFile = Boolean(batchFile);
+  const batchJson = opts.batchJson;
+  const hasInline = batchJson !== undefined;
+  const hasFile = opts.batchFile !== undefined;
   if (!hasInline && !hasFile) {
     return null;
   }
@@ -176,9 +219,9 @@ export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] 
     throw new Error("Use either --batch-json or --batch-file, not both.");
   }
   if (hasInline) {
-    return parseBatchEntries(batchJson as string, "--batch-json");
+    return parseBatchEntries(batchJson, "--batch-json");
   }
-  const pathname = normalizeStringifiedOptionalString(opts.batchFile) ?? "";
+  const pathname = readNonBlankString(opts.batchFile);
   if (!pathname) {
     throw new Error("--batch-file must not be empty.");
   }

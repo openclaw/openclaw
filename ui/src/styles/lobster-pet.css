@@ -1,32 +1,96 @@
-/* ============================================
-   Lobster pet – decorative status mascot that
-   perches on the sidebar footer.
-   ============================================ */
-
-/* The footer bar is the pet's ledge. */
-.sidebar-shell__footer {
-  position: relative;
-}
-
-/* Every visit variant shares this zero-layout overlay strip above the footer.
-   Its bottom edge sits 3px inside the bar so feet dangle over the divider, and
-   overflow: hidden makes duck/peek/enter moves read as "behind the ledge". */
+/* All visitor species share measured, obstacle-free composer lanes. */
 openclaw-lobster-pet {
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: calc(100% - 3px);
+  inset: 0;
   display: block;
-  height: 52px;
-  overflow: hidden;
+  z-index: 1;
+  overflow: visible;
+  clip-path: inset(-88px 0 0);
   pointer-events: none;
 }
 
+openclaw-lobster-pet .lobster-pet {
+  top: var(--lob-y, 0px);
+  bottom: auto;
+  transform: translate(-50%, -100%);
+  transition: none;
+}
+
+.lobster-pet__motion {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.lobster-pet__motion--walk {
+  animation: lobster-pet-travel-walk var(--lob-travel-ms) ease-in-out both;
+}
+
+.lobster-pet__motion--hop {
+  animation: lobster-pet-travel-hop var(--lob-travel-ms) linear both;
+}
+
+.lobster-pet__motion--hop .lobster-pet .lobster-pet__body {
+  transform-origin: 50% 100%;
+  animation: lobster-pet-landing var(--lob-travel-ms) ease-in-out both;
+  animation-delay: var(--lob-act-delay, 0s);
+}
+
+@keyframes lobster-pet-travel-walk {
+  from {
+    transform: translate(var(--lob-from-x), var(--lob-from-y));
+  }
+  to {
+    transform: translate(0, 0);
+  }
+}
+
+/* Crouch, lift above departure, then accelerate into a soft landing.
+   The scene owner supplies the same duration to CSS and the act timer. */
+@keyframes lobster-pet-travel-hop {
+  0%,
+  14% {
+    transform: translate(var(--lob-from-x), var(--lob-from-y));
+  }
+  38% {
+    transform: translate(calc(var(--lob-from-x) * 0.7), calc(var(--lob-from-y) * 0.85 - 22px));
+  }
+  65% {
+    transform: translate(calc(var(--lob-from-x) * 0.3), calc(var(--lob-from-y) * 0.35 - 18px));
+  }
+  86%,
+  100% {
+    transform: translate(0, 0);
+  }
+}
+
+@keyframes lobster-pet-landing {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  14% {
+    transform: scale(1.03, 0.96);
+  }
+  38% {
+    transform: scale(0.98, 1.03) rotate(-4deg);
+  }
+  70% {
+    transform: scale(0.99, 1.02) rotate(3deg);
+  }
+  86% {
+    transform: scale(1.04, 0.94);
+  }
+  94% {
+    transform: scale(0.99, 1.02);
+  }
+}
+
 /* Departure/dismissal: duck down behind the ledge and fade. */
-.lobster-pet--away {
+openclaw-lobster-pet .lobster-pet--away {
   opacity: 0;
   visibility: hidden;
-  transform: translateX(-50%) translateY(105%);
+  transform: translate(-50%, -45%);
   transition:
     transform 0.3s ease-in,
     opacity 0.2s ease 0.1s,
@@ -37,8 +101,8 @@ openclaw-lobster-pet {
   position: absolute;
   bottom: 0;
   left: var(--lob-x, 80%);
-  /* Build multipliers stretch the sprite box; the svg renders with
-     preserveAspectRatio="none", so the silhouette follows the box. */
+  /* Lobsters keep the artwork's proportions; other species supply their
+     own fixed sprite dimensions through --lob-w and --lob-h. */
   width: calc(16px * var(--lob-scale, 2) * var(--lob-w, 1));
   height: calc(14px * var(--lob-scale, 2) * var(--lob-h, 1));
   transform: translateX(-50%);
@@ -50,6 +114,11 @@ openclaw-lobster-pet {
   /* Seeded glint tint is mapped before the palette rules so palette and
      offline class rules still out-cascade it on both look surfaces. */
   --lob-glint: var(--lob-glint-seed, #00e5cc);
+}
+
+openclaw-lobster-pet .lobster-bottle {
+  top: -20px;
+  bottom: auto;
 }
 
 /* Restore hit testing beneath the pointer-inert decorative pet host. */
@@ -69,7 +138,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   position: absolute;
   left: 8%;
   right: 8%;
-  bottom: 0;
+  top: 0;
   height: 2px;
   background: linear-gradient(
     90deg,
@@ -1329,6 +1398,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  openclaw-lobster-pet .lobster-pet__motion,
   openclaw-lobster-pet .lobster-pet,
   openclaw-lobster-pet .lobster-pet *,
   openclaw-lobster-pet .lobster-bottle,
@@ -1361,25 +1431,19 @@ openclaw-lobster-pet[data-dex-complete]::after {
 
 /* ---- Pass-through visitors ---- */
 
-/* Passers cross the whole ledge once; left/right position comes from the
-   crossing keyframes, not the perch variable, and each kind sets its own
-   crossing time through --lob-cross (LOBSTER_PASSER_CROSS_MS). */
+/* All species cross the measured free lane, not the whole composer width. */
 .lobster-pet--passer {
   pointer-events: none;
   cursor: default;
-  bottom: 0;
+  animation: lobster-pet-cross var(--lob-cross, 11s) linear forwards;
 }
 
 .lobster-pet--passer .lobster-pet__body {
   animation: lobster-pet-waddle 0.32s ease-in-out infinite;
 }
 
-.lobster-pet--passer-ltr {
-  animation: lobster-pet-cross-ltr var(--lob-cross, 11s) linear forwards;
-}
-
-.lobster-pet--passer-rtl {
-  animation: lobster-pet-cross-rtl var(--lob-cross, 11s) linear forwards;
+.lobster-pet--passer-hop {
+  animation-name: lobster-pet-cross, lobster-pet-cross-hop;
 }
 
 /* The crab walks sideways by definition: it crosses while facing you and
@@ -1398,30 +1462,60 @@ openclaw-lobster-pet[data-dex-complete]::after {
   animation: lobster-pet-duck-bob 1.6s ease-in-out infinite;
 }
 
+.lobster-pet--fedora .lobster-pet__body {
+  animation: lobster-pet-fedora-tumble 1.4s ease-in-out infinite;
+}
+
+@keyframes lobster-pet-fedora-tumble {
+  0%,
+  100% {
+    transform: rotate(-6deg);
+  }
+  50% {
+    transform: rotate(6deg);
+  }
+}
+
 /* The jellyfish drifts above the ledge, pulsing softly. */
 .lobster-pet--jellyfish {
-  bottom: 12px;
+  margin-top: -8px;
 }
 
 .lobster-pet--jellyfish .lobster-pet__body {
   animation: lobster-pet-jelly-pulse 2.4s ease-in-out infinite;
 }
 
-@keyframes lobster-pet-cross-ltr {
-  from {
-    left: -6%;
+@keyframes lobster-pet-cross {
+  0% {
+    left: var(--lob-cross-from);
+    opacity: 0;
   }
-  to {
-    left: 106%;
+  8%,
+  92% {
+    opacity: 1;
+  }
+  100% {
+    left: var(--lob-cross-to);
+    opacity: 0;
   }
 }
 
-@keyframes lobster-pet-cross-rtl {
-  from {
-    left: 106%;
+@keyframes lobster-pet-cross-hop {
+  0%,
+  10%,
+  90%,
+  100% {
+    top: 0;
   }
-  to {
-    left: -6%;
+  15% {
+    top: -12px;
+  }
+  26%,
+  70% {
+    top: var(--lob-y);
+  }
+  82% {
+    top: -12px;
   }
 }
 
@@ -1537,10 +1631,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
   justify-items: start;
 }
 
-.lobsterdex__open {
-  text-decoration: none;
-}
-
 .lobsterdex__tooltip {
   display: grid;
   max-width: 230px;
@@ -1553,229 +1643,4 @@ openclaw-lobster-pet[data-dex-complete]::after {
 
 .lobsterdex__tooltip span {
   color: var(--muted);
-}
-
-/* ---- Lobsterdex full-page collection ---- */
-
-.lobsterdex-page {
-  display: grid;
-  gap: 22px;
-}
-
-.lobsterdex-page__header {
-  position: relative;
-  display: flex;
-  gap: 20px;
-  align-items: flex-end;
-  justify-content: space-between;
-  padding: 18px 20px;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background:
-    radial-gradient(
-      circle at 12% 0%,
-      color-mix(in srgb, var(--accent) 13%, transparent),
-      transparent 42%
-    ),
-    var(--card);
-}
-
-.lobsterdex-page__header::after {
-  position: absolute;
-  right: 18px;
-  bottom: 0;
-  left: 18px;
-  height: 2px;
-  content: "";
-  background: transparent;
-}
-
-.lobsterdex-page__header--complete::after {
-  background: linear-gradient(
-    90deg,
-    transparent,
-    #f4b840 30%,
-    #f9d47a 50%,
-    #f4b840 70%,
-    transparent
-  );
-  opacity: 0.7;
-}
-
-.lobsterdex-page__header h2,
-.lobsterdex-page__card h3,
-.lobsterdex-page__header p,
-.lobsterdex-page__card p {
-  margin: 0;
-}
-
-.lobsterdex-page__header h2 {
-  font-size: 24px;
-  letter-spacing: -0.025em;
-}
-
-.lobsterdex-page__header p {
-  margin-top: 4px;
-  color: var(--muted);
-}
-
-.lobsterdex-page__count {
-  flex: 0 0 auto;
-  padding: 5px 9px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--muted);
-  background: color-mix(in srgb, var(--card) 75%, transparent);
-  font-size: 12px;
-  font-weight: 650;
-}
-
-.lobsterdex-page__header--complete .lobsterdex-page__count {
-  border-color: color-mix(in srgb, #f4b840 55%, var(--border));
-  color: color-mix(in srgb, #f4b840 75%, var(--text));
-}
-
-.lobsterdex-page__grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 12px;
-}
-
-.lobsterdex-page__card {
-  position: relative;
-  display: grid;
-  grid-template-rows: 94px auto minmax(42px, auto) auto;
-  gap: 7px;
-  justify-items: center;
-  min-width: 0;
-  padding: 16px 13px 13px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--card) 94%, white 6%), var(--card));
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.08);
-  text-align: center;
-}
-
-.lobsterdex-page__card--highlight {
-  animation: lobsterdex-card-highlight 2s ease-out;
-}
-
-@keyframes lobsterdex-card-highlight {
-  0%,
-  100% {
-    border-color: var(--border);
-    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.08);
-  }
-  35% {
-    border-color: var(--accent);
-    box-shadow:
-      0 0 0 3px color-mix(in srgb, var(--accent) 26%, transparent),
-      0 0 22px color-mix(in srgb, var(--accent) 34%, transparent);
-  }
-}
-
-.lobsterdex-page__card--unseen {
-  border-style: dashed;
-  box-shadow: none;
-}
-
-.lobsterdex-page__sprite.lobster-pet {
-  position: relative;
-  bottom: auto;
-  left: auto;
-  width: 90px;
-  height: auto;
-  aspect-ratio: 120 / 105;
-  align-self: center;
-  transform: none;
-  pointer-events: none;
-}
-
-.lobsterdex-page__card h3 {
-  color: var(--text-strong);
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.lobsterdex-page__lore {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.lobsterdex-page__date {
-  color: var(--muted);
-  font-size: 10px;
-}
-
-.lobsterdex-page__dates {
-  min-height: 18px;
-}
-
-.lobsterdex-page__copy-link {
-  position: absolute;
-  top: 8px;
-  left: 8px;
-  display: grid;
-  width: 26px;
-  height: 26px;
-  padding: 5px;
-  border: 0;
-  border-radius: 7px;
-  place-items: center;
-  color: var(--muted);
-  background: color-mix(in srgb, var(--card) 82%, transparent);
-  opacity: 0;
-  pointer-events: none;
-  cursor: var(--cursor-action);
-  transition:
-    opacity 0.16s ease,
-    color 0.16s ease,
-    background 0.16s ease;
-}
-
-.lobsterdex-page__copy-link svg {
-  width: 15px;
-  height: 15px;
-}
-
-.lobsterdex-page__card:hover .lobsterdex-page__copy-link,
-.lobsterdex-page__card:focus-within .lobsterdex-page__copy-link {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-/* Touch screens have no hover to reveal the control; keep it tappable in a
-   quieter resting state instead of unreachable. */
-@media (hover: none) {
-  .lobsterdex-page__copy-link {
-    opacity: 0.55;
-    pointer-events: auto;
-  }
-}
-
-.lobsterdex-page__copy-link:hover,
-.lobsterdex-page__copy-link:focus-visible {
-  color: var(--text-strong);
-  background: color-mix(in srgb, var(--accent) 13%, var(--card));
-}
-
-.lobsterdex-page__star {
-  top: -1px;
-  right: 1px;
-  font-size: 14px;
-  filter: drop-shadow(0 0 4px rgba(244, 184, 64, 0.4));
-}
-
-@media (max-width: 560px) {
-  .lobsterdex-page__header {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 12px;
-  }
-
-  .lobsterdex-page__grid {
-    grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
-  }
 }

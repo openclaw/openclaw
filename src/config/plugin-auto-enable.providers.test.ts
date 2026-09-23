@@ -9,6 +9,7 @@ import {
   makeRegistry,
   resetPluginAutoEnableTestState,
 } from "./plugin-auto-enable.test-helpers.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 const env = makeIsolatedEnv();
 
@@ -17,6 +18,50 @@ afterAll(() => {
 });
 
 describe("applyPluginAutoEnable providers", () => {
+  it.each([
+    { label: "default", agents: { defaults: { decisionModel: "judge/fast" } } },
+    { label: "agent override", agents: { entries: { worker: { decisionModel: "judge/fast" } } } },
+  ])("activates a decision contract owner selected by $label", ({ agents }) => {
+    const result = applyPluginAutoEnable({
+      config: { agents, plugins: { allow: ["telegram"] } },
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "decision-plugin",
+          channels: [],
+          origin: "bundled",
+          contracts: { decisionProviders: ["judge"] },
+        },
+      ]),
+    });
+    expect(result.config.plugins?.entries?.["decision-plugin"]?.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["telegram", "decision-plugin"]);
+    expect(result.autoEnabledReasons).toEqual({
+      "decision-plugin": ["judge decision provider selected"],
+    });
+  });
+
+  it.each([
+    { plugins: { enabled: false } },
+    { plugins: { entries: { "decision-plugin": { enabled: false } } } },
+    { plugins: { deny: ["decision-plugin"] } },
+  ])("keeps a selected decision provider disabled by explicit plugin policy: %j", ({ plugins }) => {
+    const result = applyPluginAutoEnable({
+      config: { agents: { defaults: { decisionModel: "judge/fast" } }, plugins },
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "decision-plugin",
+          channels: [],
+          origin: "bundled",
+          contracts: { decisionProviders: ["judge"] },
+        },
+      ]),
+    });
+    expect(result.config.plugins?.entries?.["decision-plugin"]?.enabled).not.toBe(true);
+    expect(result.changes).toEqual([]);
+  });
+
   it("auto-enables provider auth plugins when profiles exist", () => {
     const result = applyPluginAutoEnable({
       config: {
@@ -41,6 +86,65 @@ describe("applyPluginAutoEnable providers", () => {
 
     expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
   });
+
+  const googleProviderCases: Array<{ name: string; config: OpenClawConfig }> = [
+    {
+      name: "Google auth profile",
+      config: {
+        auth: {
+          profiles: {
+            "google:default": {
+              provider: "google",
+              mode: "api_key",
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "Google provider config",
+      config: {
+        models: {
+          providers: {
+            google: {
+              apiKey: "configured-google-key",
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+              models: [],
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "Google Vertex auth profile",
+      config: {
+        auth: {
+          profiles: {
+            "google-vertex:default": {
+              provider: "google-vertex",
+              mode: "oauth",
+            },
+          },
+        },
+      },
+    },
+  ];
+
+  it.each(googleProviderCases)(
+    "auto-enables the Google plugin from $name under a restrictive allowlist",
+    ({ config }) => {
+      const result = applyPluginAutoEnable({
+        config: {
+          ...config,
+          plugins: { allow: ["telegram"] },
+        },
+        env,
+      });
+
+      expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
+      expect(result.config.plugins?.allow).toEqual(["telegram", "google"]);
+    },
+  );
 
   it("auto-enables provider plugins when plugin-owned web search config exists", () => {
     const result = applyPluginAutoEnable({

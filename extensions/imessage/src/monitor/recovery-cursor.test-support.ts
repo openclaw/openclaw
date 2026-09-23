@@ -41,116 +41,134 @@ describe("iMessage recovery cursor", () => {
     installIMessageStateRuntimeForTest();
   });
 
-  it("returns null before anything is recorded", () => {
-    expect(loadIMessageRecoveryCursor("default", DB)).toBeNull();
+  it("returns null before anything is recorded", async () => {
+    expect(await loadIMessageRecoveryCursor("default", DB)).toBeNull();
   });
 
-  it("persists the last dispatched rowid", () => {
-    advanceIMessageRecoveryCursor("default", DB, 100);
-    expect(loadIMessageRecoveryCursor("default", DB)).toBe(100);
+  it("persists the last dispatched rowid", async () => {
+    await advanceIMessageRecoveryCursor("default", DB, 100);
+    expect(await loadIMessageRecoveryCursor("default", DB)).toBe(100);
   });
 
-  it("advances forward only and never rewinds", () => {
-    advanceIMessageRecoveryCursor("default", DB, 100);
-    advanceIMessageRecoveryCursor("default", DB, 50);
-    expect(loadIMessageRecoveryCursor("default", DB)).toBe(100);
-    advanceIMessageRecoveryCursor("default", DB, 150);
-    expect(loadIMessageRecoveryCursor("default", DB)).toBe(150);
+  it("advances forward only and never rewinds", async () => {
+    await advanceIMessageRecoveryCursor("default", DB, 100);
+    await advanceIMessageRecoveryCursor("default", DB, 50);
+    expect(await loadIMessageRecoveryCursor("default", DB)).toBe(100);
+    await advanceIMessageRecoveryCursor("default", DB, 150);
+    expect(await loadIMessageRecoveryCursor("default", DB)).toBe(150);
   });
 
-  it("scopes the cursor per account", () => {
-    advanceIMessageRecoveryCursor("work", DB, 10);
-    advanceIMessageRecoveryCursor("home", DB, 20);
-    expect(loadIMessageRecoveryCursor("work", DB)).toBe(10);
-    expect(loadIMessageRecoveryCursor("home", DB)).toBe(20);
+  it("scopes the cursor per account", async () => {
+    await advanceIMessageRecoveryCursor("work", DB, 10);
+    await advanceIMessageRecoveryCursor("home", DB, 20);
+    expect(await loadIMessageRecoveryCursor("work", DB)).toBe(10);
+    expect(await loadIMessageRecoveryCursor("home", DB)).toBe(20);
   });
 
-  it("ignores a cursor recorded against a different database (#99638)", () => {
+  it("ignores a cursor recorded against a different database (#99638)", async () => {
     // A high-water from db-a must not seed since_rowid after repointing to db-b,
     // or every lower rowid in db-b is silently suppressed forever.
-    advanceIMessageRecoveryCursor("default", DB, 12396);
-    expect(loadIMessageRecoveryCursor("default", DB_B, { migrateLegacyCatchup: false })).toBeNull();
+    await advanceIMessageRecoveryCursor("default", DB, 12396);
+    expect(
+      await loadIMessageRecoveryCursor("default", DB_B, { migrateLegacyCatchup: false }),
+    ).toBeNull();
     // The original database still reports its cursor.
-    expect(loadIMessageRecoveryCursor("default", DB)).toBe(12396);
+    expect(await loadIMessageRecoveryCursor("default", DB)).toBe(12396);
   });
 
-  it("re-scopes the cursor to the new database on advance", () => {
-    advanceIMessageRecoveryCursor("default", DB, 12396);
+  it("re-scopes the cursor to the new database on advance", async () => {
+    await advanceIMessageRecoveryCursor("default", DB, 12396);
     // Advancing on db-b starts fresh (not blocked by db-a's higher monotonic value).
-    advanceIMessageRecoveryCursor("default", DB_B, 15);
-    expect(loadIMessageRecoveryCursor("default", DB_B)).toBe(15);
+    await advanceIMessageRecoveryCursor("default", DB_B, 15);
+    expect(await loadIMessageRecoveryCursor("default", DB_B)).toBe(15);
     // db-a keeps its own high-water; switching back does not lose it.
-    expect(loadIMessageRecoveryCursor("default", DB)).toBe(12396);
+    expect(await loadIMessageRecoveryCursor("default", DB)).toBe(12396);
   });
 
-  it("adopts a pre-database-scoping cursor once for the active database (#99638)", () => {
+  it("adopts a pre-database-scoping cursor once for the active database (#99638)", async () => {
     writeLegacyRecoveryCursor("default", 12396);
     // Upgrade restart: the identity-less cursor is adopted for the active
     // database so downtime replay still works (not dropped to the watermark).
-    expect(loadIMessageRecoveryCursor("default", DB, { migrateLegacyCatchup: false })).toBe(12396);
+    expect(await loadIMessageRecoveryCursor("default", DB, { migrateLegacyCatchup: false })).toBe(
+      12396,
+    );
     // It is consumed and re-scoped, so a different database does not inherit it.
-    expect(loadIMessageRecoveryCursor("default", DB_B, { migrateLegacyCatchup: false })).toBeNull();
+    expect(
+      await loadIMessageRecoveryCursor("default", DB_B, { migrateLegacyCatchup: false }),
+    ).toBeNull();
     // The adopted database keeps it across reloads.
-    expect(loadIMessageRecoveryCursor("default", DB)).toBe(12396);
+    expect(await loadIMessageRecoveryCursor("default", DB)).toBe(12396);
   });
 
-  it("rewinds a cursor above the database watermark when chat.db is replaced at the same path", () => {
-    advanceIMessageRecoveryCursor("default", DB, 9000);
+  it("rewinds a cursor above the database watermark when chat.db is replaced at the same path", async () => {
+    await advanceIMessageRecoveryCursor("default", DB, 9000);
     expect(
-      loadIMessageRecoveryCursor("default", DB, { migrateLegacyCatchup: false, watermarkRowid: 5 }),
+      await loadIMessageRecoveryCursor("default", DB, {
+        migrateLegacyCatchup: false,
+        watermarkRowid: 5,
+      }),
     ).toBe(5);
-    expect(loadIMessageRecoveryCursor("default", DB, { migrateLegacyCatchup: false })).toBe(5);
-    advanceIMessageRecoveryCursor("default", DB, 6);
-    expect(loadIMessageRecoveryCursor("default", DB)).toBe(6);
+    expect(await loadIMessageRecoveryCursor("default", DB, { migrateLegacyCatchup: false })).toBe(
+      5,
+    );
+    await advanceIMessageRecoveryCursor("default", DB, 6);
+    expect(await loadIMessageRecoveryCursor("default", DB)).toBe(6);
   });
 
-  it("rewinds a cursor to zero when chat.db is rebuilt empty at the same path", () => {
-    advanceIMessageRecoveryCursor("default", DB, 9000);
+  it("rewinds a cursor to zero when chat.db is rebuilt empty at the same path", async () => {
+    await advanceIMessageRecoveryCursor("default", DB, 9000);
     expect(
-      loadIMessageRecoveryCursor("default", DB, { migrateLegacyCatchup: false, watermarkRowid: 0 }),
+      await loadIMessageRecoveryCursor("default", DB, {
+        migrateLegacyCatchup: false,
+        watermarkRowid: 0,
+      }),
     ).toBe(0);
-    expect(loadIMessageRecoveryCursor("default", DB, { migrateLegacyCatchup: false })).toBe(0);
-    advanceIMessageRecoveryCursor("default", DB, 1);
-    expect(loadIMessageRecoveryCursor("default", DB)).toBe(1);
+    expect(await loadIMessageRecoveryCursor("default", DB, { migrateLegacyCatchup: false })).toBe(
+      0,
+    );
+    await advanceIMessageRecoveryCursor("default", DB, 1);
+    expect(await loadIMessageRecoveryCursor("default", DB)).toBe(1);
   });
 
-  it("keeps a cursor at or below the database watermark", () => {
-    advanceIMessageRecoveryCursor("default", DB, 4990);
-    expect(loadIMessageRecoveryCursor("default", DB, { watermarkRowid: 5000 })).toBe(4990);
-    expect(loadIMessageRecoveryCursor("default", DB, { watermarkRowid: 4990 })).toBe(4990);
-    expect(loadIMessageRecoveryCursor("default", DB, { watermarkRowid: null })).toBe(4990);
+  it("keeps a cursor at or below the database watermark", async () => {
+    await advanceIMessageRecoveryCursor("default", DB, 4990);
+    expect(await loadIMessageRecoveryCursor("default", DB, { watermarkRowid: 5000 })).toBe(4990);
+    expect(await loadIMessageRecoveryCursor("default", DB, { watermarkRowid: 4990 })).toBe(4990);
+    expect(await loadIMessageRecoveryCursor("default", DB, { watermarkRowid: null })).toBe(4990);
   });
 
-  it("rewinds a migrated legacy catchup cursor above the database watermark", () => {
+  it("rewinds a migrated legacy catchup cursor above the database watermark", async () => {
     writeLegacyCatchupCursor("default", 9000);
-    expect(loadIMessageRecoveryCursor("default", DB, { watermarkRowid: 5 })).toBe(5);
-    expect(loadIMessageRecoveryCursor("default", DB)).toBe(5);
+    expect(await loadIMessageRecoveryCursor("default", DB, { watermarkRowid: 5 })).toBe(5);
+    expect(await loadIMessageRecoveryCursor("default", DB)).toBe(5);
   });
 
-  it("ignores non-finite rowids", () => {
-    advanceIMessageRecoveryCursor("default", DB, Number.NaN);
-    expect(loadIMessageRecoveryCursor("default", DB)).toBeNull();
+  it("ignores non-finite rowids", async () => {
+    await advanceIMessageRecoveryCursor("default", DB, Number.NaN);
+    expect(await loadIMessageRecoveryCursor("default", DB)).toBeNull();
   });
 
-  it("seeds from the retired catchup cursor once on upgrade, then consumes it", () => {
+  it("seeds from the retired catchup cursor once on upgrade, then consumes it", async () => {
     writeLegacyCatchupCursor("default", 4321);
     // First load with no recovery cursor seeds from the legacy catchup cursor.
-    expect(loadIMessageRecoveryCursor("default", DB)).toBe(4321);
+    expect(await loadIMessageRecoveryCursor("default", DB)).toBe(4321);
     // The legacy entry is consumed and the value is now the recovery cursor, so
     // a later load still returns it without re-reading the legacy store.
-    expect(loadIMessageRecoveryCursor("default", DB)).toBe(4321);
+    expect(await loadIMessageRecoveryCursor("default", DB)).toBe(4321);
   });
 
-  it("can skip legacy catchup cursor migration when compatibility catchup still owns it", () => {
+  it("can skip legacy catchup cursor migration when compatibility catchup still owns it", async () => {
     writeLegacyCatchupCursor("default", 4321);
-    expect(loadIMessageRecoveryCursor("default", DB, { migrateLegacyCatchup: false })).toBeNull();
-    expect(loadIMessageRecoveryCursor("default", DB)).toBe(4321);
+    expect(
+      await loadIMessageRecoveryCursor("default", DB, { migrateLegacyCatchup: false }),
+    ).toBeNull();
+    expect(await loadIMessageRecoveryCursor("default", DB)).toBe(4321);
   });
 
-  it("prefers an existing recovery cursor over the legacy catchup cursor", () => {
-    advanceIMessageRecoveryCursor("default", DB, 9000);
+  it("prefers an existing recovery cursor over the legacy catchup cursor", async () => {
+    await advanceIMessageRecoveryCursor("default", DB, 9000);
     writeLegacyCatchupCursor("default", 10);
-    expect(loadIMessageRecoveryCursor("default", DB)).toBe(9000);
+    expect(await loadIMessageRecoveryCursor("default", DB)).toBe(9000);
   });
 
   it("unifies the implicit default with explicit spellings of the same chat.db (#99638)", () => {

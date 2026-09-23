@@ -1,21 +1,25 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { BACKUP_RUN_ERROR_MAX_LENGTH } from "./backup-run-records.contract.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "./openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
 type BackupRunDatabase = Pick<OpenClawStateDatabase, "backup_runs">;
 
 type BackupRunKind = "archive" | "sqlite-snapshot" | "git";
 
-export type BackupRunRecord = {
+type BackupRunRecord = {
   id: string;
   createdAt: number;
   archivePath: string;
@@ -26,9 +30,14 @@ export type BackupRunRecord = {
   pushFailed?: true;
 };
 
+export type BackupRunFreshness = {
+  latest?: BackupRunRecord;
+  latestOk?: BackupRunRecord;
+};
+
 function boundedText(value: string | undefined, maxLength: number): string | undefined {
   const trimmed = value?.trim();
-  return trimmed ? trimmed.slice(0, maxLength) : undefined;
+  return trimmed ? truncateUtf16Safe(trimmed, maxLength) : undefined;
 }
 
 function parseBackupRun(row: {
@@ -67,7 +76,7 @@ function parseBackupRun(row: {
 }
 
 /** Record one best-effort backup outcome in the shared bounded operational log. */
-export function recordBackupRunOutcome(params: {
+export async function recordBackupRunOutcome(params: {
   archivePath: string;
   status: "ok" | "failed";
   kind: BackupRunKind;
@@ -76,51 +85,35 @@ export function recordBackupRunOutcome(params: {
   pushFailed?: boolean;
   createdAt?: number;
   env?: NodeJS.ProcessEnv;
-}): void {
+}): Promise<void> {
+  const databasePath = resolveOpenClawStateSqlitePath(params.env ?? process.env);
   // Best-effort log only: never bootstrap an absent state database to record an
   // outcome, or a failed backup on a fresh host would create a blank DB that a
   // retry then treats as real backup input.
-  if (!existsSync(resolveOpenClawStateSqlitePath(params.env ?? process.env))) {
+  if (!existsSync(databasePath)) {
     return;
   }
+  const context = captureOpenClawStateWorkerContext({ path: databasePath, env: params.env });
   const manifest = JSON.stringify({
     kind: params.kind,
     ...(boundedText(params.target, 512) ? { target: boundedText(params.target, 512) } : {}),
-    ...(boundedText(params.error, 1_200) ? { error: boundedText(params.error, 1_200) } : {}),
+    ...(boundedText(params.error, BACKUP_RUN_ERROR_MAX_LENGTH)
+      ? { error: boundedText(params.error, BACKUP_RUN_ERROR_MAX_LENGTH) }
+      : {}),
     ...(params.pushFailed === true ? { pushFailed: true } : {}),
   });
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const kysely = getNodeSqliteKysely<BackupRunDatabase>(db);
-      executeSqliteQuerySync(
-        db,
-        kysely.insertInto("backup_runs").values({
-          id: randomUUID(),
-          created_at: params.createdAt ?? Date.now(),
-          archive_path: params.archivePath,
-          status: params.status,
-          manifest_json: manifest,
-        }),
-      );
-      // This is a bounded operational log. Hourly scheduled backups must not grow it forever.
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .deleteFrom("backup_runs")
-          .where(
-            "id",
-            "in",
-            kysely
-              .selectFrom("backup_runs")
-              .select("id")
-              .orderBy("created_at", "desc")
-              .orderBy("id", "desc")
-              .limit(2_147_483_647)
-              .offset(200),
-          ),
-      );
-    },
-    { env: params.env },
+  const row = {
+    id: randomUUID(),
+    created_at: params.createdAt ?? Date.now(),
+    archive_path: params.archivePath,
+    status: params.status,
+    manifest_json: manifest,
+  };
+  const { runOpenClawStateWorkerOperation } = await import("./openclaw-state-worker-store.js");
+  await runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: "backup.recordOutcome", input: row }),
+    { existingOnly: true },
   );
 }
 
@@ -143,12 +136,40 @@ function readBackupRun(database: DatabaseSync, status?: "ok"): BackupRunRecord |
   return row ? parseBackupRun(row) : undefined;
 }
 
-/** Read the newest recorded backup attempt from an already-open database. */
-export function readLatestBackupRun(database: DatabaseSync): BackupRunRecord | undefined {
-  return readBackupRun(database);
+/** Read backup freshness without creating or repairing an absent state database. */
+export async function readBackupRunFreshness(env: NodeJS.ProcessEnv): Promise<BackupRunFreshness> {
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => ({ latest: readBackupRun(db), latestOk: readBackupRun(db, "ok") }),
+      { env, path: resolveOpenClawStateSqlitePath(env) },
+    ) ?? {}
+  );
 }
 
-/** Read the newest successful backup from an already-open database. */
-export function readLatestSuccessfulBackupRun(database: DatabaseSync): BackupRunRecord | undefined {
-  return readBackupRun(database, "ok");
+/** Archive parents are the fallback scratch roots when TMPDIR overlaps a source. */
+export function readBackupArchiveDirectories(env: NodeJS.ProcessEnv): string[] {
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => {
+        if (!tableExists(db, "backup_runs")) {
+          return [];
+        }
+        const rows = executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<BackupRunDatabase>(db).selectFrom("backup_runs").selectAll(),
+        ).rows;
+        return [
+          ...new Set(
+            rows.flatMap((row) => {
+              const record = parseBackupRun(row);
+              return record?.kind === "archive" && path.isAbsolute(record.archivePath)
+                ? [path.dirname(record.archivePath)]
+                : [];
+            }),
+          ),
+        ];
+      },
+      { env, path: resolveOpenClawStateSqlitePath(env) },
+    ) ?? []
+  );
 }

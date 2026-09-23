@@ -1,11 +1,17 @@
-// Memory Core plugin module implements manager reindex state behavior.
 import {
   hashText,
   MEMORY_CHUNKING_VERSION,
   normalizeExtraMemoryPathEntries,
   type MemoryExtraPath,
+  type MemoryIndexIdentityState as HostMemoryIndexIdentityState,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+
+export type MemoryIndexIdentityState =
+  | Exclude<HostMemoryIndexIdentityState, { status: "mismatched"; owner: "openclaw" }>
+  | (Extract<HostMemoryIndexIdentityState, { status: "mismatched"; owner: "openclaw" }> & {
+      versionOrder: "older" | "newer";
+    });
 
 export type MemoryIndexMeta = {
   model: string;
@@ -22,19 +28,6 @@ export type MemoryIndexMeta = {
 };
 
 export const MEMORY_INDEX_PROVENANCE_VERSION = 1;
-
-export type MemoryIndexIdentityState =
-  | {
-      status: "valid";
-    }
-  | {
-      status: "missing";
-      reason: string;
-    }
-  | {
-      status: "mismatched";
-      reason: string;
-    };
 
 export type MemoryIndexProviderIdentity = {
   provider: string;
@@ -106,6 +99,29 @@ function configuredMetaSourcesDiffer(params: {
   return metaSources.some((source, index) => source !== params.configuredSources[index]);
 }
 
+function openClawIndexMismatch(
+  code: "provenance_version" | "chunking_version",
+  reason: string,
+  versionOrder: "older" | "newer",
+): MemoryIndexIdentityState {
+  return { status: "mismatched", reason, code, owner: "openclaw", versionOrder };
+}
+
+function configuredIndexMismatch(
+  code:
+    | "model"
+    | "provider"
+    | "provider_settings"
+    | "sources"
+    | "scope"
+    | "chunking"
+    | "vector_dims"
+    | "fts_tokenizer",
+  reason: string,
+): MemoryIndexIdentityState {
+  return { status: "mismatched", reason, code, owner: "configuration" };
+}
+
 export function resolveConfiguredScopeHash(params: {
   workspaceDir: string;
   extraPaths?: MemoryExtraPath[];
@@ -133,7 +149,7 @@ export function resolveConfiguredScopeHash(params: {
   );
 }
 
-export function resolveMemoryIndexIdentityState(params: {
+type MemoryIndexIdentityParams = {
   meta: MemoryIndexMeta | null;
   provider: { id: string; model?: string } | null;
   providerKey?: string;
@@ -146,23 +162,12 @@ export function resolveMemoryIndexIdentityState(params: {
   vectorReady: boolean;
   hasIndexedChunks?: boolean;
   ftsTokenizer: string;
-}): MemoryIndexIdentityState {
-  const { meta } = params;
-  if (!meta) {
-    return { status: "missing", reason: "index metadata is missing" };
-  }
-  if (meta.provenanceVersion !== MEMORY_INDEX_PROVENANCE_VERSION) {
-    return {
-      status: "mismatched",
-      reason: "index provenance classifier changed",
-    };
-  }
-  if (meta.chunkingVersion !== MEMORY_CHUNKING_VERSION) {
-    return {
-      status: "mismatched",
-      reason: "index chunking implementation changed",
-    };
-  }
+};
+
+function resolveConfigurationIndexIdentityState(
+  params: Omit<MemoryIndexIdentityParams, "meta">,
+  meta: MemoryIndexMeta,
+): MemoryIndexIdentityState {
   const expectedModel =
     params.provider && params.provider.model === undefined
       ? undefined
@@ -172,62 +177,103 @@ export function resolveMemoryIndexIdentityState(params: {
     ...(params.providerAliases ?? []),
   ].filter((identity) => identity.model === meta.model);
   if (expectedModel !== undefined && matchingModelIdentities.length === 0) {
-    return {
-      status: "mismatched",
-      reason: `index was built for model ${meta.model}, expected ${expectedModel}`,
-    };
+    return configuredIndexMismatch(
+      "model",
+      `index was built for model ${meta.model}, expected ${expectedModel}`,
+    );
   }
   const expectedProvider = params.provider ? params.provider.id : "none";
   if (meta.provider !== expectedProvider) {
-    return {
-      status: "mismatched",
-      reason: `index was built for provider ${meta.provider}, expected ${expectedProvider}`,
-    };
+    return configuredIndexMismatch(
+      "provider",
+      `index was built for provider ${meta.provider}, expected ${expectedProvider}`,
+    );
   }
   if (
     expectedModel !== undefined &&
     params.providerKeyKnown !== false &&
     !matchingModelIdentities.some((identity) => identity.providerKey === meta.providerKey)
   ) {
-    return {
-      status: "mismatched",
-      reason: "index provider settings changed",
-    };
+    return configuredIndexMismatch("provider_settings", "index provider settings changed");
   }
-  if (
-    configuredMetaSourcesDiffer({
-      meta,
-      configuredSources: params.configuredSources,
-    })
-  ) {
-    return {
-      status: "mismatched",
-      reason: "index sources changed",
-    };
-  }
-  if (meta.scopeHash !== params.configuredScopeHash) {
-    return {
-      status: "mismatched",
-      reason: "index scope changed",
-    };
-  }
-  if (meta.chunkTokens !== params.chunkTokens || meta.chunkOverlap !== params.chunkOverlap) {
-    return {
-      status: "mismatched",
-      reason: "index chunking changed",
-    };
+  const contentIdentity = resolveContentScopeIdentityState(params, meta);
+  if (contentIdentity.status !== "valid") {
+    return contentIdentity;
   }
   if (params.vectorReady && params.hasIndexedChunks !== false && !meta.vectorDims) {
-    return {
-      status: "mismatched",
-      reason: "index vector dimensions are missing",
-    };
-  }
-  if ((meta.ftsTokenizer ?? "unicode61") !== params.ftsTokenizer) {
-    return {
-      status: "mismatched",
-      reason: "index FTS tokenizer changed",
-    };
+    return configuredIndexMismatch("vector_dims", "index vector dimensions are missing");
   }
   return { status: "valid" };
+}
+
+// The constraints that decide whether stored keyword rows still describe the
+// configured corpus. Embedding identity is deliberately absent: keyword reads
+// never consume embeddings, so a changed model or an unavailable provider must
+// not lock the last published keyword index away.
+function resolveContentScopeIdentityState(
+  params: Omit<MemoryIndexIdentityParams, "meta">,
+  meta: MemoryIndexMeta,
+): MemoryIndexIdentityState {
+  if (configuredMetaSourcesDiffer({ meta, configuredSources: params.configuredSources })) {
+    return configuredIndexMismatch("sources", "index sources changed");
+  }
+  if (meta.scopeHash !== params.configuredScopeHash) {
+    return configuredIndexMismatch("scope", "index scope changed");
+  }
+  if (meta.chunkTokens !== params.chunkTokens || meta.chunkOverlap !== params.chunkOverlap) {
+    return configuredIndexMismatch("chunking", "index chunking changed");
+  }
+  if ((meta.ftsTokenizer ?? "unicode61") !== params.ftsTokenizer) {
+    return configuredIndexMismatch("fts_tokenizer", "index FTS tokenizer changed");
+  }
+  return { status: "valid" };
+}
+
+export function resolveMemoryIndexIdentityState(
+  params: MemoryIndexIdentityParams,
+): MemoryIndexIdentityState {
+  const { meta } = params;
+  if (!meta) {
+    return {
+      status: "missing",
+      reason: "index metadata is missing",
+      code: "metadata_missing",
+      owner: "openclaw",
+    };
+  }
+  // A newer dimension wins over an older one: a rollback cannot rewrite that index.
+  if (
+    (meta.provenanceVersion ?? 0) > MEMORY_INDEX_PROVENANCE_VERSION ||
+    (meta.chunkingVersion ?? 0) > MEMORY_CHUNKING_VERSION
+  ) {
+    return openClawIndexMismatch(
+      (meta.provenanceVersion ?? 0) > MEMORY_INDEX_PROVENANCE_VERSION
+        ? "provenance_version"
+        : "chunking_version",
+      "the index was written by a newer OpenClaw version; upgrade OpenClaw or reindex explicitly",
+      "newer",
+    );
+  }
+  if ((meta.provenanceVersion ?? 0) < MEMORY_INDEX_PROVENANCE_VERSION) {
+    return openClawIndexMismatch(
+      "provenance_version",
+      "index provenance classifier changed",
+      "older",
+    );
+  }
+  if ((meta.chunkingVersion ?? 0) < MEMORY_CHUNKING_VERSION) {
+    // Only an older chunker may use the last published lexical corpus. Embedding
+    // identities do not authorize lexical reads; source/scope identity does.
+    return {
+      ...openClawIndexMismatch(
+        "chunking_version",
+        "index chunking implementation changed",
+        "older",
+      ),
+      ...(resolveContentScopeIdentityState(params, meta).status === "valid"
+        ? { chunkingVersionOnly: true }
+        : {}),
+    };
+  }
+  return resolveConfigurationIndexIdentityState(params, meta);
 }

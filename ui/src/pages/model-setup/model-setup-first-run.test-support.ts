@@ -27,7 +27,8 @@ function mutableGatewaySnapshot(snapshot: ApplicationGateway["snapshot"]) {
 }
 
 export function createFirstRunContext(refreshError?: string, beforeRefresh?: () => Promise<void>) {
-  const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>();
+  const request =
+    vi.fn<(...args: Parameters<GatewayBrowserClient["request"]>) => Promise<unknown>>();
   const client = createTestGatewayClient(request);
   const listeners = new Set<(snapshot: ApplicationGateway["snapshot"]) => void>();
   const snapshot = {
@@ -37,7 +38,11 @@ export function createFirstRunContext(refreshError?: string, beforeRefresh?: () 
     hello: {
       type: "hello-ok",
       protocol: 1,
-      auth: { role: "operator", scopes: ["operator.read", "operator.admin"] },
+      auth: {
+        role: "operator",
+        scopes: ["operator.read", "operator.admin"],
+        recoveryScope: "synthetic-setup-owner",
+      },
       features: {
         methods: [
           "config.set",
@@ -64,6 +69,7 @@ export function createFirstRunContext(refreshError?: string, beforeRefresh?: () 
     },
     connectionRevision: 0,
     eventLog: [],
+    eventLogRevision: 0,
     connect: () => undefined,
     setSessionKey: () => undefined,
     start: () => undefined,
@@ -100,6 +106,10 @@ export function createFirstRunContext(refreshError?: string, beforeRefresh?: () 
   const context = {
     gateway,
     agentSelection: {
+      state: { selectedId: "main", scopeId: "main" },
+      subscribe: () => () => undefined,
+    },
+    settingsAgentSelection: {
       state: { selectedId: "main", scopeId: "main" },
       subscribe: () => () => undefined,
     },
@@ -164,4 +174,34 @@ export function requestParameters(params: unknown) {
     throw new Error("Expected Gateway request parameters.");
   }
   return params;
+}
+
+export async function clickCandidate(page: ModelSetupPage, kind: string) {
+  await waitForFast(() => {
+    const candidateButton = page.querySelector<HTMLButtonElement>(
+      `[data-candidate-kind="${kind}"] button`,
+    );
+    expect(candidateButton).not.toBeNull();
+    expect(candidateButton!.disabled).toBe(false);
+  });
+  const button = page.querySelector<HTMLButtonElement>(`[data-candidate-kind="${kind}"] button`);
+  expect(button).not.toBeNull();
+  expect(button!.disabled).toBe(false);
+  button!.click();
+  await page.updateComplete;
+}
+
+export async function selectManualProvider(page: ModelSetupPage, providerId: string) {
+  const picker = page.querySelector(".model-setup-provider-select")!;
+  const item = picker.querySelector(`[data-manual-provider="${providerId}"]`);
+  expect(item).not.toBeNull();
+  picker.dispatchEvent(new CustomEvent("wa-select", { detail: { item }, bubbles: true }));
+  await page.updateComplete;
+}
+
+export async function waitForModelSetupDetection(page: ModelSetupPage): Promise<void> {
+  await page.updateComplete;
+  await waitForFast(() =>
+    expect(page.querySelector(".model-setup")?.getAttribute("aria-busy")).toBe("false"),
+  );
 }

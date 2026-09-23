@@ -4,9 +4,12 @@
  * output, cache, reasoning, and total token accounting fields.
  */
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Usage } from "../llm/types.js";
 
 export type ContextUsage = NonNullable<Usage["contextUsage"]>;
+
+export const USAGE_COST_COMPONENTS = ["input", "output", "cacheRead", "cacheWrite"] as const;
 
 type PromptTokenDetails = {
   cached_tokens?: number;
@@ -73,7 +76,8 @@ export type NormalizedUsage = {
   contextUsage?: ContextUsage;
   reasoningTokens?: number;
   total?: number;
-  cost?: Pick<Usage["cost"], "total" | "totalOrigin">;
+  cost?: Pick<Usage["cost"], "total" | "totalOrigin"> &
+    Partial<Pick<Usage["cost"], "input" | "output" | "cacheRead" | "cacheWrite">>;
 };
 
 /** OpenAI chat-completions compatible usage shape. */
@@ -143,13 +147,25 @@ export function hasBillableUsage(usage?: NormalizedUsage | null): usage is Norma
   return usage?.cost !== undefined || hasNonzeroUsage(usage);
 }
 
-/** Empty transport snapshots synthesize $0; only a billed zero is an observed model cost. */
-export function hasObservedModelUsage(usage?: NormalizedUsage | null): usage is NormalizedUsage {
+/** Adapter-default zeros are not price evidence; billed totals and cost components are. */
+export function hasRecordedUsageCost(value: unknown): boolean {
+  const cost = asOptionalRecord(value);
+  const total = asFiniteNumber(cost?.total);
   return (
-    (usage?.cost !== undefined &&
-      (usage.cost.total > 0 || usage.cost.totalOrigin === "provider-billed")) ||
-    hasNonzeroUsage(usage)
+    total !== undefined &&
+    total >= 0 &&
+    (total > 0 ||
+      cost?.totalOrigin === "provider-billed" ||
+      (asFiniteNumber(cost?.input) ?? 0) !== 0 ||
+      (asFiniteNumber(cost?.output) ?? 0) !== 0 ||
+      (asFiniteNumber(cost?.cacheRead) ?? 0) !== 0 ||
+      (asFiniteNumber(cost?.cacheWrite) ?? 0) !== 0)
   );
+}
+
+/** Empty transport snapshots synthesize $0; recorded cost evidence can establish an observation. */
+export function hasObservedModelUsage(usage?: NormalizedUsage | null): usage is NormalizedUsage {
+  return hasRecordedUsageCost(usage?.cost) || hasNonzeroUsage(usage);
 }
 
 const normalizeTokenCount = (value: unknown): number | undefined => {
@@ -273,6 +289,15 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
             : {}),
         }
       : undefined;
+  if (cost?.total === 0) {
+    // Retain the component evidence that distinguishes a recorded zero from an adapter default.
+    for (const key of USAGE_COST_COMPONENTS) {
+      const component = asFiniteNumber(raw.cost?.[key]);
+      if (component !== undefined && component !== 0) {
+        cost[key] = component;
+      }
+    }
+  }
 
   if (
     input === undefined &&
@@ -297,6 +322,23 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     ...(contextUsage ? { contextUsage } : {}),
     ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
     total,
+  };
+}
+
+/** Aggregate token counters for model.usage diagnostics, separate from context snapshots. */
+export function toDiagnosticUsage(usage: NormalizedUsage) {
+  const input = usage.input ?? 0;
+  const output = usage.output ?? 0;
+  const cacheRead = usage.cacheRead ?? 0;
+  const cacheWrite = usage.cacheWrite ?? 0;
+  const promptTokens = input + cacheRead + cacheWrite;
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    promptTokens,
+    total: usage.total ?? promptTokens + output,
   };
 }
 

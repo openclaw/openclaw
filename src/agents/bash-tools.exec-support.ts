@@ -1,10 +1,15 @@
 import type { ExecHost } from "../infra/exec-approvals.js";
 import { requireValidExecTarget } from "../infra/exec-approvals.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { invalidateTaskActivity } from "../tasks/task-registry-activity.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import { EXEC_RETENTION_CAP_NOTE, renderExecOutputText } from "./bash-tools.exec-output.js";
 import type { ExecToolArgs } from "./bash-tools.exec-request-preparation.js";
 import { type ExecProcessOutcome, resolveExecTarget } from "./bash-tools.exec-runtime.js";
+import {
+  type BackgroundExecTaskHandle,
+  finalizeBackgroundExecTask,
+} from "./bash-tools.exec-task-tracking.js";
 import type {
   ExecToolApprovalReview,
   ExecToolDefaults,
@@ -12,6 +17,28 @@ import type {
 } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { failedTextResult, textResult } from "./tools/common.js";
+
+export function createExecProcessSettlement() {
+  const settlement: {
+    outcome: ExecProcessOutcome | null;
+    backgroundTask: BackgroundExecTaskHandle | null;
+    settle: (outcome: ExecProcessOutcome) => void;
+    activity: (at: number) => void;
+  } = {
+    outcome: null,
+    backgroundTask: null,
+    activity(at) {
+      if (settlement.backgroundTask && !settlement.outcome) {
+        invalidateTaskActivity(settlement.backgroundTask.taskId, at);
+      }
+    },
+    settle(outcome: ExecProcessOutcome) {
+      settlement.outcome = outcome;
+      finalizeBackgroundExecTask({ handle: settlement.backgroundTask, outcome });
+    },
+  };
+  return settlement;
+}
 
 export function attachExecApprovalReview(
   result: AgentToolResult<ExecToolDetails>,
@@ -82,28 +109,27 @@ export function resolveExecReviewerDefaults(params: {
   return agentExec?.reviewer ?? cfg?.tools?.exec?.reviewer;
 }
 
+// Preparation and execution must interpret elevation identically before host policy runs.
+export function resolveExecElevatedMode(
+  defaults: ExecToolDefaults | undefined,
+  requested: unknown,
+) {
+  const elevated = defaults?.elevated;
+  const defaultMode =
+    elevated?.defaultLevel === "full"
+      ? "full"
+      : elevated?.defaultLevel === "ask" || elevated?.defaultLevel === "on"
+        ? "ask"
+        : "off";
+  if (typeof requested === "boolean") {
+    return requested ? (defaultMode === "full" ? "full" : "ask") : "off";
+  }
+  return elevated?.enabled && elevated.allowed && !defaults?.sandboxRequired ? defaultMode : "off";
+}
+
 export function createExecHostResolver(defaults?: ExecToolDefaults) {
   return (params: ExecToolArgs): ExecHost => {
-    const elevatedDefaults = defaults?.elevated;
-    const elevatedAllowed = Boolean(elevatedDefaults?.enabled && elevatedDefaults.allowed);
-    const elevatedDefaultMode =
-      elevatedDefaults?.defaultLevel === "full"
-        ? "full"
-        : elevatedDefaults?.defaultLevel === "ask"
-          ? "ask"
-          : elevatedDefaults?.defaultLevel === "on"
-            ? "ask"
-            : "off";
-    const effectiveDefaultMode =
-      elevatedAllowed && !defaults?.sandboxRequired ? elevatedDefaultMode : "off";
-    const elevatedMode =
-      typeof params.elevated === "boolean"
-        ? params.elevated
-          ? elevatedDefaultMode === "full"
-            ? "full"
-            : "ask"
-          : "off"
-        : effectiveDefaultMode;
+    const elevatedMode = resolveExecElevatedMode(defaults, params.elevated);
     const requestedTarget = requireValidExecTarget(params.host);
     return resolveExecTarget({
       configuredTarget: defaults?.host,

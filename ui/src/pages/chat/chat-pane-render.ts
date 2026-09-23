@@ -1,22 +1,17 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
-import { findInlineApproval } from "../../app/approval-presentation.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
-import { cancelQuestionPrompt, submitQuestionPrompt } from "../../app/question-prompt.ts";
 import { patchSettings } from "../../app/settings.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
-import { navigateMarkdownSession } from "../../components/markdown-session-links.ts";
+import {
+  markdownSessionPublicOrigin,
+  navigateMarkdownSession,
+} from "../../components/markdown-session-links.ts";
 import { personActivityRouting } from "../../components/person-activity-link.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
-import {
-  resolveControlUiFollowUpMode,
-  resolveControlUiServerQueueMode,
-} from "../../lib/chat/follow-up-mode.ts";
-import {
-  chatModelUnavailableMessage,
-  resolveChatModelUnavailableReason,
-} from "../../lib/chat/model-select-state.ts";
+import { isModelIndependentChatCommand } from "../../lib/chat/commands.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   pickFreshestObserverDigest,
@@ -24,21 +19,22 @@ import {
   resolveChatPaneObserverRunId,
 } from "../../lib/observer-digest.ts";
 import { hasSessionPresenceViewers } from "../../lib/presence-users.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { projectsForGateway } from "../../lib/projects.ts";
+import { GitHubPublicationController } from "../../lib/sessions/github-publication-controller.ts";
 import {
   buildAgentMainSessionKey,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
-import { resolveComposerAvailability } from "./chat-composer-availability.ts";
-import { mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
+import { chatGoalRecovery, mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
 import { clearChatHistory } from "./chat-history-actions.ts";
-import { getChatHistoryVersion } from "./chat-history-state.ts";
+import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
-import { requiresChatModelSetup } from "./chat-model-setup.ts";
+import { chatModelUnavailableBanner, requiresChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneLayoutRender } from "./chat-pane-layout-render.ts";
 import { createChatPaneRails } from "./chat-pane-rails.ts";
 import {
+  createChatPaneQueuedEditProps,
   createChatPaneSessionActionCallbacks,
   readChatPaneMutationAccess,
   renderChatPaneComposerControls,
@@ -46,13 +42,17 @@ import {
 import { resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
 import {
   dismissChatError,
+  initialHistorySubmitState,
   resolveAssistantAttachmentAuthToken,
   resolveChatArtifactDownload,
+  resolveChatPaneFollowUpMode,
 } from "./chat-pane-state.ts";
+import { ChatProviderReviewController } from "./chat-provider-review-controller.ts";
+import { createChatQuestionActions } from "./chat-question-actions.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
 import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
 import { chatSendHoldReason } from "./chat-send-support.ts";
-import { refreshChatCommands, refreshPageChat } from "./chat-state-refresh.ts";
+import { refreshChatCommands } from "./chat-state-refresh.ts";
 import {
   resolveChatAgentId,
   resolveChatAvatarUrl,
@@ -60,28 +60,34 @@ import {
 } from "./chat-state-route.ts";
 import type { ChatProps } from "./chat-view.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import { chatPullRequestId, createPullRequestBranch } from "./components/chat-pull-requests.ts";
 import {
   openSessionWorkspaceFile,
   revealSessionWorkspaceFile,
 } from "./components/chat-session-workspace.ts";
-import { createLinkFaviconFetcher } from "./link-favicon-loader.ts";
-import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
-import { hasAbortableSessionRun } from "./run-lifecycle.ts";
-import { scheduleChatScroll } from "./scroll.ts";
-import { maybeResetToolStream } from "./stream-reconciliation.ts";
+import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
+import { hasAbortableSessionRun, hasDirectSessionRun } from "./run-lifecycle.ts";
+import { lockChatScroll, scheduleChatScroll } from "./scroll.ts";
 import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
-import { configureToolTitleFetcher } from "./tool-titles.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
 export class ChatPane extends ChatPaneLayoutRender {
+  private readonly providerReview = new ChatProviderReviewController(
+    this,
+    () => this.state ?? undefined,
+  );
+  private presentationUserId: string | null = null;
+  // Stable absent inputs let catalog renders reuse the transcript cache.
+  private readonly emptyTranscriptItems: [] = [];
+
   override render() {
     const state = this.state;
     if (!state) {
       return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
     }
-    void this.ensureTaskSuggestionCloudProfiles();
     const selectedSession = selectedChatSessionRow(state);
+    const providerPaused = Boolean(selectedSession?.providerReview);
+    const readTarget = this.resolveChatReadTarget();
+    const progressPresentation = this.progressCardPresentation;
     const selectedSessionArchived = this.isCurrentSessionArchived(state);
     const mutationAccess = readChatPaneMutationAccess(
       this.context.gateway.snapshot,
@@ -113,43 +119,23 @@ export class ChatPane extends ChatPaneLayoutRender {
       layout: state.sidebarLayout,
       paneWidth: this.paneWidth,
     });
-    state.chatFollowUpMode = resolveControlUiFollowUpMode(
-      state.settings.chatFollowUpMode,
-      resolveControlUiServerQueueMode(
-        this.context.runtimeConfig.state.configSnapshot?.runtimeConfig,
-        {
-          configNeedsApply: this.context.runtimeConfig.state.configNeedsApply,
-          effectiveMode: state.chatEffectiveQueueMode,
-          sessionMetadataLoaded:
-            selectedSession !== undefined || state.chatEffectiveQueueMode !== undefined,
-          sessionMode: state.chatQueueModeOverride,
-        },
-      ),
+    state.chatFollowUpMode = resolveChatPaneFollowUpMode(
+      state,
+      selectedSession,
+      this.context.runtimeConfig.state,
     );
     const currentAgentId = resolveChatAgentId(state);
     const { catalogKey, chatProps } = resolveChatMessageAccess(state);
     const overlays = this.context?.overlays;
-    const inlineApproval =
-      findInlineApproval(state.chatSessionApprovalQueue ?? [], state.sessionKey) ??
-      findInlineApproval(overlays?.snapshot?.approvalQueue ?? [], state.sessionKey);
-    // Tool rows consult the global title store while rendering. Requests capture
-    // session + agent at schedule time, so another pane cannot re-route them.
-    configureToolTitleFetcher({
-      client: state.connected ? state.client : null,
-      sessionKey: catalogKey ? null : state.sessionKey || null,
-      agentId: currentAgentId || null,
-      schedulingEnabled: this.active && this.presented,
-      historyOwner: state,
-      historyVersion: getChatHistoryVersion(state),
-    });
     const selectedAgent = this.context.agents.state.agentsList?.agents.find(
       (agent) => agent.id === currentAgentId,
     );
     const agentDefaultModel = selectedAgent?.model?.primary;
-    const modelUnavailableReason = resolveChatModelUnavailableReason(
+    const modelUnavailableBanner = chatModelUnavailableBanner(
       selectedSession?.model ?? agentDefaultModel,
       selectedSession?.modelProvider,
       state.chatModelCatalog,
+      () => this.context.navigate("model-setup"),
     );
     const modelSetupRequired = requiresChatModelSetup({
       catalog: catalogKey !== null,
@@ -160,8 +146,7 @@ export class ChatPane extends ChatPaneLayoutRender {
     });
     const placementStartup = this.context.placementStartup.get(state.sessionKey);
     const sendHoldReason = chatSendHoldReason(state, state.sessionKey, placementStartup !== null);
-    const placementStartupPending =
-      placementStartup !== null && placementStartup.phase !== "failed";
+    const runActive = hasDirectSessionRun(state);
     const sessionParticipationBlocked = this.sessionParticipationTracker.resolve({
       catalog: catalogKey !== null,
       listLoading: state.sessionsLoading,
@@ -176,14 +161,13 @@ export class ChatPane extends ChatPaneLayoutRender {
     const canDismissProgressCard =
       state.connected &&
       !sessionParticipationBlocked &&
-      hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null) &&
-      isGatewayMethodAdvertised(gatewaySnapshot, "progressCard.put") === true;
+      hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null);
+    this.providerReview.sync(canDismissProgressCard && !selectedSessionArchived);
     const onDismissProgressCard = canDismissProgressCard
-      ? (card: ProgressCard) => {
+      ? (card: ProgressCard) =>
           void this.progressCard
             .dismiss(card)
-            .catch(() => showToast({ message: t("sessionProgressCard.dismissFailed") }));
-        }
+            .catch(() => showToast({ message: t("sessionProgressCard.dismissFailed") }))
       : undefined;
     const restartRecoveryTombstoned = selectedSession?.restartRecoveryStatus === "tombstoned";
     const multiIdentity = this.hasMultipleIdentities();
@@ -195,14 +179,17 @@ export class ChatPane extends ChatPaneLayoutRender {
       selectedSession.sharingRole === "viewer" &&
       isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.add") === true &&
       isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.list") === true;
-    // Placement progress already explains its gate in the transcript. Other
-    // gates need a reason here or a sessionDisabledBanner.
-    const modelUnavailableMessage = chatModelUnavailableMessage(modelUnavailableReason);
+    // Placement progress explains this gate; other gates need a reason or sessionDisabledBanner.
     const disabledReason =
-      modelUnavailableMessage ??
-      (sessionParticipationBlocked && !suggestionViewer
+      sessionParticipationBlocked && !suggestionViewer
         ? t("chat.sessionSharing.readOnlyNotice")
-        : null);
+        : null;
+    const modelRequiredReason =
+      catalogKey || suggestionViewer
+        ? undefined
+        : modelSetupRequired
+          ? t("modelSetup.required.body")
+          : modelUnavailableBanner?.text;
     const typingEnabled =
       multiIdentity &&
       hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null) &&
@@ -214,8 +201,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         gatewaySnapshot.client?.instanceId,
         state.sessionKey,
       );
-    // Do not flash view-only while metadata loads; failed lookups still explain
-    // why the composer is disabled.
+    // Avoid flashing view-only while metadata loads; failed lookups still explain the gate.
     const catalogDisabledReason =
       catalogKey && !this.catalogLoading && this.catalogSession?.canContinue !== true
         ? this.catalogHost?.kind === "node"
@@ -237,23 +223,18 @@ export class ChatPane extends ChatPaneLayoutRender {
       presenceEntries: readPresenceEntries(this.presencePayload),
       presenceInstanceId: gatewaySnapshot.client?.instanceId,
     });
+    if (selfUser?.identity?.type === "profile") {
+      this.presentationUserId = selfUser.identity.id;
+    }
     const projectionRunId = resolveChatProjectionRunId({
       localRunId: state.chatRunId,
       activeRunIds: selectedSession?.activeRunIds,
       queue: state.chatQueue,
     });
-    const attachmentReads = this.chatState.attachmentReads;
-    const attachmentReadSignal = attachmentReads.readSignal;
     const historyHasMore = catalogKey
       ? Boolean(this.catalogCursor)
       : state.chatHistoryPagination.hasMore;
-    const fetchLinkFavicon = state.automaticallyFetchFavicons
-      ? createLinkFaviconFetcher({
-          auth: { hello: state.hello, settings: state.settings, password: state.password },
-          resourceBasePath: state.resourceBasePath,
-          gatewayUrl: state.client?.gatewayUrl ?? state.settings.gatewayUrl,
-        })
-      : undefined;
+    const fetchLinkFavicon = resolveChatLinkFaviconFetcher(state);
     const sessionActionCallbacks = createChatPaneSessionActionCallbacks({
       getSnapshot: () => this.context.gateway.snapshot,
       hasLocalRun: () => Boolean(state.chatRunId),
@@ -278,133 +259,193 @@ export class ChatPane extends ChatPaneLayoutRender {
           agentDefaultPermissionMode: selectedAgent?.defaultPermissionMode,
           modelAccess: mutationAccess.model,
           effortAccess: mutationAccess.effort,
+          contextWindowAccess: mutationAccess.contextWindow,
           permissionAccess: mutationAccess.permission,
           canSelectFull: hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null),
           onModelSetup: () => this.context.navigate("model-setup"),
+          onModelAccounts: () => this.context.navigate("profile"),
         });
     const composerState = getChatComposerState(this.presentationId);
+    const projectCatalog = projectsForGateway(this.context.gateway).snapshot;
     const publicationScope = this.captureConnectionScope();
-    const publicationOwnerKey = () =>
-      JSON.stringify([
-        resolveCurrentSelfUser({
-          snapshotUser: this.context.gateway.snapshot.selfUser,
-          presenceEntries: readPresenceEntries(this.presencePayload),
-          presenceInstanceId: this.context.gateway.snapshot.client?.instanceId,
-        })?.identity ?? null,
-        this.context.gateway.snapshot.hello?.auth?.role,
-        this.context.gateway.snapshot.hello?.auth?.scopes,
-        selectedChatSessionRow(state)?.sessionId,
-        selectedChatSessionRow(state)?.sharingRole,
-        selectedChatSessionRow(state)?.visibility,
-        this.isCurrentSessionArchived(state),
-        sessionParticipationBlocked,
-      ]);
-    const publicationOwner = publicationOwnerKey();
-    const publicationAvailable = Boolean(
-      publicationScope &&
-      selectedSession?.key &&
-      isGatewayMethodAdvertised(gatewaySnapshot, "sessions.github.publish") === true,
-    );
-    this.githubPublication.sync(
-      publicationAvailable && publicationScope && selectedSession
-        ? {
-            client: publicationScope.client,
-            key: `${publicationScope.generation}:${selectedSession.key}:${publicationOwner}`,
-            sessionKey: selectedSession.key,
-            canWrite:
-              !selectedSessionArchived &&
-              !sessionParticipationBlocked &&
-              hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null),
-            personalReady:
-              !hasAbortableSessionRun(state) &&
-              !isCloudWorkerPlacementState(placement?.state) &&
-              !workspaceConflict,
-            isCurrent: () =>
-              this.presented &&
-              this.isConnectionScopeCurrent(publicationScope) &&
-              selectedChatSessionRow(state)?.key === selectedSession.key &&
-              publicationOwnerKey() === publicationOwner,
-          }
-        : null,
-    );
+    const readPublicationRow = () => {
+      const row = selectedChatSessionRow(state);
+      return (
+        row && {
+          ...row,
+          agentId: row.agentId ?? resolveChatAgentId(state) ?? undefined,
+          archived: this.isCurrentSessionArchived(state),
+        }
+      );
+    };
+    const publicationRow = readPublicationRow();
+    if (
+      !publicationScope ||
+      !publicationRow ||
+      !isGatewayMethodAdvertised(gatewaySnapshot, "sessions.github.publish")
+    ) {
+      this.githubPublication?.detach();
+      this.githubPublication = null;
+    } else {
+      if (!this.githubPublication?.matches(publicationRow)) {
+        this.githubPublication?.detach();
+        this.githubPublication = this.context.sessions.githubPublication.attach(
+          publicationRow,
+          () => this.requestUpdate(),
+          GitHubPublicationController,
+        );
+      }
+      const publication = this.githubPublication;
+      publication?.sync({
+        canWrite:
+          !selectedSessionArchived &&
+          !sessionParticipationBlocked &&
+          hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null),
+        personalReady:
+          !hasAbortableSessionRun(state) &&
+          (!isCloudWorkerPlacementState(placement?.state) ||
+            (Boolean(publicationRow.repositoryWorkspaceId) && placement?.state === "active")) &&
+          !workspaceConflict,
+        isPresented: () => this.presented,
+        isCurrent: () => {
+          const row = readPublicationRow();
+          return (
+            this.isConnectionScopeCurrent(publicationScope) &&
+            row !== undefined &&
+            publication?.matches(row)
+          );
+        },
+      });
+    }
     const sessionDisabledBanner = this.sessionDisabledBanner({
       catalogDisabledReason,
       modelSetupRequired,
       restartRecoveryTombstoned,
       selectedSessionArchived,
       selectedSessionId: selectedSession?.sessionId?.trim() || undefined,
+      selectedSession,
       sessionKey: state.sessionKey,
       unarchiveAccess: mutationAccess.unarchive,
     });
-    const composerAvailability = resolveComposerAvailability({
-      catalog: Boolean(catalogKey),
-      catalogCanSend: this.catalogSession?.canContinue === true,
-      catalogDisabledReason,
-      modelSetupRequired,
-      baseDisabledReason: disabledReason,
-      baseDisabledReasonTone: sessionParticipationBlocked && !suggestionViewer ? "info" : "danger",
-      selectedSessionArchived,
-      restartRecoveryTombstoned,
-      placement: placementComposer,
-      sendHoldReason,
-      placementStartupPending: placementStartup !== null,
-      sessionDisabledBanner,
-    });
+    const initialHistoryUnavailable = !catalogKey && isInitialChatHistoryUnavailable(state);
+    const composerAvailability = {
+      canSend:
+        !providerPaused &&
+        sessionDisabledBanner?.kind !== "composer-replacement" &&
+        (catalogKey
+          ? this.catalogSession?.canContinue === true
+          : !disabledReason &&
+            !selectedSessionArchived &&
+            !restartRecoveryTombstoned &&
+            !placementComposer.blocksSend &&
+            (!sendHoldReason || initialHistoryUnavailable)),
+      ...initialHistorySubmitState(state, initialHistoryUnavailable),
+      modelRequiredReason,
+      disabledReason:
+        catalogDisabledReason ??
+        disabledReason ??
+        placementComposer.busyMessage ??
+        (placementComposer.state.kind === "failed" && !placementComposer.state.recoveryAction
+          ? placementComposer.failedUnavailableMessage
+          : null) ??
+        (state.connected && (placementStartup || initialHistoryUnavailable)
+          ? null
+          : sendHoldReason),
+      disabledReasonTone:
+        placementComposer.busyMessage || (sessionParticipationBlocked && !suggestionViewer)
+          ? ("info" as const)
+          : ("danger" as const),
+      disabledReasonBusy: placementComposer.busyMessage !== null,
+      disabledBanner:
+        sessionDisabledBanner ?? placementComposer.disabledBanner ?? modelUnavailableBanner,
+    };
+    const progressCardRefresh =
+      canDismissProgressCard &&
+      composerAvailability.canSend &&
+      !catalogKey &&
+      !suggestionViewer &&
+      progressPresentation
+        ? this.captureProgressCardRefreshAction()
+        : undefined;
+    const selfProfileId = selfUser?.identity?.type === "profile" ? selfUser.identity.id : null;
+    const mentionsUnsupported = Boolean(
+      catalogKey || suggestionViewer || selectedSession?.incognito || !selfProfileId,
+    );
+    const { gatewayQuestionPrompts, inlineApproval } = this.projectConversationAttention(
+      state,
+      currentAgentId,
+      !catalogKey && !sessionParticipationBlocked,
+    );
     const props: ChatProps = {
       transcript: this.transcript,
       paneId: this.presentationId,
       sessionKey: state.sessionKey,
       announceTranscript: this.active && this.presented,
-      onSessionKeyChange: (next) => {
-        this.onPaneSessionChange?.(this.paneId, next);
-      },
+      onSessionKeyChange: (next) => void this.onPaneSessionChange?.(this.paneId, next),
       thinkingLevel: state.chatThinkingLevel,
       autoExpandToolCalls: state.chatVerboseLevel === "full",
       showThinking: state.settings.chatShowThinking,
       showToolCalls: state.settings.chatShowToolCalls,
       persistCommentary: state.settings.chatPersistCommentary !== false,
-      loading: catalogKey ? this.catalogLoading : state.chatLoading,
+      // Recovery can temporarily withhold the first turn after history loaded empty.
+      // Keep its pane loading until startup can display the retained message again.
+      loading: catalogKey
+        ? this.catalogLoading
+        : state.chatLoading || (!runActive && sendHoldReason !== null && placementStartup === null),
+      routeLoadingSkeleton: this.routeLoadingSkeleton && initialHistoryUnavailable,
       sending:
-        placementStartupPending ||
+        (placementStartup !== null && placementStartup.phase !== "failed") ||
         state.chatSending ||
         this.recoveringSession ||
         this.sessionSuggestionAddOperation !== undefined,
-      placementStartup,
+      placementStartup: placementStartup ?? placementComposer.startup,
       onRetrySessionPlacementStartup: placementStartup?.retryable
         ? () => this.context.placementStartup.retry(state.sessionKey)
         : undefined,
       canAbort: sessionParticipationBlocked ? false : hasAbortableSessionRun(state),
+      runActive,
       runStatus: state.chatRunStatus,
       startupStatus: activeChatRunStartupStatus(state.chatRunStartup),
       waitingApproval: state.waitingApprovalStatuses.size > 0,
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
-      progressCard: this.progressCard.card,
-      progressCardHasActiveRun: Boolean(
-        state.chatRunId || (selectedSession && isSessionRunActive(selectedSession)),
-      ),
+      providerPolicyNotice: catalogKey ? null : state.providerPolicyNotice,
+      providerReviewNotice: this.providerReview.notice(),
+      progressCard: progressPresentation?.card ?? null,
+      progressCardIdentity: progressPresentation?.identity,
+      progressCardLifetime: progressPresentation?.lifetime,
+      gatewayScope: gatewayPresentationScope(this.context.gateway),
+      progressCardInitialLoading: this.progressCardInitialLoading,
+      progressCardRefresh,
       collapseTaskProgress: state.settings.chatCollapseTaskProgress === true,
-      onDismissProgressCard,
-      gatewayQuestionPrompts: catalogKey || sessionParticipationBlocked ? [] : this.questionPrompts,
-      onGatewayQuestionChange: () => {
-        this.questionPrompts = [...this.questionPrompts];
-        this.requestUpdate();
+      readingHistory: state.chatReadingHistory,
+      onProgressManipulate: () => {
+        lockChatScroll(state);
+        this.transcript.cancelScroll();
       },
-      onGatewayQuestionSubmit: (id, answers) =>
-        submitQuestionPrompt(this.questionPromptState, id, answers),
-      onGatewayQuestionSkip: (id) => cancelQuestionPrompt(this.questionPromptState, id),
+      onDismissProgressCard,
+      gatewayQuestionPrompts,
+      asyncQuestionStorage:
+        !catalogKey && !suggestionViewer ? this.chatState.durableComposerScope : null,
+      ...createChatQuestionActions({
+        state,
+        questionState: this.questionPromptState,
+        canSend:
+          composerAvailability.canSend && !catalogKey && !suggestionViewer && state.connected,
+        isCurrent: () => this.state === state,
+      }),
       messages: catalogKey ? this.catalogMessages : state.chatMessages,
       historyPagination:
         historyHasMore || this.loadingOlder
           ? {
               hasMore: historyHasMore,
-              loading: this.loadingOlder,
-              onShowEarlier: () => void this.showEarlierMessages(),
+              loading: this.loadingOlder || (catalogKey ? this.catalogLoading : state.chatLoading),
+              onShowEarlier: () => void this.loadOlderMessages(),
             }
           : undefined,
-      toolMessages: catalogKey ? [] : state.chatToolMessages,
-      guardianNotices: catalogKey ? [] : state.guardianNotices,
-      streamSegments: catalogKey ? [] : state.chatStreamSegments,
+      toolMessages: catalogKey ? this.emptyTranscriptItems : state.chatToolMessages,
+      guardianNotices: catalogKey ? this.emptyTranscriptItems : state.guardianNotices,
+      streamSegments: catalogKey ? this.emptyTranscriptItems : state.chatStreamSegments,
       stream: catalogKey ? null : state.chatStream,
       streamStartedAt: catalogKey ? null : state.chatStreamStartedAt,
       runId: catalogKey ? null : projectionRunId,
@@ -413,6 +454,18 @@ export class ChatPane extends ChatPaneLayoutRender {
       sendShortcut: state.settings.chatSendShortcut,
       followUpMode: state.chatFollowUpMode,
       draft: state.chatMessage,
+      mentions: state.chatMentions,
+      getMentions: () => state.chatMentions ?? [],
+      mentionsUnsupported,
+      mentionDirectory:
+        state.connected && state.client && !mentionsUnsupported && !sessionParticipationBlocked
+          ? {
+              client: state.client,
+              // Separately hydrated session-list metadata must not cancel an active query.
+              ownerKey: JSON.stringify([state.connectionEpoch, selfProfileId]),
+              params: { sessionKey: state.sessionKey, agentId: currentAgentId },
+            }
+          : undefined,
       modelCatalog: state.chatModelCatalog,
       modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
       queue: state.chatQueue,
@@ -427,10 +480,12 @@ export class ChatPane extends ChatPaneLayoutRender {
       realtimeTalkVideoCapable: state.realtimeTalkVideoCapable,
       realtimeTalkVideoPending: state.realtimeTalkVideoPending,
       realtimeTalkCameraError: state.realtimeTalkCameraError,
+      realtimeTalkVoice: state.realtimeTalkVoice,
       connected: state.connected,
       offline: gatewaySnapshot.offlineStable,
       gatewayClient: state.client,
       composerHoldToRecord: state.settings.composerHoldToRecord,
+      realtimeTalkInputDeviceId: state.settings.realtimeTalkInputDeviceId,
       onComposerHoldToRecordChange: (enabled) => {
         state.settings = patchSettings({ composerHoldToRecord: enabled });
       },
@@ -445,10 +500,11 @@ export class ChatPane extends ChatPaneLayoutRender {
       modelSetupRequired:
         modelSetupRequired && !selectedSessionArchived && !restartRecoveryTombstoned,
       onModelSetup: () => this.context.navigate("model-setup"),
-      error: state.lastError,
+      error: providerPaused ? null : state.lastError,
       diskSpace: placementComposer.diskSpace,
-      runError: catalogKey ? null : (state.chatRunError ?? placementComposer.runError),
-      inlineApproval: sessionParticipationBlocked ? null : inlineApproval,
+      runError:
+        catalogKey || providerPaused ? null : (state.chatRunError ?? placementComposer.runError),
+      inlineApproval,
       approvalBusy: overlays?.snapshot?.approvalBusy,
       approvalCanGrant: overlays?.snapshot?.approvalCanGrant ?? false,
       approvalErrors: overlays?.snapshot?.approvalErrors,
@@ -483,7 +539,7 @@ export class ChatPane extends ChatPaneLayoutRender {
               (composerState.capabilityMenuView === "skills" ||
                 composerState.capabilityMenuView.startsWith("library:")),
           ),
-      swarmSessions: this.swarmHydrator?.rows ?? [],
+      swarm: readTarget ? { ...readTarget, sessions: this.swarmHydrator?.rows ?? [] } : undefined,
       sessionHost: {
         assistantAgentId: state.assistantAgentId,
         agentsList: state.agentsList,
@@ -497,35 +553,21 @@ export class ChatPane extends ChatPaneLayoutRender {
       permissionPicker: composerControls?.permissionPicker,
       backgroundTasks: catalogKey ? undefined : backgroundTasks,
       ...this.suggestionChatProps(state.connected, selectedSessionArchived, multiIdentity),
-      pullRequests: this.sessionPullRequests.filter(
-        (pullRequest) => !this.dismissedSessionPullRequestIds.has(chatPullRequestId(pullRequest)),
-      ),
-      pullRequestsBranch: createPullRequestBranch(
-        this.sessionPullRequests,
-        this.sessionPullRequestsBranch,
-      ),
-      // A dismissed open PR still exists, so the row must not offer a duplicate.
-      pullRequestsRateLimited: this.sessionPullRequestsRateLimited,
-      pullRequestsExpanded: this.sessionPullRequestsExpanded,
+      pullRequests: this.visibleSessionPullRequests,
+      // Until catalog success, a lowercase name may be a hidden/ambiguous alias.
+      // Do not mint a checkout link that can prefetch the wrong repository.
+      githubRepo: projectCatalog.result ? this.githubRepo : null,
+      githubRepositories: projectCatalog.repositories,
+      pullRequestsGateway: this.context.gateway,
+      pullRequestsBranch: this.sessionPullRequestsBranch,
+      pullRequestsStatus: this.sessionPullRequestsStatus,
       onOpenSessionDiff: sessionWorkspace.onOpenDiff,
-      onExpandPullRequests: () => {
-        this.sessionPullRequestsExpanded = true;
-        this.requestUpdate();
-      },
       onDismissPullRequest: this.dismissSessionPullRequest,
-      githubPublication: this.githubPublication.view(),
+      githubPublication: this.githubPublication?.view(),
       onOpenWorkspaceFile: (target) => openSessionWorkspaceFile(state, target),
       onOpenSessionLink: (target) => navigateMarkdownSession(this.context, target),
       onRevealWorkspaceFile: (path) => revealSessionWorkspaceFile(state, path),
-      onRefresh: () => {
-        if (catalogKey) {
-          void this.loadCatalogSession(catalogKey, false);
-          return;
-        }
-        maybeResetToolStream(state, { preserveStreamSegments: state.chatRunId !== null });
-        this.reconcileWaitingApprovalSnapshot();
-        void refreshPageChat(state, { awaitHistory: true, scheduleScroll: false });
-      },
+      onRefresh: this.refreshHistory,
       onChatScroll: (event) => this.handleTranscriptScroll(event),
       onHistoryIntent: (event) => this.handleTranscriptHistoryIntent(event),
       // Lazy SVG sizing can resize a committed row; re-enter the scroll owner
@@ -542,36 +584,29 @@ export class ChatPane extends ChatPaneLayoutRender {
           : (command) => void state.handleSendChat(command),
       showNewMessages: state.chatNewMessagesBelow,
       onScrollToBottom: state.scrollToBottom,
-      attachments: state.chatAttachments,
-      attachmentLimits: state.hello?.policy?.attachments,
-      getAttachments: () => state.chatAttachments,
-      pendingAttachmentReads: attachmentReads.pendingReads,
-      getPendingAttachmentReads: () => attachmentReads.pendingReads,
-      readSignal: attachmentReadSignal,
-      onPendingReadsChange: (delta) => attachmentReads.updatePending(attachmentReadSignal, delta),
-      onAttachmentsChange: (next) => {
-        state.chatAttachments = next;
-        state.requestUpdate?.();
-      },
+      ...this.chatState.attachmentInputProps(state),
       onRemoveAttachment: this.removeBrowserAnnotation,
       onSend: (followUpModeOverride, submissionAction) =>
-        catalogKey
-          ? void this.continueCatalogSession(catalogKey)
-          : suggestionViewer
-            ? void this.addCurrentSessionSuggestion()
-            : void state.handleSendChat(
-                undefined,
-                followUpModeOverride ? { followUpMode: followUpModeOverride } : undefined,
-                submissionAction,
-              ),
-      // Checkpoint deep-link carries the archived filter so the row stays findable.
-      onOpenSessionCheckpoints: () => {
-        const status = selectedSessionArchived ? "&status=archived" : "";
-        this.context.navigate("sessions", {
-          search: `?session=${encodeURIComponent(state.sessionKey)}${status}`,
-        });
+        !composerAvailability.canSend ||
+        (modelRequiredReason &&
+          (state.chatAttachments.length > 0 || !isModelIndependentChatCommand(state.chatMessage)))
+          ? undefined
+          : catalogKey
+            ? this.continueCatalogSession(catalogKey)
+            : suggestionViewer
+              ? this.addCurrentSessionSuggestion()
+              : state.handleSendChat(
+                  undefined,
+                  followUpModeOverride ? { followUpMode: followUpModeOverride } : undefined,
+                  submissionAction,
+                ),
+      onUseSystemDefaultMicrophone: state.realtimeTalkUseSystemDefault ?? undefined,
+      onToggleRealtimeTalk: () => {
+        if (!providerPaused) {
+          void state.toggleRealtimeTalk();
+        }
       },
-      onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
+      onSelectRealtimeVoice: (voice) => void state.selectRealtimeTalkVoice(voice),
       onToggleRealtimeCamera: () => void state.toggleRealtimeTalkCamera(),
       onSwitchRealtimeCamera: () => void state.switchRealtimeTalkCamera(),
       onDismissError: () => {
@@ -584,20 +619,14 @@ export class ChatPane extends ChatPaneLayoutRender {
       },
       onAbort: sessionActionCallbacks.onAbort,
       onQueueRemove: state.removeQueuedMessage,
-      onQueueRetry: (id) => void state.retryQueuedChatMessage(id),
-      onQueueSteer: sessionParticipationBlocked
-        ? undefined
-        : (id) => void state.steerQueuedChatMessage(id),
+      onQueueRetry: providerPaused ? undefined : (id) => void state.retryQueuedChatMessage(id),
+      onQueueSteer:
+        sessionParticipationBlocked || providerPaused
+          ? undefined
+          : (id) => void state.steerQueuedChatMessage(id),
       onQueueMove: sessionParticipationBlocked ? undefined : state.moveQueuedChatMessage,
-      queuedEdit: {
-        editingId: activeQueuedMessageEdit(state)?.id ?? null,
-        editingText: activeQueuedMessageEdit(state)?.draftText,
-        source: activeQueuedMessageEdit(state)?.source,
-        onEdit: sessionParticipationBlocked ? undefined : state.editQueuedChatMessage,
-        onEditChange: sessionParticipationBlocked ? undefined : state.updateQueuedChatMessageEdit,
-        onEditSubmit: sessionParticipationBlocked ? undefined : state.submitQueuedChatMessageEdit,
-        onCancel: state.cancelQueuedChatMessageEdit,
-      },
+      queuedEdit: createChatPaneQueuedEditProps(state, sessionParticipationBlocked),
+      goalRecovery: chatGoalRecovery(state),
       onGoalAction: (goalId, action) => void mutateChatGoal(state, { goalId, action }),
       goalDraftMode: state.chatGoalDraftMode ?? null,
       currentSessionId: state.currentSessionId,
@@ -615,7 +644,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         state.chatReplyTarget = null;
         state.requestUpdate?.();
       },
-      onSetReply: selectedSessionArchived ? undefined : setReply,
+      onSetReply: sessionDisabledBanner ? undefined : setReply,
       replyMessageAccess: catalogKey || selectedSessionArchived ? undefined : replyMessageAccess,
       onRewindMessage: selectedSessionArchived ? undefined : sessionActionCallbacks.onRewindMessage,
       onForkMessage: sessionActionCallbacks.onForkMessage,
@@ -623,13 +652,9 @@ export class ChatPane extends ChatPaneLayoutRender {
       agentsList: state.agentsList,
       currentAgentId,
       ...chatProps,
-      onAgentChange: (agentId) => {
-        const nextSessionKey = buildAgentMainSessionKey({ agentId });
-        this.onPaneSessionChange?.(this.paneId, nextSessionKey);
-      },
-      onSessionSelect: (next) => {
-        this.onPaneSessionChange?.(this.paneId, next);
-      },
+      onAgentChange: (agentId) =>
+        void this.onPaneSessionChange?.(this.paneId, buildAgentMainSessionKey({ agentId })),
+      onSessionSelect: (next) => this.onPaneSessionChange?.(this.paneId, next),
       canvasPluginSurfaceUrl: state.canvasPluginSurfaceUrl,
       boardProvider: board.provider,
       onOpenSidebar: state.handleOpenSidebar,
@@ -642,22 +667,25 @@ export class ChatPane extends ChatPaneLayoutRender {
         agentsList: this.context.agents.state.agentsList,
         hello: this.context.gateway.snapshot.hello,
       }),
-      userId: selfUser?.identity?.type === "profile" ? selfUser.identity.id : null,
+      userId: this.presentationUserId,
       userName: selfUser?.name ?? state.userName,
       userAvatar: selfUser?.avatarUrl ?? state.userAvatar,
       personActivity: personActivityRouting(this.context),
-      localMediaPreviewRoots: state.localMediaPreviewRoots,
+      mediaPolicyEpoch: state.mediaPolicyEpoch,
       connectionEpoch: state.connectionEpoch,
       embedSandboxMode: state.embedSandboxMode,
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,
       fetchLinkFavicon,
       chatMessageMaxWidth: state.settings.chatMessageMaxWidth,
+      branding: this.context?.theme.branding,
       assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state as never),
-      resolveArtifactDownload: (params) => resolveChatArtifactDownload(state, params),
+      resolveArtifactDownload: (params, signal) =>
+        resolveChatArtifactDownload(state, params, signal),
       basePath: state.basePath,
+      sessionPublicOrigin: markdownSessionPublicOrigin(this.context),
       resourceBasePath: state.resourceBasePath,
     };
-    return this.renderChatPaneLayout({
+    return html`${this.renderChatPaneLayout({
       state,
       selectedSession,
       currentAgentId,
@@ -673,6 +701,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       workspaceGit: selectedAgent?.workspaceGit === true,
       openPanelSlot,
       closePanelSlot,
-    });
+    })}${this.providerReview.dialog()}`;
   }
 }

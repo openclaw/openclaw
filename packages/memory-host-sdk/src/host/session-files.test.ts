@@ -1,5 +1,6 @@
 // Memory Host SDK tests cover session files behavior.
 import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -15,17 +16,13 @@ import {
   resetSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../../../../src/config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../../../src/state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../../../src/state/openclaw-state-db.js";
+import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import {
   buildSessionEntry,
-  listSessionFilesForAgent,
   listSessionTranscriptCorpusEntriesForAgent,
-  loadSessionTranscriptClassificationForAgent,
-  normalizeSessionTranscriptPathForComparison,
   parseCanonicalSessionSyncTargetFromPath,
-  resolveSessionIdentityForTranscriptFile,
-  resolveSessionFileForSyncTarget,
   statSessionEntrySync,
   type SessionFileEntry,
 } from "./session-files.js";
@@ -55,11 +52,11 @@ beforeEach(() => {
   clearConfigCache();
 });
 
-afterEach(() => {
-  // Agent close releases leases through shared state; close agent handles first while the fixture
-  // env is active, then close shared state before removing the Windows-owned directory.
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+afterEach(async () => {
+  // Join native workers before removing their files; agent leases still need shared state
+  // and the fixture environment while they close.
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   for (const [key, value] of Object.entries(envSnapshot ?? {})) {
     if (value === undefined) {
       Reflect.deleteProperty(process.env, key);
@@ -90,7 +87,7 @@ async function upsertTestSessionEntries(
   }
 }
 
-describe("listSessionFilesForAgent", () => {
+describe("session transcript archive discovery", () => {
   it("includes reset and deleted transcripts in session file listing", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     fsSync.mkdirSync(path.join(sessionsDir, "archive"), { recursive: true });
@@ -118,9 +115,9 @@ describe("listSessionFilesForAgent", () => {
       "",
     );
 
-    const files = await listSessionFilesForAgent("main");
+    const entries = await listSessionTranscriptCorpusEntriesForAgent("main");
 
-    expect(files.map((filePath) => path.basename(filePath)).toSorted()).toEqual(
+    expect(entries.map((entry) => path.basename(entry.sessionFile)).toSorted()).toEqual(
       included.toSorted(),
     );
   });
@@ -133,7 +130,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     const scanError = Object.assign(new Error("transient session archive scan failure"), {
       code: "EIO",
     });
-    const readdirSpy = vi.spyOn(fsSync, "readdirSync").mockImplementation(() => {
+    const readdirSpy = vi.spyOn(fs, "readdir").mockImplementation(async () => {
       throw scanError;
     });
 
@@ -241,11 +238,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       },
     });
 
-    const classification = loadSessionTranscriptClassificationForAgent("main");
-
-    expect(classification.cronRunTranscriptPaths).toEqual(
-      new Set([normalizeSessionTranscriptPathForComparison(archivePath)]),
-    );
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toContainEqual({
       agentId: "main",
       artifactKind: "archive-artifact",
@@ -346,6 +338,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       absPath: sessionKey,
       path: liveEntry.path,
       mtimeMs: liveEntry.mtimeMs,
+      revisionMs: liveEntry.revisionMs,
       size: liveEntry.size,
     });
     expect(archiveEntry.path).toBe(
@@ -472,12 +465,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     });
 
     const expectedArchivePath = archivePath;
-    const classification = loadSessionTranscriptClassificationForAgent("main");
-
-    expect(classification.cronRunTranscriptPaths).toEqual(
-      new Set([normalizeSessionTranscriptPathForComparison(expectedArchivePath)]),
-    );
-    await expect(listSessionFilesForAgent("main")).resolves.toEqual([expectedArchivePath]);
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -506,7 +493,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       }),
     );
 
-    await expect(listSessionFilesForAgent("main")).resolves.toEqual([]);
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
   });
 
@@ -516,7 +502,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     const symlinkPath = path.join(sessionsDir, "linked.jsonl.deleted.2026-02-16T22-27-33.000Z");
     fsSync.mkdirSync(sessionsDir, { recursive: true });
     fsSync.writeFileSync(symlinkPath, "");
-    await expect(listSessionFilesForAgent("main")).resolves.toEqual([symlinkPath]);
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toContainEqual(
       expect.objectContaining({
         artifactKind: "archive-artifact",
@@ -535,7 +520,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     }
     expect(fsSync.lstatSync(symlinkPath).isSymbolicLink()).toBe(true);
 
-    await expect(listSessionFilesForAgent("main")).resolves.toEqual([]);
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
   });
 
@@ -552,7 +536,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       }),
     );
 
-    await expect(listSessionFilesForAgent("main")).resolves.toEqual([]);
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
   });
 
@@ -640,7 +623,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       },
     });
 
-    await expect(listSessionFilesForAgent("main")).resolves.toEqual([]);
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toContainEqual(
       expect.objectContaining({
         sessionFile: "agent:main:chat:custom",
@@ -665,7 +647,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     clearRuntimeConfigSnapshot();
     clearConfigCache();
 
-    await expect(listSessionFilesForAgent("main")).resolves.toEqual([archivePath]);
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([
       {
         agentId: "main",
@@ -704,7 +685,11 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       },
     });
 
-    await expect(listSessionFilesForAgent("main")).resolves.toEqual([archivePath]);
+    expect(
+      (await listSessionTranscriptCorpusEntriesForAgent("main"))
+        .filter((entry) => entry.artifactKind === "archive-artifact")
+        .map((entry) => entry.sessionFile),
+    ).toEqual([archivePath]);
   });
 
   it("keeps legacy session keys in non-main per-agent stores", async () => {
@@ -722,8 +707,8 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       }),
     );
 
-    await expect(listSessionFilesForAgent("ops")).resolves.toEqual([]);
-    await expect(listSessionFilesForAgent("main")).resolves.toEqual([]);
+    await expect(listSessionTranscriptCorpusEntriesForAgent("ops")).resolves.toEqual([]);
+    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
   });
 
   it("keeps legacy main aliases in a renamed default agent store", async () => {
@@ -749,7 +734,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     clearRuntimeConfigSnapshot();
     clearConfigCache();
 
-    await expect(listSessionFilesForAgent("ops")).resolves.toEqual([]);
+    await expect(listSessionTranscriptCorpusEntriesForAgent("ops")).resolves.toEqual([]);
   });
 });
 
@@ -772,65 +757,33 @@ describe("memory session sync targets", () => {
       ),
     ).toBeNull();
   });
-
-  it("does not synthesize active transcript paths for identity sync targets", () => {
-    expect(resolveSessionFileForSyncTarget({ sessionId: "active" }, "main")).toBeNull();
-    expect(resolveSessionFileForSyncTarget({ agentId: "MAIN", sessionId: "active" })).toBeNull();
-  });
-
-  it("rejects identity sync targets that would escape the sessions directory", () => {
-    expect(resolveSessionFileForSyncTarget({ sessionId: "../outside" }, "main")).toBeNull();
-  });
-
-  it("rejects identity sync targets that normalize to another transcript", () => {
-    expect(resolveSessionFileForSyncTarget({ sessionId: "foo/../active" }, "main")).toBeNull();
-  });
-
-  it("does not read legacy sessions.json for persisted session-key sync targets", () => {
-    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-    fsSync.mkdirSync(sessionsDir, { recursive: true });
-    fsSync.writeFileSync(
-      path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
-        "agent:main:chat:thread-456": {
-          sessionFile: "active-thread-456.jsonl",
-          sessionId: "active",
-        },
-      }),
-    );
-
-    expect(
-      resolveSessionFileForSyncTarget({
-        agentId: "main",
-        sessionId: "active",
-        sessionKey: "agent:main:chat:thread-456",
-      }),
-    ).toBeNull();
-  });
-
-  it("resolves transcript file identities through persisted session keys", () => {
-    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-    fsSync.mkdirSync(sessionsDir, { recursive: true });
-    const sessionFile = path.join(sessionsDir, "active-thread-456.jsonl");
-    fsSync.writeFileSync(
-      path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
-        "agent:main:chat:thread-456": {
-          sessionFile: "active-thread-456.jsonl",
-          sessionId: "active",
-        },
-      }),
-    );
-
-    expect(resolveSessionIdentityForTranscriptFile(sessionFile)).toEqual({
-      agentId: "main",
-      sessionId: "active",
-      sessionKey: "agent:main:chat:thread-456",
-    });
-  });
 });
 
 describe("buildSessionEntry", () => {
+  it("preserves the persisted export hash for wrapped Unicode messages", async () => {
+    const records = Array.from({ length: 4 }, (_, index) => ({
+      type: "message",
+      id: `m${index}`,
+      timestamp: "2026-09-01T00:00:00Z",
+      message: {
+        role: index % 2 ? "assistant" : "user",
+        content: `sample-${index} café 🦞 ordinary text. `.repeat(32).slice(0, 1024),
+        __openclaw: { senderIsOwner: true },
+      },
+    }));
+    const filePath = path.join(tmpDir, "hash-contract.jsonl");
+    fsSync.writeFileSync(filePath, records.map((record) => JSON.stringify(record)).join("\n"));
+    const entry = requireSessionEntry(
+      await buildSessionEntry(filePath, {
+        generatedByCronRun: false,
+        generatedByDreamingNarrative: false,
+        sessionKind: "interactive",
+      }),
+    );
+    expect(entry.lineMap).toEqual([1, 1, 2, 2, 3, 3, 4, 4]);
+    expect(entry.hash).toBe("c0c681f57b6caea32f1a6baee132322c0dbc6f93e75656725fe3ef7158f195ae");
+  });
+
   it("returns lineMap tracking original JSONL line numbers", async () => {
     // Simulate a real session JSONL file with metadata records interspersed
     // Lines 1-3: non-message metadata records
@@ -1065,11 +1018,7 @@ describe("buildSessionEntry", () => {
     const jsonlLines = [
       JSON.stringify({
         type: "message",
-        message: {
-          role: "user",
-          content: "Hello",
-          timestamp: 8_640_000_000_000_001,
-        },
+        message: makeUserMessage("Hello", 8_640_000_000_000_001),
       }),
     ];
     const filePath = path.join(tmpDir, "invalid-timestamp-session.jsonl");

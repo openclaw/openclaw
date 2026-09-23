@@ -7,6 +7,7 @@ type ThreadBindingsTestState = {
   reusableWebhooksByAccountChannel: Map<string, unknown>;
   persistByAccountId: Map<string, boolean>;
   loadedBindings: boolean;
+  loadingBindings?: Promise<void>;
   loadedPersistentBindings: boolean;
   persistenceAvailable: boolean;
   lastPersistedAtMs: number;
@@ -30,6 +31,7 @@ export function resetThreadBindingsForTests() {
   state.tokensByAccountId.clear();
   state.persistByAccountId.clear();
   state.loadedBindings = false;
+  delete state.loadingBindings;
   state.loadedPersistentBindings = false;
   state.persistenceAvailable = true;
   state.lastPersistedAtMs = 0;

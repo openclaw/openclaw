@@ -15,7 +15,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
-import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasErrnoCode } from "../../infra/errno.js";
@@ -104,7 +103,9 @@ export function buildCliAgentSystemPrompt(params: {
   workspaceDir: string;
   cwd?: string;
   config?: OpenClawConfig;
-  defaultThinkLevel?: ThinkLevel;
+  preparedModelRuntime?: Parameters<
+    typeof buildConfiguredAgentSystemPrompt
+  >[0]["preparedModelRuntime"];
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   requireExplicitMessageTarget?: boolean;
@@ -125,7 +126,7 @@ export function buildCliAgentSystemPrompt(params: {
   sessionKey?: string;
   sessionId?: string;
 }) {
-  const runtimeWorkspaceDir = params.cwd?.trim() || params.workspaceDir;
+  const runtimeCwd = params.cwd?.trim() || params.workspaceDir;
   const defaultModelRef = resolveDefaultModelForAgent({
     cfg: params.config ?? {},
     agentId: params.agentId,
@@ -134,8 +135,8 @@ export function buildCliAgentSystemPrompt(params: {
   const { runtimeInfo, userTimezone, userDate } = buildSystemPromptParams({
     config: params.config,
     agentId: params.agentId,
-    workspaceDir: runtimeWorkspaceDir,
-    cwd: runtimeWorkspaceDir,
+    workspaceDir: runtimeCwd,
+    cwd: runtimeCwd,
     runtime: {
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
@@ -153,9 +154,10 @@ export function buildCliAgentSystemPrompt(params: {
   });
   return buildConfiguredAgentSystemPrompt({
     config: params.config,
+    preparedModelRuntime: params.preparedModelRuntime,
     agentId: params.agentId,
-    workspaceDir: runtimeWorkspaceDir,
-    defaultThinkLevel: params.defaultThinkLevel,
+    workspaceDir: params.workspaceDir,
+    runtimeCwd,
     extraSystemPrompt: params.extraSystemPrompt,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
@@ -171,6 +173,7 @@ export function buildCliAgentSystemPrompt(params: {
     }),
     runtimeInfo,
     toolNames: params.tools.map((tool) => tool.name),
+    messageTool: params.tools.find((tool) => tool.name.trim().toLowerCase() === "message"),
     skillsPrompt: params.skillsPrompt,
     userTimezone,
     userDate,

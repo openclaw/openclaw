@@ -3,6 +3,7 @@ import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
+import { buildLiveQaApprovalForwardingConfig } from "../shared/live-approval-config.js";
 import type { WhatsAppQaConfigOverrides, WhatsAppQaRuntimeEnv } from "./whatsapp-live.contracts.js";
 
 const WHATSAPP_QA_ENV_KEYS = [
@@ -208,32 +209,7 @@ export function buildWhatsAppQaConfig(
         },
       }
     : {};
-  const approvalForwardingConfig =
-    approvalOverrides?.exec || approvalOverrides?.plugin
-      ? {
-          approvals: {
-            ...baseCfg.approvals,
-            ...(approvalOverrides.exec
-              ? {
-                  exec: {
-                    ...baseCfg.approvals?.exec,
-                    enabled: true,
-                    mode: "session" as const,
-                  },
-                }
-              : {}),
-            ...(approvalOverrides.plugin
-              ? {
-                  plugin: {
-                    ...baseCfg.approvals?.plugin,
-                    enabled: true,
-                    mode: "session" as const,
-                  },
-                }
-              : {}),
-          },
-        }
-      : {};
+  const approvalForwardingConfig = buildLiveQaApprovalForwardingConfig(baseCfg, approvalOverrides);
   const actionToolConfig = params.overrides?.actions
     ? {
         tools: {

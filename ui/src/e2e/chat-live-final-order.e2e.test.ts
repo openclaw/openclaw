@@ -1,15 +1,162 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
   requireRecord,
+  requireString,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
+function canvasPreview(viewId: string) {
+  return {
+    kind: "canvas",
+    surface: "assistant_message",
+    render: "url",
+    viewId,
+    title: `Preview ${viewId}`,
+    url: `/__openclaw__/canvas/documents/${viewId}/index.html`,
+    preferredHeight: 120,
+    sandbox: "scripts",
+  };
+}
+
+function canvasToolResult(viewId: string, toolCallId: string, timestamp: number) {
+  return {
+    role: "toolResult",
+    toolCallId,
+    toolName: "show_widget",
+    timestamp,
+    content: JSON.stringify({
+      kind: "canvas",
+      view: {
+        backend: "canvas",
+        id: viewId,
+        url: `/__openclaw__/canvas/documents/${viewId}/index.html`,
+      },
+      presentation: {
+        target: "assistant_message",
+        title: `Preview ${viewId}`,
+        preferred_height: 120,
+        sandbox: "scripts",
+      },
+    }),
+  };
+}
+
+function canvasBlock(viewId: string) {
+  return { type: "canvas", preview: canvasPreview(viewId) };
+}
+
 suite.define(() => {
+  const canvasView = useCanvasSandboxFixture();
+  it("renders each persisted Canvas view once after reload", async () => {
+    const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("chat-canvas-history-stability", artifactRoot)
+      : undefined;
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+    const page = await context.newPage();
+    const documentIds = ["cv_first", "cv_second"];
+    const finalText = "Both previews are ready.";
+    const messages = [
+      {
+        role: "user",
+        timestamp: 1_000,
+        content: [{ type: "text", text: "Show both previews." }],
+      },
+      canvasToolResult("cv_first", "call-first", 1_001),
+      canvasToolResult("cv_second", "call-second", 1_002),
+      {
+        role: "assistant",
+        timestamp: 1_003,
+        content: [
+          {
+            type: "text",
+            text: `[embed ref="cv_first" /]\n[embed ref="cv_second" /]\n${finalText}`,
+          },
+          canvasBlock("cv_first"),
+          canvasBlock("cv_second"),
+        ],
+      },
+    ];
+
+    try {
+      const gateway = await installMockGateway(page, {
+        historyMessages: messages,
+        methodResponses: {
+          "canvas.document.view": {
+            cases: documentIds.map((docId) => ({
+              match: { docId },
+              response: canvasView(
+                buildWidgetDocument(`Preview ${docId}`, `<p>Rendered ${docId}</p>`),
+              ),
+            })),
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+
+      const readPreviews = () =>
+        page
+          .locator(".chat-tool-card__widget-host iframe")
+          .evaluateAll((frames) => frames.map((frame) => frame.getAttribute("title")));
+      const expectedPreviews = ["Preview cv_first", "Preview cv_second"];
+      const expectRenderedPreviews = async () => {
+        await expect.poll(readPreviews).toEqual(expectedPreviews);
+        for (const docId of documentIds) {
+          await page
+            .locator(`.chat-tool-card__widget-host iframe[title="Preview ${docId}"]`)
+            .contentFrame()
+            .frameLocator("iframe")
+            .getByText(`Rendered ${docId}`, { exact: true })
+            .waitFor();
+        }
+        expect(
+          (await gateway.getRequests("canvas.document.view"))
+            .map((request) =>
+              requireString(requireRecord(request.params).docId, "Canvas document ID"),
+            )
+            .toSorted((left, right) => left.localeCompare(right)),
+        ).toEqual(documentIds);
+      };
+
+      await expectRenderedPreviews();
+      await expect.poll(() => page.getByText(finalText, { exact: true }).isVisible()).toBe(true);
+      if (artifactDir) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "before-reload.png"),
+        });
+      }
+
+      await page.reload();
+      // Reload reinstalls the in-page mock Gateway and its request ring, so the
+      // first startup request in the new document is the synchronization point.
+      await gateway.waitForRequest("chat.startup");
+      await expectRenderedPreviews();
+      await expect.poll(() => page.getByText(finalText, { exact: true }).isVisible()).toBe(true);
+      if (artifactDir) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "after-reload.png"),
+        });
+      }
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("keeps multiple live replies after their delayed prompt before history catches up", async () => {
     const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactRoot
@@ -25,7 +172,10 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const runId = "multi-reply-run";
-    const replies = ["First part of the current answer.", "Second part of the current answer."];
+    const replies = [
+      "First part of the current answer.",
+      "Second part of the current answer.",
+    ] as const;
     const previous = "Previous durable conversation.";
     const prompt = "Please give me both parts.";
     try {
@@ -85,10 +235,12 @@ suite.define(() => {
         await page.locator(".chat-thread-inner").getByText(text, { exact: true }).waitFor();
       }
       if (artifactDir) {
-        await page.screenshot({
-          path: path.join(artifactDir, "multi-reply-order.png"),
-          fullPage: true,
-        });
+        await writeFile(
+          path.join(artifactDir, "multi-reply-order.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator(".chat-thread-inner").getByText(replies[1], { exact: true }),
+          ]),
+        );
       }
       await expect
         .poll(() =>
@@ -106,12 +258,116 @@ suite.define(() => {
     }
   });
 
+  it("hydrates one terminal when same-run tool history overlaps final persistence", async () => {
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+    const page = await context.newPage();
+    const runId = "tool-heavy-run";
+    const promptText = "Inspect the repository.";
+    const boundaryText = "Checking the repository.";
+    const finalText = "The repair is complete.";
+    const prompt = {
+      role: "user",
+      content: [{ type: "text", text: promptText }],
+      __openclaw: { id: "prompt", idempotencyKey: `${runId}:user`, seq: 1 },
+      timestamp: Date.now(),
+    };
+    const toolBoundary = {
+      role: "assistant",
+      content: [
+        { type: "text", text: boundaryText },
+        { type: "toolCall", id: "read-1", name: "read", arguments: { path: "AGENTS.md" } },
+      ],
+      __openclaw: { id: "assistant-tool-boundary", runId, seq: 2 },
+      timestamp: Date.now(),
+    };
+    const persistedFinal = {
+      role: "assistant",
+      content: [{ type: "text", text: finalText }],
+      __openclaw: { id: "assistant-final", runId, runTerminal: true, seq: 4 },
+      timestamp: Date.now(),
+    };
+
+    try {
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["chat.history"],
+        methodResponses: {
+          "chat.history": {
+            messages: [],
+            sessionId: "session:agent:main:main",
+            sessionInfo: {
+              activeRunIds: [],
+              hasActiveRun: false,
+              key: "main",
+              kind: "direct",
+              status: "done",
+              updatedAt: Date.now(),
+            },
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      await gateway.emitChatFinal({ runId, text: finalText });
+      await page.locator(".chat-thread-inner").getByText(finalText, { exact: true }).waitFor();
+
+      await gateway.setHistoryMessages([prompt, toolBoundary, persistedFinal]);
+      const historyBefore = (await gateway.getRequests("chat.history")).length;
+      await gateway.emitGatewayEvent("session.message", {
+        activeRunIds: [],
+        hasActiveRun: false,
+        message: prompt,
+        messageId: "prompt",
+        messageSeq: 1,
+        session: {
+          activeRunIds: [],
+          hasActiveRun: false,
+          key: "main",
+          kind: "direct",
+          status: "done",
+          updatedAt: Date.now(),
+        },
+        sessionKey: "main",
+      });
+      await gateway.waitForRequest("chat.history", { after: historyBefore });
+      await gateway.resolveDeferred("chat.history", {
+        messages: [prompt, toolBoundary, persistedFinal],
+        sessionId: "session:agent:main:main",
+        sessionInfo: {
+          activeRunIds: [],
+          hasActiveRun: false,
+          key: "main",
+          kind: "direct",
+          lastRunId: runId,
+          status: "done",
+          updatedAt: Date.now(),
+        },
+      });
+
+      const thread = page.locator(".chat-thread-inner");
+      await thread.getByText(boundaryText, { exact: true }).waitFor();
+      await expect
+        .poll(() =>
+          thread.locator(".chat-group.assistant .chat-bubble", { hasText: finalText }).count(),
+        )
+        .toBe(1);
+      await expect
+        .poll(() =>
+          thread.evaluate(
+            (element, texts) => {
+              const rows = Array.from(element.querySelectorAll(".chat-bubble"));
+              return texts.map((text) => rows.findIndex((row) => row.textContent?.includes(text)));
+            },
+            [promptText, boundaryText, finalText],
+          ),
+        )
+        .toEqual([0, 1, 2]);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("keeps durable turns ordered when a live final arrives before transcript events", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const currentRunId = "current-run";
     const previousPrompt = "What happened before this run?";

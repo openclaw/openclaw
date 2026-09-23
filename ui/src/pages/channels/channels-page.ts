@@ -8,14 +8,14 @@ import type {
 } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { resolveControlUiAuthHeader } from "../../app/control-ui-auth.ts";
+import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveChannelPairingAuthSignature } from "../../lib/channels/index.ts";
-import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import {
@@ -26,14 +26,14 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { importNostrProfile, parseValidationErrors, putNostrProfile } from "./nostr-profile-ops.ts";
+import { ChannelPluginPresentationController } from "./plugin-presentation-controller.ts";
 import { createNostrProfileFormState } from "./view.nostr-profile-form.ts";
-import { renderChannels } from "./view.ts";
+import { renderChannels, resolveChannelOrder } from "./view.ts";
 import type { ChannelPairingPrompt } from "./view.types.ts";
 import { runWhatsAppLogoutConfirmation } from "./whatsapp-logout.ts";
 import { ChannelWizardHost } from "./wizard-host.ts";
 
 type NostrProfileFormState = ReturnType<typeof createNostrProfileFormState> | null;
-
 const CHANNEL_PAIRING_POLL_INTERVAL_MS = 30_000;
 const CHANNELS_DOCS_URL = "https://docs.openclaw.ai/channels";
 
@@ -43,7 +43,7 @@ type NostrOperation = {
   channels: ApplicationContext["channels"];
   formAccountId: string | null;
   accountId: string;
-  headers: Record<string, string>;
+  authCandidates: readonly string[];
 };
 
 function formatNostrProfileOperationError(error: unknown, prefix: string): string {
@@ -77,15 +77,17 @@ class ChannelsPage extends OpenClawLightDomElement {
   @state()
   private pairingNotice: string | null = null;
 
-  @state()
-  private showAdvancedSettings = false;
+  private readonly pluginPresentation = new ChannelPluginPresentationController({
+    getContext: () => this.context,
+    getChannelIds: () => resolveChannelOrder(this.context.channels.state.channelsSnapshot),
+    isConnected: () => this.isConnected,
+    requestUpdate: () => this.requestUpdate(),
+  });
 
   private readonly wizardHost = new ChannelWizardHost({
     getContext: () => this.context,
     requestUpdate: () => this.requestUpdate(),
-    clearSelection: () => {
-      this.selectedChannel = null;
-    },
+    clearSelection: () => (this.selectedChannel = null),
   });
 
   private schemaLoadStarted = false;
@@ -106,6 +108,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       }
     },
     false,
+    "visible",
   );
 
   private readonly subscriptions = new SubscriptionsController(this)
@@ -120,6 +123,7 @@ class ChannelsPage extends OpenClawLightDomElement {
         const handleChange = () => {
           if (this.channelsSource === channels) {
             this.reconcilePairingFilter(channels.state.pairingSnapshot);
+            this.pluginPresentation.ensure(this.context.gateway.snapshot.client);
             this.requestUpdate();
           }
         };
@@ -146,14 +150,12 @@ class ChannelsPage extends OpenClawLightDomElement {
         };
       },
     )
-    // The advanced tier is one global display pref; theme republishes every
-    // appearance setting, so this keeps the channel forms in sync with the
-    // toggle on the config pages.
+    // Republished theme settings keep channel forms in sync with the global advanced toggle.
     .watch(
       () => this.context?.theme,
       (theme, notify) => theme.subscribe(notify),
       () => {
-        this.showAdvancedSettings = loadSettings().showAdvancedSettings === true;
+        this.requestUpdate();
       },
     );
 
@@ -165,6 +167,9 @@ class ChannelsPage extends OpenClawLightDomElement {
       !change.initial && this.gatewayPairingAuthSignature !== pairingAuthSignature;
     if (change.identityChanged || snapshot.phase !== "connected") {
       this.clearNostrForm();
+    }
+    if (change.identityChanged || change.connectionChanged || snapshot.phase !== "connected") {
+      this.pluginPresentation.reset();
     }
     if (
       change.identityChanged ||
@@ -215,6 +220,8 @@ class ChannelsPage extends OpenClawLightDomElement {
       return;
     }
 
+    this.pluginPresentation.ensure(client);
+
     const channels = context.channels.state;
     const config = context.runtimeConfig.state;
     if (!channels.channelsSnapshot && !channels.channelsLoading) {
@@ -246,6 +253,7 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.pairingAccountFilter = null;
     this.pairingNotice = null;
     this.pairingPolling.stop();
+    this.pluginPresentation.reset();
     this.invalidateNostrForm();
     this.subscriptions.clear();
     this.schemaLoadStarted = false;
@@ -254,18 +262,15 @@ class ChannelsPage extends OpenClawLightDomElement {
 
   private setShowAdvancedSettings(enabled: boolean) {
     patchSettings({ showAdvancedSettings: enabled });
-    // Republish so the config pages and this page read the same pref without a
-    // reload; patchSettings alone only writes storage and the server pref.
     this.context.theme.refresh();
   }
 
   private async saveChannelConfig() {
-    const context = this.context;
-    if (!context) {
+    if (!this.context) {
       return;
     }
-    if (await context.runtimeConfig.save()) {
-      await context.channels.refresh(true);
+    if (await this.context.runtimeConfig.save()) {
+      await this.context.channels.refresh(true);
     }
   }
 
@@ -274,7 +279,7 @@ class ChannelsPage extends OpenClawLightDomElement {
     if (!context) {
       return;
     }
-    await context.runtimeConfig.refresh({ discardPendingChanges: true });
+    await context.runtimeConfig.discardDraft({ reloadOnly: true });
     await context.channels.refresh(true);
   }
 
@@ -300,13 +305,12 @@ class ChannelsPage extends OpenClawLightDomElement {
     return this.nostrProfileAccountId ?? accounts[0]?.accountId ?? "default";
   }
 
-  private buildGatewayHttpHeaders(gateway: ApplicationContext["gateway"]): Record<string, string> {
-    const authorization = resolveControlUiAuthHeader({
+  private resolveGatewayHttpCredentials(gateway: ApplicationContext["gateway"]): string[] {
+    return resolveControlUiAuthCandidates({
       hello: gateway.snapshot.hello,
       settings: { token: gateway.connection.token },
       password: gateway.connection.password,
     });
-    return authorization ? { Authorization: authorization } : {};
   }
 
   private clearNostrForm() {
@@ -342,7 +346,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       channels,
       formAccountId: this.nostrProfileAccountId,
       accountId: this.resolveNostrAccountId(),
-      headers: this.buildGatewayHttpHeaders(gateway),
+      authCandidates: this.resolveGatewayHttpCredentials(gateway),
     };
   }
 
@@ -410,9 +414,10 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.nostrProfileFormState = pendingForm;
 
     try {
-      const { data, response } = await putNostrProfile({
+      const { data, response, errorMessage } = await putNostrProfile({
         accountId: operation.accountId,
-        headers: operation.headers,
+        authCandidates: operation.authCandidates,
+        isCurrent: () => this.currentNostrForm(operation) !== null,
         values: form.values,
       });
       const currentForm = this.currentNostrForm(operation);
@@ -423,12 +428,7 @@ class ChannelsPage extends OpenClawLightDomElement {
         this.nostrProfileFormState = {
           ...currentForm,
           saving: false,
-          error: formatUiExternalText(
-            data?.error,
-            t("channels.nostr.notices.updateFailedStatus", {
-              status: String(response.status),
-            }),
-          ),
+          error: errorMessage,
           success: null,
           fieldErrors: parseValidationErrors(data?.details),
         };
@@ -485,9 +485,10 @@ class ChannelsPage extends OpenClawLightDomElement {
     };
 
     try {
-      const { data, response } = await importNostrProfile({
+      const { data, response, errorMessage } = await importNostrProfile({
         accountId: operation.accountId,
-        headers: operation.headers,
+        authCandidates: operation.authCandidates,
+        isCurrent: () => this.currentNostrForm(operation) !== null,
       });
       const currentForm = this.currentNostrForm(operation);
       if (!currentForm) {
@@ -497,12 +498,7 @@ class ChannelsPage extends OpenClawLightDomElement {
         this.nostrProfileFormState = {
           ...currentForm,
           importing: false,
-          error: formatUiExternalText(
-            data?.error,
-            t("channels.nostr.notices.importFailedStatus", {
-              status: String(response.status),
-            }),
-          ),
+          error: errorMessage,
           success: null,
         };
         return;
@@ -659,6 +655,8 @@ class ChannelsPage extends OpenClawLightDomElement {
           connected: channels.connected,
           loading: channels.channelsLoading,
           snapshot: channels.channelsSnapshot,
+          pluginCatalog: this.pluginPresentation.pluginCatalog,
+          pluginIconUrls: this.pluginPresentation.pluginIconUrls,
           lastError: channels.channelsError,
           lastSuccessAt: channels.channelsLastSuccess,
           pairingLoading: channels.pairingLoading,
@@ -683,7 +681,7 @@ class ChannelsPage extends OpenClawLightDomElement {
           configSaving: config.configSaving,
           configError: config.lastError,
           configFormDirty: config.configFormDirty,
-          showAdvancedSettings: this.showAdvancedSettings,
+          showAdvancedSettings: loadSettings().showAdvancedSettings === true,
           nostrProfileFormState: this.nostrProfileFormState,
           nostrProfileAccountId: this.nostrProfileAccountId,
           selectedChannel: this.selectedChannel,

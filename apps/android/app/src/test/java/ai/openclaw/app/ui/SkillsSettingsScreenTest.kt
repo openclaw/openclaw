@@ -6,6 +6,7 @@ import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.SecurePrefs
+import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import android.content.Context
 import androidx.compose.ui.test.assertIsDisplayed
@@ -36,20 +37,20 @@ class SkillsSettingsScreenTest {
     val app = RuntimeEnvironment.getApplication() as NodeApp
     val originalRuntime = app.peekRuntime()
     val prefs = SecurePrefs(app, app.getSharedPreferences("skills-settings-${UUID.randomUUID()}", Context.MODE_PRIVATE))
-    val runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
     val runtimeField = NodeApp::class.java.getDeclaredField("runtimeInstance").apply { isAccessible = true }
-    runtimeField.set(app, runtime)
-    val viewModel = MainViewModel(app, prefs, SavedStateHandle())
-    val viewModels = ViewModelStore().apply { put("skills", viewModel) }
-
-    @Suppress("UNCHECKED_CAST")
-    val state =
-      NodeRuntime::class.java
-        .getDeclaredField("_clawHubSkillSearchState")
-        .apply { isAccessible = true }
-        .get(runtime) as MutableStateFlow<GatewayClawHubSkillSearchState>
-
+    val viewModels = ViewModelStore()
+    val runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
     try {
+      runtimeField.set(app, runtime)
+      val viewModel = MainViewModel(app, prefs, SavedStateHandle()).also { viewModels.put("skills", it) }
+
+      @Suppress("UNCHECKED_CAST")
+      val state =
+        NodeRuntime::class.java
+          .getDeclaredField("_clawHubSkillSearchState")
+          .apply { isAccessible = true }
+          .get(runtime) as MutableStateFlow<GatewayClawHubSkillSearchState>
+
       viewModel.refreshSkills()
       composeRule.setContent {
         ClawDesignTheme { SkillsSettingsScreen(viewModel = viewModel, onBack = {}) }
@@ -75,9 +76,15 @@ class SkillsSettingsScreenTest {
         composeRule.onNodeWithText(message).assertDoesNotExist()
       }
     } finally {
-      viewModels.clear()
-      runtimeField.set(app, originalRuntime)
-      runtime.disconnect()
+      try {
+        viewModels.clear()
+      } finally {
+        try {
+          closeNodeRuntimeTestFixture(runtime)
+        } finally {
+          runtimeField.set(app, originalRuntime)
+        }
+      }
     }
   }
 

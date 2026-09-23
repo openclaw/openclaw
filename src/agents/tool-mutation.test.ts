@@ -26,6 +26,17 @@ describe("tool mutation helpers", () => {
     }
   });
 
+  it.each(["list", "get", "set", "import", "future-action", undefined])(
+    "classifies theme action %s for safe replay",
+    (action) => {
+      const readOnly = action === "list" || action === "get";
+      expect(buildToolMutationState("theme", { action })).toEqual({
+        mutatingAction: !readOnly,
+        replaySafe: readOnly,
+      });
+    },
+  );
+
   it("treats owner-declared side effects as mutating and replay-unsafe", () => {
     expect(
       buildToolMutationState(

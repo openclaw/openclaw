@@ -7,6 +7,11 @@ describe("message-normalizer senderSession", () => {
     { sessionKey: "agent:main:main", agentId: "main" },
     { sessionKey: "agent:main:main" },
     { agentId: "main" },
+    {
+      sessionKey: "agent:main:cron:daily:run:first",
+      agentId: "main",
+      label: "Daily report",
+    },
   ])("preserves forwarded source-session attribution %o", (senderSession) => {
     expect(
       normalizeMessage({ role: "assistant", content: "Forwarded report", senderSession }),
@@ -42,10 +47,25 @@ describe("message-normalizer senderSession", () => {
         senderSession: {
           sessionKey: " agent:source:main ",
           agentId: " source\t",
+          label: " Daily report\t",
           extra: "discarded",
         },
       }).senderSession,
-    ).toStrictEqual({ sessionKey: "agent:source:main", agentId: "source" });
+    ).toStrictEqual({
+      sessionKey: "agent:source:main",
+      agentId: "source",
+      label: "Daily report",
+    });
+  });
+
+  it.each(["  ", 42, false, null])("ignores an invalid source label %o", (label) => {
+    expect(
+      normalizeMessage({
+        role: "assistant",
+        content: "Forwarded report",
+        senderSession: { sessionKey: "agent:main:cron:daily:run:first", label },
+      }).senderSession,
+    ).toEqual({ sessionKey: "agent:main:cron:daily:run:first" });
   });
 
   it("keeps a valid source agent when its source-session key is malformed", () => {

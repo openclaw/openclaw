@@ -2,6 +2,7 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createCronRegressionState,
   createDueIsolatedJob,
   noopLogger,
   setupCronRegressionFixtures,
@@ -9,7 +10,7 @@ import {
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { listTaskRecordsUnsorted } from "../../tasks/task-registry.js";
+import { listTaskRecords } from "../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { isCronJobActive, markCronJobActive } from "../active-jobs.js";
 import { createCronExecutionId } from "../run-id.js";
@@ -46,13 +47,9 @@ function createBatchState(params: {
   onEvent?: Parameters<typeof createCronServiceState>[0]["onEvent"];
   isAgentAvailable?: Parameters<typeof createCronServiceState>[0]["isAgentAvailable"];
 }) {
-  const state = createCronServiceState({
-    cronEnabled: true,
+  const state = createCronRegressionState({
     storePath: params.storePath,
-    log: noopLogger,
     nowMs: () => params.nowMs,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: params.runIsolatedAgentJob,
     isAgentAvailable: params.isAgentAvailable,
     maxMissedJobsPerRestart: 40,
@@ -72,9 +69,7 @@ function startBatch(
 }
 
 function findCronTask(jobId: string) {
-  return listTaskRecordsUnsorted().find(
-    (task) => task.runtime === "cron" && task.sourceId === jobId,
-  );
+  return listTaskRecords().find((task) => task.runtime === "cron" && task.sourceId === jobId);
 }
 
 function authorOutcome(
@@ -169,13 +164,9 @@ describe("cron batch outcome finalization", () => {
         status: "ok" as const,
         summary: "finished before terminal store failure",
       }));
-      const state = createCronServiceState({
-        cronEnabled: true,
+      const state = createCronRegressionState({
         storePath: store.storePath,
-        log: noopLogger,
         nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob,
         onEvent: (event) => events.push(event),
       });
@@ -220,13 +211,9 @@ describe("cron batch outcome finalization", () => {
         expect(events.filter((event) => event.action === "finished")).toEqual([]);
 
         database.exec(`DROP TRIGGER IF EXISTS ${triggerName}`);
-        recoveryState = createCronServiceState({
-          cronEnabled: true,
+        recoveryState = createCronRegressionState({
           storePath: store.storePath,
-          log: noopLogger,
           nowMs: () => startedAt + 1,
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
           runIsolatedAgentJob,
           onEvent: (event) => events.push(event),
         });
@@ -234,7 +221,7 @@ describe("cron batch outcome finalization", () => {
 
         expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
         expect(
-          listTaskRecordsUnsorted().filter(
+          listTaskRecords().filter(
             (record) => record.runtime === "cron" && record.sourceId === job.id,
           ),
         ).toEqual([expect.objectContaining({ runId: task?.runId, status: "succeeded" })]);
@@ -570,13 +557,9 @@ describe("cron batch outcome finalization", () => {
     job.state.runningAtMs = dueAt;
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createCronRegressionState({
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => dueAt + 10,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
     });
     const database = openOpenClawStateDatabase().db;

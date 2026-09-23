@@ -1,20 +1,25 @@
 import path from "node:path";
 import type { Plugin } from "vite";
-import type { Vitest } from "vitest/node";
-import { isVitestWorkerMetadataRequest } from "../../scripts/lib/vitest-cli-mode.mts";
+// The runner config loader closes before hooks run; capture the native parser while loading.
+import { parseCLI, type Vitest } from "vitest/node";
+import { parseVitestExecutionArgs } from "../../scripts/lib/vitest-cli.mts";
 import {
   isVitestWorkerDeclaration,
   requestVitestWorkerArtifacts,
   resolveVitestWorkerDeclaration,
-  verifyVitestWorkerArtifacts,
-  vitestWorkerDeclarationEntries,
 } from "../../scripts/lib/vitest-worker-artifacts.mts";
 import { getVitestWorkerDescriptor } from "../../scripts/lib/vitest-worker-bootstrap.mts";
+import {
+  nativeSchtasksIntegrationEnabled,
+  vitestWorkerDeclarationEntries,
+} from "../../scripts/lib/vitest-worker-declarations.mts";
 
 // Configs may be separately bundled per project. The Vitest instance, not a
 // module singleton or project globalSetup, owns their one preparation request.
 const declarationNames = new Set(
-  Object.values(vitestWorkerDeclarationEntries).map((source) => path.basename(source, ".ts")),
+  Object.values(vitestWorkerDeclarationEntries).map((source) =>
+    path.basename(source).replace(/\.[cm]?[jt]s$/u, ""),
+  ),
 );
 const ownerKey = Symbol.for("openclaw.vitest.compiled-subprocess-owner");
 const declarationPrefix = "\0openclaw:compiled-subprocess:";
@@ -26,22 +31,26 @@ export function compiledSubprocessesPlugin(): Plugin {
   return {
     name: "openclaw:compiled-subprocesses",
     enforce: "pre",
-    configureVitest({ vitest, experimental_defineCacheKeyGenerator }) {
+    configureVitest({ vitest, defineCacheKeyGenerator }) {
       const supplied = getVitestWorkerDescriptor();
       // Only the repository runner can join all borrowers before deleting code.
       // Standalone Vitest, watch and metadata collection retain live source.
       if (
         !supplied ||
         vitest.config.watch ||
-        isVitestWorkerMetadataRequest(process.argv.slice(2))
+        !parseVitestExecutionArgs(process.argv.slice(2), parseCLI)
       ) {
         return;
       }
       const instance = vitest as WorkerVitest;
       if (!instance[ownerKey]) {
-        // Source and compiled imports differ, but generations within this mode
-        // share parent transforms. Keep Vitest's source/config hashing intact.
-        experimental_defineCacheKeyGenerator(() => "openclaw:compiled-subprocesses");
+        // Declaration selection changes source versus compiled imports; generations
+        // with the same selection can share parent transforms.
+        defineCacheKeyGenerator(() =>
+          nativeSchtasksIntegrationEnabled
+            ? "openclaw:compiled-subprocesses:native-schtasks"
+            : "openclaw:compiled-subprocesses",
+        );
         const directory = supplied.directory;
         let preparation: Promise<string> | undefined;
         let failure: unknown;
@@ -60,8 +69,10 @@ export function compiledSubprocessesPlugin(): Plugin {
         instance[ownerKey] = {
           acquire() {
             return (preparation ??= (async () => {
-              await requestVitestWorkerArtifacts();
-              verifyVitestWorkerArtifacts(directory);
+              await requestVitestWorkerArtifacts().catch((error: unknown) => {
+                failure = error;
+                throw error;
+              });
               return directory;
             })());
           },
@@ -71,19 +82,10 @@ export function compiledSubprocessesPlugin(): Plugin {
             process.exitCode = 1;
           }
         });
-        // Vitest closes its pool concurrently with this hook. Verification is
-        // safe here; deletion belongs to the outer runner after actual child close.
-        vitest.onClose(async () => {
+        // The outer owner verifies before lending and after every borrower closes.
+        // Rechecking here races pool shutdown and consumes Vitest's teardown deadline.
+        vitest.onClose(() => {
           process.off("disconnect", ownerDisconnected);
-          if (preparation) {
-            try {
-              verifyVitestWorkerArtifacts(await preparation);
-            } catch (error) {
-              failure = error;
-              process.exitCode = 1;
-              throw error;
-            }
-          }
         });
       }
       owner = instance[ownerKey];
@@ -95,7 +97,7 @@ export function compiledSubprocessesPlugin(): Plugin {
       if (
         !owner ||
         !importer ||
-        !declarationNames.has(path.basename(source).replace(/\.[jt]s$/u, ""))
+        !declarationNames.has(path.basename(source).replace(/\.[cm]?[jt]s$/u, ""))
       ) {
         return null;
       }
@@ -105,9 +107,10 @@ export function compiledSubprocessesPlugin(): Plugin {
       if (!resolved || !isVitestWorkerDeclaration(resolved.id)) {
         return null;
       }
-      // Cached imports are replayed without their original importer. Give the
-      // compiler's source declarations a distinct URL so replay cannot redirect them.
+      // Cached imports are replayed without their original importer. Give build
+      // configurations' source declarations a distinct URL so replay cannot redirect them.
       if (
+        importer.endsWith("/scripts/lib/managed-handoff-build-config.mts") ||
         importer.endsWith("/scripts/lib/runtime-process-build-entries.mts") ||
         importer.endsWith("/scripts/lib/runtime-process-core-build-entries.mts") ||
         importer.endsWith("/scripts/lib/vitest-worker-build-entries.mts")

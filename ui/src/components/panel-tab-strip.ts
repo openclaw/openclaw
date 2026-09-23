@@ -1,4 +1,6 @@
 import { css, html, nothing, type TemplateResult } from "lit";
+import { AsyncDirective } from "lit/async-directive.js";
+import { directive, type ElementPart } from "lit/directive.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { icons } from "./icons.ts";
@@ -17,6 +19,11 @@ export type PanelTabStripTab = {
   badge?: string | null;
   className?: string;
   closeLabel: string;
+  group?: string;
+  draggable?: boolean;
+  reorderId?: string;
+  /** Explicit click/Enter/Space action; arrow-key selection still uses onSelect. */
+  onActivate?: () => void;
 };
 
 const reconciledTabLayouts = new WeakMap<Element, string>();
@@ -46,12 +53,12 @@ function activeElementFor(element: Element): Element | null {
     : document.activeElement;
 }
 
-function deepestActiveElement(): Element | null {
+function deepestActiveElementId(): string | null {
   let active = document.activeElement;
   while (active instanceof HTMLElement && active.shadowRoot?.activeElement) {
     active = active.shadowRoot.activeElement;
   }
-  return active;
+  return active instanceof HTMLElement ? active.id : null;
 }
 
 function focusNeedsRecovery(element: Element, current: Element | null): boolean {
@@ -63,80 +70,133 @@ function focusNeedsRecovery(element: Element, current: Element | null): boolean 
   );
 }
 
-function panelTabLabelOverflowRef() {
-  let resizeObserver: ResizeObserver | null = null;
-  return (element: Element | undefined) => {
-    resizeObserver?.disconnect();
-    resizeObserver = null;
-    if (!(element instanceof HTMLElement)) {
-      return;
-    }
-    const update = () => {
-      const overflowing = element.scrollWidth > element.clientWidth + 1;
-      element.classList.toggle("is-overflowing", overflowing);
-      element.parentElement?.classList.toggle("has-label-overflow", overflowing);
-      element.toggleAttribute("data-tooltip-overflow", overflowing);
-    };
-    update();
-    if (typeof ResizeObserver === "function") {
-      resizeObserver = new ResizeObserver(update);
-      resizeObserver.observe(element);
-    }
-  };
-}
+class PanelTabMeasurementsDirective extends AsyncDirective {
+  #element: Element | undefined;
+  #scroller: HTMLElement | undefined;
+  #resizeObserver: ResizeObserver | undefined;
+  #mutationObserver: MutationObserver | undefined;
+  #observed = new Set<Element>();
+  #frame: number | undefined;
+  #generation = 0;
+  #layoutKey: string | undefined;
+  #direction: string | undefined;
 
-/** Marks which edges of the tab row still hide tabs, so CSS can fade them out
- *  instead of letting the scroller slice a pill into an icon-only stub. Edges
- *  are measured from client rects because `scrollLeft` flips sign under RTL,
- *  while rects — and the fade masks they drive — are always physical. */
-function panelTabScrollEdgesRef() {
-  let resizeObserver: ResizeObserver | null = null;
-  let detach: (() => void) | null = null;
-  // Installation resumes after an await, so a ref swap inside that window has to
-  // cancel the pending body; otherwise its listener and observer outlive every
-  // cleanup and accumulate once per render.
-  let generation = 0;
-  return (element: Element | undefined) => {
-    generation += 1;
-    const installing = generation;
-    resizeObserver?.disconnect();
-    resizeObserver = null;
-    detach?.();
-    detach = null;
-    if (!(element instanceof HTMLElement)) {
+  render(_layoutKey: string) {
+    return nothing;
+  }
+
+  override update(part: ElementPart, [layoutKey]: [string]) {
+    if (!this.#element) {
+      this.#element = part.element;
+      this.#connect();
+    }
+    const direction = this.#element.ownerDocument.documentElement.dir;
+    if (this.#layoutKey !== layoutKey || this.#direction !== direction) {
+      this.#layoutKey = layoutKey;
+      this.#direction = direction;
+      this.#schedule();
+    }
+    return nothing;
+  }
+
+  #connect() {
+    const element = this.#element;
+    if (!element || !this.isConnected) {
       return;
     }
+    const generation = ++this.#generation;
+    // Text can change its overflow without changing the label's observed width.
+    this.#mutationObserver = new MutationObserver(this.#schedule);
+    this.#mutationObserver.observe(element, {
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
     void (async () => {
-      // The scroller is the group's own tabs part, so wait for its first render.
-      await (element as HTMLElement & { updateComplete?: Promise<unknown> }).updateComplete;
-      const scroller = element.shadowRoot?.querySelector<HTMLElement>('[part~="tabs"]');
-      if (!scroller || !element.isConnected || installing !== generation) {
+      await (element as Element & { updateComplete?: Promise<unknown> }).updateComplete;
+      if (generation !== this.#generation || !this.isConnected || !element.isConnected) {
         return;
       }
-      const update = () => {
-        // Ignore sub-pixel and padding-sized offsets so a resting row does not
-        // fade its first tab for the scroller's own inline padding.
-        const edgeSlack = 8;
-        const rects = [...element.children].map((item) => item.getBoundingClientRect());
-        if (rects.length === 0) {
-          return;
-        }
-        const viewport = scroller.getBoundingClientRect();
-        const contentLeft = Math.min(...rects.map((rect) => rect.left));
-        const contentRight = Math.max(...rects.map((rect) => rect.right));
-        element.classList.toggle("has-scroll-left", viewport.left - contentLeft > edgeSlack);
-        element.classList.toggle("has-scroll-right", contentRight - viewport.right > edgeSlack);
-      };
-      update();
-      scroller.addEventListener("scroll", update, { passive: true });
-      detach = () => scroller.removeEventListener("scroll", update);
+      this.#scroller =
+        element.shadowRoot?.querySelector<HTMLElement>('[part~="tabs"]') ?? undefined;
+      this.#scroller?.addEventListener("scroll", this.#schedule, { passive: true });
       if (typeof ResizeObserver === "function") {
-        resizeObserver = new ResizeObserver(update);
-        resizeObserver.observe(scroller);
+        this.#resizeObserver = new ResizeObserver(this.#schedule);
+        if (this.#scroller) {
+          this.#resizeObserver.observe(this.#scroller);
+          this.#observed.add(this.#scroller);
+        }
       }
+      this.#schedule();
     })();
+  }
+
+  readonly #schedule = () => {
+    if (this.#frame !== undefined || !this.isConnected || !this.#scroller) {
+      return;
+    }
+    this.#frame = requestAnimationFrame(() => {
+      this.#frame = undefined;
+      const element = this.#element;
+      const scroller = this.#scroller;
+      if (!this.isConnected || !element?.isConnected || !scroller) {
+        return;
+      }
+      const children = [...element.children];
+      const labels = [...element.querySelectorAll<HTMLElement>(".tabstrip-tab__label")];
+      const observed = new Set<Element>([scroller, ...children, ...labels]);
+      for (const target of this.#observed) {
+        if (!observed.has(target)) {
+          this.#resizeObserver?.unobserve(target);
+        }
+      }
+      for (const target of observed) {
+        if (!this.#observed.has(target)) {
+          this.#resizeObserver?.observe(target);
+        }
+      }
+      this.#observed = observed;
+
+      // Read the completed row together before any overflow classes can dirty layout.
+      const overflow = labels.map((label) => ({
+        label,
+        overflowing: label.scrollWidth > label.clientWidth + 1,
+      }));
+      const rects = children.map((child) => child.getBoundingClientRect());
+      const viewport = scroller.getBoundingClientRect();
+      // Rects are physical in both writing directions; scrollLeft is not.
+      // Keep resting tabs clear of the fade despite inline padding and rounding.
+      const left = rects.some((rect) => viewport.left - rect.left > 8);
+      const right = rects.some((rect) => rect.right - viewport.right > 8);
+      overflow.forEach(({ label, overflowing }) => {
+        label.classList.toggle("is-overflowing", overflowing);
+        label.parentElement?.classList.toggle("has-label-overflow", overflowing);
+        label.toggleAttribute("data-tooltip-overflow", overflowing);
+      });
+      element.classList.toggle("has-scroll-left", left);
+      element.classList.toggle("has-scroll-right", right);
+    });
   };
+
+  protected override disconnected() {
+    this.#generation += 1;
+    this.#mutationObserver?.disconnect();
+    this.#resizeObserver?.disconnect();
+    this.#observed.clear();
+    this.#scroller?.removeEventListener("scroll", this.#schedule);
+    this.#scroller = undefined;
+    if (this.#frame !== undefined) {
+      cancelAnimationFrame(this.#frame);
+      this.#frame = undefined;
+    }
+  }
+
+  protected override reconnected() {
+    this.#connect();
+  }
 }
+
+const panelTabMeasurements = directive(PanelTabMeasurementsDirective);
 
 /** "before"/"after" are array order, but pointer position is physical: under RTL
  *  the visually leading half of a tab is its right half. Both drag handlers read
@@ -184,10 +244,10 @@ function reconcileSelectedTabElement(
   });
 }
 
-export function renderPanelTabStrip(params: {
-  tabs: PanelTabStripTab[];
+export function renderPanelTabStrip<T extends PanelTabStripTab>(params: {
+  tabs: T[];
   activeId: string | null;
-  ariaControls: string;
+  ariaControls: string | ((tab: T) => string);
   onSelect: (id: string) => void;
   onClose: (id: string) => void | Promise<void>;
   onNew: () => void;
@@ -198,6 +258,8 @@ export function renderPanelTabStrip(params: {
   separateTabs?: boolean;
   onReorder?: (sourceId: string, targetId: string, placement: "before" | "after") => void;
 }) {
+  const controlsFor = (tab: T) =>
+    typeof params.ariaControls === "string" ? params.ariaControls : params.ariaControls(tab);
   const newButton = (slotted: boolean) =>
     params.newControl === nothing
       ? nothing
@@ -224,60 +286,97 @@ export function renderPanelTabStrip(params: {
     // visible. Keep the new-session control outside the group until one exists.
     return newButton(false);
   }
-  const activeElement = deepestActiveElement();
-  const focusedTabDomId =
-    activeElement instanceof HTMLElement &&
-    params.tabs.some((tab) => tab.domId === activeElement.id)
-      ? activeElement.id
-      : null;
+  // Event callbacks retain this render scope; keep focus identity without retaining its DOM tree.
+  const activeElementId = deepestActiveElementId();
+  const focusedTabDomId = params.tabs.some((tab) => tab.domId === activeElementId)
+    ? activeElementId
+    : null;
   // Selection belongs in the key: activating a clipped tab has to scroll it back
   // into view, otherwise it stays cut off at the viewport edge as icon-only.
   // Serialized rather than joined: a delimiter can appear inside an id, and two
   // different layouts must never produce the same key.
   const layoutKey = JSON.stringify([params.activeId, params.tabs.map((tab) => tab.id)]);
+  // A new class binding replaces overflow markers even when dimensions stay equal.
+  const measurementKey = JSON.stringify([layoutKey, params.tabs.map((tab) => tab.className)]);
   return html`
     <wa-tab-group
       class="tabstrip"
-      ${ref(panelTabScrollEdgesRef())}
+      ${panelTabMeasurements(measurementKey)}
       .active=${params.activeId ?? ""}
       activation="auto"
       without-scroll-controls
-      @wa-tab-show=${(event: CustomEvent<{ name: string }>) => params.onSelect(event.detail.name)}
+      @wa-tab-show=${(event: CustomEvent<{ name: string }>) => {
+        // Web Awesome also emits for controlled selection updates. Echoing those
+        // as user actions can reopen a panel that its owner just focused away.
+        if (event.detail.name !== params.activeId) {
+          params.onSelect(event.detail.name);
+        }
+      }}
     >
       ${repeat(
         params.tabs,
         (tab) => tab.id,
         (tab, index) => {
           const selected = tab.id === params.activeId;
-          // Every gap keeps its separator so activating a tab cannot reflow the
-          // row; the pair touching the active tab is faded out in CSS instead.
-          const showSeparator = params.separateTabs === true && index < params.tabs.length - 1;
+          const reorderId = tab.reorderId ?? tab.id;
+          const draggable = Boolean(params.onReorder) && tab.draggable !== false;
+          // Every gap outside a group keeps its separator so activating a tab cannot
+          // reflow the row; the pair touching the active tab is faded out in CSS instead.
+          const showSeparator =
+            params.separateTabs === true &&
+            index < params.tabs.length - 1 &&
+            (tab.group === undefined || tab.group !== params.tabs[index + 1]?.group);
           const tabContent = html`
-            ${tab.icon == null || tab.icon === nothing
-              ? nothing
-              : html`<span class="tabstrip-tab__icon" aria-hidden="true">${tab.icon}</span>`}
-            <span class="tabstrip-tab__label" ${ref(panelTabLabelOverflowRef())}>${tab.label}</span>
+            ${
+              tab.icon == null || tab.icon === nothing
+                ? nothing
+                : html`<span class="tabstrip-tab__icon" aria-hidden="true">${tab.icon}</span>`
+            }
+            <span class="tabstrip-tab__label">${tab.label}</span>
             ${tab.badge ? html`<span class="tabstrip-tab__badge">${tab.badge}</span>` : nothing}
-            ${tab.statusLabel
-              ? html`<span class="tabstrip-tab__status">${tab.statusLabel}</span>`
-              : nothing}
+            ${
+              tab.statusLabel
+                ? html`<span class="tabstrip-tab__status">${tab.statusLabel}</span>`
+                : nothing
+            }
           `;
           return html`
             <wa-tab
               id=${tab.domId}
               class=${`tabstrip-tab ${tab.className ?? ""}`}
               panel=${tab.id}
-              aria-controls=${params.ariaControls}
+              aria-controls=${controlsFor(tab)}
               aria-selected=${selected ? "true" : "false"}
               title=${tab.title || nothing}
               ?active=${selected}
-              draggable=${params.onReorder ? "true" : nothing}
+              draggable=${draggable ? "true" : nothing}
               .tabIndex=${selected ? 0 : -1}
-              ${selected
-                ? ref((element) =>
-                    reconcileSelectedTabElement(element, layoutKey, focusedTabDomId === tab.domId),
-                  )
-                : nothing}
+              ${
+                selected
+                  ? ref((element) =>
+                      reconcileSelectedTabElement(
+                        element,
+                        layoutKey,
+                        focusedTabDomId === tab.domId,
+                      ),
+                    )
+                  : nothing
+              }
+              @click=${(event: MouseEvent) => {
+                if (tab.onActivate) {
+                  event.stopPropagation();
+                  tab.onActivate();
+                }
+              }}
+              @keydown=${(event: KeyboardEvent) => {
+                if (tab.onActivate && (event.key === "Enter" || event.key === " ")) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  if (!event.repeat) {
+                    tab.onActivate();
+                  }
+                }
+              }}
               @auxclick=${(event: MouseEvent) => {
                 if (event.button === 1) {
                   event.preventDefault();
@@ -285,15 +384,15 @@ export function renderPanelTabStrip(params: {
                 }
               }}
               @dragstart=${(event: DragEvent) => {
-                if (!params.onReorder || !event.dataTransfer) {
+                if (!draggable || !event.dataTransfer) {
                   return;
                 }
                 event.dataTransfer.effectAllowed = "move";
-                event.dataTransfer.setData(PANEL_TAB_DRAG_TYPE, tab.id);
+                event.dataTransfer.setData(PANEL_TAB_DRAG_TYPE, reorderId);
                 if (event.currentTarget instanceof Element) {
                   const group = event.currentTarget.closest<HTMLElement>("wa-tab-group");
                   if (group) {
-                    group.dataset.draggedPanelTab = tab.id;
+                    group.dataset.draggedPanelTab = reorderId;
                   }
                 }
               }}
@@ -305,7 +404,7 @@ export function renderPanelTabStrip(params: {
                   event.currentTarget instanceof Element
                     ? draggedPanelTabId(event.currentTarget)
                     : "";
-                if (!sourceId || sourceId === tab.id) {
+                if (!sourceId || sourceId === reorderId) {
                   return;
                 }
                 event.preventDefault();
@@ -337,13 +436,13 @@ export function renderPanelTabStrip(params: {
                   target instanceof Element
                     ? draggedPanelTabId(target) || event.dataTransfer.getData(PANEL_TAB_DRAG_TYPE)
                     : "";
-                if (!sourceId || sourceId === tab.id || !(target instanceof Element)) {
+                if (!sourceId || sourceId === reorderId || !(target instanceof Element)) {
                   return;
                 }
                 event.preventDefault();
                 const placement = panelTabDropPlacement(event, target);
                 finishPanelTabDrag(target);
-                params.onReorder(sourceId, tab.id, placement);
+                params.onReorder(sourceId, reorderId, placement);
               }}
               @dragend=${(event: DragEvent) => {
                 if (event.currentTarget instanceof Element) {
@@ -351,21 +450,22 @@ export function renderPanelTabStrip(params: {
                 }
               }}
             >
-              ${tab.labelTooltip
-                ? html`<openclaw-tooltip
-                    class="tabstrip-tab__label-tooltip"
-                    .content=${tab.labelTooltip}
-                  >
-                    <span class="tabstrip-tab__tooltip-trigger">${tabContent}</span>
-                  </openclaw-tooltip>`
-                : tabContent}
+              ${
+                tab.labelTooltip
+                  ? html`<openclaw-tooltip
+                      class="tabstrip-tab__label-tooltip"
+                      .content=${tab.labelTooltip}
+                    >
+                      <span class="tabstrip-tab__tooltip-trigger">${tabContent}</span>
+                    </openclaw-tooltip>`
+                  : tabContent
+              }
             </wa-tab>
             <button
               slot="nav"
               class="rail-header__action tabstrip-tab__close"
               type="button"
               .tabIndex=${selected ? 0 : -1}
-              title=${tab.closeLabel}
               aria-label=${tab.closeLabel}
               @keydown=${(event: KeyboardEvent) => {
                 if (
@@ -396,9 +496,10 @@ export function renderPanelTabStrip(params: {
                     HTMLElement & { updateComplete?: Promise<unknown> }
                   >("wa-tab-group") ?? []),
                 ].find((candidate) =>
-                  [...candidate.querySelectorAll<HTMLElement>("wa-tab")].some(
-                    (renderedTab) =>
-                      renderedTab.getAttribute("aria-controls") === params.ariaControls,
+                  [...candidate.querySelectorAll<HTMLElement>("wa-tab")].some((renderedTab) =>
+                    params.tabs.some(
+                      (entry) => renderedTab.getAttribute("aria-controls") === controlsFor(entry),
+                    ),
                   ),
                 );
                 await settledGroup?.updateComplete;
@@ -414,9 +515,11 @@ export function renderPanelTabStrip(params: {
             >
               <span class="tabstrip-tab__close-box">${icons.x}</span>
             </button>
-            ${showSeparator
-              ? html`<span slot="nav" class="tabstrip-separator" aria-hidden="true"></span>`
-              : nothing}
+            ${
+              showSeparator
+                ? html`<span slot="nav" class="tabstrip-separator" aria-hidden="true"></span>`
+                : nothing
+            }
           `;
         },
       )}
@@ -487,6 +590,12 @@ export const panelTabStripStyles = css`
   .tabstrip-tab__icon {
     display: inline-flex;
     color: var(--accent, #ff5c5c);
+  }
+  .tabstrip-tab__favicon {
+    width: 16px;
+    height: 16px;
+    border-radius: 3px;
+    object-fit: contain;
   }
   .tabstrip-tab.is-exited .tabstrip-tab__icon {
     color: var(--muted, #8a919e);

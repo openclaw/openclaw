@@ -26,7 +26,6 @@ import {
   blockedTargetsByCdpUrl,
   cachedByCdpUrl,
   closeConnectionPromises,
-  closedConnections,
   connectingByCdpUrl,
   contextStates,
   observedContexts,
@@ -53,7 +52,7 @@ function resolveCdpConnectRetryDelayMs(attempt: number): number {
   return 250 + attempt * 250;
 }
 
-function hasCachedPlaywrightBrowserConnection(cdpUrl: string): boolean {
+export function hasCachedPlaywrightBrowserConnection(cdpUrl: string): boolean {
   return cachedByCdpUrl.has(normalizeCdpUrl(cdpUrl));
 }
 
@@ -155,7 +154,7 @@ export function clearBlockedPageRef(cdpUrl: string, page: Page): void {
   blockedPageRefsByCdpUrl.get(normalizeCdpUrl(cdpUrl))?.delete(page);
 }
 
-export function takeCachedPlaywrightBrowserConnection(cdpUrl: string): ConnectedBrowser | null {
+function takeCachedPlaywrightBrowserConnection(cdpUrl: string): ConnectedBrowser | null {
   const normalized = normalizeCdpUrl(cdpUrl);
   const cur = cachedByCdpUrl.get(normalized);
   cachedByCdpUrl.delete(normalized);
@@ -176,7 +175,7 @@ export function takeCachedPlaywrightBrowserConnection(cdpUrl: string): Connected
 }
 
 /** Raised when a page target has been quarantined after policy denial. */
-export class BlockedBrowserTargetError extends Error {
+class BlockedBrowserTargetError extends Error {
   constructor() {
     super("Browser target is unavailable after SSRF policy blocked its navigation.");
     this.name = "BlockedBrowserTargetError";
@@ -197,12 +196,7 @@ function releaseClosingPlaywrightConnection(connection: ConnectedBrowser): void 
   }
 }
 
-export async function closeTrackedPlaywrightConnection(
-  connection: ConnectedBrowser,
-): Promise<void> {
-  if (closedConnections.has(connection)) {
-    return;
-  }
+async function closeTrackedPlaywrightConnection(connection: ConnectedBrowser): Promise<void> {
   const existing = closeConnectionPromises.get(connection);
   if (existing) {
     return await existing;
@@ -211,10 +205,10 @@ export async function closeTrackedPlaywrightConnection(
   const closing = (async () => {
     try {
       await connection.browser.close();
-      closedConnections.add(connection);
       releaseClosingPlaywrightConnection(connection);
-    } finally {
+    } catch (error) {
       closeConnectionPromises.delete(connection);
+      throw error;
     }
   })();
   closeConnectionPromises.set(connection, closing);
@@ -248,65 +242,44 @@ export function retirePlaywrightBrowserConnectionExact(opts: {
   const normalized = normalizeCdpUrl(opts.cdpUrl);
   clearBlockedTargetsForCdpUrl(normalized);
   clearBlockedPageRefsForCdpUrl(normalized);
-  const connections = new Set<ConnectedBrowser>();
-  const closeAttempts = new Map<ConnectedBrowser, Promise<void>>();
+  const connections = new Map<ConnectedBrowser, Promise<void> | undefined>();
   const pendingCollections = new Set<Promise<void>>();
   let retired = false;
-  const startClosing = () => {
-    for (const connection of connections) {
-      if (closeAttempts.has(connection)) {
-        continue;
-      }
-      const closing = closeTrackedPlaywrightConnection(connection);
-      closeAttempts.set(connection, closing);
-      void closing.catch(() => {});
+  const captureConnection = (connection: ConnectedBrowser) => {
+    const existing = connections.get(connection);
+    if (existing) {
+      return existing;
     }
-  };
-  const awaitClosing = async () => {
-    const attempts = [...closeAttempts];
-    const results = await Promise.allSettled(attempts.map(([, closing]) => closing));
-    let firstError: Error | undefined;
-    for (const [index, result] of results.entries()) {
-      if (result.status === "rejected") {
-        const [connection, closing] = attempts[index] ?? [];
-        if (connection && closeAttempts.get(connection) === closing) {
-          closeAttempts.delete(connection);
-        }
-        firstError ??= toErrorObject(result.reason, "Playwright adapter disconnect failed.");
-      }
-    }
-    if (firstError) {
-      throw firstError;
-    }
+    const closing = closeTrackedPlaywrightConnection(connection);
+    connections.set(connection, closing);
+    void closing.catch(() => {});
+    return closing;
   };
   const capture = () => {
     const pending = connectingByCdpUrl.get(normalized);
     const cached = takeCachedPlaywrightBrowserConnection(normalized);
     for (const connection of retainedClosingByCdpUrl.get(normalized) ?? []) {
-      connections.add(connection);
+      void captureConnection(connection);
     }
     if (cached) {
-      connections.add(cached);
-      retainClosingPlaywrightConnection(cached);
+      void captureConnection(cached);
     }
     if (pending) {
       const collection = pending.promise.then(
         (connection) => {
-          connections.add(connection);
+          void captureConnection(connection);
         },
         () => {
           if (pending.attempt.retired) {
-            connections.add(pending.attempt.retired);
+            void captureConnection(pending.attempt.retired);
           }
         },
       );
       pendingCollections.add(collection);
       void collection.then(() => {
         pendingCollections.delete(collection);
-        startClosing();
       });
     }
-    startClosing();
     const captured = Boolean(pending || connections.size > 0);
     retired ||= captured;
     return captured;
@@ -320,10 +293,28 @@ export function retirePlaywrightBrowserConnectionExact(opts: {
     close: async () => {
       await withPlaywrightCloseTimeout(
         (async () => {
-          startClosing();
+          for (const connection of connections.keys()) {
+            void captureConnection(connection);
+          }
           await Promise.all(pendingCollections);
-          startClosing();
-          await awaitClosing();
+          const attempts = [...connections.keys()].map(
+            (connection) => [connection, captureConnection(connection)] as const,
+          );
+          const results = await Promise.allSettled(attempts.map(([, closing]) => closing));
+          let firstError: Error | undefined;
+          for (const [index, result] of results.entries()) {
+            if (result.status !== "rejected") {
+              continue;
+            }
+            const [connection, closing] = attempts[index]!;
+            if (connections.get(connection) === closing) {
+              connections.set(connection, undefined);
+            }
+            firstError ??= toErrorObject(result.reason, "Playwright adapter disconnect failed.");
+          }
+          if (firstError) {
+            throw firstError;
+          }
         })(),
       );
     },
@@ -358,8 +349,6 @@ function hasBlockedTargetsForCdpUrl(cdpUrl: string): boolean {
   }
   return false;
 }
-
-/** Raised when a page target has been quarantined after policy denial. */
 
 function observeContext(context: BrowserContext) {
   if (observedContexts.has(context)) {
@@ -413,6 +402,10 @@ export async function connectBrowser(
   // Run SSRF policy check only on cache miss so transient DNS failures
   // do not break active sessions that already hold a live CDP connection.
   const configuredPin = await assertCdpEndpointAllowed(normalized, ssrfPolicy);
+  const connectedDuringPolicyCheck = cachedByCdpUrl.get(normalized);
+  if (connectedDuringPolicyCheck) {
+    return connectedDuringPolicyCheck;
+  }
   const connecting = connectingByCdpUrl.get(normalized);
   if (connecting) {
     return await connecting.promise;
@@ -553,13 +546,21 @@ async function partitionAccessiblePages(opts: { cdpUrl: string; pages: Page[] })
 }> {
   const accessible: Array<{ page: Page; targetId: string | null }> = [];
   let blockedCount = 0;
-  for (const page of opts.pages) {
+  const candidates = await Promise.all(
+    opts.pages.map(async (page) => {
+      if (isBlockedPageRef(opts.cdpUrl, page)) {
+        return { page, targetId: null };
+      }
+      ensurePageState(page);
+      const targetId = (await pageTargetInfo(page).catch(() => null))?.targetId ?? null;
+      return { page, targetId };
+    }),
+  );
+  for (const { page, targetId } of candidates) {
     if (isBlockedPageRef(opts.cdpUrl, page)) {
       blockedCount += 1;
       continue;
     }
-    ensurePageState(page);
-    const targetId = (await pageTargetInfo(page).catch(() => null))?.targetId ?? null;
     // Fail closed when we cannot resolve a target id while this session has
     // quarantined targets; otherwise a blocked tab can become selectable.
     if (!targetId) {
@@ -625,17 +626,17 @@ export async function getPageForTargetId(opts: {
   ssrfPolicy?: SsrFPolicy;
   relayReference?: RelayOperationReference;
 }): Promise<Page> {
-  const reusedCachedBrowser = hasCachedPlaywrightBrowserConnection(opts.cdpUrl);
+  const cachedBrowser = cachedByCdpUrl.get(normalizeCdpUrl(opts.cdpUrl))?.browser;
   try {
     return await getPageForTargetIdOnce(opts);
   } catch (err) {
-    if (!isRecoverableStalePageSelectionError(err, reusedCachedBrowser)) {
+    if (!isRecoverableStalePageSelectionError(err, Boolean(cachedBrowser))) {
       throw err;
     }
     if (opts.relayReference) {
       await closeRelayOperationConnection(opts.relayReference);
     } else {
-      retirePlaywrightBrowserConnection({ cdpUrl: opts.cdpUrl });
+      evictStalePlaywrightBrowserConnection(opts.cdpUrl, cachedBrowser);
     }
     return await getPageForTargetIdOnce(opts);
   }

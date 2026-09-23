@@ -24,12 +24,15 @@ import { PROXY_ATTRIBUTION_REQUIRED_REASON } from "./ingress-attribution.js";
  */
 export function setDefaultSecurityHeaders(
   res: ServerResponse,
-  opts?: { strictTransportSecurity?: string },
+  opts?: { strictTransportSecurity?: string | false },
 ) {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("Permissions-Policy", "camera=(), microphone=(self), geolocation=()");
-  const strictTransportSecurity = opts?.strictTransportSecurity;
+  const strictTransportSecurity =
+    typeof opts?.strictTransportSecurity === "string"
+      ? opts.strictTransportSecurity.trim()
+      : undefined;
   if (typeof strictTransportSecurity === "string" && strictTransportSecurity.length > 0) {
     res.setHeader("Strict-Transport-Security", strictTransportSecurity);
   }
@@ -227,20 +230,33 @@ export function watchClientDisconnect(
   if (sockets.length === 0) {
     return () => {};
   }
+  const stopWatchingDisconnect = () => {
+    for (const socket of sockets) {
+      socket.off("close", handleClose);
+    }
+    res.off("finish", stopWatchingDisconnect);
+  };
   const handleClose = () => {
+    stopWatchingDisconnect();
     onDisconnect?.();
     if (!abortController.signal.aborted) {
       abortController.abort(new ClientDisconnectError());
     }
   };
-  const stopWatchingResponseErrors = () => {
+  const handleResponseClose = () => {
     res.off("error", handleClose);
-    res.off("close", stopWatchingResponseErrors);
+    if (!res.writableFinished) {
+      handleClose();
+      return;
+    }
+    stopWatchingDisconnect();
   };
-  // Finalizers release socket watchers before res.end(); keep its error
-  // listener until close so a failed flush cannot become process-fatal.
+  // Completed responses release socket watchers; keep response errors handled
+  // until close so a failed flush cannot become process-fatal. Some compatible
+  // runtimes publish only the response close when a client disconnects.
   res.on("error", handleClose);
-  res.once("close", stopWatchingResponseErrors);
+  res.once("close", handleResponseClose);
+  res.once("finish", stopWatchingDisconnect);
   if (res.destroyed || sockets.some((socket) => socket.destroyed)) {
     handleClose();
     return () => {};
@@ -248,9 +264,19 @@ export function watchClientDisconnect(
   for (const socket of sockets) {
     socket.on("close", handleClose);
   }
-  return () => {
-    for (const socket of sockets) {
-      socket.off("close", handleClose);
-    }
-  };
+  return stopWatchingDisconnect;
+}
+
+export function isWebSocketUpgradeRequest(req: IncomingMessage): boolean {
+  const headerContains = (value: string | readonly string[] | undefined, token: string) =>
+    (typeof value === "string" ? [value] : (value ?? [])).some((entry) =>
+      entry
+        .toLowerCase()
+        .split(",")
+        .some((part) => part.trim() === token),
+    );
+  return (
+    headerContains(req.headers.upgrade, "websocket") &&
+    headerContains(req.headers.connection, "upgrade")
+  );
 }

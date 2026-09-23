@@ -107,18 +107,21 @@ describe("message-normalizer", () => {
       expect(result.audioAsVoice).toBeUndefined();
     });
 
-    it("normalizes message with array content", () => {
-      const result = normalizeMessage({
+    it("normalizes mixed text, thinking, and tool content", () => {
+      const message = {
         role: "assistant",
         content: [
           { type: "text", text: "Here is the result" },
           { type: "tool_use", name: "bash", args: { command: "ls" } },
+          { type: "thinking", thinking: "Checking the result." },
         ],
         timestamp: 2000,
-      });
+      };
+      const result = normalizeMessage(message);
 
       expect(result.role).toBe("toolResult");
-      expect(result.content).toHaveLength(2);
+      expect(isStandaloneToolMessageForDisplay(message)).toBe(false);
+      expect(result.content).toHaveLength(3);
       expect(result.content[0]).toEqual({
         type: "text",
         text: "Here is the result",
@@ -131,6 +134,7 @@ describe("message-normalizer", () => {
         name: "bash",
         args: { command: "ls" },
       });
+      expect(result.content[2]).toEqual({ type: "thinking", thinking: "Checking the result." });
     });
 
     it("normalizes persisted Responses text blocks as renderable text", () => {
@@ -355,6 +359,46 @@ describe("message-normalizer", () => {
       });
     });
 
+    it.each([
+      { viewId: "cv_widget", url: "/__openclaw__/canvas/documents/cv_widget/index.html" },
+      { url: "/__openclaw__/canvas/documents/cv_widget/index.html" },
+    ])("keeps the canonical Canvas block instead of its shortcode copy: %j", (identity) => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: [
+          { type: "text", text: 'Ready.\n[embed ref="cv_widget" title="Widget" /]' },
+          {
+            type: "canvas",
+            preview: {
+              kind: "canvas",
+              surface: "assistant_message",
+              render: "url",
+              ...identity,
+              sandbox: "strict",
+              boardWidgetName: "saved-widget",
+            },
+            rawText: "original tool result",
+          },
+        ],
+      });
+
+      expect(result.content).toEqual([
+        { type: "text", text: "Ready." },
+        {
+          type: "canvas",
+          preview: {
+            kind: "canvas",
+            surface: "assistant_message",
+            render: "url",
+            ...identity,
+            sandbox: "strict",
+            boardWidgetName: "saved-widget",
+          },
+          rawText: "original tool result",
+        },
+      ]);
+    });
+
     it("drops invalid canvas dashboard identity from history", () => {
       const result = normalizeMessage({
         role: "assistant",
@@ -564,6 +608,18 @@ describe("message-normalizer", () => {
               width: value,
               height: value,
             },
+            {
+              type: "attachment",
+              attachment: {
+                kind: "document",
+                url: "/media/document",
+                label: "Document",
+                sizeBytes: value,
+                durationMs: value,
+                width: value,
+                height: value,
+              },
+            },
           ],
         });
         expect(result.content).toEqual([
@@ -578,6 +634,10 @@ describe("message-normalizer", () => {
             rawText: null,
           },
           { type: "attachment", attachment: { kind: "video", url: "/media/clip", label: "Video" } },
+          {
+            type: "attachment",
+            attachment: { kind: "document", url: "/media/document", label: "Document" },
+          },
         ]);
       },
     );
@@ -764,53 +824,30 @@ describe("message-normalizer", () => {
       ]);
     });
 
-    it("preserves relative MEDIA references as visible text instead of dropping the assistant turn", () => {
-      const result = normalizeMessage({
-        role: "assistant",
-        content: "MEDIA:chart.png",
-      });
-
-      expect(result.content).toEqual([{ type: "text", text: "MEDIA:chart.png" }]);
+    it.each([
+      ["image.png", "image", "image/png"],
+      ["./image.png", "image", "image/png"],
+      ["openclaw/tmp/github-panel/v2-proof/github-pr-diff-light.png", "image", "image/png"],
+      ["voice.ogg", "audio", "audio/ogg"],
+      ["report.pdf", "document", "application/pdf"],
+      ["render final.png", "image", "image/png"],
+    ])("keeps relative MEDIA references as assistant attachments: %s", (url, kind, mimeType) => {
+      const attachment = {
+        type: "attachment",
+        attachment: { url, kind, mimeType, label: url.split("/").at(-1) },
+      };
+      expect(normalizeMessage({ role: "assistant", content: `MEDIA:${url}` }).content).toEqual([
+        attachment,
+      ]);
+      expect(
+        normalizeMessage({
+          role: "assistant",
+          content: `Before\nMEDIA:"${url}"\nAfter`,
+        }).content,
+      ).toEqual([{ type: "text", text: "Before" }, attachment, { type: "text", text: "After" }]);
     });
 
-    it.each([
-      ["bare image", "Generated image\nMEDIA:image.png", "Generated image\nMEDIA:image.png"],
-      ["bare audio", "Generated audio\nMEDIA:voice.ogg", "Generated audio\nMEDIA:voice.ogg"],
-      [
-        "bare document",
-        "Generated document\nMEDIA:report.pdf",
-        "Generated document\nMEDIA:report.pdf",
-      ],
-      [
-        "caption after bare filename",
-        "MEDIA:image.png\nGenerated image",
-        "MEDIA:image.png\nGenerated image",
-      ],
-      [
-        "quoted bare filename",
-        'Generated image\nMEDIA:"image.png"',
-        "Generated image\nMEDIA:image.png",
-      ],
-      [
-        "quoted bare filename with spaces",
-        'Generated image\nMEDIA:"render final.png"',
-        "Generated image\nMEDIA:render final.png",
-      ],
-      [
-        "explicit relative sibling",
-        "Generated image\nMEDIA:./image.png",
-        "Generated image\nMEDIA:./image.png",
-      ],
-    ] as const)(
-      "preserves relative assistant media beside its caption: %s",
-      (_name, input, text) => {
-        expect(normalizeMessage({ role: "assistant", content: input }).content).toEqual([
-          { type: "text", text },
-        ]);
-      },
-    );
-
-    it("preserves bare assistant media references around a renderable attachment", () => {
+    it("preserves the order of relative and remote assistant attachments", () => {
       expect(
         normalizeMessage({
           role: "assistant",
@@ -818,7 +855,16 @@ describe("message-normalizer", () => {
             "Generated artifacts\nMEDIA:image.png\nMEDIA:https://example.com/remote.png\nMEDIA:voice.ogg",
         }).content,
       ).toEqual([
-        { type: "text", text: "Generated artifacts\nMEDIA:image.png" },
+        { type: "text", text: "Generated artifacts" },
+        {
+          type: "attachment",
+          attachment: {
+            url: "image.png",
+            kind: "image",
+            label: "image.png",
+            mimeType: "image/png",
+          },
+        },
         {
           type: "attachment",
           attachment: {
@@ -828,7 +874,15 @@ describe("message-normalizer", () => {
             mimeType: "image/png",
           },
         },
-        { type: "text", text: "MEDIA:voice.ogg" },
+        {
+          type: "attachment",
+          attachment: {
+            url: "voice.ogg",
+            kind: "audio",
+            label: "voice.ogg",
+            mimeType: "audio/ogg",
+          },
+        },
       ]);
     });
 

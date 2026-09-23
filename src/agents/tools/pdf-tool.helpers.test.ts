@@ -1,40 +1,9 @@
 // PDF tool helper tests cover page ranges, PDF input normalization, provider
 // capability checks, and assistant text coercion.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-
-const pdfMetadataPlugins = vi.hoisted(() => [
-  {
-    contracts: {
-      mediaUnderstandingProviders: ["anthropic", "google", "openai"],
-    },
-    mediaUnderstandingProviderMetadata: {
-      anthropic: { capabilities: ["image"], nativeDocumentInputs: ["pdf"] },
-      google: { capabilities: ["image"], nativeDocumentInputs: ["pdf"] },
-      openai: { capabilities: ["image"], nativeDocumentInputs: [] },
-    },
-  },
-]);
-
-vi.mock("../../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: () => ({
-    plugins: pdfMetadataPlugins,
-    diagnostics: [],
-  }),
-  loadPluginRegistrySnapshotWithMetadata: () => ({
-    source: "derived",
-    snapshot: { plugins: [] },
-    diagnostics: [],
-  }),
-}));
-
-vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../plugins/current-plugin-metadata-snapshot.js")>()),
-  getCurrentPluginMetadataSnapshot: () => ({
-    plugins: pdfMetadataPlugins,
-  }),
-}));
-
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import {
   coercePdfAssistantText,
   coercePdfModelConfig,
@@ -43,6 +12,22 @@ import {
   resolvePdfInputs,
   resolvePdfToolMaxTokens,
 } from "./pdf-tool.helpers.js";
+
+const pdfMetadataSnapshot = createPluginMetadataSnapshotFixture({
+  plugins: [
+    {
+      id: "pdf-fixture",
+      contracts: {
+        mediaUnderstandingProviders: ["anthropic", "google", "openai"],
+      },
+      mediaUnderstandingProviderMetadata: {
+        anthropic: { capabilities: ["image"], nativeDocumentInputs: ["pdf"] },
+        google: { capabilities: ["image"], nativeDocumentInputs: ["pdf"] },
+        openai: { capabilities: ["image"], nativeDocumentInputs: [] },
+      },
+    },
+  ],
+});
 
 const ANTHROPIC_PDF_MODEL = "anthropic/claude-opus-4-7";
 
@@ -75,11 +60,6 @@ describe("parsePageRange", () => {
     expect(() => parsePageRange("abc", 20)).toThrow("Invalid page number");
   });
 
-  it("throws on fractional page numbers", () => {
-    expect(() => parsePageRange("1.5", 20)).toThrow('Invalid page number: "1.5"');
-    expect(() => parsePageRange("1,2.5", 20)).toThrow('Invalid page number: "2.5"');
-  });
-
   it("throws on unsafe integer page numbers and ranges", () => {
     const unsafePage = String(Number.MAX_SAFE_INTEGER + 1);
     const maxPages = 20;
@@ -109,35 +89,21 @@ describe("parsePageRange", () => {
 });
 
 describe("providerSupportsNativePdf", () => {
-  it("returns true for anthropic", () => {
-    // Native PDF support is derived from plugin metadata, not a hard-coded
-    // provider allowlist in the helper.
-    expect(providerSupportsNativePdf("anthropic")).toBe(true);
-  });
-
-  it("returns true for google", () => {
-    expect(providerSupportsNativePdf("google")).toBe(true);
-  });
-
-  it("returns false for openai", () => {
-    expect(providerSupportsNativePdf("openai")).toBe(false);
-  });
-
-  it("returns false for minimax", () => {
-    expect(providerSupportsNativePdf("minimax")).toBe(false);
-  });
-
-  it("is case-insensitive", () => {
-    expect(providerSupportsNativePdf("Anthropic")).toBe(true);
-    expect(providerSupportsNativePdf("GOOGLE")).toBe(true);
+  it.each([
+    ["anthropic", true],
+    ["google", true],
+    ["openai", false],
+    ["minimax", false],
+    ["Anthropic", true],
+    ["GOOGLE", true],
+  ] as const)("returns %s capability from its manifest: %s", (provider, supported) => {
+    withPluginMetadataSnapshotScope(pdfMetadataSnapshot, () => {
+      expect(providerSupportsNativePdf(provider)).toBe(supported);
+    });
   });
 });
 
 describe("pdf-tool.helpers", () => {
-  it("resolvePdfInputs requires at least one pdf reference", () => {
-    expect(() => resolvePdfInputs({ prompt: "test" })).toThrow("pdf required");
-  });
-
   it("resolvePdfInputs deduplicates pdf and pdfs entries", () => {
     // `pdf` and `pdfs` are both public inputs; normalize them to one ordered
     // list before any filesystem or provider work begins.

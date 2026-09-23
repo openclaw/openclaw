@@ -3,11 +3,13 @@ import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { crabboxState } from "./crabbox-state.test-support.js";
 import { registerCrabboxWarmImageCommands } from "./crabbox-worker-warm-image-cli.js";
 import {
-  openCrabboxWarmImageStore,
+  assertCrabboxWarmImageMigrationReady,
   type WarmProfileRecord,
 } from "./crabbox-worker-warm-image-store.js";
 
@@ -15,7 +17,8 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const SELECTOR = "83eb5c1e-e408-4b64-9575-f8670287e294";
 let output = "";
 
-beforeEach(() => {
+beforeEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-crabbox-warm-cli-"));
   output = "";
@@ -25,23 +28,29 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
-function pendingCapture(): WarmProfileRecord {
+function pendingCapture(
+  phase: "scrubbing" | "creating" | "uncertain" = "creating",
+): WarmProfileRecord {
   const now = Date.now();
   return {
-    version: 2,
+    version: 3,
     allocations: {},
     image: {
       checkpointId: "chk_last_good",
       kind: "native",
       state: "available",
       createdAtMs: now - 86_400_000,
-      lastUsedAtMs: now,
+      preparationKey: null,
+      cacheKey: null,
+      purpose: null,
+      lastDemandAtMs: now,
     },
     operation: {
       type: "capture",
@@ -49,14 +58,14 @@ function pendingCapture(): WarmProfileRecord {
       startedAtMs: now - 1_200_000,
       leaseId: "cbx_capture",
       provider: "aws",
-      phase: "creating",
+      phase,
     },
   };
 }
 
 async function runCli(...args: string[]) {
   const program = new Command().exitOverride();
-  registerCrabboxWarmImageCommands(program);
+  registerCrabboxWarmImageCommands(program, crabboxState);
   await program.parseAsync(["crabbox", "warm-images", ...args], { from: "user" });
 }
 
@@ -66,7 +75,11 @@ describe("Crabbox warm-image CLI", () => {
       namespace: "warm-leases",
       maxEntries: 256,
     });
+    await expect(assertCrabboxWarmImageMigrationReady(crabboxState)).resolves.toBeUndefined();
     legacy.register("cbx_legacy", { machineClass: "standard" });
+    await expect(assertCrabboxWarmImageMigrationReady(crabboxState)).rejects.toThrow(
+      "legacy worker allocations",
+    );
     await runCli("--json");
     const selector = JSON.parse(output).legacyLeases[0].selector as string;
     expect(JSON.parse(output).legacyLeases[0]).toMatchObject({
@@ -87,11 +100,18 @@ describe("Crabbox warm-image CLI", () => {
       "--acknowledge-provider-cleanup",
     );
     expect(legacy.lookup("cbx_legacy")).toBeUndefined();
+    await expect(assertCrabboxWarmImageMigrationReady(crabboxState)).resolves.toBeUndefined();
   });
 
   it("inspects retained capture ownership after reopening SQLite without changing it", async () => {
     const record = pendingCapture();
-    openCrabboxWarmImageStore().register("profile", record);
+    record.image!.runtimeIdentity = {
+      nodeBootstrapSha256: "a".repeat(64),
+      executionMode: "worker-turn",
+      workerBundleSha256: "b".repeat(64),
+    };
+    openWarmImageFixtureStore().register("profile", record);
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
 
     await runCli("--json");
@@ -104,7 +124,11 @@ describe("Crabbox warm-image CLI", () => {
           checkpointId: "chk_last_good",
           state: "available",
           createdAtMs: record.image!.createdAtMs,
-          lastUsedAtMs: record.image!.lastUsedAtMs,
+          preparationKey: null,
+          cacheKey: null,
+          purpose: null,
+          lastDemandAtMs: record.image!.lastDemandAtMs,
+          runtimeIdentity: record.image!.runtimeIdentity,
           allocations: {},
           capture: {
             selector: SELECTOR,
@@ -118,7 +142,7 @@ describe("Crabbox warm-image CLI", () => {
         },
       ],
     });
-    expect(openCrabboxWarmImageStore().lookup("profile")).toEqual(record);
+    expect(openWarmImageFixtureStore().lookup("profile")).toEqual(record);
   });
 
   it.each([
@@ -139,11 +163,11 @@ describe("Crabbox warm-image CLI", () => {
     },
   ])("rejects $name without clearing durable ownership", async ({ args, error }) => {
     const record = pendingCapture();
-    openCrabboxWarmImageStore().register("profile", record);
+    openWarmImageFixtureStore().register("profile", record);
 
     await expect(runCli(...args)).rejects.toThrow(error);
 
-    expect(openCrabboxWarmImageStore().lookup("profile")).toEqual(record);
+    expect(openWarmImageFixtureStore().lookup("profile")).toEqual(record);
   });
 
   it("acknowledges only the selected capture and preserves its last-good checkpoint and other retirement", async () => {
@@ -153,17 +177,17 @@ describe("Crabbox warm-image CLI", () => {
       image: { ...record.image!, checkpointId: "chk_replacement" },
       operation: { type: "retire", checkpointId: "chk_predecessor" },
     };
-    openCrabboxWarmImageStore().register("profile", record);
-    openCrabboxWarmImageStore().register("other", retiring);
+    openWarmImageFixtureStore().register("profile", record);
+    openWarmImageFixtureStore().register("other", retiring);
 
     await runCli("--recover", SELECTOR, "--acknowledge-provider-cleanup", "--json");
 
     expect(JSON.parse(output).recoveredCapture).toBe(SELECTOR);
-    expect(openCrabboxWarmImageStore().lookup("profile")).toEqual({
+    expect(openWarmImageFixtureStore().lookup("profile")).toEqual({
       ...record,
       operation: undefined,
     });
-    expect(openCrabboxWarmImageStore().lookup("other")).toEqual(retiring);
+    expect(openWarmImageFixtureStore().lookup("other")).toEqual(retiring);
     const replacement = {
       ...record,
       operation: {
@@ -175,27 +199,46 @@ describe("Crabbox warm-image CLI", () => {
         phase: "creating" as const,
       },
     };
-    openCrabboxWarmImageStore().register("profile", replacement);
+    openWarmImageFixtureStore().register("profile", replacement);
     await expect(runCli("--recover", SELECTOR, "--acknowledge-provider-cleanup")).rejects.toThrow(
       "selector is absent or changed",
     );
-    expect(openCrabboxWarmImageStore().lookup("profile")).toEqual(replacement);
+    expect(openWarmImageFixtureStore().lookup("profile")).toEqual(replacement);
   });
 
-  it("prints the exact manual recovery command and pending checkpoint deletion", async () => {
-    const record = pendingCapture();
-    openCrabboxWarmImageStore().register("profile", record);
-    openCrabboxWarmImageStore().register("retiring", {
-      ...record,
-      operation: { type: "retire", checkpointId: "chk_predecessor" },
-    });
+  it.each(["scrubbing", "creating", "uncertain"] as const)(
+    "prints guidance for an old %s capture and pending deletion",
+    async (phase) => {
+      const record = pendingCapture(phase);
+      openWarmImageFixtureStore().register("profile", record);
+      openWarmImageFixtureStore().register("retiring", {
+        ...record,
+        operation: { type: "retire", checkpointId: "chk_predecessor" },
+      });
 
-    await runCli();
+      await runCli();
 
-    expect(output).toContain(
-      `openclaw crabbox warm-images --recover ${SELECTOR} --acknowledge-provider-cleanup`,
-    );
-    expect(output).toContain("Stop the owning Gateway and capture processes");
-    expect(output).toContain("Checkpoint deletion pending: chk_predecessor");
-  });
+      if (phase === "uncertain") {
+        expect(output).toContain(
+          `openclaw crabbox warm-images --recover ${SELECTOR} --acknowledge-provider-cleanup`,
+        );
+        expect(output).toContain("Stop the owning Gateway and capture processes");
+      } else {
+        expect(output).toContain("may still be");
+        expect(output).not.toContain("paused");
+        expect(output).not.toContain("--recover");
+        expect(output).not.toContain("Stop the owning Gateway");
+      }
+      expect(output).toContain("Checkpoint deletion pending: chk_predecessor");
+      expect(openWarmImageFixtureStore().lookup("profile")).toEqual(record);
+    },
+  );
 });
+
+function openWarmImageFixtureStore() {
+  return createPluginStateSyncKeyedStoreForTests<WarmProfileRecord>("crabbox", {
+    namespace: "warm-images",
+    maxEntries: 128,
+    overflowPolicy: "reject-new",
+  });
+}

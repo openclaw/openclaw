@@ -1,4 +1,3 @@
-// Discord plugin module implements retry behavior.
 import {
   collectErrorGraphCandidates,
   extractErrorCode,
@@ -108,6 +107,14 @@ export function hasDiscordMessageCreateAmbiguity(error: unknown): boolean {
       typeof candidate === "object" &&
       ambiguousDiscordMessageCreates.has(candidate),
   );
+}
+
+export function canFallbackDiscordWebhookSend(error: unknown): boolean {
+  if (hasDiscordMessageCreateAmbiguity(error)) {
+    return false;
+  }
+  const failure = classifyDiscordDeliveryFailure(error);
+  return failure === "rejected" || failure === "pre-connect";
 }
 
 function hasDiscordRateLimitRejection(error: unknown): boolean {

@@ -4,6 +4,7 @@ import { expectWindowRetiredAfterFinal } from "./bot-message-dispatch.progress-w
 import {
   allDeliveredReplyTexts,
   describeTelegramDispatch,
+  emitToolStart,
   createContext,
   createBot,
   createDirectSessionPayload,
@@ -346,7 +347,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       async ({ dispatcherOptions, replyOptions }) => {
         await replyOptions?.onPartialReply?.({ text: "Site A shows X." });
         await dispatcherOptions.deliver({ text: "Site A shows X." }, { kind: "block" });
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
         await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
         return { queuedFinal: true };
       },
@@ -359,7 +360,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       ["Final answer", expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) })],
     ]);
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b>$/) }),
+      expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b> <i>running<\/i>$/) }),
     );
     // The tool-progress window repositions before the final (deferred delete),
     // never an immediate clear/delete.
@@ -396,7 +397,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
         await dispatcherOptions.deliver({ text: "Site A shows X." }, { kind: "block" });
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
         await dispatcherOptions.deliver({ text: "Site B shows Y." }, { kind: "block" });
         await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
         return { queuedFinal: true };
@@ -407,7 +408,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
 
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Site A shows X.");
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b>$/) }),
+      expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b> <i>running<\/i>$/) }),
     );
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site B shows Y.");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(
@@ -434,129 +435,89 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
-  it("keeps compaction replay on the same answer stream", async () => {
-    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onPartialReply?.({ text: "Partial before compaction" });
+  it.each(["progress", "partial", "block"] as const)(
+    "shows compaction progress before model output in %s mode",
+    async (streamMode) => {
+      const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+      const compactionPreviews: unknown[] = [];
+      const compactionFlushCounts: number[] = [];
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          answerDraftStream.flush.mockClear();
+          await replyOptions?.onCompactionStart?.();
+          compactionFlushCounts.push(answerDraftStream.flush.mock.calls.length);
+          compactionPreviews.push(answerDraftStream.updatePreview.mock.lastCall?.[0]);
+          await replyOptions?.onCompactionEnd?.({ completed: false });
+          compactionFlushCounts.push(answerDraftStream.flush.mock.calls.length);
+          compactionPreviews.push(answerDraftStream.updatePreview.mock.lastCall?.[0]);
+          await replyOptions?.onCompactionStart?.();
+          compactionFlushCounts.push(answerDraftStream.flush.mock.calls.length);
+          compactionPreviews.push(answerDraftStream.updatePreview.mock.lastCall?.[0]);
+          await replyOptions?.onCompactionEnd?.({ completed: true });
+          compactionFlushCounts.push(answerDraftStream.flush.mock.calls.length);
+          compactionPreviews.push(answerDraftStream.updatePreview.mock.lastCall?.[0]);
+          await replyOptions?.onPartialReply?.({ text: "Partial before compaction" });
+          await dispatcherOptions.deliver({ text: "Final after compaction" }, { kind: "final" });
+          return { queuedFinal: true };
+        },
+      );
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode,
+        telegramCfg: { streaming: { mode: streamMode, progress: { toolProgress: true } } },
+      });
+
+      expect(compactionPreviews).toEqual(
+        [
+          "Compacting context",
+          "Compaction incomplete",
+          "Compacting context",
+          "Compaction complete",
+        ].map((text) =>
+          expect.objectContaining({ text: expect.stringContaining(text), complete: true }),
+        ),
+      );
+      if (streamMode === "progress") {
+        expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
+        expect(compactionFlushCounts).toEqual([1, 2, 3, 4]);
+        expectDeliveredReply(0, { text: "Final after compaction" });
+        expect(
+          requireInvocationOrder(answerDraftStream.discard, 0, "compaction progress discard"),
+        ).toBeLessThan(requireInvocationOrder(deliverReplies, 0, "final reply delivery"));
+        expectWindowRetiredAfterFinal(answerDraftStream, deliverReplies);
+      } else {
+        expect(answerDraftStream.update).toHaveBeenCalledWith(
+          "Final after compaction",
+          expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+        );
+        expect(deliverReplies).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each(["partial", "block", "off"] as const)(
+    "keeps compaction reactions when preview progress is disabled in %s mode",
+    async (streamMode) => {
+      const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+      const statusReactionController = createStatusReactionController();
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
         await replyOptions?.onCompactionStart?.();
-        await replyOptions?.onPartialReply?.({ text: "Partial before compaction" });
-        await dispatcherOptions.deliver({ text: "Final after compaction" }, { kind: "final" });
+        await replyOptions?.onCompactionEnd?.({ completed: true });
         return { queuedFinal: true };
-      },
-    );
+      });
 
-    await dispatchWithContext({ context: createContext() });
+      await dispatchWithContext({
+        context: createContext({ statusReactionController: statusReactionController as never }),
+        streamMode,
+        telegramCfg: { streaming: { mode: streamMode, preview: { toolProgress: false } } },
+      });
 
-    expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Partial before compaction");
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
-      2,
-      "Final after compaction",
-      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
-    );
-    expect(deliverReplies).not.toHaveBeenCalled();
-  });
-
-  it("rotates a tool-progress-only answer draft before streaming the final answer", async () => {
-    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-        await dispatcherOptions.deliver({ text: "Branch is up to date" }, { kind: "final" });
-        return { queuedFinal: true };
-      },
-    );
-
-    await dispatchWithContext({ context: createContext() });
-
-    expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b>$/) }),
-    );
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
-      1,
-      "Branch is up to date",
-      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
-    );
-    // Reposition, not delete-then-repost: the tool-progress window is rewound
-    // for a new message and its delete deferred until after the replacement
-    // lands. clear() (immediate delete) must NOT run — that scroll-jumps.
-    expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
-    // The reposition rewinds the stream BEFORE any deliverer cleanup clear(),
-    // so that clear finds no live message id and never deletes the window.
-    if (answerDraftStream.clear.mock.invocationCallOrder.length > 0) {
-      expect(
-        requireInvocationOrder(
-          answerDraftStream.rotateToNewMessageDeferringDelete,
-          0,
-          "first deferred answer draft rotation",
-        ),
-      ).toBeLessThan(
-        requireInvocationOrder(answerDraftStream.clear, 0, "first answer draft clear"),
-      );
-    }
-    const rotationOrder = requireInvocationOrder(
-      answerDraftStream.rotateToNewMessageDeferringDelete,
-      0,
-      "first deferred answer draft rotation",
-    );
-    const finalUpdateOrder = requireInvocationOrder(
-      answerDraftStream.update,
-      0,
-      "first answer draft update",
-    );
-    expect(rotationOrder).toBeLessThan(finalUpdateOrder);
-  });
-
-  it("clears a tool-progress-only draft across assistant boundaries before final text", async () => {
-    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-        await replyOptions?.onAssistantMessageStart?.();
-        await dispatcherOptions.deliver({ text: "Branch is up to date" }, { kind: "final" });
-        return { queuedFinal: true };
-      },
-    );
-
-    await dispatchWithContext({ context: createContext() });
-
-    expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b>$/) }),
-    );
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
-      1,
-      "Branch is up to date",
-      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
-    );
-    // Across an assistant boundary the tool-progress window still repositions
-    // (new message first, deferred delete) rather than deleting immediately.
-    expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
-    // The reposition rewinds the stream BEFORE any deliverer cleanup clear(),
-    // so that clear finds no live message id and never deletes the window.
-    if (answerDraftStream.clear.mock.invocationCallOrder.length > 0) {
-      expect(
-        requireInvocationOrder(
-          answerDraftStream.rotateToNewMessageDeferringDelete,
-          0,
-          "first deferred answer draft rotation",
-        ),
-      ).toBeLessThan(
-        requireInvocationOrder(answerDraftStream.clear, 0, "first answer draft clear"),
-      );
-    }
-    const rotationOrder = requireInvocationOrder(
-      answerDraftStream.rotateToNewMessageDeferringDelete,
-      0,
-      "first deferred answer draft rotation",
-    );
-    const finalUpdateOrder = requireInvocationOrder(
-      answerDraftStream.update,
-      0,
-      "first answer draft update",
-    );
-    expect(rotationOrder).toBeLessThan(finalUpdateOrder);
-  });
+      expect(answerDraftStream.updatePreview).not.toHaveBeenCalled();
+      expect(statusReactionController.setCompacting).toHaveBeenCalledTimes(1);
+      expect(statusReactionController.cancelPending).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("rotates a verbose tool result draft before streaming the final answer", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
@@ -608,7 +569,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     answerDraftStream.hasConsumedReplyTarget.mockReturnValue(true);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
         await replyOptions?.onItemEvent?.({
           kind: "command",
           name: "exec",
@@ -622,13 +583,18 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress", progress: { label: "Cracking" } } },
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Cracking" } },
+      },
     });
 
     // #121600: default command progress is status-only — raw command text stays
     // out of chat previews (`/verbose full` / commandText: "raw" retain it).
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      telegramProgressPreview("Cracking\n\n🛠️ Exec", "<b>Cracking</b>\n<b>🛠️ Exec</b>"),
+      telegramProgressPreview(
+        "Cracking\n\n🛠️ Exec running",
+        "<b>Cracking</b>\n<b>🛠️ Exec</b> <i>running</i>",
+      ),
     );
     expect(answerDraftStream.update).not.toHaveBeenCalledWith("Branch is up to date");
     expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
@@ -657,7 +623,9 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress", progress: { label: "Cracking" } } },
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Cracking" } },
+      },
     });
 
     expect(answerDraftStream.update).not.toHaveBeenCalledWith("Terminal block answer");
@@ -668,7 +636,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
         await dispatcherOptions.deliver(
           { text: "Terminal block after tool" },
           { kind: "block", assistantMessageIndex: 0 },
@@ -680,7 +648,9 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress", progress: { label: "Cracking" } } },
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Cracking" } },
+      },
     });
 
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
@@ -690,12 +660,12 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     expectWindowRetiredAfterFinal(answerDraftStream, deliverReplies);
   });
 
-  it("sends the final answer before retiring the progress window", async () => {
-    // Deliver first so removing the progress window cannot move the final off screen.
+  it("seals pending progress before sending the final answer", async () => {
+    // Seal the preview queue first so stale progress cannot overtake the final.
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
         await dispatcherOptions.deliver({ text: "All done" }, { kind: "final" });
         return { queuedFinal: true };
       },
@@ -704,19 +674,55 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress" } },
+      telegramCfg: { streaming: { mode: "progress", progress: { toolProgress: true } } },
     });
 
     expectDeliveredReply(0, { text: "All done" });
+    expect(
+      requireInvocationOrder(answerDraftStream.discard, 0, "progress draft discard"),
+    ).toBeLessThan(requireInvocationOrder(deliverReplies, 0, "final reply delivery"));
     expectWindowRetiredAfterFinal(answerDraftStream, deliverReplies);
   });
+
+  it.each([false, true])(
+    "delivers the final when progress cleanup fails (isError=%s)",
+    async (isError) => {
+      const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+      answerDraftStream.discard.mockRejectedValueOnce(new Error("discard failed"));
+      answerDraftStream.rotateToNewMessageDeferringDelete.mockRejectedValueOnce(
+        new Error("teardown failed"),
+      );
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
+          await dispatcherOptions.deliver(
+            { text: "Final survives cleanup", ...(isError ? { isError: true } : {}) },
+            { kind: "final" },
+          );
+          return { queuedFinal: true };
+        },
+      );
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "progress",
+        telegramCfg: { streaming: { mode: "progress", progress: { toolProgress: true } } },
+      });
+
+      expectDeliveredReply(0, {
+        text: "Final survives cleanup",
+        ...(isError ? { isError: true } : {}),
+      });
+      expect(deliverReplies).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("retires the progress window when the final answer send is skipped", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     deliverReplies.mockResolvedValue({ delivered: false });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
         await dispatcherOptions.deliver({ text: "Answer that fails to send" }, { kind: "final" });
         return { queuedFinal: true };
       },
@@ -725,7 +731,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress" } },
+      telegramCfg: { streaming: { mode: "progress", progress: { toolProgress: true } } },
     });
 
     expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
@@ -741,7 +747,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress" } },
+      telegramCfg: { streaming: { mode: "progress", progress: { toolProgress: true } } },
     });
 
     expect(allDeliveredReplyTexts()).toEqual(["Just an answer"]);
@@ -751,7 +757,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
         await dispatcherOptions.deliver(
           { text: "Something went wrong", isError: true },
           { kind: "final" },
@@ -763,7 +769,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress" } },
+      telegramCfg: { streaming: { mode: "progress", progress: { toolProgress: true } } },
     });
 
     expect(allDeliveredReplyTexts()).toEqual(["Something went wrong"]);

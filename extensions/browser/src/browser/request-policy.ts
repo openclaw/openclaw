@@ -1,13 +1,24 @@
 /**
  * Request policy helpers for profile-aware Browser control server routes.
  */
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNullableRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type BrowserRequestProfileParams = {
   query?: Record<string, unknown>;
   body?: unknown;
   profile?: string | null;
 };
+
+export function isManagedOnlyBrowserRequest(params: BrowserRequestProfileParams): boolean {
+  return (
+    params.query?.managedOnly === true ||
+    params.query?.managedOnly === "true" ||
+    asNullableRecord(params.body)?.managedOnly === true
+  );
+}
 
 /** Normalizes route paths so mutation-policy checks compare stable slash forms. */
 export function normalizeBrowserRequestPath(value: string): string {

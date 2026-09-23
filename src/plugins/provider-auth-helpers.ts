@@ -21,7 +21,7 @@ import {
 } from "../config/types.secrets.js";
 import { safeRealpathSync } from "../infra/boundary-path.js";
 import type { OAuthCredentials } from "../llm/oauth.js";
-import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
@@ -45,7 +45,7 @@ function buildEnvSecretRef(id: string): SecretRef {
 }
 
 function resolveProviderDefaultEnvSecretRef(provider: string, config?: OpenClawConfig): SecretRef {
-  const envVars = getProviderEnvVars(provider, {
+  const envVars = getProviderEnvVarsCore(provider, {
     ...(config ? { config } : {}),
     includeUntrustedWorkspacePlugins: false,
   });
@@ -179,9 +179,12 @@ export function applyAuthProfileConfig(
     return next;
   }
 
-  const normalizedProvider = resolveProviderIdForAuth(params.provider, { config: cfg });
-  const matchesProvider = (provider: string) =>
-    resolveProviderIdForAuth(provider, { config: cfg }) === normalizedProvider;
+  const normalizedProvider = resolveProviderIdForAuth(params.provider, {
+    config: cfg,
+    storedCredential: true,
+  });
+  const matchesProvider = (provider: string, storedCredential = false) =>
+    resolveProviderIdForAuth(provider, { config: cfg, storedCredential }) === normalizedProvider;
   const matchingOrderEntries = orderEntries.filter(([provider]) => matchesProvider(provider));
   let providerOrder: string[] | undefined;
   if (matchingOrderEntries.length > 0) {
@@ -192,7 +195,9 @@ export function applyAuthProfileConfig(
         ? existingOrder
         : [...existingOrder, params.profileId];
   } else if (preferProfileFirst) {
-    const peers = configuredProfiles.filter(([, profile]) => matchesProvider(profile.provider));
+    const peers = configuredProfiles.filter(([, profile]) =>
+      matchesProvider(profile.provider, true),
+    );
     if (
       peers.some(
         ([profileId, profile]) => profileId !== params.profileId && profile.mode !== params.mode,

@@ -1,16 +1,77 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, type Mock } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import { runExec } from "../../process/exec.js";
+import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
+import { runDaemonRestart } from "../daemon-cli/lifecycle.js";
+import * as startRepair from "../daemon-cli/start-repair.js";
+import type { UpdateCommandOptions } from "./shared.js";
+import { runUpdateFinalizationDoctorInFreshProcess } from "./update-command-fresh-doctor.js";
+import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
+import {
+  type createServiceActivationFixture,
+  readyRecoveryHealth,
+} from "./update-command-service-recovery.test-support.js";
+import { createShippedUnresolvedServiceStop } from "./update-command-service-state.test-support.js";
 import {
   maybeRestartService,
   maybeStopManagedServiceBeforeMutableUpdate,
   revalidateManagedGatewayServiceAfterUpdate,
 } from "./update-command-service.js";
 
-type InstallRootTransitionFixture = {
+export const preservedActivationCases = [
+  ...(
+    [
+      { mode: "git", outcome: "healthy" },
+      { mode: "npm", outcome: "healthy" },
+      { mode: "npm", outcome: "stale retry" },
+    ] as const
+  ).map(({ mode, outcome }) => ({
+    mode,
+    outcome,
+    denial: "sealed" as const,
+    json: true,
+    phase: "initial",
+  })),
+  ...(["git", "npm", "pnpm", "bun"] as const).flatMap((mode) =>
+    (["sealed", "unknown"] as const).flatMap((denial) =>
+      (mode === "git" || mode === "npm"
+        ? ["healthy", "json denial", "stale retry", "uninspectable", "foreign"]
+        : ["healthy"]
+      ).map((outcome) => ({
+        mode,
+        denial,
+        outcome,
+        json: outcome === "json denial",
+        phase: "late",
+      })),
+    ),
+  ),
+  ...(["sealed", "unknown"] as const).flatMap((denial) =>
+    ["initial", "late"].flatMap((phase) =>
+      // Late healthy/stale-retry Git tuples are already covered above.
+      (phase === "late"
+        ? ["stale build", "missing build"]
+        : ["healthy", "stale build", "missing build", "stale retry"]
+      ).map((outcome) => ({
+        mode: "git" as const,
+        denial,
+        outcome,
+        json: false,
+        phase,
+      })),
+    ),
+  ),
+];
+
+export type InstallRootTransitionFixture = {
   root: string;
+  run: NonNullable<UpdateCommandOptions["run"]>;
   mocks: {
     running: boolean;
     events: string[];
@@ -21,11 +82,13 @@ type InstallRootTransitionFixture = {
     child: Mock<typeof import("../../process/exec.js").runCommandWithTimeout>;
     health: Mock<typeof import("../daemon-cli/restart-health.js").waitForGatewayHealthyRestart>;
     script: Mock;
+    configSnapshot: Mock;
   };
 };
 
 export function registerInstallRootTransitionTests(getFixture: () => InstallRootTransitionFixture) {
   it.each([
+    { scenario: "CLI already uses replacement install", mode: "npm", allowed: true },
     { scenario: "retained source launcher", mode: "npm", allowed: true },
     { scenario: "removed pnpm package root", mode: "pnpm", allowed: true },
     { scenario: "same-version stale launcher after refresh", mode: "npm", allowed: true },
@@ -36,12 +99,12 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
     { scenario: "original sealed definition", mode: "npm", allowed: false },
     { scenario: "newly sealed definition", mode: "npm", allowed: false },
     { scenario: "unknown definition authority", mode: "npm", allowed: false },
-    { scenario: "original unresolved launcher", mode: "npm", allowed: false },
+    { scenario: "retained unresolved launcher", mode: "npm", allowed: false },
     { scenario: "unrequested root transition", mode: "npm", allowed: false },
   ] as const)(
     "refreshes a verified installed root with $scenario",
     async ({ scenario, mode, allowed }) => {
-      const { root, mocks } = getFixture();
+      const { root, run, mocks } = getFixture();
       const replacementRoot = path.join(root, "replacement");
       const replacementEntry = path.join(replacementRoot, "dist", "index.js");
       await fs.mkdir(path.dirname(replacementEntry), { recursive: true });
@@ -55,18 +118,25 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
           ? { kind: "sealed", reason: "foreign-owner" }
           : { kind: "writable" },
       );
-      if (scenario === "original unresolved launcher") {
+      if (scenario === "retained unresolved launcher") {
         mocks.command.mockResolvedValue({
-          programArguments: ["openclaw-wrapper", "gateway"],
-          environment: { HOME: root },
+          programArguments: ["openclaw", "gateway", "run"],
+          environment: { OPENCLAW_SERVICE_MARKER: "openclaw", OPENCLAW_SERVICE_KIND: "gateway" },
         });
+        mocks.running = false;
       }
-      const before = await maybeStopManagedServiceBeforeMutableUpdate({
-        updateInstallKind: mode === "npm" ? "git" : "package",
-        root,
-        shouldRestart: true,
-        jsonMode: true,
-      });
+      const before =
+        scenario === "retained unresolved launcher"
+          ? createShippedUnresolvedServiceStop(process.env, root)
+          : await maybeStopManagedServiceBeforeMutableUpdate({
+              updateInstallKind:
+                mode === "npm" && scenario !== "CLI already uses replacement install"
+                  ? "git"
+                  : "package",
+              root: scenario === "CLI already uses replacement install" ? replacementRoot : root,
+              shouldRestart: true,
+              jsonMode: true,
+            });
       expect(before.stopped).toBe(true);
       const command = await mocks.command(process.env);
       if (!command) {
@@ -99,7 +169,7 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
         preManagedServiceStop: before,
         allowInstallRootChange: scenario !== "unrequested root transition",
       });
-      if (scenario === "original unresolved launcher") {
+      if (scenario === "retained unresolved launcher") {
         expect(await pendingVerdict).toMatchObject({ kind: "unresolved" });
         expect(mocks.child).not.toHaveBeenCalled();
         return;
@@ -115,18 +185,29 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
         mocks.health.mockImplementation(async ({ port, expectedBuildId }) => ({
           healthy: mocks.running && (!expectedBuildId || expectedBuildId === servingBuildId),
           staleGatewayPids: [],
-          runtime: { status: mocks.running ? "running" : "stopped" },
+          runtime: {
+            status: mocks.running ? "running" : "stopped",
+            pid: mocks.running ? 4242 : undefined,
+          },
+          gatewayBootId: "service-boot",
           portUsage: { port, status: "busy", listeners: [], hints: [] },
         }));
         mocks.script.mockImplementation(async () => {
           mocks.events.push("restart managed service");
           mocks.running = true;
           servingBuildId = "target-build";
+          return true;
         });
       }
       mocks.child.mockImplementation(async (argv) => {
         expect(argv).toContain(replacementEntry);
         if (argv.includes("install")) {
+          if (scenario === "CLI already uses replacement install") {
+            expect(argv.slice(argv.indexOf("--port"), argv.indexOf("--port") + 2)).toEqual([
+              "--port",
+              "19305",
+            ]);
+          }
           mocks.events.push("install verified replacement");
           if (scenario === "failed Git refresh retains original launcher") {
             return {
@@ -158,19 +239,22 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
           termination: "exit",
         };
       });
+      if (scenario === "Git still serves previous build") {
+        mocks.configSnapshot.mockResolvedValueOnce(undefined);
+      }
+      const result: Parameters<typeof maybeRestartService>[0]["result"] = {
+        status: "ok",
+        mode,
+        root: replacementRoot,
+        before: { version: VERSION },
+        after: { version: VERSION, ...(mode === "git" ? { buildId: "target-build" } : {}) },
+        steps: [],
+        durationMs: 0,
+      };
       const activated = await maybeRestartService({
         shouldRestart: true,
-        result: {
-          status: "ok",
-          mode,
-          root: replacementRoot,
-          before: { version: VERSION },
-          after: { version: VERSION, ...(mode === "git" ? { buildId: "target-build" } : {}) },
-          steps: [],
-          durationMs: 0,
-        },
-        channel: mode === "git" ? "dev" : "stable",
-        opts: { json: true },
+        result,
+        opts: { json: true, run },
         refreshServiceEnv: true,
         serviceUpdateVerdict: verdict,
         serviceEnv: state.env,
@@ -181,7 +265,12 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
       });
       expect(activated).toBe(
         scenario !== "same-version stale launcher after refresh" &&
-          scenario !== "failed Git refresh retains original launcher",
+          scenario !== "failed Git refresh retains original launcher"
+          ? "ok"
+          : "reconciliation-pending",
+      );
+      expect(mocks.configSnapshot).toHaveBeenCalledTimes(
+        scenario === "Git still serves previous build" ? 1 : 0,
       );
       expect(mocks.events).toEqual([
         "native stop",
@@ -197,6 +286,388 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
         );
       }
       expect(mocks.child.mock.calls.filter(([argv]) => argv.includes("install"))).toHaveLength(1);
+      if (
+        scenario === "same-version stale launcher after refresh" ||
+        scenario === "failed Git refresh retains original launcher"
+      ) {
+        expect(result.steps).toContainEqual(
+          expect.objectContaining({
+            advisory: expect.objectContaining({
+              message: expect.stringContaining("gateway install --force"),
+            }),
+          }),
+        );
+      }
+    },
+  );
+}
+
+export function registerRestartOutcomeTests(
+  getFixture: () => {
+    root: string;
+    run: NonNullable<UpdateCommandOptions["run"]>;
+    servingOwner: Awaited<ReturnType<typeof createServiceActivationFixture>>["servingOwner"];
+    mocks: Pick<
+      InstallRootTransitionFixture["mocks"],
+      "child" | "health" | "configSnapshot" | "capability"
+    > & {
+      restart: Mock<() => Promise<{ outcome: "completed" }>>;
+      terminateStale: Mock<
+        typeof import("../../infra/restart-stale-pids.js").terminateStaleGatewayPids
+      >;
+      writeJson: Mock;
+    };
+  },
+) {
+  it.each([
+    ["preserved health", "restart-health-failed"],
+    ["native refusal", "failed"],
+    ["unexpected check", "failed"],
+    ["retry refusal", "failed"],
+    ["writable health", "restart-health-failed"],
+    ["writable retry health", "restart-health-failed"],
+    ["progressing cap", "readiness-pending"],
+    ["cap then healthy", "ok"],
+    ["writable progressing cap", "readiness-pending"],
+  ])(
+    "carries the real lifecycle's serialized %s result through a child process",
+    async (scenario, expected) => {
+      const { root, run, mocks, servingOwner } = getFixture();
+      await servingOwner.publish();
+      const writable = scenario.startsWith("writable ");
+      const progressing = scenario.includes("cap");
+      const serviceEnv = { ...process.env, OPENCLAW_UPDATE_IN_PROGRESS: "1" };
+      const repair = vi
+        .spyOn(startRepair, "repairLoadedGatewayServiceForStart")
+        .mockRejectedValue(new Error("Updater restarts must preserve the definition."));
+      if (writable) {
+        mocks.configSnapshot.mockResolvedValueOnce(undefined);
+        mocks.capability.mockResolvedValue({ kind: "writable" });
+      }
+      const exit = new Error("test lifecycle exit");
+      let exitCode: number | undefined;
+      vi.mocked(defaultRuntime.exit).mockImplementationOnce((code) => {
+        exitCode = code;
+        throw exit;
+      });
+      if (scenario === "native refusal") {
+        mocks.restart.mockRejectedValueOnce(new Error("native owner refused"));
+      } else if (scenario === "retry refusal") {
+        mocks.restart
+          .mockImplementationOnce(async () => {
+            await servingOwner.restart();
+            return { outcome: "completed" };
+          })
+          .mockRejectedValueOnce(new Error("later native refusal"));
+      }
+      mocks.health.mockResolvedValue({
+        healthy: false,
+        staleGatewayPids:
+          scenario === "retry refusal" || scenario === "writable retry health" ? [4242] : [],
+        runtime: { status: "stopped" },
+        portUsage: { port: 19305, status: "free", listeners: [], hints: [] },
+      });
+      if (progressing) {
+        const health = {
+          ...readyRecoveryHealth(19305, true),
+          healthy: false,
+          waitOutcome: "still-starting" as const,
+          elapsedMs: 300_000,
+          startupPhase: "startup migration",
+        };
+        mocks.health.mockResolvedValue(
+          scenario === "cap then healthy" ? readyRecoveryHealth(19305, true) : health,
+        );
+        mocks.health.mockResolvedValueOnce(health);
+      }
+      if (scenario === "unexpected check") {
+        mocks.health.mockRejectedValueOnce(new Error("health observer crashed"));
+      }
+      const actual =
+        await vi.importActual<typeof import("../../process/exec.js")>("../../process/exec.js");
+      mocks.child.mockImplementationOnce(async (argv, options) => {
+        const childEnv = typeof options === "number" ? undefined : options.env;
+        expect(childEnv?.OPENCLAW_UPDATE_IN_PROGRESS).toBe("1");
+        await withOwnedManagedUpdateEnv(childEnv, async () => {
+          await expect(
+            runDaemonRestart({
+              json: true,
+              preserveDefinition: argv.includes("--preserve-definition"),
+            }),
+          ).rejects.toBe(exit);
+        });
+        expect(mocks.restart).toHaveBeenCalled();
+        expect(mocks.writeJson).toHaveBeenCalledOnce();
+        if (exitCode === undefined) {
+          throw new Error("Lifecycle did not return an exit code");
+        }
+        const serialized = JSON.stringify(mocks.writeJson.mock.lastCall?.[0]);
+        await fs.writeFile(
+          path.join(root, "dist", "index.js"),
+          `process.stdout.write(${JSON.stringify(serialized)}); process.exitCode = ${exitCode};`,
+        );
+        return actual.runCommandWithTimeout(argv, options);
+      });
+      const result: UpdateRunResult = {
+        status: "ok",
+        mode: "npm",
+        root,
+        steps: [],
+        durationMs: 0,
+        ...(progressing ? { after: { version: VERSION } } : {}),
+      };
+      expect(
+        await maybeRestartService({
+          shouldRestart: true,
+          result,
+          opts: { json: false, run },
+          refreshServiceEnv: false,
+          serviceUpdateVerdict: {
+            kind: "owned",
+            root,
+            refreshDefinition: writable,
+            fingerprint: "fixture",
+          },
+          serviceEnv,
+          requireRunningServiceAfterRestart: writable,
+          gatewayPort: 19305,
+          timeoutMs: 1000,
+          nodeRunner: process.execPath,
+        }),
+      ).toBe(expected);
+      expect(repair).not.toHaveBeenCalled();
+      expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBeUndefined();
+      expect(mocks.child).toHaveBeenCalledOnce();
+      expect(mocks.child.mock.calls[0]?.[0]).toEqual(
+        expect.arrayContaining([
+          path.join(root, "dist", "index.js"),
+          "gateway",
+          "restart",
+          "--preserve-definition",
+          "--json",
+        ]),
+      );
+      if (progressing) {
+        expect(exitCode).toBe(1);
+        expect(result.reason).toBe(expected === "readiness-pending" ? "still-starting" : undefined);
+        expect(result.recovery).toBeUndefined();
+        expect(mocks.restart).toHaveBeenCalledOnce();
+        expect(mocks.configSnapshot).toHaveBeenCalledTimes(writable ? 1 : 0);
+        expect(mocks.terminateStale).not.toHaveBeenCalled();
+        expect(result.steps).toContainEqual(
+          expect.objectContaining({ name: "gateway verification", exitCode: 0 }),
+        );
+        expect(mocks.writeJson).toHaveBeenCalledWith(
+          expect.objectContaining({
+            result: "restart-health-failed",
+            error: expect.stringContaining("still starting"),
+          }),
+        );
+      }
+      if (scenario === "writable retry health") {
+        expect(mocks.terminateStale).toHaveBeenCalledExactlyOnceWith(
+          [4242],
+          expect.objectContaining({ env: expect.any(Object), assertCurrent: expect.any(Function) }),
+        );
+        expect(mocks.restart).toHaveBeenCalledTimes(2);
+        expect(mocks.health.mock.lastCall?.[0]).toMatchObject({
+          requireRunningService: true,
+          requirePluginHealth: false,
+        });
+      }
+    },
+  );
+
+  const healthFailure = {
+    action: "restart",
+    ok: false,
+    result: "restart-health-failed",
+    error: "Gateway is unhealthy",
+  };
+  const json = JSON.stringify(healthFailure);
+  const success = JSON.stringify({ action: "restart", ok: true, result: "restarted" });
+  it.each<{
+    scenario: string;
+    response?: Partial<
+      Awaited<ReturnType<typeof import("../../process/exec.js").runCommandWithTimeout>>
+    >;
+    action?: "install" | "restart";
+  }>([
+    { scenario: "health" },
+    { scenario: "missing", response: { stdout: "" } },
+    { scenario: "malformed", response: { stdout: "{" } },
+    { scenario: "mixed", response: { stdout: `log before result\n${json}` } },
+    { scenario: "multiple", response: { stdout: `${json}\n${json}` } },
+    {
+      scenario: "wrong action",
+      response: { stdout: JSON.stringify({ ...healthFailure, action: "install" }) },
+    },
+    {
+      scenario: "wrong result",
+      response: { stdout: JSON.stringify({ ...healthFailure, result: "unknown" }) },
+    },
+    { scenario: "wrong ok", response: { stdout: JSON.stringify({ ...healthFailure, ok: true }) } },
+    {
+      scenario: "missing error",
+      response: { stdout: JSON.stringify({ ...healthFailure, error: undefined }) },
+    },
+    { scenario: "signal", response: { signal: "SIGTERM", termination: "signal" } },
+    { scenario: "timeout", response: { termination: "timeout" } },
+    { scenario: "truncated", response: { stdoutTruncatedBytes: 1 } },
+    { scenario: "killed", response: { killed: true } },
+    { scenario: "wrong exit", response: { code: 2 } },
+    { scenario: "forced", response: { cleanup: "forced" } },
+    { scenario: "uncertain", response: { cleanup: "uncertain" } },
+    { scenario: "forced success", response: { cleanup: "forced", code: 0, stdout: success } },
+    { scenario: "uncertain success", response: { cleanup: "uncertain", code: 0, stdout: success } },
+    { scenario: "install", action: "install" },
+  ])(
+    "classifies only the complete owned restart health response ($scenario)",
+    async ({ scenario, response, action = "restart" }) => {
+      const { root, mocks } = getFixture();
+      mocks.child.mockResolvedValueOnce({
+        code: 1,
+        stdout: json,
+        stderr: "",
+        signal: null,
+        killed: false,
+        termination: "exit",
+        cleanup: "normal",
+        ...response,
+      });
+      await expect(
+        runUpdatedInstallGatewayCommand(
+          {
+            result: { root, mode: "npm" },
+            opts: { json: false },
+            invocationEnv: process.env,
+            nodeRunner: process.execPath,
+          },
+          action,
+        ),
+      ).rejects.toMatchObject({
+        name:
+          scenario === "health"
+            ? "GatewayRestartHealthError"
+            : response?.cleanup === "forced" || response?.cleanup === "uncertain"
+              ? "CommandProcessCleanupError"
+              : "Error",
+      });
+      expect(mocks.child.mock.lastCall?.[0]).toContain("--json");
+    },
+  );
+}
+
+type PluginMaintenanceFixture = InstallRootTransitionFixture & {
+  writeConfig: (version: string) => Promise<void>;
+  mocks: {
+    log: Mock;
+    start: Mock;
+    restart: Mock;
+    doctor: Mock;
+    call: Mock<typeof import("../../gateway/call.js").callGateway>;
+  };
+};
+
+export function registerPluginMaintenanceTests(getFixture: () => PluginMaintenanceFixture) {
+  it.each(["git", "npm"] as const)(
+    "delegates %s activation and post-handoff Doctor after newer config is stamped",
+    async (mode) => {
+      const { root, run, mocks, writeConfig } = getFixture();
+      const before = await maybeStopManagedServiceBeforeMutableUpdate({
+        updateInstallKind: mode === "git" ? "git" : "package",
+        root,
+        shouldRestart: true,
+        jsonMode: true,
+      });
+      expect(before.stopped).toBe(true);
+      mocks.events.push("core updated");
+      await writeConfig("9999.1.1");
+      mocks.call.mockImplementation(
+        gatewayHealthResponse({ server: { version: "9999.1.1", bootId: "service-boot" } }),
+      );
+      mocks.events.push("candidate doctor stamped config");
+      const service = resolveGatewayService();
+      const state = await readGatewayServiceState(service, { requireEffective: true });
+      const verdict = await revalidateManagedGatewayServiceAfterUpdate({
+        state,
+        root,
+        preManagedServiceStop: before,
+      });
+
+      const activated = await maybeRestartService({
+        shouldRestart: true,
+        result: {
+          status: "ok",
+          mode,
+          root,
+          steps: [],
+          durationMs: 0,
+          before: { version: VERSION },
+          after: { version: "9999.1.1" },
+        },
+        opts: { run },
+        refreshServiceEnv: false,
+        serviceUpdateVerdict: verdict,
+        serviceEnv: state.env,
+        gatewayPort: 19305,
+        requireRunningServiceAfterRestart: true,
+        timeoutMs: 1000,
+      });
+
+      expect(activated, mocks.log.mock.calls.flat().join("\n")).toBe("ok");
+      expect(mocks.events).toEqual([
+        "native stop",
+        "core updated",
+        "candidate doctor stamped config",
+        "fresh CLI restart",
+      ]);
+      const child = mocks.child.mock.calls[0];
+      expect(child?.[0].slice(1)).toEqual([
+        path.join(root, "dist", "index.js"),
+        "gateway",
+        "restart",
+        "--preserve-definition",
+        "--json",
+      ]);
+      expect(mocks.health.mock.calls[0]?.[0]).toMatchObject({
+        port: 19305,
+        expectedVersion: "9999.1.1",
+        requireRunningService: true,
+      });
+      expect(mocks.start).not.toHaveBeenCalled();
+      expect(mocks.restart).not.toHaveBeenCalled();
+      expect(mocks.doctor).not.toHaveBeenCalled();
+      // The old adapter still refuses the same config: delegation must not weaken its guard.
+      await expect(service.restart({ env: state.env, stdout: process.stdout })).rejects.toThrow(
+        "older than the config",
+      );
+
+      process.env.OPENCLAW_UPDATE_RUN_HANDOFF = "1";
+      vi.mocked(runExec).mockResolvedValueOnce({ stdout: "", stderr: "" });
+      await runUpdateFinalizationDoctorInFreshProcess({
+        root,
+        phase: "post-plugin",
+        yes: true,
+        json: true,
+        timeoutMs: 1000,
+      });
+      expect(runExec).toHaveBeenLastCalledWith(
+        process.execPath,
+        [
+          path.join(root, "dist", "index.js"),
+          "doctor",
+          "--repair",
+          "--non-interactive",
+          "--no-workspace-suggestions",
+          "--yes",
+        ],
+        expect.objectContaining({ cwd: root }),
+      );
+      // Delegation must leave the stale parent's destructive-action guard intact.
+      await expect(service.stop({ env: state.env, stdout: process.stdout })).rejects.toThrow(
+        "older than the config",
+      );
     },
   );
 }

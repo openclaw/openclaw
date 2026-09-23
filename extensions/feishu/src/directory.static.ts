@@ -1,4 +1,3 @@
-// Feishu plugin module implements directory.static behavior.
 import {
   applyDirectoryQueryAndLimit,
   listDirectoryGroupEntriesFromMapKeysAndAllowFrom,

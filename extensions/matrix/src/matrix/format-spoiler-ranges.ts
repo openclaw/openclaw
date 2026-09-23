@@ -2,7 +2,7 @@
 import MarkdownIt, { type Env } from "markdown-it";
 import { findCodeRegions, isInsideCode, tokenizeHtmlTags } from "openclaw/plugin-sdk/text-chunking";
 import { isMarkdownEscaped, projectMatrixMarkdown } from "./format-profile.js";
-import { findMatrixTableSourceRanges } from "./format-table-ranges.js";
+import { matrixTableSourceRangesFromTokens } from "./format-table-ranges.js";
 
 const spoilerParser = new MarkdownIt({ html: false, linkify: true, typographer: false });
 spoilerParser.linkify.set({ fuzzyLink: true });
@@ -17,8 +17,14 @@ function findInlineMetadataRanges(
   const underlineTags = [...tokenizeHtmlTags(markdown)].filter(
     (tag) => tag.name === "u" || tag.name === "ins",
   );
+  let underlineIndex = 0;
   for (let index = 0; index < markdown.length - 1; index += 1) {
-    const underlineTag = underlineTags.find((tag) => tag.start === index);
+    let nextUnderlineTag = underlineTags[underlineIndex];
+    while (nextUnderlineTag && nextUnderlineTag.start < index) {
+      underlineIndex += 1;
+      nextUnderlineTag = underlineTags[underlineIndex];
+    }
+    const underlineTag = nextUnderlineTag?.start === index ? nextUnderlineTag : undefined;
     if (underlineTag) {
       index = underlineTag.end - 1;
       continue;
@@ -89,24 +95,24 @@ function findInlineMetadataRanges(
     if (markdown[index] === "]" && !isMarkdownEscaped(markdown, index)) {
       labelStack.pop();
     }
-    const autolink = /^<[A-Za-z][A-Za-z0-9+.-]{1,31}:[^<>\s]*>/u.exec(markdown.slice(index));
-    if (autolink && !isMarkdownEscaped(markdown, index)) {
-      ranges.push({ start: index, end: index + autolink[0].length });
-      index += autolink[0].length - 1;
-      continue;
-    }
-    const emailAutolink = /^<[^<>\s@]+@[^<>\s@]+>/u.exec(markdown.slice(index));
-    if (emailAutolink && !isMarkdownEscaped(markdown, index)) {
-      ranges.push({ start: index, end: index + emailAutolink[0].length });
-      index += emailAutolink[0].length - 1;
+    if (markdown[index] === "<") {
+      const autolink = /^<[A-Za-z][A-Za-z0-9+.-]{1,31}:[^<>\s]*>/u.exec(markdown.slice(index));
+      if (autolink && !isMarkdownEscaped(markdown, index)) {
+        ranges.push({ start: index, end: index + autolink[0].length });
+        index += autolink[0].length - 1;
+        continue;
+      }
+      const emailAutolink = /^<[^<>\s@]+@[^<>\s@]+>/u.exec(markdown.slice(index));
+      if (emailAutolink && !isMarkdownEscaped(markdown, index)) {
+        ranges.push({ start: index, end: index + emailAutolink[0].length });
+        index += emailAutolink[0].length - 1;
+      }
     }
   }
   return ranges;
 }
 
-export function findMatrixMarkdownMetadataRanges(
-  markdown: string,
-): Array<{ start: number; end: number }> {
+export function prepareMatrixMarkdownSource(markdown: string) {
   const env: Env = {};
   const tokens = spoilerParser.parse(markdown, env);
   const references = new Set(Object.keys(env.references ?? {}));
@@ -117,17 +123,21 @@ export function findMatrixMarkdownMetadataRanges(
     }
   }
   lineStarts.push(markdown.length);
-  const ranges = tokens.flatMap((token) => {
+  const inlineRanges = tokens.flatMap((token) => {
+    // Table-cell inline tokens have no source map because pipes belong to GFM table grammar.
     if (token.type !== "inline" || !token.map) {
       return [];
     }
     const start = lineStarts[token.map[0]] ?? 0;
     const end = lineStarts[token.map[1]] ?? markdown.length;
-    return findInlineMetadataRanges(markdown.slice(start, end), references).map((range) => ({
+    return [{ start, end }];
+  });
+  const ranges = inlineRanges.flatMap(({ start, end }) =>
+    findInlineMetadataRanges(markdown.slice(start, end), references).map((range) => ({
       start: start + range.start,
       end: start + range.end,
-    }));
-  });
+    })),
+  );
   for (const match of markdown.matchAll(/^\s*\[[^\]\n]+\]:\s*.+$/gmu)) {
     const start = match.index ?? 0;
     const labelEnd = match[0].indexOf("]:");
@@ -147,41 +157,32 @@ export function findMatrixMarkdownMetadataRanges(
       ranges.push({ start: match.index, end: match.lastIndex });
     }
   }
-  return ranges;
+  return {
+    markdown,
+    inlineRanges,
+    tableRanges: matrixTableSourceRangesFromTokens(tokens, lineStarts, markdown.length),
+    metadataRanges: ranges,
+    codeRegions,
+    underlineTags: [...tokenizeHtmlTags(markdown)].filter(
+      (tag) => tag.name === "u" || tag.name === "ins",
+    ),
+  };
 }
 
-export function findMatrixSpoilerDelimiterOffsets(markdown: string): number[] {
-  const projected = projectMatrixMarkdown(markdown);
-  const tokens = spoilerParser.parse(projected, {});
-  const lineStarts = [0];
-  for (let index = 0; index < projected.length; index += 1) {
-    if (projected[index] === "\n") {
-      lineStarts.push(index + 1);
-    }
-  }
-  lineStarts.push(projected.length);
-  const excludedRanges = [
-    ...findCodeRegions(projected),
-    ...findMatrixMarkdownMetadataRanges(projected),
-    ...[...tokenizeHtmlTags(projected)].flatMap((tag) =>
-      tag.name === "u" || tag.name === "ins" ? [{ start: tag.start, end: tag.end }] : [],
-    ),
-  ];
+type MatrixMarkdownSource = ReturnType<typeof prepareMatrixMarkdownSource>;
+
+function findMatrixSpoilerDelimiterOffsets(source: MatrixMarkdownSource): number[] {
+  const { markdown, inlineRanges, codeRegions, metadataRanges, underlineTags } = source;
+  const excludedRanges = [...codeRegions, ...metadataRanges, ...underlineTags];
   const offsets: number[] = [];
-  for (const token of tokens) {
-    // Table-cell inline tokens have no source map because pipes belong to GFM table grammar.
-    if (token.type !== "inline" || !token.map) {
-      continue;
-    }
-    const start = lineStarts[token.map[0]] ?? 0;
-    const end = lineStarts[token.map[1]] ?? projected.length;
+  for (const { start, end } of inlineRanges) {
     const candidates: number[] = [];
     for (let index = start; index < end - 1; index += 1) {
-      if (projected[index] !== "|" || projected[index + 1] !== "|") {
+      if (markdown[index] !== "|" || markdown[index + 1] !== "|") {
         continue;
       }
       const excluded = excludedRanges.some((range) => index >= range.start && index < range.end);
-      if (isMarkdownEscaped(projected, index) || excluded) {
+      if (isMarkdownEscaped(markdown, index) || excluded) {
         continue;
       }
       candidates.push(index);
@@ -193,25 +194,28 @@ export function findMatrixSpoilerDelimiterOffsets(markdown: string): number[] {
   return [...new Set(offsets)].toSorted((left, right) => left - right);
 }
 
-export function hasMatrixSpoilerMetadataCollision(markdown: string): boolean {
-  const projected = projectMatrixMarkdown(markdown);
-  const ordinary = new Set(findMatrixSpoilerDelimiterOffsets(projected));
-  const underlineTags = [...tokenizeHtmlTags(projected)].filter(
-    (tag) => (tag.name === "u" || tag.name === "ins") && !isMarkdownEscaped(projected, tag.start),
+function hasMatrixSpoilerMetadataCollision(
+  source: MatrixMarkdownSource,
+  offsets: number[],
+): boolean {
+  const { markdown, codeRegions } = source;
+  const ordinary = new Set(offsets);
+  const underlineTags = source.underlineTags.filter(
+    (tag) => !isMarkdownEscaped(markdown, tag.start),
   );
   // Matrix consumes underline tags before parsing inline code, so backticks
   // inside their attributes cannot make a literal code region.
   const literalRanges = [
-    ...findMatrixTableSourceRanges(projected),
-    ...findCodeRegions(projected).filter(
+    ...source.tableRanges,
+    ...codeRegions.filter(
       (code) => !underlineTags.some((tag) => code.start > tag.start && code.start < tag.end),
     ),
   ];
-  for (let index = 0; index < projected.length - 1; index += 1) {
-    if (projected[index] !== "|" || projected[index + 1] !== "|") {
+  for (let index = 0; index < markdown.length - 1; index += 1) {
+    if (markdown[index] !== "|" || markdown[index + 1] !== "|") {
       continue;
     }
-    if (ordinary.has(index) || isMarkdownEscaped(projected, index)) {
+    if (ordinary.has(index) || isMarkdownEscaped(markdown, index)) {
       continue;
     }
     if (literalRanges.some((range) => index >= range.start && index < range.end)) {
@@ -220,4 +224,24 @@ export function hasMatrixSpoilerMetadataCollision(markdown: string): boolean {
     return true;
   }
   return false;
+}
+
+export type MatrixSpoilerAnalysis = {
+  markdown: string;
+  delimiterOffsets: number[];
+  metadataCollision: boolean;
+};
+
+export function analyzeMatrixSpoilers(markdown: string): MatrixSpoilerAnalysis {
+  const projected = projectMatrixMarkdown(markdown);
+  if (!projected.includes("||")) {
+    return { markdown: projected, delimiterOffsets: [], metadataCollision: false };
+  }
+  const source = prepareMatrixMarkdownSource(projected);
+  const delimiterOffsets = findMatrixSpoilerDelimiterOffsets(source);
+  return {
+    markdown: projected,
+    delimiterOffsets,
+    metadataCollision: hasMatrixSpoilerMetadataCollision(source, delimiterOffsets),
+  };
 }

@@ -2,6 +2,7 @@ import type { ReactiveController } from "lit";
 import { t } from "../i18n/index.ts";
 import { showToast } from "../lib/toast.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
+import { PersonActivityDataController } from "./person-activity-data.ts";
 import type { SidebarPeopleRuntime } from "./sidebar-people.runtime.ts";
 
 const EVENTS = ["pointerover", "pointerout", "focusin", "focusout", "click", "keydown"] as const;
@@ -15,6 +16,9 @@ export class SidebarPeopleController implements ReactiveController {
 
   constructor(private readonly host: AppSidebarSessionNavigationElement) {
     host.addController(this);
+    host.addController(
+      new PersonActivityDataController(host, () => host.sessionDataContext, host.sessionData),
+    );
   }
 
   hostConnected(): void {
@@ -61,13 +65,21 @@ export class SidebarPeopleController implements ReactiveController {
   };
 
   private readonly handleEvent = (event: Event): void => {
+    // Links own clicks, including modified browser gestures; only hover/focus opens their card.
+    if (
+      event.type === "click" &&
+      event.target instanceof Element &&
+      event.target.closest("a[href]")
+    ) {
+      return;
+    }
     if (this.runtime) {
       this.runtime.handleEvent(event);
       return;
     }
     const target =
       event.target instanceof Element
-        ? event.target.closest<HTMLElement>(".sidebar-online__row")
+        ? event.target.closest<HTMLElement>("[data-person-card]")
         : null;
     if (!target || !["pointerover", "focusin", "click"].includes(event.type)) {
       return;

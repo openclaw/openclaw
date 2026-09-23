@@ -1,4 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { annotateSourceDelivery } from "./message-action-execution.js";
 
 const actionParams = {
@@ -26,16 +32,79 @@ const input = {
 
 const annotationParams = {
   cfg: {},
-  actionParams,
+  params: actionParams,
   channel: "testchat" as const,
   accountId: "default",
   input,
-  replyToIsExplicit: false,
+  dryRun: false,
+  channelPlugin: createChannelTestPluginBase({ id: "testchat" }),
+  mediaAccess: { localRoots: [] },
 };
 
+afterEach(() => resetPluginRuntimeStateForTest());
+
 describe("annotateSourceDelivery thread replies", () => {
-  it("marks a gateway-returned current-thread receipt", () => {
-    const result = annotateSourceDelivery(
+  it.each([true, false, "error", "stale"] as const)(
+    "awaits owner proof for a receiptless thread reply without legacy fallback (%s)",
+    async (outcome) => {
+      const proof = createDeferred<boolean>();
+      const matchesCurrentConversation = vi.fn(() => true);
+      const matchesCurrentConversationAsync = vi.fn(() => proof.promise);
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "testchat",
+            source: "test",
+            origin: "bundled",
+            plugin: {
+              ...annotationParams.channelPlugin,
+              actions: {
+                describeMessageTool: () => ({ actions: ["thread-reply"] }),
+                messageActionTargetAliases: {
+                  "thread-reply": {
+                    aliases: ["threadId"],
+                    matchesCurrentConversation,
+                    matchesCurrentConversationAsync,
+                  },
+                },
+              },
+            },
+          },
+        ]),
+      );
+      const actionResult = {
+        kind: "action" as const,
+        channel: "testchat" as const,
+        action: "thread-reply" as const,
+        handledBy: "plugin" as const,
+        payload: { ok: true },
+        dryRun: false,
+      };
+      const pending = annotateSourceDelivery(actionResult, annotationParams, false);
+      expect(matchesCurrentConversationAsync).toHaveBeenCalledOnce();
+      expect(matchesCurrentConversation).not.toHaveBeenCalled();
+      if (outcome === "error") {
+        const expected = expect(pending).rejects.toThrow("proof unavailable");
+        proof.reject(new Error("proof unavailable"));
+        await expected;
+      } else {
+        if (outcome === "stale") {
+          setActivePluginRegistry(createTestRegistry([]));
+        }
+        proof.resolve(outcome !== false);
+        const result = await pending;
+        if (outcome === true) {
+          expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
+        } else {
+          expect(result).toBe(actionResult);
+        }
+      }
+      expect(matchesCurrentConversation).not.toHaveBeenCalled();
+    },
+  );
+
+  it("marks a gateway-returned current-thread receipt", async () => {
+    const result = await annotateSourceDelivery(
       {
         kind: "action" as const,
         channel: "testchat" as const,
@@ -45,14 +114,15 @@ describe("annotateSourceDelivery thread replies", () => {
         dryRun: false,
       },
       annotationParams,
+      false,
     );
 
     expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
   });
 
-  it("marks both payload and tool details after local plugin dispatch", () => {
+  it("marks both payload and tool details after local plugin dispatch", async () => {
     const receipt = { threadId: "thread-1" };
-    const result = annotateSourceDelivery(
+    const result = await annotateSourceDelivery(
       {
         kind: "action" as const,
         channel: "testchat" as const,
@@ -66,14 +136,15 @@ describe("annotateSourceDelivery thread replies", () => {
         dryRun: false,
       },
       annotationParams,
+      false,
     );
 
     expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
     expect(result.toolResult.details).toMatchObject({ sourceReplyRoute: "current-source" });
   });
 
-  it("leaves a different-thread receipt unmarked", () => {
-    const result = annotateSourceDelivery(
+  it("leaves a different-thread receipt unmarked", async () => {
+    const result = await annotateSourceDelivery(
       {
         kind: "action" as const,
         channel: "testchat" as const,
@@ -83,6 +154,7 @@ describe("annotateSourceDelivery thread replies", () => {
         dryRun: false,
       },
       annotationParams,
+      false,
     );
 
     expect(result.payload).not.toHaveProperty("sourceReplyRoute");

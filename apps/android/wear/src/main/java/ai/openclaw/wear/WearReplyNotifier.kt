@@ -78,6 +78,7 @@ internal class WearReplyNotifier(
         .setSmallIcon(R.drawable.ic_notification)
         .setContentTitle(context.getString(R.string.notification_reply_failed_title))
         .setContentText(context.getString(R.string.notification_reply_failed_text))
+        .setContentIntent(createOpenAppIntent(NOTIFICATION_ID))
         .setAutoCancel(true)
         .setLocalOnly(true)
         .addAction(createReplyAction(sessionKey, notificationTag, phoneNodeId))
@@ -224,9 +225,13 @@ class WearReplyReceiver : BroadcastReceiver() {
         Log.w(LOG_TAG, "Wear notification reply failed", err)
         val notifier = WearReplyNotifier(context.applicationContext)
         when (notificationReplyFailureAction(err)) {
-          NotificationReplyFailureAction.RetrySamePhone ->
+          NotificationReplyFailureAction.RetrySamePhone -> {
             notifier.showReplyFailure(sessionKey, notificationTag, phoneNodeId)
-          NotificationReplyFailureAction.OpenApp -> notifier.showPreferredPhoneChanged(notificationTag)
+          }
+
+          NotificationReplyFailureAction.OpenApp -> {
+            notifier.showPreferredPhoneChanged(notificationTag)
+          }
         }
       } finally {
         pendingResult.finish()

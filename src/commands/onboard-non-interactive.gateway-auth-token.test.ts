@@ -1,46 +1,24 @@
 // Gateway auth-token storage tests cover what onboarding persists at gateway.auth.token:
 // plaintext by default, and env/store SecretRefs under --secret-input-mode ref.
-import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import {
   capturedReplaceConfigFileCalls,
   configWritePluginLeaseDepths,
   gatewayReachableState,
   getPseudoPort,
-  loadGatewayOnboardModules,
   readTestConfig,
   resolveTestConfigPath,
   runNonInteractiveSetup,
   gatewayOnboardRuntime as runtime,
   testConfigStore,
+  useGatewayOnboardTestHarness,
 } from "./onboard-non-interactive.gateway.test-mocks.js";
-import {
-  createOnboardStateDirHarness,
-  prepareOnboardGatewayTestEnv,
-} from "./onboard-non-interactive.test-helpers.js";
 
 describe("onboard (non-interactive): gateway auth token storage", () => {
-  let envSnapshot: ReturnType<typeof prepareOnboardGatewayTestEnv>;
-  let tempHome: string | undefined;
-  const { withStateDir } = createOnboardStateDirHarness(() => tempHome);
-
-  beforeAll(async () => {
-    envSnapshot = prepareOnboardGatewayTestEnv();
-    tempHome = await makeTempWorkspace("openclaw-onboard-auth-token-");
-    setTestEnvValue("HOME", tempHome);
-    await loadGatewayOnboardModules();
-  });
-
-  afterAll(async () => {
-    if (tempHome) {
-      await fs.rm(tempHome, { recursive: true, force: true });
-    }
-    envSnapshot.restore();
-  });
+  const { withStateDir } = useGatewayOnboardTestHarness("openclaw-onboard-auth-token-");
 
   afterEach(() => {
     gatewayReachableState.mock = undefined;
@@ -94,7 +72,7 @@ describe("onboard (non-interactive): gateway auth token storage", () => {
       expect(cfg?.agents?.defaults?.workspace).toBe(workspace);
       expect(cfg?.gateway?.mode).toBe("local");
       expect(cfg?.gateway?.bind).toBe("loopback");
-      expect(cfg?.tools?.profile).toBe("coding");
+      expect(cfg?.tools?.profile).toBe("full");
       expect(cfg?.gateway?.auth?.mode).toBe("token");
       expect(cfg?.gateway?.auth?.token).toBe(token);
       expect(cfg?.gateway?.tailscale).toEqual({ mode: "off" });

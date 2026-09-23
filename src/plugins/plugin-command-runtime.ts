@@ -5,7 +5,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactToolPayloadTextWithConfig } from "../logging/redact.js";
 import type { RegisteredPluginCommand } from "./command-registry-state.js";
 import { resolveManifestCommandAliasOwnerInRegistry } from "./manifest-command-aliases.js";
-import { retainPluginCommandCatalogForCurrentAccount } from "./plugin-command-account-start-scope.js";
 import {
   PLUGIN_COMMAND_DISPATCH,
   type PluginCommandReplyOptions,
@@ -34,6 +33,7 @@ export type PluginCommandDispatchContext = Readonly<{
   channelId?: PluginCommandContext["channelId"];
   isAuthorizedSender: boolean;
   senderIsOwner?: boolean;
+  assertOwnerCurrent?: () => void;
   gatewayClientScopes?: PluginCommandContext["gatewayClientScopes"];
   agentId?: string;
   sessionKey?: PluginCommandContext["sessionKey"];
@@ -56,6 +56,7 @@ export type PluginCommandDispatchContext = Readonly<{
   runtimeContext?: {
     compactCurrent?: (
       signal?: AbortSignal,
+      assertOwnerCurrent?: () => void,
     ) => ReturnType<
       NonNullable<NonNullable<PluginCommandContext["runtimeContext"]>["compactCurrent"]>
     >;
@@ -95,6 +96,7 @@ type PluginCommandInvocationMatch = Readonly<{
 
 export type PluginCommandRuntime = Readonly<{
   listNativeCandidates: (provider: string) => readonly PluginCommandNativeCandidate[];
+  /** @deprecated Accounts reload automatically; retained for v2026.9.1 callers until the next breaking SDK. */
   retainNativeCatalog: (provider: string) => void;
 }>;
 
@@ -149,8 +151,9 @@ function createSelectedPluginCommandDispatch(
 async function executeSelectedPluginCommand(
   runtime: PluginCommandRuntime | undefined,
   dispatch: PluginCommandDispatch,
-  context: PluginCommandDispatchContext,
+  input: PluginCommandDispatchContext,
 ): Promise<PluginCommandResult> {
+  const context = { ...input };
   const selected = dispatchSelections.get(dispatch as object);
   if (!selected || (runtime && selected.runtime !== runtime)) {
     return { ...INVALID_SELECTION_REPLY };
@@ -242,14 +245,7 @@ export function createPluginCommandRuntime(): PluginCommandRuntime {
           }),
       );
     },
-    retainNativeCatalog(provider: string): void {
-      assertCurrent();
-      const channel = normalizeOptionalLowercaseString(provider) ?? "";
-      if (!state.commands.some((command) => pluginCommandSupportsChannel(command, channel))) {
-        return;
-      }
-      retainPluginCommandCatalogForCurrentAccount(channel);
-    },
+    retainNativeCatalog: assertCurrent,
   });
   runtimeStates.set(runtime, state);
   return runtime;

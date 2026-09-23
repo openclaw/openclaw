@@ -2,10 +2,9 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { Minipass } from "minipass";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { observeBackupTarEntryProgress, writeArchiveStreamToFile } from "./backup-create-stream.js";
+import { writeArchiveStreamToFile } from "./backup-create-stream.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type ReportBackupProgress = Parameters<
@@ -24,6 +23,7 @@ describe("writeArchiveStreamToFile", () => {
       const writePromise = writeArchiveStreamToFile({
         archivePath,
         createArchiveStream: () => archiveStream,
+        onPartialArchive: vi.fn(),
       });
       archiveStream.end("partial archive");
 
@@ -41,6 +41,7 @@ describe("writeArchiveStreamToFile", () => {
     const writePromise = writeArchiveStreamToFile({
       archivePath,
       createArchiveStream: () => archiveStream,
+      onPartialArchive: vi.fn(),
     });
     archiveStream.write("partial archive");
     archiveStream.destroy(new Error("injected tar read failure"));
@@ -58,14 +59,14 @@ describe("writeArchiveStreamToFile", () => {
       const writePromise = writeArchiveStreamToFile({
         archivePath,
         createArchiveStream: () => archiveStream,
-        idleTimeoutMs: 50,
+        onPartialArchive: vi.fn(),
       });
       archiveStream.write("partial archive");
 
       const rejection = expect(writePromise).rejects.toThrow(
-        "Backup archive write stalled: no progress observed for 50ms",
+        "Backup archive write stalled: no progress observed for 300000ms",
       );
-      await vi.advanceTimersByTimeAsync(60);
+      await vi.advanceTimersByTimeAsync(300_001);
       await rejection;
       expect(archiveStream.destroyed).toBe(true);
       await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -83,13 +84,13 @@ describe("writeArchiveStreamToFile", () => {
       const writePromise = writeArchiveStreamToFile({
         archivePath,
         createArchiveStream: () => archiveStream,
-        idleTimeoutMs: 50,
+        onPartialArchive: vi.fn(),
       });
 
       archiveStream.write("first");
-      await vi.advanceTimersByTimeAsync(40);
+      await vi.advanceTimersByTimeAsync(240_000);
       archiveStream.write("second");
-      await vi.advanceTimersByTimeAsync(40);
+      await vi.advanceTimersByTimeAsync(240_000);
       archiveStream.end("third");
 
       await expect(writePromise).resolves.toMatchObject({ archivePath });
@@ -112,6 +113,7 @@ describe("writeArchiveStreamToFile", () => {
           reportProgress = progress;
           return archiveStream;
         },
+        onPartialArchive: vi.fn(),
       });
 
       for (let elapsed = 0; elapsed < 360_000; elapsed += 60_000) {
@@ -133,7 +135,6 @@ describe("writeArchiveStreamToFile", () => {
       const tempDir = tempDirs.make("openclaw-backup-stream-entry-progress-");
       const archivePath = path.join(tempDir, "complete.tar.gz");
       const archiveStream = new PassThrough();
-      const entry = new Minipass();
       let reportProgress: ReportBackupProgress | undefined;
       const writePromise = writeArchiveStreamToFile({
         archivePath,
@@ -141,17 +142,12 @@ describe("writeArchiveStreamToFile", () => {
           reportProgress = progress;
           return archiveStream;
         },
+        onPartialArchive: vi.fn(),
       });
-      observeBackupTarEntryProgress(entry, (bytes) => {
-        reportProgress?.({ phase: "raw", entryPath: "/source/large.pack", bytes });
-      });
-      entry.on("data", () => {});
-
       for (let elapsed = 0; elapsed < 360_000; elapsed += 60_000) {
         await vi.advanceTimersByTimeAsync(60_000);
-        entry.write(Buffer.alloc(16));
+        reportProgress?.({ phase: "raw", entryPath: "/source/large.pack", bytes: 16 });
       }
-      entry.end();
       archiveStream.end("archive after one large entry");
 
       await expect(writePromise).resolves.toMatchObject({ archivePath });
@@ -161,56 +157,42 @@ describe("writeArchiveStreamToFile", () => {
     }
   });
 
-  it("keeps non-current tar entries paused until the archive consumer attaches", async () => {
-    const firstEntry = new Minipass();
-    const secondEntry = new Minipass();
-    const reportProgress = vi.fn();
-    observeBackupTarEntryProgress(firstEntry, reportProgress);
-    observeBackupTarEntryProgress(secondEntry, reportProgress);
+  it.each([
+    { entryPath: "/source/stalled.pack", expectedPath: "/source/stalled.pack" },
+    {
+      entryPath: `/source/🤖${"a".repeat(170)}/${"b".repeat(170)}/${"c".repeat(169)}`,
+      expectedPath: `${"a".repeat(170)}/${"b".repeat(170)}/${"c".repeat(169)}`,
+    },
+    { entryPath: "/source/🤖/stalled.pack", expectedPath: "/source/🤖/stalled.pack" },
+  ])(
+    "cleans a stalled archive and preserves its entry suffix: $entryPath",
+    async ({ entryPath, expectedPath }) => {
+      vi.useFakeTimers();
+      try {
+        const tempDir = tempDirs.make("openclaw-backup-stream-entry-timeout-");
+        const archivePath = path.join(tempDir, "partial.tar.gz");
+        const archiveStream = new PassThrough();
+        let reportProgress: ReportBackupProgress | undefined;
+        const writePromise = writeArchiveStreamToFile({
+          archivePath,
+          createArchiveStream: (progress) => {
+            reportProgress = progress;
+            return archiveStream;
+          },
+          onPartialArchive: vi.fn(),
+        });
+        reportProgress?.({ phase: "raw", entryPath, bytes: 16 });
+        archiveStream.write("partial archive");
 
-    firstEntry.end("first entry");
-    secondEntry.end("second entry");
-    const firstChunks: Buffer[] = [];
-    const secondChunks: Buffer[] = [];
-    firstEntry.on("data", (chunk) => firstChunks.push(chunk));
-    secondEntry.on("data", (chunk) => secondChunks.push(chunk));
-
-    await Promise.all([firstEntry.promise(), secondEntry.promise()]);
-    expect(Buffer.concat(firstChunks).toString()).toBe("first entry");
-    expect(Buffer.concat(secondChunks).toString()).toBe("second entry");
-    expect(reportProgress).toHaveBeenCalledTimes(2);
-  });
-
-  it("cleans a partial archive when one entry stops producing raw bytes", async () => {
-    vi.useFakeTimers();
-    try {
-      const tempDir = tempDirs.make("openclaw-backup-stream-entry-timeout-");
-      const archivePath = path.join(tempDir, "partial.tar.gz");
-      const archiveStream = new PassThrough();
-      const entry = new Minipass();
-      let reportProgress: ReportBackupProgress | undefined;
-      const writePromise = writeArchiveStreamToFile({
-        archivePath,
-        createArchiveStream: (progress) => {
-          reportProgress = progress;
-          return archiveStream;
-        },
-      });
-      observeBackupTarEntryProgress(entry, (bytes) => {
-        reportProgress?.({ phase: "raw", entryPath: "/source/stalled.pack", bytes });
-      });
-      entry.on("data", () => {});
-      entry.write(Buffer.alloc(16));
-      archiveStream.write("partial archive");
-
-      const rejection = expect(writePromise).rejects.toThrow(
-        'Backup archive write stalled: no progress observed for 300000ms (phase=output, entry="/source/stalled.pack", rawBytes=16, outputBytes=15)',
-      );
-      await vi.advanceTimersByTimeAsync(300_001);
-      await rejection;
-      await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        const rejection = expect(writePromise).rejects.toThrow(
+          `Backup archive write stalled: no progress observed for 300000ms (phase=output, entry=${JSON.stringify(expectedPath)}, rawBytes=16, outputBytes=15)`,
+        );
+        await vi.advanceTimersByTimeAsync(300_001);
+        await rejection;
+        await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 });

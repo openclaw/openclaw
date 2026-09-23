@@ -111,7 +111,7 @@ const subagentFollowupRuntimeLoader = createLazyImportLoader(
 type DescendantSubagentFollowup = {
   /** Descendant reply that replaces the interim cron text; undefined keeps the original. */
   finalReply: string | undefined;
-  activeSubagentRuns: number;
+  hasUnsettledDescendants: boolean;
   hadDescendants: boolean;
 };
 
@@ -123,42 +123,46 @@ export async function resolveDescendantSubagentFollowup(params: {
   deliveryBestEffort: boolean;
   spawnOnlyHandoff: boolean;
   initialSynthesizedText: string;
+  abortSignal?: AbortSignal;
 }): Promise<DescendantSubagentFollowup> {
   const expectedFollowup = expectsSubagentFollowup(params.initialSynthesizedText);
   const subagentRegistryRuntime = await deliverySubagentRegistryRuntimeLoader.load();
-  let activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(params.sessionKey);
+  let hasUnsettledDescendants = subagentRegistryRuntime.hasDescendantRunAwaitingSettle(
+    params.sessionKey,
+  );
   const shouldCheckCompletedDescendants =
-    activeSubagentRuns === 0 &&
+    !params.abortSignal?.aborted &&
+    !hasUnsettledDescendants &&
     (params.spawnOnlyHandoff || isLikelyInterimCronMessage(params.initialSynthesizedText));
   const needsFollowupRuntime =
-    shouldCheckCompletedDescendants || activeSubagentRuns > 0 || expectedFollowup;
+    shouldCheckCompletedDescendants || hasUnsettledDescendants || expectedFollowup;
   const followupRuntime = needsFollowupRuntime
     ? await subagentFollowupRuntimeLoader.load()
     : undefined;
-  // Also check for already-completed descendants. If the subagent finished
-  // before delivery-dispatch runs, activeSubagentRuns is 0 and
-  // expectedFollowup may be false (e.g. cron said "on it" which doesn't
-  // match the narrow hint list). We still need to use the descendant's
-  // output instead of the interim cron text.
+  // A child may settle before delivery starts without matching the narrow
+  // follow-up hints. Its result still replaces the parent's interim text.
   const completedDescendantReply = shouldCheckCompletedDescendants
     ? await followupRuntime?.readDescendantSubagentFallbackReply({
         sessionKey: params.sessionKey,
         runStartedAt: params.runStartedAt,
       })
     : undefined;
-  const hadDescendants = activeSubagentRuns > 0 || Boolean(completedDescendantReply);
+  const hadDescendants = hasUnsettledDescendants || Boolean(completedDescendantReply);
   if (
     (!params.deliveryBestEffort || params.spawnOnlyHandoff) &&
-    (activeSubagentRuns > 0 || expectedFollowup)
+    (hasUnsettledDescendants || expectedFollowup)
   ) {
     let finalReply = await followupRuntime?.waitForDescendantSubagentSummary({
       sessionKey: params.sessionKey,
       initialReply: params.initialSynthesizedText,
       timeoutMs: params.timeoutMs,
-      observedActiveDescendants: activeSubagentRuns > 0 || expectedFollowup,
+      observedActiveDescendants: hasUnsettledDescendants || expectedFollowup,
+      abortSignal: params.abortSignal,
     });
-    activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(params.sessionKey);
-    if (!finalReply && activeSubagentRuns === 0) {
+    hasUnsettledDescendants = subagentRegistryRuntime.hasDescendantRunAwaitingSettle(
+      params.sessionKey,
+    );
+    if (!params.abortSignal?.aborted && !finalReply && !hasUnsettledDescendants) {
       finalReply = await followupRuntime?.readDescendantSubagentFallbackReply({
         sessionKey: params.sessionKey,
         runStartedAt: params.runStartedAt,
@@ -166,12 +170,12 @@ export async function resolveDescendantSubagentFollowup(params: {
     }
     // Apply only once every descendant settled; a live run still owns the turn.
     return {
-      finalReply: finalReply && activeSubagentRuns === 0 ? finalReply : undefined,
-      activeSubagentRuns,
+      finalReply: finalReply && !hasUnsettledDescendants ? finalReply : undefined,
+      hasUnsettledDescendants,
       hadDescendants,
     };
   }
-  return { finalReply: completedDescendantReply, activeSubagentRuns, hadDescendants };
+  return { finalReply: completedDescendantReply, hasUnsettledDescendants, hadDescendants };
 }
 
 export async function logCronDeliveryWarn(message: string): Promise<void> {
@@ -190,23 +194,18 @@ export function logCronDeliveryErrorDeferred(message: string): void {
   });
 }
 
-export function resolveCronDeliveryScheduledAtMs(params: {
+export function resolveStaleCronDeliveryError(params: {
   job: CronJob;
   runStartedAt: number;
-}): number {
+}): string | undefined {
   const scheduledAt = params.job.state?.nextRunAtMs;
-  return hasScheduledNextRunAtMs(scheduledAt) ? scheduledAt : params.runStartedAt;
-}
-
-export function resolveCronDeliveryStartDelayMs(params: {
-  job: CronJob;
-  runStartedAt: number;
-}): number {
-  return params.runStartedAt - resolveCronDeliveryScheduledAtMs(params);
-}
-
-export function isStaleCronDelivery(params: { job: CronJob; runStartedAt: number }): boolean {
-  return resolveCronDeliveryStartDelayMs(params) > STALE_CRON_DELIVERY_MAX_START_DELAY_MS;
+  const scheduledAtMs = hasScheduledNextRunAtMs(scheduledAt) ? scheduledAt : params.runStartedAt;
+  const startDelayMs = params.runStartedAt - scheduledAtMs;
+  if (startDelayMs > STALE_CRON_DELIVERY_MAX_START_DELAY_MS) {
+    const nowMs = Date.now();
+    return `skipping stale delivery scheduled at ${new Date(scheduledAtMs).toISOString()}, started ${Math.round(startDelayMs / 60_000)}m late, current age ${Math.round((nowMs - scheduledAtMs) / 60_000)}m`;
+  }
+  return undefined;
 }
 
 export async function maybeApplyTtsToCronPayloads(params: {
@@ -320,8 +319,9 @@ function summarizeDirectCronDeliveryError(error: unknown): string {
 }
 
 function isTransientDirectCronDeliveryError(error: unknown): boolean {
-  if (deliveryRecovery.findPlatformMessageRejectedError(error)) {
-    return false;
+  const typedRetryability = deliveryRecovery.resolveDeliveryNotSentRetryability(error);
+  if (typedRetryability !== undefined) {
+    return typedRetryability;
   }
   const message = summarizeDirectCronDeliveryError(error);
   if (!message) {

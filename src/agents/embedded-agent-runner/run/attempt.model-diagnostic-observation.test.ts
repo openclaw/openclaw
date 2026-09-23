@@ -22,6 +22,7 @@ import {
 } from "../../../logging/diagnostic-run-activity.js";
 import { resetGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
+import { createModelObserver } from "./attempt.model-diagnostic-observation.js";
 
 async function collectModelCallEvents(run: () => Promise<void>): Promise<DiagnosticEventPayload[]> {
   // Diagnostics are emitted asynchronously; collect only public model-call
@@ -125,6 +126,65 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents observation", () => {
     resetDiagnosticRunActivityForTest();
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it.each([
+    ["below the large-string threshold", "x".repeat(4095)],
+    ["at the large-string threshold", "x".repeat(4096)],
+    [
+      "escapes, Unicode, and lone surrogates",
+      (
+        Array.from({ length: 32 }, (_, code) => String.fromCharCode(code)).join("") +
+        '"\\日本語 café 🦞\ud800x\udfff'
+      ).repeat(128),
+    ],
+    [
+      "native JSON conversions",
+      {
+        omitted: undefined,
+        array: [undefined, Number.NaN, Symbol("omitted")],
+        date: new Date("2026-01-01T00:00:00Z"),
+        custom: { toJSON: (key: string) => key.repeat(1024) },
+      },
+    ],
+  ])("preserves exact diagnostic sizes for %s", (_name, value) => {
+    const messages = [{ role: "user", content: value }];
+    const observer = createModelObserver({
+      streamContext: { messages, tools: [value] },
+      capturePromptStats: true,
+    });
+    observer.assignRequestPayloadBytes(value);
+    observer.observeResponseChunk(Date.now(), value);
+
+    expect(observer.promptStats?.inputMessagesChars).toBe(JSON.stringify(messages).length);
+    expect(observer.promptStats?.toolDefinitionsChars).toBe(JSON.stringify([value]).length);
+    expect(observer.sizeTimingFields()).toMatchObject({
+      requestPayloadBytes: Buffer.byteLength(JSON.stringify(value), "utf8"),
+      responseStreamBytes: Buffer.byteLength(JSON.stringify(value), "utf8"),
+    });
+  });
+
+  it("does not assemble multi-megabyte JSON strings just to measure messages", () => {
+    const messages = Array.from({ length: 128 }, (_, index) => ({
+      role: "user",
+      content: `${index}: ${'A "quoted" line.\n'.repeat(1024)}`,
+    }));
+    const expectedChars = JSON.stringify(messages).length;
+    const expectedBytes = Buffer.byteLength(JSON.stringify({ messages }), "utf8");
+    const stringify = vi.spyOn(JSON, "stringify");
+    const observer = createModelObserver({
+      streamContext: { messages },
+      capturePromptStats: true,
+    });
+    observer.assignRequestPayloadBytes({ messages });
+    const largestJsonString = Math.max(
+      ...stringify.mock.results.map(({ value }) => (typeof value === "string" ? value.length : 0)),
+    );
+    stringify.mockRestore();
+
+    expect(observer.promptStats?.inputMessagesChars).toBe(expectedChars);
+    expect(observer.sizeTimingFields().requestPayloadBytes).toBe(expectedBytes);
+    expect(largestJsonString).toBeLessThan(64 * 1024);
   });
 
   it.each([
@@ -643,57 +703,124 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents observation", () => {
     expect(JSON.stringify(events)).not.toContain("private tool description");
   });
 
-  it("captures per-call usage from terminal error events", async () => {
-    // Aborted/error streams terminate with an `error` event carrying the final
-    // AssistantMessage and its usage. Iterating to completion without awaiting
-    // result() must still surface per-call usage, matching the `done` path and
-    // the usage field already emitted on model.call.error and its OTel span.
-    const assistant = {
-      role: "assistant",
-      content: [{ type: "text", text: "partial reply" }],
-      usage: {
+  it.each(
+    [
+      {
+        stopReason: "aborted",
+        errorMessage: undefined,
+        errorCode: undefined,
+        failureKind: "aborted",
+        requestIdHash: undefined,
+      },
+      {
+        stopReason: "error",
+        errorMessage: "request timed out",
+        errorCode: undefined,
+        failureKind: "timeout",
+        requestIdHash: undefined,
+      },
+      {
+        stopReason: "error",
+        errorMessage: "provider unavailable",
+        errorCode: "ETIMEDOUT",
+        failureKind: "timeout",
+        requestIdHash: undefined,
+      },
+      {
+        stopReason: "error",
+        errorMessage: "synthetic-private-error [request_id=req_error_usage]",
+        errorCode: "ECONNRESET",
+        failureKind: "connection_reset",
+        requestIdHash: expect.stringMatching(/^sha256:[a-f0-9]{12}$/),
+      },
+      {
+        stopReason: "aborted",
+        errorMessage: "synthetic-private-error [request_id=req_error_usage]",
+        errorCode: "ECONNRESET",
+        failureKind: "aborted",
+        requestIdHash: expect.stringMatching(/^sha256:[a-f0-9]{12}$/),
+      },
+    ].flatMap((failure) =>
+      ["iterator", "result", "result-then-iterator", "iterator-then-result"].map((consumption) =>
+        Object.assign({}, failure, { consumption }),
+      ),
+    ),
+  )(
+    "records $stopReason/$failureKind via $consumption with usage and no duplicate terminal event",
+    async ({ stopReason, errorMessage, errorCode, failureKind, requestIdHash, consumption }) => {
+      const assistant = {
+        role: "assistant",
+        content: [{ type: "text", text: "partial reply" }],
+        usage: {
+          input: 11,
+          output: 7,
+          cacheRead: 3,
+          cacheWrite: 2,
+          reasoningTokens: 5,
+          totalTokens: 28,
+        },
+        stopReason,
+        errorMessage,
+        errorCode,
+        timestamp: 1,
+      };
+      async function* stream() {
+        yield { type: "error", reason: stopReason, error: assistant };
+      }
+      const originalStream = Object.assign(stream(), { result: async () => assistant });
+      const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+        (() => originalStream) as unknown as StreamFn,
+        {
+          runId: "run-1",
+          provider: "openrouter",
+          model: "openrouter/auto",
+          trace: createDiagnosticTraceContext(),
+          nextCallId: () => "call-error-usage",
+        },
+      );
+
+      const entries = await collectTrustedModelCallEvents(async () => {
+        const response = wrapped(
+          {} as never,
+          {} as never,
+          {} as never,
+        ) as unknown as typeof originalStream;
+        if (consumption === "result" || consumption === "result-then-iterator") {
+          expect(await response.result()).toBe(assistant);
+        }
+        if (consumption !== "result") {
+          for await (const event of response) {
+            expect(event.error).toBe(assistant);
+            if (consumption === "iterator-then-result") {
+              expect(await response.result()).toBe(assistant);
+              break;
+            }
+          }
+        }
+      });
+
+      const events = entries.map(({ event }) => event);
+      expect(events.map((event) => event.type)).toEqual(["model.call.started", "model.call.error"]);
+      const errorEvent = getEvent(events, 1);
+      expect(errorEvent.errorCategory).toBe("Error");
+      expect(errorEvent.failureKind).toBe(failureKind);
+      expect(errorEvent.upstreamRequestIdHash).toEqual(requestIdHash);
+      expect(errorEvent.responseStreamBytes).toBeGreaterThan(0);
+      expect(errorEvent.usage).toEqual({
         input: 11,
         output: 7,
         cacheRead: 3,
         cacheWrite: 2,
         reasoningTokens: 5,
-        totalTokens: 28,
-      },
-      stopReason: "aborted",
-      timestamp: 1,
-    };
-    async function* stream() {
-      yield { type: "error", reason: "aborted", error: assistant };
-    }
-    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
-      (() => stream()) as unknown as StreamFn,
-      {
-        runId: "run-1",
-        provider: "openrouter",
-        model: "openrouter/auto",
-        trace: createDiagnosticTraceContext(),
-        nextCallId: () => "call-error-usage",
-      },
-    );
-
-    const events = await collectModelCallEvents(async () => {
-      await drain(wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>);
-    });
-
-    // An in-band error event is data, not a throw, so iteration completes
-    // normally; the per-call usage rides on the terminal completion event.
-    const completedEvent = getEvent(events, 1);
-    expect(completedEvent.type).toBe("model.call.completed");
-    expect(completedEvent.usage).toEqual({
-      input: 11,
-      output: 7,
-      cacheRead: 3,
-      cacheWrite: 2,
-      reasoningTokens: 5,
-      total: 28,
-      promptTokens: 16,
-    });
-  });
+        total: 28,
+        promptTokens: 16,
+      });
+      expect(entries[1]?.privateData.modelContent).toBeUndefined();
+      expect(JSON.stringify(entries)).not.toContain("synthetic-private-error");
+      expect(JSON.stringify(entries)).not.toContain("req_error_usage");
+      expect(JSON.stringify(entries)).not.toContain("partial reply");
+    },
+  );
 
   it("skips prompt stat computation when diagnostics are disabled", async () => {
     // Prompt stats are only attached to diagnostic events; when diagnostics are

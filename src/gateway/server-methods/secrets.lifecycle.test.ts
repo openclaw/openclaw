@@ -57,6 +57,40 @@ async function invoke(
 const resolveSecrets = async () => ({ assignments: [], diagnostics: [], inactiveRefPaths: [] });
 
 describe("secret store mutation lifecycle", () => {
+  it("rejects a redaction sentinel without replacing the stored credential", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const name = "OPENCLAW_GATEWAY_TOKEN";
+      const value = "synthetic-gateway-token";
+      writeSecretStoreEntry({
+        scope: { kind: "team" },
+        name,
+        value,
+        kind: "secret",
+        updatedBy: "test",
+      });
+      const reloadSecrets = vi.fn(async () => ({ warningCount: 0 }));
+      const handlers = createSecretsHandlers({
+        reloadSecrets,
+        resolveSecrets,
+        storeWriteService: createSecretStoreWriteService({ reloadSecrets }),
+      });
+
+      expect(
+        await invoke(handlers, "secrets.store.set", {
+          name,
+          value: "__OPENCLAW_REDACTED__",
+          kind: "secret",
+        }),
+      ).toMatchObject([
+        false,
+        undefined,
+        { code: "INVALID_REQUEST", message: expect.stringContaining(name) },
+      ]);
+      expect(readSecretStoreValue({ scope: { kind: "team" }, name })).toEqual({ ok: true, value });
+      expect(reloadSecrets).not.toHaveBeenCalled();
+    });
+  });
+
   it.each(["dispatch continuation", "mutation logging"] as const)(
     "does not delete when admitted authority closes during %s",
     async (closure) => {
@@ -197,7 +231,7 @@ describe("secret store mutation lifecycle", () => {
         expect(JSON.stringify(result)).not.toContain("test-secret-operator-only");
         expect(methods).toEqual(["question.request", "question.waitAnswer", "secrets.store.list"]);
       } finally {
-        manager.reset();
+        manager.close();
         releaseAgentRunDelegatedAuthority(authority);
         clearAgentRunContext("tool-run");
       }

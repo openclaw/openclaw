@@ -41,13 +41,15 @@ describe("ACP session metadata store ownership", () => {
     expect(mocks.loadSessionEntryReadOnly).not.toHaveBeenCalled();
   });
 
-  it("reads a persisted fixed-store owner's store after restart", () => {
+  it.each(["persisted", "sole"] as const)("reads the %s owner's global session", (owner) => {
     const cfg = {
       ...explicitFleet(),
       session: { store: "/stores/shared.sqlite" },
       agents: {
         ...explicitFleet().agents,
-        defaults: { sessionStore: { agentId: "ops" } },
+        ...(owner === "persisted"
+          ? { defaults: { sessionStore: { agentId: "ops" } } }
+          : { entries: { ops: {} } }),
       },
     } satisfies OpenClawConfig;
     mocks.loadSessionEntryReadOnly.mockReturnValue({ sessionId: "ops-session" });

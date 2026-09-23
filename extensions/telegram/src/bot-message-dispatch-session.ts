@@ -146,7 +146,11 @@ export function createCurrentTurnTranscriptFinalResolver(params: {
       if (!latest?.timestamp || latest.timestamp < params.dispatchStartedAt) {
         return undefined;
       }
-      return { ...(latest.id ? { messageId: latest.id } : {}), text: latest.text };
+      return {
+        ...(latest.id ? { messageId: latest.id } : {}),
+        text: latest.text,
+        ...(latest.openclawDelivery ? { openclawDelivery: latest.openclawDelivery } : {}),
+      };
     } catch (err) {
       logVerbose(`telegram transcript final candidate lookup failed: ${formatErrorMessage(err)}`);
       return undefined;

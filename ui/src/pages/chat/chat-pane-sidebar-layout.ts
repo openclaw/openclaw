@@ -1,4 +1,5 @@
-import { html, type TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
+import { styleMap } from "lit/directives/style-map.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import {
@@ -6,6 +7,7 @@ import {
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
 import { renderLazyViewError } from "../../components/lazy-view-error.ts";
+import { t } from "../../i18n/index.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -15,17 +17,18 @@ import type {
   SidebarRegionCallbacks,
 } from "./components/chat-sidebar-region-types.ts";
 import type { SidebarFullMessageLoader } from "./components/chat-sidebar.ts";
+import type { LinkFaviconFetcher } from "./link-favicon-loader.ts";
 import {
   activatePanel,
+  toggleSidebarPanelExpanded,
   closeSlot,
   fitSidebarLayout,
   isSidebarRegionCollapsed,
   openSlot,
   reorderPanel,
-  setSidebarDock,
-  setSidebarExpanded,
-  setSidebarOpen,
   sidebarDock,
+  sidebarMainPanel,
+  isSidebarSlotVisible,
   type SidebarLayout,
   type SidebarSlotId,
 } from "./sidebar-layout.ts";
@@ -49,8 +52,13 @@ const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
     "openclaw-terminal-panel",
     () => import("../../components/terminal/terminal-panel-registration.ts"),
   ],
+  "link-reader": [
+    "openclaw-link-reader-panel",
+    () => import("../../components/link-reader-panel.ts"),
+  ],
   browser: ["openclaw-browser-panel", () => import("../../components/browser/browser-panel.ts")],
   desktop: ["openclaw-desktop-panel", () => import("../../components/desktop/desktop-panel.ts")],
+  portal: ["openclaw-portals-page", () => import("../portals/portals-page.ts")],
   companion: ["openclaw-chat-session-rail", () => import("./components/chat-session-rail.ts")],
   discussion: [
     "openclaw-session-discussion",
@@ -108,7 +116,6 @@ export function sidebarRegionCallbacks(params: {
   layout: SidebarLayout;
   closePanelSlot: (slot: SidebarSlotId) => void;
   openPanelSlot: (slot: SidebarSlotId) => void;
-  hideBoard: () => void;
   forgetDiscussionUrl: () => void;
   resizePanel: (columnId: string, size: number) => void;
   setPanelOpen: (open: boolean) => void;
@@ -116,12 +123,23 @@ export function sidebarRegionCallbacks(params: {
   const { layout, state } = params;
   return {
     activatePanel: (panelId) => {
-      state.updateSidebarLayout(activatePanel(layout, panelId));
+      const slot = layout.columns[0]?.panels.find((panel) => panel.id === panelId)?.slot;
+      if (slot === "dashboard" && !isSidebarSlotVisible(layout, "dashboard")) {
+        params.openPanelSlot(slot);
+      } else {
+        state.updateSidebarLayout(activatePanel(layout, panelId));
+      }
+      state.updateSidebarActivePanel(panelId);
+    },
+    togglePanelExpanded: (panelId) => {
+      state.updateSidebarLayout(toggleSidebarPanelExpanded(layout, panelId), {
+        dashboardPresentation: "personal",
+      });
       state.updateSidebarActivePanel(panelId);
     },
     closeSlot: (slot) => {
-      if (slot === "chat") {
-        params.hideBoard();
+      if (slot === "conversation") {
+        params.setPanelOpen(false);
         return;
       }
       if (slot === "discussion") {
@@ -133,13 +151,13 @@ export function sidebarRegionCallbacks(params: {
     reorderPanel: (panelId, targetPanelId, placement) =>
       state.updateSidebarLayout(reorderPanel(layout, panelId, targetPanelId, placement)),
     resizePanel: params.resizePanel,
-    setDock: (dock) => state.updateSidebarLayout(setSidebarDock(layout, dock)),
-    setExpanded: (expanded) => state.updateSidebarLayout(setSidebarExpanded(layout, expanded)),
     setOpen: params.setPanelOpen,
   };
 }
 
 export function renderSidebarRegion(params: {
+  presentationId: string;
+  fetchFavicon?: LinkFaviconFetcher;
   availableWidth: number;
   callbacks: SidebarRegionCallbacks;
   availableSlots: SidebarSlotId[];
@@ -148,12 +166,15 @@ export function renderSidebarRegion(params: {
   panelDefinitions?: SidebarPanelDefinition[];
   panelActions: SidebarPanelTemplates;
   panelTemplates: SidebarPanelTemplates;
+  header?: TemplateResult | typeof nothing;
   primary: TemplateResult;
   requestUpdate: () => void;
 }): TemplateResult {
+  const panelIdPrefix = `chat-panel-${encodeURIComponent(params.presentationId)}`;
   const panelDefinitions = params.panelDefinitions ?? sidebarPanelDefinitions();
   const panelOpen = params.layout.open === true;
-  const regionError = panelOpen ? ensureLazyElement("region", params.requestUpdate) : undefined;
+  const hasPanels = params.layout.columns.length > 0;
+  const regionError = hasPanels ? ensureLazyElement("region", params.requestUpdate) : undefined;
   let panelTemplates: SidebarPanelTemplates | null = null;
   for (const panel of params.layout.columns[0]?.panels ?? []) {
     const lazyState = ensureLazyElement(panel.slot, params.requestUpdate);
@@ -166,6 +187,9 @@ export function renderSidebarRegion(params: {
   const availableWidth =
     params.availableWidth > 0 ? params.availableWidth : Number.POSITIVE_INFINITY;
   const collapsed = params.narrow || isSidebarRegionCollapsed(params.layout, availableWidth);
+  const main = sidebarMainPanel(params.layout);
+  const chatMain = !main || main.slot === "conversation";
+  const column = params.layout.columns[0];
   const activePanelId = params.layout.columns[0]?.activePanelId;
   const activePanelSlot = params.layout.columns[0]?.panels.find(
     (panel) => panel.id === activePanelId,
@@ -174,26 +198,43 @@ export function renderSidebarRegion(params: {
     (definition) => definition.slot === activePanelSlot,
   )?.loading;
   return html`<div
-    class="sidebar-region ${collapsed && panelOpen ? "sidebar-region--narrow" : ""} ${panelOpen &&
-    params.layout.expanded
-      ? "sidebar-region--expanded"
-      : ""} ${panelOpen && sidebarDock(params.layout) === "bottom" ? "sidebar-region--bottom" : ""}"
+    class="sidebar-region ${collapsed ? "sidebar-region--narrow" : ""} ${
+      params.layout.expanded ? "sidebar-region--expanded" : ""
+    } ${params.layout.expanded && params.layout.expandedSide ? "sidebar-region--expanded-side" : ""} sidebar-region--${sidebarDock(params.layout)} ${panelOpen ? "sidebar-region--open" : ""}"
+    style=${styleMap({
+      "--side-panel-width": `${column?.width ?? 480}px`,
+      "--side-panel-height": `${column?.height ?? 360}px`,
+    })}
   >
-    ${regionError !== undefined
-      ? regionError === null
-        ? (regionLoading ?? null)
-        : null
-      : html`<openclaw-chat-sidebar-region
-          .layout=${params.layout}
-          .panelDefinitions=${panelDefinitions}
-          .panelTemplates=${panelTemplates ?? params.panelTemplates}
-          .panelActions=${params.panelActions}
-          .availableSlots=${params.availableSlots}
-          .callbacks=${params.callbacks}
-          .narrow=${params.narrow}
-          .availableWidth=${params.availableWidth}
-        ></openclaw-chat-sidebar-region>`}
-    <div class="sidebar-region__primary">${params.primary}</div>
+    <div class="sidebar-region__header">${params.header ?? nothing}</div>
+    ${
+      regionError !== undefined
+        ? regionError === null
+          ? (regionLoading ?? null)
+          : null
+        : html`<openclaw-chat-sidebar-region
+            .panelIdPrefix=${panelIdPrefix}
+            .layout=${params.layout}
+            .fetchFavicon=${params.fetchFavicon}
+            .panelDefinitions=${panelDefinitions}
+            .panelTemplates=${panelTemplates ?? params.panelTemplates}
+            .panelActions=${params.panelActions}
+            .availableSlots=${params.availableSlots}
+            .callbacks=${params.callbacks}
+            .narrow=${params.narrow}
+            .availableWidth=${params.availableWidth}
+          ></openclaw-chat-sidebar-region>`
+    }
+    <div
+      id=${`${panelIdPrefix}-conversation`}
+      class="sidebar-region__primary"
+      role="region"
+      aria-label=${t("chat.sidePanel.conversation")}
+      data-region=${chatMain ? "main" : "side"}
+      ?hidden=${!isSidebarSlotVisible(params.layout, "conversation")}
+    >
+      ${params.primary}
+    </div>
     <div class="sidebar-region__right-runtime">${regionError ?? null}</div>
   </div>`;
 }
@@ -204,35 +245,14 @@ export function resolveSidebarLayoutForBoard(params: {
   paneWidth: number;
 }): SidebarLayout {
   let layout = params.layout;
-  const chatSide =
-    params.board.hasBoard &&
-    params.board.face === "dashboard" &&
-    (params.board.dock === "left" || params.board.dock === "right")
-      ? params.board.dock
-      : null;
-  if (!chatSide) {
-    layout = closeSlot(layout, "chat");
-    if (
-      params.board.hasBoard &&
-      params.board.face === "dashboard" &&
-      params.board.dock === "hidden" &&
-      params.board.provider.canMutate
-    ) {
-      // Dashboard is the board-only mode. Preserve the stored tabs for the
-      // next explicit Split transition, but never render them over the board.
-      layout = setSidebarOpen(layout, false);
-    }
+  if (!params.board.available) {
+    layout = closeSlot(layout, "dashboard");
     return fitSidebarLayout(layout, params.paneWidth) ?? layout;
   }
-  const explicitlyClosed = layout.columns.length > 0 && layout.open === false;
-  const selectedPanelId = layout.columns[0]?.activePanelId;
-  layout = openSlot(layout, "chat");
-  // Board projection must guarantee the chat tab exists without stealing the
-  // user's selected side-panel tab on every render.
-  if (selectedPanelId) {
-    layout = activatePanel(layout, selectedPanelId);
+  if (params.board.face !== "dashboard" || layout.columns.length > 0) {
+    return fitSidebarLayout(layout, params.paneWidth) ?? layout;
   }
-  layout = { ...layout, open: !explicitlyClosed };
+  layout = openSlot(layout, "dashboard");
   return fitSidebarLayout(layout, params.paneWidth) ?? layout;
 }
 
@@ -247,11 +267,16 @@ export function createSidebarFullMessageLoader(
     if (!state.client || !state.connected) {
       return null;
     }
-    return state.client.request("chat.message.get", {
-      sessionKey: request.sessionKey,
-      ...(request.agentId ? { agentId: request.agentId } : {}),
-      messageId: request.messageId,
-      maxChars: DETAIL_FULL_MESSAGE_MAX_CHARS,
-    });
+    const client = state.client;
+    const result = await client.request<Awaited<ReturnType<SidebarFullMessageLoader>>>(
+      "chat.message.get",
+      {
+        sessionKey: request.sessionKey,
+        ...(request.agentId ? { agentId: request.agentId } : {}),
+        messageId: request.messageId,
+        maxChars: request.maxChars ?? DETAIL_FULL_MESSAGE_MAX_CHARS,
+      },
+    );
+    return state.connected && state.client === client ? result : null;
   };
 }

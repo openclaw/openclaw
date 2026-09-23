@@ -11,7 +11,12 @@ const gatewayClientState = vi.hoisted(() => ({
   options: null as Record<string, unknown> | null,
   requests: [] as string[],
   startCalls: 0,
-  startMode: "hello" as "hello" | "close" | "connect-error-close" | "startup-retry-then-hello",
+  startMode: "hello" as
+    | "hello"
+    | "close"
+    | "connect-error-close"
+    | "startup-retry-then-hello"
+    | "defer",
   socketOpened: true,
   transportValidated: true,
   close: { code: 1008, reason: "pairing required" },
@@ -103,6 +108,9 @@ class MockGatewayClient {
 
   start(): void {
     gatewayClientState.startCalls += 1;
+    if (gatewayClientState.startMode === "defer") {
+      return;
+    }
     void Promise.resolve()
       .then(async () => {
         if (gatewayClientState.startMode === "close") {
@@ -192,14 +200,15 @@ vi.mock("../infra/device-auth-store.js", () => ({
   },
 }));
 
-vi.mock("./event-loop-ready.js", () => ({
+vi.mock("../../packages/gateway-client/src/event-loop-ready.js", () => ({
   waitForEventLoopReady: vi.fn((params?: { maxWaitMs?: number }) => {
     eventLoopReadyState.calls.push(params);
     return Promise.resolve(eventLoopReadyState.result);
   }),
 }));
 
-const { clampProbeTimeoutMs, probeGateway } = await import("./probe.js");
+const { clampProbeTimeoutMs, getDeviceRequiredProbeCacheSizeForTest, probeGateway } =
+  await import("./probe.js");
 
 type ProbeGatewayParams = Parameters<typeof probeGateway>[0];
 
@@ -393,6 +402,21 @@ describe("probeGateway", () => {
     expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(250);
     expect(gatewayClientState.options?.url).toBe("ws://127.0.0.1:18789");
     expect(gatewayClientState.startCalls).toBe(0);
+  });
+
+  it("stops an active probe when its owner aborts", async () => {
+    gatewayClientState.startMode = "defer";
+    const controller = new AbortController();
+    const probe = runTokenLightweightProbe({
+      timeoutMs: 5_000,
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(gatewayClientState.startCalls).toBe(1));
+
+    controller.abort();
+
+    await expect(probe).resolves.toMatchObject({ ok: false, error: "aborted" });
+    expect(gatewayClientState.stopAndWaitCalls).toEqual([{ timeoutMs: 1_000 }]);
   });
 
   it("connects with operator.read scope", async () => {
@@ -843,6 +867,14 @@ describe("probeGateway", () => {
     } finally {
       dateNowSpy.mockRestore();
     }
+  });
+
+  it("evicts the oldest device-required cache entries once the cap is reached", async () => {
+    setDeviceRequiredProbeMode();
+    for (let i = 0; i <= 500; i += 1) {
+      await runLightweightProbe(nextProbeUrl(`cache-evict-${i}`));
+    }
+    expect(getDeviceRequiredProbeCacheSizeForTest()).toBeLessThanOrEqual(500);
   });
 
   it("lets paired probes clear prior device-required failures", async () => {

@@ -5,16 +5,14 @@ import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-pa
  * Applies logging redaction rules to persisted messages while preserving unchanged object identity.
  */
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readLoggingConfig } from "../logging/config.js";
-import { redactSourceInputTextWithConfig } from "../logging/redact-source.js";
 import {
-  redactModelVisibleSensitiveFieldValueWithConfig,
-  redactModelVisibleToolPayloadTextWithConfig,
-  redactSensitiveFieldValueWithConfig,
-  redactSensitiveText,
-  redactToolPayloadTextWithConfig,
-} from "../logging/redact.js";
+  copyPreparedModelVisibleToolText,
+  isPreparedModelVisibleToolText,
+} from "../logging/redact-internal.js";
+import { redactSourceInputTextWithConfig } from "../logging/redact-source.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { readNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import type { ProviderEndpointClass } from "./provider-attribution.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
@@ -31,41 +29,11 @@ import {
   shouldPreserveTranscriptImagePayload,
 } from "./transcript-redact-images.js";
 import { sanitizeCompactionReplayState } from "./transcript-redact-replay.js";
-
-function resolveTranscriptLoggingConfig(cfg?: OpenClawConfig) {
-  const configuredLogging = readLoggingConfig();
-  const redactPatterns = cfg?.logging?.redactPatterns ?? configuredLogging?.redactPatterns;
-  return redactPatterns ? { redactPatterns } : undefined;
-}
-
-function redactTranscriptText(
-  value: string,
-  cfg?: OpenClawConfig,
-  modelVisibleToolResult = false,
-): string {
-  const loggingConfig = resolveTranscriptLoggingConfig(cfg);
-  return modelVisibleToolResult
-    ? redactModelVisibleToolPayloadTextWithConfig(value, loggingConfig)
-    : redactToolPayloadTextWithConfig(value, loggingConfig);
-}
-
-function redactTranscriptStructuredFieldValue(
-  key: string,
-  value: string,
-  cfg?: OpenClawConfig,
-  modelVisibleToolResult = false,
-): string {
-  // Preserve pagination state only in transcripts; value-pattern and global log redaction remain.
-  return /^(?:next[_-]?)?page[_-]?token$|^page[_-]?cursor$/i.test(key)
-    ? redactTranscriptText(value, cfg, modelVisibleToolResult)
-    : modelVisibleToolResult
-      ? redactModelVisibleSensitiveFieldValueWithConfig(
-          key,
-          value,
-          resolveTranscriptLoggingConfig(cfg),
-        )
-      : redactSensitiveFieldValueWithConfig(key, value, resolveTranscriptLoggingConfig(cfg));
-}
+import {
+  redactTranscriptStructuredFieldValue,
+  redactTranscriptText,
+  resolveTranscriptLoggingConfig,
+} from "./transcript-redact-text.js";
 
 function isPlainTranscriptObject(value: object): value is Record<string, unknown> {
   const prototype = Object.getPrototypeOf(value);
@@ -552,6 +520,15 @@ function redactTranscriptStructuredValue(
     next = { ...source };
   }
   for (const [key, item] of Object.entries(source)) {
+    // Reuse admitted live text; custom patterns need not be idempotent.
+    if (
+      modelVisibleToolResult &&
+      key === "text" &&
+      typeof item === "string" &&
+      isPreparedModelVisibleToolText(source, item, resolveTranscriptLoggingConfig(cfg))
+    ) {
+      continue;
+    }
     // The append transaction owns this control-plane identity. Redacting it would
     // make stored dedupe disagree with the admitted message identity.
     if (location === "root" && key === "idempotencyKey") {
@@ -713,14 +690,27 @@ function redactTranscriptStructuredValue(
   }
   // Redacted source facts no longer identify the producer's sender. Keep display
   // redaction, but never qualify the replacement bytes as a person or remote actor.
-  if (
-    fieldKey === "__openclaw" &&
-    next &&
-    (next.senderIdentity !== source.senderIdentity || next.senderId !== source.senderId)
-  ) {
-    delete next.senderIdentity;
+  if (fieldKey === "__openclaw" && next) {
+    if (next.senderIdentity !== source.senderIdentity || next.senderId !== source.senderId) {
+      delete next.senderIdentity;
+    }
+    if (next.humanMentions !== source.humanMentions) {
+      delete next.humanMentions;
+    }
+  }
+  if (location === "root" && source.role === "user" && next && next.content !== source.content) {
+    const metadata = asOptionalRecord(next["__openclaw"]);
+    if (metadata?.humanMentions !== undefined) {
+      // UTF-16 selections cannot retain their binding after storage redacts the content.
+      const retained = { ...metadata };
+      delete retained.humanMentions;
+      next["__openclaw"] = retained;
+    }
   }
   seen.delete(value);
+  if (next && modelVisibleToolResult) {
+    copyPreparedModelVisibleToolText(source, next);
+  }
   return next ?? value;
 }
 

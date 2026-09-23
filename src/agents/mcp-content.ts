@@ -1,3 +1,4 @@
+import type { GetPromptResult } from "@modelcontextprotocol/sdk/types.js";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentToolResult } from "./runtime/index.js";
@@ -107,7 +108,7 @@ function projectMcpCallToolResultContent(result: {
 }): AgentToolResult<unknown>["content"] {
   const sourceContent = Array.isArray(result.content) ? result.content : [];
   if (isRecord(result.structuredContent)) {
-    const mirroredText = JSON.stringify(result.structuredContent, null, 2);
+    let mirroredText: string | undefined;
     const structuredJson = JSON.stringify(
       JSON.parse(stableStringify(result.structuredContent)),
       null,
@@ -118,7 +119,12 @@ function projectMcpCallToolResultContent(result: {
       { type: "text", text: structuredText },
       ...sourceContent
         // Only the SDK's full pretty-JSON mirror is redundant; overlapping text can carry recovery guidance.
-        .filter((block) => !isRecord(block) || block.type !== "text" || block.text !== mirroredText)
+        .filter(
+          (block) =>
+            !isRecord(block) ||
+            block.type !== "text" ||
+            block.text !== (mirroredText ??= JSON.stringify(result.structuredContent, null, 2)),
+        )
         .map(mcpContentBlockToAgentContent),
     ];
   }
@@ -159,4 +165,22 @@ export function projectMcpCallToolResult(
       : {}),
     ...(typeof result.isError === "boolean" ? { isError: result.isError } : {}),
   });
+}
+
+/** Keep template roles descriptive while projecting its content for the model. */
+export function projectMcpGetPromptResult(
+  result: GetPromptResult,
+  details: Record<string, unknown>,
+): AgentToolResult<unknown> {
+  const content = result.messages.flatMap(({ role, content: block }) => [
+    { type: "text", text: `${role}:` },
+    block,
+  ]);
+  if (result.description !== undefined) {
+    content.unshift({ type: "text", text: result.description });
+  }
+  return setMcpCodeModeGuestResult(
+    projectMcpCallToolResult({ content }, details),
+    toToolSearchJsonSafe(result),
+  );
 }

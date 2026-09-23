@@ -1,14 +1,12 @@
-// Whatsapp plugin module implements monitor behavior.
 import type { WAMessageKey } from "baileys";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
+import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   registerUnhandledRejectionHandler,
@@ -153,11 +151,11 @@ export async function monitorWebChannel(
   const reconnectPolicy = resolveReconnectPolicy(cfg, tuning.reconnect);
   const socketTiming = resolveWhatsAppSocketTiming(tuning.socketTiming);
   const baseMentionConfig = buildMentionConfig(cfg);
-  const groupHistoryLimit =
+  const groupHistoryLimit = resolvePromptHistoryLimit(
     account.historyLimit ??
-    cfg.channels?.whatsapp?.historyLimit ??
-    cfg.messages?.groupChat?.historyLimit ??
-    DEFAULT_GROUP_HISTORY_LIMIT;
+      cfg.channels?.whatsapp?.historyLimit ??
+      cfg.messages?.groupChat?.historyLimit,
+  );
   const groupHistories = new Map<
     string,
     Array<{
@@ -223,10 +221,6 @@ export async function monitorWebChannel(
       }
 
       const connectionId = newConnectionId();
-      const inboundDebounceMs = resolveInboundDebounceMs({
-        cfg,
-        channel: "whatsapp",
-      });
       const shouldDebounce = (msg: WebInboundCallbackMessage) =>
         shouldDebounceTextInbound({
           text: msg.payload.commandBody ?? msg.payload.body,
@@ -280,7 +274,7 @@ export async function monitorWebChannel(
               selfChatMode: account.selfChatMode,
               sendReadReceipts: account.sendReadReceipts,
               socketTiming,
-              debounceMs: inboundDebounceMs,
+              debounceMs: tuning.debounceMs,
               appendReplyWindow: connectionLocal.openedAfterRecentInbound
                 ? {
                     afterMs: connectionLocal.startedAt - reconnectCatchUpWindowMs,

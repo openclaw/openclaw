@@ -1,5 +1,11 @@
-import type { ChatAttachment, ChatComposerMemoryFallback } from "../lib/chat/chat-types.ts";
-import { releaseChatAttachmentPayloads } from "../pages/chat/attachment-payload-store.ts";
+import type {
+  ChatAttachment,
+  ChatComposerMemoryFallback,
+  ChatGoalDraftMode,
+  HumanMention,
+} from "../lib/chat/chat-types.ts";
+import { releaseChatAttachmentPayloads } from "../pages/chat/attachment-payload-lifecycle.ts";
+import type { NewSessionDraftHandoff } from "../pages/new-session/draft-persistence.ts";
 import type { ApplicationChatAttachmentHandoff } from "./context.ts";
 
 const MAX_PENDING_CHAT_ATTACHMENT_ENTRIES = 32;
@@ -13,6 +19,10 @@ type PendingChatAttachmentHandoff = {
   attachments: ChatAttachment[];
   fallbacks: Record<string, ChatComposerMemoryFallback>;
   message: string;
+  draftRevision?: number;
+  goalMode?: ChatGoalDraftMode | null;
+  mentions?: readonly HumanMention[];
+  newSessionDraft?: NewSessionDraftHandoff;
   preparedAt: number;
 };
 
@@ -50,11 +60,22 @@ export function createChatAttachmentHandoff(): ApplicationChatAttachmentHandoff 
   };
 
   return {
-    prepare: ({ owner, paneId, scopeKey, attachments, fallbacks, message = "" }) => {
+    prepare: ({
+      owner,
+      paneId,
+      scopeKey,
+      attachments,
+      fallbacks,
+      message = "",
+      draftRevision,
+      goalMode,
+      mentions,
+      newSessionDraft,
+    }) => {
       const key = entryKey(paneId, scopeKey);
       const previous = take(key);
       const fallbackEntries = Object.entries(fallbacks);
-      if (!message && attachments.length === 0 && fallbackEntries.length === 0) {
+      if (!message && !goalMode && attachments.length === 0 && fallbackEntries.length === 0) {
         releaseHandoff(previous);
         return;
       }
@@ -78,7 +99,11 @@ export function createChatAttachmentHandoff(): ApplicationChatAttachmentHandoff 
         paneId,
         scopeKey,
         attachments: [...attachments],
+        ...(newSessionDraft ? { newSessionDraft } : {}),
         message,
+        ...(draftRevision !== undefined ? { draftRevision } : {}),
+        ...(goalMode ? { goalMode } : {}),
+        ...(mentions?.length ? { mentions: mentions.map((mention) => ({ ...mention })) } : {}),
         fallbacks: Object.fromEntries(
           fallbackEntries.map(([fallbackKey, fallback]) => [
             fallbackKey,
@@ -103,11 +128,27 @@ export function createChatAttachmentHandoff(): ApplicationChatAttachmentHandoff 
         return {
           attachments: match.attachments,
           fallbacks: match.fallbacks,
+          ...(match.newSessionDraft ? { newSessionDraft: match.newSessionDraft } : {}),
           ...(match.message ? { message: match.message } : {}),
+          ...(match.draftRevision !== undefined ? { draftRevision: match.draftRevision } : {}),
+          ...(match.goalMode ? { goalMode: match.goalMode } : {}),
+          ...(match.mentions ? { mentions: match.mentions } : {}),
         };
       }
       releaseHandoff(match);
       return null;
+    },
+    retainedAttachmentIds: (attachments) => {
+      const requested = new Set(attachments.map((attachment) => attachment.id));
+      const retained = new Set<string>();
+      for (const handoff of pending.values()) {
+        for (const attachment of handoffAttachments(handoff)) {
+          if (requested.has(attachment.id)) {
+            retained.add(attachment.id);
+          }
+        }
+      }
+      return retained;
     },
     retireScope: (scopeKey, beforeRevision) => {
       // Optimistic navigation may unmount the pane before deletion confirms.

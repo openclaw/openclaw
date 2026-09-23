@@ -55,7 +55,7 @@ type BraveSearchResult = {
   title?: string;
   url?: string;
   description?: string;
-  age?: string;
+  page_age?: string;
 };
 
 type BraveSearchResponse = {
@@ -262,12 +262,7 @@ async function runBraveJsonRequest<T>(
 }
 
 async function runBraveLlmContextSearch(params: BraveSearchRequestParams): Promise<{
-  results: Array<{
-    url: string;
-    title: string;
-    snippets: string[];
-    siteName?: string;
-  }>;
+  results: ReturnType<typeof mapBraveLlmContextResults>;
   sources?: BraveLlmContextResponse["sources"];
 }> {
   const data = await runBraveJsonRequest<BraveLlmContextResponse>(
@@ -309,7 +304,7 @@ async function runBraveWebSearch(
     "Brave Search API error",
   );
   const results = Array.isArray(data.web?.results) ? (data.web?.results ?? []) : [];
-  return results.map((entry) => {
+  return results.slice(0, params.count).map((entry) => {
     const description = entry.description ?? "";
     const title = entry.title ?? "";
     const url = entry.url ?? "";
@@ -317,7 +312,7 @@ async function runBraveWebSearch(
       title: title ? wrapWebContent(title, "web_search") : "",
       url,
       description: description ? wrapWebContent(description, "web_search") : "",
-      published: entry.age || undefined,
+      published: entry.page_age || undefined,
       siteName: resolveSiteName(url) || undefined,
     };
   });
@@ -432,6 +427,7 @@ export async function executeBraveSearch(
       braveMode === "llm-context" && dateAfter
         ? (dateBefore ?? new Date().toISOString().slice(0, 10))
         : dateBefore;
+    const requestedCount = resolveSearchCount(count, DEFAULT_SEARCH_COUNT);
     const cacheKey = buildSearchCacheKey(
       braveMode === "llm-context"
         ? [
@@ -439,6 +435,7 @@ export async function executeBraveSearch(
             braveMode,
             braveBaseUrl,
             query,
+            requestedCount,
             country,
             normalizedLanguage.search_lang,
             freshness,
@@ -450,7 +447,7 @@ export async function executeBraveSearch(
             braveMode,
             braveBaseUrl,
             query,
-            resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
+            requestedCount,
             country,
             normalizedLanguage.search_lang,
             normalizedLanguage.ui_lang,
@@ -488,7 +485,7 @@ export async function executeBraveSearch(
         : {
             results: await runBraveWebSearch({
               ...request,
-              count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
+              count: requestedCount,
               ui_lang: normalizedLanguage.ui_lang,
             }),
             mode: "web" as const,
@@ -497,11 +494,12 @@ export async function executeBraveSearch(
     signal?.throwIfAborted();
     const results =
       response.mode === "llm-context"
-        ? response.results.map((entry) => ({
+        ? response.results.slice(0, requestedCount).map((entry) => ({
             title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
             url: entry.url,
             snippets: entry.snippets.map((snippet) => wrapWebContent(snippet, "web_search")),
             siteName: entry.siteName,
+            published: entry.published,
           }))
         : response.results;
     const payload = {

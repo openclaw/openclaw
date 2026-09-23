@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { Readable } from "node:stream";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createZipCentralDirectoryArchive } from "../test-utils/zip-central-directory-fixture.js";
@@ -50,7 +49,8 @@ vi.mock("../infra/clawhub-artifacts.js", async () => {
   };
 });
 
-vi.mock("../version.js", () => ({
+vi.mock("../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version.js")>()),
   resolveCompatibilityHostVersion: (...args: unknown[]) =>
     resolveCompatibilityHostVersionMock(...args),
 }));
@@ -282,7 +282,6 @@ type PackageLookupCall = {
 
 type ArchiveInstallCall = {
   archivePath?: string;
-  dangerouslyForceUnsafeInstall?: boolean;
   expectedPluginId?: string;
   onInstallPolicyWarning?: unknown;
   installPolicyRequest?: {
@@ -484,6 +483,49 @@ describe("installPluginFromClawHub", () => {
       expect.stringContaining("ClawHub   https://clawhub.ai/plugins/demo"),
     );
     expect(logger.warn).not.toHaveBeenCalled();
+    expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not publish a ClawHub plugin after authority closes during artifact review", async () => {
+    const archive = await mockClawHubFallbackArchive({
+      entries: {
+        "package.json": JSON.stringify({
+          name: "demo",
+          version: "2026.3.22",
+          openclaw: { extensions: ["./index.js"] },
+        }),
+        "openclaw.plugin.json": JSON.stringify({
+          id: "demo",
+          configSchema: { type: "object" },
+        }),
+        "index.js": "export default { register() {} };\n",
+      },
+    });
+    const extensionsDir = path.join(path.dirname(archive.archivePath), "extensions");
+    const { installPluginFromArchive } = await import("./install-package.js");
+    installPluginFromArchiveMock.mockImplementationOnce(installPluginFromArchive);
+    let authorityActive = true;
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      extensionsDir,
+      onBeforePluginArtifactCommit: async () => {
+        authorityActive = false;
+      },
+      beforePersistentApply: () => {
+        if (!authorityActive) {
+          throw new Error("plugin installation authority closed");
+        }
+      },
+    });
+
+    expect(authorityActive).toBe(false);
+    expect(result).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("plugin installation authority closed"),
+    });
+    await expect(fs.stat(path.join(extensionsDir, "demo"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
   });
 
@@ -1200,6 +1242,7 @@ describe("installPluginFromClawHub", () => {
         sha256: DEMO_CLAWPACK_SHA256,
         npmIntegrity: "sha512-clawpack",
         npmShasum: "1".repeat(40),
+        size: 4096,
       } as unknown as ClawHubResolvedArtifact,
     });
     downloadClawHubPackageArchiveMock.mockResolvedValueOnce({
@@ -1224,6 +1267,7 @@ describe("installPluginFromClawHub", () => {
     expect(success.clawhub?.npmIntegrity).toBe("sha512-clawpack");
     expect(success.clawhub?.npmShasum).toBe("1".repeat(40));
     expect(success.clawhub?.clawpackSha256).toBe(DEMO_CLAWPACK_SHA256);
+    expect(success.clawhub?.clawpackSize).toBe(4096);
     expect(fetchClawHubPackageVersionMock).not.toHaveBeenCalled();
     expect(archiveDownloadCall().artifact).toBe("clawpack");
     expect(archiveDownloadCall().name).toBe("demo");
@@ -1851,16 +1895,6 @@ describe("installPluginFromClawHub", () => {
     expect(archiveCleanupMock).not.toHaveBeenCalled();
   });
 
-  it("passes dangerous force unsafe install through to archive installs", async () => {
-    await installPluginFromClawHub({
-      spec: "clawhub:demo",
-      dangerouslyForceUnsafeInstall: true,
-    });
-
-    expect(archiveInstallCall().archivePath).toBe("/tmp/clawhub-demo/archive.zip");
-    expect(archiveInstallCall().dangerouslyForceUnsafeInstall).toBe(true);
-  });
-
   it("passes install policy acknowledgement through to archive installs", async () => {
     const onInstallPolicyWarning = vi.fn().mockResolvedValue({ status: "approved" });
 
@@ -1870,6 +1904,7 @@ describe("installPluginFromClawHub", () => {
     });
 
     expect(archiveInstallCall().onInstallPolicyWarning).toBe(onInstallPolicyWarning);
+    expect(archiveInstallCall().archivePath).toBe("/tmp/clawhub-demo/archive.zip");
   });
 
   it("cleans up the downloaded archive even when archive install fails", async () => {
@@ -2354,24 +2389,14 @@ describe("installPluginFromClawHub", () => {
       "_meta.json": '{"slug":"demo","version":"2026.3.22"}',
       "openclaw.plugin.json": '{"id":"demo"}',
     });
-    const oversizedMetaEntry = {
-      name: "_meta.json",
-      dir: false,
-      _data: { uncompressedSize: 256 * 1024 * 1024 + 1 },
-      nodeStream: vi.fn(),
-    } as unknown as JSZip.JSZipObject;
-    const listedFileEntry = {
-      name: "openclaw.plugin.json",
-      dir: false,
-      _data: { uncompressedSize: 13 },
-      nodeStream: () => Readable.from([Buffer.from('{"id":"demo"}')]),
-    } as unknown as JSZip.JSZipObject;
-    const loadAsyncSpy = vi.spyOn(JSZip, "loadAsync").mockResolvedValueOnce({
-      files: {
-        "_meta.json": oversizedMetaEntry,
-        "openclaw.plugin.json": listedFileEntry,
-      },
-    } as unknown as JSZip);
+    const archiveBytes = await fs.readFile(archivePath);
+    const centralDirectoryOffset = archiveBytes.readUInt32LE(archiveBytes.length - 6);
+    // The first entry is _meta.json. Keep both size declarations consistent so
+    // real ZIP admission reaches the per-file guard without allocating 256 MiB.
+    const oversizedBytes = 256 * 1024 * 1024 + 1;
+    archiveBytes.writeUInt32LE(oversizedBytes, 22);
+    archiveBytes.writeUInt32LE(oversizedBytes, centralDirectoryOffset + 24);
+    await fs.writeFile(archivePath, archiveBytes);
     fetchClawHubPackageVersionMock.mockResolvedValueOnce({
       version: {
         version: "2026.3.22",
@@ -2400,7 +2425,6 @@ describe("installPluginFromClawHub", () => {
       spec: "clawhub:demo",
     });
 
-    loadAsyncSpy.mockRestore();
     expectInstallFailureFields(
       result,
       CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
@@ -2423,7 +2447,7 @@ describe("installPluginFromClawHub", () => {
           entryType,
         }),
       );
-      const loadAsyncSpy = vi.spyOn(JSZip, "loadAsync");
+      const loadAsyncSpy = vi.spyOn(JSZip.prototype, "loadAsync");
       fetchClawHubPackageVersionMock.mockResolvedValueOnce({
         version: {
           version: "2026.3.22",

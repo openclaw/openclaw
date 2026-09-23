@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ConfigReplaceInput } from "../config/mutate.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import {
@@ -17,7 +18,6 @@ import {
   metadataSnapshot,
 } from "./management-service.test-helpers.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
-import { collectPluginCapabilityConsentDiagnostics } from "./status-snapshot.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   records: {} as Record<string, import("../config/types.plugins.js").PluginInstallRecord>,
   replaceConfig: vi.fn(),
   writeRecords: vi.fn(),
+  slotSelection: vi.fn((config) => ({ config, warnings: [] })),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -36,8 +37,8 @@ vi.mock("../config/config.js", () => ({
   replaceConfigFile: (params: unknown) => mocks.replaceConfig(params),
 }));
 
-vi.mock("./install-persistence.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./install-persistence.js")>()),
+vi.mock("./install-config-mutation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./install-config-mutation.js")>()),
   resolveInstallConfigMutationPreflights: () => ({
     hookMutation: { mode: "allowed" },
     pluginMutation: { mode: "allowed" },
@@ -75,6 +76,9 @@ vi.mock("./plugin-lifecycle-lease.js", () => ({
     }),
 }));
 
+vi.mock("./slot-selection.js", () => ({ applySlotSelectionForPlugin: mocks.slotSelection }));
+vi.mock("./registry-refresh.js", () => ({ refreshPluginRegistryAfterConfigMutation: vi.fn() }));
+
 vi.mock("./plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: (...args: unknown[]) => mocks.metadata(...args),
   resolvePluginMetadataSnapshot: (...args: unknown[]) => mocks.metadata(...args),
@@ -86,12 +90,9 @@ vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
     mocks.officialCatalog(...args),
 }));
 
-const {
-  clearManagedPluginOfficialCatalogCache,
-  inspectManagedPlugin,
-  listManagedPlugins,
-  setManagedPluginEnabled,
-} = await import("./management-service.js");
+const { clearManagedPluginCatalogCache } = await import("./management-catalog.js");
+const { inspectManagedPlugin, listManagedPlugins } = await import("./management-service.js");
+const { setManagedPluginEnabled } = await import("./management-mutations.js");
 
 const trackedArtifactDirs: string[] = [];
 
@@ -159,11 +160,85 @@ describe("managed plugin capability consent", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    clearManagedPluginOfficialCatalogCache();
+    clearManagedPluginCatalogCache();
     clearPluginMetadataLifecycleCaches();
     mocks.records = {};
     mocks.officialCatalog.mockResolvedValue({ source: "hosted", entries: [] });
     mocks.readConfig.mockResolvedValue(configSnapshot());
+    mocks.replaceConfig.mockImplementation(async (params: ConfigReplaceInput) => {
+      const config = params.sourceConfig ?? params.nextConfig;
+      return {
+        path: "/tmp/openclaw.json",
+        nextConfig: config,
+        persistedHash: "committed",
+        persistedSourceConfig: config,
+      };
+    });
+  });
+
+  it.each([
+    { name: "global disable", plugins: { enabled: false }, reason: "plugins disabled" },
+    { name: "denylist", plugins: { deny: ["community-plugin"] }, reason: "blocked by denylist" },
+    {
+      name: "restrictive allowlist",
+      plugins: { allow: ["other-plugin"] },
+      reason: "blocked by allowlist",
+    },
+  ])(
+    "preserves CLI $name before consent, persistence, or slot selection",
+    async ({ plugins, reason }) => {
+      const record = installRecord();
+      configureExternalPlugin(record);
+      mocks.readConfig.mockResolvedValue(configSnapshot({ plugins }));
+      const applyRuntime = vi.fn();
+      const request = {
+        pluginId: "community-plugin",
+        enabled: true,
+        allowlistPolicy: "preserve" as const,
+        acknowledgeCapabilities: { reviewToken: artifactReviewToken(record) },
+        applyRuntime,
+        env: {},
+      };
+      await expect(setManagedPluginEnabled(request)).rejects.toThrow(reason);
+      expect(mocks.writeRecords).not.toHaveBeenCalled();
+      expect(mocks.replaceConfig).not.toHaveBeenCalled();
+      expect(mocks.slotSelection).not.toHaveBeenCalled();
+      expect(applyRuntime).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { name: "admin omission", pluginId: "community-plugin", allowlistPolicy: undefined },
+    {
+      name: "explicit-selection exception",
+      pluginId: "clickclack",
+      allowlistPolicy: "preserve" as const,
+    },
+  ])("retains $name enablement", async ({ pluginId, allowlistPolicy }) => {
+    mocks.metadata.mockReturnValue(metadataSnapshot({ enabled: false, id: pluginId }));
+    mocks.readConfig.mockResolvedValue(configSnapshot({ plugins: { allow: ["other-plugin"] } }));
+    const applyRuntime = vi.fn(async () => ({
+      operationId: "enable",
+      generation: 2,
+      pluginIds: [pluginId],
+    }));
+    const request = {
+      pluginId,
+      enabled: true,
+      ...(allowlistPolicy ? { allowlistPolicy } : {}),
+      applyRuntime,
+      env: {},
+    };
+    await setManagedPluginEnabled(request);
+    expect(mocks.replaceConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceConfig: expect.objectContaining({
+          plugins: expect.objectContaining({ allow: ["other-plugin", pluginId] }),
+        }),
+      }),
+    );
+    expect(mocks.slotSelection).toHaveBeenCalledOnce();
+    expect(applyRuntime).toHaveBeenCalledOnce();
   });
 
   it("exempts release-bundled plugins from durable capability acceptance", async () => {
@@ -327,7 +402,6 @@ describe("managed plugin capability consent", () => {
       resolvePluginCapabilityConsent({ config, env, pluginId: "diffs" }),
     ).resolves.toBeUndefined();
     expect(mocks.writeRecords).not.toHaveBeenCalled();
-    expect(collectPluginCapabilityConsentDiagnostics({ index, manifests: byPluginId })).toEqual([]);
     const catalog = await listManagedPlugins({ config, env });
     expect(catalog.diagnostics).not.toContainEqual(
       expect.objectContaining({ message: expect.stringContaining("requires capability consent") }),
@@ -348,7 +422,9 @@ describe("managed plugin capability consent", () => {
         pluginId: "community-plugin",
         reviewToken: artifactReviewToken(record),
       },
-      message: expect.stringContaining("--accept-capabilities"),
+      message: expect.stringContaining(
+        "Rerun the openclaw plugins install, enable, update, or reload command with --accept-capabilities after reviewing the plugin.",
+      ),
     });
     expect(mocks.replaceConfig).not.toHaveBeenCalled();
   });

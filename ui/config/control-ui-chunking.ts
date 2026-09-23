@@ -2,17 +2,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolvedLocaleConfigHintsModulePrefix } from "./control-ui-locales.ts";
 
 const configDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(configDir, "../..");
-// Measured module set the default boot flow (app shell + sidebar + chat route)
-// loads through dynamic imports. `pnpm ui:boot-manifest:gen` measures a fresh
-// build without this group so stale entries cannot feed back into the capture.
-const controlUiBootModules: ReadonlySet<string> = new Set(
-  JSON.parse(
-    fs.readFileSync(path.join(configDir, "control-ui-boot-modules.json"), "utf8"),
-  ) as string[],
-);
+// Fresh /new and /chat captures separate shared boot work from route-only work.
+// The generator disables these groups so stale entries cannot feed back into it.
+const controlUiBootModules = JSON.parse(
+  fs.readFileSync(path.join(configDir, "control-ui-boot-modules.json"), "utf8"),
+) as Record<"shared" | "new" | "chat", string[]>;
 
 function normalizeModuleId(id: string): string {
   return id.replace(/\\/g, "/");
@@ -39,11 +37,36 @@ function moduleIdIncludesPackage(id: string, packageName: string): boolean {
   );
 }
 
+export const controlUiLocaleConfigHintsChunkPrefix = "locale-config-hints-";
+
 export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
+  switch (controlUiBootManifestKey(id)) {
+    case "ui/src/components/login-gate.ts":
+    case "ui/src/components/login-gate-feedback.ts":
+    case "ui/src/i18n/locales/en-login.ts":
+    case "ui/src/lib/gateway-secret-shape.ts":
+      return "login-runtime";
+    case "ui/src/components/sidebar-update-card.ts":
+    case "ui/src/styles/sidebar-update-card.css":
+      return "sidebar-update-runtime";
+  }
+
+  if (normalized.startsWith(resolvedLocaleConfigHintsModulePrefix)) {
+    return `${controlUiLocaleConfigHintsChunkPrefix}${normalized.slice(resolvedLocaleConfigHintsModulePrefix.length)}`;
+  }
+
   if (normalized.endsWith("/ui/src/lib/gateway-methods.ts")) {
     return "gateway-runtime";
+  }
+
+  if (
+    normalized.endsWith("/ui/src/styles/chat/grouped.css") ||
+    normalized.endsWith("/ui/src/styles/chat/message-layout.css")
+  ) {
+    // Both routes load transcript styles; keep them outside the larger shared boot stylesheet.
+    return "chat-transcript-styles";
   }
 
   if (
@@ -51,7 +74,11 @@ export function controlUiStableChunkName(id: string): string | undefined {
     moduleIdIncludesPackage(id, "lit-html") ||
     moduleIdIncludesPackage(id, "@lit/reactive-element")
   ) {
-    return "lit-runtime";
+    // Cache and async content directives have only deferred consumers. Keep
+    // their implementation and helpers with those consumers, outside startup.
+    return /\/directives\/(?:cache|until|private-async-helpers)\.js$/u.test(normalized)
+      ? undefined
+      : "lit-runtime";
   }
 
   if (
@@ -68,12 +95,12 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return "markdown-runtime";
   }
 
-  if (
-    moduleIdIncludesPackage(id, "zod") ||
-    moduleIdIncludesPackage(id, "json5") ||
-    moduleIdIncludesPackage(id, "libphonenumber-js")
-  ) {
+  if (moduleIdIncludesPackage(id, "zod") || moduleIdIncludesPackage(id, "json5")) {
     return "config-runtime";
+  }
+
+  if (moduleIdIncludesPackage(id, "libphonenumber-js")) {
+    return "phone-runtime";
   }
 
   // @noble/hashes stays out of this startup chunk deliberately: it is only
@@ -98,27 +125,25 @@ export const controlUiCodeSplitting = {
         normalizeModuleId(id).includes("/ui/src/") ? "control-ui-core" : "control-ui-foundation",
       tags: ["$initial"] as ["$initial"],
       priority: 10,
-      // 640 KiB keeps the startup graph together; the previous 576 KiB boundary
-      // split it into two extra requests and added roughly 1 KiB of gzip.
-      maxSize: 640 * 1024,
+      // Keep the boot graph in fewer partitions; the performance checker owns
+      // the compressed-size and request budgets for the emitted chunks.
+      maxSize: 1024 * 1024,
     },
-    {
-      // Boot-path consolidation: the lazily-loaded modules the default boot
-      // flow always fetches (~124 automatic chunks without this group) merge
-      // into a handful of chunks so the gateway's HTTP/1.1 6-connection
-      // transport pays ~7 instead of ~24 serialized round-trips on high-latency
-      // links. Byte cost is ~zero: every captured module is fetched during boot
-      // either way. Recursive dependency inclusion is required for correctness
-      // here — merging without it emitted chunks whose execution order broke at
-      // startup ("TypeError: X is not a function" during application start).
-      name: "control-ui-boot",
-      test: (id: string) => controlUiBootModules.has(controlUiBootManifestKey(id)),
-      priority: 8,
-      includeDependenciesRecursively: true,
-      // Larger ceiling than the startup groups: this sizes pre-minification
-      // module bytes, and ~1.5 MiB keeps the largest emitted chunk near
-      // ~190 KiB gzip, inside the 215 KiB largest-JS budget.
-      maxSize: 1536 * 1024,
-    },
+    ...(["shared", "new", "chat"] as const).map((route, index) => {
+      const modules = new Set(controlUiBootModules[route]);
+      return {
+        name: `control-ui-boot-${route}`,
+        test: (id: string) => modules.has(controlUiBootManifestKey(id)),
+        // Shared dependencies must be assigned first, or a route group pulls
+        // them (and therefore other routes) into its eagerly imported chunk.
+        priority: 8 - index,
+        includeDependenciesRecursively: true,
+        // Shared and chat groups both contain dense UI modules; keep their
+        // generated chunks within the existing compressed-size budget.
+        // Let tiny split tails stay with their consumers through automatic chunking.
+        minSize: 16 * 1024,
+        maxSize: 1408 * 1024,
+      };
+    }),
   ],
 };

@@ -1,11 +1,11 @@
 // Agent Core tests cover agent loop behavior.
-import { EventStream } from "@openclaw/ai/event-stream";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { agentLoop, agentLoopContinue, runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
+import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
+import { captureAgentLoop, collectEvents } from "./agent-loop.test-support.js";
 import { Agent } from "./agent.js";
-import { TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE, TranscriptNotContinuableError } from "./errors.js";
+import { TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE } from "./errors.js";
 import {
   acknowledgeInternalToolResult,
   attachInternalSyncSteeringGetter,
@@ -70,14 +70,6 @@ const failingStreamFn: StreamFn = async () => {
   throw new Error("provider exploded");
 };
 
-async function collectEvents(stream: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
-  const events: AgentEvent[] = [];
-  for await (const event of stream) {
-    events.push(event);
-  }
-  return events;
-}
-
 function expectTerminalFailure(events: AgentEvent[], result: AgentMessage[]): void {
   expect(events.map((event) => event.type)).toContain("agent_end");
   expect(result).toHaveLength(1);
@@ -103,35 +95,36 @@ describe("internal tool batch lifecycle", () => {
   });
 });
 
-describe("agentLoop EventStream failures", () => {
-  it("ends the public stream when a new prompt run rejects", async () => {
-    const stream = agentLoop(
-      [{ role: "user", content: "hello", timestamp: 1 }],
-      { systemPrompt: "", messages: [] },
-      config,
-      undefined,
-      failingStreamFn,
-    );
-    expect(stream).toBeInstanceOf(EventStream);
+describe("Agent run failures", () => {
+  it.each(["prompt", "continue"] as const)(
+    "records a terminal failure when %s rejects",
+    async (entryPoint) => {
+      const events: AgentEvent[] = [];
+      const agent = new Agent({
+        initialState: {
+          model,
+          messages:
+            entryPoint === "continue" ? [{ role: "user", content: "hello", timestamp: 1 }] : [],
+        },
+        convertToLlm: config.convertToLlm,
+        streamFn: failingStreamFn,
+      });
+      agent.subscribe((event) => {
+        events.push(event);
+      });
 
-    const events = await collectEvents(stream);
-    const result = await stream.result();
+      await (entryPoint === "prompt" ? agent.prompt("hello") : agent.continue());
 
-    expectTerminalFailure(events, result);
-  });
-
-  it("ends the public stream when a continue run rejects", async () => {
-    const context: AgentContext = {
-      systemPrompt: "",
-      messages: [{ role: "user", content: "hello", timestamp: 1 }],
-    };
-    const stream = agentLoopContinue(context, config, undefined, failingStreamFn);
-
-    const events = await collectEvents(stream);
-    const result = await stream.result();
-
-    expectTerminalFailure(events, result);
-  });
+      const terminal = events.find((event) => event.type === "agent_end");
+      expectTerminalFailure(events, terminal?.messages ?? []);
+      expect(agent.state.isStreaming).toBe(false);
+      expect(agent.state.messages.at(-1)).toMatchObject({
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: "provider exploded",
+      });
+    },
+  );
 
   it("persists and replays interruption guidance after Agent aborts a rejected run", async () => {
     let markStarted = () => {};
@@ -330,20 +323,6 @@ describe("agentLoop continuation guards", () => {
     ],
   };
 
-  it("throws a coded error from the public continue stream guard", () => {
-    expect(() => agentLoopContinue(assistantTailContext, config)).toThrowError(
-      TranscriptNotContinuableError,
-    );
-    try {
-      agentLoopContinue(assistantTailContext, config);
-    } catch (error) {
-      expect(error).toMatchObject({
-        code: TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE,
-        role: "assistant",
-      });
-    }
-  });
-
   it("throws a coded error from the async continue runner guard", async () => {
     await expect(
       runAgentLoopContinue(assistantTailContext, config, async () => undefined),
@@ -513,14 +492,14 @@ describe("agentLoop streaming updates", () => {
       return stream;
     };
 
-    const stream = agentLoop(
+    const run = captureAgentLoop(
       [{ role: "user", content: "hello", timestamp: 1 }],
       { systemPrompt: "", messages: [] },
       config,
       undefined,
       streamFn,
     );
-    const events = await collectEvents(stream);
+    const events = await collectEvents(run);
 
     const deltaUpdates = events.filter(
       (event): event is Extract<AgentEvent, { type: "message_update" }> =>
@@ -537,12 +516,10 @@ describe("agentLoop streaming updates", () => {
   });
 
   it("does not execute tool calls from a max-token-truncated assistant turn", async () => {
-    const execute = vi.fn(
-      async (): Promise<AgentToolResult<unknown>> => ({
-        content: [{ type: "text", text: "should not run" }],
-        details: {},
-      }),
-    );
+    const execute = vi.fn(async (): Promise<AgentToolResult<unknown>> => ({
+      content: [{ type: "text", text: "should not run" }],
+      details: {},
+    }));
     const contexts: Context[] = [];
     let streamCalls = 0;
     const streamFn: StreamFn = async (_model, context) => {
@@ -597,7 +574,7 @@ describe("agentLoop streaming updates", () => {
       return stream;
     };
 
-    const stream = agentLoop(
+    const run = captureAgentLoop(
       [{ role: "user", content: "spawn specialists", timestamp: 1 }],
       {
         systemPrompt: "",
@@ -621,8 +598,8 @@ describe("agentLoop streaming updates", () => {
       streamFn,
     );
 
-    const events = await collectEvents(stream);
-    const messages = await stream.result();
+    const events = await collectEvents(run);
+    const messages = await run.result;
     const truncatedMessageEnd = events.find(
       (event): event is Extract<AgentEvent, { type: "message_end" }> =>
         event.type === "message_end" &&
@@ -686,12 +663,10 @@ describe("runAgentLoop deferred tool hydration", () => {
   }
 
   it("hydrates an authorized deferred tool for execution and the continuation", async () => {
-    const execute = vi.fn(
-      async (): Promise<AgentToolResult<unknown>> => ({
-        content: [{ type: "text", text: "hidden ok" }],
-        details: { ok: true },
-      }),
-    );
+    const execute = vi.fn(async (): Promise<AgentToolResult<unknown>> => ({
+      content: [{ type: "text", text: "hidden ok" }],
+      details: { ok: true },
+    }));
     const hiddenTool: AgentTool = {
       name: "hidden_search",
       label: "hidden_search",
@@ -806,12 +781,10 @@ describe("runAgentLoop deferred tool hydration", () => {
   });
 
   it("rejects deferred tools whose names differ from the requested call", async () => {
-    const execute = vi.fn(
-      async (): Promise<AgentToolResult<unknown>> => ({
-        content: [{ type: "text", text: "wrong tool ran" }],
-        details: { ok: true },
-      }),
-    );
+    const execute = vi.fn(async (): Promise<AgentToolResult<unknown>> => ({
+      content: [{ type: "text", text: "wrong tool ran" }],
+      details: { ok: true },
+    }));
     const mismatchedTool: AgentTool = {
       name: "other_deferred",
       label: "other_deferred",
@@ -1077,7 +1050,7 @@ describe("agentLoop tool termination", () => {
         role: "toolResult",
         toolCallId: "call-second",
         isError: true,
-        content: [{ type: "text", text: "Skipped due to queued user message." }],
+        content: [{ type: "text", text: "Skipped to process an incoming message." }],
         details: { status: "skipped", deniedReason: "steering" },
       },
       firstSteer,
@@ -1584,6 +1557,62 @@ describe("agentLoop tool termination", () => {
     expect(getSteeringMessages).toHaveBeenCalled();
   });
 
+  it("commits drained steering and settled tools before a host-requested model-step stop", async () => {
+    const steer = { role: "user" as const, content: "verify the new version", timestamp: 2 };
+    const queued: AgentMessage[] = [];
+    const requestMessages: Message[][] = [];
+    const execute = vi.fn(async () => {
+      queued.push(steer);
+      return { content: [{ type: "text" as const, text: "reload committed" }], details: {} };
+    });
+    let refresh = false;
+    const context: AgentContext = {
+      systemPrompt: "",
+      messages: [],
+      tools: [{ ...makeTool("reload", []), execute }],
+    };
+    const events: AgentEvent[] = [];
+    const result = await runAgentLoop(
+      [{ role: "user", content: "edit and reload", timestamp: 1 }],
+      context,
+      {
+        ...config,
+        getSteeringMessages: async () => queued.splice(0),
+        afterToolCall: async () => {
+          refresh = true;
+        },
+        prepareNextTurn: async () => (refresh ? { stop: true } : undefined),
+      },
+      (event) => {
+        events.push(event);
+      },
+      undefined,
+      createTurnSequenceStream(
+        [
+          [{ type: "toolCall", id: "reload-once", name: "reload", arguments: {} }],
+          [{ type: "text", text: "must not run on the old catalog" }],
+        ],
+        requestMessages,
+      ),
+    );
+
+    expect(requestMessages).toHaveLength(1);
+    expect(execute).toHaveBeenCalledOnce();
+    expect(result.at(-1)).toBe(steer);
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolCallId: "reload-once",
+        content: [{ type: "text", text: "reload committed" }],
+      }),
+    );
+    expect(events.at(-1)).toMatchObject({ type: "agent_end", messages: result });
+    expect(
+      events.filter((event) => event.type === "message_end" && event.message === steer),
+    ).toHaveLength(1);
+    expect(queued).toEqual([]);
+  });
+
   it("delivers steering admitted while the final follow-up drain is pending", async () => {
     const followUpDrainStarted = createDeferred();
     const releaseFollowUpDrain = createDeferred();
@@ -1803,7 +1832,7 @@ describe("agentLoop tool termination", () => {
         role: "toolResult",
         toolCallId: "prepared",
         isError: true,
-        content: [{ type: "text", text: "Skipped due to queued user message." }],
+        content: [{ type: "text", text: "Skipped to process an incoming message." }],
         details: { status: "skipped", deniedReason: "steering" },
       },
       steer,
@@ -2121,7 +2150,7 @@ describe("agentLoop tool termination", () => {
         requestMessages,
       );
       const events = await collectEvents(
-        agentLoop(
+        captureAgentLoop(
           [{ role: "user", content: "run", timestamp: 1 }],
           {
             systemPrompt: "",
@@ -2195,7 +2224,7 @@ describe("agentLoop tool termination", () => {
       },
     );
     const events = await collectEvents(
-      agentLoop(
+      captureAgentLoop(
         [{ role: "user", content: "run", timestamp: 1 }],
         { systemPrompt: "", messages: [], tools: [makeTool("read", executed)] },
         {
@@ -2251,7 +2280,7 @@ describe("agentLoop tool termination", () => {
       resultContentSource: "network",
     };
     const events = await collectEvents(
-      agentLoop(
+      captureAgentLoop(
         [{ role: "user", content: "run", timestamp: 1 }],
         { systemPrompt: "", messages: [], tools: [networkTool] },
         {
@@ -2311,7 +2340,7 @@ describe("agentLoop tool termination", () => {
       return stream;
     };
     const events = await collectEvents(
-      agentLoop(
+      captureAgentLoop(
         [{ role: "user", content: "run", timestamp: 1 }],
         { systemPrompt: "", messages: [], tools: [makeTool("read", executed)] },
         {
@@ -2382,7 +2411,7 @@ describe("agentLoop tool termination", () => {
       },
     });
     const events = await collectEvents(
-      agentLoop(
+      captureAgentLoop(
         [{ role: "user", content: "abort mid-admission", timestamp: 1 }],
         { systemPrompt: "", messages: [], tools: [] },
         {
@@ -2439,7 +2468,7 @@ describe("agentLoop tool termination", () => {
       },
     );
     const events = await collectEvents(
-      agentLoop(
+      captureAgentLoop(
         [{ role: "user", content: "run", timestamp: 1 }],
         {
           systemPrompt: "",
@@ -2505,7 +2534,7 @@ describe("agentLoop tool termination", () => {
         },
       );
       const events = await collectEvents(
-        agentLoop(
+        captureAgentLoop(
           [{ role: "user", content: "run", timestamp: 1 }],
           {
             systemPrompt: "",
@@ -2649,15 +2678,15 @@ describe("agentLoop tool termination", () => {
         [{ type: "text", text: "stored result" }],
       ]);
 
-      const stream = agentLoop(
+      const run = captureAgentLoop(
         [{ role: "user", content: "fetch", timestamp: 1 }],
         { systemPrompt: "", messages: [], tools: [tool] },
         config,
         undefined,
         streamFn,
       );
-      await collectEvents(stream);
-      const messages = await stream.result();
+      await collectEvents(run);
+      const messages = await run.result;
       const toolResult = messages.find((message) => message.role === "toolResult");
       const assistant = messages.findLast(
         (message): message is AssistantMessage => message.role === "assistant",
@@ -2669,6 +2698,73 @@ describe("agentLoop tool termination", () => {
         tainted ? { resultContentSource: "network" } : undefined,
       );
       expect(metadata(assistant)).toEqual(tainted ? { turnTainted: true } : undefined);
+    },
+  );
+
+  it.each(["execute", "prepare", "immediate", "after-call", "after-outcome"] as const)(
+    "preserves only operation-owned error provenance at %s",
+    async (phase) => {
+      const provenance = { source: "operation-effect-proof" };
+      const failure = attachInternalToolResultProvenance(
+        new Error("operation rejected"),
+        provenance,
+      );
+      const tool: AgentTool = {
+        ...makeTool("operation", []),
+        execute: async () => {
+          if (phase === "execute") {
+            throw failure;
+          }
+          return { content: [{ type: "text", text: "completed" }], details: {} };
+        },
+      };
+      if (phase === "prepare" || phase === "immediate") {
+        attachInternalToolExecutionPreparer(tool, async () => {
+          if (phase === "prepare") {
+            throw failure;
+          }
+          return { kind: "immediate", outcome: { kind: "error", error: failure }, dispose() {} };
+        });
+      }
+      const run = captureAgentLoop(
+        [{ role: "user", content: "perform operation", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [tool] },
+        {
+          ...config,
+          ...(phase === "after-call"
+            ? {
+                afterToolCall: async () => {
+                  throw failure;
+                },
+              }
+            : {}),
+          ...(phase === "after-outcome"
+            ? {
+                afterToolOutcome: async () => {
+                  throw failure;
+                },
+              }
+            : {}),
+        },
+        undefined,
+        createTurnSequenceStream([
+          [{ type: "toolCall", id: "operation-call", name: tool.name, arguments: {} }],
+          [{ type: "text", text: "recovered" }],
+        ]),
+      );
+      const events = await collectEvents(run);
+      const end = events.find((event) => event.type === "tool_execution_end");
+      if (
+        end?.type !== "tool_execution_end" ||
+        typeof end.result !== "object" ||
+        end.result === null
+      ) {
+        throw new Error("Expected the operation's terminal result");
+      }
+      expect(end.isError).toBe(true);
+      expect(getInternalToolResultProvenance(end.result)).toBe(
+        phase === "after-call" || phase === "after-outcome" ? undefined : provenance,
+      );
     },
   );
 
@@ -2759,7 +2855,7 @@ describe("agentLoop tool termination", () => {
         [{ type: "toolCall", id: "network-preflight", name: tool.name, arguments: {} }],
         [{ type: "text", text: "local outcome" }],
       ]);
-      const stream = agentLoop(
+      const run = captureAgentLoop(
         [{ role: "user", content: "network preflight", timestamp: 1 }],
         { systemPrompt: "", messages: [], tools: [tool] },
         {
@@ -2773,8 +2869,8 @@ describe("agentLoop tool termination", () => {
         streamFn,
       );
 
-      const events = await collectEvents(stream);
-      const messages = await stream.result();
+      const events = await collectEvents(run);
+      const messages = await run.result;
       const toolResult = messages.find((message) => message.role === "toolResult");
       const assistant = messages.findLast((message) => message.role === "assistant");
 
@@ -2809,7 +2905,7 @@ describe("agentLoop tool termination", () => {
       const streamFn = createTurnSequenceStream([
         [{ type: "toolCall", id: "network-cancel", name: tool.name, arguments: {} }],
       ]);
-      const stream = agentLoop(
+      const run = captureAgentLoop(
         [{ role: "user", content: failure, timestamp: 1 }],
         { systemPrompt: "", messages: [], tools: [tool] },
         { ...config, toolExecution, afterToolCall },
@@ -2817,8 +2913,8 @@ describe("agentLoop tool termination", () => {
         streamFn,
       );
 
-      const events = await collectEvents(stream);
-      const messages = await stream.result();
+      const events = await collectEvents(run);
+      const messages = await run.result;
       const toolResult = messages.find((message) => message.role === "toolResult");
 
       expect(afterToolCall).toHaveBeenCalledOnce();
@@ -2903,7 +2999,7 @@ describe("agentLoop tool termination", () => {
     };
 
     const events = await collectEvents(
-      agentLoop(
+      captureAgentLoop(
         [{ role: "user", content: "resume", timestamp: 1 }],
         { systemPrompt: "", messages: [], tools: [hiddenTool] },
         { ...config, toolExecution: "sequential" },
@@ -2950,7 +3046,7 @@ describe("agentLoop tool termination", () => {
     ]);
 
     const events = await collectEvents(
-      agentLoop(
+      captureAgentLoop(
         [{ role: "user", content: "run", timestamp: 1 }],
         { systemPrompt: "", messages: [], tools: [tool] },
         { ...config, toolExecution: "sequential" },
@@ -2987,7 +3083,7 @@ describe("agentLoop tool termination", () => {
     );
     let recordedSideEffect = false;
 
-    const stream = agentLoop(
+    const run = captureAgentLoop(
       [{ role: "user", content: "hello", timestamp: 1 }],
       {
         systemPrompt: "",
@@ -3007,7 +3103,7 @@ describe("agentLoop tool termination", () => {
       streamFn,
     );
 
-    const events = await collectEvents(stream);
+    const events = await collectEvents(run);
 
     expect(recordedSideEffect).toBe(true);
     expect(turn).toBe(3);
@@ -3045,7 +3141,7 @@ describe("agentLoop tool termination", () => {
     };
 
     await collectEvents(
-      agentLoop(
+      captureAgentLoop(
         [{ role: "user", content: "run", timestamp: 1 }],
         { systemPrompt: "", messages: [], tools: [tool] },
         {
@@ -3092,7 +3188,7 @@ describe("agentLoop tool termination", () => {
     ]);
 
     const events = await collectEvents(
-      agentLoop(
+      captureAgentLoop(
         [{ role: "user", content: "run", timestamp: 1 }],
         { systemPrompt: "", messages: [], tools: [tool] },
         {
@@ -3123,7 +3219,7 @@ describe("agentLoop tool termination", () => {
       [{ type: "text", text: "done" }],
     ]);
 
-    const stream = agentLoop(
+    const run = captureAgentLoop(
       [{ role: "user", content: "hello", timestamp: 1 }],
       {
         systemPrompt: "",
@@ -3138,7 +3234,7 @@ describe("agentLoop tool termination", () => {
       streamFn,
     );
 
-    const events = await collectEvents(stream);
+    const events = await collectEvents(run);
     const endEvent = events.find(
       (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
         event.type === "tool_execution_end",
@@ -3163,7 +3259,7 @@ describe("agentLoop tool termination", () => {
     };
 
     const events = await collectEvents(
-      agentLoop(
+      captureAgentLoop(
         [{ role: "user", content: "hello", timestamp: 1 }],
         { systemPrompt: "", messages: [], tools: [tool] },
         { ...config, afterToolOutcome },
@@ -3205,7 +3301,7 @@ describe("agentLoop tool termination", () => {
     ]);
 
     const events = await collectEvents(
-      agentLoop(
+      captureAgentLoop(
         [{ role: "user", content: "hello", timestamp: 1 }],
         { systemPrompt: "", messages: [], tools: [makeTool("read", executed)] },
         {
@@ -3249,7 +3345,7 @@ describe("agentLoop tool termination", () => {
       },
     );
 
-    const stream = agentLoop(
+    const run = captureAgentLoop(
       [{ role: "user", content: "hello", timestamp: 1 }],
       {
         systemPrompt: "",
@@ -3268,7 +3364,7 @@ describe("agentLoop tool termination", () => {
       streamFn,
     );
 
-    const events = await collectEvents(stream);
+    const events = await collectEvents(run);
 
     expect(turn).toBe(1);
     expect(executed).toEqual(["message"]);
@@ -3961,7 +4057,7 @@ describe("agentLoop thinking state", () => {
       return stream;
     };
     let prepared = false;
-    const stream = agentLoop(
+    const run = captureAgentLoop(
       [{ role: "user", content: "hello", timestamp: 1 }],
       { systemPrompt: "", messages: [] },
       {
@@ -3981,7 +4077,7 @@ describe("agentLoop thinking state", () => {
       streamFn,
     );
 
-    await collectEvents(stream);
+    await collectEvents(run);
 
     expect(observedReasoning).toEqual(expected);
   });

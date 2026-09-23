@@ -7,23 +7,22 @@ import type { PluginRegistry } from "./registry.js";
 import type {
   PluginHookBeforeInstallContext,
   PluginHookBeforeInstallEvent,
-  PluginHookBeforeInstallResult,
   PluginHookRegistration,
 } from "./types.js";
+
+type BeforeInstallHook = PluginHookRegistration<"before_install">["handler"];
 
 function addBeforeInstallHook(
   registry: PluginRegistry,
   pluginId: string,
-  handler:
-    | (() => PluginHookBeforeInstallResult | Promise<PluginHookBeforeInstallResult>)
-    | PluginHookRegistration["handler"],
+  handler: BeforeInstallHook,
   priority?: number,
 ) {
   addTestHook({
     registry,
     pluginId,
     hookName: "before_install",
-    handler: handler as PluginHookRegistration["handler"],
+    handler,
     priority,
   });
 }
@@ -68,7 +67,7 @@ describe("before_install hook merger", () => {
     addBeforeInstallHook(
       registry,
       "plugin-a",
-      (): PluginHookBeforeInstallResult => ({
+      () => ({
         findings: [
           {
             ruleId: "first",
@@ -84,7 +83,7 @@ describe("before_install hook merger", () => {
     addBeforeInstallHook(
       registry,
       "plugin-b",
-      (): PluginHookBeforeInstallResult => ({
+      () => ({
         findings: [
           {
             ruleId: "second",
@@ -124,39 +123,35 @@ describe("before_install hook merger", () => {
   });
 
   it("short-circuits after block=true and preserves earlier findings", async () => {
-    const blocker = vi.fn(
-      (): PluginHookBeforeInstallResult => ({
-        findings: [
-          {
-            ruleId: "blocker",
-            severity: "critical",
-            file: "block.ts",
-            line: 3,
-            message: "blocked finding",
-          },
-        ],
-        block: true,
-        blockReason: "policy blocked",
-      }),
-    );
-    const skipped = vi.fn(
-      (): PluginHookBeforeInstallResult => ({
-        findings: [
-          {
-            ruleId: "skipped",
-            severity: "warn",
-            file: "skip.ts",
-            line: 4,
-            message: "should not appear",
-          },
-        ],
-      }),
-    );
+    const blocker = vi.fn<BeforeInstallHook>(() => ({
+      findings: [
+        {
+          ruleId: "blocker",
+          severity: "critical",
+          file: "block.ts",
+          line: 3,
+          message: "blocked finding",
+        },
+      ],
+      block: true,
+      blockReason: "policy blocked",
+    }));
+    const skipped = vi.fn<BeforeInstallHook>(() => ({
+      findings: [
+        {
+          ruleId: "skipped",
+          severity: "warn",
+          file: "skip.ts",
+          line: 4,
+          message: "should not appear",
+        },
+      ],
+    }));
 
     addBeforeInstallHook(
       registry,
       "plugin-a",
-      (): PluginHookBeforeInstallResult => ({
+      () => ({
         findings: [
           {
             ruleId: "first",

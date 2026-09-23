@@ -45,7 +45,6 @@ function createToolHandlerCtx(): ToolHandlerContext {
     state: {
       ...createBaseToolHandlerState(),
       toolMetaById: new Map<string, ToolCallSummary>(),
-      pendingMessagingTargets: new Map<string, MessagingToolSend>(),
       messagingToolSentTargets: [] as MessagingToolSend[],
       successfulCronAdds: 0,
     },

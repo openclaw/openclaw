@@ -55,11 +55,13 @@ function buildExecutableResolution(
   params: {
     cwd?: string;
     env?: NodeJS.ProcessEnv;
+    useCache?: boolean;
   },
 ): ExecutableResolution {
   const resolvedPath = resolveExecutableCandidatePath(rawExecutable, {
     cwd: params.cwd,
     env: params.env,
+    useCache: params.useCache,
   });
   const resolvedRealPath = tryResolveRealpath(resolvedPath);
   const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
@@ -77,6 +79,7 @@ function buildCommandResolution(params: {
   policyRawExecutable?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  useCache?: boolean;
   effectiveArgv: string[];
   wrapperChain: string[];
   policyBlocked: boolean;
@@ -122,6 +125,7 @@ export function resolveCommandResolutionFromArgv(
   cwd?: string,
   env?: NodeJS.ProcessEnv,
   platform: NodeJS.Platform = process.platform,
+  options?: { useCache?: boolean },
 ): CommandResolution | null {
   const plan = resolveExecWrapperTrustPlan(argv, undefined, platform);
   const effectiveArgv = plan.argv;
@@ -136,6 +140,7 @@ export function resolveCommandResolutionFromArgv(
     wrapperChain: plan.wrapperChain,
     policyBlocked: plan.policyBlocked,
     blockedWrapper: plan.blockedWrapper,
+    useCache: options?.useCache,
     cwd,
     env,
   });
@@ -275,6 +280,28 @@ export function isCwdBoundHashedArgPattern(value: string | null | undefined): bo
   return typeof value === "string" && value.startsWith(CWD_BOUND_HASHED_ARG_PATTERN_PREFIX);
 }
 
+export type ExecAllowlistScope = "command text" | "argv+cwd" | "argv" | "any args" | "inactive";
+
+export function classifyExecAllowlistScope(
+  entry: Pick<ExecAllowlistEntry, "pattern" | "source" | "argPattern">,
+): ExecAllowlistScope {
+  const pattern = entry.pattern.trim();
+  const generated = entry.source === "allow-always";
+  // Reserved command markers require generated source; manual patterns remain executable globs.
+  if (generated && (pattern.startsWith("=command:") || pattern.startsWith("=node-command:"))) {
+    return "command text";
+  }
+  // Legacy hashes never match, including on manual entries that Doctor must retain.
+  const legacyHashed = entry.argPattern?.startsWith(LEGACY_HASHED_ARG_PATTERN_PREFIX) === true;
+  if (legacyHashed || (generated && !isCwdBoundHashedArgPattern(entry.argPattern))) {
+    return "inactive";
+  }
+  if (isCwdBoundHashedArgPattern(entry.argPattern)) {
+    return "argv+cwd";
+  }
+  return entry.argPattern ? "argv" : "any args";
+}
+
 function renderGeneratedArgPatternSubject(argv: string[]): string {
   const argsSlice = argv.slice(1);
   return argsSlice.length === 0 ? "\x00\x00" : argsSlice.join("\x00") + "\x00";
@@ -304,15 +331,7 @@ export function buildCwdBoundHashedArgPattern(
   return `${CWD_BOUND_HASHED_ARG_PATTERN_PREFIX}${digest}`;
 }
 
-function matchArgPattern(
-  argPattern: string,
-  argv: string[],
-  cwd: string | undefined,
-  platform?: string | null,
-): boolean {
-  if (argPattern.startsWith(CWD_BOUND_HASHED_ARG_PATTERN_PREFIX)) {
-    return cwd !== undefined && argPattern === buildCwdBoundHashedArgPattern(argv, cwd, platform);
-  }
+function matchArgPattern(argPattern: string, argv: string[], platform?: string | null): boolean {
   if (argPattern.startsWith(LEGACY_HASHED_ARG_PATTERN_PREFIX)) {
     return false;
   }
@@ -406,6 +425,7 @@ export function matchAllowlist(
     return null;
   }
   let pathOnlyMatch: ExecAllowlistEntry | null = null;
+  let cwdBoundHash: string | undefined;
   for (const entry of entries) {
     const pattern = entry.pattern?.trim();
     if (!pattern) {
@@ -428,11 +448,21 @@ export function matchAllowlist(
       }
       continue;
     }
-    // Entry has argPattern — check argv match.
-    if (entry.source === "allow-always" && !isCwdBoundHashedArgPattern(entry.argPattern)) {
+    if (!argv) {
       continue;
     }
-    if (argv && matchArgPattern(entry.argPattern, argv, cwd, platform)) {
+    if (isCwdBoundHashedArgPattern(entry.argPattern)) {
+      if (cwd === undefined) {
+        continue;
+      }
+      cwdBoundHash ??= buildCwdBoundHashedArgPattern(argv, cwd, platform);
+      if (entry.argPattern === cwdBoundHash) {
+        return entry;
+      }
+    } else if (
+      entry.source !== "allow-always" &&
+      matchArgPattern(entry.argPattern, argv, platform)
+    ) {
       return entry;
     }
   }

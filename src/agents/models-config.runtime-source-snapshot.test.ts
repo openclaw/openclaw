@@ -2,8 +2,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
-import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import {
   installModelsConfigTestHooks,
   MODELS_CONFIG_IMPLICIT_ENV_VARS,
@@ -48,7 +48,7 @@ let clearRuntimeConfigSnapshot: typeof import("../config/io.js").clearRuntimeCon
 let setRuntimeConfigSnapshot: typeof import("../config/io.js").setRuntimeConfigSnapshot;
 let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClawModelsJson;
 let resetModelsJsonReadyCacheForTest: typeof import("./models-config-state.test-support.js").resetModelsJsonReadyCacheForTest;
-let planOpenClawModelsJsonWithDeps: typeof import("./models-config.plan.test-support.js").planOpenClawModelsJsonWithDeps;
+let planModelsJsonForTest: typeof import("./models-config.plan.test-support.js").planModelsJsonForTest;
 let readGeneratedModelsJson: typeof import("./models-config.test-utils.js").readGeneratedModelsJson;
 const fixtureSuite = createFixtureSuite("openclaw-models-runtime-source-");
 
@@ -58,7 +58,7 @@ beforeAll(async () => {
     await import("../config/io.js"));
   ({ ensureOpenClawModelsJson } = await import("./models-config.js"));
   ({ resetModelsJsonReadyCacheForTest } = await import("./models-config-state.test-support.js"));
-  ({ planOpenClawModelsJsonWithDeps } = await import("./models-config.plan.test-support.js"));
+  ({ planModelsJsonForTest } = await import("./models-config.plan.test-support.js"));
   ({ readGeneratedModelsJson } = await import("./models-config.test-utils.js"));
 });
 
@@ -228,19 +228,14 @@ async function planGeneratedProviders(params: {
   sourceConfigForSecrets: OpenClawConfig;
 }) {
   // Planner assertions avoid filesystem noise for marker-projection cases.
-  const plan = await planOpenClawModelsJsonWithDeps(
-    {
-      cfg: params.config,
-      sourceConfigForSecrets: params.sourceConfigForSecrets,
-      agentDir: "/tmp/openclaw-models-plan",
-      env: {},
-      existingRaw: "",
-      existingParsed: null,
-    },
-    {
-      resolveImplicitProviders: async () => ({}),
-    },
-  );
+  const plan = await planModelsJsonForTest({
+    cfg: params.config,
+    sourceConfigForSecrets: params.sourceConfigForSecrets,
+    agentDir: "/tmp/openclaw-models-plan",
+    env: {},
+    existingRaw: "",
+    existingParsed: null,
+  });
   expect(plan.action).toBe("write");
   if (plan.action !== "write") {
     throw new Error(`expected models.json write plan, got ${plan.action}`);

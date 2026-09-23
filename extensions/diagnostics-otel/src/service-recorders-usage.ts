@@ -129,6 +129,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       spanAttrs["openclaw.plugin"] = normalizeDiagnosticValue(hostPluginId);
     }
     assignGenAiSpanIdentityAttrs(spanAttrs, evt);
+    addRunAttrs(spanAttrs, evt);
     assignPositiveNumberAttr(spanAttrs, "gen_ai.usage.input_tokens", genAiInputTokens);
     assignPositiveNumberAttr(spanAttrs, "gen_ai.usage.output_tokens", usage.output);
     assignPositiveNumberAttr(spanAttrs, "gen_ai.usage.cache_read.input_tokens", usage.cacheRead);
@@ -271,6 +272,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       return;
     }
     const spanAttrs: Record<string, string | number> = { ...attrs };
+    addRunAttrs(spanAttrs, evt);
     if (evt.reason) {
       spanAttrs["openclaw.reason"] = normalizeDiagnosticValue(evt.reason, "unknown");
     }

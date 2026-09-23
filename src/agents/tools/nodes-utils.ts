@@ -1,11 +1,6 @@
-/**
- * Nodes lookup helpers.
- *
- * Loads paired nodes from Gateway and resolves requested/default nodes with legacy pair-list fallback.
- */
+// Gateway node inventory and explicit/default target resolution.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
-import { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
+import { parseNodeList } from "../../shared/node-list-parse.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { resolveNodeFromNodeList, resolveNodeIdFromNodeList } from "../../shared/node-resolve.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
@@ -19,33 +14,6 @@ type DefaultNodeSelectionOptions = {
   fallback?: DefaultNodeFallback;
   preferLocalMac?: boolean;
 };
-
-async function loadNodes(opts: GatewayCallOptions, signal?: AbortSignal): Promise<NodeListNode[]> {
-  try {
-    const res = await callGatewayTool("node.list", opts, {}, { signal });
-    return parseNodeList(res);
-  } catch (error) {
-    if (
-      !(error instanceof GatewayClientRequestError) ||
-      error.gatewayCode !== "INVALID_REQUEST" ||
-      error.retryable ||
-      error.message !== "unknown method: node.list" ||
-      (error.retryAfterMs !== undefined &&
-        (!Number.isInteger(error.retryAfterMs) || error.retryAfterMs < 0))
-    ) {
-      throw error;
-    }
-    // Older gateways only expose paired-node state; preserve node tools until node.list exists.
-    const res = await callGatewayTool("node.pair.list", opts, {}, { signal });
-    const { paired } = parsePairingList(res);
-    return paired.map((n) => ({
-      nodeId: n.nodeId,
-      displayName: n.displayName,
-      platform: n.platform,
-      remoteIp: n.remoteIp,
-    }));
-  }
-}
 
 function isLocalMacNode(node: NodeListNode): boolean {
   return (
@@ -108,8 +76,11 @@ export function selectDefaultNodeFromList(
   // Once the pool is known to be offline, stale connection timestamps must not
   // outrank the durable last-seen signal used to choose the wake target.
   const recencyField = connected.length > 0 ? "connectedAtMs" : "lastSeenAtMs";
-  const ordered = [...candidates].toSorted((a, b) => compareDefaultNodeOrder(a, b, recencyField));
-  return ordered[0] ?? null;
+  return candidates.reduce<NodeListNode | null>(
+    (best, node) =>
+      best === null || compareDefaultNodeOrder(node, best, recencyField) < 0 ? node : best,
+    null,
+  );
 }
 
 function pickDefaultNode(nodes: NodeListNode[]): NodeListNode | null {
@@ -120,12 +91,13 @@ function pickDefaultNode(nodes: NodeListNode[]): NodeListNode | null {
   });
 }
 
-/** Lists Gateway nodes, falling back to paired-node records for older Gateway versions. */
+/** Lists the Gateway node inventory. */
 export async function listNodes(
   opts: GatewayCallOptions,
   signal?: AbortSignal,
 ): Promise<NodeListNode[]> {
-  return loadNodes(opts, signal);
+  const res = await callGatewayTool("node.list", opts, {}, { signal });
+  return parseNodeList(res);
 }
 
 /** Resolves a node id from an already-loaded node list using shared node matching rules. */
@@ -157,7 +129,7 @@ export async function resolveAgentNode(
   query?: string,
   allowDefault = false,
 ): Promise<NodeListNode> {
-  const nodes = await loadNodes(opts);
+  const nodes = await listNodes(opts);
   return resolveNodeFromNodeList(nodes, query, {
     allowDefault,
     pickDefaultNode,

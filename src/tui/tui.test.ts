@@ -8,8 +8,8 @@ import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { withEnv } from "../test-utils/env.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
+import { beginTuiShutdown } from "./tui-shutdown.js";
 import {
-  beginTuiShutdown,
   createBackspaceDeduper,
   createDeferredTuiFinish,
   createTuiConnectionLineage,
@@ -373,12 +373,14 @@ describe("resolveInitialTuiAgentId", () => {
 
   it("falls back to a retained legacy owner", () => {
     const retained = retainLegacyDefaultAgentId(structuredClone(cfg), "ops");
+    delete retained.agents!.ownership;
 
     expect(resolveInitialTuiAgentId({ cfg: retained, cwd: "/var/tmp/unrelated" })).toBe("ops");
   });
 
   it("keeps an ownerless explicit fleet selection-required", () => {
-    expect(() => resolveInitialTuiAgentId({ cfg, cwd: "/var/tmp/unrelated" })).toThrow(
+    const retained = retainLegacyDefaultAgentId(structuredClone(cfg), "ops");
+    expect(() => resolveInitialTuiAgentId({ cfg: retained, cwd: "/var/tmp/unrelated" })).toThrow(
       "Multiple agents are configured, but TUI startup has no explicit owner. Pass an agent-scoped --session key (e.g., 'openclaw tui --session agent:agentname:main').",
     );
   });
@@ -1016,7 +1018,6 @@ describe("TUI shutdown safety", () => {
           finishTuiStop = resolve;
         }),
     );
-    const clearTimeoutFn = vi.fn();
     const requestFinish = vi.fn(() => calls.push("finish"));
     const onError = vi.fn((error: unknown) => {
       calls.push("error");
@@ -1032,19 +1033,18 @@ describe("TUI shutdown safety", () => {
       requestFinish,
       onError,
       keepHardExitArmed: false,
-      clearTimeoutFn,
     });
 
     await vi.advanceTimersByTimeAsync(0);
     expect(calls).toEqual(["client", "tui"]);
-    expect(clearTimeoutFn).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(1);
     expect(requestFinish).not.toHaveBeenCalled();
 
     finishTuiStop?.();
     await vi.advanceTimersByTimeAsync(0);
     expect(calls).toEqual(["client", "tui", "error", "finish"]);
     expect(stopTui).toHaveBeenCalledOnce();
-    expect(clearTimeoutFn).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
     expect(onError).toHaveBeenCalledOnce();
     expect(requestFinish).toHaveBeenCalledOnce();
   });
@@ -1093,34 +1093,29 @@ describe("TUI shutdown safety", () => {
   });
 
   it("does not keep a clean standalone TUI alive for the watchdog deadline", () => {
-    const unref = vi.fn();
-    const setTimeoutFn = vi.fn((_callback: () => void, delayMs: number) => {
-      expect(delayMs).toBe(2000);
-      return { unref };
-    });
-    const exit = vi.fn();
-    const writeStderr = vi.fn();
-
-    scheduleProcessExitAfterTuiReturn({ setTimeoutFn, exit, writeStderr });
-
-    expect(setTimeoutFn).toHaveBeenCalledOnce();
-    expect(unref).toHaveBeenCalledOnce();
-    expect(writeStderr).not.toHaveBeenCalled();
-    expect(exit).not.toHaveBeenCalled();
+    const timer = scheduleProcessExitAfterTuiReturn();
+    try {
+      expect(timer.hasRef()).toBe(false);
+    } finally {
+      clearTimeout(timer);
+    }
   });
 
-  it("forces standalone TUI exit on deadline while another handle lingers", async () => {
+  it("forces standalone TUI exit on deadline while another handle lingers", () => {
     vi.useFakeTimers();
     const lingeringHandle = setInterval(() => {}, 60_000);
-    const exit = vi.fn();
-    const writeStderr = vi.fn();
+    const exited = new Error("process exited");
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw exited;
+    });
+    const writeStderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
 
-    const timer = scheduleProcessExitAfterTuiReturn({ exit, writeStderr });
+    const timer = scheduleProcessExitAfterTuiReturn();
 
-    expect((timer as NodeJS.Timeout).hasRef()).toBe(false);
-    await vi.advanceTimersByTimeAsync(1999);
+    expect(timer.hasRef()).toBe(false);
+    vi.advanceTimersByTime(1999);
     expect(exit).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
+    expect(() => vi.advanceTimersByTime(1)).toThrow(exited);
     expect(writeStderr).toHaveBeenCalledWith("openclaw tui forcing process exit after return\n");
     expect(exit).toHaveBeenCalledWith(0);
     clearInterval(lingeringHandle);

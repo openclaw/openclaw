@@ -9,7 +9,7 @@ describe("CallManager inbound allowlist", () => {
       allowFrom: ["+15550001234"],
     });
 
-    manager.processEvent({
+    await manager.processEvent({
       id: "evt-allowlist-missing",
       type: "call.initiated",
       callId: "call-missing",
@@ -30,7 +30,7 @@ describe("CallManager inbound allowlist", () => {
       allowFrom: ["+15550001234"],
     });
 
-    manager.processEvent({
+    await manager.processEvent({
       id: "evt-allowlist-anon",
       type: "call.initiated",
       callId: "call-anon",
@@ -52,7 +52,7 @@ describe("CallManager inbound allowlist", () => {
       allowFrom: ["+15550001234"],
     });
 
-    manager.processEvent({
+    await manager.processEvent({
       id: "evt-allowlist-suffix",
       type: "call.initiated",
       callId: "call-suffix",
@@ -73,7 +73,7 @@ describe("CallManager inbound allowlist", () => {
       inboundPolicy: "disabled",
     });
 
-    manager.processEvent({
+    await manager.processEvent({
       id: "evt-reject-init",
       type: "call.initiated",
       callId: "provider-dup",
@@ -84,7 +84,7 @@ describe("CallManager inbound allowlist", () => {
       to: "+15550000000",
     });
 
-    manager.processEvent({
+    await manager.processEvent({
       id: "evt-reject-ring",
       type: "call.ringing",
       callId: "provider-dup",
@@ -121,7 +121,7 @@ describe("CallManager inbound allowlist", () => {
       provider,
     );
 
-    manager.processEvent({
+    await manager.processEvent({
       id: "evt-reject-fail-init",
       type: "call.initiated",
       callId: "provider-flaky",
@@ -133,7 +133,7 @@ describe("CallManager inbound allowlist", () => {
     });
     await Promise.resolve();
 
-    manager.processEvent({
+    await manager.processEvent({
       id: "evt-reject-fail-ring",
       type: "call.ringing",
       callId: "provider-flaky",
@@ -158,7 +158,7 @@ describe("CallManager inbound allowlist", () => {
       allowFrom: ["+15550001234"],
     });
 
-    manager.processEvent({
+    await manager.processEvent({
       id: "evt-allowlist-exact",
       type: "call.initiated",
       callId: "call-exact",

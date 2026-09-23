@@ -123,6 +123,17 @@ describe("node execution target resolution", () => {
     callGatewayToolMock.mockReset();
   });
 
+  it("rejects inventory records without execution capabilities", async () => {
+    callGatewayToolMock.mockResolvedValueOnce({
+      nodes: [{ nodeId: "node-1", platform: "linux" }],
+    });
+
+    await expect(resolveNodeExecutionTarget(createDirectNodeRun().request)).rejects.toThrow(
+      /supports system.run/,
+    );
+    expect(callGatewayToolMock.mock.calls.map(([method]) => method)).toEqual(["node.list"]);
+  });
+
   it("requires an explicit target when multiple connected nodes support system.run", async () => {
     callGatewayToolMock.mockResolvedValueOnce({
       nodes: [
@@ -219,12 +230,14 @@ describe("node execution target resolution", () => {
           {
             nodeId: "node-shared-exec",
             displayName: "build-worker",
+            clientId: "openclaw-macos",
             commands: ["system.run"],
             connected: true,
           },
           {
             nodeId: "node-shared-canvas",
             displayName: "build-worker",
+            clientId: "node-host",
             commands: ["canvas.present"],
             connected: true,
           },
@@ -265,7 +278,7 @@ function createDirectNodeRun(signal?: AbortSignal): DirectNodeRun {
       env: undefined,
       invokeDeadlineMs: 30_000,
       invokeWaitMs: 35_000,
-      runTimeoutSec: 30,
+      runTimeoutMs: 30_000,
       supportsSystemRunPrepare: true,
     },
   };

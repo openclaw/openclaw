@@ -190,7 +190,6 @@ const RETIRED_TUNING_PATHS = [
   ["acp", "stream", "hiddenBoundarySeparator"],
   ["acp", "maxConcurrentSessions"],
   ["acp", "runtime", "ttlMinutes"],
-  ["mcp", "sessionIdleTtlMs"],
   ["worktrees"],
   ["transcripts", "maxUtterances"],
   ["hooks", "maxBodyBytes"],
@@ -245,17 +244,22 @@ const RETIRED_AGENT_TUNING_PATHS = [
   ["tools", "loopDetection", "postCompactionGuard"],
 ] as const;
 
-export function stripRetiredTuningKnobs(raw: Record<string, unknown>): boolean {
-  let changed = false;
+export function stripRetiredTuningKnobs(raw: Record<string, unknown>, changes?: string[]): boolean {
+  const removed: string[] = [];
   for (const path of RETIRED_TUNING_PATHS) {
-    changed = deleteRetiredPath(raw, path) || changed;
+    deleteRetiredPath(raw, path, removed);
   }
-  visitAgentConfigScopes(raw, (agent) => {
+  visitAgentConfigScopes(raw, (agent, prefix) => {
     for (const path of RETIRED_AGENT_TUNING_PATHS) {
-      changed = deleteRetiredPath(agent, path) || changed;
+      deleteRetiredPath(agent, path, removed, `${prefix}.`);
     }
   });
-  return changed;
+  if (removed.length > 0) {
+    changes?.push(
+      `Removed retired runtime tuning knobs: ${JSON.stringify(removed.join(", ")).slice(1, -1)}; built-in defaults now apply.`,
+    );
+  }
+  return removed.length > 0;
 }
 
 const MEDIA_CAPABILITIES = ["image", "audio", "video"] as const;

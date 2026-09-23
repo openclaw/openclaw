@@ -8,14 +8,18 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import * as fileAccess from "openclaw/plugin-sdk/security-runtime";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { containerCheck, containerRpcRequest } from "./client-container.js";
 
 type StartedServer = { baseUrl: string; close: () => Promise<void> };
 
 const running: StartedServer[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   while (running.length > 0) {
     await running.pop()?.close();
   }
@@ -41,6 +45,100 @@ async function startServer(handler: http.RequestListener): Promise<StartedServer
 }
 
 describe("signal REST real-server deadline", () => {
+  it("stops a send when the caller closes during container attachment preparation", async () => {
+    let requests = 0;
+    const server = await startServer((_req, res) => {
+      requests += 1;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ timestamp: "1735689600000" }));
+    });
+    const file = join(tempDirs.make("signal-handoff-"), "photo.jpg");
+    await writeFile(file, Buffer.from([0xff, 0xd8, 0xff, 0xe0]));
+    const caller = new AbortController();
+    const read = fileAccess.readRegularFile;
+    const preparation = vi
+      .spyOn(fileAccess, "readRegularFile")
+      .mockImplementationOnce(async (options) => {
+        const result = await read(options);
+        caller.abort(new Error("Signal caller closed during attachment preparation"));
+        return result;
+      });
+
+    await expect(
+      containerRpcRequest(
+        "send",
+        {
+          account: "+15550001111",
+          recipient: ["+15551234567"],
+          message: "pending",
+          attachments: [file],
+        },
+        {
+          baseUrl: server.baseUrl,
+          assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+        },
+      ),
+    ).rejects.toThrow("Signal caller closed during attachment preparation");
+    expect(preparation).toHaveBeenCalledOnce();
+    expect(requests).toBe(0);
+  });
+
+  it.each([false, true])(
+    "checks a reaction caller before REST mutation (remove=%s)",
+    async (remove) => {
+      let requests = 0;
+      const server = await startServer((_req, res) => {
+        requests += 1;
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ timestamp: "1735689600000" }));
+      });
+      const caller = new AbortController();
+      caller.abort(new Error("Signal reaction caller closed"));
+
+      await expect(
+        containerRpcRequest(
+          "sendReaction",
+          {
+            account: "+15550001111",
+            recipients: ["+15551234567"],
+            targetTimestamp: 1700000000001,
+            emoji: "👍",
+            remove,
+          },
+          {
+            baseUrl: server.baseUrl,
+            assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+          },
+        ),
+      ).rejects.toThrow("Signal reaction caller closed");
+      expect(requests).toBe(0);
+    },
+  );
+
+  it("preserves a REST send accepted before its caller closes", async () => {
+    const caller = new AbortController();
+    const server = await startServer((_req, res) => {
+      caller.abort(new Error("Signal caller closed after transmission"));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ timestamp: "1735689600000" }));
+    });
+
+    await expect(
+      containerRpcRequest(
+        "send",
+        {
+          account: "+15550001111",
+          recipient: ["+15551234567"],
+          message: "accepted",
+        },
+        {
+          baseUrl: server.baseUrl,
+          assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+        },
+      ),
+    ).resolves.toEqual({ timestamp: 1735689600000 });
+  });
+
   it.each([{ bytes: [0xff] }, { bytes: [0xc3] }])(
     "rejects malformed UTF-8 bytes $bytes before JSON parsing",
     async ({ bytes }) => {
@@ -70,34 +168,38 @@ describe("signal REST real-server deadline", () => {
     });
   });
 
-  it("aborts a slow-drip body that never idles, at the request deadline", async () => {
-    // Drip a byte every 50ms: below the 300ms idle guard, so only the total request
-    // deadline can stop it. This is the exact slow-drip case the fix bounds.
-    let dripCount = 0;
+  it("aborts an unfinished streaming body at the request deadline and closes the connection", async () => {
+    // Deterministic repeated-chunk timing lives in client-container.test.ts. Real sockets
+    // prove that a started response is cancelled by the deadline, regardless of tick cadence.
+    let firstChunkFlushed = false;
+    let connectionClosed = false;
     const server = await startServer((_req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
-      res.write("{");
+      res.write("{", (error) => {
+        firstChunkFlushed = !error;
+      });
       const drip = setInterval(() => {
         try {
-          dripCount += 1;
           res.write(" ");
         } catch {
           clearInterval(drip);
         }
       }, 50);
-      res.on("close", () => clearInterval(drip));
+      res.on("close", () => {
+        clearInterval(drip);
+        connectionClosed = true;
+      });
     });
 
     const startedAt = Date.now();
     await expect(
       containerRpcRequest("version", undefined, { baseUrl: server.baseUrl, timeoutMs: 300 }),
-    ).rejects.toThrow(/Signal REST request timed out|stalled/);
+    ).rejects.toThrow("Signal REST request timed out");
     const elapsedMs = Date.now() - startedAt;
 
-    // Multiple chunks arrived below the idle threshold, yet the absolute deadline
-    // still bounded the call. Without it, this response would continue indefinitely.
-    expect(dripCount).toBeGreaterThan(1);
+    expect(firstChunkFlushed).toBe(true);
     expect(elapsedMs).toBeLessThan(2_000);
+    await expect.poll(() => connectionClosed).toBe(true);
   });
 
   it("aborts a response whose body stalls immediately after headers", async () => {

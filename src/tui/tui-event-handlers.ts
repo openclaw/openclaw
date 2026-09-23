@@ -1,9 +1,10 @@
-// Handles TUI keyboard, paste, backend, and command events.
 import {
   hasSessionProjectionAcceptedFinal,
   reduceSessionProjectionRunEvent,
   type SessionProjectionRunStatus,
 } from "../../packages/gateway-client/src/session-projection.js";
+// Handles TUI keyboard, paste, backend, and command events.
+import type { ChatLogOperations } from "./components/chat-log.js";
 import {
   formatPrimitiveString,
   extractTextFromMessage,
@@ -11,6 +12,7 @@ import {
   formatTuiAbortDiagnostic,
   isCommandMarkedMessage,
 } from "./tui-formatters.js";
+import { extractTuiImageSources } from "./tui-images.js";
 import { createTuiRunLifecycle } from "./tui-run-lifecycle.js";
 import { matchesSelectedTuiSession, readTuiSessionUserMessage } from "./tui-session-events.js";
 import {
@@ -28,6 +30,7 @@ import {
   getPendingSubmitAcceptedRunId,
   hasPendingSubmit,
 } from "./tui-submit-state.js";
+import { renderTuiActivityItem } from "./tui-tool-activity.js";
 import type {
   AgentEvent,
   BtwEvent,
@@ -38,44 +41,24 @@ import type {
   TuiStateAccess,
 } from "./tui-types.js";
 
-type EventHandlerChatLog = {
-  addLiveUser: (
-    text: string,
-    options: { messageId: string; runId?: string; sendId?: string },
-  ) => void;
-  startTool: (toolCallId: string, toolName: string, args: unknown, runId?: string) => void;
-  updateToolResult: (
-    toolCallId: string,
-    result: unknown,
-    options?: { partial?: boolean; isError?: boolean },
-  ) => void;
-  addSystem: (text: string) => void;
-  addPendingSystem: (runId: string, text: string) => void;
-  dismissPendingSystem: (runId: string) => void;
-  updateAssistant: (text: string, runId: string) => void;
-  finalizeAssistant: (text: string, runId: string) => void;
-  dropAssistant: (runId: string) => void;
-};
-
 type EventHandlerTui = { requestRender: (force?: boolean) => void };
-
-type EventHandlerBtwPresenter = {
-  showResult: (params: { question: string; text: string; isError?: boolean }) => void;
-  clear: () => void;
-};
 
 function isFailedTuiRunStatus(status: SessionProjectionRunStatus | undefined): boolean {
   return status === "aborted" || status === "error" || status === "timeout";
 }
 
 type EventHandlerContext = {
-  chatLog: EventHandlerChatLog;
-  btw: EventHandlerBtwPresenter;
+  chatLog: ChatLogOperations;
+  btw: {
+    showResult: (params: { question: string; text: string; isError?: boolean }) => void;
+    clear: () => void;
+  };
   tui: EventHandlerTui;
   state: TuiStateAccess;
   setActivityStatus: (text: string) => void;
+  updateFooter: () => void;
   refreshSessionInfo?: () => Promise<void>;
-  loadHistory?: () => Promise<TuiHistoryLoadResult>;
+  loadHistory: () => Promise<TuiHistoryLoadResult>;
   noteLocalRunId?: (runId: string) => void;
   isLocalRunId?: (runId: string) => boolean;
   forgetLocalRunId?: (runId: string) => void;
@@ -109,7 +92,6 @@ export function createEventHandlers(context: EventHandlerContext) {
   const runCoordinator = new TuiSessionRunCoordinator({
     state,
     loadHistory,
-    refreshSessionInfo,
     restoreTerminalError: (message) => chatLog.addSystem(message),
     requestRender: (force) => tui.requestRender(force),
     finalizeHistoryOwnedRun: ({ runId, result, previouslyDisplayed }) => {
@@ -342,7 +324,12 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (suppressEmptyExternalPlaceholder) {
         chatLog.dropAssistant(evt.runId);
       } else {
-        chatLog.finalizeAssistant(finalText, evt.runId);
+        const images = extractTuiImageSources(evt.message);
+        if (images.length > 0) {
+          chatLog.finalizeAssistant(finalText, evt.runId, images);
+        } else {
+          chatLog.finalizeAssistant(finalText, evt.runId);
+        }
       }
       finalizeRun({
         runId: evt.runId,
@@ -594,11 +581,20 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (isActiveRun) {
         armStreamingWatchdog(evt.runId);
       }
+      context.updateFooter();
       tui.requestRender();
       return;
     }
     const isKnownRun = isActiveRun || isPendingRun || isSessionRun || finalizedRuns.has(evt.runId);
     if (!isKnownRun) {
+      return;
+    }
+    if (evt.stream === "item") {
+      if (
+        renderTuiActivityItem({ chatLog, event: evt, verboseLevel: state.sessionInfo.verboseLevel })
+      ) {
+        tui.requestRender();
+      }
       return;
     }
     if (evt.stream === "tool") {

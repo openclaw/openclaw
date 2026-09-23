@@ -1,4 +1,3 @@
-// Memory Host SDK module implements memory schema behavior.
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "./error-utils.js";
 import {
@@ -9,6 +8,7 @@ import {
 } from "./memory-schema-base.js";
 import {
   dropDisabledMemoryFts,
+  dropMemoryChunkFtsTriggers,
   dropMemoryPathFtsTriggers,
   ensureMemoryChunkFtsSchema,
   ensureMemoryPathFtsSchema,
@@ -25,7 +25,17 @@ import {
 } from "./memory-schema-migration.js";
 import * as provenanceSchema from "./memory-schema-provenance.js";
 import { ensureMemoryRecallMetadataSchema } from "./memory-schema-recall.js";
+import {
+  markInvalidImportedMemoryEmbeddings,
+  migrateMemoryIndexStorage,
+  registerMemoryEmbeddingMigrationFunctions,
+} from "./memory-schema-storage-migration.js";
 import { migrateSqliteSchemaToStrict } from "./openclaw-runtime-sqlite.js";
+export {
+  markInvalidImportedMemoryEmbeddings,
+  migrateMemoryIndexStorage,
+  registerMemoryEmbeddingMigrationFunctions,
+} from "./memory-schema-storage-migration.js";
 export {
   ensureMemoryRecallMetadataSchema,
   hasLegacyMemoryRecallMetadataColumns,
@@ -33,13 +43,17 @@ export {
 } from "./memory-schema-recall.js";
 
 export {
+  dropMemoryChunkFtsTriggers,
   dropMemoryPathFtsTriggers,
+  ensureMemoryChunkFtsTriggers,
   ensureMemoryPathFtsTriggers,
   MEMORY_INDEX_CHUNKS_TABLE,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_PATHS_FTS_TABLE,
   MEMORY_INDEX_SOURCES_TABLE,
   MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,
+  MEMORY_CHUNK_FTS_TRIGGER_DEFINITIONS,
+  rebuildMemoryChunkFts,
 } from "./memory-schema-fts.js";
 export {
   ensureMemoryChunkProvenance,
@@ -50,6 +64,7 @@ export {
   MEMORY_INDEX_META_TABLE,
   MEMORY_INDEX_STATE_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
+  MEMORY_INDEX_DERIVED_TABLES,
 } from "./memory-schema-base.js";
 
 // SQLite schema setup for builtin memory index, embedding cache, and FTS.
@@ -354,6 +369,7 @@ function copyLegacyMemoryIndexRows(
   preservedEmbeddingCacheTable?: string,
 ): void {
   ensureLegacyMemoryMigrationIndexes(db, schema);
+  registerMemoryEmbeddingMigrationFunctions(db);
   // Canonical-owned chunk sets stay intact; any extra legacy identity invalidates
   // the source for rebuild. Chunkless sources import only when metadata matches.
   // Keep invalidated rows for deleted-file cleanup; snapshot before inserts.
@@ -430,7 +446,8 @@ function copyLegacyMemoryIndexRows(
       )
       -- Chunks are derived from source rows. Shipped cleanup could leave an
       -- ownerless legacy chunk, which must not become permanently searchable.
-      SELECT id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
+      SELECT id, path, source, start_line, end_line, hash, model, text,
+             openclaw_memory_embedding_from_json(embedding), updated_at
       FROM ${schema}.chunks AS legacy
       WHERE EXISTS (
         SELECT 1 FROM ${schema}.files AS owner
@@ -524,7 +541,7 @@ function copyLegacyMemoryIndexRows(
         model TEXT NOT NULL,
         provider_key TEXT NOT NULL,
         hash TEXT NOT NULL,
-        embedding TEXT NOT NULL,
+        embedding BLOB NOT NULL,
         dims INTEGER,
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (provider, model, provider_key, hash)
@@ -532,7 +549,7 @@ function copyLegacyMemoryIndexRows(
       INSERT OR IGNORE INTO main.${MEMORY_EMBEDDING_CACHE_TABLE} (
         provider, model, provider_key, hash, embedding, dims, updated_at
       )
-      SELECT provider, model, provider_key, hash, embedding, dims, updated_at
+      SELECT provider, model, provider_key, hash, openclaw_memory_embedding_from_json(embedding), dims, updated_at
       FROM ${schema}.embedding_cache;
     `);
     assertLegacyMemoryRowsCopied(
@@ -549,6 +566,7 @@ function copyLegacyMemoryIndexRows(
       "embedding_cache",
     );
   }
+  markInvalidImportedMemoryEmbeddings(db, schema);
 }
 
 function migrateLegacyMemoryIndexTables(
@@ -609,6 +627,7 @@ export function ensureMemoryIndexSchema(params: {
       includeEmbeddingCache: params.cacheEnabled,
     }),
   );
+  migrateMemoryIndexStorage(params.db, { embeddingCacheTable });
   ensureMemoryRecallMetadataSchema(params.db);
   params.db.exec(`
     INSERT OR IGNORE INTO ${MEMORY_INDEX_STATE_TABLE} (id, revision) VALUES (1, 0);
@@ -693,6 +712,10 @@ export function ensureMemoryIndexSchema(params: {
       }
       ftsAvailable = true;
     } catch (err) {
+      if (ftsTable === MEMORY_INDEX_FTS_TABLE) {
+        dropMemoryChunkFtsTriggers(params.db);
+        dropMemoryPathFtsTriggers(params.db);
+      }
       const message = formatErrorMessage(err);
       ftsAvailable = false;
       ftsError = message;

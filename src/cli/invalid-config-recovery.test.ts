@@ -1,19 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
 import { createInvalidConfigError } from "../config/io.invalid-config.js";
-import { ExitError, type RuntimeEnv } from "../runtime.js";
+import { ExitError } from "../runtime.js";
 import { offerInvalidConfigRecovery } from "./invalid-config-recovery.js";
-
-function createRuntime(): RuntimeEnv {
-  return {
-    error: vi.fn(),
-    exit: vi.fn(),
-    log: vi.fn(),
-  };
-}
 
 describe("offerInvalidConfigRecovery", () => {
   it("runs doctor and retries once after interactive consent", async () => {
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
     const runDoctor = vi.fn(async () => {});
     const retry = vi.fn(async () => "started");
 
@@ -34,7 +27,7 @@ describe("offerInvalidConfigRecovery", () => {
   });
 
   it("prints the command without running doctor when consent is declined", async () => {
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
     const runDoctor = vi.fn(async () => {});
     const retry = vi.fn(async () => {});
 
@@ -56,7 +49,7 @@ describe("offerInvalidConfigRecovery", () => {
   });
 
   it("prints only the command in non-interactive mode", async () => {
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
     const confirm = vi.fn(async () => true);
     const runDoctor = vi.fn(async () => {});
     const retry = vi.fn(async () => {});
@@ -77,7 +70,7 @@ describe("offerInvalidConfigRecovery", () => {
   });
 
   it("reports one failed retry without running doctor again", async () => {
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
     const runDoctor = vi.fn(async () => {});
     const retry = vi.fn(async () => {
       throw createInvalidConfigError("/tmp/openclaw.json", "- gateway.port: invalid");
@@ -101,7 +94,7 @@ describe("offerInvalidConfigRecovery", () => {
   });
 
   it("reports doctor failures without retrying the command", async () => {
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
     const retry = vi.fn(async () => "started");
 
     await expect(
@@ -123,7 +116,7 @@ describe("offerInvalidConfigRecovery", () => {
   });
 
   it("preserves intentional doctor exits", async () => {
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
 
     await expect(
       offerInvalidConfigRecovery({

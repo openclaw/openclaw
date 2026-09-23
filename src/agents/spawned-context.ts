@@ -4,9 +4,11 @@
  * Projects tool runtime context into persisted lineage, group routing, workspace, and inherited policy metadata.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
+import type { ModelRef } from "./model-ref-shared.js";
 import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.types.js";
 
 export type SpawnedRunMetadata = {
@@ -23,6 +25,10 @@ export type SpawnedToolContext = {
   agentGroupSpace?: string | null;
   agentMemberRoleIds?: string[];
   workspaceDir?: string;
+  /** Effective parent-turn level, including one-shot overrides, for child inheritance. */
+  requesterThinkingLevel?: ThinkLevel;
+  /** Effective parent-turn model; saved preferences may describe a later turn. */
+  requesterModel?: ModelRef;
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];

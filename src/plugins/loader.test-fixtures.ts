@@ -5,7 +5,7 @@ import path from "node:path";
 import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { withEnv } from "../test-utils/env.js";
 import { loadOpenClawPlugins } from "./loader.js";
-import { pluginLoaderCacheState } from "./registry-lifecycle.js";
+import { getPluginLoaderCacheState } from "./registry-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 
 export { loadOpenClawPlugins };
@@ -32,7 +32,7 @@ export function mkdirSafe(dir: string) {
   chmodSafeDir(dir);
 }
 
-const fixtureRoot = mkdtempSafe(path.join(os.tmpdir(), "openclaw-plugin-"));
+const fixtureRoot = fs.realpathSync(mkdtempSafe(path.join(os.tmpdir(), "openclaw-plugin-")));
 let tempDirIndex = 0;
 const prevBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const prevDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
@@ -109,18 +109,23 @@ export function writePluginMetadata(params: {
   );
 }
 
-export function writePlugin(params: {
-  id: string;
-  body: string;
-  dir?: string;
-  filename?: string;
-  configSchema?: Record<string, unknown>;
-}): TempPlugin {
+export function writePlugin(
+  params: {
+    id: string;
+    dir?: string;
+    filename?: string;
+    configSchema?: Record<string, unknown>;
+  } & ({ body: string } | { registration: string }),
+): TempPlugin {
   const dir = params.dir ?? makePluginLoaderTempDir();
   const filename = params.filename ?? `${params.id}.cjs`;
   mkdirSafe(dir);
   const file = path.join(dir, filename);
-  fs.writeFileSync(file, params.body, "utf-8");
+  const body =
+    "body" in params
+      ? params.body
+      : `module.exports = { id: ${JSON.stringify(params.id)}, register(api) {\n${params.registration}\n} };`;
+  fs.writeFileSync(file, body, "utf-8");
   writePluginMetadata({ dir, id: params.id, configSchema: params.configSchema });
   return { dir, file, id: params.id };
 }
@@ -177,7 +182,7 @@ export function resetPluginLoaderTestStateForTest() {
 
 /** Clears loader state for test isolation without exposing a production-only reset export. */
 export function clearPluginLoaderCache(): void {
-  pluginLoaderCacheState.clear();
+  getPluginLoaderCacheState().clear();
   resetPluginRuntimeStateForTest();
 }
 

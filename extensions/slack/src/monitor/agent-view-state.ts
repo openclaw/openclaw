@@ -27,8 +27,6 @@ export function createSlackAgentViewState(params: {
   let enabled = false;
   let loaded = false;
   let persisted = false;
-  let workspaceStore: PluginStateKeyedStore<StoredSlackAgentViewState> | undefined;
-  let threadStore: PluginStateKeyedStore<StoredSlackManagedThreadState> | undefined;
   let warned = false;
   const managedThreads = new Map<string, true>();
 
@@ -40,46 +38,35 @@ export function createSlackAgentViewState(params: {
     params.warn(action, error);
   };
 
-  const openWorkspaceStore = () => {
-    if (workspaceStore) {
-      return workspaceStore;
-    }
-    const runtime = getOptionalSlackRuntime();
-    if (!runtime) {
-      return undefined;
-    }
-    try {
-      // Slack cannot switch an app back to Assistant View, so this marker has no TTL.
-      workspaceStore = runtime.state.openKeyedStore<StoredSlackAgentViewState>({
-        namespace: SLACK_AGENT_VIEW_STATE_NAMESPACE,
-        maxEntries: SLACK_AGENT_VIEW_STATE_MAX_ENTRIES,
-      });
-      return workspaceStore;
-    } catch (error) {
-      warnOnce("open", error);
-      return undefined;
-    }
+  const createStoreOpener = <T>(namespace: string, maxEntries: number) => {
+    let store: PluginStateKeyedStore<T> | undefined;
+    return () => {
+      if (store) {
+        return store;
+      }
+      const runtime = getOptionalSlackRuntime();
+      if (!runtime) {
+        return undefined;
+      }
+      try {
+        store = runtime.state.openKeyedStore<T>({ namespace, maxEntries });
+        return store;
+      } catch (error) {
+        warnOnce("open", error);
+        return undefined;
+      }
+    };
   };
 
-  const openThreadStore = () => {
-    if (threadStore) {
-      return threadStore;
-    }
-    const runtime = getOptionalSlackRuntime();
-    if (!runtime) {
-      return undefined;
-    }
-    try {
-      threadStore = runtime.state.openKeyedStore<StoredSlackManagedThreadState>({
-        namespace: SLACK_AGENT_VIEW_THREAD_STATE_NAMESPACE,
-        maxEntries: SLACK_AGENT_VIEW_THREAD_STATE_MAX_ENTRIES,
-      });
-      return threadStore;
-    } catch (error) {
-      warnOnce("open", error);
-      return undefined;
-    }
-  };
+  // Slack cannot switch an app back to Assistant View, so this marker has no TTL.
+  const openWorkspaceStore = createStoreOpener<StoredSlackAgentViewState>(
+    SLACK_AGENT_VIEW_STATE_NAMESPACE,
+    SLACK_AGENT_VIEW_STATE_MAX_ENTRIES,
+  );
+  const openThreadStore = createStoreOpener<StoredSlackManagedThreadState>(
+    SLACK_AGENT_VIEW_THREAD_STATE_NAMESPACE,
+    SLACK_AGENT_VIEW_THREAD_STATE_MAX_ENTRIES,
+  );
 
   const workspaceStateKey = () => {
     const apiAppId = params.getApiAppId();
@@ -118,7 +105,7 @@ export function createSlackAgentViewState(params: {
     }
     const stateKey = workspaceStateKey();
     if (!stateKey) {
-      loaded = true;
+      // No app id yet: keep the durable lookup pending until it is learned.
       return false;
     }
     const openedStore = openWorkspaceStore();

@@ -169,10 +169,15 @@ export function registerAgentsCommands(program: Command): void {
     .command("add [name]")
     .description("Add a new isolated agent")
     .option("--workspace <dir>", "Workspace directory for the new agent")
+    .option("--role <role>", "Seed a role: coordinator, researcher, writer, reviewer")
     .option("--model <id>", "Model id for this agent")
     .option("--agent-dir <dir>", "Agent state directory for this agent")
     .option("--bind <channel[:accountId]>", "Route channel binding (repeatable)", collectOption, [])
-    .option("--non-interactive", "Disable prompts; requires --workspace", false)
+    .option(
+      "--non-interactive",
+      "Disable prompts; requires --workspace unless --role is set",
+      false,
+    )
     .option("--json", "Output JSON summary", false)
     .action(async (name, opts, command): Promise<void> => {
       await runAgentsCommandAction(async (runtime) => {
@@ -188,6 +193,7 @@ export function registerAgentsCommands(program: Command): void {
           {
             name: typeof name === "string" ? name : undefined,
             workspace: opts.workspace as string | undefined,
+            role: typeof opts.role === "string" ? opts.role : undefined,
             model: opts.model as string | undefined,
             agentDir: opts.agentDir as string | undefined,
             bind: Array.isArray(opts.bind) ? (opts.bind as string[]) : undefined,
@@ -201,10 +207,41 @@ export function registerAgentsCommands(program: Command): void {
     });
 
   agents
+    .command("team")
+    .description("Create a coordinated team of agents")
+    .command("create")
+    .description("Create a coordinator and specialists from a bundled preset")
+    .option("--preset <name>", "Team preset (team)", "team")
+    .option("--coordinator <id>", "Coordinator agent id", "coordinator")
+    .option("--prefix <p>", "Prefix every team agent id with <p>-")
+    .option("--workspace-root <dir>", "Parent directory for separate team workspaces")
+    .option("--non-interactive", "Disable prompts", false)
+    .option("--json", "Output JSON summary", false)
+    .action(async (opts): Promise<void> => {
+      await runAgentsCommandAction(async (runtime) => {
+        const { agentsTeamCreateCommand } = await import("../../commands/agents.commands.team.js");
+        await agentsTeamCreateCommand(
+          {
+            preset: typeof opts.preset === "string" ? opts.preset : undefined,
+            coordinator: typeof opts.coordinator === "string" ? opts.coordinator : undefined,
+            prefix: typeof opts.prefix === "string" ? opts.prefix : undefined,
+            workspaceRoot: typeof opts.workspaceRoot === "string" ? opts.workspaceRoot : undefined,
+            nonInteractive: Boolean(opts.nonInteractive),
+            json: Boolean(opts.json),
+          },
+          runtime,
+        );
+      });
+    });
+
+  agents
     .command("set-identity")
     .description("Update an agent identity (name/theme/emoji/avatar)")
     .option("--agent <id>", "Agent id to update")
-    .option("--workspace <dir>", "Workspace directory used to locate the agent + IDENTITY.md")
+    .option(
+      "--workspace <dir>",
+      "Locate the agent and IDENTITY.md; does not change the stored workspace",
+    )
     .option("--identity-file <path>", "Explicit IDENTITY.md path to read")
     .option("--from-identity", "Read values from IDENTITY.md", false)
     .option("--name <name>", "Identity name")

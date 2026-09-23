@@ -1,6 +1,6 @@
 {
   "id": "deepseek",
-  "icon": "https://cdn.simpleicons.org/deepseek",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
@@ -24,6 +24,9 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "deepseek": "deepseek"
+    },
     "providers": {
       "deepseek": {
         "baseUrl": "https://api.deepseek.com",
@@ -81,6 +84,26 @@
               "input": 0.44,
               "output": 1.32,
               "cacheRead": 0.014,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens",
+              "codeMode": "preferred"
+            }
+          },
+          {
+            "id": "deepseek-flash",
+            "name": "DeepSeek V4.1 Flash",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 384000,
+            "cost": {
+              "input": 0.3,
+              "output": 1.2,
+              "cacheRead": 0.006,
               "cacheWrite": 0
             },
             "compat": {

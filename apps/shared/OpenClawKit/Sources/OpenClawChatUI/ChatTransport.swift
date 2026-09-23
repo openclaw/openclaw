@@ -393,20 +393,85 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
         _ archived: Bool?,
         _ unread: Bool?) async throws -> Void
     public typealias DeleteSession = @Sendable (_ key: String) async throws -> Void
+    public typealias PatchTarget = @Sendable (
+        _ target: OpenClawChatSessionTarget,
+        _ expectedSessionID: String?,
+        _ expectedMarkedUnreadAt: Double??,
+        _ label: String??,
+        _ category: String??,
+        _ color: String??,
+        _ pinned: Bool?,
+        _ archived: Bool?,
+        _ unread: Bool?) async throws -> Void
+    public typealias DeleteTarget = @Sendable (_ target: OpenClawChatSessionTarget) async throws -> Void
 
-    private let patchSessionImpl: PatchSession
-    private let deleteSessionImpl: DeleteSession?
+    private let patchSessionImpl: PatchTarget
+    private let deleteSessionImpl: DeleteTarget?
 
     public init(
         patchSession: @escaping PatchSession,
         deleteSession: DeleteSession? = nil)
     {
-        self.patchSessionImpl = patchSession
-        self.deleteSessionImpl = deleteSession
+        self
+            .patchSessionImpl =
+            { target, expectedID, expectedUnreadAt, label, category, color, pinned, archived, unread in
+                guard target.agentID == nil else { throw OpenClawChatTransportSendError.notDispatched }
+                try await patchSession(
+                    target.sessionKey, expectedID, expectedUnreadAt, label, category, color, pinned, archived, unread)
+            }
+        if let deleteSession {
+            self.deleteSessionImpl = { target in
+                guard target.agentID == nil else { throw OpenClawChatTransportSendError.notDispatched }
+                try await deleteSession(target.sessionKey)
+            }
+        } else {
+            self.deleteSessionImpl = nil
+        }
+    }
+
+    public init(patchTarget: @escaping PatchTarget, deleteTarget: DeleteTarget?) {
+        self.patchSessionImpl = patchTarget
+        self.deleteSessionImpl = deleteTarget
+    }
+
+    /// The caller binds requests to its captured connection. Resolve targets at
+    /// invocation time because transport copies can share mutable agent routing.
+    public init(
+        sessionTarget: @escaping @Sendable (String) -> OpenClawChatSessionTarget,
+        unreadAckContract: Bool?,
+        request: @escaping @Sendable (OpenClawChatGatewayRequest) async throws -> Data)
+    {
+        self.init(
+            patchTarget: { requested, expectedID, expectedUnreadAt, label, category, color, pinned, archived, unread in
+                guard unread != false || unreadAckContract != nil else {
+                    throw OpenClawChatTransportSendError.notDispatched
+                }
+                let target = requested.agentID == nil ? sessionTarget(requested.sessionKey) : requested
+                _ = try await request(OpenClawChatGatewayRequests.patchSession(
+                    sessionKey: target.sessionKey,
+                    agentID: target.agentID,
+                    expectedSessionID: expectedID,
+                    label: label,
+                    category: category,
+                    color: color,
+                    pinned: pinned,
+                    archived: archived,
+                    unreadPatch: .routed(
+                        unread: unread,
+                        expectedMarkedUnreadAt: expectedUnreadAt,
+                        supportsReadContract: unreadAckContract == true)))
+            },
+            deleteTarget: { requested in
+                let target = requested.agentID == nil ? sessionTarget(requested.sessionKey) : requested
+                _ = try await request(OpenClawChatGatewayRequests.deleteSession(
+                    sessionKey: target.sessionKey,
+                    agentID: target.agentID))
+            })
     }
 
     public func patchSession(
         key: String,
+        agentID: String? = nil,
         expectedSessionID: String? = nil,
         expectedMarkedUnreadAt: Double?? = nil,
         label: String??,
@@ -417,7 +482,7 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
         unread: Bool?) async throws
     {
         try await self.patchSessionImpl(
-            key,
+            OpenClawChatSessionTarget(sessionKey: key, agentID: agentID),
             expectedSessionID,
             expectedMarkedUnreadAt,
             label,
@@ -428,11 +493,11 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
             unread)
     }
 
-    public func deleteSession(key: String) async throws {
+    public func deleteSession(key: String, agentID: String? = nil) async throws {
         guard let deleteSessionImpl else {
             throw OpenClawChatTransportSendError.notDispatched
         }
-        try await deleteSessionImpl(key)
+        try await deleteSessionImpl(OpenClawChatSessionTarget(sessionKey: key, agentID: agentID))
     }
 }
 
@@ -530,9 +595,19 @@ public enum OpenClawChatTransportSendError: Error, Sendable {
     case notDispatched
 }
 
+public enum OpenClawChatProgressCardError: LocalizedError, Sendable {
+    case ownerScopeUnavailable
+
+    public var errorDescription: String? {
+        OpenClawChatTransportUpgradeMessage.progressCardAgentScope
+    }
+}
+
 public enum OpenClawChatTransportUpgradeMessage {
-    public static let routingContract =
-        "Update the gateway before sending queued messages. This version requires safe delivery routing."
+    public static let progressCardAgentScope =
+        String(localized: "Update the gateway to load progress cards for this agent.")
+    public static let routingContract = String(
+        localized: "Update the gateway before sending queued messages. This version requires safe delivery routing.")
 }
 
 public enum OpenClawChatRunTerminalState: Sendable, Equatable {
@@ -647,13 +722,24 @@ public struct OpenClawChatMetadataCapabilities: Codable, Sendable, Equatable {
 public struct OpenClawChatModelCatalogSnapshot: Sendable, Equatable {
     public let choices: [OpenClawChatModelChoice]
     public let availabilityIsSessionScoped: Bool
+    public let refreshFailed: Bool
+
+    public var message: String? {
+        if !self.availabilityIsSessionScoped {
+            return String(
+                localized: "Update your Gateway to use session model choices. Slash commands are still available.")
+        }
+        return nil
+    }
 
     public init(
         choices: [OpenClawChatModelChoice],
-        availabilityIsSessionScoped: Bool)
+        availabilityIsSessionScoped: Bool,
+        refreshFailed: Bool = false)
     {
         self.choices = choices
         self.availabilityIsSessionScoped = availabilityIsSessionScoped
+        self.refreshFailed = refreshFailed
     }
 }
 
@@ -661,9 +747,15 @@ public enum OpenClawChatMediaKind: String, Sendable {
     case image
     case audio
     case video
+    case file
 
-    public var mimeTypePrefix: String {
-        "\(rawValue)/"
+    public var acceptHeader: String {
+        self == .file ? "*/*" : "\(rawValue)/*"
+    }
+
+    public func acceptsMIMEType(_ mimeType: String) -> Bool {
+        // Files are exported, never rendered. The Gateway owns document admission.
+        self == .file ? !mimeType.isEmpty : mimeType.hasPrefix("\(rawValue)/")
     }
 
     public func acceptsManagedArtifactID(_ artifactID: String) -> Bool {
@@ -671,7 +763,7 @@ public enum OpenClawChatMediaKind: String, Sendable {
         return switch self {
         case .image:
             normalized.hasPrefix("artifact_managed_image_")
-        case .audio, .video:
+        case .audio, .video, .file:
             normalized.hasPrefix("artifact_managed_media_")
         }
     }
@@ -732,6 +824,8 @@ public struct OpenClawChatSwarmRouteLease: Sendable {
 }
 
 public protocol OpenClawChatTransport: Sendable {
+    /// A fixed agent fallback sharing the same Gateway connection and route guards.
+    func scoped(toAgentID agentID: String) -> (any OpenClawChatTransport)?
     func createSession(
         key: String,
         label: String?,
@@ -750,9 +844,10 @@ public protocol OpenClawChatTransport: Sendable {
     /// gateway's advertised method set answers, nil when no catalog is known
     /// (disconnected, pre-catalog gateway, or non-gateway transport).
     func gatewayAdvertisesMethod(_ method: String) async -> Bool?
-    func fetchProgressCard(sessionKey: String) async throws -> ProgressCard?
+    func fetchProgressCard(sessionKey: String, agentID: String?) async throws -> ProgressCard?
     func requestFullMessage(sessionKey: String, messageID: String) async throws -> OpenClawChatMessage?
     func listModels(agentID: String?) async throws -> [OpenClawChatModelChoice]
+    func acquireModelSignInContext(agentID: String?) async -> OpenClawChatModelSignInContext?
     func loadModelCatalog(
         sessionKey: String,
         agentID: String?) async throws -> OpenClawChatModelCatalogSnapshot
@@ -795,6 +890,11 @@ public protocol OpenClawChatTransport: Sendable {
         limit: Int?,
         search: String?,
         archived: Bool) async throws -> OpenClawChatSessionsListResponse
+    func listSessions(
+        limit: Int?,
+        search: String?,
+        archived: Bool,
+        agentID: String?) async throws -> OpenClawChatSessionsListResponse
     func listChildSessions(parentKey: String) async throws -> [OpenClawChatSessionEntry]
     func acquireSwarmRouteLease() async -> OpenClawChatSwarmRouteLease?
     func listAgents() async throws -> OpenClawChatAgentsListResponse?
@@ -819,6 +919,7 @@ public protocol OpenClawChatTransport: Sendable {
     func deleteSession(key: String) async throws
     func forkSession(parentKey: String) async throws -> String
     func forkSession(parentKey: String, fromLastCompleted: Bool) async throws -> String
+    func forkSession(parentKey: String, fromLastCompleted: Bool, agentID: String?) async throws -> String
     func rewindSession(sessionKey: String, entryId: String) async throws -> OpenClawChatRewindResponse
     func forkSessionAtMessage(
         sessionKey: String,
@@ -862,12 +963,27 @@ public protocol OpenClawChatTransport: Sendable {
         kind: OpenClawChatMediaKind,
         playback: OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
 
+    func loadSourceContext() async -> OpenClawChatSourceContext?
+    func loadSourceFavicon(host: String) async -> Data?
+
     func setActiveSessionKey(_ sessionKey: String) async throws
     func resetSession(sessionKey: String) async throws
     func compactSession(sessionKey: String) async throws
 }
 
 extension OpenClawChatTransport {
+    public func loadSourceContext() async -> OpenClawChatSourceContext? {
+        nil
+    }
+
+    public func loadSourceFavicon(host _: String) async -> Data? {
+        nil
+    }
+
+    public func scoped(toAgentID _: String) -> (any OpenClawChatTransport)? {
+        nil
+    }
+
     public var supportsComposerCapabilities: Bool {
         false
     }
@@ -883,7 +999,7 @@ extension OpenClawChatTransport {
         nil
     }
 
-    public func fetchProgressCard(sessionKey _: String) async throws -> ProgressCard? {
+    public func fetchProgressCard(sessionKey _: String, agentID _: String?) async throws -> ProgressCard? {
         nil
     }
 
@@ -1144,6 +1260,16 @@ extension OpenClawChatTransport {
         []
     }
 
+    /// Existing custom transports retain their own roster scope until they adopt explicit agent routing.
+    public func listSessions(
+        limit: Int?,
+        search: String?,
+        archived: Bool,
+        agentID _: String?) async throws -> OpenClawChatSessionsListResponse
+    {
+        try await self.listSessions(limit: limit, search: search, archived: archived)
+    }
+
     /// Convenience for callers that only select archive state. Transports must
     /// implement the canonical `listSessions(limit:search:archived:)`
     /// requirement; same-name methods on a conformer are shadowed by this
@@ -1221,6 +1347,11 @@ extension OpenClawChatTransport {
         try await self.forkSession(parentKey: parentKey)
     }
 
+    public func forkSession(parentKey: String, fromLastCompleted: Bool, agentID: String?) async throws -> String {
+        guard agentID == nil else { throw OpenClawChatTransportSendError.notDispatched }
+        return try await self.forkSession(parentKey: parentKey, fromLastCompleted: fromLastCompleted)
+    }
+
     public func rewindSession(
         sessionKey _: String,
         entryId _: String) async throws -> OpenClawChatRewindResponse
@@ -1263,6 +1394,10 @@ extension OpenClawChatTransport {
             domain: "OpenClawChatTransport",
             code: 0,
             userInfo: [NSLocalizedDescriptionKey: "models.list not supported by this transport"])
+    }
+
+    public func acquireModelSignInContext(agentID _: String?) async -> OpenClawChatModelSignInContext? {
+        nil
     }
 
     public func loadModelCatalog(

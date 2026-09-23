@@ -1,5 +1,6 @@
 import path from "node:path";
 import { onAgentEvent, type AgentEventPayload } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createProcessPollDeliveryContract } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import {
   emitTrustedDiagnosticEvent,
   hasPendingInternalDiagnosticEvent,
@@ -7,16 +8,17 @@ import {
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
-import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
   emitDynamicToolStartedDiagnostic,
   emitDynamicToolTerminalDiagnostic,
 } from "./dynamic-tool-diagnostics.js";
 import { hasPendingDynamicToolTerminalDiagnostic } from "./dynamic-tool-execution.js";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import type { CodexDynamicToolCallParams } from "./protocol.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
@@ -60,6 +62,84 @@ function activeDiagnosticToolKeys(events: DiagnosticEventPayload[]): Set<string>
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt dynamic tools", () => {
+  it("acknowledges a terminal sandbox process poll only after Codex accepts its exact result", async () => {
+    const process = createProcessPollDeliveryContract("codex-result-delivery");
+    const turnStarted = createDeferred<void>();
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "turn/start") {
+        turnStarted.resolve();
+      }
+    });
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    setCodexTestToolFactory(params, () => [{ ...process.tool, name: "sandbox_process" }]);
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    setCodexTestModelSupportsTools(params, true);
+    const closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
+    // Protocol acceptance owns this test; host I/O must not spend the execution watchdog.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const run = runCodexAppServerAttempt(params);
+    try {
+      await Promise.race([
+        turnStarted.promise,
+        run.then((result) => {
+          throw new Error("Attempt ended before turn/start", { cause: result });
+        }),
+      ]);
+      const response = await harness.handleServerRequest({
+        id: "process-poll",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "process-poll",
+          namespace: null,
+          tool: "sandbox_process",
+          arguments: process.pollArguments,
+        },
+      });
+      expect(response).toMatchObject({
+        success: true,
+        contentItems: [{ type: "inputText", text: expect.stringContaining("completed output") }],
+      });
+      expect(process.pendingNotifications()).toEqual(["unrelated event", "exec completed"]);
+      const completed = (turnId: string, result: unknown) => ({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId,
+          item: {
+            type: "dynamicToolCall",
+            id: "process-poll",
+            tool: "sandbox_process",
+            ...(result as object),
+          },
+        },
+      });
+      await harness.notify(completed("old-turn", response));
+      await harness.notify(
+        completed("turn-1", {
+          success: false,
+          contentItems: [{ type: "inputText", text: "Could not decode tool response" }],
+        }),
+      );
+      expect(process.pendingNotifications()).toEqual(["unrelated event", "exec completed"]);
+      await harness.notify(completed("turn-1", response));
+      expect(process.pendingNotifications()).toEqual(["unrelated event"]);
+    } finally {
+      try {
+        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+        expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
+      } finally {
+        vi.useRealTimers();
+        closeHostCapabilities();
+        process.close();
+      }
+    }
+  });
+
   it.each([
     { name: "default", timeoutSeconds: undefined, waitMs: 900_000 },
     { name: "explicit", timeoutSeconds: 900, waitMs: 900_000 },
@@ -88,12 +168,13 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
           details: { status: "no_answer" },
         };
       });
-      dynamicToolBuildState.openClawCodingToolsFactory = () => [tool];
+
       const harness = createStartedThreadHarness();
       const params = createParams(
         path.join(tempDir, "session.jsonl"),
         path.join(tempDir, "workspace"),
       );
+      setCodexTestToolFactory(params, () => [tool]);
       params.runtimePlan = createCodexRuntimePlanFixture();
       params.timeoutMs = waitMs + 120_000;
       setCodexTestModelSupportsTools(params, true);
@@ -164,7 +245,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       };
     });
     tool.execute = execute;
-    dynamicToolBuildState.openClawCodingToolsFactory = () => [tool];
+
     const harness = createStartedThreadHarness();
     let closeHostCapabilities: (() => void) | undefined;
     const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) => {
@@ -177,6 +258,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         path.join(tempDir, "session.jsonl"),
         path.join(tempDir, "workspace"),
       );
+      setCodexTestToolFactory(params, () => [tool]);
       setCodexTestModelSupportsTools(params, true);
       closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
       const runtimePlan = createCodexRuntimePlanFixture();
@@ -817,7 +899,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     params.sandboxSessionKey = "agent:main:policy";
     params.runtimePlan = createCodexRuntimePlanFixture();
     setCodexTestModelSupportsTools(params, true);
-    dynamicToolBuildState.openClawCodingToolsFactory = () => [createRuntimeDynamicTool("echo")];
+    setCodexTestToolFactory(params, () => [createRuntimeDynamicTool("echo")]);
     const harness = createStartedThreadHarness();
     const closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
     const run = runCodexAppServerAttempt(params);

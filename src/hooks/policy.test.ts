@@ -78,14 +78,19 @@ describe("hook policy", () => {
       expect(resolved[0]?.hook.source).toBe("openclaw-managed");
     });
 
-    it("keeps later workspace entries for the same source/name", () => {
-      const first = makeHookEntry("shared", "openclaw-workspace");
-      const second = makeHookEntry("shared", "openclaw-workspace");
-      second.hook.handlerPath = "/tmp/openclaw-workspace/shared/handler-2.js";
+    it.each([
+      ["openclaw-bundled", 0],
+      ["openclaw-plugin", 0],
+      ["openclaw-managed", 1],
+      ["openclaw-workspace", 1],
+    ] as const)("preserves the duplicate winner for %s", (source, winner) => {
+      const first = makeHookEntry("shared", source);
+      const second = makeHookEntry("shared", source);
+      second.hook.handlerPath = `/tmp/${source}/shared/handler-2.js`;
 
       const resolved = resolveHookEntries([first, second]);
       expect(resolved).toHaveLength(1);
-      expect(resolved[0]?.hook.handlerPath).toContain("handler-2");
+      expect(resolved[0]).toBe([first, second][winner]);
     });
   });
 });

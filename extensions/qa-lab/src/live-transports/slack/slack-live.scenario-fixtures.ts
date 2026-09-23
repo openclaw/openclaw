@@ -74,7 +74,7 @@ export function renderSlackTableAccessibleText(summaryText: string) {
 
 type SlackProgressCommentaryExpectation = {
   commentary: "headline" | "lane" | "standalone";
-  toolProgress: "absent" | "standalone" | "standalone-redacted";
+  toolProgress: "absent" | "draft" | "standalone" | "standalone-redacted";
 };
 
 function observedSlackText(message: { blockText?: string[]; text: string }) {
@@ -106,9 +106,19 @@ function isSlackSafeExecSummary(message: { text: string }) {
   return /^(?:🛠️|:hammer_and_wrench:) Exec$/u.test(message.text.trim());
 }
 
-function hasSlackExecHeader(message: { text: string }) {
+function hasSlackExecHeader(message: { blockText?: string[]; text: string }) {
   // Full output includes the runtime's command-derived label after the Exec glyph.
-  return /^(?:🛠️|:hammer_and_wrench:) \S.*$/u.test(message.text.split(/\r?\n/u)[0]?.trim() ?? "");
+  if (/^(?:🛠️|:hammer_and_wrench:) \S.*$/u.test(message.text.split(/\r?\n/u)[0]?.trim() ?? "")) {
+    return true;
+  }
+  // Compact progress cards keep the native tool row in Block Kit while their
+  // fallback text remains a generic status headline. Command-derived suffixes
+  // can be truncated, so identify the row by its stable native label.
+  return (message.blockText ?? []).some((text) =>
+    text
+      .split(/\r?\n/u)
+      .some((line) => /^(?:(?:•|🛠️|:hammer_and_wrench:) \*Exec\*|Exec) — \S/u.test(line.trim())),
+  );
 }
 
 function slackMarkerEnvelope(text: string, marker: string) {
@@ -167,7 +177,7 @@ export function buildSlackProgressCommentaryRun(
     input: [
       `<@${sutUserId}> This is a Slack progress protocol test. First, emit an assistant commentary message whose entire text is exactly ${commentaryMarker}.`,
       "Do not call any tool until that commentary message is complete.",
-      `Then use the exec tool exactly once to run this exact command: \`sleep 5; printf '%s\\n' '${outputMarker}' # ${toolMarker}\`.`,
+      `Then use the exec tool exactly once to run this exact command: \`printf '%s' '${toolMarker}' >/dev/null; sleep 5; printf '%s\\n' '${outputMarker}'\`.`,
       `After the command finishes, reply with only this exact marker: ${finalMarker}`,
     ].join(" "),
     matchText: finalMarker,
@@ -260,7 +270,9 @@ export function buildSlackProgressCommentaryRun(
             (message) =>
               [toolMarker, outputMarker].some((marker) =>
                 observedSlackText(message).includes(marker),
-              ) || hasSlackExecHeader(message),
+              ) ||
+              hasSlackExecHeader(message) ||
+              /\bsleep\s+5\b/u.test(observedSlackText(message)),
           )
           .map((message) => message.ts),
       );
@@ -285,6 +297,13 @@ export function buildSlackProgressCommentaryRun(
           safeToolTimestamps.has(finalMessage.ts)
         ) {
           fail("expected one safe Exec summary in a standalone verbose message");
+        }
+      } else if (expectation.toolProgress === "draft") {
+        if (toolTimestamps.size !== 1 || toolTimestamps.has(finalMessage.ts)) {
+          fail("expected tool progress on the draft separate from the fresh final");
+        }
+        if (expectation.commentary !== "standalone" && !toolTimestamps.has(commentaryTs)) {
+          fail("expected commentary and tool progress on one Slack draft identity");
         }
       } else if (expectation.toolProgress === "standalone") {
         const toolMessages = progressMessages.filter(hasSlackExecHeader);

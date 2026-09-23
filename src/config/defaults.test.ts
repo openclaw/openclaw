@@ -15,7 +15,9 @@ import {
   applyContextPruningDefaults,
   applyMessageDefaults,
 } from "./defaults.js";
+import { materializeRuntimeConfig } from "./materialize.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "./runtime-snapshot.js";
+import type { ModelProviderConfig } from "./types.models.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 const mocks = vi.hoisted(() => ({
@@ -26,8 +28,9 @@ vi.mock("./provider-policy.js", () => ({
   applyProviderConfigDefaultsForConfig: (
     ...args: Parameters<typeof mocks.applyProviderConfigDefaultsForConfig>
   ) => mocks.applyProviderConfigDefaultsForConfig(...args),
-  normalizeProviderConfigForConfigDefaults: (_params: { providerConfig: unknown }) =>
-    _params.providerConfig,
+  normalizeProviderConfigForConfigDefaults: vi.fn(
+    (_params: { providerConfig: unknown }) => _params.providerConfig,
+  ),
 }));
 
 describe("config defaults", () => {
@@ -104,6 +107,45 @@ describe("config defaults", () => {
     expect(defaultsParams.manifestRegistry).toBe(manifestRegistry);
   });
 
+  it.each(["staged", "ambient"] as const)(
+    "materializes provider defaults from the supplied env when auth is %s",
+    (source) => {
+      vi.stubEnv("ANTHROPIC_API_KEY", source === "ambient" ? "ambient-fixture" : "");
+      const env = { ANTHROPIC_API_KEY: source === "staged" ? "staged-fixture" : "" };
+      mocks.applyProviderConfigDefaultsForConfig.mockImplementation(
+        ({ config, env: providerEnv }: { config: OpenClawConfig; env: NodeJS.ProcessEnv }) => ({
+          ...config,
+          agents: {
+            ...config.agents,
+            defaults: {
+              ...config.agents?.defaults,
+              ...(providerEnv.ANTHROPIC_API_KEY
+                ? { contextPruning: { mode: "cache-ttl", ttl: "1h" } }
+                : {}),
+            },
+          },
+        }),
+      );
+      const config = materializeRuntimeConfig(
+        { agents: { defaults: {} } },
+        {
+          env,
+          manifestRegistry: { plugins: [] },
+        },
+      );
+      if (source === "staged") {
+        expect(config.agents?.defaults?.contextPruning).toEqual({ mode: "cache-ttl", ttl: "1h" });
+        expect(mocks.applyProviderConfigDefaultsForConfig).toHaveBeenCalledWith(
+          expect.objectContaining({ env }),
+        );
+      } else {
+        expect(config.agents?.defaults?.contextPruning).toBeUndefined();
+        expect(mocks.applyProviderConfigDefaultsForConfig).not.toHaveBeenCalled();
+      }
+      expect(process.env.ANTHROPIC_API_KEY).toBe(source === "ambient" ? "ambient-fixture" : "");
+    },
+  );
+
   it("defaults ackReactionScope without deriving other message fields", () => {
     const next = applyMessageDefaults({
       agents: {
@@ -153,7 +195,7 @@ describe("applyModelDefaults catalog seeding", () => {
         id: "openai",
         modelCatalog: {
           providers: {
-            openai: {
+            " OpenAI ": {
               models: [
                 {
                   id: "gpt-5.6-sol",
@@ -169,6 +211,9 @@ describe("applyModelDefaults catalog seeding", () => {
                 },
               ],
             },
+            openai: {
+              models: [{ id: "gpt-5.6-sol", reasoning: false, input: ["text"] }],
+            },
           },
         },
       },
@@ -179,43 +224,54 @@ describe("applyModelDefaults catalog seeding", () => {
   // Regression: an override entry pinning only sizing fields materialized as a
   // text-only, non-reasoning, zero-cost model, silently dropping vision-gated
   // tools (like `computer`) for that model downstream.
-  it("fills omitted fields from the owning catalog row before generic defaults", async () => {
-    const { applyModelDefaults } = await import("./defaults.js");
-    const cfg = applyModelDefaults(
-      {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              models: [
-                // SAFETY: mirrors a real operator config entry that omits input/reasoning/cost.
-                {
-                  id: "gpt-5.6-sol",
-                  name: "GPT-5.6",
-                  contextWindow: 1_050_000,
-                  contextTokens: 922_000,
-                } as never,
-              ],
+  it.each([
+    { providerId: "openai", generatedRows: false },
+    { providerId: " OpenAI ", generatedRows: true },
+  ])(
+    "seeds $providerId models (normalizer supplies rows: $generatedRows)",
+    async ({ providerId, generatedRows }) => {
+      const { applyModelDefaults } = await import("./defaults.js");
+      const { normalizeProviderConfigForConfigDefaults } = await import("./provider-policy.js");
+      // SAFETY: config schema accepts omitted model metadata before materialization.
+      const models = [
+        {
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6",
+          contextWindow: 1_050_000,
+          contextTokens: 922_000,
+        },
+      ] as ModelProviderConfig["models"];
+      vi.mocked(normalizeProviderConfigForConfigDefaults).mockImplementationOnce((params) =>
+        generatedRows ? { ...params.providerConfig, models } : params.providerConfig,
+      );
+      const cfg = applyModelDefaults(
+        {
+          models: {
+            providers: {
+              [providerId]: {
+                baseUrl: "https://api.openai.com/v1",
+                models: generatedRows ? [] : models,
+              },
             },
           },
         },
-      },
-      { manifestRegistry: catalogRegistry },
-    );
-    const model = expectDefined(
-      cfg.models?.providers?.openai?.models?.[0],
-      "materialized model entry",
-    );
-    expect(model.input).toEqual(["text", "image"]);
-    expect(model.reasoning).toBe(true);
-    expect(model.cost).toEqual({ input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 });
-    expect(model.maxTokens).toBe(128_000);
-    expect(model.thinkingLevelMap).toEqual({ off: "none" });
-    // Authored fields stay authoritative.
-    expect(model.contextWindow).toBe(1_050_000);
-    expect(model.contextTokens).toBe(922_000);
-    expect(model.name).toBe("GPT-5.6");
-  });
+        { manifestRegistry: catalogRegistry },
+      );
+      const model = expectDefined(
+        cfg.models?.providers?.[providerId]?.models?.[0],
+        "materialized model entry",
+      );
+      expect(model.input).toEqual(["text", "image"]);
+      expect(model.reasoning).toBe(true);
+      expect(model.cost).toEqual({ input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 });
+      expect(model.maxTokens).toBe(128_000);
+      expect(model.thinkingLevelMap).toEqual({ off: "none" });
+      // Authored fields stay authoritative.
+      expect(model.contextWindow).toBe(1_050_000);
+      expect(model.contextTokens).toBe(922_000);
+      expect(model.name).toBe("GPT-5.6");
+    },
+  );
 
   it("keeps authored metadata authoritative over the catalog row", async () => {
     const { applyModelDefaults } = await import("./defaults.js");

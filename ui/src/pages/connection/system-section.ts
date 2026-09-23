@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import {
   renderSettingsSection,
@@ -7,21 +7,23 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
-import { formatDurationHuman } from "../../lib/format.ts";
+import { formatDurationHuman } from "../../lib/format-duration.ts";
 import { CONNECTION_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 
 type SystemSectionProps = {
   systemInfo?: SystemInfoResult | null;
   systemInfoUnavailable?: boolean;
+  systemInfoLoading?: boolean;
 };
 
 type SystemStat = {
   label: string;
-  value: string;
+  value: string | TemplateResult;
   unit?: string;
   detail?: string;
   /** Used share of the resource (0..1); renders the meter bar when present. */
   usedFraction?: number;
+  path?: string;
   title?: string;
 };
 
@@ -57,15 +59,20 @@ function renderSystemMeter(label: string, fraction: number) {
 }
 
 function renderSystemStat(stat: SystemStat) {
+  const label = stat.path ? `${stat.label} ${stat.path}` : stat.label;
   return html`
-    <div class="config-host__stat" title=${stat.title ?? ""}>
-      <div class="config-host__stat-label">${stat.label}</div>
-      <div class="config-host__stat-value">
-        ${stat.value}${stat.unit
-          ? html` <span class="config-host__stat-unit">${stat.unit}</span>`
-          : nothing}
+    <div class="config-host__stat" title=${stat.title ?? nothing}>
+      <div class="config-host__stat-label">
+        ${stat.label}${
+          stat.path ? html` <span class="config-host__stat-path">${stat.path}</span>` : nothing
+        }
       </div>
-      ${stat.usedFraction == null ? nothing : renderSystemMeter(stat.label, stat.usedFraction)}
+      <div class="config-host__stat-value">
+        ${stat.value}${
+          stat.unit ? html` <span class="config-host__stat-unit">${stat.unit}</span>` : nothing
+        }
+      </div>
+      ${stat.usedFraction == null ? nothing : renderSystemMeter(label, stat.usedFraction)}
       ${stat.detail ? html`<div class="config-host__stat-detail">${stat.detail}</div>` : nothing}
     </div>
   `;
@@ -100,7 +107,6 @@ function buildSystemStats(info: SystemInfoResult): SystemStat[] {
           label: t("quickSettings.system.cpu"),
           value: coresLabel,
           detail: info.cpuModel,
-          title: cpuTitle,
         }
       : {
           label: t("quickSettings.system.cpu"),
@@ -123,29 +129,31 @@ function buildSystemStats(info: SystemInfoResult): SystemStat[] {
     usedFraction: memoryUsed,
   };
   const stats = [cpu, memory];
-  const diskUsed = usedFraction(info.diskTotalBytes, info.diskAvailableBytes);
-  // Disk info is optional in the protocol; skip the tile instead of showing an empty gauge.
-  if (diskUsed != null) {
+  for (const disk of info.disks ?? []) {
+    const diskUsed = usedFraction(disk.totalBytes, disk.availableBytes);
+    if (diskUsed == null) {
+      continue;
+    }
     stats.push({
       label: t("quickSettings.system.disk"),
       value: formatUsedPercent(diskUsed),
       unit: t("quickSettings.system.used"),
       detail: t("quickSettings.system.freeOf", {
-        free: formatBytes(info.diskAvailableBytes),
-        total: formatBytes(info.diskTotalBytes),
+        free: formatBytes(disk.availableBytes),
+        total: formatBytes(disk.totalBytes),
       }),
       usedFraction: diskUsed,
-      title: info.diskPath,
+      path: disk.path,
     });
   }
   return stats;
 }
 
-function buildSystemStatsPlaceholder(): SystemStat[] {
+function buildSystemStatsPlaceholder(value: SystemStat["value"]): SystemStat[] {
   return [
-    { label: t("quickSettings.system.cpu"), value: "—" },
-    { label: t("quickSettings.system.memory"), value: "—" },
-    { label: t("quickSettings.system.disk"), value: "—" },
+    { label: t("quickSettings.system.cpu"), value },
+    { label: t("quickSettings.system.memory"), value },
+    { label: t("quickSettings.system.disk"), value },
   ];
 }
 
@@ -155,12 +163,14 @@ export function renderSystemSection(props: SystemSectionProps) {
     return nothing;
   }
   const info = props.systemInfo;
-  const placeholder = "—";
+  const placeholder = props.systemInfoLoading
+    ? html`<span class="skeleton config-host__placeholder" aria-hidden="true"></span>`
+    : "—";
   const hostTitle = info && info.hostname !== info.machineName ? info.hostname : undefined;
   const address = info?.lanAddress
     ? `${info.lanAddress}${info.port == null ? "" : `:${info.port}`}`
     : undefined;
-  const stats = info ? buildSystemStats(info) : buildSystemStatsPlaceholder();
+  const stats = info ? buildSystemStats(info) : buildSystemStatsPlaceholder(placeholder);
 
   // Escape hatch: host identity + metered stats are a genuine two-column grid,
   // kept as custom markup inside the single group with row-matched paddings.
@@ -174,7 +184,7 @@ export function renderSystemSection(props: SystemSectionProps) {
       : undefined,
   };
   return html`
-    <div id=${CONNECTION_SETTINGS_TARGET_IDS.host}>
+    <div id=${CONNECTION_SETTINGS_TARGET_IDS.host} aria-busy=${Boolean(props.systemInfoLoading)}>
       ${renderSettingsSection(
         sectionProps,
         html`
@@ -187,12 +197,14 @@ export function renderSystemSection(props: SystemSectionProps) {
                 ${info ? `${info.osLabel} · ${info.arch}` : placeholder}
               </div>
               <div class="config-host__meta">
-                ${info
-                  ? t("quickSettings.system.runtime", {
-                      version: info.nodeVersion,
-                      pid: String(info.pid),
-                    })
-                  : placeholder}
+                ${
+                  info
+                    ? t("quickSettings.system.runtime", {
+                        version: info.nodeVersion,
+                        pid: String(info.pid),
+                      })
+                    : placeholder
+                }
               </div>
               ${address ? html`<code class="config-host__address">${address}</code>` : nothing}
             </div>

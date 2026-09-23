@@ -100,17 +100,19 @@ function createExistingSessionProcessFixture(
     const pid = nextPid++;
     alive.add(pid);
     const transport: { pid: number | null } = { pid };
+    const client = {
+      callTool,
+      close: vi.fn(async () => {
+        alive.delete(pid);
+        transport.pid = null;
+      }),
+    };
     return {
       transport,
+      closeTransport: () => client.close(),
       processCleanup: { status: "open" as const },
       ready: Promise.resolve(),
-      client: {
-        callTool,
-        close: vi.fn(async () => {
-          alive.delete(pid);
-          transport.pid = null;
-        }),
-      },
+      client,
     } as never;
   });
   setChromeMcpSessionFactoryForTest(factory);
@@ -383,7 +385,12 @@ describe("browser server-context listProfiles", () => {
     const ctx = createBrowserRouteContext({ getState: () => state });
     const profiles = await ctx.listProfiles();
 
-    expect(isChromeReachable).toHaveBeenCalledWith("http://127.0.0.1:18800", 200, undefined);
+    expect(isChromeReachable).toHaveBeenCalledWith(
+      "http://127.0.0.1:18800",
+      200,
+      undefined,
+      expect.any(AbortSignal),
+    );
     expect(profiles).toHaveLength(1);
     expect(profiles[0]?.name).toBe("openclaw");
     expect(profiles[0]?.running).toBe(true);
@@ -417,6 +424,7 @@ describe("browser server-context listProfiles", () => {
       "http://127.0.0.1:9222",
       state.resolved.remoteCdpTimeoutMs,
       undefined,
+      expect.any(AbortSignal),
     );
     expect(profiles).toHaveLength(1);
     expect(profiles[0]?.name).toBe("manual-cdp");
@@ -451,6 +459,7 @@ describe("browser server-context listProfiles", () => {
       "http://openclaw:relay-token@127.0.0.1:9222",
       state.resolved.remoteCdpTimeoutMs,
       undefined,
+      expect.any(AbortSignal),
     );
     expect(profiles[0]?.cdpUrl).toBe("http://127.0.0.1:9222");
   });

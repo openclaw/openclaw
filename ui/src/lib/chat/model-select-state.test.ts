@@ -926,3 +926,122 @@ describe("chat-model-select-state", () => {
     ]);
   });
 });
+
+describe("selected Fast applicability", () => {
+  function state(
+    support: boolean | undefined,
+    fastMode?: boolean | "auto",
+    selected = "claude-sonnet-5",
+    runtime?: {
+      id: string;
+      catalogRuntime?: string;
+      alternativeFastSupport?: boolean;
+    },
+  ) {
+    const sessionsResult = createSessionsListResult({
+      model: "claude-sonnet-5",
+      modelProvider: "anthropic",
+    });
+    const session = expectDefined(sessionsResult.sessions[0], "Fast applicability session");
+    if (runtime) {
+      session.agentRuntime = { id: runtime.id, source: "session-key" };
+    }
+    return resolveChatFastModeSelectState({
+      activeRunId: null,
+      connected: true,
+      gatewayAvailable: true,
+      loading: false,
+      sending: false,
+      stream: null,
+      currentModelOverride: `anthropic/${selected}`,
+      sessionsResult,
+      fastModeTarget: { ...session, ...(fastMode === undefined ? {} : { fastMode }) },
+      catalog: [
+        {
+          id: "claude-sonnet-5",
+          name: "Sonnet 5",
+          provider: "anthropic",
+          supportsFastMode: support,
+          ...(runtime?.catalogRuntime
+            ? { agentRuntime: { id: runtime.catalogRuntime, source: "model" as const } }
+            : {}),
+          ...(runtime?.alternativeFastSupport === undefined
+            ? {}
+            : {
+                runtimeChoices: [
+                  {
+                    agentRuntime: { id: "claude-cli", source: "model" as const },
+                    available: true,
+                    supportsFastMode: runtime.alternativeFastSupport,
+                  },
+                ],
+              }),
+        },
+        { id: "claude-opus-5", name: "Opus 5", provider: "anthropic", supportsFastMode: true },
+      ],
+    });
+  }
+
+  it.each([
+    [undefined, undefined],
+    ["claude-cli", undefined],
+    ["claude-cli", "openclaw"],
+  ] as const)(
+    "disables a confirmed no-op offer with runtime %s and catalog runtime %s without alternatives",
+    (runtime, catalogRuntime) => {
+      expect(
+        state(false, undefined, undefined, runtime ? { id: runtime, catalogRuntime } : undefined),
+      ).toMatchObject({
+        supported: false,
+        disabled: true,
+        nextValue: "",
+      });
+    },
+  );
+  it.each([
+    { id: "acpx", supported: false },
+    { id: "claude-cli", supported: true },
+  ])(
+    "uses runtime-specific Fast capability only for a listed runtime: $id",
+    ({ id, supported }) => {
+      expect(
+        state(false, undefined, undefined, {
+          id,
+          catalogRuntime: "openclaw",
+          alternativeFastSupport: true,
+        }),
+      ).toMatchObject({
+        supported,
+        disabled: !supported,
+        nextValue: supported ? "on" : "",
+      });
+    },
+  );
+  it("uses canonical spelling when matching the selected applicability", () => {
+    expect(state(false, undefined, "CLAUDE-SONNET-5")).toMatchObject({
+      supported: false,
+      disabled: true,
+      nextValue: "",
+    });
+  });
+  it.each([true, false, "auto"] as const)(
+    "keeps saved %s clearable on a no-op route",
+    (fastMode) => {
+      expect(state(false, fastMode)).toMatchObject({
+        supported: true,
+        disabled: false,
+        nextValue: "",
+      });
+    },
+  );
+  it("preserves the existing unknown behavior", () => {
+    expect(state(undefined)).toMatchObject({ supported: true, disabled: false, nextValue: "on" });
+  });
+  it("uses the selected model's support before the stale session model", () => {
+    expect(state(false, undefined, "claude-opus-5")).toMatchObject({
+      supported: true,
+      disabled: false,
+      nextValue: "on",
+    });
+  });
+});

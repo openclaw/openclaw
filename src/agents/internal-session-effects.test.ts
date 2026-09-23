@@ -19,7 +19,6 @@ import {
   createInternalSessionEffectsCleanup,
   prepareInternalSessionEffectsSession,
   removeInternalSessionEffectsSession,
-  resolveInternalSessionEffectsTarget,
 } from "./internal-session-effects.js";
 
 describe("internal session effects", () => {
@@ -73,6 +72,7 @@ describe("internal session effects", () => {
 
           await persistSessionResetLifecycle({
             agentId: "main",
+            workspaceDir: dir,
             cleanupPreviousTranscript: true,
             nextEntry: {
               ...previousEntry,
@@ -132,7 +132,7 @@ describe("internal session effects", () => {
 
   it("escapes the reserved prefix for a durable internal-effects run id", async () => {
     await withTestDir({ prefix: "openclaw-internal-session-effects-" }, async (dir) => {
-      const target = resolveInternalSessionEffectsTarget({
+      const target = await prepareInternalSessionEffectsSession({
         agentId: "main",
         runId: "incognito-not-private",
         storePath: path.join(dir, "sessions.json"),
@@ -179,6 +179,52 @@ describe("internal session effects", () => {
       ]);
     });
   });
+
+  it.each(["copy", "reopen"] as const)(
+    "requires the retained source and current owner during %s",
+    async (phase) => {
+      await withTestDir({ prefix: "openclaw-internal-session-effects-" }, async (dir) => {
+        const storePath = path.join(dir, "sessions.json");
+        const source = await prepareInternalSessionEffectsSession({
+          agentId: "main",
+          runId: "required-source",
+          storePath,
+        });
+        await appendTranscriptMessage(source, {
+          message: { role: "assistant", content: "retained progress", timestamp: 1 },
+        });
+        const request = {
+          agentId: "main",
+          runId: "required-successor",
+          source,
+          storePath,
+          requireSource: true,
+        };
+        if (phase === "reopen") {
+          await prepareInternalSessionEffectsSession(request);
+        }
+        let current = phase === "copy";
+        await expect(
+          prepareInternalSessionEffectsSession({
+            ...request,
+            commitGuard: () => {
+              if (!current) {
+                throw new Error("recovery owner retired");
+              }
+              queueMicrotask(() => {
+                current = false;
+              });
+            },
+          }),
+        ).rejects.toThrow("recovery owner retired");
+        expect(JSON.stringify(await loadTranscriptEvents(source))).toContain("retained progress");
+        await removeInternalSessionEffectsSession(source);
+        await expect(prepareInternalSessionEffectsSession(request)).rejects.toThrow(
+          "Required internal-effects source session is unavailable",
+        );
+      });
+    },
+  );
 
   it.each([true, false])(
     "cleans only the latest tracked hidden identities when enabled=%s",

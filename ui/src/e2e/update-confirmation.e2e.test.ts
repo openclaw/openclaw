@@ -4,6 +4,7 @@ import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { createUpdateRunFixture } from "./update-run.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI update confirmation E2E",
@@ -18,6 +19,7 @@ const UPDATE_AVAILABLE = {
 } as const;
 const UPDATE_RUN_RESPONSE = {
   ok: true,
+  runId: createUpdateRunFixture().runId,
   restart: null,
   result: { after: { version: "2.0.0" }, status: "ok" },
 } as const;
@@ -37,7 +39,10 @@ function confirmationDialog(page: Page) {
 
 async function openUpdateCard(page: Page, baseUrl: string, compact = false) {
   const gateway = await installMockGateway(page, {
-    methodResponses: { "update.run": UPDATE_RUN_RESPONSE },
+    methodResponses: {
+      "update.run": UPDATE_RUN_RESPONSE,
+      "update.runs.get": { run: createUpdateRunFixture() },
+    },
   });
   expect((await page.goto(`${baseUrl}chat`))?.status()).toBe(200);
   await gateway.waitForRequest("chat.startup");
@@ -79,6 +84,7 @@ suite.define(() => {
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           gatewayBootId: "gateway-boot-a",
+          presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
           operatorScopes: ["operator.admin", "operator.read"],
           updateAvailable: UPDATE_AVAILABLE,
           updateSchedule: {
@@ -134,12 +140,77 @@ suite.define(() => {
     );
   });
 
+  it("keeps Inbox snoozes and the account-menu update chip with their authenticated account", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          gatewayBootId: "gateway-boot-accounts",
+          presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
+          operatorScopes: ["operator.admin", "operator.read"],
+          updateAvailable: UPDATE_AVAILABLE,
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await gateway.waitForRequest("chat.startup");
+        const connect = await gateway.waitForRequest("connect");
+        const instanceId = (connect.params as { client: { instanceId: string } }).client.instanceId;
+        const inboxBadge = page.locator(".sidebar-issues-button__count");
+        await inboxBadge.waitFor();
+        await page.locator(".sidebar-issues-button").click();
+        const updateIssue = page.locator(
+          'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+        );
+        await updateIssue.locator(".sidebar-issues-panel__dismiss").click();
+        await updateIssue.waitFor({ state: "detached" });
+        await page.keyboard.press("Escape");
+        await inboxBadge.waitFor({ state: "detached" });
+
+        for (const [id, name, snoozed] of [
+          ["bob", "Bob", false],
+          ["alice", "Alice", true],
+        ] as const) {
+          await gateway.emitGatewayEvent("presence", {
+            presence: [
+              {
+                instanceId,
+                mode: "webchat",
+                reason: "connect",
+                user: { id, name },
+                watchedSessions: [],
+              },
+            ],
+          });
+          await expect
+            .poll(() => page.locator(".sidebar-identity-card").textContent())
+            .toContain(name);
+          if (id === "bob") {
+            await page.screenshot({
+              animations: "disabled",
+              path: path.join(PROOF_DIR, "account-b-inbox.png"),
+            });
+          }
+          await expect.poll(() => inboxBadge.count()).toBe(snoozed ? 0 : 1);
+          await page.locator(".sidebar-identity-card").click();
+          await page.locator(".sidebar-identity-menu").waitFor({ state: "visible" });
+          await expect
+            .poll(() =>
+              page.locator(".sidebar-identity-menu .sidebar-footer-build__update").count(),
+            )
+            .toBe(snoozed ? 1 : 0);
+          await page.keyboard.press("Escape");
+          await page.locator(".sidebar-identity-menu").waitFor({ state: "detached" });
+        }
+      },
+    );
+  });
+
   it("keeps the update visible but non-dismissible for read-only operators", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 720, width: 1280 } },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           gatewayBootId: "gateway-boot-read-only",
+          presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
           operatorScopes: ["operator.read"],
           updateAvailable: UPDATE_AVAILABLE,
           updateSchedule: {
@@ -324,6 +395,7 @@ suite.define(() => {
         await confirmationCopy(page)
           .getByRole("button", { name: "Updating…", exact: true })
           .waitFor();
+        await confirmationCopy(page).locator("openclaw-update-run-view").waitFor();
         await page.screenshot({
           animations: "disabled",
           path: path.join(PROOF_DIR, "07-update-running.png"),
@@ -336,7 +408,9 @@ suite.define(() => {
           'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
         );
         await updateIssue.locator("summary").click();
-        expect(await updateIssue.locator(".sidebar-update-card__action").isDisabled()).toBe(true);
+        await updateIssue.locator(".sidebar-update-card__action").click();
+        await confirmationCopy(page).locator("openclaw-update-run-view").waitFor();
+        expect(await gateway.getRequests("update.run")).toHaveLength(1);
       },
     );
   });
@@ -358,6 +432,7 @@ suite.define(() => {
               valid: true,
             },
             "update.run": UPDATE_RUN_RESPONSE,
+            "update.runs.get": { run: createUpdateRunFixture() },
           },
         });
 

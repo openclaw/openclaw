@@ -34,6 +34,10 @@ import type { PreparedSlackMessage } from "./types.js";
 export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
   const { ctx, account, message, route } = prepared;
   const slackClient = prepared.eventScope?.client ?? ctx.app.client;
+  const slackClientOptions = {
+    ...ctx.app.webClientOptions,
+    ...(prepared.eventScope ? { teamId: prepared.eventScope.teamId } : {}),
+  };
   const slackStreamFallbackTeamId = prepared.eventScope?.teamId ?? ctx.teamId;
   const cfg = ctx.cfg;
   const runtime = ctx.runtime;
@@ -121,6 +125,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
   const messageTs = message.ts ?? message.event_ts;
   const incomingThreadTs = message.thread_ts;
   let didSetStatus = false;
+  let statusWasSet = false;
   let didAddTypingReaction = false;
   const statusReactionsEnabled =
     prepared.ctxPayload.InboundEventKind !== "room_event" &&
@@ -173,11 +178,8 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
 
   const typingTarget = statusThreadTs ? `${message.channel}/${statusThreadTs}` : message.channel;
   const typingReaction = ctx.typingReaction;
-  // Slack clears the assistant thread status as soon as the app puts anything
-  // in the thread, then renders its own rotating "agent working" row for every
-  // later status write. Once this turn has visible output, the keepalive would
-  // paint that duplicate row under the streamed card, so it must go quiet.
-  // Installed by the dispatcher, which owns the delivered/preview facts.
+  // Session status is a state write, not a typing keepalive. Start it once
+  // before visible output; the dispatcher owns the delivered/preview gate.
   const threadStatusGate = { hasVisibleOutput: () => false };
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg,
@@ -187,12 +189,14 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     transformReplyPayload: sanitizeSlackMonitorReplyPayload,
     typing: {
       start: async () => {
-        if (!threadStatusGate.hasVisibleOutput()) {
+        if (!didSetStatus && !threadStatusGate.hasVisibleOutput()) {
           didSetStatus = true;
-          await ctx.setSlackThreadStatus({
+          statusWasSet = await ctx.setSlackSessionStatus({
             channelId: message.channel,
             threadTs: statusThreadTs,
-            status: "is typing...",
+            status: "processing",
+            // Initialize new sessions with core's derived label; later title changes use rename.
+            title: prepared.sessionDisplayName ?? prepared.ctxPayload.ThreadLabel,
             eventScope: prepared.eventScope,
           });
         }
@@ -209,12 +213,24 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
       stop: async () => {
         if (didSetStatus) {
           didSetStatus = false;
-          await ctx.setSlackThreadStatus({
+          const reportFailure = statusWasSet;
+          statusWasSet = false;
+          const restored = await ctx.setSlackSessionStatus({
             channelId: message.channel,
             threadTs: statusThreadTs,
-            status: "",
+            status: "active",
             eventScope: prepared.eventScope,
           });
+          if (reportFailure && !restored) {
+            try {
+              runtime.error?.(
+                "Slack session status could not return to active after processing. " +
+                  "Enable verbose logging to inspect the Slack API failure.",
+              );
+            } catch {
+              // Diagnostics must not prevent the remaining typing-reaction cleanup.
+            }
+          }
         }
         // Tracked apart from the status write: a suppressed status refresh
         // still adds the reaction, and that reaction must still be removed.
@@ -264,13 +280,15 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     (hookRunner?.hasHooks("message_sending") ?? false);
   // Portable previews and native progress cards exist before outbound modifiers accept the
   // payload. Native answer streaming stays enabled because it begins after both hook gates.
-  const allowPreHookProviderStreaming = !modifyingHooksRegistered;
+  const allowPreHookProviderStreaming =
+    !prepared.ctxPayload.GroupThread && !modifyingHooksRegistered;
   const previewStreamingEnabled =
     allowPreHookProviderStreaming && !sourceRepliesAreToolOnly && slackStreaming.mode !== "off";
   const hasSlackCustomIdentity = Boolean(
     slackIdentity?.username || slackIdentity?.iconUrl || slackIdentity?.iconEmoji,
   );
   const streamingEnabled =
+    !prepared.ctxPayload.GroupThread &&
     !sourceRepliesAreToolOnly &&
     (allowPreHookProviderStreaming || slackStreaming.mode !== "progress") &&
     isSlackStreamingEnabled({
@@ -292,11 +310,6 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
         blockStreamingEnabled,
       });
 
-  const onSlackDeliveryError = (err: unknown, info: { kind: string }) => {
-    runtime.error?.(danger(`slack ${info.kind} reply failed: ${formatSlackError(err)}`));
-    replyPipeline.typingCallbacks?.onIdle?.();
-  };
-
   return {
     prepared,
     ctx,
@@ -304,6 +317,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     message,
     route,
     slackClient,
+    slackClientOptions,
     slackStreamFallbackTeamId,
     cfg,
     runtime,
@@ -335,7 +349,6 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     shouldUseDraftStream,
     disableBlockStreaming,
     useStreaming,
-    onSlackDeliveryError,
   };
 }
 

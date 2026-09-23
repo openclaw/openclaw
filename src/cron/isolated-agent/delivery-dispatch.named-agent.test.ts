@@ -6,7 +6,7 @@ vi.mock("../../agents/subagents/announce/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(),
 }));
 vi.mock("../../agents/subagents/registry/subagent-registry-read.js", () => ({
-  countActiveDescendantRuns: vi.fn().mockReturnValue(0),
+  hasDescendantRunAwaitingSettle: vi.fn().mockReturnValue(false),
 }));
 
 describe("resolveCronDeliveryBestEffort", () => {

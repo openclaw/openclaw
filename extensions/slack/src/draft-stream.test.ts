@@ -1,5 +1,6 @@
 // Slack tests cover draft stream plugin behavior.
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { noteSlackDraftConversationMessage } from "./draft-message-boundaries.js";
 import { createSlackDraftStream } from "./draft-stream.js";
@@ -63,6 +64,42 @@ function createDraftStreamHarness(
 }
 
 describe("createSlackDraftStream", () => {
+  it("still edits an existing preview with partial preamble text", async () => {
+    const { stream, send, edit } = createDraftStreamHarness();
+    stream.update("_I’ll check the report._");
+    await stream.flush();
+    stream.update({ text: "_I found_", allowNewMessage: false });
+    await stream.flush();
+    expect(send).toHaveBeenCalledOnce();
+    expect(edit).toHaveBeenCalledWith("C123", "111.222", "_I found_", expect.any(Object));
+  });
+
+  it("waits for a complete preamble when a human reply rotates the draft", async () => {
+    const { stream, send, edit } = createDraftStreamHarness({ threadTs: "100.000" });
+    stream.update("_I’ll check the report._");
+    await stream.flush();
+
+    // The partial was admitted while a preview existed. A human can retire
+    // that preview before the throttled transport gets to publish the edit.
+    noteSlackDraftConversationMessage({
+      channelId: "C123",
+      threadTs: "100.000",
+      messageTs: "112.000",
+      userId: "U_HUMAN",
+    });
+    stream.update({ text: "_the_", allowNewMessage: false });
+    await stream.flush();
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(edit).not.toHaveBeenCalled();
+
+    stream.update({ text: "_then I’ll check the key releases._", allowNewMessage: true });
+    await stream.flush();
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(mockCalls<Parameters<DraftSendFn>>(send).at(-1)?.[1]).toBe(
+      "_then I’ll check the key releases._",
+    );
+  });
+
   it("sends the first update and edits subsequent updates", async () => {
     const { stream, send, edit } = createDraftStreamHarness();
 
@@ -280,6 +317,42 @@ describe("createSlackDraftStream", () => {
     });
   });
 
+  it("does not let an old queued clear delete or stop an admitted turn", async () => {
+    const deleting = createDeferred<void>();
+    const releaseDelete = createDeferred<void>();
+    const visible = new Map<string, string>();
+    let nextId = 0;
+    const send = vi.fn<DraftSendFn>(async (_target, text) => {
+      const messageId = `message-${++nextId}`;
+      visible.set(messageId, text);
+      return slackDraftSendResult(messageId);
+    });
+    const edit = vi.fn<DraftEditFn>(async (_channel, messageId, text) => {
+      visible.set(messageId, text);
+    });
+    const remove = vi.fn<DraftRemoveFn>(async (_channel, messageId) => {
+      deleting.resolve();
+      await releaseDelete.promise;
+      visible.delete(messageId);
+    });
+    const { stream } = createDraftStreamHarness({ send, edit, remove });
+    stream.update("old preview");
+    await stream.flush();
+    const firstClear = stream.clear();
+    await deleting.promise;
+    const queuedClear = stream.clear();
+    stream.forceNewMessage();
+    stream.update("new preview");
+    await stream.flush();
+    releaseDelete.resolve();
+    await Promise.all([firstClear, queuedClear]);
+
+    stream.update("newer preview");
+    await stream.flush();
+    expect([...visible.entries()]).toEqual([["message-2", "newer preview"]]);
+    expect(stream.messageId()).toBe("message-2");
+  });
+
   it("does not drop a finalized preview after forceNewMessage", async () => {
     const { stream, remove } = createDraftStreamHarness();
 
@@ -290,16 +363,6 @@ describe("createSlackDraftStream", () => {
     stream.forceNewMessage();
     await stream.dropDetachedMessages();
 
-    expect(remove).not.toHaveBeenCalled();
-  });
-
-  it("does not issue wire calls when no detached preview exists", async () => {
-    const { stream, send, edit, remove } = createDraftStreamHarness();
-
-    await stream.dropDetachedMessages();
-
-    expect(send).not.toHaveBeenCalled();
-    expect(edit).not.toHaveBeenCalled();
     expect(remove).not.toHaveBeenCalled();
   });
 
@@ -447,6 +510,112 @@ describe("createSlackDraftStream", () => {
     expect(send).toHaveBeenCalledTimes(2);
     expect(edit).not.toHaveBeenCalled();
     expect(stream.messageId()).toBe("100.300");
+  });
+
+  it.each([false, true])(
+    "settles active-only cleanup after a delayed send (human reply: %s)",
+    async (humanReply) => {
+      const accountId = `alternate-final-during-send-${humanReply}`;
+      let resolveReceipt!: (message: ReturnType<typeof slackDraftSendResult>) => void;
+      const receipt = new Promise<ReturnType<typeof slackDraftSendResult>>((resolve) => {
+        resolveReceipt = resolve;
+      });
+      const send = vi.fn<DraftSendFn>(async () => await receipt);
+      const { stream, remove } = createDraftStreamHarness({
+        accountId,
+        threadTs: "100.000",
+        send,
+      });
+      stream.update("_checking the original request_");
+      const flushing = stream.flush();
+      await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+      const clearing = stream.clear({ preserveHumanReplies: true });
+      if (humanReply) {
+        noteSlackDraftConversationMessage({
+          accountId,
+          channelId: "C123",
+          threadTs: "100.000",
+          messageTs: "100.200",
+          userId: "U_OWNER",
+        });
+      }
+      resolveReceipt(slackDraftSendResult("100.100"));
+      await Promise.all([flushing, clearing]);
+      stream.update("Late preview after final delivery");
+      await stream.flush();
+      expect(send).toHaveBeenCalledOnce();
+      expect(stream.messageId()).toBeUndefined();
+      if (humanReply) {
+        expect(remove).not.toHaveBeenCalled();
+      } else {
+        expect(remove).toHaveBeenCalledWith(
+          "C123",
+          "100.100",
+          expect.objectContaining({ accountId }),
+        );
+      }
+    },
+  );
+
+  it("preserves human context while a detached drain overlaps failed-delete retry", async () => {
+    const accountId = "selective-final-cleanup";
+    const visible = new Map<string, string>();
+    const ids = ["100.100", "100.300", "100.500", "100.700", "100.900"];
+    let nextId = 0;
+    let failFirstDelete = true;
+    const retryStarted = createDeferred<void>();
+    const resumeRetry = createDeferred<void>();
+    const send = vi.fn<DraftSendFn>(async (_target, text) => {
+      const id = ids[nextId++]!;
+      visible.set(id, text);
+      return slackDraftSendResult(id);
+    });
+    const remove = vi.fn<DraftRemoveFn>(async (_channel, id) => {
+      if (id === "100.100" && failFirstDelete) {
+        failFirstDelete = false;
+        throw new Error("temporary delete failure");
+      }
+      if (id === "100.100") {
+        retryStarted.resolve();
+        await resumeRetry.promise;
+      }
+      visible.delete(id);
+    });
+    const { stream } = createDraftStreamHarness({ accountId, threadTs: "100.000", send, remove });
+
+    stream.update("failed active preview");
+    await stream.flush();
+    await stream.clear();
+    stream.forceNewMessage();
+    stream.update("explicitly rotated preview");
+    await stream.flush();
+    stream.forceNewMessage();
+    stream.update("human conversation context");
+    await stream.flush();
+    noteSlackDraftConversationMessage({
+      accountId,
+      channelId: "C123",
+      threadTs: "100.000",
+      messageTs: "100.600",
+      userId: "U_OWNER",
+    });
+    stream.update("active preview before final");
+    await stream.flush();
+    const clearing = stream.clear({ preserveHumanReplies: true });
+    await retryStarted.promise;
+    const draining = stream.dropDetachedMessages();
+    resumeRetry.resolve();
+    await Promise.all([clearing, draining]);
+
+    expect([...visible.values()]).toEqual(["human conversation context"]);
+    expect(remove.mock.calls.filter(([, id]) => id === "100.100")).toHaveLength(2);
+    stream.forceNewMessage();
+    stream.update("later silent preview");
+    await stream.flush();
+    await stream.clear();
+    await stream.dropDetachedMessages();
+    expect([...visible.values()]).toEqual(["human conversation context"]);
+    expect(remove.mock.calls.some(([, id]) => id === "100.500")).toBe(false);
   });
 
   it("keeps direct-message previews after the latest unthreaded human message", async () => {

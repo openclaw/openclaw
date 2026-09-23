@@ -1,4 +1,5 @@
 /** Resolves incomplete-turn payloads, continuation evidence, and run liveness. */
+import { hasOnlyAssistantReasoningContent } from "@openclaw/ai/internal/shared";
 import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
@@ -13,9 +14,11 @@ import { formatUserFacingAssistantErrorText } from "../../embedded-agent-helpers
 import type { MessagingToolSend } from "../../embedded-agent-messaging.types.js";
 import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
 import { buildProviderAuthRecoveryHint } from "../../provider-auth-recovery-hint.js";
-import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classification.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { hasCommittedMessagingToolDeliveryEvidence } from "../delivery-evidence.js";
+import {
+  hasCommittedMessagingToolDeliveryEvidence,
+  resolveSourceReplyDelivery,
+} from "../delivery-evidence.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
 import {
   hasAsyncActivity,
@@ -24,7 +27,6 @@ import {
 } from "./attempt-terminal-evidence.js";
 import {
   classifyAssistantTurn,
-  hasOnlySilentAssistantReply,
   isIncompleteTerminalAssistantTurn,
   joinAssistantTexts,
   type IncompleteTurnAttempt,
@@ -101,9 +103,8 @@ export function resolveIncompleteTurnPayloadText(params: {
   }
 
   if (
-    hasOnlySilentAssistantReply(params.attempt.assistantTexts) ||
     params.attempt.hasToolMediaBlockReply ||
-    hasCommittedMessagingToolDeliveryEvidence(params.attempt)
+    resolveSourceReplyDelivery(params.attempt) !== "missing"
   ) {
     return null;
   }
@@ -112,7 +113,15 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
-  if (hasAsyncActivity(params.attempt.toolMetas)) {
+  // Failed or incomplete model steps still need a warning when their lifecycle
+  // snapshot contains unfinished work; only a normal stop can leave that work pending.
+  if (
+    hasAsyncActivity(params.attempt.toolMetas) ||
+    (!params.aborted &&
+      assistant?.stopReason === "stop" &&
+      (params.attempt.itemLifecycle.activeCount > 0 ||
+        params.attempt.itemLifecycle.completedCount < params.attempt.itemLifecycle.startedCount))
+  ) {
     return null;
   }
 
@@ -174,10 +183,6 @@ export function shouldRetryMissingAssistantTurn(params: {
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError
   ) {
-    return false;
-  }
-
-  if (hasOnlySilentAssistantReply(params.attempt.assistantTexts)) {
     return false;
   }
 
@@ -331,11 +336,14 @@ export function resolveReplayInvalidFlag(params: {
   incompleteTurnText?: string | null;
 }): boolean {
   const terminal = projectAgentRunAttemptTerminal(params.attempt.terminal);
+  const replaySafeProviderRefusal =
+    params.attempt.replayMetadata.replaySafe &&
+    isProviderRefusalAssistantError(resolveCurrentAttemptAssistant(params.attempt));
   return (
     !params.attempt.replayMetadata.replaySafe ||
     terminal.promptErrorSource === "compaction" ||
     terminal.timedOutDuringCompaction ||
-    Boolean(params.incompleteTurnText)
+    (Boolean(params.incompleteTurnText) && !replaySafeProviderRefusal)
   );
 }
 

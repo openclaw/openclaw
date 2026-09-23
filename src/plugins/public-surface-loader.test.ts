@@ -5,10 +5,12 @@ import { pathToFileURL } from "node:url";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { MissingPublicSurfaceError } from "../plugin-sdk/facade-loader.js";
 import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { resetPluginCache } from "./plugin-cache.js";
+import { pluginProcessRuntimeEntrypoints } from "./process-runtime.test-support.js";
 
 const tempDirs = createTempDirTracker();
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -230,17 +232,16 @@ describe("bundled plugin public surface loader", () => {
       'export { marker } from "import-only-fixture";\nexport { default as shared } from "../../shared.cjs";\n',
     );
 
-    const moduleUrl = (relativePath: string) =>
-      JSON.stringify(pathToFileURL(path.join(process.cwd(), relativePath)).href);
+    const moduleUrl = (
+      entrypoint: (typeof pluginProcessRuntimeEntrypoints)[keyof typeof pluginProcessRuntimeEntrypoints],
+    ) => JSON.stringify(resolveRuntimeWorkerUrl(entrypoint).href);
     const result = spawnNodeEvalSync(
       `
         import assert from "node:assert/strict";
         import fs from "node:fs";
-        import { createRequire } from "node:module";
-        import { loadBundledPluginPublicArtifactModuleSync, loadPluginPublicArtifactModuleSync } from ${moduleUrl("src/plugins/public-surface-loader.ts")};
-        import { loadFacadeModuleAtLocationSync } from ${moduleUrl("src/plugin-sdk/facade-loader.ts")};
-        import { clearPluginMetadataLifecycleCaches } from ${moduleUrl("src/plugins/plugin-metadata-lifecycle.ts")};
-        assert.equal(typeof createRequire(import.meta.url).extensions[".ts"], "function");
+        import { loadBundledPluginPublicArtifactModuleSync, loadPluginPublicArtifactModuleSync } from ${moduleUrl(pluginProcessRuntimeEntrypoints.publicSurfaceLoader)};
+        import { loadFacadeModuleAtLocationSync } from ${moduleUrl(pluginProcessRuntimeEntrypoints.facadeLoader)};
+        import { clearPluginMetadataLifecycleCaches } from ${moduleUrl(pluginProcessRuntimeEntrypoints.metadataLifecycle)};
         const load = () => loadBundledPluginPublicArtifactModuleSync({ dirName: "demo", artifactBasename: "secret-contract-api.js" });
         const first = load();
         assert.equal(first.marker, "original");
@@ -257,6 +258,7 @@ describe("bundled plugin public surface loader", () => {
         console.log("source artifact import, identity, and lifecycle verified");
       `,
       {
+        // The plugin remains TypeScript: this probe owns source-loader behavior.
         imports: [pathToFileURL(path.join(process.cwd(), "scripts/tsx.mjs")).href],
         timeout: 30_000,
         env: {
@@ -667,6 +669,7 @@ describe("bundled plugin public surface loader", () => {
     const bundledPluginsDir = path.join(tempRoot, "dist");
     const pluginDir = path.join(bundledPluginsDir, "demo");
     fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(path.join(pluginDir, "package.json"), '{"type":"module"}\n', "utf8");
     fs.writeFileSync(
       path.join(pluginDir, "runtime-api.js"),
       'export const marker = "runtime-fallback";\n',

@@ -1,6 +1,7 @@
-import type {
-  AdmittedRunContext,
-  PreparedAgentRunAdmission,
+import {
+  resolveAdmittedRunActiveAssertion,
+  type AdmittedRunContext,
+  type PreparedAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
 import { parseExecutionIdentityAdmissionToken } from "./execution-identity-admission.js";
 
@@ -17,7 +18,7 @@ export function isRetainedExecutionOwnerBinding(
   return result === "bound" || result === "already-bound";
 }
 
-type ExecutionOwnerBinding = Readonly<{
+export type ExecutionOwnerBinding = Readonly<{
   contextId: string;
   executionId: string;
 }>;
@@ -51,46 +52,54 @@ export function classifyExecutionOwnerBinding(
 /** Adds one exact owner write after admission resolves, never inside the admission callback. */
 export function withPostAdmissionExecutionOwnerBinding(
   prepared: PreparedAgentRunAdmission,
-  bind: (context: AdmittedRunContext) => void,
+  bind: (context: AdmittedRunContext) => void | Promise<void>,
 ): PreparedAgentRunAdmission {
-  let bound = false;
+  let binding: Promise<void> | undefined;
   return Object.freeze({
-    operationalRunInstance: prepared.operationalRunInstance,
+    ...prepared,
     admit: async (runtimeKind, runtimeInstanceId) => {
       const admitted = await prepared.admit(runtimeKind, runtimeInstanceId);
-      if (!bound) {
-        bound = true;
-        bind(admitted);
+      const assertActive = resolveAdmittedRunActiveAssertion(admitted);
+      if (!assertActive) {
+        throw new Error("prepared execution authority closed during owner binding");
       }
+      binding ??= Promise.resolve().then(() => {
+        assertActive();
+        return bind(admitted);
+      });
+      await binding;
+      assertActive();
       return admitted;
     },
-    close: prepared.close,
   });
 }
 
 /** Requires both exact admission and actual execution start, in either runtime order. */
-export function createExecutionStartedOwnerBinding(bind: (context: AdmittedRunContext) => void): {
-  onPostAdmission: (context: AdmittedRunContext) => void;
-  onExecutionStarted: () => void;
+export function createExecutionStartedOwnerBinding(
+  bind: (context: AdmittedRunContext) => void | Promise<void>,
+): {
+  onPostAdmission: (context: AdmittedRunContext) => Promise<void>;
+  onExecutionStarted: () => Promise<void>;
 } {
   let admitted: AdmittedRunContext | undefined;
   let executionStarted = false;
-  let bound = false;
-  const bindIfReady = () => {
-    if (bound || !admitted || !executionStarted) {
+  let binding: Promise<void> | undefined;
+  const bindIfReady = async () => {
+    if (!admitted || !executionStarted) {
       return;
     }
-    bound = true;
-    bind(admitted);
+    const context = admitted;
+    binding ??= Promise.resolve().then(() => bind(context));
+    await binding;
   };
   return {
     onPostAdmission: (context) => {
       admitted = context;
-      bindIfReady();
+      return bindIfReady();
     },
     onExecutionStarted: () => {
       executionStarted = true;
-      bindIfReady();
+      return bindIfReady();
     },
   };
 }

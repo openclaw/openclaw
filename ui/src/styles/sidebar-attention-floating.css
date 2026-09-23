@@ -6,6 +6,8 @@
 
 openclaw-sidebar-attention.sidebar-attention--floating {
   --sidebar-bg: var(--bg-content, var(--bg));
+  --sidebar-issues-border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  --sidebar-issues-background: color-mix(in srgb, var(--panel) 92%, transparent);
 
   position: fixed;
   top: 10px;
@@ -25,17 +27,23 @@ html.openclaw-native-macos openclaw-sidebar-attention.sidebar-attention--floatin
   top: 52px;
 }
 
-/* Web-hosted titlebar controls occupy the native row instead of sitting below it. */
+/* The borderless Inbox badge extends 1px beyond its 32px control. Keep the
+   existing 8px title clearance measured from the badge edge, not the button. */
+html.openclaw-native-web-chrome
+  .shell--nav-collapsed:has(openclaw-sidebar-attention.sidebar-attention--floating) {
+  --shell-attention-width: 41px;
+}
+
+/* Native titlebar actions stay borderless; only controls floating over page content need chrome. */
 html.openclaw-native-web-chrome openclaw-sidebar-attention.sidebar-attention--floating {
+  --sidebar-issues-border: 0;
+  --sidebar-issues-background: transparent;
+
   top: calc((var(--openclaw-native-titlebar-height, 50px) - var(--shell-chrome-control-size)) / 2);
   left: calc(
     var(--shell-native-titlebar-controls-inset) + var(--shell-native-titlebar-controls-width) +
       var(--shell-chrome-controls-gap)
   );
-}
-
-:is(.shell--onboarding, .shell--settings) openclaw-sidebar-attention.sidebar-attention--floating {
-  inset: auto auto max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
 }
 
 /* A stale-client refresh card shares the collapsed overlay strip's row; drop it
@@ -44,10 +52,9 @@ html.openclaw-native-web-chrome openclaw-sidebar-attention.sidebar-attention--fl
   margin-top: 50px;
 }
 
-/* Footer buttons need opaque chrome when they float over arbitrary page content. */
-:where(openclaw-sidebar-attention.sidebar-attention--floating) .sidebar-issues-button {
-  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-  background: color-mix(in srgb, var(--panel) 92%, transparent);
+/* Inherited chrome survives late entry CSS; direct hover/expanded fills still win. */
+:where(html:not(.openclaw-native-web-chrome) openclaw-sidebar-attention.sidebar-attention--floating)
+  .sidebar-issues-button {
   box-shadow: var(--shadow-sm);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);

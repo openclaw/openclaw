@@ -1,4 +1,6 @@
 /** Owns Codex thread/resume subscription safety. */
+import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
+import { publishCodexCatalogResume } from "../session-catalog-events.js";
 import {
   assertCodexThreadResumeSubscription,
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
@@ -6,6 +8,7 @@ import {
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import { isCodexAppServerStartupError } from "./attempt-timeouts.js";
+import { forgetCodexWorkspaceReferences } from "./client-runtime.js";
 import {
   CodexAppServerRpcError,
   isCodexAppServerOverloadError,
@@ -25,13 +28,23 @@ export async function resumeCodexAppServerThread(params: {
   timeoutMs?: number;
   signal?: AbortSignal;
   assertCurrent?: () => void;
-  /** Identifies ownership rejection by the request's physical pre-write fence only. */
-  isPrewriteOwnershipError?: (error: unknown) => boolean;
   onSubscriptionReleased?: () => void;
   requestResume?: (request: CodexThreadResumeParams) => Promise<unknown>;
 }): Promise<CodexThreadResumeResponse> {
   const threadId = params.request.threadId;
   let response: CodexThreadResumeResponse;
+  let ownershipRejected = false;
+  const assertCurrent =
+    params.assertCurrent &&
+    (() => {
+      try {
+        params.assertCurrent?.();
+      } catch (error) {
+        // Only this physical pre-write callback proves no subscription was acquired.
+        ownershipRejected = true;
+        throw error;
+      }
+    });
   try {
     response = assertCodexThreadResumeResponse(
       await (params.requestResume
@@ -39,13 +52,14 @@ export async function resumeCodexAppServerThread(params: {
         : params.client.request("thread/resume", params.request, {
             ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
             ...(params.signal ? { signal: params.signal } : {}),
-            assertCurrent: params.assertCurrent,
+            assertCurrent,
           })),
     );
     assertCodexThreadResumeSubscription(threadId, response.thread.id);
+    forgetCodexWorkspaceReferences(params.client, threadId);
   } catch (error) {
     if (
-      params.isPrewriteOwnershipError?.(error) ||
+      ownershipRejected ||
       isCodexAppServerStartSelectionChangedError(error) ||
       isCodexAppServerStartupError(error) ||
       error instanceof CodexAppServerScopedRequestRejectedError ||
@@ -85,5 +99,6 @@ export async function resumeCodexAppServerThread(params: {
       { cause: error },
     );
   }
+  await publishCodexCatalogResume(params.client, response, sanitizeTerminalText);
   return response;
 }

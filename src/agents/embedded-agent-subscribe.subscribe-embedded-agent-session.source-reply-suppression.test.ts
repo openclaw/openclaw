@@ -43,9 +43,14 @@ function createBlockReplyHarness(
       typeof event.toolCallId === "string" &&
       details?.messageDelivery !== undefined
     ) {
-      recordEmbeddedToolReceipt(sessionManager, event.toolCallId, {
-        messageDelivery: details.messageDelivery,
-      });
+      recordEmbeddedToolReceipt(
+        sessionManager,
+        event.toolCallId,
+        {
+          messageDelivery: details.messageDelivery,
+        },
+        true,
+      );
     }
     rawEmit(evt);
   };
@@ -80,8 +85,7 @@ async function emitMessageToolLifecycle(params: {
   threadId?: string;
   result: unknown;
 }) {
-  // Message tool sends are modeled as normal tool start/end events because the
-  // subscription records pending send text at start and delivery at end.
+  // Tool start preserves invocation context; completion records confirmed delivery.
   params.emit({
     type: "tool_execution_start",
     toolName: "message",
@@ -509,7 +513,121 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(subscription.getMessagingToolSourceReplyPayloads()).toEqual([
       { text: "Visible terminal answer." },
     ]);
+    expect(subscription.getSourceReplyDelivered()).toBeUndefined();
   });
+
+  it("does not let an earlier approval prompt suppress the next user reply", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "approval-input-boundary",
+      blockReplyBreak: "message_end",
+      onBlockReply,
+      onToolResult: async () => {},
+    });
+    emit({
+      type: "tool_execution_end",
+      toolName: "exec",
+      toolCallId: "approval-request",
+      isError: false,
+      result: {
+        details: {
+          status: "approval-pending",
+          approvalId: "approval-request",
+          approvalSlug: "approval-request",
+          host: "gateway",
+          command: "echo approved",
+        },
+      },
+    });
+    await subscription.waitForPendingEvents();
+    expect(subscription.didSendDeterministicApprovalPrompt()).toBe(true);
+    emitAssistantMessageEnd(emit, "Waiting for approval.");
+    await subscription.waitForPendingEvents();
+    expect(onBlockReply).not.toHaveBeenCalled();
+    emit({
+      type: "message_end",
+      message: { role: "user", content: "A new request.", timestamp: 2 },
+    });
+    emitAssistantMessageEnd(emit, "The new request has its own answer.");
+    await subscription.waitForPendingEvents();
+    expect(onBlockReply.mock.calls.map(([payload]) => payload.text)).toEqual([
+      "The new request has its own answer.",
+    ]);
+    expect(subscription.didSendDeterministicApprovalPrompt()).toBe(false);
+    subscription.unsubscribe();
+  });
+
+  it.each([
+    { action: "send", final: true },
+    { action: "reply", final: true },
+    { action: "thread-reply", final: true },
+    { action: "poll", final: true },
+    { action: "send", final: false },
+  ])(
+    "keeps source progress distinct from final receipts for $action (final=$final)",
+    async ({ action, final }) => {
+      const { session, emit } = createStubSessionHarness();
+      const sessionManager = {};
+      Object.assign(session, { sessionManager });
+      const onBlockReply = vi.fn();
+      const onDeliveredMessageToolOnlySourceReply = vi.fn();
+      const subscription = subscribeEmbeddedAgentSession({
+        session,
+        runId: "implicit-source",
+        sourceReplyDeliveryMode: "message_tool_only",
+        blockReplyBreak: "message_end",
+        onBlockReply,
+        onDeliveredMessageToolOnlySourceReply,
+      });
+      emit({
+        type: "tool_execution_start",
+        toolName: "message",
+        toolCallId: "source-send",
+        args: { action, final, target: "channel:source", message: "Delivered once." },
+      });
+      await Promise.resolve();
+      recordEmbeddedToolReceipt(
+        sessionManager,
+        "source-send",
+        {
+          messageDelivery: {
+            status: "settled",
+            partialDelivery: false,
+            createdThreadIds: [],
+            sourceReplyDelivered: true,
+          },
+        },
+        true,
+      );
+      emit({
+        type: "tool_execution_end",
+        toolName: "message",
+        toolCallId: "source-send",
+        isError: false,
+        result: { content: [], details: { redacted: true } },
+      });
+      await Promise.resolve();
+
+      expect(subscription.getSourceReplyDelivered()).toBe(true);
+      expect(subscription.getSourceReplyDeliveryState()).toBe(final ? "delivered" : "missing");
+      emitAssistantMessageEnd(emit, "A later assistant response must stay suppressed.");
+      await Promise.resolve();
+      expect(onBlockReply).not.toHaveBeenCalled();
+      expect(onDeliveredMessageToolOnlySourceReply).toHaveBeenCalledOnce();
+
+      emit({
+        type: "message_end",
+        message: { role: "user", content: "A new request.", timestamp: 2 },
+      });
+      emitAssistantMessageEnd(emit, "The new request still needs its own reply.");
+      await subscription.waitForPendingEvents();
+      expect(onBlockReply.mock.calls.map(([payload]) => payload.text)).toEqual([
+        "The new request still needs its own reply.",
+      ]);
+      expect(subscription.getSourceReplyDeliveryState()).toBe("missing");
+      subscription.unsubscribe();
+    },
+  );
 
   it("suppresses text-only tool summaries after message-tool-only delivery", async () => {
     const onToolResult = vi.fn();

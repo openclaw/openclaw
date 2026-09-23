@@ -3,9 +3,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import { CronService } from "./service.js";
 import { writeCronStoreSnapshot } from "./service.test-harness.js";
+import { getSuspensionVisibleCronTaskRunCount } from "./service/active-run-cancellation.js";
+import * as scheduleMaintenance from "./service/schedule-maintenance.js";
+import { loadCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
 const sqliteTransactionLabels = vi.hoisted(() => [] as string[]);
@@ -58,22 +63,27 @@ async function makeStorePath() {
 }
 
 function createDeferredIsolatedRun() {
-  let resolveRun: ((value: IsolatedRunResult) => void) | undefined;
-  let resolveRunStarted: (() => void) | undefined;
-  const runStarted = new Promise<void>((resolve) => {
-    resolveRunStarted = resolve;
-  });
+  const result = createDeferred<IsolatedRunResult>();
+  const started = createDeferred();
   const runIsolatedAgentJob = vi.fn(async () => {
-    resolveRunStarted?.();
-    return await new Promise<IsolatedRunResult>((resolve) => {
-      resolveRun = resolve;
-    });
+    started.resolve();
+    return await result.promise;
   });
   return {
     runIsolatedAgentJob,
-    runStarted,
-    completeRun: (result: IsolatedRunResult) => {
-      resolveRun?.(result);
+    runStarted: started.promise,
+    completeRun: result.resolve,
+    settle: async (run?: Promise<unknown>) => {
+      // The caller stops scheduling first; storage must outlive the admitted core and tick.
+      result.resolve({ status: "ok", summary: "done" });
+      try {
+        await run;
+      } finally {
+        await vi.waitFor(() => {
+          expect(getSuspensionVisibleCronTaskRunCount()).toBe(0);
+          expect(getActiveGatewayRootWorkCount()).toBe(0);
+        });
+      }
     },
   };
 }
@@ -123,9 +133,11 @@ describe("CronService read ops while job is running", () => {
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
+    const maintenance = vi.spyOn(scheduleMaintenance, "recomputeUnownedCronSchedules");
     try {
       await cron.start();
       sqliteTransactionLabels.length = 0;
+      maintenance.mockClear();
 
       await cron.status();
       await cron.list({ includeDisabled: true });
@@ -135,7 +147,9 @@ describe("CronService read ops while job is running", () => {
       expect(
         sqliteTransactionLabels.filter((label) => label === "cron.schedule-unowned"),
       ).toHaveLength(0);
+      expect(maintenance).not.toHaveBeenCalled();
     } finally {
+      maintenance.mockRestore();
       cron.stop();
       await store.cleanup();
     }
@@ -156,6 +170,7 @@ describe("CronService read ops while job is running", () => {
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
+    const maintenance = vi.spyOn(scheduleMaintenance, "recomputeUnownedCronSchedules");
     try {
       sqliteTransactionLabels.length = 0;
       await expect(cron.readJob(job.id)).resolves.toMatchObject({
@@ -163,8 +178,13 @@ describe("CronService read ops while job is running", () => {
       });
       expect(
         sqliteTransactionLabels.filter((label) => label === "cron.schedule-unowned"),
-      ).toHaveLength(1);
+      ).toHaveLength(0);
+      expect(maintenance).toHaveBeenCalledOnce();
+      expect((await loadCronStore(store.storePath)).jobs[0]?.state.nextRunAtMs).toBe(
+        nowMs + 60_000,
+      );
     } finally {
+      maintenance.mockRestore();
       cron.stop();
       await store.cleanup();
     }
@@ -259,6 +279,7 @@ describe("CronService read ops while job is running", () => {
       } finally {
         cron.stop();
         restartedCron?.stop();
+        await isolatedRun.settle();
         vi.clearAllTimers();
         vi.useRealTimers();
         await store.cleanup();
@@ -344,6 +365,7 @@ describe("CronService read ops while job is running", () => {
       expect(internal.state?.running).toBe(false);
     } finally {
       cron.stop();
+      await isolatedRun.settle();
       vi.clearAllTimers();
       vi.useRealTimers();
       await store.cleanup();
@@ -366,6 +388,7 @@ describe("CronService read ops while job is running", () => {
         runIsolatedAgentJob: isolatedRun.runIsolatedAgentJob,
       });
       let restartedCron: CronService | undefined;
+      let run: ReturnType<CronService["run"]> | undefined;
 
       try {
         await cron.start();
@@ -380,7 +403,7 @@ describe("CronService read ops while job is running", () => {
           delivery: { mode: "none" },
         });
 
-        const run = cron.run(job.id, "force");
+        run = cron.run(job.id, "force");
         await isolatedRun.runStarted;
         await cron.update(job.id, {
           schedule: { kind: "at", at: new Date(intermediateAt).toISOString() },
@@ -418,6 +441,7 @@ describe("CronService read ops while job is running", () => {
       } finally {
         cron.stop();
         restartedCron?.stop();
+        await isolatedRun.settle(run);
         await store.cleanup();
       }
     },
@@ -437,6 +461,7 @@ describe("CronService read ops while job is running", () => {
       requestHeartbeat,
       runIsolatedAgentJob: isolatedRun.runIsolatedAgentJob,
     });
+    let runPromise: ReturnType<CronService["run"]> | undefined;
 
     try {
       await cron.start();
@@ -454,7 +479,7 @@ describe("CronService read ops while job is running", () => {
         delivery: { mode: "none" },
       });
 
-      const runPromise = cron.run(job.id, "force");
+      runPromise = cron.run(job.id, "force");
       await isolatedRun.runStarted;
 
       await expect(
@@ -479,6 +504,7 @@ describe("CronService read ops while job is running", () => {
       expect(completed[0]?.state.runningAtMs).toBeUndefined();
     } finally {
       cron.stop();
+      await isolatedRun.settle(runPromise);
       await store.cleanup();
     }
   });

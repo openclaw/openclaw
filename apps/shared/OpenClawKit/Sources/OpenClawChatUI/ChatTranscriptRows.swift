@@ -78,22 +78,25 @@ enum ChatTranscriptRow: Hashable, Identifiable {
     case message(OpenClawChatMessage)
     case systemNotice(SystemNotice)
     case historyDivider(HistoryDivider)
+    case completedWork(CompletedWork)
 
     var id: UUID {
         switch self {
         case let .message(message): message.id
         case let .systemNotice(notice): notice.id
         case let .historyDivider(divider): divider.id
+        case let .completedWork(work): work.id
         }
     }
 
     var startsTurn: Bool {
         switch self {
         case let .message(message):
-            message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user"
+            message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user" ||
+                message.turnBoundary == true || message.isForwardedTurnBoundary
         case .systemNotice:
             true
-        case .historyDivider:
+        case .historyDivider, .completedWork:
             false
         }
     }

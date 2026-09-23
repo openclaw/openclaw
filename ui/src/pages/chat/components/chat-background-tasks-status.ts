@@ -1,20 +1,25 @@
 import { html, nothing, type TemplateResult } from "lit";
 import "../../../components/elapsed-time.ts";
-import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerBackgroundTasksEnglish } from "../../../i18n/locales/en-background-tasks.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import {
   isActiveTask,
   partitionTasks,
-  taskStatusLabel,
   taskTimestampMs,
   taskTitle,
 } from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
-import { STATUS_TONES } from "./chat-background-tasks-shared.ts";
+import {
+  backgroundTaskIsExecuting,
+  backgroundTaskStatusLabel,
+  STATUS_TONES,
+} from "./chat-background-tasks-shared.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import { renderSubagentActivity } from "./chat-subagent-activity.ts";
+
+registerBackgroundTasksEnglish();
 
 type BackgroundTasksStatus = { count: number; startedMs: number | null };
 
@@ -47,22 +52,28 @@ function renderStatusPreviewRow(task: TaskSummary): TemplateResult {
     : taskTimestampMs(task.updatedAt ?? task.createdAt);
   return html`
     <div class="chat-tasks-preview__row">
-      ${task.status === "running"
-        ? html`<span class="chat-tasks-rail__task-pulse" aria-hidden="true"></span>`
-        : nothing}
+      ${
+        backgroundTaskIsExecuting(task)
+          ? html`<span class="chat-tasks-rail__task-pulse" aria-hidden="true"></span>`
+          : nothing
+      }
       <span class="chat-tasks-preview__title">${taskTitle(task)}</span>
       <span class="chat-tasks-preview__meta">
         <span class="chat-tasks-rail__task-status chat-tasks-rail__task-status--${tone}"
-          >${taskStatusLabel(task.status)}</span
+          >${backgroundTaskStatusLabel(task)}</span
         >
-        ${timeMs > 0
-          ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
-              <span>
-                ${active
-                  ? html`<openclaw-elapsed-time .startMs=${timeMs}></openclaw-elapsed-time>`
-                  : formatRelativeTimestamp(timeMs)}
-              </span>`
-          : nothing}
+        ${
+          timeMs > 0
+            ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
+                <span>
+                  ${
+                    active
+                      ? html`<openclaw-elapsed-time .startMs=${timeMs}></openclaw-elapsed-time>`
+                      : formatRelativeTimestamp(timeMs)
+                  }
+                </span>`
+            : nothing
+        }
       </span>
     </div>
   `;
@@ -83,11 +94,13 @@ function renderStatusPreview(remainingTasks: readonly TaskSummary[]): TemplateRe
         <span>${t("chat.backgroundTasks.running", { count: String(active.length) })}</span>
       </div>
       ${preview.map((task) => renderStatusPreviewRow(task))}
-      ${overflow > 0
-        ? html`<div class="chat-tasks-preview__more">
-            ${t("chat.backgroundTasks.statusPreviewMore", { count: String(overflow) })}
-          </div>`
-        : nothing}
+      ${
+        overflow > 0
+          ? html`<div class="chat-tasks-preview__more">
+              ${t("chat.backgroundTasks.statusPreviewMore", { count: String(overflow) })}
+            </div>`
+          : nothing
+      }
     </div>
   `;
 }
@@ -95,7 +108,7 @@ function renderStatusPreview(remainingTasks: readonly TaskSummary[]): TemplateRe
 /** Post-turn status row in the chat thread: once the agent turn settles while
  * background tasks keep running, the running work stays visible next to a
  * free composer. Hover previews the latest tasks; the link opens the tasks
- * rail (noop when already open). */
+ * list, including when that panel already shows a task detail. */
 export function renderBackgroundTasksStatusRow(
   backgroundTasks: BackgroundTasksProps | undefined,
 ): TemplateResult | typeof nothing {
@@ -122,30 +135,33 @@ export function renderBackgroundTasksStatusRow(
     status.count === 1
       ? t("chat.backgroundTasks.statusRunningOne")
       : t("chat.backgroundTasks.statusRunningMany", { count: String(status.count) });
-  const openRail = () => {
-    if (backgroundTasks.collapsed) {
-      backgroundTasks.onToggleCollapsed();
-    }
-  };
   // Keep the live announcement separate from the tooltip: rich preview
   // content must not enter the polite region, while the popup must anchor to
-  // the link itself or its center drifts with the claw and elapsed time.
+  // the link itself or its center drifts with the indicator and elapsed time.
   const aggregate = html`
     <div class="chat-tasks-status" id=${backgroundTasks.statusRowId}>
-      <span class="chat-tasks-status__claw" aria-hidden="true">${icons.claw}</span>
-      ${status.startedMs !== null
-        ? html`
-            <span class="chat-tasks-status__time" aria-hidden="true">
-              <openclaw-elapsed-time .startMs=${status.startedMs}></openclaw-elapsed-time>
-            </span>
-            <span class="chat-tasks-status__sep" aria-hidden="true">·</span>
-          `
-        : nothing}
+      <span class="chat-tasks-status__dot" aria-hidden="true"></span>
       <span class="sr-only" role="status">${label}</span>
       <openclaw-tooltip class="chat-tasks-status__preview">
-        <button class="chat-tasks-status__link" type="button" @click=${openRail}>${label}</button>
+        <button
+          class="chat-tasks-status__link"
+          type="button"
+          @click=${backgroundTasks.onOpenTaskList}
+        >
+          ${label}
+        </button>
         ${renderStatusPreview(remainingTasks)}
       </openclaw-tooltip>
+      ${
+        status.startedMs !== null
+          ? html`
+              <span class="chat-tasks-status__sep" aria-hidden="true">·</span>
+              <span class="chat-tasks-status__time" aria-hidden="true">
+                <openclaw-elapsed-time .startMs=${status.startedMs}></openclaw-elapsed-time>
+              </span>
+            `
+          : nothing
+      }
     </div>
   `;
   return subagentActivity === nothing ? aggregate : html`${subagentActivity}${aggregate}`;

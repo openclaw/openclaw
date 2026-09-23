@@ -1,17 +1,15 @@
 /** Tests provider env-var candidate and auth evidence lookup. */
 import { describe, expect, it } from "vitest";
 import {
-  getProviderEnvVars,
-  listKnownProviderAuthEnvVarNames,
+  getProviderEnvVarsCore,
+  listKnownProviderAuthEnvVarNamesCore,
   listKnownSecretEnvVarNames,
   omitEnvKeysCaseInsensitive,
 } from "./provider-env-vars.js";
 
 describe("provider env vars", () => {
-  it("keeps the auth scrub list broader than the global secret env list", () => {
+  it("keeps provider credentials in auth and secret inventories", () => {
     const sharedSecretNames = [
-      "GITHUB_TOKEN",
-      "GH_TOKEN",
       "ANTHROPIC_OAUTH_TOKEN",
       "BRAVE_API_KEY",
       "DEEPGRAM_API_KEY",
@@ -21,7 +19,7 @@ describe("provider env vars", () => {
       "OPENROUTER_API_KEY",
       "TAVILY_API_KEY",
     ];
-    const providerAuthNames = listKnownProviderAuthEnvVarNames();
+    const providerAuthNames = listKnownProviderAuthEnvVarNamesCore();
     const secretNames = listKnownSecretEnvVarNames();
     for (const name of sharedSecretNames) {
       expect(providerAuthNames).toContain(name);
@@ -36,6 +34,12 @@ describe("provider env vars", () => {
     expect(secretNames).toContain("ANTHROPIC_ADMIN_KEY");
     expect(secretNames).toContain("ANTHROPIC_ADMIN_API_KEY");
     expect(listKnownSecretEnvVarNames()).not.toContain("OPENCLAW_API_KEY");
+  });
+
+  it.each(["GH_TOKEN", "GITHUB_TOKEN"])("audits %s without activating a provider", (name) => {
+    expect(listKnownSecretEnvVarNames()).toContain(name);
+    expect(listKnownProviderAuthEnvVarNamesCore()).not.toContain(name);
+    expect(getProviderEnvVarsCore("github-copilot")).not.toContain(name);
   });
 
   it("omits env keys case-insensitively", () => {
@@ -54,10 +58,13 @@ describe("provider env vars", () => {
   });
 
   it("ignores prototype-chain keys when resolving provider env vars", () => {
-    expect(getProviderEnvVars("__proto__")).toStrictEqual([]);
-    expect(getProviderEnvVars("constructor")).toStrictEqual([]);
-    expect(getProviderEnvVars("openai")).toEqual(["CODEX_API_KEY", "OPENAI_API_KEY"]);
-    expect(getProviderEnvVars("anthropic")).toEqual(["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]);
-    expect(getProviderEnvVars("fal")).toEqual(["FAL_KEY", "FAL_API_KEY"]);
+    expect(getProviderEnvVarsCore("__proto__")).toStrictEqual([]);
+    expect(getProviderEnvVarsCore("constructor")).toStrictEqual([]);
+    expect(getProviderEnvVarsCore("openai")).toEqual(["CODEX_API_KEY", "OPENAI_API_KEY"]);
+    expect(getProviderEnvVarsCore("anthropic")).toEqual([
+      "ANTHROPIC_OAUTH_TOKEN",
+      "ANTHROPIC_API_KEY",
+    ]);
+    expect(getProviderEnvVarsCore("fal")).toEqual(["FAL_KEY", "FAL_API_KEY"]);
   });
 });

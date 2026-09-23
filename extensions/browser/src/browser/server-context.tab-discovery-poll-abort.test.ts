@@ -6,7 +6,11 @@ import * as cdpModule from "./cdp.js";
 import { OPEN_TAB_DISCOVERY_POLL_MS } from "./server-context.constants.js";
 import { createBrowserRouteContext } from "./server-context.js";
 import { beginProfileTransition, markBrowserRuntimeStopping } from "./server-context.lifecycle.js";
-import { makeState, originalFetch } from "./server-context.remote-tab-ops.harness.js";
+import {
+  createTestBrowserRouteContext,
+  makeState,
+  originalFetch,
+} from "./server-context.remote-tab-ops.harness.js";
 import { createProfileSelectionOps } from "./server-context.selection.js";
 import type { ProfileRuntimeState } from "./server-context.types.js";
 
@@ -46,6 +50,86 @@ function makeProfileRuntime(): ProfileRuntimeState {
 }
 
 describe("browser tab discovery poll abort", () => {
+  it.each(["caller", "deadline"])(
+    "cancels an in-flight local tab listing on %s",
+    async (source) => {
+      vi.useFakeTimers();
+      let requestSignal: AbortSignal | null | undefined;
+      let releaseRequest!: () => void;
+      let markStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      globalThis.fetch = withBrowserFetchPreconnect(
+        vi.fn(async (_url: unknown, init?: RequestInit) => {
+          requestSignal = init?.signal;
+          return await new Promise<Response>((resolve, reject) => {
+            releaseRequest = () => resolve(new Response("[]"));
+            requestSignal?.addEventListener(
+              "abort",
+              () => reject(new Error("tab listing aborted", { cause: requestSignal?.reason })),
+              { once: true },
+            );
+            markStarted();
+          });
+        }),
+      );
+      const state = makeState("openclaw");
+      const profile = createTestBrowserRouteContext({ getState: () => state }).forProfile(
+        "openclaw",
+      );
+      const controller = new AbortController();
+      const listing = profile.listTabs({ signal: controller.signal, timeoutMs: 25 });
+      const rejected = listing.catch((error: unknown) => error);
+      await started;
+      if (source === "caller") {
+        controller.abort(new Error("listing cancelled"));
+      } else {
+        await vi.advanceTimersByTimeAsync(25);
+      }
+      try {
+        expect(requestSignal?.aborted).toBe(true);
+      } finally {
+        releaseRequest();
+      }
+      expect(await rejected).toBeInstanceOf(Error);
+      expect(state.profiles.get("openclaw")?.tabAliases).toBeUndefined();
+    },
+  );
+
+  it("does not adopt a local tab listing returned after cancellation", async () => {
+    let releaseRequest!: () => void;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    globalThis.fetch = withBrowserFetchPreconnect(
+      vi.fn(async () => {
+        markStarted();
+        return await new Promise<Response>((resolve) => {
+          releaseRequest = () =>
+            resolve(
+              new Response(
+                JSON.stringify([
+                  { id: "LATE", title: "Late tab", url: "about:blank", type: "page" },
+                ]),
+              ),
+            );
+        });
+      }),
+    );
+    const state = makeState("openclaw");
+    const profile = createTestBrowserRouteContext({ getState: () => state }).forProfile("openclaw");
+    const controller = new AbortController();
+    const listing = profile.listTabs({ signal: controller.signal });
+    const rejected = expect(listing).rejects.toThrow("listing cancelled");
+    await started;
+    controller.abort(new Error("listing cancelled"));
+    releaseRequest();
+    await rejected;
+    expect(state.profiles.get("openclaw")?.tabAliases).toBeUndefined();
+  });
+
   it("cancels the selection discovery timer", async () => {
     vi.useFakeTimers();
     const runtime = makeProfileRuntime();
@@ -61,7 +145,6 @@ describe("browser tab discovery poll abort", () => {
       profile: runtime.profile,
       runtime,
       getCdpControlPolicy: () => undefined,
-      ensureBrowserAvailable: async () => {},
       listTabs,
       openTab: async () => tabWithoutWsUrl,
     });
@@ -98,7 +181,6 @@ describe("browser tab discovery poll abort", () => {
       profile: runtime.profile,
       runtime,
       getCdpControlPolicy: () => undefined,
-      ensureBrowserAvailable: async () => {},
       listTabs,
       openTab: async () => tab,
     });

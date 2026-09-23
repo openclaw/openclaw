@@ -35,6 +35,74 @@ describe("config factory writer boundary", () => {
     return { io, env, home, configPath, raw };
   }
 
+  it.each([undefined, false, true])(
+    "initializes absent-file catalog privacy while preserving explicit %s",
+    async (enabled) => {
+      const home = await roots.make();
+      const configPath = path.join(home, "openclaw.json");
+      const { createConfigIO } = await import("./io.factory.js");
+      const io = createConfigIO({
+        env: { HOME: home, OPENCLAW_STATE_DIR: home, OPENCLAW_CONFIG_PATH: configPath },
+        homedir: () => home,
+        logger: { warn: vi.fn(), error: vi.fn() },
+      });
+      await io.writeConfigFile({
+        gateway: { mode: "local" },
+        ...(enabled !== undefined
+          ? {
+              plugins: {
+                entries: {
+                  codex: { config: { sessionCatalog: { enabled } } },
+                },
+              },
+            }
+          : {}),
+      });
+      const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
+      expect(saved.plugins?.entries?.codex).toEqual({
+        config: { sessionCatalog: { enabled: enabled ?? false } },
+      });
+      expect(saved.plugins?.entries?.anthropic).toEqual({
+        config: { sessionCatalog: { enabled: false } },
+      });
+      expect(saved.plugins?.installs).toBeUndefined();
+      if (enabled !== true) {
+        const snapshot = await io.readConfigFileSnapshot();
+        expect(snapshot.valid).toBe(true);
+        expect(snapshot.warnings).not.toContainEqual(
+          expect.objectContaining({ path: "plugins.entries.codex" }),
+        );
+      }
+    },
+  );
+
+  it("reads existing first-write catalog opt-outs without disabled-plugin warnings", async () => {
+    const { io, configPath } = await fixture();
+    const config = {
+      gateway: { mode: "local" },
+      plugins: {
+        entries: { codex: { config: { sessionCatalog: { enabled: false } } } },
+      },
+    };
+    const raw = JSON.stringify(config);
+    await fs.writeFile(configPath, raw);
+
+    const snapshot = await io.readConfigFileSnapshot();
+    expect(snapshot.valid).toBe(true);
+    expect(snapshot.warnings).not.toContainEqual(
+      expect.objectContaining({ path: "plugins.entries.codex" }),
+    );
+    expect(await fs.readFile(configPath, "utf8")).toBe(raw);
+  });
+
+  it("preserves an existing unversioned configuration's omitted catalog preferences", async () => {
+    const { io, configPath } = await fixture();
+    await io.writeConfigFile({ gateway: { mode: "local", port: 19001 } });
+    const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
+    expect(saved.plugins?.entries?.codex).toBeUndefined();
+    expect(saved.plugins?.entries?.anthropic).toBeUndefined();
+  });
+
   it("reads and records normal observation without importing the writer", async () => {
     const loadWriter = vi.fn(() => {
       throw new Error("read imported the config writer");
@@ -65,7 +133,9 @@ describe("config factory writer boundary", () => {
 
   it("loads the real writer on first use and reads back the persisted config", async () => {
     const loadWriter = vi.fn(() =>
-      vi.importActual<typeof import("./io.write.js")>("./io.write.js"),
+      vi.importActual<typeof import("./io.write.js")>(
+        new URL("./io.write.js", import.meta.url).href,
+      ),
     );
     vi.doMock("./io.write.js", loadWriter);
     const { io, configPath } = await fixture();
@@ -82,6 +152,60 @@ describe("config factory writer boundary", () => {
     expect((await io.readConfigFileSnapshot()).config.gateway?.port).toBe(19001);
   });
 
+  it("honors per-call unobserved mutation reads without disabling write auditing", async () => {
+    const { io, env, home, configPath } = await fixture();
+    const { openOpenClawStateDatabase } = await import("../state/openclaw-state-db.js");
+    const { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } =
+      await import("../infra/kysely-sync.js");
+    const { listConfigAuditRecordsForTests } = await import("./io.audit.test-support.js");
+    const { transformConfigFileWithRetry } = await import("./mutate.js");
+    const health = () => {
+      const { db } = openOpenClawStateDatabase({ env });
+      return executeSqliteQueryTakeFirstSync(
+        db,
+        getNodeSqliteKysely<Pick<DB, "config_health_entries">>(db)
+          .selectFrom("config_health_entries")
+          .selectAll()
+          .where("config_path", "=", configPath),
+      );
+    };
+    const audit = () => listConfigAuditRecordsForTests({ env, homedir: () => home });
+    await io.readConfigFileSnapshotForWrite();
+    const beforeHealth = health();
+    const beforeAudit = audit();
+    expect(beforeHealth?.last_known_good_json).toEqual(expect.any(String));
+    await fs.writeFile(configPath, '{"gateway":{"mode":"local","port":19001}}\n');
+
+    const failure = new Error("mutation declined before committing");
+    await expect(
+      transformConfigFileWithRetry({
+        io,
+        writeOptions: { observe: false },
+        transform() {
+          throw failure;
+        },
+      }),
+    ).rejects.toBe(failure);
+    expect(health()).toEqual(beforeHealth);
+    expect(audit()).toEqual(beforeAudit);
+
+    await transformConfigFileWithRetry({
+      io,
+      writeOptions: { observe: false },
+      transform: (config) => ({
+        nextConfig: { ...config, gateway: { ...config.gateway, port: 19002 } },
+      }),
+    });
+    expect(health()).toEqual(beforeHealth);
+    expect(audit()).toContainEqual(
+      expect.objectContaining({ event: "config.write", configPath, result: "rename" }),
+    );
+    expect(JSON.parse(await fs.readFile(configPath, "utf8")).gateway.port).toBe(19002);
+
+    await io.readConfigFileSnapshotForWrite();
+    expect(health()?.last_known_good_json).not.toBe(beforeHealth?.last_known_good_json);
+  });
+
   it.each(["path", "snapshot"] as const)(
     "rejects %s changes while the writer import is pending",
     async (change) => {
@@ -90,7 +214,9 @@ describe("config factory writer boundary", () => {
       vi.doMock("./io.write.js", async () => {
         entered.resolve();
         await release.promise;
-        return vi.importActual<typeof import("./io.write.js")>("./io.write.js");
+        return vi.importActual<typeof import("./io.write.js")>(
+          new URL("./io.write.js", import.meta.url).href,
+        );
       });
       const { io, env, home, configPath, raw } = await fixture();
       const secondPath = path.join(home, "second.json");

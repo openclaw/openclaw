@@ -1,7 +1,6 @@
 // Tool invoke HTTP tests cover request auth, tool context construction, hook
 // filtering, plugin metadata, payload validation, and response shaping.
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,7 +13,7 @@ import type { ExecSessionDefaults } from "../agents/exec-defaults.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { TerminalSessionManager } from "./terminal/session-manager.js";
 import {
@@ -22,6 +21,7 @@ import {
   baseOpenRequest,
   makeFakePty,
 } from "./terminal/session-manager.test-helpers.js";
+import { createToolsInvokeHttpTestServer } from "./tools-invoke-http.test-support.js";
 
 type RunBeforeToolCallHook = typeof runBeforeToolCallHookType;
 type RunBeforeToolCallHookArgs = Parameters<RunBeforeToolCallHook>[0];
@@ -77,6 +77,11 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
       const entry = sessionEntries.get(params.sessionKey);
       return entry ? { sessionKey: params.sessionKey, entry } : undefined;
     },
+    loadExactSessionEntryCandidates: (params: { sessionKeys: readonly string[] }) =>
+      params.sessionKeys.flatMap((sessionKey) => {
+        const entry = sessionEntries.get(sessionKey);
+        return entry ? [{ sessionKey, entry }] : [];
+      }),
     resolveSessionEntryAccessTarget: (params: { sessionKey: string }) => ({
       entry: sessionEntries.get(params.sessionKey),
     }),
@@ -274,56 +279,23 @@ const { toolsInvokeHandlers } = await import("./server-methods/tools-invoke.js")
 let pluginHttpHandlers: Array<(req: IncomingMessage, res: ServerResponse) => Promise<boolean>> = [];
 
 let sharedPort = 0;
-let sharedServer: ReturnType<typeof createServer> | undefined;
+const server = createToolsInvokeHttpTestServer({
+  handleToolsInvoke: handleToolsInvokeHttpRequest,
+  getPluginHandlers: () => pluginHttpHandlers,
+});
 
 beforeAll(async () => {
-  sharedServer = createServer((req, res) => {
-    void (async () => {
-      const handled = await handleToolsInvokeHttpRequest(req, res, {
-        auth: { mode: "none", allowTailscale: false },
-      });
-      if (handled) {
-        return;
-      }
-      for (const handler of pluginHttpHandlers) {
-        if (await handler(req, res)) {
-          return;
-        }
-      }
-      res.statusCode = 404;
-      res.end("not found");
-    })().catch((err: unknown) => {
-      res.statusCode = 500;
-      res.end(String(err));
-    });
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    sharedServer?.once("error", reject);
-    sharedServer?.listen(0, "127.0.0.1", () => {
-      const address = sharedServer?.address() as AddressInfo | null;
-      sharedPort = address?.port ?? 0;
-      resolve();
-    });
-  });
+  sharedPort = await server.listen();
 });
 
-afterAll(async () => {
-  const server = sharedServer;
-  if (!server) {
-    return;
-  }
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
-  sharedServer = undefined;
-});
+afterAll(() => server.close());
 
 beforeEach(() => {
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
   delete process.env.OPENCLAW_GATEWAY_PASSWORD;
   pluginHttpHandlers = [];
   cfg = {};
+  server.resetContext();
   lastCreateOpenClawToolsContext = undefined;
   sessionEntries.clear();
   hookMocks.resolveToolLoopDetectionConfig.mockClear();
@@ -531,7 +503,7 @@ describe("POST /tools/invoke", () => {
             definitions: {
               guest: {
                 sessions: { others: "view" },
-                agents: ["guest-agent"],
+                agents: ["main", "guest-agent"],
                 scopes: ["operator.write"],
               },
             },
@@ -568,49 +540,61 @@ describe("POST /tools/invoke", () => {
     });
   });
 
-  it("preserves host-minted system authority for a shared-secret caller under roles", async () => {
-    await withOpenClawTestState({ label: "tools-invoke-system-authority" }, async () => {
-      const owner = ensureProfileForEmail("sysauth-owner@example.test");
-      const sessionKey = "agent:main:sysauth-primary";
-      const entry = {
-        sessionId: "sysauth-primary-session",
-        updatedAt: 1,
-        visibility: "shared" as const,
-        createdActor: { type: "human" as const, source: "profile" as const, id: owner.id },
-      };
-      await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
-      sessionEntries.set(sessionKey, entry);
-      cfg = {
-        agents: { list: [{ id: "main", default: true, tools: { allow: ["agents_list"] } }] },
-        gateway: {
-          roles: {
-            default: "guest",
-            definitions: {
-              guest: {
-                sessions: { others: "view" },
-                agents: ["guest-agent"],
-                scopes: ["operator.write"],
+  it.each([
+    { toolName: "agents_list", withProfile: false },
+    { toolName: "agents_list", withProfile: true },
+    { toolName: "sessions_spawn", withProfile: true },
+  ])(
+    "preserves system authority for $toolName with owner profile: $withProfile",
+    async ({ toolName, withProfile }) => {
+      await withOpenClawTestState({ label: "tools-invoke-system-authority" }, async () => {
+        const owner = ensureGatewayOwnerProfile("Gateway Owner");
+        const sessionKey = "agent:main:sysauth-primary";
+        const entry = {
+          sessionId: "sysauth-primary-session",
+          updatedAt: 1,
+          visibility: "shared" as const,
+          createdActor: { type: "human" as const, source: "profile" as const, id: owner.id },
+        };
+        await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
+        sessionEntries.set(sessionKey, entry);
+        cfg = {
+          agents: { list: [{ id: "main", default: true, tools: { allow: [toolName] } }] },
+          gateway: {
+            tools: { allow: [toolName] },
+            roles: {
+              default: "guest",
+              definitions: {
+                guest: {
+                  sessions: { others: "view" },
+                  agents: ["guest-agent"],
+                  scopes: ["operator.write"],
+                },
               },
             },
           },
-        },
-      };
+        };
 
-      // Shared-secret operator owners have no durable profile; connect mints system
-      // authority on the connection. Dispatch must carry that fact forward instead of
-      // re-deriving ownership from scopes, or the caller is denied its own agent.
-      const call = await invokeToolsRpc(
-        { name: "agents_list", args: {}, sessionKey },
-        ["operator.write"],
-        undefined,
-        undefined,
-        undefined,
-        { operatorRoleActor: { kind: "system" } },
-      );
+        const call = await invokeToolsRpc(
+          { name: toolName, args: { agentId: "restricted-agent" }, sessionKey },
+          ["operator.write"],
+          undefined,
+          undefined,
+          withProfile
+            ? {
+                profileId: owner.id,
+                displayName: owner.displayName,
+                hasAvatar: false,
+                updatedAt: owner.updatedAt,
+              }
+            : undefined,
+          { operatorRoleActor: { kind: "system" } },
+        );
 
-      expect(call?.[1]).toMatchObject({ ok: true, toolName: "agents_list" });
-    });
-  });
+        expect(call?.[1]).toMatchObject({ ok: true, toolName });
+      });
+    },
+  );
 
   it("rejects a nested sessions_send target that the operator cannot mutate", async () => {
     await withOpenClawTestState({ label: "tools-invoke-foreign-session" }, async () => {

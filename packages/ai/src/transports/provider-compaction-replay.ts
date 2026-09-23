@@ -1,10 +1,12 @@
 import type { AssistantMessage, Model, ProviderReplayState } from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveNewestAnthropicCompaction } from "./anthropic-compaction-replay.js";
 import { resolveAnthropicServerCompactionPlan } from "./anthropic-payload-policy.js";
 import {
   CompactionReplayRefreshRequiredError,
   resolveNewestOpenAIResponsesCompactionReplay,
 } from "./openai-responses-compaction-replay.js";
+import { resolveResponsesContextUsageBoundary } from "./openai-responses-context-usage.js";
 import { OPENAI_RESPONSES_APIS } from "./openai-responses-contracts.js";
 
 export { CompactionReplayRefreshRequiredError } from "./openai-responses-compaction-replay.js";
@@ -15,6 +17,7 @@ type ReplayPressureEstimator = {
   text(value: string): number;
   image(): number;
   json(value: unknown): number;
+  toolResult?(value: string): number;
 };
 
 function isAssistantReplayMessage<T extends ReplayMessage>(
@@ -101,37 +104,71 @@ export function preserveCompactionReplayWindow<T extends ReplayMessage>(
   ];
 }
 
-function estimateResponsesWindow(
-  checkpoint: NonNullable<ReturnType<typeof resolveNewestOpenAIResponsesCompactionReplay>> & {
-    mode: "complete-window";
-  },
+function estimateResponsesContent(
+  content: unknown,
+  estimate: ReplayPressureEstimator,
+  text: (value: string) => number,
+): number {
+  if (typeof content === "string") {
+    return text(content);
+  }
+  if (!Array.isArray(content)) {
+    return estimate.json(content);
+  }
+  return content.reduce<number>((tokens, block: unknown) => {
+    if (!isRecord(block)) {
+      return tokens + estimate.json(block);
+    }
+    if (
+      (block.type === "input_text" || block.type === "output_text") &&
+      typeof block.text === "string"
+    ) {
+      const { text: value, ...metadata } = block;
+      return tokens + text(value) + estimate.json(metadata);
+    }
+    if (block.type === "input_image") {
+      const { image_url: url, ...metadata } = block;
+      return (
+        tokens +
+        estimate.image() +
+        estimate.json(typeof url === "string" && url.startsWith("data:") ? metadata : block)
+      );
+    }
+    return tokens + estimate.json(block);
+  }, 0);
+}
+
+function estimateResponsesInput(
+  input: readonly unknown[],
   estimate: ReplayPressureEstimator,
 ): number {
-  return checkpoint.output.reduce((tokens, entry) => {
-    if (entry.type === "compaction") {
+  return input.reduce<number>((tokens, entry) => {
+    if (!isRecord(entry)) {
+      return tokens + estimate.json(entry);
+    }
+    if (entry.type === "compaction" && typeof entry.encrypted_content === "string") {
       const { encrypted_content, ...metadata } = entry;
       return tokens + estimate.text(encrypted_content) + estimate.json(metadata);
     }
-    const { content, ...metadata } = entry;
-    return (
-      tokens +
-      estimate.json(metadata) +
-      content.reduce((sum, block) => {
-        if (block.type === "input_text") {
-          const { text, ...fields } = block;
-          return sum + estimate.text(text) + estimate.json(fields);
-        }
-        if (block.type === "input_image") {
-          const { image_url: _imageUrl, ...fields } = block;
-          return (
-            sum +
-            estimate.image() +
-            estimate.json(block.image_url?.startsWith("data:") ? fields : block)
-          );
-        }
-        return sum + estimate.json(block);
-      }, 0)
-    );
+    if (entry.type === "message") {
+      const { content, ...metadata } = entry;
+      return (
+        tokens +
+        estimate.json(metadata) +
+        estimateResponsesContent(content, estimate, (value) => estimate.text(value))
+      );
+    }
+    if (entry.type === "function_call_output" || entry.type === "custom_tool_call_output") {
+      const { output, ...metadata } = entry;
+      return (
+        tokens +
+        estimate.json(metadata) +
+        estimateResponsesContent(output, estimate, (value) =>
+          estimate.toolResult ? estimate.toolResult(value) : estimate.text(value),
+        )
+      );
+    }
+    return tokens + estimate.json(entry);
   }, 0);
 }
 
@@ -141,7 +178,8 @@ export function resolveCompactionReplayPressure<T extends ReplayMessage>(
   model: Model,
   identity: ReplayIdentity,
   estimate: ReplayPressureEstimator,
-): { messages: T[]; prefixTokens: number } | undefined {
+  systemPrompt?: string,
+): { messages: T[]; prefixTokens: number; measuredTokens?: number } | undefined {
   const checkpoint = resolveCompactionSource(messages, model, identity);
   if (!checkpoint) {
     return undefined;
@@ -158,10 +196,24 @@ export function resolveCompactionReplayPressure<T extends ReplayMessage>(
     checkpoint.family === "anthropic"
       ? estimate.text(checkpoint.summary)
       : checkpoint.mode === "complete-window"
-        ? estimateResponsesWindow(checkpoint, estimate)
+        ? estimateResponsesInput(checkpoint.output, estimate)
         : estimate.text(checkpoint.item.encrypted_content);
-  // Persisted usage does not identify the checkpoint sent with that request.
-  // Route/auth/config may have changed away and back; keep billing, not pressure authority.
+  const measuredBoundary =
+    checkpoint.family === "responses"
+      ? resolveResponsesContextUsageBoundary(messages, model, identity, systemPrompt)
+      : undefined;
+  if (measuredBoundary) {
+    // Async tool results can be persisted before the final usage event. The wire
+    // owner orders them after its response; count that suffix instead of a raw index.
+    return {
+      messages: [],
+      prefixTokens:
+        measuredBoundary.totalTokens + estimateResponsesInput(measuredBoundary.suffix, estimate),
+      measuredTokens: measuredBoundary.totalTokens,
+    };
+  }
+  // The checkpoint-producing request predates its replacement window. Later usage
+  // is authoritative only when its saved wire prefix still matches this replay.
   const { contextUsage: _staleContextUsage, ...usage } = checkpoint.owner.usage;
   const tail: T[] = [];
   for (const message of messages.slice(ownerIndex + 1)) {

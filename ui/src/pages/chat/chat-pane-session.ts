@@ -3,19 +3,22 @@ import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
+import type {
+  ControlUiSessionPullRequest,
+  ControlUiSessionPullRequestSnapshot,
+} from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
-import { nativeHistoryMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { clampText } from "../../lib/format.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { projectsForGateway } from "../../lib/projects.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   summarizeSessionPullRequests,
-  scopedSessionPullRequestKey,
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
+  sessionGitHubRepository,
 } from "../../lib/session-pull-requests.ts";
 import {
   lookupCatalogSession,
@@ -23,32 +26,97 @@ import {
   type CatalogSessionKey,
 } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
-import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import { parseAgentSessionKey, scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
+import { getAcceptedChatHistorySession } from "./chat-history-state.ts";
 import {
   CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS,
   catalogRawResult,
   catalogRawString,
 } from "./chat-pane-shared.ts";
 import { ChatPaneTaskSuggestions } from "./chat-pane-task-suggestions.ts";
+import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import {
+  chatPullRequestId,
   dismissChatPullRequest,
   listDismissedChatPullRequests,
 } from "./components/chat-pull-requests.ts";
+import { scheduleControlUiAfterPaint } from "./performance.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 
 export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   private deferredSessionHydrationActive = false;
   private pendingDeferredSessionHydration: (() => void) | null = null;
 
-  protected async refreshSessionPullRequests(options: { refresh?: boolean } = {}): Promise<void> {
+  protected secondarySessionReadsReady(explicit = false): boolean {
+    const state = this.state;
+    return Boolean(
+      state?.connected &&
+      this.presented &&
+      document.visibilityState !== "hidden" &&
+      (explicit ||
+        (!this.deferredSessionHydrationActive &&
+          (parseCatalogSessionKey(state.sessionKey) ||
+            this.transcriptReady ||
+            getAcceptedChatHistorySession(state)))),
+    );
+  }
+
+  protected subscribeSessionRepositoryContext(): void {
+    this.chatState.addCleanup(
+      projectsForGateway(this.context.gateway).subscribe(() => this.requestUpdate()),
+    );
+    const sessionPullRequests = sessionPullRequestsForGateway(this.context.gateway);
+    this.chatState.addCleanup(
+      sessionPullRequests.subscribe(() => {
+        void this.refreshSessionPullRequests();
+      }),
+    );
+    this.chatState.addCleanup(() => sessionPullRequests.unwatch(this));
+  }
+
+  protected get visibleSessionPullRequests(): ControlUiSessionPullRequest[] {
+    return this.sessionPullRequests.filter(
+      (pullRequest) => !this.dismissedSessionPullRequestIds.has(chatPullRequestId(pullRequest)),
+    );
+  }
+
+  private applyPullRequestPresentation(
+    result?: ControlUiSessionPullRequestSnapshot,
+    dismissed = this.dismissedSessionPullRequestIds,
+  ): void {
+    const pullRequests = result?.pullRequests ?? [];
+    const repository = sessionGitHubRepository(result);
+    const status = result?.status ?? "ready";
+    const changed =
+      (this.sessionPullRequests !== pullRequests &&
+        (this.sessionPullRequests.length > 0 || pullRequests.length > 0)) ||
+      this.sessionPullRequestsBranch !== result?.branch ||
+      this.githubRepo?.owner !== repository?.owner ||
+      this.githubRepo?.repo !== repository?.repo ||
+      this.sessionPullRequestsStatus !== status ||
+      this.dismissedSessionPullRequestIds.size !== dismissed.size ||
+      [...dismissed].some((id) => !this.dismissedSessionPullRequestIds.has(id));
+    this.sessionPullRequests = pullRequests;
+    this.sessionPullRequestsBranch = result?.branch;
+    this.githubRepo = repository;
+    this.sessionPullRequestsStatus = status;
+    this.dismissedSessionPullRequestIds = dismissed;
+    if (changed) {
+      this.requestUpdate();
+    }
+  }
+
+  protected refreshSessionPullRequests(
+    options: { refresh?: boolean; automatic?: boolean } = {},
+  ): boolean {
     if (!this.presented) {
       sessionPullRequestsForGateway(this.context.gateway).unwatch(this);
-      return;
+      return false;
     }
     const scope = this.captureConnectionScope();
     if (
@@ -61,53 +129,42 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       if (scope) {
         sessionPullRequestsForGateway(scope.context.gateway).unwatch(this);
       }
-      this.sessionPullRequests = [];
-      this.sessionPullRequestsBranch = undefined;
-      this.githubPublication.reset();
-      this.sessionPullRequestsRateLimited = false;
-      this.requestUpdate();
-      return;
+      this.applyPullRequestPresentation();
+      return false;
     }
     const sessionKey = scope.state.sessionKey;
     if (!sessionKey.trim() || parseCatalogSessionKey(sessionKey)) {
       sessionPullRequestsForGateway(scope.context.gateway).unwatch(this);
-      this.sessionPullRequests = [];
-      this.sessionPullRequestsBranch = undefined;
-      this.sessionPullRequestsRateLimited = false;
-      this.requestUpdate();
-      return;
+      this.applyPullRequestPresentation();
+      return false;
     }
     const pullRequestEpoch = scope.context.sessions.capturePullRequestEpoch(sessionKey);
     const store = sessionPullRequestsForGateway(scope.context.gateway);
-    const pullRequestKey = scopedSessionPullRequestKey(
+    const pullRequestKey = scopedSessionArtifactKey(
       sessionKey,
       scopedAgentParamsForSession(scope.state, sessionKey).agentId ??
         resolveChatAgentId(scope.state),
     );
     store.watch(this, [pullRequestKey], { foreground: true });
-    if (options.refresh) {
-      store.refresh(pullRequestKey);
-    }
+    const refreshAdmitted = options.refresh === true && store.refresh(pullRequestKey, options);
     const result = store.get(pullRequestKey);
     if (!this.isConnectionScopeCurrent(scope) || sessionKey !== scope.state.sessionKey) {
-      return;
+      return refreshAdmitted;
     }
     if (!result) {
       if (this.sessionPullRequests.length > 0 || this.sessionPullRequestsBranch !== undefined) {
         scope.context.sessions.setPullRequestSummary(sessionKey, undefined, pullRequestEpoch);
       }
-      this.sessionPullRequests = [];
-      this.sessionPullRequestsBranch = undefined;
-      this.sessionPullRequestsRateLimited = false;
-      this.dismissedSessionPullRequestIds = new Set();
-      this.requestUpdate();
-      return;
+      this.applyPullRequestPresentation(undefined, new Set());
+      return refreshAdmitted;
     }
-    if (result.status === "unavailable") {
-      return;
-    }
-    this.sessionPullRequests = result.pullRequests;
-    if (!result.rateLimited || result.pullRequests.length > 0) {
+    const repository = sessionGitHubRepository(result);
+    const repositoryChanged =
+      this.githubRepo != null &&
+      repository !== null &&
+      (this.githubRepo.owner !== repository.owner || this.githubRepo.repo !== repository.repo);
+    this.applyPullRequestPresentation(result, listDismissedChatPullRequests(sessionKey));
+    if (!result.rateLimited || result.pullRequests.length > 0 || repositoryChanged) {
       const previousSummary = scope.context.sessions.pullRequestSummary(sessionKey);
       scope.context.sessions.setPullRequestSummary(
         sessionKey,
@@ -116,8 +173,8 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       );
     }
     const published =
-      this.githubPublication.result?.status === "published"
-        ? this.githubPublication.result
+      this.githubPublication?.result?.status === "published"
+        ? this.githubPublication?.result
         : undefined;
     const publishedPullRequest = published
       ? result.pullRequests.find((pullRequest) => pullRequest.url === published.url)
@@ -130,21 +187,22 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
           publishedPullRequest.state !== "open" &&
           publishedPullRequest.state !== "draft"))
     ) {
-      this.githubPublication.reset();
+      this.githubPublication?.reset();
     }
-    this.sessionPullRequestsBranch = result.branch;
-    this.sessionPullRequestsRateLimited = result.rateLimited;
-    this.dismissedSessionPullRequestIds = listDismissedChatPullRequests(sessionKey);
-    this.requestUpdate();
+    return refreshAdmitted;
   }
 
   protected resetSessionPullRequests(): void {
+    if (this.state) {
+      retirePullRequestRefreshes(this.state);
+    }
     sessionPullRequestsForGateway(this.context.gateway).unwatch(this);
     this.sessionPullRequests = [];
     this.sessionPullRequestsBranch = undefined;
-    this.sessionPullRequestsRateLimited = false;
-    this.sessionPullRequestsExpanded = false;
-    this.githubPublication.reset();
+    this.githubRepo = null;
+    this.sessionPullRequestsStatus = "ready";
+    this.githubPublication?.detach();
+    this.githubPublication = null;
     this.dismissedSessionPullRequestIds = new Set();
   }
 
@@ -190,18 +248,23 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         retireIfCurrent();
         return;
       }
-      if (!this.presented) {
+      if (!this.presented || document.visibilityState === "hidden") {
         this.pendingDeferredSessionHydration = () => scheduleHydration(historyCommitted);
         return;
       }
       this.pendingDeferredSessionHydration = null;
       // These affordances do not shape the transcript. Start them together only
-      // after the authoritative history has committed so they cannot delay chat paint.
-      state.renderLifecycle.afterCommit((complete) => {
-        if (isCurrent() && this.presented) {
+      // after the transcript paints; a DOM commit still runs before the browser can paint.
+      scheduleControlUiAfterPaint(state, () => {
+        if (isCurrent() && this.presented && document.visibilityState !== "hidden") {
           this.deferredSessionHydrationActive = false;
+          state.requestUpdate?.();
+          void this.refreshTaskSuggestions({ automatic: true });
           if (historyCommitted) {
             this.markSessionRead(selectedChatSessionRow(state));
+          }
+          if (client) {
+            void this.loadHeaderPlatform(client, connectionGeneration);
           }
           void loadChatBranches(state);
           void this.probeSessionDiscussion(sessionKey);
@@ -212,7 +275,6 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         } else {
           retireIfCurrent();
         }
-        complete();
       });
     };
     void transcriptLoad.then(scheduleHydration, () => scheduleHydration(false));
@@ -255,6 +317,14 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     // not an operation failure and should not latch the unread retry guard.
     if (
       !access.allowed ||
+      // Shared visibility can still be capped to viewing by the caller's role.
+      row.sharingRole === "viewer" ||
+      this.sessionParticipationTracker.resolve({
+        catalog: parseCatalogSessionKey(state.sessionKey) !== null,
+        listLoading: state.sessionsLoading,
+        sessionKey: `${resolveChatAgentId(state) ?? ""}\0${state.sessionKey}`,
+        session: row,
+      }) ||
       !this.unreadPatchGuard.shouldPatch(state.sessionKey, true, row.markedUnreadAt)
     ) {
       return;
@@ -274,10 +344,10 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
             this.unreadPatchGuard.patchFailed(guardKey);
           }
         },
-        () => {
-          // Unlatch so later unread snapshots retry; the session capability
-          // publishes the actionable error for the owning page.
-          this.unreadPatchGuard.patchFailed(guardKey);
+        (error: unknown) => {
+          // The capability publishes the error once; only transient failures
+          // may send another acknowledgement on the next snapshot.
+          this.unreadPatchGuard.patchFailed(guardKey, error);
         },
       );
   }
@@ -375,6 +445,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         : null;
     }
     let content = text;
+    let truncated = item.truncated;
     if (item.type === "reasoning") {
       content = text ? `Thinking\n\n${text}` : "Thinking";
     } else if (item.type === "toolCall") {
@@ -382,17 +453,18 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         text ?? catalogRawString(item.raw, ["command", "name", "tool", "title", "query"]);
       content = label ? `Tool call\n\n${label}` : "Tool call";
     } else if (item.type === "toolResult") {
-      // Raw aggregated output is only bounded by the transcript read's per-item
-      // byte cap (megabytes), so clamp it to the preview size before rendering.
-      const aggregated = catalogRawString(item.raw, ["aggregatedOutput"]);
       const output =
-        text ??
-        (aggregated ? clampText(aggregated, CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS) : null) ??
-        catalogRawResult(item.raw);
-      content = output ? `Tool result\n\n${output}` : "Tool result";
+        text ?? catalogRawString(item.raw, ["aggregatedOutput"]) ?? catalogRawResult(item.raw);
+      // Native text and raw fallbacks share the same display limit; source data stays intact.
+      const preview = output ? clampText(output, CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS) : null;
+      truncated ||= Boolean(output && preview !== output);
+      content = preview ? `Tool result\n\n${preview}` : "Tool result";
     }
     if (!content) {
       return null;
+    }
+    if (truncated) {
+      content = `${content}\n\n${t("chat.catalogOutputTruncated")}`;
     }
     return {
       role: "assistant",
@@ -417,35 +489,12 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     return [...uniqueMessages, ...this.catalogMessages];
   }
 
-  protected prependUniqueNativeMessages(messages: unknown[], current: unknown[]): unknown[] {
-    const duplicateCounts = new Map<string, number>();
-    for (const message of current) {
-      const identity = nativeHistoryMessageIdentity(message);
-      if (identity) {
-        duplicateCounts.set(identity, (duplicateCounts.get(identity) ?? 0) + 1);
-      }
-    }
-    const uniqueMessages = messages.filter((message) => {
-      const identity = nativeHistoryMessageIdentity(message);
-      if (!identity) {
-        return true;
-      }
-      const duplicatesRemaining = duplicateCounts.get(identity) ?? 0;
-      if (duplicatesRemaining === 0) {
-        return true;
-      }
-      duplicateCounts.set(identity, duplicatesRemaining - 1);
-      return false;
-    });
-    return [...uniqueMessages, ...current];
-  }
-
   protected async loadCatalogSession(key: CatalogSessionKey, older: boolean): Promise<boolean> {
-    const state = this.state;
-    const client = state?.client;
-    if (!state || !client || !state.connected) {
+    const scope = this.captureConnectionScope();
+    if (!scope) {
       return false;
     }
+    const { state, client } = scope;
     if (older && !this.catalogCursor) {
       return false;
     }
@@ -453,6 +502,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     const generation = older ? this.catalogLoadGeneration : ++this.catalogLoadGeneration;
     const requestedSessionKey = this.sessionKey;
     const isCurrent = () =>
+      this.isConnectionScopeCurrent(scope) &&
       generation === this.catalogLoadGeneration &&
       this.sessionKey === requestedSessionKey &&
       resolveChatAgentId(state) === agentId;
@@ -468,7 +518,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     try {
       if (!older) {
         const lookup = await lookupCatalogSession({ agentId, client, key, isCurrent });
-        if (!lookup) {
+        if (!lookup || !isCurrent()) {
           return false;
         }
         this.catalogHost = lookup.host;
@@ -510,24 +560,22 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
           this.olderCursorsSeen.has(page.nextCursor));
       this.catalogMessages = nextMessages;
       this.catalogCursor = olderExhausted ? undefined : page.nextCursor;
-      const currentState = this.state ?? state;
-      currentState.lastError = null;
-      scheduleChatScroll(currentState, !older);
+      state.lastError = null;
+      scheduleChatScroll(state, !older);
       return !older || addedMessages || !olderExhausted;
     } catch (error) {
       if (isCurrent()) {
-        (this.state ?? state).lastError = formatUiError(error);
+        state.lastError = formatUiError(error);
       }
       return false;
     } finally {
       if (isCurrent()) {
-        const currentState = this.state ?? state;
         if (!older) {
           this.catalogLoading = false;
-          currentState.chatLoading = false;
+          state.chatLoading = false;
         }
         if (!older) {
-          currentState.requestUpdate();
+          state.requestUpdate();
         }
       }
     }

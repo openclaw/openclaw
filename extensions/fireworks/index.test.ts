@@ -107,23 +107,45 @@ describe("fireworks provider plugin", () => {
     });
   });
 
-  it("resolves forward-compat Fireworks model ids from the default template", async () => {
-    const provider = await registerSingleProviderPlugin(fireworksPlugin);
-    const resolved = provider.resolveDynamicModel?.(
-      createProviderDynamicModelContext({
-        provider: "fireworks",
-        modelId: "accounts/fireworks/models/qwen3.6-plus",
-        models: [createFireworksDefaultRuntimeModel({ reasoning: true })],
-      }),
-    );
+  it.each(["default", "custom", "missing"] as const)(
+    "resolves forward-compat Fireworks model ids with a %s template",
+    async (source) => {
+      const provider = await registerSingleProviderPlugin(fireworksPlugin);
+      const template = createFireworksDefaultRuntimeModel({ reasoning: true });
+      if (source === "custom") {
+        template.api = "openai-responses";
+        template.baseUrl = "https://models.example.test/v1";
+        template.headers = { "X-Route": "custom-template" };
+        template.contextWindow = 64_000;
+        template.maxTokens = 16_000;
+        template.cost = { input: 2, output: 3, cacheRead: 1, cacheWrite: 0 };
+      }
+      const resolved = provider.resolveDynamicModel?.(
+        createProviderDynamicModelContext({
+          provider: "fireworks",
+          modelId: "accounts/fireworks/models/qwen3.6-plus",
+          models: source === "missing" ? [] : [template],
+        }),
+      );
 
-    expect(resolved?.provider).toBe("fireworks");
-    expect(resolved?.id).toBe("accounts/fireworks/models/qwen3.6-plus");
-    expect(resolved?.api).toBe("openai-completions");
-    expect(resolved?.baseUrl).toBe(FIREWORKS_BASE_URL);
-    expect(resolved?.reasoning).toBe(true);
-    expect(resolved?.input).toEqual(["text", "image"]);
-  });
+      expect(resolved).toMatchObject({
+        provider: "fireworks",
+        id: "accounts/fireworks/models/qwen3.6-plus",
+        api: source === "missing" ? "openai-completions" : template.api,
+        baseUrl: source === "missing" ? FIREWORKS_BASE_URL : template.baseUrl,
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow:
+          source === "missing" ? FIREWORKS_DEFAULT_CONTEXT_WINDOW : template.contextWindow,
+        maxTokens: source === "missing" ? FIREWORKS_DEFAULT_MAX_TOKENS : template.maxTokens,
+        cost:
+          source === "missing"
+            ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+            : template.cost,
+      });
+      expect(resolved?.headers).toEqual(source === "missing" ? undefined : template.headers);
+    },
+  );
 
   it("disables reasoning metadata for Fireworks Kimi dynamic models", async () => {
     const provider = await registerSingleProviderPlugin(fireworksPlugin);

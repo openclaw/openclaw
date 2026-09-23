@@ -16,7 +16,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
-import java.lang.reflect.Field
 import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
@@ -142,7 +141,10 @@ class CronRuntimeGuardTest {
       val requestedOffsets = mutableListOf<Int>()
       runtime.gatewayDataRequestOverrideForTests = { _, method, params ->
         when (method) {
-          "cron.status" -> """{"enabled":true,"jobs":201}"""
+          "cron.status" -> {
+            """{"enabled":true,"jobs":201}"""
+          }
+
           "cron.list" -> {
             val request = Json.parseToJsonElement(requireNotNull(params)).jsonObject
             val offset =
@@ -169,7 +171,10 @@ class CronRuntimeGuardTest {
             val nextOffset = if (hasMore) "200" else "null"
             """{"jobs":[$jobs],"snapshotRevision":"rev-1","total":201,"offset":$offset,"limit":200,"hasMore":$hasMore,"nextOffset":$nextOffset}"""
           }
-          else -> error("unexpected method $method")
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -197,7 +202,10 @@ class CronRuntimeGuardTest {
       val requestedOffsets = mutableListOf<Int>()
       runtime.gatewayDataRequestOverrideForTests = { _, method, params ->
         when (method) {
-          "cron.status" -> """{"enabled":true,"jobs":201}"""
+          "cron.status" -> {
+            """{"enabled":true,"jobs":201}"""
+          }
+
           "cron.list" -> {
             val request = Json.parseToJsonElement(requireNotNull(params)).jsonObject
             val offset =
@@ -216,7 +224,10 @@ class CronRuntimeGuardTest {
             val nextOffset = if (hasMore) "200" else "null"
             """{"jobs":[$jobs],"total":201,"offset":$offset,"limit":200,"hasMore":$hasMore,"nextOffset":$nextOffset}"""
           }
-          else -> error("unexpected method $method")
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -238,7 +249,10 @@ class CronRuntimeGuardTest {
       val requestedOffsets = mutableListOf<Int>()
       runtime.gatewayDataRequestOverrideForTests = { _, method, params ->
         when (method) {
-          "cron.status" -> """{"enabled":true,"jobs":201}"""
+          "cron.status" -> {
+            """{"enabled":true,"jobs":201}"""
+          }
+
           "cron.list" -> {
             val request = Json.parseToJsonElement(requireNotNull(params)).jsonObject
             val offset =
@@ -253,17 +267,25 @@ class CronRuntimeGuardTest {
                 val jobs = (0 until 200).joinToString(",") { cronJobSummaryJson(it) }
                 """{"jobs":[$jobs],"snapshotRevision":"rev-1","total":201,"offset":0,"limit":200,"hasMore":true,"nextOffset":200}"""
               }
-              1 ->
+
+              1 -> {
                 """{"jobs":[${cronJobSummaryJson(999)}],"snapshotRevision":"rev-2","total":201,"offset":200,"limit":200,"hasMore":false,"nextOffset":null}"""
+              }
+
               2 -> {
                 val jobs = (0 until 200).joinToString(",") { cronJobSummaryJson(it) }
                 """{"jobs":[$jobs],"snapshotRevision":"rev-2","total":201,"offset":0,"limit":200,"hasMore":true,"nextOffset":200}"""
               }
-              else ->
+
+              else -> {
                 """{"jobs":[${cronJobSummaryJson(200)}],"snapshotRevision":"rev-2","total":201,"offset":200,"limit":200,"hasMore":false,"nextOffset":null}"""
+              }
             }
           }
-          else -> error("unexpected method $method")
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -321,7 +343,7 @@ class CronRuntimeGuardTest {
     name: String,
     value: Any?,
   ) {
-    findField(target, name).set(target, value)
+    findTestField(target, name).set(target, value)
   }
 
   private fun <T> readField(
@@ -329,22 +351,7 @@ class CronRuntimeGuardTest {
     name: String,
   ): T {
     @Suppress("UNCHECKED_CAST")
-    return findField(target, name).get(target) as T
-  }
-
-  private fun findField(
-    target: Any,
-    name: String,
-  ): Field {
-    var type: Class<*>? = target.javaClass
-    while (type != null) {
-      try {
-        return type.getDeclaredField(name).apply { isAccessible = true }
-      } catch (_: NoSuchFieldException) {
-        type = type.superclass
-      }
-    }
-    error("Field $name not found on ${target.javaClass.name}")
+    return findTestField(target, name).get(target) as T
   }
 
   private fun invokeStringMethod(

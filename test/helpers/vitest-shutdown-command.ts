@@ -2,13 +2,17 @@ import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { createBoundedChildOutput } from "./bounded-child-output.ts";
 
 /** Capture fixture diagnostics without losing the managed cancellation outcome. */
-export async function runVitestShutdownCommand(
-  options: Pick<
-    Parameters<typeof runManagedCommand>[0],
-    "args" | "cwd" | "env" | "timeoutMs" | "onReady"
-  >,
-) {
-  const maxBytes = 2 * 1024 * 1024;
+export async function runVitestShutdownCommand({
+  maxBytes = 2 * 1024 * 1024,
+  signal,
+  ...options
+}: Pick<
+  Parameters<typeof runManagedCommand>[0],
+  "args" | "cwd" | "env" | "timeoutMs" | "onReady" | "signal"
+> & {
+  bin?: string;
+  maxBytes?: number;
+}) {
   const stdout = createBoundedChildOutput(maxBytes);
   const stderr = createBoundedChildOutput(maxBytes);
   const controller = new AbortController();
@@ -16,11 +20,11 @@ export async function runVitestShutdownCommand(
   try {
     const code = await runManagedCommand({
       ...options,
-      bin: process.execPath,
+      bin: options.bin ?? process.execPath,
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
       requireProcessTreeExit: process.platform !== "win32",
-      signal: controller.signal,
+      signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
       onReady(child) {
         for (const [pipe, output] of [
           [child.stdout, stdout],
@@ -31,9 +35,10 @@ export async function runVitestShutdownCommand(
             output.append(chunk);
             bytes += chunk.byteLength;
             if (bytes > maxBytes && !overflow) {
-              overflow = Object.assign(new Error("Shutdown fixture output exceeded 2 MiB"), {
-                code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
-              });
+              overflow = Object.assign(
+                new Error(`Shutdown fixture output exceeded ${maxBytes} bytes`),
+                { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" },
+              );
               controller.abort();
             }
           });

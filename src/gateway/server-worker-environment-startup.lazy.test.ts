@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import type { WorkerConnectionIdentity } from "./worker-environments/connection-identity.js";
 
@@ -39,19 +41,22 @@ import {
   createGatewayWorkerEnvironmentRuntime,
   loadGatewayWorkerEnvironmentStartupState,
 } from "./server-worker-environment-startup.js";
+import { withGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.state.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  mocks.executeSessionTool = undefined;
-  vi.clearAllMocks();
-});
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    mocks.executeSessionTool = undefined;
+    vi.clearAllMocks();
+    cleanup();
+  }),
+);
 
 describe("gateway worker session-tool startup", () => {
   it("creates one executor on concurrent first use", async () => {
     const stateDir = tempDirs.make("openclaw-worker-session-tool-lazy-");
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+    await withGatewayWorkerEnvironmentStartupState(stateDir, async () => {
       const startup = await loadGatewayWorkerEnvironmentStartupState();
       const registry = createEmptyPluginRegistry();
       await createGatewayWorkerEnvironmentRuntime({

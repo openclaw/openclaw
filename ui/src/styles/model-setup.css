@@ -48,7 +48,7 @@
   min-height: 68px;
 }
 
-.model-setup__loading-sections .settings-section > p {
+.model-setup__loading-intro {
   margin: 0 0 12px;
 }
 
@@ -280,7 +280,7 @@
 }
 
 :root[data-theme-mode="light"] .model-setup-provider-select__trigger {
-  background: white;
+  background: var(--bg-elevated);
 }
 
 .model-setup-provider-select__trigger:focus-visible {
@@ -334,9 +334,15 @@
 }
 
 .model-setup-provider-select__option {
+  padding: 6px 8px;
+  border-radius: var(--menu-item-radius);
   color: var(--text);
   font: inherit;
   font-size: 13px;
+}
+
+.model-setup-provider-select__option[data-selected] {
+  background: var(--menu-selected);
 }
 
 .model-setup-provider-select__option::part(label) {
@@ -548,4 +554,13 @@
   .model-setup-success__actions .btn {
     width: 100%;
   }
+}
+
+/* Discovery has body + footer; its body must shrink before the footer can clip. */
+.model-setup-discovery {
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.model-setup-discovery > .model-setup-wizard__body {
+  min-height: 0;
 }

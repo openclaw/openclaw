@@ -53,8 +53,14 @@ struct QuickChatControllerTests {
         #expect(createdRoutes == [firstRoute, secondRoute])
     }
 
-    @Test func `accepted global route opens chat with its agent`() async {
+    @Test(arguments: [
+        ("global", "/chat/work"),
+        ("agent:work:global", "/chat/work/~key/global"),
+        ("AGENT:WORK:GlObAl", "/chat/work/~key/GlObAl"),
+    ])
+    func `accepted global route opens the exact Dashboard session`(sessionKey: String, expectedPath: String) async {
         var openedRoute: QuickChatRoutingTarget?
+        var openedPath: String?
         let model = QuickChatModel(
             sessionKeyProvider: { "main" },
             agentsProvider: {
@@ -73,7 +79,7 @@ struct QuickChatControllerTests {
             permissionGrantProvider: { _ in [:] },
             connectionGateProvider: { .available },
             modelControlsProvider: { _ in .testFixture },
-            modelPatchProvider: { _, _ in nil })
+            settingsPatchProvider: { _, _ in nil })
         let controller = QuickChatController(
             enableUI: false,
             model: model,
@@ -81,15 +87,21 @@ struct QuickChatControllerTests {
             chatOpener: { sessionKey, agentID in
                 guard let sessionKey else { return }
                 openedRoute = QuickChatRoutingTarget(sessionKey: sessionKey, agentID: agentID)
+                openedPath = WebChatRoute.dashboardPath(sessionKey: sessionKey, agentID: agentID)
             })
         let presentationID = model.beginPresentation()
         await model.refreshForPresentation(id: presentationID)
         model.selectAgent("work")
+        model.selectSessionOverride(QuickChatSessionTargetOverride(key: sessionKey, displayName: "Global"))
         model.text = "hello"
 
         #expect(await model.send())
+        model.selectAgent("main")
         controller.handleSendAcceptedForTesting(openChat: true)
-        #expect(openedRoute == QuickChatRoutingTarget(sessionKey: "global", agentID: "work"))
+        #expect(openedRoute == QuickChatRoutingTarget(
+            sessionKey: sessionKey,
+            agentID: sessionKey == "global" ? "work" : nil))
+        #expect(openedPath == expectedPath)
         controller.stop()
     }
 
@@ -143,6 +155,31 @@ struct QuickChatControllerTests {
         #expect(clearedMonitorCount == 2)
     }
 
+    @Test func `deferred focus loss cannot dismiss a newer presentation`() async throws {
+        let model = Self.makeModel()
+        let controller = QuickChatController(enableUI: false, model: model, monitoringEnabled: false)
+        defer { controller.stop() }
+        controller.present()
+        let firstPresentation = try #require(model.activePresentationID)
+
+        controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
+        controller.dismiss()
+        controller.present()
+        let nextPresentation = try #require(model.activePresentationID)
+        #expect(nextPresentation != firstPresentation)
+
+        await Self.drainMainQueue()
+
+        #expect(controller.isVisible)
+        #expect(model.activePresentationID == nextPresentation)
+
+        controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
+        await Self.drainMainQueue()
+
+        #expect(!controller.isVisible)
+        #expect(model.activePresentationID == nil)
+    }
+
     @Test func `resign key keeps bar visible while granting permissions`() async {
         let latch = GrantLatch()
         let model = QuickChatModel(
@@ -165,7 +202,7 @@ struct QuickChatControllerTests {
             },
             connectionGateProvider: { .available },
             modelControlsProvider: { _ in .testFixture },
-            modelPatchProvider: { _, _ in nil })
+            settingsPatchProvider: { _, _ in nil })
         let controller = QuickChatController(enableUI: false, model: model, monitoringEnabled: false)
         controller.present()
         guard let id = model.activePresentationID else {
@@ -185,6 +222,7 @@ struct QuickChatControllerTests {
             await Task.yield()
         }
         controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
+        await Self.drainMainQueue()
         #expect(!controller.isVisible)
         controller.stop()
     }
@@ -211,7 +249,7 @@ struct QuickChatControllerTests {
             connectionGateProvider: { .available },
             textContextCaptureProvider: { await latch.wait() },
             modelControlsProvider: { _ in .testFixture },
-            modelPatchProvider: { _, _ in nil })
+            settingsPatchProvider: { _, _ in nil })
         let controller = QuickChatController(enableUI: false, model: model, monitoringEnabled: false)
         controller.present()
         guard let id = model.activePresentationID else {
@@ -230,6 +268,7 @@ struct QuickChatControllerTests {
             await Task.yield()
         }
         controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
+        await Self.drainMainQueue()
         #expect(!controller.isVisible)
         controller.stop()
     }
@@ -240,6 +279,12 @@ struct QuickChatControllerTests {
         }
         await TestIsolation.withUserDefaultsValues([quickChatEnabledKey: false]) {
             #expect(!AppState(preview: true).quickChatEnabled)
+        }
+    }
+
+    private static func drainMainQueue() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
         }
     }
 
@@ -259,7 +304,7 @@ struct QuickChatControllerTests {
             permissionGrantProvider: { _ in [:] },
             connectionGateProvider: { .available },
             modelControlsProvider: { _ in .testFixture },
-            modelPatchProvider: { _, _ in nil })
+            settingsPatchProvider: { _, _ in nil })
     }
 }
 

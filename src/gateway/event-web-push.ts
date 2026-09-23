@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import type { WebPushNotificationCategory } from "../../packages/gateway-protocol/src/schema/push.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createCronExecutionId } from "../cron/run-id.js";
 import {
   WEB_PUSH_USER_PREFERENCES_KEY,
   isWebPushQuietHours,
@@ -12,20 +14,28 @@ import {
   webPushCategoryEnabled,
 } from "../infra/push-web-preferences.js";
 import {
-  listBoundWebPushSubscriptions,
+  hasBoundWebPushSubscriptions,
   prepareWebPushNotificationSender,
   type BoundWebPushSubscription,
 } from "../infra/push-web.js";
+import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import { getUserPreferences } from "../state/user-preferences.js";
 import { resolveUserProfileId } from "../state/user-profiles.js";
+import { resolveControlUiWebPushUrl } from "./control-ui-shared.js";
 import { QUESTIONS_SCOPE } from "./method-scopes.js";
-import { READ_SCOPE } from "./operator-scopes.js";
+import { ADMIN_SCOPE, READ_SCOPE } from "./operator-scopes.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import { canReceiveSessionEvent } from "./session-sharing.js";
-import { listCurrentWebPushTargets, webPushTargetClient } from "./web-push-authority.js";
+import {
+  listCurrentWebPushTargets,
+  withCurrentWebPushAuthority,
+  webPushTargetClient,
+  type CurrentWebPushTarget,
+} from "./web-push-authority.js";
 
 const EVENT_PUSH_TTL_SECONDS = 5 * 60;
+const defaultLog = createSubsystemLogger("gateway/web-push");
 
 type EventNotification = {
   category: WebPushNotificationCategory;
@@ -33,6 +43,17 @@ type EventNotification = {
   body: string;
   identifiedBody?: string;
   tag: string;
+  path?: string;
+};
+
+export type HumanMentionWebPush = {
+  id: string;
+  recipientProfileId: string;
+  sessionKey: string;
+  agentId: string;
+  senderLabel?: string;
+  sessionTitle?: string;
+  isCurrent: () => boolean;
 };
 
 function resolveEventWebPushNotification(
@@ -45,16 +66,19 @@ function resolveEventWebPushNotification(
   }
   if (event === "question.requested") {
     const id = normalizeWebPushDisplayLabel(value.id) ?? "pending";
+    const questionId = normalizeOptionalString(value.id);
     return {
       category: "agent-question",
       title: "OpenClaw needs an answer",
       body: "An agent has a question for you.",
       tag: `openclaw-question-${id}`,
+      ...(questionId ? { path: `ask/${encodeURIComponent(questionId)}` } : {}),
     };
   }
   if (
     event === "chat" &&
     value.state === "final" &&
+    value.yielded !== true &&
     !isTranscriptOnlyOpenClawAssistantMessage(value.message)
   ) {
     const runId = normalizeWebPushDisplayLabel(value.runId) ?? "finished";
@@ -67,7 +91,7 @@ function resolveEventWebPushNotification(
   }
   if (event === "task" && value.action === "upserted") {
     const task = isRecord(value.task) ? value.task : null;
-    if (task?.status !== "failed" && task?.status !== "timed_out") {
+    if ((task?.status !== "failed" && task?.status !== "timed_out") || task.runtime === "cron") {
       return null;
     }
     const taskId = normalizeWebPushDisplayLabel(task.id) ?? "failed";
@@ -82,23 +106,37 @@ function resolveEventWebPushNotification(
   }
   if (event === "cron" && value.action === "finished" && value.status === "error") {
     const job = isRecord(value.job) ? value.job : null;
-    const jobId = normalizeWebPushDisplayLabel(value.jobId) ?? "failed";
+    const jobId = normalizeOptionalString(value.jobId);
+    const jobTag = normalizeWebPushDisplayLabel(jobId) ?? "failed";
     const jobName = normalizeWebPushDisplayLabel(job?.name);
+    const query = new URLSearchParams();
+    if (jobId) {
+      query.set("job", jobId);
+      const runId =
+        normalizeOptionalString(value.runId) ??
+        (typeof value.runAtMs === "number" &&
+        Number.isSafeInteger(value.runAtMs) &&
+        value.runAtMs >= 0
+          ? createCronExecutionId(jobId, value.runAtMs)
+          : undefined);
+      if (runId) {
+        query.set("run", runId);
+      }
+    }
     return {
       category: "scheduled-task-failed",
       title: "OpenClaw scheduled task failed",
       body: "A scheduled task needs attention.",
       ...(jobName ? { identifiedBody: `${jobName} needs attention.` } : {}),
-      tag: `openclaw-cron-failed-${jobId}`,
+      tag: `openclaw-cron-failed-${jobTag}`,
+      path: `automations${query.size ? `?${query}` : ""}`,
     };
   }
   return null;
 }
 
-function preferenceFor(subscription: BoundWebPushSubscription, stateDir?: string) {
-  const profileId = subscription.userProfileId
-    ? resolveUserProfileId(subscription.userProfileId)
-    : undefined;
+function preferenceFor(target: CurrentWebPushTarget, stateDir?: string) {
+  const profileId = target.userProfileId;
   const user = profileId
     ? getUserPreferences(
         profileId,
@@ -106,108 +144,192 @@ function preferenceFor(subscription: BoundWebPushSubscription, stateDir?: string
         stateDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } } : {},
       )[WEB_PUSH_USER_PREFERENCES_KEY]
     : undefined;
-  return resolveEffectiveWebPushPreferences({ user, device: subscription.devicePreferences });
+  return resolveEffectiveWebPushPreferences({
+    user,
+    device: target.subscription.devicePreferences,
+  });
 }
 
 /** Routes attention events to offline browsers without expanding live session visibility. */
 export function createEventWebPushDelivery(params: {
   getRuntimeConfig: () => OpenClawConfig;
-  log?: { warn?: (message: string) => void };
+  log?: Pick<SubsystemLogger, "warn">;
   stateDir?: string;
 }) {
+  const log = params.log ?? defaultLog;
+  const deliver = (
+    notification: EventNotification,
+    event: string,
+    payload?: unknown,
+    opts?: GatewayBroadcastOpts,
+    mention?: HumanMentionWebPush,
+  ): void => {
+    void (async () => {
+      if (!(await hasBoundWebPushSubscriptions(params.stateDir))) {
+        return;
+      }
+      const sender = await prepareWebPushNotificationSender(params.stateDir);
+      const groupedResults = await withCurrentWebPushAuthority(
+        params.stateDir,
+        (subscriptions, pairedDevices) => {
+          const cfg = params.getRuntimeConfig();
+          const recipientProfileId = mention && resolveUserProfileId(mention.recipientProfileId);
+          if (mention && !recipientProfileId) {
+            return undefined;
+          }
+          const agentId = normalizeOptionalString(
+            opts?.agentId ?? (isRecord(payload) ? payload.agentId : undefined),
+          );
+          const sessionKeys = opts?.sessionKeys ?? [];
+          const sessionKey = mention?.sessionKey ?? sessionKeys[0];
+          const sessionPath = sessionKey
+            ? buildControlUiSessionPath({
+                namespace: "chat",
+                sessionKey,
+                fallbackAgentId: agentId,
+                mainKey: cfg.session?.mainKey,
+                exactKey: true,
+              })
+            : undefined;
+          if (mention && !sessionPath) {
+            return undefined;
+          }
+          const path =
+            notification.path ??
+            sessionPath?.slice(1) ??
+            (notification.category === "background-task-failed" ? "tasks" : "sessions");
+          const url = resolveControlUiWebPushUrl(cfg, path);
+          const targets = listCurrentWebPushTargets({
+            cfg,
+            subscriptions,
+            requiredScopes:
+              notification.category === "agent-question"
+                ? [READ_SCOPE, QUESTIONS_SCOPE]
+                : [READ_SCOPE],
+            ...(mention ? { visibilityScopes: [ADMIN_SCOPE] } : {}),
+            pairedDevices,
+          });
+          const agentLabel = normalizeWebPushDisplayLabel(agentId);
+          const groups = new Map<
+            string,
+            { title: string; body: string; subscriptions: BoundWebPushSubscription[] }
+          >();
+          for (const target of targets) {
+            if (mention && target.userProfileId !== recipientProfileId) {
+              continue;
+            }
+            const preferences = preferenceFor(target, params.stateDir);
+            if (
+              !webPushCategoryEnabled(preferences, notification.category) ||
+              isWebPushQuietHours(preferences) ||
+              !webPushAgentAllowed(preferences, agentId)
+            ) {
+              continue;
+            }
+            if (
+              sessionKeys.length > 0 &&
+              !canReceiveSessionEvent({
+                cfg,
+                client: webPushTargetClient(target),
+                sessionKeys,
+                ...(agentId ? { agentId } : {}),
+                event,
+                payload,
+              })
+            ) {
+              continue;
+            }
+            if (cfg.gateway?.roles && sessionKeys.length === 0) {
+              // Multi-user events without an authoritative session owner are not broadcast offline.
+              continue;
+            }
+            const prefix = preferences.label ? `${preferences.label} · ` : "";
+            const title = `${prefix}${notification.title}`;
+            const body =
+              preferences.detailLevel === "private"
+                ? notification.body
+                : (notification.identifiedBody ??
+                  (agentLabel ? `${agentLabel}: ${notification.body}` : notification.body));
+            const key = JSON.stringify({ title, body });
+            const group = groups.get(key) ?? { title, body, subscriptions: [] };
+            group.subscriptions.push(target.subscription);
+            groups.set(key, group);
+          }
+          // The mention owner fences dismissal, expiry, session replacement and Gateway
+          // teardown after preparation. No awaited work may separate it from the send.
+          if (mention && !mention.isCurrent()) {
+            return undefined;
+          }
+          const topic = createHash("sha256")
+            .update(notification.tag)
+            .digest("base64url")
+            .slice(0, 32);
+          return {
+            start: () =>
+              Promise.all(
+                [...groups.values()].map((group) =>
+                  sender({
+                    subscriptions: group.subscriptions,
+                    payload: {
+                      title: group.title,
+                      body: group.body,
+                      tag: notification.tag,
+                      renotify: false,
+                      url,
+                    },
+                    deliveryOptions: {
+                      TTL: EVENT_PUSH_TTL_SECONDS,
+                      urgency: notification.category.includes("failed") ? "high" : "normal",
+                      topic,
+                    },
+                  }),
+                ),
+              ),
+          };
+        },
+      );
+      if (!groupedResults) {
+        return;
+      }
+      const results = groupedResults.flat();
+      const failed = results.filter((result) => !result.ok).length;
+      if (failed > 0) {
+        log.warn("event Web Push delivery failed", {
+          category: notification.category,
+          attempted: results.length,
+          failed,
+        });
+      }
+    })().catch(() => {
+      // Transport failures can contain endpoints and payload bytes; log only the closed category.
+      log.warn("event Web Push delivery could not complete", { category: notification.category });
+    });
+  };
+
   return {
     handleEvent(event: string, payload: unknown, opts?: GatewayBroadcastOpts): void {
       const notification = resolveEventWebPushNotification(event, payload);
-      if (!notification) {
-        return;
+      if (notification) {
+        deliver(notification, event, payload, opts);
       }
-      void (async () => {
-        if (listBoundWebPushSubscriptions(params.stateDir).length === 0) {
-          return;
-        }
-        const sender = await prepareWebPushNotificationSender(params.stateDir);
-        const cfg = params.getRuntimeConfig();
-        const targets = listCurrentWebPushTargets({
-          cfg,
-          requiredScopes:
-            notification.category === "agent-question"
-              ? [READ_SCOPE, QUESTIONS_SCOPE]
-              : [READ_SCOPE],
-          stateDir: params.stateDir,
-        });
-        const agentId = normalizeOptionalString(
-          opts?.agentId ?? (isRecord(payload) ? payload.agentId : undefined),
-        );
-        const agentLabel = normalizeWebPushDisplayLabel(agentId);
-        const groups = new Map<
-          string,
-          { title: string; body: string; subscriptions: BoundWebPushSubscription[] }
-        >();
-        for (const target of targets) {
-          const subscription = target.subscription;
-          const preferences = preferenceFor(subscription, params.stateDir);
-          if (
-            !webPushCategoryEnabled(preferences, notification.category) ||
-            isWebPushQuietHours(preferences) ||
-            !webPushAgentAllowed(preferences, agentId)
-          ) {
-            continue;
-          }
-          const sessionKeys = opts?.sessionKeys ?? [];
-          if (
-            sessionKeys.length > 0 &&
-            !canReceiveSessionEvent({
-              cfg,
-              client: webPushTargetClient(target),
-              sessionKeys,
-              ...(agentId ? { agentId } : {}),
-              event,
-              payload,
-            })
-          ) {
-            continue;
-          }
-          if (cfg.gateway?.roles && sessionKeys.length === 0) {
-            // Multi-user events without an authoritative session owner are not broadcast offline.
-            continue;
-          }
-          const prefix = preferences.label ? `${preferences.label} · ` : "";
-          const title = `${prefix}${notification.title}`;
-          const body =
-            preferences.detailLevel === "private"
-              ? notification.body
-              : (notification.identifiedBody ??
-                (agentLabel ? `${agentLabel}: ${notification.body}` : notification.body));
-          const key = JSON.stringify({ title, body });
-          const group = groups.get(key) ?? { title, body, subscriptions: [] };
-          group.subscriptions.push(subscription);
-          groups.set(key, group);
-        }
-        const topic = createHash("sha256")
-          .update(notification.tag)
-          .digest("base64url")
-          .slice(0, 32);
-        await Promise.all(
-          [...groups.values()].map((group) =>
-            sender({
-              subscriptions: group.subscriptions,
-              payload: {
-                title: group.title,
-                body: group.body,
-                tag: notification.tag,
-                renotify: false,
-              },
-              deliveryOptions: {
-                TTL: EVENT_PUSH_TTL_SECONDS,
-                urgency: notification.category.includes("failed") ? "high" : "normal",
-                topic,
-              },
-            }),
-          ),
-        );
-      })().catch((error: unknown) => {
-        params.log?.warn?.(`event Web Push delivery failed event=${event}: ${String(error)}`);
-      });
+    },
+    deliverMention(this: void, mention: HumanMentionWebPush): void {
+      const senderLabel = normalizeWebPushDisplayLabel(mention.senderLabel) ?? "Someone";
+      const sessionTitle = normalizeWebPushDisplayLabel(mention.sessionTitle);
+      const id = createHash("sha256").update(mention.id).digest("base64url");
+      deliver(
+        {
+          category: "human-mentioned",
+          title: "OpenClaw mention",
+          body: "Someone mentioned you in a conversation.",
+          identifiedBody: `${senderLabel} mentioned you${sessionTitle ? ` in ${sessionTitle}` : ""}.`,
+          tag: `openclaw-mention-${id}`,
+        },
+        "human-mentioned",
+        undefined,
+        { agentId: mention.agentId, sessionKeys: [mention.sessionKey] },
+        mention,
+      );
     },
   };
 }

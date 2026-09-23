@@ -1,10 +1,12 @@
 /**
  * Gateway WebSocket log formatting tests.
  */
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { setVerbose } from "../global-state.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { loggingState } from "../logging/state.js";
 import { formatForLog, logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
+import { setGatewayWsLogStyle } from "./ws-logging.js";
 
 function shouldLogWs(direction: "in" | "out", kind: string): boolean {
   let admitted = false;
@@ -17,11 +19,66 @@ function shouldLogWs(direction: "in" | "out", kind: string): boolean {
 
 afterEach(() => {
   setVerbose(false);
+  setGatewayWsLogStyle("auto");
   setLoggerOverride(null);
+  loggingState.rawConsole = null;
   resetLogger();
+  vi.restoreAllMocks();
 });
 
 describe("gateway ws log helpers", () => {
+  test.each(["optimized", "compact", "full"] as const)(
+    "bounds unanswered timing and preserves request identity across %s log changes",
+    (style) => {
+      setVerbose(style !== "optimized");
+      setGatewayWsLogStyle(style === "optimized" ? "auto" : style);
+      setLoggerOverride({ level: "silent", consoleLevel: "info" });
+      const output = vi.fn();
+      loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
+      const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const first = { connId: `first-${style}`, id: "same", method: "health" };
+      const second = { connId: `second-${style}`, id: "same", method: "health" };
+      try {
+        logWs("in", "req", first);
+        clock.mockReturnValue(1_050);
+        logWs("in", "req", second);
+        clock.mockReturnValue(1_100);
+        output.mockClear();
+        logWs("out", "res", { ...first, ok: true });
+        expect(output).toHaveBeenLastCalledWith(expect.stringContaining("100ms"));
+        logWs("out", "res", { ...second, ok: true });
+        expect(output).toHaveBeenLastCalledWith(expect.stringContaining("50ms"));
+        logWs("out", "res", { ...first, ok: false });
+        expect(output).toHaveBeenLastCalledWith(expect.not.stringMatching(/\d+ms/));
+
+        clock.mockReturnValue(2_000);
+        logWs("in", "req", first);
+        for (let index = 0; index < 2_000; index += 1) {
+          logWs("in", "req", { ...first, id: `unanswered-${index}` });
+        }
+        clock.mockReturnValue(2_100);
+        output.mockClear();
+        logWs("out", "res", { ...first, ok: false });
+        expect(output).toHaveBeenLastCalledWith(expect.not.stringMatching(/\d+ms/));
+
+        logWs("in", "req", second);
+        setVerbose(true);
+        setGatewayWsLogStyle(style === "full" ? "compact" : "full");
+        clock.mockReturnValue(2_200);
+        logWs("out", "res", { ...second, ok: true });
+        expect(output).toHaveBeenLastCalledWith(expect.stringContaining("100ms"));
+      } finally {
+        setVerbose(style !== "optimized");
+        setGatewayWsLogStyle(style === "optimized" ? "auto" : style);
+        logWs("out", "res", { ...first, ok: true });
+        logWs("out", "res", { ...second, ok: true });
+        for (let index = 0; index < 2_000; index += 1) {
+          logWs("out", "res", { ...first, id: `unanswered-${index}`, ok: true });
+        }
+      }
+    },
+  );
+
   test("admits only useful optimized-mode frames and honors console info enablement", () => {
     setVerbose(false);
     setLoggerOverride({ level: "silent", consoleLevel: "info" });
@@ -153,13 +210,30 @@ describe("gateway ws log helpers", () => {
     expect(summary.text).not.toContain("\n");
   });
 
-  test("summarizeAgentEventForWsLog keeps compact previews UTF-16 safe", () => {
-    const summary = summarizeAgentEventForWsLog({
-      stream: "assistant",
-      data: { text: `${"a".repeat(158)}😀tail` },
-    });
-
-    expect(summary.text).toBe(`${"a".repeat(158)}…`);
+  test.each([
+    { name: "Unicode whitespace", text: "\u00a0hello\u2028world\ufeff", expected: "hello world" },
+    { name: "blank text", text: "\u00a0\n ".repeat(200), expected: undefined },
+    { name: "long leading whitespace", text: `${" ".repeat(512)}hello`, expected: "hello" },
+    {
+      name: "long interior whitespace",
+      text: `hello${" ".repeat(512)}world`,
+      expected: "hello world",
+    },
+    {
+      name: "trailing whitespace at the limit",
+      text: `${"a".repeat(160)}${" ".repeat(512)}`,
+      expected: "a".repeat(160),
+    },
+    {
+      name: "emoji at the limit",
+      text: `${"a".repeat(158)}😀tail`,
+      expected: `${"a".repeat(158)}…`,
+    },
+    { name: "long text", text: "a".repeat(8192), expected: `${"a".repeat(159)}…` },
+  ])("summarizeAgentEventForWsLog preserves $name", ({ text, expected }) => {
+    const summary = summarizeAgentEventForWsLog({ stream: "assistant", data: { text } });
+    expect(summary.text).toBe(expected);
+    expect(Object.hasOwn(summary, "text")).toBe(expected !== undefined);
   });
 
   test("summarizeAgentEventForWsLog includes tool metadata", () => {

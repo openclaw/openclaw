@@ -1,6 +1,5 @@
 // Reply-preview resolution: memoized quoted-source previews served from
 // already-loaded transcript rows first, then the reply-message access loader.
-import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { persistedMessageEntryId } from "../chat-thread.ts";
 import { resolveMessageGroupSenderLabel } from "./chat-message-group.ts";
@@ -18,7 +17,7 @@ type ResolvedReplyPreview = (MessageReplyTarget & { sourceMessageId: string }) |
 
 type ReplyPreviewProps = Pick<
   ChatThreadProps,
-  "assistantName" | "replyMessageAccess" | "userAvatar" | "userId" | "userName"
+  "assistantName" | "replyMessageAccess" | "userId" | "userName"
 >;
 
 function projectResolvedReplyPreview(
@@ -31,15 +30,9 @@ function projectResolvedReplyPreview(
   if (!text) {
     return undefined;
   }
-  const group: MessageGroup = {
-    kind: "group",
-    key: replyToId,
-    role: normalized.role,
-    senderLabel: normalized.senderLabel,
-    ...(normalized.sender ? { sender: normalized.sender } : {}),
-    messages: [{ key: replyToId, message }],
-    timestamp: normalized.timestamp,
-    isStreaming: false,
+  const group = {
+    ...normalized,
+    messages: [{ message }],
   };
   const sourceMessageId = persistedMessageEntryId(message) ?? replyToId;
   return {

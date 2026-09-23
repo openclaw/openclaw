@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { activityPersonFromPath } from "../../app-route-paths.ts";
 import {
   parseSessionActivityFilters,
+  canonicalSessionActivityLocation,
   projectSessionActivity,
-  sessionActivitySearch,
+  sessionActivityLocation,
+  sessionActivityTimestamp,
 } from "./session-activity.ts";
 
 const people: NonNullable<SessionsListResult["people"]> = [
@@ -24,18 +27,62 @@ function result(sessions: GatewaySessionRow[]): SessionsListResult {
 }
 
 describe("session activity projection", () => {
+  it("refreshes decorative names while retaining exact references, longer prefixes, filters and anchors", () => {
+    const personId = "12345678-abcd-4123-8123-123456789abc";
+    const legacy = {
+      pathname: "/ui/activity",
+      search: `?person=${personId}&time=30d&q=release`,
+      hash: "#sessions",
+    };
+    expect(canonicalSessionActivityLocation(legacy, personId, "Ada Lovelace", "/ui")).toEqual({
+      pathname: "/ui/activity/ada-lovelace-12345678abcd41238123123456789abc",
+      search: "?time=30d&q=release",
+      hash: "#sessions",
+    });
+    for (const reference of [
+      "12345678",
+      "12345678abcd4123",
+      personId,
+      personId.replaceAll("-", ""),
+    ]) {
+      const location = { ...legacy, pathname: `/ui/activity/${reference}`, search: "?q=none" };
+      expect(canonicalSessionActivityLocation(location, personId, "Ada", "/ui")?.pathname).toBe(
+        `/ui/activity/ada-${reference.replaceAll("-", "")}`,
+      );
+    }
+    const empty = { pathname: "/ui/activity/ada-12345678abcd", search: "?q=none", hash: "" };
+    expect(canonicalSessionActivityLocation(empty, "12345678abcd", undefined, "/ui")).toBeNull();
+    expect(
+      canonicalSessionActivityLocation(legacy, "abcdef12-1234-4123-8123-123456789abc", "Ada", "/ui")
+        ?.pathname,
+    ).toBe("/ui/activity/ada-abcdef12123441238123123456789abc");
+  });
+
   it("groups the server page without treating its preview or session clock as personal history", () => {
     const now = new Date(2026, 7, 17, 12).getTime();
     const rows: GatewaySessionRow[] = [
       {
         key: "agent:main:first",
         kind: "direct",
-        updatedAt: now,
+        updatedAt: now + 60_000,
+        lastActivityAt: now - 26 * 60 * 60_000,
+        lastInteractionAt: now,
         participants: [{ identity: { type: "agent", id: "bob" } }],
       },
-      { key: "agent:main:second", kind: "direct", updatedAt: now - 60_000 },
-      { key: "agent:main:older", kind: "direct", updatedAt: now - 26 * 60 * 60_000 },
+      {
+        key: "agent:main:second",
+        kind: "direct",
+        updatedAt: now - 26 * 60 * 60_000,
+        lastActivityAt: now - 60_000,
+      },
+      {
+        key: "agent:main:older",
+        kind: "direct",
+        updatedAt: now,
+        lastActivityAt: now - 26 * 60 * 60_000,
+      },
     ];
+    Object.freeze(rows);
     const activity = projectSessionActivity(result(rows));
     expect(activity.people.map(({ id, count }) => ({ id, count }))).toEqual([
       { id: "alice", count: 12 },
@@ -48,6 +95,22 @@ describe("session activity projection", () => {
     ]);
     expect(activity.matchedCount).toBe(12);
     expect(activity.timeCount).toBe(15);
+    expect(activity.sessions).toBe(rows);
+    expect(activity.sessions.map(sessionActivityTimestamp)).toEqual([
+      now,
+      now - 60_000,
+      now - 26 * 60 * 60_000,
+    ]);
+  });
+
+  it.each([
+    { lastActivityAt: 0, lastInteractionAt: Number.NaN, updatedAt: 120, createdAt: 100 },
+    { lastActivityAt: Number.POSITIVE_INFINITY, updatedAt: null, createdAt: 120 },
+    { lastActivityAt: 0, updatedAt: 0, createdAt: 120 },
+    { lastActivityAt: 120, lastInteractionAt: Number.NaN, updatedAt: 200 },
+    { lastActivityAt: -1, lastInteractionAt: 120, updatedAt: 200 },
+  ])("uses known clocks for Activity ages when a stored timestamp is invalid: %j", (clocks) => {
+    expect(sessionActivityTimestamp(clocks)).toBe(120);
   });
 
   it("does not infer people from unqualified owner or participant IDs", () => {
@@ -66,10 +129,16 @@ describe("session activity projection", () => {
     expect(projectSessionActivity(undefined).sessions).toEqual([]);
   });
 
-  it("round-trips linkable filters in a stable query order", () => {
+  it("round-trips person paths and query filters under a mounted base path", () => {
     const filters = { personId: "profile/a", query: "release notes", time: "30d" as const };
-    const search = sessionActivitySearch(filters);
-    expect(search).toBe("?time=30d&person=profile%2Fa&q=release+notes");
-    expect(parseSessionActivityFilters(search)).toEqual(filters);
+    const { pathname, search } = sessionActivityLocation(filters, "/ui");
+    expect(pathname).toBe("/ui/activity/profile%2Fa");
+    expect(search).toBe("?time=30d&q=release+notes");
+    expect(parseSessionActivityFilters(search, activityPersonFromPath(pathname, "/ui"))).toEqual(
+      filters,
+    );
+    expect(sessionActivityLocation({ ...filters, personId: null }, "/ui").pathname).toBe(
+      "/ui/activity",
+    );
   });
 });

@@ -2,12 +2,8 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
-import {
-  SANDBOX_MEDIA_MAX_BYTES,
-  stageSandboxMedia,
-  type StageSandboxMediaResult,
-} from "../../auto-reply/reply/stage-sandbox-media.js";
+import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import type { StageSandboxMediaResult } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -56,11 +52,6 @@ function isManagedInboundPdfOffloadRef(ref: OffloadedRef): boolean {
   }
 }
 
-function shouldPassThroughManagedInboundPdfOffloadRef(ref: OffloadedRef): boolean {
-  // Host-readable managed PDFs above the staging cap do not need a sandbox copy.
-  return ref.sizeBytes > SANDBOX_MEDIA_MAX_BYTES && isManagedInboundPdfOffloadRef(ref);
-}
-
 // Stage media before ACK so permanent client errors stay 4xx and retryable
 // staging failures stay 5xx. Managed PDFs retain their host-readable fallback.
 async function prestageMediaPathOffloads(params: {
@@ -69,6 +60,8 @@ async function prestageMediaPathOffloads(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
+  abortSignal: AbortSignal;
+  assertWorkAdmissionCurrent: () => void;
 }): Promise<{ paths: string[]; types: string[]; workspaceDir?: string }> {
   const mediaPathRefs = params.offloadedRefs.filter(
     (ref) => params.includeImageRefs || !ref.mimeType.startsWith("image/"),
@@ -76,21 +69,35 @@ async function prestageMediaPathOffloads(params: {
   if (mediaPathRefs.length === 0) {
     return { paths: [], types: [] };
   }
-  const refsByManagedPath = (refs: OffloadedRef[]) => ({
-    paths: refs.map((ref) => ref.path),
-    types: refs.map((ref) => ref.mimeType),
-  });
-  const passThroughRefs: OffloadedRef[] = [];
-  const refsToStage: OffloadedRef[] = [];
-  for (const ref of mediaPathRefs) {
-    (shouldPassThroughManagedInboundPdfOffloadRef(ref) ? passThroughRefs : refsToStage).push(ref);
-  }
-  if (refsToStage.length === 0) {
-    return refsByManagedPath(mediaPathRefs);
-  }
-
   try {
+    const [{ ensureSandboxWorkspaceForSession }, { SANDBOX_MEDIA_MAX_BYTES, stageSandboxMedia }] =
+      await Promise.all([
+        import("../../agents/sandbox/context.js"),
+        import("../../auto-reply/reply/stage-sandbox-media.js"),
+      ]);
+    params.abortSignal.throwIfAborted();
+    params.assertWorkAdmissionCurrent();
+    const refsByManagedPath = (refs: OffloadedRef[]) => ({
+      paths: refs.map((ref) => ref.path),
+      types: refs.map((ref) => ref.mimeType),
+    });
+    const passThroughRefs: OffloadedRef[] = [];
+    const refsToStage: OffloadedRef[] = [];
+    for (const ref of mediaPathRefs) {
+      // Host-readable managed PDFs above the staging cap do not need a sandbox copy.
+      (ref.sizeBytes > SANDBOX_MEDIA_MAX_BYTES && isManagedInboundPdfOffloadRef(ref)
+        ? passThroughRefs
+        : refsToStage
+      ).push(ref);
+    }
+    if (refsToStage.length === 0) {
+      return refsByManagedPath(mediaPathRefs);
+    }
+
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+    if (getAgentWorkspaceAccess(workspaceDir, "prepareTurnAttachments")?.prepareTurnAttachments) {
+      return refsByManagedPath(mediaPathRefs);
+    }
     const sandbox = await ensureSandboxWorkspaceForSession({
       config: params.cfg,
       agentId: params.agentId,
@@ -128,11 +135,15 @@ async function prestageMediaPathOffloads(params: {
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         workspaceDir,
+        abortSignal: params.abortSignal,
       });
     } catch (stageErr) {
-      // Only managed inbound PDFs have a host-readable fallback. Other files
-      // must fail before ACK or the agent silently loses the attachment.
-      if (refsToStage.some((ref) => !isManagedInboundPdfOffloadRef(ref))) {
+      // Cancellation is terminal; only ordinary managed-PDF failures can use
+      // the host-readable fallback. Other files must fail before ACK.
+      if (
+        (params.abortSignal.aborted && Object.is(stageErr, params.abortSignal.reason)) ||
+        refsToStage.some((ref) => !isManagedInboundPdfOffloadRef(ref))
+      ) {
         throw stageErr;
       }
       return refsByManagedPath(mediaPathRefs);
@@ -170,8 +181,11 @@ async function prestageMediaPathOffloads(params: {
       workspaceDir: sandbox.workspaceDir,
     };
   } catch (err) {
-    await discardPreparedInboundMedia(params.offloadedRefs);
-    if (err instanceof MediaOffloadError || err instanceof UnsupportedAttachmentError) {
+    if (
+      (params.abortSignal.aborted && Object.is(err, params.abortSignal.reason)) ||
+      err instanceof MediaOffloadError ||
+      err instanceof UnsupportedAttachmentError
+    ) {
       throw err;
     }
     throw new MediaOffloadError(
@@ -256,6 +270,8 @@ export async function prepareChatSendAttachments(params: {
             cfg,
             sessionKey,
             agentId,
+            abortSignal: activeRunAbort.controller.signal,
+            assertWorkAdmissionCurrent: admission.assertWorkAdmissionCurrent,
           }));
         },
         {
@@ -267,14 +283,23 @@ export async function prepareChatSendAttachments(params: {
           },
         },
       );
+      // Pass-through media still needs awaited cleanup when preparation was cancelled.
+      activeRunAbort.controller.signal.throwIfAborted();
       prepareAttachmentsMs = roundedChatSendTimingMs(
         performance.now() - prepareAttachmentsStartedAtMs,
       );
     } catch (err) {
-      if (
+      const aborted =
         activeRunAbort.controller.signal.aborted &&
-        context.chatRunState.hasAbortMarker(clientRunId)
-      ) {
+        (context.chatRunState.hasAbortMarker(clientRunId) ||
+          Object.is(err, activeRunAbort.controller.signal.reason));
+      // Retire failed-run cancellation before cleanup yields, but retain work
+      // admission until deletion finishes so a late abort cannot replace the error.
+      if (!aborted) {
+        activeRunAbort.cleanup();
+      }
+      await discardPreparedInboundMedia(offloadedRefs);
+      if (aborted) {
         finishAbortedChatSend();
         return { ok: false as const };
       }

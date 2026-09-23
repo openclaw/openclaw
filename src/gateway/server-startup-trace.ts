@@ -1,4 +1,5 @@
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
+import { consumeGatewayBootstrapSteps } from "../cli/startup-trace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   emitDiagnosticsTimelineEvent,
@@ -31,6 +32,7 @@ export function createGatewayStartupTrace(log: GatewayLogger, startedAt = perfor
   const logEnabled = isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE);
   let timelineConfig: OpenClawConfig | undefined;
   let eventLoopDelay: ReturnType<typeof monitorEventLoopDelay> | undefined;
+  let closed = false;
   const timelineOptions = () => ({
     ...(timelineConfig ? { config: timelineConfig } : {}),
     env: process.env,
@@ -39,16 +41,22 @@ export function createGatewayStartupTrace(log: GatewayLogger, startedAt = perfor
     isDiagnosticsTimelineEnabled(timelineOptions()) &&
     isTruthyEnvValue(process.env.OPENCLAW_DIAGNOSTICS_EVENT_LOOP);
   const ensureEventLoopDelay = () => {
-    if (eventLoopDelay || (!logEnabled && !eventLoopTimelineEnabled())) {
+    if (closed || eventLoopDelay || (!logEnabled && !eventLoopTimelineEnabled())) {
       return;
     }
     eventLoopDelay = monitorEventLoopDelay({ resolution: 10 });
     eventLoopDelay.enable();
   };
   ensureEventLoopDelay();
+  const close = () => {
+    eventLoopDelay?.disable();
+    eventLoopDelay = undefined;
+    closed = true;
+  };
   const started = startedAt;
   let last = started;
   let spanSequence = 0;
+  let bootstrapSummary = "";
   const formatMetric = (key: string, value: number | string) =>
     `${key}=${typeof value === "number" ? value.toFixed(1) : value}`;
   const mapTimelineName = (name: string) => {
@@ -56,7 +64,6 @@ export function createGatewayStartupTrace(log: GatewayLogger, startedAt = perfor
       case "config.snapshot":
         return "config.load";
       case "config.auth":
-      case "config.final-snapshot":
       case "runtime.config":
         return "config.normalize";
       case "plugins.bootstrap":
@@ -122,6 +129,7 @@ export function createGatewayStartupTrace(log: GatewayLogger, startedAt = perfor
     }
   };
   return {
+    close,
     setConfig(config: OpenClawConfig) {
       timelineConfig = config;
       ensureEventLoopDelay();
@@ -129,7 +137,28 @@ export function createGatewayStartupTrace(log: GatewayLogger, startedAt = perfor
     mark(name: string) {
       const now = performance.now();
       const eventLoopSample = takeEventLoopSample();
-      emit(name, now - last, now - started, eventLoopSample);
+      if (name === "process.bootstrap") {
+        const steps = consumeGatewayBootstrapSteps();
+        bootstrapSummary = steps
+          .map((step) => `${step.name}:${step.durationMs.toFixed(1)}ms/${step.calls}`)
+          .join(",");
+        for (const step of steps) {
+          emit(`process.bootstrap.${step.name}`, step.durationMs, step.completedAt, undefined, [
+            ["start", `${step.startedAt.toFixed(1)}ms`],
+            ["calls", step.calls],
+            ...Object.entries(step.metrics),
+          ]);
+        }
+      }
+      emit(
+        name,
+        now - last,
+        now - started,
+        eventLoopSample,
+        bootstrapSummary && (name === "process.bootstrap" || name === "ready")
+          ? [["bootstrapSteps", bootstrapSummary]]
+          : [],
+      );
       emitDiagnosticsTimelineEvent(
         {
           type: "mark",
@@ -143,7 +172,7 @@ export function createGatewayStartupTrace(log: GatewayLogger, startedAt = perfor
       emitEventLoopTimelineSample(name, eventLoopSample);
       last = now;
       if (name === "ready") {
-        eventLoopDelay?.disable();
+        close();
       }
     },
     detail(name: string, metrics: ReadonlyArray<readonly [string, number | string]>) {

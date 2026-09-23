@@ -3,7 +3,6 @@
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   type ErrorShape,
   type ProtocolValidator,
   validateSkillsUploadBeginParams,
@@ -15,18 +14,10 @@ import {
   areUploadedSkillArchivesEnabled,
   UPLOADED_SKILL_ARCHIVES_DISABLED_MESSAGE,
 } from "../../skills/lifecycle/upload-install.js";
-import {
-  defaultSkillUploadStore,
-  SkillUploadRequestError,
-} from "../../skills/lifecycle/upload-store.js";
+import { SkillUploadRequestError } from "../../skills/lifecycle/upload-store-error.js";
+import { defaultSkillUploadStore } from "../../skills/lifecycle/upload-store.js";
 import type { GatewayRequestHandlers } from "./types.js";
-
-function uploadErrorShape(
-  prefix: string,
-  errors: Parameters<typeof formatValidationErrors>[0],
-): ErrorShape {
-  return errorShape(ErrorCodes.INVALID_REQUEST, `${prefix}: ${formatValidationErrors(errors)}`);
-}
+import { assertValidParams } from "./validation.js";
 
 function mapUploadError(err: unknown): ErrorShape {
   if (err instanceof SkillUploadRequestError) {
@@ -69,8 +60,7 @@ function makeUploadHandler<P, R>(
       );
       return;
     }
-    if (!validator(params)) {
-      respond(false, undefined, uploadErrorShape(`invalid ${name} params`, validator.errors));
+    if (!assertValidParams(params, validator, name, respond)) {
       return;
     }
     try {

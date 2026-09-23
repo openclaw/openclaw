@@ -26,7 +26,13 @@ describe("persistAgentSessionPhase", () => {
         freshness: undefined,
       };
 
+      const committed = vi.fn((entry: { sessionId: string }) => {
+        expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })?.sessionId).toBe(
+          entry.sessionId,
+        );
+      });
       const result = await persistAgentSessionPhase({
+        onSessionCommitted: committed,
         request: { message: "sandboxed", idempotencyKey: runId },
         cfg: {
           gateway: {
@@ -76,6 +82,8 @@ describe("persistAgentSessionPhase", () => {
         createdActor: { type: "human", id: profile.id },
         sandbox: "required",
       });
+      expect(committed).toHaveBeenCalledOnce();
+      expect(committed.mock.calls[0]?.[0].sessionId).toBe(result?.sessionEntry?.sessionId);
       expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
         sandbox: "required",
       });

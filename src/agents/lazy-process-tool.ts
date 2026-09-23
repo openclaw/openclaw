@@ -1,6 +1,7 @@
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { describeProcessTool } from "./bash-tools.descriptions.js";
+import { ProcessToolOutputSchema } from "./bash-tools.process-schema.js";
 import type { ProcessToolDefaults } from "./bash-tools.process.js";
 import { processSchema } from "./bash-tools.schemas.js";
 import { PROCESS_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
@@ -29,6 +30,7 @@ export function createLazyProcessTool(defaults?: ProcessToolDefaults): AnyAgentT
     displaySummary: PROCESS_TOOL_DISPLAY_SUMMARY,
     description: describeProcessTool({ hasCronTool: defaults?.hasCronTool === true }),
     parameters: processSchema,
+    outputSchema: ProcessToolOutputSchema,
     execute: async (toolCallId, params, signal, onUpdate) =>
       (await loadTool()).execute(
         toolCallId,

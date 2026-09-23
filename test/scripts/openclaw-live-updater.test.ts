@@ -47,8 +47,13 @@ import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
 } from "../../scripts/lib/local-build-metadata.mts";
+import { writeUpdateCompatibilityChunks } from "../../scripts/lib/update-compat-chunks.mts";
 import { listCoreRuntimePostBuildOutputs } from "../../scripts/runtime-postbuild.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  previousReleaseInventory,
+  writeUpdateCompatibilityBuildFixture,
+} from "./update-compat-chunks.test-support.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const script = path.join(repoRoot, ".agents/skills/openclaw-live-updater/scripts/update-main.mjs");
@@ -200,15 +205,26 @@ function writeBuild(mirror: string) {
     '<script type="module" src="./assets/app.js"></script>\n',
   );
   writeFileSync(path.join(mirror, "dist/control-ui/assets/app.js"), "// ui\n");
-  writeFileSync(path.join(mirror, "dist", BUILD_STAMP_FILE), `${JSON.stringify({ head })}\n`);
+  writeFileSync(
+    path.join(mirror, "dist", BUILD_STAMP_FILE),
+    `${JSON.stringify({ head, inputsClean: true })}\n`,
+  );
   writeFileSync(
     path.join(mirror, "dist", RUNTIME_POSTBUILD_STAMP_FILE),
-    `${JSON.stringify({ head })}\n`,
+    `${JSON.stringify({ head, inputsClean: true })}\n`,
   );
+  writeUpdateCompatibilityBuildFixture(mirror);
+  writeUpdateCompatibilityChunks({
+    distDir: path.join(mirror, "dist"),
+    sourceDir: mirror,
+    inventory: previousReleaseInventory,
+  });
   for (const relativePath of listCoreRuntimePostBuildOutputs({ rootDir: mirror })) {
     const outputPath = path.join(mirror, relativePath);
     mkdirSync(path.dirname(outputPath), { recursive: true });
-    writeFileSync(outputPath, "// runtime postbuild\n");
+    if (!existsSync(outputPath)) {
+      writeFileSync(outputPath, "// runtime postbuild\n");
+    }
   }
   writeFileSync(path.join(mirror, "dist/build-info.json"), `${JSON.stringify({ commit: head })}\n`);
 }
@@ -333,7 +349,7 @@ describe("openclaw live updater", () => {
     }
   });
 
-  describe.sequential("fixture cleanup boundary", () => {
+  describe("fixture cleanup boundary", { concurrent: false }, () => {
     test("creates a disposable clone fixture", () => {
       cleanupProbeRoot = makeFixture().root;
       expect(existsSync(cleanupProbeRoot)).toBe(true);
@@ -1582,7 +1598,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
       requirements: { build: { shouldBuild: true, reason: "git_head_changed" } },
     });
 
-    writeFileSync(buildStamp, `${JSON.stringify({ head })}\n`);
+    writeFileSync(buildStamp, `${JSON.stringify({ head, inputsClean: true })}\n`);
     rmSync(runtimeStamp);
     expect(inspectBuildState(mirror, head)).toMatchObject({
       current: false,

@@ -773,6 +773,47 @@ describe("resolveSessionDeliveryTarget", () => {
     },
   );
 
+  it("keeps owner discovery fail-closed for unresolved store SecretRefs and resolves once the credential is materialized", () => {
+    const telegram = createOwnerAllowlistTargetTestPlugin({
+      id: "telegram",
+      label: "Telegram",
+      ownerId: "123456789",
+      inferTargetChatType: ({ to }) => (/^\d+$/.test(to) ? "direct" : undefined),
+    });
+    telegram.config = {
+      ...telegram.config,
+      listAccountIds: () => ["default"],
+      inspectAccount: (cfg: OpenClawConfig) => {
+        const botToken = cfg.channels?.telegram?.botToken;
+        return typeof botToken === "string" && botToken.trim()
+          ? { enabled: true, configured: true, token: botToken, tokenStatus: "available" }
+          : { enabled: true, configured: true, tokenStatus: "configured_unavailable" };
+      },
+    };
+    setActivePluginRegistry(createTargetsTestRegistry([telegram]));
+
+    // A store-backed SecretRef that this command path could not resolve must keep
+    // owner discovery fail-closed instead of reporting a phantom route.
+    const unresolvedCfg: OpenClawConfig = {
+      commands: { ownerAllowFrom: ["telegram:123456789"] },
+      channels: {
+        telegram: {
+          enabled: true,
+          botToken: { source: "store", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+        },
+      },
+    };
+    expect(hasResolvableHeartbeatOwnerRoute({ cfg: unresolvedCfg })).toBe(false);
+
+    // Once the read-only resolution contract materializes the credential, the
+    // configured owner route resolves without any other config change (#137217).
+    const resolvedCfg: OpenClawConfig = {
+      commands: { ownerAllowFrom: ["telegram:123456789"] },
+      channels: { telegram: { enabled: true, botToken: "8905123456:AAF-example-bDTs" } },
+    };
+    expect(hasResolvableHeartbeatOwnerRoute({ cfg: resolvedCfg })).toBe(true);
+  });
+
   it("reuses an exact direct owner route with its account and thread", () => {
     const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
     setActivePluginRegistry(createTargetsTestRegistry([alpha]));
@@ -1577,6 +1618,35 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved).toMatchObject({ channel: "telegram", to: "telegram:456" });
   });
 
+  it.each([
+    { target: undefined, source: false, purpose: "heartbeat-owner" },
+    { target: "owner", source: false, purpose: "heartbeat-owner" },
+    { target: "whatsapp", source: false, purpose: undefined },
+    { target: "owner", source: true, purpose: undefined },
+  ] as const)(
+    "marks only owner-derived plugin routes: target=$target, source=$source",
+    async ({ target, source, purpose }) => {
+      const plugin = createOwnerAllowlistTargetTestPlugin({
+        id: "whatsapp",
+        label: "WhatsApp",
+        ownerId: "+15555550166",
+        inferTargetChatType: () => "direct",
+      });
+      const resolveRoute = vi.fn().mockResolvedValue(null);
+      plugin.messaging = { ...plugin.messaging, resolveOutboundSessionRoute: resolveRoute };
+      setActivePluginRegistry(createTargetsTestRegistry([plugin]));
+      const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+        cfg: { channels: { whatsapp: { allowFrom: ["+15555550166"] } } },
+        agentId: "main",
+        heartbeat: { target, to: "+15555550166" },
+        turnSource: source ? { channel: "whatsapp", to: "+15555550166" } : undefined,
+      });
+      expect(resolved).toMatchObject({ channel: "whatsapp", to: "+15555550166" });
+      expect(resolveRoute).toHaveBeenCalledOnce();
+      expect(resolveRoute.mock.calls[0]?.[0].deliveryPurpose).toBe(purpose);
+    },
+  );
+
   it("delivers a classifier-proven WhatsApp E.164 owner route", async () => {
     const inferTargetChatType = vi.fn(({ to }: { to: string }) =>
       /^\+\d+$/.test(to) ? ("direct" as const) : undefined,
@@ -2060,6 +2130,66 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.to).toBe("dm:one");
     expect(resolved.threadId).toBeUndefined();
   });
+
+  it.each([
+    {
+      name: "moved direct session does not block the event group",
+      storedTo: "user:operator",
+      storedType: "direct",
+      eventTo: "group:ops",
+      expectedChannel: "alpha",
+      expectedType: "group",
+    },
+    {
+      name: "moved group session does not allow the event direct chat",
+      storedTo: "group:ops",
+      storedType: "group",
+      eventTo: "user:operator",
+      expectedChannel: "none",
+      expectedType: undefined,
+    },
+    {
+      name: "same opaque direct conversation retains its hint",
+      storedTo: "opaque-dm",
+      storedType: "direct",
+      eventTo: "opaque-dm",
+      expectedChannel: "none",
+      expectedType: undefined,
+    },
+    {
+      name: "same group conversation remains deliverable",
+      storedTo: "group:ops",
+      storedType: "group",
+      eventTo: "group:ops",
+      expectedChannel: "alpha",
+      expectedType: "group",
+    },
+  ] as const)(
+    "qualifies heartbeat chat type by the selected conversation: $name",
+    async ({ storedTo, storedType, eventTo, expectedChannel, expectedType }) => {
+      const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+        cfg: {},
+        agentId: "main",
+        entry: {
+          sessionId: "chat-type-owner",
+          updatedAt: 1,
+          lastChannel: "alpha",
+          lastTo: storedTo,
+          chatType: storedType,
+        },
+        heartbeat: { target: "last", directPolicy: "block" },
+        turnSource: { channel: "alpha", to: eventTo },
+      });
+      expect(resolved.channel).toBe(expectedChannel);
+      expect(resolved.chatType).toBe(expectedType);
+      if (expectedChannel === "none") {
+        expect(resolved.reason).toBe("dm-blocked");
+        expect(resolved.to).toBeUndefined();
+      } else {
+        expect(resolved.to).toBe(eventTo);
+      }
+    },
+  );
 
   it("prefers turn-scoped routing over mutable session routing for target=last", () => {
     const resolved = resolveHeartbeatDeliveryTarget({

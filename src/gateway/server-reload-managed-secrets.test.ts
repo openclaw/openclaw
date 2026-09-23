@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveModelProviderRouteOverridePresence } from "../config/model-provider-config.js";
+import { createModelProviderRouteOverrideResolver } from "../config/model-provider-config.js";
 import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
@@ -15,8 +15,8 @@ import {
 } from "../secrets/runtime.js";
 import { buildGatewayReloadPlan } from "./config-reload-plan.js";
 import type { GatewayConfigReloadTransactionOwnership } from "./config-reload.js";
-import type { ManagedGatewayConfigReloaderParams } from "./server-reload-contracts.js";
 import { createManagedReloadSecretHandlers } from "./server-reload-managed-secrets.js";
+import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import { createRuntimeSecretsActivator } from "./server-startup-config.js";
 
 vi.mock("../agents/context.js", () => ({ refreshContextWindowCache: vi.fn() }));
@@ -66,33 +66,34 @@ function expectAuthoredSource(source: OpenClawConfig) {
   expect(config).not.toBeNull();
   expect(getRuntimeConfigSourceSnapshot()).toEqual(source);
   expect(
-    resolveModelProviderRouteOverridePresence({
+    createModelProviderRouteOverrideResolver({
       provider: "openai",
-      modelId: "gpt-5.6-luna",
       authoredConfig: projectConfigOntoRuntimeSourceSnapshot(config!),
-    }),
+    })("gpt-5.6-luna"),
   ).toBe("none");
 }
 
-async function createReload(canonicalActivator: boolean, commit: () => Promise<void>) {
+async function createReload(commit: () => Promise<void>, beforePublication?: () => Promise<void>) {
   const initial = configPair("openclaw");
   activateSecretsRuntimeSnapshotWithSource(await prepare(initial.config), initial.source);
   expectAuthoredSource(initial.source);
-  const activator = createRuntimeSecretsActivator({
+  const activateRuntimeSecrets = createRuntimeSecretsActivator({
     logSecrets: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     emitStateEvent: vi.fn(),
     prepareRuntimeSecretsSnapshot: ({ config }) => prepare(config),
     activateRuntimeSecretsSnapshot: activateSecretsRuntimeSnapshot,
   });
-  const activateRuntimeSecrets: ManagedGatewayConfigReloaderParams["activateRuntimeSecrets"] =
-    canonicalActivator ? activator : (config, options) => activator(config, options);
   // Only secret publication is exercised here; the service tail is injected at its existing seam.
   const params = {
     activateRuntimeSecrets,
     resolveSharedGatewaySessionGenerationForConfig: () => undefined,
-    sharedGatewaySessionGenerationState: { current: undefined, required: null },
+    sharedGatewaySessionGenerationState: new SharedGatewaySessionGenerationState({
+      current: undefined,
+      required: null,
+    }),
     clients: [],
-    reconcileTerminalSessions: vi.fn(),
+    commitRuntimePolicy: vi.fn(),
+    reconcileRuntimePolicy: vi.fn(),
   };
   const { onHotReload } = createManagedReloadSecretHandlers({
     params,
@@ -102,6 +103,7 @@ async function createReload(canonicalActivator: boolean, commit: () => Promise<v
       expectedRevision: getActiveSecretsRuntimeSnapshotRevision(),
     }),
     applyHotReload: async (_plan, _config, publication) => {
+      await beforePublication?.();
       let committed = false;
       await publication!.publish(
         async () => {
@@ -115,6 +117,10 @@ async function createReload(canonicalActivator: boolean, commit: () => Promise<v
   });
   const ownership: GatewayConfigReloadTransactionOwnership = {
     isCurrent: () => true,
+    checkpoint: async () => {},
+    withRestartPreparation: async () => {
+      throw new Error("Unexpected restart preparation in secret publication fixture");
+    },
     markRuntimeCommitted: vi.fn(),
     commitRuntimeEnv: vi.fn(),
     publishRuntimeEnv: vi.fn(),
@@ -126,40 +132,62 @@ async function createReload(canonicalActivator: boolean, commit: () => Promise<v
     ["agents.defaults.models.openai/gpt-5.6-luna.agentRuntime.id"],
     { candidateConfig: next.config },
   );
-  return { initial, next, run: () => onHotReload(plan, next.config, ownership, next.source) };
+  return {
+    initial,
+    next,
+    ownership,
+    run: () => onHotReload(plan, next.config, ownership, next.source),
+  };
 }
 
-describe.each([true, false])(
-  "managed reload authored source (canonical activator: %s)",
-  (canonical) => {
-    it("preserves generated model metadata across a successful hot reload", async () => {
-      const { next, run } = await createReload(canonical, async () => {});
-      await expect(run()).resolves.toBe("applied");
-      expect(
-        getRuntimeConfigSnapshot()?.agents?.defaults?.models?.["openai/gpt-5.6-luna"]?.agentRuntime
-          ?.id,
-      ).toBe("codex");
-      expectAuthoredSource(next.source);
+describe("managed reload authored source", () => {
+  it("rejects a closed plugin invoker before activating its prepared secrets", async () => {
+    const failure = new Error("plugin invoker closed");
+    const commit = vi.fn(async () => {});
+    let invokerOpen = true;
+    const { initial, ownership, run } = await createReload(commit, async () => {
+      invokerOpen = false;
     });
+    const revision = getActiveSecretsRuntimeSnapshotRevision();
+    ownership.assertInvokerOwned = () => {
+      if (!invokerOpen) {
+        throw failure;
+      }
+    };
+    await expect(run()).rejects.toBe(failure);
+    expect(commit).not.toHaveBeenCalled();
+    expect(getActiveSecretsRuntimeSnapshotRevision()).toBe(revision);
+    expectAuthoredSource(initial.source);
+  });
 
-    it("restores the predecessor's authored source when runtime commit fails", async () => {
-      const { initial, run } = await createReload(canonical, async () => {
-        throw new Error("commit failed");
-      });
-      await expect(run()).rejects.toThrow("commit failed");
-      expectAuthoredSource(initial.source);
-    });
+  it("preserves generated model metadata across a successful hot reload", async () => {
+    const { next, run } = await createReload(async () => {});
+    await expect(run()).resolves.toBe("applied");
+    expect(
+      getRuntimeConfigSnapshot()?.agents?.defaults?.models?.["openai/gpt-5.6-luna"]?.agentRuntime
+        ?.id,
+    ).toBe("codex");
+    expectAuthoredSource(next.source);
+  });
 
-    it("does not roll back a newer publication's authored source", async () => {
-      const newer = configPair("codex");
-      newer.source.models.providers.openai.models[0]!.name = "Newer model";
-      newer.config.models!.providers!.openai!.models[0]!.name = "Newer model";
-      const { run } = await createReload(canonical, async () => {
-        activateSecretsRuntimeSnapshotWithSource(await prepare(newer.config), newer.source);
-        throw new Error("superseded commit failed");
-      });
-      await expect(run()).rejects.toThrow("superseded commit failed");
-      expectAuthoredSource(newer.source);
+  it("restores the predecessor's authored source when runtime commit fails", async () => {
+    const { initial, ownership, run } = await createReload(async () => {
+      throw new Error("commit failed");
     });
-  },
-);
+    await expect(run()).rejects.toThrow("commit failed");
+    expect(ownership.markRuntimeCommitted).not.toHaveBeenCalled();
+    expectAuthoredSource(initial.source);
+  });
+
+  it("does not roll back a newer publication's authored source", async () => {
+    const newer = configPair("codex");
+    newer.source.models.providers.openai.models[0]!.name = "Newer model";
+    newer.config.models!.providers!.openai!.models[0]!.name = "Newer model";
+    const { run } = await createReload(async () => {
+      activateSecretsRuntimeSnapshotWithSource(await prepare(newer.config), newer.source);
+      throw new Error("superseded commit failed");
+    });
+    await expect(run()).rejects.toThrow("superseded commit failed");
+    expectAuthoredSource(newer.source);
+  });
+});

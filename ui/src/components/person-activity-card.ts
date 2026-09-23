@@ -1,16 +1,17 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
-import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { i18n, t } from "../i18n/index.ts";
-import {
-  restartHoverMarqueeIfActive,
-  startHoverMarqueeFromEvent,
-  stopHoverMarqueeFromEvent,
-} from "../lib/hover-marquee.ts";
+import { gatewayClientKind } from "../lib/gateway-client-kind.ts";
+import { renderHoverMarquee } from "../lib/hover-marquee.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
-import { presenceMatchesProfile, type PresenceViewer } from "../lib/presence-users.ts";
+import { describePlatform } from "../lib/platform-label.ts";
+import {
+  presenceMatchesProfile,
+  presenceUserLabel,
+  type PresenceViewer,
+} from "../lib/presence-users.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
   resolveSessionPreferredFace,
@@ -22,25 +23,15 @@ import {
   parseAgentSessionKey,
 } from "../lib/sessions/session-key.ts";
 import { icons } from "./icons.ts";
+import type { PersonActivityData } from "./person-activity-data.ts";
 import { personActivityLink, type PersonActivityRouting } from "./person-activity-link.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
 import "./elapsed-time.ts";
 import "./viewer-facepile.ts";
 
 type ScopedSession = { row: GatewaySessionRow; agentId: string };
-type PersonSessionData = Readonly<
-  Pick<
-    SessionDataController,
-    | "sessionsAgentId"
-    | "sessionsResult"
-    | "sessionResultsByAgent"
-    | "childSessionRowsByParent"
-    | "loadedChildSessionKeys"
-  >
->;
 type PersonCardInput = {
   user: PresenceViewer;
-  sessionData: PersonSessionData;
+  sessionData: PersonActivityData | undefined;
   watchAgentId: string;
   mainKey: string;
   globalScope: boolean;
@@ -49,7 +40,10 @@ type PersonCardInput = {
 };
 
 /** Loaded, caller-visible roster facts, paired with their owning list scope. */
-function loadedPresenceSessions(data: PersonSessionData): ScopedSession[] {
+function loadedPresenceSessions(data: PersonActivityData | undefined): ScopedSession[] {
+  if (!data) {
+    return [];
+  }
   const lists = [
     { agentId: data.sessionsAgentId, result: data.sessionsResult },
     ...Object.entries(data.sessionResultsByAgent).map(([agentId, result]) => ({
@@ -120,17 +114,19 @@ function connections(user: PresenceViewer): string[] {
     ...new Set(
       (user.entries ?? [])
         .map((entry) => {
-          const app =
-            entry.mode === "webchat"
-              ? t("presence.card.controlUi")
-              : entry.mode === "cli"
-                ? t("presence.card.cli")
-                : entry.mode === "ui"
-                  ? t("presence.card.app")
-                  : undefined;
+          const family = entry.deviceFamily?.trim();
+          const platform = describePlatform(entry.platform ?? "", family);
+          const familyPlatform = family === "Mac" ? "macOS" : family === "iPad" ? "iPadOS" : family;
+          const kind = gatewayClientKind({ id: entry.clientId, mode: entry.mode });
+          const app = kind ? t(`presence.card.${kind}`) : undefined;
           return [
             ...new Set(
-              [entry.deviceFamily, entry.platform, app]
+              [
+                family,
+                platform.label === familyPlatform ? undefined : platform.label,
+                platform.architecture,
+                app,
+              ]
                 .map((value) => value?.trim())
                 .filter(Boolean),
             ),
@@ -152,67 +148,106 @@ function renderSessions(
   const title = t(recent ? "presence.card.recentSessions" : "presence.card.viewingNow");
   return html`<section class="person-activity-card__section">
     <h3>${title}</h3>
-    ${sessions.length
-      ? html`<div class="person-activity-card__sessions">
-          ${repeat(
-            sessions.slice(0, 3),
-            ({ row, agentId }) => sessionIdentity(row.key, agentId, input),
-            ({ row, agentId }) => {
-              const displayName = resolveSessionDisplayName(row.key, row);
-              const name = html`<span
-                ${recent ? ref(restartHoverMarqueeIfActive) : nothing}
-                class="person-activity-card__session-name ${recent
-                  ? "hover-marquee"
-                  : "person-activity-card__session-name--multiline"}"
-                data-hover-marquee-delay=${recent ? "250" : nothing}
-                data-hover-marquee-extra-shift=${recent ? "18" : nothing}
-                >${displayName}</span
-              >`;
-              const target = sessionNavigationTarget({
-                face: resolveSessionPreferredFace(row),
-                sessionKey: row.key,
-                fallbackAgentId: agentId,
-                basePath: input.routing.basePath,
-                row,
-                mainKey: input.mainKey,
-              });
-              return html`<a
-                class="person-activity-card__session session-row-host"
-                href=${target.href}
-                @mouseenter=${startHoverMarqueeFromEvent}
-                @mouseleave=${stopHoverMarqueeFromEvent}
-                @focusin=${startHoverMarqueeFromEvent}
-                @focusout=${stopHoverMarqueeFromEvent}
-                @click=${(event: MouseEvent) => {
-                  if (!shouldHandleNavigationClick(event)) {
-                    return;
-                  }
-                  event.preventDefault();
-                  input.openSession(row, agentId);
-                }}
-                ><span class="person-activity-card__session-icon" aria-hidden="true"
-                  >${icons.messageSquare}</span
-                >
-                <span class="person-activity-card__session-copy"
-                  >${recent ? keyed(displayName, name) : name}
-                  ${row.updatedAt != null
-                    ? html`<span class="person-activity-card__session-age"
-                        >${elapsed(row.updatedAt, "single-unit")}</span
-                      >`
-                    : nothing}</span
-                >
-              </a>`;
-            },
-          )}
-        </div>`
-      : html`<p class="person-activity-card__muted">
-          ${t(recent ? "presence.card.noRecentSessions" : "presence.card.noVisibleSessions")}
-        </p>`}
+    ${
+      sessions.length
+        ? html`<div class="person-activity-card__sessions">
+            ${repeat(
+              sessions.slice(0, 3),
+              ({ row, agentId }) => sessionIdentity(row.key, agentId, input),
+              ({ row, agentId }) => {
+                const displayName = resolveSessionDisplayName(row.key, row);
+                const name = recent
+                  ? renderHoverMarquee(displayName, "person-activity-card__session-name", {
+                      delay: 250,
+                      speed: 80,
+                    })
+                  : html`<span
+                      class="person-activity-card__session-name person-activity-card__session-name--multiline"
+                      >${displayName}</span
+                    >`;
+                const target = sessionNavigationTarget({
+                  face: resolveSessionPreferredFace(row),
+                  sessionKey: row.key,
+                  fallbackAgentId: agentId,
+                  basePath: input.routing.basePath,
+                  row,
+                  mainKey: input.mainKey,
+                });
+                return html`<a
+                  class="person-activity-card__session session-row-host"
+                  href=${target.href}
+                  @click=${(event: MouseEvent) => {
+                    if (!shouldHandleNavigationClick(event)) {
+                      return;
+                    }
+                    event.preventDefault();
+                    input.openSession(row, agentId);
+                  }}
+                  ><span class="person-activity-card__session-icon" aria-hidden="true"
+                    >${icons.messageSquare}</span
+                  >
+                  <span class="person-activity-card__session-copy"
+                    >${recent ? keyed(displayName, name) : name}
+                    ${
+                      row.updatedAt != null
+                        ? html`<span class="person-activity-card__session-age"
+                            >${elapsed(row.updatedAt, "single-unit")}</span
+                          >`
+                        : nothing
+                    }</span
+                  >
+                </a>`;
+              },
+            )}
+          </div>`
+        : html`<p class="person-activity-card__muted">
+            ${t(recent ? "presence.card.noRecentSessions" : "presence.card.noVisibleSessions")}
+          </p>`
+    }
   </section>`;
+}
+
+function renderPersonCardHeader(user: PresenceViewer, detail: unknown = nothing) {
+  const label = presenceUserLabel(user, t("presence.card.person"));
+  return html` <header class="person-activity-card__header">
+    <openclaw-viewer-avatar
+      .user=${user}
+      .markAsViewer=${false}
+      variant="footer"
+      aria-hidden="true"
+    ></openclaw-viewer-avatar>
+    <div>
+      <h2>${label.name}</h2>
+      ${detail}
+    </div>
+  </header>`;
+}
+
+function renderPersonCardActivity(user: PresenceViewer, routing: PersonActivityRouting) {
+  const activity = personActivityLink(
+    user.identity?.id,
+    routing,
+    presenceUserLabel(user, t("presence.card.person")).name,
+  );
+  return html` ${
+    activity
+      ? html`<footer>
+          <a href=${activity.href} @click=${activity.open}
+            >${t("presence.card.viewActivity")}<span aria-hidden="true"
+              >${icons.chevronRight}</span
+            ></a
+          >
+        </footer>`
+      : nothing
+  }`;
 }
 
 export function renderPersonActivityCard(input: PersonCardInput) {
   const { user } = input;
+  const label = presenceUserLabel(user, t("presence.card.person"));
+  // Undefined means presence has not been observed; an empty snapshot means offline.
+  const observed = user.entries !== undefined;
+  const offline = user.entries?.length === 0;
   const entries = user.entries ?? [];
   const onlineSince = observedTimestamp(
     entries.map((entry) => entry.onlineSince),
@@ -254,53 +289,55 @@ export function renderPersonActivityCard(input: PersonCardInput) {
         presenceMatchesProfile(user, actor?.identity),
       ),
   );
-  const activity = personActivityLink(user.identity?.id, input.routing);
   return html`<div class="person-activity-card">
-    <header class="person-activity-card__header">
-      <openclaw-viewer-avatar
-        .user=${user}
-        .markAsViewer=${false}
-        variant="footer"
-        aria-hidden="true"
-      ></openclaw-viewer-avatar>
-      <div>
-        <h2>${user.name ?? user.email ?? t("presence.card.person")}</h2>
-        <span class="person-activity-card__status"
-          ><span aria-hidden="true"></span>${onlineSince === undefined
-            ? t("presence.rosterTitle")
-            : html`${t("presence.card.onlineFor")} ${elapsed(onlineSince, "minute-compact")}`}</span
-        >
-      </div>
-    </header>
-    <dl class="person-activity-card__facts">
-      ${where.length || zones.length
-        ? html`<div>
-            <dt>${t("presence.card.where")}</dt>
-            <dd>
-              ${where.map((description) => html`<span>${description}</span>`)}${zones.map(
-                (zone) => html`<small>${t("presence.card.reportedTimeZone", { zone })}</small>`,
-              )}
-            </dd>
-          </div>`
-        : nothing}
-      <div>
-        <dt>${t("presence.card.lastActivity")}</dt>
-        <dd>
-          ${lastActivityAt === undefined
-            ? t("presence.card.notObserved")
-            : html`<span>${elapsed(lastActivityAt)} ${t("presence.card.ago")}</span>`}
-        </dd>
-      </div>
-    </dl>
+    ${renderPersonCardHeader(
+      user,
+      observed
+        ? html` <span
+            class="person-activity-card__status ${
+              offline ? "person-activity-card__status--offline" : ""
+            }"
+            ><span aria-hidden="true"></span>${
+              offline
+                ? t("presence.offline")
+                : onlineSince === undefined
+                  ? t("presence.rosterTitle")
+                  : html`${t("presence.card.onlineFor")} ${elapsed(onlineSince, "minute-compact")}`
+            }</span
+          >`
+        : nothing,
+    )}
+    ${label.isSharedOwner ? html`<p class="person-activity-card__hint person-activity-card__muted">${t("presence.sharedOwner.hint")}</p>` : nothing}
+    ${
+      !observed || offline
+        ? nothing
+        : html`<dl class="person-activity-card__facts">
+            ${
+              where.length || zones.length
+                ? html`<div>
+                    <dt>${t("presence.card.where")}</dt>
+                    <dd>
+                      ${where.map((description) => html`<span>${description}</span>`)}${zones.map(
+                        (zone) =>
+                          html`<small>${t("presence.card.reportedTimeZone", { zone })}</small>`,
+                      )}
+                    </dd>
+                  </div>`
+                : nothing
+            }
+            <div>
+              <dt>${t("presence.card.lastActivity")}</dt>
+              <dd>
+                ${
+                  lastActivityAt === undefined
+                    ? t("presence.card.notObserved")
+                    : html`<span>${elapsed(lastActivityAt)} ${t("presence.card.ago")}</span>`
+                }
+              </dd>
+            </div>
+          </dl>`
+    }
     ${renderSessions(viewing, input, false)}${renderSessions(recent, input, true)}
-    ${activity
-      ? html`<footer>
-          <a href=${activity.href} @click=${activity.open}
-            >${t("presence.card.viewActivity")}<span aria-hidden="true"
-              >${icons.chevronRight}</span
-            ></a
-          >
-        </footer>`
-      : nothing}
+    ${renderPersonCardActivity(user, input.routing)}
   </div>`;
 }

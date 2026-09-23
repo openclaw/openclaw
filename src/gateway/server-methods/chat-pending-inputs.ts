@@ -5,7 +5,10 @@ import {
   listSessionPendingInputs,
   type SessionPendingInput,
 } from "../../config/sessions/session-accessor.js";
-import { projectChatDisplayMessage } from "../chat-display-projection.js";
+import {
+  createCurrentUserProfileMessageProjector,
+  projectChatDisplayMessage,
+} from "../chat-display-projection.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import { replaceOversizedChatHistoryMessages } from "./chat-history-budget.js";
 
@@ -14,11 +17,13 @@ const PENDING_INPUT_DISPLAY_MAX_BYTES = 128 * 1024;
 // not turn a bounded display page into an unbounded payload. Never truncate IDs.
 const PENDING_INPUT_CORRELATION_MAX_CHARS = 256;
 
-export function projectPendingInputMessage(input: SessionPendingInput, maxChars: number) {
-  const message = projectChatDisplayMessage(input.message, {
-    maxChars,
-    resolveCurrentUserProfileDisplay,
-  });
+export function projectPendingInputMessage(
+  input: SessionPendingInput,
+  maxChars: number,
+  projectProfile = createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay),
+) {
+  const projected = projectChatDisplayMessage(input.message, { maxChars });
+  const message = projected ? projectProfile(projected) : undefined;
   if (!message) {
     return undefined;
   }
@@ -41,8 +46,9 @@ export function readChatPendingInputs(
     before: options.before,
     limit: Math.min(options.limit, 20),
   });
+  const projectProfile = createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay);
   const visible = page.items.flatMap((input) => {
-    const message = projectPendingInputMessage(input, options.maxChars);
+    const message = projectPendingInputMessage(input, options.maxChars, projectProfile);
     return message ? [{ input, message }] : [];
   });
   const messages = replaceOversizedChatHistoryMessages({

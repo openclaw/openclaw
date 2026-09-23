@@ -1,18 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import type { Message } from "../../llm/types.js";
 import { assertExperienceReviewDecision } from "./experience-review-decision.test-support.js";
 
 type DecisionInput = Parameters<typeof assertExperienceReviewDecision>[0];
 function abstention(): DecisionInput {
   const messages: Message[] = [
-    {
-      role: "toolResult",
-      toolCallId: "history",
-      toolName: "exec",
-      content: [{ type: "text", text: "observed recovery" }],
-      isError: false,
-      timestamp: 0,
-    },
+    makeTextToolResult("history", "exec", "observed recovery", false, 0),
   ];
   return {
     messages,
@@ -80,14 +74,9 @@ describe("Workshop live decision acceptance", () => {
         name: "skill_workshop",
         arguments: { action, name: "existing-skill" },
       });
-      input.observation.toolResults.push({
-        role: "toolResult",
-        toolCallId: "prepare",
-        toolName: "skill_workshop",
-        content: [{ type: "text", text: "Existing skill content" }],
-        isError: false,
-        timestamp: 0,
-      });
+      input.observation.toolResults.push(
+        makeTextToolResult("prepare", "skill_workshop", "Existing skill content", false, 0),
+      );
       expect(assertExperienceReviewDecision(input)).toBe("abstained");
     },
   );
@@ -138,27 +127,17 @@ describe("Workshop live decision acceptance", () => {
           name: "skill_workshop",
           arguments: { action: "create", name: "existing-skill" },
         });
-        input.observation.toolResults.push({
-          role: "toolResult",
-          toolCallId: "read",
-          toolName: "skill_workshop",
-          content: [{ type: "text", text: "Existing skill content" }],
-          isError: false,
-          timestamp: 0,
-        });
+        input.observation.toolResults.push(
+          makeTextToolResult("read", "skill_workshop", "Existing skill content", false, 0),
+        );
       },
     ],
     [
       "rejected tool",
       (input: DecisionInput) => {
-        input.observation.toolResults.push({
-          role: "toolResult",
-          toolCallId: "rejected",
-          toolName: "skill_workshop",
-          content: [{ type: "text", text: "name required" }],
-          isError: true,
-          timestamp: 0,
-        });
+        input.observation.toolResults.push(
+          makeTextToolResult("rejected", "skill_workshop", "name required", true, 0),
+        );
       },
     ],
   ] as const)("rejects %s even when the proposal count is zero", (_label, corrupt) => {

@@ -4,6 +4,7 @@ import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outco
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type { AgentPlanStep } from "../channels/streaming.js";
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
+import type { OutboundPayloadPlan } from "../infra/outbound/reply-payload-parts.js";
 import type { ImageContent } from "../llm/types.js";
 import type { MediaFact } from "../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
@@ -92,8 +93,10 @@ export type TurnAdoptionLifecycle = {
   onAdopted: () => void | Promise<void>;
   /** Return false to reject followup enqueue. */
   onDeferred?: () => boolean | void;
-  /** Reports that a deferred turn is still queued behind an active turn. */
+  /** Pre-adoption liveness while waiting for reply-lane admission or preflight compaction. */
   onDeferredHeartbeat?: () => void;
+  /** Requested cadence for pre-adoption heartbeats. */
+  deferredHeartbeatIntervalMs?: number;
   /** Deferred turn finished without owning the reply lane. */
   onAbandoned?: () => void;
   /** Always fires when the followup ownership cycle ends (admitted or not). Gateway cleanup. */
@@ -135,12 +138,21 @@ type ProgressCallbackResult = boolean | void;
 
 /** Reply generation options shared by auto-reply, webchat, channels, and tests. */
 export type GetReplyOptions = {
+  /** Host-issued capability for the exact findings acknowledged by the current operator. */
+  providerReviewAcknowledgment?: import("../sessions/provider-review.js").ProviderReviewAcknowledgment;
+  /** Channel-owned participant name encoding for source replies sent through message actions. */
+  groupThreadReplyFormatter?: (
+    text: string,
+    participant: { agentId: string; name: string },
+  ) => string;
   /** Override run id for agent events (defaults to random UUID). */
   runId?: string;
   /** Stable provider prompt-cache affinity key; distinct from run id/idempotency. */
   promptCacheKey?: string;
   /** Abort signal for the underlying agent run. */
   abortSignal?: AbortSignal;
+  /** Ephemeral channel owner check for a targeted Stop; never serialized as authority. */
+  isCommandTargetCurrent?: () => boolean;
   /** Optional inbound images (used for webchat attachments). */
   images?: ImageContent[];
   /** Original inline/offloaded attachment order for inbound images. */
@@ -189,8 +201,6 @@ export type GetReplyOptions = {
   fastModeAutoOnSecondsOverride?: number;
   /** Controls bootstrap workspace context injection (default: full). */
   bootstrapContextMode?: "full" | "lightweight";
-  /** If true, suppress tool error warning payloads for this run. */
-  suppressToolErrorWarnings?: boolean;
   /** If true, run the model without OpenClaw tools for this turn. */
   disableTools?: boolean;
   /** Runtime tool allow-list for this turn. Empty means no tools. */
@@ -199,6 +209,12 @@ export type GetReplyOptions = {
   enableHeartbeatTool?: boolean;
   /** If true, keep the heartbeat response tool available even under narrow tool profiles. */
   forceHeartbeatTool?: boolean;
+  /**
+   * @deprecated Ignored. The tool-failure warning is delivered whenever a run ends
+   * without a reply and cannot be suppressed. Kept only so plugin-sdk callers that
+   * still pass it keep compiling; removed in the first stable release after 2026.10.
+   */
+  suppressToolErrorWarnings?: boolean;
   /**
    * If true, dispatch skips default tool/progress text messages and expects the
    * channel to surface progress via its own streaming/edit UX.
@@ -238,6 +254,11 @@ export type GetReplyOptions = {
     context?: BlockReplyContext,
   ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
+  /** Receives a block whose producer has already resolved inline directives. */
+  onPreparedBlockReply?: (
+    plan: OutboundPayloadPlan,
+    context?: BlockReplyContext,
+  ) => Promise<void> | void;
   onToolResult?: (
     payload: ReplyPayload,
   ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
@@ -266,6 +287,8 @@ export type GetReplyOptions = {
     approvalId?: string;
     approvalSlug?: string;
     suppressDurableProgress?: true;
+    hideFromChannelProgress?: boolean;
+    suppressChannelProgress?: boolean;
   }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /**
    * Called when the utility-model narration of the in-progress turn changes.
@@ -305,6 +328,8 @@ export type GetReplyOptions = {
     phase?: string;
     title?: string;
     explanation?: string;
+    /** Prepared literal text; unmarked explanations retain authored Markdown. */
+    explanationFormat?: "plain";
     steps?: AgentPlanStep[];
     source?: string;
   }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
@@ -351,8 +376,10 @@ export type GetReplyOptions = {
   }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when context auto-compaction starts (allows UX feedback during the pause). */
   onCompactionStart?: () => Promise<ProgressCallbackResult> | ProgressCallbackResult;
-  /** Called when context auto-compaction completes. */
-  onCompactionEnd?: () => Promise<ProgressCallbackResult> | ProgressCallbackResult;
+  /** Called when context auto-compaction ends; omitted outcome means completed for legacy callers. */
+  onCompactionEnd?: (payload?: {
+    completed: boolean;
+  }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when the actual model is selected (including after fallback).
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
   onModelSelected?: (ctx: ModelSelectedContext) => void;
@@ -386,4 +413,6 @@ export type GetReplyOptions = {
   hasRepliedRef?: { value: boolean };
   /** Override agent timeout in seconds (0 = no timeout). Threads through to resolveAgentTimeoutMs. */
   timeoutOverrideSeconds?: number;
+  /** Millisecond run timeout override; takes precedence over seconds (0 = no timeout). */
+  timeoutOverrideMs?: number;
 };

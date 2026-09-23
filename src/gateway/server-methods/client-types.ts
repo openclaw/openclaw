@@ -1,11 +1,18 @@
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import type { RuntimeContextFragment } from "../../agents/internal-runtime-context.js";
 import type { TranscriptSenderIdentity } from "../../chat/sender-identity.js";
 import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
-import type { AuthenticatedGitHubIdentitySync } from "../github-user-identity.js";
+import type { AuthenticatedGitHubIdentitySync } from "../github-user-identity.types.js";
+import type { GatewayOperatorAccessAuthority } from "../operator-access-policy.types.js";
 import type { GatewayOperatorRoleActor } from "../operator-role-actor.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
+import type {
+  GatewayWsBrowserOrigin,
+  PreparedSessionProfile,
+} from "../server/client-identity-types.js";
 import type { TrustedSessionCreation } from "./session-creation-provenance.js";
 
 /** Trusted in-process spawn control plane that already owns this run's task row.
@@ -17,6 +24,8 @@ export type GatewayAgentRunTaskOwner = "plugin_subagent" | "native_subagent";
 export type TrustedAgentToolCaller = Readonly<{
   agentId: string;
   sessionKey: string;
+  /** Exact admitted requester lifetime; identity alone does not establish live authority. */
+  assertCurrent?: () => void;
 }>;
 
 /** Closure-bound streaming hooks attached only to trusted plugin-owned synthetic clients. */
@@ -30,6 +39,12 @@ export type GatewayNodeInvokeStream = {
 /** Per-connection client metadata captured after the gateway handshake. */
 export type GatewayClient = {
   connect: ConnectParams;
+  /** Transport-owned revocation marker; retained callers have no authority after invalidation. */
+  invalidated?: boolean;
+  /** Host-owned transport retirement notification; does not cancel ordinary admitted RPCs. */
+  connectionSignal?: AbortSignal;
+  /** Server-attested browser origin captured during the WebSocket handshake. */
+  browserOrigin?: GatewayWsBrowserOrigin;
   connId?: string;
   presenceKey?: string;
   clientIp?: string;
@@ -39,6 +54,8 @@ export type GatewayClient = {
   /** Verified Tailscale provider identity; generic proxy identities must not infer this. */
   authenticatedUserIsTailscaleProvider?: boolean;
   authenticatedGitHubIdentitySync?: AuthenticatedGitHubIdentitySync;
+  /** Prepared at identity admission and profile publication, before session reads or events. */
+  preparedSessionProfile?: PreparedSessionProfile;
   authenticatedUserProfile?: {
     profileId: string;
     displayName: string | null;
@@ -53,10 +70,18 @@ export type GatewayClient = {
   internal?: {
     /** Handshake-attested direct-local transport; never accepted from wire params. */
     isLocalClient?: true;
+    /** Authenticated Control UI operator ingress; never accepted from wire params. */
+    authenticatedControlUi?: true;
+    /** Authenticated Control UI admin admission; never accepted from wire params. */
+    controlUiAdmin?: true;
     /** Marks the server-constructed client used by trusted in-process dispatch. */
     syntheticClient?: true;
     /** Host-owned role authority retained separately from an autonomous run principal. */
     operatorRoleActor?: GatewayOperatorRoleActor;
+    /** Original source restriction carried only by trusted in-process run admission. */
+    operatorRunAuthority?: AdmittedRunOperatorAuthority;
+    /** Closure-bound access captured by the authenticated ingress, never wire data. */
+    operatorAccessAuthority?: GatewayOperatorAccessAuthority | null;
     /** Overrides persisted sender attribution without changing the authorizing client identity. */
     senderAttribution?: { id: string; name?: string; identity?: TranscriptSenderIdentity };
     /** Trusted session creation provenance; never accepted from Gateway wire params. */
@@ -77,6 +102,7 @@ export type GatewayClient = {
     pluginSubagentRequester?: PluginSubagentRequesterContext;
     /** Host-owned exact media set for a scoped automatic recovery delivery. */
     internalDeliveryMediaUrls?: string[];
+    runtimeContextFragments?: RuntimeContextFragment[];
     internalDeliverySuppressText?: boolean;
     /** Plugin-owned tools authorized for this internal subagent run. */
     runtimePluginToolGrant?: RuntimePluginToolGrant;

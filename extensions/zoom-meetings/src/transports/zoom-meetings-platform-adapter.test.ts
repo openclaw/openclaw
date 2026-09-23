@@ -6,6 +6,28 @@ import { ZOOM_MEETINGS_PLATFORM_ADAPTER } from "./zoom-meetings-platform-adapter
 
 const URL = "https://acme.zoom.us/j/12345678901?pwd=abc";
 
+it.each([true, false])(
+  "starts browser capture only for the current Zoom session (owner=%s)",
+  async (owns) => {
+    const source = ZOOM_MEETINGS_PLATFORM_ADAPTER.browser.buildAudioCaptureScript?.({
+      action: "start",
+      captureId: "capture-1",
+      meetingSessionId: "session-1",
+      meetingUrl: URL,
+    });
+    const identity = ZOOM_MEETINGS_PLATFORM_ADAPTER.urls.normalizeForReuse(URL);
+    const result = runInNewContext(`(${source})()`, {
+      URL: globalThis.URL,
+      location: { href: URL },
+      window: { __openclawZoomMeeting: { sessionId: owns ? "session-1" : "session-2", identity } },
+      AudioContext: function AudioContext() {
+        throw new Error("capture admitted");
+      },
+    });
+    await expect(result).rejects.toThrow(owns ? "capture admitted" : "no longer owns");
+  },
+);
+
 function pageControl(label: string) {
   const click = vi.fn();
   const control = {

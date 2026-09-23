@@ -6,6 +6,7 @@
  * remain in this sequence.
  */
 import type { ToolLoopWarning } from "@openclaw/agent-core";
+import { getRuntimeConfig } from "../config/config.js";
 import { freezeDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { getGlobalHookRunnerRegistry } from "../plugins/hook-runner-global-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -83,6 +84,7 @@ export function hasBeforeToolCallPolicy(): boolean {
 /** Consume voice approval only after tool-owned finalization produces execution params. */
 export function consumeFinalClientVoiceToolConfirmation(args: {
   toolName: string;
+  toolCallId?: string;
   params: unknown;
   ctx?: HookContext;
 }) {
@@ -91,6 +93,7 @@ export function consumeFinalClientVoiceToolConfirmation(args: {
     agentId: voiceRun?.agentId,
     voiceSessionId: voiceRun?.voiceSessionId,
     runId: args.ctx?.runId,
+    toolCallId: args.toolCallId,
     toolName: normalizeToolPolicyName(args.toolName || "tool"),
     toolParams: args.params,
     ...(voiceRun ? { isConfirmable: () => isClientVoiceSessionConfirmable(voiceRun) } : {}),
@@ -169,17 +172,22 @@ export async function runBeforeToolCallHook(args: {
     const policyRegistry = getGlobalHookRunnerRegistry() ?? undefined;
     const shouldRunTrustedPolicies = hasTrustedToolPolicies(policyRegistry);
     const normalizedParams = isPlainObject(params) ? params : {};
-    const initialCorePolicyResult = await resolveSkillWorkshopToolApproval({
-      toolName,
-      toolParams: normalizedParams,
-      ...(args.ctx?.config ? { config: args.ctx.config } : {}),
-      ...(args.ctx?.workspaceDir ? { workspaceDir: args.ctx.workspaceDir } : {}),
-    });
+    const initialCorePolicyResult =
+      toolName === "skill_workshop"
+        ? await resolveSkillWorkshopToolApproval({
+            toolName,
+            toolParams: normalizedParams,
+            config: args.ctx?.config ?? getRuntimeConfig(),
+            ...(args.ctx?.workspaceDir ? { workspaceDir: args.ctx.workspaceDir } : {}),
+            ...(args.ctx?.agentId ? { agentId: args.ctx.agentId } : {}),
+          })
+        : undefined;
     const voiceRun = resolveClientVoiceRunBinding(args.ctx?.runId);
     const voiceConfirmation = checkClientVoiceToolConfirmationPolicy({
       agentId: voiceRun?.agentId,
       voiceSessionId: voiceRun?.voiceSessionId,
       runId: args.ctx?.runId,
+      toolCallId: args.toolCallId,
       toolName,
       toolParams: normalizedParams,
       ...(voiceRun ? { isConfirmable: () => isClientVoiceSessionConfirmable(voiceRun) } : {}),

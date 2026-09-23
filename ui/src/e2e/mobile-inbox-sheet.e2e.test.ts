@@ -1,7 +1,13 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
@@ -31,6 +37,89 @@ async function setTheme(page: import("playwright").Page, theme: "dark" | "light"
 }
 
 suite.define(() => {
+  it("closes both mobile surfaces for Inbox destinations but keeps local actions in place", async () => {
+    await suite.withPage(
+      { viewport, reducedMotion: "reduce", serviceWorkers: "block" },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          presenceUsers: [
+            {
+              self: true,
+              id: "viewer",
+              identity: { type: "profile", id: "viewer" },
+              name: "Viewer",
+            },
+          ],
+          featureMethods: [...defaultControlUiFeatureMethods, "mentions.list", "mentions.dismiss"],
+          methodResponses: {
+            "mentions.list": {
+              gatewayInstanceId: "e2e-gateway-boot",
+              revision: 1,
+              items: [
+                {
+                  id: "mobile-mention",
+                  senderProfileId: "riley",
+                  senderLabel: "Riley",
+                  sessionKey: "agent:main:main",
+                  agentId: "main",
+                  sessionTitle: "Release checklist",
+                  messageId: "message-1",
+                  createdAt: 1_000,
+                  expiresAt: 10_000,
+                },
+              ],
+            },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "activity");
+        const panel = page.locator("#sidebar-issues-panel");
+        const drawer = page.locator(".nav-drawer");
+        const openInbox = async () => {
+          await page.getByRole("button", { name: "Expand sidebar" }).click();
+          await drawer.waitFor();
+          await page.locator(".sidebar-issues-button:visible").click();
+          await panel.waitFor();
+        };
+        const expectClosed = async () => {
+          await panel.waitFor({ state: "hidden" });
+          await page.locator('.nav-drawer[aria-hidden="true"]').waitFor({ state: "attached" });
+        };
+        await openInbox();
+        await panel.getByRole("tab", { name: /Mentions/ }).click();
+        expect(await drawer.getAttribute("aria-hidden")).toBeNull();
+        await panel.getByRole("button", { name: "Close", exact: true }).click();
+        await panel.waitFor({ state: "hidden" });
+        expect(await drawer.getAttribute("aria-hidden")).toBeNull();
+        await page.locator(".sidebar-issues-button:visible").click();
+        await panel.locator('[data-mention-id="mobile-mention"] a').click();
+        await waitForControlUiRoute(page, { pathname: "/chat/main", routeId: "chat" });
+        await expectClosed();
+        // An Inbox link to the already-open session must close the drawer too.
+        await openInbox();
+        await panel.locator('[data-mention-id="mobile-mention"] a').click();
+        await expectClosed();
+        expect(await gateway.getRequests("mentions.dismiss")).toHaveLength(0);
+        await gateway.emitGatewayEvent("exec.approval.requested", {
+          id: "mobile-approval",
+          createdAtMs: Date.now(),
+          expiresAtMs: Date.now() + 60_000,
+          request: { command: "pnpm test", agentId: "main", sessionKey: "agent:main:main" },
+        });
+        await openInbox();
+        await panel.locator('[data-approval-id="mobile-approval"] a').click();
+        await expectClosed();
+        expect(await gateway.getRequests("exec.approval.resolve")).toHaveLength(0);
+        await openInbox();
+        await panel.getByRole("link", { name: "Notification settings" }).click();
+        await expectClosed();
+        await waitForControlUiRoute(page, {
+          pathname: "/settings/notifications",
+          routeId: "notifications",
+        });
+      },
+    );
+  });
+
   it("rises from the bottom with a continuous header and compact close control", async () => {
     const results: Array<{
       closeBackground: string;
@@ -45,8 +134,15 @@ suite.define(() => {
       startTop: number;
       finalTop: number;
       duration: number;
-      tabTrackWidth: number;
-      tabWidths: number[];
+      tabTrackLeft: number;
+      tabTrackRight: number;
+      tabs: Array<{
+        panel: string | null;
+        left: number;
+        right: number;
+        labelLeft: number;
+        labelRight: number;
+      }>;
     }> = [];
 
     for (const theme of ["light", "dark"] as const) {
@@ -72,15 +168,31 @@ suite.define(() => {
       await panel.waitFor({ state: "attached" });
 
       const result = await panel.evaluate(async (element) => {
-        const animation = element.getAnimations().find((candidate) => {
-          const effect = candidate.effect;
-          return effect instanceof KeyframeEffect && effect.target === element;
-        });
+        const findEntrance = () =>
+          element.getAnimations().find((candidate) => {
+            const effect = candidate.effect;
+            return effect instanceof KeyframeEffect && effect.target === element;
+          });
+        let animation = findEntrance();
+        if (!animation) {
+          // A loaded runner can sample after the CSS entrance already finished, and
+          // getAnimations() drops finished animations. Replay it so the geometry is
+          // measured from the real keyframes instead of depending on scheduling luck.
+          element.style.animation = "none";
+          void element.getBoundingClientRect();
+          element.style.removeProperty("animation");
+          animation = findEntrance();
+        }
         if (!animation?.effect) {
           throw new Error("Expected the mobile Inbox sheet entrance animation");
         }
         const timing = animation.effect.getComputedTiming();
+        // Playwright can reach this sample after the entrance animation has advanced.
+        // Rewind the real effect so start geometry does not depend on runner load.
+        animation.pause();
+        animation.currentTime = 0;
         const startTop = element.getBoundingClientRect().top;
+        animation.play();
         await animation.finished;
         const close = element.querySelector<HTMLElement>(".sidebar-issues-panel__mobile-close")!;
         const header = element.querySelector<HTMLElement>(".sidebar-issues-panel__header")!;
@@ -88,6 +200,7 @@ suite.define(() => {
         const tabTrack = element
           .querySelector<HTMLElement>(".sidebar-issues-panel__tabs")!
           .shadowRoot!.querySelector<HTMLElement>(".tabs")!;
+        const tabTrackBounds = tabTrack.getBoundingClientRect();
         const tabs = Array.from(element.querySelectorAll<HTMLElement>("wa-tab.hub-tab"));
         return {
           closeBackground: getComputedStyle(close).backgroundColor,
@@ -102,8 +215,24 @@ suite.define(() => {
           headerBackground: getComputedStyle(header).backgroundColor,
           listBackground: getComputedStyle(list).backgroundColor,
           startTop,
-          tabTrackWidth: tabTrack.getBoundingClientRect().width,
-          tabWidths: tabs.map((tab) => tab.getBoundingClientRect().width),
+          tabTrackLeft: tabTrackBounds.left,
+          tabTrackRight: tabTrackBounds.right,
+          tabs: tabs.map((tab) => {
+            const label = Array.from(tab.childNodes).find(
+              (node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim(),
+            )!;
+            const range = document.createRange();
+            range.selectNodeContents(label);
+            const labelBounds = range.getBoundingClientRect();
+            const bounds = tab.getBoundingClientRect();
+            return {
+              panel: tab.getAttribute("panel"),
+              left: bounds.left,
+              right: bounds.right,
+              labelLeft: labelBounds.left,
+              labelRight: labelBounds.right,
+            };
+          }),
         };
       });
       results.push(result);
@@ -133,11 +262,10 @@ suite.define(() => {
             .shell--mobile-nav .sidebar-issues-panel__list-wrap { background: transparent; }
           `,
         });
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(artifactDir, `mobile-inbox-before-${theme}.png`),
-        });
+        await writeFile(
+          path.join(artifactDir, `mobile-inbox-before-${theme}.png`),
+          await takeControlUiViewportScreenshot(page, panel, [panel.getByRole("tab").first()]),
+        );
         const dismissShownBefore = await page
           .locator(".sidebar-issues-panel__dismiss-shown")
           .evaluate((element) => ({
@@ -146,11 +274,10 @@ suite.define(() => {
             lineHeight: getComputedStyle(element).lineHeight,
           }));
         await previousStyle.evaluate((element) => element.parentNode?.removeChild(element));
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(artifactDir, `mobile-inbox-after-${theme}.png`),
-        });
+        await writeFile(
+          path.join(artifactDir, `mobile-inbox-after-${theme}.png`),
+          await takeControlUiViewportScreenshot(page, panel, [panel.getByRole("tab").first()]),
+        );
         const dismissShownAfter = await page
           .locator(".sidebar-issues-panel__dismiss-shown")
           .evaluate((element) => ({
@@ -160,6 +287,16 @@ suite.define(() => {
           }));
         expect(dismissShownAfter).toEqual(dismissShownBefore);
       }
+      for (const name of ["approvals", "mentions", "automations", "system", "all"]) {
+        const tab = panel.locator(`wa-tab[panel="${name}"]`);
+        await tab.click();
+        await expect.poll(() => tab.getAttribute("aria-selected")).toBe("true");
+        await expect
+          .poll(() => panel.getByRole("tabpanel").getAttribute("aria-labelledby"))
+          .toBe(`sidebar-issues-tab-${name}`);
+      }
+      await panel.getByRole("button", { name: "Close", exact: true }).click();
+      await panel.waitFor({ state: "hidden" });
       await suite.closeBrowserContext(context);
     }
 
@@ -175,9 +312,26 @@ suite.define(() => {
       expect(result.closeBorderWidth).toBe("1px");
       expect(result.closeBorderRadius).toBe("9999px");
       expect(result.closeBackground).not.toBe("rgba(0, 0, 0, 0)");
-      expect(result.tabWidths).toHaveLength(4);
-      for (const tabWidth of result.tabWidths) {
-        expect(tabWidth).toBeCloseTo(result.tabTrackWidth / 4, 1);
+      expect(result.tabs.map((tab) => tab.panel)).toEqual([
+        "all",
+        "approvals",
+        "mentions",
+        "automations",
+        "system",
+      ]);
+      expect(result.tabs[0]!.left).toBeCloseTo(result.tabTrackLeft, 1);
+      expect(result.tabs.at(-1)!.right).toBeCloseTo(result.tabTrackRight, 1);
+      for (const [index, tab] of result.tabs.entries()) {
+        expect(tab.labelRight).toBeGreaterThan(tab.labelLeft);
+        expect(tab.labelLeft, `${tab.panel} label starts inside its tab`).toBeGreaterThanOrEqual(
+          tab.left - 1,
+        );
+        expect(tab.labelRight, `${tab.panel} label fits inside its tab`).toBeLessThanOrEqual(
+          tab.right + 1,
+        );
+        if (index > 0) {
+          expect(tab.left).toBeGreaterThanOrEqual(result.tabs[index - 1]!.right - 1);
+        }
       }
     }
   });

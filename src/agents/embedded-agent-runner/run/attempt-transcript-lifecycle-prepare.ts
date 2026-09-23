@@ -4,6 +4,7 @@ import {
   type OwnedSessionTranscriptWriteContext,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { resolveAgentRunSessionTarget } from "../../run-session-target.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
@@ -22,7 +23,7 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
     | "sessionKey"
     | "sessionManager"
     | "sessionTarget"
-  >;
+  > & { admittedRunContext?: EmbeddedRunAttemptParams["admittedRunContext"] };
   externalAbortController: {
     arm: () => void;
     throwIfFiredAfterPrepCleanup: () => Promise<void>;
@@ -64,21 +65,27 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
       ? { expectedWriterRunId: attempt.sessionTarget.expectedWriterRunId }
       : {}),
   };
+  const assertAdmittedActive = attempt.admittedRunContext
+    ? resolveAdmittedRunActiveAssertion(attempt.admittedRunContext, attempt.abortSignal)
+    : undefined;
+  const withTranscriptWrite: WithOwnedTranscriptWrite = (operation) =>
+    initialWriter
+      ? initialWriter.withTranscriptWrite(() => transcriptLifecycle.withTranscriptWrite(operation))
+      : transcriptLifecycle.withTranscriptWrite(operation);
   const ownedTranscriptWriteContext: OwnedSessionTranscriptWriteContext = {
     sessionFile: attempt.sessionFile,
     sessionKey: attempt.sessionKey,
     sessionTarget: fencedSessionTarget,
-    ...(initialWriter
-      ? {
-          initialWriter,
-          assertCommitAllowed: () => attempt.abortSignal?.throwIfAborted(),
-        }
-      : {}),
-    withTranscriptWrite: (operation) => transcriptLifecycle.withTranscriptWrite(operation),
+    ...(initialWriter ? { initialWriter } : {}),
+    assertCommitAllowed: () => {
+      attempt.abortSignal?.throwIfAborted();
+      assertAdmittedActive?.();
+    },
+    withTranscriptWrite,
   };
   const withOwnedTranscriptWrite: WithOwnedTranscriptWrite = (operation) =>
     withOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, async () =>
-      transcriptLifecycle.withTranscriptWrite(operation),
+      withTranscriptWrite(operation),
     );
 
   externalAbortController.arm();

@@ -7,10 +7,12 @@ import type {
 } from "./get-reply.types.js";
 
 export type InternalReplyResolverOptions = {
+  mediaNormalizationOwner?: InternalGetReplyOptions["mediaNormalizationOwner"];
   onDeliberateSilentTerminalReply?: () => void;
   onPendingContinuation?: (settlement?: PendingContinuationSettlement) => void;
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
+  onRunVerbosityResolved?: InternalGetReplyOptions["onRunVerbosityResolved"];
 };
 
 export type PluginBindingTranscriptOwner = {
