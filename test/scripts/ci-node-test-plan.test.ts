@@ -118,6 +118,7 @@ describe("Control UI release-only inventories", () => {
     "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts";
   const releaseOnlyRealGateway = new Set([
     "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
+    "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
     automationManagement,
     "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
     "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
@@ -150,7 +151,7 @@ describe("Control UI release-only inventories", () => {
         run_desktop,
       })),
     ).toEqual([
-      { shard: 1, shard_count: 2, run_desktop: true },
+      { shard: 1, shard_count: 2, run_desktop: expectedFiles.includes(desktop) },
       { shard: 2, shard_count: 2, run_desktop: false },
     ]);
     const files = shards.flatMap((shard) => [
@@ -167,7 +168,11 @@ describe("Control UI release-only inventories", () => {
     for (const file of [
       "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
+      "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
+      "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
+      "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
+      "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
     ]) {
       expect(shards[0]?.groups[0]?.includePatterns).toContain(file);
     }

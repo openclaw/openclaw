@@ -1462,6 +1462,7 @@ const RELEASE_ONLY_UI_TEST_FILES = new Set([
   "ui/src/e2e/chat-session-entry.e2e.test.ts",
   "ui/src/components/app-sidebar.stress.browser.test.ts",
   "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
+  "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
   "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
   "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
   "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
@@ -1508,25 +1509,28 @@ export function createUiRealGatewayTestShards(
     e2eGroups.flatMap((group) => group.includePatterns ?? uiE2eRealGatewayTestFiles),
   );
   const parallelFiles = new Set(uiE2ePrebuiltParallelTestFiles);
-  // Pair standalone fixtures beside desktop proof without another preview build.
-  const desktopParallelFiles = new Set([
+  // Balance the serial phase with standalone fixtures that need no preview build.
+  const standaloneCompanions = new Set([
     "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
+    "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
+    "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
+    "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
+    "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
   ]);
-  const files = uiE2eRealGatewayTestFiles.filter(
-    (file) => selected.has(file) && file !== "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
-  );
+  const desktop = "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts";
+  const files = uiE2eRealGatewayTestFiles.filter((file) => selected.has(file) && file !== desktop);
   // Desktop transport proof owns its file separately, alongside the serial phase.
   return ([1, 2] as const).map((shard) => ({
     shard,
     shard_count: 2 as const,
-    run_desktop: shard === 1,
+    run_desktop: shard === 1 && selected.has(desktop),
     groups: [
       {
         configs: ["test/vitest/vitest.ui-e2e-prebuilt.config.ts"],
         shard_name: `ui-e2e-real-gateway-${shard === 1 ? "desktop" : "parallel"}`,
         includePatterns: files.filter(
-          (file) => (parallelFiles.has(file) && !desktopParallelFiles.has(file)) === (shard === 2),
+          (file) => (parallelFiles.has(file) && !standaloneCompanions.has(file)) === (shard === 2),
         ),
       },
     ],
