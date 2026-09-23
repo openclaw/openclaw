@@ -120,13 +120,21 @@ describe("plugin module generation SDK identity", () => {
         write(host, `${tree}/plugin-sdk/identity-peer.${extension}`, 'export * from "./owner.js";');
         write(
           host,
-          `${tree}/plugin-sdk/owner.${extension}`,
+          tree === "dist"
+            ? "dist/run-embedded.runtime-abc123.mjs"
+            : `${tree}/plugin-sdk/owner.${extension}`,
           `const bindings = new WeakMap();
            export const identity = { tree: ${JSON.stringify(tree)} };
            export const bind = (token, value) => bindings.set(token, value);
            export const read = (token) => bindings.get(token);`,
         );
       }
+      write(host, "dist/plugin-sdk/owner.js", 'export * from "../run-embedded.runtime.js";');
+      write(
+        host,
+        "dist/run-embedded.runtime.js",
+        'export * from "./run-embedded.runtime-abc123.mjs";',
+      );
       fs.symlinkSync(host, hostLink, process.platform === "win32" ? "junction" : "dir");
       const plugin = path.join(root, "plugin");
       const captures = path.join(root, "captures");
@@ -146,7 +154,8 @@ describe("plugin module generation SDK identity", () => {
              return result;
            } finally { await worker.terminate(); }
          }
-         export const resolveSdk = () => import.meta.resolve('openclaw/plugin-sdk/identity');`,
+         export const resolveSdk = () => import.meta.resolve('openclaw/plugin-sdk/identity');
+         export const readResolvedSdk = () => import(import.meta.resolve('openclaw/plugin-sdk/identity'));`,
       );
       write(
         plugin,
@@ -203,6 +212,7 @@ describe("plugin module generation SDK identity", () => {
            const first = load();
            assert.equal(first.api.identity, host.identity);
            assert.equal(first.api.read(token), 'host-issued');
+           assert.equal((await first.api.readResolvedSdk()).identity, host.identity);
            await assertWorker(first.api);
            const sdkUrl = first.api.resolveSdk();
            const lazy = first.instance.loadModule(${JSON.stringify(path.join(plugin, "lazy.ts"))});

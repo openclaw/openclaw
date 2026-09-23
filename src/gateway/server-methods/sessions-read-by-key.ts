@@ -11,6 +11,7 @@ import {
   createSessionListEntryFilter,
 } from "../session-sharing.js";
 import { readRecentSessionMessagesWithStatsAsync } from "../session-transcript-readers.js";
+import { createVisibleActiveSessionRunProjector } from "./session-active-runs.js";
 import { requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -50,7 +51,15 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
             return;
           }
           const query = { key, agentId: requestedAgent.agentId };
-          const presentation = prepareProjectedSessionPresentation(read, client);
+          const presentation = prepareProjectedSessionPresentation(
+            read,
+            client,
+            Date.now(),
+            createVisibleActiveSessionRunProjector(
+              context,
+              read.state.rowContext.projectedAgentRuns,
+            ),
+          );
           const denied = presentation.authorizeDescription(query);
           if (denied) {
             respond(false, undefined, denied);

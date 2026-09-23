@@ -23,16 +23,28 @@ type AgentHarnessToolSurfaceOptions = Omit<
   "operationalRunInstance"
 >;
 
+type AgentHarnessModelExecutionBinder = (
+  model: import("@openclaw/model-catalog-core/model-catalog-refs").ProviderModelRef | undefined,
+) => Readonly<{ signal: AbortSignal; assertCurrent: () => void; release: () => void }> | undefined;
+
 export type AgentHarnessHostCapabilities = Readonly<{
   kind: "agent-harness-host-capability";
   version: 1;
   /** Fails closed unless this exact admitted run capability remains active. */
   assertActive: () => void;
+  /** Binds the actual native model; returns undefined only for runs without an operator source. */
+  bindModelExecution?: AgentHarnessModelExecutionBinder;
   /** Retains the original source for already-admitted work beyond foreground completion. */
   retainSourceAuthority?: () =>
     | Readonly<{
         assertCurrent: () => void;
         signal?: AbortSignal;
+        /** Live preflight fact; absence means unknown, not an unrestricted source. */
+        modelPolicyRequired?: boolean;
+        /** Opaque equality for compatible active input; never authority by itself. */
+        sourceIdentity?: object;
+        /** Binds later dispatches while this retained work remains active. */
+        bindModelExecution?: AgentHarnessModelExecutionBinder;
         release: () => void;
       }>
     | undefined;

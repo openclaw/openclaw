@@ -290,8 +290,10 @@ it("identifies a slow transcript matcher while retaining its hot read snapshot",
       expect(holds).toEqual([
         {
           async: false,
+          database: race.database.path,
           elapsedMs: 1_200,
           isMainThread,
+          mode: "deferred",
           operation: "session transcript match read",
           pid: process.pid,
           threadId,

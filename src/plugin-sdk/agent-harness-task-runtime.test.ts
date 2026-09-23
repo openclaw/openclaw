@@ -13,10 +13,12 @@ import {
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createAgentHarnessTaskRuntimeScope } from "../tasks/agent-harness-task-runtime-scope.js";
+import { SUBAGENT_KILL_TASK_ERROR } from "../tasks/detached-task-runtime-contract.js";
 import {
   createRunningTaskRun,
   finalizeTaskRunByRunId,
   recordTaskRunProgressByRunId,
+  setDetachedTaskDeliveryStatusByRunId,
   transitionTaskAssignment,
   getDetachedTaskLifecycleRuntime,
 } from "../tasks/detached-task-runtime.js";
@@ -131,6 +133,114 @@ describe("agent-harness-task-runtime", () => {
       }
     },
   );
+
+  it.each([false, true])(
+    "projects private task content before every writer (private: %s)",
+    (privateSession) => {
+      const requesterSessionKey = privateSession
+        ? "agent:main:dashboard:incognito-native"
+        : "agent:main:main";
+      const runtime = createAgentHarnessTaskRuntime({
+        runtime: "subagent",
+        taskKind: "example-harness",
+        scope: createScope(requesterSessionKey),
+      });
+      const content = "SYNTHETIC_PRIVATE_TASK_CONTENT";
+      const detail = { nativeTurnId: "turn-1", nativeHistory: { sessionId: "parent-1" } };
+      const task = runtime.createRunningTaskRun({
+        runId: "example:child",
+        task: content,
+        label: content,
+        progressSummary: content,
+        detail,
+      });
+      const expectedTask = captureAgentHarnessTaskAssignment(task);
+      const created = vi.mocked(createRunningTaskRun).mock.calls[0]?.[0];
+      expect(JSON.stringify(created).includes(content)).toBe(!privateSession);
+      expect(created).toMatchObject({ requesterSessionKey, runId: "example:child", detail });
+
+      for (const ownership of [{}, { expectedTask }]) {
+        const identity = { runId: "example:child", ...ownership };
+        runtime.recordTaskRunProgressByRunId({
+          ...identity,
+          progressSummary: content,
+          eventSummary: content,
+          detail,
+        });
+        runtime.finalizeTaskRunByRunId({
+          ...identity,
+          status: "failed",
+          endedAt: 2,
+          error: content,
+          progressSummary: content,
+          terminalSummary: content,
+          detail,
+        });
+        runtime.setDetachedTaskDeliveryStatusByRunId({
+          ...identity,
+          deliveryStatus: "pending",
+          error: content,
+        });
+      }
+      for (const writer of [
+        recordTaskRunProgressByRunId,
+        finalizeTaskRunByRunId,
+        setDetachedTaskDeliveryStatusByRunId,
+      ]) {
+        expect(JSON.stringify(vi.mocked(writer).mock.calls).includes(content)).toBe(
+          !privateSession,
+        );
+        expect(writer).toHaveBeenCalledOnce();
+      }
+      const transitions = vi.mocked(transitionTaskAssignment).mock.calls.map(([input]) => input);
+      expect(transitions).toHaveLength(3);
+      expect(JSON.stringify(transitions).includes(content)).toBe(!privateSession);
+      for (const transition of transitions) {
+        expect(transition.expectedTask).toEqual(expectedTask);
+        expect(transition.transition.params).toMatchObject({
+          runId: "example:child",
+          sessionKey: requesterSessionKey,
+        });
+      }
+      expect(transitions[1]?.transition.params).toMatchObject({
+        status: "failed",
+        endedAt: 2,
+        detail,
+      });
+    },
+  );
+
+  it("preserves the Incognito task cancellation marker", () => {
+    const runtime = createAgentHarnessTaskRuntime({
+      runtime: "subagent",
+      taskKind: "example-harness",
+      scope: createScope("agent:main:dashboard:incognito-native"),
+    });
+    runtime.finalizeTaskRunByRunId({
+      runId: "example:child",
+      status: "cancelled",
+      endedAt: 2,
+      error: SUBAGENT_KILL_TASK_ERROR,
+    });
+    expect(finalizeTaskRunByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "cancelled", error: SUBAGENT_KILL_TASK_ERROR }),
+    );
+  });
+
+  it("keeps full Incognito completion content on the live delivery path", async () => {
+    const result = "SYNTHETIC_LIVE_COMPLETION";
+    await expect(
+      deliverAgentHarnessTaskCompletion({
+        scope: createScope("agent:main:dashboard:incognito-native"),
+        childSessionKey: "harness-thread:child",
+        childSessionId: "child",
+        announceId: "harness:parent:child:succeeded",
+        status: "succeeded",
+        result,
+      }),
+    ).resolves.toMatchObject({ delivered: true, path: "steered" });
+    expect(JSON.stringify(vi.mocked(deliverSubagentAnnouncement).mock.calls)).toContain(result);
+  });
 
   it("keeps the runtime owner captured before an assignment's delayed settlement", () => {
     const runtime = createAgentHarnessTaskRuntime({

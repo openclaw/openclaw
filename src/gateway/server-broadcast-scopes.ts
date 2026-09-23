@@ -1,3 +1,5 @@
+import { isProxy } from "node:util/types";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import {
   GATEWAY_EVENT_DEVICE_PAIR_CHANGED,
@@ -92,6 +94,27 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "terminal.exit": [ADMIN_SCOPE],
   "portal.changed": [READ_SCOPE],
 };
+
+export function modelMetadataInvalidationFragment(payload: unknown): string | undefined {
+  if (isProxy(payload) || !isRecord(payload)) {
+    return undefined;
+  }
+  const prototype = Object.getPrototypeOf(payload);
+  if ((prototype !== null && prototype !== Object.prototype) || "toJSON" in payload) {
+    return undefined;
+  }
+  const keys = Reflect.ownKeys(payload);
+  if (keys.length === 0) {
+    return ',"payload":{}';
+  }
+  if (keys.length !== 1 || keys[0] !== "modelSelectionChanged") {
+    return undefined;
+  }
+  const field = Object.getOwnPropertyDescriptor(payload, "modelSelectionChanged");
+  return field?.value === true && field.enumerable
+    ? ',"payload":{"modelSelectionChanged":true}'
+    : undefined;
+}
 
 export function hasEventScope(
   client: GatewayWsClient,

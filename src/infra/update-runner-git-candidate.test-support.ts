@@ -366,3 +366,133 @@ export function registerGitActivationDoctorOutcomeTests(
     },
   );
 }
+
+export function registerGitRuntimeStagingTests(
+  getFixture: () => {
+    root: string;
+    beforeSha: string;
+    isStopped: () => boolean;
+    advanceRemote: () => Promise<string>;
+    git: (root: string, ...args: string[]) => Promise<string>;
+    update: (
+      opts: Pick<UpdateRunnerOptions, "progress" | "validateCandidate">,
+    ) => Promise<UpdateRunResult>;
+    expectNoRuntimeStagingPaths: () => Promise<void>;
+  },
+) {
+  it("omits generated tool caches while preserving runtime files during promotion", async () => {
+    const { root, isStopped, advanceRemote, update, expectNoRuntimeStagingPaths } = getFixture();
+    const target = await advanceRemote();
+    const stagingProgress: string[] = [];
+    const copy = fs.cp.bind(fs);
+    vi.spyOn(fs, "cp").mockImplementation(async (...args) => {
+      if (String(args[1]).includes(".openclaw-update-")) {
+        expect(stagingProgress).toEqual(["start"]);
+        expect(isStopped()).toBe(false);
+      }
+      return copy(...args);
+    });
+    const omitted = [
+      "node_modules/.cache/jiti",
+      "node_modules/.vite",
+      "node_modules/.vite-temp",
+      "ui/node_modules/.cache/jiti",
+    ];
+    const retained = [
+      "node_modules/.cache/other-tool",
+      "node_modules/package/.cache/jiti",
+      "node_modules/package/.vite",
+      "packages/runtime/node_modules/.cache/jiti",
+      "dist/.cache/jiti",
+      "dist-runtime/.vite",
+    ];
+    const result = await update({
+      progress: {
+        onStepStart: ({ name }) => {
+          if (name === "preflight-runtime-stage") {
+            stagingProgress.push("start");
+          }
+        },
+        onStepComplete: ({ name }) => {
+          if (name === "preflight-runtime-stage") {
+            stagingProgress.push("complete");
+          }
+        },
+      },
+      validateCandidate: async (candidateRoot) => {
+        for (const relative of [...omitted, ...retained]) {
+          await fs.mkdir(path.join(candidateRoot, relative), { recursive: true });
+          await fs.writeFile(path.join(candidateRoot, relative, "content"), "keep or regenerate");
+        }
+        await expectRuntime(candidateRoot, target);
+      },
+    });
+    expect(result.status, JSON.stringify(result)).toBe("ok");
+    expect(stagingProgress).toEqual(["start", "complete"]);
+    expect(result.steps).toContainEqual(
+      expect.objectContaining({
+        name: "preflight-runtime-stage",
+        exitCode: 0,
+        durationMs: expect.any(Number),
+      }),
+    );
+    for (const relative of omitted) {
+      await expect(fs.stat(path.join(root, relative))).rejects.toMatchObject({ code: "ENOENT" });
+    }
+    for (const relative of retained) {
+      expect(await fs.readFile(path.join(root, relative, "content"), "utf8")).toBe(
+        "keep or regenerate",
+      );
+    }
+    await expectRuntime(root, target);
+    await expectNoRuntimeStagingPaths();
+  });
+
+  it.each(["validation", "runtime staging"])(
+    "leaves the old runtime serving when candidate %s fails",
+    async (failurePoint) => {
+      const {
+        root,
+        beforeSha,
+        isStopped,
+        advanceRemote,
+        git,
+        update,
+        expectNoRuntimeStagingPaths,
+      } = getFixture();
+      await advanceRemote();
+      const failure = new Error("candidate canary failed");
+      const onStepComplete = vi.fn();
+      await expect(
+        update({
+          progress: {
+            onStepComplete,
+            onStepStart: ({ name }) => {
+              if (failurePoint === "runtime staging" && name === "preflight-cleanup") {
+                expect(onStepComplete).toHaveBeenCalledWith(
+                  expect.objectContaining({
+                    name: "preflight-runtime-stage",
+                    exitCode: 1,
+                    failureFacts: [expect.objectContaining({ check: "preflight-runtime-stage" })],
+                  }),
+                );
+              }
+            },
+          },
+          validateCandidate: async () => {
+            if (failurePoint === "validation") {
+              throw failure;
+            }
+            vi.spyOn(fs, "cp").mockRejectedValueOnce(failure);
+          },
+        }),
+      ).rejects.toBe(failure);
+      expect(isStopped()).toBe(false);
+      expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
+      expect(await fs.readFile(path.join(root, "node_modules", "identity.cjs"), "utf8")).toContain(
+        beforeSha,
+      );
+      await expectNoRuntimeStagingPaths();
+    },
+  );
+}

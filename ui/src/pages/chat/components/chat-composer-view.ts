@@ -179,22 +179,26 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             }
             <div class="agent-chat__disabled-banner-detail">${props.disabledBanner.text}</div>
           </div>
-          <button
-            type="button"
-            class="btn btn--sm ${props.disabledBanner.actionStyle ?? ""}"
-            ?disabled=${Boolean(props.disabledBanner.disabledReason) || props.disabledBanner.busy}
-            aria-busy=${props.disabledBanner.busy ? "true" : "false"}
-            title=${props.disabledBanner.disabledReason ?? nothing}
-            @click=${props.disabledBanner.onAction}
-          >
-            ${
-              props.disabledBanner.busy
-                ? html`<span class="btn__spinner" aria-hidden="true"></span>${
-                      props.disabledBanner.busyLabel ?? props.disabledBanner.actionLabel
-                    }`
-                : props.disabledBanner.actionLabel
-            }
-          </button>
+          ${
+            props.disabledBanner.onAction
+              ? html`<button
+                  type="button"
+                  class="btn btn--sm ${props.disabledBanner.actionStyle ?? ""}"
+                  ?disabled=${Boolean(props.disabledBanner.disabledReason) || props.disabledBanner.busy}
+                  aria-busy=${props.disabledBanner.busy ? "true" : "false"}
+                  title=${props.disabledBanner.disabledReason ?? nothing}
+                  @click=${props.disabledBanner.onAction}
+                >
+                  ${
+                    props.disabledBanner.busy
+                      ? html`<span class="btn__spinner" aria-hidden="true"></span>${
+                            props.disabledBanner.busyLabel ?? props.disabledBanner.actionLabel
+                          }`
+                      : props.disabledBanner.actionLabel
+                  }
+                </button>`
+              : nothing
+          }
           ${
             props.disabledBanner.kind === "composer-replacement" && showAbortableUi
               ? renderChatAbortAction(runControlsProps)
@@ -288,7 +292,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     : renderChatRunStatusIndicator(composerRunStatus);
   const fallbackStatus = renderFallbackIndicator(props.fallbackStatus);
   const progressCard = props.progressCard
-    ? html`<div class="agent-chat__progress-float">
+    ? html`<div class="agent-chat__progress-float" ?hidden=${!showComposer}>
         ${renderSessionProgressCard(
           props.progressCard,
           "composer",
@@ -299,6 +303,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           props.runActive,
           props.collapseTaskProgress,
           {
+            presented: showComposer,
             gatewayScope: props.gatewayScope,
             sessionIdentity: props.progressCardIdentity,
             cardLifetime: props.progressCardLifetime,
@@ -311,6 +316,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     : props.progressCardInitialLoading
       ? html`<div
           class="agent-chat__progress-float agent-chat__progress-float--loading"
+          ?hidden=${!showComposer}
           aria-hidden="true"
         ></div>`
       : nothing;

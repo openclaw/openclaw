@@ -1,5 +1,6 @@
 // Isolated plugin LLM completion policy validates and dispatches the zero-tool runtime mode.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { IsolatedCompletionResult } from "../../agents/isolated-completion.js";
 import { buildConfiguredModelCatalog } from "../../agents/model-selection-shared.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
@@ -116,7 +117,10 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
   provider: string;
   model: string;
   authProfileId?: string;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+  assertCurrent?: () => void;
 }): Promise<IsolatedCompletionResult> {
+  params.assertCurrent?.();
   const prompt = requireIsolatedUserPrompt(params.request);
   const timeoutMs = resolveIsolatedTimeoutMs(params.request.execution.timeoutMs);
   assertIsolatedReasoningSupported({
@@ -154,6 +158,8 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
         provider: params.provider,
         model: params.model,
         authProfileId: params.authProfileId,
+        operatorAuthority: params.operatorAuthority,
+        assertCurrent: params.assertCurrent,
         agentId: params.agentId,
         systemPrompt: params.request.systemPrompt ?? "",
         prompt,

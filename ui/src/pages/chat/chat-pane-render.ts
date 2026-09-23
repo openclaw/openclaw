@@ -30,7 +30,7 @@ import { chatGoalRecovery, mutateChatGoal, submitChatGoalDraft } from "./chat-go
 import { clearChatHistory } from "./chat-history-actions.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
-import { chatModelUnavailableBanner, requiresChatModelSetup } from "./chat-model-setup.ts";
+import { resolveChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneLayoutRender } from "./chat-pane-layout-render.ts";
 import { createChatPaneRails } from "./chat-pane-rails.ts";
 import {
@@ -131,18 +131,22 @@ export class ChatPane extends ChatPaneLayoutRender {
       (agent) => agent.id === currentAgentId,
     );
     const agentDefaultModel = selectedAgent?.model?.primary;
-    const modelUnavailableBanner = chatModelUnavailableBanner(
-      selectedSession?.model ?? agentDefaultModel,
-      selectedSession?.modelProvider,
-      state.chatModelCatalog,
-      () => this.context.navigate("model-setup"),
-    );
-    const modelSetupRequired = requiresChatModelSetup({
+    const { modelSetupRequired, modelUnavailableBanner, requiredReason } = resolveChatModelSetup({
+      activeSession: selectedSession,
+      chatModelCatalog: state.chatModelCatalog,
+      modelOverrides: state.sessions.state.modelOverrides,
+      sessionKey: state.sessionKey,
+      sessionsResult: state.sessionsResult,
       catalog: catalogKey !== null,
       connected: state.connected,
       agentsLoaded: this.context.agents.state.agentsList !== null,
       selectedAgentFound: selectedAgent !== undefined,
       agentModel: agentDefaultModel,
+      modelSelectionPolicy: state.chatModelSelectionPolicy,
+      catalogRetired: state.chatModelCatalogRetired,
+      catalogInitialized: state.chatModelCatalogInitialized,
+      catalogError: state.chatModelCatalogError,
+      onSetup: () => this.context.navigate("model-setup"),
     });
     const placementStartup = this.context.placementStartup.get(state.sessionKey);
     const sendHoldReason = chatSendHoldReason(state, state.sessionKey, placementStartup !== null);
@@ -184,12 +188,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       sessionParticipationBlocked && !suggestionViewer
         ? t("chat.sessionSharing.readOnlyNotice")
         : null;
-    const modelRequiredReason =
-      catalogKey || suggestionViewer
-        ? undefined
-        : modelSetupRequired
-          ? t("modelSetup.required.body")
-          : modelUnavailableBanner?.text;
+    const modelRequiredReason = catalogKey || suggestionViewer ? undefined : requiredReason;
     const typingEnabled =
       multiIdentity &&
       hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null) &&

@@ -2,6 +2,7 @@ import type {
   SessionsCompanionAskResult,
   SessionsCompanionStateResult,
 } from "../../packages/gateway-protocol/src/schema/sessions.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import {
@@ -20,6 +21,7 @@ export type SessionCompanionService = {
     sessionKey: string;
     question: string;
     connId: string;
+    operatorAuthority?: AdmittedRunOperatorAuthority;
     assertSourceCurrent?: () => void;
     signal?: AbortSignal;
   }) => Promise<SessionsCompanionAskResult>;

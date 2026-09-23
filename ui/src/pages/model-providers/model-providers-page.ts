@@ -30,17 +30,16 @@ import {
   readModelBehaviorConfig,
   runModelProviderApiKeyMutation,
   runModelProviderConfigMutation,
-  type ModelBehaviorConfig,
   type ModelProviderConfigMutation,
   type ModelProviderRowMessage,
 } from "./config-mutation.ts";
 import { ModelProviderCoreLoader, type ModelProviderRefreshReason } from "./core-load.ts";
 import {
   buildModelProviderCards,
-  buildSelectableDefaultModels,
+  resolveDefaultModelPresentation,
   buildUnconfiguredProviderOptions,
   readModelProviderConfig,
-  type DefaultModelSelection,
+  type DefaultsDraft,
   type ModelProviderPendingLogout,
 } from "./data.ts";
 import { ModelProviderDiscoveryController } from "./discovery-controller.ts";
@@ -61,8 +60,6 @@ import {
   renderModelProviders,
   renderModelProvidersPageShell,
 } from "./view.ts";
-
-type DefaultsDraft = DefaultModelSelection & ModelBehaviorConfig;
 
 export class ModelProvidersPage extends OpenClawLightDomElement {
   private readonly mutationBlockedReason = (): string | null =>
@@ -593,19 +590,19 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     const data = this.data ?? EMPTY_MODEL_PROVIDERS_DATA;
     const configObject = currentConfigObject(this.context.runtimeConfig.state);
     const config = readModelProviderConfig(configObject);
-    const catalog =
-      gatewaySnapshot.client && this.selectedAgentId
-        ? modelCatalog.peekModelCatalog(
-            gatewaySnapshot.client,
-            { agentId: this.selectedAgentId },
-            { allowStale: true },
-          )
-        : undefined;
+    const catalog = modelCatalog.readAgentModelCatalog(
+      gatewaySnapshot.client,
+      this.selectedAgentId,
+    );
     const configuredDefaults = {
       ...config.defaults,
       ...readModelBehaviorConfig(asConfigRecord(asConfigRecord(configObject?.agents)?.defaults)),
     };
-    const defaults = this.defaultsDraft ?? configuredDefaults;
+    const { defaults, configuredModels } = resolveDefaultModelPresentation(
+      catalog,
+      configuredDefaults,
+      this.defaultsDraft,
+    );
     const stageDefaults = (patch: Partial<DefaultsDraft>) => {
       this.defaultsDraft = { ...(this.defaultsDraft ?? configuredDefaults), ...patch };
       this.setMessage("defaults", null);
@@ -614,7 +611,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     const cards = buildModelProviderCards({
       ...data,
       models: catalog?.models ?? null,
-      providerOutcomes: catalog ? (catalog.providerOutcomes ?? []) : data.providerOutcomes,
+      providerOutcomes: catalog.hasSnapshot
+        ? (catalog.providerOutcomes ?? [])
+        : data.providerOutcomes,
       pendingProviders: catalog?.pendingProviders,
       providerUsage: data.providerUsage?.ok ? data.providerUsage.value : null,
       configProviderIds: config.providerIds,
@@ -655,7 +654,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       costDays: MODEL_PROVIDERS_COST_DAYS,
       credentialAgentLabel: selected ? normalizeAgentLabel(selected) : this.selectedAgentId,
       cards: noSelectableAgents ? [] : this.installedAgents.filterProviders(cards),
-      configuredModels: buildSelectableDefaultModels(catalog?.models ?? null, defaults),
+      configuredModels,
       decisionModels: catalog?.decisionModels ?? [],
       defaultModels: defaults,
       authStatus: data.authStatus,
