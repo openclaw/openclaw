@@ -84,6 +84,7 @@ it("drains accepted settlement before retiring the shared pool during whole-cach
     type: "userProfiles.reconcile",
     sourceAdmitted: true,
     profile: descriptor,
+    emailBindings: [],
   });
   const closing = closeOpenClawStateDatabaseAsync();
   void closing.catch(() => {});
@@ -98,7 +99,7 @@ it("drains accepted settlement before retiring the shared pool during whole-cach
       type: "userProfiles.reconcile",
       profileId: profile.id,
     });
-    expect(publish).toHaveBeenCalledExactlyOnceWith(descriptor);
+    expect(publish).toHaveBeenCalledExactlyOnceWith(descriptor, []);
     expect(release).toHaveBeenCalledOnce();
     expect(recovery.close).toHaveBeenCalledOnce();
     await poolStopping.promise;
@@ -134,6 +135,7 @@ it.each([false, true])(
       type: command.type,
       sourceAdmitted: true,
       profile: descriptor,
+      emailBindings: [],
     };
     const task = queueTask();
     const delivery = new Error("mutation result delivery failed");
@@ -196,7 +198,7 @@ it.each([false, true])(
       stopped.resolve();
       await closing;
     }
-    expect(publish).toHaveBeenCalledExactlyOnceWith(descriptor);
+    expect(publish).toHaveBeenCalledExactlyOnceWith(descriptor, []);
     expect(release).toHaveBeenCalledOnce();
     expect(mutation).toHaveBeenCalledOnce();
     expect(task.close).toHaveBeenCalledTimes(retryFails ? 3 : 2);
@@ -557,7 +559,7 @@ it.each([
         : type === "fleet.get"
           ? { ok: true, type, sourceAdmitted: true, cell: undefined }
           : type === "userProfiles.reconcile"
-            ? { ok: true, type, sourceAdmitted: true, profile: undefined }
+            ? { ok: true, type, sourceAdmitted: true, profile: undefined, emailBindings: [] }
             : type === "onboardingRecommendations.read"
               ? { ok: true, type, sourceAdmitted: true, record: null }
               : type === "pluginBlob.lookup"
@@ -657,6 +659,66 @@ it.each(["skills.library.descriptions", "skills.library.manifests"] as const)(
       expect((await task.captured).command).toEqual({ type, input: expected });
       task.result.resolve(returned);
       expect(await result).toEqual(returned);
+    } finally {
+      dispatch.resolve();
+      task.result.resolve(returned);
+      await Promise.allSettled([result]);
+    }
+  },
+);
+
+it.each(["single", "union"] as const)(
+  "captures and charges %s task selectors while retaining original admission",
+  async (shape) => {
+    const { options } = source();
+    const context = captureOpenClawStateWorkerContext(options);
+    const selector = "任务🦞".repeat(512);
+    const scope = {
+      taskId: selector,
+      flowId: selector,
+      runId: selector,
+      childSessionKey: selector,
+    };
+    const input = shape === "single" ? scope : [scope, { taskId: selector }];
+    const expected = structuredClone(input);
+    const dispatch = createDeferredCore();
+    const task = queueTask(dispatch.promise);
+    const result = executeExistingOpenClawStateRead(
+      { path: context.admission.databasePath, env: context.environment },
+      { type: "tasks.mutationSnapshot", input },
+      { context },
+    );
+    const returned: OpenClawStateReadReply = {
+      ok: true,
+      type: "tasks.mutationSnapshot",
+      sourceAdmitted: true,
+      snapshot: { tasks: new Map(), deliveryStates: new Map() },
+    };
+    try {
+      const submitted = await task.submitted;
+      scope.taskId = "changed task";
+      scope.flowId = "changed flow";
+      scope.runId = "changed run";
+      scope.childSessionKey = "changed child";
+      if (Array.isArray(input)) {
+        input.push({ taskId: "added while queued" });
+      }
+      options.env.OPENCLAW_STATE_DIR = "/changed-after-capture";
+      expect(submitted.inputBytes).toBeGreaterThanOrEqual(
+        Buffer.byteLength(selector) * (shape === "single" ? 4 : 5),
+      );
+      dispatch.resolve();
+      const request = await task.captured;
+      expect(request.command).toEqual({ type: "tasks.mutationSnapshot", input: expected });
+      expect(request.databasePath).toBe(context.admission.databasePath);
+      expect(request.context.environment).toEqual(context.environment);
+      const failure = new Error("Original task admission retired");
+      vi.spyOn(context.admission, "assertCurrent").mockImplementation(() => {
+        throw failure;
+      });
+      const rejected = expect(result).rejects.toThrow(failure.message);
+      task.result.resolve(returned);
+      await rejected;
     } finally {
       dispatch.resolve();
       task.result.resolve(returned);

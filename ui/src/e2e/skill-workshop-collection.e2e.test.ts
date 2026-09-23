@@ -472,7 +472,9 @@ describe("Workshop current collection", () => {
         message: "Workshop inventory is unavailable.",
       });
       await page.getByText("Workshop inventory is unavailable.", { exact: true }).waitFor();
-      expect(await page.locator(".sw-collection__count").textContent()).toBe("Count unavailable");
+      expect((await page.locator(".sw-collection__count").textContent())?.trim()).toBe(
+        "Count unavailable",
+      );
       expect(await page.getByText("No skills installed yet", { exact: true }).count()).toBe(0);
 
       await gateway.setMethodResponse("skills.proposals.list", {

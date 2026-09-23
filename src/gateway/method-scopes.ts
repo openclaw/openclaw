@@ -260,6 +260,7 @@ export function projectOperatorScopesForMethod(params: {
       requestedScope,
       params.allowedScopes,
       sessionScope,
+      params.method,
     );
     return authorization.allowed && authorization.sessionScope ? [authorization.sessionScope] : [];
   });
@@ -302,6 +303,7 @@ export function authorizeOperatorScopesForMethod(
           missingScope,
           scopes,
           resolveSessionMethodScope(method, params),
+          method,
         )
       : { allowed: true };
   }
@@ -310,6 +312,7 @@ export function authorizeOperatorScopesForMethod(
     requiredScope,
     scopes,
     resolveSessionMethodScope(method, params),
+    method,
   );
 }
 
@@ -318,6 +321,7 @@ export function authorizeOperatorScopesForRequiredScope(
   requiredScope: OperatorScope,
   scopes: readonly string[],
   sessionScope?: SessionOperatorScope,
+  method?: string,
 ):
   | { allowed: true; sessionScope?: SessionOperatorScope }
   | { allowed: false; missingScope: OperatorScope } {
@@ -326,7 +330,9 @@ export function authorizeOperatorScopesForRequiredScope(
   }
   if (
     ((requiredScope === READ_SCOPE && sessionScope === "operator.sessions.read") ||
-      (requiredScope === WRITE_SCOPE && sessionScope === "operator.sessions.write")) &&
+      ((requiredScope === WRITE_SCOPE ||
+        (requiredScope === QUESTIONS_SCOPE && method?.startsWith("question."))) &&
+        sessionScope === "operator.sessions.write")) &&
     operatorScopeSatisfied(sessionScope, scopes)
   ) {
     return { allowed: true, sessionScope };

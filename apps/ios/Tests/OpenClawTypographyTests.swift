@@ -22,6 +22,18 @@ struct RootSidebarTypographyTests {
 }
 
 struct OpenClawTypographyTests {
+    @Test func `file attachment controls use branded typography`() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatFileAttachment.swift"),
+            encoding: .utf8)
+        #expect(source.contains(".font(OpenClawChatTypography.footnote)"))
+        #expect(source.contains(".font(OpenClawChatTypography.caption)"))
+        #expect(source.contains(".font(OpenClawChatTypography.body)"))
+        #expect(!source.contains(".font(."))
+    }
+
     @Test func `gateway picker uses branded typography`() throws {
         let source = try String(
             contentsOf: Self.sourceURL("RootSidebarGatewayControl.swift"),

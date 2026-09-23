@@ -70,11 +70,11 @@ function createPluginRouteRuntimeClient(
     connId: `plugin-http:${clientIp ?? "unknown"}`,
     ...(clientIp ? { clientIp } : {}),
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
-    ...(operatorRoleActor || operatorAccessAuthority
+    ...(operatorRoleActor || operatorAccessAuthority !== undefined
       ? {
           internal: {
             ...(operatorRoleActor ? { operatorRoleActor } : {}),
-            ...(operatorAccessAuthority ? { operatorAccessAuthority } : {}),
+            ...(operatorAccessAuthority !== undefined ? { operatorAccessAuthority } : {}),
           },
         }
       : {}),

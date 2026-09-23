@@ -232,7 +232,7 @@ test("sessions.recover denies a narrow continuation into a linked foreign succes
   ).resolves.toEqual(transcriptBefore);
   expect(operatorRunCaptures.size).toBe(0);
 
-  addSessionMember(successorScope, {
+  await addSessionMember(successorScope, {
     identityId: sourceOwner.authenticatedUserProfile!.profileId,
     addedBy: broadWriter.authenticatedUserProfile!.profileId,
     expectedSessionId: successorSessionId,

@@ -243,7 +243,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Tool result after partial");
   });
 
-  it("rotates the answer stream only after a finalized assistant message", async () => {
+  it("preserves successive assistant answers and intervening partial output", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
@@ -257,7 +257,6 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
 
     await dispatchWithContext({ context: createContext() });
 
-    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(
       1,
       "Message A final",
@@ -437,7 +436,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
     await vi.waitFor(() => expect(statusReactionController.setError).toHaveBeenCalledOnce());
   });
 
-  it("falls back to normal delivery before rotating a stale queued block preview", async () => {
+  it("delivers a stale queued block before streaming the next block", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     let firstBlockPreviewWentStale = false;
     answerDraftStream.lastDeliveredText.mockImplementation(() =>
@@ -495,7 +494,6 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Site A shows X.");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site A shows X.");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(3, "Site B shows Y.");
-    expect(answerDraftStream.clear).toHaveBeenCalled();
     expect(deliverReplies).toHaveBeenCalledTimes(1);
     const fallbackDelivery = mockCallArg(deliverReplies) as {
       replies?: Array<{ text?: string }>;
@@ -503,25 +501,13 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
     };
     expect(fallbackDelivery.replies?.[0]?.text).toBe("Site A shows X.");
     expect(fallbackDelivery.transcriptMirror).toBeUndefined();
-    const clearOrder = requireInvocationOrder(
-      answerDraftStream.clear,
-      0,
-      "first answer draft clear",
-    );
     const fallbackDeliveryOrder = requireInvocationOrder(deliverReplies, 0, "first reply delivery");
-    const rotationOrder = requireInvocationOrder(
-      answerDraftStream.forceNewMessage,
-      0,
-      "first answer draft rotation",
-    );
     const secondBlockUpdateOrder = requireInvocationOrder(
       answerDraftStream.update,
       2,
       "third answer draft update",
     );
-    expect(clearOrder).toBeLessThan(fallbackDeliveryOrder);
-    expect(fallbackDeliveryOrder).toBeLessThan(rotationOrder);
-    expect(rotationOrder).toBeLessThan(secondBlockUpdateOrder);
+    expect(fallbackDeliveryOrder).toBeLessThan(secondBlockUpdateOrder);
   });
 
   it("does not rotate a partial preview before queued block delivery drains", async () => {

@@ -326,7 +326,9 @@ describe("native hook relay WebSocket request lifetime", () => {
             })
           ).ok,
         ).toBe(true);
-        expect(JSON.parse((await retry).stdout).hookSpecificOutput.decision.behavior).toBe("allow");
+        const retryResponse = await retry;
+        expect(retryResponse.stdout, JSON.stringify({ retryId, retryResponse })).not.toBe("");
+        expect(JSON.parse(retryResponse.stdout).hookSpecificOutput.decision.behavior).toBe("allow");
         if (other) {
           const otherId = records.get("call-b")![0]!.id;
           expect(

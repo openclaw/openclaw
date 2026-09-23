@@ -493,12 +493,11 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       </div>`;
     }
     return html`<div class="side-panel-empty side-panel-empty--selector">
-      <div class="side-panel-empty__types" role="list">
+      <div class="side-panel-empty__types">
         ${this.panelTypes().map(
           (type) => html`<button
             class="side-panel-empty__type"
             type="button"
-            role="listitem"
             @click=${() => this.callbacks?.openSlot(type.slot)}
           >
             ${renderPanelTypeOption(type)}

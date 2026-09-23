@@ -145,9 +145,10 @@ export function repairOpenClawStateDatabaseReadabilityForDoctor(
   );
 }
 
-/** Automatic preparation shares runtime schema convergence; historical repair stays with Doctor. */
+/** Preparation checks readiness; only Doctor may repair historical or quarantined state. */
 export function repairOpenClawStateDatabaseSchemaIfNeeded(
   options: OpenClawStateDatabaseOptions = {},
+  scope: "automatic" | "doctor" = "automatic",
 ): {
   changes: string[];
   warnings: string[];
@@ -160,14 +161,30 @@ export function repairOpenClawStateDatabaseSchemaIfNeeded(
   }
 
   return runWithOpenClawStateWriteAccess(
-    { databasePath: pathname, env },
+    {
+      databasePath: pathname,
+      env,
+      ...(scope === "doctor"
+        ? { openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission }
+        : {}),
+    },
     "state schema repair preflight/repair",
-    () =>
-      needsOpenClawStateDatabaseSchemaRepair(pathname)
+    () => {
+      let needsRepair = false;
+      if (scope === "doctor") {
+        try {
+          assertOpenClawStateDatabaseFreshOpenAllowed(options);
+        } catch {
+          // The full repair must clear quarantine before dependent readers can proceed.
+          needsRepair = true;
+        }
+      }
+      return needsRepair || needsOpenClawStateDatabaseSchemaRepair(pathname, scope)
         ? withStateSchemaFence({ databasePath: pathname }, () =>
-            repairStateSchema(pathname, env, "automatic"),
+            repairStateSchema(pathname, env, scope),
           )
-        : { changes: [], warnings: [] },
+        : { changes: [], warnings: [] };
+    },
   );
 }
 

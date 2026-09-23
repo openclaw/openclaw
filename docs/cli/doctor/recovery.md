@@ -23,8 +23,13 @@ without requiring a Gateway connection. Update finalization and standalone
 `openclaw doctor --fix` reconcile eligible, previously running managed services
 through the native installer; update-time Doctor reports drift and defers publication
 to finalization. Doctor can automatically refresh installation-only drift in a
-verified, writable packaged service; additional native settings, operator edits,
-or uncertain inspection still require interactive confirmation.
+verified, writable packaged service. It also repairs recognized stale native
+policy, such as a missing systemd `KillMode=mixed` or zero Scheduled Task restart
+retries, through the update installer's backup transaction before restoring a
+Gateway stopped for maintenance. Doctor reports changed keys and backup paths;
+supported custom settings survive the rewrite. Automatic native-policy repair
+preserves unknown operator edits and uncertain definitions for operator review.
+Other command or credential changes still require interactive confirmation.
 Services already stopped keep their definitions and stop state; run the reported
 profile-aware `openclaw gateway install --force` command from the intended
 installation to reconcile them (installation may start the service).

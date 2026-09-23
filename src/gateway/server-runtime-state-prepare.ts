@@ -24,6 +24,7 @@ import { resolveGatewayAuth } from "./auth.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import { isLoopbackHost } from "./net.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
+import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { createGatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
 import type { GatewayInstanceRuntime } from "./server-instance-runtime.types.js";
@@ -162,10 +163,18 @@ export async function prepareGatewayKernelState(params: {
         loadWorkerPlacementStartupModule,
       )
     : undefined;
+  const getCommittedRuntimeConfig = () => {
+    const context = resolvePluginGatewayContext();
+    if (!context) {
+      throw new GatewayOperatorAccessUnavailableError();
+    }
+    return (context.getCommittedRuntimeConfig ?? context.getRuntimeConfig)();
+  };
   const githubPublicationRuntime =
     workerEnvironmentStartup && workerPlacementModule
       ? workerPlacementModule.createGatewayGitHubPublicationRuntime({
           placements: workerEnvironmentStartup.placementStore,
+          getCommittedRuntimeConfig,
           warn: (message) => log.warn(message),
         })
       : undefined;
@@ -177,6 +186,7 @@ export async function prepareGatewayKernelState(params: {
       ? await startupTrace.measure("worker-environments.placement-runtime", async () =>
           workerPlacementModule.createGatewayWorkerPlacementRuntime({
             placements: workerEnvironmentStartup.placementStore,
+            getCommittedRuntimeConfig,
             environments: workerEnvironmentService,
             gatewayNamespace: nodeWorkerGatewayNamespace,
             nodeWorkerBundleRetention,

@@ -17,17 +17,23 @@ import type {
   OpenClawStateReadOutcome,
 } from "./openclaw-state-read.types.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
-import type { ProfileDisplayRow } from "./user-profiles.types.js";
+import type { ProfileDisplayRow, UserProfileEmailBinding } from "./user-profiles.types.js";
 
 type SettlementReadCommand = Extract<OpenClawStateReadCommand, { type: "userProfiles.reconcile" }>;
 type SettlementRead = {
   bind(
     command: SettlementReadCommand,
     settlement: Promise<SqliteWorkerOperationSettlement>,
-    publish: (profile: ProfileDisplayRow | undefined) => void,
+    publish: (
+      profile: ProfileDisplayRow | undefined,
+      bindings?: readonly UserProfileEmailBinding[],
+    ) => void,
     release: () => void,
   ): void;
-  acknowledge(profile: ProfileDisplayRow | undefined): void;
+  acknowledge(
+    profile: ProfileDisplayRow | undefined,
+    bindings?: readonly UserProfileEmailBinding[],
+  ): void;
 };
 
 /** A fixed read completes an accepted mutation; it grants no new write or path admission. */
@@ -53,7 +59,10 @@ export async function withOpenClawStateSettlementRead<T>(
     | {
         command: SettlementReadCommand;
         settlement: Promise<SqliteWorkerOperationSettlement>;
-        publish: (profile: ProfileDisplayRow | undefined) => void;
+        publish: (
+          profile: ProfileDisplayRow | undefined,
+          bindings?: readonly UserProfileEmailBinding[],
+        ) => void;
         release: () => void;
       }
     | undefined;
@@ -117,7 +126,7 @@ export async function withOpenClawStateSettlementRead<T>(
       if (!result || "error" in result || result.value.type !== "userProfiles.reconcile") {
         throw new Error("Unexpected shared-state settlement read reply");
       }
-      selected.publish(result.value.profile);
+      selected.publish(result.value.profile, result.value.emailBindings);
       pending = false;
     })().finally(() => {
       recovery = undefined;
@@ -165,13 +174,13 @@ export async function withOpenClawStateSettlementRead<T>(
         selected = { command: { ...command }, settlement, publish, release };
         pending = true;
       },
-      acknowledge(profile) {
+      acknowledge(profile, bindings) {
         authority.assertCurrent();
         if (selected) {
           if (!profile || profile.id !== selected.command.profileId) {
             throw new Error("Profile commit differs from its retained settlement read");
           }
-          selected.publish(profile);
+          selected.publish(profile, bindings);
         } else if (profile) {
           throw new Error("Profile commit did not retain its catalog publication");
         }

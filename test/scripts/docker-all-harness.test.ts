@@ -1,5 +1,4 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -7,13 +6,16 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
-  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import {
   isProcessAlive,
   waitForChildClose,
@@ -23,181 +25,11 @@ import {
   waitForPidFile,
 } from "../helpers/process-wait.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { copyDockerSchedulerHarness } from "./docker-all-harness.test-support.js";
+import { quote, setupFixture } from "./docker-all-harness-fixture.test-support.js";
+import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const posixIt = process.platform === "win32" ? it.skip : it;
-const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const laneNames = ["gateway-network", "gateway-concurrency", "live-models"];
-
-function writeJson(file: string, value: unknown) {
-  mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, JSON.stringify(value));
-}
-
-function setupFixture(
-  mode: "split" | "override" | "local",
-  missingTargetScript = false,
-  corepack = false,
-  makeTempDir: typeof tempDirs.make = (prefix, root) => tempDirs.make(prefix, root),
-) {
-  const artifactRoot = path.resolve(".artifacts");
-  mkdirSync(artifactRoot, { recursive: true });
-  const root = realpathSync(makeTempDir("docker-harness-", artifactRoot));
-  const target = path.join(root, "frozen pnpm target");
-  mkdirSync(target);
-  const harness = mode === "local" ? target : path.join(target, ".release-harness");
-  const selectedHarness =
-    mode === "override" ? path.join(root, "operator's $& pnpm harness") : harness;
-  copyDockerSchedulerHarness(harness);
-  if (selectedHarness !== harness) {
-    mkdirSync(selectedHarness, { recursive: true });
-  }
-  const marker = path.join(root, "calls.jsonl");
-  const poison = path.join(root, "target-ran");
-  const toolchainMarker = path.join(root, "toolchains.jsonl");
-  const version = "2026.8.1";
-  const packageDir = path.join(root, "packed", "package");
-  writeJson(path.join(packageDir, "package.json"), { name: "openclaw", version });
-  const tarball = path.join(root, "frozen candidate.tgz");
-  execFileSync("tar", ["-czf", tarball, "-C", path.dirname(packageDir), "package"]);
-  const sha256 = createHash("sha256").update(readFileSync(tarball)).digest("hex");
-  const trustedScript = `
-const fs = require('node:fs');
-fs.appendFileSync(${JSON.stringify(marker)}, JSON.stringify({
-  lane: process.env.OPENCLAW_DOCKER_ALL_LANE_NAME,
-  cwd: process.cwd(),
-  phase: process.argv[2],
-  skipDockerBuild: process.env.OPENCLAW_SKIP_DOCKER_BUILD,
-  registry: process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR,
-  registryVersion: process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION,
-  registrySha256: process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256,
-  target: process.env.OPENCLAW_DOCKER_E2E_REPO_ROOT,
-  harness: process.env.OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR,
-  liveTarget: process.env.OPENCLAW_LIVE_DOCKER_REPO_ROOT,
-  package: process.env.OPENCLAW_CURRENT_PACKAGE_TGZ,
-  sha256: process.env.OPENCLAW_CURRENT_PACKAGE_SHA256,
-  selectedSha: process.env.OPENCLAW_DOCKER_E2E_SELECTED_SHA,
-  cache: process.env.OPENCLAW_DOCKER_CACHE_HOME_DIR,
-  tools: process.env.OPENCLAW_DOCKER_CLI_TOOLS_DIR,
-}) + '\\n');
-`;
-  const poisonedScript = `require('node:fs').writeFileSync(${JSON.stringify(poison)}, 'old harness'); process.exit(47);`;
-  for (const [dir, script] of [
-    [target, poisonedScript],
-    [selectedHarness, trustedScript],
-  ] as const) {
-    const scriptsDir = path.join(dir, "scripts");
-    mkdirSync(path.join(scriptsDir, "e2e"), { recursive: true });
-    writeFileSync(path.join(dir, "marker.cjs"), script);
-    for (const leaf of [
-      "e2e/gateway-concurrency-docker.sh",
-      "test-live-models-docker.sh",
-      "test-live-build-docker.sh",
-    ]) {
-      writeFileSync(
-        path.join(scriptsDir, leaf),
-        `#!/usr/bin/env bash\nexec node ${quote(path.join(dir, "marker.cjs"))} ${leaf === "test-live-build-docker.sh" ? "live-build" : ""}\n`,
-      );
-    }
-    writeJson(path.join(dir, "package.json"), {
-      name: "openclaw",
-      version,
-      ...(corepack && {
-        packageManager: dir === selectedHarness ? "pnpm@11.22.0" : "pnpm@12.0.0",
-      }),
-      scripts:
-        dir === target && missingTargetScript
-          ? {}
-          : {
-              "test:docker:gateway-network": "node marker.cjs",
-              "test:docker:package-install": "node marker.cjs",
-              "test:docker:cli-installer-distribution": "node marker.cjs",
-              "test:docker:e2e-build": "node marker.cjs package-image",
-              "test:docker:cleanup": "node marker.cjs cleanup",
-              "test:docker:all": `node ${quote(path.join(harness, "scripts/test-docker-all.mjs"))}`,
-            },
-    });
-    // Keep pnpm in this miniature workspace, away from the host repo's toolchain pin.
-    writeFileSync(path.join(dir, "pnpm-workspace.yaml"), "packages: []\n");
-  }
-  execFileSync("git", ["init", "-q"], { cwd: target });
-  execFileSync("git", ["add", "package.json"], { cwd: target });
-  execFileSync(
-    "git",
-    ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "candidate"],
-    { cwd: target },
-  );
-  const selectedSha = execFileSync("git", ["rev-parse", "HEAD"], {
-    cwd: target,
-    encoding: "utf8",
-  }).trim();
-  const registry = path.join(root, "frozen registry");
-  mkdirSync(registry);
-  writeJson(path.join(packageDir, "package.json"), { name: "@openclaw/codex", version });
-  const pluginTarball = path.join(registry, "codex.tgz");
-  execFileSync("tar", ["-czf", pluginTarball, "-C", path.dirname(packageDir), "package"]);
-  const registryManifest = path.join(registry, "prepublish-plugin-registry.json");
-  writeJson(registryManifest, {
-    schema: "openclaw.prepublish-plugin-registry/v1",
-    schemaVersion: 1,
-    sourceSha: selectedSha,
-    candidateVersion: version,
-    packages: [
-      {
-        name: "@openclaw/codex",
-        version,
-        tarball: "codex.tgz",
-        sha256: createHash("sha256").update(readFileSync(pluginTarball)).digest("hex"),
-      },
-    ],
-  });
-  const registrySha256 = createHash("sha256").update(readFileSync(registryManifest)).digest("hex");
-  const pnpm = execFileSync("bash", ["-c", "command -v pnpm"], { encoding: "utf8" }).trim();
-  const pinnedPnpm = path.join(root, "pinned '$& pnpm wrapper");
-  // Corepack Engine.executePackageManagerRequest resolves findProjectSpec(cwd)
-  // before runVersion forwards argv. pnpm then checks its effective project's pin.
-  // Model only that offline boundary; package scripts still execute as real children.
-  writeFileSync(
-    pinnedPnpm,
-    corepack
-      ? `#!/usr/bin/env node
-import fs from 'node:fs';
-import path from 'node:path';
-import { spawnSync } from 'node:child_process';
-const manifest = (cwd) => JSON.parse(fs.readFileSync(path.join(cwd, 'package.json'), 'utf8'));
-const selected = manifest(process.cwd()).packageManager;
-const args = process.argv.slice(2);
-const cwd = args[0] === '--dir' ? args.splice(0, 2)[1] : process.cwd();
-const project = manifest(cwd);
-fs.appendFileSync(${JSON.stringify(toolchainMarker)}, JSON.stringify({ cwd: process.cwd(), selected, required: project.packageManager }) + '\\n');
-if (selected !== project.packageManager) {
-  console.error('ERR_PNPM_BAD_PM_VERSION: Corepack selected ' + selected + ' before --dir; project requires ' + project.packageManager);
-  process.exit(1);
-}
-const result = spawnSync(project.scripts[args[0]], { cwd, shell: true, stdio: 'inherit' });
-process.exit(result.status ?? 1);
-`
-      : `#!/usr/bin/env bash\nexec ${quote(pnpm)} "$@"\n`,
-  );
-  chmodSync(pinnedPnpm, 0o755);
-  return {
-    root,
-    target,
-    harness,
-    selectedHarness,
-    marker,
-    poison,
-    tarball,
-    sha256,
-    selectedSha,
-    pinnedPnpm,
-    registry,
-    registrySha256,
-    toolchainMarker,
-  };
-}
 
 function runFixture(
   fixture: ReturnType<typeof setupFixture>,
@@ -478,6 +310,134 @@ function startOwnedScheduler(
         () => closed,
       );
       rmSync(fixture.root, { recursive: true, force: true });
+    },
+  };
+}
+
+function observeCleanupClock() {
+  const advances = [10_000, 1_000];
+  const prefix = "DOCKER_CLEANUP_CLOCK ";
+  function waitForReceipt(
+    owner: ReturnType<typeof startOwnedScheduler>,
+    event: "ready" | "advanced",
+    step: number,
+  ) {
+    return new Promise<{ pid: number; advances: number[] }>((resolve, reject) => {
+      let settled = false;
+      const fail = (error: unknown) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        owner.shim.stderr.off("data", check);
+        reject(
+          error instanceof Error
+            ? error
+            : new Error("Cleanup clock observation failed", { cause: error }),
+        );
+      };
+      const check = () => {
+        if (settled) {
+          return;
+        }
+        try {
+          for (const line of owner.stderr().split("\n").slice(0, -1)) {
+            if (!line.startsWith(prefix)) {
+              continue;
+            }
+            const receipt: { event: string; pid: number; step: number; advances: number[] } =
+              JSON.parse(line.slice(prefix.length));
+            if (receipt.event !== event || receipt.step !== step) {
+              continue;
+            }
+            expect(receipt).toEqual({
+              event,
+              pid: receipt.pid,
+              step,
+              advances: advances.slice(0, step),
+            });
+            expect(owner.children()).toContainEqual({
+              owner: owner.shim.pid,
+              pid: receipt.pid,
+            });
+            settled = true;
+            owner.shim.stderr.off("data", check);
+            resolve(receipt);
+            return;
+          }
+        } catch (error) {
+          fail(error);
+        }
+      };
+      owner.shim.stderr.on("data", check);
+      void owner.result.then(() => {
+        check();
+        fail(new Error(`Scheduler exited before cleanup clock ${event} ${step}`));
+      }, fail);
+      check();
+    });
+  }
+  return {
+    // Keep native polling timers and signals; advance only after the denied
+    // inspection reaches each production grace window in the owned scheduler.
+    probe: `
+      const cleanupClockAdvances = ${JSON.stringify(advances)};
+      const cleanupClockNow = Date.now.bind(Date);
+      let cleanupClockOffset = 0;
+      let cleanupClockStep = 0;
+      let cleanupClockWaiting = false;
+      let cleanupClockDenied = false;
+      let cleanupClockGroup;
+      let cleanupClockForced = false;
+      const cleanupClockReceipt = event => process.stderr.write('\\n' + ${JSON.stringify(prefix)} + JSON.stringify({
+        event, pid: process.pid, step: cleanupClockStep,
+        advances: cleanupClockAdvances.slice(0, cleanupClockStep),
+      }) + '\\n');
+      Date.now = () => cleanupClockNow() + cleanupClockOffset;
+      const cleanupClockKill = process.kill.bind(process);
+      process.kill = (pid, signal) => {
+        if (signal === 0) cleanupClockDenied = false;
+        try { return cleanupClockKill(pid, signal); }
+        catch (error) {
+          if (signal === 0 && error.code === 'EPERM') {
+            cleanupClockDenied = true;
+            cleanupClockGroup ??= pid;
+          }
+          throw error;
+        } finally {
+          if (pid === cleanupClockGroup && signal === 'SIGKILL') cleanupClockForced = true;
+        }
+      };
+      const cleanupClockTimeout = globalThis.setTimeout;
+      globalThis.setTimeout = (...args) => {
+        const timer = cleanupClockTimeout(...args);
+        const denied = cleanupClockDenied;
+        cleanupClockDenied = false;
+        if (denied && !cleanupClockWaiting && cleanupClockStep < cleanupClockAdvances.length) {
+          if (cleanupClockStep === 1 && !cleanupClockForced) {
+            throw new Error('cleanup clock reached its force-kill wait before forwarding SIGKILL');
+          }
+          cleanupClockWaiting = true;
+          cleanupClockReceipt('ready');
+        }
+        return timer;
+      };
+      process.on('SIGUSR1', () => {
+        if (!cleanupClockWaiting) throw new Error('cleanup clock advanced before its owner waited');
+        cleanupClockOffset += cleanupClockAdvances[cleanupClockStep++];
+        cleanupClockWaiting = false;
+        cleanupClockReceipt('advanced');
+      });
+    `,
+    async advance(owner: ReturnType<typeof startOwnedScheduler>) {
+      for (let step = 0; step < advances.length; step += 1) {
+        const ready = await waitForReceipt(owner, "ready", step);
+        process.kill(ready.pid, "SIGUSR1");
+        const advanced = await waitForReceipt(owner, "advanced", step + 1);
+        if (step === advances.length - 1) {
+          expect(advanced.advances).toEqual([10_000, 1_000]);
+        }
+      }
     },
   };
 }
@@ -833,6 +793,7 @@ describe("Docker scheduler trusted harness execution", () => {
       const groupPath = path.join(fixture.root, "stagger-group.pid");
       const faultPath = path.join(fixture.root, "stagger-probe-rejected");
       const timer = observeStaggerTimer(fixture);
+      const cleanupClock = fatal ? observeCleanupClock() : undefined;
       const laneOrder = ["gateway-concurrency", "live-models"];
       writeFileSync(
         path.join(fixture.selectedHarness, "marker.cjs"),
@@ -875,7 +836,7 @@ describe("Docker scheduler trusted harness execution", () => {
           OPENCLAW_DOCKER_ALL_START_STAGGER_MS: fatal || failFast ? "600000" : "3000",
           OPENCLAW_DOCKER_ALL_FAIL_FAST: failFast ? "1" : "0",
         },
-        `${timer.probe}\n${probe}`,
+        `${timer.probe}\n${probe}\n${cleanupClock?.probe ?? ""}`,
         [leaderPath],
       );
       await runQaGatewayFixture(
@@ -890,6 +851,7 @@ describe("Docker scheduler trusted harness execution", () => {
           process.kill(leaderPid, "SIGUSR1");
           await waitForFile(path.join(owner.events, `${group}.close`), 5_000);
           if (fatal) {
+            await cleanupClock!.advance(owner);
             await waitForFixtureFile(faultPath, owner.result, "final-verification");
           }
           await waitForFixtureFile(timer.checkpoint, owner.result);
@@ -1227,6 +1189,7 @@ describe("Docker scheduler trusted harness execution", () => {
       const groupPath = path.join(fixture.root, "group.pid");
       const unjoined = failure !== "ordinary command failure";
       const priorFailure = failure === "ordinary failure then unjoined cleanup";
+      const cleanupClock = unjoined ? observeCleanupClock() : undefined;
       let leafPid: number | undefined;
       const leafScript = [
         "process.on('SIGTERM', () => {});",
@@ -1277,6 +1240,7 @@ describe("Docker scheduler trusted harness execution", () => {
           "    }",
           "    return kill(pid, signal);",
           "  };",
+          cleanupClock?.probe ?? "",
         ].join("\n"),
         [leaderPath, leafPath],
       );
@@ -1287,6 +1251,7 @@ describe("Docker scheduler trusted harness execution", () => {
             writeFileSync(groupPath, String(owner.captureGroup(leafPid)));
             const leader = await owner.ready(leaderPath);
             process.kill(leader, "SIGUSR1");
+            await cleanupClock!.advance(owner);
           }
           expect(await owner.result).toEqual({ code: unjoined ? 2 : 1, signal: null });
           if (leafPid) {
@@ -1616,6 +1581,10 @@ describe("Docker scheduler publication settlement", () => {
       const fence = mode === "tree error fences admission" || mode === "log error fences admission";
       const shutdownOnly = mode === "shutdown-only sibling cleanup error";
       const siblingLogs = mode === "sibling log errors";
+      const cleanupClock =
+        mode === "tree and log errors" || mode === "tree error fences admission" || shutdownOnly
+          ? observeCleanupClock()
+          : undefined;
       if (siblingLogs) {
         const marker = path.join(fixture.selectedHarness, "marker.cjs");
         writeFileSync(
@@ -1822,10 +1791,11 @@ describe("Docker scheduler publication settlement", () => {
               }
             : {}),
         },
-        `${fence ? timer.probe : ""}\n${probe}`,
+        `${fence ? timer.probe : ""}\n${probe}\n${cleanupClock?.probe ?? ""}`,
       );
       await runQaGatewayFixture(
         async () => {
+          await cleanupClock?.advance(owner);
           const held = [
             "delayed close",
             "repeated signals after group join",
@@ -2325,13 +2295,17 @@ describe("Docker scheduler publication settlement", () => {
             expect(
               JSON.parse(readFileSync(path.join(fixture.root, "logs", "failures.json"), "utf8")),
             ).not.toHaveProperty("status");
-            for (const [script, args, expected] of [
-              ["docker-e2e.mts", ["summary", summaryPath, "Docker scheduler"], "Status: `failed`"],
-              ["docker-e2e-timings.mts", [summaryPath], "Status: failed"],
+            for (const [entrypoint, args, expected] of [
+              [
+                toolingMtsEntrypoints.dockerSummary,
+                ["summary", summaryPath, "Docker scheduler"],
+                "Status: `failed`",
+              ],
+              [toolingMtsEntrypoints.dockerTimings, [summaryPath], "Status: failed"],
             ] as const) {
               const output = execFileSync(
                 process.execPath,
-                ["--import", "tsx", path.join("scripts", script), ...args],
+                [...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(entrypoint)), ...args],
                 { encoding: "utf8", timeout: 10_000 },
               );
               expect(output).toContain(expected);

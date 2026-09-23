@@ -27,12 +27,23 @@ the existing single shared-state lease owner; independent Gateways must not shar
 mutable agent databases across state directories.
 
 Within a live lifecycle, an admitted owner can still lend its revocable,
-file-bound runtime proof to another handle. This also requires a matching
-verification record and a live lease; deleted or mismatched records force a
-full check even when runtime proof remains in memory.
+file-bound runtime proof to another handle with a live lease in the same known
+process. This proof does not require the persisted restart receipt. Peer leases
+with matching process ID and start time do not consume or block publication of
+that receipt; each handle retains its own lease until cleanup finishes.
+Explicit invalidation revokes shared runtime proof as well as durable metadata,
+including stale admission and unsettled Worker cleanup. A successful native close
+with a reader-blocked checkpoint removes restart metadata but preserves live
+runtime proof; failed close or uncertain storage errors revoke both. Cold opens and restarts
+still require matching clean-close metadata or a full check.
 Cleanup workers and native agent execution workers borrow that proof under their
 existing writer admission. Cleanup workers return new verification to the Gateway
 after they finish.
+Reclamation retains one Worker connection per database, so alternating agents
+reuse their admitted handles. Requests still share the archive FIFO. Each Worker
+retires after 30 idle minutes, on database close, or when idle under critical
+memory pressure; failed cleanup retains its original lease until settlement.
+Integrity revocation, schema checks, and update behavior are unchanged.
 Native execution workers can also borrow retained host proof after the host handle
 closes or is evicted. The receiving opener rechecks the physical file identity and
 shared revocation cell; a closed handle alone does not discard valid proof.

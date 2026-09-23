@@ -15,12 +15,18 @@ import {
   addSubagentRunForTests,
   getSubagentRunByRunId,
   resetSubagentRegistryForTests,
-  testing as registryTesting,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { consumeSwarmStructuredOutput } from "../agents/tools/structured-output-tool.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveMcpLoopbackScopedTools } from "./mcp-http.runtime.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
+
+vi.mock("../agents/subagents/registry/subagent-registry-state.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../agents/subagents/registry/subagent-registry-state.js")
+  >()),
+  persistSubagentRunsToDiskOrThrow: () => {},
+}));
 
 const runId = "cli-collector-run";
 const schemalessRunId = "cli-schemaless-collector-run";
@@ -102,7 +108,6 @@ function resolveLoopbackGrantToolNames(toolsAllow: string[], admittedRunId: stri
 
 beforeEach(() => {
   resetSubagentRegistryForTests({ persist: false });
-  registryTesting.setDepsForTest({ persistSubagentRunsToDiskOrThrow: vi.fn() });
   addSubagentRunForTests({
     runId,
     childSessionKey: collectorSessionKey,
@@ -119,7 +124,6 @@ beforeEach(() => {
 afterEach(() => {
   consumeSwarmStructuredOutput(runId);
   resetSubagentRegistryForTests({ persist: false });
-  registryTesting.setDepsForTest();
 });
 
 describe("resolveGatewayScopedTools swarm collectors", () => {

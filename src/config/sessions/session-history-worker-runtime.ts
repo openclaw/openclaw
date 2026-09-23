@@ -10,7 +10,6 @@ import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.pa
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { getRuntimeConfig } from "../config.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.js";
-import type { SessionTranscriptDisplayDeltaResult } from "./session-accessor.sqlite-history-query.js";
 import {
   resolveSqliteTranscriptReadScope,
   resolveSqliteScope,
@@ -21,10 +20,12 @@ import { prepareSessionTranscriptReadTargetCore } from "./session-accessor.trans
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
 import type {
   ChatHistoryPage,
+  SessionHistoryDelta,
   SessionHistorySnapshot,
   SessionHistoryWorkerRequest,
   SessionHistoryWorkerResult,
 } from "./session-history-types.js";
+import { SessionHistoryDeltaPreparationError } from "./session-history-worker-errors.js";
 import { isSessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
@@ -38,6 +39,7 @@ type QueuedHistoryRead = {
   promise: Promise<SessionHistoryWorkerResult>;
   remainingReaders: number;
 };
+type AdmittedSessionHistoryDelta = SessionHistoryDelta & { assertCurrent: () => void };
 const queuedHistoryReads = new Map<string, QueuedHistoryRead>();
 let pendingHistoryReaders = 0;
 let pendingHistoryBytes = 0;
@@ -47,12 +49,24 @@ function receivePage(
   signal?: AbortSignal,
 ): Promise<SessionHistoryWorkerResult> {
   queued.remainingReaders++;
-  return queued.promise.then((page) => {
-    queued.remainingReaders--;
-    signal?.throwIfAborted();
-    // Dispatch closes the group; the final receiver owns the original after earlier clones finish.
-    return queued.remainingReaders === 0 ? page : structuredClone(page);
-  });
+  return queued.promise.then(
+    (page) => {
+      queued.remainingReaders--;
+      signal?.throwIfAborted();
+      // Dispatch closes the group; the final receiver owns the original after earlier clones finish.
+      return queued.remainingReaders === 0 ? page : structuredClone(page);
+    },
+    (error: unknown) => {
+      queued.remainingReaders--;
+      if (error instanceof SessionHistoryDeltaPreparationError) {
+        signal?.throwIfAborted();
+        if (queued.remainingReaders > 0) {
+          throw new SessionHistoryDeltaPreparationError(structuredClone(error.partial));
+        }
+      }
+      throw error;
+    },
+  );
 }
 
 function readQueuedPage(
@@ -95,17 +109,15 @@ export function readSessionHistoryPageInWorker(
 export function readSessionHistoryPageInWorker(
   request: Extract<SessionHistoryWorkerRequest, { kind: "delta" }>,
   signal?: AbortSignal,
-): Promise<SessionTranscriptDisplayDeltaResult>;
+): Promise<AdmittedSessionHistoryDelta>;
 export function readSessionHistoryPageInWorker(
-  request: Extract<SessionHistoryWorkerRequest, { kind: "message-lookup" }>,
+  request: Extract<SessionHistoryWorkerRequest, { kind: "message-lookup" | "recent" }>,
   signal?: AbortSignal,
 ): Promise<unknown[]>;
 export async function readSessionHistoryPageInWorker(
   request: SessionHistoryWorkerRequest,
   signal?: AbortSignal,
-): Promise<
-  ChatHistoryPage | SessionHistorySnapshot | SessionTranscriptDisplayDeltaResult | unknown[]
-> {
+): Promise<ChatHistoryPage | SessionHistorySnapshot | AdmittedSessionHistoryDelta | unknown[]> {
   signal?.throwIfAborted();
   const scope: SessionTranscriptReadScope =
     request.kind === "rpc"
@@ -187,17 +199,35 @@ export async function readSessionHistoryPageInWorker(
   pendingHistoryReaders++;
   pendingHistoryBytes += inputBytes;
   try {
-    const result = await withSessionHistoryWorkerDatabase(input.database, (owner) =>
-      readRestoredSessionTranscript(
-        scope,
-        () => {
-          assertStateCurrent();
-          return readQueuedPage(input, `${owner.generation}:${key}`, owner, signal);
-        },
-        { assertCurrent: owner.assertCurrent },
-      ),
-    );
-    assertStateCurrent();
+    const acquired = await withSessionHistoryWorkerDatabase(input.database, async (owner) => {
+      let result: SessionHistoryWorkerResult;
+      try {
+        result = await readRestoredSessionTranscript(
+          scope,
+          () => {
+            assertStateCurrent();
+            return readQueuedPage(input, `${owner.generation}:${key}`, owner, signal);
+          },
+          { assertCurrent: owner.assertCurrent },
+        );
+      } catch (error) {
+        if (error instanceof SessionHistoryDeltaPreparationError && request.kind === "delta") {
+          // Failed execution/retirement has joined. Recover inside the retained
+          // scope so primary revocation and release failures still refuse it.
+          owner.assertCurrent();
+          result = { kind: "delta", ...error.partial };
+        } else {
+          throw error;
+        }
+      }
+      return { result, assertCurrent: owner.assertCurrent };
+    });
+    const assertCurrent = () => {
+      acquired.assertCurrent();
+      assertStateCurrent();
+    };
+    assertCurrent();
+    const result = acquired.result;
     if (result.kind !== request.kind) {
       throw new Error("Session history worker returned the wrong page type");
     }
@@ -206,7 +236,7 @@ export async function readSessionHistoryPageInWorker(
       : result.kind === "http"
         ? result.snapshot
         : result.kind === "delta"
-          ? result.delta
+          ? { ...result, assertCurrent }
           : result.messages;
   } catch (error) {
     if (isSessionTranscriptProjectionUnavailableError(error)) {

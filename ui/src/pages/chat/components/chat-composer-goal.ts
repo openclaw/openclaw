@@ -23,6 +23,15 @@ const goalIcon = strokeIcon(svg` <path d="M12 13V2l8 4-8 4" />
   <path d="M20.561 10.222a9 9 0 1 1-12.55-5.29" />
   <path d="M8.002 9.997a5 5 0 1 0 8.9 2.02" />`);
 
+const goalStatusIcons: Record<SessionGoal["status"], TemplateResult> = {
+  active: goalIcon,
+  paused: icons.pause,
+  blocked: icons.alertTriangle,
+  usage_limited: icons.alertTriangle,
+  budget_limited: icons.alertTriangle,
+  complete: icons.check,
+};
+
 function clearGoalElapsedTimer(el: HTMLElement) {
   const timer = goalElapsedTimers.get(el);
   if (timer !== undefined) {
@@ -106,6 +115,7 @@ export function renderChatGoal(
     goal.status === "blocked" ||
     goal.status === "usage_limited" ||
     goal.status === "budget_limited";
+  const pauseReason = canResume && !expanded ? goal.lastStatusNote : undefined;
   const toggleExpanded = () => {
     state.goalExpandedId = expanded ? null : goal.id;
     actions.requestUpdate();
@@ -118,9 +128,15 @@ export function renderChatGoal(
       aria-label=${formatGoalDetail(goal)}
     >
       <div class="agent-chat__goal-row">
-        <span class="agent-chat__goal-icon">${goalIcon}</span>
+        <span class="agent-chat__goal-icon" aria-hidden="true"
+          >${goalStatusIcons[goal.status]}</span
+        >
         <span class="agent-chat__goal-copy">
-          <span class="agent-chat__goal-label">${formatGoalStatusLabel(goal.status)}</span>
+          <openclaw-tooltip .content=${pauseReason ?? ""} ?disabled=${!pauseReason}>
+            <span class="agent-chat__goal-label" tabindex=${pauseReason ? "0" : nothing}
+              >${formatGoalStatusLabel(goal.status)}</span
+            >
+          </openclaw-tooltip>
           <span class="agent-chat__goal-objective">${goal.objective}</span>
         </span>
         <span class="agent-chat__goal-elapsed" ${ref(createGoalElapsedRef(goal))}></span>

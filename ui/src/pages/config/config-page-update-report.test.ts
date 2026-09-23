@@ -21,11 +21,11 @@ describe("ConfigPage update failure reporting", () => {
       allowed: true,
     },
     {
-      label: "non-owner administrator",
+      label: "named administrator",
       profileId: "other-operator",
       scope: "operator.admin",
       connected: true,
-      allowed: false,
+      allowed: true,
     },
     {
       label: "unidentified administrator",

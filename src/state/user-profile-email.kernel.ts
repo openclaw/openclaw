@@ -1,12 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { publishUserProfileAuthorityChange } from "./user-profile-events.js";
 import { publishUserProfilesChange } from "./user-profile-list.js";
 import type { UserProfileMutationContext } from "./user-profile-mutation.js";
 import {
   insertUserProfile,
   requireResolvedUserProfileMetadataById,
+  setUserProfileEmailBinding,
   toUserProfile,
   userProfilesDb,
 } from "./user-profiles-internal.js";
@@ -40,14 +41,7 @@ export function ensureProfileForEmailInDatabase(
     initialDisplayName ??
     truncateUtf16Safe(email.split("@", 1)[0] || email, MAX_USER_PROFILE_DISPLAY_NAME_LENGTH);
   const row = insertUserProfile(db, displayName, now, mutation);
-  executeSqliteQuerySync(
-    db,
-    kysely.insertInto("user_profile_emails").values({
-      email,
-      profile_id: row.id,
-      created_at: now,
-    }),
-  );
+  setUserProfileEmailBinding(db, email, row.id, now);
   mutation?.authority(row.id);
   publishUserProfileAuthorityChange(db, row.id);
   mutation?.publish(row.id);

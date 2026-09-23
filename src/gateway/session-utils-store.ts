@@ -142,8 +142,8 @@ function loadSessionEntryWithMode(
       })
     | undefined,
   readOnly: boolean,
+  cfg: OpenClawConfig = getRuntimeConfig(),
 ) {
-  const cfg = getRuntimeConfig();
   const key = normalizeOptionalString(sessionKey) ?? "";
   const target = resolveGatewaySessionStoreTargetWithStore({
     cfg,
@@ -188,8 +188,9 @@ function loadSessionEntryWithMode(
 export function loadGatewaySessionEntry(
   sessionKey: string,
   opts?: Pick<SessionEntryListScope, "agentId" | "clone" | "projection" | "env">,
+  cfg?: OpenClawConfig,
 ) {
-  return loadSessionEntryWithMode(sessionKey, opts, false);
+  return loadSessionEntryWithMode(sessionKey, opts, false, cfg);
 }
 
 export function loadGatewaySessionEntryReadOnly(
@@ -198,8 +199,9 @@ export function loadGatewaySessionEntryReadOnly(
     includeStoreChildEntries?: boolean;
     targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
   } & Pick<SessionEntryListScope, "agentId" | "clone" | "projection" | "env">,
+  cfg?: OpenClawConfig,
 ) {
-  return loadSessionEntryWithMode(sessionKey, opts, true);
+  return loadSessionEntryWithMode(sessionKey, opts, true, cfg);
 }
 
 /** Returns the one canonical entry and the exact persisted key that owns it. */

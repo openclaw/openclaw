@@ -51,6 +51,25 @@ export const doctorOutputEntrypoints = {
   },
 } as const;
 
+// Import guards need physical module boundaries in the prepared fixture graph.
+export const mcpImportBoundaryEntrypoints = {
+  cli: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "mcp-cli",
+    distWorkerPath: "legacy-finalizer/src/cli/mcp-cli.js",
+  },
+  catalog: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../agents/agent-bundle-mcp-materialize",
+    distWorkerPath: "legacy-finalizer/src/agents/agent-bundle-mcp-materialize.js",
+  },
+  metadata: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../plugins/tool-metadata",
+    distWorkerPath: "legacy-finalizer/src/plugins/tool-metadata.js",
+  },
+} as const;
+
 // Failure reporting and exit finalization must share their compiled error classes.
 export const updateCandidateExitEntrypoints = {
   oneShotExit: {

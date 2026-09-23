@@ -420,7 +420,8 @@ path settings.
 Registry retirement revokes managed execution separately from physical resource
 release. An acquired inspection can release its execution authority while a
 borrower still holds the underlying registration resources; the last physical
-claim owns their disposal. Bare SDK provider results retain their own instance
+claim owns their disposal, including a cleanup work scope that remains usable
+after the releasing request has ended. Bare SDK provider results retain their own instance
 consumer, so their callbacks remain usable until the owning SDK host closes.
 That host joins admitted callback work before releasing consumers and resources;
 releasing the inspection still prevents new borrows. Gateway shutdown keeps shared dependencies

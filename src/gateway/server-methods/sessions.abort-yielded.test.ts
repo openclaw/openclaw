@@ -1,3 +1,6 @@
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { writeFile } from "node:fs/promises";
 import { expect, it, vi } from "vitest";
 import {
@@ -14,10 +17,7 @@ import {
   registerSubagentRun,
   settleRequesterAfterSessionSpawns,
 } from "../../agents/subagents/registry/subagent-registry.js";
-import {
-  settleSubagentRegistryPersistenceWork,
-  writeSubagentSessionEntry,
-} from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { clearSessionQueues, enqueueFollowupRun } from "../../auto-reply/reply/queue.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
@@ -31,7 +31,6 @@ import { isPathInside } from "../../infra/path-guards.js";
 import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.test-support.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
-import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { createChatAbortContext } from "./chat.abort.test-helpers.js";
 import { sessionAbortHandlers } from "./sessions-abort.js";
 import type { RespondFn } from "./types.js";
@@ -245,7 +244,7 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
         abortedLastRun: true,
         lastRunId: parentRunId,
       });
-      await settleSubagentRegistryPersistenceWork();
+      await fixture.settle();
       expect(getSubagentRunByChildSessionKey(childKey)?.killReconciliation).toMatchObject({
         suppressTaskDelivery: true,
       });

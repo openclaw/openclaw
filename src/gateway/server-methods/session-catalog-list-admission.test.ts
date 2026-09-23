@@ -57,10 +57,12 @@ describe("SessionCatalogListAdmission", () => {
       message: "session catalog is busy (1 active, 1 queued); retry shortly",
     });
     expect(overflowTask).not.toHaveBeenCalled();
-    await expect(admission.run("healthy", async () => "healthy")).resolves.toBe("healthy");
+    const healthy = admission.run("healthy", () => active.promise);
+    const healthyQueued = admission.run("healthy", async () => "healthy");
 
     active.resolve();
-    await Promise.all([first, queued]);
+    await expect(healthyQueued).resolves.toBe("healthy");
+    await Promise.all([first, queued, healthy]);
   });
 
   it("reserves a continuing operation behind all 32 waiters before admitting new arrivals", async () => {
@@ -85,10 +87,10 @@ describe("SessionCatalogListAdmission", () => {
       admission.run(`active-${index}`, () => gate.promise),
     );
     const queued = Array.from({ length: 32 }, (_, index) =>
-      admission.run(`queued-${index}`, async () => {
+      admission.run("continuing", async () => {
         order.push(`queued-${index}`);
         if (index === 0) {
-          lateArrival = admission.run("late", async () => order.push("late"));
+          lateArrival = admission.run("continuing", async () => order.push("late"));
           void lateArrival.catch(() => undefined);
           oldestStarted.resolve();
           await oldestPage.promise;

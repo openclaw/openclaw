@@ -12,8 +12,7 @@ import {
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { claimAgentRunContext } from "../infra/agent-run-registry.js";
@@ -44,14 +43,6 @@ afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
 });
 
-async function seedSessionEntry(
-  storePath: string,
-  sessionKey: string,
-  entry: SessionEntry,
-): Promise<void> {
-  await replaceSessionEntry({ sessionKey, storePath }, entry);
-}
-
 describe("session list subagent payload reads", () => {
   afterEach(async () => {
     resetAgentEventsForTest({ preserveListeners: true });
@@ -77,10 +68,17 @@ describe("session list subagent payload reads", () => {
         setRuntimeConfigSnapshot(cfg, cfg);
         const nativeJson = new DatabaseSync(":memory:");
         try {
-          await seedSessionEntry(storePath, parentKey, { sessionId: "parent", updatedAt: 1 });
+          // Async writes schedule maintenance whose retained-payload reads contaminate this observer.
+          replaceSessionEntrySync(
+            { storePath, sessionKey: parentKey },
+            { sessionId: "parent", updatedAt: 1 },
+          );
           for (const runId of ["explicit", "fallback", "redirected", "unrelated", "alias"]) {
             const childSessionKey = `agent:main:subagent:${runId}`;
-            await seedSessionEntry(storePath, childSessionKey, { sessionId: runId, updatedAt: 1 });
+            replaceSessionEntrySync(
+              { storePath, sessionKey: childSessionKey },
+              { sessionId: runId, updatedAt: 1 },
+            );
             runs.set(runId, {
               runId,
               childSessionKey,
@@ -170,13 +168,19 @@ describe("session list subagent payload reads", () => {
         const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
         setRuntimeConfigSnapshot(cfg, cfg);
         try {
-          await seedSessionEntry(storePath, parentKey, { sessionId: "parent", updatedAt: now });
-          await seedSessionEntry(storePath, childKey, {
-            sessionId: "child",
-            updatedAt: now,
-            parentSessionKey: navigationKey,
-            spawnedBy: "agent:main:subagent:old-controller",
-          });
+          replaceSessionEntrySync(
+            { storePath, sessionKey: parentKey },
+            { sessionId: "parent", updatedAt: now },
+          );
+          replaceSessionEntrySync(
+            { storePath, sessionKey: childKey },
+            {
+              sessionId: "child",
+              updatedAt: now,
+              parentSessionKey: navigationKey,
+              spawnedBy: "agent:main:subagent:old-controller",
+            },
+          );
           const runs = new Map<string, SubagentRunFixture>();
           for (let index = 0; index < 20; index += 1) {
             const runId = `retained-${index}`;

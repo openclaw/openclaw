@@ -10,6 +10,8 @@ import {
   getOwnedSessionTranscriptWriterFence,
   SessionTranscriptWriterClaimReboundError,
 } from "../../config/sessions/transcript-write-context.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { hasModelFallbackStop } from "../failover-error.js";
 import { testModel } from "./agent-session-loop-correctness.test-support.js";
@@ -20,8 +22,70 @@ import { DefaultResourceLoader } from "./resource-loader.js";
 import { createAgentSession } from "./sdk.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
 import type { ModelChangeEntry, ThinkingLevelChangeEntry } from "./session-manager-types.js";
+import * as writeAdmission from "./session-manager-write-admission.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
+
+it("restores prepared session context without waiting for an unrelated database writer", async () => {
+  await withOpenClawTestState({ label: "sdk-restored-admission" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionId: "restored",
+      sessionKey: "agent:main:restored",
+      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+    };
+    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const manager = SessionManager.open(target, state.workspaceDir);
+    await manager.appendThinkingLevelChange("off");
+    const message = { role: "user" as const, content: "Restore these exact bytes", timestamp: 1 };
+    manager.appendMessage(message);
+    const before = await loadTranscriptEvents(target);
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const writer = runOpenClawAgentWorkerWrite(
+      { agentId: "main", path: target.storePath },
+      async () => {
+        entered.resolve();
+        await release.promise;
+      },
+    );
+    await entered.promise;
+    const requestedWrite = createDeferredCore<"writer-admission">();
+    const originalWrite = writeAdmission.withSessionManagerWrite;
+    const intercepted = vi
+      .spyOn(writeAdmission, "withSessionManagerWrite")
+      .mockImplementation((writeManager, write) => {
+        requestedWrite.resolve("writer-admission");
+        return originalWrite(writeManager, write);
+      });
+    const authStorage = AuthStorage.inMemory();
+    const restored = createAgentSession({
+      cwd: state.workspaceDir,
+      agentDir: state.agentDir("main"),
+      model: testModel,
+      noTools: "all",
+      authStorage,
+      modelRegistry: ModelRegistry.inMemory(authStorage),
+      sessionManager: manager,
+      settingsManager: SettingsManager.inMemory(),
+      resourceLoader: createResourceLoader(),
+    });
+    try {
+      expect(await Promise.race([restored.then(() => "ready"), requestedWrite.promise])).toBe(
+        "ready",
+      );
+      const { session } = await restored;
+      expect(session.messages).toEqual([message]);
+      expect(session.thinkingLevel).toBe("off");
+      expect(await loadTranscriptEvents(target)).toEqual(before);
+    } finally {
+      intercepted.mockRestore();
+      release.resolve();
+      await writer;
+      (await restored).session.dispose();
+    }
+  });
+});
 
 it.each(["model", "thinking", "resource loading"] as const)(
   "rejects SDK exposure after retargeting during %s initialization",

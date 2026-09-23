@@ -1,4 +1,7 @@
 /** Exact recovered-parent Stop owns its descendants, not other turns or queues. */
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { expect, it, vi } from "vitest";
 import {
   clearActiveEmbeddedRun,
@@ -11,10 +14,7 @@ import {
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { resolveAgentRunAbortLifecycleFields } from "../../agents/run-termination.js";
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
-import {
-  writeSubagentSessionEntry,
-  settleSubagentRegistryPersistenceWork,
-} from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import {
   enqueueSwarmRun,
@@ -29,7 +29,6 @@ import { createDirectChatContext } from "../server-chat.agent-events.test-helper
 import { handleGatewayRequest } from "../server-methods.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
-import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { createActiveRun, createChatAbortContext } from "./chat.abort.test-helpers.js";
 import { sessionAbortHandlers } from "./sessions-abort.js";
 
@@ -274,7 +273,7 @@ it("exact embedded Stop cancels running and queued collectors without dispatchin
       status: "aborted",
     });
     expect(parentAbort).toHaveBeenCalledOnce();
-    await settleSubagentRegistryPersistenceWork();
+    await fixture.settle();
     for (const id of ["running", "queued"]) {
       expect(getSubagentRunByChildSessionKey(childKey(id)), id).toMatchObject({
         endedReason: "subagent-killed",
@@ -469,7 +468,7 @@ it.each([
       ]);
       expect(registration.controller.signal.aborted).toBe(!finalizing);
       expect(parentAbort).toHaveBeenCalledTimes(finalizing ? 0 : 1);
-      await settleSubagentRegistryPersistenceWork();
+      await fixture.settle();
       expect.soft(childAbort).toHaveBeenCalledTimes(finalizing ? 0 : 1);
       expect(dispatch).not.toHaveBeenCalled();
       for (const id of ["running", "queued"]) {

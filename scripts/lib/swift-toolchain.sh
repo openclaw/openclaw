@@ -20,6 +20,25 @@ select_xcode_toolchain() {
   swift --version
 }
 
+prepare_ios_test_simulator() {
+  local simulator_id
+  simulator_id="$(
+    xcrun simctl list devices available --json | node --input-type=module -e '
+      const chunks = [];
+      for await (const chunk of process.stdin) chunks.push(chunk);
+      const runtimes = JSON.parse(Buffer.concat(chunks).toString("utf8")).devices;
+      const simulator = Object.values(runtimes)
+        .flat()
+        .find((device) => device.isAvailable && device.name.startsWith("iPhone"));
+      if (!simulator) throw new Error("No available iPhone simulator for iOS tests");
+      process.stdout.write(simulator.udid);
+    '
+  )" || return
+  # Finish first-boot setup before XCTest's launch deadline starts.
+  xcrun simctl bootstatus "$simulator_id" -b >&2 || return
+  printf '%s\n' "$simulator_id"
+}
+
 run_apple_command_logged() {
   local log_path="$1"
   shift

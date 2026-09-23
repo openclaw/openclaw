@@ -144,12 +144,17 @@ function renderProviderCostHistory(snapshot: ProviderUsageDetails) {
           `,
         )}
       </div>
-      <div class="provider-cost-chart" aria-label=${t("usage.providerUsage.dailyCost")}>
+      <div
+        class="provider-cost-chart"
+        role="group"
+        aria-label=${t("usage.providerUsage.dailyCost")}
+      >
         ${history.daily.map((day) => {
           const height =
             day.amount > 0 && maxAmount > 0 ? Math.max(3, (day.amount / maxAmount) * 100) : 0;
           const label = `${day.date}: ${formatAmount(day.amount)}`;
           return html`<span
+            role="img"
             style=${`height: ${height}%`}
             title=${label}
             aria-label=${label}

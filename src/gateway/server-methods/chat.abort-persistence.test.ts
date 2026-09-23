@@ -326,7 +326,7 @@ describe("chat abort transcript persistence", () => {
     if (rejects) {
       await expect(persistence).rejects.toThrow("transcript identity not resolved");
     } else {
-      await expect(persistence).resolves.toBeUndefined();
+      await expect(persistence).resolves.toContain("could not be saved to history");
     }
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("transcript identity not resolved"));
   });

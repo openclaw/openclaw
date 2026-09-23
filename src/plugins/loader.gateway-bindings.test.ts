@@ -319,8 +319,8 @@ it.each([
           gateway: { roles: { ...config.gateway.roles, default: "staff" } },
         };
         for (const unboundConfig of [staffDefault, { ...config, gateway: {} }]) {
-          expect(resolveGatewayOperatorAccessAuthority(visitor.id, unboundConfig)).toBeUndefined();
-          expect(resolveGatewayOperatorAccessAuthority(staff.id, unboundConfig)).toBeUndefined();
+          expect(resolveGatewayOperatorAccessAuthority(visitor.id, unboundConfig)).toBeNull();
+          expect(resolveGatewayOperatorAccessAuthority(staff.id, unboundConfig)).toBeNull();
         }
       } else {
         expect(() => resolveGatewayOperatorAccessAuthority(visitor.id, config)).toThrow(
@@ -328,14 +328,12 @@ it.each([
         );
         expect(optionalChecks).not.toHaveBeenCalled();
       }
-      expect(resolveGatewayOperatorAccessAuthority(staff.id, config)).toBeUndefined();
-      expect(resolveGatewayOperatorAccessAuthority(unbound.id, config)).toBeUndefined();
+      expect(resolveGatewayOperatorAccessAuthority(staff.id, config)).toBeNull();
+      expect(resolveGatewayOperatorAccessAuthority(unbound.id, config)).toBeNull();
       expect(optionalChecks).toHaveBeenCalledWith(staff.id, false);
       expect(optionalChecks).toHaveBeenCalledWith(unbound.id, false);
       optionalChecks.mockClear();
-      expect(
-        resolveGatewayOperatorAccessAuthority(GATEWAY_OWNER_PROFILE_ID, config),
-      ).toBeUndefined();
+      expect(resolveGatewayOperatorAccessAuthority(GATEWAY_OWNER_PROFILE_ID, config)).toBeNull();
       expect(optionalChecks).not.toHaveBeenCalled();
     } finally {
       process.off(optionalCheckEvent, optionalChecks);

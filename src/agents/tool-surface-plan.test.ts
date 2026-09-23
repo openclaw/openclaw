@@ -122,9 +122,8 @@ describe("resolveAgentToolSurfacePlan", () => {
     },
   );
 
-  it("uses the selected model policy before transport aliases and reevaluates fallbacks", () => {
+  it("uses automatic activation by default while honoring model policy and fallback capability", () => {
     const config: OpenClawConfig = {
-      tools: { codeMode: "auto" },
       agents: { defaults: { models: { "test/family": { codeMode: false } } } },
     };
     const model = { id: "family-current", provider: "test", compat: { codeMode: "preferred" } };
@@ -135,6 +134,16 @@ describe("resolveAgentToolSurfacePlan", () => {
     expect(
       resolveAgentToolSurfacePlan({ ...params, modelId: "fallback" }).codeModeControlsEnabled,
     ).toBe(true);
+    for (const compat of [{ codeMode: "capable" }, {}]) {
+      const plan = resolveAgentToolSurfacePlan({
+        ...params,
+        modelId: "fallback",
+        model: { ...model, compat },
+      });
+      expect(plan.codeModeControlsEnabled).toBe(false);
+      expect(plan.toolSearchControlsEnabled).toBe(true);
+    }
+    expect(config.tools).toBeUndefined();
   });
 
   it.each([

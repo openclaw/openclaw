@@ -12,6 +12,18 @@ read_when:
 2. `pnpm test <path-or-filter>` for one file, directory, or explicit target.
 3. `pnpm test` only when you intentionally need the full local Vitest suite.
 
+The repository wrappers partition ordinary unfiltered Gateway-server run-mode
+selections and expanded full-suite plans into at most 50 test files per process.
+This bounds the non-isolated module graph as the inventory grows without changing
+worker concurrency, heap limits, or individual file boundaries. Raw Vitest and
+existing single-invocation selections, such as explicit targets, coverage, report
+output, bail, and watch mode, retain their existing behavior.
+
+Tests that create real managed worktrees must satisfy the
+[capacity and disk-space requirements](/concepts/managed-worktrees#capacity-and-disk-space),
+including the additional allowance for executable setup scripts. Keep that space
+available throughout the run.
+
 The project runner prints wrapper usage for a sole `--help` or `-h` request.
 Compound requests, including `--help --no-help`, follow native Vitest option semantics.
 
@@ -84,6 +96,25 @@ for comparable results. This selects the
 actual Vitest process and workers while retaining Node for orchestration and
 compiler preparation. It does not use Bun's native test runner. `bun run` alone
 does not select Bun for tests. Node remains the local default.
+
+For the CI Control UI comparison, run the full Node selection followed by its
+compatible Bun partition:
+
+```sh
+OPENCLAW_NODE_TEST_CONFIGS_JSON='["ui/vitest.config.ts"]' \
+OPENCLAW_NODE_TEST_VITEST_ARGS_JSON='["--maxWorkers", "3"]' \
+OPENCLAW_CI_TEST_RUNTIME_POLICY=dual \
+node --import tsx scripts/ci-run-node-test-shard.mts
+```
+
+The pinned fork can loop in CSS tokenization after particular UI file orders.
+The nonbrowser UI setup prevents inlining the native tokenizer's `endOfFile`
+predicate on Bun while retaining baseline, DFG, and FTL JIT. It does nothing on Node, and
+Chromium keeps its existing setup. See the
+[CI runtime policy](/ci/pipeline#test-runtime-selection) for the removal proof.
+The Bun partition deliberately excludes two whole GC-sensitive files, which
+remain covered by Node. Running the complete UI config directly with
+`OPENCLAW_VITEST_RUNTIME=bun` also runs those currently incompatible assertions.
 
 Test processes and their CLI fixtures keep Sparkplug baseline compilation enabled
 but run it synchronously. This avoids a Node 24 shutdown deadlock where a

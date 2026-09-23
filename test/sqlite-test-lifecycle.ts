@@ -6,6 +6,7 @@ const source = (name: string) => normalizeModuleId(path.resolve(import.meta.dirn
 const agentSource = source("src/state/openclaw-agent-db-lifecycle.ts");
 const agentKey = Symbol.for("openclaw.agentDatabaseLifecycle");
 const brokerKey = Symbol.for("openclaw.sqliteWorkerBroker");
+const coordinatorPoolKey = Symbol.for("openclaw.sqliteCoordinatorPool");
 const resetKey = Symbol.for("openclaw.globalSingletonLifecycleResets");
 const retainedCustodyKey = Symbol.for("openclaw.sqliteTestRetainedCustody");
 
@@ -17,8 +18,10 @@ export const sqliteTestSingletonPublications: ReadonlyMap<string, symbol> = new 
     Symbol.for("openclaw.sharedStateWorkerOwner"),
   ],
   [source("src/infra/sqlite-worker-store.ts"), brokerKey],
+  [source("src/infra/sqlite-coordinator.ts"), coordinatorPoolKey],
   [source("src/state/openclaw-state-db-cache.ts"), Symbol.for("openclaw.stateDatabaseLifecycle")],
   [source("src/state/openclaw-state-read-worker.ts"), Symbol.for("openclaw.stateReadWorkers")],
+  [source("src/gateway/session-group-catalog.ts"), Symbol.for("openclaw.sessionGroupCatalog")],
   [agentSource, agentKey],
 ]);
 
@@ -75,9 +78,11 @@ export async function drainSqliteTestSingletons(
         }
       }),
   );
+  // Native and broker retirement can return a coordinator to the idle pool.
+  const closeOrder = (key: symbol) => (key === coordinatorPoolKey ? 2 : Number(key === brokerKey));
   const sqlite = entries
     .filter(([key]) => sqliteKeys.has(key))
-    .toSorted(([left], [right]) => Number(left === brokerKey) - Number(right === brokerKey));
+    .toSorted(([left], [right]) => closeOrder(left) - closeOrder(right));
   for (const [key, reset] of sqlite) {
     if (hasRetainedSqliteTestCustody()) {
       break;

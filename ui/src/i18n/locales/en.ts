@@ -2556,6 +2556,15 @@ export const en: TranslationMap & {
     restartRequired: "Gateway restart required.",
     saveErrorTitle: "Could not update feature",
     saveFailed: "The feature setting could not be saved.",
+    decisionAssistance: {
+      title: "Decision assistance",
+      description:
+        "Enable experimental features powered by Decision models. Requires a Decision model, set globally or per agent. No features use this setting yet.",
+      optedIn: "Preference saved.",
+      loading: "Loading setting…",
+      unavailable: "Couldn’t load this setting. Reconnect or refresh to try again.",
+      refresh: "Refresh configuration",
+    },
     codeMode: {
       title: "Code Mode",
       description:
@@ -3045,6 +3054,10 @@ export const en: TranslationMap & {
     "reload-required": "Refresh required",
     offline: "Disconnected",
     reconnecting: "Reconnecting…",
+    interruptedRetrying:
+      "Connection to the Gateway was interrupted. Reconnecting automatically. (WebSocket {code})",
+    interrupted:
+      "Connection to the Gateway was interrupted. Check your connection and try again. (WebSocket {code})",
     restarting: "Restarting…",
     suspending: "Suspending…",
     suspended: "Suspended",
@@ -3236,6 +3249,8 @@ export const en: TranslationMap & {
       loadFailed: "Could not load {detail}: {error}",
       noDataInRange: "No data in range",
       usageOverTime: "Usage Over Time",
+      rangeStart: "Range start",
+      rangeEnd: "Range end",
       reset: "Reset",
       perTurn: "Per Turn",
       cumulative: "Cumulative",
@@ -3820,6 +3835,9 @@ export const en: TranslationMap & {
       groups: "Groups",
       coding: "Coding",
       catalogViewOptions: "View options",
+      reorderItem: "Reorder {item}",
+      moveUp: "Move up",
+      moveDown: "Move down",
       hideFromSidebar: "Hide from sidebar",
       sectionHidden: "{section} hidden.",
       sectionHiddenRecovery: "Show it again in Settings > Appearance > Sidebar.",
@@ -4384,10 +4402,7 @@ export const en: TranslationMap & {
       toolInput: "Tool input",
       toolOutput: "Tool output",
       providerResponse: "Provider tool response",
-      providerResponseNote:
-        "Captured before context processing. The exact model input is unverified.",
       executionOutput: "Execution output",
-      executionOutputNote: "Captured execution output, not a verified model input.",
       showFullOutput: "Show full output",
       fullOutputUnavailable: "Full output unavailable. Only the captured output is shown.",
       copyOutput: "Copy available output",
@@ -4976,7 +4991,7 @@ export const en: TranslationMap & {
       agentMessageRequired: "Agent message is required.",
       timeoutInvalid: "If set, timeout must be 0 or greater (0 disables this timeout).",
       webhookUrlRequired: "Webhook URL is required.",
-      webhookUrlInvalid: "Webhook URL must start with http:// or https://.",
+      webhookUrlInvalid: "Webhook URL must be a valid http(s):// URL without embedded credentials.",
       invalidRunTime: "Invalid run time.",
       invalidIntervalAmount: "Invalid interval amount.",
       cronExprRequiredShort: "Cron expression required.",

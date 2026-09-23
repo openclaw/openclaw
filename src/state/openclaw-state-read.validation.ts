@@ -5,6 +5,16 @@ import { UserChannelIdentitySchema } from "../../packages/gateway-protocol/src/s
 import { isPluginBlobReadCommand } from "../plugin-state/plugin-blob-worker-contract.js";
 import type { OpenClawStateReadRequest } from "./openclaw-state-read.types.js";
 
+function isTaskSnapshotScope(input: unknown): boolean {
+  return (
+    isRecord(input) &&
+    typeof input.taskId === "string" &&
+    (input.flowId === undefined || typeof input.flowId === "string") &&
+    (input.runId === undefined || typeof input.runId === "string") &&
+    (input.childSessionKey === undefined || typeof input.childSessionKey === "string")
+  );
+}
+
 export function isReadRequest(input: unknown): input is OpenClawStateReadRequest {
   if (!isRecord(input) || !isRecord(input.context) || !isRecord(input.command)) {
     return false;
@@ -25,9 +35,27 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
     isRecord(coordinatorRuntime) &&
     typeof coordinatorRuntime.directory === "string" &&
     typeof coordinatorRuntime.keepAlive === "boolean" &&
-    ((input.command.type === "mcpOAuth.statuses" &&
-      Array.isArray(input.command.input) &&
-      input.command.input.every((key) => typeof key === "string")) ||
+    ((input.command.type === "acpSessions.metadata" &&
+      Array.isArray(input.command.entries) &&
+      input.command.entries.length <= 64 &&
+      input.command.entries.every(
+        (entry) =>
+          isRecord(entry) &&
+          Array.isArray(entry.keys) &&
+          entry.keys.length <= 3 &&
+          entry.keys.every((key) => typeof key === "string") &&
+          (entry.legacyKey === undefined || typeof entry.legacyKey === "string") &&
+          (entry.entry === undefined ||
+            (isRecord(entry.entry) &&
+              (entry.entry.lifecycleRevision === undefined ||
+                typeof entry.entry.lifecycleRevision === "string") &&
+              (entry.entry.sessionId === undefined || typeof entry.entry.sessionId === "string") &&
+              (entry.entry.sessionStartedAt === undefined ||
+                typeof entry.entry.sessionStartedAt === "number"))),
+      )) ||
+      (input.command.type === "mcpOAuth.statuses" &&
+        Array.isArray(input.command.input) &&
+        input.command.input.every((key) => typeof key === "string")) ||
       ((input.command.type === "mcpOAuth.readOnly" ||
         input.command.type === "mcpOAuth.keys" ||
         input.command.type === "mcpOAuth.pending" ||
@@ -65,6 +93,13 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         typeof input.command.input.nowMs === "number") ||
       input.command.type === "admit" ||
       input.command.type === "subagents.sessionList" ||
+      (input.command.type === "subagents.forChildSession" &&
+        typeof input.command.childSessionKey === "string") ||
+      (input.command.type === "tasks.mutationSnapshot" &&
+        (input.command.input === undefined ||
+          (Array.isArray(input.command.input)
+            ? Array.from(input.command.input).every(isTaskSnapshotScope)
+            : isTaskSnapshotScope(input.command.input)))) ||
       (input.command.type === "subagents.runs" &&
         isRecord(input.command.scope) &&
         ((input.command.scope.kind === "session" &&
@@ -82,6 +117,8 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
             isRecord(pin) && typeof pin.skillId === "string" && typeof pin.revision === "string",
         )) ||
       input.command.type === "agentDatabaseRegistry.read" ||
+      input.command.type === "sessionGroups.snapshot" ||
+      (input.command.type === "sessionGroups.members" && isRecord(input.command.cfg)) ||
       (input.command.type === "workerEnvironments.snapshot" &&
         (input.command.ids === undefined ||
           (Array.isArray(input.command.ids) &&
@@ -95,6 +132,17 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
           (isRecord(input.command.input.cursor) &&
             typeof input.command.input.cursor.changedAtMs === "number" &&
             typeof input.command.input.cursor.environmentId === "string"))) ||
+      input.command.type === "userProfiles.catalog" ||
+      (input.command.type === "githubPublication.lifecycle" &&
+        (input.command.publicationKind === "shared" ||
+          input.command.publicationKind === "personal") &&
+        typeof input.command.requestId === "string") ||
+      ((input.command.type === "githubPublication.request" ||
+        input.command.type === "githubRepository.request") &&
+        typeof input.command.requestId === "string") ||
+      ((input.command.type === "githubPublication.knownPullRequestUrls" ||
+        input.command.type === "githubRepository.knownPullRequestUrls") &&
+        isRecord(input.command.input)) ||
       (input.command.type === "userProfiles.reconcile" &&
         typeof input.command.profileId === "string") ||
       (input.command.type === "userProfiles.channelIdentity.list" &&

@@ -31,6 +31,7 @@ import {
   type StreamEvent,
   resolveProviderVariant,
   type MockOpenAiRequestSnapshot,
+  type MockOpenAiRequestSnapshotBase,
   type MockOpenAiRequestSnapshotInput,
   type MockOpenAiRequestKind,
   type MockCompactionSummaryFaultMode,
@@ -600,14 +601,14 @@ async function buildResponsesPayload(
         codeModeControlJson?.status === "waiting" &&
         "runId" in codeModeControlJson &&
         typeof codeModeControlJson.runId === "string" &&
-        hasDeclaredTool(body, "wait")
+        hasDeclaredTool(toolDeclarationBody, "wait")
       ) {
         return buildToolCallEventsWithArgs("wait", { runId: codeModeControlJson.runId });
       }
       if (
         toolJson?.status === "waiting" &&
         typeof toolJson.runId === "string" &&
-        hasDeclaredTool(body, "wait")
+        hasDeclaredTool(toolDeclarationBody, "wait")
       ) {
         return buildToolCallEventsWithArgs("wait", { runId: toolJson.runId });
       }
@@ -619,7 +620,7 @@ async function buildResponsesPayload(
       if (nextCheckpoint > 1 && !QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)) {
         return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
       }
-      if (hasDeclaredTool(body, "exec")) {
+      if (hasDeclaredTool(toolDeclarationBody, "exec")) {
         const encodedTarget = encodeCodeModeTarget("qa_restart_wait", {});
         return buildToolCallEventsWithArgs("exec", {
           restartSafe: true,
@@ -639,7 +640,7 @@ async function buildResponsesPayload(
     if (!QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)) {
       return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
     }
-    if (hasToolDefinition(body, "qa_restart_unsafe_probe")) {
+    if (hasToolDefinition(toolDeclarationBody, "qa_restart_unsafe_probe")) {
       return buildToolCallEventsWithArgs("qa_restart_unsafe_probe", {});
     }
     return buildAssistantEvents(QA_RESTART_FINAL_TEXT);
@@ -2225,22 +2226,13 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
       toolOutput: extractToolOutput(input),
       model,
       providerVariant: resolveProviderVariant(model),
+      codeModeExecSurface:
+        resolveCodeModeExecSurface(resolveCurrentToolDeclarationSurface(body, input)) ?? undefined,
       imageInputCount: countImageInputs(input),
       requestKind,
       compactionSummaryFaultMode,
       rawByteLength,
-    } satisfies Omit<
-      MockOpenAiRequestSnapshotInput,
-      | "outcome"
-      | "errorCode"
-      | "plannedToolCallId"
-      | "plannedToolItemId"
-      | "plannedToolName"
-      | "plannedWireToolName"
-      | "plannedToolArgs"
-      | "toolOutputCallId"
-      | "toolOutputStructuredError"
-    >;
+    } satisfies MockOpenAiRequestSnapshotBase;
     if (
       requestKind === "agent-initial" &&
       (QA_COMPACTION_RETRY_PROMPT_RE.test(allInputText) ||

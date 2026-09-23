@@ -2,7 +2,9 @@ import { err } from "@openclaw/normalization-core/result";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import type { MessageSendResult } from "../infra/outbound/message.js";
+import * as stateCoordinator from "../infra/state-database-coordinator.js";
 import * as systemEvents from "../infra/system-events.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -11,17 +13,23 @@ import {
 } from "../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { resetTaskFlowRegistryForTests } from "./task-flow-registry.test-support.js";
+import {
+  createManagedTaskFlow,
+  resetTaskFlowRegistryForTests,
+} from "./task-flow-registry.test-support.js";
 import type { sendMessage as SendMessage } from "./task-registry-delivery-runtime.js";
 import { maybeDeliverTaskStateChangeUpdate } from "./task-registry-delivery.js";
 import {
   captureTaskDeliveryWork,
+  failTaskNotificationPreparationAfterConsume,
   commitTaskDeliveryFixture,
 } from "./task-registry-delivery.test-support.js";
+import * as taskRegistryListener from "./task-registry-listener-state.js";
 import { getTaskDeliveryState } from "./task-registry-mutation.js";
 import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.js";
 import * as deliveryRuntime from "./task-registry-runtime-loaders.js";
@@ -39,7 +47,7 @@ import { bindTaskRunOwner, getTaskRunOwner } from "./task-run-owner.js";
 const sendMessage = vi.hoisted(() => vi.fn<typeof SendMessage>());
 vi.mock("./task-registry-delivery-runtime.js", () => ({
   sendMessage,
-  resolveTaskControlUiSessionUrl: () => undefined,
+  prepareTaskControlUiSessionUrl: async () => () => undefined,
 }));
 
 const ownerKey = "agent:main:state-notification";
@@ -58,7 +66,7 @@ let state: OpenClawTestState;
 let notifications: Array<{ complete: () => void; result: Promise<TaskRecord | null> }>;
 let nativeDeliveries: ReturnType<typeof captureTaskDeliveryWork> | undefined;
 
-function createTask(): TaskRecord {
+function createTask(parentFlowId?: string): TaskRecord {
   return createTaskFixture("cli", {
     ownerKey,
     requesterSessionKey: ownerKey,
@@ -69,6 +77,7 @@ function createTask(): TaskRecord {
     notifyPolicy: "state_changes",
     deliveryStatus: "pending",
     lastEventAt: Date.now(),
+    parentFlowId,
   });
 }
 
@@ -105,19 +114,7 @@ function stored(taskId: string) {
 
 function failPreparationAfterQueue(failure: Error) {
   const queued = vi.spyOn(systemEvents, "enqueueSystemEvent");
-  const mutate = taskRegistryState.withTaskRegistryMutation;
-  let failed = false;
-  vi.spyOn(taskRegistryState, "withTaskRegistryMutation").mockImplementation(
-    <T>(operation: () => T, onAdmissionFailure?: (error: unknown) => T): T => {
-      const before = queued.mock.calls.length;
-      const result = mutate(operation, onAdmissionFailure);
-      if (!failed && queued.mock.calls.length > before) {
-        failed = true;
-        throw failure;
-      }
-      return result;
-    },
-  );
+  failTaskNotificationPreparationAfterConsume(() => queued.mock.calls.length > 0, failure);
   return queued;
 }
 
@@ -152,6 +149,113 @@ afterEach(async () => {
 });
 
 describe("task state notification acknowledgements", () => {
+  it("retains failure ownership when the database retires during preparation", async () => {
+    const task = createTask();
+    const before = stored(task.taskId);
+    const entered = createDeferred();
+    const release = createDeferred();
+    vi.spyOn(taskRegistryListener, "captureTaskRegistryReadFence").mockImplementationOnce(
+      async () => {
+        entered.resolve();
+        await release.promise;
+      },
+    );
+    const warnings = vi.spyOn(taskRegistryState.taskRegistryLog, "warn");
+    const result = maybeDeliverTaskStateChangeUpdate(task, progress(task.createdAt + 10));
+    const outcome = result.then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    notifications.push({ complete: () => release.resolve(), result: outcome.then(() => null) });
+    await entered.promise;
+    await closeOpenClawStateDatabaseAsync();
+    release.resolve();
+    expect(await outcome).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED" }),
+    });
+    expect(warnings).toHaveBeenCalledExactlyOnceWith(
+      "Background task notification failed",
+      expect.objectContaining({
+        taskId: task.taskId,
+        error: expect.objectContaining({ code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED" }),
+      }),
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(systemEvents.drainSystemEvents(ownerKey)).toEqual([]);
+    expect(stored(task.taskId)).toEqual(before);
+  });
+
+  it("joins an accepted terminal event before selecting progress for delivery", async () => {
+    const task = createTask();
+    const admitted = createDeferred();
+    const release = createDeferred();
+    const store = getTaskRegistryStore();
+    const mutate = store.runAgentEventMutationAsync.bind(store);
+    vi.spyOn(store, "runAgentEventMutationAsync").mockImplementationOnce(async (...args) => {
+      admitted.resolve();
+      await release.promise;
+      return mutate(...args);
+    });
+    sendMessage.mockResolvedValue(sent);
+    nativeDeliveries = captureTaskDeliveryWork();
+    emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end", endedAt: Date.now() } });
+    await admitted.promise;
+    const preparing = createDeferred();
+    const captureReadFence = taskRegistryListener.captureTaskRegistryReadFence;
+    vi.spyOn(taskRegistryListener, "captureTaskRegistryReadFence").mockImplementationOnce(
+      (...args) => {
+        const fence = captureReadFence(...args);
+        preparing.resolve();
+        return fence;
+      },
+    );
+    const result = maybeDeliverTaskStateChangeUpdate(task, progress(task.createdAt + 10));
+    notifications.push({ complete: () => release.resolve(), result });
+    try {
+      await preparing.promise;
+      expect(sendMessage).not.toHaveBeenCalled();
+      release.resolve();
+      await taskRegistryListener.captureTaskRegistryReadFence(
+        captureOpenClawStateWorkerContext().admission,
+      );
+      await result;
+      await nativeDeliveries.settle();
+      expect(stored(task.taskId).task?.status).toBe("succeeded");
+      expect(
+        sendMessage.mock.calls.every(([params]) => !params.content?.includes("Original progress")),
+      ).toBe(true);
+    } finally {
+      release.resolve();
+      await result;
+    }
+  });
+
+  it.each([false, true])(
+    "delivers and acknowledges with parent flow=%s without entering the host state coordinator",
+    async (linked) => {
+      const flow = linked
+        ? createManagedTaskFlow({
+            ownerKey,
+            requesterOrigin: nextOrigin,
+            goal: "Synthetic notification flow",
+            controllerId: "tests/notification",
+          })
+        : undefined;
+      const task = createTask(flow?.flowId);
+      const acquire = vi
+        .spyOn(stateCoordinator, "acquireStateDatabaseCoordinator")
+        .mockImplementation(() => {
+          throw new Error("Synthetic held host coordinator must not block notification delivery");
+        });
+      const notification = startNotification(task, progress(task.createdAt + 10));
+      expect(await notification.dispatched).toMatchObject(linked ? nextOrigin : origin);
+      notification.complete();
+      expect(await notification.result).toMatchObject({ taskId: task.taskId });
+      expect(acquire).not.toHaveBeenCalled();
+    },
+  );
+
   it("acknowledges a confirmed direct send without host task or delivery writes", async () => {
     const task = createTask();
     const warnings = vi.spyOn(taskRegistryState.taskRegistryLog, "warn");

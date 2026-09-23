@@ -1862,6 +1862,15 @@ describe("prepared provider auth reload invalidation", () => {
 });
 
 describe("gateway hot reload model state", () => {
+  function expectPreparedModelRefresh(config: OpenClawConfig, agentIds?: Set<string>) {
+    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(config, {
+      allowGatewaySubagentBinding: true,
+      catalogMode: "static",
+      joinSupersedingPublication: true,
+      ...(agentIds ? { agentIds } : {}),
+    });
+  }
+
   it.each([
     {
       reconciliationResult: "converged" as const,
@@ -2146,11 +2155,7 @@ describe("gateway hot reload model state", () => {
       "prepared model runtime owner is stale before config publication",
       { waitForReplacement: true, agentIds: new Set(["alpha"]) },
     );
-    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
-      allowGatewaySubagentBinding: true,
-      catalogMode: "static",
-      agentIds: new Set(["alpha"]),
-    });
+    expectPreparedModelRefresh(nextConfig, new Set(["alpha"]));
   });
 
   it.each([
@@ -2177,10 +2182,7 @@ describe("gateway hot reload model state", () => {
     await applyHotReload(buildGatewayReloadPlan([changedPath]), nextConfig);
 
     expect(hoisted.markPreparedModelRuntimeSnapshotsStale).toHaveBeenCalledOnce();
-    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
-      allowGatewaySubagentBinding: true,
-      catalogMode: "static",
-    });
+    expectPreparedModelRefresh(nextConfig);
     expect(heartbeatRunner.updateConfig).not.toHaveBeenCalled();
     expect(cron.stop).not.toHaveBeenCalled();
     expect(channels.start).not.toHaveBeenCalled();
@@ -2848,10 +2850,7 @@ describe("gateway hot reload model state", () => {
       "prepared model runtime owner is stale before config publication",
       { waitForReplacement: true },
     );
-    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
-      allowGatewaySubagentBinding: true,
-      catalogMode: "static",
-    });
+    expectPreparedModelRefresh(nextConfig);
   });
 
   it("reconciles cached MCP owners on MCP config hot reloads", async () => {
