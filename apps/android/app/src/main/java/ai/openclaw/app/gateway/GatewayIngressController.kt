@@ -160,12 +160,19 @@ internal class GatewayIngressController(
 
   suspend fun prepare(
     endpoint: GatewayEndpoint,
-    tls: GatewayTlsParams,
+    tls: GatewayTlsParams?,
     userInitiated: Boolean,
     admissionCheckpoint: Long,
     isCurrent: () -> Boolean,
   ): GatewayIngressAuthorization? {
     kotlin.coroutines.coroutineContext.ensureActive()
+    if (tls == null) {
+      forget(endpoint.stableId) {
+        if (!isCurrent()) throw CancellationException("Gateway request superseded")
+      }
+      checkCleartextAdmission(endpoint.stableId, isCurrent)
+      return null
+    }
     return prepareRegistered(register(endpoint, tls, isCurrent), userInitiated, admissionCheckpoint, isCurrent)
   }
 
@@ -685,10 +692,15 @@ internal class GatewayIngressController(
 
     suspend fun prepare(
       endpoint: GatewayEndpoint,
-      tls: GatewayTlsParams,
+      tls: GatewayTlsParams?,
     ): GatewayIngressAuthorization? {
       kotlin.coroutines.coroutineContext.ensureActive()
       require(endpoint.stableId == stableId)
+      if (tls == null) {
+        forget(stableId, ::checkOwnerLocked)
+        checkCleartextAdmission(stableId, isCurrent)
+        return null
+      }
       val prepared =
         register(endpoint, tls, isCurrent) { selected ->
           checkOwnerLocked()
@@ -1114,6 +1126,18 @@ internal class GatewayIngressController(
     } catch (_: CancellationException) {
       false
     }
+
+  private suspend fun checkCleartextAdmission(
+    stableId: String,
+    isCurrent: () -> Boolean,
+  ) {
+    kotlin.coroutines.coroutineContext.ensureActive()
+    synchronized(lock) {
+      // Forget can skip superseded cleanup. Admission still belongs to this caller
+      // and profile, independently of another profile's origin-wide retirement.
+      if (!isCurrent() || registrations[stableId] != null) throw CancellationException("Gateway request superseded")
+    }
+  }
 
   private suspend fun checkRegistration(
     registration: Registration,
