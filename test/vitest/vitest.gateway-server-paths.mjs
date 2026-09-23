@@ -1,5 +1,6 @@
 // Plugin integration tests retain Gateway runtime setup outside core source.
 export const gatewayPluginTestFiles = [
+  "test/plugins/browser-session-authority.gateway.test.ts",
   "test/plugins/codex-model-catalog.gateway.test.ts",
   "test/plugins/crabbox-allocation-authority.gateway.test.ts",
   "test/plugins/team-reports-http.gateway.test.ts",
@@ -279,6 +280,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/workspace-result-ref-mutation.test.ts",
   "src/gateway/worker-environments/workspace-result-repository.test.ts",
   "src/gateway/worker-workspace-recovery-transcript.test.ts",
+  "test/plugins/browser-session-authority.gateway.test.ts",
   "test/plugins/codex-model-catalog.gateway.test.ts",
 ];
 

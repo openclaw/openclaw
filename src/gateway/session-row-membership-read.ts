@@ -42,6 +42,24 @@ export function createSessionRowMembershipReadAccess(params: {
       await params.runInOwner(() => membership.prepare());
     } while (needsMembershipPreparation());
   }
+  const sharingTarget = (query: records.Lookup) => {
+    if (!params.isActive() || params.topologyDirty() || isIncognitoSessionKey(query.key)) {
+      return null;
+    }
+    const row = params.lookup(query);
+    const entry = row?.sharingEntry;
+    return row && entry
+      ? {
+          agentId: row.agentId,
+          generation: row.generation,
+          canonicalKey: row.key,
+          entry,
+          storeKey: row.key,
+          storeKeys: [row.key],
+          storePath: row.storeTarget.storePath,
+        }
+      : null;
+  };
   return {
     prepareMembership,
     needsMembershipPreparation,
@@ -51,22 +69,23 @@ export function createSessionRowMembershipReadAccess(params: {
       }
       return membership.groupTargets();
     },
-    sharingTarget(query: records.Lookup) {
-      if (!params.isActive() || params.topologyDirty() || isIncognitoSessionKey(query.key)) {
-        return null;
+    sharingTarget,
+    /** Refresh uncertainty fences effects but does not retire a shared session resource. */
+    sharingTargetState(query: records.Lookup) {
+      if (!params.isActive() || isIncognitoSessionKey(query.key)) {
+        return { status: "missing" as const };
       }
-      const row = params.lookup(query);
-      const entry = row?.sharingEntry;
-      return row && entry
-        ? {
-            agentId: row.agentId,
-            canonicalKey: row.key,
-            entry,
-            storeKey: row.key,
-            storeKeys: [row.key],
-            storePath: row.storeTarget.storePath,
-          }
-        : null;
+      if (params.topologyDirty()) {
+        return { status: "pending" as const };
+      }
+      const target = sharingTarget(query);
+      if (!target) {
+        return { status: "missing" as const };
+      }
+      if (!membership.ready(target.storePath, target.storeKey)) {
+        return { status: "pending" as const };
+      }
+      return { status: "ready" as const, target };
     },
     hasMembership: (storePath: string, key: string, identity: string) =>
       membership.membership(storePath, key)?.includes(identity) ?? false,
