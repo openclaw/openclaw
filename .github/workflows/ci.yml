@@ -1464,6 +1464,9 @@ jobs:
               ? "./scripts/lib/ci-changed-node-test-plan.mts"
               : "./scripts/lib/ci-changed-node-test-plan.mjs",
           );
+          const dockerSeedPlan = existsSync("./scripts/lib/ci-docker-seed-plan.mts")
+            ? await import("./scripts/lib/ci-docker-seed-plan.mts")
+            : {};
           const channelContractPlan = await importTargetPlan(
             existsSync("./scripts/lib/channel-contract-test-plan.mts")
               ? "./scripts/lib/channel-contract-test-plan.mts"
@@ -1755,18 +1758,13 @@ jobs:
           const ownerPathEvent = isCanonicalRepository &&
             eventName === "push" && eventRef === "refs/heads/main";
           const dockerSeedLanes =
-            ownerPathEvent &&
-            changedPaths &&
+            runProofTier && isCanonicalRepository &&
             supportsDockerSeedE2e &&
-            typeof changedNodeTestPlan.resolveChangedDockerSeedLanes === "function"
-              ? changedNodeTestPlan.resolveChangedDockerSeedLanes(changedPaths)
+            (ownerPathEvent || eventName === "workflow_dispatch")
+              ? typeof dockerSeedPlan.resolveDockerSeedLanes === "function"
+                ? dockerSeedPlan.resolveDockerSeedLanes({ includeReleaseOnly: eventName === "workflow_dispatch" })
+                : ["published-upgrade-survivor"]
               : [];
-          // Manual CI is Full Release Validation's owner for the exact
-          // legacy-operator-state + auto-auth seed contract.
-          if (runProofTier && isCanonicalRepository && supportsDockerSeedE2e && (
-              eventName === "workflow_dispatch" || (ownerPathEvent && changedPaths === null))) {
-            dockerSeedLanes.push("published-upgrade-survivor");
-          }
           // Canonical pushes also use compact bins: 80+ single-group jobs
           // drain the runner pool for minutes, and per-shard check names on
           // main have no branch-protection consumers. Dispatch (release
@@ -6527,7 +6525,21 @@ jobs:
             --target-context-ref "$TARGET_CONTEXT_REF")"
           printf 'OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=%s\n' "$baseline" >> "$GITHUB_ENV"
 
-      - name: Run changed Docker seed owner lanes
+      # The main update tripwire needs the complete runtime and public SDK types.
+      # Manual/release validation retains the full declaration-complete package.
+      - name: Prepare main Docker smoke package
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.ci_shape == 'main')
+        run: |
+          set -euo pipefail
+          pnpm clean:dist
+          pnpm build:ci-artifacts
+          package_dir="${RUNNER_TEMP}/docker-seed-package"
+          node scripts/package-openclaw-for-docker.mjs --skip-build \
+            --allow-unreleased-changelog --output-dir "$package_dir" \
+            --output-name openclaw-current.tgz
+          printf 'OPENCLAW_CURRENT_PACKAGE_TGZ=%s/openclaw-current.tgz\n' "$package_dir" >> "$GITHUB_ENV"
+
+      - name: Run Docker seed tier
         env:
           OPENCLAW_DOCKER_ALL_LANES: ${{ needs.preflight.outputs.docker_seed_lanes }}
           OPENCLAW_DOCKER_ALL_LIVE_MODE: skip

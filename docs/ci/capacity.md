@@ -38,8 +38,9 @@ not prove available physical capacity or faster preflight execution.
 
 The protected cache warmer has two platform rows: the existing Linux workload and one hosted macOS pnpm-store publisher. Its per-ref concurrency and pending-run coalescing are unchanged. Each admitted warmer run adds one hosted macOS job and no Blacksmith registrations; pull-request CI adds no writers or jobs. Native producer and consumer measurements must include cache transfer, extraction, installation, and archive size before claiming a setup-time saving.
 
-The published-upgrade main tripwire reuses the reserved `docker-seed-e2e` job,
-so the retained peak envelope stays `4 × 150 + 21 × 210 = 5,010` registrations.
+Every admitted canonical main run selects the published-upgrade tripwire in the
+reserved `docker-seed-e2e` job, so the retained peak envelope stays
+`4 × 150 + 21 × 210 = 5,010` registrations.
 Docs-only main tips remain excluded by the `**/*.md` and `docs/**` push filters.
 Admitted main pushes retain the same two non-canceling parity slots; the bound
 includes both active runs and both coalesced successors. It does not assume
@@ -352,13 +353,17 @@ two; at most 4 GiB caps them at one. Committed timing weights are unchanged.
 
 ## Owner-path and release coverage
 
-Docker seed and QA Smoke retain owner-path selection on canonical main pushes;
-ordinary manual CI and Full Release Validation retain the supported complete
-proofs. Pull requests and their exact-head fallback dispatches omit these jobs,
+Docker seed runs one published-upgrade survivor on every admitted canonical main
+run; QA Smoke retains owner-path selection. Ordinary manual CI and Full Release
+Validation select all six Docker seed lanes. Main builds the complete runtime
+and public SDK declarations through `ciArtifacts` before canonical packaging;
+manual/release runs retain full package generation. Pull requests and their
+exact-head fallback dispatches omit these jobs,
 real-Gateway UI, and named built-process verifiers. Unit/boundary and mocked
 Gateway coverage remain. The complete-file proof inventory belongs to
 `scripts/lib/ci-proof-test-inventory.mts` and applies to precise and compact PR
-plans after owner resolution. Main/manual plans keep every proof assertion.
+plans after owner resolution. Retained main proofs and the full manual inventory
+keep every assertion.
 
 The Windows planner consumes all explicit files in the two existing package
 scripts and keeps every file intact. Reference run `35520647082` had
@@ -401,14 +406,14 @@ the earlier two-row Windows inventory. Compact90, push70, PR130, and the
 96-concurrent-Node limit remain unchanged. The daily timing refit still observes
 main and release proofs; no committed weight baseline was changed for tiering.
 
-| Lane                            | PR coverage                                                                                             | Main/manual and full release coverage                                           |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Docker seed                     | Selector, scheduler, update/Doctor/state unit and boundary owners                                       | Owner-selected main; exact published-upgrade survivor on ordinary manual CI     |
-| QA Smoke CI                     | QA plan, catalog, transport, lifecycle and channel unit suites                                          | Owner-selected main; complete supported smoke profile on manual CI              |
-| Real-Gateway UI                 | UI units and mocked-Gateway browser projects                                                            | Existing selected main/manual real-Gateway inventory                            |
-| Built process proofs            | Browser registration, Doctor persistence, Discord multipart, SQLite store, watch and TUI boundary tests | Native host, Doctor, Discord, SQLite, watch and TUI canaries in build-artifacts |
-| Doctor refusal / Codex recovery | Doctor admission/repair and harness replacement/cancellation boundaries                                 | Complete files in main/manual Node plans                                        |
-| Windows                         | All 133 native unit/boundary/process files in measured whole-file rows                                  | Same inventory, historical targets retain their package commands                |
+| Lane                            | PR coverage                                                                                             | Main/manual and full release coverage                                                                        |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Docker seed                     | Selector, scheduler, update/Doctor/state unit and boundary owners                                       | Published-upgrade survivor on every admitted canonical main run; all six lanes on ordinary manual/release CI |
+| QA Smoke CI                     | QA plan, catalog, transport, lifecycle and channel unit suites                                          | Owner-selected main; complete supported smoke profile on manual CI                                           |
+| Real-Gateway UI                 | UI units and mocked-Gateway browser projects                                                            | Existing selected main/manual real-Gateway inventory                                                         |
+| Built process proofs            | Browser registration, Doctor persistence, Discord multipart, SQLite store, watch and TUI boundary tests | Native host, Doctor, Discord, SQLite, watch and TUI canaries in build-artifacts                              |
+| Doctor refusal / Codex recovery | Doctor admission/repair and harness replacement/cancellation boundaries                                 | Complete files in main/manual Node plans                                                                     |
+| Windows                         | All 133 native unit/boundary/process files in measured whole-file rows                                  | Same inventory, historical targets retain their package commands                                             |
 
 ## Measured shard weights
 
