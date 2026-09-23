@@ -20,19 +20,25 @@ export type ContainerSourceLease = {
   adopted: boolean;
 };
 
-type PrivateContainer = {
-  kind: "active";
+type ContainerProvenance = {
   id: string;
   profileId: string;
   grant: ContainerSourceLease["grant"];
+};
+
+type PrivateContainer = ContainerProvenance & {
+  kind: "active";
   sources: Map<object, { lease: ContainerSourceLease; unsubscribe: () => void }>;
   revoked: boolean;
   terminated: boolean;
 };
 
-// Live custody is established only at allocation. Registry rows and scope names
+// Private history is established only at allocation. Registry rows and scope names
 // cannot prove exclusive access, including after a Gateway restart.
-const privateContainers = new Map<string, PrivateContainer | { kind: "stopped"; id: string }>();
+const privateContainers = new Map<
+  string,
+  PrivateContainer | (ContainerProvenance & { kind: "stopped" })
+>();
 
 function containerAuthorityKey(engine: SandboxContainerEngine, name: string): string {
   return JSON.stringify([engine.command, ...(engine.globalArgs ?? []), name]);
@@ -102,9 +108,14 @@ async function stopRevokedPrivateContainer(
     return false;
   }
   releasePrivateContainer(key);
-  // Preserve only the proved physical fact. A fresh record fences callbacks
-  // from the ended authority while allowing ordinary authorized reuse.
-  privateContainers.set(key, { kind: "stopped", id: container.id });
+  // Preserve physical proof and original grant history without retaining ended
+  // authority. A fresh record fences callbacks from the previous admission.
+  privateContainers.set(key, {
+    kind: "stopped",
+    id: container.id,
+    profileId: container.profileId,
+    grant: container.grant,
+  });
   log.info(
     `Stopped private ${engine.displayName} sandbox ${container.id} after access revocation.`,
   );
@@ -221,16 +232,22 @@ export async function admitSandboxContainerSource(params: {
     releasePrivateContainer(key);
     return false;
   }
+  const source = params.source;
+  const sameGrant =
+    source !== undefined &&
+    source.authority.profileId === container.profileId &&
+    source.grant.pluginId === container.grant.pluginId &&
+    source.grant.grantId === container.grant.grantId;
   if (container.kind === "stopped") {
     if (
-      !params.source ||
+      !sameGrant ||
       params.running ||
       !(await containerHasTerminated(params.engine, container.id))
     ) {
       releasePrivateContainer(key);
       return false;
     }
-    bindSandboxContainerSource({ ...params, owner: params.source });
+    bindSandboxContainerSource({ ...params, owner: source });
     return true;
   }
   if (container.revoked) {
@@ -239,23 +256,18 @@ export async function admitSandboxContainerSource(params: {
     if (!(await stopRevokedPrivateContainer(params.engine, key, container))) {
       return false;
     }
-    if (params.source) {
-      bindSandboxContainerSource({ ...params, owner: params.source });
+    if (sameGrant) {
+      bindSandboxContainerSource({ ...params, owner: source });
     } else {
       releasePrivateContainer(key);
     }
     return true;
-  } else if (
-    !params.source ||
-    params.source.authority.profileId !== container.profileId ||
-    params.source.grant.pluginId !== container.grant.pluginId ||
-    params.source.grant.grantId !== container.grant.grantId
-  ) {
+  } else if (!sameGrant) {
     // Mixed grants, staff, and unknown history permanently disqualify this
     // generation, even after their foreground work ends.
     releasePrivateContainer(key);
   } else {
-    retainPrivateContainerSource({ ...params, container, owner: params.source });
+    retainPrivateContainerSource({ ...params, container, owner: source });
   }
   return false;
 }

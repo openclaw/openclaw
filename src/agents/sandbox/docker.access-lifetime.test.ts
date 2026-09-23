@@ -111,6 +111,7 @@ vi.mock("./container-engine.js", () => ({
 
 function source(params?: {
   source?: object;
+  profileId?: string;
   grantId?: string;
   grantSignal?: AbortSignal;
   retain?: boolean;
@@ -129,7 +130,7 @@ function source(params?: {
     }
   };
   const authority = createAdmittedRunOperatorAuthority({
-    profileId: "guest",
+    profileId: params?.profileId ?? "guest",
     scopes: ["operator.write"],
     gatewayAccessGrant: { pluginId: "fixture-access", grantId: params?.grantId ?? "original" },
     source: params?.source ?? {},
@@ -202,7 +203,7 @@ it("retains original access after foreground close and stops only its private ge
   expect(fixture.containers.get(name)?.running).toBe(true);
 
   owner.controller.abort(new Error("original access revoked"));
-  const replacement = source({ grantId: "replacement" });
+  const replacement = source();
   await ensureSandboxContainer(provision(replacement));
   expect(fixture.calls.filter(([operation]) => operation === "kill")).toEqual([["kill", id]]);
   expect(fixture.calls.filter(([operation]) => operation === "wait")).toEqual([["wait", id]]);
@@ -354,6 +355,55 @@ it.each(["preexisting", "shared", "no-signal", "no-retain"] as const)(
   },
 );
 
+it.each([
+  { timing: "stopped", changed: "grant" },
+  { timing: "queued", changed: "grant" },
+  { timing: "stopped", changed: "profile" },
+  { timing: "queued", changed: "profile" },
+])(
+  "preserves mixed history after $timing reuse changes the $changed",
+  async ({ timing, changed }) => {
+    const first = source();
+    const { containerName, containerId } = await ensureSandboxContainer(provision(first));
+    const other = source({
+      grantId: changed === "grant" ? "other" : "original",
+      profileId: changed === "profile" ? "other" : "guest",
+    });
+    if (timing === "queued") {
+      const entered = createDeferred();
+      const release = createDeferred();
+      const blocked = withSandboxContainerLifecycle(containerName, undefined, async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      await entered.promise;
+      const queued = ensureSandboxContainer(provision(other));
+      first.controller.abort();
+      release.resolve();
+      await blocked;
+      await queued;
+    } else {
+      first.controller.abort();
+      await withSandboxContainerLifecycle(containerName, undefined, async () => {});
+      await ensureSandboxContainer(provision(other));
+    }
+    other.controller.abort();
+    await withSandboxContainerLifecycle(containerName, undefined, async () => {});
+    expect(fixture.containers.get(containerName)).toMatchObject({ id: containerId, running: true });
+    expect(fixture.calls.filter(([operation]) => operation === "kill")).toEqual([
+      ["kill", containerId],
+    ]);
+
+    fixture.containers.get(containerName)!.running = false;
+    const later = source();
+    await ensureSandboxContainer(provision(later));
+    later.controller.abort();
+    await withSandboxContainerLifecycle(containerName, undefined, async () => {});
+    expect(fixture.containers.get(containerName)?.running).toBe(true);
+    expect(fixture.calls.filter(([operation]) => operation === "kill")).toHaveLength(1);
+  },
+);
+
 it("settles revocation during setup before an already-queued replacement can start", async () => {
   const owner = source();
   const started = createDeferred();
@@ -368,7 +418,7 @@ it("settles revocation during setup before an already-queued replacement can sta
   const creating = ensureSandboxContainer(provision(owner));
   const rejected = expect(creating).rejects.toThrow("setup access revoked");
   await started.promise;
-  const replacement = source({ grantId: "replacement" });
+  const replacement = source();
   const queued = ensureSandboxContainer(provision(replacement));
   owner.controller.abort(new Error("setup access revoked"));
   await rejected;
@@ -445,7 +495,7 @@ it("settles old targeted cleanup from its own termination receipt after same-ID 
     await inspected.promise;
     first.controller.abort();
     await withSandboxContainerLifecycle(backend.runtimeId, undefined, async () => {});
-    const restarted = await createBackend(source({ grantId: "replacement" }));
+    const restarted = await createBackend(source());
     expect(restarted.runtimeId).toBe(backend.runtimeId);
     expect(fixture.containers.get(restarted.runtimeId)?.running).toBe(true);
     delayed.resolve();

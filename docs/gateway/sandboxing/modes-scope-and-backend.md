@@ -94,7 +94,8 @@ share that private container. Revoking one device or source preserves it while
 another source remains authorized; revoking the invitation ends all of them.
 This preserves saved workspace files and the
 container's writable layer; stopping loses temporary filesystem and process
-state. Ordinary authorized use can restart the retained container.
+state. Ordinary authorized use can restart the retained container; stopping it
+does not erase its invitation and profile history.
 
 A different invitation, staff access, or unclassified use makes
 that container ineligible for this shutdown. Explicitly shared containers,
