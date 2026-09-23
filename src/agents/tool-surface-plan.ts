@@ -95,6 +95,7 @@ type ApplyAgentToolSurfaceCatalogParams = Omit<CodeModeCatalogParams, "directToo
   codeModeControlsEnabled: boolean;
   toolSearchConfig: ToolSearchConfig;
   forceDirectMessageTool: boolean;
+  directToolNames?: Iterable<string>;
 };
 
 export function applyAgentToolSurfaceCatalog({
@@ -102,11 +103,15 @@ export function applyAgentToolSurfaceCatalog({
   toolSearchConfig,
   toolSearchRuntimeConfig,
   forceDirectMessageTool,
+  directToolNames: requiredDirectToolNames,
   ...catalogParams
 }: ApplyAgentToolSurfaceCatalogParams) {
   // When the message tool is the only reply path it must stay directly visible
   // in every search mode; a hidden delivery tool can leave the run mute.
-  const directToolNames = forceDirectMessageTool ? ["message"] : [];
+  const directToolNames = [
+    ...(requiredDirectToolNames ?? []),
+    ...(forceDirectMessageTool ? ["message"] : []),
+  ];
   if (codeModeControlsEnabled) {
     return applyCodeModeCatalog({
       ...catalogParams,

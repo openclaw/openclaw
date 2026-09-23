@@ -430,6 +430,37 @@ describe("applyAgentToolSurfaceCatalog", () => {
     expect(result.compacted).toBe(false);
   });
 
+  it.each(["tools", "directory"] as const)(
+    "keeps policy-required tools direct in %s mode",
+    (mode) => {
+      const config: OpenClawConfig = {
+        tools: { codeMode: false, toolSearch: { enabled: true, mode } },
+      };
+      const plan = resolveAgentToolSurfacePlan({ ...basePlanParams, config });
+      const catalogRef = createToolSearchCatalogRef();
+      const result = applyAgentToolSurfaceCatalog({
+        tools: [
+          ...createToolSearchTools({ config, catalogRef, executeTool }),
+          createStubTool("memory_search"),
+          createStubTool("memory_get"),
+          createStubTool("hidden_target"),
+        ],
+        config,
+        toolSearchRuntimeConfig: plan.toolSearchRuntimeConfig,
+        codeModeControlsEnabled: plan.codeModeControlsEnabled,
+        toolSearchConfig: plan.toolSearchConfig,
+        forceDirectMessageTool: false,
+        directToolNames: ["memory_search", "memory_get"],
+        catalogRef,
+      });
+
+      expect(result.tools.map((tool) => tool.name)).toEqual(
+        expect.arrayContaining(["memory_search", "memory_get"]),
+      );
+      expect(result.tools.map((tool) => tool.name)).not.toContain("hidden_target");
+    },
+  );
+
   it("uses the tool-search catalog outside directory mode", () => {
     const config: OpenClawConfig = {
       tools: { codeMode: false, toolSearch: { enabled: true, mode: "tools" } },
