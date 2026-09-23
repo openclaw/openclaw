@@ -2,7 +2,6 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { emitDiagnosticEventWithTrustedTraceContext } from "../infra/diagnostic-events.js";
 import { recordDiagnosticToolExecutionDeadline } from "../infra/diagnostic-tool-execution-liveness.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -54,6 +53,7 @@ import {
   resolveProcessCleanupMs,
   tail,
 } from "./bash-process-registry.js";
+import { emitExecProcessCompleted } from "./bash-tools.exec-diagnostics.js";
 import { prepareHostExecSpawn } from "./bash-tools.exec-host-spawn.js";
 import {
   appendExecTimeoutRetryGuidance,
@@ -69,7 +69,10 @@ import type { AgentToolResult } from "./runtime/index.js";
 import { createSessionSlug } from "./session-slug.js";
 import { createStreamingBinaryOutputSanitizer } from "./shell-utils.js";
 import { registerTrustedToolNoStartError } from "./tool-result-error.js";
-import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  withoutGatewayToolCallerIdentity,
+} from "./tools/gateway-caller-context.js";
 export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
 
 export { execSchema } from "./bash-tools.schemas.js";
@@ -169,42 +172,6 @@ export type ExecProcessHandle = {
   /** Immediately suppress all future `onUpdate` calls for this handle. */
   disableUpdates: () => void;
 };
-
-function normalizeExecExitSignal(signal: NodeJS.Signals | number | null): string | undefined {
-  if (signal === null) {
-    return undefined;
-  }
-  return String(signal);
-}
-
-function emitExecProcessCompleted(params: {
-  command: string;
-  mode: "child" | "pty";
-  outcome: ExecProcessOutcome;
-  sessionKey?: string;
-  target: "host" | "sandbox";
-}): void {
-  const exitSignal = normalizeExecExitSignal(params.outcome.exitSignal);
-  // Payload stays untrusted, but the ambient trace context is the OpenClaw run
-  // scope, so exporters may use it to nest the exec span under its run.
-  emitDiagnosticEventWithTrustedTraceContext({
-    type: "exec.process.completed",
-    target: params.target,
-    mode: params.mode,
-    outcome: params.outcome.status,
-    durationMs: params.outcome.durationMs,
-    commandLength: params.command.length,
-    ...(params.sessionKey?.trim() ? { sessionKey: params.sessionKey.trim() } : {}),
-    ...(typeof params.outcome.exitCode === "number" ? { exitCode: params.outcome.exitCode } : {}),
-    ...(exitSignal ? { exitSignal } : {}),
-    ...(params.outcome.status === "failed"
-      ? {
-          timedOut: params.outcome.timedOut,
-          failureKind: params.outcome.failureKind,
-        }
-      : {}),
-  });
-}
 
 /** Renders a host label for user-facing exec policy messages. */
 function renderExecHostLabel(host: ExecHost) {
@@ -656,6 +623,9 @@ export async function runExecProcess({
 }): Promise<ExecProcessHandle> {
   let assertSourceActive: (() => void) | undefined =
     captureAgentToolSourceExecutionGuard(initialStartupSignal);
+  let operatorAuthority = getGatewayToolCallerIdentity()?.operatorAuthority;
+  const operatorSignal = operatorAuthority?.signal;
+  let releaseOperatorAuthority: (() => void) | undefined;
   const startedAt = Date.now();
   const sessionId = createSessionSlug(isProcessSessionIdTaken);
   const execCommand = opts.execCommand ?? opts.command;
@@ -876,6 +846,7 @@ export async function runExecProcess({
   };
 
   let managedRun: ManagedRun | null = null;
+  const onOperatorRevoked = () => managedRun?.cancel("manual-cancel");
   let usingPty = opts.usePty && !opts.sandbox;
   const assertPreSpawnAuthorized = async () => {
     assertSourceActive?.();
@@ -887,10 +858,12 @@ export async function runExecProcess({
   };
   const spawn = async (input: SpawnInput) => {
     const assertSourceCurrent = assertSourceActive;
+    const assertOperatorCurrent = operatorAuthority?.assertCurrent;
     const assertRuntimeCurrent = assertSandboxCurrent;
     const assertHostPolicyCurrent = assertPolicyCurrent;
     const assertCurrent = () => {
       assertSourceCurrent?.();
+      assertOperatorCurrent?.();
       assertRuntimeCurrent?.();
     };
     // Source authority covers construction; approval policy ends at native launch.
@@ -917,6 +890,8 @@ export async function runExecProcess({
 
   try {
     assertSourceActive?.();
+    operatorAuthority?.assertCurrent();
+    releaseOperatorAuthority = operatorAuthority?.retain?.();
     const spawnSpec = await prepareSpawnSpec();
     usingPty = spawnSpec.mode === "pty";
     const spawnBase = {
@@ -957,6 +932,11 @@ export async function runExecProcess({
         stdinMode: spawnSpec.stdinMode,
       });
     }
+    // Background execution outlives the turn, but never its original access grant.
+    operatorSignal?.addEventListener("abort", onOperatorRevoked, { once: true });
+    if (operatorSignal?.aborted) {
+      onOperatorRevoked();
+    }
   } catch (error) {
     onUpdate = undefined;
     const outcome = await finalizeAndSettleSession(
@@ -968,6 +948,9 @@ export async function runExecProcess({
     ).finally(() => {
       onSettledBeforeNotify = undefined;
       onActivity = undefined;
+      operatorSignal?.removeEventListener("abort", onOperatorRevoked);
+      releaseOperatorAuthority?.();
+      releaseOperatorAuthority = undefined;
     });
     emitExecProcessCompleted({
       command: opts.command,
@@ -981,6 +964,7 @@ export async function runExecProcess({
     beforeSpawn = undefined;
     assertPolicyCurrent = undefined;
     assertSourceActive = undefined;
+    operatorAuthority = undefined;
     assertSandboxCurrent = undefined;
   }
   session.processActivity = managedRun.activity;
@@ -1023,6 +1007,9 @@ export async function runExecProcess({
     } finally {
       onSettledBeforeNotify = undefined;
       onActivity = undefined;
+      operatorSignal?.removeEventListener("abort", onOperatorRevoked);
+      releaseOperatorAuthority?.();
+      releaseOperatorAuthority = undefined;
     }
   });
 

@@ -39,8 +39,8 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       harness.ensureSandboxContainer(params),
     ]);
 
-    expect(first).toBe("oc-test-shared");
-    expect(second).toBe(first);
+    expect(first).toEqual({ containerName: "oc-test-shared", containerId: "c".repeat(64) });
+    expect(second).toEqual(first);
     expect(spawnState.calls.filter((call) => call.args[0] === "create")).toHaveLength(1);
     expect(spawnState.calls.filter((call) => call.args[0] === "start")).toHaveLength(1);
     expect(registryMocks.updateRegistry).toHaveBeenCalledTimes(2);
@@ -128,7 +128,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       configHash: oldHash,
     });
 
-    const containerName = await harness.ensureSandboxContainer({
+    const { containerName } = await harness.ensureSandboxContainer({
       scopeKey: "shared",
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
@@ -139,8 +139,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     const dockerCalls = spawnState.calls.filter((call) => call.command === "docker");
     expect(
       dockerCalls.some(
-        (call) =>
-          call.args[0] === "rm" && call.args[1] === "-f" && call.args[2] === "oc-test-shared",
+        (call) => call.args[0] === "rm" && call.args[1] === "-f" && call.args[2] === "c".repeat(64),
       ),
     ).toBe(true);
     const createCall = dockerCalls.find((call) => call.args[0] === "create");
@@ -555,7 +554,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
         agentWorkspaceDir: "/tmp/workspace",
         cfg,
       }),
-    ).resolves.toBe("oc-test-podman-shared");
+    ).resolves.toEqual({ containerName: "oc-test-podman-shared", containerId: "c".repeat(64) });
 
     expect(registryMocks.removeRegistryEntry).toHaveBeenCalledWith("oc-test-podman-shared");
     expect(spawnState.calls).toContainEqual(

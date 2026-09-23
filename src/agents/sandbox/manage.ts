@@ -11,6 +11,7 @@ import {
   stopCachedBrowserBridge,
   type CachedBrowserBridge,
 } from "./browser-bridges.js";
+import { removeSandboxContainerRuntime } from "./container-lifecycle.js";
 import { dockerSandboxBackendManager } from "./docker-backend.js";
 import {
   execContainer,
@@ -141,16 +142,7 @@ export async function removeSandboxRuntimeGeneration(params: {
     runtime.kind === "container" ? runtime.entry.backendTarget : undefined,
   );
   assertCurrent();
-  if (id !== null) {
-    const removed = await execContainer(engine, ["rm", "-f", id], { allowFailure: true });
-    assertCurrent();
-    if (
-      removed.code !== 0 &&
-      !/no such (?:container|object)|does not exist/iu.test(removed.stderr)
-    ) {
-      throw new Error("Sandbox runtime generation retirement failed; custody retained");
-    }
-  }
+  await removeSandboxContainerRuntime(engine, runtime.entry.containerName, { id, assertCurrent });
   // A name can be rebound without a registry update. Never forget its replacement's
   // metadata or bridge merely because the old physical ID was already absent.
   const assertAbsent = async () => {

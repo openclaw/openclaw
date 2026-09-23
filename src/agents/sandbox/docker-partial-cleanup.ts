@@ -5,6 +5,7 @@ export async function throwAfterPartialSandboxCleanup(params: {
   engine: SandboxContainerEngine;
   containerName: string;
   creationError: unknown;
+  onRemoved?: () => void;
 }): Promise<never> {
   const cleanupErrors: unknown[] = [];
   let removalConfirmed = false;
@@ -24,6 +25,7 @@ export async function throwAfterPartialSandboxCleanup(params: {
     cleanupErrors.push(cleanupError);
   }
   if (removalConfirmed) {
+    params.onRemoved?.();
     try {
       await removeRegistryEntry(params.containerName);
     } catch (cleanupError) {

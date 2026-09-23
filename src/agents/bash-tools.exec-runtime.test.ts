@@ -14,7 +14,6 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
-import type { ManagedRun } from "../process/supervisor/index.js";
 import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { createAgentToolExecutionBudget } from "./agent-tool-source-execution-guard.js";
 import {
@@ -22,6 +21,7 @@ import {
   acknowledgeNotifyOnExit,
   waitForExecScope,
 } from "./bash-process-registry.js";
+import { createRunExit, runtimeManagedRun } from "./bash-tools.exec-runtime.test-support.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import {
   getGatewayToolCallerIdentity,
@@ -82,20 +82,6 @@ afterEach(() => {
   resetProcessRegistryForTests();
 });
 
-function createRunExit(overrides: Partial<RunExit> = {}): RunExit {
-  return {
-    reason: "exit",
-    exitCode: 0,
-    exitSignal: null,
-    durationMs: 1,
-    stdout: "",
-    stderr: "",
-    timedOut: false,
-    noOutputTimedOut: false,
-    ...overrides,
-  };
-}
-
 async function runExecWithExit(params: {
   exit: RunExit;
   stdout?: string | string[];
@@ -131,21 +117,6 @@ async function runExecWithExit(params: {
     timeoutSec: params.timeoutSec ?? null,
   });
   return { run, outcome: await run.promise };
-}
-
-function runtimeManagedRun(input: SpawnInput, stdout = ""): ManagedRun {
-  if (stdout) {
-    input.onStdout?.(stdout);
-  }
-  return {
-    activity: { resultSettled: true, lastOutputAtMs: Date.now() },
-    runId: input.runId ?? "test-run",
-    pid: 1234,
-    startedAtMs: Date.now(),
-    stdin: { write: vi.fn(), end: vi.fn(), destroy: vi.fn() },
-    cancel: vi.fn(),
-    wait: vi.fn(async () => createRunExit()),
-  };
 }
 
 function prepareSuspension(requestId: string) {

@@ -63,7 +63,10 @@ function createConfig(): OpenClawConfig {
 }
 
 async function createDockerExecBackend() {
-  dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-container");
+  dockerMocks.ensureSandboxContainer.mockResolvedValueOnce({
+    containerName: "sandbox-container",
+    containerId: "a".repeat(64),
+  });
   return createDockerSandboxBackend({
     sessionKey: "agent:coder:main",
     scopeKey: "agent:coder:main",
@@ -75,7 +78,9 @@ async function createDockerExecBackend() {
 
 describe("docker sandbox backend manager", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    for (const mock of Object.values(dockerMocks)) {
+      mock.mockReset();
+    }
     dockerMocks.containerState.mockResolvedValue({
       exists: true,
       running: true,
@@ -100,7 +105,10 @@ describe("docker sandbox backend manager", () => {
 
   it("rechecks runtime authority after awaited engine validation before filesystem exec", async () => {
     let current = true;
-    dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-container");
+    dockerMocks.ensureSandboxContainer.mockResolvedValueOnce({
+      containerName: "sandbox-container",
+      containerId: "a".repeat(64),
+    });
     const backend = await createDockerSandboxBackend({
       sessionKey: "agent:coder:main",
       scopeKey: "agent:coder:main",
@@ -123,24 +131,28 @@ describe("docker sandbox backend manager", () => {
     expect(dockerMocks.execContainerRaw).not.toHaveBeenCalled();
   });
 
-  it.each(["identity", "mounts"] as const)(
-    "does not execute a mount probe after authority retires during %s inspection",
+  it.each(["allocation", "mount inspection"] as const)(
+    "does not execute a mount probe after authority retires during %s",
     async (stage) => {
       let current = true;
       const execute = dockerMocks.execContainer.getMockImplementation()!;
       dockerMocks.execContainer.mockImplementation(async (engine, args, options) => {
         const result = await execute(engine, args, options);
         if (
+          stage === "mount inspection" &&
           args[0] === "inspect" &&
-          (stage === "identity"
-            ? args.includes("{{.Id}}")
-            : args.some((arg: string) => arg.includes("Mounts")))
+          args.some((arg: string) => arg.includes("Mounts"))
         ) {
           current = false;
         }
         return result;
       });
-      dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-container");
+      dockerMocks.ensureSandboxContainer.mockImplementationOnce(async () => {
+        if (stage === "allocation") {
+          current = false;
+        }
+        return { containerName: "sandbox-container", containerId: "a".repeat(64) };
+      });
       await expect(
         createDockerSandboxBackend({
           sessionKey: "agent:coder:main",
@@ -161,7 +173,14 @@ describe("docker sandbox backend manager", () => {
     },
   );
 
-  it("pins retained termination to its original container generation", async () => {
+  it("pins retained termination when the name is replaced after allocation", async () => {
+    const execute = dockerMocks.execContainer.getMockImplementation()!;
+    dockerMocks.execContainer.mockImplementation(async (engine, args, options) => {
+      if (args.includes("{{.Id}}") && args.at(-1) === "sandbox-container") {
+        return { code: 0, stdout: "b".repeat(64), stderr: "" };
+      }
+      return execute(engine, args, options);
+    });
     const backend = await createDockerExecBackend();
     const cleanup = backend.prepareProcessCleanup!({});
     dockerMocks.execContainerRaw.mockResolvedValueOnce({
@@ -169,7 +188,7 @@ describe("docker sandbox backend manager", () => {
       stdout: Buffer.alloc(0),
       stderr: Buffer.alloc(0),
     });
-    // The stable display name may now refer to a different container.
+    // Allocation returned A, while any later lookup of its stable name finds B.
     await cleanup.terminate();
     expect(dockerMocks.execContainerRaw.mock.calls.at(-1)?.[1]?.[2]).toBe("a".repeat(64));
   });
@@ -216,7 +235,10 @@ describe("docker sandbox backend manager", () => {
   });
 
   it("forwards the canonical scope key to container provisioning", async () => {
-    dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-container");
+    dockerMocks.ensureSandboxContainer.mockResolvedValueOnce({
+      containerName: "sandbox-container",
+      containerId: "a".repeat(64),
+    });
     const scopeKey = `agent:poly:workspace:${"a".repeat(32)}`;
     const readOnlyResourceMounts = [
       { hostPath: "/host/attachments", containerPath: "/openclaw/attachments" },
@@ -238,7 +260,6 @@ describe("docker sandbox backend manager", () => {
 
   it("captures image-volume masks once for the filesystem bridge after provisioning", async () => {
     dockerMocks.execContainer
-      .mockResolvedValueOnce({ code: 0, stdout: "a".repeat(64), stderr: "" })
       .mockResolvedValueOnce({
         code: 0,
         stderr: "",
@@ -285,7 +306,7 @@ describe("docker sandbox backend manager", () => {
     expect(bridge.resolvePath({ filePath: "cache/export/marker" }).hostPath).toBe(
       path.resolve("/host/export/marker"),
     );
-    expect(dockerMocks.execContainer).toHaveBeenCalledTimes(3);
+    expect(dockerMocks.execContainer).toHaveBeenCalledTimes(2);
     expect(dockerMocks.ensureSandboxContainer.mock.invocationCallOrder[0]).toBeLessThan(
       dockerMocks.execContainer.mock.invocationCallOrder[0]!,
     );
@@ -401,7 +422,6 @@ describe("docker sandbox backend manager", () => {
     },
   ])("captures realized masks for $name", async ({ binds, tmpfs, table, masked, readable }) => {
     dockerMocks.execContainer
-      .mockResolvedValueOnce({ code: 0, stdout: "a".repeat(64), stderr: "" })
       .mockResolvedValueOnce({
         code: 0,
         stderr: "",
@@ -449,7 +469,7 @@ describe("docker sandbox backend manager", () => {
     for (const filePath of readable) {
       expect(bridge.resolvePath({ filePath }).containerPath).toBe(filePath);
     }
-    expect(dockerMocks.execContainer).toHaveBeenCalledTimes(3);
+    expect(dockerMocks.execContainer).toHaveBeenCalledTimes(2);
   });
 
   it("does not return a backend when its filesystem snapshot cannot be read", async () => {
@@ -458,7 +478,10 @@ describe("docker sandbox backend manager", () => {
   });
 
   it("binds Podman provisioning and later execs to the resolved target", async () => {
-    dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-podman");
+    dockerMocks.ensureSandboxContainer.mockResolvedValueOnce({
+      containerName: "sandbox-podman",
+      containerId: "a".repeat(64),
+    });
     const podmanTarget = {
       key: `machine:${"a".repeat(32)}`,
       globalArgs: [
@@ -495,7 +518,7 @@ describe("docker sandbox backend manager", () => {
     );
     expect(dockerMocks.execContainer).toHaveBeenCalledWith(
       expect.objectContaining({ id: "podman", globalArgs: podmanTarget.globalArgs }),
-      expect.arrayContaining(["inspect", "sandbox-podman"]),
+      expect.arrayContaining(["inspect", "a".repeat(64)]),
       expect.anything(),
     );
     expect(dockerMocks.validateSandboxContainerEngineTarget).toHaveBeenCalledWith(

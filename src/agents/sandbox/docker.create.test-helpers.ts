@@ -130,6 +130,8 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
     } else {
       stdout = spawnState.inspectRunning ? "true\n" : "false\n";
     }
+  } else if (args[0] === "inspect" && args[2] === "{{.Id}}") {
+    stdout = "c".repeat(64);
   } else if (
     args[0] === "inspect" &&
     args[1] === "-f" &&
@@ -166,6 +168,7 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
       stderr = "container name is already in use";
     } else {
       spawnState.containerExists = true;
+      stdout = "c".repeat(64);
       spawnState.inspectRunning = false;
       spawnState.labelHash =
         args

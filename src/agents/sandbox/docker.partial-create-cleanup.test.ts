@@ -35,7 +35,7 @@ beforeEach(() => {
     if (args[0] === "exec") {
       throw new Error("setup failed");
     }
-    return { code: 0, stdout: "", stderr: "" };
+    return { code: 0, stdout: "a".repeat(64), stderr: "" };
   });
 });
 
@@ -119,7 +119,7 @@ describe("fresh sandbox container cleanup", () => {
           await Promise.resolve();
           current = false;
         }
-        return { code: 0, stdout: "", stderr: "" };
+        return { code: 0, stdout: "a".repeat(64), stderr: "" };
       });
       await expect(
         ensureSandboxContainer({
@@ -159,7 +159,7 @@ describe("fresh sandbox container cleanup", () => {
         );
         throw new Error("allocation response lost");
       }
-      return { code: 0, stdout: "", stderr: "" };
+      return { code: 0, stdout: "a".repeat(64), stderr: "" };
     });
     await expect(
       ensureSandboxContainer({
@@ -219,7 +219,7 @@ describe("fresh sandbox container cleanup", () => {
       if (args[0] === "create") {
         throw new Error("container name already in use");
       }
-      return { code: 0, stdout: "", stderr: "" };
+      return { code: 0, stdout: "a".repeat(64), stderr: "" };
     });
 
     await expect(
@@ -249,7 +249,7 @@ describe("fresh sandbox container cleanup", () => {
       if (args[0] === "rm") {
         return { code: 1, stdout: "", stderr: "permission denied" };
       }
-      return { code: 0, stdout: "", stderr: "" };
+      return { code: 0, stdout: "a".repeat(64), stderr: "" };
     });
 
     await expect(

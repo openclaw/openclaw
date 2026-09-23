@@ -83,6 +83,26 @@ profile's resources. Required sandboxing and the read-only workspace cap remain
 in force; backend failure never falls back to host execution.
 Sessions without a role-required sandbox keep the configured scope behavior.
 
+When original Guest access is revoked, registered background commands retain that
+access dependency and are cancelled even after their foreground turn finishes.
+Closing the browser or stopping one turn does not revoke this retained access.
+
+OpenClaw also stops and verifies a Docker or Podman container when it created
+that container under the original access and every use has remained with the
+same original invitation and profile. Multiple connections and sessions can
+share that private container. Revoking one device or source preserves it while
+another source remains authorized; revoking the invitation ends all of them.
+This preserves saved workspace files and the
+container's writable layer; stopping loses temporary filesystem and process
+state. Ordinary authorized use can restart the retained container.
+
+A different invitation, staff access, or unclassified use makes
+that container ineligible for this shutdown. Explicitly shared containers,
+containers already present when the Gateway starts, sandbox browsers, and other
+backends also remain running. Their existing cancellation owners target the
+affected work. Arbitrary detached processes inside these shared or unclassified
+environments are not guaranteed to stop when access is revoked.
+
 The [creator namespace migration](/reference/database-schemas#creator-namespace-migration)
 does not delete or adopt old ambiguous workspaces or containers. Such sessions
 start with separate resources after upgrade. Preserve any needed old data
