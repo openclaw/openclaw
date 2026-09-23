@@ -79,6 +79,20 @@ the nested shape before starting the Gateway. See the
   output. Still uses the chunker if the buffered text exceeds `maxChars`, so it
   can emit multiple chunks at the end.
 
+### Native Ollama block timing
+
+Native Ollama (`api: "ollama"`, `/api/chat`) waits until the assistant message
+finishes (`message_end`) before delivering durable text blocks, even with
+`blockStreamingBreak: "text_end"`. Earlier text can still become pre-tool
+narration, so OpenClaw waits for the completed message to distinguish commentary
+from the answer. A long tool-free generation therefore produces no durable
+reply chunks while it is still generating.
+
+Tool-call narration stays out of the durable reply; ordinary final answers and
+length-limited partial answers remain deliverable. The independent live
+assistant/preview stream can still update while generating when enabled and
+supported by the channel. This exception does not disable Ollama API streaming.
+
 ### Media delivery with block streaming
 
 When a plugin uses `before_agent_finalize` to validate the built-in runtime's
