@@ -191,6 +191,7 @@ Live is opt-in, so there is no fixed "CI model list." `OPENCLAW_LIVE_MODELS=mode
 
 | Provider/model                                      | Notes      |
 | --------------------------------------------------- | ---------- |
+| `anthropic/claude-opus-5-5`                         |            |
 | `anthropic/claude-opus-5`                           |            |
 | `anthropic/claude-opus-4-8`                         |            |
 | `anthropic/claude-sonnet-5`                         |            |

@@ -40,10 +40,10 @@ describe("anthropic Claude model refs", () => {
   });
   it("upgrades retired refs without rewriting future canonical refs", () => {
     expect(resolveKnownAnthropicModelRef("anthropic/claude-opus-4-5")).toBe(
-      "anthropic/claude-opus-5",
+      "anthropic/claude-opus-5-5",
     );
     expect(resolveKnownAnthropicModelRef("anthropic/claude-opus-4-5@anthropic:work")).toBe(
-      "anthropic/claude-opus-5@anthropic:work",
+      "anthropic/claude-opus-5-5@anthropic:work",
     );
     expect(resolveKnownAnthropicModelRef("anthropic/claude-sonnet-4-20250514")).toBe(
       "anthropic/claude-sonnet-4-6",
@@ -65,10 +65,10 @@ describe("anthropic Claude model refs", () => {
   it("resolves the bare opus family alias to the current default Opus", () => {
     // Bare family aliases and retired-ref upgrades both land on the current
     // default Opus; only an explicitly pinned ref keeps its own target.
-    expect(resolveKnownAnthropicModelRef("opus")).toBe("anthropic/claude-opus-5");
-    expect(resolveKnownAnthropicModelRef("claude-cli/opus")).toBe("anthropic/claude-opus-5");
+    expect(resolveKnownAnthropicModelRef("opus")).toBe("anthropic/claude-opus-5-5");
+    expect(resolveKnownAnthropicModelRef("claude-cli/opus")).toBe("anthropic/claude-opus-5-5");
     expect(resolveKnownAnthropicModelRef("anthropic/claude-opus-4-5")).toBe(
-      "anthropic/claude-opus-5",
+      "anthropic/claude-opus-5-5",
     );
     expect(resolveKnownAnthropicModelRef("anthropic/claude-opus-4-8")).toBe(
       "anthropic/claude-opus-4-8",
@@ -276,7 +276,7 @@ describe("anthropic cli migration", () => {
       },
     });
 
-    expect(result.defaultModel).toBe("anthropic/claude-opus-5");
+    expect(result.defaultModel).toBe("anthropic/claude-opus-5-5");
     expect(result.configPatch).toEqual({
       agents: {
         defaults: {
@@ -309,7 +309,7 @@ describe("anthropic cli migration", () => {
       },
     });
 
-    expect(result.defaultModel).toBe("anthropic/claude-opus-5");
+    expect(result.defaultModel).toBe("anthropic/claude-opus-5-5");
     expect(result.configPatch?.agents?.defaults?.model).toBeUndefined();
     expect(result.configPatch?.agents?.defaults?.models?.["anthropic/gpt-5.2"]).toBeUndefined();
   });

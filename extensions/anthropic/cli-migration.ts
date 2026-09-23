@@ -8,6 +8,7 @@ import {
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveClaudeCliAnthropicModelRefs } from "./claude-model-refs.js";
+import { CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF } from "./cli-constants.js";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "./cli-shared.js";
 
 type AgentDefaultsModel = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["model"];
@@ -187,7 +188,7 @@ export function buildAnthropicCliMigrationResult(config: OpenClawConfig): Provid
     ...rewrittenModels.runtimeRefs,
     ...rewrittenModels.migrated,
   ]);
-  const defaultModel = rewrittenModel.primary ?? "anthropic/claude-opus-5";
+  const defaultModel = rewrittenModel.primary ?? CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF;
 
   return {
     profiles: [],
