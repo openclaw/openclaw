@@ -6337,7 +6337,7 @@ jobs:
           --config.side-effects-cache=true
 
       # Same-repo runs carry the Gradle user home (dependency, wrapper, and
-      # build caches) on a Blacksmith sticky disk: the setup-java gradle cache
+      # build caches) on a Blacksmith sticky disk: the Actions Gradle cache
       # above is evicted so quickly under the repo quota that it rarely
       # restores, leaving every run to re-resolve the full dependency graph.
       # Fork PRs, manual dispatches, the GitHub backend, and hosted hybrid retries must never produce writable
@@ -6353,14 +6353,14 @@ jobs:
           # budget, 429-failing every mount. Task scope stays in the key: each
           # matrix task resolves a different dependency set, and a shared key
           # would let a light task (ktlint) pin a thin snapshot the heavy
-          # build lanes can never repair. Dependency-file changes live in the
-          # runtime fingerprint marker below instead of the key.
+          # build lanes can never repair. Gradle invalidates changed inputs and
+          # expires unused entries; dependency changes must not erase warm caches.
           key: ${{ github.repository }}-gradle-v2-${{ matrix.task }}
           path: /var/tmp/openclaw-gradle
           # Single semantic writer: only protected pushes commit, so
           # pull_request clones stay read-only and the snapshot tracks main.
           # Explicit true (not on-change) because the allocated-byte heuristic
-          # can miss a same-size refresh and strand the fingerprint marker;
+          # can miss a same-size refresh;
           # v1.4.0 still skips commit after failed/cancelled steps, so a
           # broken build cannot poison this key.
           commit: ${{ github.event_name != 'pull_request' && 'true' || 'false' }}
@@ -6368,31 +6368,9 @@ jobs:
       - name: Point Gradle at the sticky disk
         if: vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && !(contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && github.run_attempt > 1) && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
         shell: bash
-        env:
-          # Gradle caches are content-addressed, so a stale snapshot is safe
-          # to restore (obsolete entries are simply ignored). The fingerprint
-          # only bounds disk growth: when dependency inputs change, the writer
-          # rebuilds its snapshot from scratch so retired dependency artifacts
-          # do not accumulate on the O(1) key forever.
-          GRADLE_DEPS_FINGERPRINT: ${{ hashFiles('apps/android/**/*.gradle*', 'apps/android/**/gradle-wrapper.properties', 'apps/android/gradle/libs.versions.toml') }}
-          STICKY_WRITER: ${{ github.event_name != 'pull_request' && 'true' || 'false' }}
         run: |
           set -euo pipefail
           sticky_root=/var/tmp/openclaw-gradle
-          marker="$sticky_root/.openclaw-gradle-deps-fingerprint"
-          disk_fingerprint=""
-          if [ -f "$marker" ]; then
-            disk_fingerprint="$(<"$marker")"
-          fi
-          if [ "$disk_fingerprint" != "$GRADLE_DEPS_FINGERPRINT" ]; then
-            if [ "$STICKY_WRITER" = "true" ]; then
-              echo "Gradle dependency inputs changed; rebuilding snapshot cold to drop retired artifacts"
-              rm -rf "$sticky_root/gradle-user-home"
-              printf '%s\n' "$GRADLE_DEPS_FINGERPRINT" > "$marker"
-            else
-              echo "Gradle dependency inputs changed since snapshot; content-addressed caches stay safe to reuse"
-            fi
-          fi
           mkdir -p "$sticky_root/gradle-user-home"
           echo "GRADLE_USER_HOME=$sticky_root/gradle-user-home" >> "$GITHUB_ENV"
 
@@ -6422,7 +6400,7 @@ jobs:
               // Record the executing launcher; cached results do not prove this JVM ran tests.
               doFirst {
                 def metadata = javaLauncher.get().metadata
-                logger.lifecycle("Test JVM ${path}: runtime=${metadata.javaRuntimeVersion} vendor=${metadata.vendor} home=${metadata.installationPath.asFile}")
+                logger.lifecycle("Test JVM ${path}: runtime=${metadata.javaRuntimeVersion} vendor=${metadata.vendor} home=${metadata.installationPath.asFile} forks=${maxParallelForks}")
               }
             }
           }
