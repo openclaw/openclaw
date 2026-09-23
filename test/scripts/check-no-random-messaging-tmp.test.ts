@@ -53,12 +53,9 @@ describe("check-no-random-messaging-tmp", () => {
       1,
       "Found os.tmpdir()/tmpdir() usage in messaging/channel runtime sources:",
     );
-    expect(
-      errorLog.mock.calls
-        .slice(1, -1)
-        .map(([message]) => message)
-        .toSorted(),
-    ).toEqual(runtimePaths.map((relativePath) => `- ${relativePath}:2`).toSorted());
+    expect(new Set(errorLog.mock.calls.slice(1, -1).map(([message]) => message))).toEqual(
+      new Set(runtimePaths.map((relativePath) => `- ${relativePath}:2`)),
+    );
     expect(errorLog).toHaveBeenLastCalledWith(
       "Use resolvePreferredOpenClawTmpDir() or plugin-sdk temp helpers instead of host tmp defaults.",
     );
