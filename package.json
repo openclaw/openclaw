@@ -1931,6 +1931,7 @@
     "prepare": "node scripts/prepare-git-hooks.mjs",
     "prepush:ci": "bash scripts/prepush-ci.sh",
     "probe:anthropic:prompt": "node --import ./scripts/tsx.mjs scripts/anthropic-prompt-probe.ts",
+    "proof:real-channel-dedupe": "node --import ./scripts/tsx.mjs scripts/proof-real-channel-dedupe.ts",
     "prompt:snapshots:check": "node --import ./scripts/tsx.mjs scripts/generate-prompt-snapshots.ts --check",
     "prompt:snapshots:gen": "node --import ./scripts/tsx.mjs scripts/generate-prompt-snapshots.ts --write",
     "prompt:snapshots:sync-codex-model": "node --import ./scripts/tsx.mjs scripts/sync-codex-model-prompt-fixture.ts",

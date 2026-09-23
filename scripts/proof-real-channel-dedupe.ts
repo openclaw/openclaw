@@ -234,7 +234,7 @@ async function main() {
       subscribe: () => () => {},
       isCompacting: false,
       abortCompaction() {},
-    } as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"];
+    } as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"];
     const subscription = subscribeEmbeddedAgentSession({
       session,
       runId: "pr-128580-proof-run",
@@ -331,10 +331,10 @@ async function main() {
       (request) => request.method === "sendMessage",
     );
     const sendPhotoRequests = recorder.requests.filter((request) => request.method === "sendPhoto");
-    const photoValidationError =
-      sendPhotoRequests.length === 1
-        ? validatePhotoRequest(sendPhotoRequests[0].body)
-        : "expected one sendPhoto request";
+    const sendPhotoRequest = sendPhotoRequests.length === 1 ? sendPhotoRequests.at(0) : undefined;
+    const photoValidationError = sendPhotoRequest
+      ? validatePhotoRequest(sendPhotoRequest.body)
+      : "expected one sendPhoto request";
     const passed =
       sendMessageRequests.length === 1 &&
       blank.replyPayloads.length === 0 &&
