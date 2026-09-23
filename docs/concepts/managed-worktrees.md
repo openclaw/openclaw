@@ -293,7 +293,8 @@ openclaw worktrees retire-snapshot <id> \
   --retained-ref refs/heads/<retained-branch> --retained-oid <source-commit> --json
 ```
 
-Retirement requires identical source trees and retained snapshot-parent history.
+Retirement applies only to ordinary snapshots, not exact-state recovery snapshots or
+their retained checkouts. It requires identical source trees and retained snapshot-parent history.
 It refuses a live or reappeared checkout, Git registration, changed identity,
 pending removal, run/removal consumer, unknown or nonempty provisioned-file
 inventory, or any retained local workspace projection. Git equality does not prove

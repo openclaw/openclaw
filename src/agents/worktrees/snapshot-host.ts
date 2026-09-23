@@ -3,6 +3,7 @@ import { lstatSync } from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
+import { withWorktreeAllocationLease } from "./allocation.js";
 import { requireWorktreeDiskSpace } from "./capacity.js";
 import type { WorktreeGitPolicy } from "./checkout-git-config.js";
 import { removeUnusedEmptyWorktreeSource } from "./empty-source.js";
@@ -158,6 +159,32 @@ export function assertExactSnapshotRecordCurrent(
       "Exact-state recovery owner or lifecycle changed; source and snapshot preserved",
     );
   }
+}
+
+/** Local CLI retirement shares the same allocation owner as removal and GC. */
+export async function retireManagedWorktreeSnapshotById(
+  params: RetireManagedWorktreeSnapshotParams,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  return await withWorktreeAllocationLease({ ...params, env }, async (guard) => {
+    const record = getRegistryWorktree(env, params.id);
+    if (
+      !record ||
+      record.removedAt === undefined ||
+      record.removedAt !== params.expectedRemovedAt ||
+      record.snapshotRef !== params.expectedSnapshotRef
+    ) {
+      throw new Error("Expected removed worktree snapshot identity does not match");
+    }
+    await retireManagedWorktreeSnapshot({
+      record,
+      env,
+      signal: guard.signal,
+      assertCurrent: () => guard.commitGuard(),
+      expected: params,
+    });
+    return { retired: true as const, id: record.id };
+  });
 }
 
 /** Preparation remains under the allocation owner; Git commits exact ref custody atomically. */

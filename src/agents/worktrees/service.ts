@@ -104,7 +104,6 @@ import type {
   ManagedWorktreeRunEndCleanup,
   ManagedWorktreeRunEndCleanupOutcome,
   RemoveManagedWorktreeResult,
-  RetireManagedWorktreeSnapshotParams,
 } from "./types.js";
 
 export {
@@ -1284,29 +1283,6 @@ export class ManagedWorktreeService {
     if (record) {
       await this.release(record.id);
     }
-  }
-
-  /** Explicit lossless retirement does not run GC or manufacture another snapshot. */
-  async retireSnapshot(params: RetireManagedWorktreeSnapshotParams) {
-    return await this.withAllocationLease(params, async (guard) => {
-      const record = getRegistryWorktree(this.env, params.id);
-      if (
-        !record ||
-        record.removedAt === undefined ||
-        record.removedAt !== params.expectedRemovedAt ||
-        record.snapshotRef !== params.expectedSnapshotRef
-      ) {
-        throw new Error("Expected removed worktree snapshot identity does not match");
-      }
-      await retireManagedWorktreeSnapshot({
-        record,
-        env: this.env,
-        signal: guard.signal,
-        assertCurrent: () => guard.commitGuard(),
-        expected: params,
-      });
-      return { retired: true as const, id: record.id };
-    });
   }
 
   async gc(params: ManagedWorktreeGcParams = {}): Promise<ManagedWorktreeGcResult> {

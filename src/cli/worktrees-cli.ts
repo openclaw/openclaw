@@ -181,8 +181,9 @@ export function registerWorktreesCli(program: Command): void {
           retainedOid: string;
         },
       ) => {
-        const { managedWorktrees } = await import("../agents/worktrees/service.js");
-        const result = await managedWorktrees.retireSnapshot({
+        const { retireManagedWorktreeSnapshotById } =
+          await import("../agents/worktrees/snapshot-host.js");
+        const result = await retireManagedWorktreeSnapshotById({
           id,
           expectedSnapshotRef: opts.expectedRef,
           expectedSnapshotOid: opts.expectedOid,
