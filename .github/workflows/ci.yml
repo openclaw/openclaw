@@ -720,6 +720,13 @@ jobs:
               evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs")
               platform_scripts = ("scripts/lib/swift-toolchain.sh",)
               upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs")
+              npm_lock_scripts = (
+                  "scripts/ci-npm-lock-admission.mjs",
+                  "scripts/generate-npm-package-lock.mjs",
+                  "scripts/generate-npm-package-lock.mts",
+                  "scripts/changed-lanes.mts",
+                  "scripts/lib/merge-head-diff-base.mjs",
+              )
               if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
                   raise GitFailure(1)
               harness = os.path.join(workspace, ".ci-harness")
@@ -743,7 +750,7 @@ jobs:
                   if kind == "platform":
                       pathspecs += platform_scripts
                   if kind == "linux-node":
-                      pathspecs += upgrade_scripts
+                      pathspecs += (*upgrade_scripts, *npm_lock_scripts)
                   paths = git_output(workspace, "ls-files", "-z", "--", *pathspecs).split("\0")[:-1]
                   run_git(workspace, "checkout-index", "--force", f"--prefix={harness}/", "--", *paths)
               else:
@@ -755,7 +762,7 @@ jobs:
                   if kind == "platform":
                       sparse_paths += [f"/{path}" for path in platform_scripts]
                   if kind == "linux-node":
-                      sparse_paths += [f"/{path}" for path in upgrade_scripts]
+                      sparse_paths += [f"/{path}" for path in (*upgrade_scripts, *npm_lock_scripts)]
                   # Rooted non-cone patterns keep the kind-owned workflow files exact.
                   # Sparse first, then blob-less avoids downloading a second repository snapshot.
                   run_git(harness, "sparse-checkout", "set", "--no-cone", *sparse_paths)
@@ -4271,7 +4278,22 @@ jobs:
             runner: blacksmith-16vcpu-ubuntu-2404
     steps:
       - *linux_node_checkout_step
+      - name: Check npm lock scope before setup
+        id: npm-lock-scope
+        if: matrix.task == 'npm-lock'
+        env:
+          HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
+        shell: bash
+        run: |
+          # A missing runtime or unfamiliar target must keep the existing check.
+          if decision="$(node .ci-harness/scripts/ci-npm-lock-admission.mjs)"; then
+            echo "$decision" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Setup Node environment
+        if: steps.npm-lock-scope.outputs.skip != 'true'
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
           cache-mode: ${{ needs.preflight.outputs.cache_mode }}
@@ -4359,6 +4381,7 @@ jobs:
 
       - name: Run check shard
         env:
+          SKIP_NPM_LOCK: ${{ steps.npm-lock-scope.outputs.skip }}
           FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
           HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
           FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check }}
@@ -4432,6 +4455,10 @@ jobs:
               pnpm check:import-cycles
               ;;
             npm-lock)
+              if [[ "$SKIP_NPM_LOCK" == "true" ]]; then
+                echo "No npm-lock package changes detected; dependency setup skipped."
+                exit 0
+              fi
               # The --all sweep resolves ~94 npm graphs against the registry
               # (~110s). Push/PR runs use the reviewed --changed scoping (zero
               # dependency-surface changes resolve nothing); dispatches and

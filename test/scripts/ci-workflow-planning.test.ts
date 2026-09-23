@@ -1045,6 +1045,7 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
     frozenTarget: options.frozenTarget,
     hostedRunnerProfileContract: options.types?.hostedContract ?? true,
     runnerProfile: options.types?.profile ?? "hybrid",
+    steps: { "npm-lock-scope": { outputs: { skip: "false" } } },
     preflightOutputs: {
       compatibility_target: String(options.frozenTarget),
       run_format_check: "false",
@@ -1097,6 +1098,7 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
           HISTORICAL_TARGET: options.frozenTarget ? "true" : "false",
           HOSTED_RUNNER_STRIPES: "true",
           CHECKOUT_BASE_SHA: options.checkoutBase ?? "",
+          SKIP_NPM_LOCK: "false",
           PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
           PNPM_CALLS: callsPath,
           TASK: options.task ?? "guards",
