@@ -185,6 +185,24 @@ describe("closed session browser route", () => {
     expect(mocked.dispatch).not.toHaveBeenCalled();
   });
 
+  it("passes a synchronous final fence to navigation and interaction dispatch", async () => {
+    const events: string[] = [];
+    mocked.dispatch.mockImplementationOnce(async ({ assertCurrent }) => {
+      const assertion = assertCurrent();
+      queueMicrotask(() => {
+        mocked.current = false;
+        events.push("revoked");
+      });
+      if (assertion) {
+        await assertion;
+      }
+      events.push(mocked.current ? "authorized effect" : "stale effect");
+      return { status: 200, body: {} };
+    });
+    await request({ method: "POST", path: "/navigate", body: { url: "https://example.test" } });
+    expect(events).toEqual(["authorized effect", "revoked"]);
+  });
+
   it("does not return data after authority changes during the action", async () => {
     mocked.dispatch.mockImplementationOnce(async () => {
       mocked.current = false;

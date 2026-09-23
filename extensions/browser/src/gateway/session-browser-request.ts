@@ -155,7 +155,7 @@ export const handleSessionBrowserGatewayRequest: GatewayRequestHandlers[string] 
           query,
           body,
           signal,
-          assertCurrent: async () => assertCurrent(),
+          assertCurrent,
           screencastAuthority: {
             signal: resource.signal,
             assertCurrent: resource.assertCurrent,

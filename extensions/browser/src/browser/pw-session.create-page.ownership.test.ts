@@ -9,6 +9,7 @@ function installBrowserMocks() {
   const openPages: Page[] = [];
   const pageGoto = vi.fn(async () => null);
   const pageRoute = vi.fn();
+  const pageFocus = vi.fn(async () => {});
   const pageClose = vi.fn(async () => {
     openPages.splice(openPages.indexOf(page), 1);
   });
@@ -23,6 +24,7 @@ function installBrowserMocks() {
     title: async () => "",
     url: () => "about:blank",
     route: pageRoute,
+    bringToFront: pageFocus,
     unroute: vi.fn(),
   } as unknown as Page;
   const contextClose = vi.fn(async () => {
@@ -56,6 +58,7 @@ function installBrowserMocks() {
     page,
     pageGoto,
     pageRoute,
+    pageFocus,
     pageClose,
     sessionSend,
     contextClose,
@@ -165,6 +168,26 @@ describe("Playwright created-page ownership", () => {
 
     expect(pageClose).toHaveBeenCalledOnce();
     expect(page.context().pages()).toEqual([]);
+  });
+
+  it("focuses an existing page in the same turn as its synchronous authority assertion", async () => {
+    const fixture = installBrowserMocks();
+    await fixture.newPage();
+    let expired = false;
+    fixture.pageFocus.mockImplementationOnce(async () => {
+      expect(expired).toBe(false);
+    });
+    await pwAi.focusPageByTargetIdViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "TARGET_1",
+      assertCurrent: () => {
+        queueMicrotask(() => {
+          expired = true;
+        });
+      },
+    });
+    expect(fixture.pageFocus).toHaveBeenCalledOnce();
+    expect(expired).toBe(true);
   });
 
   it("does not navigate when cancellation wins navigation validation", async () => {
