@@ -14,6 +14,10 @@ import { deliverReplies, deliverStructuredReplies } from "./bot/delivery.replies
 import * as sendRuntime from "./send.runtime.js";
 import { resolveTelegramTestUpload } from "./send.telegram-http.test-support.js";
 
+const DELIVERY_WARNING =
+  "I couldn't confirm the reply reached Telegram. Check OpenClaw chat history for the answer before retrying the task.";
+const DELIVERY_WARNING_PREFIX = "I couldn't confirm the reply reached Telegram.";
+
 describe("Telegram progress custody and delivery outcomes through HTTP", () => {
   const http = createTelegramDispatchHttpFixture();
   const {
@@ -155,7 +159,7 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
       finals: ["cancel"],
       fallback: false,
     },
-    { name: "partially delivered final", before: undefined, finals: ["partial"], fallback: false },
+    { name: "partially delivered final", before: undefined, finals: ["partial"], fallback: true },
     {
       name: "failed final and fallback",
       before: undefined,
@@ -189,10 +193,10 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
         call.method === "sendMessage" &&
         (String(call.fields.text).startsWith("fail") ||
           call.fields.text === "B".repeat(40) ||
-          (rejectFallback && String(call.fields.text).includes("No response generated")))
+          (rejectFallback && DELIVERY_WARNING.includes(String(call.fields.text))))
           ? { error_code: 400, description: "Bad Request: fixture delivery rejected" }
           : undefined;
-      const delivery = dispatchProgressTurn(async () => undefined, {
+      await dispatchProgressTurn(async () => undefined, {
         mode: "off",
         toolProgress: true,
         textLimit: 80,
@@ -212,11 +216,6 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
         },
         allowErrors: true,
       });
-      if (rejectFallback) {
-        await expect(delivery).rejects.toThrow("fixture delivery rejected");
-      } else {
-        await delivery;
-      }
       if (before) {
         expect(hookDeliveries).toContainEqual({
           kind: before.endsWith("tool") ? "tool" : "block",
@@ -231,18 +230,15 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
       const fallbackSends = calls.filter(
         (call) =>
           call.method === "sendMessage" &&
-          call.fields.text === "No response generated. Please try again.",
+          String(call.fields.text).startsWith(DELIVERY_WARNING_PREFIX),
       );
       expect(fallbackSends).toHaveLength(fallback ? 1 : 0);
       expect(JSON.stringify(acceptedCalls)).not.toContain("cancel");
-      expect([...visibleMessages.values()]).toEqual(
-        rejectFallback
-          ? []
-          : fallback
-            ? ["No response generated. Please try again."]
-            : finals.some((text) => text === "partial")
-              ? ["A".repeat(80)]
-              : [],
+      const visible = [...visibleMessages.values()];
+      const accepted = finals.some((text) => text === "partial") ? ["A".repeat(80)] : [];
+      expect(visible.slice(0, accepted.length)).toEqual(accepted);
+      expect(visible.slice(accepted.length).join("")).toBe(
+        fallback && !rejectFallback ? DELIVERY_WARNING : "",
       );
     },
   );

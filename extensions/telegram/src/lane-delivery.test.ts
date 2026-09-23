@@ -34,14 +34,13 @@ describe("createLaneTextDeliverer", () => {
       error: historyFailure,
     });
     expect(harness.sendPayload).not.toHaveBeenCalled();
-    expect(harness.answer?.clear).not.toHaveBeenCalled();
-    expect(harness.lanes.answer.finalized).toBe(true);
   });
 
   it("claims an equal visible preview and survives a cleanup-only crash", async () => {
     const events: string[] = [];
     const answer = createTestDraftStream({ messageId: 999 });
-    answer.lastDeliveredText.mockReturnValue(HELLO_FINAL);
+    answer.update(HELLO_FINAL);
+    answer.update.mockClear();
     const harness = createHarness({ answerStream: answer });
     harness.stopDraftLane.mockImplementationOnce(async () => {
       events.push("finalize");
@@ -53,7 +52,7 @@ describe("createLaneTextDeliverer", () => {
 
     // The preview text is already on screen: custody must be claimed, and a
     // cleanup crash must not convert the accepted preview into a send failure.
-    await harness.deliverLaneText({
+    const result = await harness.deliverLaneText({
       laneName: "answer",
       text: HELLO_FINAL,
       payload: { text: HELLO_FINAL },
@@ -64,7 +63,10 @@ describe("createLaneTextDeliverer", () => {
     expect(events).toEqual(["custody", "finalize"]);
     expect(answer.update).not.toHaveBeenCalled();
     expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
-    expect(harness.lanes.answer.finalized).toBe(true);
+    const delivery = expectPreviewFinalized(result);
+    expect(delivery.messageId).toBe(999);
+    expect(delivery.content).toBe(HELLO_FINAL);
+    expect(harness.sendPayload).not.toHaveBeenCalled();
   });
 
   it("keeps throwing late media failures without a concrete preview receipt", async () => {
@@ -83,7 +85,6 @@ describe("createLaneTextDeliverer", () => {
         infoKind: "final",
       }),
     ).rejects.toBe(mediaError);
-    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
   });
 
   it("keeps text on late voice media so blocked voice sends can fall back", async () => {
@@ -216,7 +217,7 @@ describe("createLaneTextDeliverer", () => {
           text: telegramHtmlToPlainTextFallback(fallbackPayload.text ?? ""),
         });
         await options?.promptContextSequence?.finish();
-        return true;
+        return { visibleReplySent: true };
       });
       const deliveryPromise = deliverProjectedFinalAnswer(harness, fullAnswer);
 
@@ -266,11 +267,15 @@ describe("createLaneTextDeliverer", () => {
 
     const result = await deliverFinalAnswer(harness, HELLO_FINAL);
 
-    expect(result.kind).toBe("preview-retained");
+    expect(result).toMatchObject({
+      kind: "preview-retained",
+      deliveryResult: {
+        visibleReplySent: false,
+        suppression: { reason: "adapter_returned_no_identity" },
+      },
+    });
     expect(answer.update).toHaveBeenCalledWith(HELLO_FINAL);
     expect(harness.sendPayload).not.toHaveBeenCalled();
-    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
-    expect(harness.lanes.answer.finalized).toBe(true);
   });
 
   it("waits for a concrete streamed tool message before attaching buttons", async () => {

@@ -130,9 +130,6 @@ describeTelegramDispatch("dispatchTelegramMessage directive delivery", () => {
             }),
           }),
         );
-        if (!existingTarget) {
-          expect(answerDraftStream.clear).toHaveBeenCalledOnce();
-        }
         expect(answerDraftStream.update).not.toHaveBeenCalledWith(fullText);
       } finally {
         await drainSessionDiskBudgetWorkers();
@@ -239,7 +236,6 @@ describeTelegramDispatch("dispatchTelegramMessage directive delivery", () => {
         }),
       );
       expect(answerDraftStream.update).not.toHaveBeenCalledWith(fullText);
-      expect(answerDraftStream.clear).toHaveBeenCalledOnce();
       if (media) {
         const payload = deliverInboundReplyWithMessageSendContext.mock.calls[0]?.[0]?.payload;
         expect(payload?.mediaUrls).toEqual(mediaUrls);
