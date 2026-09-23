@@ -450,7 +450,7 @@ catch (error) { if (error.code !== 'EEXIST') throw error; }
 if (fs.readFileSync(owner, 'utf8') === String(process.pid)) {
   const schedule = globalThis.setTimeout;
   globalThis.setTimeout = (callback, ms, ...args) => {
-    if (ms !== 250) return schedule(callback, ms, ...args);
+    if (ms !== 100) return schedule(callback, ms, ...args);
     globalThis.setTimeout = schedule;
     return schedule(() => {
       let released = false;
@@ -2223,7 +2223,7 @@ if (commandArgs[0] === "list") {
           DEADLINE_FILE: deadlineFile,
           NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(preload)}`,
         },
-        timeoutMs: 250,
+        timeoutMs: 100,
       });
 
       expect(result.status).toBe(124);
@@ -2263,7 +2263,7 @@ if (commandArgs[0] === "list") {
             OPENCLAW_TEST_GRANDCHILD_PID: grandchildPidPath,
             OPENCLAW_TEST_READY_FILE: join(tempDir, "ready"),
           },
-          timeoutMs: 500,
+          timeoutMs: 200,
         });
 
         expect(result.status).toBe(124);
@@ -2285,7 +2285,7 @@ if (commandArgs[0] === "list") {
       const grandchildPidPath = join(tempDir, "grandchild.pid");
       let grandchildPid = 0;
       // Outlive the assertion bound, but self-clean if PID setup fails.
-      const grandchildScript = "setTimeout(() => process.exit(0), 3_000);";
+      const grandchildScript = "setTimeout(() => process.exit(0), 1_000);";
       const parentScript = [
         "const { spawn } = require('node:child_process');",
         "const { renameSync, writeFileSync } = require('node:fs');",
@@ -2311,7 +2311,7 @@ if (commandArgs[0] === "list") {
           },
           quiet: true,
           // Let the command spawn its pipe holder before exercising timeout settlement.
-          timeoutMs: 500,
+          timeoutMs: 200,
         });
 
         const durationMs = Date.now() - startedAt;
