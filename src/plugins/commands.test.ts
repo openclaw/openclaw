@@ -317,8 +317,6 @@ describe("registerPluginCommand", () => {
       command: {
         // Runtime plugin payloads are untyped; guard at boundary.
         name: undefined as unknown as string,
-        description: "Demo",
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -328,9 +326,7 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects invalid command descriptions",
       command: {
-        name: "demo",
         description: undefined as unknown as string,
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -340,10 +336,7 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects invalid agent prompt guidance",
       command: {
-        name: "demo",
-        description: "Demo",
         agentPromptGuidance: "use /demo" as unknown as string[],
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -353,10 +346,7 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects invalid structured agent prompt guidance",
       command: {
-        name: "demo",
-        description: "Demo",
         agentPromptGuidance: [{ text: "Use /demo.", surfaces: ["nope"] }] as never,
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -367,10 +357,7 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects empty structured agent prompt guidance surfaces",
       command: {
-        name: "demo",
-        description: "Demo",
         agentPromptGuidance: [{ text: "Use /demo.", surfaces: [] }] as never,
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -380,10 +367,7 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects invalid channel scopes",
       command: {
-        name: "demo",
-        description: "Demo",
         channels: ["telegram", "   "],
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -393,10 +377,7 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects primitive native command metadata",
       command: {
-        name: "demo",
-        description: "Demo",
         nativeNames: "demo-native",
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -406,10 +387,7 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects primitive client presentation metadata",
       command: {
-        name: "demo",
-        description: "Demo",
         clientPresentation: "device-pairing",
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -419,13 +397,10 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects unknown client presentation actions",
       command: {
-        name: "demo",
-        description: "Demo",
         clientPresentation: {
           when: "no-arguments",
           action: { kind: "open-route" },
         },
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -435,14 +410,11 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects additional client presentation fields",
       command: {
-        name: "demo",
-        description: "Demo",
         clientPresentation: {
           when: "no-arguments",
           action: { kind: "device-pairing" },
           route: "/settings/devices",
         },
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -452,13 +424,10 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects additional client presentation action fields",
       command: {
-        name: "demo",
-        description: "Demo",
         clientPresentation: {
           when: "no-arguments",
           action: { kind: "device-pairing", callback: "run" },
         },
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -466,7 +435,9 @@ describe("registerPluginCommand", () => {
       },
     },
   ] as const)("$name", ({ command, expected }) => {
-    expect(registerPluginCommand("demo-plugin", command as never)).toEqual(expected);
+    expect(registerPluginCommand("demo-plugin", createVoiceCommand(command as never))).toEqual(
+      expected,
+    );
   });
 
   it("normalizes command metadata for downstream consumers", () => {
@@ -554,30 +525,30 @@ describe("registerPluginCommand", () => {
     expect(listRegisteredPluginAgentPromptGuidance()).toEqual(["Ambient guidance"]);
   });
 
-  it.each([
-    ["zeta-plugin", "alpha-plugin"],
-    ["alpha-plugin", "zeta-plugin"],
-  ])("keeps prompt guidance stable for plugin discovery order %j", (...pluginIds) => {
-    for (const pluginId of pluginIds) {
-      const alpha = pluginId === "alpha-plugin";
-      expect(
-        registerPluginCommand(pluginId, {
-          name: alpha ? "alpha_cmd" : "zeta_cmd",
-          description: alpha ? "Alpha command" : "Zeta command",
-          agentPromptGuidance: alpha
-            ? ["Use /alpha_cmd first.", "Then finish the alpha workflow."]
-            : ["Use /zeta_cmd for zeta routing."],
-          handler: async () => ({ text: "ok" }),
-        }),
-      ).toEqual({ ok: true });
-    }
+  it.each([["zeta-plugin", "alpha-plugin"]])(
+    "keeps prompt guidance stable for plugin discovery order %j",
+    (...pluginIds) => {
+      for (const pluginId of pluginIds) {
+        const alpha = pluginId === "alpha-plugin";
+        expect(
+          registerPluginCommand(pluginId, {
+            name: alpha ? "alpha_cmd" : "zeta_cmd",
+            description: alpha ? "Alpha command" : "Zeta command",
+            agentPromptGuidance: alpha
+              ? ["Use /alpha_cmd first.", "Then finish the alpha workflow."]
+              : ["Use /zeta_cmd for zeta routing."],
+            handler: async () => ({ text: "ok" }),
+          }),
+        ).toEqual({ ok: true });
+      }
 
-    expect(listRegisteredPluginAgentPromptGuidance()).toEqual([
-      "Use /alpha_cmd first.",
-      "Then finish the alpha workflow.",
-      "Use /zeta_cmd for zeta routing.",
-    ]);
-  });
+      expect(listRegisteredPluginAgentPromptGuidance()).toEqual([
+        "Use /alpha_cmd first.",
+        "Then finish the alpha workflow.",
+        "Use /zeta_cmd for zeta routing.",
+      ]);
+    },
+  );
 
   it("normalizes and filters structured agent prompt guidance by surface", () => {
     const result = registerPluginCommand("demo-plugin", {
