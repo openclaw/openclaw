@@ -1,4 +1,5 @@
 // @vitest-environment node
+
 import { describe, expect, it } from "vitest";
 import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
 import { validateCronForm } from "./index.ts";

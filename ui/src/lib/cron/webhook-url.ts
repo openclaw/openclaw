@@ -1,5 +1,4 @@
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
-
 export function resolveCronWebhookDeliveryError(deliveryTo: string): string | undefined {
   const target = deliveryTo.trim();
   if (!target) {
