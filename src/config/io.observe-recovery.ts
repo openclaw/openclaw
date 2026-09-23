@@ -234,6 +234,16 @@ function* planSuspiciousConfigRead(
   }
   const backupPath = `${configPath}.bak`;
   const lastGoodPath = `${configPath}.last-good`;
+  // With neither recovery source on disk no plan can restore anything, so
+  // return before fingerprinting the file or opening the health worker.
+  // Only when a source may exist does the plan continue, because a missing
+  // `.bak` alongside a promoted `.last-good` payload is still recoverable.
+  if (
+    (yield createConfigBackupMissingEffect(deps, backupPath)) &&
+    (yield createConfigBackupMissingEffect(deps, lastGoodPath))
+  ) {
+    return null;
+  }
   const stat = (yield createConfigRecoveryStatEffect(deps, configPath)) as fs.Stats | null;
   const now = new Date().toISOString();
   const current = createConfigHealthFingerprint({
@@ -287,10 +297,9 @@ function* planSuspiciousConfigRead(
   // Source selection needs only the retained baseline's hash, so it happens
   // before any source-specific preparation: an unusable `.bak` must not gate
   // access to a verified `.last-good` payload promoted for these exact bytes.
-  const preferLastGoodSource = Boolean(
+  const preferLastGoodSource =
     handAuthoredBaseline &&
-    (!backupRaw || !backupParse || hashConfigRaw(backupRaw) !== baseline?.hash),
-  );
+    (!backupRaw || !backupParse || hashConfigRaw(backupRaw) !== baseline?.hash);
   let restoreSourceRaw: string;
   let restoreSourcePath: string;
   let restoreSourceContext: string;

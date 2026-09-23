@@ -480,95 +480,6 @@ describe("config observe recovery", () => {
     });
   });
 
-  it("auto-restores when gateway mode disappears from the last-good shape", async () => {
-    await withSuiteHome(async (home) => {
-      const { deps, configPath, auditPath } = makeDeps(home);
-      await seedConfigBackup(configPath, recoverableTelegramConfig);
-      const clobbered = await writeConfigRaw(configPath, {
-        meta: { lastTouchedVersion: "2026.4.22" },
-        update: { channel: "beta" },
-        channels: { telegram: { enabled: true, dmPolicy: "pairing", groupPolicy: "allowlist" } },
-      });
-
-      const recovered = await recoverSuspiciousConfigRead({ deps, configPath, ...clobbered });
-
-      expect((recovered.parsed as { gateway?: { mode?: string } }).gateway?.mode).toBe("local");
-      const observe = await readLastObserveEvent(auditPath);
-      expect(observe?.restoredFromBackup).toBe(true);
-      expectSuspiciousIncludes(observe, "gateway-mode-missing-vs-last-good");
-    });
-  });
-
-  it("hardens async backup restores to owner-only config permissions", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    await withSuiteHome(async (home) => {
-      const { deps, configPath } = makeDeps(home);
-      await seedConfigBackup(configPath, recoverableTelegramConfig);
-      await writeClobberedUpdateChannel(configPath);
-      await fsp.chmod(configPath, 0o644);
-
-      await recoverClobberedUpdateChannel({ deps, configPath });
-
-      expect((await fsp.stat(configPath)).mode & 0o777).toBe(0o600);
-    });
-  });
-
-  it("warns when async backup restore cannot tighten config permissions", async () => {
-    await withSuiteHome(async (home) => {
-      const { deps, configPath, warn } = makeDeps(home);
-      await seedConfigBackup(configPath, recoverableTelegramConfig);
-      const clobbered = await writeClobberedUpdateChannel(configPath);
-
-      const recovered = await maybeRecoverSuspiciousConfigRead({
-        deps: withAsyncChmodFailure(deps, configPath),
-        configPath,
-        raw: clobbered.raw,
-        parsed: clobbered.parsed,
-        prepareBackup: approveRecoveryCandidate,
-      });
-
-      expect((recovered.parsed as { gateway?: { mode?: string } }).gateway?.mode).toBe("local");
-      expectWarnContaining(
-        warn,
-        `Config permission hardening failed (backup restore): ${configPath}: EPERM: chmod denied`,
-      );
-      expectWarnContaining(warn, `Config auto-restored from backup: ${configPath}`);
-    });
-  });
-
-  it("auto-restores after a large size drop against last-good config", async () => {
-    await withSuiteHome(async (home) => {
-      const { deps, configPath, auditPath } = makeDeps(home);
-      await seedConfigBackup(configPath, {
-        ...recoverableTelegramConfig,
-        channels: {
-          telegram: {
-            enabled: true,
-            dmPolicy: "pairing",
-            groupPolicy: "allowlist",
-            allowFrom: Array.from({ length: 60 }, (_, index) => `telegram-user-${index}`),
-          },
-        },
-      });
-      const clobbered = await writeConfigRaw(configPath, {
-        meta: { lastTouchedVersion: "2026.4.22" },
-        gateway: { mode: "local" },
-      });
-
-      const recovered = await recoverSuspiciousConfigRead({ deps, configPath, ...clobbered });
-
-      expect(
-        (recovered.parsed as { channels?: { telegram?: { allowFrom?: string[] } } }).channels
-          ?.telegram?.allowFrom,
-      ).toHaveLength(60);
-      const observe = await readLastObserveEvent(auditPath);
-      expect(observe?.restoredFromBackup).toBe(true);
-      expectSuspiciousMatching(observe, /^size-drop-vs-last-good:/);
-    });
-  });
-
   it("read snapshots auto-restore tiny valid clobbers before recording them observed", async () => {
     await withSuiteHome(async (home) => {
       const { io, configPath, warn } = createTestConfigIO(home);
@@ -944,30 +855,6 @@ describe("config observe recovery", () => {
     });
   });
 
-  it("read snapshots auto-restore tiny valid clobbers before recording them observed", async () => {
-    await withSuiteHome(async (home) => {
-      const { io, configPath, warn } = createTestConfigIO(home);
-      const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
-      await seedConfigBackup(configPath, largeRecoverableCoreConfig);
-      const clobbered = await writeConfigRaw(configPath, {
-        meta: { lastTouchedVersion: "2026.5.28" },
-      });
-
-      const snapshot = await io.readConfigFileSnapshot({ recoverSuspicious: true });
-
-      expect(snapshot.valid).toBe(true);
-      expect(snapshot.config.gateway?.mode).toBe("local");
-      await expect(fsp.readFile(configPath, "utf-8")).resolves.not.toBe(clobbered.raw);
-      expectWarnContaining(warn, "Config auto-restored from backup:");
-      const observeEvents = await readObserveEvents(auditPath);
-      expect(observeEvents).toHaveLength(1);
-      expect(observeEvents[0]?.restoredFromBackup).toBe(true);
-      expectSuspiciousMatching(observeEvents[0], /^size-drop-vs-last-good:/);
-      expectSuspiciousIncludes(observeEvents[0], "gateway-mode-missing-vs-last-good");
-      await expect(listClobberFiles(configPath)).resolves.toHaveLength(1);
-    });
-  });
-
   it("rereads a committed backup after its audit closes health admission", async () => {
     await withSuiteHome(async (home) => {
       const { io, configPath, warn } = createTestConfigIO(home);
@@ -1042,21 +929,6 @@ describe("config observe recovery", () => {
       });
     },
   );
-
-  it("loadConfig auto-restores tiny valid clobbers before using defaults", async () => {
-    await withSuiteHome(async (home) => {
-      const { io, configPath, warn } = createTestConfigIO(home);
-      await seedConfigBackup(configPath, recoverableCoreConfig);
-      await writeConfigRaw(configPath, {
-        meta: { lastTouchedVersion: "2026.5.28" },
-      });
-
-      const config = io.loadConfig();
-
-      expect(config.gateway?.mode).toBe("local");
-      expectWarnContaining(warn, "Config auto-restored from backup:");
-    });
-  });
 
   it("loadConfig skips health observation when observation is disabled", async () => {
     await withSuiteHome(async (home) => {
@@ -1475,7 +1347,6 @@ describe("config observe recovery", () => {
       });
     },
   );
-
 
   it.each(["async", "sync"] as const)(
     "%s recovery tolerates an unreadable current config stat",

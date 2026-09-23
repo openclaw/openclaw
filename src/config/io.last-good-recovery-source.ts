@@ -51,6 +51,7 @@ export function* prepareLastGoodRecoverySource(params: {
   unknown
 > {
   const { deps } = params;
+  // SAFETY: Both effect runners return the backup payload text or null.
   const lastGoodRaw = (yield createConfigBackupReadEffect(deps, params.lastGoodPath)) as
     | string
     | null;
@@ -66,14 +67,14 @@ export function* prepareLastGoodRecoverySource(params: {
     sync: () => params.prepareBackup(lastGoodCandidate),
     async: () =>
       params.prepareBackupAsync?.(lastGoodCandidate) ?? params.prepareBackup(lastGoodCandidate),
-  }) as ConfigRecoveryCandidatePreparation;
+  }) as ConfigRecoveryCandidatePreparation; // SAFETY: Both effect runners return the typed candidate preparation.
   if (!prepared.ok) {
     return null;
   }
   const lastGoodStat = (yield createConfigRecoveryStatEffect(
     deps,
     params.lastGoodPath,
-  )) as fs.Stats | null;
+  )) as fs.Stats | null; // SAFETY: Both effect runners return the recovery stat or null.
   const fingerprint = createConfigHealthFingerprint({
     raw: lastGoodRaw,
     parsed: lastGoodParse.parsed,
