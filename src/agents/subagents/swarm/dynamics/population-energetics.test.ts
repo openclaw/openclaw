@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   assessAgentEnergetics,
   assessPopulationEnergetics,
+  planEnergeticLaunch,
   type AgentEnergeticObservation,
 } from "./population-energetics.js";
 
@@ -126,5 +127,47 @@ describe("population energetics", () => {
     expect(decision.effectivePopulationSize).not.toBeNull();
     expect(decision.effectivePopulationSize).toBeLessThan(4);
     expect(decision.authority).toBe("search-only");
+  });
+
+  it("turns energy and phase into concrete launch behavior", () => {
+    const critical = planEnergeticLaunch({
+      replicaId: "next",
+      state: {
+        energy: 0.4,
+        temperature: 0.5,
+        mobility: 0.5,
+        noveltyRate: 0.5,
+        evidenceCompleteness: 0.4,
+        verifierDisagreement: 0.9,
+        correlation: 0.4,
+        susceptibility: 0.8,
+        resourcePressure: 0.2,
+      },
+    });
+
+    expect(critical).toMatchObject({
+      regime: "critical",
+      thinking: "high",
+      fastMode: false,
+      suppressSpawn: false,
+    });
+    expect(critical.actionKinds).toEqual(["measure", "deepen"]);
+    expect(critical.directive).toContain("discriminating measurement");
+
+    const jammed = planEnergeticLaunch({
+      replicaId: "blocked",
+      state: {
+        energy: 0.8,
+        temperature: 0.5,
+        mobility: 0.5,
+        noveltyRate: 0.5,
+        evidenceCompleteness: 0.5,
+        verifierDisagreement: 0.1,
+        correlation: 0.5,
+        susceptibility: 0.1,
+        resourcePressure: 0.95,
+      },
+    });
+    expect(jammed).toMatchObject({ regime: "jammed", suppressSpawn: true });
   });
 });

@@ -181,10 +181,18 @@ starts, or call `phase()` when several children belong to the same stage.
 `log()` publishes a short progress note. Progress calls are fire-and-forget.
 They do not delay the script if the UI is unavailable.
 
-The optional `dynamics` field is an experimental generic launch contract. Core
-owns information-boundary filtering plus monotone requests for stricter existing
-admission. It does not ship role/personality names, grant tools, change approvals,
-or set model sampling parameters.
+The optional `dynamics` field is an experimental launch + population-control
+contract. Core still owns information-boundary filtering plus monotone requests for
+stricter existing admission, but measured `dynamics.energetics` can now change the
+next child's real launch posture before native dispatch.
+
+Energy maps to the existing reasoning controls (`thinking` / `fastMode`).
+Temperature and local regime change the task directive: critical lanes deepen around
+a discriminating measurement, glassy lanes are decorrelated, crystalline lanes are
+kept non-mutating for verification, and jammed lanes are not submitted. The resulting
+launch still passes through the existing native admission/sandbox/tool-policy owners;
+dynamics does not grant tools, credentials, approvals, publication, merge, or deploy
+authority.
 
 For example, an independent-verification recipe can choose
 `boundary: "artifact-only"` and require `sandbox: "require"`, a candidate
@@ -193,7 +201,8 @@ fails rather than retrying unsandboxed. Handoff filtering only controls the
 explicit `dynamics.handoff` payload; it is not a security boundary for the
 original task, workspace, memory, or tool visibility.
 
-Caller-side role names and allocation policy are orchestration recipes, not core API values.
+See [Swarm dynamics](/tools/swarm-dynamics) for the energy/temperature model,
+mixed local regimes, bounded peer snapshot, and exact actuation rules.
 
 When `dynamics.candidate` is present, OpenClaw validates the complete
 candidate/source/recipe/policy manifest, computes a stable candidate identity,

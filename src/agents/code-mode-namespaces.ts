@@ -485,6 +485,22 @@ interface DynamicsCandidate {
   policyDigest: string;
 }
 
+interface DynamicsEnergeticState {
+  energy?: number | null;
+  temperature?: number | null;
+  mobility?: number | null;
+  noveltyRate?: number | null;
+  evidenceCompleteness?: number | null;
+  verifierDisagreement?: number | null;
+  correlation?: number | null;
+  susceptibility?: number | null;
+  resourcePressure?: number | null;
+}
+
+interface DynamicsEnergetics extends DynamicsEnergeticState {
+  peers?: Array<DynamicsEnergeticState & { replicaId: string }>;
+}
+
 interface DynamicsOptions {
   boundary: DynamicsBoundary;
   requirements?: {
@@ -494,6 +510,12 @@ interface DynamicsOptions {
   };
   handoff?: DynamicsHandoff;
   candidate?: DynamicsCandidate;
+  /**
+   * Measured search state. When supplied, OpenClaw actuates the next child:
+   * energy changes thinking/fastMode; temperature/regime changes its task posture;
+   * a jammed target is not launched.
+   */
+  energetics?: DynamicsEnergetics;
 }
 
 interface AgentRunOptions {

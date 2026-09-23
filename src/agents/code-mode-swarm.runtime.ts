@@ -126,13 +126,13 @@ async function runAgentSpawnBridge(params: {
   };
   assertCurrent();
   const groupId = resolveCodeModeSwarmGroupId(params.ctx);
+  const preparedDynamics = prepareDynamicsSpawn({
+    task: prompt.trim(),
+    dynamics: options.dynamics,
+    sourceReplicaId: groupId,
+    targetReplicaId: `${params.codeModeRunId}:${params.request.id}`,
+  });
   const spawnInput: Record<PropertyKey, unknown> = {
-    ...prepareDynamicsSpawn({
-      task: prompt.trim(),
-      dynamics: options.dynamics,
-      sourceReplicaId: groupId,
-      targetReplicaId: `${params.codeModeRunId}:${params.request.id}`,
-    }),
     collect: true,
     groupId,
     ...(label ? { label } : {}),
@@ -141,6 +141,10 @@ async function runAgentSpawnBridge(params: {
     ...(agentId ? { agentId } : {}),
     ...(fastMode !== undefined ? { fastMode } : {}),
     ...(schema ? { outputSchema: schema } : {}),
+    // Energetic actuation is intentionally applied last: when measured dynamics
+    // asks to deepen/reheat/freeze, it changes the actual native launch budget
+    // instead of remaining advisory metadata.
+    ...preparedDynamics,
   };
   const requestFingerprint = `sha256:${createHash("sha256")
     .update(stableStringify(spawnInput))

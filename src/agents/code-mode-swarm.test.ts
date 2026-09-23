@@ -423,6 +423,7 @@ describe("Code Mode swarm guest", () => {
     expect(files[0]?.content).toContain("Promise.allSettled");
     expect(files[0]?.content).toContain("schema: AgentJsonSchema");
     expect(files[0]?.content).toContain("dynamics?: DynamicsOptions");
+    expect(files[0]?.content).toContain("energetics?: DynamicsEnergetics");
     expect(files[0]?.content).toContain('"artifact-only"');
   });
 });
@@ -569,6 +570,41 @@ describe("Code Mode swarm host bridge", () => {
       expect(harness.spawnTool.parameters).not.toHaveProperty("properties.collect");
     },
   );
+
+  it("actuates energetic dynamics end to end from guest code into native spawn", async () => {
+    const harness = createSwarmHarness();
+    const result = await runSwarmCode(
+      harness,
+      `return await agents.run("Resolve the disagreement", {
+        label: "adaptive-critical",
+        thinking: "low",
+        fastMode: true,
+        dynamics: {
+          boundary: "isolated",
+          energetics: {
+            energy: 0.2,
+            temperature: 0.5,
+            verifierDisagreement: 0.9,
+            susceptibility: 0.8,
+            resourcePressure: 0.2
+          }
+        }
+      });`,
+    );
+
+    expect(result).toMatchObject({ status: "completed", value: "restored" });
+    expect(swarmMocks.spawnSubagentDirect).toHaveBeenCalledOnce();
+    const input = swarmMocks.spawnSubagentDirect.mock.calls[0]?.[0];
+    expect(input).toMatchObject({
+      collect: true,
+      label: "adaptive-critical",
+      thinking: "high",
+      fastMode: false,
+      context: "isolated",
+    });
+    expect(input?.task).toContain('"regime":"critical"');
+    expect(input?.task).toContain("discriminating measurement");
+  });
 
   it.each([
     { name: "ordinary field", input: { task: 42, collect: true } },

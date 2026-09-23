@@ -12,8 +12,7 @@ export type EnergeticRegime = (typeof ENERGETIC_REGIMES)[number];
 export type EnergyLevel = "low" | "medium" | "high" | "unknown";
 export type DynamicsMetric = number | null;
 
-export type AgentEnergeticObservation = {
-  replicaId: string;
+export type AgentEnergeticState = {
   /**
    * Normalized compute intensity committed to this replica. Energy is distinct
    * from temperature: a verifier may be high-energy and low-temperature.
@@ -28,6 +27,10 @@ export type AgentEnergeticObservation = {
   correlation: DynamicsMetric;
   susceptibility: DynamicsMetric;
   resourcePressure: DynamicsMetric;
+};
+
+export type AgentEnergeticObservation = AgentEnergeticState & {
+  replicaId: string;
 };
 
 export type AgentEnergeticAssessment = {
@@ -77,6 +80,18 @@ export type PopulationEnergeticsDecision = {
   meanCorrelation: number | null;
   effectivePopulationSize: number | null;
   actions: readonly EnergeticAction[];
+};
+
+export type EnergeticLaunchPlan = {
+  authority: "search-only";
+  replicaId: string;
+  regime: EnergeticRegime;
+  energyLevel: EnergyLevel;
+  actionKinds: readonly EnergeticAction["kind"][];
+  thinking?: "low" | "medium" | "high";
+  fastMode?: boolean | "auto";
+  directive: string;
+  suppressSpawn: boolean;
 };
 
 function validateUnitMetric(value: DynamicsMetric, name: string): void {
@@ -379,5 +394,95 @@ export function assessPopulationEnergetics(
     meanCorrelation,
     effectivePopulationSize,
     actions,
+  };
+}
+
+function actionTargets(action: EnergeticAction, replicaId: string): boolean {
+  return "targetReplicaIds" in action && action.targetReplicaIds.includes(replicaId);
+}
+
+function computeControls(
+  energyLevel: EnergyLevel,
+): Pick<EnergeticLaunchPlan, "thinking" | "fastMode"> {
+  if (energyLevel === "low") {
+    return { thinking: "low", fastMode: true };
+  }
+  if (energyLevel === "medium") {
+    return { thinking: "medium", fastMode: "auto" };
+  }
+  if (energyLevel === "high") {
+    return { thinking: "high", fastMode: false };
+  }
+  return {};
+}
+
+function directiveFor(params: {
+  regime: EnergeticRegime;
+  actionKinds: readonly EnergeticAction["kind"][];
+  temperature: DynamicsMetric;
+}): string {
+  const { regime, actionKinds, temperature } = params;
+  if (actionKinds.includes("freeze")) {
+    return "Treat this lane as crystallized: do not mutate the candidate. Independently verify the exact supplied candidate and report concrete evidence or deviations.";
+  }
+  if (actionKinds.includes("measure") || actionKinds.includes("deepen")) {
+    return "Spend the extra reasoning budget on a discriminating measurement that resolves the active disagreement. Do not widen the search until that evidence is obtained.";
+  }
+  if (actionKinds.includes("reheat")) {
+    return "Reheat this lane by breaking correlation with the current basin: change assumptions, decomposition, tools, or search path and seek genuinely novel evidence instead of continuing the same trajectory.";
+  }
+  if (regime === "gas" || (temperature !== null && temperature >= 0.7)) {
+    return "Stay exploratory: generate a distinct hypothesis or path, preserve diversity, and avoid premature convergence on the population consensus.";
+  }
+  if (regime === "liquid") {
+    return "Remain mobile while recombining useful partial structure from the population; prefer progress that preserves alternative paths.";
+  }
+  if (temperature !== null && temperature <= 0.2) {
+    return "Keep exploratory temperature low: preserve established facts and avoid gratuitous mutation while checking the current path carefully.";
+  }
+  return "Follow the task normally; no additional energetic transition is justified by the measured state.";
+}
+
+/**
+ * Convert a measured local/population state into concrete launch behavior.
+ *
+ * This is where the physics model affects the next agent: energy controls the
+ * native reasoning budget, while temperature/regime controls the behavioral
+ * directive. A jammed lane is not launched at all.
+ */
+export function planEnergeticLaunch(params: {
+  replicaId: string;
+  state: AgentEnergeticState;
+  peers?: readonly AgentEnergeticObservation[];
+}): EnergeticLaunchPlan {
+  const current: AgentEnergeticObservation = { replicaId: params.replicaId, ...params.state };
+  const decision = assessPopulationEnergetics([current, ...(params.peers ?? [])]);
+  const assessment = decision.assessments.find((item) => item.replicaId === params.replicaId);
+  if (!assessment) {
+    throw new Error("population energetics lost the target replica");
+  }
+  const targeted = decision.actions.filter((action) => actionTargets(action, params.replicaId));
+  const actionKinds = targeted.map((action) => action.kind);
+  const suppressSpawn = actionKinds.includes("drain");
+  const controls = computeControls(assessment.energyLevel);
+
+  if (actionKinds.includes("deepen") || actionKinds.includes("freeze")) {
+    controls.thinking = "high";
+    controls.fastMode = false;
+  }
+
+  return {
+    authority: "search-only",
+    replicaId: params.replicaId,
+    regime: assessment.regime,
+    energyLevel: assessment.energyLevel,
+    actionKinds,
+    ...controls,
+    directive: directiveFor({
+      regime: assessment.regime,
+      actionKinds,
+      temperature: params.state.temperature,
+    }),
+    suppressSpawn,
   };
 }

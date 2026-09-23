@@ -9,7 +9,7 @@ status: experimental
 OpenClaw dynamics has two deliberately separate layers:
 
 1. a **bounded launch contract** that narrows one native Swarm launch and binds exact candidate identity;
-2. a **search-only energetic model** that treats a heterogeneous multi-agent population as a dynamical system and recommends where compute should move next.
+2. a **search-only energetic model** that treats a heterogeneous multi-agent population as a dynamical system and actuates the next child launch through existing Swarm controls.
 
 Neither layer owns admission, sandboxing, execution authority, cancellation, approvals, publication, merge, or deployment.
 
@@ -85,7 +85,7 @@ The controller returns only search advisories:
 - `drain` — remove pressure before expanding;
 - `hold` — preserve the current search posture.
 
-The controller cannot execute any of those actions by itself.
+The controller never gains execution authority, but its plan is now applied to the next native child launch before admission. Energy changes the actual reasoning budget (`thinking` / `fastMode`), while temperature and regime change the injected task posture. `critical` lanes deepen, `glass` lanes are explicitly decorrelated, `crystal` lanes are told not to mutate the candidate, and a `jammed` lane is not submitted at all. The existing native spawn owner still admits or rejects every launch.
 
 ### Effective population matters more than raw agent count
 
@@ -128,10 +128,50 @@ type DynamicsOptions = {
     recipeDigest: string;
     policyDigest: string;
   };
+  energetics?: {
+    energy?: number | null;
+    temperature?: number | null;
+    mobility?: number | null;
+    noveltyRate?: number | null;
+    evidenceCompleteness?: number | null;
+    verifierDisagreement?: number | null;
+    correlation?: number | null;
+    susceptibility?: number | null;
+    resourcePressure?: number | null;
+    peers?: Array<{
+      replicaId: string;
+      energy?: number | null;
+      temperature?: number | null;
+      mobility?: number | null;
+      noveltyRate?: number | null;
+      evidenceCompleteness?: number | null;
+      verifierDisagreement?: number | null;
+      correlation?: number | null;
+      susceptibility?: number | null;
+      resourcePressure?: number | null;
+    }>;
+  };
 };
 ```
 
 The contract is monotone with respect to authority. It may request a stricter existing sandbox or require identity/artifact fields, but it cannot grant tools, credentials, approvals, publication, merge, or deployment authority.
+
+### Energetic actuation
+
+When `dynamics.energetics` is present, the measured state changes the child that is actually sent to `sessions_spawn`:
+
+- normalized **energy** maps to the native compute controls: low -> `thinking: "low", fastMode: true`; medium -> `thinking: "medium", fastMode: "auto"`; high -> `thinking: "high", fastMode: false`;
+- a **critical** measurement forces `thinking: "high"` and `fastMode: false` and injects a discriminating-measurement directive;
+- a **glass** injects a decorrelation/reheating directive instead of blindly increasing reasoning depth;
+- a **crystal** forces deep, non-mutating verification posture;
+- a **jammed** target suppresses the launch before native dispatch;
+- high/low **temperature** changes the search posture in the task while remaining distinct from energy.
+
+If the caller supplied `thinking` or `fastMode` and measured energetics requires a stronger transition, the energetic plan is applied last and therefore changes the real child launch. Calls without `energetics` preserve the caller's existing controls.
+
+`peers` lets the same control law see a bounded population snapshot. Correlation can therefore reduce effective population size and trigger a decorrelation action for the target lane.
+
+This actuates **the next launch**; it does not mutate an already-running model turn in place.
 
 ## Handoff boundaries
 
@@ -202,4 +242,4 @@ In short:
 
 > OpenClaw should not merely run a swarm; it should reshape the swarm by moving agents between different energy/temperature regimes, spending compute where measured novelty, uncertainty, disagreement, and correlation make the next unit of reasoning most valuable, then crystallize exact candidates for deterministic verification.
 
-The energetic controller remains a pure search-policy primitive in this PR. Automatic actuation is intentionally not added: existing OpenClaw owners still decide whether any recommended spawn, execution, or effect is admitted.
+The energetic controller is search-only, but it is no longer diagnostic-only: its plan changes the next child launch end to end. Existing OpenClaw owners still decide whether that changed launch is admitted and retain all sandbox, tool, approval, publication, merge, and deployment authority.

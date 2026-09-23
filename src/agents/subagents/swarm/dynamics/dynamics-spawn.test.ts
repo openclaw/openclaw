@@ -38,6 +38,51 @@ describe("native dynamics launch preparation", () => {
     expect(result.task).toContain("grants no authority");
   });
 
+  it("actuates measured energy and criticality into the child launch", () => {
+    const result = prepareDynamicsSpawn({
+      ...base,
+      dynamics: {
+        boundary: "isolated",
+        energetics: {
+          energy: 0.2,
+          temperature: 0.5,
+          mobility: 0.5,
+          noveltyRate: 0.5,
+          evidenceCompleteness: 0.4,
+          verifierDisagreement: 0.9,
+          correlation: 0.4,
+          susceptibility: 0.8,
+          resourcePressure: 0.2,
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      context: "isolated",
+      thinking: "high",
+      fastMode: false,
+    });
+    expect(result.task).toContain("Energetic actuation");
+    expect(result.task).toContain('"regime":"critical"');
+    expect(result.task).toContain("discriminating measurement");
+  });
+
+  it("suppresses a jammed launch instead of spending more compute", () => {
+    expect(() =>
+      prepareDynamicsSpawn({
+        ...base,
+        dynamics: {
+          boundary: "isolated",
+          energetics: {
+            energy: 0.8,
+            temperature: 0.5,
+            resourcePressure: 0.95,
+          },
+        },
+      }),
+    ).toThrow("suppressed spawn for jammed lane");
+  });
+
   it("binds the generic contract and host-owned lineage into reproducible task bytes", () => {
     const first = prepareDynamicsSpawn({ ...base, dynamics: { boundary: "isolated" } });
     expect(first).toEqual(prepareDynamicsSpawn({ ...base, dynamics: { boundary: "isolated" } }));

@@ -167,6 +167,50 @@ describe("dynamics through the actual native spawn bridge", () => {
     });
   });
 
+  it("lets measured critical dynamics change the real native child budget and prompt", async () => {
+    const fixture = setup(
+      {
+        boundary: "isolated",
+        energetics: {
+          energy: 0.2,
+          temperature: 0.5,
+          verifierDisagreement: 0.9,
+          susceptibility: 0.8,
+          resourcePressure: 0.2,
+        },
+      },
+      // Deliberately conflict with the controller. Measured criticality must win.
+      { label: "adaptive-lane", thinking: "low", fastMode: true },
+    );
+
+    await codeModeSwarmHandlers.agentSpawn(fixture.params);
+    const input = fixture.callExactId.mock.calls[0]![1];
+    expect(input).toMatchObject({
+      label: "adaptive-lane",
+      thinking: "high",
+      fastMode: false,
+      context: "isolated",
+    });
+    expect(input.task).toContain('"regime":"critical"');
+    expect(input.task).toContain("discriminating measurement");
+  });
+
+  it("does not dispatch a new native child when measured state is jammed", async () => {
+    const fixture = setup({
+      boundary: "isolated",
+      energetics: {
+        energy: 0.8,
+        temperature: 0.4,
+        resourcePressure: 0.95,
+      },
+    });
+
+    await expect(codeModeSwarmHandlers.agentSpawn(fixture.params)).rejects.toThrow(
+      "suppressed spawn for jammed lane",
+    );
+    expect(fixture.callExactId).not.toHaveBeenCalled();
+  });
+
   it("leaves legacy calls untouched", async () => {
     const fixture = setup();
     await codeModeSwarmHandlers.agentSpawn(fixture.params);
