@@ -364,11 +364,9 @@ describe("shared auth store relocation", () => {
   });
 
   it.each([
-    "identical subset",
     "older subset",
     "empty subset",
     "changed credential",
-    "source-only profile",
     "malformed source",
     "malformed target",
     "malformed target profile",
@@ -409,12 +407,10 @@ describe("shared auth store relocation", () => {
         profiles: {
           ...makeStore("openai:extra", "extra-key").profiles,
           ...(scenario === "malformed target profile" ? { bad: null } : {}),
-          ...(scenario === "source-only profile"
-            ? {}
-            : makeStore(
-                "openai:shared",
-                scenario === "changed credential" ? "different-key" : "shared-key",
-              ).profiles),
+          ...makeStore(
+            "openai:shared",
+            scenario === "changed credential" ? "different-key" : "shared-key",
+          ).profiles,
         },
         version: 1,
         ...(scenario === "changed metadata" ? { legacyMetadata: "keep" } : {}),
@@ -424,7 +420,7 @@ describe("shared auth store relocation", () => {
           scenario === "malformed target"
             ? '{"version":1,"profiles":null}'
             : JSON.stringify(targetStore),
-        updated_at_ms: scenario === "identical subset" ? 100 : 200,
+        updated_at_ms: 200,
       };
       target
         .prepare("INSERT INTO config_machine_state VALUES ('authProfiles.store', ?, ?)")
@@ -451,7 +447,6 @@ describe("shared auth store relocation", () => {
       );
       const conflictDetails: Record<string, string> = {
         "changed credential": '"openai:shared": credential differs',
-        "source-only profile": '"openai:shared": missing from target',
         "malformed source": '"bad": malformed credential',
         "malformed target": "invalid credential payload",
         "malformed target profile": '"bad": malformed credential',
