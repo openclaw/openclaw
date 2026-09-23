@@ -26,18 +26,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -591,20 +588,6 @@ private fun ChatImagePreview(
         contentScale = ContentScale.Fit,
         modifier = Modifier.matchParentSize().then(anchor?.modifier ?: Modifier),
       )
-      Surface(
-        modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp).size(32.dp),
-        shape = CircleShape,
-        color = Color.Black.copy(alpha = 0.62f),
-        contentColor = Color.White,
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(
-            imageVector = Icons.Default.OpenInFull,
-            contentDescription = nativeString("Open image preview"),
-            modifier = Modifier.size(17.dp),
-          )
-        }
-      }
     }
   }
   if (previewVisible) {

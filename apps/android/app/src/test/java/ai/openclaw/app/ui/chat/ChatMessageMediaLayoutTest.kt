@@ -23,10 +23,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithContentDescription
@@ -84,7 +87,7 @@ class ChatMessageMediaLayoutTest {
     awaitImages(1)
     composeRule.onNodeWithContentDescription("Garden 5", useUnmergedTree = true).assertIsDisplayed()
     capture("five-images-next-page")
-    composeRule.onNodeWithContentDescription("Open image preview").performClick()
+    composeRule.onNodeWithContentDescription("Garden 5", useUnmergedTree = true).performTouchInput { click(center) }
     composeRule.onNodeWithContentDescription("Close image preview").assertIsDisplayed().performClick()
     composeRule.onNodeWithText("Previous images").performClick()
     awaitImages(4)
@@ -213,6 +216,12 @@ class ChatMessageMediaLayoutTest {
     val managed = bounds("Garden 2")
     assertEquals(inline.top.value, managed.top.value, 1f)
     assertEquals((inline.right - inline.left).value, (managed.right - managed.left).value, 1f)
+    composeRule.onAllNodesWithContentDescription("Open image preview").assertCountEquals(0)
+    for (label in listOf("image/png", "Garden 2")) {
+      composeRule.onNodeWithContentDescription(label).assert(hasClickAction())
+      composeRule.onNodeWithContentDescription(label, useUnmergedTree = true).performTouchInput { click(center) }
+      composeRule.onNodeWithContentDescription("Close image preview").assertIsDisplayed().performClick()
+    }
   }
 
   @Test
@@ -343,8 +352,11 @@ class ChatMessageMediaLayoutTest {
   }
 
   private fun awaitImages(count: Int) {
-    composeRule.waitUntil { composeRule.onAllNodesWithContentDescription("Open image preview").fetchSemanticsNodes().size == count }
-    composeRule.onAllNodesWithContentDescription("Open image preview").assertCountEquals(count)
+    fun visibleImages(): Int =
+      composeRule.onAllNodesWithContentDescription("Garden", substring = true, useUnmergedTree = true).fetchSemanticsNodes().size +
+        composeRule.onAllNodesWithContentDescription("image/png", useUnmergedTree = true).fetchSemanticsNodes().size
+    composeRule.waitUntil { visibleImages() == count }
+    assertEquals(count, visibleImages())
   }
 
   private fun bounds(label: String) = composeRule.onNodeWithContentDescription(label, useUnmergedTree = true).getUnclippedBoundsInRoot()
