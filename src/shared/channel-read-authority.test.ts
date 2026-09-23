@@ -108,7 +108,7 @@ describe("channel read completion ownership", () => {
   });
 
   it("publishes checked acceptance before asynchronous resource teardown", async () => {
-    const closing = createDeferred();
+    const closing = createDeferred<{ accepted: boolean; publishCalls: unknown[][] }>();
     const release = createDeferred();
     const publish = vi.fn();
     let active = true;
@@ -122,9 +122,10 @@ describe("channel read completion ownership", () => {
         captureChannelReadScope()!.registerResource({
           key: "created-media",
           settle: async (accepted) => {
-            expect(accepted).toBe(true);
-            expect(publish).toHaveBeenCalledExactlyOnceWith("accepted result");
-            closing.resolve();
+            closing.resolve({
+              accepted,
+              publishCalls: publish.mock.calls.map((args) => [...args]),
+            });
             await release.promise;
           },
         });
@@ -133,9 +134,19 @@ describe("channel read completion ownership", () => {
       undefined,
       publish,
     );
-    await closing.promise;
-    active = false;
-    release.resolve();
+    const operationSettled = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    try {
+      const observed = await closing.promise;
+      expect(observed.accepted).toBe(true);
+      expect(observed.publishCalls).toEqual([["accepted result"]]);
+      active = false;
+    } finally {
+      release.resolve();
+      await operationSettled;
+    }
     await expect(operation).resolves.toBe("accepted result");
   });
 

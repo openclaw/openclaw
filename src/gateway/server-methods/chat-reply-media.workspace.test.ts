@@ -139,7 +139,10 @@ describe("WebChat reply media workspace ownership", () => {
             managedMediaLocalRoots: getWebchatReplyMediaLocalRoots(scope),
             assertCurrent: scope.assertCurrent,
           });
-    const rejected = expect(delivery).rejects.toThrow("Session media access changed");
+    const deliverySettled = delivery.then(
+      () => undefined,
+      () => undefined,
+    );
     try {
       await opened.promise;
       await replaceSessionEntry(target, {
@@ -150,8 +153,9 @@ describe("WebChat reply media workspace ownership", () => {
       });
     } finally {
       release.resolve();
+      await deliverySettled;
     }
-    await rejected;
+    await expect(delivery).rejects.toThrow("Session media access changed");
     expect(readCounts.length).toBeGreaterThan(0);
     expect(readCounts.reduce((total, count) => total + count(), 0)).toBe(0);
     expect(await fs.readFile(source)).toEqual(

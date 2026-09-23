@@ -106,8 +106,9 @@ it.each([
         { kind: "raw", payload: { mediaUrls: [audioSource], trustedLocalMedia: true } },
       ],
     });
-    const rejected = expect(delivery).rejects.toThrow(
-      change === "abort" ? "aborted" : "Session media access changed",
+    const deliverySettled = delivery.then(
+      () => undefined,
+      () => undefined,
     );
     try {
       await opened.promise;
@@ -128,8 +129,11 @@ it.each([
       }
     } finally {
       release.resolve();
+      await deliverySettled;
     }
-    await rejected;
+    await expect(delivery).rejects.toThrow(
+      change === "abort" ? "aborted" : "Session media access changed",
+    );
     expect(audioReadCounts.length).toBeGreaterThan(0);
     expect(audioReadCounts.reduce((total, count) => total + count(), 0)).toBe(0);
     expect(await fs.readdir(outbound)).toEqual([]);
