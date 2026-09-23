@@ -487,6 +487,13 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "transcripts",
+    description: "Inspect and manage meeting transcript captures",
+    sectionId: "media",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "tts",
     description: "Text-to-speech conversion",
     sectionId: "media",
@@ -580,10 +587,9 @@ export function resolveCoreToolProfilePolicy(profile?: string): ToolProfilePolic
   };
 }
 
-/** Lists core tools grouped into UI sections. */
+/** Lists configurable core tools; per-run authorization belongs to runtime assembly. */
 export function listCoreToolSections(params?: {
   swarmEnabled?: boolean;
-  githubPublicationAvailable?: boolean;
   personalInstructionsEnabled?: boolean;
 }): CoreToolSection[] {
   // Callers resolve the swarm gate and pass the fact in; resolving config here
@@ -596,10 +602,7 @@ export function listCoreToolSections(params?: {
       .filter(
         (tool) =>
           (tool.id !== "agents_wait" || swarmEnabled) &&
-          (tool.id !== "personal_instructions" || params?.personalInstructionsEnabled === true) &&
-          (tool.id !== "github_identity_status" ||
-            params?.githubPublicationAvailable !== undefined) &&
-          (tool.id !== "github_publish" || params?.githubPublicationAvailable === true),
+          (tool.id !== "personal_instructions" || params?.personalInstructionsEnabled === true),
       )
       .map((tool) => ({
         id: tool.id,

@@ -26,6 +26,11 @@ that session. Global, agent, provider, allow/deny, owner, filesystem, sandbox, a
 execution restrictions still apply. A catalog entry does not mean a tool or plugin
 is configured, connected, or authorized in the current session.
 
+The agent's **Tools** settings include run-dependent tools such as
+`github_identity_status`, `github_publish`, and `transcripts`, so **Disable All**
+also adds explicit denies for them. Their catalog rows do not bypass the GitHub
+workspace and identity checks or the meeting transcript caller checks.
+
 | Profile     | Includes                                                                                                                                                                                                                                                                         |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `minimal`   | `session_status`, `gateway` (update only)                                                                                                                                                                                                                                        |
@@ -69,7 +74,7 @@ whether the tool is available. Subagent and non-owner restrictions still apply.
 | `group:messaging`  | `message`                                                                                                                                                                                                                                                |
 | `group:nodes`      | `nodes`, `computer`                                                                                                                                                                                                                                      |
 | `group:agents`     | `agents_list`, `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`                                                                                                                                                   |
-| `group:media`      | `view_image`, `image_generate`, `music_generate`, `video_generate`, `tts`, `pdf`                                                                                                                                                                         |
+| `group:media`      | `view_image`, `image_generate`, `music_generate`, `video_generate`, `transcripts`, `tts`, `pdf`                                                                                                                                                          |
 | `group:openclaw`   | All built-in tools above except `read`/`write`/`edit`/`apply_patch`/`exec`/`process`/`canvas` (excludes plugin tools)                                                                                                                                    |
 | `group:plugins`    | Tools owned by loaded plugins, including configured MCP servers exposed through `bundle-mcp`                                                                                                                                                             |
 
@@ -85,6 +90,10 @@ to select it with a restricted profile. Catalog discovery does not bypass its
 owner, sandbox, direct-call, or execution permission checks.
 
 `pdf` belongs to both `group:media` and `group:openclaw`. Group denies also cover PDF and override an explicit `pdf` allow entry. If an existing configuration should keep PDF access, remove or narrow the conflicting group deny. Group grants do not bypass [PDF model and authentication requirements](/tools/pdf).
+
+`transcripts` also belongs to `group:media` and `group:openclaw`. It is not added
+to `minimal`, `coding`, or `messaging`; restricted profiles can select it with
+`tools.alsoAllow`. The current caller and capture access checks still apply.
 
 ## MCP and plugin tools inside sandbox tool policy
 
