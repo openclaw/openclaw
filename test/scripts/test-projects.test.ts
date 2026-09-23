@@ -5376,8 +5376,18 @@ describe("test selector native source facts", () => {
           matches: ["scripts/tool.mts", "scripts/tool"],
           references: ["scripts/tool.mts"],
         };
-        const scanner = path.join(fs.realpathSync(cwd), "test-selector-source-facts.mts");
-        fs.copyFileSync(path.resolve("scripts/lib/test-selector-source-facts.mts"), scanner);
+        for (const file of [
+          "scripts/lib/test-selector-source-facts.mts",
+          "src/infra/node-runtime-executable.ts",
+        ]) {
+          const target = path.join(cwd, file);
+          fs.mkdirSync(path.dirname(target), { recursive: true });
+          fs.copyFileSync(path.resolve(file), target);
+        }
+        const scanner = path.join(
+          fs.realpathSync(cwd),
+          "scripts/lib/test-selector-source-facts.mts",
+        );
         const native = spawnSync(process.execPath, [scanner], {
           cwd,
           input: JSON.stringify({ files, terms: ["scripts/tool.mts", "scripts/tool"] }),

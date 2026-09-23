@@ -1,10 +1,11 @@
-// Pre-install test selectors need a Node-only read boundary; no package or application imports.
+// Pre-install selectors use only built-ins and the shared Node executable resolver.
 import { spawnSync } from "node:child_process";
 import { lstatSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { stripTypeScriptTypes } from "node:module";
+import nodeModule from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { resolveNodeRuntimeExecutable } from "../../src/infra/node-runtime-executable.ts";
 
 type SourceFile = { file: string; parseImports: boolean };
 type SourceToken = { value: string; literal?: boolean; statementEnd?: boolean };
@@ -267,7 +268,7 @@ function importFacts(
   if (possibleJsx && !uncertain && classifyTypes) {
     try {
       // Valid TypeScript generics/comparisons need no widening. Node rejects JSX.
-      runtimeSource = stripTypeScriptTypes(source, { mode: "strip" });
+      runtimeSource = nodeModule.stripTypeScriptTypes(source, { mode: "strip" });
     } catch {
       unresolvedJsx = true;
     }
@@ -357,7 +358,7 @@ function importFacts(
   try {
     // Node's parser distinguishes import types from calls and preserves named
     // type-import side effects, matching this repo's verbatimModuleSyntax contract.
-    runtimeSource ??= stripTypeScriptTypes(source, { mode: "strip" });
+    runtimeSource ??= nodeModule.stripTypeScriptTypes(source, { mode: "strip" });
   } catch {
     // JSX and transform-required syntax remain conservatively connected.
     return { imports: [...imports], typeOnlyImports: [] };
@@ -489,7 +490,7 @@ export function isErasedTypeScriptModuleSource(source: string): boolean {
   }
   let runtime: ReturnType<typeof sourceTokens>;
   try {
-    runtime = sourceTokens(stripTypeScriptTypes(source, { mode: "strip" }));
+    runtime = sourceTokens(nodeModule.stripTypeScriptTypes(source, { mode: "strip" }));
   } catch {
     return false;
   }
@@ -612,7 +613,11 @@ export function readTestSelectorSourceFacts(
   // exits before we return; inheriting loader hooks would reintroduce tsx work.
   const env = { ...process.env };
   delete env.NODE_OPTIONS;
-  const result = spawnSync(process.execPath, [fileURLToPath(import.meta.url)], {
+  const executable = resolveNodeRuntimeExecutable({ env });
+  if (!executable) {
+    throw new Error("A Node executable is required for test selection; add node to PATH.");
+  }
+  const result = spawnSync(executable, [fileURLToPath(import.meta.url)], {
     cwd,
     env,
     input: JSON.stringify({ files, terms }),
