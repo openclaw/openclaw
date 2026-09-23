@@ -82,6 +82,13 @@ export type WorkerDesktopLaunchResult = {
 
 /** Request-facing lifecycle methods, kept separate from persistence and provider internals. */
 export type WorkerEnvironmentServiceContract = {
+  /** Current explicit provider attestation, never the persisted legacy default. */
+  getDedicatedNodeLeaseSignal(environmentId: string): AbortSignal | undefined;
+  captureSessionAttachment(identity: WorkerEnvironmentSessionIdentity): {
+    binding: WorkerEnvironmentAttachment;
+    assertCurrent(): void;
+    touch(): Promise<void>;
+  };
   getSessionAttachment(sessionId: string): WorkerEnvironmentAttachment | undefined;
   findSessionAttachment(
     identity: Pick<WorkerEnvironmentSessionIdentity, "agentId" | "sessionKey">,

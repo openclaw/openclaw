@@ -22,7 +22,7 @@ import { crabboxState } from "./crabbox-state.test-support.js";
 import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
 import { operationLeaseId, parseCrabboxProfile } from "./crabbox-worker-profile.js";
 import { createCrabboxWorkerProvider } from "./crabbox-worker-provider.js";
-import { classProfile, mappedCatalog } from "./crabbox-worker-provider.test-support.js";
+import { active, classProfile, mappedCatalog } from "./crabbox-worker-provider.test-support.js";
 import {
   CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS,
   CRABBOX_LIFECYCLE_TIMEOUT_MS,
@@ -310,7 +310,7 @@ describe("Crabbox worker provider", () => {
       { id: "standard", label: "Standard", os: "linux", cpu: 8, default: true },
     ]);
     const lease = { ...(await provider.provision(profile, OPERATION_ID)), profile };
-    expect(await provider.inspect(lease)).toEqual({ status: "active" });
+    expect(await provider.inspect(lease)).toEqual(active);
     await provider.destroy(lease);
 
     expect(runCommand.mock.calls.map(([argv]) => argv[1])).toEqual(
@@ -2459,7 +2459,7 @@ describe("Crabbox worker provider", () => {
       );
       expect(calls[2]?.argv.join(" ")).not.toContain("setup-code");
       const lease = lifecycleLease(LEASE_ID, profile);
-      await expect(provider.inspect(lease)).resolves.toEqual({ status: "active" });
+      await expect(provider.inspect(lease)).resolves.toEqual(active);
       await expect(provider.destroy(lease)).resolves.toBeUndefined();
       expect(calls.slice(3).map(({ argv, options }) => [argv[1], options.timeoutMs])).toEqual([
         ["inspect", lifecycleTimeoutMs],
@@ -3070,7 +3070,7 @@ describe("Crabbox worker provider", () => {
     providers.add(provider);
     const lease = lifecycleLease(LEASE_ID, { ...PROFILE, binary, provider: "coder" });
 
-    await expect(provider.inspect(lease)).resolves.toStrictEqual({ status: "active" });
+    await expect(provider.inspect(lease)).resolves.toStrictEqual(active);
     await expect(provider.destroy(lease)).resolves.toBeUndefined();
     expect(calls).toEqual([
       [binary, "inspect", "--provider", "coder", "--network", "public", "--id", LEASE_ID, "--json"],
@@ -3252,7 +3252,7 @@ describe("Crabbox worker provider", () => {
     const lease = lifecycleLease();
 
     try {
-      await expect(provider.inspect(lease)).resolves.toStrictEqual({ status: "active" });
+      await expect(provider.inspect(lease)).resolves.toStrictEqual(active);
       await vi.advanceTimersByTimeAsync(0);
       await provider.inspect(lease);
       await vi.advanceTimersByTimeAsync(180_000);
@@ -3288,7 +3288,7 @@ describe("Crabbox worker provider", () => {
     const lease = lifecycleLease();
 
     try {
-      await expect(provider.inspect(lease)).resolves.toStrictEqual({ status: "active" });
+      await expect(provider.inspect(lease)).resolves.toStrictEqual(active);
       await vi.advanceTimersByTimeAsync(60_012);
 
       expect(warnings).toEqual([
@@ -3334,7 +3334,7 @@ describe("Crabbox worker provider", () => {
       const lease = lifecycleLease();
 
       try {
-        await expect(provider.inspect(lease)).resolves.toStrictEqual({ status: "active" });
+        await expect(provider.inspect(lease)).resolves.toStrictEqual(active);
         await vi.advanceTimersByTimeAsync(0);
         expect(heartbeatAttempts).toBe(1);
         expect(warnings).toEqual([
@@ -3386,7 +3386,7 @@ describe("Crabbox worker provider", () => {
       });
       const lease = lifecycleLease();
       try {
-        await expect(provider.inspect(lease)).resolves.toEqual({ status: "active" });
+        await expect(provider.inspect(lease)).resolves.toEqual(active);
         await vi.advanceTimersByTimeAsync(0);
         expect(heartbeats).toHaveBeenCalledTimes(1);
         inspection = inspectJson({ state, ready });

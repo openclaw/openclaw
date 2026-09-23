@@ -64,13 +64,19 @@ export function createWorkerEnvironmentSessionAttachments(
   };
   const project = (
     record: WorkerEnvironmentAttachmentRecord | undefined,
+    prepared?: WorkerEnvironmentSessionIdentity,
   ): WorkerEnvironmentAttachment | undefined => {
     if (
       !record ||
       record.closedAtMs !== null ||
       closingAttachments.has(record.sessionId) ||
       options.isStopping() ||
-      !currentSession(record)
+      !(prepared
+        ? record.sessionId === prepared.sessionId &&
+          record.sessionKey === prepared.sessionKey &&
+          record.agentId === prepared.agentId &&
+          record.sessionLifecycleRevision === prepared.sessionLifecycleRevision
+        : currentSession(record))
     ) {
       return undefined;
     }
@@ -94,8 +100,11 @@ export function createWorkerEnvironmentSessionAttachments(
       ownerEpoch: environment.ownerEpoch,
     };
   };
-  const assertSessionAttachment = (binding: WorkerEnvironmentAttachment) => {
-    const current = project(store.getSessionAttachmentRecord(binding.sessionId));
+  const assertSessionAttachment = (
+    binding: WorkerEnvironmentAttachment,
+    prepared?: WorkerEnvironmentSessionIdentity,
+  ) => {
+    const current = project(store.getSessionAttachmentRecord(binding.sessionId), prepared);
     if (
       !current ||
       current.environmentId !== binding.environmentId ||
@@ -155,6 +164,28 @@ export function createWorkerEnvironmentSessionAttachments(
     }
   };
   const attachments = {
+    captureSessionAttachment(identity: WorkerEnvironmentSessionIdentity) {
+      // Admission already read the canonical session. Its identity plus synchronous
+      // retirement fences avoid repeating that SQLite read on each proxy connection.
+      const binding = project(store.getSessionAttachmentRecord(identity.sessionId), identity);
+      if (!binding) {
+        throw new Error("No current environment is attached to this conversation");
+      }
+      const assertCurrent = () => assertSessionAttachment(binding, identity);
+      return {
+        binding,
+        assertCurrent,
+        async touch() {
+          await store.ready();
+          assertCurrent();
+          await store.touchSessionAttachment(
+            store.getSessionAttachmentRecord(binding.sessionId)!,
+            assertCurrent,
+          );
+          assertCurrent();
+        },
+      };
+    },
     cancelSessionAttachmentCreations() {
       for (const pending of creations.values()) {
         for (const creation of pending) {

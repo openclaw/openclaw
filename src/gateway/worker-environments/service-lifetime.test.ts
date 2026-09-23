@@ -9,6 +9,65 @@ type WorkerLifecycleLease = support.WorkerLifecycleLease;
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
+  it("requires fresh explicit dedicated-node inspection for restricted previews without changing legacy classification", async () => {
+    const node = await support.seedReadyNodeDesktop("preview-dedicated");
+    let sharedHost: boolean | undefined;
+    let inspectionFails = false;
+    const provider = support.createProvider({
+      resolveAllocation: async () => ({ leaseId: node.leaseId!, sharedHost: false }),
+      inspect: async () => {
+        if (inspectionFails) {
+          throw new Error("provider temporarily unavailable");
+        }
+        return { status: "active", ...(sharedHost === undefined ? {} : { sharedHost }) };
+      },
+    });
+    const service = support.createService(provider);
+    expect(Boolean(service.getDedicatedNodeLeaseSignal(node.environmentId))).toBe(false);
+    await service.reconcileOnce();
+    expect(service.get(node.environmentId)?.sharedHost).toBe(false);
+    expect(Boolean(service.getDedicatedNodeLeaseSignal(node.environmentId))).toBe(false);
+    sharedHost = false;
+    await service.reconcileOnce();
+    expect(Boolean(service.getDedicatedNodeLeaseSignal(node.environmentId))).toBe(true);
+    const firstQualification = service.getDedicatedNodeLeaseSignal(node.environmentId)!;
+    await service.reconcileOnce();
+    expect(service.getDedicatedNodeLeaseSignal(node.environmentId)).toBe(firstQualification);
+    expect(firstQualification.aborted).toBe(false);
+    inspectionFails = true;
+    await service.reconcileOnce();
+    expect(service.getDedicatedNodeLeaseSignal(node.environmentId)).toBe(firstQualification);
+    expect(firstQualification.aborted).toBe(false);
+    inspectionFails = false;
+    sharedHost = undefined;
+    await service.reconcileOnce();
+    expect(service.get(node.environmentId)?.sharedHost).toBe(false);
+    expect(Boolean(service.getDedicatedNodeLeaseSignal(node.environmentId))).toBe(false);
+    expect(firstQualification.aborted).toBe(true);
+    sharedHost = false;
+    await service.reconcileOnce();
+    expect(Boolean(service.getDedicatedNodeLeaseSignal(node.environmentId))).toBe(true);
+    sharedHost = true;
+    await service.reconcileOnce();
+    expect(Boolean(service.getDedicatedNodeLeaseSignal(node.environmentId))).toBe(false);
+    sharedHost = false;
+    await service.reconcileOnce();
+    expect(Boolean(service.getDedicatedNodeLeaseSignal(node.environmentId))).toBe(true);
+    await service.stop();
+    expect(Boolean(service.getDedicatedNodeLeaseSignal(node.environmentId))).toBe(false);
+    const restarted = support.createService(provider);
+    expect(Boolean(restarted.getDedicatedNodeLeaseSignal(node.environmentId))).toBe(false);
+    await restarted.reconcileOnce();
+    expect(Boolean(restarted.getDedicatedNodeLeaseSignal(node.environmentId))).toBe(true);
+    const epoch = restarted.get(node.environmentId)!.ownerEpoch;
+    const restartedQualification = restarted.getDedicatedNodeLeaseSignal(node.environmentId)!;
+    await support.testState.store.revokeEnvironmentCredential(node.environmentId, {
+      expectedOwnerEpoch: epoch,
+    });
+    expect(Boolean(restarted.getDedicatedNodeLeaseSignal(node.environmentId))).toBe(false);
+    expect(restartedQualification.aborted).toBe(true);
+  });
+
   it("exposes the catalog display identity without allocating a worker", () => {
     const provider = support.createProvider({ resolveDisplayId: () => "aws" });
     const provision = vi.spyOn(provider, "provision");

@@ -146,7 +146,7 @@ describe("worker node portal carrier", () => {
         ownerEpoch: record.ownerEpoch,
         remotePort: 4321,
       }),
-    ).rejects.toThrow("sessions.move");
+    ).rejects.toThrow("reconnect or update the worker node, then retry");
     proof.workerHost.portalStream = NODE_WORKER_PORTAL_STREAM_VERSION;
     proofCurrent = false;
     await expect(carrier.supports(record.environmentId, record.ownerEpoch)).resolves.toBe(false);
@@ -194,7 +194,9 @@ describe("worker node portal carrier", () => {
     await portal.close();
     expect(firstStream.destroyed).toBe(true);
     expect(secondStream.destroyed).toBe(true);
-    await expect(portal.connect()).rejects.toThrow("sessions.move");
+    await expect(portal.connect()).rejects.toThrow(
+      "reconnect or update the worker node, then retry",
+    );
   });
 
   it.each([

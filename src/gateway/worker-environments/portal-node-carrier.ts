@@ -32,7 +32,7 @@ type ActiveNodePortalStream = {
 };
 
 const UNSUPPORTED_NODE_PORTAL_MESSAGE =
-  "Portals require a current cloud-worker node with portal stream support; move the session back to the gateway with sessions.move";
+  "Portals require a connected cloud-worker node with portal-stream support; reconnect or update the worker node, then retry";
 
 /** Opens one ticketed node connection per request while its durable portal owner remains current. */
 export function createWorkerNodePortalCarrier(options: {

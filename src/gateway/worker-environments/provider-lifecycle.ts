@@ -9,6 +9,7 @@ import {
 } from "../../plugins/types.js";
 import { verifyWorkerAdmissionHandshake } from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
+import { createDedicatedNodeLeaseAttestations } from "./dedicated-node-lease-attestations.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";
@@ -23,7 +24,6 @@ import { createWorkerRuntimeRefresher } from "./provider-runtime-refresh.js";
 import {
   requireProviderOperationTimeoutMs,
   requireWorkerLease,
-  requireWorkerLeaseStatus,
   requireWorkerProfile as validateWorkerProfile,
   resolveWorkerLeaseTransportError,
 } from "./service-validation.js";
@@ -36,6 +36,9 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
   const { store, callBootstrap, callProvider, inState, move, saveError, serviceError } = options;
   const now = options.now ?? Date.now;
   const { commitReady, ensurePendingCredential } = options.credentialBroker;
+  const dedicatedLeases = createDedicatedNodeLeaseAttestations(options, (record) =>
+    requireCurrentOwner(record),
+  );
 
   const requireWorkerProfile = (value: unknown) => validateWorkerProfile(value, serviceError);
 
@@ -59,7 +62,12 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     finishConfirmedProvisionCleanup,
     preserveIndeterminateProvisionCleanup,
     destroy,
-  } = createWorkerProviderOwnerLifecycle({ ...options, providerFor, requireWorkerProfile });
+  } = createWorkerProviderOwnerLifecycle({
+    ...options,
+    providerFor,
+    requireWorkerProfile,
+    onOwnerStopped: dedicatedLeases.retire,
+  });
 
   const machineCatalog = createWorkerMachineCatalog({
     getConfig: options.getConfig,
@@ -392,7 +400,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       );
     }
     if (lease.node) {
-      return await nodeProvisioning.finish(
+      const ready = await nodeProvisioning.finish(
         record,
         lease,
         provider,
@@ -402,6 +410,8 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         projectOperation?.getPreparedWorkspace(),
         beforeProvision,
       );
+      dedicatedLeases.note(ready, lease.sharedHost === false);
+      return ready;
     }
     const bootstrapping = await move(record, "bootstrapping", patch);
     let installation = preparedInstallation;
@@ -535,21 +545,15 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     if (await retireMismatchedWorkerLease(record, provider, store, finishDestroy)) {
       return;
     }
-    const inspection = await callProvider(record.environmentId, () =>
-      provider.inspect(lifecycleLease(record, leaseId)),
-    )
-      .then(requireWorkerLeaseStatus)
-      .catch(async (error: unknown) => {
-        await saveError(record, error);
-        return undefined;
-      });
+    const lease = lifecycleLease(record, leaseId);
+    const inspection = await dedicatedLeases.inspect(record, provider, lease);
     if (!inspection) {
       return;
     }
+    requireCurrentOwner(record);
     const { status } = inspection;
     const teardownExpected = record.destroyRequestedAtMs !== null || record.state === "destroying";
     if (status === "destroyed") {
-      requireCurrentOwner(record);
       const requested =
         record.destroyRequestedAtMs === null
           ? await store.requestDestroy({
@@ -571,7 +575,6 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       return;
     }
     if (status === "unknown") {
-      requireCurrentOwner(record);
       // Provider loss fences placement authority before remote cleanup, which may remain
       // unreachable after node revocation. Preserve its exact attachment until stop is proven.
       const requested = teardownExpected
@@ -593,18 +596,8 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       // holding state out of the unknown/orphan path until pairing itself is removed.
       return;
     }
-    const inspectedSharedHost = inspection.sharedHost === true;
-    if (record.sharedHost !== null && record.sharedHost !== inspectedSharedHost) {
-      // Workspace actions capture isolation at tunnel creation. Fence the old actions before
-      // committing a provider-owned change so no reconciliation can use stale host scope.
-      record = await stopOwner(record);
-    }
-    record = await store.reconcileSharedHost({
-      environmentId: record.environmentId,
-      state: record.state,
-      leaseId,
-      sharedHost: inspectedSharedHost,
-    });
+    record = await dedicatedLeases.reconcileSharedHost(record, leaseId, inspection, stopOwner);
+    requireCurrentOwner(record);
     if (record.destroyRequestedAtMs !== null) {
       await finishDestroy(record, provider).catch(() => undefined);
       return;
@@ -699,6 +692,8 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     });
 
   return {
+    getDedicatedNodeLeaseSignal: dedicatedLeases.signal,
+    clearDedicatedNodeLeases: dedicatedLeases.clear,
     createWithProfile,
     prepareIntent,
     prepareRetention,

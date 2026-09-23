@@ -8,6 +8,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { ADMIN_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import { resolveSessionEnvironmentCaller } from "./environments.session.js";
+import { sessionPortalHandlers } from "./portals.session.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
 
@@ -47,6 +48,7 @@ function attachedPortalOwner(options: GatewayRequestHandlerOptions, environmentI
 }
 
 export const portalHandlers: GatewayRequestHandlers = {
+  ...sessionPortalHandlers,
   "portal.list": defineValidatedGatewayMethod(
     "portal.list",
     validatePortalListParams,
@@ -123,7 +125,7 @@ export const portalHandlers: GatewayRequestHandlers = {
                     const stream = await connection.connect();
                     try {
                       await owner.environments.touchSessionAttachment(owner.binding);
-                      owner.assertCurrent();
+                      owner.environments.assertSessionAttachment(owner.binding);
                       return stream;
                     } catch (error) {
                       stream.destroy();

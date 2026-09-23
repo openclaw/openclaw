@@ -13,7 +13,7 @@ import type {
   AgentToolGatewayRequestCaller,
   InProcessGatewayCaller,
 } from "./in-process-gateway.js";
-import { createPortalTool } from "./portal-tool.js";
+import { createPortalTool, createSessionPortalTool } from "./portal-tool.js";
 
 type AgentToolGatewayRequest = Parameters<AgentToolGatewayRequestCaller>[0];
 
@@ -32,10 +32,10 @@ function recorder() {
   const calls: Array<[string, unknown]> = [];
   const requestScopes: Array<[string, readonly string[] | undefined]> = [];
   const reply = (method: string) => {
-    if (method === "portal.list") {
+    if (method === "portal.list" || method === "portal.session.list") {
       return { portals: [portal] } as PortalListResult;
     }
-    if (method === "portal.close") {
+    if (method === "portal.close" || method === "portal.session.close") {
       return { closed: true } as PortalCloseResult;
     }
     return portal;
@@ -58,6 +58,46 @@ function recorder() {
 }
 
 describe("portal tool", () => {
+  it("keeps a restricted tool on its captured worker and refuses host or alternate target selection", async () => {
+    const recorded = recorder();
+    let current = true;
+    const target = {
+      sessionKey: "agent:main:preview",
+      agentId: "main",
+      environmentId: "worker:preview",
+      assertCurrent() {
+        if (!current) {
+          throw new Error("retired target");
+        }
+      },
+    };
+    const tool = createSessionPortalTool(target, recorded);
+    expect(Value.Check(tool.parameters, { action: "open", port: 3000 })).toBe(true);
+    expect(
+      Value.Check(tool.parameters, { action: "open", port: 3000, environmentId: "other" }),
+    ).toBe(false);
+    for (const action of ["open", "list", "close"]) {
+      await tool.execute(action, { action, port: 3000, id: "p3000" });
+    }
+    const bound = {
+      sessionKey: target.sessionKey,
+      agentId: target.agentId,
+      environmentId: target.environmentId,
+    };
+    expect(recorded.calls).toEqual([
+      ["portal.session.open", { ...bound, port: 3000 }],
+      ["portal.session.list", bound],
+      ["portal.session.close", { ...bound, id: "p3000" }],
+    ]);
+    await expect(
+      tool.execute("host", { action: "open", port: 3000, environmentId: "other" }),
+    ).rejects.toThrow("bound");
+    current = false;
+    await expect(tool.execute("stale", { action: "open", port: 3000 })).rejects.toThrow(
+      "retired target",
+    );
+    expect(recorded.calls).toHaveLength(3);
+  });
   it("uses a flat closed action schema and owner-only security gate", () => {
     const tool = createPortalTool();
     expect(tool.parameters).toMatchObject({

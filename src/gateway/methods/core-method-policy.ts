@@ -105,6 +105,7 @@ export function createCoreGatewayMethodDescriptors(
       ...(spec.startup === true ? { startup: "unavailable-until-sidecars" } : {}),
       ...(spec.controlPlaneWrite === true ? { controlPlaneWrite: true } : {}),
       ...(spec.description ? { description: spec.description } : {}),
+      ...(spec.sessionAccess ? { sessionAccess: spec.sessionAccess } : {}),
     });
   }
   for (const name of Object.keys(handlers)) {

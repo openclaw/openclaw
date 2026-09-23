@@ -1,3 +1,5 @@
+export const active = { status: "active", sharedHost: false };
+
 export function classProfile(
   machineClass: string,
   primary: Record<string, unknown> = {},
