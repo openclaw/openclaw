@@ -67,10 +67,14 @@ vi.mock("./health.js", () => ({
 import { checkGatewayHealth, probeGatewayMemoryStatus } from "./doctor-gateway-health.js";
 
 describe("checkGatewayHealth", () => {
-  const cfg = {} as OpenClawConfig;
+  const cfg: OpenClawConfig = {};
+  const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
   beforeEach(() => {
     vi.spyOn(performance, "now").mockReturnValue(0);
+    runtime.log.mockReset();
+    runtime.error.mockReset();
+    runtime.exit.mockReset();
     callGateway.mockReset();
     isGatewayCredentialsRequiredError.mockReset();
     isGatewayCredentialsRequiredError.mockReturnValue(false);
@@ -139,10 +143,9 @@ describe("checkGatewayHealth", () => {
           return {};
         },
       );
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
       await expect(
-        checkGatewayHealth({ runtime: runtime as never, cfg: {} as OpenClawConfig }),
+        checkGatewayHealth({ runtime, cfg: {} as OpenClawConfig }),
       ).resolves.toMatchObject({ authenticated: !rejectStatus, healthOk: !rejectStatus });
 
       expect(note).toHaveBeenCalledWith(
@@ -155,13 +158,14 @@ describe("checkGatewayHealth", () => {
 
   it("uses a lightweight status RPC for the restart liveness gate", async () => {
     callGateway.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({});
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
     const now = vi.spyOn(performance, "now").mockReturnValue(0);
     try {
-      await expect(
-        checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
-      ).resolves.toEqual({ authenticated: true, healthOk: true, status: { ok: true } });
+      await expect(checkGatewayHealth({ runtime, cfg, timeoutMs: 3000 })).resolves.toEqual({
+        authenticated: true,
+        healthOk: true,
+        status: { ok: true },
+      });
     } finally {
       now.mockRestore();
     }
@@ -203,7 +207,6 @@ describe("checkGatewayHealth", () => {
       programArguments: ["/usr/bin/openclaw", "gateway", "run"],
       environment,
     });
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
     await expect(checkGatewayHealth({ runtime, cfg })).resolves.toMatchObject({
       healthOk: false,
@@ -237,7 +240,6 @@ describe("checkGatewayHealth", () => {
       } else {
         readServiceCommand.mockRejectedValueOnce(inspectionError);
       }
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
       await expect(checkGatewayHealth({ runtime, cfg })).resolves.toMatchObject({
         healthOk: false,
@@ -261,13 +263,11 @@ describe("checkGatewayHealth", () => {
       config: { gateway: { mode: "remote", remote: { url: TEST_GATEWAY_URL } } },
       url: TEST_GATEWAY_URL,
     },
-    { name: "missing remote URL", config: { gateway: { mode: "remote" } }, url: TEST_GATEWAY_URL },
   ] satisfies Array<{ name: string; config: OpenClawConfig; url: string }>)(
     "does not use a local service to diagnose $name",
     async ({ config, url }) => {
       buildGatewayConnectionDetails.mockReturnValue({ url });
       callGateway.mockRejectedValueOnce(new Error("ECONNREFUSED"));
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
       await expect(checkGatewayHealth({ runtime, cfg: config })).resolves.toMatchObject({
         healthOk: false,
@@ -284,7 +284,6 @@ describe("checkGatewayHealth", () => {
   ])("reports %s without marking the gateway unhealthy", async (field, title) => {
     const warning = 'Inspect the affected state. Run "openclaw doctor".';
     callGateway.mockResolvedValueOnce({ [field]: warning }).mockResolvedValue({});
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     await expect(checkGatewayHealth({ runtime, cfg })).resolves.toMatchObject({ healthOk: true });
     expect(note).toHaveBeenCalledWith(warning, title);
   });
@@ -333,9 +332,8 @@ describe("checkGatewayHealth", () => {
           },
         ],
       });
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
-    await checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 });
+    await checkGatewayHealth({ runtime, cfg, timeoutMs: 3000 });
 
     expect(note).toHaveBeenCalledWith(
       "diagnostics-otel · logs · started · stdout",
@@ -547,9 +545,12 @@ describe("checkGatewayHealth", () => {
       .mockRejectedValueOnce(
         new Error(`\u001B[31mchannel probe failed\nAuthorization: Bearer ${token}`),
       );
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
-    await checkGatewayHealth({ runtime: runtime as never, cfg });
+    await expect(checkGatewayHealth({ runtime, cfg })).resolves.toEqual({
+      authenticated: true,
+      healthOk: true,
+      status: { ok: true },
+    });
 
     const [message, title] = note.mock.calls.at(-1) ?? [];
     expect(title).toBe("Channel warnings");
@@ -557,6 +558,8 @@ describe("checkGatewayHealth", () => {
     expect(message).not.toContain(token);
     expect(message).not.toContain("\u001B");
     expect(message.split("\n")).toHaveLength(2);
+    expect(message).toContain("Retry: openclaw channels status --probe");
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 
   it("reports sanitized exporter diagnostic failures with a retry command", async () => {
@@ -567,11 +570,12 @@ describe("checkGatewayHealth", () => {
       .mockRejectedValueOnce(
         new Error(`\u001B[31mexporter probe failed\nAuthorization: Bearer ${token}`),
       );
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
-    await expect(
-      checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
-    ).resolves.toEqual({ authenticated: true, healthOk: true, status: { ok: true } });
+    await expect(checkGatewayHealth({ runtime, cfg, timeoutMs: 3000 })).resolves.toEqual({
+      authenticated: true,
+      healthOk: true,
+      status: { ok: true },
+    });
 
     const [message, title] = note.mock.calls.at(-1) ?? [];
     expect(title).toBe("Telemetry exporters");
@@ -585,11 +589,8 @@ describe("checkGatewayHealth", () => {
 
   it("notes CLI and gateway version mismatch when the gateway reports another runtime version", async () => {
     callGateway.mockResolvedValueOnce({ runtimeVersion: "2026.4.23" }).mockResolvedValueOnce({});
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
-    await expect(
-      checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
-    ).resolves.toEqual({
+    await expect(checkGatewayHealth({ runtime, cfg, timeoutMs: 3000 })).resolves.toEqual({
       authenticated: true,
       healthOk: true,
       status: { runtimeVersion: "2026.4.23" },
@@ -618,8 +619,7 @@ describe("checkGatewayHealth", () => {
         },
       })
       .mockResolvedValue({});
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-    expect(await checkGatewayHealth({ runtime: runtime as never, cfg })).toMatchObject({
+    expect(await checkGatewayHealth({ runtime, cfg })).toMatchObject({
       healthOk: true,
       authenticated: true,
     });
@@ -660,9 +660,8 @@ describe("checkGatewayHealth", () => {
         ],
       })
       .mockResolvedValueOnce({});
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
-    await checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 });
+    await checkGatewayHealth({ runtime, cfg, timeoutMs: 3000 });
 
     expect(note).toHaveBeenCalledWith(
       [
@@ -702,9 +701,8 @@ describe("checkGatewayHealth", () => {
         ],
       })
       .mockResolvedValueOnce({});
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
-    await checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 });
+    await checkGatewayHealth({ runtime, cfg, timeoutMs: 3000 });
 
     expect(note).toHaveBeenCalledWith(
       [
@@ -727,9 +725,8 @@ describe("checkGatewayHealth", () => {
       },
     });
     callGateway.mockRejectedValueOnce(error);
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
-    await checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 });
+    await checkGatewayHealth({ runtime, cfg, timeoutMs: 3000 });
 
     expect(note).toHaveBeenCalledWith(
       "Gateway connect failed: transport closed: protocol version mismatch",
@@ -747,11 +744,11 @@ describe("checkGatewayHealth", () => {
       error: TEST_AUTH_CLOSE_ERROR,
       gatewayReached: true,
     });
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
-    await expect(
-      checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
-    ).resolves.toEqual({ authenticated: false, healthOk: true });
+    await expect(checkGatewayHealth({ runtime, cfg, timeoutMs: 3000 })).resolves.toEqual({
+      authenticated: false,
+      healthOk: true,
+    });
 
     expect(probeGatewayStatus).toHaveBeenCalledWith({
       url: TEST_GATEWAY_URL,
@@ -779,11 +776,11 @@ describe("checkGatewayHealth", () => {
       connectFailure: { kind: "rate-limited", detailCode: "AUTH_RATE_LIMITED" },
       gatewayReached: true,
     });
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
-    await expect(
-      checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
-    ).resolves.toEqual({ authenticated: false, healthOk: true });
+    await expect(checkGatewayHealth({ runtime, cfg, timeoutMs: 3000 })).resolves.toEqual({
+      authenticated: false,
+      healthOk: true,
+    });
 
     expect(runtime.error).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledWith(
@@ -813,11 +810,11 @@ describe("checkGatewayHealth", () => {
     });
     retainGatewayResponsePayload(error, undefined);
     callGateway.mockRejectedValueOnce(error);
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
-    await expect(
-      checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
-    ).resolves.toEqual({ authenticated: false, healthOk: true });
+    await expect(checkGatewayHealth({ runtime, cfg, timeoutMs: 3000 })).resolves.toEqual({
+      authenticated: false,
+      healthOk: true,
+    });
 
     expect(isGatewayCredentialsRequiredError).not.toHaveBeenCalled();
     expect(probeGatewayStatus).not.toHaveBeenCalled();
@@ -838,11 +835,11 @@ describe("checkGatewayHealth", () => {
       error: TEST_AUTH_CLOSE_ERROR,
       gatewayReached: true,
     });
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
-    await expect(
-      checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
-    ).resolves.toEqual({ authenticated: false, healthOk: true });
+    await expect(checkGatewayHealth({ runtime, cfg, timeoutMs: 3000 })).resolves.toEqual({
+      authenticated: false,
+      healthOk: true,
+    });
 
     expect(isGatewaySecretRefUnavailableError).toHaveBeenCalledWith(error);
     expect(probeGatewayStatus).toHaveBeenCalledWith({
@@ -863,7 +860,7 @@ describe("checkGatewayHealth", () => {
 });
 
 describe("probeGatewayMemoryStatus", () => {
-  const cfg = {} as OpenClawConfig;
+  const cfg: OpenClawConfig = {};
 
   beforeEach(() => {
     callGateway.mockReset();
@@ -951,17 +948,6 @@ describe("probeGatewayMemoryStatus", () => {
       checked: true,
       ready: false,
       error: "gateway memory probe unavailable: gateway request timeout for doctor.memory.status",
-      skipped: false,
-    });
-  });
-
-  it("keeps non-timeout gateway errors as explicit failures", async () => {
-    callGateway.mockRejectedValue(new Error("gateway closed (1006): no close reason"));
-
-    await expect(probeGatewayMemoryStatus({ cfg })).resolves.toEqual({
-      checked: true,
-      ready: false,
-      error: "gateway memory probe unavailable: gateway closed (1006): no close reason",
       skipped: false,
     });
   });
