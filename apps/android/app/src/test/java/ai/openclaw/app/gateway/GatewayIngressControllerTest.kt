@@ -344,6 +344,81 @@ class GatewayIngressControllerTest {
       }
     }
 
+  @Test fun headerlessLoginRedirectsPreserveAdmissionAndRejectRevokedGrants() =
+    runTest {
+      for (rejection in listOf("prepare", "upgrade", "response")) {
+        val registry = registry()
+        val storage = Storage()
+        var ordinary = true
+        var revoked = false
+        var prompts = 0
+        val grant = CompletableDeferred<CloudflareAccessSession>()
+        val owner =
+          GatewayIngressController(backgroundScope, registry, storage.persistence, { emptyMap() }, {}, registryObserverDispatcher = StandardTestDispatcher(testScheduler), clientForRoute = { _, _ ->
+            client(loginRedirect = true) { !ordinary && (revoked || it.header("Cf-Access-Token") == null) }
+          }, authenticate = { _, open ->
+            prompts++
+            open("https://example.cloudflareaccess.com/login")
+            grant.await()
+          })
+        assertNull(owner.prepare(endpoint, tls, false, owner.admissionCheckpoint()) { true })
+        assertNull(owner.presentation.value.attention)
+        assertEquals(0, prompts)
+        ordinary = false
+        assertTrue(runCatching { owner.prepare(endpoint, tls, false, owner.admissionCheckpoint()) { true } }.exceptionOrNull() is GatewayExternalAuthorizationException)
+        assertAttentionProfile(endpoint.stableId, owner)
+        assertNull(owner.presentation.value.browserLaunch)
+        assertEquals(0, prompts)
+        val pending = async { owner.prepare(endpoint, tls, true, owner.admissionCheckpoint()) { true } }
+        try {
+          runCurrent()
+          val launch = checkNotNull(owner.presentation.value.browserLaunch)
+          assertEquals(launch.url, owner.consumeBrowserLaunch(launch.attemptId))
+          grant.complete(CloudflareAccessTestTokens.session())
+          val current = checkNotNull(pending.await())
+          val request = Request.Builder().url(application.origin.uri.toString()).build()
+          current.requireCurrent(request)
+          val cached = checkNotNull(owner.prepare(endpoint, tls, false, owner.admissionCheckpoint()) { true })
+          assertNotNull(cached.authorizeUpgrade(request).header("Cf-Access-Token"))
+          assertEquals(1, prompts)
+          assertNull(owner.presentation.value.attention)
+          revoked = true
+          if (rejection == "response") {
+            val response =
+              okhttp3.Response
+                .Builder()
+                .request(request)
+                .protocol(okhttp3.Protocol.HTTP_1_1)
+                .code(302)
+                .message("Found")
+                .header("Location", "https://login.example.test/cdn-cgi/access/login?opaque=ignored")
+                .build()
+            assertNotNull(cached.rejection(response))
+          } else {
+            val failure =
+              runCatching {
+                if (rejection == "prepare") {
+                  owner.prepare(endpoint, tls, false, owner.admissionCheckpoint()) { true }
+                } else {
+                  cached.authorizeUpgrade(request)
+                }
+              }.exceptionOrNull()
+            assertTrue(failure is GatewayExternalAuthorizationException)
+          }
+          runCurrent()
+          assertTrue(runCatching { cached.requireCurrent(request) }.exceptionOrNull() is GatewayExternalAuthorizationException)
+          assertAttentionProfile(endpoint.stableId, owner)
+          assertNull(owner.presentation.value.browserLaunch)
+          assertEquals(1, prompts)
+          owner.forget(endpoint.stableId)
+          assertNull(storage.values[application.origin])
+        } finally {
+          grant.cancel()
+          pending.cancelAndJoin()
+        }
+      }
+    }
+
   @Test fun ordinaryAndServiceHeaderRoutesNeverPresentBrowser() =
     runTest {
       val registry = registry()
@@ -392,7 +467,7 @@ class GatewayIngressControllerTest {
   @Test fun retirementJoinsCredentialedDiscoveryFromPrepareAndUpgrade() =
     runTest {
       for (upgrade in listOf(false, true)) {
-        for (retirement in listOf("expiry")) {
+        for (retirement in listOf("forget", "expiry")) {
           val registry = registry()
           val storage = Storage()
           var now = System.currentTimeMillis() / 1000.0
@@ -438,11 +513,20 @@ class GatewayIngressControllerTest {
             assertTrue(entered.isCompleted)
             cleanup =
               async {
-                now += 61
-                owner.revalidate()
+                when (retirement) {
+                  "forget" -> {
+                    owner.forget(endpoint.stableId)
+                  }
+
+                  else -> {
+                    now += 61
+                    owner.revalidate()
+                  }
+                }
               }
             runCurrent()
             assertTrue("$upgrade/$retirement must cancel the owned probe", canceled.isCompleted)
+            if (retirement != "expiry") assertFalse(cleanup.isCompleted)
             assertFalse(pending.isCompleted)
             assertNotNull(storage.values[application.origin])
             assertTrue(storage.deleted.isEmpty())
@@ -461,6 +545,74 @@ class GatewayIngressControllerTest {
             cleanup?.cancelAndJoin()
           }
         }
+      }
+    }
+
+  @Test fun profileForgetDrainsOnlyItsDiscoveryAndPreservesRecreatedAdmission() =
+    runTest {
+      val registry = registry()
+      val sibling = endpoint.copy(stableId = "discovery-sibling")
+      add(registry, sibling)
+      val storage = Storage()
+      storage.values[application.origin] = CloudflareAccessTestTokens.session().encode()
+      val entered = CompletableDeferred<Unit>()
+      val canceled = CompletableDeferred<Unit>()
+      val release = CompletableDeferred<Unit>()
+      var hold = false
+      val owner =
+        GatewayIngressController(backgroundScope, registry, storage.persistence, { emptyMap() }, {}, registryObserverDispatcher = StandardTestDispatcher(testScheduler), clientForRoute = { target, _ ->
+          client {
+            if (it.header("Cf-Access-Token") == null) return@client true
+            if (hold && target.stableId == endpoint.stableId) {
+              entered.complete(Unit)
+              try {
+                awaitCancellation()
+              } finally {
+                withContext(NonCancellable) {
+                  canceled.complete(Unit)
+                  release.await()
+                }
+              }
+            }
+            false
+          }
+        })
+      owner.prepare(endpoint, tls, false, owner.admissionCheckpoint()) { true }
+      val siblingLease = checkNotNull(owner.prepare(sibling, tls.copy(stableId = sibling.stableId), false, owner.admissionCheckpoint()) { true })
+      hold = true
+      val pending = async { runCatching { owner.prepare(endpoint, tls, false, owner.admissionCheckpoint()) { true } } }
+      var forgetting: Deferred<Unit>? = null
+      var replacement: Deferred<GatewayIngressAuthorization?>? = null
+      try {
+        runCurrent()
+        assertTrue(entered.isCompleted)
+        forgetting = async { owner.forget(endpoint.stableId) }
+        runCurrent()
+        assertTrue(canceled.isCompleted)
+        assertFalse(forgetting.isCompleted)
+        val request = Request.Builder().url("${application.origin.uri}/gateway/socket").build()
+        siblingLease.requireCurrent(request)
+        assertNotNull(storage.values[application.origin])
+        assertTrue(storage.deleted.isEmpty())
+        hold = false
+        replacement = async { owner.prepare(endpoint, tls, false, owner.admissionCheckpoint()) { true } }
+        runCurrent()
+        assertFalse(replacement.isCompleted)
+        release.complete(Unit)
+        forgetting.await()
+        val current = checkNotNull(replacement.await())
+        current.requireCurrent(request)
+        siblingLease.requireCurrent(request)
+        assertTrue(pending.await().exceptionOrNull() is CancellationException)
+        assertAccessOrigin(application.origin.uri.toString(), registry, endpoint.stableId)
+        assertNotNull(storage.values[application.origin])
+        assertTrue(storage.deleted.isEmpty())
+        assertNull(owner.presentation.value.browserLaunch)
+      } finally {
+        release.complete(Unit)
+        pending.cancelAndJoin()
+        forgetting?.cancelAndJoin()
+        replacement?.cancelAndJoin()
       }
     }
 
@@ -755,6 +907,107 @@ class GatewayIngressControllerTest {
       assertNull(requests.first().header("Cf-Access-Token"))
       assertNotNull(requests.last().header("Cf-Access-Token"))
       assertNull(owner.presentation.value.browserLaunch)
+    }
+
+  @Test fun ordinaryOriginChangeRetiresOnlyThePreviousOriginsLastOwner() =
+    runTest {
+      for (hasSibling in listOf(false, true)) {
+        val registry = registry()
+        val storage = Storage()
+        storage.values[application.origin] = CloudflareAccessTestTokens.session().encode()
+        registry.setAccessOrigin(endpoint.stableId, application.origin)
+        if (hasSibling) {
+          val sibling = endpoint.copy(stableId = "old-origin-sibling")
+          add(registry, sibling)
+          registry.setAccessOrigin(sibling.stableId, application.origin)
+        }
+        val replacement = endpoint.copy(host = "ordinary.example.test")
+        add(registry, replacement)
+        val owner = GatewayIngressController(backgroundScope, registry, storage.persistence, { emptyMap() }, {}, registryObserverDispatcher = StandardTestDispatcher(testScheduler), clientForRoute = { _, _ -> client { false } })
+        assertNull(owner.prepare(replacement, tls, false, admissionCheckpoint = owner.admissionCheckpoint()) { true })
+        assertAccessOrigin(null, registry, endpoint.stableId)
+        assertEquals(hasSibling, application.origin in storage.values)
+        owner.forget(endpoint.stableId)
+        assertEquals(hasSibling, application.origin in storage.values)
+      }
+    }
+
+  @Test fun originChangeKeepsItsDurableOwnerThroughFailureAndReconstruction() =
+    runTest {
+      for (failure in listOf("drain", "delete", "interruption")) {
+        val context = RuntimeEnvironment.getApplication()
+        val preferences = context.getSharedPreferences("access-retirement-${UUID.randomUUID()}", Context.MODE_PRIVATE)
+
+        fun restoredRegistry() = GatewayRegistryStore(SecurePrefs(context, preferences))
+        val registry = restoredRegistry().also { add(it, endpoint) }
+        registry.setAccessOrigin(endpoint.stableId, application.origin)
+        val replacement = endpoint.copy(host = "replacement.example.test")
+        add(registry, replacement)
+        val storage = Storage()
+        val encoded = CloudflareAccessTestTokens.session().encode()
+        storage.values[application.origin] = encoded
+        storage.deleteSucceeds = failure != "delete"
+        val release = CompletableDeferred<Unit>()
+        val uncaught = mutableListOf<Throwable>()
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler) + CoroutineExceptionHandler { _, error -> uncaught += error })
+        var entered = false
+        var probes = 0
+        val owner =
+          GatewayIngressController(scope, registry, storage.persistence, { emptyMap() }, {
+            entered = true
+            release.await()
+            if (failure == "drain") throw java.io.IOException("Old origin drain failed")
+          }, registryObserverDispatcher = StandardTestDispatcher(testScheduler), clientForRoute = { _, _ ->
+            client {
+              probes++
+              false
+            }
+          })
+        try {
+          val pending = async { runCatching { owner.prepare(replacement, tls, false, owner.admissionCheckpoint()) { true } } }
+          runCurrent()
+          assertTrue(entered)
+          assertSingleAccessOrigin(application.origin.uri.toString(), restoredRegistry())
+          assertEquals(encoded, storage.values[application.origin])
+          assertEquals(0, probes)
+          if (failure == "interruption") scope.cancel() else release.complete(Unit)
+          runCurrent()
+          val error = pending.await().exceptionOrNull()
+          when (failure) {
+            "drain" -> assertTrue(error is java.io.IOException)
+            "delete" -> assertTrue(error is CloudflareAccessException)
+            else -> assertTrue(error is CancellationException)
+          }
+          assertSingleAccessOrigin(application.origin.uri.toString(), restoredRegistry())
+          assertEquals(encoded, storage.values[application.origin])
+          assertEquals(0, probes)
+
+          // Rebuild from persisted ownership, without the failed controller's registrations.
+          // A valid encoded grant must remain discoverable for a later cleanup attempt.
+          scope.cancel()
+          runCurrent()
+          storage.deleteSucceeds = true
+          val restoredStore = CloudflareAccessSessionStore(backgroundScope, storage.persistence, retireTransports = {})
+          assertNotNull(restoredStore.snapshot(application.origin))
+          val coldRegistry = restoredRegistry()
+          val retired = mutableListOf<CloudflareAccessOrigin>()
+          val cold = GatewayIngressController(backgroundScope, coldRegistry, storage.persistence, { emptyMap() }, { retired += it }, registryObserverDispatcher = StandardTestDispatcher(testScheduler), clientForRoute = { _, _ -> client { false } })
+          if (failure == "delete") {
+            cold.forget(endpoint.stableId)
+            assertTrue(coldRegistry.remove(endpoint.stableId))
+          } else {
+            assertNull(cold.prepare(replacement, tls, false, cold.admissionCheckpoint()) { true })
+            assertSingleAccessOrigin(null, restoredRegistry())
+          }
+          assertEquals(listOf(application.origin), retired)
+          assertNull(storage.values[application.origin])
+          assertTrue(uncaught.isEmpty())
+        } finally {
+          release.complete(Unit)
+          scope.cancel()
+          runCurrent()
+        }
+      }
     }
 
   @Test fun sharedOriginDeparturesLeaveTheLastProfileOwningRetirement() =
@@ -1097,6 +1350,133 @@ class GatewayIngressControllerTest {
       assertTrue(pending.await().exceptionOrNull() is CancellationException)
     }
 
+  @Test fun forgettingPendingProfileClearsItsActionAndPreservesSharedGrant() =
+    runTest {
+      val registry = registry()
+      val sibling = endpoint.copy(stableId = "shared-origin-sibling")
+      add(registry, sibling)
+      registry.setAccessOrigin(sibling.stableId, application.origin)
+      val storage = Storage()
+      val grant = CompletableDeferred<CloudflareAccessSession>()
+      val waiter = PausingDispatcher(StandardTestDispatcher(testScheduler))
+      val owner =
+        GatewayIngressController(backgroundScope, registry, storage.persistence, { emptyMap() }, {}, registryObserverDispatcher = StandardTestDispatcher(testScheduler), clientForRoute = { _, _ -> client() }, authenticate = { _, open ->
+          open("https://example.cloudflareaccess.com/login")
+          grant.await()
+        })
+      val pending = async(waiter) { runCatching { owner.prepare(endpoint, tls, true, admissionCheckpoint = owner.admissionCheckpoint()) { true } } }
+      runCurrent()
+      val id = checkNotNull(owner.presentation.value.browserLaunch).attemptId
+      waiter.paused = true
+      var resumeOnClear = false
+      var resumedDuringClear = false
+      backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+        owner.presentation.collect { presentation ->
+          val it = presentation.attention
+          if (resumeOnClear && it == null) {
+            resumeOnClear = false
+            resumedDuringClear = true
+            waiter.resumeImmediately()
+          }
+        }
+      }
+      try {
+        grant.complete(CloudflareAccessTestTokens.session())
+        runCurrent()
+        val persisted = checkNotNull(storage.values[application.origin])
+        assertFalse(pending.isCompleted)
+        resumeOnClear = true
+        owner.forget(endpoint.stableId)
+        assertTrue(resumedDuringClear)
+        assertTrue(pending.isCompleted)
+        registry.remove(endpoint.stableId)
+        assertNull(owner.consumeBrowserLaunch(id))
+        assertNull(owner.presentation.value.attention)
+        assertEquals(persisted, storage.values[application.origin])
+        assertSingleAccessOrigin(application.origin.uri.toString(), registry)
+      } finally {
+        waiter.resume()
+      }
+      runCurrent()
+      assertTrue(pending.await().exceptionOrNull() is CancellationException)
+      assertNotNull(owner.prepare(sibling, tls.copy(stableId = sibling.stableId), false, admissionCheckpoint = owner.admissionCheckpoint()) { true })
+      assertNull(owner.presentation.value.attention)
+      assertNull(owner.presentation.value.browserLaunch)
+    }
+
+  @Test fun associationObserverCannotPublishRequiredForForgottenOrRevokedAction() =
+    runTest {
+      val registry = registry()
+      val sibling = endpoint.copy(stableId = "association-sibling")
+      add(registry, sibling)
+      registry.setAccessOrigin(sibling.stableId, application.origin)
+      val owner = GatewayIngressController(backgroundScope, registry, Storage().persistence, { emptyMap() }, {}, registryObserverDispatcher = StandardTestDispatcher(testScheduler), clientForRoute = { _, _ -> client() })
+      var armed = true
+      var observed = false
+      val observer =
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+          registry.entries.collect { entries ->
+            if (armed && entries.any { it.stableId == endpoint.stableId && it.accessOrigin != null }) {
+              armed = false
+              observed = true
+              owner.forget(endpoint.stableId)
+              registry.remove(endpoint.stableId)
+            }
+          }
+        }
+      val result = runCatching { owner.prepare(endpoint, tls, false, owner.admissionCheckpoint()) { true } }
+      assertTrue(observed)
+      assertTrue(result.exceptionOrNull() is CancellationException)
+      assertNull(owner.presentation.value.browserLaunch)
+      runCurrent()
+      assertNull(owner.presentation.value.attention)
+      observer.cancel()
+    }
+
+  @Test fun pendingPresentationIsAtomicWhenObserverCancelsOrForgets() =
+    runTest {
+      for (forget in listOf(false, true)) {
+        val registry = registry()
+        val sibling = endpoint.copy(stableId = "presentation-sibling")
+        add(registry, sibling)
+        registry.setAccessOrigin(sibling.stableId, application.origin)
+        val owner =
+          GatewayIngressController(backgroundScope, registry, Storage().persistence, { emptyMap() }, {}, registryObserverDispatcher = StandardTestDispatcher(testScheduler), clientForRoute = { _, _ -> client() }, authenticate = { _, open ->
+            open("https://example.cloudflareaccess.com/login")
+            CompletableDeferred<CloudflareAccessSession>().await()
+          })
+        var observed = false
+        val observer =
+          backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            owner.presentation.collect { state ->
+              state.browserLaunch?.let { assertEquals(it.attemptId, state.attention?.attemptId) }
+              val id = state.attention?.attemptId
+              if (!observed && id != null) {
+                observed = true
+                assertEquals(id, state.browserLaunch?.attemptId)
+                if (forget) {
+                  owner.forget(endpoint.stableId)
+                  registry.remove(endpoint.stableId)
+                } else {
+                  owner.cancel(id)
+                }
+              }
+            }
+          }
+        val pending = async { runCatching { owner.prepare(endpoint, tls, true, owner.admissionCheckpoint()) { true } } }
+        runCurrent()
+        assertTrue(observed)
+        assertTrue(pending.await().exceptionOrNull() is CancellationException)
+        assertNull(owner.presentation.value.browserLaunch)
+        assertNull(
+          owner.presentation.value.attention
+            ?.attemptId,
+        )
+        if (forget) assertNull(owner.presentation.value.attention)
+        observer.cancel()
+      }
+    }
+
   @Test fun replacingBrowserOwnerPublishesOnlyTheNewIntent() =
     runTest {
       val registry = registry()
@@ -1153,6 +1533,32 @@ class GatewayIngressControllerTest {
       runCurrent()
       assertTrue(pending.await().exceptionOrNull() is CancellationException)
       assertNull(owner.presentation.value.browserLaunch)
+    }
+
+  @Test fun forgettingLastAdmittedProfilePreservesSiblingCapabilityAndItsExpiry() =
+    runTest {
+      val registry = registry()
+      val sibling = endpoint.copy(stableId = "discovered-sibling")
+      add(registry, sibling)
+      val storage = Storage()
+      var now = System.currentTimeMillis() / 1000.0
+      var retirements = 0
+      storage.values[application.origin] = CloudflareAccessTestTokens.session(expires = now + 1).encode()
+      val owner = GatewayIngressController(backgroundScope, registry, storage.persistence, { emptyMap() }, { retirements++ }, now = { now }, registryObserverDispatcher = StandardTestDispatcher(testScheduler), clientForRoute = { _, _ -> client() })
+      val first = checkNotNull(owner.prepare(endpoint, tls, false, admissionCheckpoint = owner.admissionCheckpoint()) { true })
+      val last = checkNotNull(owner.prepare(sibling, tls.copy(stableId = sibling.stableId), false, admissionCheckpoint = owner.admissionCheckpoint()) { true })
+      val request = Request.Builder().url(application.origin.uri.toString()).build()
+      owner.forget(sibling.stableId)
+      registry.remove(sibling.stableId)
+      assertTrue(runCatching { last.requireCurrent(request) }.exceptionOrNull() is GatewayExternalAuthorizationException)
+      first.requireCurrent(request)
+      assertNotNull(storage.values[application.origin])
+      now += 2
+      advanceTimeBy(1001)
+      runCurrent()
+      assertEquals(1, retirements)
+      assertTrue(runCatching { first.requireCurrent(request) }.exceptionOrNull() is GatewayExternalAuthorizationException)
+      assertNull(storage.values[application.origin])
     }
 
   @Test fun pendingProfileReplacementCannotSwallowSharedOriginExpiry() =
@@ -1228,6 +1634,26 @@ class GatewayIngressControllerTest {
       assertNull(storage.values[application.origin])
     }
 
+  @Test fun coldForgetRetainsSiblingGrantAndLastOwnerDeletesIt() =
+    runTest {
+      val registry = registry()
+      val storage = Storage()
+      val sibling = endpoint.copy(stableId = "discovered-sibling")
+      add(registry, sibling)
+      storage.values[application.origin] = CloudflareAccessTestTokens.session().encode()
+
+      fun owner() = GatewayIngressController(backgroundScope, registry, storage.persistence, { emptyMap() }, {}, registryObserverDispatcher = StandardTestDispatcher(testScheduler), clientForRoute = { _, _ -> client() })
+      val producer = owner()
+      producer.prepare(endpoint, tls, false, admissionCheckpoint = producer.admissionCheckpoint()) { true }
+      producer.prepare(sibling, tls.copy(stableId = sibling.stableId), false, admissionCheckpoint = producer.admissionCheckpoint()) { true }
+      val cold = owner()
+      cold.forget(sibling.stableId)
+      assertNotNull(storage.values[application.origin])
+      registry.remove(sibling.stableId)
+      cold.forget(endpoint.stableId)
+      assertNull(storage.values[application.origin])
+    }
+
   @Test fun sameOriginProfileCannotReplaceSuspendedRegistration() =
     runTest {
       val registry = registry()
@@ -1282,6 +1708,215 @@ class GatewayIngressControllerTest {
       assertEquals(encoded, storage.values[application.origin])
       assertEquals(requestsBefore, requests)
       assertEquals(0, retirements)
+    }
+
+  @Test fun overlappingDeparturesShareTheLatestRetirementAcknowledgement() =
+    runTest {
+      for (mode in listOf("forget", "origin-change")) {
+        for (succeeds in listOf(false, true)) {
+          val registry = registry()
+          val storage =
+            Storage().also {
+              it.values[application.origin] = CloudflareAccessTestTokens.session().encode()
+              it.deleteSucceeds = succeeds
+            }
+          val release = CompletableDeferred<Unit>()
+          val firstDispatcher = PausingDispatcher(StandardTestDispatcher(testScheduler))
+          val secondDispatcher = PausingDispatcher(StandardTestDispatcher(testScheduler))
+          val replacement = endpoint.copy(host = "replacement.example.test")
+          var entered = 0
+          val pendingCallers = mutableListOf<Job>()
+          val ownerScope = OwnedTestScope(StandardTestDispatcher(testScheduler))
+          try {
+            val owner =
+              GatewayIngressController(ownerScope, registry, storage.persistence, { emptyMap() }, {
+                entered++
+                release.await()
+              }, registryObserverDispatcher = StandardTestDispatcher(testScheduler), clientForRoute = { target, _ -> client { target.host == endpoint.host && it.header("Cf-Access-Token") == null } })
+            owner.prepare(endpoint, tls, false, owner.admissionCheckpoint()) { true }
+
+            suspend fun depart(): GatewayIngressAuthorization? =
+              if (mode == "forget") {
+                owner.forget(endpoint.stableId)
+                null
+              } else {
+                owner.prepare(replacement, tls, false, owner.admissionCheckpoint()) { true }
+              }
+            val first = async(firstDispatcher) { runCatching { depart() } }.also(pendingCallers::add)
+            var second: Deferred<Result<GatewayIngressAuthorization?>>? = null
+            try {
+              runCurrent()
+              assertEquals(1, entered)
+              val secondCaller = async(secondDispatcher) { runCatching { depart() } }.also(pendingCallers::add)
+              second = secondCaller
+              runCurrent()
+              firstDispatcher.paused = true
+              secondDispatcher.paused = true
+              release.complete(Unit)
+              runCurrent()
+              assertEquals(2, storage.deleted.size)
+              assertFalse(first.isCompleted)
+              assertFalse(secondCaller.isCompleted)
+              // R1 and R2 are terminal before either caller can consume them. The
+              // stale R1 waiter must follow R2, not reserve another revocation.
+              firstDispatcher.resume()
+              val firstResult = first.await()
+              assertEquals(2, storage.deleted.size)
+              secondDispatcher.resume()
+              val secondResult = secondCaller.await()
+              if (succeeds) {
+                assertTrue(firstResult.isSuccess)
+                assertNull(firstResult.getOrThrow())
+                if (mode == "origin-change") {
+                  // Route prepares still reject a changed captured association;
+                  // public cleanup and cleartext admission remain idempotent.
+                  assertTrue(secondResult.exceptionOrNull() is CancellationException)
+                } else {
+                  assertTrue(secondResult.isSuccess)
+                  assertNull(secondResult.getOrThrow())
+                }
+                assertSingleAccessOrigin(null, registry)
+                assertNull(storage.values[application.origin])
+              } else {
+                assertEquals(CloudflareAccessException.Kind.StorageFailed, (firstResult.exceptionOrNull() as? CloudflareAccessException)?.kind)
+                assertEquals(CloudflareAccessException.Kind.StorageFailed, (secondResult.exceptionOrNull() as? CloudflareAccessException)?.kind)
+                assertSingleAccessOrigin(application.origin.uri.toString(), registry)
+                assertNotNull(storage.values[application.origin])
+                storage.deleteSucceeds = true
+                owner.forget(endpoint.stableId)
+                assertSingleAccessOrigin(null, registry)
+                assertNull(storage.values[application.origin])
+              }
+            } finally {
+              release.complete(Unit)
+              firstDispatcher.resume()
+              secondDispatcher.resume()
+              first.cancelAndJoin()
+              second?.cancelAndJoin()
+            }
+          } finally {
+            ownerScope.close({ pendingCallers.asSequence() }) {
+              release.complete(Unit)
+              firstDispatcher.resume()
+              secondDispatcher.resume()
+            }
+          }
+        }
+      }
+    }
+
+  @Test fun finalDepartureReconcilesGrantRenewedAfterAcknowledgedDeletion() =
+    runTest {
+      for (mode in listOf("origin-change", "forget")) {
+        for (outcome in listOf("leaves", "stays", "delete-fails")) {
+          val registry = registry()
+          val storage = Storage()
+          storage.values[application.origin] = CloudflareAccessTestTokens.session().encode()
+          val sibling = endpoint.copy(stableId = "renewed-origin-sibling")
+          val replacement = endpoint.copy(host = "replacement.example.test")
+          val release = CompletableDeferred<Unit>()
+          val waiter = PausingDispatcher(StandardTestDispatcher(testScheduler))
+          var holdRetirement = false
+          var retirementEntered = false
+          var prompts = 0
+          val pendingCallers = mutableListOf<Job>()
+          val ownerScope = OwnedTestScope(StandardTestDispatcher(testScheduler))
+          try {
+            val owner =
+              GatewayIngressController(ownerScope, registry, storage.persistence, { emptyMap() }, {
+                if (holdRetirement) {
+                  retirementEntered = true
+                  release.await()
+                }
+              }, registryObserverDispatcher = StandardTestDispatcher(testScheduler), clientForRoute = { target, _ -> client { target.host == endpoint.host && it.header("Cf-Access-Token") == null } }, authenticate = { _, open ->
+                prompts++
+                open("https://example.cloudflareaccess.com/login")
+                CloudflareAccessTestTokens.session("renewed")
+              })
+            val original = checkNotNull(owner.prepare(endpoint, tls, false, owner.admissionCheckpoint()) { true })
+            val deletedBefore = storage.deleted.size
+            holdRetirement = true
+            val pending =
+              async(waiter) {
+                runCatching {
+                  if (mode == "origin-change") {
+                    owner.prepare(replacement, tls, false, owner.admissionCheckpoint()) { true }
+                  } else {
+                    owner.forget(endpoint.stableId)
+                    null
+                  }
+                }
+              }.also(pendingCallers::add)
+            try {
+              runCurrent()
+              assertTrue(retirementEntered)
+              waiter.paused = true
+              release.complete(Unit)
+              runCurrent()
+              // R1 has deleted the key; only A's continuation is paused. B can now
+              // obtain a fresh checkpoint and persist G2 while A still owns cleanup.
+              assertEquals(deletedBefore + 1, storage.deleted.size)
+              assertNull(storage.values[application.origin])
+              assertFalse(pending.isCompleted)
+              assertAccessOrigin(application.origin.uri.toString(), registry, endpoint.stableId)
+              val request = Request.Builder().url(application.origin.uri.toString()).build()
+              assertTrue(runCatching { original.requireCurrent(request) }.exceptionOrNull() is GatewayExternalAuthorizationException)
+              add(registry, sibling)
+              val peer = checkNotNull(owner.prepare(sibling, tls.copy(stableId = sibling.stableId), true, owner.admissionCheckpoint()) { true })
+              val renewedBytes = checkNotNull(storage.values[application.origin])
+              assertEquals("renewed", CloudflareAccessSession.decode(renewedBytes).subject)
+              assertEquals(1, prompts)
+              peer.requireCurrent(request)
+              val deletedAfterRenewal = storage.deleted.size
+              if (outcome != "stays") {
+                owner.forget(sibling.stableId)
+                assertAccessOrigin(null, registry, sibling.stableId)
+                assertEquals(renewedBytes, storage.values[application.origin])
+                assertEquals(deletedAfterRenewal, storage.deleted.size)
+              }
+              storage.deleteSucceeds = outcome != "delete-fails"
+              waiter.resume()
+              val result = pending.await()
+              if (outcome == "delete-fails") {
+                assertEquals(CloudflareAccessException.Kind.StorageFailed, (result.exceptionOrNull() as? CloudflareAccessException)?.kind)
+                assertAccessOrigin(application.origin.uri.toString(), registry, endpoint.stableId)
+                assertEquals(renewedBytes, storage.values[application.origin])
+                storage.deleteSucceeds = true
+                owner.forget(endpoint.stableId)
+                assertNull(storage.values[application.origin])
+              } else {
+                assertTrue(result.isSuccess)
+                assertNull(result.getOrThrow())
+                assertEquals(deletedAfterRenewal + if (outcome == "stays") 0 else 1, storage.deleted.size)
+                if (outcome == "stays") {
+                  assertEquals(renewedBytes, storage.values[application.origin])
+                  peer.requireCurrent(request)
+                  assertAccessOrigin(application.origin.uri.toString(), registry, sibling.stableId)
+                } else {
+                  assertNull(storage.values[application.origin])
+                  assertTrue(runCatching { peer.requireCurrent(request) }.exceptionOrNull() is GatewayExternalAuthorizationException)
+                }
+              }
+              assertAccessOrigin(null, registry, endpoint.stableId)
+              assertNull(owner.authorization(if (mode == "origin-change") replacement else endpoint))
+              assertFalse(
+                owner.presentation.value.browserRequired
+                  .contains(endpoint.stableId),
+              )
+              assertNull(owner.presentation.value.browserLaunch)
+            } finally {
+              release.complete(Unit)
+              waiter.resume()
+              pending.cancelAndJoin()
+            }
+          } finally {
+            ownerScope.close({ pendingCallers.asSequence() }) {
+              release.complete(Unit)
+              waiter.resume()
+            }
+          }
+        }
+      }
     }
 
   @Test fun ordinaryProbeCannotOverwriteAnInterveningManagedPhaseOrGrant() =
@@ -1434,65 +2069,80 @@ class GatewayIngressControllerTest {
 
   @Test fun explicitDepartureRetiresAnOrdinarySuccessorsObsoleteBrowserGeneration() =
     runTest {
-      val registry = registry()
-      val replacement = endpoint.copy(contextPath = "/changed/socket")
-      val probeEntered = CompletableDeferred<Unit>()
-      val probeRelease = CompletableDeferred<Unit>()
-      val storage = Storage()
-      val grant = CompletableDeferred<CloudflareAccessSession>()
-      val pending = mutableListOf<Job>()
-      val ownerScope = OwnedTestScope(StandardTestDispatcher(testScheduler))
-      var ordinary = false
-      var authentication: Job? = null
-      var prompts = 0
-      try {
-        val owner =
-          GatewayIngressController(ownerScope, registry, storage.persistence, { emptyMap() }, {}, registryObserverDispatcher = StandardTestDispatcher(testScheduler), clientForRoute = { target, _ ->
-            client { request ->
-              if (target == replacement) {
-                probeEntered.complete(Unit)
-                probeRelease.await()
-                true
-              } else {
-                !(target.stableId == endpoint.stableId && ordinary) && request.header("Cf-Access-Token") == null
+      for (replace in listOf(false, true)) {
+        val registry = registry()
+        val sibling = endpoint.copy(stableId = "next-browser-profile")
+        add(registry, sibling)
+        val replacement = endpoint.copy(contextPath = "/changed/socket")
+        val probeEntered = CompletableDeferred<Unit>()
+        val probeRelease = CompletableDeferred<Unit>()
+        val storage = Storage()
+        val grant = CompletableDeferred<CloudflareAccessSession>()
+        val pending = mutableListOf<Job>()
+        val ownerScope = OwnedTestScope(StandardTestDispatcher(testScheduler))
+        var ordinary = false
+        var authentication: Job? = null
+        var prompts = 0
+        try {
+          val owner =
+            GatewayIngressController(ownerScope, registry, storage.persistence, { emptyMap() }, {}, registryObserverDispatcher = StandardTestDispatcher(testScheduler), clientForRoute = { target, _ ->
+              client { request ->
+                if (target == replacement) {
+                  probeEntered.complete(Unit)
+                  probeRelease.await()
+                  true
+                } else {
+                  !(target.stableId == endpoint.stableId && ordinary) && request.header("Cf-Access-Token") == null
+                }
               }
+            }, authenticate = { _, open ->
+              prompts++
+              authentication = kotlin.coroutines.coroutineContext[Job]
+              open("https://example.cloudflareaccess.com/login")
+              grant.await()
+            })
+          val old = async { runCatching { owner.prepare(endpoint, tls, true, owner.admissionCheckpoint()) { true } } }.also(pending::add)
+          runCurrent()
+          val launch = checkNotNull(owner.presentation.value.browserLaunch)
+          ordinary = true
+          assertNull(owner.prepare(endpoint, tls, false, owner.admissionCheckpoint()) { true })
+          assertFalse(checkNotNull(authentication).isCancelled)
+          assertFalse(old.isCompleted)
+          assertNull(owner.presentation.value.browserLaunch)
+          assertNull(owner.presentation.value.attention)
+          assertNull(owner.consumeBrowserLaunch(launch.attemptId))
+          val automatic =
+            if (replace) {
+              async { runCatching { owner.prepare(replacement, tls, false, owner.admissionCheckpoint()) { true } } }.also(pending::add).also {
+                runCurrent()
+                assertTrue(probeEntered.isCompleted)
+                assertFalse(it.isCompleted)
+              }
+            } else {
+              owner.forget(endpoint.stableId)
+              null
             }
-          }, authenticate = { _, open ->
-            prompts++
-            authentication = kotlin.coroutines.coroutineContext[Job]
-            open("https://example.cloudflareaccess.com/login")
-            grant.await()
-          })
-        val old = async { runCatching { owner.prepare(endpoint, tls, true, owner.admissionCheckpoint()) { true } } }.also(pending::add)
-        runCurrent()
-        val launch = checkNotNull(owner.presentation.value.browserLaunch)
-        ordinary = true
-        assertNull(owner.prepare(endpoint, tls, false, owner.admissionCheckpoint()) { true })
-        assertFalse(checkNotNull(authentication).isCancelled)
-        assertFalse(old.isCompleted)
-        assertNull(owner.presentation.value.browserLaunch)
-        assertNull(owner.presentation.value.attention)
-        assertNull(owner.consumeBrowserLaunch(launch.attemptId))
-        val automatic =
-          async { runCatching { owner.prepare(replacement, tls, false, owner.admissionCheckpoint()) { true } } }.also(pending::add).also {
-            runCurrent()
-            assertTrue(probeEntered.isCompleted)
-            assertFalse(it.isCompleted)
+          assertTrue(checkNotNull(authentication).isCancelled)
+          assertTrue(old.await().exceptionOrNull() is CancellationException)
+          assertNull(storage.values[application.origin])
+          val result =
+            if (automatic != null) {
+              probeRelease.complete(Unit)
+              automatic.await()
+            } else {
+              assertAccessOrigin(null, registry, endpoint.stableId)
+              runCatching { owner.prepare(sibling, tls.copy(stableId = sibling.stableId), false, owner.admissionCheckpoint()) { true } }
+            }
+          assertTrue(result.exceptionOrNull() is GatewayExternalAuthorizationException)
+          assertEquals(if (replace) endpoint.stableId else sibling.stableId, checkNotNull(owner.presentation.value.attention).stableId)
+          assertTrue(checkNotNull(owner.presentation.value.attention).message.startsWith("Sign in to Cloudflare Access"))
+          assertNull(owner.presentation.value.browserLaunch)
+          assertEquals(1, prompts)
+        } finally {
+          ownerScope.close({ pending.asSequence() }) {
+            grant.cancel()
+            probeRelease.complete(Unit)
           }
-        assertTrue(checkNotNull(authentication).isCancelled)
-        assertTrue(old.await().exceptionOrNull() is CancellationException)
-        assertNull(storage.values[application.origin])
-        probeRelease.complete(Unit)
-        val result = automatic.await()
-        assertTrue(result.exceptionOrNull() is GatewayExternalAuthorizationException)
-        assertEquals(endpoint.stableId, checkNotNull(owner.presentation.value.attention).stableId)
-        assertTrue(checkNotNull(owner.presentation.value.attention).message.startsWith("Sign in to Cloudflare Access"))
-        assertNull(owner.presentation.value.browserLaunch)
-        assertEquals(1, prompts)
-      } finally {
-        ownerScope.close({ pending.asSequence() }) {
-          grant.cancel()
-          probeRelease.complete(Unit)
         }
       }
     }
@@ -2067,6 +2717,64 @@ class GatewayIngressControllerTest {
       } finally {
         fixture.close()
       }
+    }
+
+  @Test fun canonicalIpv6OriginsRestoreStorageRegistryAndAdmitCurrentLeases() =
+    runTest {
+      val context = RuntimeEnvironment.getApplication()
+      val prefs = SecurePrefs(context, context.getSharedPreferences("access-ipv6-" + UUID.randomUUID(), Context.MODE_PRIVATE))
+      val persistence = CloudflareAccessSessionStore.Persistence.securePrefs(prefs)
+      val expanded = CloudflareAccessOrigin.from("wss://[0:0:0:0:0:0:0:1]:8443/gateway/socket")
+      val canonical = CloudflareAccessOrigin.from("https://[::1]:8443")
+      val descriptor = application.copy(origin = expanded)
+      val session = sessionFor(descriptor)
+      assertTrue(persistence.save(expanded, session.encode()))
+      assertEquals(session.encode(), persistence.load(canonical))
+      val restoredStore = CloudflareAccessSessionStore(backgroundScope, persistence, retireTransports = {})
+      val snapshot = checkNotNull(restoredStore.snapshot(canonical))
+      assertEquals(descriptor, snapshot.session.application)
+      assertSame(snapshot, restoredStore.snapshot(expanded))
+
+      val target = GatewayEndpoint.manual("0:0:0:0:0:0:0:1", 8443, true, "/gateway/socket")
+      val registry = GatewayRegistryStore(prefs)
+      add(registry, target)
+      assertTrue(registry.setAccessOrigin(target.stableId, expanded))
+      val restoredRegistry = GatewayRegistryStore(prefs)
+      assertSingleAccessOrigin("https://[::1]:8443", restoredRegistry)
+      var probes = 0
+      val owner =
+        GatewayIngressController(
+          backgroundScope,
+          restoredRegistry,
+          persistence,
+          { emptyMap() },
+          {},
+          clientForRoute = { _, _ ->
+            client(descriptor = { descriptor }, probe = { request ->
+              probes++
+              if (probes == 1) {
+                assertNull(request.header("Cf-Access-Token"))
+                true
+              } else {
+                assertEquals(session.authorizationHeader(request.url.toString()), request.header("Cf-Access-Token"))
+                false
+              }
+            })
+          },
+        )
+      val lease = checkNotNull(owner.prepare(target, GatewayTlsParams(true, null, false, target.stableId), false, owner.admissionCheckpoint()) { true })
+      for (url in listOf("wss://[::1]:8443/gateway/socket", "https://[0:0:0:0:0:0:0:1]:8443/media")) {
+        val request = Request.Builder().url(url).build()
+        lease.requireCurrent(request)
+        assertEquals(session.authorizationHeader(request.url.toString()), lease.authorizeUpgrade(request).header("Cf-Access-Token"))
+      }
+      assertEquals(4, probes)
+      for (url in listOf("https://[::2]:8443/media", "https://[::1]:8444/media", "http://[::1]:8443/media")) {
+        val failure = runCatching { lease.requireCurrent(Request.Builder().url(url).build()) }.exceptionOrNull()
+        assertTrue(failure is GatewayExternalAuthorizationException)
+      }
+      restoredStore.forget(expanded).task.await()
+      assertNull(persistence.load(canonical))
     }
 
   @Test fun configuredRouteTlsFailurePreservesTrustErrorWithoutAccessSideEffects() =

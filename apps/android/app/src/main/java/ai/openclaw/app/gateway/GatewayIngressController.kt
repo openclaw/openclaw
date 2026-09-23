@@ -499,6 +499,66 @@ internal class GatewayIngressController(
     cancel(id)
   }
 
+  suspend fun forget(stableId: String) = forget(stableId) {}
+
+  private suspend fun forget(
+    stableId: String,
+    validate: () -> Unit,
+  ) {
+    val context = kotlin.coroutines.coroutineContext
+    var associationFailed = false
+    val (intent, retirement, association) =
+      synchronized(lock) {
+        context.ensureActive()
+        validate()
+        val registration = registrations[stableId]
+        val association =
+          registry.entries.value
+            .firstOrNull { it.stableId == stableId }
+            ?.accessOrigin
+        val origin = association?.let { runCatching { CloudflareAccessOrigin.from(it) }.getOrNull() } ?: registration?.origin
+        // Reserve last-owner retirement before any observable publication. Shared
+        // departures release their association now, leaving the final owner durable.
+        val retirement =
+          origin
+            ?.takeIf { selected -> registry.entries.value.none { it.stableId != stableId && it.accessOrigin == selected.uri.toString() } }
+            ?.let(store::reserveForget)
+        leases.remove(stableId)?.active?.set(false)
+        registrations.remove(stableId)
+        if (retirement == null && association != null) {
+          associationFailed = !registry.setAccessOrigin(stableId, null)
+        }
+        val intent = registration?.let(::retireBrowserParticipationLocked)
+        // Registry observers can reenter after the association commit. A newer
+        // registration owns its UI even when it uses the same origin.
+        if (registrations[stableId] == null) {
+          publishLocked(
+            attention = mutablePresentation.value.attention.takeUnless { it?.stableId == stableId },
+            browserLaunch = mutablePresentation.value.browserLaunch,
+          )
+        }
+        Triple(intent, retirement, association)
+      }
+    retirement?.start()
+    retireDiscoveries { it.registration.endpoint.stableId == stableId && registrations[stableId] !== it.registration }
+    val cancellation = intent?.let { finishCancellation(it, it.task) }
+    cancellation?.join()
+    if (retirement != null) {
+      completeDeparture(stableId, association, retirement) { registrations[stableId] == null }
+    } else {
+      context.ensureActive()
+      synchronized(lock) {
+        if (associationFailed && registrations[stableId] == null &&
+          registry.entries.value
+            .firstOrNull { it.stableId == stableId }
+            ?.accessOrigin == association
+        ) {
+          throw CloudflareAccessException(CloudflareAccessException.Kind.StorageFailed)
+        }
+      }
+    }
+  }
+
   private suspend fun completeDeparture(
     stableId: String,
     association: String?,
