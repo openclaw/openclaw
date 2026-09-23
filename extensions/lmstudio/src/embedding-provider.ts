@@ -15,7 +15,6 @@ import {
   type MemorySearchDeadlineControl,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-host-secret";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { findNormalizedProviderKey } from "openclaw/plugin-sdk/provider-model-metadata";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { LMSTUDIO_DEFAULT_EMBEDDING_MODEL, LMSTUDIO_PROVIDER_ID } from "./defaults.js";
@@ -42,7 +41,16 @@ import {
 const log = createSubsystemLogger("memory/embeddings");
 
 type LmstudioEmbeddingClient = Omit<RemoteEmbeddingClient, "fetchImpl">;
-type MemoryCoreAcquireLocalService = OpenClawPluginApi["runtime"]["llm"]["acquireLocalService"];
+type MemoryCoreAcquireLocalService = (
+  target: {
+    providerId: string;
+    baseUrl: string;
+    headers?: HeadersInit;
+    /** Reports managed-companion readiness waits; request work stays outside. */
+    onReadinessWait?: (waiting: boolean) => void;
+  },
+  signal?: AbortSignal | null,
+) => Promise<{ release: () => void } | undefined>;
 type LocalServiceAwareEmbeddingOptions = MemoryEmbeddingProviderCreateOptions & {
   acquireLocalService?: MemoryCoreAcquireLocalService;
 };
