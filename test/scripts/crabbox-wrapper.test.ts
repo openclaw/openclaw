@@ -2330,6 +2330,73 @@ describe("scripts/crabbox-wrapper", () => {
     }
   });
 
+  it.skipIf(process.platform === "win32").each(["command", "script"])(
+    "runs native AWS no-hydrate %s payloads without Node or pnpm",
+    (mode) => {
+      const cwd = invocationLogTempDirs.make("openclaw-raw-aws-");
+      const emptyPath = path.join(cwd, "empty-path");
+      mkdirSync(emptyPath);
+      const script =
+        "set -eu\n! command -v node\n! command -v pnpm\nprintf '%s\\n' raw-bootstrap-ran\n";
+      const file = path.join(cwd, "bootstrap.sh");
+      writeFileSync(file, script);
+      const payload = mode === "script" ? ["--script", file] : ["--shell", "--", script];
+      const { output, remoteCommand } = runSuccessfulDefaultWrapper([
+        "run",
+        "--provider",
+        "aws",
+        "--no-hydrate",
+        ...payload,
+      ]);
+      expect(output.args).toContain("--no-hydrate");
+      const result = spawnSync(
+        "/bin/sh",
+        ["-c", mode === "script" ? output.scriptContent! : remoteCommand],
+        {
+          cwd,
+          encoding: "utf8",
+          env: { PATH: emptyPath },
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe("raw-bootstrap-ran\n");
+      expect(output.args.slice(-payload.length)).toEqual(payload);
+      expect(mode === "script" ? output.scriptContent : remoteCommand).toBe(script);
+    },
+  );
+
+  it.each([
+    { flags: ["--no-hydrate"], capsule: false },
+    { flags: ["--no-hydrate=true"], capsule: false },
+    { flags: ["--no-hydrate=1"], capsule: false },
+    { flags: ["--no-hydrate=T"], capsule: false },
+    { flags: ["--no-hydrate=false"], capsule: true },
+    { flags: ["--no-hydrate=0"], capsule: true },
+    { flags: ["--no-hydrate=F"], capsule: true },
+    { flags: ["--no-hydrate", "--no-hydrate=false"], capsule: true },
+    { flags: ["--no-hydrate=false", "--no-hydrate"], capsule: false },
+    { flags: ["--label", "--no-hydrate"], capsule: true },
+  ])("preserves native hydration option semantics: $flags", ({ flags, capsule }) => {
+    const { output, remoteCommand } = runSuccessfulDefaultWrapper([
+      "run",
+      "--provider",
+      "aws",
+      ...flags,
+      "--",
+      "echo",
+      "--no-hydrate",
+    ]);
+    expect(remoteCommand.includes(".openclaw-crabbox-changed-gate.bundle")).toBe(capsule);
+    expect(remoteCommand).not.toContain("OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1");
+    const index = output.args.indexOf(flags[0]!);
+    expect(output.args.slice(index, index + flags.length)).toEqual(flags);
+    if (capsule) {
+      expect(remoteCommand).toContain("echo --no-hydrate");
+    } else {
+      expect(output.args.slice(-2)).toEqual(["echo", "--no-hydrate"]);
+    }
+  });
+
   it.each<{ source: string; args: string[]; options: WrapperOptions; capsule: boolean }>([
     { source: "Linux alias", args: ["--target", "ubuntu"], options: {}, capsule: true },
     {

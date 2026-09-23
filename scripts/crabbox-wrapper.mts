@@ -3292,17 +3292,26 @@ function isWorktreeClean() {
 
 function needsSourceCapsule(commandArgs: string[], providerName: string) {
   const provider = canonicalProviderName(providerName);
+  const invocation = parseCommandInvocation(help.text, commandArgs);
+  const noHydrate = invocation.optionEntries.findLast(({ name }) => name === "no-hydrate");
+  const hydrationDisabled = Boolean(
+    noHydrate &&
+    (!commandArgs[noHydrate.index]?.includes("=") ||
+      /^(?:1|t|T|true|TRUE|True)$/u.test(noHydrate.value)),
+  );
   return (
     commandArgs[0] === "run" &&
     !hasOption(commandArgs, "--no-sync") &&
     !hasOption(commandArgs, "--fresh-pr") &&
     !isNativeWindowsRemoteTarget(commandArgs) &&
     (provider === "blacksmith-testbox" ||
-      // Ordinary Linux sync can omit Git; other targets retain their native bootstrap.
+      // Ordinary Linux sync can omit Git. Explicit raw bootstrap commands must keep
+      // native ownership because the source receiver itself requires Node.
       (provider === "aws" &&
         ["", "linux", "ubuntu"].includes(effectiveTargetContext(commandArgs).target) &&
+        !hydrationDisabled &&
         !hasOption(commandArgs, "--sync-only")) ||
-      analyzeRemoteCommand(parseCommandInvocation(help.text, commandArgs)).changedGate)
+      analyzeRemoteCommand(invocation).changedGate)
   );
 }
 
