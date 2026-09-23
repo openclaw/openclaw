@@ -412,7 +412,11 @@ checklist below explains each step; this section decides what the default is.
    entry, and the contribution record land on that branch in one commit, so
    Code SHA = Release SHA. Freeze the Tooling SHA once at dispatch. A
    publish-tooling re-tag (`release-publish/<sha12>-<epoch>` at a newer `main`)
-   never requires a new candidate or a new validation parent.
+   never requires a new candidate or a new validation parent. A second cut
+   (re-basing the candidate on newer `main`) happens only when Peter explicitly
+   asks for it in that release; otherwise cherry-pick merged `main` commits onto
+   the release branch only for a confirmed release blocker and name each one in
+   the handoff record.
 2. **Beta-profile evidence with a stable soak waiver.** Dispatch Full Release
    Validation with `release_profile=beta` and `run_release_soak=false`. Pass
    `--release-profile beta --stable-soak-waiver '<reason>' --skip-telegram --skip-parallels`
@@ -431,7 +435,8 @@ checklist below explains each step; this section decides what the default is.
    it lands.) A
    lane that fails twice on a test the candidate did not touch, where diagnosis
    finds no product cause in the candidate delta, is flaky: record it, fix it
-   on `main` in parallel, and do not re-cut. A re-cut is justified only by a
+   on `main` in parallel, and do not re-cut. A new Code SHA on the release
+   branch is justified only by a
    confirmed product defect that a required lane blocks on: the update/install
    path (the previous stable must update to the candidate, `install-smoke`,
    pack budget, worker bundle), the bytes to publish, or another required gate
