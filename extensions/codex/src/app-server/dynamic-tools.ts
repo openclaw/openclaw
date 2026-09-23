@@ -420,7 +420,7 @@ export function createCodexDynamicToolBridge(params: {
       const rawArguments =
         toolName === "automations" ? resolveAutomationsToolsAllow(call.arguments) : call.arguments;
       const args = asNonArrayRecord(rawArguments);
-      const startedAt = Date.now();
+      const invocationStartedAt = Date.now();
       const signal = composeAbortSignals(params.signal, options?.signal);
       let preparedMessageMedia:
         | Awaited<ReturnType<typeof prepareCodexRemoteWorkspaceMessageMedia>>
@@ -446,7 +446,7 @@ export function createCodexDynamicToolBridge(params: {
           turnId: call.turnId,
         },
         runId: toolResultHookContext.runId,
-        startedAt,
+        startedAt: invocationStartedAt,
         signal,
         boundaries: executionBoundaries,
         retainExecutionSnapshot: options?.retainExecutionSnapshot,
