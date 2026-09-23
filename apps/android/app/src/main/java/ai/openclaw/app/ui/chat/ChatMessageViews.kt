@@ -14,6 +14,7 @@ import ai.openclaw.app.ui.image.RemoteImageResult
 import ai.openclaw.app.ui.image.safeRemoteImageStore
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -58,6 +59,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
@@ -563,7 +565,6 @@ private fun ChatImagePreview(
   val anchor = rememberChatReaderAnchor(stateKey)
   var previewVisible by rememberSaveable(stateKey) { mutableStateOf(false) }
   Surface(
-    onClick = { previewVisible = true },
     shape = RoundedCornerShape(10.dp),
     border = BorderStroke(1.dp, ClawTheme.colors.border),
     color = ClawTheme.colors.surfaceRaised,
@@ -579,7 +580,7 @@ private fun ChatImagePreview(
           val height = (image.height * scale).roundToInt().coerceIn(constraints.minHeight, constraints.maxHeight)
           val placeable = measurable.measure(constraints.copy(minWidth = width, maxWidth = width, minHeight = height, maxHeight = height))
           layout(width, height) { placeable.placeRelative(0, 0) }
-        },
+        }.clickable(role = Role.Button, onClickLabel = nativeString("Open image preview")) { previewVisible = true },
   ) {
     Box {
       Image(

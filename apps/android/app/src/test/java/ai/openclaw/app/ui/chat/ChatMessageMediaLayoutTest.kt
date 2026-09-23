@@ -23,6 +23,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
@@ -218,7 +221,13 @@ class ChatMessageMediaLayoutTest {
     assertEquals((inline.right - inline.left).value, (managed.right - managed.left).value, 1f)
     composeRule.onAllNodesWithContentDescription("Open image preview").assertCountEquals(0)
     for (label in listOf("image/png", "Garden 2")) {
-      composeRule.onNodeWithContentDescription(label).assert(hasClickAction())
+      val preview = composeRule.onNodeWithContentDescription(label)
+      preview.assert(hasClickAction())
+      preview.assert(
+        SemanticsMatcher("preview click action has a label") { node ->
+          node.config.getOrNull(SemanticsActions.OnClick)?.label == "Open image preview"
+        },
+      )
       composeRule.onNodeWithContentDescription(label, useUnmergedTree = true).performTouchInput { click(center) }
       composeRule.onNodeWithContentDescription("Close image preview").assertIsDisplayed().performClick()
     }
