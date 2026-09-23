@@ -19,6 +19,7 @@ import type {
   SessionTranscriptHistoryWorkerInput,
   SessionTranscriptWorkerInput,
   SessionTranscriptWorkerReply,
+  SessionTranscriptWorkerSuccess,
   SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
 
@@ -36,11 +37,7 @@ async function withHistoryDatabase<T>(
   database: SessionTranscriptHistoryWorkerInput["database"],
   operationLabel: string,
   operation: () => T | Promise<T>,
-): Promise<{
-  ok: true;
-  value: T;
-  closedHistoryDatabase?: SessionTranscriptHistoryWorkerInput["database"];
-}> {
+): Promise<SessionTranscriptWorkerSuccess<T>> {
   const key = JSON.stringify(database);
   let retained = historyDatabaseScopes.get(key);
   if (!retained) {

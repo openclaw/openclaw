@@ -18,16 +18,25 @@ export type SessionHistoryWorkerRequestRunner = <TResult>(
   onRequest?: (value: unknown) => void,
 ) => Promise<TResult>;
 
-type SessionHistoryWorkerValue = SessionTranscriptWorkerValues[SessionHistoryWorkerInput["kind"]];
+type HistoryWorkerValue = SessionTranscriptWorkerValues[SessionHistoryWorkerInput["kind"]];
+type TaggedHistoryWorkerValue = Extract<HistoryWorkerValue, { kind: string }>;
 
-function assertResultKind<K extends Extract<SessionHistoryWorkerValue, { kind: string }>["kind"]>(
-  value: SessionHistoryWorkerValue,
-  kind: K,
-  expected: string,
-): asserts value is Extract<SessionHistoryWorkerValue, { kind: K }> {
-  if (typeof value === "boolean" || Array.isArray(value) || value.kind !== kind) {
-    throw new Error(`Session history worker returned another result instead of ${expected}`);
+function hasResultKind<Kind extends TaggedHistoryWorkerValue["kind"]>(
+  value: HistoryWorkerValue,
+  kind: Kind,
+): value is Extract<TaggedHistoryWorkerValue, { kind: Kind }> {
+  return typeof value !== "boolean" && !Array.isArray(value) && value.kind === kind;
+}
+
+function readResult<Kind extends TaggedHistoryWorkerValue["kind"]>(
+  value: HistoryWorkerValue,
+  kind: Kind,
+  label: string,
+) {
+  if (!hasResultKind(value, kind)) {
+    throw new Error(`Session history worker returned another result instead of ${label}`);
   }
+  return value;
 }
 
 /** Decode domain results; database custody remains with the enclosing history owner. */
@@ -67,55 +76,37 @@ export function createSessionHistoryWorkerReaders(
       await runRequest(
         () => ({ kind: "session-archive-pruning", ...input }),
         JSON.stringify(input).length * 2,
-        (value) => {
-          assertResultKind(value, "session-archive-pruning", "archive pruning");
-          return value.result;
-        },
+        (value) => readResult(value, "session-archive-pruning", "archive pruning").result,
       ),
     readColdMetadata: async (input) =>
       await runRequest(
         () => ({ kind: "cold-metadata", ...input }),
         JSON.stringify(input).length * 2,
-        (value) => {
-          assertResultKind(value, "cold-metadata", "cold metadata");
-          return value;
-        },
+        (value) => readResult(value, "cold-metadata", "cold metadata"),
       ),
     searchTranscripts: async (params) =>
       await runRequest(
         () => ({ kind: "transcript-search", params }),
         JSON.stringify(params).length * 2,
-        (value) => {
-          assertResultKind(value, "transcript-search", "search");
-          return value.result;
-        },
+        (value) => readResult(value, "transcript-search", "search").result,
       ),
     readPreview: async (input) =>
       await runRequest(
         () => ({ kind: "session-preview", ...input }),
         JSON.stringify(input).length * 2,
-        (value) => {
-          assertResultKind(value, "session-preview", "a preview");
-          return value.items;
-        },
+        (value) => readResult(value, "session-preview", "a preview").items,
       ),
     readTitleFields: async (input) =>
       await runRequest(
         () => ({ kind: "session-title-fields", ...input }),
         JSON.stringify(input).length * 2,
-        (value) => {
-          assertResultKind(value, "session-title-fields", "title fields");
-          return value.fields;
-        },
+        (value) => readResult(value, "session-title-fields", "title fields").fields,
       ),
     readRowBackfill: async (params) =>
       await runRequest(
         () => ({ kind: "session-row-backfill", params }),
         JSON.stringify(params).length * 2,
-        (value) => {
-          assertResultKind(value, "session-row-backfill", "transcript fields");
-          return value.fields;
-        },
+        (value) => readResult(value, "session-row-backfill", "transcript fields").fields,
       ),
     run: async (prepare, inputBytes) =>
       await runRequest(prepare, inputBytes, (value) => {
@@ -205,29 +196,20 @@ export function createSessionHistoryWorkerReaders(
       await runRequest(
         () => ({ kind: "current-turn-entry", ...input }),
         JSON.stringify(input).length * 2,
-        (value) => {
-          assertResultKind(value, "current-turn-entry", "a current-turn entry");
-          return value;
-        },
+        (value) => readResult(value, "current-turn-entry", "a current-turn entry"),
         signal,
       ),
     readUsageCache: async (input) =>
       await runRequest(
         () => ({ kind: "usage-cache", ...input }),
         JSON.stringify(input).length * 2,
-        (value) => {
-          assertResultKind(value, "usage-refresh-lock", "usage cache");
-          return value;
-        },
+        (value) => readResult(value, "usage-refresh-lock", "usage cache"),
       ),
     readMembershipFacts: async (input) =>
       await runRequest(
         () => ({ kind: "session-membership-facts", ...input }),
         JSON.stringify(input).length * 2,
-        (value) => {
-          assertResultKind(value, "session-membership-facts", "membership facts");
-          return value;
-        },
+        (value) => readResult(value, "session-membership-facts", "membership facts"),
       ),
     readMembers: async (input) =>
       await runRequest(
@@ -244,10 +226,7 @@ export function createSessionHistoryWorkerReaders(
       await runRequest(
         () => ({ kind: "session-exact-entries", ...input }),
         JSON.stringify(input).length * 2,
-        (value) => {
-          assertResultKind(value, "session-exact-entries", "exact entries");
-          return value;
-        },
+        (value) => readResult(value, "session-exact-entries", "exact entries"),
         signal,
       ),
     readRowFacts: async (input) => {
@@ -262,20 +241,14 @@ export function createSessionHistoryWorkerReaders(
       return await runRequest(
         () => ({ kind: "session-row-facts", ...captured }),
         JSON.stringify(captured).length * 2,
-        (value) => {
-          assertResultKind(value, "session-row-facts", "row facts");
-          return value;
-        },
+        (value) => readResult(value, "session-row-facts", "row facts"),
       );
     },
     readProgressCard: async (input) =>
       await runRequest(
         () => ({ kind: "session-progress-card", ...input }),
         JSON.stringify(input).length * 2,
-        (value) => {
-          assertResultKind(value, "session-progress-card", "a progress card");
-          return value.card;
-        },
+        (value) => readResult(value, "session-progress-card", "a progress card").card,
       ),
     readEntryResult: async (input) =>
       await runRequest(
@@ -301,19 +274,13 @@ export function createSessionHistoryWorkerReaders(
       await runRequest(
         () => ({ kind: "session-entry-list", scope }),
         JSON.stringify(scope).length * 2,
-        (value) => {
-          assertResultKind(value, "session-entry-list", "entries");
-          return value.entries;
-        },
+        (value) => readResult(value, "session-entry-list", "entries").entries,
       ),
     readIdentityEvidence: async (input) =>
       await runRequest(
         () => ({ kind: "session-identity-evidence", ...input }),
         JSON.stringify(input).length * 2,
-        (value) => {
-          assertResultKind(value, "session-identity-evidence", "identity evidence");
-          return value.evidence;
-        },
+        (value) => readResult(value, "session-identity-evidence", "identity evidence").evidence,
       ),
     readProjectionStatus: async (input, signal) =>
       await runRequest(

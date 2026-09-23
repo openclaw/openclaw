@@ -352,33 +352,24 @@ function buildFreshestSessionEntryIndex(store: SessionEntryReadView): Map<string
       continue;
     }
     const normalized = normalizeStoreSessionKey(key);
-    const existing = index.get(normalized);
-    const entryRoutable = hasDeliveryTargetFields(deliveryContextFromSession(entry));
-    const existingRoutable = hasDeliveryTargetFields(deliveryContextFromSession(existing));
-    if (
-      !existing ||
-      (entryRoutable && !existingRoutable) ||
-      (entryRoutable === existingRoutable && (entry.updatedAt ?? 0) > (existing.updatedAt ?? 0))
-    ) {
-      index.set(normalized, entry);
-    }
+    const keys = [normalized];
     // Lowercase aliases are only indexed when case folding is not proof-sensitive; Matrix-style
     // opaque ids must keep exact-case delivery evidence.
     const foldedLegacyKey = normalizeLowercaseStringOrEmpty(normalized);
-    if (foldedLegacyKey === normalized || requiresFoldedSessionKeyAliasProof(normalized)) {
-      continue;
+    if (foldedLegacyKey !== normalized && !requiresFoldedSessionKeyAliasProof(normalized)) {
+      keys.push(foldedLegacyKey);
     }
-    const foldedExisting = index.get(foldedLegacyKey);
-    const foldedExistingRoutable = hasDeliveryTargetFields(
-      deliveryContextFromSession(foldedExisting),
-    );
-    if (
-      !foldedExisting ||
-      (entryRoutable && !foldedExistingRoutable) ||
-      (entryRoutable === foldedExistingRoutable &&
-        (entry.updatedAt ?? 0) > (foldedExisting.updatedAt ?? 0))
-    ) {
-      index.set(foldedLegacyKey, entry);
+    const entryRoutable = hasDeliveryTargetFields(deliveryContextFromSession(entry));
+    for (const indexKey of keys) {
+      const existing = index.get(indexKey);
+      const existingRoutable = hasDeliveryTargetFields(deliveryContextFromSession(existing));
+      if (
+        !existing ||
+        (entryRoutable && !existingRoutable) ||
+        (entryRoutable === existingRoutable && (entry.updatedAt ?? 0) > (existing.updatedAt ?? 0))
+      ) {
+        index.set(indexKey, entry);
+      }
     }
   }
   return index;

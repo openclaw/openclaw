@@ -26,6 +26,7 @@ function isBlockedConfigEnvVar(key: string): boolean {
 
 /** Returns whether a config-controlled environment entry is safe to apply at runtime. */
 export function isConfigRuntimeEnvVarAllowed(key: string, value: string): boolean {
+  // Unresolved templates must not become literal process credentials before env substitution.
   return Boolean(value.trim()) && !isBlockedConfigEnvVar(key) && !containsEnvVarReference(value);
 }
 

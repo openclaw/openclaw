@@ -14,13 +14,10 @@ import { resolveCollapsedSessionAuthPinSource } from "../config/sessions/auth-pr
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
-import { applyModelOverrideToSessionEntry } from "./model-overrides.js";
-
-type ModelOverrideSelection = {
-  provider: string;
-  model: string;
-  isDefault?: boolean;
-};
+import {
+  applyModelOverrideToSessionEntry,
+  type ModelOverrideSelection,
+} from "./model-overrides.js";
 
 function resolvePinnedAuthProfileProvider(params: {
   cfg: OpenClawConfig;

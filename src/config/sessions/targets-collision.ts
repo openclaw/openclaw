@@ -45,6 +45,9 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
     onResolvedTarget?: (selected: SessionStoreTarget, physical: SessionStoreTarget) => void;
   },
 ): SessionStoreTarget[] {
+  const reportDiagnostic =
+    options.onDiagnostic ??
+    ((diagnostic: SessionStoreTargetCollisionDiagnostic) => log.warn(diagnostic.message));
   // Ownership must not fall back while the authoritative registry is unreadable:
   // doing so can project the same physical DB under a different configured default.
   const registeredDatabases = readSessionStoreRegistryRows(
@@ -127,11 +130,7 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
       ignoredAgentIds,
       ownerSource,
     };
-    if (options.onDiagnostic) {
-      options.onDiagnostic(diagnostic);
-    } else {
-      log.warn(diagnostic.message);
-    }
+    reportDiagnostic(diagnostic);
   }
   const deduped: SessionStoreTarget[] = [];
   for (const [sqlitePath, group] of grouped) {
@@ -159,11 +158,7 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
         ignoredAgentIds: [...byAgentId.keys()],
         ownerSource: "ambiguous-registry",
       };
-      if (options.onDiagnostic) {
-        options.onDiagnostic(diagnostic);
-      } else {
-        log.warn(diagnostic.message);
-      }
+      reportDiagnostic(diagnostic);
       continue;
     }
     const ownerSource =
@@ -210,11 +205,7 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
         ignoredAgentIds: effectiveIgnoredAgentIds,
         ownerSource,
       };
-      if (options.onDiagnostic) {
-        options.onDiagnostic(diagnostic);
-      } else {
-        log.warn(diagnostic.message);
-      }
+      reportDiagnostic(diagnostic);
     }
   }
   return deduped;
