@@ -26,6 +26,7 @@ import {
 } from "./admitted-run-context.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import { closeAuthProfileReadPool } from "./auth-profiles/sqlite.js";
+import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import { resolveCliExecutionTarget } from "./cli-runner/execution-target.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 
@@ -502,4 +503,21 @@ export function createWeatherSkillFixture(root: string, materialized: boolean) {
       ],
     } satisfies NonNullable<RunCliAgentParams["skillsSnapshot"]>,
   };
+}
+
+export function createJsonlStdinBackendConfig(command: string): CliBackendPlugin["config"] {
+  return {
+    command,
+    args: ["--print"],
+    output: "jsonl",
+    input: "stdin",
+    sessionMode: "existing",
+  };
+}
+
+export function setRawCliBackendForPrepareTest(backend: CliBackendPlugin & { pluginId: string }) {
+  cliBackendsTesting.setDepsForTest({
+    resolvePluginSetupCliBackend: () => undefined,
+    resolveRuntimeCliBackends: () => [backend],
+  });
 }

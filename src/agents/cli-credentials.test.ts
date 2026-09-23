@@ -10,6 +10,7 @@ let readCodexCliActiveApiKey: typeof import("./cli-credentials.js").readCodexCli
 let readCodexCliCredentialsCached: typeof import("./cli-credentials.js").readCodexCliCredentialsCached;
 let readGeminiCliCredentialsCached: typeof import("./cli-credentials.js").readGeminiCliCredentialsCached;
 let readMiniMaxCliCredentialsCached: typeof import("./cli-credentials.js").readMiniMaxCliCredentialsCached;
+let resolveNativeCliAuthIdentity: typeof import("./cli-credentials.js").resolveNativeCliAuthIdentity;
 
 function createJwtWithExp(expSeconds: number): string {
   // Signature verification is out of scope; expiration extraction only needs a
@@ -38,6 +39,7 @@ describe("cli credentials", () => {
       readCodexCliCredentialsCached,
       readGeminiCliCredentialsCached,
       readMiniMaxCliCredentialsCached,
+      resolveNativeCliAuthIdentity,
     } = await import("./cli-credentials.js"));
   });
 
@@ -702,5 +704,68 @@ describe("cli credentials", () => {
     } finally {
       fs.rmSync(tempHome, { recursive: true, force: true });
     }
+  });
+
+  it("reads only the non-secret native Claude account identity", () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-native-"));
+    try {
+      fs.writeFileSync(
+        path.join(tempHome, ".claude.json"),
+        JSON.stringify({ oauthAccount: { emailAddress: "owner@example.com" } }),
+        "utf8",
+      );
+      fs.mkdirSync(path.join(tempHome, ".claude"), { recursive: true });
+      fs.writeFileSync(
+        path.join(tempHome, ".claude", ".credentials.json"),
+        JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "native-access",
+            refreshToken: "native-refresh",
+            expiresAt: Date.parse("2030-01-01T00:00:00Z"),
+            subscriptionType: "max",
+            rateLimitTier: "default_claude_max_20x",
+          },
+        }),
+        "utf8",
+      );
+
+      expect(
+        resolveNativeCliAuthIdentity({
+          backendId: "claude-cli",
+          profileId: "anthropic:claude-cli",
+          homeDir: tempHome,
+        }),
+      ).toEqual({
+        profileId: "anthropic:claude-cli",
+        accountRef: "owner@example.com",
+        planRef: "max|default_claude_max_20x",
+      });
+    } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when the native Claude account email is unavailable", () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-native-none-"));
+    try {
+      expect(
+        resolveNativeCliAuthIdentity({
+          backendId: "claude-cli",
+          profileId: "anthropic:claude-cli",
+          homeDir: tempHome,
+        }),
+      ).toBeUndefined();
+    } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores native identity for backends with no native login", () => {
+    expect(
+      resolveNativeCliAuthIdentity({
+        backendId: "google-gemini-cli",
+        profileId: "google-gemini-cli:default",
+      }),
+    ).toBeUndefined();
   });
 });
