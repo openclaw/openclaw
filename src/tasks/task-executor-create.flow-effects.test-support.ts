@@ -5,9 +5,9 @@ import {
   createInMemoryTaskRegistryStore,
 } from "../test-utils/task-registry-store.js";
 import { createRunningTaskRunCoreWithReceiptAsync } from "./task-executor-create.async.js";
-import { getTaskFlowById } from "./task-flow-registry.js";
 import { applyFlowPatch } from "./task-flow-registry.records.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import { getTaskFlowById } from "./task-flow-runtime-internal.js";
 import { buildManagedFlowCancellationPatch } from "./task-initial-flow.rules.js";
 import type { TaskInitialWorkerOperations } from "./task-initial-worker.types.js";
 import { ensureTaskRegistryReadyAsync } from "./task-registry-state.js";
