@@ -202,7 +202,7 @@ function isOpenAIResponseItemId(
   value: string,
   route: TranscriptAssistantRoute | undefined,
 ): boolean {
-  return isSafeReplayIdentifier(value, 512);
+  return isSafeReplayIdentifier(value, isGitHubCopilotResponsesRoute(route) ? 64 : 512);
 }
 
 const replaySanitizerHelpers = {
@@ -380,7 +380,10 @@ function sanitizeOpenAIReasoningSignature(
   }
   if (
     parsed.id !== undefined &&
-    (typeof parsed.id !== "string" || !isOpenAIResponseItemId(parsed.id, route))
+    (typeof parsed.id !== "string" ||
+      !(isOpenAIResponsesRoute(route)
+        ? isSafeReplayIdentifier(parsed.id, Infinity)
+        : isOpenAIResponseItemId(parsed.id, route)))
   ) {
     return undefined;
   }
