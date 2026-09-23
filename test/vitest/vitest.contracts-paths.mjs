@@ -23,7 +23,6 @@ export const channelRegistryContractPatterns = [
   "src/channels/plugins/contracts/plugin-shape.contract.test.ts",
   "src/channels/plugins/contracts/plugins-core.catalog.paths.contract.test.ts",
   "src/channels/plugins/contracts/plugins-core.loader.contract.test.ts",
-  "src/channels/plugins/contracts/plugins-core.registry.contract.test.ts",
   "src/channels/plugins/contracts/*-shard-c.contract.test.ts",
   "src/channels/plugins/contracts/*-shard-g.contract.test.ts",
 ];

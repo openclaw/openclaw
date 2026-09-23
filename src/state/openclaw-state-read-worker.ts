@@ -86,6 +86,9 @@ function readPool(): ReadPool {
 }
 
 function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCommand {
+  if (command.type === "acpSessions.metadata") {
+    return structuredClone(command);
+  }
   if (command.type === "userProfiles.channelIdentity.resolve") {
     return { type: command.type, identity: { ...command.identity } };
   }

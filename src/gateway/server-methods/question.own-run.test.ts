@@ -5,7 +5,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
-import { historyPages } from "../../config/sessions/session-transcript-worker-resources.js";
+import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -379,8 +379,8 @@ describe("own-run question admission", () => {
         retainedReads += 1;
         assertCurrent(read);
       });
-      const run = historyPages.run.bind(historyPages);
-      vi.spyOn(historyPages, "run").mockImplementation((...args) => {
+      const run = historyLane.pool.run.bind(historyLane.pool);
+      vi.spyOn(historyLane.pool, "run").mockImplementation((...args) => {
         retainedReads += 1;
         return run(...args);
       });
@@ -533,8 +533,8 @@ describe("own-run question admission", () => {
       const recipient = questionPeer(f.profile, "independent-current-recipient");
       const entered = createDeferred();
       const release = createDeferred();
-      const run = historyPages.run.bind(historyPages);
-      const spy = vi.spyOn(historyPages, "run").mockImplementationOnce(async (...args) => {
+      const run = historyLane.pool.run.bind(historyLane.pool);
+      const spy = vi.spyOn(historyLane.pool, "run").mockImplementationOnce(async (...args) => {
         const result = await run(...args);
         entered.resolve();
         await release.promise;
@@ -579,7 +579,7 @@ describe("own-run question admission", () => {
         return result;
       });
       const failure = new Error("Transient question worker read failure");
-      const spy = vi.spyOn(historyPages, "run").mockRejectedValueOnce(failure);
+      const spy = vi.spyOn(historyLane.pool, "run").mockRejectedValueOnce(failure);
       try {
         await expect(f.call("question.get", { id })).rejects.toThrow(failure);
         expect(observation.isCurrent()).toBe(true);

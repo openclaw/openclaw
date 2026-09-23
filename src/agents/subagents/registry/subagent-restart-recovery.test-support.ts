@@ -124,12 +124,17 @@ export function useSubagentRestartRecoveryFixture() {
         resetTaskFlowRegistryForTests({ persist: false });
         clearRuntimeConfigSnapshot();
         if (tempStateDir) {
-          await fs.rm(tempStateDir, {
-            recursive: true,
-            force: true,
-            maxRetries: 5,
-            retryDelay: 50,
-          });
+          // Resource cleanup finished; removal failure must not retain a retired owner.
+          try {
+            await fs.rm(tempStateDir, {
+              recursive: true,
+              force: true,
+              maxRetries: 5,
+              retryDelay: 50,
+            });
+          } catch (error) {
+            failures.push(error);
+          }
         }
         envSnapshot.restore();
         deliveries?.[Symbol.dispose]();

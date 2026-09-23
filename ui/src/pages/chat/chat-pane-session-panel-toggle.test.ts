@@ -1,6 +1,14 @@
+import { html, LitElement } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import "./components/chat-sidebar-region.runtime.ts";
+import "../../components/browser/browser-panel.ts";
 import type { ControlUiLinkReaderDescriptor } from "../../../../src/shared/control-ui-link-reader.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  createBrowserClient,
+  stubScreenshotMedia,
+  createBrowserPanelTestMetrics,
+} from "../../components/browser/browser-panel-controller-test-support.ts";
 import { LINK_READER_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import {
   rememberSessionPanelToggle,
@@ -10,12 +18,14 @@ import {
   ChatPaneSessionPanelToggleController,
   type PendingSessionPanelToggle,
 } from "./chat-pane-session-panel-toggle.ts";
+import { renderSidebarRegion } from "./chat-pane-sidebar-layout.ts";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
+import { isSidebarSlotVisible } from "./sidebar-layout.ts";
 
 const reader: ControlUiLinkReaderDescriptor = {
   pluginId: "forge",
@@ -208,4 +218,134 @@ describe("session link-reader intent delivery", () => {
       expect(f.deliverPanelEvent).not.toHaveBeenCalled();
     },
   );
+});
+
+it("delivers a browser card after the pane's scheduled render commits", async () => {
+  vi.useFakeTimers();
+  stubScreenshotMedia();
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+  const url = "http://127.0.0.1:18789/assets/example.html";
+  const gateway = createBrowserClient(async (request) => {
+    if (request.path === "/tabs" && request.query?.profile !== "managed") {
+      return { running: true, tabs: [] };
+    }
+    if (request.path === "/tabs") {
+      return {
+        running: true,
+        tabs: [{ tabId: "t1", targetId: "target-1", title: "Local preview", url }],
+      };
+    }
+    if (request.path === "/screenshot") {
+      return { path: "/proof/local.png", targetId: "target-1", url };
+    }
+    if (request.path === "/act") {
+      return createBrowserPanelTestMetrics(url, "Local preview");
+    }
+    return { ok: true };
+  });
+  const commit = createDeferred();
+  class ScheduledBrowserPane extends LitElement {
+    readonly state = createPageState(
+      createInitializationContext(),
+      { invalidate: () => this.requestUpdate(), afterCommit: () => () => {} },
+      this,
+    );
+    readonly pending = new Map<SessionPanelToggleSlot, PendingSessionPanelToggle>();
+    readonly toggles = new ChatPaneSessionPanelToggleController({
+      current: () => ({
+        renderRoot: this,
+        state: this.state,
+        linkReaders: [],
+        updateComplete: this.updateComplete,
+      }),
+      pending: this.pending,
+      requestUpdate: () => this.requestUpdate(),
+      updateSidebarLayout: (layout) => {
+        this.state.sidebarLayout = layout;
+        this.requestUpdate();
+      },
+    });
+    override createRenderRoot() {
+      return this;
+    }
+    protected override async scheduleUpdate() {
+      if (this.hasUpdated) {
+        await commit.promise;
+      }
+      await super.scheduleUpdate();
+    }
+    override render() {
+      return renderSidebarRegion({
+        presentationId: "delayed-browser-card",
+        availableWidth: 1400,
+        availableSlots: ["browser"],
+        callbacks: {
+          activatePanel: () => undefined,
+          togglePanelExpanded: () => undefined,
+          closeSlot: () => undefined,
+          openSlot: () => undefined,
+          reorderPanel: () => undefined,
+          resizePanel: () => undefined,
+          setOpen: () => undefined,
+        },
+        layout: this.state.sidebarLayout,
+        narrow: false,
+        panelActions: {},
+        panelTemplates: {
+          browser: html`<openclaw-browser-panel
+            embedded
+            .available=${true}
+            .client=${gateway.client}
+            .sessionKey=${this.state.sessionKey}
+            .presented=${isSidebarSlotVisible(this.state.sidebarLayout, "browser")}
+            .refreshOnPresentation=${!this.pending.has("browser")}
+          ></openclaw-browser-panel>`,
+        },
+        primary: html`<main>Conversation</main>`,
+        requestUpdate: () => this.requestUpdate(),
+      });
+    }
+  }
+  customElements.define("scheduled-browser-pane", ScheduledBrowserPane);
+  const pane = document.createElement("scheduled-browser-pane") as ScheduledBrowserPane;
+  pane.state.sidebarLayout = { columns: [] };
+  pane.state.sessionKey = "agent:main:local-preview";
+  document.body.append(pane);
+  try {
+    await pane.updateComplete;
+    pane.toggles.handle(
+      "browser",
+      "openclaw-browser-panel",
+      new CustomEvent("openclaw:browser-toggle", {
+        detail: {
+          open: true,
+          browserTab: { target: "host", profile: "managed", targetId: "target-1" },
+        },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    commit.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    await pane.updateComplete;
+    expect(gateway.request).toHaveBeenCalledWith(
+      "browser.request",
+      expect.objectContaining({
+        path: "/tabs/focus",
+        target: "host",
+        query: { profile: "managed" },
+        body: { targetId: "t1" },
+      }),
+    );
+    expect(
+      pane
+        .querySelector("openclaw-browser-panel")
+        ?.shadowRoot?.querySelector(".bp-shot")
+        ?.getAttribute("alt"),
+    ).toBe("Local preview");
+  } finally {
+    commit.resolve();
+    pane.remove();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  }
 });

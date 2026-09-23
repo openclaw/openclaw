@@ -4,6 +4,7 @@ import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { isRecord } from "../utils.js";
 import { PLUGIN_MANIFEST_CONTRACT_KEYS } from "./manifest-contract-keys.js";
 import type {
+  DecisionProviderCapabilities,
   PluginManifest,
   PluginManifestCapabilityProviderAuthSignal,
   PluginManifestCapabilityProviderConfigSignal,
@@ -26,6 +27,50 @@ import type {
   PluginManifestTranscriptSource,
 } from "./manifest-types.js";
 
+// Accept only bounded declarative facts; unknown or malformed fields never enter tool guidance.
+function normalizeDecisionCapabilities(value: unknown): DecisionProviderCapabilities | undefined {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.questionTypes) ||
+    value.questionTypes.length === 0 ||
+    value.questionTypes.length > 3 ||
+    !value.questionTypes.every(
+      (kind) => kind === "boolean" || kind === "choice" || kind === "score",
+    )
+  ) {
+    return undefined;
+  }
+  const capabilities: DecisionProviderCapabilities = {
+    questionTypes: [...new Set<"boolean" | "choice" | "score">(value.questionTypes)],
+  };
+  // Limits are provider facts, not host admission overrides.
+  for (const key of [
+    "maxQuestions",
+    "maxChoiceAlternatives",
+    "maxScoreLevels",
+    "maxInputTokens",
+  ] as const) {
+    const limit = value[key];
+    if (typeof limit === "number" && Number.isSafeInteger(limit) && limit > 0) {
+      capabilities[key] = limit;
+    }
+  }
+  if (
+    value.inputTokenScope === "encoded-question" ||
+    value.inputTokenScope === "state-plus-each-criterion"
+  ) {
+    capabilities.inputTokenScope = value.inputTokenScope;
+  }
+  if (typeof value.requiresBooleanCriteria === "boolean") {
+    capabilities.requiresBooleanCriteria = value.requiresBooleanCriteria;
+  }
+  if (value.confidence === "provider-specific" || value.confidence === "none") {
+    capabilities.confidence = value.confidence;
+  }
+  return capabilities;
+}
+
+/** Normalize provider-owned model descriptors without importing provider code. */
 export function normalizeManifestDecisionModels(
   value: unknown,
   providers: readonly string[] | undefined,
@@ -47,7 +92,8 @@ export function normalizeManifestDecisionModels(
     }
     const ref = `${provider}/${id}`;
     if (!seen.has(ref)) {
-      models.push({ provider, id, name });
+      const capabilities = normalizeDecisionCapabilities(entry.capabilities);
+      models.push({ provider, id, name, ...(capabilities ? { capabilities } : {}) });
       seen.add(ref);
     }
   }

@@ -11,6 +11,7 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import {
   activeRunContext,
   identifiedClient,
@@ -50,6 +51,7 @@ const archiveFixture = createFixtureLifetime();
 afterEach(async () => {
   // Vitest cancellation rejects its wrapper before the retained handler body finishes.
   await archiveFixture.cleanup();
+  await disposeSessionReadContexts();
   closeOpenClawStateDatabaseForTest();
 });
 

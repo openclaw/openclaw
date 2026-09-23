@@ -129,8 +129,25 @@ refreshed by direct reads while a reply is pending keep their newer facts; a dir
 replacement retries under its own generation. Related rows use resident facts and
 existing invalidations to converge across batches.
 
-Startup/topology hydration, direct keyed and archived reads, process-held incognito
-stores, and optional transcript backfill remain migration debt. Preserve the
+Dirty resident row refreshes also prepare ACP metadata in the shared-state read
+worker. Explicit absence travels with the row facts, so presentation does not
+repeat ACP lookups or their schema admission checks. ACP publications invalidate
+the existing row revision, and entry lifecycle matching still rejects stale
+runtime metadata. Optional preview and terminal-message facts use the retained
+history worker, with foreground priority and row-generation checks before
+publication. The host evaluates fallback notices using its current runtime plugin
+aliases; configuration and model policy do not travel to the read worker.
+
+Durable keyed RPCs prepare only their selected dirty or archived rows through the
+worker before synchronous presentation; placement waits recheck that preparation.
+`sessions.get` selects session metadata from the row projection and reads raw
+recent messages in the history worker. They recheck the current config,
+sharing policy, and session identity before responding. Hot transcript reads use
+the atomic reader's cold marker; restoration runs only after a cold rejection and
+retains the bounded retry for a concurrent rearchive.
+
+Startup/topology hydration, internal synchronous keyed and archived reads, and
+process-held incognito stores remain migration debt. Preserve the
 projection and its identity/revision invalidation instead of replacing it with
 another per-request store scan. See the
 [inventory baseline](/reference/database-schemas/worker-access-inventory#profile-priority-and-current-cutover-status)
@@ -146,7 +163,12 @@ Synchronous operator inspection uses the same selected-row reader. An unavailabl
 schema refuses the read rather than reporting missing backing sessions. Canonical
 admission, malformed-row handling, retention, and update behavior are unchanged.
 
-Cron retention discovery also uses the session reader worker. It validates the
+Cron retention discovery uses a separate, single-worker maintenance lane within the
+same session database lifecycle owner. Foreground history and exact-entry reads
+keep their own queue while full-store validation runs. Both lanes retain the same
+admission, revocation, cleanup, and idle-retirement rules; a database close joins
+every lane that holds it. The additional worker is created on demand and retires
+on idle timeout or critical memory pressure. Discovery validates the
 complete physical store's metadata and participants in one read snapshot. Its
 existing full-row decoder streams JSON once and retains prompt snapshots only
 for expired cron runs belonging to the logical agent. The
@@ -212,6 +234,13 @@ owners; these reporting snapshots grant no execution or deletion authority.
 This execution cutover does not change schemas, stored bytes, retention, config,
 or update behavior. A change to those contracts follows the
 [storage review checkpoint](/reference/database-schemas/storage-changes#review-checkpoint-for-material-changes).
+
+iMessage resource authorization reads uncached message-to-chat membership through
+its existing read-only Messages database worker and joins reader cleanup before
+returning. The resource owner retains local executable attestation, exclusive
+account binding, and conversation matching; reply sends recheck live caller
+authority after the read. Missing or failed reads retain the existing delegated
+refusal and direct-operator behavior, without falling back to host SQLite.
 
 Administrative skill archive uploads use the shared-state worker for staging,
 expiry cleanup, commit, installation claims, lease renewal, and consumption. The

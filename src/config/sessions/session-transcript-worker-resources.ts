@@ -43,19 +43,24 @@ import type {
 } from "./session-transcript-worker.types.js";
 
 const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
-export const historyPages = createOwnedWorkerTaskPool<
-  SessionHistoryWorkerInput,
-  SessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>
->({
-  workerUrl,
-  workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
-  maxWorkers: 1,
-  idleTimeoutMs: 0,
-  prepareWorker: () => {
-    ensureSqliteLibrarySelected();
-    return { options: {} };
-  },
-});
+function createHistoryPool() {
+  return createOwnedWorkerTaskPool<
+    SessionHistoryWorkerInput,
+    SessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>
+  >({
+    workerUrl,
+    workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
+    maxWorkers: 1,
+    idleTimeoutMs: 0,
+    prepareWorker: () => {
+      ensureSqliteLibrarySelected();
+      return { options: {} };
+    },
+  });
+}
+
+const historyPages = createHistoryPool();
+const maintenancePages = createHistoryPool();
 
 function createUsageCostPool(kind: "read" | "refresh") {
   return new WorkerTaskPool<UsageCostWorkerInput, UsageCostWorkerReply>({
@@ -91,6 +96,10 @@ export type SessionCostWorkerLane = SessionDatabaseWorkerLane & {
   pool: WorkerTaskPool<UsageCostWorkerInput, UsageCostWorkerReply>;
 };
 
+export type SessionHistoryWorkerLane = SessionDatabaseWorkerLane & {
+  pool: ReturnType<typeof createHistoryPool>;
+};
+
 export type SessionDatabaseCleanup = { run: () => Promise<void> };
 
 export type HistoryDatabaseResource = {
@@ -110,9 +119,17 @@ const historyDatabases = new Map<string, HistoryDatabaseResource>();
 const historySetTimeout = setTimeout;
 export const historyClearTimeout = clearTimeout;
 let historyGeneration = 0;
-export const historyLane: SessionDatabaseWorkerLane = {
+export const historyLane: SessionHistoryWorkerLane = {
   name: "Session history",
   pool: historyPages,
+  nativeSequence: 0,
+  retiredSequence: 0,
+  pending: 0,
+};
+// Full-store validation cannot yield its snapshot to a foreground history read.
+export const maintenanceLane: SessionHistoryWorkerLane = {
+  name: "Session maintenance",
+  pool: maintenancePages,
   nativeSequence: 0,
   retiredSequence: 0,
   pending: 0,
@@ -132,8 +149,10 @@ export const costRefreshLane: SessionCostWorkerLane = {
   pending: 0,
 };
 
+const databaseWorkerLanes = [historyLane, maintenanceLane, costReadLane, costRefreshLane];
+
 channel("openclaw.memory.critical").subscribe(() => {
-  for (const lane of [historyLane, costReadLane, costRefreshLane]) {
+  for (const lane of databaseWorkerLanes) {
     if (lane.pending > 0 || lane.rotation || lane.nativeSequence <= lane.retiredSequence) {
       continue;
     }
@@ -249,9 +268,9 @@ export function acquireHistoryDatabaseResource(
         })().finally(() => {
           owned.closing = undefined;
           pruneHistoryDatabases();
-          armDatabaseWorkerIdleRetirement(historyLane);
-          armDatabaseWorkerIdleRetirement(costReadLane);
-          armDatabaseWorkerIdleRetirement(costRefreshLane);
+          for (const lane of databaseWorkerLanes) {
+            armDatabaseWorkerIdleRetirement(lane);
+          }
         });
         void owned.closing.catch(() => {});
       }
@@ -286,6 +305,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
       request: Omit<SessionStoreTargetInventoryRequest, "candidates">,
     ) => Promise<SessionStoreTargetInventoryResult>;
   }) => Promise<T>,
+  lane: SessionHistoryWorkerLane = historyLane,
 ): Promise<T> {
   const capturedCandidates = candidates.map(({ path, physicalPath, scope }) => ({
     path,
@@ -296,8 +316,8 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
     path: physicalPath,
     ...(scope ? { scope } : {}),
   }));
-  historyClearTimeout(historyLane.idleTimer);
-  historyLane.pending++;
+  historyClearTimeout(lane.idleTimer);
+  lane.pending++;
   try {
     let revoked = false;
     let closing: Promise<void> | undefined;
@@ -321,7 +341,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
       closing ??= (async () => {
         nativeCleanupPending = true;
         try {
-          await rotateDatabaseWorkers(historyLane);
+          await rotateDatabaseWorkers(lane);
           nativeCleanupPending = false;
         } finally {
           closing = undefined;
@@ -359,11 +379,11 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
         assertCurrent,
         readStoreTarget: async (request) => {
           const preparedRequest = { ...request, candidates: capturedCandidates };
-          const reply = await historyPages.run(
+          const reply = await lane.pool.run(
             () => {
               assertCurrent();
               dispatched = true;
-              historyLane.nativeSequence++;
+              lane.nativeSequence++;
               return { kind: "session-store-target", request: preparedRequest };
             },
             { inputBytes: JSON.stringify(preparedRequest).length * 2, timeoutMs: 60_000 },
@@ -385,11 +405,11 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
         },
         readTargetInventory: async (request) => {
           const preparedRequest = { ...request, candidates: capturedCandidates };
-          const reply = await historyPages.run(
+          const reply = await lane.pool.run(
             () => {
               assertCurrent();
               dispatched = true;
-              historyLane.nativeSequence++;
+              lane.nativeSequence++;
               return { kind: "session-target-inventory", request: preparedRequest };
             },
             {
@@ -438,13 +458,13 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
         if ("error" in outcome || discoveryFailed || process.versions.bun) {
           await retire();
         } else {
-          const through = historyLane.nativeSequence;
+          const through = lane.nativeSequence;
           candidateCleanupPending = true;
           try {
-            await historyPages.closeResources(JSON.stringify(selected));
+            await lane.pool.closeResources(JSON.stringify(selected));
             candidateCleanupPending = false;
             for (const resource of historyDatabases.values()) {
-              const sequence = resource.nativeSequences.get(historyLane);
+              const sequence = resource.nativeSequences.get(lane);
               if (
                 sequence !== undefined &&
                 sequence <= through &&
@@ -452,7 +472,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
                   matchesAgentDatabaseReadCandidatePath(candidate, resource.database.path),
                 )
               ) {
-                resource.nativeSequences.delete(historyLane);
+                resource.nativeSequences.delete(lane);
               }
             }
             pruneHistoryDatabases();
@@ -484,7 +504,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
     assertCurrent();
     return outcome.value;
   } finally {
-    historyLane.pending--;
-    armDatabaseWorkerIdleRetirement(historyLane);
+    lane.pending--;
+    armDatabaseWorkerIdleRetirement(lane);
   }
 }

@@ -14,6 +14,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   assertDeferredPluginMigrationsCurrent,
+  readDeferredPluginMigrationCompletions,
   readDeferredPluginMigrations,
   recordDeferredPluginMigrations,
   formatDeferredPluginMigration,
@@ -63,6 +64,7 @@ describe("deferred configured-plugin migrations", () => {
   it("reads absent migration state without creating a database", () => {
     const { env, stateDir } = fixture();
     expect(readDeferredPluginMigrations({ env })).toEqual([]);
+    expect(readDeferredPluginMigrationCompletions({ env })).toEqual([]);
     expect(fs.existsSync(stateDir)).toBe(false);
   });
 
@@ -297,6 +299,9 @@ describe("deferred configured-plugin migrations", () => {
     );
     closeOpenClawStateDatabaseForTest();
     expect(readDeferredPluginMigrations({ env })).toEqual([beta]);
+    expect(readDeferredPluginMigrationCompletions({ env })).toEqual([
+      { pluginId: "alpha", completedAtMs: 2 },
+    ]);
     expect(log.info).toHaveBeenCalledWith(
       'Deferred state migration completed for plugin "alpha".',
       {

@@ -4,8 +4,9 @@ import { evaluate } from "./client.js";
 import { runtimeConfig } from "./config.js";
 import { MAX_JSON_BYTES, parseInput, parseResult } from "./schema.js";
 
-const config = { apiKey: "synthetic-test-credential", model: "jev-test", timeoutMs: 1000 };
+const config = { apiKey: "synthetic-test-credential", timeoutMs: 1000 };
 const input = {
+  model: "jev-test",
   state: { text: "synthetic state" },
   questions: {
     route: { type: "choice", instructions: "Choose", criteria: { keep: "Keep", skip: "Skip" } },
