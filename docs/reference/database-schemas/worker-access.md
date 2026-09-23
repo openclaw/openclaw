@@ -230,6 +230,24 @@ For writes, shared-state domain operations registered by
 `src/state/openclaw-state-worker-runtime.ts` reuse the broker and publish results
 through their original store/projection owner.
 
+Streaming assistant and tool-result completion events use the session manager's
+existing SQLite writer domain. The host retains extension hooks, redaction, and
+tool-result custody; the worker validates the prepared parent, appends the exact
+storage bytes, and returns the committed version and any required view reload.
+The manager adopts that receipt before publishing pending-tool changes. Each
+event still commits before the runtime advances; bulk transcript imports reuse
+their transaction-local append cursor. Root checks read metadata without saved
+prompt payloads. No cross-transaction root cache is introduced.
+
+Runtime report navigation and writes use the same broker's agent database owner.
+Custom report selectors consume prepared facts on the host, and the worker
+compares the transcript version before appending. Only a definite version conflict
+repeats selection; uncertain writes are never replayed. Startup orphan repair
+retains its native transaction so session settlement and the report remain atomic.
+Process-held incognito databases, user-input custody, custom-message writes, and
+the shipped synchronous SessionManager SDK remain separate migration work.
+Schemas, stored bytes, retention, and update behavior are unchanged.
+
 Channel identity administration, profile role assignments, email linking, and
 HTTP/WebSocket sign-in acquisition use that writer and the existing read worker.
 Worker commit receipts publish affected profile, alias, and display facts through

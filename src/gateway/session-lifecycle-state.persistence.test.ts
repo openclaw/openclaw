@@ -511,6 +511,10 @@ it.each([
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const writerStarted = createDeferred();
     const releaseWriter = createDeferred();
+    const terminalPersisted = createDeferred();
+    let persistenceSpy:
+      | MockInstance<typeof lifecycleState.persistGatewaySessionLifecycleEvent>
+      | undefined;
     let claimId: string | undefined;
     let subscriptions: ReturnType<typeof startGatewayEventSubscriptions> | undefined;
     let heldWriter: Promise<unknown> | undefined;
@@ -563,6 +567,21 @@ it.each([
         terminalSessions: { closeTaskSessions: vi.fn() },
         refreshConnectedUserProfiles: vi.fn(),
       });
+      const persistLifecycleEvent = lifecycleState.persistGatewaySessionLifecycleEvent;
+      persistenceSpy = vi
+        .spyOn(lifecycleState, "persistGatewaySessionLifecycleEvent")
+        .mockImplementation((params) => {
+          const persistence = persistLifecycleEvent(params);
+          if (
+            params.event.runId === runId &&
+            params.sessionKey === target.sessionKey &&
+            params.event.lifecycleGeneration === lifecycleGeneration &&
+            params.event.data?.phase === phase
+          ) {
+            terminalPersisted.resolve(persistence);
+          }
+          return persistence;
+        });
 
       emitAgentEventForOwner(
         {
@@ -590,6 +609,8 @@ it.each([
       releaseWriter.resolve();
       await heldWriter;
       await vi.waitFor(() => expect(loadSessionEntry(target)?.status).toBe(status));
+      // Failure notices join this receipt after the terminal row commits.
+      await terminalPersisted.promise;
       await vi.waitFor(() =>
         expect(getAgentRunContextOwnerStatus(runId, terminalClaimId, lifecycleGeneration)).toBe(
           "clear-requested",
@@ -604,6 +625,7 @@ it.each([
       subscriptions?.lifecycleUnsub();
       await subscriptions?.taskUnsub();
       releaseAgentRunContext(runId, claimId);
+      persistenceSpy?.mockRestore();
       routing.loadSessionEntry.mockReset();
       closeOpenClawAgentDatabasesForTest();
       tempDirs.cleanup();

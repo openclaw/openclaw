@@ -48,6 +48,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/github-publication-requester-aliases.test.ts",
   "src/gateway/github-publication-requester.test.ts",
   "src/gateway/github-publication-session-access.test.ts",
+  "src/gateway/github-publication-transcript.test.ts",
   "src/gateway/github-publication-workflows.test.ts",
   "src/gateway/github-publication.test.ts",
   "src/gateway/github-repository-publication-restart.test.ts",
@@ -152,6 +153,8 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-history-lookup.worker.test.ts",
   "src/gateway/session-history-worker-lifecycle.test.ts",
   "src/gateway/session-history-worker.integration.test.ts",
+  "src/gateway/session-lifecycle-run-failure.test.ts",
+  "src/gateway/session-lifecycle-state.persistence.test.ts",
   "src/gateway/session-message-events.exec-completion.test.ts",
   "src/gateway/session-message-events.test.ts",
   "src/gateway/session-repository-materialization.test.ts",
@@ -273,6 +276,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/workspace-result-finalize.test.ts",
   "src/gateway/worker-environments/workspace-result-ref-mutation.test.ts",
   "src/gateway/worker-environments/workspace-result-repository.test.ts",
+  "src/gateway/worker-workspace-recovery-transcript.test.ts",
   "test/plugins/codex-model-catalog.gateway.test.ts",
 ];
 

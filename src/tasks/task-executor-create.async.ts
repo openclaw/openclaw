@@ -231,6 +231,8 @@ async function createTaskRun(
     {
       scope,
       admission: context.admission,
+      // Creation only inserts this ID or rewrites an exact run match, never other session runs.
+      readIdentity: { kind: "creation", taskId: scope.taskId, runId: scope.runId },
       readEventTarget: () =>
         readTaskCreationEventTarget(
           creationOwner?.committed?.facts,
