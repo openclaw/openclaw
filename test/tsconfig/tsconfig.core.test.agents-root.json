@@ -5,7 +5,9 @@
   },
   "include": [
     "../../src/agents/*.test.ts",
-    "../../src/agents/*.test.tsx"
+    "../../src/agents/*.test.tsx",
+    "../../src/model-picker/**/*.test.ts",
+    "../../src/model-picker/**/*.test.tsx"
   ],
   "exclude": [
     "../../node_modules",

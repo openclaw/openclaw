@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getRecentDiagnosticPhases,
   resetDiagnosticPhasesForTest,
@@ -16,6 +16,7 @@ import {
   type DiagnosticEventPayload,
 } from "./diagnostic-events.js";
 import { runWithDiagnosticTraceContext } from "./diagnostic-trace-context.js";
+import { registerDiagnosticTracePropagationBridge } from "./diagnostic-trace-propagation.js";
 
 const trace = { traceId: "1234567890abcdef1234567890abcdef", spanId: "1234567890abcdef" };
 const phase = { name: "runtime.fixture", startedAt: 10, endedAt: 20, durationMs: 10 };
@@ -58,6 +59,32 @@ describe("queued runtime diagnostic phases", () => {
     expect(events[2]).toMatchObject({ ...phase, trace, details: { threadCpuMs: 3 } });
     expect(publicEvents).toHaveLength(1);
     expect(getRecentDiagnosticPhases().map((entry) => entry.name)).toEqual(["startup.fixture"]);
+  });
+
+  it("never calls exporter trace preparation for queued runtime phases", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const prepareEvent = vi.fn();
+    const shouldPrepareEvent = vi.fn(() => true);
+    const stopBridge = registerDiagnosticTracePropagationBridge({
+      prepareEvent,
+      shouldPrepareEvent,
+      resolveTraceContext: (context) => context,
+    });
+    try {
+      onTrustedInternalDiagnosticEvent((event) => events.push(event));
+      const emit = runWithDiagnosticTraceContext(trace, createQueuedDiagnosticPhaseEmitter);
+      if (!emit) {
+        throw new Error("Expected an interested queued-phase emitter");
+      }
+      emit(phase);
+      expect(events).toHaveLength(0);
+      await waitForDiagnosticEventsDrained();
+      expect(events).toEqual([expect.objectContaining({ ...phase, trace })]);
+      expect(shouldPrepareEvent).not.toHaveBeenCalled();
+      expect(prepareEvent).not.toHaveBeenCalled();
+    } finally {
+      stopBridge();
+    }
   });
 
   it("requires a currently interested trusted consumer and respects disabled diagnostics", async () => {

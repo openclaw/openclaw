@@ -8,11 +8,21 @@ import {
   DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY,
   normalizeDiagnosticStabilityQuery,
 } from "./diagnostic-stability-query.js";
+import type {
+  DiagnosticExporterHealthUpdate,
+  DiagnosticStabilityEventRecord,
+  DiagnosticStabilitySnapshot,
+} from "./diagnostic-stability.types.js";
 
 export {
   MAX_DIAGNOSTIC_STABILITY_LIMIT,
   normalizeDiagnosticStabilityQuery,
 } from "./diagnostic-stability-query.js";
+export type {
+  DiagnosticExporterHealthUpdate,
+  DiagnosticStabilityEventRecord,
+  DiagnosticStabilitySnapshot,
+} from "./diagnostic-stability.types.js";
 
 // Ring-buffer recorder for stability diagnostics and support-bundle snapshots.
 const MAX_DIAGNOSTIC_EXPORTER_STATES = 16;
@@ -20,116 +30,6 @@ const LIVENESS_EVENT_LOOP_DELAY_WARN_MS = 1_000;
 
 const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
 const SAFE_EXPORTER_CODE = /^[A-Za-z0-9_-]{1,120}$/u;
-
-/** Sanitized diagnostic event record retained in the stability ring buffer. */
-export type DiagnosticStabilityEventRecord = {
-  seq: number;
-  ts: number;
-  type: DiagnosticEventPayload["type"];
-  channel?: string;
-  pluginId?: string;
-  source?: string;
-  target?: string;
-  surface?: string;
-  action?: string;
-  reason?: string;
-  errorCategory?: string;
-  outcome?: string;
-  mode?: string;
-  level?: string;
-  phase?: string;
-  detector?: string;
-  deliveryKind?: string;
-  talkEventType?: string;
-  transport?: string;
-  brain?: string;
-  toolName?: string;
-  approvalId?: string;
-  activeWorkKind?: string;
-  pairedToolName?: string;
-  provider?: string;
-  model?: string;
-  durationMs?: number;
-  requestBytes?: number;
-  responseBytes?: number;
-  timeToFirstByteMs?: number;
-  resultCount?: number;
-  commandLength?: number;
-  exitCode?: number;
-  timedOut?: boolean;
-  final?: boolean;
-  costUsd?: number;
-  count?: number;
-  bytes?: number;
-  limitBytes?: number;
-  thresholdBytes?: number;
-  rssGrowthBytes?: number;
-  windowMs?: number;
-  eventLoopDelayP99Ms?: number;
-  eventLoopDelayMaxMs?: number;
-  eventLoopUtilization?: number;
-  cpuCoreRatio?: number;
-  ageMs?: number;
-  queueDepth?: number;
-  queueSize?: number;
-  queueLength?: number;
-  waitMs?: number;
-  failureKind?: string;
-  active?: number;
-  waiting?: number;
-  queued?: number;
-  droppedEvents?: number;
-  droppedTrustedEvents?: number;
-  droppedUntrustedEvents?: number;
-  droppedPriorityEvents?: number;
-  maxQueueLength?: number;
-  drainBatchSize?: number;
-  webhooks?: {
-    received: number;
-    processed: number;
-    errors: number;
-  };
-  memory?: DiagnosticMemoryUsage;
-  usage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    promptTokens?: number;
-    total?: number;
-  };
-  context?: {
-    limit?: number;
-    used?: number;
-  };
-};
-
-/** Point-in-time stability snapshot with records and derived summaries. */
-export type DiagnosticStabilitySnapshot = {
-  generatedAt: string;
-  capacity: number;
-  count: number;
-  dropped: number;
-  firstSeq?: number;
-  lastSeq?: number;
-  events: DiagnosticStabilityEventRecord[];
-  summary: {
-    byType: Record<string, number>;
-    memory?: {
-      latest?: DiagnosticMemoryUsage;
-      maxRssBytes?: number;
-      maxHeapUsedBytes?: number;
-      pressureCount: number;
-    };
-    payloadLarge?: {
-      count: number;
-      rejected: number;
-      truncated: number;
-      chunked: number;
-      bySurface: Record<string, number>;
-    };
-  };
-};
 
 type DiagnosticStabilityState = {
   records: Array<DiagnosticStabilityEventRecord | undefined>;
@@ -141,24 +41,6 @@ type DiagnosticStabilityState = {
   exporterRecords: Map<string, DiagnosticStabilityEventRecord>;
   exporterDropped: number;
   unsubscribe: (() => void) | null;
-};
-
-export type DiagnosticExporterHealthUpdate = {
-  signal: "traces" | "metrics" | "logs";
-  transport: string;
-  endpointMode?: "configured" | "default_endpoint";
-  status: "started" | "failure" | "recovered" | "dropped";
-  reason?:
-    | "configured"
-    | "default_endpoint"
-    | "export_failed"
-    | "handler_failed"
-    | "emit_failed"
-    | "queue_full"
-    | "shutdown_failed"
-    | "start_failed"
-    | "unsupported_protocol";
-  errorCategory?: string;
 };
 
 function createState(capacity = DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY): DiagnosticStabilityState {
@@ -244,7 +126,8 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
     case "gateway.event_loop.sample":
     case "diagnostic.gc":
     case "diagnostic.child_process.spawn":
-      // Runtime measurements are exporter-only and excluded by the subscription.
+    case "model.runtime_choice":
+      // Exporter measurements and runtime guard facts stay outside the stability ring.
       break;
     case "model.usage":
       record.channel = event.channel;
@@ -805,6 +688,7 @@ export function startDiagnosticStabilityRecorder(): void {
         "log.record",
         "telemetry.exporter",
         "gateway.rpc",
+        "model.runtime_choice",
         "gateway.event_loop.sample",
         "diagnostic.gc",
         "diagnostic.child_process.spawn",

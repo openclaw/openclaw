@@ -5,7 +5,13 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/service.test-harness.js";
 import { createCronServiceState as createCronServiceStateBase } from "../../cron/service/state.js";
-import { onTimer } from "../../cron/service/timer.test-support.js";
+import {
+  createDueCommandJob,
+  createDueIsolatedAgentJob,
+  createDueMainJob,
+  createDueScriptJob,
+  onTimer,
+} from "../../cron/service/timer.test-support.js";
 import { loadCronStore } from "../../cron/store.js";
 import type { CronJob } from "../../cron/types.js";
 import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
@@ -30,80 +36,6 @@ function createCronServiceState(
   params: Parameters<typeof createCronServiceStateBase>[0],
 ): ReturnType<typeof createCronServiceStateBase> {
   return createCronServiceStateBase({ defaultAgentId: "main", ...params });
-}
-
-function createDueMainJob(params: { now: number; wakeMode: CronJob["wakeMode"] }): CronJob {
-  return {
-    id: "main-heartbeat-job",
-    name: "main heartbeat job",
-    enabled: true,
-    createdAtMs: params.now - 60_000,
-    updatedAtMs: params.now - 60_000,
-    schedule: { kind: "every", everyMs: 60_000, anchorMs: params.now - 60_000 },
-    sessionTarget: "main",
-    wakeMode: params.wakeMode,
-    payload: { kind: "systemEvent", text: "heartbeat seam tick" },
-    sessionKey: "agent:main:main",
-    state: { nextRunAtMs: params.now - 1 },
-  };
-}
-
-function createDueIsolatedAgentJob(params: { now: number }): CronJob {
-  return {
-    id: "isolated-agent-job",
-    agentId: "finn",
-    name: "isolated agent job",
-    enabled: true,
-    createdAtMs: params.now - 60_000,
-    updatedAtMs: params.now - 60_000,
-    schedule: { kind: "every", everyMs: 60_000, anchorMs: params.now - 60_000 },
-    sessionTarget: "isolated",
-    wakeMode: "now",
-    payload: { kind: "agentTurn", message: "run isolated cron" },
-    state: { nextRunAtMs: params.now - 1 },
-  };
-}
-
-function createDueCommandJob(params: { now: number }): CronJob {
-  return {
-    id: "command-job",
-    agentId: "finn",
-    name: "command job",
-    enabled: true,
-    createdAtMs: params.now - 60_000,
-    updatedAtMs: params.now - 60_000,
-    schedule: { kind: "every", everyMs: 60_000, anchorMs: params.now - 60_000 },
-    sessionTarget: "isolated",
-    wakeMode: "now",
-    payload: { kind: "command", argv: ["sh", "-lc", "echo ok"] },
-    state: { nextRunAtMs: params.now - 1 },
-  };
-}
-
-function createDueScriptJob(params: {
-  now: number;
-  sessionTarget?: "main" | "isolated";
-  pacing?: CronJob["pacing"];
-}): CronJob {
-  return {
-    id: "script-job",
-    agentId: "finn",
-    name: "script job",
-    enabled: true,
-    createdAtMs: params.now - 60_000,
-    updatedAtMs: params.now - 60_000,
-    schedule: { kind: "every", everyMs: 60_000, anchorMs: params.now - 60_000 },
-    pacing: params.pacing,
-    sessionTarget: params.sessionTarget ?? "isolated",
-    wakeMode: "now",
-    payload: {
-      kind: "script",
-      script: "return { notify: 'done' }",
-      timeoutSeconds: 300,
-      toolBudget: 50,
-    },
-    state: { nextRunAtMs: params.now - 1, triggerState: { revision: 1 } },
-  };
 }
 
 function findCronTaskByBaseRunId(baseRunId: string) {
