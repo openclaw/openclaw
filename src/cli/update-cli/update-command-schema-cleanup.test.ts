@@ -101,6 +101,30 @@ it("refuses actual forward update admission when a real snapshot reader prevents
   expect(snapshots.prepareSqliteReadOnlyLocation).toHaveBeenCalledTimes(1);
 });
 
+it("refuses failed owned scratch removal and admits a retry after removal recovers", async () => {
+  const original = fs.readFileSync(source);
+  const remove = fs.promises.rm;
+  const failure = Object.assign(new Error("owned scratch removal denied"), { code: "EACCES" });
+  const removal = vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
+    if (target === prepared.cleanupRoot) {
+      throw failure;
+    }
+    return remove(target, options);
+  });
+  try {
+    await expect(runUpdate()).rejects.toThrow(/snapshot cleanup failed/i);
+    expect(fs.existsSync(prepared.location)).toBe(true);
+    expect(fs.readFileSync(source)).toEqual(original);
+  } finally {
+    removal.mockRestore();
+  }
+  await expect(runUpdate()).resolves.toMatchObject({
+    packageSchemaPreflight: { incompatible: [], indeterminate: [] },
+  });
+  expect(fs.existsSync(prepared.location)).toBe(false);
+  expect(fs.readFileSync(source)).toEqual(original);
+});
+
 it("propagates rejected cleanup unchanged through the forward update caller", async () => {
   const failure = new Error("snapshot owner could not retire");
   vi.spyOn(prepared, "cleanupAsync").mockRejectedValue(failure);
