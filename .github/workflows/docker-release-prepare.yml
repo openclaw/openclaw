@@ -81,6 +81,12 @@ jobs:
           fetch-depth: 1
           sparse-checkout: scripts
           persist-credentials: false
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
+
       - name: Resolve exact preparation identity
         id: identity
         env:
@@ -170,6 +176,11 @@ jobs:
           cleanup: false
       - name: Prepare OCI output directory
         run: mkdir -p "${RUNNER_TEMP}/docker-release/oci"
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
       # Both variants reuse this builder's local cache. Fresh provenance timestamps
       # invalidate application layers across runs; remote transfers cost more than
       # reusing the remaining runtime setup saves.
@@ -182,6 +193,7 @@ jobs:
           platforms: linux/${{ matrix.architecture }}
           outputs: type=oci,dest=${{ runner.temp }}/docker-release/oci/default,tar=false,compression=gzip,compression-level=1
           build-args: |
+            GITHUB_ACTIONS=true
             GIT_COMMIT=${{ inputs.release_sha }}
             OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve.outputs.built_at }}
             OPENCLAW_DOCKER_BUILD_VERSION=${{ needs.resolve.outputs.version }}
@@ -193,6 +205,15 @@ jobs:
           sbom: true
           provenance: mode=max
           push: false
+      - name: Relay default image limit warnings
+        if: ${{ always() && steps.build.outputs.metadata != '' }}
+        env:
+          BUILD_METADATA: ${{ steps.build.outputs.metadata }}
+        run: |
+          set -euo pipefail
+          build_ref="$(node -e 'const ref = JSON.parse(process.env.BUILD_METADATA)["buildx.build.ref"]; if (typeof ref !== "string" || !ref) throw new Error("Build metadata is missing its build reference"); process.stdout.write(ref)')"
+          docker buildx history logs --progress plain "$build_ref" 2>&1 |
+            node workflow-source/scripts/relay-build-limit-warnings.mts
       - name: Build browser OCI image
         if: ${{ needs.resolve.outputs.include_browser == 'true' }}
         id: build-browser
@@ -202,6 +223,7 @@ jobs:
           platforms: linux/${{ matrix.architecture }}
           outputs: type=oci,dest=${{ runner.temp }}/docker-release/oci/browser,tar=false,compression=gzip,compression-level=1
           build-args: |
+            GITHUB_ACTIONS=true
             GIT_COMMIT=${{ inputs.release_sha }}
             OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve.outputs.built_at }}
             OPENCLAW_DOCKER_BUILD_VERSION=${{ needs.resolve.outputs.version }}
@@ -214,6 +236,16 @@ jobs:
           sbom: true
           provenance: mode=max
           push: false
+      - name: Relay browser image limit warnings
+        if: ${{ always() && steps.build-browser.outputs.metadata != '' }}
+        env:
+          BUILD_METADATA: ${{ steps.build-browser.outputs.metadata }}
+        run: |
+          set -euo pipefail
+          build_ref="$(node -e 'const ref = JSON.parse(process.env.BUILD_METADATA)["buildx.build.ref"]; if (typeof ref !== "string" || !ref) throw new Error("Build metadata is missing its build reference"); process.stdout.write(ref)')"
+          docker buildx history logs --progress plain "$build_ref" 2>&1 |
+            node workflow-source/scripts/relay-build-limit-warnings.mts
+
       - name: Verify OCI bytes, attestations, and image smoke
         env:
           JOB_CONTEXT: ${{ toJSON(job) }}
@@ -264,6 +296,12 @@ jobs:
           pattern: ${{ needs.resolve.outputs.artifact_name }}-metadata-*
           merge-multiple: true
           path: ${{ runner.temp }}/docker-release/metadata
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
+
       - name: Seal exact prepared image identities
         id: manifest
         env:

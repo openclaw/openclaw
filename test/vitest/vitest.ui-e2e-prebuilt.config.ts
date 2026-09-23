@@ -5,7 +5,8 @@ import {
 } from "vitest/config";
 import { intersectIncludePatterns } from "./vitest.include-patterns.ts";
 import { matchesVitestGlob } from "./vitest.pattern-file.ts";
-import { createUiE2eVitestConfig, uiE2eRealGatewayTestFiles } from "./vitest.ui-e2e.config.ts";
+import { createUiE2eVitestConfig } from "./vitest.ui-e2e.config.ts";
+import { uiE2eRealGatewayTestFiles } from "./vitest.ui-paths.mjs";
 
 // New real-Gateway files stay serial until their shared readers/writers are audited.
 // Listed fixtures own their HOME, state, ports, and cleanup; UI bytes are either

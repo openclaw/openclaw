@@ -43,6 +43,7 @@ import {
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
+import { prepareTranscriptPayload } from "./transcript-payload.js";
 
 describe("accepted input custody", () => {
   const fixture = useTempSessionsFixture("openclaw-pending-inputs-");
@@ -968,9 +969,18 @@ describe("accepted input custody", () => {
             receipt.inputId,
           );
         } else {
+          const payload = prepareTranscriptPayload(db, `{"message":${messageJson}}`);
           db.prepare(
-            "UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = (SELECT seq FROM transcript_event_identities WHERE session_id = ? AND event_id = ?)",
-          ).run(`{"message":${messageJson}}`, sessionId, sessionId, receipt.inputId);
+            "UPDATE transcript_events SET event_json = ?, event_zstd = ?, event_utf8_bytes = ?, navigation_json = ? WHERE session_id = ? AND seq = (SELECT seq FROM transcript_event_identities WHERE session_id = ? AND event_id = ?)",
+          ).run(
+            payload.event_json,
+            payload.event_zstd,
+            payload.event_utf8_bytes,
+            payload.navigation_json,
+            sessionId,
+            sessionId,
+            receipt.inputId,
+          );
         }
         db.exec("PRAGMA query_only = ON");
         try {

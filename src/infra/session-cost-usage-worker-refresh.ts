@@ -14,7 +14,6 @@ import {
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import {
   resolveUsageCostTranscriptFile,
-  type UsageCostTranscriptFile,
   type UsageCostCollectionAccess,
 } from "./session-cost-usage-collection.js";
 import {
@@ -38,7 +37,11 @@ import {
   type SessionUsageRollupData,
 } from "./session-cost-usage-rollup.js";
 import { createEmptyCostUsageTotals as emptyTotals } from "./session-cost-usage-totals.js";
-import type { CostUsageTotals, ParsedTranscriptEntry } from "./session-cost-usage.types.js";
+import type {
+  CostUsageTotals,
+  ParsedTranscriptEntry,
+  UsageCostTranscriptFile,
+} from "./session-cost-usage.types.js";
 
 const USAGE_COST_FILE_ANCHOR_BYTES = 4096;
 
@@ -192,7 +195,7 @@ type RollupScanInput = {
 
 function createUsageRollupScan(params: RollupScanInput & { appendOnly: boolean }) {
   const previous = params.appendOnly ? params.previous?.entry : undefined;
-  // This task exclusively owns the decoded row; the CAS comparison retains the original text.
+  // This task exclusively owns the decoded body; publication retains its original envelope for CAS.
   const rollup = previous?.rollup ?? createSessionUsageRollupData();
   let countedRecords = 0;
   let parsedRecords = 0;

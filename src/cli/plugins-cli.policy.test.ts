@@ -772,9 +772,7 @@ describe("plugins cli policy mutations", () => {
       entries: { alpha: { enabled: true } },
       slots: { memory: "alpha" },
     });
-    expect(pluginsCliRuntimeLogs.join("\n")).toContain(
-      'Exclusive slot "memory" switched from "previous" to "alpha".',
-    );
+    expect(pluginsCliRuntimeLogs.join("\n")).not.toContain("Exclusive slot");
     expect(
       replaceConfigFileMock.mock.calls.map(([write]) => write.sourceConfig?.plugins?.slots?.memory),
     ).toEqual(["alpha", "previous", "alpha"]);

@@ -14,7 +14,6 @@ import {
 import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import { withEnv } from "../../src/test-utils/env.js";
 import { createGatewayDatabaseWorkersVitestConfig } from "../vitest/vitest.gateway-database-workers.config.ts";
-import { createGatewayMethodsVitestConfig } from "../vitest/vitest.gateway-methods.config.ts";
 import { gatewayDatabaseWorkerTestFiles } from "../vitest/vitest.gateway-server-paths.mjs";
 import { packageContractTestFiles } from "../vitest/vitest.package-contract-paths.mjs";
 import { collectVitestExcludePatterns, matchesVitestGlob } from "../vitest/vitest.pattern-file.ts";
@@ -53,16 +52,10 @@ describe("test-projects args", () => {
   const gatewayWorkerFile = "src/gateway/server-methods/cron.runs.test.ts";
   const catalogFile = "test/plugins/codex-model-catalog.gateway.test.ts";
   it.each<[string, string, string | undefined, boolean]>([
-    ["server-methods/cron.runs.test.ts", gatewayWorkerFile, undefined, true],
     [gatewayWorkerFile, gatewayWorkerFile, undefined, true],
     [catalogFile, catalogFile, undefined, true],
-    [
-      "server-methods/cron.runs.test.ts",
-      gatewayWorkerFile,
-      "server-methods/cron.runs.test.ts",
-      false,
-    ],
-    ["server-methods/cron.runs.test.ts", gatewayWorkerFile, "server-methods/*.test.ts", false],
+    [gatewayWorkerFile, gatewayWorkerFile, gatewayWorkerFile, false],
+    [gatewayWorkerFile, gatewayWorkerFile, "src/gateway/server-methods/*.test.ts", false],
     [catalogFile, catalogFile, catalogFile, false],
     [catalogFile, catalogFile, "test/plugins/**/*.test.ts", false],
     [catalogFile, catalogFile, "unrelated.test.ts", true],
@@ -76,16 +69,11 @@ describe("test-projects args", () => {
           "vitest",
           "run",
           "--config",
-          expected === catalogFile
-            ? "test/vitest/vitest.gateway-methods.config.ts"
-            : "test/vitest/vitest.gateway-database-workers.config.ts",
+          "test/vitest/vitest.gateway-database-workers.config.ts",
           selector,
           ...(exclude ? ["--exclude", exclude] : []),
         ];
-        const config =
-          expected === catalogFile
-            ? createGatewayMethodsVitestConfig({})
-            : createGatewayDatabaseWorkersVitestConfig({});
+        const config = createGatewayDatabaseWorkersVitestConfig({});
         const testConfig = expectDefined(config.test, "Gateway owner test config");
         const dir = path.resolve(config.root ?? process.cwd(), testConfig.dir ?? ".");
         const relative = path.relative(dir, path.resolve(expected)).replaceAll("\\", "/");
@@ -226,7 +214,12 @@ describe("test-projects args", () => {
     {
       title: "test-projects routes the bundled native Gateway test to its Gateway owner",
       target: "test/plugins/codex-model-catalog.gateway.test.ts",
-      config: "test/vitest/vitest.gateway-methods.config.ts",
+      config: "test/vitest/vitest.gateway-database-workers.config.ts",
+    },
+    {
+      title: "routes the Gateway TLS producer to its worker owner",
+      target: "test/e2e/qa-lab/runtime/gateway-tls-pinning.test.ts",
+      config: "test/vitest/vitest.infra.config.ts",
     },
     {
       title: "keeps native artifact fixtures in the serial tooling owner",
@@ -235,13 +228,23 @@ describe("test-projects args", () => {
     },
     {
       title: "routes fake-timer unit-fast targets to the serial fake-timer config",
-      target: "src/acp/control-plane/manager.test.ts",
+      target: "src/acp/translator.stop-reason.test.ts",
       config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+    },
+    {
+      title: "routes ACP session signals to their host broker owner",
+      target: "src/acp/control-plane/manager.test.ts",
+      config: "test/vitest/vitest.infra.config.ts",
     },
     {
       title: "routes process targets to the process config",
       target: "src/process/exec.test.ts",
       config: "test/vitest/vitest.process.config.ts",
+    },
+    {
+      title: "routes raw-source SQLite cache probes to the process owner",
+      target: "src/infra/sqlite-readonly-worker.compile-cache.process.test.ts",
+      config: "test/vitest/vitest.cli-process.config.ts",
     },
     {
       title: "routes the Git backup outcome consumer to the infra config",
@@ -251,6 +254,11 @@ describe("test-projects args", () => {
     {
       title: "routes the worker-backed task registry to the infra config",
       target: "src/tasks/task-registry.test.ts",
+      config: "test/vitest/vitest.infra.config.ts",
+    },
+    {
+      title: "routes disk-budget worker lifecycle fixtures to the isolated infra owner",
+      target: "src/config/sessions/disk-budget.physical-usage.test.ts",
       config: "test/vitest/vitest.infra.config.ts",
     },
     {
@@ -486,12 +494,13 @@ describe("test-projects args", () => {
 
     const firstEnv = specs[0]?.env;
     expect(firstEnv?.KEEP_ME).toBe("1");
-    expect(firstEnv?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.replaceAll("\\", "/")).toBe(
-      "/repo/.cache/vitest/0-test-vitest-vitest.gateway.config.ts",
-    );
-    expect(specs[1]?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.replaceAll("\\", "/")).toBe(
-      "/repo/.cache/vitest/1-test-vitest-vitest.gateway-server.config.ts",
-    );
+    const paths = specs.map((spec) => spec.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH);
+    expect(new Set(paths).size).toBe(2);
+    for (const cachePath of paths) {
+      expect(cachePath?.replaceAll("\\", "/")).toMatch(
+        /^\/repo\/\.cache\/vitest\/slots\/[a-f\d]+\/0$/u,
+      );
+    }
   });
 
   it("routes plugin targets to the plugins config", () => {
@@ -808,12 +817,24 @@ describe("test-projects args", () => {
     });
   });
 
-  it("routes auth setup script changes to the focused auth monitor test", () => {
-    const changedPaths = ["scripts/setup-auth-system.sh"];
+  it.each([
+    {
+      changedPath: "scripts/setup-auth-system.sh",
+      targets: ["test/scripts/auth-monitor.test.ts"],
+    },
+    {
+      changedPath: ".github/actions/setup-node-env/dependency-fingerprint.mjs",
+      targets: [
+        "test/scripts/ci-workflow-guards.test.ts",
+        "test/scripts/setup-node-env-dependency-fingerprint.test.ts",
+      ],
+    },
+  ])("routes $changedPath changes to focused tooling tests", ({ changedPath, targets }) => {
+    const changedPaths = [changedPath];
 
     expect(resolveChangedTestTargetPlan(changedPaths)).toEqual({
       mode: "targets",
-      targets: ["test/scripts/auth-monitor.test.ts"],
+      targets,
     });
     expect(
       buildVitestRunPlans(["--changed=origin/main"], process.cwd(), () => changedPaths),
@@ -821,7 +842,7 @@ describe("test-projects args", () => {
       {
         config: "test/vitest/vitest.tooling.config.ts",
         forwardedArgs: [],
-        includePatterns: ["test/scripts/auth-monitor.test.ts"],
+        includePatterns: targets,
         watchMode: false,
       },
     ]);

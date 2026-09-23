@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import type { ThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
@@ -56,6 +57,7 @@ type StreamMessageOptions = Pick<
 >;
 
 export type StreamGroupOptions = StreamMessageOptions & {
+  branding?: ThemeBranding;
   entryRefFor?: (key: string) => ((element?: Element) => void) | undefined;
   onReply?: (target: MessageReplyTarget) => void;
   onOpenSidebar?: (content: SidebarContent) => void;
@@ -86,6 +88,8 @@ export function renderStreamGroupPart(
 ) {
   if (part.kind === "reading-indicator") {
     return renderChatWorkingIndicator(part, {
+      mascot: opts.branding?.mascot,
+      workingPhrases: opts.branding?.workingPhrases,
       waitingApproval: opts.waitingApproval === true,
       startupLabel: opts.startupLabel,
       outputTokens: opts.runOutputTokens,

@@ -10,7 +10,7 @@
   "dependencies": {
     "@line/bot-sdk": "11.2.0",
     "typebox": "1.3.30",
-    "zod": "4.6.4"
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

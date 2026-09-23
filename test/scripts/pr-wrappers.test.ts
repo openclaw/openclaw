@@ -51,7 +51,7 @@ describe.each([
       resource === "graphql" ? { errors: [{ type, message: detail }] } : { message: detail },
     );
   const response = (body: string, headers = "", status = resource === "graphql" ? 200 : 403) =>
-    `HTTP/2.0 ${status} Response\r\nX-RateLimit-Resource: ${resource}\r\nX-RateLimit-Remaining: 0\r\n${headers}\r\n${body}`;
+    `HTTP/2.0 ${status} Response\r\nX-RateLimit-Resource: ${resource}\r\nX-RateLimit-Remaining: 0\r\nAccess-Control-Expose-Headers: ETag, Retry-After, X-RateLimit-Remaining\r\n${headers}\r\n${body}`;
 
   it.each(resource === "graphql" ? ["RATE_LIMIT", "RATE_LIMITED"] : ["REST primary limit"])(
     "recognizes the original %s response with and without headers",
@@ -212,6 +212,30 @@ function createWrapperGit(fixtureEnv: ReturnType<typeof isolatedWrapperEnv>) {
   };
 }
 
+function baseBranchGhStub(baseRef: string) {
+  const pull = {
+    number: 123,
+    html_url: "https://github.com/fixture/repo/pull/123",
+    base: {
+      ref: baseRef,
+      repo: {
+        id: 123,
+        node_id: "fixture-repo",
+        full_name: "fixture/repo",
+        html_url: "https://github.com/fixture/repo",
+      },
+    },
+  };
+  return `#!/bin/sh
+case "$*" in
+  "browse") printf 'https://github.com/fixture/repo\\n' ;;
+  "api --hostname github.com repos/fixture/repo/pulls/123 -H Cache-Control: max-age=0")
+    printf '%s\\n' '${JSON.stringify(pull)}' ;;
+  *) echo "Unexpected gh call: $*" >&2; exit 99 ;;
+esac
+`;
+}
+
 function createMismatchedWrapperTemplate({
   realModules,
   dispatchBody,
@@ -235,10 +259,7 @@ function createMismatchedWrapperTemplate({
   // Deterministic gh stub: main-only subcommands fail fast on the base-branch
   // gate instead of reaching the network, proving which wrapper actually ran.
   const ghStub = join(bin, "gh");
-  writeFileSync(
-    ghStub,
-    '#!/bin/sh\nif [ "$1" = "browse" ]; then\n  printf \'https://github.com/fixture/repo\\n\'\n  exit 0\nfi\nif [ "$1" = "api" ]; then\n  printf \'{"base":{"ref":"not-main"}}\\n\'\n  exit 0\nfi\necho "Unexpected gh call: $*" >&2\nexit 99\n',
-  );
+  writeFileSync(ghStub, baseBranchGhStub("not-main"));
   chmodSync(ghStub, 0o755);
 
   const fixtureEnv = isolatedWrapperEnv(root);
@@ -355,7 +376,10 @@ function resolveCommand(command: string): string {
   throw new Error(`command not found in test PATH: ${command}`);
 }
 
-function seedReadyReview(fixture: ReturnType<typeof makeMismatchedWrapperRepo>) {
+function seedReadyReview(
+  fixture: ReturnType<typeof makeMismatchedWrapperRepo>,
+  correction = false,
+) {
   const reviewRoot = join(fixture.canonical, ".worktrees", "pr-123");
   fixture.git(fixture.canonical, [
     "worktree",
@@ -366,8 +390,17 @@ function seedReadyReview(fixture: ReturnType<typeof makeMismatchedWrapperRepo>) 
   ]);
   const review = validReview(fixture.localRevision);
   review.pr.number = 123;
-  review.recommendation = "READY FOR /prepare-pr";
+  review.recommendation = correction ? "NEEDS WORK" : "READY FOR /prepare-pr";
   review.issueValidation.status = "valid";
+  if (correction) {
+    review.findings.push({
+      id: "I1",
+      severity: "IMPORTANT",
+      title: "Wrong behavior",
+      area: "docs/fix.md",
+      fix: "Correct behavior",
+    });
+  }
   writeReviewArtifacts(reviewRoot, review, { prNumber: 123, headSha: fixture.localRevision });
 }
 
@@ -519,9 +552,12 @@ describe("scripts/pr wrappers", () => {
     const merge = readScript("scripts/pr-lib/merge.sh");
     const mergeOutcome = readScript("scripts/pr-lib/merge-outcome.sh");
 
-    expect(script).toContain('base_json=$(read_pr_view_json "$pr" "baseRefName")');
+    expect(script).toContain('pr_observe "$pr" || exit 1');
+    expect(script).toContain('base_json="$PR_OBSERVATION"');
     expect(common).toContain('pr_gh pr view "$pr" --json "$fields"');
-    expect(worktree).toContain('metadata=$(GH_REPO="$repo_url" read_pr_view_json "$pr"');
+    expect(worktree).toContain(
+      'metadata=$(read_pr_view_json "$pr" "number,title,state,isDraft,author,baseRefName,baseRefOid,baseRepository,',
+    );
     expect(review).toContain('pr_gh_plain assign-reviewer "$pr" "$reviewer"');
     expect(push).toContain('pr_gh_plain api graphql --input "$payload_file"');
     expect(push).not.toContain("pr_gh_plain api graphql --input -");
@@ -578,6 +614,23 @@ describe("scripts/pr wrappers", () => {
       ["123", "not-an-outcome", "--confirmed-operator-recovery"],
       ["123", "a".repeat(40), "--confirmed-no-running-tools"],
       ["123", "a".repeat(40), "--confirmed-operator-recovery", "--auto-merge"],
+      ["123", "a".repeat(40), "--confirmed-operator-recovery", "--cancel-auto", "--cancel-auto"],
+      [
+        "123",
+        "a".repeat(40),
+        "--confirmed-operator-recovery",
+        "--cancel-auto",
+        "--body-file",
+        "message.md",
+      ],
+      [
+        "123",
+        "a".repeat(40),
+        "--confirmed-operator-recovery",
+        "--cancel-auto",
+        "--replacement-head",
+        "b".repeat(40),
+      ],
       ...[
         [],
         [""],
@@ -618,6 +671,29 @@ describe("scripts/pr wrappers", () => {
     }
   });
 
+  itPosix("dispatches public correction commands to the explicit native owners", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    seedReadyReview(fixture, true);
+    const ghPath = join(fixture.bin, "gh");
+    writeFileSync(ghPath, readFileSync(ghPath, "utf8").replace("not-main", "main"));
+    writeFileSync(
+      join(fixture.canonical, "scripts/pr-lib/prepare-core.sh"),
+      `prepare_init() { printf '%s\\n' "$2" | jq -e '.number == 123 and .baseRefName == "main"' >/dev/null || return 1; printf 'init <%s> <%s>\\n' "$1" "$3"; }\nprepare_correction_review_init() { printf 'review <%s>\\n' "$1"; }\n`,
+    );
+    for (const [command, expected] of [
+      ["prepare-correction-init", "init <123> <correction>"],
+      ["prepare-correction-review-init", "review <123>"],
+    ] as const) {
+      const result = spawnSync(join(fixture.canonical, "scripts/pr"), [command, "123"], {
+        cwd: fixture.canonical,
+        env: fixture.env,
+        encoding: "utf8",
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe(expected);
+    }
+  });
+
   itPosix("resolves an explicit merge body from the caller before supervisor cwd changes", () => {
     const fixture = makeMismatchedWrapperRepo();
     const caller = join(fixture.canonical, "nested");
@@ -633,7 +709,7 @@ describe("scripts/pr wrappers", () => {
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toBe(
-      `<123>\n<false>\n<>\n<>\n<${join(caller, "operator body.md")}>\n<>\n`,
+      `<123>\n<false>\n<>\n<>\n<${join(caller, "operator body.md")}>\n<>\n<false>\n<>\n`,
     );
   });
 
@@ -697,16 +773,17 @@ describe("scripts/pr wrappers", () => {
 
   itPosix("dispatches explicit replacement arguments through the same merge owner", () => {
     const fixture = makeMismatchedWrapperRepo();
-    writeFileSync(
-      join(fixture.bin, "gh"),
-      `#!/bin/sh\nif [ "$1" = "browse" ]; then printf 'https://github.com/fixture/repo\\n'; else printf '{"base":{"ref":"main"}}\\n'; fi\n`,
-    );
+    writeFileSync(join(fixture.bin, "gh"), baseBranchGhStub("main"));
     writeFileSync(
       join(fixture.canonical, "scripts/pr-lib/merge.sh"),
       `merge_run() { printf '<%s>\\n' "$@"; }\n`,
     );
-    for (const replacement of [[], ["--replacement-head", "b".repeat(40)]]) {
+    for (const replacement of [[], ["--replacement-head", "b".repeat(40)], ["--cancel-auto"]]) {
       for (const body of [[], ["--body-file", "message.md"]]) {
+        const cancel = replacement[0] === "--cancel-auto";
+        if (cancel && body.length) {
+          continue;
+        }
         const result = spawnSync(
           join(fixture.canonical, "scripts/pr"),
           [
@@ -721,48 +798,50 @@ describe("scripts/pr wrappers", () => {
         );
         expect(result.status, result.stdout + result.stderr).toBe(0);
         expect(result.stdout).toBe(
-          `<123>\n<false>\n<${"a".repeat(40)}>\n<${replacement[1] ?? ""}>\n<${body.length ? join(fixture.canonical, "message.md") : ""}>\n<>\n`,
+          `<123>\n<false>\n<${"a".repeat(40)}>\n<${replacement[1] ?? ""}>\n<${body.length ? join(fixture.canonical, "message.md") : ""}>\n<>\n<${cancel}>\n<>\n`,
         );
       }
     }
   });
 
-  itPosix("pins legacy refusal evidence and requires an explicit current recovery head", () => {
-    const fixture = makeMismatchedWrapperRepo();
-    const caller = join(fixture.canonical, "nested");
-    mkdirSync(caller);
-    writeFileSync(
-      join(fixture.bin, "gh"),
-      `#!/bin/sh\nif [ "$1" = "browse" ]; then printf 'https://github.com/fixture/repo\\n'; else printf '{"base":{"ref":"main"}}\\n'; fi\n`,
-    );
-    writeFileSync(
-      join(fixture.canonical, "scripts/pr-lib/merge.sh"),
-      `merge_run() { printf '<%s>\\n' "$@"; }\n`,
-    );
-    const args = [
-      "merge-recover",
-      "123",
-      "a".repeat(40),
-      "--confirmed-operator-recovery",
-      "--legacy-refusal",
-      "proof",
-    ];
-    const missing = spawnSync(join(fixture.canonical, "scripts/pr"), args, {
-      cwd: caller,
-      encoding: "utf8",
-      env: fixture.env,
-    });
-    expect(missing.status, missing.stdout + missing.stderr).toBe(2);
-    const result = spawnSync(
-      join(fixture.canonical, "scripts/pr"),
-      [...args, "--replacement-head", "b".repeat(40)],
-      { cwd: caller, encoding: "utf8", env: fixture.env },
-    );
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.stdout).toBe(
-      `<123>\n<false>\n<${"a".repeat(40)}>\n<${"b".repeat(40)}>\n<>\n<${join(caller, "proof")}>\n`,
-    );
-  });
+  itPosix.each(["legacy-refusal", "pre-dispatch-refusal"])(
+    "pins %s evidence relative to the original caller",
+    (flag) => {
+      const fixture = makeMismatchedWrapperRepo();
+      const caller = join(fixture.canonical, "nested");
+      mkdirSync(caller);
+      writeFileSync(join(fixture.bin, "gh"), baseBranchGhStub("main"));
+      writeFileSync(
+        join(fixture.canonical, "scripts/pr-lib/merge.sh"),
+        `merge_run() { printf '<%s>\\n' "$@"; }\n`,
+      );
+      const args = [
+        "merge-recover",
+        "123",
+        "a".repeat(40),
+        "--confirmed-operator-recovery",
+        `--${flag}`,
+        "proof",
+      ];
+      const missing = spawnSync(join(fixture.canonical, "scripts/pr"), args, {
+        cwd: caller,
+        encoding: "utf8",
+        env: fixture.env,
+      });
+      expect(missing.status, missing.stdout + missing.stderr).toBe(
+        flag === "legacy-refusal" ? 2 : 0,
+      );
+      const result = spawnSync(
+        join(fixture.canonical, "scripts/pr"),
+        [...args, "--replacement-head", "b".repeat(40)],
+        { cwd: caller, encoding: "utf8", env: fixture.env },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).toBe(
+        `<123>\n<false>\n<${"a".repeat(40)}>\n<${"b".repeat(40)}>\n<>\n<${flag === "legacy-refusal" ? join(caller, "proof") : ""}>\n<false>\n<${flag === "pre-dispatch-refusal" ? join(caller, "proof") : ""}>\n`,
+      );
+    },
+  );
 
   it("runs a mismatched advisory wrapper locally with an explicit developer opt-in", () => {
     const fixture = makeMismatchedWrapperRepo();
@@ -807,36 +886,38 @@ describe("scripts/pr wrappers", () => {
     expect(result.stderr).not.toContain("Refusing to silently substitute");
   });
 
-  it.each(["prepare-run", "merge-recover"])(
-    "routes mismatched %s to the canonical wrapper despite opt-in",
-    (command) => {
-      const fixture = makeMismatchedWrapperRepo();
-      if (command === "prepare-run") {
-        seedReadyReview(fixture);
-      }
-      const result = spawnSync(
-        join(fixture.linked, "scripts", "pr"),
-        [
-          "--dev-wrapper",
-          command,
-          "123",
-          ...(command === "merge-recover" ? ["a".repeat(40), "--confirmed-operator-recovery"] : []),
-        ],
-        { cwd: fixture.linked, encoding: "utf8", env: fixture.env },
-      );
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        `subcommand '${command}' is classified landing; dev-wrapper opt-in is unavailable.`,
-      );
-      expect(result.stderr).toContain(anchorSubstitutionNotice(fixture.canonical));
-      // The stubbed gh reports a non-main base: reaching this gate proves the
-      // canonical wrapper ran instead of the mismatched local one.
-      expect(result.stderr).toContain(
-        "scripts/pr prepare and merge commands only support PRs targeting main; PR #123 targets not-main.",
-      );
-      expect(result.stdout).not.toContain("local wrapper executed");
-    },
-  );
+  it.each([
+    "prepare-run",
+    "prepare-correction-init",
+    "prepare-correction-review-init",
+    "merge-recover",
+  ])("routes mismatched %s to the canonical wrapper despite opt-in", (command) => {
+    const fixture = makeMismatchedWrapperRepo();
+    if (command === "prepare-run" || command === "prepare-correction-init") {
+      seedReadyReview(fixture, command === "prepare-correction-init");
+    }
+    const result = spawnSync(
+      join(fixture.linked, "scripts", "pr"),
+      [
+        "--dev-wrapper",
+        command,
+        "123",
+        ...(command === "merge-recover" ? ["a".repeat(40), "--confirmed-operator-recovery"] : []),
+      ],
+      { cwd: fixture.linked, encoding: "utf8", env: fixture.env },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      `subcommand '${command}' is classified landing; dev-wrapper opt-in is unavailable.`,
+    );
+    expect(result.stderr).toContain(anchorSubstitutionNotice(fixture.canonical));
+    // The stubbed gh reports a non-main base: reaching this gate proves the
+    // canonical wrapper ran instead of the mismatched local one.
+    expect(result.stderr).toContain(
+      "scripts/pr prepare and merge commands only support PRs targeting main; PR #123 targets not-main.",
+    );
+    expect(result.stdout).not.toContain("local wrapper executed");
+  });
 
   it("substitutes the canonical wrapper for a stale-base worktree once main moves the wrapper", () => {
     const fixture = makeMismatchedWrapperRepo();
@@ -1204,6 +1285,20 @@ exec "$OPENCLAW_TEST_NODE" "$@"
 
   it("materializes the origin/main anchor wrapper when canonical is parked elsewhere", () => {
     const fixture = makeMismatchedWrapperRepo();
+    const names = [
+      "space name",
+      ...(process.platform === "win32"
+        ? []
+        : ["tab\tname", 'quote"name', "backslash\\name", "control\u0001name", "newline\nname"]),
+    ];
+    const directory = "scripts/pr-lib/path-spelling";
+    mkdirSync(join(fixture.canonical, directory));
+    for (const name of names) {
+      writeFileSync(join(fixture.canonical, directory, name), "anchored path bytes\n");
+    }
+    fixture.git(fixture.canonical, ["add", "--", directory]);
+    fixture.git(fixture.canonical, ["commit", "-m", "test: anchored path spellings"]);
+    fixture.git(fixture.canonical, ["push", "origin", "main"]);
     parkCanonicalOffAnchor(fixture);
     const result = spawnSync(join(fixture.linked, "scripts", "pr"), ["ci-dispatch", "123"], {
       cwd: fixture.linked,
@@ -1220,6 +1315,15 @@ exec "$OPENCLAW_TEST_NODE" "$@"
       "running wrapper code materialized from the refs/remotes/origin/main trust anchor",
     );
     expect(result.stderr).not.toContain("Refusing to silently substitute");
+    const anchors = readdirSync(fixture.root).filter((name) =>
+      name.startsWith("openclaw-pr-anchor."),
+    );
+    expect(anchors).toHaveLength(1);
+    for (const name of names) {
+      expect(readFileSync(join(fixture.root, anchors[0]!, directory, name), "utf8")).toBe(
+        "anchored path bytes\n",
+      );
+    }
   });
 
   itPosix("materializes the anchor when tar stops before the producer's trailing padding", () => {
@@ -1248,16 +1352,35 @@ fi
     expect(result.stderr).not.toContain("Refusing to silently substitute");
   });
 
-  itPosix.each(["producer failure", "truncated archive", "reader failure"])(
-    "refuses anchor extraction on %s",
-    (failure) => {
-      const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
-      parkCanonicalOffAnchor(fixture);
-      const git = join(fixture.bin, "git");
-      writeFileSync(
-        git,
-        `#!/bin/sh
-if [ "$3" = archive ]; then
+  itPosix.each([
+    "producer failure",
+    "truncated archive",
+    "reader failure",
+    "listing producer failure",
+    "hash producer failure",
+    "incomplete hash output",
+    "unterminated listing",
+    "omitted required inventory component",
+    "leaf symlink",
+    "parent symlink",
+  ])("refuses anchor extraction on %s", (failure) => {
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
+    parkCanonicalOffAnchor(fixture);
+    const git = join(fixture.bin, "git");
+    writeFileSync(
+      git,
+      `#!/bin/sh
+git_command() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -c|-C) shift 2 ;;
+      -c?*|-C?*|--no-pager|--literal-pathspecs|--no-replace-objects) shift ;;
+      *) printf '%s\\n' "$1"; return ;;
+    esac
+  done
+}
+command=$(git_command "$@")
+if [ "$command" = archive ]; then
   if [ "$OPENCLAW_TEST_FAILURE" = 'truncated archive' ]; then
     "$OPENCLAW_TEST_GIT" "$@" > "$OPENCLAW_TEST_ARCHIVE" || exit
     dd if="$OPENCLAW_TEST_ARCHIVE" bs=512 count=3 2>/dev/null
@@ -1269,44 +1392,97 @@ if [ "$3" = archive ]; then
   fi
   exit 0
 fi
+case "$command:$OPENCLAW_TEST_FAILURE" in
+  'ls-tree:listing producer failure'|'hash-object:hash producer failure')
+    "$OPENCLAW_TEST_GIT" "$@" || exit
+    exit 42
+    ;;
+  'ls-tree:unterminated listing'|'ls-tree:omitted required inventory component'|'hash-object:incomplete hash output')
+    "$OPENCLAW_TEST_GIT" "$@" > "$OPENCLAW_TEST_GIT_OUTPUT" || exit
+    exec "$OPENCLAW_TEST_NODE" -e '
+const { readFileSync, writeFileSync } = require("node:fs");
+const output = readFileSync(process.env.OPENCLAW_TEST_GIT_OUTPUT);
+let changed;
+if (process.env.OPENCLAW_TEST_FAILURE === "unterminated listing") {
+  changed = output.subarray(0, -1);
+} else {
+  const separator = output.includes(0) ? 0 : 10;
+  const records = [];
+  let start = 0;
+  for (let end = 0; end < output.length; end++) {
+    if (output[end] === separator) {
+      records.push(output.subarray(start, end));
+      start = end + 1;
+    }
+  }
+  const retained = process.env.OPENCLAW_TEST_FAILURE === "incomplete hash output"
+    ? records.slice(0, -1)
+    : records.filter((record) => !record.subarray(record.indexOf(9) + 1).equals(Buffer.from("package.json")));
+  changed = Buffer.concat(retained.flatMap((record) => [record, Buffer.from([separator])]));
+}
+writeFileSync(1, changed);
+'
+    ;;
+esac
 exec "$OPENCLAW_TEST_GIT" "$@"
 `,
-      );
-      chmodSync(git, 0o755);
-      const tar = join(fixture.bin, "tar");
-      writeFileSync(
-        tar,
-        `#!/bin/sh
+    );
+    chmodSync(git, 0o755);
+    const tar = join(fixture.bin, "tar");
+    writeFileSync(
+      tar,
+      `#!/bin/sh
 printf 'started\\n' >> "$OPENCLAW_TEST_READER_LOG"
 "$OPENCLAW_TEST_TAR" "$@" || exit
 if [ "$OPENCLAW_TEST_FAILURE" = 'reader failure' ]; then
   exit 42
 fi
+case "$OPENCLAW_TEST_FAILURE" in
+  'leaf symlink') linked_path=scripts/lib/plain-gh.mjs ;;
+  'parent symlink') linked_path=scripts/lib ;;
+  *) exit 0 ;;
+esac
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-C" ]; then
+    mv "$2/$linked_path" "$OPENCLAW_TEST_LINK_TARGET" || exit
+    ln -s "$OPENCLAW_TEST_LINK_TARGET" "$2/$linked_path"
+    exit
+  fi
+  shift
+done
+exit 99
 `,
-      );
-      chmodSync(tar, 0o755);
-      const readerLog = join(fixture.root, "reader.log");
-      const result = spawnSync(join(fixture.linked, "scripts/pr"), ["unknown-command"], {
-        cwd: fixture.linked,
-        encoding: "utf8",
-        env: {
-          ...fixture.env,
-          OPENCLAW_TEST_GIT: resolveCommand("git"),
-          OPENCLAW_TEST_TAR: resolveCommand("tar"),
-          OPENCLAW_TEST_FAILURE: failure,
-          OPENCLAW_TEST_ARCHIVE: join(fixture.root, "complete.tar"),
-          OPENCLAW_TEST_READER_LOG: readerLog,
-        },
-      });
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
-      expect(result.stderr).toContain("Refusing to silently substitute");
-      expect(result.stderr).not.toContain("running wrapper code materialized from");
-      expect(existsSync(readerLog)).toBe(failure !== "producer failure");
-      expect(
-        readdirSync(fixture.root).filter((name) => name.startsWith("openclaw-pr-anchor.")),
-      ).toEqual([]);
-    },
-  );
+    );
+    chmodSync(tar, 0o755);
+    const readerLog = join(fixture.root, "reader.log");
+    const result = spawnSync(join(fixture.linked, "scripts/pr"), ["unknown-command"], {
+      cwd: fixture.linked,
+      encoding: "utf8",
+      env: {
+        ...fixture.env,
+        OPENCLAW_TEST_GIT: resolveCommand("git"),
+        OPENCLAW_TEST_TAR: resolveCommand("tar"),
+        OPENCLAW_TEST_FAILURE: failure,
+        OPENCLAW_TEST_ARCHIVE: join(fixture.root, "complete.tar"),
+        OPENCLAW_TEST_GIT_OUTPUT: join(fixture.root, "git-output"),
+        OPENCLAW_TEST_LINK_TARGET: join(fixture.root, "anchor-matching-link-target"),
+        OPENCLAW_TEST_NODE: process.execPath,
+        OPENCLAW_TEST_READER_LOG: readerLog,
+      },
+    });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
+    expect(result.stderr).toContain("Refusing to silently substitute");
+    expect(result.stderr).not.toContain("running wrapper code materialized from");
+    expect(
+      result.stderr
+        .split("\n")
+        .find((line) => line.startsWith("differing wrapper components vs origin/main:")),
+    ).toBe("differing wrapper components vs origin/main: scripts/pr-lib");
+    expect(existsSync(readerLog)).toBe(failure !== "producer failure");
+    expect(
+      readdirSync(fixture.root).filter((name) => name.startsWith("openclaw-pr-anchor.")),
+    ).toEqual([]);
+  });
 
   itPosix("executes extracted helpers through a symlinked temporary root", () => {
     const fixture = makeMismatchedWrapperRepo({ realModules: true });
@@ -1890,9 +2066,15 @@ exit 99
     }
 
     itPosix.each([
-      ...["init", "validate-commit", "gates", "push", "run"].map(
-        (mode) => ["pr-prepare", [mode, "123"], [`prepare-${mode}`, "123"]] as const,
-      ),
+      ...[
+        "init",
+        "correction-init",
+        "correction-review-init",
+        "validate-commit",
+        "gates",
+        "push",
+        "run",
+      ].map((mode) => ["pr-prepare", [mode, "123"], [`prepare-${mode}`, "123"]] as const),
       [
         "pr-review",
         ["123", "argument with spaces", ""],

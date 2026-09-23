@@ -66,7 +66,7 @@ export type SessionPullRequestSnapshotStore = {
     owner: object,
     sessionKey: string,
   ) => Promise<ControlUiSessionPullRequestSnapshot | undefined>;
-  refresh: (sessionKey: string) => boolean;
+  refresh: (sessionKey: string, options?: { automatic?: boolean }) => boolean;
   get: (sessionKey: string) => ControlUiSessionPullRequestSnapshot | undefined;
   subscribe: (listener: () => void) => () => void;
 };
@@ -93,6 +93,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     Set<(snapshot: ControlUiSessionPullRequestSnapshot | undefined) => void>
   >();
   const pendingRefreshKeys = new Set<string>();
+  const automaticRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const connection = createGatewayConnectionLifecycle(gateway.snapshot);
   let lastHello: object | null = null;
   let lastSignature: string | null = null;
@@ -135,6 +136,12 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
 
   const pruneUnwatched = () => {
     const watched = new Set(watchedKeys());
+    for (const [key, timer] of automaticRefreshTimers) {
+      if (!watched.has(key)) {
+        clearTimeout(timer);
+        automaticRefreshTimers.delete(key);
+      }
+    }
     for (const key of pendingRefreshKeys) {
       if (!watched.has(key)) {
         pendingRefreshKeys.delete(key);
@@ -214,13 +221,11 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       let removed = false;
       for (const sessionKey of matchingKeys) {
         removed = snapshots.delete(sessionKey) || removed;
-        pendingRefreshKeys.add(sessionKey);
+        refresh(sessionKey, { automatic: true });
       }
-      retry.reset();
       if (removed) {
         notify();
       }
-      lifecycle.schedule();
       return;
     }
     if (event.event !== CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT) {
@@ -286,6 +291,10 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       lastHello = null;
       lastSignature = null;
       snapshots.clear();
+      for (const timer of automaticRefreshTimers.values()) {
+        clearTimeout(timer);
+      }
+      automaticRefreshTimers.clear();
     },
   });
   const { retry } = lifecycle;
@@ -433,6 +442,26 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     }
   };
 
+  function refresh(sessionKey: string, options: { automatic?: boolean } = {}): boolean {
+    const key = sessionKey.trim();
+    if (!key || !watchedKeys().includes(key)) {
+      return false;
+    }
+    clearTimeout(automaticRefreshTimers.get(key));
+    automaticRefreshTimers.delete(key);
+    if (options.automatic) {
+      automaticRefreshTimers.set(
+        key,
+        setTimeout(() => refresh(key), 5_000),
+      );
+    } else {
+      pendingRefreshKeys.add(key);
+      retry.reset();
+      lifecycle.schedule();
+    }
+    return true;
+  }
+
   return {
     watch,
     unwatch: (owner) => {
@@ -479,16 +508,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
         }
       }
     },
-    refresh: (sessionKey) => {
-      const key = sessionKey.trim();
-      if (!key || !watchedKeys().includes(key)) {
-        return false;
-      }
-      pendingRefreshKeys.add(key);
-      retry.reset();
-      lifecycle.schedule();
-      return true;
-    },
+    refresh,
     get: (sessionKey) => snapshots.get(sessionKey),
     subscribe: (listener) => {
       const wasActive = isActive();

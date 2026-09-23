@@ -7,8 +7,19 @@ import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoin
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
+import {
+  createManagedUpdateRequesterAuthority,
+  type UpdateRequesterAuthority,
+} from "../../infra/update-requester-authority.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import * as processRunner from "../../process/exec.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import {
+  linkUserChannelIdentity,
+  unlinkUserChannelIdentity,
+} from "../../state/user-channel-identities.js";
+import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
@@ -20,7 +31,9 @@ const { executionParams, mocks, successfulUpdate } =
 
 it.each(
   (["package", "git"] as const).flatMap((kind) =>
-    (["healthy", "requester-revoked", "run-replaced"] as const).map((fault) => ({ kind, fault })),
+    (
+      ["healthy", "migrated", "requester-revoked", "requester-reassigned", "run-replaced"] as const
+    ).map((fault) => ({ kind, fault })),
   ),
 )(
   "delegates $kind Doctor without reusing its suspended parent ($fault)",
@@ -51,16 +64,71 @@ it.each(
       import fs from "node:fs";
       ${owner.pathname.endsWith(".ts") ? `await import(${JSON.stringify(pathToFileURL(path.resolve("scripts/tsx.mjs")).href)});` : ""}
       const {withDelegatedUpdateCommandExecutor}=await import(${JSON.stringify(owner.href)});
-      const raw=fs.readFileSync(0,"utf8");
+      // Wait for parent admission and decode UTF-8 across pipe chunks.
+      process.stdin.setEncoding("utf8");
+      let raw=""; for await (const chunk of process.stdin) raw+=chunk;
       if(raw) fs.writeFileSync(${JSON.stringify(received)},"received");
       const input=JSON.parse(raw);
       await withDelegatedUpdateCommandExecutor(input.executor,input.runId,input.root,async fence=>{
         fence.assertCurrent();
+        ${fault === "migrated" ? `const {DatabaseSync}=await import('node:sqlite');const db=new DatabaseSync(${JSON.stringify(resolveOpenClawStateSqlitePath(env))});db.exec(${JSON.stringify(`BEGIN IMMEDIATE; PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}; UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1} WHERE meta_key = 'primary'; COMMIT;`)});db.close();` : ""}
         fs.writeFileSync(${JSON.stringify(marker)},"owned");
       });
     `,
       );
       let requesterCurrent = true;
+      let requesterAuthority: UpdateRequesterAuthority = {
+        requester: {},
+        isCurrent: () => requesterCurrent,
+      };
+      let reassignRequester: (() => void) | undefined;
+      if (fault === "requester-reassigned" || fault === "migrated") {
+        const options = { env };
+        const ada = ensureProfileForEmail("ada@example.test", options);
+        const grace = ensureProfileForEmail("grace@example.test", options);
+        setUserProfileRole(ada.id, "admin", options);
+        setUserProfileRole(grace.id, "admin", options);
+        const identity = {
+          channelId: "discord",
+          accountId: "team-bot",
+          senderId: "100000000000000001",
+        };
+        linkUserChannelIdentity(ada.id, identity, options);
+        await fs.writeFile(
+          env.OPENCLAW_CONFIG_PATH,
+          JSON.stringify({
+            plugins: { enabled: false },
+            gateway: {
+              auth: {
+                identityScopes: {
+                  "ada@example.test": ["operator.admin"],
+                  "grace@example.test": ["operator.admin"],
+                },
+              },
+              roles: {
+                default: "admin",
+                definitions: {
+                  admin: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
+                },
+              },
+            },
+          }),
+        );
+        requesterAuthority = await createManagedUpdateRequesterAuthority(
+          {
+            channel: identity.channelId,
+            accountId: identity.accountId,
+            senderId: identity.senderId,
+            authorizationSource: `profile:${ada.id}`,
+          },
+          env,
+        );
+        expect(requesterAuthority.isCurrent()).toBe(true);
+        reassignRequester = () => {
+          unlinkUserChannelIdentity(ada.id, identity, options);
+          linkUserChannelIdentity(grace.id, identity, options);
+        };
+      }
       let reachedSpawn = false;
       const runChild = processRunner.runUtf8CommandWithTimeout;
       vi.spyOn(processRunner, "runUtf8CommandWithTimeout").mockImplementation((argv, options) => {
@@ -71,6 +139,9 @@ it.each(
             reachedSpawn = true;
             if (fault === "requester-revoked") {
               requesterCurrent = false;
+            }
+            if (fault === "requester-reassigned") {
+              reassignRequester?.();
             }
             if (fault === "run-replaced") {
               params.opts.run = { runId: "replacement-run", env };
@@ -84,7 +155,7 @@ it.each(
       params.opts.run = {
         runId,
         env,
-        requesterAuthority: { requester: {}, isCurrent: () => requesterCurrent },
+        requesterAuthority,
       };
       mocks.nativeSupport.mockResolvedValue(true);
       mocks.validateCanary.mockResolvedValue({
@@ -122,7 +193,7 @@ it.each(
         params.opts.run!.executorFence = await executor.enter(root);
         return executeMutableUpdate(params);
       });
-      if (fault !== "healthy") {
+      if (fault !== "healthy" && fault !== "migrated") {
         await expect(update).rejects.toThrow("requester-revoked");
         await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
         await expect(fs.stat(received)).rejects.toMatchObject({ code: "ENOENT" });
@@ -132,6 +203,9 @@ it.each(
           steps: [{ name: "openclaw doctor", exitCode: 0 }],
         });
         expect(await fs.readFile(marker, "utf8")).toBe("owned");
+        if (fault === "migrated") {
+          expect(requesterAuthority.isCurrent).toThrow(/newer schema version/);
+        }
       }
       expect(reachedSpawn).toBe(true);
       expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });

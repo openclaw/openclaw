@@ -1270,7 +1270,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 .btn.active {
   border-color: var(--accent);
   background: var(--accent-subtle);
-  color: var(--accent);
+  color: var(--text);
 }
 
 .btn.danger {
@@ -2113,7 +2113,7 @@ select.input {
 :root[data-theme-mode="light"] .btn.active {
   border-color: var(--accent);
   background: var(--accent-subtle);
-  color: var(--accent);
+  color: var(--text);
 }
 
 :root[data-theme-mode="light"] .btn.primary {
@@ -2770,7 +2770,7 @@ select.input {
     transform var(--duration-fast) var(--ease-out);
 }
 
-.chip:hover {
+.chip:is(button, a, label):hover {
   border-color: var(--border-strong);
   transform: translateY(-1px);
 }
@@ -4977,8 +4977,8 @@ td.data-table-key-col {
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  height: 22px;
-  min-height: 22px;
+  height: 24px;
+  min-height: 24px;
   max-height: 66px;
   margin: 0;
   padding: 0 calc(var(--cmd-palette-actions-width) + 20px) 0 0;

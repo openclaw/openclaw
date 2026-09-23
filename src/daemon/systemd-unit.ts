@@ -7,6 +7,48 @@ import type { GatewayServiceRenderArgs } from "./service-types.js";
 
 const SYSTEMD_LINE_BREAKS = /[\r\n]/;
 
+/** Copy only policy fields admitted for preservation by the native audit. */
+export function preserveSystemdUnitPolicy(
+  generated: string,
+  previous: string,
+  keys: readonly string[] = [],
+): string {
+  if (!keys.length) {
+    return generated;
+  }
+  const keyedLines = (content: string) => {
+    let section = "";
+    return splitSystemdLogicalLines(content).map((line) => {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+        section = trimmed.slice(1, -1);
+      }
+      const separator = trimmed.indexOf("=");
+      return { line, key: separator < 0 ? "" : `${section}.${trimmed.slice(0, separator).trim()}` };
+    });
+  };
+  const installed = keyedLines(previous);
+  const retained = new Map(keys.map((key) => [key, installed.filter((line) => line.key === key)]));
+  const copied = new Set<string>();
+  return `${keyedLines(generated)
+    .flatMap(({ line, key }) => {
+      const original = retained.get(key);
+      if (!original) {
+        return [line];
+      }
+      if (!original.length) {
+        throw new Error(`Custom systemd policy ${key} disappeared before publication.`);
+      }
+      if (copied.has(key)) {
+        return [];
+      }
+      copied.add(key);
+      return original.map((entry) => entry.line);
+    })
+    .join("\n")
+    .trimEnd()}\n`;
+}
+
 export const SYSTEMD_FIXED_POLICY: Readonly<Record<string, string>> = {
   "Unit.After": "network-online.target",
   "Unit.Wants": "network-online.target",

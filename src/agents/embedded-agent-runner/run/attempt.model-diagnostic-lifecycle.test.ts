@@ -31,12 +31,18 @@ import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagn
 
 const tempDirs = createTempDirTracker();
 
-async function collectModelCallEvents(run: () => Promise<void>): Promise<DiagnosticEventPayload[]> {
+type ModelCallEvent = Extract<DiagnosticEventPayload, { type: `model.call.${string}` }>;
+
+async function collectModelCallEvents(run: () => Promise<void>): Promise<ModelCallEvent[]> {
   // Diagnostics are emitted asynchronously; collect only public model-call
   // events and flush one tick after the stream completes.
-  const events: DiagnosticEventPayload[] = [];
+  const events: ModelCallEvent[] = [];
   const stop = onInternalDiagnosticEvent((event) => {
-    if (event.type.startsWith("model.call.")) {
+    if (
+      event.type === "model.call.started" ||
+      event.type === "model.call.completed" ||
+      event.type === "model.call.error"
+    ) {
       events.push(event);
     }
   });
@@ -151,6 +157,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
       });
       const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(() => originalStream, {
         runId: "run-explicit-result",
+        agentId: "agent-explicit-result",
         provider: "openai",
         model: "gpt-5.4",
         trace: createDiagnosticTraceContext(),
@@ -175,6 +182,10 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
       const expectedTerminalType =
         stopReason === "error" ? "model.call.error" : "model.call.completed";
       expect(events.filter((event) => event.type === expectedTerminalType)).toHaveLength(1);
+      expect(events.map((event) => event.agentId)).toEqual([
+        "agent-explicit-result",
+        "agent-explicit-result",
+      ]);
     },
   );
 
@@ -364,11 +375,14 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
     const startedAt = Date.parse("2026-07-09T18:30:00.000Z");
     let now = startedAt;
     vi.spyOn(Date, "now").mockImplementation(() => now);
+    const readFlags = vi.fn(() => []);
     const assistant = { role: "assistant", stopReason: "stop", content: [] };
     async function* stream() {
       for (const offset of [0, 1, 29_999, 30_000, 30_001]) {
         now = startedAt + offset;
-        yield { type: "thinking_delta", delta: "", partial: {} };
+        for (let index = 0; index < 1000; index += 1) {
+          yield { type: "thinking_delta", delta: "", partial: {} };
+        }
       }
       yield { type: "done", message: assistant };
     }
@@ -376,6 +390,13 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
     const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
       (() => original) as unknown as StreamFn,
       {
+        config: {
+          diagnostics: {
+            get flags() {
+              return readFlags();
+            },
+          },
+        },
         runId: "run-activity",
         provider: "synthetic",
         model: "synthetic-model",
@@ -405,6 +426,8 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
     expect(
       events.every((event) => event.runId === "run-activity" && event.spanId === "call-activity"),
     ).toBe(true);
+    // Configuration resolution scales with heartbeats, not the 5,000 chunks.
+    expect(readFlags.mock.calls.length).toBeLessThan(100);
   });
 
   it.each(["unset", "override"] as const)(

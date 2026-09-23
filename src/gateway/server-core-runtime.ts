@@ -234,6 +234,7 @@ export async function startGatewayCoreRuntime(input: {
     sessionCompanion,
     sessionObserver,
     sessionActivitySummaries,
+    channelAdmissionAudit,
     ...runtimeSubscriptionUnsubs
   } = await startupTrace.measure("runtime.subscriptions", () =>
     startGatewayEventSubscriptions({
@@ -376,9 +377,13 @@ export async function startGatewayCoreRuntime(input: {
     // expired/no-route terminals).
     const fenceResolver = { kind: "system", id: "worker-dispatch" } as const;
     for (const manager of [execApprovalManager, pluginApprovalManager]) {
-      for (const record of manager.listPendingRecords()) {
+      for (const record of manager.listLocalPendingRecords()) {
         if (approvalRequestTargetsSession(record.request, keys, sessionId)) {
-          manager.forceDenyDetailed(record.id, "run-aborted", fenceResolver, "cancelled");
+          void manager
+            .forceDenyDetailed(record.id, "run-aborted", fenceResolver, "cancelled")
+            .catch((error: unknown) => {
+              log.error(`approval dispatch-fence settlement failed: ${String(error)}`);
+            });
         }
       }
     }
@@ -524,6 +529,7 @@ export async function startGatewayCoreRuntime(input: {
     sessionCompanion,
     sessionObserver,
     sessionActivitySummaries,
+    channelAdmissionAudit,
     approvalSessionEvents,
     execApprovalManager,
     questionManager,

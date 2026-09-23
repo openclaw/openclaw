@@ -3,14 +3,12 @@ import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
-import { projectSessionDisplayMessage } from "./session-display-projection.js";
 import { findExistingTranscriptPath } from "./session-transcript-archive-reader.js";
 import {
   createSessionTranscriptUsageAccumulator,
   type SessionTranscriptUsageSnapshot,
 } from "./session-transcript-derived-readers.js";
 import { isOversizedTranscriptLine } from "./session-transcript-record-parser.js";
-import type { SessionPreviewItem } from "./session-utils.types.js";
 
 export type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
 
@@ -90,23 +88,4 @@ export async function readLatestSessionUsageFromTranscriptFileAsync(
   } catch {
     return null;
   }
-}
-
-export function buildSessionPreviewItems(
-  messages: readonly unknown[],
-  maxItems: number,
-  maxChars: number,
-  view: "display" | "model-context" = "display",
-): SessionPreviewItem[] {
-  const items: SessionPreviewItem[] = [];
-  // Rejected rows do not consume the limit; older text cannot affect a full preview.
-  for (let index = messages.length - 1; index >= 0 && items.length < maxItems; index -= 1) {
-    const projected = projectSessionDisplayMessage(messages[index], { maxChars, view });
-    if (!projected) {
-      continue;
-    }
-    items.push(projected);
-  }
-
-  return items.toReversed();
 }

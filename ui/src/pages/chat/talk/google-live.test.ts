@@ -295,7 +295,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       encodeJsonFrame({
         serverContent: {
           modelTurn: {
-            parts: Array.from({ length: 321 }, () => ({
+            parts: Array.from({ length: 4_097 }, () => ({
               inlineData: { data: "AAAA", mimeType: "audio/pcm;rate=24000" },
             })),
           },
@@ -309,7 +309,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
         "Realtime Talk playback exceeded the browser audio buffer limit",
       ),
     );
-    expect(createdSources).toHaveLength(320);
+    expect(createdSources).toHaveLength(4_096);
     expect(createdSources.every((source) => source.stop.mock.calls.length === 1)).toBe(true);
     expect(ws.readyState).toBe(3);
     expect(
@@ -331,7 +331,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       }),
     );
     await flushMicrotasks();
-    expect(createdSources).toHaveLength(320);
+    expect(createdSources).toHaveLength(4_096);
   });
 
   it("rejects an oversized first frame before decoding provider audio", async () => {
@@ -346,7 +346,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
             parts: [
               {
                 inlineData: {
-                  data: "!".repeat(700_000),
+                  data: "!".repeat(3_904_000),
                   mimeType: "audio/pcm;rate=24000",
                 },
               },

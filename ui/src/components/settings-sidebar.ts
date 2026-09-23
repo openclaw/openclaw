@@ -182,8 +182,11 @@ function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: strin
       @pointerenter=${(event: Event) =>
         scheduleRoutePreload(props.preloadTimers, routeId, event, props.onPreload, active)}
       @pointerleave=${(event: Event) => cancelRoutePreload(props.preloadTimers, event)}
-      @touchstart=${(event: TouchEvent) =>
-        scheduleRoutePreload(props.preloadTimers, routeId, event, props.onPreload, active, true)}
+      @touchstart=${{
+        handleEvent: (event: TouchEvent) =>
+          scheduleRoutePreload(props.preloadTimers, routeId, event, props.onPreload, active, true),
+        passive: true,
+      }}
       @click=${(event: MouseEvent) => {
         if (!shouldHandleNavigationClick(event)) {
           return;

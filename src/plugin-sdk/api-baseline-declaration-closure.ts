@@ -188,8 +188,10 @@ export function createDeclarationClosureRenderer(params: {
   const renderedClosures = new Map<string, DeclarationClosure>();
   const reachability = new Map<string, WalkResult>();
   const active = new Set<string>();
+  const rootReachability = new Map<string, WalkResult>();
   const ambientReachability = new Map<string, Walk>();
   const activeAmbient = new Set<string>();
+  const rootAmbientReachability = new Map<string, Walk>();
   const unresolvedDependencies = new Set<string>();
 
   const baseDiagnostics = [...program.getOptionsDiagnostics(), ...program.getGlobalDiagnostics()];
@@ -514,7 +516,7 @@ export function createDeclarationClosureRenderer(params: {
 
   const ambientContribution = (sourceFile: ts.SourceFile): Walk => {
     const key = canonical(sourceFile.fileName);
-    const cached = ambientReachability.get(key);
+    const cached = ambientReachability.get(key) ?? rootAmbientReachability.get(key);
     if (cached) {
       return cached;
     }
@@ -538,6 +540,8 @@ export function createDeclarationClosureRenderer(params: {
     const result = { sections, tainted };
     if (!tainted) {
       ambientReachability.set(key, result);
+    } else {
+      rootAmbientReachability.set(key, result);
     }
     return result;
   };
@@ -584,8 +588,8 @@ export function createDeclarationClosureRenderer(params: {
     exported: boolean,
   ): WalkResult => {
     const key = `${canonical(sourceFile.fileName)}\0${exported ? "export" : "local"}\0${name}`;
-    const cached = reachability.get(key);
-    if (cached !== undefined || reachability.has(key)) {
+    const cached = reachability.get(key) ?? rootReachability.get(key);
+    if (cached !== undefined || reachability.has(key) || rootReachability.has(key)) {
       return cached ?? null;
     }
     if (active.has(key)) {
@@ -649,6 +653,8 @@ export function createDeclarationClosureRenderer(params: {
     if (result?.tainted) {
       // Back-edge results are complete only inside the current root union. Caching them can let
       // reachable cycle changes escape the hash and make later exports entry-order sensitive.
+      // Reuse them only within this root: its union already includes the omitted back edge.
+      rootReachability.set(key, result);
     } else {
       reachability.set(key, result);
     }
@@ -664,6 +670,8 @@ export function createDeclarationClosureRenderer(params: {
     if (cached) {
       return cached;
     }
+    rootReachability.clear();
+    rootAmbientReachability.clear();
     const walk = walkDeclaration(owner, exportName, true) ?? recallFallback(owner);
     const uniqueSections = [...walk.sections.values()].toSorted(
       (left, right) => compareText(left.name, right.name) || compareText(left.text, right.text),

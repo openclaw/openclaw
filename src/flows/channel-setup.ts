@@ -47,6 +47,7 @@ import {
   ensureChannelSetupPluginInstalledWithNavigation as runPluginInstallWithNavigation,
   runScopedChannelStep as runNavigationScope,
 } from "./channel-setup-navigation.js";
+import { createChannelSetupDisabledHints } from "./channel-setup.disabled.js";
 import {
   formatAccountLabel,
   maybeConfigureCommandOwner,
@@ -345,50 +346,12 @@ export async function setupChannels(
     }
   };
 
-  const resolveConfigDisabledHint = (channel: ChannelChoice): string | undefined => {
-    if (next.plugins?.enabled === false) {
-      return "plugins disabled";
-    }
-    if (next.plugins?.entries?.[channel]?.enabled === false) {
-      return "plugin disabled";
-    }
-    if (
-      typeof (next.channels as Record<string, { enabled?: boolean }> | undefined)?.[channel]
-        ?.enabled === "boolean"
-    ) {
-      return (next.channels as Record<string, { enabled?: boolean }>)[channel]?.enabled === false
-        ? "disabled"
-        : undefined;
-    }
-    return undefined;
-  };
-
-  const resolveAccountDisabledHint = (
-    channel: ChannelChoice,
-    accountId?: string,
-  ): string | undefined => {
-    const plugin = getVisibleChannelPlugin(channel);
-    if (!plugin) {
-      return undefined;
-    }
-    const account = plugin.config.resolveAccount(
-      next,
-      accountId ?? resolveChannelDefaultAccountId({ plugin, cfg: next }),
-    );
-    let enabled: boolean | undefined;
-    if (plugin.config.isEnabled) {
-      enabled = plugin.config.isEnabled(account, next);
-    } else if (typeof (account as { enabled?: boolean })?.enabled === "boolean") {
-      enabled = (account as { enabled?: boolean }).enabled;
-    }
-    return enabled === false ? "disabled" : undefined;
-  };
-  const resolveDisabledHint = (channel: ChannelChoice): string | undefined => {
-    const configDisabledHint = resolveConfigDisabledHint(channel);
-    return configDisabledHint || deferStatusUntilSelection
-      ? configDisabledHint
-      : resolveAccountDisabledHint(channel);
-  };
+  const { resolveConfigDisabledHint, resolveAccountDisabledHint, resolveDisabledHint } =
+    createChannelSetupDisabledHints({
+      getConfig: () => next,
+      getPlugin: getVisibleChannelPlugin,
+      deferStatusUntilSelection,
+    });
 
   const getChannelEntries = () => {
     const resolved = resolveVisibleChannelEntries();
@@ -437,12 +400,18 @@ export async function setupChannels(
   };
 
   const resolveSelectionContributions = () =>
-    withCommandPluginMetadata({ config: next, workspaceDir: resolveWorkspaceDir() }, () => {
+    withCommandPluginMetadata({ config: next, workspaceDir: resolveWorkspaceDir() }, async () => {
       const { entries, catalogById } = getChannelEntries();
+      const disabledHints = new Map<ChannelChoice, string | undefined>();
+      for (const entry of entries) {
+        if (shouldShowChannelInSetup(entry.meta)) {
+          disabledHints.set(entry.id, await resolveDisabledHint(entry.id));
+        }
+      }
       return resolveChannelSetupSelectionContributions({
         entries,
         statusByChannel: buildStatusByChannelForSelection(catalogById),
-        resolveDisabledHint,
+        resolveDisabledHint: (channel) => disabledHints.get(channel),
       });
     });
 
@@ -1079,7 +1048,7 @@ export async function setupChannels(
         try {
           if (
             resolveConfigDisabledHint(id) ||
-            resolveAccountDisabledHint(id, accountIdsByChannel.get(id))
+            (await resolveAccountDisabledHint(id, accountIdsByChannel.get(id)))
           ) {
             continue;
           }

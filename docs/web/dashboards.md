@@ -27,7 +27,8 @@ Open `/dashboards` to browse dashboard-enabled threads as a card gallery. Search
 by thread or author, filter by author, and sort by recent activity or title.
 Stored sessions without a matching task URL remain visible as previews without an open link.
 Select a linked card to open its owning task using your personal presentation override
-or the dashboard’s shared default. In fullscreen, choose **Restore split** to
+or the dashboard’s shared default. Ordinary card clicks stay in the app and preserve
+retained widget interactions. In fullscreen, choose **Restore split** to
 bring the side panel alongside it. An open Dashboards page updates as threads
 are renamed, archived, or deleted, including
 after a Gateway reconnect.
@@ -143,19 +144,25 @@ never needs the agent.
   panel. With Dashboard active in the side panel, choose **Swap** in the task
   toolbar, then **Focus** for a dashboard-only view. **Restore split** brings
   the side panel back. A tab with one full-width widget fills the focused
-  dashboard edge to edge, without a card border or surrounding padding.
+  dashboard edge to edge, using all available width and height without a card
+  border or surrounding padding. Embedded MCP apps follow the available space
+  when you resize the window or restore the split.
   Its widget controls move into the task toolbar’s **…** menu, leaving no
   hover pill or drag and resize handles over the page. Granted permissions
   remain available in that menu; approval requests and errors stay visible
   in the widget.
   Restoring the split or adding another widget brings back the normal spacing.
 - **Shared default.** In the task menu’s **Layout** submenu, choose **Use current
-  view as default** to save the current fullscreen or split view for this dashboard.
+  view as default** to make ordinary session opens, including sidebar links, show
+  Dashboard in its current fullscreen or split view.
   While Dashboard is shown, **This is the default view** confirms that the current
-  fullscreen or split view matches the shared default, including for read-only
-  viewers. When the view differs, **Use current view as default** is available
+  fullscreen or split view and the session's opening view both match the shared
+  default, including for read-only viewers. When the view differs, **Use current view as default** is available
   if you can edit the session. Both explain that personal layout choices still
-  apply. Saving does not rearrange
+  apply. Merely opening, swapping, or focusing a panel does not change the shared
+  default. If an older dashboard saved its fullscreen or split presentation but
+  still opens as Chat, choose **Use current view as default** once to save both
+  choices together. Saving does not rearrange
   anyone already viewing the dashboard; the default applies on subsequent opens
   and revisits, including opens from the dashboard gallery.
   Your browser’s deliberate **Focus** / **Restore split** choice takes precedence
@@ -185,7 +192,8 @@ never needs the agent.
   `action: "set_default_presentation"` and `presentation: "split"` or `"expanded"`.
   This durable operation works without a connected browser. `action: "read"`
   returns the effective `defaultPresentation`, which is `"split"` when unset.
-  Both the menu and agent use the same authorized `sessions.patch` mutation.
+  Both the menu and agent use the same authorized `sessions.patch` mutation to
+  save `boardFace: "dashboard"` and `boardPresentation` together.
   The optional `boardPresentation` metadata is stored with the session, survives
   restart and `/new` or `/reset` of that session, and is removed with session
   deletion. Patching `boardPresentation: null` restores the built-in split default.
@@ -335,6 +343,12 @@ permissions stay the same or shrink. A grant is preserved only when the
 approved bytes still match and the requested permissions do not widen.
 The authoring result distinguishes pending, rejected, and granted access;
 saving a widget does not imply its capabilities were approved.
+Automatic review can reuse a low-risk approval when the same agent recreates
+an HTML or registered-source widget with the same name, source, and declarations
+in another session. This bounded in-memory reuse resets when the runtime
+configuration or exec-approval policy changes. Each session's current permission
+mode and each widget's grant authority still apply. MCP apps and incognito
+sessions do not reuse these assessments. New content still waits for review.
 Widget interactions the agent should know about (filters you clicked, views
 you switched) reach it quietly as session notices — it stays informed without
 being interrupted.

@@ -1,13 +1,13 @@
 import { isDeepStrictEqual } from "node:util";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { crabboxCommandError } from "./crabbox-worker-command-error.js";
-import { runCrabboxCommand, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
+import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import {
   buildCrabboxAllocationArgs,
   resolveCrabboxWarmImageProfileKey,
   type parseCrabboxProfile,
   type resolveCrabboxProvisionProfile,
 } from "./crabbox-worker-profile.js";
+import { runProvisionWarmup } from "./crabbox-worker-provision-commands.js";
 import { WARM_IMAGE_COMMAND_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 import { createCrabboxWarmImageCapture } from "./crabbox-worker-warm-image-capture.js";
 import {
@@ -656,17 +656,10 @@ export function createCrabboxWarmImageManager(dependencies: {
         }
       }
       assertCurrent(context);
-      const result = await runCrabboxCommand({
-        action: "warmup",
-        args: ["warmup", ...buildCrabboxAllocationArgs(context.profile, context.id, context.slug)],
-        binary: context.binary,
+      await runProvisionWarmup({
+        ...context,
         runCommand: dependencies.runCommand,
-        timeoutMs: context.timeoutMs(),
-        ...(context.signal ? { signal: context.signal } : {}),
       });
-      if (result.termination !== "exit" || result.code !== 0) {
-        throw crabboxCommandError("warmup", result);
-      }
       return { kind: "cold" };
     },
   };

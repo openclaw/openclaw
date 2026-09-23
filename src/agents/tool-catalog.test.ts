@@ -27,6 +27,15 @@ function requirePolicyAllow(profile: Parameters<typeof resolveCoreToolProfilePol
 }
 
 describe("tool-catalog", () => {
+  it("lists personal instructions only when the multi-user capability is enabled", () => {
+    const ids = (personalInstructionsEnabled?: boolean) =>
+      listCoreToolSections({ personalInstructionsEnabled }).flatMap((section) =>
+        section.tools.map((tool) => tool.id),
+      );
+    expect(ids()).not.toContain("personal_instructions");
+    expect(ids(false)).not.toContain("personal_instructions");
+    expect(ids(true)).toContain("personal_instructions");
+  });
   it("lists the setup helper once in Automation without adding restricted profile membership", () => {
     const sections = listCoreToolSections();
     expect(
@@ -85,6 +94,7 @@ describe("tool-catalog", () => {
   it("includes code execution, web tools, and progress_card in the coding profile policy", () => {
     const policy = requireCoreToolProfilePolicy("coding");
     expect(policy.allow).toEqual([
+      "decision_evaluate",
       "ls",
       "read",
       "write",
@@ -99,6 +109,7 @@ describe("tool-catalog", () => {
       "x_search",
       "memory_search",
       "memory_get",
+      "personal_instructions",
       "sessions",
       "sessions_list",
       "sessions_history",
@@ -141,7 +152,9 @@ describe("tool-catalog", () => {
   it("includes bundle MCP tools in coding and messaging profile policies", () => {
     expect(requirePolicyAllow("coding").at(-1)).toBe("bundle-mcp");
     expect(requirePolicyAllow("messaging")).toEqual([
+      "decision_evaluate",
       "secrets",
+      "personal_instructions",
       "sessions",
       "sessions_list",
       "sessions_history",

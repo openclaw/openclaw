@@ -8,6 +8,7 @@ import {
   listSessionTranscriptCorpusEntriesForAgent,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
+  encodeMemoryEmbedding,
   MEMORY_CHUNKING_VERSION,
   type MemorySessionSyncTarget,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -49,12 +50,15 @@ describe("memory session update sync", () => {
       .prepare(
         "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, 'sessions', 1, 1, ?, ?, ?, ?, ?)",
       )
-      .run(sessionPath, sessionPath, "stale-chunk", "fts-only", text, "[]", 10);
-    database
-      .prepare(
-        "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, 'sessions', ?, 1, 1)",
-      )
-      .run(text, sessionPath, sessionPath, "fts-only");
+      .run(
+        sessionPath,
+        sessionPath,
+        "stale-chunk",
+        "fts-only",
+        text,
+        encodeMemoryEmbedding([]),
+        10,
+      );
     database
       .prepare(
         "INSERT INTO memory_index_chunk_provenance (chunk_id, origin_class, session_kind, observed_at) VALUES (?, 'system', 'subagent', ?)",

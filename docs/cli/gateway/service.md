@@ -98,6 +98,10 @@ commands retain their service-management behavior.
 
 ### Pin the service runtime
 
+Forced reinstall retains a supported Node executable recorded in the service.
+Doctor also retains it when no runtime migration is needed. An explicit
+`--runtime node` requests automatic selection again.
+
 Use `--runtime-path` to keep the service on an operator-selected Node or Bun
 executable instead of automatic runtime selection:
 
@@ -116,6 +120,21 @@ To replace it, supply another `--runtime-path`; to return to automatic selection
 run `openclaw gateway install --runtime node --force` without `--runtime-path`.
 An explicit wrapper still controls the executable and takes precedence over a pin.
 Installation starts the service and may restart an existing Gateway.
+
+### Repair a LaunchAgent environment wrapper
+
+On macOS, the generated LaunchAgent starts a shell wrapper with the generated
+environment file followed by the Gateway command. If `gateway status` reports a
+missing environment-file argument, or the service log reports **Invalid LaunchAgent
+environment file**, run `openclaw gateway install --force` from the owning account
+and profile, then check `openclaw gateway status` and `openclaw health`.
+
+Back up the plist and private service environment file before repairing a malformed
+definition. If its runtime argument was also changed, select the intended executable
+explicitly with `--runtime-path` as shown above. A recorded runtime pin whose service
+definition has changed must be explicitly selected again. Keep service-only
+environment values available to the reinstall; malformed wrapper arguments can
+prevent OpenClaw from reading the previous environment file.
 
 ### Install with a wrapper
 

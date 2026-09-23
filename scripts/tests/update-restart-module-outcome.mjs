@@ -3,12 +3,13 @@
 // Node >=24: node --experimental-vm-modules --test this-file.mjs
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import { createRequire, stripTypeScriptTypes } from "node:module";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import vm from "node:vm";
+import ts from "typescript";
 import { createDiskSwap } from "./update-restart-swap-fixture.mjs";
 
 const sourceRoot = path.resolve(
@@ -47,14 +48,13 @@ class UpdateActivationTimeoutError extends Error {}
 async function fixture({
   error,
   commandError,
-  serviceLoadBoundaryFailure = false,
   verification = { ok: true },
   mutateExecutor = false,
   packageTransaction,
   verifyOnDisk,
   installRoot = root,
 } = {}) {
-  let commandFailure = commandError;
+  const commandFailure = commandError;
   const events = [],
     messages = [],
     completion = [],
@@ -86,7 +86,6 @@ async function fixture({
   const opts = { json: true, yes: true, run };
   const assertCurrent = () => run.executorFence.assertCurrent();
   const restartContext = {
-    restartScriptPath: null,
     refreshGatewayServiceEnv: false,
     gatewayServiceEnv: {},
     gatewayServiceInstallEnv: null,
@@ -217,10 +216,6 @@ async function fixture({
       events.push("rollback-unverified");
       return { result: params.result, rolledBack: false };
     },
-    repairUpdateService: async (params) => {
-      events.push("repair-unverified");
-      return params.result;
-    },
     resolveUpdateResultNextAction: () => "Retain recovery material until health is verified.",
     completeUpdateCommandRun: (value) => value,
     printResult: (value) => printed.push(value),
@@ -273,15 +268,11 @@ async function fixture({
           "../../process/exec-result",
           "../../shared/update-outcome",
           "../../infra/update-run-report",
-          "../../infra/update-run-step",
           "../../infra/update-run-record",
           "../../infra/update-run-limits",
           "../../infra/update-doctor-config",
           "../../infra/update-failure-facts-format",
           "../../../packages/gateway-protocol/src/update-run-vocabulary",
-          // Keep pending-load retention policy and Error identity production-owned.
-          "update-command-service-load",
-          "../../daemon/service-stage",
         ]
       : ["update-restart-module-error"]),
   ];
@@ -291,10 +282,14 @@ async function fixture({
   // no function extraction, production-body rewrites, or replacement outcome logic.
   for (const name of realNames) {
     const filename = path.join(sourceRoot, "src/cli/update-cli", name + ".ts");
-    const code = stripTypeScriptTypes(await fs.readFile(filename, "utf8"), {
-      mode: "transform",
-      sourceUrl: filename,
-    });
+    const code = ts.transpileModule(await fs.readFile(filename, "utf8"), {
+      fileName: filename,
+      compilerOptions: {
+        target: ts.ScriptTarget.ESNext,
+        module: ts.ModuleKind.ESNext,
+        verbatimModuleSyntax: true,
+      },
+    }).outputText;
     const mod = new vm.SourceTextModule(code, { context, identifier: filename });
     modules.set(path.basename(name) + ".js", mod);
     const imports = new Map();
@@ -371,12 +366,6 @@ async function fixture({
   const entry = modules.get("update-command-post-update.js");
   await entry.link(link);
   await entry.evaluate();
-  if (serviceLoadBoundaryFailure) {
-    const { UpdateServiceLoadBoundaryError } = modules.get(
-      "update-command-service-load.js",
-    ).namespace;
-    commandFailure = new UpdateServiceLoadBoundaryError("fixture service load boundary");
-  }
   return {
     commandError: commandFailure,
     direct: (params) =>
@@ -464,7 +453,6 @@ for (const [name, makeError] of thrownCases) {
     assert.deepEqual(f.completion, [false]);
     assert.equal(f.printed.at(-1).status, "error");
     assert.ok(f.events.includes("rollback-unverified"));
-    assert.ok(f.events.includes("repair-unverified"));
     if (main) {
       assert.ok(f.events.indexOf("complete:false") < f.events.indexOf("recovery-verification"));
     }
@@ -498,13 +486,6 @@ void test("accepted restart without healthy successor cannot authorize retiremen
   assert.deepEqual(f.unexpected, []);
 });
 if (main) {
-  void test("current-main service-load boundary error propagates unchanged", async () => {
-    const f = await fixture({ serviceLoadBoundaryFailure: true });
-    await assert.rejects(f.direct(), (actual) => actual === f.commandError);
-    assert.equal(f.counts().verifyCalls, 0);
-    assert.equal(f.counts().commandCalls, 1);
-    assert.deepEqual(f.unexpected, []);
-  });
   for (const mutateExecutor of ["verification", "native-state"]) {
     void test(`current-main cannot publish after executor replacement during ${mutateExecutor}`, async () => {
       const f = await fixture({ error: thrownCases[0][1](), mutateExecutor });

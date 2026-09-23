@@ -10,10 +10,8 @@ import type {
   OriginalManagedServiceRuntime,
   UpdateRestartParams,
 } from "./update-command-service-context-types.js";
-import type { UpdateServiceLoadBoundary } from "./update-command-service-load.js";
 export type FinishUpdateParams = UpdateRestartParams & {
   coreAlreadyCurrent?: boolean;
-  serviceLoadBoundary?: UpdateServiceLoadBoundary;
   failure?: { cause: unknown; detail: string };
   mutationStarted: boolean;
   expectedVersion?: string;

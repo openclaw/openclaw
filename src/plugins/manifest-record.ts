@@ -13,7 +13,7 @@ import type {
   BundledChannelConfigCollector,
   PluginManifestRecord,
 } from "./manifest-registry.types.js";
-import { loadManifestThemeDefinitions } from "./manifest-themes.js";
+import { loadManifestThemeDefinitions } from "./manifest-theme-definitions.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import {
   type OpenClawPackageManifest,

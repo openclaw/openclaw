@@ -405,7 +405,7 @@ final class ProfileChatPreferencesTests: XCTestCase {
         try await AppKitTestSupport.waitForAccessibilityElement(in: window, description: "Thread menu") { elements in
             elements.first {
                 let role = $0.accessibilityRole?()
-                let names: [String?] = [$0.accessibilityLabel?(), $0.accessibilityTitle?()]
+                let names: [String?] = [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)]
                 return (role == .button || role == .popUpButton || role == .menuButton) &&
                     (names.contains("Thread") || names.contains("More"))
             }
@@ -446,7 +446,7 @@ final class ProfileChatPreferencesTests: XCTestCase {
             return elements.first {
                 let value: Any? = $0.accessibilityValue?()
                 return $0.accessibilityIdentifier?() == "chat-composer-inline-model" &&
-                    $0.accessibilityLabel?() == "Model" && value as? String == selection
+                    AppKitTestSupport.accessibilityName(of: $0) == "Model" && value as? String == selection
             }
         }
     }

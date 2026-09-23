@@ -1,14 +1,11 @@
 // Resolves ClawHub plugin catalog entries and install metadata.
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import JSZip from "jszip";
-import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
+import type JSZip from "jszip";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { formatTerminalLink } from "../../packages/terminal-core/src/terminal-link.js";
 import {
   ARCHIVE_LIMIT_ERROR_CODE,
   ArchiveLimitError,
@@ -43,12 +40,23 @@ import {
   type ClawHubPackageVersion,
 } from "../infra/clawhub-packages.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
+import { sha256File } from "../infra/directory-durability.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { root } from "../infra/fs-safe.js";
+import type { ExtractedArchiveVerification } from "../infra/install-flow.js";
 import type { TimedInstallModeOptions } from "../infra/install-mode-options.js";
+import { withInstallActivity } from "../infra/install-progress.js";
+import { walkRootDirectory } from "../infra/root-walk.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import type { RuntimeVersionEnv } from "../version.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, type ClawHubInstallErrorCode } from "./clawhub-error-codes.js";
 import type { ClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
+import {
+  formatClawHubReleaseLabel,
+  formatClawHubSpecifier,
+  logClawHubPackageSummary,
+  type PluginInstallLogger,
+} from "./clawhub-presentation.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
 import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
@@ -61,12 +69,6 @@ import { checkMinHostVersion } from "./min-host-version.js";
 import { satisfiesPluginApiRange } from "./package-compat.js";
 
 export { CLAWHUB_INSTALL_ERROR_CODE };
-
-type PluginInstallLogger = {
-  info?: (message: string) => void;
-  warn?: (message: string) => void;
-  terminalLinks?: boolean;
-};
 
 type ClawHubInstallFailure = {
   ok: false;
@@ -127,7 +129,7 @@ type ClawHubArchiveFileVerificationResult =
 
 type JSZipObjectWithSize = JSZip.JSZipObject & {
   // Internal JSZip field from loadAsync() metadata. Use it only as a best-effort
-  // size hint; the streaming byte checks below are the authoritative guard.
+  // size hint; fs-safe extraction enforces the actual byte limits.
   _data?: {
     uncompressedSize?: number;
   };
@@ -135,9 +137,11 @@ type JSZipObjectWithSize = JSZip.JSZipObject & {
 
 const CLAWHUB_GENERATED_ARCHIVE_METADATA_FILE = "_meta.json";
 
-type ClawHubArchiveEntryLimits = {
-  maxEntryBytes: number;
-  addArchiveBytes: (bytes: number) => boolean;
+const CLAWHUB_ARCHIVE_LIMITS = {
+  maxArchiveBytes: DEFAULT_MAX_ARCHIVE_BYTES_ZIP,
+  maxEntries: DEFAULT_MAX_ENTRIES,
+  maxExtractedBytes: DEFAULT_MAX_EXTRACTED_BYTES,
+  maxEntryBytes: DEFAULT_MAX_ENTRY_BYTES,
 };
 
 function normalizeClawHubClawPackInstallFields(
@@ -336,10 +340,6 @@ function resolveTopLevelLegacyArchiveVerification(
   return integrity ? { kind: "archive-integrity", integrity } : null;
 }
 
-function formatClawHubSpecifier(params: { name: string; version?: string }): string {
-  return `clawhub:${params.name}${params.version ? `@${params.version}` : ""}`;
-}
-
 function buildClawHubInstallFailure(
   error: string,
   code?: ClawHubInstallErrorCode,
@@ -353,16 +353,6 @@ function buildClawHubInstallFailure(
     ...(warning ? { warning } : {}),
     ...(version ? { version } : {}),
   };
-}
-
-function isClawHubInstallFailure(value: unknown): value is ClawHubInstallFailure {
-  return Boolean(
-    value &&
-    typeof value === "object" &&
-    "ok" in value &&
-    Object.is((value as { ok?: unknown }).ok, false) &&
-    "error" in value,
-  );
 }
 
 function mapClawHubRequestError(
@@ -382,25 +372,6 @@ function mapClawHubRequestError(
     );
   }
   return buildClawHubInstallFailure(formatErrorMessage(error));
-}
-
-function encodeClawHubPackagePath(packageName: string): string {
-  return packageName
-    .split("/")
-    .map((part) => encodeURIComponent(part).replaceAll("%40", "@"))
-    .join("/");
-}
-
-function resolveClawHubPluginUrl(params: { baseUrl?: string; packageName: string }): string {
-  return `${resolveClawHubBaseUrl(params.baseUrl)}/plugins/${encodeClawHubPackagePath(params.packageName)}`;
-}
-
-function padRight(value: string, width: number): string {
-  return `${value}${" ".repeat(Math.max(0, width - visibleWidth(value)))}`;
-}
-
-function formatClawHubReleaseLabel(packageName: string, version: string): string {
-  return `${sanitizeTerminalText(packageName)}@${sanitizeTerminalText(version)}`;
 }
 
 function resolveClawHubExpectedRuntimeId(params: {
@@ -667,114 +638,6 @@ function resolveClawHubArchiveVerification(
   };
 }
 
-async function readLimitedClawHubArchiveEntry<T>(
-  entry: JSZip.JSZipObject,
-  limits: ClawHubArchiveEntryLimits,
-  handlers: {
-    onChunk: (buffer: Buffer) => void;
-    onEnd: () => T;
-  },
-): Promise<T | ClawHubInstallFailure> {
-  const hintedSize = (entry as JSZipObjectWithSize)["_data"]?.uncompressedSize;
-  if (
-    typeof hintedSize === "number" &&
-    Number.isFinite(hintedSize) &&
-    hintedSize > limits.maxEntryBytes
-  ) {
-    return buildClawHubInstallFailure(
-      `ClawHub archive fallback verification rejected "${entry.name}" because it exceeds the per-file size limit.`,
-      CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-    );
-  }
-  let entryBytes = 0;
-  return await new Promise<T | ClawHubInstallFailure>((resolve) => {
-    let settled = false;
-    const stream = entry.nodeStream("nodebuffer") as NodeJS.ReadableStream & {
-      destroy?: (error?: Error) => void;
-    };
-    stream.on("data", (chunk: Buffer | Uint8Array | string) => {
-      if (settled) {
-        return;
-      }
-      const buffer =
-        typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk as Uint8Array);
-      entryBytes += buffer.byteLength;
-      if (entryBytes > limits.maxEntryBytes) {
-        settled = true;
-        stream.destroy?.();
-        resolve(
-          buildClawHubInstallFailure(
-            `ClawHub archive fallback verification rejected "${entry.name}" because it exceeds the per-file size limit.`,
-            CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-          ),
-        );
-        return;
-      }
-      if (!limits.addArchiveBytes(buffer.byteLength)) {
-        settled = true;
-        stream.destroy?.();
-        resolve(
-          buildClawHubInstallFailure(
-            "ClawHub archive fallback verification exceeded the total extracted-size limit.",
-            CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-          ),
-        );
-        return;
-      }
-      handlers.onChunk(buffer);
-    });
-    stream.once("end", () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      resolve(handlers.onEnd());
-    });
-    stream.once("error", (error: unknown) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      resolve(
-        buildClawHubInstallFailure(
-          error instanceof Error ? error.message : String(error),
-          CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-        ),
-      );
-    });
-  });
-}
-
-async function readClawHubArchiveEntryBuffer(
-  entry: JSZip.JSZipObject,
-  limits: ClawHubArchiveEntryLimits,
-): Promise<Buffer | ClawHubInstallFailure> {
-  const chunks: Buffer[] = [];
-  return await readLimitedClawHubArchiveEntry(entry, limits, {
-    onChunk(buffer) {
-      chunks.push(buffer);
-    },
-    onEnd() {
-      return Buffer.concat(chunks);
-    },
-  });
-}
-
-async function hashClawHubArchiveEntry(
-  entry: JSZip.JSZipObject,
-  limits: ClawHubArchiveEntryLimits,
-): Promise<string | ClawHubInstallFailure> {
-  const digest = createHash("sha256");
-  return await readLimitedClawHubArchiveEntry(entry, limits, {
-    onChunk(buffer) {
-      digest.update(buffer);
-    },
-    onEnd() {
-      return digest.digest("hex");
-    },
-  });
-}
-
 function validateClawHubArchiveMetaJson(params: {
   packageName: string;
   version: string;
@@ -825,6 +688,12 @@ function mapClawHubArchiveReadFailure(error: unknown): ClawHubInstallFailure {
         CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
       );
     }
+    if (error.code === ARCHIVE_LIMIT_ERROR_CODE.EXTRACTED_SIZE_EXCEEDS_LIMIT) {
+      return buildClawHubInstallFailure(
+        "ClawHub archive fallback verification exceeded the total extracted-size limit.",
+        CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
+      );
+    }
   }
   return buildClawHubInstallFailure(
     "ClawHub archive fallback verification failed while reading the downloaded archive.",
@@ -832,12 +701,11 @@ function mapClawHubArchiveReadFailure(error: unknown): ClawHubInstallFailure {
   );
 }
 
-async function verifyClawHubArchiveFiles(params: {
+async function preflightClawHubArchiveFiles(params: {
   archivePath: string;
   packageName: string;
   packageVersion: string;
-  files: ClawHubFileVerificationEntry[];
-}): Promise<ClawHubArchiveFileVerificationResult> {
+}): Promise<{ ok: true; paths: string[] } | ClawHubInstallFailure> {
   try {
     const archiveStat = await fs.stat(params.archivePath);
     if (archiveStat.size > DEFAULT_MAX_ARCHIVE_BYTES_ZIP) {
@@ -847,19 +715,8 @@ async function verifyClawHubArchiveFiles(params: {
       );
     }
     const archiveBytes = await fs.readFile(params.archivePath);
-    const zip = await loadZipArchiveWithPreflight(archiveBytes, {
-      maxArchiveBytes: DEFAULT_MAX_ARCHIVE_BYTES_ZIP,
-      maxEntries: DEFAULT_MAX_ENTRIES,
-      maxExtractedBytes: DEFAULT_MAX_EXTRACTED_BYTES,
-      maxEntryBytes: DEFAULT_MAX_ENTRY_BYTES,
-    });
-    const actualFiles = new Map<string, string>();
-    const validatedGeneratedPaths = new Set<string>();
-    let extractedBytes = 0;
-    const addArchiveBytes = (bytes: number): boolean => {
-      extractedBytes += bytes;
-      return extractedBytes <= DEFAULT_MAX_EXTRACTED_BYTES;
-    };
+    const zip = await loadZipArchiveWithPreflight(archiveBytes, CLAWHUB_ARCHIVE_LIMITS);
+    const paths: string[] = [];
     for (const entry of Object.values(zip.files as Record<string, JSZip.JSZipObject>)) {
       if (entry.dir) {
         continue;
@@ -871,33 +728,59 @@ async function verifyClawHubArchiveFiles(params: {
           CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
         );
       }
+      const hintedSize = (entry as JSZipObjectWithSize)["_data"]?.uncompressedSize;
+      if (typeof hintedSize === "number" && hintedSize > DEFAULT_MAX_ENTRY_BYTES) {
+        return buildClawHubInstallFailure(
+          `ClawHub archive fallback verification rejected "${entry.name}" because it exceeds the per-file size limit.`,
+          CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
+        );
+      }
+      paths.push(relativePath);
+    }
+    return { ok: true, paths };
+  } catch (error) {
+    return mapClawHubArchiveReadFailure(error);
+  }
+}
+
+async function verifyClawHubExtractedFiles(params: {
+  extractDir: string;
+  archivePaths: readonly string[];
+  packageName: string;
+  packageVersion: string;
+  files: ClawHubFileVerificationEntry[];
+}): Promise<ClawHubArchiveFileVerificationResult> {
+  try {
+    const extracted = await root(params.extractDir);
+    // Extraction can omit unsupported records; their names must still participate in verification.
+    const actualFiles = new Map<string, string | undefined>(
+      params.archivePaths.map((filePath) => [filePath, undefined]),
+    );
+    const validatedGeneratedPaths: string[] = [];
+    for await (const entry of walkRootDirectory(extracted.rootReal, "", {
+      symlinkPolicy: "skip",
+    })) {
+      if (entry.kind !== "file") {
+        continue;
+      }
+      const relativePath = entry.relativePath;
       if (relativePath === CLAWHUB_GENERATED_ARCHIVE_METADATA_FILE) {
-        const metaResult = await readClawHubArchiveEntryBuffer(entry, {
-          maxEntryBytes: DEFAULT_MAX_ENTRY_BYTES,
-          addArchiveBytes,
-        });
-        if (isClawHubInstallFailure(metaResult)) {
-          return metaResult;
-        }
         const metaFailure = validateClawHubArchiveMetaJson({
           packageName: params.packageName,
           version: params.packageVersion,
-          bytes: metaResult,
+          bytes: await extracted.readBytes(relativePath, { maxBytes: DEFAULT_MAX_ENTRY_BYTES }),
         });
         if (metaFailure) {
           return metaFailure;
         }
-        validatedGeneratedPaths.add(relativePath);
+        validatedGeneratedPaths.push(relativePath);
+        actualFiles.delete(relativePath);
         continue;
       }
-      const sha256 = await hashClawHubArchiveEntry(entry, {
-        maxEntryBytes: DEFAULT_MAX_ENTRY_BYTES,
-        addArchiveBytes,
-      });
-      if (typeof sha256 !== "string") {
-        return sha256;
-      }
-      actualFiles.set(relativePath, sha256);
+      // Archive names are literal; Root expands unprefixed ~/ inputs.
+      await using opened = await extracted.open(`./${relativePath}`);
+      const { digest } = await sha256File(opened.handle, { maxBytes: DEFAULT_MAX_ENTRY_BYTES });
+      actualFiles.set(relativePath, digest);
     }
     for (const file of params.files) {
       const actualSha256 = actualFiles.get(file.path);
@@ -929,7 +812,7 @@ async function verifyClawHubArchiveFiles(params: {
     }
     return {
       ok: true,
-      validatedGeneratedPaths: [...validatedGeneratedPaths].toSorted(),
+      validatedGeneratedPaths,
     };
   } catch (error) {
     return mapClawHubArchiveReadFailure(error);
@@ -1170,48 +1053,6 @@ function validateClawHubPluginPackage(params: {
   return null;
 }
 
-function logClawHubPackageSummary(params: {
-  detail: ClawHubPackageDetail;
-  version: string;
-  compatibility?: ClawHubPackageCompatibility | null;
-  baseUrl?: string;
-  logger?: PluginInstallLogger;
-}) {
-  const pkg = params.detail.package;
-  if (!pkg) {
-    return;
-  }
-  const familyLabel = pkg.family === "code-plugin" ? "plugin" : pkg.family;
-  const compatibilityParts = [
-    params.compatibility?.pluginApiRange
-      ? `pluginApi ${params.compatibility.pluginApiRange}`
-      : null,
-    params.compatibility?.minGatewayVersion
-      ? `minGateway ${params.compatibility.minGatewayVersion}`
-      : null,
-  ].filter(Boolean);
-  const pluginUrl = sanitizeTerminalText(
-    resolveClawHubPluginUrl({ baseUrl: params.baseUrl, packageName: pkg.name }),
-  );
-  params.logger?.info?.(
-    [
-      `  ${padRight("Package", 9)} ${formatClawHubReleaseLabel(pkg.name, params.version)}`,
-      `  ${padRight("Type", 9)} ${familyLabel}`,
-      compatibilityParts.length > 0
-        ? `  ${padRight("Requires", 9)} ${compatibilityParts.join(" · ")}`
-        : null,
-      `  ${padRight("ClawHub", 9)} ${formatTerminalLink("view plugin", pluginUrl, {
-        fallback: pluginUrl,
-        ...(params.logger?.terminalLinks !== undefined
-          ? { force: params.logger.terminalLinks }
-          : {}),
-      })}`,
-    ]
-      .filter((line) => line !== null)
-      .join("\n"),
-  );
-}
-
 export async function installPluginFromClawHub(
   params: InstallSafetyOverrides &
     TimedInstallModeOptions<PluginInstallLogger> & {
@@ -1256,46 +1097,53 @@ export async function installPluginFromClawHub(
   }
 
   params.logger?.info?.(`Resolving ${formatClawHubSpecifier(parsed)}…`);
-  let detail: ClawHubPackageDetail;
-  try {
-    detail = await fetchClawHubPackageDetail({
-      name: parsed.name,
+  const resolved = await withInstallActivity(params.logger, "resolve", async () => {
+    let detail: ClawHubPackageDetail;
+    try {
+      detail = await fetchClawHubPackageDetail({
+        name: parsed.name,
+        baseUrl: params.baseUrl,
+        token: params.token,
+        timeoutMs: params.timeoutMs,
+      });
+    } catch (error) {
+      return mapClawHubRequestError(error, {
+        stage: "package",
+        name: parsed.name,
+      });
+    }
+    const versionState = await resolveCompatiblePackageVersion({
+      detail,
+      requestedVersion: parsed.version,
       baseUrl: params.baseUrl,
       token: params.token,
       timeoutMs: params.timeoutMs,
     });
-  } catch (error) {
-    return mapClawHubRequestError(error, {
-      stage: "package",
-      name: parsed.name,
+    if (!versionState.ok) {
+      return versionState;
+    }
+    const runtimeVersion = resolveCompatibilityHostVersion(params.env);
+    const validationFailure = validateClawHubPluginPackage({
+      detail,
+      compatibility: versionState.compatibility,
+      runtimeVersion,
     });
-  }
-  const versionState = await resolveCompatiblePackageVersion({
-    detail,
-    requestedVersion: parsed.version,
-    baseUrl: params.baseUrl,
-    token: params.token,
-    timeoutMs: params.timeoutMs,
+    if (validationFailure) {
+      return validationFailure;
+    }
+    const runtimeIdResolution = resolveClawHubExpectedRuntimeId({
+      detail,
+      expectedPluginId: params.expectedPluginId,
+    });
+    if (!runtimeIdResolution.ok) {
+      return runtimeIdResolution;
+    }
+    return { ok: true as const, detail, versionState, runtimeIdResolution };
   });
-  if (!versionState.ok) {
-    return versionState;
+  if (!resolved.ok) {
+    return resolved;
   }
-  const runtimeVersion = resolveCompatibilityHostVersion(params.env);
-  const validationFailure = validateClawHubPluginPackage({
-    detail,
-    compatibility: versionState.compatibility,
-    runtimeVersion,
-  });
-  if (validationFailure) {
-    return validationFailure;
-  }
-  const runtimeIdResolution = resolveClawHubExpectedRuntimeId({
-    detail,
-    expectedPluginId: params.expectedPluginId,
-  });
-  if (!runtimeIdResolution.ok) {
-    return runtimeIdResolution;
-  }
+  const { detail, versionState, runtimeIdResolution } = resolved;
   const expectedClawPackSha256 = resolveClawHubClawPackArtifactSha256(versionState.clawpack);
   const canonicalPackageName = detail.package?.name ?? parsed.name;
   const officialClawHubPackage = detail.package
@@ -1337,15 +1185,20 @@ export async function installPluginFromClawHub(
   const releaseLabel = formatClawHubReleaseLabel(canonicalPackageName, versionState.version);
 
   let archive;
+  params.logger?.info?.(
+    `Downloading ${detail.package?.family === "bundle-plugin" ? "bundle" : "plugin"} ${releaseLabel} from ClawHub…`,
+  );
   try {
-    archive = await downloadClawHubPackageArchive({
-      name: canonicalPackageName,
-      version: versionState.version,
-      artifact: expectedClawPackSha256 ? "clawpack" : "archive",
-      baseUrl: params.baseUrl,
-      token: params.token,
-      timeoutMs: params.timeoutMs,
-    });
+    archive = await withInstallActivity(params.logger, "download", () =>
+      downloadClawHubPackageArchive({
+        name: canonicalPackageName,
+        version: versionState.version,
+        artifact: expectedClawPackSha256 ? "clawpack" : "archive",
+        baseUrl: params.baseUrl,
+        token: params.token,
+        timeoutMs: params.timeoutMs,
+      }),
+    );
   } catch (error) {
     if (isClawHubArtifactDownloadPolicyBlock(error)) {
       return buildClawHubInstallFailure(
@@ -1380,6 +1233,7 @@ export async function installPluginFromClawHub(
     );
   }
   try {
+    let verification: ExtractedArchiveVerification<ClawHubInstallFailure> | undefined;
     if (expectedIntegrity && archive.integrity !== expectedIntegrity) {
       return buildClawHubInstallFailure(
         `ClawHub archive integrity mismatch for "${releaseLabel}": expected ${expectedIntegrity}, got ${archive.integrity}.`,
@@ -1421,35 +1275,50 @@ export async function installPluginFromClawHub(
         );
       }
     } else if (versionState.verification) {
-      const validatedPaths = versionState.verification.files
-        .map((file) => file.path)
-        .toSorted()
-        .join(", ");
-      const fallbackVerification = await verifyClawHubArchiveFiles({
+      const files = versionState.verification.files;
+      const preflight = await preflightClawHubArchiveFiles({
         archivePath: archive.archivePath,
         packageName: canonicalPackageName,
         packageVersion: versionState.version,
-        files: versionState.verification.files,
       });
-      if (!fallbackVerification.ok) {
-        return fallbackVerification;
+      if (!preflight.ok) {
+        return preflight;
       }
-      const validatedGeneratedPaths =
-        fallbackVerification.validatedGeneratedPaths.length > 0
-          ? ` Validated generated metadata files present in archive: ${fallbackVerification.validatedGeneratedPaths.join(", ")} (JSON parse plus slug/version match only).`
-          : "";
-      params.logger?.warn?.(
-        `ClawHub package "${releaseLabel}" is missing sha256hash; falling back to files[] verification. Validated files: ${validatedPaths}.${validatedGeneratedPaths}`,
-      );
+      verification = {
+        limits: CLAWHUB_ARCHIVE_LIMITS,
+        onExtractionError: mapClawHubArchiveReadFailure,
+        verify: async (extractDir) => {
+          const result = await verifyClawHubExtractedFiles({
+            extractDir,
+            archivePaths: preflight.paths,
+            packageName: canonicalPackageName,
+            packageVersion: versionState.version,
+            files,
+          });
+          if (!result.ok) {
+            return result;
+          }
+          const validatedPaths = files
+            .map((file) => file.path)
+            .toSorted()
+            .join(", ");
+          const validatedGeneratedPaths =
+            result.validatedGeneratedPaths.length > 0
+              ? ` Validated generated metadata files present in archive: ${result.validatedGeneratedPaths.join(", ")} (JSON parse plus slug/version match only).`
+              : "";
+          params.logger?.warn?.(
+            `ClawHub package "${releaseLabel}" is missing sha256hash; falling back to files[] verification. Validated files: ${validatedPaths}.${validatedGeneratedPaths}`,
+          );
+          return null;
+        },
+      };
     }
     const clawhubRegistry = resolveClawHubBaseUrl(params.baseUrl);
     const clawhubAuthority = isDefaultClawHubBaseUrl(params.baseUrl) ? "openclaw" : "third-party";
-    params.logger?.info?.(
-      `Downloading ${detail.package?.family === "bundle-plugin" ? "bundle" : "plugin"} ${releaseLabel} from ClawHub…`,
-    );
-    const installResult = await installPluginFromArchive(
+    const installResult = await installPluginFromArchive<ClawHubInstallFailure>(
       copyPluginInstallTransactionRequest(params, {
         archivePath: archive.archivePath,
+        verification,
         onInstallPolicyWarning: params.onInstallPolicyWarning,
         trustedSourceLinkedOfficialInstall:
           officialClawHubPackage || isTrustedSourceLinkedOfficialPackage(detail.package!),

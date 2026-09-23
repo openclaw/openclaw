@@ -20,6 +20,7 @@ import type {
 import { isSameCodexAppServerThreadOwner } from "./app-server/thread-ownership.js";
 import { assertCodexSupervisionThreadLineage } from "./app-server/thread-policy.js";
 import {
+  assertCodexHostOwnerCurrent,
   canMutateCodexHost,
   CODEX_FULL_PERMISSIONS_AUTH_ERROR,
   hasCodexAdminScope,
@@ -176,7 +177,12 @@ export async function handleComputerUseCommand(
     ...(Object.keys(parsed.overrides).length > 0 ? { overrides: parsed.overrides } : {}),
   };
   if (parsed.action === "install") {
-    return formatComputerUseStatus(await deps.installCodexComputerUse(params));
+    return formatComputerUseStatus(
+      await deps.installCodexComputerUse({
+        ...params,
+        assertCurrent: () => assertCodexHostOwnerCurrent(ctx),
+      }),
+    );
   }
   return formatComputerUseStatus(await deps.readCodexComputerUseStatus(params));
 }
@@ -235,7 +241,7 @@ export async function handleNativeGoal(
       pluginConfig,
       CODEX_CONTROL_METHODS.clearThreadGoal,
       { threadId: binding.threadId },
-      goalRequestOptions,
+      { ...goalRequestOptions, assertOwnerCurrent: () => assertCodexHostOwnerCurrent(ctx) },
     );
     return isJsonObject(response) && response.cleared === true
       ? "Cleared the Codex goal."
@@ -271,6 +277,7 @@ export async function handleNativeGoal(
       },
       {
         ...goalRequestOptions,
+        assertOwnerCurrent: () => assertCodexHostOwnerCurrent(ctx),
         ...((isObjectiveUpdate || requestedStatus === "active") &&
         connection.usesSupervisionConnection
           ? { beforeRequest: supervisedCommandGuard(deps, target.identity, binding) }
@@ -310,7 +317,7 @@ export async function stopConversationTurn(
     await deps.stopCodexConversationTurn({
       identity: target.identity,
       binding,
-      assertCurrent: authority.assertCurrent,
+      assertCurrent: authority.assertMutationCurrent,
     })
   ).message;
 }
@@ -330,7 +337,7 @@ export async function steerConversationTurn(
       identity: target.identity,
       binding,
       message,
-      assertCurrent: authority.assertCurrent,
+      assertCurrent: authority.assertMutationCurrent,
     })
   ).message;
 }
@@ -387,6 +394,7 @@ export async function setConversationModel(
     binding,
     storePath: authority.storePath,
     assertCurrent: authority.assertCurrent,
+    assertCommitAllowed: authority.assertMutationCurrent,
   });
 }
 
@@ -413,7 +421,7 @@ export async function setConversationFastMode(
     bindingStore: deps.bindingStore,
     binding,
     enabled: parsed,
-    assertCurrent: authority.assertCurrent,
+    assertCurrent: parsed === undefined ? authority.assertCurrent : authority.assertMutationCurrent,
   });
 }
 
@@ -444,7 +452,7 @@ export async function setConversationPermissions(
     mode: parsed,
     config: ctx.config,
     storePath: authority.storePath,
-    assertCurrent: authority.assertHostCurrent,
+    assertCurrent: parsed ? authority.assertHostMutationCurrent : authority.assertHostCurrent,
     session: {
       agentId: target.agentId,
       sessionId: ctx.sessionId,
@@ -503,7 +511,7 @@ export async function startThreadAction(
     if (!compactCurrent) {
       return "Codex compaction is unavailable because this command is not bound to a session.";
     }
-    authority.assertCurrent();
+    authority.assertMutationCurrent();
     const result = await compactCurrent();
     return result.compacted
       ? `Compacted Codex session (${result.tokensAfter ?? "unknown"} tokens after).`
@@ -530,6 +538,7 @@ export async function startThreadAction(
         sessionKey: authority.sessionKey,
         storePath: authority.storePath,
         assertCurrent: authority.assertCurrent,
+        assertOwnerCurrent: () => assertCodexHostOwnerCurrent(ctx),
         ...(connection.usesSupervisionConnection
           ? {
               startOptions: connection.appServer.start,

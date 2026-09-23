@@ -458,8 +458,8 @@ describe("skills watcher churn", () => {
     const secondVersion = getSkillsSourceVersion(workspaceDir, {
       executionWorkspaceDir: secondExecution,
     });
-    for (const watcher of createdWatchers.slice(watcherCount)) {
-      watcher.emit("ready");
+    for (let index = watcherCount; index < createdWatchers.length; index += 1) {
+      createdWatchers[index]!.emit("ready");
     }
     expect(getSkillsSourceVersion(workspaceDir)).toBe(afterReady);
     expect(

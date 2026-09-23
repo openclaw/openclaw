@@ -13,7 +13,6 @@ import {
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
 } from "../../lib/sessions/index.ts";
-import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import {
   switchChatContextWindow,
@@ -24,6 +23,7 @@ import {
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { refreshChatModelCatalogOnDemand } from "./chat-state-refresh.ts";
+import { selectedChatSessionRow } from "./chat-state-route.ts";
 import type { ChatProps } from "./chat-view.ts";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import { renderChatModelControls } from "./components/chat-model-controls.ts";
@@ -143,10 +143,12 @@ export function renderChatPaneComposerControls(params: {
     state.connectionEpoch === connectionEpoch &&
     scopedAgentParamsForSession(state, sessionKey).agentId === agentScope.agentId;
   const ownsSelection = () => {
-    const currentSessionId =
-      state.sessionsResult?.sessions.find((row) => areUiSessionKeysEquivalent(row.key, sessionKey))
-        ?.sessionId ?? selectedSession?.sessionId;
-    return ownsRoute() && currentSessionId === expectedSessionId;
+    const currentSession = selectedChatSessionRow(state);
+    return (
+      ownsRoute() &&
+      Boolean(currentSession) === Boolean(selectedSession) &&
+      currentSession?.sessionId === expectedSessionId
+    );
   };
   let pendingChange = permissionChanges.get(permissionScopeKey);
   if (pendingChange && pendingChange.expectedSessionId !== expectedSessionId) {
@@ -328,10 +330,10 @@ export function renderChatPaneComposerControls(params: {
             affectedAgentId,
           );
           const outcome = await state.sessions.reconcileMutation(affectedAgentId);
-          if (!ownsRoute() || !ownsOutcome()) {
+          if (!ownsSelection() || !ownsOutcome()) {
             return;
           }
-          if (ownsSelection() && outcome.status !== "refreshed") {
+          if (outcome.status !== "refreshed") {
             change.pending = false;
             change.retainWhileCurrent = retainWhileCurrent;
           }

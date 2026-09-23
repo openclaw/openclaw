@@ -17,6 +17,7 @@ import {
 import { withSharedStateWriteCoordinator } from "../state/openclaw-state-db-write-coordination.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { mapTaskFlowView } from "./task-domain-views.js";
+import { maintainTaskFlowInDatabase } from "./task-flow-maintenance.worker.js";
 import {
   runManagedTaskInFlowInDatabase,
   type ManagedTaskInFlowReceipt,
@@ -30,7 +31,7 @@ import {
   readTaskFlowRegistrySnapshot,
   listTaskFlowViewRecordsForOwnerInDatabase,
   readTaskFlowViewRecordInDatabase,
-  updateTaskFlowRecordInDatabase,
+  updateSelectedTaskFlowRecordInDatabase,
   upsertTaskFlowRowInDatabase,
 } from "./task-flow-registry.store.kernel.js";
 import { isTerminalTaskFlow, type TaskFlowRecord } from "./task-flow-registry.types.js";
@@ -49,8 +50,6 @@ import {
   listTaskRecordsForOwnerReadInDatabase,
   listTaskRecordsByOwnerKeyInDatabase,
   readTaskViewRecordInDatabase,
-  readTaskRegistryMutationSnapshotInDatabase,
-  readTaskRegistrySnapshot,
   readTaskRecord,
   summarizeTaskRecordsForFlowInDatabase,
 } from "./task-registry.store.kernel.js";
@@ -67,6 +66,9 @@ export function executeTaskRegistryCommand(
   options: OpenClawStateDatabaseOptions & { path: string },
   open: () => OpenClawStateDatabase,
 ): TaskRegistryWorkerOperations[keyof TaskRegistryWorkerOperations]["output"] {
+  if (command.type === "flows.maintain") {
+    return maintainTaskFlowInDatabase(open(), command.input);
+  }
   if (command.type === "tasks.bindExecution" || command.type === "flows.bindExecution") {
     const database = open();
     return runOpenClawStateWriteTransaction(
@@ -92,6 +94,9 @@ export function executeTaskRegistryCommand(
     return observeTaskAgentEventInDatabase(open(), command.input);
   }
   if (
+    command.type === "tasks.bindRunOwner" ||
+    command.type === "tasks.updateNotificationDelivery" ||
+    command.type === "tasks.acknowledgeStateChange" ||
     command.type === "tasks.createRecord" ||
     command.type === "tasks.finalizeActive" ||
     command.type === "tasks.settleUnstarted" ||
@@ -186,7 +191,7 @@ export function executeTaskRegistryCommand(
               ? { applied: false, reason: "not_found" }
               : observed.syncMode !== "managed" || !observed.controllerId
                 ? { applied: false, reason: "not_managed", current: observed }
-                : updateTaskFlowRecordInDatabase(writer, command.input);
+                : updateSelectedTaskFlowRecordInDatabase(writer, observed, command.input);
           }
           deferSqlitePostCommitPublication(writer, () => {
             committed = result;
@@ -235,10 +240,6 @@ export function executeTaskRegistryCommand(
     switch (command.type) {
       case "flows.snapshot":
         return readTaskFlowRegistrySnapshot(db);
-      case "tasks.mutationSnapshot":
-        return command.input === undefined
-          ? readTaskRegistrySnapshot(database)
-          : readTaskRegistryMutationSnapshotInDatabase(db, command.input);
       case "tasks.get":
         return readTaskViewRecordInDatabase(db, command.input.taskId);
       case "tasks.findByRunId":

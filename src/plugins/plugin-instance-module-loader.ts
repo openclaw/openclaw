@@ -3,10 +3,12 @@ import Module, { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { JitiOptions, JitiResolveOptions } from "jiti";
+import { isPathInside } from "../infra/path-guards.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { createJiti } from "./jiti-factory.js";
 import {
   isJavaScriptModulePath,
+  resolvePluginLoaderTryNative,
   isPluginSourceModulePath,
   supportsBunRuntimeOnResolveTargets,
 } from "./native-module-require.js";
@@ -33,11 +35,7 @@ import {
   type PluginSourceLoadMode,
 } from "./plugin-source-build.js";
 import { inspectPluginTypeScriptExecutionFacts } from "./plugin-source-references.js";
-import {
-  preparePluginLoaderAliases,
-  isPluginSdkAliasSpecifier,
-  resolvePluginLoaderTryNative,
-} from "./sdk-alias.js";
+import { preparePluginLoaderAliases, isPluginSdkAliasSpecifier } from "./sdk-alias.js";
 
 // Compiled recovery shares process code identity without closing over the
 // binder's predecessor instance or source-graph state.
@@ -145,6 +143,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     pluginModulePath: params.source,
     devSourceRoot: params.devSourceRoot,
     allowedParentRoots: [artifact.boundaryRoot],
+    pluginSdkResolution: params.pluginSdkResolution,
   });
   if (!nativeHooks) {
     const capturedSource = artifact.resolve(params.source);
@@ -365,7 +364,9 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
                   if (
                     !(specifier.startsWith("file:") || path.isAbsolute(specifier)) ||
                     !native.url.startsWith("file:") ||
-                    artifact.moduleRoot(sourceForOutput(fileURLToPath(native.url)).source)
+                    artifact.moduleRoot(sourceForOutput(fileURLToPath(native.url)).source) ||
+                    // Resolved SDK URLs keep host identity just like their public specifiers.
+                    aliases.sdkRoots.some((root) => isPathInside(root, fileURLToPath(native.url)))
                   ) {
                     return native;
                   }

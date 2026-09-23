@@ -9,11 +9,12 @@ read_when:
 This page is an index. Scope and routing is documented on four pages, one per
 reader job. Open the page that matches your task.
 
-Docker seed and QA Smoke use owner paths on `main`; pull requests and exact-head
-PR fallbacks omit those proofs while retaining unit/boundary checks. Control UI
-performance uses its UI/build/import owners. Ordinary manual and release
-validation retain the Docker survivor and full QA Smoke profile independently of
-changed paths. Coalesced main pushes have no automatic proof catch-up; see
+Every admitted canonical `main` run selects the published-upgrade Docker survivor;
+QA Smoke retains owner-path selection. Pull requests and exact-head PR fallbacks
+omit those proofs while retaining unit/boundary checks. Control UI performance
+uses its UI/build/import owners. Ordinary manual and release validation select
+all six Docker seed lanes and the full QA Smoke profile independently of changed
+paths. Coalesced main pushes have no automatic owner-path proof catch-up; see
 [selection](/ci/scope-and-routing/selection) and
 [manual dispatches](/ci/scope-and-routing/manual-dispatches).
 

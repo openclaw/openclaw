@@ -605,7 +605,16 @@ export function createGatewayChatMetadataRuntime(params: {
       // History consumes stable catalogs only; live readiness stays inside the current-read fence.
       ...(readParams.readPolicy === "ready"
         ? {}
-        : { metadata: readPreparedChatMetadata(session, readParams, deps.getConfig()) }),
+        : {
+            metadata: readPreparedChatMetadata(
+              session,
+              {
+                ...readParams,
+                requesterProfileId: readParams.readRequesterProfileId?.(),
+              },
+              deps.getConfig(),
+            ),
+          }),
       sessionModelCatalog: session.modelCatalog,
       defaultModelCatalog: neutral.modelCatalog,
     });
@@ -625,7 +634,7 @@ export function createGatewayChatMetadataRuntime(params: {
             generation,
             agent,
             readParams.sessionEntry,
-            readParams.requesterProfileId,
+            readParams.readRequesterProfileId?.(),
           )
         : readNeutral;
       return {

@@ -38,3 +38,12 @@ export function listTrackedTestFiles(rootDir: string, suffix = ".test.ts"): stri
   visit(rootDir);
   return files.toSorted((a, b) => a.localeCompare(b));
 }
+
+export function isStripeEligibleTestFile(
+  file: string,
+  unitFastFiles: ReadonlySet<string>,
+): boolean {
+  return (
+    !unitFastFiles.has(file) && !file.endsWith(".e2e.test.ts") && !file.endsWith(".live.test.ts")
+  );
+}

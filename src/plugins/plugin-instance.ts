@@ -2,6 +2,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { releasePluginCacheInstance } from "./plugin-cache.js";
 import {
   PluginInstanceDrainTimeoutError,
   PluginInstanceUnavailableError,
@@ -36,6 +37,27 @@ type DisposalCleanup = {
   moduleCleanups: Array<() => void | Promise<void>>;
 };
 
+class DisposalFailures extends Set<unknown> {
+  private readonly hostErrors = new Set<unknown>();
+  private readonly instanceErrors = new Set<unknown>();
+
+  constructor(private readonly isHostCleanup: () => boolean) {
+    super();
+  }
+
+  override add(error: unknown): this {
+    (this.isHostCleanup() ? this.hostErrors : this.instanceErrors).add(error);
+    return super.add(error);
+  }
+
+  result(errors: readonly unknown[]): PluginInstanceDisposalResult {
+    const hostCleanupErrors = [...this.hostErrors].filter(
+      (error) => !this.instanceErrors.has(error),
+    );
+    return { errors, ...(hostCleanupErrors.length ? { hostCleanupErrors } : {}) };
+  }
+}
+
 export class PluginInstance {
   readonly slots = new Map<string | symbol, { runtime: unknown }>();
   readonly controller = new AbortController();
@@ -52,6 +74,7 @@ export class PluginInstance {
   private readonly calls = new Map<object, { registry?: PluginRegistry; cleanup: boolean }>();
   private forcedRetirement = false;
   private disposalFailures?: Set<unknown>;
+  private readonly hostCleanupCalls = new WeakSet<object>();
   private timedOutCalls?: {
     remaining: Set<object>;
     settled: ReturnType<typeof createDeferredCore<void>>;
@@ -68,7 +91,10 @@ export class PluginInstance {
   private readonly cleanups = new Map<() => void | Promise<void>, "plugin" | "module">();
   private readonly waiters = new Set<() => void>();
   private readonly originalValues = new WeakMap<object, object>();
-  readonly wrap = this.createValueView(<T>(run: () => T) => this.run(run));
+  readonly wrap = this.createValueView(
+    <T>(run: () => T) => this.run(run),
+    <T>(run: () => T) => this.runConsumer(run),
+  );
   private disposal?: Promise<PluginInstanceDisposalResult>;
   readonly owner?: PluginInstanceOwner;
 
@@ -256,7 +282,7 @@ export class PluginInstance {
     };
     return {
       run,
-      wrap: this.createValueView(run),
+      wrap: this.createValueView(run, run),
       close: (cleanup) => {
         if (!closing && this.consumers.has(token)) {
           // Close operation callbacks before entering a separate host teardown token.
@@ -368,7 +394,11 @@ export class PluginInstance {
     );
   }
 
-  private lease(joinDisposal = true, registry?: PluginRegistry): PluginInstanceCallLease {
+  private lease(
+    joinDisposal = true,
+    registry?: PluginRegistry,
+    hostCleanup = false,
+  ): PluginInstanceCallLease {
     // Nested callbacks and streams keep the consumer's exact token; ordinary
     // tokens could expire early or remain usable after that consumer closes.
     const current = this.activeCall();
@@ -376,6 +406,9 @@ export class PluginInstance {
       return { token: current.token, release: () => undefined };
     }
     const token = {};
+    if (hostCleanup || (current && this.hostCleanupCalls.has(current.token))) {
+      this.hostCleanupCalls.add(token);
+    }
     this.calls.set(token, {
       registry,
       cleanup: !joinDisposal || (current && this.calls.get(current.token)?.cleanup) === true,
@@ -399,7 +432,10 @@ export class PluginInstance {
     };
   }
 
-  private createValueView(admit: <T>(run: () => T) => T): <T>(value: T) => T {
+  private createValueView(
+    admit: <T>(run: () => T) => T,
+    admitCallback: <T>(run: () => T) => T = (run) => admit(() => this.invoke(run)),
+  ): <T>(value: T) => T {
     return createPluginValueView(
       {
         instance: this,
@@ -409,6 +445,7 @@ export class PluginInstance {
         hasToken: (token) => this.hasToken(token),
       },
       admit,
+      admitCallback,
     );
   }
 
@@ -533,7 +570,11 @@ export class PluginInstance {
     }
     if (!this.disposal) {
       this.quiesce();
-      const terminalFailures = (this.disposalFailures = new Set<unknown>());
+      const terminalFailures = (this.disposalFailures = new DisposalFailures(() => {
+        const current = invocation.getStore();
+        // Async failure observers retain their originating token after its call has returned.
+        return current?.instance === this && this.hostCleanupCalls.has(current.token);
+      }));
       const work = new AsyncWorkScope(terminalFailures);
       // Shared state owners still join real cleanup, independently of code-file custody.
       const cleanup = trackAsyncWork(() =>
@@ -571,7 +612,7 @@ export class PluginInstance {
             fact,
           );
           log.warn(error.message);
-          resolve({ errors: [error, ...terminalFailures] });
+          resolve(terminalFailures.result([error, ...terminalFailures]));
         }, SHUTDOWN_TIMEOUT_MS);
         void physical.then(resolve, reject).finally(() => clearTimeout(timer));
       });
@@ -597,8 +638,10 @@ export class PluginInstance {
     }
     const failures: unknown[] = [];
     let hostFailure: { error: unknown } | undefined;
-    const runCleanup = (cleanup: () => void | Promise<void>) =>
-      cleanupWork.track(() => this.invoke(cleanup, this.lease(false), terminalFailures));
+    const runCleanup = (cleanup: () => void | Promise<void>, hostCleanup = false) =>
+      cleanupWork.track(() =>
+        this.invoke(cleanup, this.lease(false, undefined, hostCleanup), terminalFailures),
+      );
     try {
       await this.waitForCalls();
     } catch (error) {
@@ -623,7 +666,7 @@ export class PluginInstance {
       // Host hooks own their bounds; explicit cleanup starts its budget after they settle.
       try {
         // This internal lease cannot join the disposal promise awaiting these hooks.
-        await runCleanup(beforeCleanup);
+        await runCleanup(beforeCleanup, true);
       } catch (error) {
         // Host admission/persistence guards are not plugin cleanup callbacks.
         hostFailure = { error };
@@ -660,7 +703,7 @@ export class PluginInstance {
 
   private async finishDisposal(
     cleanupCompletion: Promise<DisposalCleanup>,
-    terminalFailures: Set<unknown>,
+    terminalFailures: DisposalFailures,
   ): Promise<PluginInstanceDisposalResult> {
     const { failures, hostFailure, moduleCleanups } = await cleanupCompletion;
     // Logical expiry revokes results; it cannot delete code still used by the original calls.
@@ -694,6 +737,9 @@ export class PluginInstance {
     if (hostFailure) {
       throw hostFailure.error;
     }
-    return { errors: failures };
+    if (failures.length === 0) {
+      releasePluginCacheInstance(this);
+    }
+    return terminalFailures.result(failures);
   }
 }

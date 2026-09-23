@@ -601,7 +601,7 @@ export function readTaskRegistrySnapshot({
   });
 }
 
-/** The caller holds shared writer custody across this snapshot and its mutation. */
+/** Capture overlapping task and delivery selectors in one committed read transaction. */
 export function readTaskRegistryMutationSnapshotInDatabase(
   db: DatabaseSync,
   scope: TaskRegistryMutationScope | readonly TaskRegistryMutationScope[],

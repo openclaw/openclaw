@@ -171,8 +171,8 @@ export function sessionNavigationTarget<TRouteId extends string>(
   // and share, and it must not carry an internal parameter. The accepted cost is that
   // alternate activation (middle-click, open-in-new-tab, modified click) follows the
   // clean guessed path and can land on the other face for an uncached session, exactly
-  // as every open did before gateway resolution existed. The face is one click to
-  // change and the change persists, so this is a smaller win, not a regression.
+  // as every open did before gateway resolution existed. Opening another face
+  // does not change the session's shared default.
   const navigationParams = new URLSearchParams(search ?? "");
   if (params.preferenceDerivedFace && !row) {
     navigationParams.set(SESSION_FACE_PREFERENCE_PARAM, "1");

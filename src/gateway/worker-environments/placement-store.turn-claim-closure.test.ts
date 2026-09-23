@@ -19,12 +19,13 @@ import {
 import { tryBeginGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { projectSessionMessagePayload } from "../session-transcript-message.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { readWorkerSessionPlacementProjectionInDatabase } from "./placement-read-projection.js";
 import { placementTurnOwner, type WorkerSessionPlacementIdentity } from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
@@ -58,7 +59,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -128,7 +129,7 @@ it.each([
   { executionMode: "remote-exec", visibleBeforeStaging: false },
 ] as const)(
   "projects $executionMode workspace reconciliation at its owned boundary",
-  (scenario) => {
+  async (scenario) => {
     const active = advanceToActive(scenario.executionMode);
     const claim = store.claimTurn({
       ...SESSION,
@@ -140,30 +141,35 @@ it.each([
 
     const readReconciling = () => store.getWorkspaceResultReconcilingSessionIds([active.sessionId]);
     expect(readReconciling().has(active.sessionId)).toBe(scenario.visibleBeforeStaging);
-    expect(store.getProjectionFacts(active.sessionId).workspaceResultReconciling).toBe(
-      scenario.visibleBeforeStaging,
-    );
+    expect(
+      (await store.readProjection([active.sessionId])).workspaceResultReconcilingSessionIds.has(
+        active.sessionId,
+      ),
+    ).toBe(scenario.visibleBeforeStaging);
     const stagedResultRef = `refs/openclaw/worker-results/${claim.claimId}`;
     store.recordStagedWorkspaceResult(claim, stagedResultRef);
     expect(readReconciling()).toEqual(new Set([active.sessionId]));
     store.recordWorkspaceResultConflict(claim, { paths: ["conflict.txt"], stagedResultRef });
-    expect(store.getProjectionFacts(active.sessionId)).toMatchObject({
-      placement: {
-        workspaceResultConflict: { paths: ["conflict.txt"], stagedResultRef, totalCount: 1 },
-      },
-      workspaceResultReconciling: true,
+    const conflicted = await store.readProjection([active.sessionId]);
+    expect(conflicted.placements.get(active.sessionId)).toMatchObject({
+      workspaceResultConflict: { paths: ["conflict.txt"], stagedResultRef, totalCount: 1 },
     });
+    expect(conflicted.workspaceResultReconcilingSessionIds.has(active.sessionId)).toBe(true);
     store.recordWorkspaceResultConflict(claim, undefined);
-    expect(store.getProjectionFacts(active.sessionId).placement).not.toHaveProperty(
-      "workspaceResultConflict",
-    );
+    expect(
+      (await store.readProjection([active.sessionId])).placements.get(active.sessionId),
+    ).not.toHaveProperty("workspaceResultConflict");
     store.acceptWorkspaceResult(claim);
     store.completeWorkspaceResultAndReleaseTurn(claim);
-    expect(store.getProjectionFacts(active.sessionId).workspaceResultReconciling).toBe(false);
+    expect(
+      (await store.readProjection([active.sessionId])).workspaceResultReconcilingSessionIds.has(
+        active.sessionId,
+      ),
+    ).toBe(false);
   },
 );
 
-it("projects the placement committed by a peer before reconciliation is read", () => {
+it("keeps placement and result facts in one snapshot across a peer commit", async () => {
   const active = advanceToActive();
   const claim = store.claimTurn({
     ...SESSION,
@@ -173,91 +179,88 @@ it("projects the placement committed by a peer before reconciliation is read", (
   });
   store.markWorkspaceResultPending(claim);
 
-  // Stores reopen the cached handle by path. A separate connection models a peer commit.
-  // This is fail's valid worker-owned active-to-failed transition, retaining pending results.
+  database.db.exec("PRAGMA journal_mode = WAL");
   const peer = new DatabaseSync(database.path);
-  const prepare = database.db.prepare.bind(database.db);
-  const restoreReads: Array<() => void> = [];
+  const reader = new DatabaseSync(database.path, { readOnly: true });
+  const prepare = reader.prepare.bind(reader);
   const recoveryError = "Peer placement failure";
-  let peerCommitEnabled = false;
   let peerCommits = 0;
   let changedRows: number | bigint = 0;
-  const statement = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
-    const prepared = prepare(sql);
-    if (!/\bfrom\s+"?worker_session_placement_moves\b/i.test(sql)) {
-      return prepared;
-    }
-    const execute = prepared.get.bind(prepared);
-    const read = vi.spyOn(prepared, "get").mockImplementation((...args: unknown[]) => {
-      const result = Reflect.apply(execute, undefined, args);
-      if (
-        peerCommitEnabled &&
-        peerCommits === 0 &&
-        args.length === 1 &&
-        args[0] === active.sessionId
-      ) {
-        peerCommits++;
-        const updatedAtMs = Date.now();
-        changedRows = peer
-          .prepare(
-            `UPDATE worker_session_placements
+  const statement = vi.spyOn(reader, "prepare").mockImplementation((sql) => {
+    // The fresh reader has consumed placements before preparing the result query on every Node version.
+    if (peerCommits === 0 && /\bfrom\s+"?worker_workspace_pending_results\b/i.test(sql)) {
+      peerCommits++;
+      const updatedAtMs = Date.now();
+      peer.exec("BEGIN IMMEDIATE");
+      changedRows = peer
+        .prepare(
+          `UPDATE worker_session_placements
            SET state = 'failed', transition_generation = ?, recovery_error = ?,
                terminal_reason = ?, terminal_at_ms = ?, turn_claim_owner = NULL,
                turn_claim_id = NULL, turn_claim_run_id = NULL, turn_claim_generation = NULL,
                turn_claim_owner_epoch = NULL, updated_at_ms = ?, state_changed_at_ms = ?
            WHERE session_id = ? AND state = 'active' AND transition_generation = ?
              AND turn_claim_owner = 'worker' AND turn_claim_id = ? AND turn_claim_run_id = ?`,
-          )
-          .run(
-            active.generation + 1,
-            recoveryError,
-            recoveryError,
-            updatedAtMs,
-            updatedAtMs,
-            updatedAtMs,
-            active.sessionId,
-            active.generation,
-            claim.claimId,
-            claim.runId,
-          ).changes;
-      }
-      return result;
-    });
-    restoreReads.push(() => read.mockRestore());
-    return prepared;
+        )
+        .run(
+          active.generation + 1,
+          recoveryError,
+          recoveryError,
+          updatedAtMs,
+          updatedAtMs,
+          updatedAtMs,
+          active.sessionId,
+          active.generation,
+          claim.claimId,
+          claim.runId,
+        ).changes;
+      peer
+        .prepare("DELETE FROM worker_workspace_pending_results WHERE session_id = ?")
+        .run(active.sessionId);
+      peer.exec("COMMIT");
+    }
+    return prepare(sql);
   });
   try {
-    expect(store.getProjectionFacts(active.sessionId).workspaceResultReconciling).toBe(true);
-    peerCommitEnabled = true;
-    const facts = store.getProjectionFacts(active.sessionId);
+    expect(
+      (await store.readProjection([active.sessionId])).workspaceResultReconcilingSessionIds.has(
+        active.sessionId,
+      ),
+    ).toBe(true);
+    const facts = readWorkerSessionPlacementProjectionInDatabase(
+      reader,
+      [active.sessionId],
+      [],
+    ).projection;
     expect(peerCommits).toBe(1);
     expect(changedRows).toBe(1);
-    expect(facts).toMatchObject({
-      placement: {
-        state: "failed",
-        generation: active.generation + 1,
-        recoveryError,
-        turnClaim: null,
-      },
-      move: undefined,
-      workspaceResultReconciling: false,
+    expect(facts.placements.get(active.sessionId)).toMatchObject({
+      state: "active",
+      generation: active.generation,
     });
+    expect(facts.workspaceResultReconcilingSessionIds.has(active.sessionId)).toBe(true);
+    const current = await store.readProjection([active.sessionId]);
+    expect(current.placements.get(active.sessionId)).toMatchObject({
+      state: "failed",
+      generation: active.generation + 1,
+      recoveryError,
+      turnClaim: null,
+    });
+    expect(current.workspaceResultReconcilingSessionIds.has(active.sessionId)).toBe(false);
   } finally {
     statement.mockRestore();
-    for (const restoreRead of restoreReads) {
-      restoreRead();
-    }
+    reader.close();
     peer.close();
   }
 });
 
-it("rejects invalid placement fields when reading projection facts", () => {
+it("rejects invalid placement fields when reading projection facts", async () => {
   const active = advanceToActive();
   database.db
     .prepare("UPDATE worker_session_placements SET worker_bundle_hash = ' ' WHERE session_id = ?")
     .run(active.sessionId);
 
-  expect(() => store.getProjectionFacts(active.sessionId)).toThrow(
+  await expect(store.readProjection([active.sessionId])).rejects.toThrow(
     "Worker session placement worker bundle hash must be a non-empty string",
   );
 });

@@ -78,7 +78,7 @@ import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js
 import { applySystemPromptToSession } from "./system-prompt.js";
 import { collectRegisteredToolNames, toSessionToolAllowlist } from "./tool-name-allowlist.js";
 import { splitSdkTools } from "./tool-split.js";
-import { mapThinkingLevel } from "./utils.js";
+import { mapThinkingLevel, mapThinkingLevelForProvider } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
 
 export async function executePreparedCompactionSession(runtime: PreparedCompactionRuntime) {
@@ -262,7 +262,9 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             authStorage,
             modelRegistry,
             model: effectiveModel,
-            thinkingLevel: mapThinkingLevel(thinkLevel),
+            thinkingLevel: mapThinkingLevel(
+              mapThinkingLevelForProvider(thinkLevel, effectiveModel),
+            ),
             tools: sessionToolAllowlist,
             customTools,
             sessionManager,
@@ -657,12 +659,12 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           },
         };
       } catch (err) {
-        assertActive();
         const failure = resolveCompactionFailure({
           error: err,
           safeguardCancellation: getCompactionSafeguardRuntime(sessionManager)?.cancellation,
           abortSignal: params.abortSignal,
         });
+        assertActive();
         const fallbackThinking = pickFallbackThinkingLevel({
           message: formatErrorMessage(failure.error),
           attempted: attemptedThinking,

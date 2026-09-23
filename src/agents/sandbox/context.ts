@@ -17,7 +17,12 @@ import {
 } from "../../plugin-sdk/browser-profiles.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createLazyRuntimeNamedExport } from "../../shared/lazy-runtime.js";
+import { prepareRemoteSkillConnections } from "../../skills/runtime/remote-skills.js";
 import type { SkillEligibilityContext, SkillSnapshot, SkillUsagePath } from "../../skills/types.js";
+import {
+  readAdmittedRunOperatorAuthority,
+  type AdmittedRunContext,
+} from "../admitted-run-context.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import {
   resolveSubagentSessionAttachmentRootDir,
@@ -60,6 +65,7 @@ async function syncSandboxSkillsToWorkspace(params: {
         import("../../skills/runtime/remote.js"),
         import("../exec-defaults.js"),
       ]);
+    await prepareRemoteSkillConnections();
     const nodeSkills = resolveNodeExecEligibility({
       cfg: params.config,
       sessionKey: params.rawSessionKey,
@@ -244,6 +250,7 @@ type ResolveSandboxContextParams = {
   execOverrides?: ExecPolicyOverrides;
   requireCurrentConfig?: boolean;
   assertCurrent?: () => void;
+  admittedRunContext?: AdmittedRunContext;
   sessionKey?: string;
   skillsSnapshot?: SkillSnapshot;
   workspaceDir?: string;
@@ -375,25 +382,28 @@ async function resolveProvisionedSandboxContext(
     scopeKey,
   });
   const provisionBackend = () =>
-    createSandboxBackend({
-      sessionKey: rawSessionKey,
-      scopeKey,
-      ...(registeredRuntimeIds.length > 0 ? { registeredRuntimeIds } : {}),
-      workspaceDir,
-      ...(localWorkspace
-        ? {
-            workspaceSource: "managed-worktree" as const,
-            assertRuntimeCurrent: localWorkspace.assertCurrent,
-          }
-        : {}),
-      agentWorkspaceDir,
-      skillsWorkspaceDir,
-      readOnlyResourceMounts,
-      cfg: resolvedCfg,
-      ...(params.requireCurrentConfig !== undefined
-        ? { requireCurrentConfig: params.requireCurrentConfig }
-        : {}),
-    });
+    createSandboxBackend(
+      {
+        sessionKey: rawSessionKey,
+        scopeKey,
+        ...(registeredRuntimeIds.length > 0 ? { registeredRuntimeIds } : {}),
+        workspaceDir,
+        ...(localWorkspace
+          ? {
+              workspaceSource: "managed-worktree" as const,
+              assertRuntimeCurrent: localWorkspace.assertCurrent,
+            }
+          : {}),
+        agentWorkspaceDir,
+        skillsWorkspaceDir,
+        readOnlyResourceMounts,
+        cfg: resolvedCfg,
+        ...(params.requireCurrentConfig !== undefined
+          ? { requireCurrentConfig: params.requireCurrentConfig }
+          : {}),
+      },
+      readAdmittedRunOperatorAuthority(params.admittedRunContext),
+    );
 
   const backend = localWorkspace
     ? await localWorkspace.provision(provisionBackend)
@@ -489,6 +499,7 @@ export async function resolveSandboxContext(params: {
   execOverrides?: ExecPolicyOverrides;
   requireCurrentConfig?: boolean;
   assertCurrent?: () => void;
+  admittedRunContext?: AdmittedRunContext;
   sessionKey?: string;
   skillsSnapshot?: SkillSnapshot;
   workspaceDir?: string;

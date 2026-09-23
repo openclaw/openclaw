@@ -167,6 +167,7 @@ function mockCombinedStore(
           agentId,
           entry: store[key],
           readSourceEntry,
+          resolveSourceKey: (sourceKey: string) => sourceKey,
           storeTarget: { agentId, storePath: `/tmp/agents/${agentId}/agent/openclaw-agent.sqlite` },
         },
       ]),

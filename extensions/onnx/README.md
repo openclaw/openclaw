@@ -22,7 +22,7 @@ pnpm openclaw onnx probe gliclass-edge-v3.0
 Select `onnx/gliclass-edge-v3.0` as `agents.defaults.decisionModel` or as an
 agent's override. Inference stays local; model downloads use pinned revisions,
 sizes, and SHA256 hashes. Large models may need preloading to meet the host's
-ten-second decision deadline.
+30-second decision deadline.
 
 On a compatible packaged host, install the local candidate with
 `openclaw plugins install npm-pack:/path/to/openclaw-onnx.tgz`. A development

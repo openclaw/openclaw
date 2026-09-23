@@ -18,13 +18,20 @@ import {
 import { isMissingPathError } from "../../infra/errors.js";
 import { removeTemporaryArtifacts } from "../../infra/temp-artifact-cleanup.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   prepareSkillBundle,
   readSkillBundleTree,
+  readSkillLibraryManifestTree,
+  skillLibraryRevisionDir,
   SkillTreeDirectoryError,
 } from "../library/bundle.js";
 import { SkillLibraryError } from "../library/errors.js";
-import { readSelectedSkillLibraryFiles } from "../library/selection.js";
+import { readSkillLibrarySelectionManifests } from "../library/selection-read.js";
+import {
+  captureSkillLibrarySelection,
+  prepareSkillLibrarySelection,
+} from "../library/selection.js";
 import { loadSingleSkillDirectory } from "../loading/local-loader.js";
 import { createSyntheticSourceInfo, type Skill } from "../loading/skill-contract.js";
 import { shouldSyncSkillPath } from "../loading/skill-paths.js";
@@ -103,22 +110,30 @@ const localSkillResourceReader: SkillResourceSourceReader = {
 
 // The caller retains these bytes for its turn. Catalog versions do not version supporting files.
 export async function prepareSkillResourceDelivery(
-  snapshot: SkillSnapshot | undefined,
+  inputSnapshot: SkillSnapshot | undefined,
   assertCurrent: () => void,
-  explicitSelections: readonly ExplicitSkillSelection[] = [],
+  inputExplicitSelections: readonly ExplicitSkillSelection[] = [],
   workspaceDir?: string,
 ): Promise<SkillResourceDelivery | undefined> {
-  if (!snapshot) {
+  if (!inputSnapshot) {
     return undefined;
   }
   assertCurrent();
   if (
-    !snapshot.resolvedSkills?.length &&
-    !snapshot.librarySelections?.length &&
-    !explicitSelections.length
+    !inputSnapshot.resolvedSkills?.length &&
+    !inputSnapshot.librarySelections?.length &&
+    !inputExplicitSelections.length
   ) {
     return undefined;
   }
+  const snapshot = {
+    ...inputSnapshot,
+    librarySelections: captureSkillLibrarySelection(inputSnapshot.librarySelections ?? []),
+    skills: inputSnapshot.skills.map((skill) => ({ ...skill })),
+    resolvedSkills: inputSnapshot.resolvedSkills?.map((skill) => ({ ...skill })),
+    skillRoots: inputSnapshot.skillRoots && { ...inputSnapshot.skillRoots },
+  };
+  const explicitSelections = inputExplicitSelections.map((selection) => ({ ...selection }));
   // Library-only and node-native catalogs need no workspace filesystem access.
   let sourceReader: SkillResourceSourceReader | undefined;
   const getSourceReader = (skill?: Skill) => {
@@ -142,7 +157,24 @@ export async function prepareSkillResourceDelivery(
   };
   const skills: SkillResourceDelivery["skills"] = [];
   let total = 0;
-  const candidates = resolveSkillResourceCandidates(snapshot)!;
+  const libraryContext = snapshot.librarySelections?.length
+    ? captureOpenClawStateWorkerContext()
+    : undefined;
+  const assertLibraryCurrent = () => {
+    assertCurrent();
+    libraryContext?.maintenanceScope?.assertAdmission();
+    libraryContext?.admission.assertCurrent();
+  };
+  const libraryOptions = { env: libraryContext?.environment };
+  const libraryEntries = libraryContext
+    ? await prepareSkillLibrarySelection(
+        snapshot.librarySelections ?? [],
+        libraryOptions,
+        assertLibraryCurrent,
+      )
+    : [];
+  assertLibraryCurrent();
+  const candidates = resolveSkillResourceCandidates(snapshot, libraryEntries)!;
   for (const selected of explicitSelections) {
     if (
       selected.path.startsWith("node://") ||
@@ -165,7 +197,7 @@ export async function prepareSkillResourceDelivery(
     } catch (error) {
       throw contextualizeSkillResourceError({ name: selected.name, baseDir: skillDir }, error);
     }
-    assertCurrent();
+    assertLibraryCurrent();
     if (
       !loaded ||
       loaded.filePath !== selected.path ||
@@ -180,6 +212,17 @@ export async function prepareSkillResourceDelivery(
     }
     candidates.push(loaded);
   }
+  const pins = [
+    ...new Set(
+      candidates.flatMap((skill) => {
+        const pin =
+          !skill.filePath.startsWith("node://") &&
+          snapshot.librarySelections?.find((selection) => selection.name === skill.name);
+        return pin ? [pin] : [];
+      }),
+    ),
+  ];
+  let manifests: Awaited<ReturnType<typeof readSkillLibrarySelectionManifests>>;
   for (const skill of candidates) {
     if (skill.filePath.startsWith("node://")) {
       continue;
@@ -190,15 +233,30 @@ export async function prepareSkillResourceDelivery(
     );
     let files: SkillLibraryFile[] | null;
     try {
-      files = pin
-        ? await readSelectedSkillLibraryFiles(pin)
-        : await getSourceReader(skill).readSkillFiles(skill, {
-            allowMissingRoot: !explicitlySelected,
-          });
+      if (pin) {
+        assertLibraryCurrent();
+        if (!manifests) {
+          manifests = await readSkillLibrarySelectionManifests(pins, libraryOptions);
+          assertLibraryCurrent();
+        }
+        const manifest = manifests?.[pins.indexOf(pin)];
+        if (!manifest) {
+          throw new SkillLibraryError("NOT_FOUND", "Selected skill revision is unavailable.");
+        }
+        files = await readSkillLibraryManifestTree(
+          skillLibraryRevisionDir(pin.skillId, pin.revision, libraryContext?.environment),
+          manifest.files_json,
+          pin.revision,
+        );
+      } else {
+        files = await getSourceReader(skill).readSkillFiles(skill, {
+          allowMissingRoot: !explicitlySelected,
+        });
+      }
     } catch (error) {
       throw contextualizeSkillResourceError(skill, error);
     }
-    assertCurrent();
+    assertLibraryCurrent();
     if (files === null) {
       if (explicitlySelected) {
         throw contextualizeSkillResourceError(

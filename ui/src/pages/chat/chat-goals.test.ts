@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { SessionsGoalUpdateParamsSchema } from "../../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
@@ -36,18 +36,37 @@ afterEach(() => {
 });
 
 function goalHost(requestHandlers: Record<string, unknown>) {
-  return makeChatHost({
+  const host = makeChatHost({
     sessionKey: "agent:main:main",
     currentSessionId: "session-a",
     chatMessage: "Unrelated draft",
     sessionsResult: {
       ...createSessionsListResult(),
       sessions: [
-        { key: "agent:main:main", sessionId: "session-a", kind: "direct", updatedAt: 2, goal },
+        {
+          key: "agent:main:main",
+          agentId: "main",
+          sessionId: "session-a",
+          kind: "direct",
+          updatedAt: 2,
+          goal,
+        },
       ],
     },
     requestHandlers,
   });
+  const sessions = host.sessions;
+  const projectSessions = (state: typeof sessions.state) => {
+    host.sessionsResult = state.result;
+    host.sessionsResultAgentId = state.agentId;
+  };
+  projectSessions(sessions.state);
+  const stop = sessions.subscribe(projectSessions);
+  onTestFinished(() => {
+    stop();
+    sessions.dispose();
+  });
+  return host;
 }
 
 describe("Goal control requests", () => {

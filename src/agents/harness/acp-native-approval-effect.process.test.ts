@@ -67,12 +67,14 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
       });
       const stopWatchingAuthority = registerAgentRunDelegatedAuthorityClosedHandler(
         (authority, reason) => {
-          cancelAgentRuntimeBoundApprovals({
-            authority,
-            reason,
-            manager,
-            publish: () => {},
-          });
+          void gatewayWork.track(() =>
+            cancelAgentRuntimeBoundApprovals({
+              authority,
+              reason,
+              manager,
+              publish: () => {},
+            }),
+          );
         },
       );
       let native: Awaited<ReturnType<typeof registerNative>> | undefined;
@@ -102,8 +104,8 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
               );
             }),
           ]);
-          expect(manager.listPendingRecords()).toHaveLength(1);
-          expect(manager.getSnapshot(approvalId)).toMatchObject({
+          expect(await manager.listPendingRecords()).toHaveLength(1);
+          expect(await manager.getSnapshot(approvalId)).toMatchObject({
             request: {
               pluginId: "acpx",
               runId: attempt.input.runId,
@@ -149,7 +151,7 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
             abort.abort();
           }
           // A late allow cannot revive the cancelled native permission request.
-          const resolution = manager.resolveDetailed(
+          const resolution = await manager.resolveDetailed(
             approvalId,
             kind === "deny" || kind === "always-only" ? "deny" : "allow-once",
             {
@@ -162,7 +164,7 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
           expect(result.terminal).toMatchObject({
             kind: kind === "cancel" ? "aborted" : "ok",
           });
-          expect(manager.listPendingRecords()).toEqual([]);
+          expect(await manager.listPendingRecords()).toEqual([]);
           if (kind === "allow") {
             const transcript = await readVisibleSessionTranscriptMessageEntries(attempt.target);
             expect(transcript.map((row) => row.role)).toEqual(["user", "assistant"]);
@@ -184,13 +186,13 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
                   agentDir: state.agentDir(),
                   workspaceDir: state.workspaceDir,
                 }),
-              ).resolves.toEqual([]);
+              ).resolves.toEqual({ entries: [] });
             } finally {
               next.close();
             }
           }
           if (kind === "cancel") {
-            expect(manager.getSnapshot(approvalId)).toMatchObject({
+            expect(await manager.getSnapshot(approvalId)).toMatchObject({
               status: "cancelled",
               terminalReason: "run-aborted",
             });

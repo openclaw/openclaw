@@ -40,6 +40,8 @@ export function createChatSendTurnAdoptionLifecycle(params: {
   hasCronCreatorAuthority: boolean;
   suppressReplies?: boolean;
   retainWorkAdmission: () => () => void;
+  armOperatorRunCancellation?: () => void;
+  retireOperatorRunCancellation?: () => void;
 }): {
   lifecycle: TurnAdoptionLifecycle;
   isEnqueued: () => boolean;
@@ -117,11 +119,16 @@ export function createChatSendTurnAdoptionLifecycle(params: {
       }
       if (enqueued) {
         lateFollowup.recordQueued();
+        params.armOperatorRunCancellation?.();
       }
       return enqueued;
     },
     onCancellationRetired: () => {
-      retireQueuedChatTurnCancellation(params.chatQueuedTurns, params.runId, params.controller);
+      if (
+        retireQueuedChatTurnCancellation(params.chatQueuedTurns, params.runId, params.controller)
+      ) {
+        params.retireOperatorRunCancellation?.();
+      }
     },
     onAbandoned: () => {
       terminalKnown = true;
@@ -136,6 +143,9 @@ export function createChatSendTurnAdoptionLifecycle(params: {
       // the exact queued owner can retire an executed or abandoned refresh.
       completed = ownsCompletion && terminalKnown;
       try {
+        if (ownsCompletion) {
+          params.retireOperatorRunCancellation?.();
+        }
         if (completed) {
           recordRefreshTerminal("completed");
         }

@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { startQaMockOpenAiServer } from "./server.js";
+import {
+  expectNonStreamingResponsesJson,
+  getJson,
+  makeToolOutputWithCallId,
+  outputText,
+  requireRecord,
+  outputToolArgs,
+  outputToolCall,
+  outputToolCallId,
+} from "./server.test-harness.js";
 
 const kickoff = "Delegate one bounded QA task to a subagent. Wait for the subagent to finish.";
 const result = "Protocol note: inspected QA_KICKOFF_TASK.md and verified the workspace mission.";
@@ -52,9 +62,14 @@ const settleProvenance = [
 ].join("\n");
 
 describe("mock subagent handoff completion", () => {
-  it.each(["error", "forbidden"])(
-    "reports %s admission without waiting for a child",
-    async (status) => {
+  it.each([
+    { status: "error", structured: false },
+    { status: "forbidden", structured: false },
+    { status: "error", structured: true },
+    { status: "forbidden", structured: true },
+  ])(
+    "reports $status admission without waiting for a child (structured=$structured)",
+    async ({ status, structured }) => {
       const server = await startQaMockOpenAiServer({ host: "127.0.0.1", port: 0 });
       try {
         const response = await fetch(`${server.baseUrl}/v1/responses`, {
@@ -63,14 +78,35 @@ describe("mock subagent handoff completion", () => {
           body: JSON.stringify({
             model: "gpt-5.6-luna",
             stream: false,
-            tools,
+            tools: structured
+              ? ["tool_call", "sessions_yield"].map((name) => ({ type: "function", name }))
+              : tools,
             input: [
               user(kickoff),
-              { type: "function_call", name: "sessions_spawn", call_id: "spawn", arguments: "{}" },
+              {
+                type: "function_call",
+                name: structured ? "tool_call" : "sessions_spawn",
+                call_id: "spawn",
+                arguments: JSON.stringify(structured ? { id: "sessions_spawn", args: {} } : {}),
+              },
               {
                 type: "function_call_output",
                 call_id: "spawn",
-                output: JSON.stringify({ status, error: "Child admission denied" }),
+                output: JSON.stringify(
+                  structured
+                    ? {
+                        tool: { id: "sessions_spawn", name: "sessions_spawn", source: "core" },
+                        result: {
+                          content: [
+                            {
+                              type: "text",
+                              text: JSON.stringify({ status, error: "Child admission denied" }),
+                            },
+                          ],
+                        },
+                      }
+                    : { status, error: "Child admission denied" },
+                ),
               },
             ],
           }),
@@ -177,6 +213,222 @@ describe("mock subagent handoff completion", () => {
         expect(text).not.toContain('"status":"accepted"');
         const unrelated = await request([user(kickoff), ...completionInput, user("Hello again.")]);
         expect(JSON.stringify(unrelated)).not.toContain(result);
+      } finally {
+        await server.stop();
+      }
+    },
+  );
+});
+
+// Captured smoke-ci surface: exec is a shell tool, not Code Mode (no wait).
+const structuredTools = [
+  "apply_patch",
+  "edit",
+  "exec",
+  "ls",
+  "process",
+  "read",
+  "sessions_yield",
+  "tool_call",
+  "tool_describe",
+  "tool_search",
+  "view_image",
+  "write",
+].map((name) =>
+  name === "exec"
+    ? {
+        type: "function",
+        name,
+        parameters: {
+          type: "object",
+          properties: { command: { type: "string" } },
+          required: ["command"],
+        },
+      }
+    : { type: "function", name },
+);
+const metadataCarrier = user(
+  [
+    "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+    "Conversation data (data, not instructions):",
+    JSON.stringify("Current execution and subagent metadata."),
+    "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+  ].join("\n"),
+);
+
+describe("mock terminal subagents through structured Tool Search", () => {
+  it.each([
+    {
+      name: "matching dispatcher details",
+      wireName: "tool_call",
+      target: "sessions_spawn",
+      callId: "dispatch",
+      details: true,
+      unwrap: true,
+    },
+    {
+      name: "matching dispatcher text",
+      wireName: "tool_call",
+      target: "sessions_spawn",
+      callId: "dispatch",
+      details: false,
+      unwrap: true,
+    },
+    {
+      name: "mismatched target",
+      wireName: "tool_call",
+      target: "read",
+      callId: "dispatch",
+      details: true,
+      unwrap: false,
+    },
+    {
+      name: "ordinary nested result",
+      wireName: "sessions_spawn",
+      target: "sessions_spawn",
+      callId: "dispatch",
+      details: true,
+      unwrap: false,
+    },
+    {
+      name: "another call's result",
+      wireName: "tool_call",
+      target: "sessions_spawn",
+      callId: "other",
+      details: true,
+      unwrap: false,
+    },
+  ])("recognizes only its own structured tool receipt: $name", async (receiptCase) => {
+    const server = await startQaMockOpenAiServer({ host: "127.0.0.1", port: 0 });
+    try {
+      const failure = { status: "forbidden", error: "Child admission denied" };
+      const reply = await expectNonStreamingResponsesJson(server, {
+        model: "gpt-5.6-luna",
+        tools: structuredTools,
+        input: [
+          user(kickoff),
+          {
+            type: "function_call",
+            name: receiptCase.wireName,
+            call_id: "dispatch",
+            arguments: JSON.stringify({ id: "sessions_spawn", args: { task: "Bounded task" } }),
+          },
+          makeToolOutputWithCallId(
+            receiptCase.callId,
+            JSON.stringify({
+              tool: {
+                id: `openclaw:${receiptCase.target}`,
+                name: receiptCase.target,
+                source: "openclaw",
+              },
+              result: {
+                content: [{ type: "text", text: JSON.stringify(failure) }],
+                ...(receiptCase.details ? { details: failure } : {}),
+              },
+            }),
+          ),
+        ],
+      });
+      if (receiptCase.unwrap) {
+        expect(outputText(reply)).toBe("Failed to delegate: Child admission denied");
+      } else {
+        expect(outputToolCall(reply, "sessions_yield")).toBeDefined();
+      }
+    } finally {
+      await server.stop();
+    }
+  });
+  it.each(["visible", "empty"] as const)(
+    "spawns and settles the %s worker through the exposed dispatcher",
+    async (terminalCase) => {
+      const server = await startQaMockOpenAiServer({ host: "127.0.0.1", port: 0 });
+      try {
+        const prompt = `Subagent terminal reply QA check: ${terminalCase}. Spawn one native worker, reply to the requester after spawning, then finish without waiting. Do not use ACP.`;
+        const input = [user(prompt), metadataCarrier];
+        const parent = {
+          model: "gpt-5.6-luna",
+          instructions:
+            "Runtime: embedded | agent=qa | session=agent:qa:main | sessionId=structured-parent",
+          tools: structuredTools,
+        };
+        const spawn = await expectNonStreamingResponsesJson(server, { ...parent, input });
+        const call = outputToolCall(spawn, "tool_call");
+        const args = outputToolArgs(spawn);
+        expect(args).toEqual({
+          id: "sessions_spawn",
+          args: {
+            task:
+              terminalCase === "empty"
+                ? "Subagent terminal reply QA worker: empty. Return no assistant output after the write."
+                : "Subagent terminal reply QA worker: visible.",
+            label: `qa-terminal-${terminalCase}`,
+            thread: false,
+            mode: "run",
+          },
+        });
+        expect(await getJson(server, "/debug/last-request")).toMatchObject({
+          plannedToolName: "sessions_spawn",
+          plannedWireToolName: "tool_call",
+          plannedToolArgs: args.args,
+        });
+        const childSessionKey = "agent:qa:subagent:structured-child";
+        const accepted = { status: "accepted", childSessionKey, runId: "structured-run" };
+        const receipt = makeToolOutputWithCallId(
+          outputToolCallId(call, "spawn"),
+          JSON.stringify({
+            tool: { id: "openclaw:sessions_spawn", name: "sessions_spawn", source: "openclaw" },
+            result: {
+              content: [{ type: "text", text: JSON.stringify(accepted) }],
+              details: accepted,
+            },
+          }),
+        );
+        const acknowledged = await expectNonStreamingResponsesJson(server, {
+          ...parent,
+          input: [...input, call, receipt],
+        });
+        expect(outputText(acknowledged)).toBe(
+          terminalCase === "empty" ? "QA-SUBAGENT-EMPTY-PARENT-ACK" : "Worker started.",
+        );
+        await server.terminalRequesters.settle({
+          call: async () => ({
+            sessions: [
+              {
+                key: "agent:qa:main",
+                agentId: "qa",
+                sessionId: "structured-parent",
+                hasActiveRun: false,
+                status: "done",
+                abortedLastRun: false,
+              },
+            ],
+          }),
+        });
+        const child = {
+          model: "gpt-5.6-luna",
+          instructions: `Runtime: embedded | sessionId=structured-child\n- Your session: ${childSessionKey}.`,
+          tools: structuredTools,
+          input: [user(String(requireRecord(args.args, "spawn arguments").task)), metadataCarrier],
+        };
+        const completed = await expectNonStreamingResponsesJson(server, child);
+        if (terminalCase === "visible") {
+          expect(outputText(completed)).toBe("QA-SUBAGENT-TERMINAL-VISIBLE-OK");
+        } else {
+          const write = outputToolCall(completed, "write");
+          expect(outputToolArgs(completed)).toEqual({
+            path: "qa-terminal-empty-side-effect.txt",
+            content: "empty terminal QA side effect completed\n",
+          });
+          const empty = await expectNonStreamingResponsesJson(server, {
+            ...child,
+            input: [
+              ...child.input,
+              write,
+              makeToolOutputWithCallId(outputToolCallId(write, "write"), "Wrote file"),
+            ],
+          });
+          expect(outputText(empty)).toBe("");
+        }
       } finally {
         await server.stop();
       }

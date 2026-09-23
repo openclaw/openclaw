@@ -5,10 +5,7 @@ import {
   executionOwnerBindingFromAdmission,
   type ExecutionOwnerBindingResult,
 } from "../audit/execution-owner-binding.js";
-import {
-  deferSqlitePostCommitPublication,
-  stageSqliteTransactionState,
-} from "../infra/sqlite-post-commit.js";
+import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
@@ -108,7 +105,6 @@ export function syncTaskMirroredFlowInSqlite(
           publication.commit();
         },
       });
-      deferSqlitePostCommitPublication(db, publication.publish);
       return result;
     });
   } catch (error) {
@@ -137,7 +133,6 @@ export function updateTaskFlowRegistryRecordInSqlite(
         rollback: publication.rollback,
         commit: publication.commit,
       });
-      deferSqlitePostCommitPublication(db, publication.publish);
     }
     return result;
   });

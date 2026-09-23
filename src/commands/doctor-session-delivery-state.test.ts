@@ -12,7 +12,10 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import {
   repairCanonicalSessionDeliveryStates,
   repairCanonicalSessionResolvedSkills,
@@ -521,6 +524,7 @@ describe("doctor canonical session delivery state", () => {
 
     const copiedStateDir = fs.realpathSync(tempDirs.make("openclaw-delivery-copy-"));
     const copiedEnv = { ...process.env, OPENCLAW_STATE_DIR: copiedStateDir };
+    openOpenClawStateDatabase({ env: copiedEnv });
     const copiedPath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: copiedEnv });
     fs.mkdirSync(path.dirname(copiedPath), { recursive: true });
     fs.copyFileSync(sourcePath, copiedPath);

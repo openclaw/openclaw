@@ -3,7 +3,7 @@ summary: "Use hosted Jev or a local System One server for typed decisions"
 title: "TypeSafe AI"
 read_when:
   - Configuring a typed decision model
-  - Using the TypeSafe evaluation tool
+  - Using TypeSafe with the decision evaluation tool
   - Running Kev locally through the System One API
 ---
 
@@ -187,8 +187,8 @@ For lower latency, batch independent questions over the same state in one call.
 Keep repeated evidence unchanged when possible so Kev can reuse its prefix
 cache. The tested Kev server serializes inference; more concurrent HTTP calls
 increase queueing time. Native decisions admit at most four concurrent requests
-per provider and return `overloaded` beyond that limit. This admission limit does
-not apply to the optional evaluation tool.
+per provider and return `overloaded` beyond that limit. The core evaluation tool
+uses the same admission limit.
 
 Cancellation closes OpenClaw's HTTP request, but the Kev server may finish
 inference already in progress. Avoid immediately resubmitting canceled work;
@@ -197,7 +197,7 @@ choose a deadline that allows for inference and queueing on your hardware.
 For local compatibility, omitted question instructions are sent as `null`.
 Structured Score rubric levels are encoded as text; returned legends must match
 that transmitted rubric before the original level descriptions are restored in
-tool results. Kev's optional nonnegative `latency_ms` field is validated and
+decision results. Kev's optional nonnegative `latency_ms` field is validated and
 removed; all answer types, labels, probabilities, and rubric bounds retain the
 same validation as hosted results.
 
@@ -226,31 +226,34 @@ largest value is an explicit consumer policy. Probabilities and confidence are
 not demonstrated accuracy guarantees or permission to act.
 
 The host owns concurrency, circuit health, deadlines, cancellation, and provider
-lifecycle. Native decisions have a ten-second maximum; shorter consumer or
-plugin timeouts still apply. The adapter shares transport and response validation
-with the tool below. Requests use the fixed TypeSafe HTTPS endpoint unless
+lifecycle. Native decisions have a 30-second maximum; shorter consumer or
+plugin timeouts still apply. Requests use the fixed TypeSafe HTTPS endpoint unless
 `baseUrl` selects a local server. Both paths reject
 redirects, and do not retry automatically. Consumers decide what to do with
 unavailable decisions; caller cancellation must not start fallback work.
 
-## Optional evaluation tool
+## Agent evaluation tool
 
-The same plugin registers the optional `typesafe_evaluate` tool. Enable it through
-your normal [tool policy](/tools) when an agent should make explicit evaluations.
-It accepts shared `state`, a map of `questions`, and an optional vendor `model`
-override. Its TypeSafe-facing question names are `choice`, `score`, and `noul`.
+Core provides `decision_evaluate` automatically when an agent has an effective
+`decisionModel` selection. Normal [tool policy](/tools), including explicit denies,
+and the active harness's capabilities still apply. No TypeSafe tool registration
+or additional enablement setting is required. See the provider-neutral
+[tool contract](/concepts/decision-models#agent-evaluation-tool) for its request
+shape and results.
 
-For this tool only, `plugins.entries.typesafe.config.model` supplies the default
-model, initially `jev-latest` for hosted inference or `kev-latest` for local
-inference. It does not override the native
-`decisionModel` role or select a provider. Pin a model version for reproducible
-tool evaluations. `timeoutMs` limits tool requests and caps native requests at
-the shorter of this setting and the host's remaining deadline.
+The tool accepts explicit shared `state` and independent `boolean`, `choice`, and
+`score` questions. The calling agent's trusted identity selects its inherited or
+per-agent `decisionModel`; there is no per-call provider or model override. With a
+TypeSafe selection, the adapter translates Boolean questions to Noul and sends
+only the supplied evidence to hosted Jev or the configured local endpoint.
 
-Tool availability and the decision model role are separate: an explicitly
-enabled tool does not select a background model, and selecting a decision model
-does not grant agents the tool. Typed answers supply evidence, not authority to
-publish, send messages, or change durable state.
+A temporary credential or provider failure returns an actionable unavailable
+result and leaves the configured tool available. Clearing the agent's effective
+selection removes eligibility through the normal tool/context refresh lifecycle.
+Execution rechecks the selection and current authority. `timeoutMs` defaults to
+30,000 ms and caps provider requests at the shorter of this setting and the host's
+remaining deadline. Typed answers supply evidence, not permission to publish,
+send messages, or change durable state.
 
 ## Existing external installation
 

@@ -1,6 +1,10 @@
 import fsSync from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import {
+  ensureMemoryChunkFtsTriggers,
+  markInvalidImportedMemoryEmbeddings,
+  rebuildMemoryChunkFts,
+  registerMemoryEmbeddingMigrationFunctions,
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_CHUNKS_TABLE,
   MEMORY_INDEX_FTS_TABLE,
@@ -8,12 +12,6 @@ import {
   MEMORY_INDEX_SOURCES_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
 } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
-import {
-  CREATE_LEGACY_MEMORY_FTS_MATCH_TABLE_SQL,
-  LEGACY_MEMORY_FTS_MATCH_TABLE,
-  buildLegacyMemoryFtsCopySql,
-  buildLegacyMemoryFtsMatchSql,
-} from "./legacy-memory-sidecar-fts.js";
 
 export type LegacyMemorySidecarSource = {
   agentId: string;
@@ -317,34 +315,12 @@ function copyLegacyMemoryVectorRows(db: DatabaseSync, schema: string): void {
   );
 }
 
-function copyLegacyMemoryFtsRows(db: DatabaseSync, schema: string): void {
-  if (!tableExists(db, "main", MEMORY_INDEX_FTS_TABLE)) {
-    return;
-  }
-  if (!db.prepare(`SELECT 1 FROM ${schema}.chunks LIMIT 1`).get()) {
-    return;
-  }
-  db.exec(CREATE_LEGACY_MEMORY_FTS_MATCH_TABLE_SQL);
-  try {
-    db.exec(buildLegacyMemoryFtsMatchSql(schema));
-    assertLegacyDerivedRowsCopied(
-      db,
-      `SELECT COUNT(*) AS missing
-       FROM temp.${LEGACY_MEMORY_FTS_MATCH_TABLE}
-       WHERE exact = 0`,
-      "fts",
-    );
-    db.exec(buildLegacyMemoryFtsCopySql(schema));
-  } finally {
-    db.exec(`DROP TABLE temp.${LEGACY_MEMORY_FTS_MATCH_TABLE}`);
-  }
-}
-
 function copyLegacyMemoryIndexRows(
   db: DatabaseSync,
   schema: string,
   options: { copyVectorRows: boolean },
 ): void {
+  registerMemoryEmbeddingMigrationFunctions(db);
   db.exec(`
     INSERT OR IGNORE INTO main.${MEMORY_INDEX_META_TABLE} (key, value)
     SELECT key, value FROM ${schema}.meta;
@@ -355,7 +331,8 @@ function copyLegacyMemoryIndexRows(
     INSERT OR IGNORE INTO main.${MEMORY_INDEX_CHUNKS_TABLE} (
       id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
     )
-    SELECT id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
+    SELECT id, path, source, start_line, end_line, hash, model, text,
+           openclaw_memory_embedding_from_json(embedding), updated_at
     FROM ${schema}.chunks;
   `);
   assertLegacyDerivedRowsCopied(
@@ -396,12 +373,15 @@ function copyLegacyMemoryIndexRows(
          AND canonical.hash IS legacy.hash
          AND canonical.model IS legacy.model
          AND canonical.text IS legacy.text
-         AND canonical.embedding IS legacy.embedding
+         AND canonical.embedding IS openclaw_memory_embedding_from_json(legacy.embedding)
          AND canonical.updated_at IS legacy.updated_at
      )`,
     "chunks",
   );
-  copyLegacyMemoryFtsRows(db, schema);
+  if (tableExists(db, "main", MEMORY_INDEX_FTS_TABLE)) {
+    rebuildMemoryChunkFts(db, MEMORY_INDEX_FTS_TABLE);
+    ensureMemoryChunkFtsTriggers(db);
+  }
   if (options.copyVectorRows) {
     copyLegacyMemoryVectorRows(db, schema);
   }
@@ -412,7 +392,7 @@ function copyLegacyMemoryIndexRows(
         model TEXT NOT NULL,
         provider_key TEXT NOT NULL,
         hash TEXT NOT NULL,
-        embedding TEXT NOT NULL,
+        embedding BLOB NOT NULL,
         dims INTEGER,
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (provider, model, provider_key, hash)
@@ -420,7 +400,7 @@ function copyLegacyMemoryIndexRows(
       INSERT OR IGNORE INTO main.${MEMORY_EMBEDDING_CACHE_TABLE} (
         provider, model, provider_key, hash, embedding, dims, updated_at
       )
-      SELECT provider, model, provider_key, hash, embedding, dims, updated_at
+      SELECT provider, model, provider_key, hash, openclaw_memory_embedding_from_json(embedding), dims, updated_at
       FROM ${schema}.embedding_cache;
     `);
     // Matching cache keys are derived rows. Validate shape before deciding whether the
@@ -436,11 +416,20 @@ function copyLegacyMemoryIndexRows(
            AND canonical.provider_key = legacy.provider_key
            AND canonical.hash = legacy.hash
            AND canonical.dims IS legacy.dims
-           AND CASE WHEN json_valid(canonical.embedding) AND json_valid(legacy.embedding) THEN json_type(canonical.embedding) = 'array' AND json_array_length(canonical.embedding) = canonical.dims AND json_type(legacy.embedding) = 'array' AND json_array_length(legacy.embedding) = legacy.dims ELSE 0 END
+           AND (
+             canonical.embedding IS openclaw_memory_embedding_from_json(legacy.embedding)
+             OR (
+               openclaw_memory_embedding_blob_valid(canonical.embedding) = 1
+               AND length(canonical.embedding) = canonical.dims * 8
+               AND CASE WHEN openclaw_memory_embedding_json_valid(legacy.embedding) = 1
+                   THEN json_array_length(legacy.embedding) = legacy.dims ELSE 0 END
+             )
+           )
        )`,
       "embedding_cache",
     );
   }
+  markInvalidImportedMemoryEmbeddings(db, schema);
 }
 
 export function importLegacyMemorySidecarIndex(params: {

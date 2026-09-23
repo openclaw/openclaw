@@ -244,10 +244,10 @@ function reconcileSelectedTabElement(
   });
 }
 
-export function renderPanelTabStrip(params: {
-  tabs: PanelTabStripTab[];
+export function renderPanelTabStrip<T extends PanelTabStripTab>(params: {
+  tabs: T[];
   activeId: string | null;
-  ariaControls: string;
+  ariaControls: string | ((tab: T) => string);
   onSelect: (id: string) => void;
   onClose: (id: string) => void | Promise<void>;
   onNew: () => void;
@@ -258,15 +258,22 @@ export function renderPanelTabStrip(params: {
   separateTabs?: boolean;
   onReorder?: (sourceId: string, targetId: string, placement: "before" | "after") => void;
 }) {
+  const controlsFor = (tab: T) =>
+    typeof params.ariaControls === "string" ? params.ariaControls : params.ariaControls(tab);
+  const newControlId = params.tabs[0] ? `${params.tabs[0].domId}-new` : undefined;
   const newButton = (slotted: boolean) =>
     params.newControl === nothing
       ? nothing
       : params.newControl
-        ? html`<span slot=${slotted ? "nav" : nothing} class="tabstrip-new-control"
+        ? html`<span
+            id=${newControlId ?? nothing}
+            slot=${slotted ? "nav" : nothing}
+            class="tabstrip-new-control"
             >${params.newControl}</span
           >`
         : html`
             <button
+              id=${newControlId ?? nothing}
               slot=${slotted ? "nav" : nothing}
               class="rail-header__action tabstrip-new"
               type="button"
@@ -343,7 +350,7 @@ export function renderPanelTabStrip(params: {
               id=${tab.domId}
               class=${`tabstrip-tab ${tab.className ?? ""}`}
               panel=${tab.id}
-              aria-controls=${params.ariaControls}
+              aria-controls=${controlsFor(tab)}
               aria-selected=${selected ? "true" : "false"}
               title=${tab.title || nothing}
               ?active=${selected}
@@ -460,6 +467,7 @@ export function renderPanelTabStrip(params: {
               }
             </wa-tab>
             <button
+              id=${`${tab.domId}-close`}
               slot="nav"
               class="rail-header__action tabstrip-tab__close"
               type="button"
@@ -494,9 +502,10 @@ export function renderPanelTabStrip(params: {
                     HTMLElement & { updateComplete?: Promise<unknown> }
                   >("wa-tab-group") ?? []),
                 ].find((candidate) =>
-                  [...candidate.querySelectorAll<HTMLElement>("wa-tab")].some(
-                    (renderedTab) =>
-                      renderedTab.getAttribute("aria-controls") === params.ariaControls,
+                  [...candidate.querySelectorAll<HTMLElement>("wa-tab")].some((renderedTab) =>
+                    params.tabs.some(
+                      (entry) => renderedTab.getAttribute("aria-controls") === controlsFor(entry),
+                    ),
                   ),
                 );
                 await settledGroup?.updateComplete;
@@ -522,6 +531,15 @@ export function renderPanelTabStrip(params: {
       )}
       ${newButton(true)}
     </wa-tab-group>
+    <!-- WA's nav slot owns visual layout; action buttons belong beside the tablist in the accessibility tree. -->
+    <span
+      role="group"
+      style="display: contents"
+      aria-owns=${[
+        ...params.tabs.map((tab) => `${tab.domId}-close`),
+        ...(params.newControl === nothing ? [] : [newControlId]),
+      ].join(" ")}
+    ></span>
   `;
 }
 

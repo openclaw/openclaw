@@ -384,7 +384,7 @@ describe("compactEmbeddedRunForRecovery", () => {
           tokensAfter: 40,
           compactionKind: "context-engine",
         });
-        state.observeContextAccounting({ kind: "model", contextTokens: 20 });
+        state.observeContextAccounting({ kind: "model", contextTokens: 20, successful: false });
         if (outcome === "failed") {
           throw error;
         }

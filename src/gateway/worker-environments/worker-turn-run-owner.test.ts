@@ -66,7 +66,7 @@ describe("cloud worker run ownership", () => {
         ...unusedEnvironments(),
         get: () => attachedEnvironment(),
         acquireTurnCredential: async () => credential(),
-        acknowledgeCredentialDelivery: () => true,
+        acknowledgeCredentialDelivery: async () => true,
         startTunnel: async () => ({
           environmentId: ENVIRONMENT_ID,
           ownerEpoch: OWNER_EPOCH,

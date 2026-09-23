@@ -58,6 +58,8 @@ function createContext(
       subscribe,
     },
     agents: { subscribe, ensureList: vi.fn(async () => null) },
+    // The Profile editor follows the app-owned Settings sidebar selector.
+    settingsAgentSelection: { state: { selectedId: null, scopeId: null }, subscribe },
     agentIdentity: { subscribe, ensure: vi.fn(async () => undefined) },
   } as unknown as ApplicationContext;
 }

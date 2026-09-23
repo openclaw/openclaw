@@ -278,9 +278,10 @@ async function readSessionTranscriptJsonlBytes(
     } else {
       const results = await withSqliteMutationWorkerLifetime(
         options,
-        async ({ assertCurrent }) =>
+        async ({ assertCurrent, signal }) =>
           await runSqliteTranscriptArchiveWorkerOperation<Map<string, number>>({
             assertCurrent,
+            signal,
             expectedMessageType: "sized",
             workerData: {
               type: "sqlite-transcript-archive-v2",

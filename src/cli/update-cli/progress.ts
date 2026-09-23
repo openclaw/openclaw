@@ -8,6 +8,7 @@ import { formatUpdateFailureFact } from "../../infra/update-failure-facts-format
 import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import {
+  toPublicUpdateRun,
   updateStepDiagnostics,
   type UpdateRunPhase,
   type UpdateRunRecord,
@@ -21,7 +22,7 @@ import type {
   UpdateRunResult,
   UpdateStepProgress,
   UpdateStepResult,
-} from "../../infra/update-runner.js";
+} from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateCommandOptions } from "./shared.js";
 
@@ -260,15 +261,19 @@ export async function printResult(
     return undefined;
   });
   if (opts.json) {
-    defaultRuntime.writeJson({ ...result, ...(run ? { run } : {}), reportPath });
+    defaultRuntime.writeJson({
+      ...result,
+      ...(run ? { run: toPublicUpdateRun(run) } : {}),
+      reportPath,
+    });
     return;
   }
   defaultRuntime.log("");
   defaultRuntime.log(theme.heading(report.headline));
-  for (const line of report.lines) {
-    defaultRuntime.log(line);
-  }
   if (reportPath) {
     defaultRuntime.log(`Report: ${reportPath}`);
+  }
+  for (const line of report.lines) {
+    defaultRuntime.log(line);
   }
 }

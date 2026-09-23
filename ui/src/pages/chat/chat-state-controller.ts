@@ -3,6 +3,7 @@ import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
 import { t } from "../../i18n/index.ts";
+import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
 import { showToast } from "../../lib/toast.ts";
 import { disposeSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
@@ -16,11 +17,8 @@ import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.
 import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
 import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
 import { clearSessionWorkspaceTimers } from "./components/chat-session-workspace.ts";
-import {
-  ChatComposerPersistence,
-  type ChatComposerPersistResult,
-  markChatComposerEdit,
-} from "./composer-persistence.ts";
+import type { ChatComposerPersistResult } from "./composer-persistence-state.ts";
+import { ChatComposerPersistence, markChatComposerEdit } from "./composer-persistence.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 import type { AfterCommitEffect, RenderLifecycle } from "./render-lifecycle.ts";
 import { cancelChatScroll, lockChatScroll, scheduleCommittedChatScroll } from "./scroll.ts";
@@ -53,6 +51,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   constructor(
     private readonly host: ReactiveControllerHost,
     private readonly onStateChange?: () => void,
+    private readonly onQueuedMessageDiscarded?: (item: ChatQueueItem) => void,
   ) {
     this.attachmentReads = new ChatAttachmentReadLifecycle(() =>
       this.stateValue?.requestUpdate?.(),
@@ -131,7 +130,13 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     this.previousRealtimeConversation = state.realtimeTalkConversation;
     const renderLifecycle = state.renderLifecycle;
     state.requestUpdate = () => renderLifecycle.invalidate();
-    this.cleanups.push(subscribeChatOutboxProjection(state));
+    this.cleanups.push(
+      subscribeChatOutboxProjection(state, (item) => {
+        if (this.stateValue === state) {
+          this.onQueuedMessageDiscarded?.(item);
+        }
+      }),
+    );
     // Retained and hidden panes still own corrections; transport availability
     // must not release their reload protection before Save or Cancel does.
     this.cleanups.push(
@@ -327,6 +332,14 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       // Retain receipt identity through custody-to-history gaps and replay;
       // retire this presentation cache with its pane or physical conversation.
       this.seenInputKeys.add(key);
+      // Persisted rows for this browser's own speech keep the live caption's identity.
+      const entryId = identity.id;
+      if (
+        entryId &&
+        state.realtimeTalkConversation.some((entry) => entry.transcriptId === entryId)
+      ) {
+        return;
+      }
       remoteInputArrived ||= !changedScope && state.chatHasAutoScrolled;
     };
     state.chatMessages.forEach((message) => observe(message));
@@ -417,6 +430,10 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
 
   composerScopeForEviction(): StoredChatOutboxScope | null {
     return this.composerPersistence.scopeForRouteSwitch();
+  }
+
+  get durableComposerScope() {
+    return this.composerPersistence.durableScope;
   }
 
   get composerDraftRevision(): number {

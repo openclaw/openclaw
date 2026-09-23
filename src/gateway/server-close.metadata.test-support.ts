@@ -108,6 +108,16 @@ export async function createGatewayMetadataCloseFixture(label: string) {
     auditReadiness.add(writer.ready);
     return writer;
   });
+  const health = await import("./server/event-loop-health.js");
+  const createHealthMonitor = health.createGatewayEventLoopHealthMonitor;
+  const healthFactory = vi
+    .spyOn(health, "createGatewayEventLoopHealthMonitor")
+    .mockImplementation((...args) => {
+      const monitor = createHealthMonitor(...args);
+      // Real CPU sampling can arm timeouts after callers install a controlled clock.
+      monitor.stop();
+      return monitor;
+    });
   setActivePluginRegistry(createEmptyPluginRegistry());
   return {
     state,
@@ -194,6 +204,7 @@ export async function createGatewayMetadataCloseFixture(label: string) {
         restoreActivePluginRegistrySnapshot(original);
         await state.cleanup();
       } finally {
+        healthFactory.mockRestore();
         auditFactory.mockRestore();
       }
     },

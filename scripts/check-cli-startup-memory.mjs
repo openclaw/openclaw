@@ -21,6 +21,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { reportLimitViolations } from "./lib/check-limits.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 const repoRoot = resolveRepoRoot(import.meta.url);
 const tmpDir = process.env.TMPDIR || process.env.TEMP || process.env.TMP || os.tmpdir();
@@ -456,7 +457,7 @@ function runCase(testCase, params = {}) {
   const result = { ...report, maxRssMb, rssSamplesMb: samples };
   if (maxRssMb > result.effectiveLimitMb) {
     const error = `${testCase.label} median max RSS ${maxRssMb.toFixed(1)} MB exceeded effective ceiling ${result.effectiveLimitMb} MB (base limit ${result.limitMb} MB; RSS tolerance ${result.rssToleranceMb} MB; samples: ${formatRssSamples(samples)} MB)`;
-    return failResult(result, testCase, error);
+    return { ...failResult(result, testCase, error), limitViolation: true };
   }
   console.log(
     `[startup-memory] ${testCase.label}: ${maxRssMb.toFixed(1)} MB median max RSS ` +
@@ -548,7 +549,18 @@ function runStartupMemoryCheck(argv = process.argv.slice(2), params = {}) {
     }
     writeReport(reservation.reports, results);
     published = true;
-    const failure = results.find((result) => result.status !== "pass");
+    const limitsFailed = reportLimitViolations(
+      results
+        .filter((result) => result.limitViolation)
+        .map((result) => ({
+          file: "scripts/check-cli-startup-memory.mjs",
+          title: "CLI startup memory budget",
+          message: result.error,
+        })),
+    );
+    const failure = results.find(
+      (result) => result.status !== "pass" && (!result.limitViolation || limitsFailed),
+    );
     if (failure?.failureMessage) {
       throw new Error(failure.failureMessage);
     }

@@ -52,6 +52,11 @@ import {
   type RegisteredNodePluginToolCommand,
 } from "./node-plugin-tool-snapshot.js";
 import {
+  pairingBindingForSession,
+  pairingStateMatchesBinding,
+  isPublishedPairingCurrent,
+} from "./node-registry-pairing.js";
+import {
   forgetNodeRunnerInventory,
   invokeLifecycleNodeRegistry,
   invokePublicNodeRegistry,
@@ -160,26 +165,6 @@ type NodeSessionRegistrationOptions = {
   pairingGeneration?: string | undefined;
   approvedSurface?: NodeApprovalSurface;
 };
-
-function pairingBindingForSession(node: PairingBoundNodeSession): PairedDeviceNodeBinding {
-  return {
-    identity: node.pairingIdentity,
-    ...(node.pairingGeneration ? { generation: node.pairingGeneration } : {}),
-  };
-}
-
-function pairingStateMatchesBinding(
-  binding: PairedDeviceNodeBinding,
-  current: PairedDeviceNodeBindingSnapshot | undefined,
-): boolean {
-  if (!current) {
-    return false;
-  }
-  if (binding.identity !== current.identity) {
-    return false;
-  }
-  return !binding.generation || binding.generation === current.generation;
-}
 
 export type NodeRegistryOptions = {
   listRegisteredNodePluginToolCommands?:
@@ -380,11 +365,15 @@ export class NodeRegistry {
     } catch {
       return { status: "unavailable" };
     }
-    return this.settlePairingLease({
-      lease,
-      isCurrent: pairingStateMatchesBinding(lease.binding, currentPairingState),
-      invalidateStale: options.invalidateStale,
-    });
+    let isCurrent = pairingStateMatchesBinding(lease.binding, currentPairingState);
+    try {
+      if (isCurrent && this.options.isPairingStateCurrent) {
+        isCurrent = this.options.isPairingStateCurrent(lease.nodeId, lease.binding);
+      }
+    } catch {
+      return { status: "unavailable" };
+    }
+    return this.settlePairingLease({ lease, isCurrent, invalidateStale: options.invalidateStale });
   }
 
   private refreshSessionPolicy(node: NodeSession): void {
@@ -656,7 +645,7 @@ export class NodeRegistry {
     });
   }
 
-  /** Reconcile connected sessions through the synchronous persistent-pairing owner. */
+  /** Reconcile connected sessions against the pairing owner's committed publication. */
   listCurrentConnectedSync(): NodeSession[] {
     const isPairingStateCurrent = this.options.isPairingStateCurrent;
     if (!isPairingStateCurrent) {
@@ -911,6 +900,7 @@ export class NodeRegistry {
         : null,
       lease
         ? {
+            prepare: () => this.getCurrentConnected(lease.nodeId),
             isCurrent: () => {
               if (!this.currentSessionForLease(lease)) {
                 return false;
@@ -1433,7 +1423,10 @@ export class NodeRegistry {
   }
 
   private sendEventInternal(node: NodeSession, event: string, payload: unknown): boolean {
-    if (node.client.invalidated === true) {
+    if (
+      node.client.invalidated === true ||
+      !isPublishedPairingCurrent(node, this.options.isPairingStateCurrent)
+    ) {
       return false;
     }
     const eventTransport = this.eventTransportsByConn.get(node.connId);
@@ -1459,7 +1452,10 @@ export class NodeRegistry {
     event: string,
     payloadJSON?: SerializedEventPayload | null,
   ): boolean {
-    if (node.client.invalidated === true) {
+    if (
+      node.client.invalidated === true ||
+      !isPublishedPairingCurrent(node, this.options.isPairingStateCurrent)
+    ) {
       return false;
     }
     if (

@@ -65,6 +65,13 @@ export type ModelRefRepairResolver = (params: {
   authProfileOnly?: boolean;
 }) => ModelRefRepair;
 
+export type SessionModelRetirement = {
+  agentId: string;
+  resolve: ModelRefRepairResolver;
+  defaultModelRef?: string;
+  warnings: string[];
+};
+
 export function repairModelRefAuthProfile(
   modelRef: string,
   profileIdMap: ReadonlyMap<string, string> | undefined,

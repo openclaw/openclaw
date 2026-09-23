@@ -24,6 +24,7 @@ import {
   registerRepairCustodyTests,
 } from "./update-command-lifecycle-repair.test-support.js";
 import {
+  registerPrivateHandoffBindingTests,
   validConfigSnapshot,
   expectLifecycleBoundary,
   finalizationCleanupCases,
@@ -201,6 +202,7 @@ vi.mock("./update-command-post-core.js", async (importOriginal) => ({
 }));
 
 import { readPackageVersion, resolveUpdateRoot, tryWriteCompletionCache } from "./shared.js";
+import { registerConvergenceCompletionTests } from "./update-command-convergence-completion.test-support.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import {
@@ -262,6 +264,7 @@ describe("update plugin lifecycle lease boundaries", () => {
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
   });
 
+  registerPrivateHandoffBindingTests();
   registerAbandonedRepairHistoryTests();
 
   it.each([false, true])(
@@ -600,15 +603,15 @@ describe("update plugin lifecycle lease boundaries", () => {
       });
 
       if (needsTargetRuntime) {
-        expect(mocks.events).toEqual([
-          "lease-enter:false",
-          "runtime-completion:true",
-          "lease-exit:false",
-          "target-convergence:false",
-        ]);
+        expect(mocks.events).toEqual(["target-convergence:false"]);
         expect(updatePluginsAfterCoreUpdate).not.toHaveBeenCalled();
       } else {
         expect(continuePostCoreUpdateInFreshProcess).not.toHaveBeenCalled();
+        expect(mocks.events.slice(0, 3)).toEqual([
+          "lease-enter:false",
+          "runtime-completion:true",
+          "lease-exit:false",
+        ]);
         expect(mocks.events).toContain("plugin-update:true");
       }
       expect(completePostCorePluginUpdate).not.toHaveBeenCalled();
@@ -619,6 +622,8 @@ describe("update plugin lifecycle lease boundaries", () => {
       );
     },
   );
+
+  registerConvergenceCompletionTests({ mocks, validConfigSnapshot, successfulPluginUpdate });
 
   it("keeps the plugin and error class when convergence fails", async () => {
     vi.mocked(updatePluginsAfterCoreUpdate).mockResolvedValueOnce({

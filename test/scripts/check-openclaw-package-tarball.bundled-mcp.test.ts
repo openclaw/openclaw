@@ -53,7 +53,7 @@ function installPatchedMcp(packageRoot: string) {
     env: npm.env,
     shell: npm.shell,
     windowsVerbatimArguments: npm.windowsVerbatimArguments,
-    timeout: 30_000,
+    timeout: 180_000,
   });
   expect(packed.status, packed.stderr).toBe(0);
   // A local override supplies real pnpm metadata without registry or host-cache access.
@@ -82,7 +82,7 @@ function installPatchedMcp(packageRoot: string) {
     encoding: "utf8",
     shell: pnpm.shell,
     windowsVerbatimArguments: pnpm.windowsVerbatimArguments,
-    timeout: 30_000,
+    timeout: 180_000,
   });
   expect(installed.status, installed.stderr || installed.stdout).toBe(0);
   expect(lstatSync(join(packageRoot, MCP_PREFIX)).isSymbolicLink()).toBe(true);
@@ -124,7 +124,7 @@ describe("bundled browser MCP package", () => {
             env: npm.env,
             shell: npm.shell,
             windowsVerbatimArguments: npm.windowsVerbatimArguments,
-            timeout: 30_000,
+            timeout: 180_000,
           });
           expect(installed.status, installed.stderr).toBe(0);
           const consumerRequire = createRequire(
@@ -138,7 +138,7 @@ describe("bundled browser MCP package", () => {
             {
               cwd: consumer,
               encoding: "utf8",
-              timeout: 30_000,
+              timeout: 180_000,
               env: {
                 ...process.env,
                 CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS: "1",

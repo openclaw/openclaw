@@ -21,7 +21,10 @@ import {
 import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
-import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
+import {
+  resolveScheduledToolCallerContext,
+  type ScheduledToolPolicyContext,
+} from "./scheduled-tool-policy.js";
 import { resolveSessionPlacementSandboxToolPolicy } from "./session-placement-computer.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
 import type { PreparedSessionCapabilityEntry } from "./subagents/spawn/subagent-capabilities.js";
@@ -138,6 +141,10 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
     params.senderIsOwner === true &&
     normalizeMessageChannel(messageProvider ?? params.messageChannel) === INTERNAL_MESSAGE_CHANNEL;
   const subagentSessionKey = params.sandboxSessionKey ?? params.sessionKey;
+  const callerContext = resolveScheduledToolCallerContext({
+    scheduledToolPolicy: params.scheduledToolPolicy,
+    channel: messageProvider ?? undefined,
+  });
   const requesterPolicies = resolveRequesterToolPolicies({
     config: params.config,
     sessionKey: params.sessionKey,
@@ -145,7 +152,7 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
     preparedSessionEntry: params.preparedSessionEntry,
     agentId: effective.agentId,
     spawnedBy: params.spawnedBy,
-    messageProvider,
+    messageProvider: callerContext.local ? messageProvider : callerContext.channel,
     groupId: trustedGroup.groupId,
     groupChannel: trustedGroupChannel,
     groupSpace: trustedGroupSpace,

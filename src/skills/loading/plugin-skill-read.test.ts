@@ -52,15 +52,18 @@ async function fixture(rootPath = "skills/guide") {
     skills: ["skills"],
     version: "1.0.0",
   };
-  const read = (name = "operator-guide") =>
-    withPluginCache(createPluginCache(), () => readPluginSkill(record, name));
+  const read = (name = "operator-guide", selectedPath?: string) =>
+    withPluginCache(createPluginCache(), () =>
+      readPluginSkill(record, name, { path: selectedPath }),
+    );
   const calls: URL[] = [];
-  const catalog = (alter?: (value: Record<string, unknown>) => void) =>
+  const catalog = (alter?: (value: Record<string, unknown>) => void, selectedPath?: string) =>
     fetchClawHubPluginSkill({
       packageName: "@example/plugin",
       version: "1.0.0",
       skillName: "operator-guide",
       skipAuth: true,
+      path: selectedPath,
       fetchImpl: async (input) => {
         const url = new URL(input instanceof Request ? input.url : input);
         calls.push(url);
@@ -115,27 +118,27 @@ describe("complete plugin skill bundles", () => {
     const installed = await read();
     expect(await catalog()).toEqual(installed);
     expect(installed.files.map((f) => f.path)).toEqual([...source.keys()].toSorted());
-    expect(installed.files.find((f) => f.path === "references/guide.md")?.content).toBe(
-      source.get("references/guide.md")!.toString(),
-    );
-    expect(installed.files.find((f) => f.path === "assets/picture.png")).toMatchObject({
-      status: "binary",
-      sizeBytes: 4,
-    });
-    expect(installed.files.find((f) => f.path === "empty.txt")).toMatchObject({
-      status: "ready",
-      content: "",
-    });
-    expect(installed.files.find((f) => f.path === "text.txt")).toMatchObject({
-      status: "ready",
-      content: text,
-    });
-    for (const code of controls) {
-      expect(installed.files.find((f) => f.path === `control-${code}.txt`)).toEqual({
-        path: `control-${code}.txt`,
-        sizeBytes: 1,
-        status: "binary",
-      });
+    expect(
+      installed.files.filter((file) => file.status === "ready").map((file) => file.path),
+    ).toEqual(["SKILL.md"]);
+    expect(
+      installed.files
+        .filter((file) => file.path !== "SKILL.md")
+        .every((file) => file.status === "deferred" && file.content === undefined),
+    ).toBe(true);
+    expect(calls).toHaveLength(2);
+    for (const [filePath, bytes] of source) {
+      const selected = await read("operator-guide", filePath);
+      expect(await catalog(undefined, filePath)).toEqual(selected);
+      const selectedFile = selected.files.find((file) => file.path === filePath)!;
+      const binary = filePath === "assets/picture.png" || filePath.startsWith("control-");
+      expect(selectedFile.status).toBe(binary ? "binary" : "ready");
+      expect(selectedFile.content).toBe(binary ? undefined : bytes.toString());
+      expect(
+        selected.files
+          .filter((file) => file.path !== filePath)
+          .every((file) => file.status === "deferred"),
+      ).toBe(true);
     }
     expect(
       calls
@@ -190,14 +193,12 @@ describe("complete plugin skill bundles", () => {
         }
       });
       expect(published).toEqual({ ...installed, version: "1.0.0" });
-      expect(published.files.find((file) => file.path === filePath)?.content).toBe(
-        contents.toString(),
-      );
+      expect(published.files.find((file) => file.path === filePath)?.status).toBe("deferred");
       expect(
         calls
           .filter((url) => url.pathname.endsWith("/file"))
           .map((url) => url.searchParams.get("path")),
-      ).toEqual([...source.keys()].toSorted().map((file) => `./${rootPath}/${file}`));
+      ).toEqual([`./${rootPath}/SKILL.md`]);
     },
   );
 
@@ -241,7 +242,7 @@ describe("complete plugin skill bundles", () => {
         calls
           .filter((url) => url.pathname.endsWith("/file"))
           .map((url) => url.searchParams.get("path")),
-      ).toEqual([...source.keys()].toSorted().map((file) => `${prefix}${file}`));
+      ).toEqual([`${prefix}SKILL.md`]);
     },
   );
 
@@ -262,7 +263,8 @@ describe("complete plugin skill bundles", () => {
     );
     const result = await read();
     for (const p of ["link.txt", "hardlink.txt", "outside"]) {
-      expect(result.files.find((f) => f.path === p)).toMatchObject({ status: "unavailable" });
+      const selected = await read("operator-guide", p);
+      expect(selected.files.find((f) => f.path === p)).toMatchObject({ status: "unavailable" });
     }
     expect(result.files.find((f) => f.path === "large.txt")).toMatchObject({ status: "too-large" });
     expect(JSON.stringify(result)).not.toContain("private fixture");
@@ -369,7 +371,12 @@ describe("complete plugin skill bundles", () => {
     });
     expect(calls).toHaveLength(1);
     expect(result.files).toHaveLength(5);
-    expect(result.files.every((file) => file.status === "unavailable")).toBe(true);
+    expect(result.files.find((file) => file.path === "SKILL.md")?.status).toBe("unavailable");
+    expect(
+      result.files
+        .filter((file) => file.path !== "SKILL.md")
+        .every((file) => file.status === "deferred"),
+    ).toBe(true);
   });
 
   it("keeps aggregate-size overflow visible in both inventories", async () => {
@@ -405,13 +412,18 @@ describe("complete plugin skill bundles", () => {
       rejectHardlinks: true,
     });
     expect(await catalog()).toEqual({ ...installed, version: "1.0.0" });
-    expect(installed.files.every((file) => file.status === "ready")).toBe(true);
+    expect(installed.files.find((file) => file.path === "SKILL.md")?.status).toBe("ready");
+    expect(
+      installed.files
+        .filter((file) => file.path !== "SKILL.md")
+        .every((file) => file.status === "deferred"),
+    ).toBe(true);
     expect(installed.files.reduce((bytes, file) => bytes + file.sizeBytes, 0)).toBe(
       SKILL_LIBRARY_MAX_BUNDLE_BYTES,
     );
   });
 
-  it("charges failed bounded reads before admitting another file", async () => {
+  it("bounds a growing selected file without touching unselected bodies", async () => {
     const { rootDir, skillDir } = await fixture();
     const growing = new Set<string>();
     for (let i = 0; i < 9; i++) {
@@ -446,14 +458,16 @@ describe("complete plugin skill bundles", () => {
       rootPath: "skills/guide",
       name: "operator-guide",
       rejectHardlinks: true,
+      path: "growing-0.txt",
     });
     const bytesRead = (await Promise.all(reads)).reduce((sum, bytes) => sum + bytes, 0);
-    expect(bytesRead).toBeGreaterThan(SKILL_LIBRARY_MAX_FILE_BYTES);
+    expect(bytesRead).toBeGreaterThan(0);
     // fs-safe reads at most one extra byte to detect overflow.
-    expect(bytesRead).toBeLessThanOrEqual(SKILL_LIBRARY_MAX_BUNDLE_BYTES + 1);
+    expect(bytesRead).toBeLessThanOrEqual(2);
     expect(result.files.find((file) => file.path === "z-after.txt")).toMatchObject({
-      status: "too-large",
+      status: "deferred",
     });
+    expect(result.files.find((file) => file.path === "growing-0.txt")?.status).toBe("too-large");
     expect(result.files).toHaveLength(15);
   });
 

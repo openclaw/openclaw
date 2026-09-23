@@ -137,6 +137,7 @@ export function containsUnaccountedActiveEscapedEnvRef(
   matchedIncoming: unknown,
   matchedParsed: unknown,
   matchedResolved: unknown,
+  explicitSetPaths?: readonly (readonly string[])[],
 ): boolean {
   const escapedCounts = countAuthoredEnvRefsByPath(escapedParsed, "escaped");
   const incomingActiveCounts = countAuthoredEnvRefsByPath(incoming, "unescaped");
@@ -147,20 +148,32 @@ export function containsUnaccountedActiveEscapedEnvRef(
     matchedResolved,
   );
   const matchedEscapedCounts = countAuthoredEnvRefsByPath(matchedParsed, "escaped");
-  return [...escapedCounts].some(
-    ([name, escapedPathCounts]) =>
+  return [...escapedCounts].some(([name, escapedPathCounts]) => {
+    const isExplicitActivation = (path: string) => {
+      if (!escapedPathCounts.has(path) || !explicitSetPaths?.length) {
+        return false;
+      }
+      const segments: string[] = JSON.parse(path);
+      return explicitSetPaths.some((supplied) =>
+        supplied.every((segment, index) => segments[index] === segment),
+      );
+    };
+    return (
       [...(incomingActiveCounts.get(name) ?? new Map())].some(
-        ([path, count]) => count > (matchedActiveCounts.get(name)?.get(path) ?? 0),
+        ([path, count]) =>
+          !isExplicitActivation(path) && count > (matchedActiveCounts.get(name)?.get(path) ?? 0),
       ) ||
       [...escapedPathCounts.keys()].some((path) => {
         const incomingActiveCount = incomingActiveCounts.get(name)?.get(path) ?? 0;
         return (
+          !isExplicitActivation(path) &&
           incomingActiveCount > 0 &&
           (incomingEscapedCounts.get(name)?.get(path) ?? 0) <
             (matchedEscapedCounts.get(name)?.get(path) ?? 0)
         );
-      }),
-  );
+      })
+    );
+  });
 }
 
 export function preservesAuthoredEscapedEnvRefs(incoming: unknown, parsed: unknown): boolean {

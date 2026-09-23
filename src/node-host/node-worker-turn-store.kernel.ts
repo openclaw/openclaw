@@ -72,13 +72,18 @@ function readReceipt(database: DatabaseSync, turnId: string): NodeWorkerTurnRece
     settleNodeWorkerActiveTurns(database, owner);
     turn = readRow(database, turnId)!;
   }
+  return turnReceiptFromRow(turn, owner);
+}
+
+// Turn writes and pruning leave the physical owner unchanged in this transaction.
+function turnReceiptFromRow(turn: TurnRow, owner: NodeWorkerLaunchReceipt): NodeWorkerTurnReceipt {
   const state = turn.state === "running" && owner.state === "pending" ? "pending" : turn.state;
   if (state !== "pending" && state !== "running" && !isNodeWorkerTerminalState(state)) {
     throw new Error(`invalid node worker turn state ${state}`);
   }
   return {
     ...owner,
-    ownerLaunchId: owner.launchId,
+    ownerLaunchId: turn.owner_launch_id,
     launchId: turn.turn_id,
     planHash: turn.plan_hash,
     runId: turn.run_id,
@@ -204,23 +209,26 @@ export class NodeWorkerTurnKernel {
           `node worker turn ${claim.launchId} does not match its live physical owner`,
         );
       }
-      executeSqliteQuerySync(
+      const turn = executeSqliteQueryTakeFirstSync(
         database,
-        query(database).insertInto("node_worker_turns").values({
-          turn_id: claim.launchId,
-          owner_launch_id: ownerLaunchId,
-          plan_hash: claim.planHash,
-          run_id: claim.runId,
-          state: "running",
-          result_json: null,
-          error_text: null,
-          completed_at_ms: null,
-          created_at_ms: nowMs,
-          updated_at_ms: nowMs,
-        }),
-      );
+        query(database)
+          .insertInto("node_worker_turns")
+          .values({
+            turn_id: claim.launchId,
+            owner_launch_id: ownerLaunchId,
+            plan_hash: claim.planHash,
+            run_id: claim.runId,
+            state: "running",
+            result_json: null,
+            error_text: null,
+            completed_at_ms: null,
+            created_at_ms: nowMs,
+            updated_at_ms: nowMs,
+          })
+          .returningAll(),
+      )!;
       pruneTerminal(database, nowMs, claim.launchId);
-      return { action: "start", receipt: readReceipt(database, claim.launchId)! };
+      return { action: "start", receipt: turnReceiptFromRow(turn, owner) };
     });
   }
 
@@ -255,7 +263,7 @@ export class NodeWorkerTurnKernel {
       }
       const nowMs = params.nowMs ?? Date.now();
       const completedAtMs = Math.max(nowMs, receipt.createdAtMs, receipt.updatedAtMs);
-      executeSqliteQuerySync(
+      const turn = executeSqliteQueryTakeFirstSync(
         database,
         query(database)
           .updateTable("node_worker_turns")
@@ -267,10 +275,11 @@ export class NodeWorkerTurnKernel {
             updated_at_ms: completedAtMs,
           })
           .where("turn_id", "=", receipt.launchId)
-          .where("state", "=", "running"),
-      );
+          .where("state", "=", "running")
+          .returningAll(),
+      )!;
       pruneTerminal(database, nowMs, receipt.launchId);
-      return readReceipt(database, receipt.launchId);
+      return turnReceiptFromRow(turn, receipt);
     });
   }
 }

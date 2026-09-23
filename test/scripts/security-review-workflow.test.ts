@@ -10,6 +10,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 type WorkflowStep = {
   "continue-on-error"?: boolean;
+  "timeout-minutes"?: number;
   env?: Record<string, string>;
   if?: string;
   id?: string;
@@ -79,7 +80,11 @@ describe("security review workflow trust boundaries", () => {
     });
     for (const [name, job] of Object.entries(workflow.jobs)) {
       const checkouts = job.steps.filter((step) => step.uses?.startsWith("actions/checkout@"));
-      expect(checkouts).toHaveLength(1);
+      expect(checkouts).toHaveLength(2);
+      expect(checkouts[1]?.with).toEqual(checkouts[0]?.with);
+      expect(checkouts[1]?.uses).toBe(checkouts[0]?.uses);
+      expect(checkouts[1]?.["timeout-minutes"]).toBe(5);
+      expect(checkouts[0]?.["timeout-minutes"]).toBe(5);
       expect(checkouts[0]?.with).toMatchObject({
         "persist-credentials": false,
       });
@@ -88,10 +93,33 @@ describe("security review workflow trust boundaries", () => {
       }
       const runtime = job.steps.filter((step) => step.uses === `./${runtimeActionPath}`);
       expect(runtime).toHaveLength(name === "review" ? 1 : 0);
+      if (runtime.length > 0) {
+        expect(runtime[0]?.["timeout-minutes"]).toBe(3);
+      }
+      const bootstrap = job.steps.filter((step) => step.uses?.startsWith("actions/setup-node@"));
+      expect(bootstrap).toEqual(
+        name === "resolve"
+          ? [
+              {
+                name: "Setup supported Node runtime",
+                "timeout-minutes": 3,
+                uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                with: { "node-version": "24.19.0", "package-manager-cache": false },
+              },
+            ]
+          : [],
+      );
+      if (name === "resolve") {
+        const bootstrapIndex = job.steps.findIndex((step) => step === bootstrap[0]);
+        expect(bootstrapIndex).toBeGreaterThan(
+          job.steps.findIndex((step) => step === checkouts[0]),
+        );
+        expect(bootstrapIndex).toBeLessThan(job.steps.findIndex((step) => step.run));
+      }
       for (const step of job.steps) {
-        if (step.uses && step.uses !== `./${runtimeActionPath}`) {
+        if (step.uses && step.uses !== `./${runtimeActionPath}` && step !== bootstrap[0]) {
           expect(step.uses).toMatch(
-            /^actions\/(?:checkout|create-github-app-token)@[a-f0-9]{40}$/u,
+            /^actions\/(?:checkout|create-github-app-token|github-script)@[a-f0-9]{40}$/u,
           );
         }
         if (step.run) {
@@ -105,6 +133,118 @@ describe("security review workflow trust boundaries", () => {
     expect(existsSync(".github/workflows/security-sensitive-guard.yml")).toBe(false);
     expect(existsSync(".github/workflows/dependency-guard.yml")).toBe(false);
   });
+
+  it.each([
+    { failures: 0, attempts: 1, jobFailed: false, cancelled: false },
+    { failures: 1, attempts: 2, jobFailed: false, cancelled: false },
+    { failures: 2, attempts: 2, jobFailed: true, cancelled: false },
+    { failures: 1, attempts: 1, jobFailed: false, cancelled: true },
+  ])(
+    "bounds checkout recovery ($failures failures, cancelled=$cancelled)",
+    ({ failures, attempts, jobFailed, cancelled }) => {
+      for (const job of Object.values(readWorkflow("security-review").jobs)) {
+        const steps: Record<string, { outcome: string }> = {};
+        let failed = false;
+        let executed = 0;
+        for (const step of job.steps.filter((candidate) =>
+          candidate.uses?.startsWith("actions/checkout@"),
+        )) {
+          const allowed: boolean = step.if
+            ? Boolean(
+                runInNewContext(step.if.replace(/^\$\{\{|\}\}$/gu, ""), {
+                  steps,
+                  cancelled: () => cancelled,
+                }),
+              )
+            : !failed;
+          const outcome: "skipped" | "failure" | "success" = !allowed
+            ? "skipped"
+            : ++executed <= failures
+              ? "failure"
+              : "success";
+          if (step.id) {
+            steps[step.id] = { outcome };
+          }
+          failed ||= outcome === "failure" && step["continue-on-error"] !== true;
+        }
+        expect(executed).toBe(attempts);
+        expect(failed).toBe(jobFailed);
+      }
+    },
+  );
+
+  it.each([
+    { state: "open", sameHead: true, publish: true },
+    { state: "closed", sameHead: true, publish: false },
+    { state: "open", sameHead: false, publish: false },
+  ])(
+    "reports bootstrap failure only for the current open head ($state, sameHead=$sameHead)",
+    async ({ state, sameHead, publish }) => {
+      const reporter = readWorkflow("security-review").jobs.review!.steps.find((step) =>
+        step.uses?.startsWith("actions/github-script@"),
+      );
+      expect(reporter).toBeDefined();
+      const sha = "a".repeat(40);
+      const writes: unknown[] = [];
+      await runInNewContext(`(async () => { ${String(reporter!.with!.script)} })()`, {
+        process: {
+          env: { OPENCLAW_SECURITY_REVIEW_PR_NUMBER: "42", OPENCLAW_SECURITY_REVIEW_HEAD_SHA: sha },
+        },
+        context: {
+          repo: { owner: "example", repo: "project" },
+          runId: 123,
+          serverUrl: "https://github.com",
+        },
+        core: { info: () => {} },
+        github: {
+          rest: {
+            pulls: {
+              get: async () => ({
+                data: { state, head: { sha: sameHead ? sha : "b".repeat(40) } },
+              }),
+            },
+            repos: {
+              createCommitStatus: async (status: unknown) => {
+                writes.push(status);
+              },
+            },
+          },
+        },
+      });
+      expect(writes).toEqual(
+        publish
+          ? [
+              {
+                owner: "example",
+                repo: "project",
+                sha,
+                context: "openclaw/ci-gate",
+                state: "failure",
+                description: "PR #42: Security review setup failed; see workflow details",
+                target_url: "https://github.com/example/project/actions/runs/123",
+              },
+            ]
+          : [],
+      );
+      for (const [failed, runtime, cancelled, allowed] of [
+        [true, "failure", false, true],
+        [true, "skipped", false, true],
+        [false, "success", false, false],
+        [true, "success", false, false],
+        [true, "skipped", true, false],
+      ] as const) {
+        expect(
+          Boolean(
+            runInNewContext(reporter!.if!.replace(/^\$\{\{|\}\}$/gu, ""), {
+              steps: { runtime: { outcome: runtime } },
+              failure: () => failed,
+              cancelled: () => cancelled,
+            }),
+          ),
+        ).toBe(allowed);
+      }
+    },
+  );
 
   it("uses automatic PR, command, revocation, and CI completion events only", () => {
     const workflow = readWorkflow("security-review");
@@ -199,7 +339,21 @@ describe("security review workflow trust boundaries", () => {
     expect(commands[1]?.if).toBe(
       "github.event_name == 'pull_request_target' && github.event.action != 'closed' && matrix.pr == github.event.pull_request.number && steps.detect.outputs.autoscrub == 'true'",
     );
-    expect(commands[2]?.if).toBe("always()");
+    for (const [runtime, cancelled, allowed] of [
+      ["success", false, true],
+      ["failure", false, false],
+      ["skipped", false, false],
+      ["success", true, false],
+    ] as const) {
+      expect(
+        Boolean(
+          runInNewContext(commands[2]!.if!.replace(/^\$\{\{|\}\}$/gu, ""), {
+            steps: { runtime: { outcome: runtime } },
+            cancelled: () => cancelled,
+          }),
+        ),
+      ).toBe(allowed);
+    }
     const tokenSteps = steps.filter((step) =>
       step.uses?.startsWith("actions/create-github-app-token@"),
     );

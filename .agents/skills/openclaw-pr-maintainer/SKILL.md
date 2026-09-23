@@ -17,8 +17,9 @@ A pasted ref is context, not permission to publish or expand the task.
 - **Fix only:** investigate, repair locally, and validate. Publishing still
   requires ship/land or equivalent scoped authority.
 - **Land/ship or autonomous repair:** finish the authorized scope through current
-  source proof, review, native auto-merge handoff, and remote verification.
-  GitHub waits for required CI; an accepted pending request ends active polling.
+  source proof, review, native merge submission, and verified remote merge.
+  Keep checking pending requests and repair CI failures or conflicts under the
+  same authority; accepted auto-merge is pending work, not task completion.
   Preserve contributor credit and unrelated work. Routine steps need no repeated
   permission; security, schema, product, release, and other root gates remain.
 - **Queue/discovery:** read [triage](references/triage.md). Batch live reads and
@@ -112,3 +113,16 @@ Verify the final merge/closure state and source rather than trusting a local
 summary. Report the problem, owner-level change, important proof and limitations,
 credit, and linked final state in concise prose. Record worthwhile follow-ups;
 do not manufacture another task after a bounded request is complete.
+
+## Finalize and clean up
+
+Once the requested outcome and required verification are complete, remove the
+task's disposable proof and scratch. This includes test logs, receipts, local
+proof archives, and `.crabbox` outputs. Do not retain, archive, export, or hand off
+these files merely to remove the completed task's worktree. Follow
+[native closeout](references/landing.md#recovery-and-closeout).
+
+Required pre-merge proof stays mandatory. Preserve requested deliverables,
+explicit retention requests, unfinished source, recovery state needed by unfinished
+operations, active owners, credentials, agent state, and shared dependencies.
+Optional follow-ups do not keep a completed task open.

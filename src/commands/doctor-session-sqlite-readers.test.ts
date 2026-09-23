@@ -2,10 +2,116 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { prepareTranscriptPayload } from "../config/sessions/transcript-payload.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   countTranscriptEventsForPath,
   createTranscriptEventReader,
-} from "./doctor-session-sqlite-readers.js";
+  readOnlySqliteDbStats,
+} from "../infra/session-sqlite-migration-readers.js";
+
+describe("read-only SQLite transcript statistics", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it.each([false, true])(
+    "reports logical bytes without decoding compressed bodies (corrupt frame: %s)",
+    (corruptFrame) => {
+      const sqlitePath = path.join(tempDirs.make("openclaw-reader-stats-"), "agent.sqlite");
+      const database = openNodeSqliteDatabase(sqlitePath);
+      const compressedJson = JSON.stringify({ type: "custom", data: "雪🦞é".repeat(1024) });
+      const identityJson = JSON.stringify({ type: "custom", data: "λ🦞" });
+      try {
+        database.exec(`CREATE TABLE transcript_events (
+          session_id TEXT, seq INTEGER, event_json TEXT, event_zstd BLOB,
+          event_utf8_bytes INTEGER, navigation_json TEXT
+        ) STRICT`);
+        const compressed = prepareTranscriptPayload(database, compressedJson);
+        expect(compressed.event_zstd).not.toBeNull();
+        const identity = prepareTranscriptPayload(database, identityJson);
+        expect(identity.event_json).toBe(identityJson);
+        const insert = database.prepare("INSERT INTO transcript_events VALUES (?, ?, ?, ?, ?, ?)");
+        for (const [sessionId, seq, payload] of [
+          ["compressed", 0, compressed],
+          ["compressed", 1, identity],
+          ["identity", 0, identity],
+        ] as const) {
+          insert.run(
+            sessionId,
+            seq,
+            payload.event_json,
+            payload.event_zstd,
+            payload.event_utf8_bytes,
+            payload.navigation_json,
+          );
+        }
+        if (corruptFrame) {
+          database
+            .prepare(
+              "UPDATE transcript_events SET event_zstd = x'010203' WHERE event_zstd IS NOT NULL",
+            )
+            .run();
+        }
+      } finally {
+        database.close();
+      }
+
+      const compressedBytes = Buffer.byteLength(compressedJson);
+      const identityBytes = Buffer.byteLength(identityJson);
+      const result = readOnlySqliteDbStats({ agentId: "main", storePath: sqlitePath, sqlitePath });
+      expect(result).toMatchObject({
+        ok: true,
+        stats: {
+          integrityCheck: "ok",
+          totalTranscriptRowBytes: compressedBytes + 2 * identityBytes,
+          largestSessions: [
+            { sessionId: "compressed", events: 2, rowBytes: compressedBytes + identityBytes },
+            { sessionId: "identity", events: 1, rowBytes: identityBytes },
+          ],
+        },
+      });
+    },
+  );
+
+  describe.each(["legacy", "encoded"])("%s identity storage", (schema) => {
+    it.each(["UTF-8", "UTF-16le", "UTF-16be"])(
+      "reports native %s bytes when recorded UTF-8 metadata is absent",
+      (encoding) => {
+        const sqlitePath = path.join(tempDirs.make("openclaw-reader-stats-"), "agent.sqlite");
+        const database = openNodeSqliteDatabase(sqlitePath);
+        const eventJson = JSON.stringify({ type: "custom", data: "雪🦞é" });
+        try {
+          database.exec(`
+            PRAGMA encoding = '${encoding}';
+            CREATE TABLE transcript_events (session_id TEXT, event_json TEXT
+              ${schema === "encoded" ? ", event_zstd BLOB, event_utf8_bytes INTEGER" : ""}
+            ) STRICT;
+          `);
+          database
+            .prepare("INSERT INTO transcript_events (session_id, event_json) VALUES (?, ?)")
+            .run("unicode", eventJson);
+        } finally {
+          database.close();
+        }
+
+        const nativeBytes = Buffer.byteLength(eventJson, encoding === "UTF-8" ? "utf8" : "utf16le");
+        const result = readOnlySqliteDbStats({
+          agentId: "main",
+          storePath: sqlitePath,
+          sqlitePath,
+        });
+        expect(result).toMatchObject({
+          ok: true,
+          stats: {
+            integrityCheck: "ok",
+            totalTranscriptRowBytes: nativeBytes,
+            largestSessions: [{ sessionId: "unicode", events: 1, rowBytes: nativeBytes }],
+          },
+        });
+      },
+    );
+  });
+});
 
 describe("legacy transcript row classification", () => {
   let directory: string;

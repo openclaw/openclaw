@@ -1,5 +1,11 @@
 // Requester continuation and child-batch ownership across Gateway replacement.
 import { describe, expect, it, vi } from "vitest";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  makeRestartRecoveryRun as makeRunRecord,
+  useSubagentRestartRecoveryFixture,
+} from "./subagent-restart-recovery.test-support.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import {
   appendTranscriptMessage,
@@ -23,14 +29,11 @@ import {
   markRestartAbortedMainSessions,
   markStartupOrphanedMainSessionsForRecovery,
 } from "../../main-session-recovery/main-session-restart-recovery-marking.js";
-import type { SubagentRegistryDeps } from "./subagent-registry-deps.js";
+import type { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { settleRequesterTurnAfterSessionSpawns } from "./subagent-registry-requester-yield.js";
 import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
-import {
-  createSubagentRegistryTestDeps,
-  writeSubagentSessionEntry,
-} from "./subagent-registry.persistence.test-support.js";
+import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   addSubagentRunForTests,
@@ -41,10 +44,6 @@ import {
   testing,
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import {
-  makeRestartRecoveryRun as makeRunRecord,
-  useSubagentRestartRecoveryFixture,
-} from "./subagent-restart-recovery.test-support.js";
 
 vi.mock("../../../gateway/session-utils.fs.js", () => ({
   readSessionMessagesAsync: vi.fn(async () => []),
@@ -301,20 +300,20 @@ describe("subagent parent recovery — durable yielded continuation", () => {
       if (scenario === "settled batch") {
         persistSubagentRunsToDiskOrThrow(subagentRuns, [child.runId]);
         // Settle through the lifecycle's exact batch callback, not by deleting a flag.
-        const deliverBatch = vi.fn<
-          SubagentRegistryDeps["maybeWakeRequesterAfterAllChildrenSettled"]
-        >(async (params) => {
-          params.completeBatch(
-            [params.settledEntry],
-            params.settledEntry.requesterSettleWake?.rearmGeneration,
-            { delivered: true, requesterVisibleFinalDelivered: true, path: "direct" },
-          );
-          return true;
-        });
-        testing.setDepsForTest({
-          ...createSubagentRegistryTestDeps(),
-          maybeWakeRequesterAfterAllChildrenSettled: deliverBatch,
-        });
+        const deliverBatch = vi.fn<typeof maybeWakeRequesterAfterAllChildrenSettled>(
+          async (params) => {
+            params.completeBatch(
+              [params.settledEntry],
+              params.settledEntry.requesterSettleWake?.rearmGeneration,
+              { delivered: true, requesterVisibleFinalDelivered: true, path: "direct" },
+            );
+            return true;
+          },
+        );
+        vi.spyOn(
+          await import("../announce/subagent-announce.requester-settle-wake.js"),
+          "maybeWakeRequesterAfterAllChildrenSettled",
+        ).mockImplementation(deliverBatch);
         // Activation alone keeps wake admission closed until the registry inventory is hydrated.
         initSubagentRegistry();
         await testing.sweepOnceForTests();
@@ -436,15 +435,13 @@ describe("subagent parent recovery — durable yielded continuation", () => {
       ).toBe(true);
       resetSubagentRegistryForTests({ persist: false });
       rotateAgentEventLifecycleGeneration();
-      const wakeRequester = vi.fn<
-        SubagentRegistryDeps["maybeWakeRequesterAfterAllChildrenSettled"]
-      >(async () => false);
-      testing.setDepsForTest({
-        ...createSubagentRegistryTestDeps(),
-        runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
-        maybeWakeRequesterAfterAllChildrenSettled: wakeRequester,
-        onAgentEvent: vi.fn(() => () => undefined),
-      });
+      const wakeRequester = vi.fn<typeof maybeWakeRequesterAfterAllChildrenSettled>(
+        async () => false,
+      );
+      vi.spyOn(
+        await import("../announce/subagent-announce.requester-settle-wake.js"),
+        "maybeWakeRequesterAfterAllChildrenSettled",
+      ).mockImplementation(wakeRequester);
       initSubagentRegistry();
       activateGatewayRuntime();
       await testing.sweepOnceForTests();

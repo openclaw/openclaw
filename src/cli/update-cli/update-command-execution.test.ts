@@ -585,75 +585,117 @@ describe("mutable update execution", () => {
 
   registerExecutionFailureTests();
 
-  it("keeps Git selection online and reserves service rewrites for finalization", async () => {
-    await withTestDir({ prefix: "git-selection-online-" }, async (root) => {
-      const events: string[] = [];
-      mocks.maybeStopService.mockImplementation(async ({ phase }) => {
-        if (phase === "prepare") {
-          events.push("stop");
-        }
-        const state = inspectOrStopService(phase);
-        if (state.serviceUpdateVerdict?.kind === "owned") {
-          state.serviceUpdateVerdict = { ...state.serviceUpdateVerdict, root };
-        }
-        return state;
-      });
-      // Readiness timing/failure semantics use the real probe in execution-validation.test.ts.
-      // This fixture checks execution ordering around an already verified runtime.
-      vi.spyOn(readiness, "verifyPreviousGatewayForUpdate").mockImplementation(
-        async ({ assertCurrent }) => {
-          assertCurrent?.();
-          expect(mocks.serviceStopped).toBe(false);
-          events.push("verified");
-          return true;
-        },
-      );
-      mocks.runGitUpdate.mockImplementation(
-        async (
-          params: Parameters<typeof import("./update-command-git.js").updateGitInstall>[0],
-        ) => {
-          if (!params.inspectGitTarget || !params.beforeGitMutation) {
-            throw new Error("Expected both real Git admission callbacks");
-          }
-          const target = { schemaVersions: { state: 15, agent: 19 } };
-          await params.inspectGitTarget(target);
-          events.push("git");
-          expect(mocks.serviceStopped).toBe(false);
-          expect(await params.beforeGitMutation(target)).toEqual({
-            allowGatewayServiceRepair: false,
-            allowGatewayActivation: false,
-          });
-          return { ...successfulUpdate, mode: "git" };
-        },
-      );
-
-      const coordinator = path.join(root, "coordinator");
-      await fs.mkdir(coordinator);
-      vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(coordinator);
-      const env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
-      const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
-      const params = { ...executionParams("git"), root };
-      params.opts.run = { runId, env };
-      const execution = await withUpdateCommandExecutor(runId, async (executor) => {
-        mocks.prepareMutableUpdate.mockImplementation(async (_env, _timeout, admitExecutor) => {
-          events.push("mutable-prepare");
-          admitExecutor(await executor.enter(root));
+  it.each([false, true])(
+    "keeps Git activation fenced with post-stop schema drift=%s",
+    async (schemaDrift) => {
+      await withTestDir({ prefix: "git-selection-online-" }, async (root) => {
+        const events: string[] = [];
+        const target = { schemaVersions: { state: 14, agent: 18 } };
+        const beginMutation = vi.fn(() => {
+          expect(mocks.serviceStopped).toBe(true);
+          events.push("mutation");
         });
-        return executeMutableUpdate(params);
-      });
+        const onActivation = vi.fn();
+        mocks.checkTargetSchemas.mockImplementation(async (versions) => {
+          if (mocks.serviceStopped) {
+            expect(versions).toEqual(target.schemaVersions);
+            events.push("post-stop-schema");
+          }
+          return {
+            incompatible:
+              schemaDrift && mocks.serviceStopped
+                ? [
+                    {
+                      kind: "state",
+                      path: "/fixture/default/state.sqlite",
+                      foundVersion: 17,
+                      supportedVersion: 14,
+                    },
+                  ]
+                : [],
+            indeterminate: [],
+          };
+        });
+        mocks.maybeStopService.mockImplementation(async ({ phase }) => {
+          if (phase === "prepare") {
+            events.push("stop");
+          }
+          const state = inspectOrStopService(phase);
+          if (state.serviceUpdateVerdict?.kind === "owned") {
+            state.serviceUpdateVerdict = { ...state.serviceUpdateVerdict, root };
+          }
+          state.windowsTaskAutoStartRecovery = {
+            suspended: Promise.resolve(true),
+            beginMutation,
+            restore: vi.fn(async () => {}),
+            handoff: vi.fn(),
+            complete: vi.fn(async () => {}),
+            interrupted: () => false,
+          };
+          return state;
+        });
+        // Readiness timing/failure semantics use the real probe in execution-validation.test.ts.
+        // This fixture checks execution ordering around an already verified runtime.
+        vi.spyOn(readiness, "verifyPreviousGatewayForUpdate").mockImplementation(
+          async ({ assertCurrent }) => {
+            assertCurrent?.();
+            expect(mocks.serviceStopped).toBe(false);
+            events.push("verified");
+            return true;
+          },
+        );
+        mocks.runGitUpdate.mockImplementation(
+          async (
+            params: Parameters<typeof import("./update-command-git.js").updateGitInstall>[0],
+          ) => {
+            if (!params.inspectGitTarget || !params.beforeGitMutation) {
+              throw new Error("Expected both real Git admission callbacks");
+            }
+            await params.inspectGitTarget(target);
+            events.push("git");
+            expect(mocks.serviceStopped).toBe(false);
+            await params.beforeGitMutation(target);
+            return { ...successfulUpdate, mode: "git" };
+          },
+        );
 
-      expect(events).toEqual([
-        "mutable-prepare",
-        "git",
-        "mutable-prepare",
-        "verified",
-        "mutable-prepare",
-        "stop",
-      ]);
-      expect(mocks.serviceStopped).toBe(true);
-      expect(execution?.result.status, JSON.stringify(execution?.failure)).toBe("ok");
-      expect(execution?.result.mode).toBe("git");
-      expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
-    });
-  });
+        const coordinator = path.join(root, "coordinator");
+        await fs.mkdir(coordinator);
+        vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(coordinator);
+        const env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
+        const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
+        const params = { ...executionParams("git"), root, onActivation };
+        params.opts.run = { runId, env };
+        const execution = await withUpdateCommandExecutor(runId, async (executor) => {
+          mocks.prepareMutableUpdate.mockImplementation(async (_env, _timeout, admitExecutor) => {
+            events.push("mutable-prepare");
+            admitExecutor(await executor.enter(root));
+          });
+          return executeMutableUpdate(params);
+        });
+
+        expect(events).toEqual([
+          "mutable-prepare",
+          "git",
+          "verified",
+          "mutable-prepare",
+          "stop",
+          "post-stop-schema",
+          ...(schemaDrift ? [] : ["mutation"]),
+        ]);
+        expect(mocks.serviceStopped).toBe(true);
+        expect(beginMutation).toHaveBeenCalledTimes(schemaDrift ? 0 : 1);
+        expect(onActivation).toHaveBeenCalledTimes(schemaDrift ? 0 : 1);
+        expect(execution?.mutationStarted).toBe(!schemaDrift);
+        expect(execution?.result.status, JSON.stringify(execution?.failure)).toBe(
+          schemaDrift ? "error" : "ok",
+        );
+        if (schemaDrift) {
+          expect(execution?.result.reason).toBe("database-schema-preflight");
+        }
+        expect(execution?.result.mode).toBe("git");
+        expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
+      });
+    },
+  );
 });

@@ -72,10 +72,12 @@ export function pruneDeliveryQueueTombstones(
   db: DatabaseSync,
   now: number,
   prefix?: { queueName: string; idPrefix: string },
-): void {
+): boolean {
   // Let producer-scoped cleanup use the existing queue/status indexes.
-  // sqlite-allow-raw: JSON1 and a window rank enforce authored policies in place.
-  db.prepare(`WITH policies AS (
+  const result =
+    // sqlite-allow-raw: JSON1 and a window rank enforce authored policies in place.
+    db
+      .prepare(`WITH policies AS (
       ${BOUNDED_DELIVERY_RECEIPTS_SQL}
       ${prefix ? "AND queue_name = @queueName AND id_prefix = @idPrefix" : ""}
     ), ranked AS (
@@ -84,10 +86,10 @@ export function pruneDeliveryQueueTombstones(
     ) DELETE FROM delivery_queue_entries WHERE rowid IN (
       SELECT receipt_rowid FROM ranked
       WHERE enqueued_at < @now - max_age_ms OR retention_rank > max_entries
-    )`).run(prefix ? { now, ...prefix } : { now });
-  if (!prefix) {
-    pruneOrdinaryDeliveryReceipts(db, now);
-  }
+    )`)
+      .run(prefix ? { now, ...prefix } : { now });
+  const ordinaryPruned = prefix ? false : pruneOrdinaryDeliveryReceipts(db, now);
+  return result.changes > 0 || ordinaryPruned;
 }
 
 /** Cheap maintenance cleanup: age predicates only, with no window sort. */
@@ -135,8 +137,8 @@ export function terminalizeBoundDeliveryQueueEntry(
   return executeSqliteQuerySync(db, query).numAffectedRows === 1n;
 }
 
-function pruneOrdinaryDeliveryReceipts(db: DatabaseSync, now: number): void {
-  executeSqliteQuerySync(
+function pruneOrdinaryDeliveryReceipts(db: DatabaseSync, now: number): boolean {
+  const result = executeSqliteQuerySync(
     db,
     getNodeSqliteKysely<DeliveryQueueDatabase>(db)
       .deleteFrom("delivery_queue_entries")
@@ -149,6 +151,7 @@ function pruneOrdinaryDeliveryReceipts(db: DatabaseSync, now: number): void {
         ]),
       ),
   );
+  return (result.numAffectedRows ?? 0n) > 0n;
 }
 
 type BoundDeliveryQueueEntry = {

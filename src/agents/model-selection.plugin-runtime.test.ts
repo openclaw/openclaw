@@ -172,6 +172,7 @@ describe("model-selection plugin runtime normalization", () => {
       await import("../auto-reply/reply/directive-handling.defaults.js");
     const { defaultProvider, defaultModel } = resolveDefaultModel({ cfg });
     const state = await createModelSelectionStateForTest({
+      agentId: "main",
       cfg,
       agentCfg: cfg.agents.defaults,
       defaultProvider,
@@ -207,6 +208,7 @@ describe("model-selection plugin runtime normalization", () => {
     const { defaultProvider, defaultModel } = resolveDefaultModel({ cfg });
     expect(defaultModel).toBe("middle");
     const selection = await createModelSelectionStateForTest({
+      agentId: "main",
       cfg,
       agentCfg: cfg.agents.defaults,
       defaultProvider,
@@ -242,6 +244,7 @@ describe("model-selection plugin runtime normalization", () => {
     const sessionStore = { [sessionKey]: sessionEntry };
 
     const state = await createModelSelectionStateForTest({
+      agentId: "main",
       cfg,
       agentCfg: cfg.agents.defaults,
       sessionEntry,
@@ -296,6 +299,7 @@ describe("model-selection plugin runtime normalization", () => {
       const sessionEntry =
         source === "session" ? storedEntry : { sessionId: sessionKey, updatedAt: 1 };
       const state = await createModelSelectionStateForTest({
+        agentId: "main",
         cfg,
         agentCfg: cfg.agents.defaults,
         sessionEntry,
@@ -372,6 +376,7 @@ describe("model-selection plugin runtime normalization", () => {
     };
 
     const state = await createModelSelectionStateForTest({
+      agentId: "main",
       cfg,
       agentCfg: cfg.agents.defaults,
       defaultProvider: "custom-provider",
@@ -419,6 +424,7 @@ describe("model-selection plugin runtime normalization", () => {
 
     const select = (cfg: ReturnType<typeof createConfig>, model: string) =>
       createModelSelectionStateForTest({
+        agentId: "main",
         cfg,
         agentCfg: cfg.agents.defaults,
         defaultProvider: "custom-provider",
@@ -483,6 +489,7 @@ describe("model-selection plugin runtime normalization", () => {
     };
 
     const state = await createModelSelectionStateForTest({
+      agentId: "main",
       cfg,
       agentCfg: cfg.agents.defaults,
       sessionEntry,

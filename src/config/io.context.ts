@@ -98,6 +98,7 @@ export type ConfigIoContext = {
     candidate: OpenClawConfig,
     includeFileHashes?: Record<string, string>,
     includeFileTargets?: Record<string, string>,
+    baseEnv?: NodeJS.ProcessEnv,
   ) => OpenClawConfig;
   prepareRecoveryBackupCandidateAsync: (
     candidate: ConfigRecoveryCandidate,
@@ -261,8 +262,9 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
     candidate: OpenClawConfig,
     includeFileHashes?: Record<string, string>,
     includeFileTargets?: Record<string, string>,
+    baseEnv: NodeJS.ProcessEnv = deps.env,
   ): OpenClawConfig {
-    const env = { ...deps.env } as NodeJS.ProcessEnv;
+    const env = cloneEnvWithPlatformSemantics(baseEnv);
     const resolvedIncludes = resolveConfigIncludesForRead(
       candidate,
       configPath,

@@ -233,15 +233,17 @@ export class ShellChromeOwner {
 
   readonly closeNavDrawer = (options: { restoreFocus?: boolean } = {}): void => {
     const host = this.host;
+    // Desktop navigation also calls this cleanup; a closed drawer never owned focus.
+    const restoreFocus = host.navDrawerOpen && options.restoreFocus;
     if (host.navDrawerOpen) {
       this.dismissSidebarTransientMenus();
       this.navDrawerSwipe.closed();
     }
     restoreToastFromNavDrawer(host);
-    const trigger = options.restoreFocus ? host.navDrawerTrigger : null;
+    const trigger = restoreFocus ? host.navDrawerTrigger : null;
     host.navDrawerOpen = false;
     host.navDrawerTrigger = null;
-    if (options.restoreFocus) {
+    if (restoreFocus) {
       requestAnimationFrame(() => this.restoreFocusTo(trigger));
     }
   };
@@ -610,9 +612,6 @@ export class ShellChromeOwner {
   readonly handleShellNavDrawerToggle = (event: Event): void => {
     this.toggleNavigationSurface(shellNavDrawerTriggerFromEvent(event));
   };
-
-  readonly openApprovals = (): void =>
-    void window.dispatchEvent(new CustomEvent(SHELL_APPROVALS_OPEN_EVENT));
 
   private readonly handleApprovalsOpen = (event: Event): void => {
     const host = this.host;

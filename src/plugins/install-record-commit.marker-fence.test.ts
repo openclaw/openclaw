@@ -98,9 +98,22 @@ describe("plugin install record marker fencing", () => {
     });
   });
 
-  it.each(["retirement", "activation"] as const)(
-    "carries live lease authority through awaited %s marker preparation",
-    async (transition) => {
+  it.each([
+    ...(["retirement", "activation"] as const).flatMap((transition) =>
+      (["lease", "invoker"] as const).map((owner) => ({
+        transition,
+        owner,
+        boundary: "preparation",
+      })),
+    ),
+    ...(["removal", "directory cleanup"] as const).map((boundary) => ({
+      transition: "activation",
+      owner: "invoker",
+      boundary,
+    })),
+  ])(
+    "carries live $owner authority through awaited $transition marker $boundary",
+    async ({ transition, owner, boundary }) => {
       const stateDir = retentionTempDirs.make("openclaw-record-marker-fence-");
       const fixture = createRetainedMarkerFixture(stateDir);
       if (transition === "activation") {
@@ -112,6 +125,10 @@ describe("plugin install record marker fencing", () => {
       }
       const before =
         transition === "activation" ? fs.readFileSync(fixture.markerPath, "utf8") : undefined;
+      const siblingMarker = path.join(path.dirname(fixture.markerPath), "unrelated.json");
+      if (boundary === "directory cleanup") {
+        fs.writeFileSync(siblingMarker, "unrelated marker");
+      }
       const records = { "retained-fence": fixture.record };
       const failure = new Error("update authority revoked during marker preparation");
       let current = true;
@@ -119,7 +136,11 @@ describe("plugin install record marker fencing", () => {
       const readFile = fs.promises.readFile.bind(fs.promises);
       const statSpy = vi.spyOn(fs.promises, "stat").mockImplementation(async (target, options) => {
         const result = await stat(target, options);
-        if (transition === "retirement" && String(target) === fixture.installPath) {
+        if (
+          boundary === "preparation" &&
+          transition === "retirement" &&
+          String(target) === fixture.installPath
+        ) {
           current = false;
         }
         return result;
@@ -128,16 +149,43 @@ describe("plugin install record marker fencing", () => {
         .spyOn(fs.promises, "readFile")
         .mockImplementation(async (target, options) => {
           const result = await readFile(target, options);
-          if (transition === "activation" && target === fixture.markerPath) {
+          if (
+            boundary === "preparation" &&
+            transition === "activation" &&
+            target === fixture.markerPath
+          ) {
             current = false;
           }
           return result;
         });
-      mocks.lease.assertOwned.mockImplementation(() => {
+      const rm = fs.promises.rm.bind(fs.promises);
+      const rmSpy = vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
+        await rm(target, options);
+        if (boundary === "removal" && String(target) === fixture.markerPath) {
+          current = false;
+        }
+      });
+      const rmdir = fs.promises.rmdir.bind(fs.promises);
+      const rmdirSpy = vi.spyOn(fs.promises, "rmdir").mockImplementation(async (target) => {
+        try {
+          await rmdir(target);
+        } finally {
+          if (
+            boundary === "directory cleanup" &&
+            String(target) === path.dirname(fixture.markerPath)
+          ) {
+            current = false;
+          }
+        }
+      });
+      const assertInvoker = () => {
         if (!current) {
           throw failure;
         }
-      });
+      };
+      if (owner === "lease") {
+        mocks.lease.assertOwned.mockImplementation(assertInvoker);
+      }
       try {
         await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
           await expect(
@@ -145,21 +193,31 @@ describe("plugin install record marker fencing", () => {
               previousInstallRecords: transition === "retirement" ? records : {},
               nextInstallRecords: transition === "activation" ? records : {},
               nextConfig: {},
+              ...(owner === "invoker"
+                ? { writeOptions: { assertConfigPathForWrite: assertInvoker } }
+                : {}),
             }),
           ).rejects.toBe(failure);
         });
         expect(current).toBe(false);
         expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-        expect(mocks.restorePersistedInstalledPluginIndexIfCurrent).not.toHaveBeenCalled();
+        expect(mocks.restorePersistedInstalledPluginIndexIfCurrent).toHaveBeenCalledTimes(
+          owner === "invoker" ? 1 : 0,
+        );
         if (before !== undefined) {
           expect(fs.readFileSync(fixture.markerPath, "utf8")).toBe(before);
         } else {
           expect(fs.existsSync(path.dirname(fixture.markerPath))).toBe(false);
         }
         expect(fs.existsSync(fixture.installPath)).toBe(true);
+        if (boundary === "directory cleanup") {
+          expect(fs.readFileSync(siblingMarker, "utf8")).toBe("unrelated marker");
+        }
       } finally {
         statSpy.mockRestore();
         readSpy.mockRestore();
+        rmSpy.mockRestore();
+        rmdirSpy.mockRestore();
         mocks.lease.assertOwned.mockReset();
       }
     },

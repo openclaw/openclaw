@@ -3,9 +3,13 @@
 // baseline for working-tree stats, and whether new pushed work is provable
 // (the Create PR gate). Pure local-git reasoning; GitHub facts come in as
 // MergedPullHead records.
+import fs from "node:fs";
+import path from "node:path";
 import { runGit } from "../agents/worktrees/git.js";
 import { requireGitCommandOutput } from "../infra/git-exec.js";
 import type { GitMergedPullHead as MergedPullHead } from "../infra/git-read-operations.js";
+import { readGitHead, readGitRefs, resolveGitRefsBase } from "../infra/git-root.js";
+import { canReadGitFilesystemRefs } from "../infra/git-worker-context.js";
 
 type BranchLanding = {
   /** origin/<branch> tip when the remote-tracking ref resolves. */
@@ -18,6 +22,70 @@ type BranchLanding = {
   /** The merge base contains every known landing, so Create PR is safe. */
   provenNewPushedWork: boolean;
 };
+
+/** Only ordinary file-backed refs bypass Git; unusual discovery/layouts retain its semantics. */
+export function readCheckoutHead(root: string): { sha: string; branch?: string | null } | null {
+  if (!canReadGitFilesystemRefs()) {
+    return null;
+  }
+  try {
+    const head = readGitHead(root, { maxDepth: 1 });
+    if (
+      !head?.value ||
+      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(head.value) ||
+      fs.lstatSync(head.headPath).isSymbolicLink()
+    ) {
+      return null;
+    }
+    // Git prints lowercase object IDs even when a ref file uses uppercase.
+    const sha = head.value.toLowerCase();
+    const refsBase = head.refsBase ?? resolveGitRefsBase(head.headPath);
+    if (
+      fs.existsSync(path.join(refsBase, "reftable")) ||
+      (head.ref !== null && !head.ref.startsWith("refs/heads/"))
+    ) {
+      return null;
+    }
+    const branch = head.ref?.slice("refs/heads/".length) ?? null;
+    // Git resolves these names through packed, per-worktree, or virtual ref scopes.
+    if (
+      branch !== null &&
+      /^(?:[A-Z_]+$|(?:refs|bisect|worktree|rewritten|main-worktree|worktrees)\/)/.test(branch)
+    ) {
+      return null;
+    }
+    const headAliases = [
+      "refs/HEAD",
+      "refs/tags/HEAD",
+      "refs/heads/HEAD",
+      "refs/remotes/HEAD",
+      "refs/remotes/HEAD/HEAD",
+    ];
+    const branchAliases =
+      branch === null
+        ? []
+        : [
+            `refs/${branch}`,
+            `refs/tags/${branch}`,
+            `refs/remotes/${branch}`,
+            `refs/remotes/${branch}/HEAD`,
+          ];
+    const aliases = readGitRefs(refsBase, [...headAliases, ...branchAliases]);
+    if (headAliases.some((ref) => aliases.get(ref) !== null)) {
+      return null;
+    }
+    if (branch === null) {
+      return { sha, branch };
+    }
+    // rev-parse uses a qualified name when another ref makes the short name ambiguous.
+    const ambiguous =
+      fs.existsSync(path.join(refsBase, branch)) ||
+      branchAliases.some((ref) => aliases.get(ref) !== null);
+    return { sha, ...(ambiguous ? {} : { branch }) };
+  } catch {
+    return null;
+  }
+}
 
 export async function gitOutput(cwd: string, args: string[]): Promise<string | null> {
   try {
@@ -128,7 +196,9 @@ export async function resolveBranchLanding(
     ...(defaultRef ? [defaultRef] : []),
   ]);
   const pushedSha = revisions.get(pushedRef) ?? null;
-  const headSha = await gitOutput(root, ["rev-parse", "--verify", "--quiet", "HEAD"]);
+  const headSha =
+    readCheckoutHead(root)?.sha ??
+    (await gitOutput(root, ["rev-parse", "--verify", "--quiet", "HEAD"]));
   const defaultSha = defaultRef ? (revisions.get(defaultRef) ?? null) : null;
   const possibleLandings = params.mergedHeads.filter(
     (head) =>

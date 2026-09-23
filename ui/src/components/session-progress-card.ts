@@ -4,7 +4,7 @@ import { html, nothing } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive } from "lit/directive.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import { t } from "../i18n/index.ts";
+import { i18n, t } from "../i18n/index.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import type { SessionProgressCardRefreshState } from "../lib/session-progress-cards.ts";
 import { icons } from "./icons.ts";
@@ -12,7 +12,7 @@ import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { scrollState } from "./scroll-state.ts";
 import {
   composerDisclosure,
-  type ComposerProgressRunLifecycle,
+  type ComposerProgressDisclosureContext,
 } from "./session-progress-disclosure-controller.ts";
 
 type SessionProgressCardPlacement = "board" | "composer";
@@ -63,6 +63,33 @@ function renderRefresh(card: ProgressCard, action?: SessionProgressCardRefreshAc
   </button>`;
 }
 type PresentedProgressStepStatus = ProgressCardStep["status"] | "paused";
+
+const PROGRESS_MARKDOWN_CACHE_LIMIT = 16;
+const PROGRESS_MARKDOWN_CACHE_MAX_CHARS = 140_000;
+const progressMarkdownCache = new Map<string, string>();
+
+function sanitizedProgressMarkdown(markdown: string): string {
+  if (markdown.length > PROGRESS_MARKDOWN_CACHE_MAX_CHARS) {
+    return toSanitizedMarkdownHtml(markdown, { progressBars: true });
+  }
+  const key = `${i18n.getLocale()}\0${markdown}`;
+  const cached = progressMarkdownCache.get(key);
+  if (cached !== undefined) {
+    progressMarkdownCache.delete(key);
+    progressMarkdownCache.set(key, cached);
+    return cached;
+  }
+  const sanitized = toSanitizedMarkdownHtml(markdown, { progressBars: true });
+  progressMarkdownCache.set(key, sanitized);
+  while (progressMarkdownCache.size > PROGRESS_MARKDOWN_CACHE_LIMIT) {
+    const oldest = progressMarkdownCache.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    progressMarkdownCache.delete(oldest);
+  }
+  return sanitized;
+}
 
 const STATUS_LABEL_KEYS: Record<ProgressCardStep["status"], Parameters<typeof t>[0]> = {
   completed: "sessionProgressCard.status.completed",
@@ -272,7 +299,7 @@ export function renderProgressCardMarkdown(
   if (!markdown) {
     return nothing;
   }
-  const sanitizedHtml = toSanitizedMarkdownHtml(markdown, { progressBars: true });
+  const sanitizedHtml = sanitizedProgressMarkdown(markdown);
   return html`<div class="session-progress-card__markdown sidebar-markdown">
     ${unsafeHTML(options.promoteProgress ? promoteFirstProgressBar(sanitizedHtml) : sanitizedHtml)}
   </div>`;
@@ -331,7 +358,7 @@ export function renderSessionProgressCard(
   endedAt?: number,
   hasActiveRun = true,
   collapseComposerByDefault = false,
-  composerRunLifecycle?: ComposerProgressRunLifecycle,
+  composerDisclosureContext?: ComposerProgressDisclosureContext,
   refreshAction?: SessionProgressCardRefreshAction,
 ) {
   if (!card) {
@@ -439,10 +466,9 @@ export function renderSessionProgressCard(
       data-progress-card-placement="composer"
       data-complete=${String(complete)}
       ${composerDisclosure(
-        composerRunLifecycle?.sessionIdentity ?? card.sessionKey,
-        !complete && !collapseComposerByDefault,
-        collapseComposerByDefault,
-        composerRunLifecycle,
+        composerDisclosureContext?.sessionIdentity ?? card.sessionKey,
+        !collapseComposerByDefault,
+        composerDisclosureContext,
       )}
     >
       <summary class="session-progress-card__summary" aria-label=${summaryLabel}>

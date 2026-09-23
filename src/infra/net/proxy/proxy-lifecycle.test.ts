@@ -311,9 +311,10 @@ describe("startProxy", () => {
   });
 
   it("redacts proxy credentials before logging the active proxy URL", async () => {
-    await startProxy({
-      proxyUrl: "http://user:pass@127.0.0.1:3128",
-    });
+    const proxyUrl = new URL("http://127.0.0.1:3128");
+    proxyUrl.username = "user";
+    proxyUrl.password = "pass";
+    await startProxy({ proxyUrl: proxyUrl.href });
 
     expect(mockLogInfo).toHaveBeenCalledWith(
       "proxy: routing process HTTP traffic through external proxy http://127.0.0.1:3128",

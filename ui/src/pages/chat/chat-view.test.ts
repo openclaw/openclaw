@@ -15,13 +15,13 @@ import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.t
 import type { UiSettings } from "../../app/settings.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
-import {
-  buildFallbackSlashCommands,
-  replaceSlashCommands,
-  SLASH_COMMANDS,
-} from "../../lib/chat/commands.ts";
+import { buildFallbackSlashCommands, replaceSlashCommands } from "../../lib/chat/commands.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import type { SessionPatchOptions } from "../../lib/sessions/patch.ts";
+import type {
+  SessionPatchOptions,
+  SessionPatchResult,
+  SessionPatchRoute,
+} from "../../lib/sessions/patch.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import {
@@ -30,6 +30,7 @@ import {
   DEFAULT_CHAT_MODEL_CATALOG,
 } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   getChatAttachmentDataUrl,
@@ -54,6 +55,12 @@ import * as chatThread from "./chat-thread.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import {
   appendChatBubble,
+  replaceSkillCommands,
+  inputDraft,
+  inputDraftAtEnd,
+  keydownComposer,
+  createReactiveDraftHarness,
+  createSlashRerenderHarness,
   createChatProps,
   createPasteEvent,
   createTestTranscript,
@@ -62,6 +69,14 @@ import {
   getComposerTextarea,
   requireElement,
   stubAnimationFrames,
+  createDragEvent,
+  getChatModelSelect,
+  getChatThinkingValue,
+  getThinkingReasoningValueLabel,
+  getThinkingSelect,
+  getThinkingSlider,
+  getThinkingSliderValues,
+  itemAt,
 } from "./chat-view.test-helpers.ts";
 import { renderChat } from "./chat-view.ts";
 import { resetChatComposerState } from "./components/chat-composer.ts";
@@ -354,6 +369,36 @@ function createSessionsResultFromRows(sessions: GatewaySessionRow[]): SessionsLi
   };
 }
 
+function createSettingsLaneHost(
+  patch: SessionPatchRoute,
+  refresh: () => Promise<void> = async () => {},
+) {
+  const host = makeChatHost({
+    requestHandlers: {},
+    sessionKey: "main",
+    chatModelSwitchPromises: {},
+    chatThinkingLevel: "high",
+    sessionsResult: createSessionsResultFromRows([
+      {
+        key: "main",
+        agentId: "main",
+        sessionId: "main",
+        kind: "direct",
+        updatedAt: 1,
+        model: "claude-fable-5",
+        modelProvider: "anthropic",
+        thinkingLevel: "high",
+        fastMode: false,
+        effectiveFastMode: false,
+      },
+    ]),
+  });
+  vi.spyOn(host.sessions, "patch").mockImplementation(patch);
+  vi.spyOn(host.sessions, "refresh").mockImplementation(refresh);
+  onTestFinished(() => host.sessions.dispose());
+  return host;
+}
+
 function createChatHeaderState(
   overrides: {
     model?: string | null;
@@ -526,15 +571,6 @@ function createOpenAiHeaderState(overrides: Parameters<typeof createChatHeaderSt
   });
 }
 
-function getChatModelSelect(container: Element): HTMLElement {
-  const select = container.querySelector<HTMLElement>('[data-chat-model-select="true"]');
-  expect(select).toBeInstanceOf(HTMLElement);
-  if (!(select instanceof HTMLElement)) {
-    throw new Error("Expected chat model control");
-  }
-  return select;
-}
-
 type ChatModelControlsProps = Parameters<typeof renderChatModelControls>[0];
 
 function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelControlsProps {
@@ -590,46 +626,6 @@ function renderModelControls(
     container,
   );
   return container;
-}
-
-function getChatThinkingValue(control: HTMLElement): string {
-  return control.dataset.chatThinkingValue ?? "";
-}
-
-function getThinkingSelect(container: Element): HTMLElement {
-  const select = container.querySelector<HTMLElement>('[data-chat-thinking-select="true"]');
-  expect(select).toBeInstanceOf(HTMLElement);
-  if (!(select instanceof HTMLElement)) {
-    throw new Error("Expected chat thinking control");
-  }
-  return select;
-}
-
-function getThinkingSlider(container: Element): HTMLInputElement | null {
-  return container.querySelector<HTMLInputElement>('[data-chat-thinking-slider="true"]');
-}
-
-function getThinkingSliderValues(container: Element): string[] {
-  const values = getThinkingSlider(container)?.dataset.chatThinkingValues ?? "";
-  return values ? values.split(",") : [];
-}
-
-function getThinkingReasoningValueLabel(container: Element): string {
-  const preview = container.querySelector(
-    "[data-chat-thinking-preview-committed]:not([hidden]), " +
-      "[data-chat-thinking-preview-index]:not([hidden])",
-  );
-  return preview?.textContent?.trim() ?? "";
-}
-
-function createDragEvent(type: string, types = ["Files"]): Event {
-  const event = new Event(type, { bubbles: true, cancelable: true });
-  Object.defineProperty(event, "dataTransfer", { value: { types } });
-  return event;
-}
-
-function itemAt<T>(items: ArrayLike<T>, index: number, label: string): T {
-  return expectDefined(items[index], `${label} ${index}`);
 }
 
 describe("chat typing status", () => {
@@ -2540,6 +2536,36 @@ describe("chat loading skeleton", () => {
     };
   }
 
+  it("retires only the exact saved Talk entries, retaining unsaved speech and repeated words", () => {
+    const container = renderChatView({
+      realtimeTalkActive: true,
+      messages: [{ role: "user", content: "Repeated words", __openclaw: { id: "voice:call:1" } }],
+      realtimeTalkConversation: [
+        {
+          id: "u1",
+          role: "user",
+          text: "Repeated words",
+          isStreaming: false,
+          transcriptId: "voice:call:1",
+        },
+        {
+          id: "u2",
+          role: "user",
+          text: "Repeated words",
+          isStreaming: false,
+          transcriptId: "voice:call:2",
+        },
+        { id: "a1", role: "assistant", text: "Still speaking", isStreaming: true },
+      ],
+    });
+    const turns = [...container.querySelectorAll(".agent-chat__voice-turn")];
+    expect(turns).toHaveLength(2);
+    expect(turns.map((turn) => turn.textContent?.replace(/\s+/g, " ").trim())).toEqual([
+      "You Repeated words",
+      "Val Still speaking",
+    ]);
+  });
+
   it("renders realtime Talk transcript as ordered voice turns", () => {
     const container = renderChatView({
       realtimeTalkActive: true,
@@ -3645,44 +3671,6 @@ describe("chat composer sizing", () => {
 });
 
 describe("chat slash menu accessibility", () => {
-  function replaceSkillCommands(
-    ...skills: Array<{ key: string; name?: string; skillDisplayName?: string; description: string }>
-  ) {
-    replaceSlashCommands([
-      ...buildFallbackSlashCommands(),
-      ...skills.map(({ key, name = key, skillDisplayName, description }) => ({
-        key,
-        name,
-        skillDisplayName,
-        description,
-        source: "skill" as const,
-        skillModelVisible: true,
-      })),
-    ]);
-  }
-
-  function inputDraft(container: HTMLElement, value: string) {
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
-    textarea!.value = value;
-    textarea!.dispatchEvent(new Event("input", { bubbles: true }));
-  }
-
-  function inputDraftAtEnd(container: HTMLElement, value: string) {
-    const textarea = getComposerTextarea(container);
-    textarea.value = value;
-    textarea.setSelectionRange(value.length, value.length);
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
-  }
-
-  function keydownComposer(container: HTMLElement, key: string, init: KeyboardEventInit = {}) {
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
-    const event = new KeyboardEvent("keydown", { ...init, key, bubbles: true, cancelable: true });
-    textarea!.dispatchEvent(event);
-    return event;
-  }
-
   function replayInput(textarea: HTMLTextAreaElement, value: string, type = "input") {
     if (type === "input") {
       textarea.value = value;
@@ -3703,47 +3691,6 @@ describe("chat slash menu accessibility", () => {
     });
     renderChatInto(container, { draft, getDraft: () => draft, onDraftChange, onSend });
     return { container, onDraftChange, onSend };
-  }
-
-  function createReactiveDraftHarness({
-    onDraftChange: observeDraftChange,
-    ...overrides
-  }: Partial<ChatProps> = {}) {
-    let draft = "";
-    let currentOverrides = overrides;
-    const container = document.createElement("div");
-    const onDraftChange = vi.fn((next: string) => {
-      draft = next;
-      observeDraftChange?.(next);
-    });
-    const renderCurrent = (nextOverrides: Partial<ChatProps> = {}) => {
-      currentOverrides = { ...currentOverrides, ...nextOverrides };
-      renderChatInto(container, {
-        draft,
-        getDraft: () => draft,
-        onDraftChange,
-        onRequestUpdate: renderCurrent,
-        ...currentOverrides,
-      });
-    };
-    renderCurrent();
-    return { container, renderCurrent };
-  }
-
-  function createSlashRerenderHarness() {
-    let draft = "";
-    const onDraftChange = vi.fn((next: string) => {
-      draft = next;
-    });
-    const renderCurrent = () => renderChatView({ draft, onDraftChange });
-    return {
-      container: renderCurrent(),
-      inputAndRender(container: HTMLElement, value: string) {
-        inputDraft(container, value);
-        return renderCurrent();
-      },
-      renderCurrent,
-    };
   }
 
   function createSessionDraftHarness(prefix: string) {
@@ -4342,28 +4289,6 @@ describe("chat slash menu accessibility", () => {
     expect(onSlashIntent).toHaveBeenCalledOnce();
   });
 
-  it("opens a skill picker for $ references anywhere in a normal prompt", async () => {
-    replaceSkillCommands({
-      key: "prose_writer",
-      skillDisplayName: "Prose Writer",
-      description: "Draft polished prose.",
-    });
-    const onSlashIntent = vi.fn(async () => undefined);
-    const { container } = createReactiveDraftHarness({ onSlashIntent });
-
-    inputDraftAtEnd(container, "Polish this with $pro:");
-    await Promise.resolve();
-    await Promise.resolve();
-
-    const listbox = container.querySelector<HTMLElement>("#chat-single-skill-menu-listbox");
-    const renderedTextarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    expect(listbox?.getAttribute("aria-label")).toBe("Skill references");
-    expect(listbox?.querySelector(".slash-menu-name")?.textContent).toBe("Prose Writer");
-    expect(renderedTextarea?.getAttribute("aria-controls")).toBe("chat-single-skill-menu-listbox");
-    expect(renderedTextarea?.getAttribute("aria-expanded")).toBe("true");
-    expect(onSlashIntent).toHaveBeenCalledOnce();
-  });
-
   it("shows skills after commands in the slash picker and highlights typed prefixes", () => {
     replaceSkillCommands({
       key: "status_report",
@@ -4948,309 +4873,6 @@ describe("chat slash menu accessibility", () => {
     render(renderChat(createChatProps({ onDraftChange, draft: "history recall" })), container);
 
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("history recall");
-  });
-
-  it("wires command suggestions to the composer with stable active option ids", () => {
-    const harness = createSlashRerenderHarness();
-    const container = harness.inputAndRender(harness.container, "/");
-
-    const wrapper = container.querySelector<HTMLElement>(".agent-chat__composer-combobox");
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    const listbox = container.querySelector<HTMLElement>("#chat-single-slash-menu-listbox");
-    const activeId = textarea?.getAttribute("aria-activedescendant");
-
-    expect(wrapper?.hasAttribute("role")).toBe(false);
-    expect(wrapper?.hasAttribute("aria-expanded")).toBe(false);
-    expect(wrapper?.hasAttribute("aria-haspopup")).toBe(false);
-    expect(wrapper?.hasAttribute("aria-controls")).toBe(false);
-    expect(textarea?.hasAttribute("role")).toBe(false);
-    expect(textarea?.getAttribute("aria-expanded")).toBe("true");
-    expect(textarea?.hasAttribute("aria-haspopup")).toBe(false);
-    expect(textarea?.getAttribute("aria-controls")).toBe("chat-single-slash-menu-listbox");
-    expect(textarea?.getAttribute("aria-autocomplete")).toBe("list");
-    expect(listbox?.getAttribute("role")).toBe("listbox");
-    expect(activeId).toMatch(/^chat-single-slash-option-command-/u);
-    expect(listbox?.querySelector(`#${activeId}`)?.getAttribute("role")).toBe("option");
-  });
-
-  it("keeps filtered command DOM and keyboard order aligned with relevance", () => {
-    replaceSlashCommands([
-      {
-        key: "pair",
-        name: "pair",
-        description: "Pair a device.",
-        tier: "power",
-        category: "tools",
-      },
-      {
-        key: "pair-device",
-        name: "pair-device",
-        description: "Pair a specific device.",
-        tier: "standard",
-        category: "session",
-      },
-      {
-        key: "openclaw",
-        name: "openclaw",
-        description: "Run the setup and repair helper.",
-        tier: "essential",
-        category: "tools",
-      },
-    ]);
-    const harness = createSlashRerenderHarness();
-    let container = harness.inputAndRender(harness.container, "/pair");
-
-    expect(
-      Array.from(container.querySelectorAll<HTMLElement>(".slash-menu [role='option']")).map(
-        (option) => option.querySelector(".slash-menu-name")?.textContent?.trim(),
-      ),
-    ).toEqual(["/pair", "/pair-device", "/openclaw"]);
-    expect(
-      Array.from(container.querySelectorAll(".slash-menu-group__label")).map((label) =>
-        label.textContent?.trim(),
-      ),
-    ).toEqual(["Tools", "Session", "Tools"]);
-
-    keydownComposer(container, "ArrowDown");
-    container = harness.renderCurrent();
-    const options = container.querySelectorAll<HTMLElement>(".slash-menu [role='option']");
-    const activeId = container
-      .querySelector<HTMLTextAreaElement>("textarea")
-      ?.getAttribute("aria-activedescendant");
-    expect(options[1]?.id).toBe(activeId);
-    expect(options[1]?.getAttribute("aria-selected")).toBe("true");
-
-    keydownComposer(container, "Enter");
-    container = harness.renderCurrent();
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/pair-device ");
-    expect(container.querySelector(".slash-menu")).toBeNull();
-  });
-
-  it("keeps a stable composer name when attachments change its placeholder", () => {
-    const harness = createReactiveDraftHarness();
-    const textarea = requireElement(
-      harness.container,
-      "textarea",
-      "chat composer",
-    ) as HTMLTextAreaElement;
-    const initialPlaceholder = textarea.placeholder;
-    expect(textarea.getAttribute("aria-label")).toBe("Chat composer");
-    expect(textarea.hasAttribute("role")).toBe(false);
-
-    harness.renderCurrent({
-      attachments: [
-        {
-          id: "image",
-          fileName: "sample.png",
-          mimeType: "image/png",
-          previewUrl: "blob:sample-image",
-          sizeBytes: 3,
-        },
-      ],
-    });
-    expect(harness.container.querySelector(".chat-attachment-thumb")).not.toBeNull();
-    expect(textarea.placeholder).not.toBe(initialPlaceholder);
-    expect(textarea.getAttribute("aria-label")).toBe("Chat composer");
-    expect(textarea.hasAttribute("role")).toBe(false);
-
-    harness.renderCurrent({ attachments: [] });
-    expect(textarea.placeholder).toBe(initialPlaceholder);
-    expect(textarea.getAttribute("aria-label")).toBe("Chat composer");
-  });
-
-  it("updates the active descendant and live announcement during command navigation", () => {
-    const harness = createSlashRerenderHarness();
-    let container = harness.inputAndRender(harness.container, "/");
-    const initialActiveId = container
-      .querySelector<HTMLTextAreaElement>("textarea")
-      ?.getAttribute("aria-activedescendant");
-
-    keydownComposer(container, "ArrowDown");
-    container = harness.renderCurrent();
-
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    const nextActiveId = textarea?.getAttribute("aria-activedescendant");
-    const activeOption = nextActiveId
-      ? container.querySelector<HTMLElement>(`#${nextActiveId}`)
-      : null;
-    const status = container.querySelector<HTMLElement>("#chat-single-slash-active-announcement");
-
-    if (!nextActiveId) {
-      throw new Error("Expected command navigation to set aria-activedescendant");
-    }
-    expect(nextActiveId).not.toBe(initialActiveId);
-    expect(activeOption?.getAttribute("aria-selected")).toBe("true");
-    expect(status?.getAttribute("aria-live")).toBe("polite");
-    const announcementText = status?.textContent?.trim();
-    if (!announcementText) {
-      throw new Error("Expected command navigation to update the live announcement");
-    }
-    const expectedAnnouncement = [
-      activeOption?.querySelector(".slash-menu-name")?.textContent?.trim(),
-      activeOption?.querySelector(".slash-menu-args")?.textContent?.trim(),
-      activeOption?.querySelector(".slash-menu-desc")?.textContent?.trim(),
-    ]
-      .filter(Boolean)
-      .join(" ");
-    expect(announcementText).toBe(expectedAnnouncement);
-  });
-
-  it("uses the localized command description in the live announcement", async () => {
-    const clearCommand = SLASH_COMMANDS.find((command) => command.name === "clear");
-    if (!clearCommand) {
-      throw new Error("Expected the clear slash command");
-    }
-    const originalDescriptionKey = clearCommand.descriptionKey;
-    clearCommand.descriptionKey = "common.health";
-    await i18n.setLocale("zh-CN");
-    try {
-      const harness = createSlashRerenderHarness();
-      const container = harness.inputAndRender(harness.container, "/clear");
-
-      const status = container.querySelector<HTMLElement>("#chat-single-slash-active-announcement");
-      expect(status?.textContent?.trim()).toBe(`/clear ${t("common.health")}`);
-    } finally {
-      clearCommand.descriptionKey = originalDescriptionKey;
-      await i18n.setLocale("en");
-    }
-  });
-
-  it("wires fixed argument suggestions with command-and-argument option ids", () => {
-    const harness = createSlashRerenderHarness();
-    const container = harness.inputAndRender(harness.container, "/tools ");
-
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    const listbox = container.querySelector<HTMLElement>("#chat-single-slash-menu-listbox");
-    const activeId = textarea?.getAttribute("aria-activedescendant");
-
-    expect(listbox?.getAttribute("aria-label")).toBe("Command arguments");
-    expect(activeId).toBe("chat-single-slash-option-arg-tools-compact");
-    expect(listbox?.querySelector(`#${activeId}`)?.getAttribute("aria-selected")).toBe("true");
-  });
-
-  it.each([
-    { name: "direct", sessionKey: "main", rowKey: "main" },
-    { name: "global alias", sessionKey: "agent:work:main", rowKey: "global" },
-  ])(
-    "opens model-supported thinking arguments after tab-completing /think ($name)",
-    ({ sessionKey, rowKey }) => {
-      const sessions = createSessionsListResult({
-        model: "gpt-5.6-sol",
-        modelProvider: "openai",
-      });
-      const session = expectDefined(sessions.sessions[0], "active session");
-      session.key = rowKey;
-      session.thinkingLevels = [
-        { id: "off", label: "off" },
-        { id: "minimal", label: "minimal" },
-        { id: "low", label: "low" },
-        { id: "medium", label: "medium" },
-        { id: "high", label: "high" },
-        { id: "xhigh", label: "xhigh" },
-        { id: "max", label: "max" },
-        { id: "ultra", label: "ultra" },
-      ];
-      const { container } = createReactiveDraftHarness({
-        sessions,
-        sessionKey,
-        selectedSession: session,
-      });
-
-      inputDraft(container, "/think");
-      keydownComposer(container, "Tab");
-
-      expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/think ");
-      expect(
-        Array.from(container.querySelectorAll<HTMLElement>(".slash-menu [role='option']")).map(
-          (option) => option.querySelector(".slash-menu-name")?.textContent?.trim(),
-        ),
-      ).toEqual(["default", "off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
-    },
-  );
-
-  it("suppresses thinking arguments while the active model is switching", () => {
-    const sessions = createSessionsListResult({
-      model: "gpt-5.6-sol",
-      modelProvider: "openai",
-    });
-    const session = expectDefined(sessions.sessions[0], "active session");
-    session.thinkingLevels = [
-      { id: "low", label: "low" },
-      { id: "high", label: "high" },
-    ];
-    const { container } = createReactiveDraftHarness({
-      modelSwitching: true,
-      sessions,
-      selectedSession: session,
-    });
-
-    inputDraft(container, "/think");
-    keydownComposer(container, "Tab");
-
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/think ");
-    expect(container.querySelector(".slash-menu")).toBeNull();
-  });
-
-  it("closes open thinking arguments when the active model starts switching", () => {
-    const sessions = createSessionsListResult({
-      model: "gpt-5.6-sol",
-      modelProvider: "openai",
-    });
-    const session = expectDefined(sessions.sessions[0], "active session");
-    session.thinkingLevels = [
-      { id: "low", label: "low" },
-      { id: "high", label: "high" },
-    ];
-    const { container, renderCurrent } = createReactiveDraftHarness({
-      sessions,
-      selectedSession: session,
-    });
-
-    inputDraft(container, "/think");
-    keydownComposer(container, "Tab");
-    expect(container.querySelector(".slash-menu")).not.toBeNull();
-    expect(
-      container
-        .querySelector<HTMLTextAreaElement>("textarea")
-        ?.getAttribute("aria-activedescendant"),
-    ).toBe("chat-single-slash-option-arg-think-default");
-
-    renderCurrent({ modelSwitching: true });
-
-    expect(container.querySelector(".slash-menu")).toBeNull();
-    expect(
-      container
-        .querySelector<HTMLTextAreaElement>("textarea")
-        ?.hasAttribute("aria-activedescendant"),
-    ).toBe(false);
-  });
-
-  it("clears active descendant when suggestions close", () => {
-    const harness = createSlashRerenderHarness();
-    let container = harness.inputAndRender(harness.container, "/");
-    const activeDescendant = container
-      .querySelector<HTMLTextAreaElement>("textarea")
-      ?.getAttribute("aria-activedescendant");
-    if (!activeDescendant) {
-      throw new Error("Expected slash suggestions to set aria-activedescendant");
-    }
-
-    container = harness.inputAndRender(container, "plain message");
-
-    expect(container.querySelector(".slash-menu")).toBeNull();
-    expect(
-      container.querySelector<HTMLTextAreaElement>("textarea")?.hasAttribute("aria-expanded"),
-    ).toBe(false);
-    expect(
-      container
-        .querySelector<HTMLElement>(".agent-chat__composer-combobox")
-        ?.hasAttribute("aria-expanded"),
-    ).toBe(false);
-    expect(
-      container
-        .querySelector<HTMLTextAreaElement>("textarea")
-        ?.hasAttribute("aria-activedescendant"),
-    ).toBe(false);
   });
 });
 
@@ -7319,12 +6941,12 @@ describe("chat model controls", () => {
     },
   );
 
-  it("matches the default model by its localized marker", () => {
+  it("matches the default model by its localized marker and canonical reference", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
       modelProvider: "openai",
       models: [
-        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+        { id: "gpt-5.5", name: "Chat Model", provider: "openai" },
         { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
       ],
     });
@@ -7337,14 +6959,14 @@ describe("chat model controls", () => {
     const container = renderModelControls(state);
     const search = container.querySelector<HTMLInputElement>("[data-chat-model-search]");
 
-    search!.value = "default";
-    search!.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    for (const query of ["default", "gpt-5.5", "OPENAI/GPT-5.5"]) {
+      search!.value = query;
+      search!.dispatchEvent(new InputEvent("input", { bubbles: true }));
 
-    const visibleOptions = Array.from(
-      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
-    ).filter((option) => !option.hidden);
-    expect(visibleOptions).toHaveLength(1);
-    expect(visibleOptions[0]?.dataset.chatModelDefault).toBe("true");
+      const visibleOptions = container.querySelectorAll("[data-chat-model-option]:not([hidden])");
+      expect(visibleOptions, query).toHaveLength(1);
+      expect(visibleOptions[0]?.getAttribute("data-chat-model-default")).toBe("true");
+    }
   });
 
   it("leaves digit keys to nested controls and selects the numbered row from the picker", () => {
@@ -7885,56 +7507,30 @@ describe("chat model controls", () => {
   });
 
   it("orders model-dependent patches after a pending model switch", async () => {
-    const modelPatch = createDeferred<unknown>();
-    const thinkingUpdate = createDeferred<unknown>();
+    const modelPatch = createDeferred<SessionPatchResult | null>();
+    const thinkingUpdate = createDeferred<SessionPatchResult | null>();
     const patches: Array<Record<string, unknown>> = [];
-    const patchResult = {
+    const patchResult: SessionPatchResult = {
       ok: true,
       path: "",
       key: "main",
       entry: { sessionId: "main" },
     };
-    const sessions = {
-      state: { modelOverrides: {} },
-      patch: vi.fn(
-        async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
-          if (options?.waitFor) {
-            await options.waitFor;
-          }
-          patches.push(patch);
-          if (Object.hasOwn(patch, "model")) {
-            return modelPatch.promise;
-          }
-          if (Object.hasOwn(patch, "thinkingLevel")) {
-            return thinkingUpdate.promise;
-          }
-          return patchResult;
-        },
-      ),
-      refresh: async () => {},
-      patchRowLocal: vi.fn(),
-    };
-    const host = {
-      client: {},
-      connected: true,
-      sessionKey: "main",
-      chatModelCatalog: [],
-      chatModelSwitchPromises: {},
-      chatThinkingLevel: "high",
-      sessions,
-      sessionsResult: createSessionsResultFromRows([
-        {
-          key: "main",
-          kind: "direct",
-          updatedAt: 1,
-          model: "claude-fable-5",
-          modelProvider: "anthropic",
-          thinkingLevel: "high",
-          fastMode: false,
-          effectiveFastMode: false,
-        },
-      ]),
-    } as unknown as Parameters<typeof switchChatModel>[0];
+    const host = createSettingsLaneHost(
+      async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
+        if (options?.waitFor) {
+          await options.waitFor;
+        }
+        patches.push(patch);
+        if (Object.hasOwn(patch, "model")) {
+          return modelPatch.promise;
+        }
+        if (Object.hasOwn(patch, "thinkingLevel")) {
+          return thinkingUpdate.promise;
+        }
+        return patchResult;
+      },
+    );
 
     const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");
     const thinkingPatch = switchChatThinkingLevel(host, "ultra");
@@ -7963,50 +7559,25 @@ describe("chat model controls", () => {
     const reconciliationStarted = createDeferred();
     const releaseReconciliation = createDeferred();
     const patches: Array<Record<string, unknown>> = [];
-    const patchResult = {
+    const patchResult: SessionPatchResult = {
       ok: true,
       path: "",
       key: "main",
       entry: { sessionId: "main" },
     };
-    const sessions = {
-      state: { modelOverrides: {} },
-      patch: vi.fn(
-        async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
-          if (options?.waitFor) {
-            await options.waitFor;
-          }
-          patches.push(patch);
-          return patchResult;
-        },
-      ),
-      // The list refresh is the reconcile step switchChatModel awaits; holding
-      // it open models a slow reconciliation inside the settings lane.
-      refresh: async () => {
+    const host = createSettingsLaneHost(
+      async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
+        if (options?.waitFor) {
+          await options.waitFor;
+        }
+        patches.push(patch);
+        return patchResult;
+      },
+      async () => {
         reconciliationStarted.resolve();
         await releaseReconciliation.promise;
       },
-      patchRowLocal: vi.fn(),
-    };
-    const host = {
-      client: {},
-      connected: true,
-      sessionKey: "main",
-      chatModelCatalog: [],
-      chatModelSwitchPromises: {},
-      chatThinkingLevel: "high",
-      sessions,
-      sessionsResult: createSessionsResultFromRows([
-        {
-          key: "main",
-          kind: "direct",
-          updatedAt: 1,
-          model: "claude-fable-5",
-          modelProvider: "anthropic",
-          thinkingLevel: "high",
-        },
-      ]),
-    } as unknown as Parameters<typeof switchChatModel>[0];
+    );
 
     const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");
     await reconciliationStarted.promise;
@@ -8020,41 +7591,17 @@ describe("chat model controls", () => {
   });
 
   it("validates queued settings independently after a model switch fails", async () => {
-    const modelPatch = createDeferred<unknown>();
+    const modelPatch = createDeferred<SessionPatchResult | null>();
     const patches: Array<Record<string, unknown>> = [];
-    const sessions = {
-      state: { modelOverrides: {} },
-      patch: vi.fn(
-        async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
-          if (options?.waitFor) {
-            await options.waitFor;
-          }
-          patches.push(patch);
-          return modelPatch.promise;
-        },
-      ),
-      refresh: async () => {},
-      patchRowLocal: vi.fn(),
-    };
-    const host = {
-      client: {},
-      connected: true,
-      sessionKey: "main",
-      chatModelCatalog: [],
-      chatModelSwitchPromises: {},
-      chatThinkingLevel: "high",
-      sessions,
-      sessionsResult: createSessionsResultFromRows([
-        {
-          key: "main",
-          kind: "direct",
-          updatedAt: 1,
-          model: "claude-fable-5",
-          modelProvider: "anthropic",
-          thinkingLevel: "high",
-        },
-      ]),
-    } as unknown as Parameters<typeof switchChatModel>[0];
+    const host = createSettingsLaneHost(
+      async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
+        if (options?.waitFor) {
+          await options.waitFor;
+        }
+        patches.push(patch);
+        return modelPatch.promise;
+      },
+    );
 
     const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");
     const thinkingPatch = switchChatThinkingLevel(host, "ultra");
@@ -8115,45 +7662,78 @@ describe("chat model controls", () => {
 
   it("keeps the newest speed selection when an older patch fails late", async () => {
     const pendingPatches: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
-    // Minimal host: the factory's mock gateway rebuilds session rows on every
-    // refresh, which would mask the optimistic fastMode value under test.
-    const host = {
-      client: {},
-      connected: true,
+    const operations: Promise<boolean>[] = [];
+    let canonical: GatewaySessionRow = {
+      key: "main",
+      agentId: "main",
+      sessionId: "main",
+      kind: "direct",
+      updatedAt: 1,
+      fastMode: false,
+      effectiveFastMode: false,
+    };
+    const host = makeChatHost({
       sessionKey: "main",
-      chatModelCatalog: [],
-      chatThinkingLevel: null,
-      sessionsResult: createSessionsResultFromRows([{ key: "main", kind: "direct", updatedAt: 1 }]),
-      sessions: {
-        patch: async (
-          _key: string,
-          _patch: Record<string, unknown>,
-          options?: SessionPatchOptions,
-        ) => {
-          if (options?.waitFor) {
-            await options.waitFor;
+      hello: {
+        ...sessionMutationGatewayHello(),
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "main",
+            mainKey: "main",
+            mainSessionKey: "agent:main:main",
+          },
+        },
+      },
+      sessionsResult: createSessionsResultFromRows([canonical]),
+      requestHandlers: {
+        "sessions.list": () => createSessionsResultFromRows([canonical]),
+        "sessions.patch": (params: Record<string, unknown>) => {
+          const fastMode = params.fastMode;
+          if (typeof fastMode !== "boolean") {
+            throw new Error("Expected the speed race to send a boolean fastMode");
           }
-          return new Promise((resolve, reject) => {
+          return new Promise<SessionPatchResult>((resolve, reject) => {
             pendingPatches.push({
-              resolve: () =>
+              resolve: () => {
+                canonical = {
+                  ...canonical,
+                  fastMode,
+                  effectiveFastMode: fastMode,
+                  updatedAt: (canonical.updatedAt ?? 0) + 1,
+                };
                 resolve({
                   ok: true,
                   path: "",
                   key: "main",
-                  entry: { sessionId: "main" },
-                }),
+                  entry: { sessionId: "main", fastMode, updatedAt: canonical.updatedAt ?? 1 },
+                });
+              },
               reject,
             });
           });
         },
-        refresh: async () => {},
-        patchRowLocal: () => {},
       },
-    } as unknown as Parameters<typeof switchChatFastMode>[0];
+    });
+    const projectSessions = (state: typeof host.sessions.state) => {
+      host.sessionsResult = state.result;
+      host.sessionsResultAgentId = state.agentId;
+    };
+    projectSessions(host.sessions.state);
+    const stop = host.sessions.subscribe(projectSessions);
+    onTestFinished(async () => {
+      stop();
+      host.sessions.dispose();
+      for (const patch of pendingPatches) {
+        patch.resolve();
+      }
+      await Promise.allSettled(operations);
+    });
 
     const first = switchChatFastMode(host, "on");
+    operations.push(first);
     await waitForFast(() => expect(pendingPatches).toHaveLength(1));
     const second = switchChatFastMode(host, "off");
+    operations.push(second);
 
     pendingPatches[0]?.reject(new Error("boom"));
     await expect(first).resolves.toBe(false);

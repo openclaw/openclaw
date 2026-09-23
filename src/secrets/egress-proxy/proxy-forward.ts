@@ -6,6 +6,7 @@ import {
 } from "node:http";
 import { request as httpsRequest, type Agent as HttpsAgent } from "node:https";
 import { PassThrough, Writable, type Readable } from "node:stream";
+import { toForwardableResponseHeaders } from "./response-headers.js";
 import {
   createSecretEgressBodyTransform,
   SecretEgressSubstitutionError,
@@ -15,6 +16,8 @@ import {
 
 export const REFUSAL_BODY = "Secret egress proxy refused the request.\n";
 const UPSTREAM_ERROR_BODY = "Secret egress proxy could not reach the upstream host.\n";
+const UPSTREAM_RESPONSE_ERROR_BODY =
+  "Secret egress proxy could not forward the upstream response.\n";
 const MAX_BUFFERED_REQUEST_BODY_BYTES = 100 * 1024 * 1024;
 const BUFFERED_REQUEST_WRITE_BYTES = 64 * 1024;
 const MAX_BUFFERED_UPGRADE_BYTES = 64 * 1024;
@@ -162,13 +165,33 @@ function sendSecretEgressRequest(
           return;
         }
         upstreamResponse.once("error", () => forward.response.destroy());
-        forward.response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
+        const statusCode = upstreamResponse.statusCode ?? 502;
+        try {
+          forward.response.writeHead(
+            statusCode,
+            toForwardableResponseHeaders(upstreamResponse.headers),
+          );
+        } catch {
+          // This callback runs outside any caller's try block; a throw here
+          // would exit the Gateway. Keep the failure on this one request.
+          refused = true;
+          upstreamResponse.destroy();
+          // Node may already have marked 1xx/204/304 heads bodyless, so a
+          // refusal body cannot be framed reliably; close those instead.
+          if (statusCode < 200 || statusCode === 204 || statusCode === 304) {
+            forward.response.destroy();
+          } else {
+            sendHttpRefusal(forward.response, 502, UPSTREAM_RESPONSE_ERROR_BODY);
+          }
+          return;
+        }
         upstreamResponse.pipe(forward.response);
       },
     ),
   );
   const bodyTransform = forward.ownResource(
     createSecretEgressBodyTransform({
+      isActive: forward.isActive,
       onSubstitution: () => {
         substituted = true;
       },
@@ -245,7 +268,7 @@ function sendSecretEgressRequest(
     // not HTTP bodies. Forward them opaquely, including both parsers' head buffers.
     forward.response.off("close", onResponseClose);
     upgraded = true;
-    forward.response.writeHead(101, response.headers);
+    forward.response.writeHead(101, toForwardableResponseHeaders(response.headers));
     forward.response.end();
     forward.response.detachSocket(clientSocket);
     forward.releaseResponse();
@@ -413,6 +436,11 @@ export function forwardSecretEgressRequest(
                 substituted = true;
               },
             });
+      // Revocation can arrive from the Gateway while this Worker scans a body.
+      if (!forward.isActive()) {
+        release();
+        return;
+      }
       upstream = sendSecretEgressRequest(
         { ...forward, ...prepared, substituted, isActive: () => !refused && forward.isActive() },
         output,

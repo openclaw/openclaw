@@ -67,7 +67,7 @@ export async function startCodexAttemptTurn(
     started = await startCodexTurn();
   } catch (error) {
     let turnStartError = error;
-    if (isCodexActiveCompactTurnError(turnStartError)) {
+    if (!params.providerReviewAcknowledgment && isCodexActiveCompactTurnError(turnStartError)) {
       embeddedAgentLog.info(
         "codex app-server turn/start blocked by active compact turn; waiting to retry",
         { threadId: resourceState.thread.threadId },
@@ -90,6 +90,7 @@ export async function startCodexAttemptTurn(
     }
     if (
       started === undefined &&
+      !params.providerReviewAcknowledgment &&
       resourceState.thread.connectionScope !== "supervision" &&
       shouldUseFreshCodexThreadAfterContextEngineOverflow({
         error: turnStartError,
@@ -164,7 +165,7 @@ export async function startCodexAttemptTurn(
         signal: runAbortController.signal,
       });
       const message = usageLimitError?.message ?? formatErrorMessage(turnStartError);
-      if (isInvalidCodexImagePayloadError(message)) {
+      if (!params.providerReviewAcknowledgment && isInvalidCodexImagePayloadError(message)) {
         await clearCodexBindingAfterInvalidImagePayload(
           bindingStore,
           bindingIdentity,
@@ -280,6 +281,5 @@ export async function startCodexAttemptTurn(
     };
   }
   turnIdRef.current = started.turn.turn.id;
-  resourceState.nativeSubagentMonitor?.bindTurn(started.turn.turn.id);
   return started;
 }

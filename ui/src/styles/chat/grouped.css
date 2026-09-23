@@ -265,16 +265,31 @@
   overflow-wrap: anywhere;
 }
 
+.chat-group-footer--send-status .chat-group-footer__meta {
+  flex-wrap: wrap;
+}
+
 .chat-send-status {
   display: inline-flex;
   order: 2;
   align-items: center;
-  gap: 4px;
-  color: var(--danger);
+  flex-wrap: wrap;
+  gap: 0.5em;
+  min-width: 0;
+  color: var(--text);
   font-size: 12px;
   line-height: 1.2;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
   pointer-events: auto;
+}
+
+/* Keep each separator with its following label when recovery rows wrap. */
+.chat-send-status__part {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
+  min-width: 0;
 }
 
 .chat-author-avatar {
@@ -416,9 +431,8 @@
   stroke-linejoin: round;
 }
 
-.chat-send-status[data-send-state="unconfirmed"],
-.chat-send-status[data-send-state="waiting-reconnect"] {
-  color: var(--warn);
+.chat-send-status__part > [aria-hidden="true"] {
+  color: var(--muted);
 }
 
 .chat-group-footer .chat-send-status__action {
@@ -427,14 +441,17 @@
   min-height: 0;
   padding: 0;
   border-radius: 0;
-  color: inherit;
+  color: var(--link);
   font: inherit;
   opacity: 1 !important;
   pointer-events: auto;
 }
 
+.chat-group-footer .chat-send-status__discard {
+  color: var(--muted);
+}
+
 .chat-group-footer .chat-send-status__action:hover {
-  color: inherit;
   text-decoration: underline;
 }
 
@@ -604,18 +621,20 @@ img.chat-avatar.user {
 /* Keep the image and its fallback in one stable grid item. display: contents
    can lose the avatar column when Lit reconciles an attributed message. */
 .chat-avatar-slot {
+  position: relative;
   display: grid;
 }
 
-.chat-avatar-slot > :not(img) {
+.chat-avatar-slot > :not(img, .identity-avatar__hat) {
   display: none;
 }
 
-.chat-avatar-slot.is-fallback > img.chat-avatar {
+.chat-avatar-slot.is-fallback > img.chat-avatar,
+.chat-avatar-slot.is-fallback > .identity-avatar__hat {
   display: none;
 }
 
-.chat-avatar-slot.is-fallback > :not(img) {
+.chat-avatar-slot.is-fallback > :not(img, .identity-avatar__hat) {
   display: grid;
 }
 
@@ -722,22 +741,6 @@ img.chat-avatar {
 .chat-group.user .chat-duplicate-count {
   background: color-mix(in srgb, var(--primary) 12%, transparent);
   color: color-mix(in srgb, var(--text) 80%, var(--primary) 20%);
-}
-
-.chat-reply-attribution {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 5px;
-  margin-bottom: var(--space-1);
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.chat-reply-attribution__icon,
-.chat-reply-attribution__icon svg {
-  width: 14px;
-  height: 14px;
 }
 
 @media (hover: none),

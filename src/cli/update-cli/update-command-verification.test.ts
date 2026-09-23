@@ -13,7 +13,7 @@ import {
   renderUpdateRunReport,
   updateRunReportInputFromResult,
 } from "../../infra/update-run-report.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
@@ -43,7 +43,6 @@ vi.mock("../../infra/update-run-report-health.js", () => ({
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: { log: vi.fn(), error: vi.fn() },
 }));
-vi.mock("./restart-helper.js", () => ({ runRestartScript: vi.fn(async () => true) }));
 vi.mock("../../infra/gateway-supervision.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/gateway-supervision.js")>()),
   assertGatewayServiceMutationAllowed: vi.fn(),
@@ -383,7 +382,7 @@ describe("update readiness generation", () => {
 
   it.each(
     [
-      "restart script",
+      "native restart",
       "service refresh",
       "child readiness timeout",
       "legacy update marker",
@@ -447,7 +446,6 @@ describe("update readiness generation", () => {
               refreshServiceEnv,
               serviceEnv: { HOME: "/synthetic-home" },
               gatewayPort: address.port,
-              restartScriptPath: childTimeout ? undefined : "/synthetic-restart.sh",
               requireRunningServiceAfterRestart: true,
               timeoutMs: exhausted ? 60_000 : 120_000,
             });
@@ -463,12 +461,8 @@ describe("update readiness generation", () => {
       }
       expect(monotonicClock.nowMs).toBe(pending ? 65_500 : 95_500);
       expect(callGateway).toHaveBeenCalledTimes(pending ? 0 : 14);
-      const { runRestartScript } = await import("./restart-helper.js");
-      expect(runRestartScript).toHaveBeenCalledTimes(
-        refreshServiceEnv || childTimeout || activation === "legacy update marker" ? 0 : 1,
-      );
       expect(runUpdatedInstallGatewayCommand).toHaveBeenCalledTimes(
-        refreshServiceEnv || childTimeout ? 1 : 0,
+        activation === "legacy update marker" ? 0 : 1,
       );
     },
   );

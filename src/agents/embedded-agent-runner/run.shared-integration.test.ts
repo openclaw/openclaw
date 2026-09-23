@@ -1,4 +1,6 @@
 // The imported scenario modules share one mocked runEmbeddedAgent module graph.
+import { afterAll } from "vitest";
+import { cleanupSharedRunIntegrationSessions } from "./run.shared-integration-harness.test-support.js";
 import "./run.before-agent-finalize.test-support.js";
 import "./run.before-agent-reply-cron.test-support.js";
 import "./run.codex-app-server-recovery.test-support.js";
@@ -16,3 +18,5 @@ import "./run.retry-lifecycle.test-support.js";
 import "./run.timeout-triggered-compaction.test-support.js";
 import "./sessions-yield.orchestration.test-support.js";
 import "./usage-reporting.test-support.js";
+
+afterAll(cleanupSharedRunIntegrationSessions);

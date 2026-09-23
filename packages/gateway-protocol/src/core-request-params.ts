@@ -25,6 +25,8 @@ import type * as UsersSchema from "./schema/users.js";
 
 /** Schema-derived payload ownership for statically validated core Gateway methods. */
 export type GatewayCoreRequestParams = {
+  "users.personalFile.get": UsersSchema.UsersPersonalFileGetParams;
+  "users.personalFile.set": UsersSchema.UsersPersonalFileSetParams;
   "canvas.document.preview": CanvasDocumentPreviewParams;
   "canvas.document.view": CanvasDocumentViewParams;
   "board.action": BoardSchema.BoardActionParams;
@@ -66,6 +68,9 @@ export type GatewayCoreRequestParams = {
   "users.listModelAccounts": UsersSchema.UsersListModelAccountsParams;
   "users.selectModelAccount": UsersSchema.UsersSelectModelAccountParams;
   "users.linkAuthProfile": UsersSchema.UsersLinkAuthProfileParams;
+  "users.linkChannelIdentity": UsersSchema.UsersLinkChannelIdentityParams;
+  "users.unlinkChannelIdentity": UsersSchema.UsersUnlinkChannelIdentityParams;
+  "users.listChannelIdentities": UsersSchema.UsersListChannelIdentitiesParams;
   "users.unlinkAuthProfile": UsersSchema.UsersUnlinkAuthProfileParams;
   "users.github.status": Static<typeof UsersSchema.UsersGitHubStatusParamsSchema>;
   "users.github.authorize.start": Static<typeof UsersSchema.UsersGitHubAuthorizeStartParamsSchema>;

@@ -338,6 +338,24 @@ Memory pressure events record RSS, heap, threshold, and growth facts
 (`rss_threshold`, `heap_threshold`, `rss_growth`) without performing a
 file-system scan or writing a pre-OOM snapshot.
 
+On Node, persistent database workers collect garbage after a completed operation
+when their used heap has grown by 32 MiB since the last idle collection. SQLite,
+history, transcript, and reclamation workers request a 512 MiB V8 old-generation
+limit; an explicit process-wide `--max-old-space-size` overrides Node's worker
+resource limit. These limits do not cover native allocations or transferred buffers.
+Critical memory pressure retires idle workers through their existing cleanup owners,
+including when diagnostic event collection is disabled. Active operations keep
+their custody and the usual 30-minute database retention window resumes after use.
+No stored data, database schema, or update procedure changes.
+
+When a task pool recreates an idle-retired Worker within five minutes, it keeps
+one replacement warm for five minutes of inactivity. Other slots retain their
+normal idle timeout. Node Code Mode likewise retains at most one completed
+Worker for five minutes, reusing it only when its runtime entry and heap limit
+match. Warm task workers still collect released payloads in place; critical
+pressure, cancellation, rotation, and shutdown retain their existing cleanup
+paths. No configuration setting is needed.
+
 ## Related
 
 - [Health checks](/gateway/health)

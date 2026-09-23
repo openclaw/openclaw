@@ -381,16 +381,11 @@ function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string)
   throw error;
 }
 
-function getSourceModuleLoader(
-  modulePath: string,
-  options: BundledEntryModuleLoadOptions,
-  transformOpenClawDependencies = false,
-) {
+function getSourceModuleLoader(modulePath: string, options: BundledEntryModuleLoadOptions) {
   return getCachedPluginModuleLoader({
     modulePath,
     importerUrl: import.meta.url,
     loaderFilename: import.meta.url,
-    transformOpenClawDependencies,
     ...(options.createLoaderForTest ? { createLoader: options.createLoaderForTest } : {}),
     tryNative: false,
   });
@@ -433,17 +428,13 @@ function loadBundledEntryModuleSync(
   let sourceLoaderReadyMs = 0;
   if (canTryNodeRequireBuiltModule(modulePath)) {
     const native = tryNativeRequireJavaScriptModule(modulePath, {
-      allowWindows: true,
-      aliasMap: buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url, "dist"),
+      aliasMap: buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url),
       fallbackOnMissingDependency: true,
-      fallbackOnNativeError: true,
     });
     if (native.ok) {
       loaded = native.moduleExport;
     } else {
-      // Native require can leave an SDK module inside an active dynamic-import graph.
-      // Transform the fallback graph end-to-end so it cannot require that module again.
-      const moduleLoader = getSourceModuleLoader(modulePath, options, true);
+      const moduleLoader = getSourceModuleLoader(modulePath, options);
       sourceLoaderReadyMs = profile ? performance.now() : 0;
       loaded = moduleLoader(toSafeImportPath(modulePath));
     }

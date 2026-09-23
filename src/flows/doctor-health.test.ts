@@ -20,6 +20,7 @@ import {
 } from "../infra/exec-approvals-sqlite.js";
 import { loadExecApprovalsReadOnly } from "../infra/exec-approvals-store.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   resolveStateDatabaseCoordinatorPath,
   resolveStateLifecycleRuntimeDirectory,
@@ -44,9 +45,11 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   OPENCLAW_AGENT_SCHEMA_VERSION,
+  resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
 import { withLegacySessionParticipantsSchema } from "../state/openclaw-agent-participants-migration.js";
+import { seedOpenClawAgentSchemaV21 } from "../state/openclaw-agent-schema-v21.test-support.js";
 import { sessionParticipantsSchemaSql } from "../state/openclaw-agent-session-participants-schema.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -55,6 +58,22 @@ import { runDoctorHealthFlow } from "./doctor-health.js";
 
 const support = await import("./doctor-health.test-support.js");
 const { mocks, registerDoctorConfigReceiptTests, postInstallAdvisory } = support;
+
+function openHistoricalAgentDatabase(options: {
+  agentId: string;
+  env: NodeJS.ProcessEnv;
+  path?: string;
+}) {
+  const databasePath = resolveOpenClawAgentSqlitePath(options);
+  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+  const db = openNodeSqliteDatabase(databasePath);
+  seedOpenClawAgentSchemaV21(db, options.agentId);
+  removeCanonicalValidationFromHistoricalAgentFixture(db);
+  db.exec(
+    "DROP TABLE session_participants; PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;",
+  );
+  return { db, path: databasePath };
+}
 
 describe("runDoctorHealthFlow", () => {
   afterEach(() => vi.unstubAllEnvs());
@@ -225,7 +244,7 @@ describe("runDoctorHealthFlow", () => {
           kind === "absent" ||
           kind === "windows-ready" ||
           kind === "windows-disabled" ||
-          kind.endsWith("loaded-disabled")
+          (kind.endsWith("loaded-disabled") && process.platform !== "darwin")
         ) {
           await run;
           expect(
@@ -358,17 +377,12 @@ describe("runDoctorHealthFlow", () => {
             JSON.stringify({ version: 1, setupCompletedAt: "2026-07-15T00:00:00.000Z" }),
           );
         }
-        const initial = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-        const secondary = openOpenClawAgentDatabase({ agentId: "research", env: state.env });
+        const open = clean ? openOpenClawAgentDatabase : openHistoricalAgentDatabase;
+        const initial = open({ agentId: "main", env: state.env });
+        const secondary = open({ agentId: "research", env: state.env });
         if (!clean) {
-          removeCanonicalValidationFromHistoricalAgentFixture(secondary.db);
-          removeCanonicalValidationFromHistoricalAgentFixture(initial.db);
-          secondary.db.exec(
-            "DROP TABLE session_participants; PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;",
-          );
-          initial.db.exec(
-            "DROP TABLE session_participants; PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;",
-          );
+          secondary.db.close();
+          initial.db.close();
         }
         closeOpenClawAgentDatabasesForTest();
         const leaseId = claimOpenClawAgentDatabaseLease({
@@ -642,11 +656,8 @@ describe("runDoctorHealthFlow", () => {
     "refuses blocked required migration for %j, then completes after the writer releases",
     async (options) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const initial = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-        removeCanonicalValidationFromHistoricalAgentFixture(initial.db);
-        initial.db.exec(
-          "DROP TABLE session_participants; PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;",
-        );
+        const initial = openHistoricalAgentDatabase({ agentId: "main", env: state.env });
+        initial.db.close();
         closeOpenClawAgentDatabasesForTest();
         const before = fs.readFileSync(initial.path);
         const leaseId = claimOpenClawAgentDatabaseLease({
@@ -679,9 +690,7 @@ describe("runDoctorHealthFlow", () => {
           );
           expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
           expect(runtime.error).toHaveBeenCalledWith(
-            expect.stringMatching(
-              /Doctor could not enter maintenance.*Agent main database is still open.*stop that process/,
-            ),
+            "Doctor could not enter maintenance. An agent database is in use. Stop other OpenClaw processes using this state, then retry the update.",
           );
           expect(maintenanceOutcome()).toEqual({ outcome: "startup_failed" });
           expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledWith({
@@ -692,8 +701,9 @@ describe("runDoctorHealthFlow", () => {
               failureFacts: [
                 {
                   check: "doctor",
-                  code: "doctor-failed",
-                  message: expect.stringContaining("Doctor could not enter maintenance"),
+                  code: "agent-database-lease-active",
+                  message:
+                    "Doctor could not enter maintenance. An agent database is in use. Stop other OpenClaw processes using this state, then retry the update.",
                 },
               ],
             },
@@ -740,19 +750,16 @@ describe("runDoctorHealthFlow", () => {
               env: state.env,
             }).path
           : undefined;
-        const initial = openOpenClawAgentDatabase({
+        const initial = openHistoricalAgentDatabase({
           agentId: "main",
           env: state.env,
           ...(configuredPath ? { path: configuredPath } : {}),
         });
-        removeCanonicalValidationFromHistoricalAgentFixture(initial.db);
-        initial.db.exec(
-          "DROP TABLE session_participants; PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;",
-        );
         initial.db.exec(withLegacySessionParticipantsSchema(sessionParticipantsSchemaSql()));
         initial.db.exec(
           "CREATE INDEX unknown_participant_dependency ON session_participants(actor_id);",
         );
+        initial.db.close();
         closeOpenClawAgentDatabasesForTest();
         unregisterOpenClawAgentDatabase({ agentId: "main", path: initial.path, env: state.env });
         const before = fs.readFileSync(initial.path);

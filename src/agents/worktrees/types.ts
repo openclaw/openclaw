@@ -92,6 +92,9 @@ export type RemoveManagedWorktreeResult = {
   removed: boolean;
   snapshotRef?: string;
   snapshotError?: string;
+  /** Exact retirement retains the original checkout, not merely its captured bytes. */
+  recoveryPath?: string;
+  recoveryRetainedUntil?: number;
 };
 
 export type ManagedWorktreeBranch = {

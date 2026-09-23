@@ -657,16 +657,11 @@ async function handleDiscordModelPickerInteraction(params: {
       return;
     }
     const applyResult = await applyDiscordModelPickerSelection({
+      ...ctx,
       interaction,
       selectionCommand,
       dispatchCommandInteraction: params.dispatchCommandInteraction,
       cfg,
-      discordConfig: ctx.discordConfig,
-      readPolicy: ctx.readPolicy,
-      accountId: ctx.accountId,
-      sessionPrefix: ctx.sessionPrefix,
-      threadBindings: ctx.threadBindings,
-      dispatchReplyFromConfig: ctx.dispatchReplyFromConfig,
       route,
       resolvedModelRef,
       selectedRuntime,

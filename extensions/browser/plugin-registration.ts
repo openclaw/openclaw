@@ -266,20 +266,17 @@ export const browserSecurityAuditCollectors: OpenClawPluginSecurityAuditCollecto
 function createLazyBrowserPluginService(): OpenClawPluginService {
   let service: OpenClawPluginService | null = null;
   let stopDashboardEvents: (() => Promise<void>) | undefined;
-  const loadService = async () => {
-    if (!service) {
-      const { createBrowserPluginService, stopBrowserControlService } =
-        await loadBrowserRegistrationRuntimeModule();
-      service = createBrowserPluginService({ stopOnDemand: stopBrowserControlService });
-    }
-    return service;
-  };
   return {
     id: "browser-control",
     // Policy changes drain the service's generation before adopting new values.
     // Profile-level refresh keeps the admitted policy until this owner stops.
     reload: {
-      configPrefixes: ["browser.enabled", "browser.evaluateEnabled", "browser.ssrfPolicy"],
+      configPrefixes: [
+        "browser.enabled",
+        "browser.evaluateEnabled",
+        "browser.ssrfPolicy",
+        "browser.extensionRelay.allowLegacyAuth",
+      ],
     },
     start: async (ctx) => {
       await stopDashboardEvents?.();
@@ -289,8 +286,10 @@ function createLazyBrowserPluginService(): OpenClawPluginService {
       if (!isTruthyEnvValue(process.env[EAGER_BROWSER_CONTROL_SERVICE_ENV])) {
         return;
       }
-      const loaded = await loadService();
-      await loaded.start(ctx);
+      const { createBrowserPluginService, stopBrowserControlService } =
+        await loadBrowserRegistrationRuntimeModule();
+      service ??= createBrowserPluginService({ stopOnDemand: stopBrowserControlService });
+      await service.start(ctx);
     },
     stop: async (ctx) => {
       await stopDashboardEvents?.();

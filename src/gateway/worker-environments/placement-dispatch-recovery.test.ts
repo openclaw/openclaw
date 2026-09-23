@@ -33,7 +33,7 @@ describe("worker placement restart recovery", () => {
     async (owner) => {
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
       const original = createHarness(support.testState.stateDb, placements);
-      const ready = support.seedReady(original.ready.environmentId);
+      const ready = await support.seedReady(original.ready.environmentId);
       const environments = support.createService(support.createProvider());
       const attached = await environments.attachSession({
         environmentId: ready.environmentId,
@@ -963,8 +963,8 @@ describe("worker placement restart recovery", () => {
       });
       const recovery = createRecoveryService(placements, workerService);
       const environmentId = "worker-stale-recovery";
-      const bootstrapping = support.seedBootstrapping(environmentId);
-      support.testState.store.transition({
+      const bootstrapping = await support.seedBootstrapping(environmentId);
+      await support.testState.store.transition({
         environmentId,
         from: bootstrapping.state,
         to: "ready",

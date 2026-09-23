@@ -1,3 +1,4 @@
+import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   cancelProviderLoginFlow,
@@ -24,7 +25,7 @@ import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { defaultTelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import type { TelegramCommandDispatch } from "./bot-native-command-dispatch.js";
-import { buildTelegramRoutingTarget, resolveTelegramCommandAuthorization } from "./bot/helpers.js";
+import { buildTelegramRoutingTarget } from "./bot/helpers.js";
 
 const activeTelegramProviderLoginFlows = createProviderLoginFlowRegistry();
 
@@ -99,17 +100,17 @@ export async function executeTelegramLoginCommand(params: {
     );
   };
   const assertCurrent = (config = dispatch.telegramDeps.getRuntimeConfig()) => {
-    const authorization = resolveTelegramCommandAuthorization({
+    dispatch.assertOwnerCurrent?.();
+    const authorization = resolveCommandAuthorization({
       cfg: config,
-      accountId: dispatch.route.accountId,
-      chatId: dispatch.chatId,
-      isGroup: dispatch.isGroup,
-      threadSpec: dispatch.threadSpec,
-      senderId: dispatch.senderId,
-      senderUsername: dispatch.senderUsername,
+      ctx: dispatch.ownerContext,
       commandAuthorized: dispatch.commandAuthorized,
     });
-    if (!authorization.senderIsOwner || !authorization.isAuthorizedSender) {
+    if (
+      !dispatch.senderIsOwner ||
+      !authorization.senderIsOwner ||
+      !authorization.isAuthorizedSender
+    ) {
       throw new Error("Provider login authority is no longer active.");
     }
   };

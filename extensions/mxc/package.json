@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@microsoft/mxc-sdk": "0.8.0",
-    "zod": "4.6.4"
+    "zod": "4.6.5"
   },
   "openclaw": {
     "extensions": [

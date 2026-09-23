@@ -1,7 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { SessionsResolveResult } from "../../../packages/gateway-protocol/src/index.js";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { clickBoardWidgetControl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -45,9 +45,7 @@ const dashboardRows = (
   createdActor: { type: "human", id: actorId, label: actorLabel },
 }));
 
-const previewMarkup = encodeURIComponent(
-  `<!doctype html><html><body style="margin:0;background:#111827;color:#f8fafc;font:16px sans-serif"><main style="padding:24px"><h1>Live Gateway Pulse</h1><strong>All systems nominal</strong></main></body></html>`,
-);
+const widgetMarkup = `<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0;background:#111827;color:#f8fafc;font:16px sans-serif"><main style="padding:24px"><h1>Live Gateway Pulse</h1><strong>All systems nominal</strong><p><label>Notes <input aria-label="Notes"></label></p><button onclick="document.querySelector('ul').replaceChildren(...Array.from(document.querySelectorAll('li')).reverse())">Reverse rows</button><ul><li>café</li><li>雪</li><li>🦞</li></ul></main></body></html>`;
 const boardSnapshots = dashboardRows.map((row) => ({
   sessionKey: row.key,
   revision: 1,
@@ -63,7 +61,7 @@ const boardSnapshots = dashboardRows.map((row) => ({
       position: 0,
       grantState: "granted",
       revision: 1,
-      frameUrl: `data:text/html,${previewMarkup}`,
+      frameUrl: "/dashboard-gallery-widget.html",
     },
     ...(row.key === selectedSessionKey
       ? [
@@ -83,11 +81,17 @@ const boardSnapshots = dashboardRows.map((row) => ({
   ],
 }));
 suite.define(() => {
-  it("opens a responsive gallery card in its owning chat with the dashboard expanded", async () => {
+  it("opens a responsive gallery card without restarting its retained dashboard widgets", async () => {
     const proofDir = process.env.OPENCLAW_UI_E2E_RECORD === "1" ? suite.artifactDir : null;
     await suite.withPage(
       { colorScheme: "dark", viewport: { width: 1440, height: 900 } },
       async ({ page }) => {
+        await page.route("**/dashboard-gallery-widget.html", (route) =>
+          route.fulfill({
+            contentType: "text/html; charset=utf-8",
+            body: widgetMarkup,
+          }),
+        );
         const gateway = await installMockGateway(page, {
           sessionKey: selectedSessionKey,
           sessions: dashboardRows,
@@ -175,21 +179,45 @@ suite.define(() => {
         await page.waitForURL(
           /\/dashboard\/main\/release-health-1234567890abcdef1234567890abcdef$/u,
         );
+        const task = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
         await page.locator(".board-session-surface").waitFor();
         await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
-        await expect.poll(() => page.locator(".chat-thread").isHidden()).toBe(true);
+        await expect.poll(() => task.locator(".chat-thread").isHidden()).toBe(true);
+        const widget = page
+          .locator('.board-session-surface iframe[title="Live Gateway Pulse"]')
+          .contentFrame();
+        const notes = "Release notes: café 雪 🦞";
+        await widget.getByRole("textbox", { name: "Notes" }).fill(notes);
+        expect(await widget.getByRole("textbox", { name: "Notes" }).inputValue()).toBe(notes);
+        await clickBoardWidgetControl(page, widget.getByRole("button", { name: "Reverse rows" }));
+        expect(await widget.locator("li").allTextContents()).toEqual(["🦞", "雪", "café"]);
+        const documentStartedAt = await page.evaluate(() => performance.timeOrigin);
+        await page.getByRole("link", { name: "Dashboards", exact: true }).click();
+        await gallery.getByRole("searchbox").fill("Release health");
+        await releaseCard.locator("a").click();
+        await page.waitForURL(
+          /\/dashboard\/main\/release-health-1234567890abcdef1234567890abcdef(?:\?.*)?$/u,
+        );
+        await page.locator('a.nav-item[href="/dashboards"]:not([aria-current])').waitFor();
+        await widget.getByRole("textbox", { name: "Notes" }).waitFor();
+        if (proofDir) {
+          await page.screenshot({ path: path.join(proofDir, "02-gallery-return.png") });
+        }
+        expect(await widget.getByRole("textbox", { name: "Notes" }).inputValue()).toBe(notes);
+        expect(await widget.locator("li").allTextContents()).toEqual(["🦞", "雪", "café"]);
+        expect(await page.evaluate(() => performance.timeOrigin)).toBe(documentStartedAt);
         // A cold route must resolve without the gallery's navigation handoff.
         await page.reload();
         await page.locator(".board-session-surface").waitFor();
         await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
-        await expect.poll(() => page.locator(".chat-thread").isHidden()).toBe(true);
+        await expect.poll(() => task.locator(".chat-thread").isHidden()).toBe(true);
         if (proofDir) {
           await page.screenshot({ path: path.join(proofDir, "02-expanded-dashboard.png") });
         }
 
         await page.getByRole("button", { name: "Restore split", exact: true }).click();
         await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
-        await page.locator(".chat-thread").waitFor();
+        await task.locator(".chat-thread").waitFor();
         if (proofDir) {
           await page.screenshot({ path: path.join(proofDir, "03-split-dashboard.png") });
         }
@@ -198,7 +226,7 @@ suite.define(() => {
           .getByRole("button", { name: "Close", exact: true })
           .click();
         await page.locator(".board-session-surface").waitFor();
-        await page.locator(".chat-thread").waitFor({ state: "hidden" });
+        await task.locator(".chat-thread").waitFor({ state: "hidden" });
         if (proofDir) {
           await page.screenshot({ path: path.join(proofDir, "04-dashboard-only.png") });
         }

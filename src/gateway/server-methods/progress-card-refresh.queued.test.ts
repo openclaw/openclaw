@@ -238,7 +238,13 @@ function fixture(options: { parkSteer?: boolean } = {}) {
   });
   const refresh = async (key = "click-1") => {
     invocation.respond.mockClear();
-    await requestProgressCardRefresh(invocation, { sessionKey, agentId: "work" }, card, key);
+    await requestProgressCardRefresh(
+      invocation,
+      { sessionKey, agentId: "work" },
+      card,
+      key,
+      async () => card,
+    );
     return invocation.respond;
   };
   const first = () => {

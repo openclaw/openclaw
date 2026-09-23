@@ -10,13 +10,14 @@ import {
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
 import { readSessionCreationSnapshot } from "./session-accessor.sqlite-creation-read.js";
 import "./session-accessor.sqlite-entry.js";
+import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
 import { forkSessionTranscriptFromParent } from "./session-accessor.sqlite-parent-session.js";
 import {
   resolveSqliteTranscriptScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-store.js";
+import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
 import type {
   SessionAccessScope,
   SessionEntryUpdateOptions,
@@ -74,6 +75,7 @@ export async function createSessionEntryWithTranscript<TError = string>(
   if (!created.ok) {
     return { ok: false, error: created.error, phase: "entry" };
   }
+  const ownerAssignment = options.resolveOwnerAssignment?.();
   const { cwd, commitGuard, withCommit, onLifecycleCommitted } = options;
 
   const initializeTranscript = async (assertSourceCurrent?: () => void) => {
@@ -122,6 +124,15 @@ export async function createSessionEntryWithTranscript<TError = string>(
     skipMaintenance: true,
     ...(commitGuard ? { beforeCommitInTransaction: commitGuard } : {}),
     ...(withCommit ? { withCommit } : {}),
+    ...(ownerAssignment
+      ? {
+          afterFreshUpsertsInTransaction: (database) => {
+            if (!replaceSessionOwnerInTransaction(database, normalizedKey, ownerAssignment)) {
+              throw new Error(`Session owner assignment lost its target: ${normalizedKey}`);
+            }
+          },
+        }
+      : {}),
     ...(onLifecycleCommitted ? { onLifecycleCommitted: () => onLifecycleCommitted(entry) } : {}),
   });
   return { ok: true, entry, sessionFile: normalizedKey };

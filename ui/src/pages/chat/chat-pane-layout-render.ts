@@ -276,6 +276,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
             .presented=${this.visuallyPresented}
           ></openclaw-plugin-contributions>`;
     const content = renderSidebarRegion({
+      presentationId: this.presentationId,
       availableWidth: this.paneWidth,
       fetchFavicon: resolveChatLinkFaviconFetcher(state),
       availableSlots,

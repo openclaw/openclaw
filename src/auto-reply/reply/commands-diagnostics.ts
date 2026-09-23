@@ -15,7 +15,7 @@ import type { PluginCommandDiagnosticsSession, PluginCommandResult } from "../..
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import type { ReplyPayload } from "../types.js";
 import { formatCommandExecResult, formatCommandExecText } from "./command-exec-result.js";
 import { rejectNonOwnerCommand } from "./command-gates.js";
@@ -53,7 +53,8 @@ type CodexDiagnosticsApprovalIntegration = {
   approvalFollowup?: () => Promise<string | undefined>;
 };
 
-export const handleDiagnosticsCommand: CommandHandler = async (params, allowTextCommands) => {
+export const handleDiagnosticsCommand: CommandHandler = async (input, allowTextCommands) => {
+  const params = { ...input, command: { ...input.command } };
   if (!allowTextCommands) {
     return null;
   }
@@ -400,6 +401,7 @@ async function executeCodexDiagnosticsAddon(
     channelId: params.command.channelId,
     isAuthorizedSender: params.command.isAuthorizedSender,
     senderIsOwner: params.command.senderIsOwner,
+    assertOwnerCurrent: params.command.assertOwnerCurrent,
     gatewayClientScopes: params.ctx.GatewayClientScopes,
     agentId: params.agentId,
     sessionKey: params.sessionKey,

@@ -15,7 +15,6 @@ import { createConnection as createNetConnection, createServer as createNetServe
 import { tmpdir } from "node:os";
 import { dirname, join, resolve as resolvePath, win32 } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
   agentOutputHasExpectedOkMarker,
@@ -93,7 +92,6 @@ import {
   resolveInstalledPrefixDirFromCliPath,
   resolvePublishedInstallerUrl,
   resolveRequestedSuites,
-  resolveRunnerMatrix,
   resolveStaticFileContentType,
   startStaticFileServer,
   trimForSummary,
@@ -113,6 +111,18 @@ import {
 } from "../../scripts/lib/cross-os-release-checks/index.ts";
 import * as candidateProcess from "../../scripts/lib/cross-os-release-checks/process.ts";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mts";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
+import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
+
+vi.mock("node:net", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:net")>();
+  // Keep native socket/stream prototypes intact across shared-worker files.
+  return {
+    ...actual,
+    createConnection: vi.fn(actual.createConnection),
+    createServer: vi.fn(actual.createServer),
+  };
+});
 
 const rootPackageManager = (
   JSON.parse(readFileSync("package.json", "utf8")) as {
@@ -1431,54 +1441,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(resolveRequestedSuites("both", input)).toEqual(expected);
   });
 
-  it("builds a suite-aware runner matrix with the beefy Windows default", () => {
-    const matrix = resolveRunnerMatrix({
-      mode: "both",
-      ref: "main",
-      ubuntuRunner: "",
-      windowsRunner: "",
-      macosRunner: "",
-      varUbuntuRunner: "",
-      varWindowsRunner: "",
-      varMacosRunner: "",
-    });
-
-    expect(matrix.include).toHaveLength(12);
-    expect(
-      matrix.include.find((entry) => entry.os_id === "windows" && entry.suite === "dev-update"),
-    ).toEqual({
-      artifact_name: "windows",
-      display_name: "Windows",
-      lane: "upgrade",
-      os_id: "windows",
-      runner: "blacksmith-32vcpu-windows-2025",
-      suite: "dev-update",
-      suite_label: "dev update",
-    });
-    expect(
-      matrix.include.find((entry) => entry.os_id === "ubuntu" && entry.suite === "installer-fresh"),
-    ).toEqual({
-      artifact_name: "linux",
-      display_name: "Linux",
-      lane: "fresh",
-      os_id: "ubuntu",
-      runner: "blacksmith-8vcpu-ubuntu-2404",
-      suite: "installer-fresh",
-      suite_label: "installer fresh",
-    });
-    expect(
-      matrix.include.find((entry) => entry.os_id === "macos" && entry.suite === "packaged-fresh"),
-    ).toEqual({
-      artifact_name: "macos",
-      display_name: "macOS",
-      lane: "fresh",
-      os_id: "macos",
-      runner: "blacksmith-6vcpu-macos-15",
-      suite: "packaged-fresh",
-      suite_label: "packaged fresh",
-    });
-  });
-
   it("keeps matrix resolution independent of package dependency imports", () => {
     const configSource = readFileSync("scripts/lib/cross-os-release-checks/config.ts", "utf8");
     const installSource = readFileSync("scripts/lib/cross-os-release-checks/install.ts", "utf8");
@@ -1531,58 +1493,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
-  });
-
-  it("filters the cross-OS runner matrix to a focused OS suite", () => {
-    const matrix = resolveRunnerMatrix({
-      mode: "both",
-      ref: "main",
-      suiteFilter: "windows/packaged-upgrade",
-      ubuntuRunner: "",
-      windowsRunner: "",
-      macosRunner: "",
-      varUbuntuRunner: "",
-      varWindowsRunner: "",
-      varMacosRunner: "",
-    });
-
-    expect(matrix.include).toEqual([
-      {
-        artifact_name: "windows",
-        display_name: "Windows",
-        lane: "upgrade",
-        os_id: "windows",
-        runner: "blacksmith-32vcpu-windows-2025",
-        suite: "packaged-upgrade",
-        suite_label: "packaged upgrade",
-      },
-    ]);
-  });
-
-  it("filters the cross-OS runner matrix by suite across platforms", () => {
-    const matrix = resolveRunnerMatrix({
-      mode: "both",
-      ref: "main",
-      suiteFilter: "packaged-fresh",
-      ubuntuRunner: "",
-      windowsRunner: "",
-      macosRunner: "",
-      varUbuntuRunner: "",
-      varWindowsRunner: "",
-      varMacosRunner: "",
-    });
-
-    expect(matrix.include).toHaveLength(3);
-    expect(matrix.include.map((entry) => entry.os_id).toSorted()).toEqual([
-      "macos",
-      "ubuntu",
-      "windows",
-    ]);
-    expect(matrix.include.map((entry) => entry.suite)).toEqual([
-      "packaged-fresh",
-      "packaged-fresh",
-      "packaged-fresh",
-    ]);
   });
 
   it("rejects unsupported cross-OS suite filter tokens", () => {
@@ -2205,9 +2115,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
 
     const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-run-command-signal-"));
     const childPidPath = join(dir, "child.pid");
-    const scriptUrl = pathToFileURL(
-      resolvePath("scripts/lib/cross-os-release-checks/process.ts"),
-    ).href;
+    const scriptUrl = resolveRuntimeWorkerUrl(toolingTsEntrypoints.crossOsProcess).href;
     let childPid: number | undefined;
     let runnerPid: number | undefined;
 
@@ -2270,9 +2178,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-run-command-signal-exit-"));
     const childPidPath = join(dir, "child.pid");
     const logPath = join(dir, "signal.log");
-    const scriptUrl = pathToFileURL(
-      resolvePath("scripts/lib/cross-os-release-checks/process.ts"),
-    ).href;
+    const scriptUrl = resolveRuntimeWorkerUrl(toolingTsEntrypoints.crossOsProcess).href;
     let childPid: number | undefined;
     let runnerPid: number | undefined;
 
@@ -2381,36 +2287,70 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(await canConnectToLoopbackPort(1234.5)).toBe(false);
 
     const server = createNetServer();
+    const closed = vi.fn();
+    server.on("close", closed);
     await new Promise<void>((resolvePromise) => {
       server.listen(0, "127.0.0.1", resolvePromise);
     });
     const address = server.address();
     const port = typeof address === "object" && address ? address.port : 0;
-    expect(await canConnectToLoopbackPort(port)).toBe(true);
-    await new Promise<void>((resolvePromise) => {
-      server.close(() => resolvePromise());
-    });
-    // Preserve the 500 ms close budget while detecting port release sooner.
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      if (!(await canConnectToLoopbackPort(port, 100))) {
-        return;
-      }
-      await delay(5);
+    try {
+      expect(await canConnectToLoopbackPort(port)).toBe(true);
+    } finally {
+      await new Promise<void>((resolvePromise, rejectPromise) => {
+        server.close((error) => (error ? rejectPromise(error) : resolvePromise()));
+      });
     }
-    expect(await canConnectToLoopbackPort(port, 100)).toBe(false);
+    expect(closed).toHaveBeenCalledOnce();
+    expect(server.listening).toBe(false);
+    expect(server.address()).toBeNull();
+
+    // Refusal belongs to the observed socket, not a released port another listener can acquire.
+    const actualNet = await vi.importActual<typeof import("node:net")>("node:net");
+    const refused = new actualNet.Socket();
+    const connect = vi.mocked(createNetConnection).mockImplementationOnce(() => {
+      queueMicrotask(() => {
+        refused.emit(
+          "error",
+          Object.assign(new Error("fixture connection refused"), {
+            code: "ECONNREFUSED",
+          }),
+        );
+      });
+      return refused;
+    });
+    try {
+      expect(await canConnectToLoopbackPort(port, 100)).toBe(false);
+      expect(refused.destroyed).toBe(true);
+    } finally {
+      connect.mockRestore();
+      refused.destroy();
+    }
   });
 
   it("keeps a release gateway port reserved until the lane is ready to start", async () => {
     const lane = { gatewayPort: 0 } as Parameters<typeof reserveGatewayPortForLane>[0];
     const reservation = await reserveGatewayPortForLane(lane);
+    let server: ReturnType<typeof createNetServer>;
+    const closed = vi.fn();
     try {
+      const created = vi.mocked(createNetServer).mock.results.at(-1);
+      if (created?.type !== "return") {
+        throw new Error("Gateway port reservation did not create its native listener");
+      }
+      server = created.value;
+      server.on("close", closed);
       expect(lane.gatewayPort).toBe(reservation.port);
+      expect(server.address()).toMatchObject({ port: reservation.port });
       expect(await canConnectToLoopbackPort(reservation.port)).toBe(true);
     } finally {
       await reservation.release();
     }
+    expect(closed).toHaveBeenCalledOnce();
+    expect(server.listening).toBe(false);
+    expect(server.address()).toBeNull();
     await reservation.release();
-    expect(await canConnectToLoopbackPort(reservation.port, 100)).toBe(false);
+    expect(closed).toHaveBeenCalledOnce();
   });
 
   it("writes Discord smoke config using the strict guild channel schema", () => {

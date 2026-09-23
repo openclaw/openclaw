@@ -103,10 +103,21 @@ export function commitComposerDraft(
   if (currentDraft === value && mentions === undefined) {
     return;
   }
-  const hadMentions = (props.getMentions?.() ?? props.mentions ?? []).length > 0;
+  const previousMentions = props.getMentions?.() ?? props.mentions ?? [];
   getChatComposerState(props.paneId).editRevision += 1;
   props.onDraftChange(value, mentions);
-  if (hadMentions || mentions?.length) {
+  const nextMentions = props.getMentions?.() ?? mentions ?? props.mentions ?? [];
+  // Moving a token while typing prose changes its span, not the recipient strip.
+  if (
+    previousMentions.length !== nextMentions.length ||
+    previousMentions.some((previous, index) => {
+      const next = nextMentions[index]!;
+      return (
+        previous.profileId !== next.profileId ||
+        currentDraft.slice(previous.start, previous.end) !== value.slice(next.start, next.end)
+      );
+    })
+  ) {
     props.onRequestUpdate?.();
   }
 }

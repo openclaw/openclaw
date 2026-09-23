@@ -33,7 +33,11 @@ import {
   type UpdateRunDriver,
 } from "./update-run-driver.js";
 import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "./update-run-legacy-expiry.js";
-import { decodeRun, readUpdateRunRecord as readRun } from "./update-run-read.kernel.js";
+import {
+  decodeRun,
+  hasStoredUpdateRecovery,
+  readUpdateRunRecord as readRun,
+} from "./update-run-read.kernel.js";
 import {
   inspectUpdateRunReconciliation,
   readUpdateRunReconciliationCandidates,
@@ -49,7 +53,7 @@ import {
   type UpdateRunStep,
 } from "./update-run-record.js";
 import { isUpdateRecoveryPending } from "./update-run-recovery-schema.js";
-import { hasStoredUpdateRecovery, readRecoveries } from "./update-run-recovery-store.js";
+import { readRecoveries } from "./update-run-recovery-store.js";
 import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
 import {
   mutateRun,
@@ -528,16 +532,12 @@ export function recordUpdateRunDiagnostic(
   runId: string,
   detail: string,
   options: LedgerOptions = {},
+  step = "finalize:exit",
 ): UpdateRunRecord {
   return mutateRun(
     runId,
     (record) => {
-      upsertStep(record, {
-        step: "finalize:exit",
-        status: "completed",
-        endedAtMs: Date.now(),
-        detail,
-      });
+      upsertStep(record, { step, status: "completed", endedAtMs: Date.now(), detail });
     },
     options,
   );

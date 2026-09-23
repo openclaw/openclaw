@@ -63,6 +63,58 @@ function createGateway(mainSessionKey?: string, mainKey = "main") {
   };
 }
 
+describe("session progress card lifetimes", () => {
+  it("ends a lifetime only after an accepted clear, not revisions, errors, or idle detach", async () => {
+    const { gateway, request, emitChange, emit } = createGateway();
+    const target = { sessionKey };
+    const owner = {};
+    const card = createProgressCard(1);
+    request.mockResolvedValue({ card });
+    const store = sessionProgressCardsForGateway(gateway);
+    store.watch(owner, [target]);
+    onTestFinished(() => store.unwatch(owner));
+    await store.load(target);
+    const lifetime = store.getLifetime(target);
+    expect(lifetime).toBeDefined();
+    emit(createGatewayEvent("sessions.changed", { key: sessionKey, reason: "patch" }));
+    expect(store.getLifetime(target)).toBe(lifetime);
+
+    request.mockResolvedValue({ card: { ...card, revision: 2 } });
+    emitChange(sessionKey, 2);
+    await store.load(target);
+    expect(store.getLifetime(target)).toBe(lifetime);
+    request.mockRejectedValueOnce(new Error("temporary failure"));
+    emitChange(sessionKey, 3);
+    await expect(store.load(target)).rejects.toThrow("temporary failure");
+    expect(store.getLifetime(target)).toBe(lifetime);
+    request.mockRejectedValueOnce(
+      new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "denied",
+        details: { code: "SESSION_PARTICIPATION_REQUIRED" },
+      }),
+    );
+    await expect(store.load(target)).rejects.toThrow("denied");
+    expect(store.get(target)).toBeNull();
+    expect(store.getLifetime(target)).toBe(lifetime);
+    await store.load(target);
+    expect(store.getLifetime(target)).toBe(lifetime);
+
+    store.unwatch(owner);
+    store.watch(owner, [target]);
+    await store.load(target);
+    expect(store.getLifetime(target)).toBe(lifetime);
+    request.mockResolvedValueOnce({ card: null });
+    emitChange(sessionKey, null);
+    await store.load(target);
+    expect(store.getLifetime(target)).toBeUndefined();
+    emitChange(sessionKey, 5);
+    await store.load(target);
+    expect(store.getLifetime(target)).toBeDefined();
+    expect(store.getLifetime(target)).not.toBe(lifetime);
+  });
+});
+
 describe("session progress card refresh", () => {
   it.each([false, true])(
     "waits for a higher authoritative revision (event first: %s)",
@@ -643,6 +695,9 @@ describe("session progress card Gateway response boundary", () => {
     await expect(store.load({ sessionKey: "agent:main:global" })).resolves.toEqual(ordinaryCard);
     expect(store.get({ sessionKey: "global" })).toEqual(globalCard);
     expect(store.get({ sessionKey: "agent:main:global" })).toEqual(ordinaryCard);
+    expect(store.getLifetime({ sessionKey: "global" })).not.toBe(
+      store.getLifetime({ sessionKey: "agent:main:global" }),
+    );
     const capturedGlobal = store.get({ sessionKey: "global" });
     if (!capturedGlobal) {
       throw new Error("Expected the loaded global card");
@@ -664,9 +719,11 @@ describe("session progress card Gateway response boundary", () => {
     const owner = {};
     store.watch(owner, [{ sessionKey: ordinaryKey }]);
     await store.load({ sessionKey: ordinaryKey });
+    const lifetime = store.getLifetime({ sessionKey: ordinaryKey });
     emitChange(ordinaryKey, null);
     await store.load({ sessionKey: ordinaryKey });
     expect(store.get({ sessionKey: ordinaryKey })).toEqual(card);
+    expect(store.getLifetime({ sessionKey: ordinaryKey })).toBe(lifetime);
     expect(request).toHaveBeenCalledTimes(2);
     store.unwatch(owner);
   });
@@ -806,6 +863,8 @@ describe("session progress card Gateway response boundary", () => {
     staleRead.resolve({ card: oldCard });
     await expect(oldRead).resolves.toBeNull();
     expect(store.get(target)).toEqual(nextCard);
+    const replacementLifetime = store.getLifetime(target);
+    expect(replacementLifetime).toBeDefined();
     expect(replacement.request).toHaveBeenCalledTimes(1);
 
     const staleDismiss = createDeferred<{ card: null }>();
@@ -833,6 +892,7 @@ describe("session progress card Gateway response boundary", () => {
     staleDismiss.resolve({ card: null });
     await expect(dismissal).resolves.toBe(false);
     expect(store.get(target)).toEqual(refreshedCard);
+    expect(store.getLifetime(target)).toBe(replacementLifetime);
     expect(replacement.request).toHaveBeenCalledTimes(4);
   });
 

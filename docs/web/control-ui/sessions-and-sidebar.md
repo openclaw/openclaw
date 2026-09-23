@@ -43,7 +43,11 @@ updates the sidebar without renaming an existing branch.
 
 ## New-session preferences and recents
 
-For connections with a durable user profile, the Gateway stores each agent's latest folder, worktree, model, and thinking choices. The new-session picker also shows recent projects and folders derived only from sessions created by that profile. These conveniences follow the person across browsers; they do not grant access to a project or path.
+In **Project → Browse**, keyboard focus moves to the folder path. Escape returns
+focus to **Browse**. Loading and folder errors are announced without moving focus
+away from the path field.
+
+For connections with a durable user profile, the Gateway stores each agent's latest folder, worktree, model, thinking, and fast-mode choices. New sessions restore the last fast-mode choice, including an explicit off choice, for supported providers. The new-session picker also shows recent projects and folders derived only from sessions created by that profile. These conveniences follow the person across browsers; they do not grant access to a project or path.
 
 A custom worktree **Name** applies to the submitted session. Once its start is
 accepted, New session clears that name while remembering the repository, checkout
@@ -126,6 +130,13 @@ unavailable plugin keeps its saved position for when it returns. **Home** stays
 at the top in chip mode. Plugin links shown by default can be reordered but not
 dragged out of Pages to unpin them; optional plugin destinations can still be unpinned.
 
+To reorder without dragging, focus or hover a page, pinned session, or stored
+session-section header and open its **Reorder** grip menu. Choose **Move up** or
+**Move down**; the same menu is available on touch screens. Keyboard focus stays
+with the moved item, and the order uses the same saved preferences or Gateway
+group order as dragging. Home and sections derived from people, projects, or
+agents keep their existing fixed order.
+
 To inspect Home’s subagents, open **Home**, choose **Show background tasks**, and use the right-hand **Tasks** panel. Expand **Finished** for recent completed runs; selecting a task opens its details and available transcript.
 
 Follow-up turns in an existing subagent session keep the parent’s activity ring running, even after the original task has finished. Opening the parent refreshes its hidden subagent activity without adding subagent rows to the sidebar. The ring clears when no work remains active.
@@ -156,7 +167,7 @@ Each group contains the agent's pinned and recent sessions, with the usual sessi
 
 Groups share a window of at most 300 sessions across agents with [Agents home](/web/control-ui#agents-home), loading pinned sessions first and then the most recent sessions. Pinned sessions count toward that limit, so more than 300 pinned sessions cannot all appear in this view. The open conversation can remain visible outside this window. **Involving me** loads the same bounded window filtered by the Gateway; the other filters apply to the loaded sessions across groups.
 
-The active session list applies Gateway lifecycle row snapshots to existing members without reloading the whole list. Membership changes, mutation events, missing row snapshots, and Gateway-owned filters still require an authoritative list read. Automatic roster refreshes debounce the first event after idle by 200 ms and coalesce continuous events within one second. After an automatic refresh completes, the next waits three times its duration, bounded between one and 15 seconds. Explicit refreshes, filter or agent changes, reconnects, and foreground replacements bypass that delay.
+The active session list applies Gateway lifecycle row snapshots to existing members without reloading the whole list. Membership changes, missing or incomplete row snapshots, and Gateway-owned filters still require an authoritative list read. Automatic roster refreshes collect events in a fixed five-second window that later events cannot postpone. After an automatic refresh completes, the next waits three times its duration, bounded between five and 15 seconds. Explicit refreshes, filter or agent changes, reconnects, and foreground replacements bypass that delay.
 
 Activity refreshes pause while the browser tab is hidden and catch up once when you return, respecting the automatic refresh delay. Changes that arrive during a roster read share one follow-up refresh; switching filters never combines pages from different filters.
 
@@ -169,7 +180,9 @@ CPU because Apple silicon Macs and desktop-mode iPads also report it.
 
 Toggle the sidebar with **⌘B** on Mac or **Ctrl+B** on Windows/Linux. Open the command palette with **⌘K** on Mac or **Ctrl+K** on Windows/Linux. Mac **Ctrl+B** and **Ctrl+K** remain available for native text editing.
 
-During text composition, the command palette leaves Enter, Escape, and arrow keys to the input method.
+The search field updates immediately, while command filtering and session searches wait until you pause typing for 200 ms. Previous results stay in place during that pause but cannot be selected until the new query applies. Press Enter to apply a pending query immediately and select an available matching result. Clearing the field restores the default commands immediately.
+
+During text composition, the command palette pauses searches and leaves Enter, Escape, and arrow keys to the input method.
 
 After token or device-token authentication, the sidebar can show its cached session roster on reload only when the browser will present the Gateway token that authenticated the previous connection, or the paired device token retained from that connection. The cached roster has no live run state and is replaced by the live list after connecting. Other authentication methods wait for the connection; see [Warm reload](/web/control-ui/offline-and-reconnect#warm-reload).
 
@@ -281,7 +294,10 @@ Choose **Icon & color** from a session menu and select a color swatch to add a n
   is not a separate stop or delete action.
 
 Both shortcuts work from the chat composer, ignore key repeat and text
-composition, and leave open modal dialogs in control. New Session preserves the
+composition, and leave open modal dialogs in control. The keyboard-shortcuts help
+dialog is the exception for New Session: the shortcut closes help before opening
+and focusing the draft. Press **⌘/** or **Ctrl+/** again to close help without
+navigating. Archive remains blocked while help is open. New Session preserves the
 existing conversation's draft through normal navigation. Archive does not clear
 that draft or navigate to another conversation.
 
@@ -423,7 +439,7 @@ For a remote target, the Control UI creates the repository or managed-worktree s
 
 Model and **Effort** are separate adjacent composer controls in chat and New session, on desktop and mobile. The model picker never contains Effort or Fast-mode controls. Long model labels ellipsize to leave room for the other controls; the full name remains in the picker, accessible label, and tooltip. Narrow composers, including split panes in wider windows, use compact controls so each picker stays independently clickable. Effort uses a gauge in these layouts whose needle reflects the current level, with a lightning badge when Fast mode is active. In chat, Fast mode stays in the Effort menu, or appears as the adjacent control when reasoning is unavailable. Models with neither available control omit it.
 
-Search the model picker by model name or provider. Your search stays applied as the model catalog refreshes. Press **Escape** to clear a nonempty search while keeping the picker open; press it again to close the picker and return focus to its trigger.
+Search the model picker by model name, model ID, provider, or provider/model reference. Your search stays applied as the model catalog refreshes. Press **Escape** to clear a nonempty search while keeping the picker open; press it again to close the picker and return focus to its trigger.
 
 When you switch sessions, the composer keeps the session's known model name visible while refreshing the model options available for that session. If the model is not yet known, the control shows a loading placeholder. Locked chats also show the selected model, or **Session model** when it is not known. The lock prevents model selection changes; it does not indicate that a native runtime owns the model.
 
@@ -437,7 +453,7 @@ If the Gateway explicitly rejects the first send, **Retry** creates a new send a
 
 When an interrupted remote-placement draft needs deletion, cleanup reclaims the placement by session key, archives it with its expected session identity, then uses the write-scoped archived-only delete contract. Cleanup errors remain visible. If an interrupted Incognito startup is successfully cleaned up, the current pane keeps a read-only copy of its prompt and an interruption notice. It does not recreate the session or resend the message; the copy lasts only in the current browser tab and credential scope. Restoring paused or unconfirmed recovery does not itself request deletion.
 
-Unsent text and staged attachments can be recovered only in the same browser profile and Gateway credential scope; they are never stored on the Gateway or synced across devices. The browser keeps the 20 most recently edited draft scopes per Gateway credential scope for up to seven days, with at most 25 MiB of attachment data per draft, but it can evict browser storage sooner. A successful send or New Session creation, explicit attachment removal, or confirmed session deletion retires the corresponding browser draft. If cleanup fails after deletion, clear site data for the Control UI origin to remove it. Clearing site data also removes every other browser draft. If a draft's attachments exceed the cap, the current tab keeps them and shows the existing storage warning, but only the text is restart-recoverable. OpenClaw **Incognito** drafts are never durable. Turning Incognito off resumes browser autosave for the current text and attachments, without requiring another edit. Switching New Session destinations and returning with Back keeps unsent Incognito text and attachments in the current tab, but reloading or closing the tab discards them. In a private browser window, IndexedDB availability and lifetime are controlled by the browser and stored data is normally cleared when the private session ends. The **Incognito** toggle in the new-session page's top-right control rail retires that browser draft and creates a web-only thread whose session entry, transcript, and compaction state stay in memory until the Gateway restarts; OpenClaw also skips its automatic memory flush. The agent keeps its normal tools, so an explicit save request or tool-driven file write can still persist data. The model provider still processes messages, and content-free audit metadata is still recorded. Remote-placement starts persist their model and reasoning choices before dispatching the session to its worker.
+Unsent text and staged attachments can be recovered only in the same browser profile and Gateway credential scope; they are never stored on the Gateway or synced across devices. The browser keeps the 20 most recently edited draft scopes per Gateway credential scope for up to seven days, with at most 25 MiB of attachment data per draft, but it can evict browser storage sooner. A successful send or New Session creation, explicit attachment removal, or confirmed session deletion retires the corresponding browser draft. If cleanup fails after deletion, clear site data for the Control UI origin to remove it. Clearing site data also removes every other browser draft. If a draft's attachments exceed the cap, the current tab keeps them and shows the existing storage warning, but only the text is restart-recoverable. OpenClaw **Incognito** drafts are never durable. Turning Incognito off resumes browser autosave for the current text and attachments, without requiring another edit. Switching New Session destinations, or leaving an existing Incognito chat for Settings and returning with Back, keeps unsent text and attachments in the current tab. Reloading or closing the tab discards that unsent input. Submitted Incognito messages in the tab-only inline outbox retain their separate reload behavior. In a private browser window, IndexedDB availability and lifetime are controlled by the browser and stored data is normally cleared when the private session ends. The **Incognito** toggle in the new-session page's top-right control rail retires that browser draft and creates a web-only thread whose session entry, transcript, and compaction state stay in memory for 24 hours after creation or until the Gateway restarts, whichever comes first; OpenClaw also skips its automatic memory flush. The agent keeps its normal tools, so an explicit save request or tool-driven file write can still persist data. The model provider still processes messages, and content-free audit metadata is still recorded. Remote-placement starts persist their model and reasoning choices before dispatching the session to its worker.
 
 <a id="register-an-existing-repository" />
 

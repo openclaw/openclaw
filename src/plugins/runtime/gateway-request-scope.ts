@@ -1,6 +1,5 @@
 // Gateway request scope tracks request-local plugin runtime context across async work.
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   getPluginExecutionFrame,
   pluginInstanceInvocation,
@@ -14,6 +13,16 @@ import { getPluginRegistryState } from "../runtime-state.js";
 import { getPluginRuntimeExecutionFrame, PluginRuntimeExecutionFrame } from "./execution-frame.js";
 import type { PluginRuntimeGatewayRequestScope } from "./gateway-request-scope.types.js";
 import { getPluginRuntimeLoadContextState } from "./load-context-state.js";
+
+export {
+  bindGatewayContextResolver,
+  clearGatewayContextResolver,
+  getCanonicalGatewayContextResolver,
+  getGatewayContextLifetime,
+  getGatewayContextResolver,
+  getSharedGatewayContextResolver,
+  hasGatewayContextOwner,
+} from "./gateway-context-binding.js";
 
 type PluginRuntimePluginScope = {
   pluginId: string;
@@ -47,71 +56,6 @@ function runWithPluginGatewayScope<T>(
 
 const isNotWebchatConnect = () => false;
 
-const GATEWAY_CONTEXT_RESOLVERS_KEY: unique symbol = Symbol.for("openclaw.gatewayContextResolvers");
-
-// Built plugin chunks and source Gateway code must redeem the same host-issued owner bindings.
-const gatewayContextResolvers = resolveGlobalSingleton<WeakMap<object, GatewayContextResolver>>(
-  GATEWAY_CONTEXT_RESOLVERS_KEY,
-  () => new WeakMap(),
-);
-
-// A closed resolver stays closed even if a late scoped loader borrows it again.
-const gatewayContextLifetimes = resolveGlobalSingleton(
-  Symbol.for("openclaw.gatewayContextLifetimes"),
-  () => new WeakMap<GatewayContextResolver, AbortController>(),
-);
-
-export function getGatewayContextLifetime(resolver: GatewayContextResolver): AbortController {
-  let lifetime = gatewayContextLifetimes.get(resolver);
-  if (!lifetime) {
-    lifetime = new AbortController();
-    gatewayContextLifetimes.set(resolver, lifetime);
-  }
-  return lifetime;
-}
-
-export function bindGatewayContextResolver(
-  owner: object,
-  resolver: GatewayContextResolver | undefined,
-): void {
-  if (resolver) {
-    gatewayContextResolvers.set(owner, resolver);
-  }
-}
-
-export const getGatewayContextResolver = (owner: object) => gatewayContextResolvers.get(owner);
-
-/** Follows explicit wrapper ownership without invoking any execution resolver. */
-export function getCanonicalGatewayContextResolver(
-  resolver: GatewayContextResolver,
-): GatewayContextResolver | undefined {
-  const seen = new Set<GatewayContextResolver>();
-  let current = resolver;
-  while (!seen.has(current)) {
-    seen.add(current);
-    const parent = gatewayContextResolvers.get(current);
-    if (!parent) {
-      return current;
-    }
-    current = parent;
-  }
-  return undefined;
-}
-
-/** Match the host owner without invoking a possibly retired execution resolver. */
-export function hasGatewayContextOwner(
-  owner: object,
-  gatewayOwner: GatewayContextResolver,
-): boolean {
-  const resolver = gatewayContextResolvers.get(owner);
-  // A lifetime wrapper records one canonical host owner; it remains the execution binding.
-  return (
-    resolver !== undefined && (gatewayContextResolvers.get(resolver) ?? resolver) === gatewayOwner
-  );
-}
-
-export const clearGatewayContextResolver = (owner: object) => gatewayContextResolvers.delete(owner);
-
 /** Carry only closure-bound node authorities into a nested request scope. */
 export function getPluginRuntimeGatewayNodeAuthorities() {
   const scope = getPluginGatewayScope();
@@ -119,44 +63,6 @@ export function getPluginRuntimeGatewayNodeAuthorities() {
     invokeWithSessionNodeAuthority: scope?.invokeWithSessionNodeAuthority,
     nodePlacementGrantAuthority: scope?.nodePlacementGrantAuthority,
   };
-}
-
-export function getSharedGatewayContextResolver(
-  owners: readonly object[],
-): GatewayContextResolver | undefined {
-  const resolvers = owners.map(getGatewayContextResolver);
-  if (resolvers.every((resolve) => !resolve)) {
-    return undefined;
-  }
-  // Separate caller wrappers may own one instance. Recheck every captured fence;
-  // never replace it with a current global resolver or permit mixed ambient routing.
-  const shared = () => {
-    const contexts = resolvers.map((resolve) => {
-      try {
-        return resolve?.();
-      } catch {
-        return undefined;
-      }
-    });
-    if (resolvers.some((resolve) => !resolve)) {
-      throw new Error("incompatible Gateway bindings: bound and unbound owners");
-    }
-    if (contexts.some((context) => !context)) {
-      return undefined;
-    }
-    if (contexts.some((context) => context !== contexts[0])) {
-      throw new Error("incompatible Gateway instances");
-    }
-    return contexts[0];
-  };
-  const canonical = resolvers.map((resolve) =>
-    resolve ? getCanonicalGatewayContextResolver(resolve) : undefined,
-  );
-  const owner = canonical[0];
-  if (owner && canonical.every((candidate) => candidate === owner)) {
-    bindGatewayContextResolver(shared, owner);
-  }
-  return shared;
 }
 
 /**

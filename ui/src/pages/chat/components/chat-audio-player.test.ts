@@ -131,6 +131,18 @@ describe("ChatAudioPlayer", () => {
     seek.dispatchEvent(new Event("input", { bubbles: true }));
     expect(media.currentTime).toBe(35);
 
+    for (const [key, time] of [
+      ["ArrowRight", 40],
+      ["ArrowUp", 45],
+      ["ArrowLeft", 40],
+      ["ArrowDown", 35],
+    ] as const) {
+      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      seek.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+      expect(media.currentTime).toBe(time);
+    }
+
     const controls = player.querySelector<HTMLElement>(".chat-audio-player")!;
     controls.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
     expect(media.currentTime).toBe(40);

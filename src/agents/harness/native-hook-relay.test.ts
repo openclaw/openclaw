@@ -610,12 +610,10 @@ describe("native hook relay registry", () => {
     ).rejects.toThrow("foreground invocation not allowed");
 
     expect(admitExecution).toHaveBeenCalledTimes(2);
-    expect(admitExecution).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        rawPayload: expect.objectContaining({ agent_id: "child-thread" }),
-      }),
-      expect.any(Function),
-    );
+    const [invocation, retainedGuard, preparation] = admitExecution.mock.lastCall ?? [];
+    expect(invocation).toMatchObject({ rawPayload: { agent_id: "child-thread" } });
+    expect(retainedGuard).toBeTypeOf("function");
+    expect(preparation).toMatchObject({ assertCurrent: expect.any(Function) });
     retainChild = false;
     relay.unregister();
   });

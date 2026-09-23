@@ -4,10 +4,9 @@
 import type { IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
-import { resolveHttpSenderIsOwner } from "./http-auth-utils.js";
 import {
   authorizeOpenAiCompatibleHttpModelOverride,
-  resolveOpenAiCompatibleHttpOperatorScopes,
+  resolveSharedSecretHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
   resolveGatewayRequestContext,
   resolveTrustedHttpOperatorScopes,
@@ -31,8 +30,8 @@ function createReq(headers: Record<string, string> = {}): IncomingMessage {
   return { headers } as IncomingMessage;
 }
 
-const tokenAuth = { mode: "token" as const };
-const noneAuth = { mode: "none" as const };
+const sharedSecretRequestAuth = { trustDeclaredOperatorScopes: false };
+const trustedRequestAuth = { trustDeclaredOperatorScopes: true };
 
 beforeEach(() => sessionEntries.clear());
 
@@ -184,7 +183,7 @@ describe("resolveTrustedHttpOperatorScopes", () => {
         authorization: "Bearer secret",
         "x-openclaw-scopes": "operator.admin, operator.write",
       }),
-      tokenAuth,
+      sharedSecretRequestAuth,
     );
 
     expect(scopes).toStrictEqual([]);
@@ -195,19 +194,19 @@ describe("resolveTrustedHttpOperatorScopes", () => {
       createReq({
         "x-openclaw-scopes": "operator.admin, operator.write",
       }),
-      noneAuth,
+      trustedRequestAuth,
     );
 
     expect(scopes).toEqual(["operator.admin", "operator.write"]);
   });
 
-  it("keeps declared scopes when auth mode is not shared-secret even if auth headers are forwarded", () => {
+  it("keeps trusted identity scopes even if bearer auth headers are forwarded", () => {
     const scopes = resolveTrustedHttpOperatorScopes(
       createReq({
         authorization: "Bearer upstream-idp-token",
         "x-openclaw-scopes": "operator.admin, operator.write",
       }),
-      noneAuth,
+      trustedRequestAuth,
     );
 
     expect(scopes).toEqual(["operator.admin", "operator.write"]);
@@ -298,32 +297,9 @@ describe("resolveTrustedHttpOperatorScopes", () => {
   );
 });
 
-describe("resolveHttpSenderIsOwner", () => {
-  it("requires operator.admin on a trusted HTTP scope-bearing request", () => {
-    expect(
-      resolveHttpSenderIsOwner(createReq({ "x-openclaw-scopes": "operator.admin" }), noneAuth),
-    ).toBe(true);
-    expect(
-      resolveHttpSenderIsOwner(createReq({ "x-openclaw-scopes": "operator.write" }), noneAuth),
-    ).toBe(false);
-  });
-
-  it("returns false for bearer requests even with operator.admin in headers", () => {
-    expect(
-      resolveHttpSenderIsOwner(
-        createReq({
-          authorization: "Bearer secret",
-          "x-openclaw-scopes": "operator.admin",
-        }),
-        tokenAuth,
-      ),
-    ).toBe(false);
-  });
-});
-
-describe("resolveOpenAiCompatibleHttpOperatorScopes", () => {
+describe("resolveSharedSecretHttpOperatorScopes", () => {
   it("restores default operator scopes for shared-secret bearer auth", () => {
-    const scopes = resolveOpenAiCompatibleHttpOperatorScopes(
+    const scopes = resolveSharedSecretHttpOperatorScopes(
       createReq({
         authorization: "Bearer secret",
         "x-openclaw-scopes": "operator.approvals",
@@ -335,7 +311,7 @@ describe("resolveOpenAiCompatibleHttpOperatorScopes", () => {
   });
 
   it("keeps declared scopes for trusted HTTP identity-bearing requests", () => {
-    const scopes = resolveOpenAiCompatibleHttpOperatorScopes(
+    const scopes = resolveSharedSecretHttpOperatorScopes(
       createReq({
         "x-openclaw-scopes": "operator.write",
       }),

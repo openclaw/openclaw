@@ -47,6 +47,107 @@ function fixture() {
   return { root, write, snapshot, signature };
 }
 
+function sealDiagnostic(before: CompilerInputSnapshot, after: CompilerInputSnapshot) {
+  let message = "";
+  try {
+    after.seal("tsconfig.json", ["fixture-compiler"], ["src/index.ts"], before, Date.now());
+  } catch (error) {
+    // Worker errors cross the process boundary as String(error), without custom fields.
+    message = String(error);
+  }
+  const prefix =
+    "Error: Boundary configuration or resolution topology changed during compilation: ";
+  expect(message.startsWith(prefix)).toBe(true);
+  const suffix = message.slice(prefix.length);
+  expect(Buffer.byteLength(suffix)).toBeLessThanOrEqual(4096);
+  return { suffix, detail: JSON.parse(suffix) };
+}
+
+it.each(["added", "removed"] as const)("identifies a %s namespace entry when sealing", (change) => {
+  const f = fixture();
+  const filename = ".workflow-shell-fixture.mjs";
+  if (change === "removed") {
+    f.write(filename, "export {};\n");
+  }
+  const before = f.snapshot();
+  f.signature(before);
+  if (change === "added") {
+    f.write(filename, "export {};\n");
+  } else {
+    fs.unlinkSync(path.join(f.root, filename));
+  }
+  // Namespace remains the first rejection even when a later guard also differs.
+  f.write("tools/compiler.js", "export const compiler = 2;\n");
+  const after = f.snapshot();
+  f.signature(after);
+  const reader = vi.spyOn(fs, "readFileSync");
+  try {
+    expect(sealDiagnostic(before, after).detail).toEqual({
+      category: "namespace",
+      changes: [{ change, path: filename }],
+      omitted: 0,
+    });
+    expect(reader).not.toHaveBeenCalled();
+  } finally {
+    reader.mockRestore();
+  }
+});
+
+it.each([
+  ["toolchain", "tools/compiler.js", "export const compiler = 2;\n"],
+  ["config", "base.json", '{"compilerOptions":{"target":"ES2022","types":[]}}'],
+  ["config-bytes", "base.json", '{ "compilerOptions": {"target":"ES2023","types":[]} }\n'],
+])(
+  "identifies a %s rejection without exposing configuration or tool bytes",
+  (category, file, bytes) => {
+    const f = fixture();
+    const before = f.snapshot();
+    f.signature(before);
+    f.write(file!, bytes!);
+    expect(sealDiagnostic(before, f.snapshot()).detail).toEqual({ category });
+  },
+);
+
+it.each(["ascii", "unicode", "controls"])(
+  "bounds and orders %s namespace diagnostics deterministically",
+  (kind) => {
+    const f = fixture();
+    const before = f.snapshot();
+    f.signature(before);
+    const segment =
+      kind === "ascii"
+        ? "x".repeat(80)
+        : kind === "unicode"
+          ? "😀".repeat(30)
+          : "\u0085\u202e\u2066\u2028".repeat(15);
+    const filenames = Array.from(
+      { length: 20 },
+      (_, index) => `added/${String(index).padStart(2, "0")}/${segment}/${segment}.mjs`,
+    );
+    for (const filename of filenames.toReversed()) {
+      f.write(filename, "export {};\n");
+    }
+    const first = sealDiagnostic(before, f.snapshot());
+    const second = sealDiagnostic(before, f.snapshot());
+    expect(second.suffix).toBe(first.suffix);
+    if (kind === "controls") {
+      expect(first.suffix).not.toMatch(/[\u0085\u202e\u2066\u2028]/u);
+      expect(first.suffix).toContain("\\u0085\\u202e\\u2066\\u2028");
+    }
+    const changes = first.detail.changes as { change: string; path: string }[];
+    expect(changes.length).toBeGreaterThan(0);
+    expect(changes.length).toBeLessThanOrEqual(16);
+    expect(first.detail.omitted).toBe(20 - changes.length);
+    expect(changes).toEqual(
+      filenames.slice(0, changes.length).map((file) => ({
+        change: "added",
+        path: file.length > 160 ? `${file.slice(0, 157)}...` : file,
+      })),
+    );
+    expect(changes.every(({ path: filename }) => filename.length <= 160)).toBe(true);
+  },
+);
+
 it("prepares the same ordered source and installed-alias namespace as synchronous readers", async () => {
   const f = fixture();
   const synchronous = f.snapshot();
@@ -54,6 +155,29 @@ it("prepares the same ordered source and installed-alias namespace as synchronou
   await prepared.prepare();
   for (const outputRoot of [undefined, path.join(f.root, "packages/local/dist")]) {
     expect(f.signature(prepared, outputRoot)).toBe(f.signature(synchronous, outputRoot));
+  }
+});
+
+it("ignores checkout scratch packages that disappear during preparation", async () => {
+  const f = fixture();
+  const original = f.signature(f.snapshot());
+  const scratch = path.join(f.root, ".tmp", "fixture-package");
+  f.write(".tmp/fixture-package/package.json", '{"name":"transient-fixture"}');
+  const read = fs.promises.readdir.bind(fs.promises);
+  const reader = vi.spyOn(fs.promises, "readdir").mockImplementation(async (...args) => {
+    const entries = await read(...args);
+    if (args[0] === scratch) {
+      fs.rmSync(scratch, { recursive: true });
+    }
+    return entries;
+  });
+  try {
+    const prepared = f.snapshot();
+    await prepared.prepare();
+    expect(f.signature(prepared)).toBe(original);
+    expect(f.signature(f.snapshot())).toBe(original);
+  } finally {
+    reader.mockRestore();
   }
 });
 
@@ -133,6 +257,15 @@ it("invalidates an indirect dependency symlink when its final target changes", a
   expect(fs.readFileSync(path.join(installed, "source.js"), "utf8")).toContain('"second"');
   expect(fs.readFileSync(inputs[0]!, "utf8")).toContain('"first"');
   expect(after.signature("tsconfig.json", [], inputs)).not.toBe(original);
+  const diagnostic = sealDiagnostic(before, after);
+  expect(diagnostic.detail).toEqual({
+    category: "namespace",
+    changes: [{ change: "changed", path: "node_modules/external-fixture" }],
+    omitted: 0,
+  });
+  for (const privatePath of [f.root, outside, first, second, indirect, originalLink]) {
+    expect(diagnostic.suffix).not.toContain(privatePath);
+  }
 });
 
 it("preloads sibling subtrees while the ordered visitor waits on a deeper directory", async () => {
@@ -192,6 +325,7 @@ it("preloads sibling subtrees while the ordered visitor waits on a deeper direct
 it.each([
   ["source addition", "src/shadow.ts", "export const shadow = 1;\n"],
   ["package addition", "src/package.json", '{"type":"commonjs"}'],
+  ["nested workspace metadata", "packages/local/.tmp/package.json", '{"type":"commonjs"}'],
   [
     "installed package metadata",
     "packages/local/package.json",

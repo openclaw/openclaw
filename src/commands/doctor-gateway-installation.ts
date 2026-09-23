@@ -1,13 +1,23 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { SERVICE_AUDIT_CODES } from "../daemon/service-audit.js";
+import { mergeGatewayServiceEnv } from "../daemon/service-env-merge.js";
 import { sanitizeServiceInspectionError } from "../daemon/service-inspection-error.js";
 import { withGatewayServiceOperationLock } from "../daemon/service-operation-lock.js";
-import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
+import type { GatewayServiceDefinitionTransactionHooks } from "../daemon/service-stage.js";
+import type {
+  GatewayServiceCommandConfig,
+  GatewayServiceEnv,
+  GatewayServiceInstallArgs,
+} from "../daemon/service-types.js";
+import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import { readGatewayServiceState, type GatewayService } from "../daemon/service.js";
 import { isSystemdUnitActive, type SystemdUnitScope } from "../daemon/systemd.js";
 import { assertGatewayServiceMutationAllowed } from "../infra/gateway-supervision.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import type { RuntimeEnv } from "../runtime.js";
 
 export type DoctorGatewayInstallationMaintenance = {
   managerUid?: number;
@@ -21,6 +31,89 @@ type GatewayServiceInstallationRepair = {
   activeRoot: string;
   maintenance?: DoctorGatewayInstallationMaintenance;
 };
+
+export async function canRepairRunningGatewayDefinition(params: {
+  service: GatewayService;
+  command: GatewayServiceCommandConfig;
+  env: GatewayServiceEnv;
+}): Promise<boolean> {
+  const currentRuntime = await params.service
+    .readRuntime(mergeGatewayServiceEnv(params.env, params.command))
+    .catch(() => null);
+  if (currentRuntime?.status === "running") {
+    return true;
+  }
+  note(
+    `Gateway native-policy repair requires a running managed service. The existing definition and stop state were preserved; inspect it with \`${formatCliCommand("openclaw gateway status --deep", params.env)}\` before using \`${formatCliCommand("openclaw gateway install --force", params.env)}\`.`,
+    "Gateway service definition",
+  );
+  return false;
+}
+
+/** One native writer retains Doctor custody through publication and recovery. */
+export async function installDoctorGatewayService(
+  params: Omit<GatewayServiceInstallationRepair, "activeRoot"> & {
+    repair: { kind: "config" } | { kind: "definition" | "installation"; root: string };
+    args: GatewayServiceInstallArgs;
+    runtime: RuntimeEnv;
+  },
+): Promise<void> {
+  try {
+    const install = async (assertCurrent = params.maintenance?.assertCurrent) => {
+      const publish = async (definitionTransaction?: GatewayServiceDefinitionTransactionHooks) => {
+        if (params.repair.kind === "definition" && !params.maintenance) {
+          if (
+            !(await canRepairRunningGatewayDefinition({
+              service: params.service,
+              command: params.command,
+              env: params.args.env,
+            }))
+          ) {
+            throw new Error(
+              "Gateway stopped before native-policy repair; its definition was preserved.",
+            );
+          }
+        }
+        await params.service.install({ ...params.args, assertCurrent, definitionTransaction });
+      };
+      if (params.repair.kind === "definition") {
+        const { reconcileGatewayServiceDefinition } =
+          await import("../daemon/service-reconciliation.js");
+        await reconcileGatewayServiceDefinition({
+          env: params.args.env,
+          root: params.repair.root,
+          command: params.command,
+          expectedCommand: params.args,
+          install: publish,
+          warn: (message) => note(message, "Gateway service definition"),
+        });
+      } else {
+        await publish();
+      }
+    };
+    if (params.repair.kind === "installation") {
+      await repairGatewayServiceInstallation({
+        service: params.service,
+        command: params.command,
+        activeRoot: params.repair.root,
+        maintenance: params.maintenance,
+        env: params.args.env,
+        install,
+      });
+      note(
+        "Gateway service installation reconciled with the active CLI.",
+        "Gateway service installation",
+      );
+    } else {
+      await install();
+    }
+  } catch (err) {
+    if (err instanceof GatewayServiceAuthorityError || hasCommandProcessCleanupError(err)) {
+      throw err;
+    }
+    params.runtime.error(`Gateway service update failed: ${String(err)}`);
+  }
+}
 
 /** Doctor consumes the updater's verified ownership; a recorded path alone grants no repair. */
 export async function assertGatewayServiceInstallationRepairAllowed(
@@ -71,7 +164,7 @@ export async function assertGatewayServiceInstallationRepairAllowed(
   }
 }
 
-export async function repairGatewayServiceInstallation(
+async function repairGatewayServiceInstallation(
   params: GatewayServiceInstallationRepair & {
     env: NodeJS.ProcessEnv;
     install: (assertCurrent: () => void) => Promise<void>;

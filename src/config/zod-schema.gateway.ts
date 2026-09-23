@@ -52,8 +52,24 @@ const GatewayOperatorRoleDefinitionSchema = z.strictObject({
       .array(z.string().trim().min(1).refine(isValidAgentId, "Invalid agent id"))
       .transform((agents) => uniqueValues(agents.map(normalizeAgentId))),
   ]),
+  /** Optional model ceiling for this role; defaults to the source agent's primary and fallbacks. */
+  modelPolicy: z
+    .strictObject({
+      sourceAgent: z
+        .string()
+        .trim()
+        .min(1)
+        .refine(isValidAgentId, "Invalid agent id")
+        .transform(normalizeAgentId)
+        .optional(),
+      allow: z.array(z.string().trim().min(1)).optional(),
+      deny: z.array(z.string().trim().min(1)).optional(),
+    })
+    .optional(),
   /** Ceiling applied to the authenticated profile's granted operator scopes. */
   scopes: z.array(OperatorScopeSchema).transform((scopes) => uniqueValues(scopes)),
+  /** Required access-policy plugin; availability is checked at admission, not config parsing. */
+  accessPolicyPlugin: z.string().trim().min(1).max(128).optional(),
 });
 const GatewayOperatorRoleNameSchema = z.string().trim().min(1).max(128);
 const GATEWAY_HTTP_LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);

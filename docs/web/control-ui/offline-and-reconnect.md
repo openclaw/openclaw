@@ -20,7 +20,8 @@ transcripts use the existing chat cache. On reload, the shell, sidebar, and cach
 conversation can appear while the Gateway is still connecting. Live state replaces
 the cached roster on connect, and chat requests changes from its saved transcript cursor.
 The first chat request waits up to 300 ms after connecting for the stored transcript,
-then falls back to live history if it is not ready.
+then falls back to live history if it is not ready. A stored transcript belongs to its selected
+agent; switching agents while it loads cannot display or save it under the new agent.
 
 Trusted-proxy and Tailscale identities always show the initial connection screen
 and save no warm boot or roster records. Password and one-time bootstrap-token
@@ -45,6 +46,11 @@ The current route and stored drafts survive the reload. If browser storage is un
 or reload protection blocks recovery, reload the tab after saving your work;
 do not clear site data while drafts or queued messages still need recovery.
 
+Unsaved file edits block automatic and in-app reloads, even after you close their
+previews or switch conversations. Reopen each edited file and save or discard its
+changes, then retry the reload. File edits stay in memory in the current page;
+an explicit browser reload or closing the browser tab discards them.
+
 ## Connection loss and reconnect
 
 Once a session is established, a dropped Gateway connection does not log you out. The dashboard
@@ -55,6 +61,9 @@ attention keep their explanation and recovery action. The same status appears in
 embedded dashboard. Connection status does not replace the Gateway name in the account menu.
 
 The client retries ordinary connection loss automatically with backoff (800 ms up to 15 s).
+If the browser provides no reason for the disconnect, the connection tooltip explains that
+the connection was interrupted and whether automatic reconnection is underway. It retains
+the WebSocket close code for troubleshooting; specific Gateway errors keep their explanation.
 Open the account menu and use **Retry now** to request an immediate attempt when offered.
 Sign-in failures use the sign-in flow, and a required dashboard refresh uses its reload flow;
 retrying the connection does not replace either action. Live updates and realtime/session actions pause until the connection
@@ -127,6 +136,9 @@ Opening a view for the first time can fail if its interface files cannot be down
 Check the connection, then use **Reload**. The same error can occur after an update;
 it does not by itself mean a new version was installed. If unsaved work blocks the
 reload, follow the displayed save or cancel guidance, then try again.
+
+A delayed history refresh preserves any newer run and its live output. A fresh idle
+response can clear a stale busy indicator after the run finishes.
 
 If chat history times out, its **Retry** action reloads the saved conversation and restores
 its live session subscription, including approval updates.

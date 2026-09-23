@@ -303,7 +303,7 @@ describe("retired caller delivery settlement", () => {
             : { error: { message: expect.stringContaining("message caller retired") } },
         );
         expect(compaction).toHaveBeenCalledOnce();
-        expect(queueStorage.findDeliveryIntentOwner(queueId, stateDir)).toMatchObject({
+        expect(await queueStorage.findDeliveryIntentOwner(queueId, stateDir)).toMatchObject({
           status: "failed",
           settlementPending: true,
         });

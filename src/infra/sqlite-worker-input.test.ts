@@ -249,7 +249,7 @@ describe("SQLite worker staged input", () => {
         { status: "rejected", reason: expect.objectContaining({ code: "unavailable" }) },
       ]);
       stores.delete(store);
-      await expect(store.close()).rejects.toMatchObject({ code: "unavailable" });
+      await expect(store.close()).resolves.toBeUndefined();
       const recovered = await open(file);
       await expectRows(recovered, []);
       expect(await append(recovered, value)).toMatchObject({ writes: 1 });
