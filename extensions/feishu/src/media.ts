@@ -8,7 +8,6 @@ import {
   buildOutboundMediaLoadOptions,
   MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
   runFfmpeg,
-  runFfprobe,
   type OutboundMediaAccess,
 } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer, type SavedMedia } from "openclaw/plugin-sdk/media-store";
@@ -30,6 +29,11 @@ import { getFeishuRuntime } from "./runtime.js";
 import { runBeforeFeishuMessageDispatch } from "./send-context.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
 import { sendReplyOrFallbackDirect } from "./send.js";
+import {
+  FEISHU_VIDEO_PREVIEW_TIMEOUT_MS,
+  maybeProbeUploadDurationMs,
+  maybeUploadVideoPreviewImageKey,
+} from "./video-preview.js";
 
 const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
 const FEISHU_MAX_FILE_UPLOAD_BYTES = 30 * 1024 * 1024;
@@ -76,7 +80,11 @@ type SaveMessageResourceResult = {
   fileName?: string;
 };
 
-function createConfiguredFeishuMediaClient(params: { cfg: ClawdbotConfig; accountId?: string }): {
+function createConfiguredFeishuMediaClient(params: {
+  cfg: ClawdbotConfig;
+  accountId?: string;
+  httpTimeoutMs?: number;
+}): {
   account: ReturnType<typeof resolveFeishuRuntimeAccount>;
   client: ReturnType<typeof createFeishuClient>;
 } {
@@ -89,7 +97,7 @@ function createConfiguredFeishuMediaClient(params: { cfg: ClawdbotConfig; accoun
     account,
     client: createFeishuClient({
       ...account,
-      httpTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
+      httpTimeoutMs: params.httpTimeoutMs ?? FEISHU_MEDIA_HTTP_TIMEOUT_MS,
     }),
   };
 }
@@ -430,9 +438,14 @@ async function uploadImageFeishu(params: {
   image: Buffer | string; // Buffer or file path
   imageType?: "message" | "avatar";
   accountId?: string;
+  httpTimeoutMs?: number;
 }): Promise<UploadImageResult> {
   const { cfg, image, imageType = "message", accountId } = params;
-  const { client } = createConfiguredFeishuMediaClient({ cfg, accountId });
+  const { client } = createConfiguredFeishuMediaClient({
+    cfg,
+    accountId,
+    httpTimeoutMs: params.httpTimeoutMs,
+  });
 
   // SDK accepts Buffer directly. Keep string path support on this helper, but
   // verify the path as a regular local file before uploading it.
@@ -572,6 +585,8 @@ async function sendFileFeishu(params: {
   to: string;
   fileKey: string;
   msgType?: "file" | "audio" | "media" | "sticker";
+  /** Optional cover image key for msg_type=media video messages. */
+  imageKey?: string;
   replyToMessageId?: string;
   replyInThread?: boolean;
   allowTopLevelReplyFallback?: boolean;
@@ -581,6 +596,7 @@ async function sendFileFeishu(params: {
     cfg,
     to,
     fileKey,
+    imageKey,
     replyToMessageId,
     replyInThread,
     allowTopLevelReplyFallback,
@@ -592,7 +608,10 @@ async function sendFileFeishu(params: {
     to,
     accountId,
   });
-  const content = JSON.stringify({ file_key: fileKey });
+  const content = JSON.stringify({
+    file_key: fileKey,
+    ...(msgType === "media" && imageKey ? { image_key: imageKey } : {}),
+  });
 
   return sendReplyOrFallbackDirect(client, {
     replyToMessageId,
@@ -846,52 +865,6 @@ async function prepareFeishuVoiceMedia(params: {
   }
 }
 
-async function probeMediaDurationMs(params: {
-  buffer: Buffer;
-  fileName: string;
-  contentType?: string;
-}): Promise<number | undefined> {
-  try {
-    return await withTempWorkspace(
-      { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "feishu-media-probe-" },
-      async (workspace) => {
-        const ext = normalizeLowercaseStringOrEmpty(path.extname(params.fileName));
-        const inferredExt =
-          ext && ext.length <= 12
-            ? ext
-            : mediaKindFromMime(params.contentType) === "video"
-              ? ".mp4"
-              : ".ogg";
-        const inputPath = await workspace.write(`input${inferredExt}`, params.buffer);
-        const stdout = await runFfprobe(
-          ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", inputPath],
-          { timeoutMs: 5_000 },
-        );
-        const seconds = Number.parseFloat(stdout.trim());
-        if (!Number.isFinite(seconds) || seconds <= 0) {
-          return undefined;
-        }
-        return Math.max(1, Math.round(seconds * 1000));
-      },
-    );
-  } catch (err) {
-    console.warn("[feishu] failed to probe media duration; upload will omit it:", err);
-    return undefined;
-  }
-}
-
-async function maybeProbeUploadDurationMs(params: {
-  buffer: Buffer;
-  fileName: string;
-  contentType?: string;
-  msgType: "file" | "audio" | "media";
-}): Promise<number | undefined> {
-  if (params.msgType !== "audio" && params.msgType !== "media") {
-    return undefined;
-  }
-  return await probeMediaDurationMs(params);
-}
-
 /**
  * Upload and send media (image or file) from URL, local path, or buffer.
  * Local paths require host-owned mediaAccess or approved legacy roots/readers.
@@ -1000,15 +973,15 @@ export async function sendMediaFeishu(params: {
       : await runBeforeFeishuMessageDispatch(() =>
           resolveFeishuOutboundMediaKind({ buffer, fileName: name, contentType }),
         );
+  const msgType = routing.msgType;
   const voiceIntentDegradedToFile =
-    routing.msgType !== "audio" &&
-    shouldSuppressFeishuTextForVoiceMedia({ mediaUrl, audioAsVoice });
+    msgType !== "audio" && shouldSuppressFeishuTextForVoiceMedia({ mediaUrl, audioAsVoice });
 
   await runBeforeFeishuMessageDispatch(() =>
-    assertFeishuUploadWithinEnvelope({ buffer, mediaMaxBytes, msgType: routing.msgType }),
+    assertFeishuUploadWithinEnvelope({ buffer, mediaMaxBytes, msgType }),
   );
 
-  if (routing.msgType === "image") {
+  if (msgType === "image") {
     const { imageKey } = await runBeforeFeishuMessageDispatch(() =>
       uploadImageFeishu({ cfg, image: buffer, accountId }),
     );
@@ -1030,7 +1003,7 @@ export async function sendMediaFeishu(params: {
     buffer,
     fileName: name,
     contentType,
-    msgType: routing.msgType,
+    msgType,
   });
   const { fileKey } = await runBeforeFeishuMessageDispatch(() =>
     uploadFileFeishu({
@@ -1042,11 +1015,30 @@ export async function sendMediaFeishu(params: {
       accountId,
     }),
   );
+  const imageKey = await runBeforeFeishuMessageDispatch(() =>
+    maybeUploadVideoPreviewImageKey({
+      buffer,
+      fileName: name,
+      contentType,
+      msgType,
+      maxBytes: Math.min(mediaMaxBytes, FEISHU_MAX_IMAGE_UPLOAD_BYTES),
+      uploadImage: async (preview) =>
+        (
+          await uploadImageFeishu({
+            cfg,
+            image: preview,
+            accountId,
+            httpTimeoutMs: FEISHU_VIDEO_PREVIEW_TIMEOUT_MS,
+          })
+        ).imageKey,
+    }),
+  );
   const result = await sendFileFeishu({
     cfg,
     to,
     fileKey,
-    msgType: routing.msgType,
+    imageKey,
+    msgType,
     replyToMessageId,
     replyInThread,
     allowTopLevelReplyFallback,
