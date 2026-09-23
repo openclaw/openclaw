@@ -3060,6 +3060,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
               owner,
             );
             expect(job.planConcurrency).toBe(1);
+            if (measured && isolated) {
+              expect(job.runner, group.shard_name).toBe(EXTRA_LARGE_NODE_TEST_RUNNER);
+            }
             const effectiveWorkers = (entry: (typeof groups)[number]) =>
               Math.min(
                 8,
@@ -3359,6 +3362,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             : blacksmithTooling ||
                 usesParallelPacking(shard) ||
                 nativeFullCli ||
+                shard.groups.some((group) => group.minTotalMemoryBytes !== undefined) ||
                 shard.groups[0]?.runner === EXTRA_LARGE_NODE_TEST_RUNNER
               ? EXTRA_LARGE_NODE_TEST_RUNNER
               : !githubPullRequestCompact.includes(shard) &&
@@ -6368,13 +6372,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           ),
         );
         for (const job of admission) {
-          // Runtime and dist rows were already serial; only ordinary 32-class
-          // Gateway rows transfer an admitted job cap onto unmeasured siblings.
+          // Memory-gated rows also preserve sibling caps when requesting more RAM,
+          // including runtime rows that were already serial before promotion.
           if (
             runnerBackend === "github" ||
             !usesParallelPacking(job) ||
             job.runner !== EXTRA_LARGE_NODE_TEST_RUNNER ||
-            job.pretestBuildMode !== undefined ||
+            (job.pretestBuildMode !== undefined &&
+              !job.groups.some((group) => group.minTotalMemoryBytes !== undefined)) ||
             job.requiresDist ||
             !job.groups.some((group) => group.fallbackMaxWorkers === 2) ||
             !job.groups.some((group) => group.configs.some(isExclusiveCiTestConfig))
