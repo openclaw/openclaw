@@ -301,7 +301,7 @@ describe("CI changed Node test plan", () => {
   });
 
   it.each(["blacksmith", "github", "hybrid"])(
-    "retains only directly changed runtime proofs with their canonical execution policies (%s)",
+    "retains directly changed runtime proofs and ordinary dependents with canonical policies (%s)",
     (runnerBackend) => {
       const targets = [
         "src/commands/doctor-config-preflight.refusal.process.test.ts",
@@ -313,6 +313,11 @@ describe("CI changed Node test plan", () => {
         "src/process/supervisor/adapters/child.service-lifecycle.test.ts",
         "src/state/openclaw-database-preflight.lifecycle.test.ts",
         "src/config/state-startup-corpus.part-2.test.ts",
+        "test/scripts/ci-linux-git.test.ts",
+        "test/scripts/pr-merge-admission.test.ts",
+        "test/scripts/pr-merge-outcome.test.ts",
+        "test/scripts/pr-merge-rest.test.ts",
+        "test/scripts/pr-worktree-provision.test.ts",
       ];
       const before = createChangedNodeTestShards(targets, { runnerBackend });
       const selected = createChangedNodeTestShards(targets, {
@@ -328,7 +333,19 @@ describe("CI changed Node test plan", () => {
           ...(selected?.flatMap((shard) => shard.includePatterns ?? []) ?? []),
           ...groups.flatMap((group) => group.includePatterns ?? []),
         ].toSorted(),
-      ).toEqual(targets.toSorted());
+      ).toEqual(
+        [
+          ...targets,
+          "test/scripts/ci-git-owner.test.ts",
+          "test/scripts/ci-platform-checkout.test.ts",
+          "test/scripts/ci-workflow-guards.test.ts",
+          "test/scripts/openclaw-performance-git-lifecycle.test.ts",
+          "test/scripts/openclaw-performance-workflow.test.ts",
+          "test/scripts/plugin-release-git-lifecycle.test.ts",
+          "test/scripts/release-workflow-git-lifecycle.test.ts",
+          "test/scripts/test-projects.test.ts",
+        ].toSorted(),
+      );
       for (const target of targets) {
         const ownerJob = expectDefined(
           before?.find(

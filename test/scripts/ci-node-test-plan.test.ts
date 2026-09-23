@@ -4141,7 +4141,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           ),
         );
         expect(beforeFiles.filter((file) => !afterFiles.includes(file)).toSorted()).toEqual(
-          [...RELEASE_ONLY_RUNTIME_TEST_FILES].toSorted(),
+          RELEASE_ONLY_RUNTIME_TEST_FILES.filter(
+            (file) => compactMode === "pull-request" || !file.startsWith("test/scripts/"),
+          ).toSorted(),
         );
         expect(afterFiles.filter((file) => !beforeFiles.includes(file))).toEqual([]);
         expect(afterFiles).toContain("src/config/config-startup-corpus.test.ts");
@@ -4157,6 +4159,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           expect(reduced.flatMap((group) => group.includePatterns ?? []).toSorted(), owner).toEqual(
             retainedFiles.toSorted(),
           );
+          if (retainedFiles.length === 0) {
+            expect(reduced, owner).toEqual([]);
+          }
           for (const group of reduced) {
             const timingKey = expectDefined(group.timing_key, "reduced runtime timing identity");
             const timingParent =
