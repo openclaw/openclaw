@@ -1590,7 +1590,7 @@ src/agents/cli-runner/bundle-mcp-runtime.ts	1
 src/agents/cli-runner/bundle-mcp.ts	6
 src/agents/cli-runner/cli-backend-auth-policy.ts	1
 src/agents/cli-runner/cli-run-settlement.ts	1
-src/agents/cli-runner/cli-run-transcript.ts	2
+src/agents/cli-runner/cli-run-transcript.ts	1
 src/agents/cli-runner/delivery-evidence.ts	2
 src/agents/cli-runner/execute-node-claude.ts	5
 src/agents/cli-runner/execute.ts	3
@@ -1913,7 +1913,7 @@ src/agents/tools/media-generate-tool-actions-shared.ts	1
 src/agents/tools/message-tool-discovery.ts	3
 src/agents/tools/message-tool-execution.ts	3
 src/agents/tools/message-tool-visible-content.ts	6
-src/agents/tools/mobile-ui-tool.ts	5
+src/agents/tools/mobile-ui-tool.ts	3
 src/agents/tools/music-generate-tool.ts	2
 src/agents/tools/nodes-tool.ts	2
 src/agents/tools/openclaw-delegate-tool.ts	1
