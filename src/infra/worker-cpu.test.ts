@@ -9,6 +9,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import {
   getTrackedWorkerCpuSources,
   createCpuTrackedWorker,
+  markWorkerRetirement,
   sampleTrackedWorkerMemory,
 } from "./worker-cpu.js";
 
@@ -53,6 +54,12 @@ describe("worker CPU lifecycle", () => {
       sampleTrackedWorkerMemory();
       await Promise.resolve();
       const memory = sampleTrackedWorkerMemory();
+      for (const name of new Set(["other", script])) {
+        expect(memory.workerLifecycle.find((entry) => entry.script === name)?.started).toBe(
+          (initial.workerLifecycle.find((entry) => entry.script === name)?.started ?? 0) +
+            (script === "other" ? 2 : 1),
+        );
+      }
       expect(memory.workerCount).toBe(initial.workerCount + 2);
       expect(memory.workerHeapSampledCount).toBe(initial.workerHeapSampledCount + 2);
       expect(memory.workerHeapTotalBytes).toBeGreaterThan(memory.workerHeapUsedBytes);
@@ -69,10 +76,25 @@ describe("worker CPU lifecycle", () => {
           heapTotal: ownedHeap.total_heap_size,
         },
       ]);
+      markWorkerRetirement(owned, "idle_timeout");
+      markWorkerRetirement(owned, "failure");
+      expect(sampleTrackedWorkerMemory().workerLifecycle).toEqual(memory.workerLifecycle);
       // Some consumers clear listeners before native teardown; counters must still retire.
       direct.removeAllListeners();
       await Promise.all([direct.terminate(), owned.terminate()]);
-      expect(sampleTrackedWorkerMemory()).toEqual(initial);
+      const retired = sampleTrackedWorkerMemory();
+      expect(retired).toEqual({ ...initial, workerLifecycle: retired.workerLifecycle });
+      for (const [name, reason] of [
+        ["other", "exit"],
+        [script, "idle_timeout"],
+      ]) {
+        const before = initial.workerLifecycle.find((entry) => entry.script === name);
+        const after = retired.workerLifecycle.find((entry) => entry.script === name);
+        expect(after?.retired.find((entry) => entry.reason === reason)?.count).toBe(
+          (before?.retired.find((entry) => entry.reason === reason)?.count ?? 0) + 1,
+        );
+      }
+      expect(sampleTrackedWorkerMemory().workerLifecycle).toEqual(retired.workerLifecycle);
     },
   );
 

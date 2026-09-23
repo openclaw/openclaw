@@ -1,6 +1,7 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import {
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
@@ -65,7 +66,35 @@ export type StoredComposerRecovery = {
   session: StoredComposerSession;
 };
 
-// Keep the original recovery bound; excess whole legacy sources remain untouched.
+export function clearStoredComposerDraftInput(session: {
+  draft?: unknown;
+  draftMentions?: unknown;
+  goalMode?: unknown;
+}): boolean {
+  if (!session.draft && !session.draftMentions && !session.goalMode) {
+    return false;
+  }
+  delete session.draft;
+  delete session.draftMentions;
+  delete session.goalMode;
+  return true;
+}
+
+function retireStoredIncognitoDrafts(store: StoredComposerState): boolean {
+  let changed = false;
+  const rows = [
+    ...Object.entries(store.sessions),
+    ...Object.values(store.recovery).map((entry) => [entry.sourceScopeKey, entry.session] as const),
+  ];
+  for (const [key, session] of rows) {
+    if (isIncognitoSessionKey(parseStoredChatOutboxScope(key)?.sessionKey)) {
+      changed = clearStoredComposerDraftInput(session) || changed;
+    }
+  }
+  return changed;
+}
+
+// Keep the original recovery bound; excess whole legacy sources remain available.
 const MAX_RECOVERY_ROWS = 80;
 const pendingLegacyTransfers = new WeakMap<
   StoredComposerState,
@@ -360,6 +389,9 @@ export function readStoredOutboxStore(
   ] as const) {
     const legacyRaw = storage.getItem(key);
     if (!legacyRaw) {
+      if (legacyRaw === "") {
+        sources.push({ key, raw: legacyRaw });
+      }
       continue;
     }
     const receipt = bytesToHex(sha256(new TextEncoder().encode(legacyRaw)));
@@ -382,6 +414,7 @@ export function readStoredOutboxStore(
     }
     const previousSessions = { ...store.sessions };
     const previousRecovery = { ...store.recovery };
+    let retiredLegacyDrafts = false;
     for (const [sourceScopeKey, value] of Object.entries(legacy.sessions)) {
       const session = normalizeStoredSession(value);
       const removed =
@@ -397,6 +430,13 @@ export function readStoredOutboxStore(
         throw new Error("Invalid legacy chat outbox record");
       }
       const scope = parseStoredChatOutboxScope(sourceScopeKey);
+      if (isRecord(value) && isIncognitoSessionKey(scope?.sessionKey)) {
+        retiredLegacyDrafts = clearStoredComposerDraftInput(value) || retiredLegacyDrafts;
+        clearStoredComposerDraftInput(session);
+        if (!normalizeStoredSession(value)) {
+          delete legacy.sessions[sourceScopeKey];
+        }
+      }
       const identifiable =
         scope &&
         (parseAgentSessionKey(scope.sessionKey) ||
@@ -462,13 +502,25 @@ export function readStoredOutboxStore(
       store.sessions = previousSessions;
       store.recovery = previousRecovery;
       store.recoveryBlocked = true;
+      if (retiredLegacyDrafts && storage.getItem(key) === legacyRaw) {
+        try {
+          // The whole source validated. Preserve queue bytes and unknown fields;
+          // no receipt acknowledges these deferred bytes until migration succeeds.
+          storage.setItem(key, JSON.stringify(legacy));
+        } catch {
+          // Storage failures must not hide the existing recovery queue.
+        }
+      }
       continue;
     }
     store.legacyReceipts = { ...store.legacyReceipts, [version]: receipt };
     sources.push({ key, raw: legacyRaw });
   }
-  if (sources.length) {
-    pendingLegacyTransfers.set(store, sources);
+  const retiredPrivateDrafts = retireStoredIncognitoDrafts(store);
+  if (sources.length || retiredPrivateDrafts) {
+    if (sources.length) {
+      pendingLegacyTransfers.set(store, sources);
+    }
     try {
       writeStoredOutboxStore(storage, target, store);
     } catch {
@@ -499,6 +551,9 @@ export function writeStoredOutboxStore(
   target: ComposerStorageTarget,
   store: StoredComposerState,
 ): void {
+  // Queue and recovery mutations share this owner: none may carry a legacy
+  // private draft forward alongside the separately retained submitted message.
+  retireStoredIncognitoDrafts(store);
   const previous = storage.getItem(target.key);
   projectedStoreByStorage.get(storage)?.delete(target.key);
   if (Object.keys(store.recovery).length > MAX_RECOVERY_ROWS) {
@@ -577,6 +632,15 @@ export function writeStoredOutboxStore(
         storage.removeItem(source.key);
       } catch {
         // The verified receipt fences this exact source even if deletion fails.
+      }
+      try {
+        if (storage.getItem(source.key) === source.raw) {
+          // All rows already committed above. An empty legacy value is also
+          // absent to readers, so failed deletion need not retain private input.
+          storage.setItem(source.key, "");
+        }
+      } catch {
+        // Keep the receipt if storage cannot retire the acknowledged bytes.
       }
     }
   }

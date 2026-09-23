@@ -198,7 +198,7 @@ suite.define(() => {
           await page.screenshot({ path: path.join(proofDir, "04-final-state.png") });
           writeFileSync(path.join(proofDir, "samples.json"), JSON.stringify(samples, null, 2));
         }
-        await context.close();
+        await suite.closeBrowserContext(context);
       }
     },
   );
@@ -375,7 +375,7 @@ suite.define(() => {
       if (proofDir) {
         writeFileSync(path.join(proofDir, "geometry.json"), JSON.stringify(report, null, 2));
       }
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 
@@ -485,7 +485,9 @@ suite.define(() => {
           stream: "item",
           ts: Date.now(),
         });
-        await runRow.getByText(`Commentary stage ${step}.`, { exact: true }).waitFor();
+        await expect
+          .poll(() => runRow.locator(".chat-working-indicator__preamble").textContent())
+          .toContain(`Commentary stage ${step}.`);
         await waitForChatScrollIdle(page);
         const preamble = await dockGeometry(page);
         report[`preamble${step}`] = preamble;
@@ -541,7 +543,9 @@ suite.define(() => {
             __openclaw: { id: `dock-result-${step}`, runId, seq: 35 + step * 2 },
           },
         );
-        await runRow.getByText(`Commentary stage ${step}.`, { exact: true }).waitFor();
+        await expect
+          .poll(() => runRow.locator(".chat-working-indicator__preamble").textContent())
+          .toContain(`Commentary stage ${step}.`);
         await waitForChatScrollIdle(page);
         const after = await dockGeometry(page);
         report[`commentary${step}`] = after;
@@ -604,7 +608,7 @@ suite.define(() => {
       if (proofDir) {
         writeFileSync(path.join(proofDir, "geometry.json"), JSON.stringify(report, null, 2));
       }
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 });

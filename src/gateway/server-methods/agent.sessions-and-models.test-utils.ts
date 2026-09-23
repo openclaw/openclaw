@@ -641,6 +641,7 @@ describe("gateway agent handler", () => {
         const originalRequester = "agent:main:telegram:direct:777";
         const previousRunId = "plugin-subagent-paused";
         const runId = "plugin-subagent-own-requester";
+        await using fixture = createPluginSubagentTestLifetime({ root, runId, childSessionKey });
         const followUpRequester = {
           sessionKey: "agent:main:telegram:direct:555",
           origin: { channel: "telegram", to: "telegram:555", accountId: "work" },
@@ -685,34 +686,32 @@ describe("gateway agent handler", () => {
         const context = makeContext();
         const baseClient = requireValue(backendGatewayClient(), "expected backend client");
 
-        const response = await invokeAgent(
-          {
-            message: "deliver to me instead",
-            sessionKey: childSessionKey,
-            idempotencyKey: runId,
-          },
-          {
-            context,
-            reqId: runId,
-            client: {
-              connect: baseClient.connect,
-              internal: {
-                ...baseClient.internal,
-                agentRunTracking: "plugin_subagent",
-                pluginSubagentRequester: followUpRequester,
-                pluginRuntimeOwnerId: "memory-core",
+        const response = await fixture.work.track(() =>
+          invokeAgent(
+            {
+              message: "deliver to me instead",
+              sessionKey: childSessionKey,
+              idempotencyKey: runId,
+            },
+            {
+              context,
+              reqId: runId,
+              client: {
+                connect: baseClient.connect,
+                internal: {
+                  ...baseClient.internal,
+                  agentRunTracking: "plugin_subagent",
+                  pluginSubagentRequester: followUpRequester,
+                  pluginRuntimeOwnerId: "memory-core",
+                },
               },
             },
-          },
+          ),
         );
         expect(response.mock.calls[0]?.[0], JSON.stringify(response.mock.calls[0])).toBe(true);
-        await waitForAssertion(() => {
-          expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, { status: "ok" });
-          expect(announce).toHaveBeenCalledTimes(1);
-          expectRecordFields(getSubagentRunByChildSessionKey(childSessionKey)?.delivery, {
-            status: "delivered",
-          });
-        });
+        await fixture.cleanupCompleted;
+        expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, { status: "ok" });
+        expect(announce).toHaveBeenCalledTimes(1);
 
         // An explicit requester is a delivery opt-in. Adopting the paused row here
         // would drop that audience with nothing recording why, so the follow-up
@@ -728,6 +727,7 @@ describe("gateway agent handler", () => {
           getSubagentRunByChildSessionKey(childSessionKey),
           "expected separately registered plugin subagent run",
         );
+        expectRecordFields(run.delivery, { status: "delivered" });
         expectRecordFields(run, {
           runId,
           requesterSessionKey: followUpRequester.sessionKey,
@@ -806,12 +806,10 @@ describe("gateway agent handler", () => {
   });
 
   it("rejects plugin SDK subagent registration and adoption when persistence fails", async () => {
-    await withTestDir(
-      { prefix: "openclaw-gateway-plugin-subagent-registry-fail-" },
-      async (root) => {
-        useTestStateDir(root);
+    await withPluginSubagentTestState(
+      "openclaw-gateway-plugin-subagent-registry-fail-",
+      async () => {
         resetAgentTaskRegistryForTests();
-        resetSubagentRegistryForTests({ persist: false });
         const persistSubagentRunsToDiskOrThrow = vi.fn();
         const persistenceError = Object.assign(new Error("disk full"), { code: "SQLITE_FULL" });
         persistSubagentRunsToDiskOrThrow.mockImplementationOnce(() => {
@@ -2898,8 +2896,8 @@ describe("gateway agent handler", () => {
     });
 
     it("keeps a host-owned subagent run to its pre-registered task row", async () => {
-      await withTestDir({ prefix: "openclaw-gateway-subagent-owner-" }, async (root) => {
-        useTestStateDir(root);
+      await withPluginSubagentTestState("openclaw-gateway-subagent-owner-", async (state) => {
+        const root = state.stateDir;
         // The Gateway worker must read the same durable task that the host registered.
         resetTaskRegistryForTests({ persist: false });
         const childSessionKey = "agent:main:subagent:owned";

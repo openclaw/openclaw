@@ -1,6 +1,11 @@
 /** Model selection state for reply runs, including catalog and override handling. */
 import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
+  assertAdmittedRunOperatorAuthority,
+  assertOperatorModelAllowed,
+  type AdmittedRunOperatorAuthority,
+} from "../../agents/admitted-run-context.js";
+import {
   hasLegacyAutoFallbackWithoutOrigin,
   resolveAgentConfig,
   resolveAgentDir,
@@ -29,6 +34,7 @@ import {
   OPENAI_PROVIDER_ID,
   listOpenAIAuthProfileProvidersForAgentRuntime,
 } from "../../agents/openai-routing.js";
+import { resolveOperatorModelDefault } from "../../agents/operator-model-policy.js";
 import {
   needsThinkHydration,
   resolveEffectiveAgentRuntime,
@@ -73,6 +79,9 @@ type ModelSelectionState = {
   model: string;
   requestedRouteResolution: ModelFallbackRouteResolution;
   modelPolicy: ModelVisibilityPolicy;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+  /** Caller-only selection; auth resolution must preserve shared session pins. */
+  operatorModelOverride?: boolean;
   allowedModelKeys: Set<string>;
   allowedModelCatalog: ModelCatalog;
   policyAliasIndex: ModelAliasIndex;
@@ -131,7 +140,13 @@ export async function createModelSelectionState(params: {
   hasResolvedHeartbeatModelOverride?: boolean;
   isHeartbeat?: boolean;
   preparedModelCatalog?: ModelCatalogSnapshot;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
 }): Promise<ModelSelectionState> {
+  const operatorAuthority = params.operatorAuthority;
+  if (operatorAuthority) {
+    assertAdmittedRunOperatorAuthority(operatorAuthority);
+    operatorAuthority.assertCurrent();
+  }
   const timingEnabled = isDiagnosticFlagEnabled("ingress.timing", params.cfg);
   const startMs = timingEnabled ? Date.now() : 0;
   const logStage = (stage: string, extra?: string) => {
@@ -301,7 +316,14 @@ export async function createModelSelectionState(params: {
     );
   }
 
-  if (sessionEntry && sessionStore && sessionKey && directOverrideRef && !hasOneTurnModelOverride) {
+  if (
+    sessionEntry &&
+    sessionStore &&
+    sessionKey &&
+    directOverrideRef &&
+    !hasOneTurnModelOverride &&
+    (!params.hasModelDirective || !operatorAuthority?.modelPolicy)
+  ) {
     const key = buildModelCatalogRef(directOverrideRef.provider, directOverrideRef.model);
     const overrideAllowed =
       hasSessionAutoModelSelection(sessionEntry) || visibilityPolicy.allows(directOverrideRef);
@@ -331,6 +353,10 @@ export async function createModelSelectionState(params: {
             sessionKey,
             initialEntry: initialSessionEntry,
             entry: nextSessionEntry,
+            validateCommit: () => {
+              operatorAuthority?.assertCurrent();
+              return undefined;
+            },
           });
           if (persistence.status === "lifecycle-invalidated") {
             throw new SessionWorkStartInvalidatedError(persistence.error);
@@ -442,9 +468,31 @@ export async function createModelSelectionState(params: {
     provider = allowedInitialSelection.provider;
     model = allowedInitialSelection.model;
   }
+  let operatorModelOverride = false;
+  if (!params.hasModelDirective) {
+    const selection =
+      hasOneTurnModelOverride || modelSelectionLocked
+        ? { provider, model }
+        : resolveOperatorModelDefault({
+            cfg,
+            agentId: params.agentId,
+            manifestPlugins: runtimeModelNormalization.manifestPlugins,
+            policy: operatorAuthority?.modelPolicy,
+            model: { provider, model },
+            allows: visibilityPolicy.allows,
+          });
+    assertOperatorModelAllowed(operatorAuthority, selection);
+    if (!selection) {
+      throw new Error("No model is available for this operator role and agent.");
+    }
+    operatorModelOverride = selection.provider !== provider || selection.model !== model;
+    provider = selection.provider;
+    model = selection.model;
+  }
 
   if (
     !params.skipStoredModelOverride &&
+    !operatorModelOverride &&
     sessionEntry &&
     sessionStore &&
     sessionKey &&
@@ -605,6 +653,8 @@ export async function createModelSelectionState(params: {
     model,
     requestedRouteResolution: "resolved",
     modelPolicy: visibilityPolicy,
+    ...(operatorAuthority ? { operatorAuthority } : {}),
+    ...(operatorModelOverride ? { operatorModelOverride } : {}),
     allowedModelKeys,
     allowedModelCatalog,
     policyAliasIndex: visibilityPolicy.policyAliasIndex,

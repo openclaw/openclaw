@@ -141,6 +141,8 @@ Reconciliation compares files with the last synchronized workspace, not the work
 
 ## What survives a dead machine
 
+An active worker turn keeps the session store selected when the Gateway admitted it. Changing session routing does not redirect that turn's transcript, live diagnostics, or auth-profile updates to another store. A replaced session or closed turn loses write authority; reconnecting a worker does not select a new store for the old turn.
+
 The Gateway owns the canonical session transcript in both modes. Worker-turn commits each complete user, assistant, and tool-result message before the worker's session write settles; remote-exec uses the normal local harness transcript path because the Codex app-server stays on the Gateway. If the machine disappears mid-message, durable history ends at the last committed message. Partial text or tool progress already shown by the live stream may disappear; the failed turn remains visible, and the failed placement records a bounded terminal reason above the composer.
 
 Worker-turn live previews are snapshots of the current assistant message. Corrections, shorter previews, and empty replacements update that message without replaying or erasing earlier messages in the turn. Explicit commentary is kept out of answer text, including when its phase arrives at message completion. Live previews are bounded and can be dropped after stream degradation; the committed transcript remains authoritative.

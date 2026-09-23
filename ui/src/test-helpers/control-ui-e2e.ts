@@ -42,6 +42,7 @@ import {
 } from "./control-ui-e2e-diagnostics.ts";
 import { resolveAvailableLoopbackPort } from "./control-ui-e2e-port.ts";
 import { controlUiE2eWaitTimeoutMs } from "./control-ui-e2e-readiness.ts";
+import { getSharedControlUiE2ePreview } from "./control-ui-e2e-shared-preview.ts";
 import { createControlUiMockResponses } from "./control-ui-mock-responses.ts";
 import type { NativeControlUiPluginFixture } from "./control-ui-plugin-fixture.ts";
 import {
@@ -562,12 +563,6 @@ const DEFAULT_CONTROL_UI_E2E_BUILD_INFO: ControlUiBuildInfo = {
   buildId: "e2e",
 };
 
-let sharedControlUiE2eServerBaseUrl: string | null = null;
-
-export function setSharedControlUiE2eServerBaseUrl(baseUrl: string | null): void {
-  sharedControlUiE2eServerBaseUrl = baseUrl;
-}
-
 export async function reconnectMockGateway(
   page: Page,
   gateway: MockGatewayControls,
@@ -664,13 +659,10 @@ export async function startControlUiE2eServer(
 ): Promise<ControlUiE2eServer> {
   // Ordinary E2E files exercise the shipped bundle. Source-module and custom
   // build-info tests retain a private Vite server through the same lease API.
-  if (
-    sharedControlUiE2eServerBaseUrl !== null &&
-    buildInfo === undefined &&
-    options.source !== true
-  ) {
+  const sharedPreview = getSharedControlUiE2ePreview();
+  if (sharedPreview && buildInfo === undefined && options.source !== true) {
     return {
-      baseUrl: sharedControlUiE2eServerBaseUrl,
+      baseUrl: sharedPreview.baseUrl,
       close: async () => {},
     };
   }
@@ -847,7 +839,7 @@ async function runProductionControlUiBuild(outDir: string): Promise<void> {
   });
 }
 
-async function startBuiltControlUiE2eServer(
+export async function startBuiltControlUiE2eServer(
   outDir: string,
   bootstrapConfig?: Record<string, unknown>,
 ): Promise<ControlUiE2eProductionServer> {
@@ -916,6 +908,7 @@ function resolveServerBaseUrl(server: ViteDevServer | PreviewServer): string {
 function normalizeScenario(
   scenario: ControlUiMockGatewayScenario,
 ): NormalizedControlUiMockGatewayScenario {
+  const sharedBuildInfo = getSharedControlUiE2ePreview()?.buildInfo;
   const defaultAgentId = normalizeAgentId(scenario.defaultAgentId);
   const mainSessionKey =
     scenario.mainSessionKey?.trim() ||
@@ -963,13 +956,13 @@ function normalizeScenario(
     deferredMethods: scenario.deferredMethods ?? [],
     heldMethods: scenario.heldMethods ?? [],
     devGitBranch: scenario.devGitBranch?.trim() || "",
-    serverBuildId: scenario.serverBuildId?.trim() || "e2e",
+    serverBuildId: scenario.serverBuildId?.trim() || sharedBuildInfo?.buildId || "e2e",
     gatewayBootId: scenario.gatewayBootId?.trim() || "e2e-gateway-boot",
     gatewaySuspensionPhase: scenario.gatewaySuspensionPhase ?? "accepting",
     updateAvailable: scenario.updateAvailable ?? null,
     updateSchedule: scenario.updateSchedule ?? null,
     controlUiBuildSource: scenario.controlUiBuildSource ?? "bundled",
-    serverVersion: scenario.serverVersion?.trim() || "e2e",
+    serverVersion: scenario.serverVersion?.trim() || sharedBuildInfo?.version || "e2e",
     deviceToken: scenario.deviceToken?.trim() || "e2e-device-token",
     authMethod: scenario.authMethod ?? "token",
     authMode: scenario.authMode ?? null,
@@ -2280,21 +2273,10 @@ function installControlUiMockGateway(
         return response;
       }
       case "sessions.list":
-        return sessions.listResponse(
-          {
-            count: sessions.list().length,
-            defaults: {
-              contextTokens: null,
-              model: "gpt-5.5",
-              modelProvider: "openai",
-            },
-            path: "",
-            sessions: sessions.list(),
-            ts: Date.now(),
-          },
-          params,
-          { renames: groupsState.renames, archiveFiltering: scenario.sessionArchiveFiltering },
-        );
+        return sessions.listResponse(responseFixtures.sessionList(), params, {
+          renames: groupsState.renames,
+          archiveFiltering: scenario.sessionArchiveFiltering,
+        });
       case "sessions.search":
         return { results: [] };
       case "sessions.patchMany":
@@ -2815,7 +2797,7 @@ function installControlUiMockGateway(
       } catch {
         // The current document still observes the canonical replacement.
       }
-      this.setMethodResponse("sessions.list", payload);
+      this.setMethodResponse("sessions.list", responseFixtures.sessionList(payload));
     },
     setSessionSharingPolicy(policy) {
       scenario.allowedSessionVisibilities = policy.allowedSessionVisibilities;

@@ -4,7 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { sessionPersonalProfileId } from "../config/sessions/session-entry-provenance.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { ensureProfileForEmail, linkEmail } from "../state/user-profiles.js";
+import {
+  ensureGatewayOwnerProfile,
+  ensureProfileForEmail,
+  linkEmail,
+} from "../state/user-profiles.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -31,6 +35,29 @@ afterEach(async () => {
   await state.cleanup();
 });
 describe("personal bootstrap", () => {
+  it.each(["owner", "named"])(
+    "keeps only workspace USER.md for a single %s identity",
+    async (kind) => {
+      const workspaceDir = tempDirs.make("bootstrap-single-user-");
+      const owner = ensureGatewayOwnerProfile("Local Owner");
+      const profile = kind === "owner" ? owner : ensureProfileForEmail("solo@example.test");
+      const personalDir = path.join(workspaceDir, "users", profile.id);
+      await fs.mkdir(personalDir, { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "USER.md"), "Only workspace preferences");
+      await fs.writeFile(path.join(personalDir, "USER.md"), "Legacy personal preferences");
+      const context = await resolveBootstrapContextForRun({
+        workspaceDir,
+        bootstrapUserProfileId: profile.id,
+      });
+      expect(context.contextFiles.filter((file) => file.path.endsWith("USER.md"))).toEqual([
+        { path: path.join(workspaceDir, "USER.md"), content: "Only workspace preferences" },
+      ]);
+      expect(await fs.readFile(path.join(personalDir, "USER.md"), "utf8")).toBe(
+        "Legacy personal preferences",
+      );
+    },
+  );
+
   it("stacks only the session-selected owner or creator after shared defaults", async () => {
     const workspaceDir = tempDirs.make("session-personal-");
     const alice = ensureProfileForEmail("alice@example.test");
@@ -105,6 +132,7 @@ describe("personal bootstrap", () => {
     expect((await load("../" + alice.id)).map((file) => file.content)).toEqual(["Shared defaults"]);
     await writePersonal(alice.id, "Updated Alice preferences");
     expect((await load(alice.id)).at(-1)?.content).toBe("Updated Alice preferences");
+    ensureProfileForEmail("third@example.test");
     linkEmail("alice@example.test", bob.id);
     expect((await load(alice.id)).map((file) => file.content)).toEqual([
       "Shared defaults",
@@ -168,6 +196,7 @@ describe("personal bootstrap", () => {
     async (boundary) => {
       const workspaceDir = tempDirs.make("bootstrap-people-boundary-");
       const alice = ensureProfileForEmail("alice@example.test");
+      ensureProfileForEmail("bob@example.test");
       const personalDir = path.join(workspaceDir, "users", alice.id);
       await fs.mkdir(personalDir, { recursive: true });
       await fs.writeFile(

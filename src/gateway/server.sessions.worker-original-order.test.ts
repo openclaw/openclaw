@@ -386,7 +386,6 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
       clear: () => {},
       clearEnvironment: () => {},
       rotateCredential: () => true,
-      start: () => {},
     },
     executeInference: async () => ({
       type: "error",

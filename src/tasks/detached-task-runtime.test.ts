@@ -14,6 +14,8 @@ import {
   DetachedTaskRuntimeOwnerRetiredError,
   type CreatedDetachedTaskRun,
 } from "./detached-task-runtime-contract.js";
+import { DetachedTaskLegacyRuntimeError } from "./detached-task-runtime-errors.js";
+import { finalizeTaskRunByRunIdAsync } from "./detached-task-runtime.async.js";
 import {
   completeTaskRunByRunId,
   createQueuedTaskRun,
@@ -30,6 +32,7 @@ import {
   tryRecoverTaskBeforeMarkLost,
 } from "./detached-task-runtime.js";
 import { captureTaskPersistenceReceipt } from "./task-registry-records.js";
+import * as taskTransitions from "./task-registry-transition.async.js";
 import type { TaskRecord } from "./task-registry.types.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
@@ -249,6 +252,71 @@ describe("detached-task-runtime", () => {
       runId: "run-owned",
       task: "Owned task",
     } as const;
+
+    it.each(["core", "legacy"] as const)(
+      "preserves %s failure custody without retrying the write",
+      async (owner) =>
+        withRuntimeOwner(async () => {
+          const failure = new Error("Task write outcome unavailable");
+          const transition = vi
+            .spyOn(taskTransitions, "transitionTaskRecordsByRunAsync")
+            .mockRejectedValue(failure);
+          const legacy = vi.fn(() => {
+            throw failure;
+          });
+          if (owner === "legacy") {
+            setDetachedTaskLifecycleRuntime({
+              ...getDetachedTaskLifecycleRuntime(),
+              finalizeTaskRunByRunId: legacy,
+            });
+          }
+          try {
+            const result = finalizeTaskRunByRunIdAsync({
+              runId: params.runId,
+              status: "succeeded",
+              endedAt: 200,
+            });
+            if (owner === "core") {
+              await expect(result).rejects.toBe(failure);
+              expect(transition).toHaveBeenCalledOnce();
+              expect(legacy).not.toHaveBeenCalled();
+            } else {
+              await expect(result).rejects.toBeInstanceOf(DetachedTaskLegacyRuntimeError);
+              await expect(result).rejects.toMatchObject({
+                message: failure.message,
+                cause: failure,
+              });
+              expect(legacy).toHaveBeenCalledOnce();
+              expect(transition).not.toHaveBeenCalled();
+            }
+          } finally {
+            transition.mockRestore();
+          }
+        }),
+    );
+
+    it.each(["succeeded", "failed"] as const)(
+      "keeps legacy %s callbacks synchronous when the optional finalizer is absent",
+      async (status) =>
+        withRuntimeOwner(async () => {
+          const task = createFakeTaskRecord({ status, endedAt: 200 });
+          const complete = vi.fn(() => [task]);
+          const fail = vi.fn(() => [task]);
+          setDetachedTaskLifecycleRuntime({
+            ...getDetachedTaskLifecycleRuntime(),
+            finalizeTaskRunByRunId: undefined,
+            completeTaskRunByRunId: complete,
+            failTaskRunByRunId: fail,
+          });
+          const terminal = { runId: task.runId!, status, endedAt: 200 };
+          const pending = finalizeTaskRunByRunIdAsync(terminal);
+          expect(status === "succeeded" ? complete : fail).toHaveBeenCalledExactlyOnceWith(
+            terminal,
+          );
+          expect(status === "succeeded" ? fail : complete).not.toHaveBeenCalled();
+          await expect(pending).resolves.toEqual([task]);
+        }),
+    );
 
     it.each(["adopted", "revoked", "runtime replaced", "instance retired"] as const)(
       "retains legacy finalization only while its adopted instance is live: %s",

@@ -42,6 +42,7 @@ export function createVisitorGatewayConfig(workspaceDir: string): OpenClawConfig
             agents: ["main"],
             scopes: [SESSION_WRITE_SCOPE],
             sandbox: "required",
+            modelPolicy: {},
           },
           admin: { sessions: { others: "write" }, agents: ["main"], scopes: [ADMIN_SCOPE] },
           writer: { sessions: { others: "write" }, agents: ["main"], scopes: [WRITE_SCOPE] },

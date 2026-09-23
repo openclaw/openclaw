@@ -1,11 +1,16 @@
 // The first selected bundle consumer owns the invocation-wide build/preview and teardown.
 import type { TestProject } from "vitest/node";
-import { startBundledControlUiE2eServer } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import type { ControlUiE2eBuildIdentity } from "../../ui/src/test-helpers/control-ui-e2e-shared-preview.ts";
+import {
+  startBuiltControlUiE2eServer,
+  startBundledControlUiE2eServer,
+} from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import { createTempDirTracker } from "../helpers/temp-dir.ts";
 
 declare module "vitest" {
   export interface ProvidedContext {
     controlUiE2eServerBaseUrl: string | null;
+    controlUiE2eServerBuildInfo: ControlUiE2eBuildIdentity | null;
   }
 }
 
@@ -25,14 +30,18 @@ export default async function setup(project: TestProject) {
   // Local full-suite runs can fan shards into separate processes in one checkout.
   // Keep every build out of canonical dist so those processes cannot clobber it.
   const tempDirs = createTempDirTracker();
-  const outDir = tempDirs.make("openclaw-ui-e2e-");
-  const server = await startBundledControlUiE2eServer(outDir).catch(async (error: unknown) => {
+  const prebuilt = root.getProvidedContext().controlUiE2ePrebuiltAssets;
+  const startServer = prebuilt
+    ? startBuiltControlUiE2eServer(prebuilt.root)
+    : startBundledControlUiE2eServer(tempDirs.make("openclaw-ui-e2e-"));
+  const server = await startServer.catch(async (error: unknown) => {
     try {
       tempDirs.cleanup();
     } catch {}
     throw error;
   });
   try {
+    root.provide("controlUiE2eServerBuildInfo", prebuilt?.buildInfo ?? null);
     root.provide("controlUiE2eServerBaseUrl", server.baseUrl);
     return async () => {
       try {

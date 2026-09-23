@@ -232,8 +232,6 @@ export async function handleAgentExecutionError(params: {
       kind: "final",
       payload: markAgentRunFailureReplyPayload({
         text: buildContextOverflowRecoveryText({
-          duringCompaction: true,
-          preserveSessionMapping: true,
           cfg: params.runtimeConfig,
           agentId: turn.followupRun.run.agentId,
           primaryProvider: turn.followupRun.run.provider,

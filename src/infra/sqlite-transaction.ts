@@ -25,6 +25,7 @@ import {
   sqlitePrimaryResultCode,
 } from "./sqlite-error-diagnostics.js";
 import { discardSqliteTransactionState } from "./sqlite-post-commit.js";
+import { captureSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
 
 const DEFAULT_SLOW_BUSY_WAIT_MS = 1_000;
 const DEFAULT_SLOW_TRANSACTION_HOLD_MS = 1_000;
@@ -215,8 +216,29 @@ function transactionLogger(
   return options?.logger ?? transactionLog;
 }
 
+function transactionDiagnosticLabels(
+  db: DatabaseSync | undefined,
+  options: Pick<SqliteTransactionOptions, "databaseLabel" | "operationLabel"> | undefined,
+) {
+  let database = options?.databaseLabel;
+  if (!database) {
+    try {
+      database = db ? (db.location() ?? ":memory:") : "unavailable";
+    } catch {
+      // Failed rollback may have retired the native connection before reporting its hold.
+      database = "unavailable";
+    }
+  }
+  return {
+    database,
+    operation: options?.operationLabel || captureSqliteReaderOwner()?.operation || "unlabeled",
+  };
+}
+
 function logSlowTransactionHold(params: {
+  db: DatabaseSync;
   elapsedMs: number;
+  mode: SqliteTransactionMode;
   options?: SqliteTransactionOptions;
 }): void {
   if (params.elapsedMs < slowTransactionHoldThresholdMs(params.options)) {
@@ -224,10 +246,10 @@ function logSlowTransactionHold(params: {
   }
   transactionLogger(params.options).warn("slow SQLite transaction hold", {
     async: false,
-    ...(params.options?.databaseLabel ? { database: params.options.databaseLabel } : {}),
+    ...transactionDiagnosticLabels(params.db, params.options),
     elapsedMs: params.elapsedMs,
     isMainThread,
-    ...(params.options?.operationLabel ? { operation: params.options.operationLabel } : {}),
+    mode: params.mode,
     pid: process.pid,
     threadId,
     thresholdMs: slowTransactionHoldThresholdMs(params.options),
@@ -242,20 +264,32 @@ export function logSlowSqliteCoordinatorWait(
   if (!isMainThread || elapsedMs <= 100) {
     return;
   }
-  transactionLogger(undefined).warn("slow SQLite coordinator lock wait", {
-    async: false,
-    database: options.databaseLabel,
-    elapsedMs,
-    isMainThread,
-    operation: options.operationLabel,
-    pid: process.pid,
-    threadId,
-    thresholdMs: 100,
-  });
+  try {
+    // Capture only slow waits, while the synchronous owner's call chain is still on the stack.
+    const trace = new Error();
+    Error.captureStackTrace(trace, logSlowSqliteCoordinatorWait);
+    transactionLogger(undefined).warn("slow SQLite coordinator lock wait", {
+      async: false,
+      caller: trace.stack
+        ?.split("\n")
+        .slice(1, 9)
+        .map((frame) => frame.trim())
+        .join(" <- "),
+      ...transactionDiagnosticLabels(undefined, options),
+      elapsedMs,
+      isMainThread,
+      pid: process.pid,
+      threadId,
+      thresholdMs: 100,
+    });
+  } catch {
+    // Diagnostics cannot abandon an acquired coordinator or replace its admission error.
+  }
 }
 
 function logSlowTransactionStep(params: {
   beginAdmission?: SqliteBeginAdmissionDiagnostics;
+  db: DatabaseSync;
   elapsedMs: number;
   options?: SqliteTransactionOptions;
   step: SqliteTransactionStep;
@@ -268,10 +302,9 @@ function logSlowTransactionStep(params: {
     ...(params.options?.busyTimeoutMs !== undefined
       ? { busyTimeoutMs: params.options.busyTimeoutMs }
       : {}),
-    ...(params.options?.databaseLabel ? { database: params.options.databaseLabel } : {}),
+    ...transactionDiagnosticLabels(params.db, params.options),
     elapsedMs: params.elapsedMs,
     isMainThread,
-    ...(params.options?.operationLabel ? { operation: params.options.operationLabel } : {}),
     pid: process.pid,
     step: params.step,
     threadId,
@@ -312,6 +345,7 @@ function execTimedTransactionStep(params: {
     const elapsedMs = Date.now() - startedAt;
     logSlowTransactionStep({
       beginAdmission,
+      db: params.db,
       elapsedMs,
       options: params.options,
       step: params.step,
@@ -327,12 +361,11 @@ function execTimedTransactionStep(params: {
         ...(params.options?.busyTimeoutMs !== undefined
           ? { busyTimeoutMs: params.options.busyTimeoutMs }
           : {}),
-        ...(params.options?.databaseLabel ? { database: params.options.databaseLabel } : {}),
+        ...transactionDiagnosticLabels(params.db, params.options),
         code: sqliteErrorCode(error),
         elapsedMs,
         failureKind: "lock-contention",
         isMainThread,
-        ...(params.options?.operationLabel ? { operation: params.options.operationLabel } : {}),
         pid: process.pid,
         ...(sqliteErrcode !== undefined ? { sqliteErrcode } : {}),
         ...(sqlitePrimaryCode !== undefined ? { sqlitePrimaryCode } : {}),
@@ -450,7 +483,9 @@ function runSqliteTransactionSync<T>(
     // Include COMMIT and failed holders: both keep other writers waiting too.
     try {
       logSlowTransactionHold({
+        db,
         elapsedMs: Date.now() - transactionStartedAt,
+        mode,
         options,
       });
     } catch {

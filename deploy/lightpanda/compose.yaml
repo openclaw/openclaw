@@ -1,0 +1,16 @@
+# Use with compose.host.yaml for a host-native OpenClaw Gateway, or merge with
+# the repository's docker-compose.yml for an unpublished container-only endpoint.
+services:
+  lightpanda:
+    # Official 0.4.1 multi-platform index: linux/amd64 and linux/arm64.
+    image: docker.io/lightpanda/browser:0.4.1@sha256:73f67d2dc0bc243f3a8c87065c9871c98b121197baf7b650df5da91b33b98f02
+    environment:
+      LIGHTPANDA_DISABLE_TELEMETRY: "1"
+      LIGHTPANDA_DISABLE_CORE_DUMP: "1"
+    command: ["/bin/lightpanda", "serve", "--host", "0.0.0.0", "--port", "9222"]
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # The official image already runs as its lightpanda user under tini.
+    restart: unless-stopped

@@ -1059,6 +1059,17 @@ struct ChatGatewayPayloadCodecTests {
             return
         }
 
+        for eventName in ["chat.metadata.changed", "config.changed"] {
+            guard case .modelSelectionChanged = OpenClawChatGatewayPayloadCodec.event(from: EventFrame(
+                type: "event",
+                event: eventName,
+                payload: eventName == "chat.metadata.changed" ? AnyCodable(["modelSelectionChanged": true]) : nil))
+            else {
+                Issue.record("expected modelSelectionChanged for \(eventName)")
+                return
+            }
+        }
+
         #expect(OpenClawChatGatewayPayloadCodec.event(from: EventFrame(
             type: "event",
             event: "unknown")) == nil)

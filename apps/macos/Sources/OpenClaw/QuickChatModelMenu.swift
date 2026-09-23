@@ -1,9 +1,11 @@
 import AppKit
+import Observation
 import OpenClawChatUI
 
 @MainActor
 private final class QuickChatModelMenuTarget: NSObject {
     let onSelectModel: (String) -> Void
+    weak var menu: NSMenu?
 
     init(onSelectModel: @escaping (String) -> Void) {
         self.onSelectModel = onSelectModel
@@ -22,7 +24,9 @@ enum QuickChatModelMenuPresenter {
             model?.selectModel(selectionID)
         }
         let menu = NSMenu()
+        target.menu = menu
         menu.autoenablesItems = false
+        let selectedModelSelectionID = model.displayedModelSelectionID
         let modelHeader = NSMenuItem(
             title: String(localized: "Model"),
             action: nil,
@@ -30,16 +34,18 @@ enum QuickChatModelMenuPresenter {
         modelHeader.isEnabled = false
         menu.addItem(modelHeader)
 
-        let defaultItem = NSMenuItem(
-            title: String(localized: "Session default"),
-            action: #selector(QuickChatModelMenuTarget.selectModel(_:)),
-            keyEquivalent: "")
-        defaultItem.target = target
-        defaultItem.representedObject = OpenClawChatViewModel.defaultModelSelectionID
-        defaultItem.state = model.selectedModelSelectionID == OpenClawChatViewModel.defaultModelSelectionID
-            ? .on
-            : .off
-        menu.addItem(defaultItem)
+        if model.canSelectDefaultModel {
+            let defaultItem = NSMenuItem(
+                title: String(localized: "Session default"),
+                action: #selector(QuickChatModelMenuTarget.selectModel(_:)),
+                keyEquivalent: "")
+            defaultItem.target = target
+            defaultItem.representedObject = OpenClawChatViewModel.defaultModelSelectionID
+            defaultItem.state = model.selectedModelSelectionID == OpenClawChatViewModel.defaultModelSelectionID
+                ? .on
+                : .off
+            menu.addItem(defaultItem)
+        }
 
         for section in model.modelPickerSections.providers {
             let providerItem = NSMenuItem(title: section.displayName, action: nil, keyEquivalent: "")
@@ -59,7 +65,7 @@ enum QuickChatModelMenuPresenter {
                 item.target = target
                 item.isEnabled = choice.available != false
                 item.representedObject = choice.selectionID
-                item.state = model.displayedModelSelectionID == choice.selectionID ? .on : .off
+                item.state = selectedModelSelectionID == choice.selectionID ? .on : .off
                 submenu.addItem(item)
             }
             providerItem.submenu = submenu
@@ -68,6 +74,12 @@ enum QuickChatModelMenuPresenter {
 
         let windowPoint = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
         let contentPoint = contentView.convert(windowPoint, from: nil)
+        // NSMenu owns a snapshot; retire this popup when its choices lose authority.
+        withObservationTracking {
+            _ = model.modelCatalogInvalidated
+        } onChange: { [weak target] in
+            Task { @MainActor [weak target] in target?.menu?.cancelTracking() }
+        }
         withExtendedLifetime(target) {
             _ = menu.popUp(positioning: nil, at: contentPoint, in: contentView)
         }

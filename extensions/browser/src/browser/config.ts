@@ -114,6 +114,8 @@ export type ResolvedBrowserTabCleanupConfig = {
 /** Runtime browser profile settings resolved from global and profile config. */
 export type ResolvedBrowserProfile = {
   name: string;
+  /** Omitted only by legacy callers; defaults to Chromium. */
+  engine?: "chromium" | "lightpanda";
   cdpPort: number;
   cdpUrl: string;
   cdpHost: string;
@@ -223,7 +225,12 @@ function hasLinuxDisplay(env: NodeJS.ProcessEnv): boolean {
 }
 
 export function isLocalManagedProfile(profile: ResolvedBrowserProfile): boolean {
-  return profile.driver === "openclaw" && profile.cdpIsLoopback && !profile.attachOnly;
+  return (
+    profile.engine !== "lightpanda" &&
+    profile.driver === "openclaw" &&
+    profile.cdpIsLoopback &&
+    !profile.attachOnly
+  );
 }
 
 function resolveBrowserTabCleanupConfig(
@@ -303,6 +310,24 @@ function resolveExtensionRelayPorts(
   return ports;
 }
 
+function assertDedicatedLightpandaEndpoints(profiles: Record<string, BrowserProfileConfig>): void {
+  const endpoints = new Map<string, { name: string; engine?: string }>();
+  for (const [name, profile] of Object.entries(profiles)) {
+    const endpoint = profile.cdpUrl ? URL.parse(profile.cdpUrl) : null;
+    if (!endpoint) {
+      continue;
+    }
+    const key = endpoint.toString().replace(/\/$/, "");
+    const previous = endpoints.get(key);
+    if (previous && (previous.engine === "lightpanda" || profile.engine === "lightpanda")) {
+      throw new Error(
+        `Lightpanda requires a dedicated CDP endpoint; profiles "${previous.name}" and "${name}" share one.`,
+      );
+    }
+    endpoints.set(key, { name, engine: profile.engine });
+  }
+}
+
 /** Resolve raw browser config into runtime browser defaults. */
 export function resolveBrowserConfig(
   cfg: BrowserConfig | undefined,
@@ -379,6 +404,8 @@ export function resolveBrowserConfig(
       )
     : [];
 
+  assertDedicatedLightpandaEndpoints(profiles);
+
   return {
     enabled,
     evaluateEnabled,
@@ -435,6 +462,54 @@ export function resolveProfile(
     return null;
   }
 
+  const engine = profile.engine ?? "chromium";
+  if (engine !== "chromium" && engine !== "lightpanda") {
+    throw new Error(`browser.profiles.${profileName}.engine must be chromium or lightpanda.`);
+  }
+  if (engine === "lightpanda") {
+    // Also validate here: callers can resolve programmatic config without
+    // passing through the persisted-config schema first.
+    const endpoint = profile.cdpUrl ? URL.parse(profile.cdpUrl) : null;
+    if (!endpoint || !["ws:", "wss:"].includes(endpoint.protocol)) {
+      throw new Error(
+        `browser.profiles.${profileName}.cdpUrl must be an explicit ws:// or wss:// Lightpanda endpoint.`,
+      );
+    }
+    if (profile.attachOnly !== true) {
+      throw new Error(`browser.profiles.${profileName} requires attachOnly: true for Lightpanda.`);
+    }
+    if (profile.driver !== undefined && profile.driver !== "openclaw") {
+      throw new Error(
+        `browser.profiles.${profileName} requires the default CDP driver for Lightpanda.`,
+      );
+    }
+    for (const key of [
+      "cdpPort",
+      "userDataDir",
+      "mcpCommand",
+      "mcpArgs",
+      "headless",
+      "executablePath",
+    ] as const) {
+      if (profile[key] !== undefined) {
+        throw new Error(`browser.profiles.${profileName}.${key} is not supported by Lightpanda.`);
+      }
+    }
+    return {
+      name: profileName,
+      engine,
+      cdpUrl: endpoint.toString(),
+      cdpHost: endpoint.hostname,
+      cdpPort: Number(endpoint.port || (endpoint.protocol === "wss:" ? 443 : 80)),
+      cdpIsLoopback: isLoopbackHost(endpoint.hostname),
+      color: DEFAULT_OPENCLAW_BROWSER_COLOR,
+      driver: "openclaw",
+      headless: true,
+      headlessSource: "default",
+      attachOnly: true,
+    };
+  }
+
   const rawProfileUrl = profile.cdpUrl?.trim() ?? "";
   let cdpHost = resolved.cdpHost;
   let cdpPort = profile.cdpPort ?? 0;
@@ -465,6 +540,7 @@ export function resolveProfile(
       : `http://127.0.0.1:${relayPort}`;
     return {
       name: profileName,
+      engine,
       cdpPort: relayPort,
       cdpUrl: relayCdpUrl,
       cdpHost: "127.0.0.1",
@@ -486,6 +562,7 @@ export function resolveProfile(
     );
     return {
       name: profileName,
+      engine,
       cdpPort: 0,
       cdpUrl: existingSessionCdp?.cdpUrl ?? "",
       cdpHost: existingSessionCdp?.cdpHost ?? "",
@@ -537,6 +614,7 @@ export function resolveProfile(
 
   return {
     name: profileName,
+    engine,
     cdpPort,
     cdpUrl,
     cdpHost,

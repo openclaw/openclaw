@@ -51,11 +51,11 @@ import {
   globalInstallArgs,
   globalInstallFallbackArgs,
   listActivePnpmIsolatedGlobalPackages,
-  resolvePnpmGlobalDirFromGlobalRoot,
   resolveExpectedInstalledVersionFromSpec,
   verifyPackageUpdateRecovery,
   type ResolvedGlobalInstallTarget,
 } from "./update-global.js";
+import { resolvePnpmGlobalDirFromGlobalRoot } from "./update-native-package-owner.js";
 import { prepareNativePackageStage } from "./update-native-package-stage.js";
 import {
   readPackageManagerProbeValue,

@@ -83,6 +83,12 @@ Repair the preserved file locally, then rerun `openclaw doctor --fix` with the s
 
 Agent database schema upgrades are reported with the database path and the observed before and after versions, independently of media rewrites. The media persistence message appears only when transcript sessions or trajectory rows were rewritten and includes both counts. A run that does both reports both; an unchanged rerun reports neither.
 
+Media repair detection stops at the first event that needs repair. The repair
+transaction still validates every transcript and trajectory row before committing;
+invalid JSON later in either store rolls back the media changes. Databases with
+no media repairs still receive a complete validation scan, including after imports
+or restores.
+
 Doctor shares its initial fleet schema and ownership inspection across the update
 guard and admission checks. Database readers use a bounded worker pool, including
 private snapshots for closed WAL databases, so large fleets do not launch a new

@@ -225,7 +225,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
         method: preservesBoard ? "sessions.reset" : "sessions.create",
         ...(preservesBoard
           ? { requiredScope: "operator.admin" as const }
-          : { params: createRequestParams }),
+          : { params: createRequestParams, sessionScope: true }),
       });
     const publishCreateAccessError = (reason: string) => {
       state.lastError = reason;

@@ -223,7 +223,6 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       : [],
   );
   const workerLiveEvents = createWorkerLiveEventReceiver({
-    getConfig: getRuntimeConfig,
     startupBindings,
     startupOwners: new Map(
       startupBindings.map((binding) => [binding.environmentId, binding.runEpoch] as const),

@@ -9,7 +9,7 @@ import type { ApplicationContext } from "./context.ts";
 type ShellDocumentTitleState = {
   activeSessionKey: string;
   outboxStoreRuntime: {
-    summarizeStoredChatOutboxes: () => { total: number };
+    read: () => { total: number };
   } | null;
   routeState: { routeId?: RouteId };
   runtime?: { context: ApplicationContext };
@@ -69,14 +69,14 @@ describe("OpenClaw shell document title", () => {
 
   it("does not read stored outboxes for a connected document title", () => {
     const shell = createShell(createContext({}));
-    const summarizeStoredChatOutboxes = vi.fn(() => ({ total: 3 }));
+    const read = vi.fn(() => ({ total: 3 }));
     shell.routeState = { routeId: "usage" };
-    shell.outboxStoreRuntime = { summarizeStoredChatOutboxes };
+    shell.outboxStoreRuntime = { read };
 
     shell.syncDocumentTitle();
 
     expect(document.title).toBe("Usage — OpenClaw");
-    expect(summarizeStoredChatOutboxes).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
   });
 
   it("appends the configured environment to route and custodian titles", () => {
@@ -173,7 +173,7 @@ describe("OpenClaw shell document title", () => {
     const shell = createShell(createContext({ connected: false }));
     shell.routeState = { routeId: "usage" };
     shell.outboxStoreRuntime = {
-      summarizeStoredChatOutboxes: () => ({ total: 3 }),
+      read: () => ({ total: 3 }),
     };
 
     shell.syncDocumentTitle();

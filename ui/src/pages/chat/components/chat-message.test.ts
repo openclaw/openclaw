@@ -927,7 +927,7 @@ describe("grouped chat rendering", () => {
       return element.getAttribute("aria-label");
     });
 
-    expect(order).toEqual(["Reply to message", "Rewind", "name", "time"]);
+    expect(order).toEqual(["Reply to message", "Rewind", "Copy as markdown", "name", "time"]);
   });
 
   it.each([
@@ -1011,7 +1011,7 @@ describe("grouped chat rendering", () => {
       return element.getAttribute("aria-label");
     });
 
-    expect(order).toEqual(["name", "time", "Reply to message", "Rewind"]);
+    expect(order).toEqual(["name", "time", "Reply to message", "Rewind", "Copy as markdown"]);
   });
 
   it("keeps hidden assistant thinking out of inline reply context", () => {

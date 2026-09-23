@@ -334,7 +334,12 @@ export async function loadCommandPaletteCatalogItems(params: {
       routeId: "agents" as const,
       agentId: agent.id,
       description: agent.id,
-      searchText: [agent.id, agent.workspace, agent.model?.primary, agent.identity?.theme]
+      searchText: [
+        agent.id,
+        agent.workspace,
+        models && !models.modelSelectionPolicy?.restricted ? agent.model?.primary : undefined,
+        agent.identity?.theme,
+      ]
         .filter(Boolean)
         .join(" "),
     })),
