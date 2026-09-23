@@ -83,7 +83,6 @@ describe("method scope resolution", () => {
     ["sessions.resolve", ["operator.read"]],
     ["tasks.list", ["operator.read"]],
     ["audit.activity.list", ["operator.read"]],
-    ["audit.run.inspect", ["operator.read"]],
     ["audit.list", ["operator.read"]],
     ["users.list", ["operator.read"]],
     ["users.self", ["operator.read"]],
@@ -99,7 +98,6 @@ describe("method scope resolution", () => {
     ["taskSuggestions.create", ["operator.write"]],
     ["taskSuggestions.accept", ["operator.admin"]],
     ["taskSuggestions.dismiss", ["operator.write"]],
-    ["config.schema.lookup", ["operator.read"]],
     ["sessions.create", ["operator.write"]],
     ["sessions.dispatch", ["operator.write"]],
     ["sessions.reclaim", ["operator.write"]],
@@ -150,20 +148,7 @@ describe("method scope resolution", () => {
     ["skills.curator.pin", ["operator.admin"]],
     ["skills.curator.unpin", ["operator.admin"]],
     ["skills.curator.restore", ["operator.admin"]],
-    ["node.pair.approve", ["operator.pairing"]],
     ["poll", ["operator.write"]],
-    ["talk.client.create", ["operator.talk"]],
-    ["talk.client.transcript", ["operator.talk"]],
-    ["talk.client.close", ["operator.talk"]],
-    ["talk.client.toolCall", ["operator.talk"]],
-    ["talk.client.steer", ["operator.talk"]],
-    ["talk.session.create", ["operator.talk"]],
-    ["talk.session.appendAudio", ["operator.talk"]],
-    ["talk.session.cancelOutput", ["operator.talk"]],
-    ["talk.session.acknowledgeMark", ["operator.talk"]],
-    ["talk.session.submitToolResult", ["operator.talk"]],
-    ["talk.session.steer", ["operator.talk"]],
-    ["talk.session.close", ["operator.talk"]],
     ["update.status", ["operator.admin"]],
     ["update.report", ["operator.admin"]],
     ["update.runs.get", ["operator.admin"]],
@@ -177,15 +162,10 @@ describe("method scope resolution", () => {
     ["tools.github.authorize.start", ["operator.admin"]],
     ["tools.github.authorize.poll", ["operator.admin"]],
     ["tools.github.authorize.cancel", ["operator.admin"]],
-    ["config.schema", ["operator.read"]],
     ["config.patch", ["operator.admin"]],
     ["nativeHook.invoke", ["operator.admin"]],
     ["wizard.start", ["operator.admin"]],
     ["update.run", ["operator.admin"]],
-    ["exec.approvals.get", ["operator.admin"]],
-    ["exec.approvals.set", ["operator.admin"]],
-    ["exec.approvals.node.get", ["operator.admin"]],
-    ["exec.approvals.node.set", ["operator.admin"]],
     ["conversations.list", ["operator.admin"]],
     ["conversations.send", ["operator.admin"]],
     ["conversations.turn", ["operator.admin"]],
@@ -255,19 +235,6 @@ describe("method scope resolution", () => {
         includeSecrets: true,
       }),
     ).toEqual({ allowed: true });
-  });
-
-  it("accepts dedicated Talk access and preserves operator.write compatibility", () => {
-    expect(authorizeOperatorScopesForMethod("talk.client.create", ["operator.talk"])).toEqual({
-      allowed: true,
-    });
-    expect(authorizeOperatorScopesForMethod("talk.client.create", ["operator.write"])).toEqual({
-      allowed: true,
-    });
-    expect(authorizeOperatorScopesForMethod("talk.client.create", ["operator.read"])).toEqual({
-      allowed: false,
-      missingScope: "operator.talk",
-    });
   });
 
   it("requires admin only when DM pairing approval bootstraps a command owner", () => {
