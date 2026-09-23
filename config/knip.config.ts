@@ -254,7 +254,7 @@ function compileFrvWorkflowConsumers(source: string, filePath: string): string {
       ...source.matchAll(
         /\b(?:import|const)\s*\{([^}]+)\}\s*(?:from\s*|=\s*await\s+import\()["']\.\/\.frv-tooling\/scripts\/frv-test-exclusions\.mjs["']/gu,
       ),
-    ].flatMap((match) => match[1].split(",").map((name) => name.trim())),
+    ].flatMap((match) => match[1]?.split(",").map((name) => name.trim()) ?? []),
   );
   // The run CLI writes a Vitest config importing its own URL. Model that emitted
   // import only while the workflow invokes the generator, and derive its names
@@ -264,7 +264,7 @@ function compileFrvWorkflowConsumers(source: string, filePath: string): string {
     for (const match of generator.matchAll(
       /`import\s*\{([^}]+)\}\s*from\s*\$\{JSON\.stringify\(import\.meta\.url\)\};`/gu,
     )) {
-      for (const name of match[1].split(",")) {
+      for (const name of match[1]?.split(",") ?? []) {
         names.add(name.trim());
       }
     }
