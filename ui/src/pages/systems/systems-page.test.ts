@@ -135,6 +135,43 @@ async function mount(controller: SystemsController) {
 }
 
 describe("Systems workspace", () => {
+  it("defers hidden initial and event reads, preserving inventory until visible recovery", async () => {
+    vi.useFakeTimers();
+    let visibility: DocumentVisibilityState = "hidden";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+    const { controller, gateway, request } = harness();
+    const page = document.createElement("openclaw-systems-page");
+    page.routeData = { controller };
+    document.body.append(page);
+    await page.updateComplete;
+    await vi.advanceTimersByTimeAsync(0);
+    const statusReads = () => request.mock.calls.filter(([method]) => method === "system.info");
+    expect(statusReads()).toHaveLength(0);
+    expect(controller.inventory).toBeNull();
+
+    visibility = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(statusReads()).toHaveLength(1);
+    const inventory = controller.inventory;
+    expect(inventory?.gatewaySystemInfo).toEqual(systemInfo);
+
+    visibility = "hidden";
+    document.dispatchEvent(new Event("visibilitychange"));
+    gateway.publishEvent("presence", {});
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(statusReads()).toHaveLength(1);
+    expect(controller.inventory).toBe(inventory);
+    expect(controller.inventory?.errors).toEqual({});
+
+    visibility = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(statusReads()).toHaveLength(2);
+    expect(controller.inventory?.errors).toEqual({});
+    expect(controller.sampledAtMs).toBe(Date.now());
+  });
+
   it.each(["selection", "authority"])(
     "cancels pending desktop enablement when %s changes",
     async (change) => {
@@ -324,7 +361,7 @@ describe("Systems workspace", () => {
       page.querySelector(".sparkline-tile__chart polyline")?.getAttribute("points")?.split(" ");
     expect(points()).toHaveLength(2);
     expect(page.querySelector('.systems-metrics[data-stale="false"]')).not.toBeNull();
-    clock.mockReturnValue(now + 20_000);
+    clock.mockReturnValue(now + 30_000);
     request.mockRejectedValueOnce(new Error("Telemetry unavailable"));
     await controller.refreshTelemetry();
     await page.updateComplete;

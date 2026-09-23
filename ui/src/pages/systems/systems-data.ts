@@ -4,14 +4,16 @@ import type {
   SystemInfoResult,
 } from "@openclaw/gateway-protocol";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import type { ApplicationGateway } from "../../app/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { readSystemInfo } from "../../lib/system-info.ts";
 
 export type SystemsInventory = {
   environments: EnvironmentSummary[];
   nodes: NodeListNode[];
   gatewaySystemInfo: SystemInfoResult | null;
+  gatewaySampledAtMs: number | null;
   errors: { nodes?: string; systemInfo?: string };
 };
 
@@ -30,10 +32,11 @@ export type SystemsInventoryRow = {
 
 /** The route owns connection epochs, refresh scheduling and publication of this snapshot. */
 export async function loadSystemsInventory(
-  client: Pick<GatewayBrowserClient, "request">,
+  gateway: ApplicationGateway,
   options: { isCurrent: () => boolean; signal?: AbortSignal },
 ): Promise<SystemsInventory | undefined> {
-  if (!options.isCurrent() || options.signal?.aborted) {
+  const client = gateway.snapshot.client;
+  if (!client || !options.isCurrent() || options.signal?.aborted) {
     return undefined;
   }
   const requestOptions = { signal: options.signal };
@@ -44,9 +47,16 @@ export async function loadSystemsInventory(
       requestOptions,
     ),
     client.request<{ nodes: NodeListNode[] }>("node.list", {}, requestOptions),
-    client.request<SystemInfoResult>("system.info", {}, requestOptions),
+    readSystemInfo(gateway, options.signal),
   ]);
   if (!options.isCurrent() || options.signal?.aborted) {
+    return undefined;
+  }
+  if (
+    systemInfo.status === "rejected" &&
+    systemInfo.reason instanceof DOMException &&
+    systemInfo.reason.name === "AbortError"
+  ) {
     return undefined;
   }
   // Never rebuild inventory from auxiliary node reads: that would resurrect cloud-owned
@@ -57,7 +67,8 @@ export async function loadSystemsInventory(
   return {
     environments: inventory.value.environments,
     nodes: nodes.status === "fulfilled" ? nodes.value.nodes : [],
-    gatewaySystemInfo: systemInfo.status === "fulfilled" ? systemInfo.value : null,
+    gatewaySystemInfo: systemInfo.status === "fulfilled" ? systemInfo.value.value : null,
+    gatewaySampledAtMs: systemInfo.status === "fulfilled" ? systemInfo.value.at : null,
     errors: {
       ...(nodes.status === "rejected" ? { nodes: formatUiError(nodes.reason) } : {}),
       ...(systemInfo.status === "rejected" ? { systemInfo: formatUiError(systemInfo.reason) } : {}),

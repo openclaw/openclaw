@@ -136,15 +136,23 @@ class SystemsPage extends OpenClawLightDomElement {
   @property({ attribute: false }) routeData?: SystemsRouteData;
   @property({ type: Boolean }) presented = true;
   private activeController: SystemsController | undefined;
-  private readonly poll = new PollController(this, 15_000, () => {
-    if (
-      this.presented &&
-      document.visibilityState !== "hidden" &&
-      (this.routeData?.controller.showStats || this.routeData?.controller.showDetails)
-    ) {
-      void this.routeData?.controller.refreshTelemetry();
-    }
-  });
+  private readonly poll = new PollController(
+    this,
+    15_000,
+    () => {
+      const controller = this.routeData?.controller;
+      if (!this.presented || !controller) {
+        return;
+      }
+      if (!controller.inventory) {
+        void controller.refresh();
+      } else if (controller.showStats || controller.showDetails) {
+        void controller.refreshTelemetry();
+      }
+    },
+    true,
+    "visible",
+  );
 
   constructor() {
     super();

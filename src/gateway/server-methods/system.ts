@@ -48,6 +48,9 @@ import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 let advertisedLanHostPromise: Promise<string | null> | null = null;
+let stateDiskSnapshot:
+  | { stateDir: string; expiresAt: number; disk: ReturnType<typeof tryReadDiskSpace> }
+  | undefined;
 // CPU identity belongs to this process; os.cpus() also reads every core's live timings.
 const cpuInfoSnapshot = (() => {
   const cpus = os.cpus();
@@ -66,7 +69,19 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
   const [oneMinute = 0, fiveMinutes = 0, fifteenMinutes = 0] = os.loadavg();
   const loadAverage: [number, number, number] = [oneMinute, fiveMinutes, fifteenMinutes];
   const stateDir = resolveStateDir();
-  const disk = tryReadDiskSpace(stateDir);
+  // State-volume stats share the mounted-disk cadence; a new state root invalidates immediately.
+  if (
+    !stateDiskSnapshot ||
+    stateDiskSnapshot.stateDir !== stateDir ||
+    Date.now() >= stateDiskSnapshot.expiresAt
+  ) {
+    stateDiskSnapshot = {
+      stateDir,
+      disk: tryReadDiskSpace(stateDir),
+      expiresAt: Date.now() + 30_000,
+    };
+  }
+  const { disk } = stateDiskSnapshot;
   const config = context.getRuntimeConfig();
   const port = resolveGatewayPort(config);
   const [lanAddress, disks] = await Promise.all([

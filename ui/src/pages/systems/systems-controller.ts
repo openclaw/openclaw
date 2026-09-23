@@ -1,4 +1,3 @@
-import type { SystemInfoResult } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -9,6 +8,7 @@ import { t } from "../../i18n/index.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
+import { readSystemInfo } from "../../lib/system-info.ts";
 import {
   loadSystemsInventory,
   projectSystemsInventory,
@@ -363,7 +363,7 @@ export class SystemsController {
     this.error = null;
     this.notify();
     try {
-      const inventory = await loadSystemsInventory(scope.client, {
+      const inventory = await loadSystemsInventory(this.context.gateway, {
         signal: request.signal,
         isCurrent,
       });
@@ -373,7 +373,7 @@ export class SystemsController {
       const initial = this.inventory === null;
       this.inventory = inventory;
       this.projectRows();
-      this.sampledAtMs = Date.now();
+      this.sampledAtMs = inventory.gatewaySampledAtMs;
       this.recordTelemetry(true);
       // Only initial entry picks a default. Later updates never replace an explicit or missing selection.
       if (initial && this.selectedId === null) {
@@ -437,17 +437,18 @@ export class SystemsController {
       this.selectedId === id;
     try {
       if (gatewayHost) {
-        const info = await scope.client.request<SystemInfoResult>(
-          "system.info",
-          {},
-          { signal: request.signal },
-        );
+        const sample = await readSystemInfo(this.context.gateway, request.signal);
         if (!isCurrent() || !this.inventory) {
           return;
         }
         const { systemInfo: _previousError, ...errors } = this.inventory.errors;
-        this.inventory = { ...this.inventory, gatewaySystemInfo: info, errors };
-        this.sampledAtMs = Date.now();
+        this.inventory = {
+          ...this.inventory,
+          gatewaySystemInfo: sample.value,
+          gatewaySampledAtMs: sample.at,
+          errors,
+        };
+        this.sampledAtMs = sample.at;
       } else {
         const result = await scope.client.request<{ nodes: NodeListNode[] }>(
           "node.list",
@@ -463,6 +464,9 @@ export class SystemsController {
       this.projectRows();
       this.recordTelemetry(gatewayHost);
     } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return;
+      }
       if (isCurrent() && this.inventory) {
         this.inventory = {
           ...this.inventory,

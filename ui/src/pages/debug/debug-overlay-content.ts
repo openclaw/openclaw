@@ -3,6 +3,7 @@ import "../../styles/debug-data.css";
 import { property, state as litState } from "lit/decorators.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { SYSTEM_INFO_POLL_INTERVAL_MS } from "../../lib/system-info.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
@@ -16,7 +17,6 @@ import {
   type DebugOverlayStatusSnapshot,
 } from "./debug-overlay-sections.ts";
 
-const DEBUG_OVERLAY_POLL_INTERVAL_MS = 2000;
 const DEBUG_OVERLAY_HISTORY_LIMIT = 90;
 
 type SectionState =
@@ -34,7 +34,7 @@ class DebugOverlayContent extends OpenClawLightDomElement {
   private statusHistory: DebugOverlayStatusSample[] = [];
   private readonly polling = new PollController(
     this,
-    DEBUG_OVERLAY_POLL_INTERVAL_MS,
+    SYSTEM_INFO_POLL_INTERVAL_MS,
     () => void this.refreshSections(),
     false,
   );
@@ -130,10 +130,12 @@ class DebugOverlayContent extends OpenClawLightDomElement {
     if (id === "status" && state.status === "ready") {
       // SAFETY: The status descriptor owns this section id and always returns a status snapshot.
       const snapshot = state.value as DebugOverlayStatusSnapshot;
-      this.statusHistory = [
-        ...this.statusHistory.slice(-(DEBUG_OVERLAY_HISTORY_LIMIT - 1)),
-        { at: Date.now(), status: snapshot },
-      ];
+      if (this.statusHistory.at(-1)?.at !== snapshot.sampledAt) {
+        this.statusHistory = [
+          ...this.statusHistory.slice(-(DEBUG_OVERLAY_HISTORY_LIMIT - 1)),
+          { at: snapshot.sampledAt, status: snapshot },
+        ];
+      }
     }
     const next = new Map(this.sections);
     next.set(id, state);
