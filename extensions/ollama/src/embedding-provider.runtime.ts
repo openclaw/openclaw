@@ -43,6 +43,8 @@ type MemoryCoreAcquireLocalService = (
     providerId: string;
     baseUrl: string;
     headers?: HeadersInit;
+    /** Reports managed-companion readiness waits; request work stays outside. */
+    onReadinessWait?: (waiting: boolean) => void;
   },
   signal?: AbortSignal | null,
 ) => Promise<{ release: () => void } | undefined>;
