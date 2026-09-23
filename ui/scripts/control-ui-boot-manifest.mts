@@ -9,17 +9,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { build } from "vite";
-import {
-  controlUiBootManifestKey,
-  controlUiCodeSplitting,
-} from "../ui/config/control-ui-chunking.ts";
+import { controlUiBootManifestKey, controlUiCodeSplitting } from "../config/control-ui-chunking.ts";
 import {
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
-} from "../ui/src/test-helpers/control-ui-e2e.ts";
-import controlUiViteConfig from "../ui/vite.config.ts";
+} from "../src/test-helpers/control-ui-e2e.ts";
+import controlUiViteConfig from "../vite.config.ts";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const manifestPath = path.join(repoRoot, "ui", "config", "control-ui-boot-modules.json");
 const SETTLE_MS = 3_000;
 const READY_TIMEOUT_MS = 60_000;

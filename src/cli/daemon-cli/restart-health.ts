@@ -255,23 +255,23 @@ export async function waitForGatewayHealthyRestart(
         );
         return resolveGatewayServiceProbeHosts({ env: params.env, command });
       }));
-    snapshot = await inspectGatewayRestart({
-      service,
-      port: params.port,
-      env: params.env,
-      expectedVersion: params.expectedVersion,
-      expectedBuildId: params.expectedBuildId,
-      requirePluginHealth: params.requirePluginHealth,
-      probeContext,
-      configuredProbe,
-      probeHosts,
-      timeoutMs: probeTimeoutMs(),
-      deadline: params.deadline,
-      phase: params.phase ?? "health-wait",
-      ...(signal ? { signal } : {}),
-    });
 
     for (let attempt = 0; ; attempt += 1) {
+      snapshot = await inspectGatewayRestart({
+        service,
+        port: params.port,
+        env: params.env,
+        expectedVersion: params.expectedVersion,
+        expectedBuildId: params.expectedBuildId,
+        requirePluginHealth: params.requirePluginHealth,
+        probeContext,
+        configuredProbe,
+        probeHosts,
+        timeoutMs: probeTimeoutMs(),
+        deadline: params.deadline,
+        phase: params.phase ?? "health-wait",
+        ...(signal ? { signal } : {}),
+      });
       signal?.throwIfAborted();
       // Preserve observed restarts across unavailable probes.
       generationChanged ||=
@@ -545,21 +545,6 @@ export async function waitForGatewayHealthyRestart(
           signal,
         ),
       );
-      snapshot = await inspectGatewayRestart({
-        service,
-        port: params.port,
-        env: params.env,
-        expectedVersion: params.expectedVersion,
-        expectedBuildId: params.expectedBuildId,
-        requirePluginHealth: params.requirePluginHealth,
-        probeContext,
-        configuredProbe,
-        probeHosts,
-        timeoutMs: probeTimeoutMs(),
-        deadline: params.deadline,
-        phase: params.phase ?? "health-wait",
-        ...(signal ? { signal } : {}),
-      });
     }
   } catch (error) {
     if (

@@ -13,6 +13,8 @@ import {
   stripCdpUrlCredentials,
 } from "./cdp.helpers.js";
 import { getChromeWebSocketEndpoint } from "./chrome.js";
+import { resolveBrowserEngine } from "./engines/registry.js";
+import type { BrowserEngineId } from "./engines/types.js";
 import { BrowserTabNotFoundError } from "./errors.js";
 import type { RelayOperationReference } from "./extension-relay/owner-client.js";
 import {
@@ -410,7 +412,7 @@ export async function connectBrowser(
   cdpUrl: string,
   ssrfPolicy?: SsrFPolicy,
   relayReference?: RelayOperationReference,
-  engine?: "chromium" | "lightpanda",
+  engine?: BrowserEngineId,
 ): Promise<ConnectedBrowser> {
   const normalized = normalizeCdpUrl(cdpUrl);
   const relay = getBorrowedRelayCdpAccess(normalized);
@@ -497,7 +499,7 @@ export async function connectBrowser(
                 headers,
                 lookup,
                 resolveWebSocketUrl,
-                ...(engine === "lightpanda" ? { engine } : {}),
+                ...(engine ? { engine } : {}),
               });
             }),
           );
@@ -528,7 +530,7 @@ export async function connectBrowser(
             cachedByCdpUrl.delete(normalized);
           }
         };
-        if (engine === "lightpanda") {
+        if (resolveBrowserEngine(engine).descriptor.sessionScope === "connection") {
           markConnectionScopedBrowser(browser);
         }
         const connected: ConnectedBrowser = { browser, cdpUrl: normalized, onDisconnected, engine };

@@ -35,6 +35,7 @@ type PortalEntry = {
   path?: string;
   origin?: string;
   target: PortalTarget;
+  resourceOwnerKey?: string;
   token: string;
   cookieNamespace: string;
   listenPort: number;
@@ -49,7 +50,7 @@ type PortalRuntimeEntry = {
   upgradedSockets: Set<Duplex>;
   onClose?: () => Promise<void> | void;
   claim?: TailscaleRouteClaim;
-  detachIngressOwner?: () => void;
+  detachOwner?: () => void;
   ingressSignal?: AbortSignal;
   revoked?: boolean;
   responses: Set<import("node:http").ServerResponse>;
@@ -60,6 +61,10 @@ type GatewayPortalOpenParams = {
   target?: PortalTarget;
   /** Revalidated before metadata mutation or publication after asynchronous listener startup. */
   assertCurrent?: () => void;
+  /** Resource lifetime, independent of the operation or actor that created the link. */
+  ownerSignal?: AbortSignal;
+  /** Internal resource identity; scoped resources must not adopt a global portal's lifetime. */
+  resourceOwnerKey?: string;
   /** Ownership transfers to open; unused targets are released even when it rejects or reuses a portal. */
   onClose?: () => Promise<void> | void;
   origin?: string;
@@ -71,7 +76,11 @@ type GatewayPortalOpenParams = {
 export type GatewayPortalService = {
   open: (params: GatewayPortalOpenParams) => Promise<PortalOpenResult>;
   list: () => PortalSummary[];
-  listWorkerPortals: (environmentId: string, ownerEpoch: number) => PortalSummary[];
+  listWorkerPortals: (
+    environmentId: string,
+    ownerEpoch: number,
+    resourceOwnerKey?: string,
+  ) => PortalSummary[];
   close: (id: string, assertCurrent?: () => void) => Promise<void>;
   closeWorkerPortals: (environmentId: string, ownerEpoch?: number) => Promise<void>;
   closeAll: () => Promise<void>;
@@ -241,7 +250,7 @@ export function createGatewayPortalService(params: {
       response.destroy();
     }
     runtime.responses.clear();
-    runtime.detachIngressOwner?.();
+    runtime.detachOwner?.();
     // Release every owned resource even if a route owner reports a teardown error.
     const cleanup = await Promise.allSettled([
       closeServers(runtime.servers),
@@ -269,10 +278,14 @@ export function createGatewayPortalService(params: {
     open: async (input) => {
       const target: PortalTarget = input.target ?? { kind: "local", port: input.targetPort };
       const targetPort = target.kind === "local" ? target.port : target.remotePort;
+      const resourceOwnerSuffix =
+        input.resourceOwnerKey === undefined
+          ? ""
+          : `-owner-${sha256HexPrefixCore(input.resourceOwnerKey, 32)}`;
       const id =
         target.kind === "local"
           ? `p${targetPort}`
-          : `p${targetPort}-worker-${sha256HexPrefixCore(target.environmentId, 32)}-${target.ownerEpoch}`;
+          : `p${targetPort}${resourceOwnerSuffix}-worker-${sha256HexPrefixCore(target.environmentId, 32)}-${target.ownerEpoch}`;
       return await serialize(id, async () => {
         let releaseTarget = input.onClose;
         try {
@@ -280,10 +293,12 @@ export function createGatewayPortalService(params: {
             throw new Error("portals unavailable");
           }
           input.assertCurrent?.();
+          input.ownerSignal?.throwIfAborted();
           let existing = entries.get(id);
           if (existing && !isAvailable(existing)) {
             await closeEntry(id);
             input.assertCurrent?.();
+            input.ownerSignal?.throwIfAborted();
             if (closed) {
               throw new Error("portals unavailable");
             }
@@ -325,6 +340,9 @@ export function createGatewayPortalService(params: {
           const tlsOptions = managed ? undefined : params.tlsOptions;
           const portal: PortalEntry = {
             id,
+            ...(input.resourceOwnerKey !== undefined
+              ? { resourceOwnerKey: input.resourceOwnerKey }
+              : {}),
             title: input.title?.trim() || `Port ${targetPort}`,
             ...(input.description ? { description: input.description } : {}),
             ...(input.path ? { path: input.path } : {}),
@@ -478,6 +496,7 @@ export function createGatewayPortalService(params: {
             }
             // A queued successor must not discover a portal created by a now-revoked turn.
             input.assertCurrent?.();
+            input.ownerSignal?.throwIfAborted();
             if (managed && (managed.signal.aborted || !claim?.isActive())) {
               throw new Error("Private portal ingress lost before publication");
             }
@@ -499,7 +518,10 @@ export function createGatewayPortalService(params: {
             ingressSignal: managed?.signal,
           };
           entries.set(id, runtime);
-          if (claim && managed) {
+          const ownerSignals = [input.ownerSignal, managed?.signal].filter(
+            (signal): signal is AbortSignal => signal !== undefined,
+          );
+          if (claim || ownerSignals.length) {
             const retire = () => {
               // Capture this exact lifetime: an old claim must never close a reopened portal.
               if (entries.get(id) === runtime) {
@@ -511,9 +533,17 @@ export function createGatewayPortalService(params: {
                 }).catch(() => undefined);
               }
             };
-            managed.signal.addEventListener("abort", retire, { once: true });
-            runtime.detachIngressOwner = () => managed.signal.removeEventListener("abort", retire);
-            void claim.exited.then(retire, retire);
+            for (const signal of ownerSignals) {
+              signal.addEventListener("abort", retire, { once: true });
+            }
+            runtime.detachOwner = () => {
+              for (const signal of ownerSignals) {
+                signal.removeEventListener("abort", retire);
+              }
+            };
+            if (claim) {
+              void claim.exited.then(retire, retire);
+            }
           }
           releaseTarget = undefined;
           return summarize(portal);
@@ -523,13 +553,14 @@ export function createGatewayPortalService(params: {
       });
     },
     list: () => summarizeEntries(entries.values()),
-    listWorkerPortals: (environmentId, ownerEpoch) =>
+    listWorkerPortals: (environmentId, ownerEpoch, resourceOwnerKey) =>
       summarizeEntries(
         [...entries.values()].filter(
           ({ portal }) =>
             portal.target.kind === "worker" &&
             portal.target.environmentId === environmentId &&
-            portal.target.ownerEpoch === ownerEpoch,
+            portal.target.ownerEpoch === ownerEpoch &&
+            (resourceOwnerKey === undefined || portal.resourceOwnerKey === resourceOwnerKey),
         ),
       ),
     close: async (id, assertCurrent) => {

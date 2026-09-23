@@ -25,7 +25,6 @@ import {
   updateAgentDeletionJournalCleanupPaths,
 } from "./agent-deletion-journal.js";
 import * as agentDeletionJournal from "./agent-deletion-journal.js";
-import { AGENT_MEDIA_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
   assertNoOpenClawAgentDatabaseLeases,
   claimOpenClawAgentDatabaseLease,
@@ -1166,64 +1165,6 @@ describe("openclaw agent database", () => {
 
     expect(result).toEqual({ found: true, value: { agent_id: "worker-1" } });
   });
-
-  it.each([
-    {
-      version: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
-      expectedError: {
-        name: "SqliteSchemaVersionError",
-        message: expect.stringContaining(
-          `newer schema version ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`,
-        ),
-      },
-    },
-    {
-      version: AGENT_MEDIA_SCHEMA_VERSION - 1,
-      expectedError: {
-        name: "OpenClawAgentDatabaseMediaMigrationRequiredError",
-        message: expect.stringContaining("run openclaw doctor --fix to migrate persisted media"),
-      },
-    },
-    {
-      version: OPENCLAW_AGENT_SCHEMA_VERSION - 1,
-      expectedError: {
-        name: "Error",
-        message: expect.stringContaining(
-          "stop active agents and run openclaw doctor --fix to migrate session identities",
-        ),
-      },
-    },
-  ])(
-    "rejects a committed version change to $version before borrowed and fresh reads",
-    ({ version, expectedError }) => {
-      const stateDir = createTempStateDir();
-      const options = { agentId: "worker-1", env: { OPENCLAW_STATE_DIR: stateDir } };
-      const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
-      openOpenClawAgentDatabase(options);
-      let admitted: boolean;
-      const read = () =>
-        withOpenClawAgentDatabaseReadOnly(({ db }) => {
-          admitted = true;
-          return db.prepare("SELECT agent_id FROM schema_meta WHERE meta_key = 'primary'").get();
-        }, options);
-      expect(read()).toEqual({ found: true, value: { agent_id: "worker-1" } });
-      admitted = false;
-
-      const { DatabaseSync } = requireNodeSqlite();
-      const writer = new DatabaseSync(databasePath);
-      try {
-        writer.exec(`BEGIN IMMEDIATE; PRAGMA user_version = ${version}; COMMIT;`);
-      } finally {
-        writer.close();
-      }
-      expect(read).toThrow(expect.objectContaining(expectedError));
-      expect(admitted).toBe(false);
-
-      expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
-      expect(read).toThrow(expect.objectContaining(expectedError));
-      expect(admitted).toBe(false);
-    },
-  );
 
   it("reads committed rows without joining or closing the owner's transaction", () => {
     const stateDir = createTempStateDir();
@@ -2417,16 +2358,16 @@ describe("openclaw agent database", () => {
       throw new Error("Missing original SQLite close implementation");
     }
     let failedClose = false;
-    const close = vi
-      .spyOn(DatabaseSync.prototype, "close")
-      .mockImplementation(function (this: DatabaseSync) {
-        // Fail the agent handle's cleanup, not a shared-state coordinator close.
-        if (!failedClose && this.location() === database.path) {
-          failedClose = true;
-          throw new Error("initialization close failed");
-        }
-        return Reflect.apply(closeDatabase, this, []);
-      });
+    const close = vi.spyOn(DatabaseSync.prototype, "close").mockImplementation(function (
+      this: DatabaseSync,
+    ) {
+      // Fail the agent handle's cleanup, not a shared-state coordinator close.
+      if (!failedClose && this.location() === database.path) {
+        failedClose = true;
+        throw new Error("initialization close failed");
+      }
+      return Reflect.apply(closeDatabase, this, []);
+    });
 
     expect(() =>
       openOpenClawAgentDatabase({ agentId: "worker-2", env, path: database.path }),

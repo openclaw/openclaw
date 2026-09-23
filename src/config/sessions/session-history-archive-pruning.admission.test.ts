@@ -286,12 +286,13 @@ it("enforces a physical archive budget without ordinary host SQLite calls", asyn
   // oxlint-disable-next-line typescript/unbound-method -- Forward native exec with its original database receiver.
   const originalExec = sqlite.DatabaseSync.prototype.exec;
   const executions: Array<{ location: string | null; sql: string }> = [];
-  const exec = vi
-    .spyOn(sqlite.DatabaseSync.prototype, "exec")
-    .mockImplementation(function (this: DatabaseSync, sql) {
-      executions.push({ location: this.location(), sql });
-      return Reflect.apply(originalExec, this, [sql]);
-    });
+  const exec = vi.spyOn(sqlite.DatabaseSync.prototype, "exec").mockImplementation(function (
+    this: DatabaseSync,
+    sql,
+  ) {
+    executions.push({ location: this.location(), sql });
+    return Reflect.apply(originalExec, this, [sql]);
+  });
   const statements = (["get", "all", "run", "iterate"] as const).map((method) =>
     vi.spyOn(sqlite.StatementSync.prototype, method),
   );

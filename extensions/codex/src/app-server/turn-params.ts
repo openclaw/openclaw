@@ -110,6 +110,7 @@ export function buildTurnStartParams(
   const modelSelection = options.preserveNativeTurnSettings
     ? undefined
     : resolveCodexAppServerRequestModelSelection({
+        homeScope: options.appServer.start.homeScope,
         model: options.model ?? params.modelId,
         modelProvider: options.modelProvider,
         authProfileId: params.authProfileId,

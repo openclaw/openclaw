@@ -118,7 +118,6 @@ extensions/buzz/src/qa/adapter.runtime.ts	2
 extensions/buzz/src/room-membership.ts	2
 extensions/buzz/src/setup-verify.ts	5
 extensions/buzz/src/types.ts	2
-extensions/byteplus/video-generation-provider.ts	1
 extensions/canvas/src/a2ui-jsonl.ts	1
 extensions/canvas/src/cli.ts	2
 extensions/canvas/src/config-migration.ts	2
@@ -260,7 +259,6 @@ extensions/cua-computer/src/driver-result.ts	9
 extensions/cua-computer/src/mcp-driver-client.ts	4
 extensions/cua-computer/src/window-actions.ts	3
 extensions/deepinfra/provider-models.ts	2
-extensions/deepinfra/video-generation-provider.ts	2
 extensions/deepseek/provider-policy-api.ts	4
 extensions/device-pair/index.ts	6
 extensions/device-pair/notify-state.ts	3
@@ -496,7 +494,7 @@ extensions/google/music-generation-provider.ts	1
 extensions/google/oauth-token-shared.ts	1
 extensions/google/onboard.ts	3
 extensions/google/provider-registration.ts	2
-extensions/google/realtime-voice-provider.ts	5
+extensions/google/realtime-voice-provider.ts	4
 extensions/google/transport-stream.ts	13
 extensions/google/vertex-adc.ts	4
 extensions/google/video-generation-provider.ts	13
@@ -1024,7 +1022,6 @@ extensions/reef/src/registration-state.ts	3
 extensions/reef/src/setup.ts	3
 extensions/reef/src/state.ts	3
 extensions/reef/src/transport.ts	3
-extensions/runway/video-generation-provider.ts	1
 extensions/searxng/src/config.ts	1
 extensions/searxng/src/searxng-client.ts	3
 extensions/signal/src/accounts.ts	3
@@ -1228,7 +1225,6 @@ extensions/tlon/src/tlon-api.ts	2
 extensions/tlon/src/types.ts	3
 extensions/tlon/src/urbit/sse-client.ts	4
 extensions/tokenjuice/tool-result-middleware.ts	1
-extensions/tts-local-cli/speech-provider.ts	2
 extensions/twitch/src/actions.ts	1
 extensions/twitch/src/config.ts	10
 extensions/twitch/src/monitor.ts	3
@@ -1337,7 +1333,6 @@ extensions/xai/stream.ts	3
 extensions/xai/tts.ts	1
 extensions/xai/x-search.ts	7
 extensions/xiaomi/onboard.ts	1
-extensions/xiaomi/speech-provider.ts	2
 extensions/zai/index.ts	2
 extensions/zai/model-definitions.ts	1
 extensions/zalo/setup-api.ts	3
@@ -2147,7 +2142,7 @@ src/cli/claws-cli.runtime.ts	2
 src/cli/command-config-resolution.ts	2
 src/cli/command-format.ts	1
 src/cli/command-options.ts	1
-src/cli/command-secret-targets.ts	2
+src/cli/command-secret-targets.ts	1
 src/cli/completion-runtime.ts	4
 src/cli/config-cli-input.ts	2
 src/cli/config-cli-path.ts	5
@@ -2186,7 +2181,7 @@ src/cli/nodes-cli/register.location.ts	2
 src/cli/nodes-cli/register.pairing.ts	4
 src/cli/nodes-cli/register.push.ts	1
 src/cli/nodes-cli/register.screen.ts	1
-src/cli/nodes-cli/register.status.ts	4
+src/cli/nodes-cli/register.status.ts	3
 src/cli/nodes-cli/rpc.ts	2
 src/cli/one-shot-exit.ts	2
 src/cli/output-file.runtime.ts	1
@@ -2590,7 +2585,7 @@ src/gateway/node-pairing-ssh-verify.ts	1
 src/gateway/node-registry-private.ts	1
 src/gateway/node-registry.ts	2
 src/gateway/openai-agent-run-usage.ts	1
-src/gateway/openai-http.ts	20
+src/gateway/openai-http.ts	1
 src/gateway/operator-approval-snapshot.ts	4
 src/gateway/operator-scopes.ts	1
 src/gateway/plugin-activation-runtime-config.ts	2
@@ -2638,7 +2633,7 @@ src/gateway/server-methods/chat-transcript-persistence.ts	7
 src/gateway/server-methods/chat-tts-markers.ts	1
 src/gateway/server-methods/config-write-flow.ts	1
 src/gateway/server-methods/config.ts	7
-src/gateway/server-methods/cron.ts	14
+src/gateway/server-methods/cron.ts	11
 src/gateway/server-methods/device-scope-upgrade.ts	2
 src/gateway/server-methods/devices.ts	4
 src/gateway/server-methods/doctor.ts	3
@@ -2661,7 +2656,6 @@ src/gateway/server-methods/plugin-host-hooks.ts	1
 src/gateway/server-methods/question.ts	2
 src/gateway/server-methods/restart-request.ts	8
 src/gateway/server-methods/session-catalog-terminal-start.ts	1
-src/gateway/server-methods/session-catalog.ts	3
 src/gateway/server-methods/session-create-initial-turn.ts	2
 src/gateway/server-methods/session-recovery-continuation.ts	1
 src/gateway/server-methods/sessions-abort.ts	3
@@ -2670,8 +2664,6 @@ src/gateway/server-methods/sessions-create.ts	1
 src/gateway/server-methods/sessions-messaging.ts	11
 src/gateway/server-methods/sessions-patch-engine.ts	1
 src/gateway/server-methods/sessions-read.ts	1
-src/gateway/server-methods/sessions-sharing.ts	1
-src/gateway/server-methods/sessions-suggestions.ts	1
 src/gateway/server-methods/skills-workspace-handler.ts	1
 src/gateway/server-methods/skills.ts	3
 src/gateway/server-methods/system-agent-chat-params.ts	2
@@ -2922,7 +2914,7 @@ src/infra/state-migrations.runtime-state.ts	7
 src/infra/state-migrations.session-store.ts	9
 src/infra/state-migrations.shared-auth-store.ts	1
 src/infra/state-migrations.state-dir.ts	1
-src/infra/state-migrations.storage.ts	9
+src/infra/state-migrations.storage.ts	7
 src/infra/state-migrations.tui-last-session.ts	2
 src/infra/state-migrations.update-check.ts	2
 src/infra/state-migrations.workspace-setup-store.ts	2
@@ -2980,9 +2972,8 @@ src/media-generation/provider-registry.ts	1
 src/media-understanding/attachments.select.ts	1
 src/media-understanding/entry-capabilities.ts	1
 src/media-understanding/image-model-runtime.ts	3
-src/media-understanding/runner.entries.ts	6
-src/media-understanding/runner.ts	1
-src/media-understanding/shared.ts	2
+src/media-understanding/runner.entries.ts	4
+src/media-understanding/shared.ts	1
 src/media/audio-transcode.ts	1
 src/media/bounded-read-file.ts	2
 src/media/fetch.ts	2
@@ -3511,7 +3502,6 @@ ui/src/components/config-form.node.shared.ts	3
 ui/src/components/config-form.node.ts	1
 ui/src/components/config-form.render.ts	1
 ui/src/components/config-form.search.ts	1
-ui/src/components/config-form.shared.ts	2
 ui/src/components/config-form.tiers.ts	1
 ui/src/components/confirm-dialog.ts	1
 ui/src/components/connect-command.ts	2
@@ -3597,7 +3587,6 @@ ui/src/pages/channels/view.nostr-profile-form.ts	4
 ui/src/pages/channels/view.nostr.ts	5
 ui/src/pages/channels/view.ts	9
 ui/src/pages/chat/chat-avatar.ts	4
-ui/src/pages/chat/chat-command-executor.ts	1
 ui/src/pages/chat/chat-composer-capability-host.ts	4
 ui/src/pages/chat/chat-gateway.ts	1
 ui/src/pages/chat/chat-history-retry.ts	1
