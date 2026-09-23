@@ -113,6 +113,14 @@ When the capability is absent, this remote attachment preparation is unavailable
 
 ## Shared attempt mechanics
 
+Native harnesses can use `buildCurrentInboundPrompt` from
+`openclaw/plugin-sdk/agent-harness-runtime` to combine the prepared
+`currentInboundContext` with the current prompt using the channel's joiner.
+Submit this context with each message, including resumed sessions. Steering
+receives its own `options.currentInboundContext`; do not reuse the initial
+turn's context. Keep context out of the original user transcript and pending
+question answer text. Conversation fields are model context, not tool authority.
+
 Official harnesses use the JavaScript-only private
 `openclaw/plugin-sdk/agent-harness-attempt-runtime` for deadlines, cancellation,
 and lifecycle/event publication; it is not a third-party Plugin SDK contract.

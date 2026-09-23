@@ -11,6 +11,7 @@ import {
   agentHarnessAttemptTerminal,
   awaitAgentEndSideEffects,
   buildAgentHookContextChannelFields,
+  buildCurrentInboundPrompt,
   buildEmbeddedForegroundPromptContext,
   clearActiveEmbeddedRun,
   embeddedAgentLog,
@@ -225,7 +226,9 @@ async function runAgentsApiSession(
       }
       await options?.userTurnTranscriptRecorder?.persistApproved();
       assertCurrent();
-      await native.queueMessage(text);
+      await native.queueMessage(
+        buildCurrentInboundPrompt({ context: options?.currentInboundContext, prompt: text }),
+      );
       options?.userTurnTranscriptRecorder?.markSentToProvider?.();
     },
     isStreaming: () => native?.isAvailable() ?? false,
@@ -296,7 +299,7 @@ async function runAgentsApiSession(
     });
     lifecycle.emitLifecycleStart({ provider: "openai", model: params.model.id });
     const result = await native.run(
-      params.prompt,
+      buildCurrentInboundPrompt({ context: params.currentInboundContext, prompt: params.prompt }),
       async () => {
         await params.userTurnTranscriptRecorder?.persistApproved();
       },
