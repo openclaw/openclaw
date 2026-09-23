@@ -202,15 +202,22 @@ async function runDoctorHealthFlowWithResult(
       });
 
       if (maintenance && (options.repair === true || options.yes === true)) {
-        const { repairOpenClawStateDatabaseReadabilityForDoctor } =
-          await import("../state/openclaw-state-db.js");
-        // Restore catalog reads before config discovery; versioned migrations remain in its graph.
-        const readability = repairOpenClawStateDatabaseReadabilityForDoctor({ env: process.env });
-        if (readability.warnings.length > 0) {
-          throw new Error(readability.warnings.join("\n"));
-        }
-        for (const change of readability.changes) {
-          effectiveRuntime.log(change);
+        const {
+          repairOpenClawStateDatabaseIndexesForDoctor,
+          repairOpenClawStateDatabaseReadabilityForDoctor,
+        } = await import("../state/openclaw-state-db.js");
+        // Restore physical indexes, then legacy catalog readability before config discovery.
+        for (const repair of [
+          repairOpenClawStateDatabaseIndexesForDoctor,
+          repairOpenClawStateDatabaseReadabilityForDoctor,
+        ]) {
+          const result = repair({ env: process.env });
+          if (result.warnings.length > 0) {
+            throw new Error(result.warnings.join("\n"));
+          }
+          for (const change of result.changes) {
+            effectiveRuntime.log(change);
+          }
         }
       }
 

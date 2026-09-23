@@ -37,8 +37,8 @@ type RepairCanonicalSqliteIndexesOptions = {
 };
 
 /**
- * Verify the whole file once, then use table scans only to locate repairable
- * index damage. Healthy opens must not multiply integrity work by table count.
+ * Verify the whole file before schema convergence. Physical corruption belongs
+ * to explicit Doctor maintenance, including when only an index is damaged.
  */
 export function verifyAndRepairCanonicalSqliteIndexes(
   db: DatabaseSync,
@@ -61,32 +61,19 @@ export function* verifyAndRepairCanonicalSqliteIndexSteps(
   } = {},
 ): SqliteIntegrityOperation<string[]> {
   const { diagnostics, reuseIntegrity, ...repairOptions } = options;
-  let integrityFailure: Error | undefined;
-  try {
-    if (reuseIntegrity) {
-      if (diagnostics) {
-        diagnostics.integrityGateOutcome = "cached";
-      }
-    } else {
-      yield* sqliteIntegrityCheckSteps(db, databaseLabel, diagnostics);
+  if (reuseIntegrity) {
+    if (diagnostics) {
+      diagnostics.integrityGateOutcome = "cached";
     }
-  } catch (error) {
-    if (!(error instanceof Error) || !isTerminalSqliteIntegrityError(error)) {
-      throw error;
-    }
-    integrityFailure = error;
+  } else {
+    yield* sqliteIntegrityCheckSteps(db, databaseLabel, diagnostics);
   }
 
   const indexesStartedAt = performance.now();
   const repairedIndexes = repairCanonicalSqliteIndexes(db, databaseLabel, schemaSql, {
     ...repairOptions,
-    verifyPhysicalIntegrity: integrityFailure !== undefined,
+    verifyPhysicalIntegrity: false,
   });
-  // A non-empty repair result already passed table and whole-file integrity
-  // checks inside the repair savepoint, so it supersedes the initial failure.
-  if (integrityFailure && repairedIndexes.length === 0) {
-    throw integrityFailure;
-  }
   if (diagnostics) {
     diagnostics.canonicalIndexMs = Math.floor(performance.now() - indexesStartedAt);
     diagnostics.repairedIndexCount = repairedIndexes.length;
@@ -96,7 +83,7 @@ export function* verifyAndRepairCanonicalSqliteIndexSteps(
 
 /**
  * Restore every named index when SQLite's IF NOT EXISTS semantics preserve a
- * same-name definition or b-tree that no longer matches the committed schema.
+ * same-name definition that no longer matches the committed schema.
  */
 export function repairCanonicalSqliteIndexes(
   db: DatabaseSync,
@@ -106,7 +93,6 @@ export function repairCanonicalSqliteIndexes(
 ): string[] {
   const indexes = getCanonicalSqliteNamedIndexContracts(schemaSql);
   const indexesByTable = new Map<string, CanonicalSqliteNamedIndexContract[]>();
-  const integrityFailuresByTable = new Map<string, Error>();
   const repairIndexes = new Set<CanonicalSqliteNamedIndexContract>();
   // One read snapshot also avoids a network lock round trip per metadata query.
   runSqlitePinnedReadSnapshotSync(db, () => {
@@ -130,18 +116,7 @@ export function repairCanonicalSqliteIndexes(
     assertNoUnexpectedUniqueIndexes(db, databaseLabel, schemaSql, indexesByTable);
 
     if (options.verifyPhysicalIntegrity !== false) {
-      for (const [tableName, tableIndexes] of indexesByTable) {
-        try {
-          assertSqliteTableIntegrity(db, databaseLabel, tableName);
-        } catch (error) {
-          if (error instanceof Error) {
-            integrityFailuresByTable.set(tableName, error);
-          }
-          for (const index of tableIndexes) {
-            repairIndexes.add(index);
-          }
-        }
-      }
+      assertSqliteIntegrity(db, databaseLabel);
     }
   });
   if (repairIndexes.size === 0) {
@@ -188,12 +163,6 @@ export function repairCanonicalSqliteIndexes(
     }
     if (error instanceof Error && isTerminalSqliteIntegrityError(error)) {
       throw error;
-    }
-    const tableIntegrityFailure = activeIndex
-      ? integrityFailuresByTable.get(activeIndex.tableName)
-      : undefined;
-    if (tableIntegrityFailure && isTerminalSqliteIntegrityError(tableIntegrityFailure)) {
-      throw tableIntegrityFailure;
     }
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(
