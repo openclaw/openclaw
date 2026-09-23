@@ -328,6 +328,8 @@ type PluginConversationBindingResolvedHandlerRegistration = PluginRegistrationOw
 
 export type PluginRecord = {
   id: string;
+  /** Normalized manifest facts captured with this exact runtime owner. */
+  decisionModels?: PluginManifestRecord["decisionModels"];
   nativeSessionCatalog?: PluginManifestNativeSessionCatalogSetup;
   name: string;
   packageVersion?: string;

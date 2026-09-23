@@ -79,6 +79,9 @@ export const DecisionEvaluateOutput = Type.Unsafe({
     provenance: { type: "object" },
     reason: { type: "string" },
     guidance: { type: "string" },
+    inputIssue: {
+      enum: ["estimated-budget-exceeded", "budget-unknown", "provider-context-overflow"],
+    },
   },
 });
 
@@ -135,6 +138,9 @@ export function capabilityGuidance(capabilities: DecisionProviderCapabilities): 
     capabilities.maxInputTokens === undefined
       ? undefined
       : `at most ${capabilities.maxInputTokens} tokens ${capabilities.inputTokenScope === "encoded-question" ? "per encoded question (state and rubric together)" : capabilities.inputTokenScope === "state-plus-each-criterion" ? "per state-plus-criterion pair" : "per provider input (accounting scope undeclared)"}; shorten state or rubric if exceeded`,
+    capabilities.maxTotalInputTokens === undefined
+      ? undefined
+      : `at most ${capabilities.maxTotalInputTokens} tokens for the total request (shared state once plus all questions)`,
   ].filter((value): value is string => value !== undefined);
   const boolean = capabilities.requiresBooleanCriteria
     ? " Boolean questions require both criteria.true and criteria.false descriptions."
@@ -178,6 +184,15 @@ const unavailableGuidance: Record<
     "The evaluation exceeded its deadline. Shorten the input or ask the operator to check provider performance.",
 };
 
+const inputIssueGuidance = {
+  "estimated-budget-exceeded":
+    "The estimated input exceeds a declared model budget. No inference was dispatched and no evidence was truncated. The caller retains its normal fallback.",
+  "budget-unknown":
+    "Required model input limits or accounting scope are unknown. No inference was dispatched under the requested admission policy.",
+  "provider-context-overflow":
+    "The provider confirmed that this input exceeds its context capacity. No retry was made and no evidence was truncated.",
+};
+
 /** Preserve provider values and provenance; diagnostics contain only bounded local facts. */
 export function decisionToolResult(
   outcome: DecisionOutcome,
@@ -188,7 +203,9 @@ export function decisionToolResult(
       ? {
           ...outcome,
           guidance:
-            unavailableGuidance[outcome.reason] +
+            (outcome.inputIssue
+              ? inputIssueGuidance[outcome.inputIssue]
+              : unavailableGuidance[outcome.reason]) +
             (outcome.reason === "unsupported-input" && capabilities
               ? ` ${capabilityGuidance(capabilities)}`
               : ""),

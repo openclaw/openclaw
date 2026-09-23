@@ -129,7 +129,7 @@ IDs are rejected. Registration and optional `isReady()` must be local, synchrono
 and network-free. Import types from `openclaw/plugin-sdk/decisions`.
 
 Consumers call `api.runtime.decisions.evaluate(batch, { agentId?, purpose, rubricVersion,
-timeoutMs, signal })`. State and rubric entries are finite JSON. Use plain objects
+timeoutMs, signal, inputBudgetPolicy? })`. State and rubric entries are finite JSON. Use plain objects
 and arrays; custom prototypes, serialization hooks, and getters are rejected on
 both request and response boundaries. Choices preserve
 all offered labels and probabilities; the chosen label is the provider's decision
@@ -159,6 +159,66 @@ The [ONNX plugin](/plugins/onnx) supplies local classifiers; the
 [TypeSafe AI plugin](/plugins/typesafe) supplies hosted Jev and local System One
 adapters, including Kev. Both plugins require
 separate installation, explicit setup, and role selection.
+
+### Estimated input admission
+
+Automatic consumers may set `inputBudgetPolicy: "require-declared"`. The existing
+runtime resolves the owning agent's selection and uses normalized manifest facts
+captured with the exact provider instance. No registry discovery, file polling,
+network, credential resolution, model loading, or inference is needed to estimate.
+Consumers own useful evidence selection and feature/Labs gating; the runtime
+neither assumes conversational input nor changes tools or feature activation.
+Omitting the policy preserves existing explicit evaluation behavior.
+
+The policy requires `maxInputTokens`, `inputTokenScope`, and
+`maxTotalInputTokens` for the selected model. Omission means unknown, **not
+unlimited**. A missing required fact returns unavailable with reason
+`unsupported-input` and `inputIssue: "budget-unknown"`, with zero provider
+calls. This intentionally leaves automatic admission unavailable until a provider
+can declare both limits; do not invent a limit from training guidance or an alias.
+
+After the ordinary host resource guard, a fast CJK-aware weighted-character
+estimate covers JSON evidence, question identifiers, instructions, criteria,
+alternative labels, and encoding overhead. It reuses the shared character
+heuristic (four weighted characters per estimated token), not a model-specific
+tokenizer. Fixed allowances are 16 estimated tokens per request/question frame
+and four per criterion, in addition to serialized structure. Unknown encoder
+cost is **heuristic**, never exact zero. The total estimate also covers the
+complete serialized request, so extra admitted JSON is not invisible.
+
+- `encoded-question`: compare state plus the largest complete question with
+  `maxInputTokens`.
+- `state-plus-each-criterion`: compare the largest state + question instructions
+  - individual criterion/label pair with `maxInputTokens`; alternatives are not
+    summed into that per-input bound.
+- `maxTotalInputTokens`: independently compare shared state **once** plus all
+  complete questions and framing, regardless of the per-input scope. This is a
+  logical request budget, not the sum of repeated provider inference rows or
+  billable usage.
+
+An estimate above either limit returns unavailable/unsupported-input with
+`inputIssue: "estimated-budget-exceeded"` before provider dispatch. Equality is
+admitted. Fit remains approximate: no silent truncation, split, retry, alternate
+model, or sizing inference occurs. A provider that confirms actual context
+rejection returns `{ status: "unavailable", reason: "unsupported-input",
+inputIssue: "provider-context-overflow" }`. The host validates that closed detail
+and copies no arbitrary error body. Other unsupported input omits `inputIssue`.
+These input rejections do not poison circuit health, including when accompanied
+by Retry-After. Cancellation, stale/closed authority, and malformed contracts
+remain terminal rather than fallback.
+
+The existing `decisions` subsystem logger emits DEBUG completion facts for
+admitted, skipped, unavailable, and provider-rejected paths: hashed purpose/model/
+provider correlations, existing ambient run trace when available, manifest limit
+source, scope, counts, estimation method, estimated tokens, actual provider usage
+when reported, dispatch status, reason, and latency. Provider results are not
+caller effects; `callerEffect: "not-observed"` makes that distinction explicit.
+DEBUG-off calls without an admission policy do no extra estimation or identifier
+hashing. Raw submitted state, question text, labels, rubric versions, tool data,
+credentials, and provider errors are never diagnostic fields. Budget-exceeded and
+confirmed-overflow warnings share a bounded one-per-minute process-local warning
+budget. This adds no audit persistence or collection opt-in; existing logging and
+audit settings retain their separate semantics.
 
 ### Calling from a third-party plugin
 

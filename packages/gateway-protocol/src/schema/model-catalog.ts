@@ -152,6 +152,9 @@ export const ModelsListResultSchema = closedObject({
             maxInputTokens: Type.Optional(
               Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
             ),
+            maxTotalInputTokens: Type.Optional(
+              Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+            ),
             inputTokenScope: Type.Optional(
               Type.Union([
                 Type.Literal("encoded-question"),

@@ -308,6 +308,22 @@ authority, and contract errors reject; do not turn cancellation into fallback wo
 See the [SDK contract](/plugins/sdk-overview/capabilities#decision-models-contract-version-1)
 for the complete lifecycle and error behavior.
 
+Automatic consumers can opt into shared estimated input admission with
+`inputBudgetPolicy: "require-declared"` in the runtime options. They first build
+useful bounded evidence; the runtime then compares a fast estimate with the
+selected model's declared per-input and total-request budgets. Missing required
+limits or accounting scope skip inference with `inputIssue: "budget-unknown"`.
+Estimated excess skips inference with `inputIssue: "estimated-budget-exceeded"`.
+Both refine `reason: "unsupported-input"`; neither truncates evidence, retries,
+changes models, or invokes a sizing model. Omitting the policy preserves existing
+explicit evaluation, including `decision_evaluate`, independently of Labs.
+
+A provider can report confirmed context overflow with
+`inputIssue: "provider-context-overflow"`. Estimates are not exact tokenization
+or a guarantee of fit; a provider can reject an admitted estimate. Input-size
+rejections do not mark the provider unhealthy. The caller still owns fallback
+and any eventual effect. See the [SDK accounting contract](/plugins/sdk-overview/capabilities#estimated-input-admission).
+
 For ONNX, cold-loading a large model can exceed the deadline on slower machines.
 Keep active models warm when memory permits, or choose a smaller model. See
 [ONNX lifecycle and runtime](/plugins/onnx#lifecycle-and-runtime) for cache settings

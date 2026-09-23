@@ -401,6 +401,8 @@ export type DecisionProviderCapabilities = {
   maxChoiceAlternatives?: number;
   maxScoreLevels?: number;
   maxInputTokens?: number;
+  /** Total request: shared state once plus every complete question and encoding overhead. */
+  maxTotalInputTokens?: number;
   /** Token accounting follows the provider encoder, including its rubric overhead. */
   inputTokenScope?: "encoded-question" | "state-plus-each-criterion";
   requiresBooleanCriteria?: boolean;
