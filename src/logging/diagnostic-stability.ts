@@ -244,6 +244,9 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
   };
 
   switch (event.type) {
+    case "agent.commentary":
+      // Trusted commentary belongs to harness traces, not the stability subscription.
+      break;
     case "gateway.rpc":
     case "gateway.event_loop.sample":
     case "diagnostic.gc":
