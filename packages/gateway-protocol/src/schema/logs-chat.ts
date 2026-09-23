@@ -359,11 +359,13 @@ const ChatEventErrorKindSchema = Type.Union([
   Type.Literal("timeout"),
   Type.Literal("rate_limit"),
   Type.Literal("context_length"),
+  Type.Literal("state_contention"),
   Type.Literal("unknown"),
 ]);
 
 /** Coarse startup stages shown while a run has not produced visible activity yet. */
 export const ChatRunStartupPhaseSchema = Type.Union([
+  Type.Literal("waiting_for_state"),
   Type.Literal("preparing_workspace"),
   Type.Literal("naming_worktree"),
   Type.Literal("creating_worktree"),

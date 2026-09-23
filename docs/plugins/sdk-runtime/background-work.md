@@ -308,6 +308,8 @@ later mutations, events, and delivery; never adopt it from a fresh task lookup.
 Before admitting exact-assignment work, call the scoped task runtime's
 `assertTaskAssignmentSupported()` on each registration, including reused runtimes.
 This checks the original runtime owner without rebinding it to a replacement.
+Local agent commands use their scoped plugin registry without requiring Gateway
+activation. Retiring or replacing that owner still invalidates retained runtimes.
 Custom detached runtimes must implement the optional `transitionTaskAssignment`
 operation for these guarded mutations. Check its `expectedTask` against the current
 record and call `assertCurrent()` immediately before persistence. An adapter without

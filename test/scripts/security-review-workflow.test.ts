@@ -336,6 +336,8 @@ describe("security review workflow trust boundaries", () => {
         },
         contains: (value: string, search: string) =>
           value.toLowerCase().includes(search.toLowerCase()),
+        startsWith: (value: unknown, prefix: string) => String(value).startsWith(prefix),
+        vars: { OPENCLAW_RELEASE_PRIORITY_RUN: "" },
       });
       expect(Boolean(result), JSON.stringify(event)).toBe(event.allowed);
     }

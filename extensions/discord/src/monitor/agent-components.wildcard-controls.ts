@@ -140,17 +140,9 @@ class DiscordComponentButton extends Button {
   }
 }
 
-function createSelectControl(
-  spec: SelectControlSpec,
-  ctx: AgentComponentContext,
-  handlers: DiscordComponentControlHandlers,
-): BaseMessageInteractiveComponent {
-  return new DiscordComponentSelectControl(spec, ctx, handlers);
-}
-
 function bindSelectControl(spec: SelectControlSpec) {
   return (ctx: AgentComponentContext, handlers: DiscordComponentControlHandlers) =>
-    createSelectControl(spec, ctx, handlers);
+    new DiscordComponentSelectControl(spec, ctx, handlers);
 }
 
 export function createDiscordComponentButtonControl(
