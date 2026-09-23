@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import ts from "typescript";
+import JSON5 from "json5";
 import { afterEach, describe, expect, it } from "vitest";
+import { readNativeTypeScriptConfig } from "../../scripts/lib/native-typescript-config.mts";
 import {
   findOversizedTsgoCoreTestShards,
   findTsgoCoreTestShardViolations,
@@ -26,21 +27,10 @@ import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 describe("tsgo core test shards", () => {
   it("covers the repository test roots exactly once", () => {
     const roots = (config: string) => {
-      const parsed = ts.getParsedCommandLineOfConfigFile(
-        path.resolve(config),
-        {},
-        {
-          ...ts.sys,
-          onUnRecoverableConfigFileDiagnostic: (diagnostic) => {
-            throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
-          },
-        },
-      );
-      if (!parsed) {
-        throw new Error(`Could not parse ${config}`);
-      }
-      expect(parsed.errors, config).toEqual([]);
-      expect(parsed.projectReferences ?? [], config).toEqual([]);
+      const parsed = readNativeTypeScriptConfig({ cwd: process.cwd(), configFileName: config });
+      const contents = JSON5.parse(fs.readFileSync(config, "utf8")) as { references?: unknown };
+      // Project references are not inherited and the native config response omits them.
+      expect(contents.references ?? [], config).toEqual([]);
       return parsed.fileNames
         .filter((file) => /\.test\.tsx?$/u.test(file))
         .map((file) => path.relative(process.cwd(), file).replaceAll(path.sep, "/"));
@@ -232,20 +222,7 @@ describe("tsgo core test shards", () => {
       write(file, "export {};\n");
     }
     const roots = (config: string) => {
-      const parsed = ts.getParsedCommandLineOfConfigFile(
-        path.join(root, config),
-        {},
-        {
-          ...ts.sys,
-          onUnRecoverableConfigFileDiagnostic: (diagnostic) => {
-            throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
-          },
-        },
-      );
-      if (!parsed) {
-        throw new Error(`Could not parse ${config}`);
-      }
-      expect(parsed.errors, config).toEqual([]);
+      const parsed = readNativeTypeScriptConfig({ cwd: root, configFileName: config });
       return parsed.fileNames.map((file) => path.relative(root, file).replaceAll(path.sep, "/"));
     };
 

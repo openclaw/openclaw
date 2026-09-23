@@ -3003,7 +3003,6 @@ src/node-host/worker-support.ts	4
 src/plugin-sdk/acp-runtime.ts	1
 src/plugin-sdk/agent-harness-exec-review-runtime.ts	1
 src/plugin-sdk/allowlist-config-edit.ts	6
-src/plugin-sdk/api-baseline-declaration-print.ts	1
 src/plugin-sdk/api-baseline.ts	1
 src/plugin-sdk/approval-auth-helpers.ts	1
 src/plugin-sdk/approval-handler-runtime.ts	1

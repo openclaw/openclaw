@@ -16,6 +16,7 @@ import { verifyBuiltPluginControlPlaneModules } from "./check-built-plugin-contr
 import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mts";
 import { copyHookMetadata, listHookMetadataOutputs } from "./copy-hook-metadata.ts";
 import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
@@ -386,6 +387,7 @@ export function writeStableRootRuntimeAliases(params: RuntimeFsParams = {}) {
   );
 
   const ownership = readRuntimeDependencyOwnership(rootDir, fsImpl);
+  using parser = createNativeTypeScriptParser({ cwd: rootDir });
   for (const [aliasFileName, candidates] of candidatesByAlias) {
     const aliasPath = path.join(distDir, aliasFileName);
     const candidate = resolveStableRootRuntimeAliasCandidate(
@@ -404,7 +406,10 @@ export function writeStableRootRuntimeAliases(params: RuntimeFsParams = {}) {
       aliasFileName === "io.runtime.js"
         ? buildUpdateConfigRuntimeAlias(
             candidate,
-            fsImpl.readFileSync(path.join(distDir, candidate), "utf8"),
+            parser.parseSourceFile(
+              path.join(distDir, candidate),
+              fsImpl.readFileSync(path.join(distDir, candidate), "utf8"),
+            ),
           )
         : buildRuntimeAliasSource(candidate, distDir, fsImpl);
     const owner = ownership?.chunks[candidate];

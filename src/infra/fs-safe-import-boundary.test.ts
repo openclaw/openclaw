@@ -2,8 +2,9 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import * as ts from "typescript/unstable/ast";
+import { afterAll, describe, expect, it } from "vitest";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
 
@@ -103,7 +104,7 @@ function sourceWithoutPluginOwnedImports(filePath: string, source: string): stri
   if (!modules) {
     return source;
   }
-  const parsed = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest);
+  const parsed = parser.parseSourceFile(filePath, source);
   let checkedSource = source;
   for (const statement of parsed.statements.toReversed()) {
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) {
@@ -125,7 +126,8 @@ function sourceWithoutPluginOwnedImports(filePath: string, source: string): stri
         const name = (element.propertyName ?? element.name).text;
         return (
           allowed.values.includes(name) ||
-          (allowed.types?.includes(name) && (clause.isTypeOnly || element.isTypeOnly))
+          (allowed.types?.includes(name) &&
+            (clause.phaseModifier === ts.SyntaxKind.TypeKeyword || element.isTypeOnly))
         );
       })
     ) {
@@ -146,6 +148,9 @@ function hasDisallowedFsSafeImport(filePath: string, source: string): boolean {
   const checked = sourceWithoutPluginOwnedImports(filePath, source);
   return checked.includes('"@openclaw/fs-safe') || checked.includes("'@openclaw/fs-safe");
 }
+
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 
 describe("fs-safe import boundary", () => {
   it("limits File Transfer's archive inventory helpers", () => {

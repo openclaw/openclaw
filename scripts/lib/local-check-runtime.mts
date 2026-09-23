@@ -86,17 +86,14 @@ export function resolveRepoToolBinPath(
   }: RepoToolOptions = {},
 ) {
   if (toolName === "tsgo") {
-    // TypeScript 6 owns the in-process compiler API; CLI checks use the stable
-    // native compiler explicitly, independent of either package's tsc bin link.
+    // Resolve this checkout's native compiler independently of the ambient tsc bin link.
     const require = createRequire(import.meta.url);
     const {
       createDeclarationInputBoundary,
     }: typeof import("./tsdown-declaration-boundary.mts") = require("./tsdown-declaration-boundary.mts");
     const inputs = createDeclarationInputBoundary(cwd);
     const fromCheckout = createRequire(path.join(inputs.root, "package.json"));
-    const nativeRoot = path.dirname(
-      inputs.assert(fromCheckout.resolve("typescript-native/package.json")),
-    );
+    const nativeRoot = path.dirname(inputs.assert(fromCheckout.resolve("typescript/package.json")));
     const getExePath: { default: () => string } = require(
       inputs.assert(path.join(nativeRoot, "lib/getExePath.js")),
     );

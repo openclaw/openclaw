@@ -1,9 +1,13 @@
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
-import { expect, it } from "vitest";
+import * as ts from "typescript/unstable/ast";
+import { afterAll, expect, it } from "vitest";
+import { createNativeTypeScriptParser } from "../../../../scripts/lib/native-typescript.mts";
 import { CODEX_APP_SERVER_OPT_OUT_NOTIFICATION_METHODS } from "./notification-policy.js";
+
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 
 it("never opts out of a method named by an incoming notification consumer", () => {
   const root = fileURLToPath(new URL("../", import.meta.url));
@@ -19,14 +23,9 @@ it("never opts out of a method named by an incoming notification consumer", () =
     ) {
       continue;
     }
-    const source = ts.createSourceFile(
-      file,
-      readFileSync(path.join(root, relative), "utf8"),
-      ts.ScriptTarget.Latest,
-      true,
-    );
+    const source = parser.parseSourceFile(file, readFileSync(path.join(root, relative), "utf8"));
     const visit = (node: ts.Node): void => {
-      if (ts.isStringLiteralLike(node) && optedOut.has(node.text)) {
+      if (ts.isStringLiteralLikeNode(node) && optedOut.has(node.text)) {
         const parent = node.parent;
         // This is an outgoing event on the separate exec-server protocol.
         const isExecServerEmission =
@@ -40,7 +39,7 @@ it("never opts out of a method named by an incoming notification consumer", () =
           consumers.push(`${file}:${line + 1}: ${node.text}`);
         }
       }
-      ts.forEachChild(node, visit);
+      node.forEachChild(visit);
     };
     visit(source);
   }

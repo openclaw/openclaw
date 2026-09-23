@@ -1,12 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import type { BuildContext } from "tsdown";
-import type ts from "typescript";
 import { portableRelativePath } from "./build-artifact-cache.mts";
 import {
   createDeclarationInputBoundary,
-  resolveDeclarationInputCaptureModule,
+  readDeclarationBuildInputs,
 } from "./tsdown-declaration-boundary.mts";
 
 const stagePrefix = (root: string) =>
@@ -44,26 +42,13 @@ export function createDeclarationInputCapture(name: string) {
       return;
     }
     const request: { roots: string[] } = JSON.parse(fs.readFileSync(file, "utf8"));
-    const { globalContext }: { globalContext: { programs: ts.Program[] } } = await import(
-      pathToFileURL(resolveDeclarationInputCaptureModule()).href
-    );
-    const roots = new Set(
-      globalContext.programs.flatMap((program) =>
-        program.getRootFileNames().map((root) => fs.realpathSync.native(root)),
-      ),
-    );
-    if (request.roots.some((root) => !roots.has(fs.realpathSync.native(boundary.resolve(root))))) {
+    const compilation = readDeclarationBuildInputs(options);
+    if (request.roots.some((root) => !compilation.roots.has(boundary.resolve(root)))) {
       throw new Error(`Incomplete compiler membership for ${name}`);
     }
-    const inputs = [
-      ...new Set(
-        globalContext.programs.flatMap((program) =>
-          program
-            .getSourceFiles()
-            .map((source) => portableRelativePath(boundary.root, boundary.assert(source.fileName))),
-        ),
-      ),
-    ].toSorted();
+    const inputs = [...compilation.inputs]
+      .map((input) => portableRelativePath(boundary.root, boundary.assert(input)))
+      .toSorted();
     fs.writeFileSync(file, JSON.stringify({ ...request, inputs }));
   };
 }

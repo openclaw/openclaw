@@ -62,7 +62,7 @@ export class BoundaryInputSnapshot extends CompilerInputSnapshot {
     const assertInput = (file: string) => boundary.assert(file);
     // Bind compact receipt lib names to this checkout's compiler, never ambient cwd.
     const require = createRequire(path.join(boundary.root, "package.json"));
-    const nativePackage = assertInput(require.resolve("typescript-native/package.json"));
+    const nativePackage = assertInput(require.resolve("typescript/package.json"));
     const nativeRoot = path.dirname(nativePackage);
     const executableResolver = assertInput(path.join(nativeRoot, "lib/getExePath.js"));
     // The native launcher prefixes long Windows executables with \\?\; normalize
