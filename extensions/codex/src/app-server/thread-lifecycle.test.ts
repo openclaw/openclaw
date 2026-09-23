@@ -6002,3 +6002,162 @@ describe("native Codex Ultra turn mapping", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+describe("restricted same-thread continuation with mock transport", () => {
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-restricted-resume-"));
+    resetCodexTestBindingStore();
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it("starts once, then resumes the same restricted thread for a separate delivery turn", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const firstAttempt = createThreadLifecycleParams(
+      path.join(tempDir, "session.jsonl"),
+      workspaceDir,
+    );
+    firstAttempt.pluginHarnessToolPolicyRestricted = true;
+    firstAttempt.sourceReplyDeliveryMode = "automatic";
+    const secondAttempt = {
+      ...firstAttempt,
+      prompt: "separate turn",
+      runId: "run-2",
+      sourceReplyDeliveryMode: "message_tool_only" as const,
+    };
+    const respond = vi.fn(async (method: string) => {
+      if (method === "config/read") return { config: {}, origins: {}, layers: [] };
+      if (method === "configRequirements/read") return { requirements: null };
+      if (method === "thread/start" || method === "thread/resume") {
+        return threadStartResult("thread-restricted-same");
+      }
+      if (method === "mcpServerStatus/list") return { data: [], nextCursor: null };
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const fixture = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond,
+    });
+    const common = {
+      client: fixture.client,
+      signal: new AbortController().signal,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      nativeCodeModeEnabled: false,
+    };
+    const first = await startOrResumeThread({ ...common, params: firstAttempt });
+    expect(first).toMatchObject({
+      threadId: "thread-restricted-same",
+      lifecycle: { action: "started" },
+    });
+    await fixture.endTurn("thread-restricted-same");
+    const second = await startOrResumeThread({ ...common, params: secondAttempt });
+    expect(second).toMatchObject({
+      threadId: "thread-restricted-same",
+      lifecycle: { action: "resumed" },
+    });
+    expect(fixture.request.mock.calls.filter(([method]) => method === "thread/start")).toHaveLength(
+      1,
+    );
+    expect(
+      fixture.request.mock.calls.filter(([method]) => method === "thread/resume"),
+    ).toHaveLength(1);
+    const identity = sessionBindingIdentity({
+      sessionId: firstAttempt.sessionId,
+      sessionKey: firstAttempt.sessionKey,
+      agentId: firstAttempt.agentId,
+      config: firstAttempt.config,
+    });
+    expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
+      threadId: "thread-restricted-same",
+      nativeToolPolicyRestricted: true,
+      restrictedThreadConfigFingerprint: expect.any(String),
+    });
+    const beforeMismatch = testCodexAppServerBindingStore.read(identity);
+    await fixture.endTurn("thread-restricted-same");
+    await expect(
+      startOrResumeThread({
+        ...common,
+        params: {
+          ...secondAttempt,
+          runId: "run-3",
+          pluginHarnessToolPolicySafeDeniedTools: ["image_generate"],
+        },
+      }),
+    ).rejects.toThrow(/restricted|changed/);
+    expect(fixture.request.mock.calls.filter(([method]) => method === "thread/start")).toHaveLength(
+      1,
+    );
+    expect(
+      fixture.request.mock.calls.filter(([method]) => method === "thread/resume"),
+    ).toHaveLength(1);
+    expect(testCodexAppServerBindingStore.read(identity)).toEqual(beforeMismatch);
+
+    expect(
+      await testCodexAppServerBindingStore.mutate(identity, {
+        kind: "patch",
+        threadId: "thread-restricted-same",
+        patch: { restrictedThreadConfigFingerprint: undefined },
+      }),
+    ).toBe(true);
+    await expect(startOrResumeThread({ ...common, params: secondAttempt })).rejects.toThrow(
+      /restricted|attestation/,
+    );
+    expect(fixture.request.mock.calls.filter(([method]) => method === "thread/start")).toHaveLength(
+      1,
+    );
+    expect(
+      fixture.request.mock.calls.filter(([method]) => method === "thread/resume"),
+    ).toHaveLength(1);
+    expect(testCodexAppServerBindingStore.read(identity)?.threadId).toBe("thread-restricted-same");
+  });
+
+  it("keeps the upstream transient start for an unrestricted binding", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const attempt = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    let starts = 0;
+    const respond = vi.fn(async (method: string) => {
+      if (method === "config/read") return { config: {}, origins: {}, layers: [] };
+      if (method === "configRequirements/read") return { requirements: null };
+      if (method === "thread/start")
+        return threadStartResult(++starts === 1 ? "thread-unrestricted" : "thread-transient");
+      if (method === "mcpServerStatus/list") return { data: [], nextCursor: null };
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const fixture = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond,
+    });
+    const common = {
+      client: fixture.client,
+      signal: new AbortController().signal,
+      params: attempt,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+    };
+    expect(await startOrResumeThread({ ...common, nativeCodeModeEnabled: true })).toMatchObject({
+      threadId: "thread-unrestricted",
+      lifecycle: { action: "started" },
+    });
+    await fixture.endTurn("thread-unrestricted");
+    expect(await startOrResumeThread({ ...common, nativeCodeModeEnabled: false })).toMatchObject({
+      threadId: "thread-transient",
+      lifecycle: { action: "started" },
+    });
+    const identity = sessionBindingIdentity({
+      sessionId: attempt.sessionId,
+      sessionKey: attempt.sessionKey,
+      agentId: attempt.agentId,
+      config: attempt.config,
+    });
+    expect(testCodexAppServerBindingStore.read(identity)?.threadId).toBe("thread-unrestricted");
+    expect(fixture.request.mock.calls.filter(([method]) => method === "thread/start")).toHaveLength(
+      2,
+    );
+  });
+});

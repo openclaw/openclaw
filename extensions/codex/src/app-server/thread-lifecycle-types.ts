@@ -148,6 +148,7 @@ export type CodexThreadResumePreparation = {
 
 export type CodexResumeThreadContext = CodexThreadRequestContext & {
   binding: CodexAppServerThreadBinding;
+  requireRestrictedThreadConfigFingerprint?: boolean;
   clearCurrentBinding: (operation: string) => Promise<void>;
   prebuiltPluginThreadConfig?: CodexPluginThreadConfig;
   buildLoadedPluginThreadConfig?: (

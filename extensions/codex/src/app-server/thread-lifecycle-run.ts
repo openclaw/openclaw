@@ -108,6 +108,21 @@ export async function startOrResumeThread(
     let replacementPredecessor: CodexAppServerThreadBinding | undefined;
     const initialBoundThreadId = binding?.threadId;
     const initialBoundClientId = binding?.clientId;
+    const strictRestrictedContinuation = Boolean(
+      initialBoundThreadId &&
+      binding?.nativeToolPolicyRestricted === true &&
+      params.nativeCodeModeEnabled === false &&
+      !(params.webSearchAllowed === false && params.persistentWebSearchAllowed === false) &&
+      !ringZeroActive,
+    );
+    if (
+      strictRestrictedContinuation &&
+      (binding?.pendingSupervisionBranch || binding?.pendingResumeConfiguration)
+    ) {
+      throw new Error(
+        "Codex restricted continuation has a pending native transition; no thread was started",
+      );
+    }
     const throwIfAborted = () => throwIfCodexThreadLifecycleAborted(params.signal);
     const prepareRequestContext = () =>
       prepareCodexThreadRequestContext(params, {
@@ -244,6 +259,11 @@ export async function startOrResumeThread(
       if (!current?.threadId) {
         return;
       }
+      if (strictRestrictedContinuation) {
+        throw new Error(
+          "Codex restricted continuation cannot replace its native binding; no thread was started",
+        );
+      }
       assertCodexBindingMayBeReplaced(current, operation, expectedOwnership);
       const cleared = await params.bindingStore.mutate(
         bindingIdentity,
@@ -356,6 +376,7 @@ export async function startOrResumeThread(
         params.nativeProviderWebSearchSupport === "unknown" &&
         !binding?.threadId);
     let rotatedContextEngineBinding = false;
+    let restrictedResumeCandidate = false;
     let prebuiltPluginThreadConfig: CodexPluginThreadConfig | undefined;
     // Scoped inventory requires a loaded native thread. The warm/resume owner
     // calls this only after acquiring that exact subscription, before admission.
@@ -495,14 +516,26 @@ export async function startOrResumeThread(
         "starting a native-tool-restricted turn",
         expectedOwnership,
       );
-      embeddedAgentLog.debug(
-        "codex app-server native tool surface disabled for turn; starting transient thread",
-        {
-          threadId: binding.threadId,
-        },
-      );
-      preserveExistingBinding = true;
-      binding = undefined;
+      if (binding.nativeToolPolicyRestricted !== true) {
+        // Preserve upstream transient behavior for unrestricted bindings.
+        embeddedAgentLog.debug(
+          "codex app-server native tool surface disabled for turn; starting transient thread",
+          { threadId: binding.threadId },
+        );
+        preserveExistingBinding = true;
+        binding = undefined;
+      } else {
+        if (
+          !restrictedToolSurface ||
+          !binding.restrictedThreadConfigFingerprint ||
+          transientDelegationRestriction
+        ) {
+          throw new Error(
+            "Codex restricted continuation lacks an attested compatible native thread; no thread was started",
+          );
+        }
+        restrictedResumeCandidate = true;
+      }
     }
     if (binding?.threadId && transientDelegationRestriction) {
       assertCodexBindingMayBeReplaced(
@@ -644,13 +677,16 @@ export async function startOrResumeThread(
         }
       } else {
         const requestContext = await prepareRequestContext();
-        const warmReuse = await tryReuseCodexLiveThread({
-          ...requestContext,
-          params,
-          binding,
-          clientId,
-          buildLoadedPluginThreadConfig,
-        });
+        const warmReuse: Awaited<ReturnType<typeof tryReuseCodexLiveThread>> =
+          restrictedResumeCandidate
+            ? { kind: "resume" }
+            : await tryReuseCodexLiveThread({
+                ...requestContext,
+                params,
+                binding,
+                clientId,
+                buildLoadedPluginThreadConfig,
+              });
         if (warmReuse.kind === "ready") {
           return publishCodexThreadInferenceBinding(params, warmReuse.binding, true);
         }
@@ -669,6 +705,7 @@ export async function startOrResumeThread(
             clearCurrentBinding,
             prebuiltFinalConfigPatch: warmReuse.prebuiltFinalConfigPatch,
             prebuiltPluginThreadConfig,
+            requireRestrictedThreadConfigFingerprint: restrictedResumeCandidate,
             buildLoadedPluginThreadConfig,
             prepareResume: () => prepareCodexThreadResume(params, resumeBinding, requestContext),
             releaseRetainedThread: async (assertCurrent) => {
@@ -687,6 +724,9 @@ export async function startOrResumeThread(
     }
 
     assertCodexBindingMayBeReplaced(binding, "starting a fresh native thread", expectedOwnership);
+    if (strictRestrictedContinuation) {
+      throw new Error("Codex restricted continuation cannot start a separate native thread");
+    }
     const requestContext = await prepareRequestContext();
     if (initialBoundThreadId && !preserveExistingBinding && !replacementPredecessor) {
       await releaseRetainedThread(initialBoundThreadId);

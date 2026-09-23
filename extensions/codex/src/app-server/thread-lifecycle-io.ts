@@ -34,6 +34,7 @@ import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import { getCurrentSharedClientEntry } from "./shared-client-lifecycle.js";
 import {
   fingerprintCodexThreadConfig,
+  fingerprintRestrictedThreadConfig,
   readActiveCodexTurnIdsFromResume,
 } from "./thread-fingerprints.js";
 import {
@@ -109,8 +110,6 @@ export async function resumeExistingCodexThread(
     const configuration = await context.prepareResume();
     const assertHandoffCurrent = configuration.assertConfigured;
     disposeConfiguration = configuration.dispose;
-    await context.releaseRetainedThread(configuration.assertCurrent);
-    configuration.assertCurrent();
     const clientBoundThread =
       ringZeroClientInstanceId !== undefined ||
       resumeBinding.ringZeroClientInstanceId !== undefined ||
@@ -187,6 +186,31 @@ export async function resumeExistingCodexThread(
         disableLoginShell: params.disableLoginShell,
       }),
     );
+    if (context.requireRestrictedThreadConfigFingerprint) {
+      if (
+        !restrictedToolSurface ||
+        resumeBinding.nativeToolPolicyRestricted !== true ||
+        params.nativeCodeModeEnabled !== false ||
+        !resumeBinding.restrictedThreadConfigFingerprint
+      ) {
+        throw new Error(
+          "Codex restricted thread policy attestation is unavailable; no thread was started",
+        );
+      }
+      const candidate = fingerprintRestrictedThreadConfig(
+        resumeParams,
+        authProfileId,
+        dynamicToolsFingerprint,
+        params.params,
+        hostSystemAgentActive,
+        environmentSelectionFingerprint,
+      );
+      if (candidate !== resumeBinding.restrictedThreadConfigFingerprint) {
+        throw new Error("Codex restricted thread policy changed; no thread was started");
+      }
+    }
+    await context.releaseRetainedThread(configuration.assertCurrent);
+    configuration.assertCurrent();
     const requestModelProvider =
       typeof resumeParams.modelProvider === "string" && resumeParams.modelProvider.trim()
         ? resumeParams.modelProvider
@@ -294,6 +318,9 @@ export async function resumeExistingCodexThread(
       ringZeroConfigFingerprint,
       ringZeroClientInstanceId,
       nativeToolPolicyRestricted: restrictedToolSurface ? true : undefined,
+      restrictedThreadConfigFingerprint: context.requireRestrictedThreadConfigFingerprint
+        ? resumeBinding.restrictedThreadConfigFingerprint
+        : undefined,
       networkProxyProfileName: params.appServer.networkProxy?.profileName,
       networkProxyConfigFingerprint,
       nativeHookRelayGeneration:
@@ -606,6 +633,17 @@ export async function startFreshCodexThread(
     params.params.authProfileId,
     response.modelProvider ?? requestModelProvider ?? startModelProvider ?? modelProvider,
   );
+  const restrictedThreadConfigFingerprint =
+    restrictedToolSurface && !preserveExistingBinding
+      ? fingerprintRestrictedThreadConfig(
+          { ...startParams, modelProvider: bindingModelProvider ?? null },
+          params.params.authProfileId,
+          dynamicToolsFingerprint,
+          params.params,
+          hostSystemAgentActive,
+          environmentSelectionFingerprint,
+        )
+      : undefined;
   const nextMcpServersFingerprint =
     params.mcpServersFingerprintEvaluated === true ? params.mcpServersFingerprint : undefined;
   const startedBinding: CodexAppServerThreadBinding = {
@@ -620,6 +658,7 @@ export async function startFreshCodexThread(
     dynamicToolsFingerprint,
     dynamicToolsContainDeferred,
     nativeSkillIsolationFingerprint,
+    restrictedThreadConfigFingerprint,
     userMcpServersFingerprint,
     mcpServersFingerprint: nextMcpServersFingerprint,
     configuredMcpOwnershipVersion: params.configuredMcpOwnershipVersion,
