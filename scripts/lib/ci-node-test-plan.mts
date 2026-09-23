@@ -28,6 +28,7 @@ import {
   isUiBrowserTestFile,
   isUiTestTarget,
   uiTimingTestFiles,
+  uiE2ePrebuiltParallelTestFiles,
   uiE2eRealGatewayTestFiles,
 } from "../../test/vitest/vitest.ui-paths.mjs";
 import {
@@ -1498,6 +1499,31 @@ export function createUiTestShardGroups(
         uiE2eRealGatewayTestFiles.includes(file),
     ),
   };
+}
+
+export function createUiRealGatewayTestShards(
+  e2eGroups: ReturnType<typeof createUiTestShardGroups>["e2e"],
+) {
+  const selected = new Set(
+    e2eGroups.flatMap((group) => group.includePatterns ?? uiE2eRealGatewayTestFiles),
+  );
+  const parallelFiles = new Set(uiE2ePrebuiltParallelTestFiles);
+  const files = uiE2eRealGatewayTestFiles.filter(
+    (file) => selected.has(file) && file !== "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
+  );
+  // Desktop transport proof owns its file separately, alongside the serial phase.
+  return ([1, 2] as const).map((shard) => ({
+    shard,
+    shard_count: 2 as const,
+    run_desktop: shard === 1,
+    groups: [
+      {
+        configs: ["test/vitest/vitest.ui-e2e-prebuilt.config.ts"],
+        shard_name: `ui-e2e-real-gateway-${shard === 1 ? "serial" : "parallel"}`,
+        includePatterns: files.filter((file) => parallelFiles.has(file) === (shard === 2)),
+      },
+    ],
+  }));
 }
 
 export const RELEASE_ONLY_TOOLING_CONFIGS = new Set(

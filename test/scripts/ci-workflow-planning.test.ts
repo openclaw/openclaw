@@ -214,6 +214,7 @@ function runCiManifestFixture(options: {
   targetHostedRunnerProfileContract?: boolean;
   uiE2eProjectsCapability?: boolean;
   uiReleaseTier?: boolean;
+  uiRealGatewayShards?: boolean;
   remoteTagRefs?: Record<string, string>;
   scopeEnv?: Record<string, string>;
 }) {
@@ -322,6 +323,22 @@ function runCiManifestFixture(options: {
           e2e: [{configs: ["test/vitest/vitest.ui-e2e.config.ts"], shard_name: "e2e", env: {fixtureTier: JSON.stringify(options)}}],
         });\n`,
       );
+      if (options.uiRealGatewayShards !== false) {
+        appendFileSync(
+          path.join(scriptsDir, "ci-node-test-plan.mts"),
+          `\nexport const createUiRealGatewayTestShards = (groups) => [1, 2].map((shard) => ({
+            shard,
+            shard_count: 2,
+            run_desktop: shard === 1,
+            groups: groups.map((group) => ({
+              ...group,
+              configs: ["test/vitest/vitest.ui-e2e-prebuilt.config.ts"],
+              shard_name: "real-gateway-" + shard,
+              includePatterns: ["ui/src/e2e/fixture-" + shard + ".real-gateway.e2e.test.ts"],
+            })),
+          }));\n`,
+        );
+      }
     }
     if (options.startupCorpusCoverage) {
       appendFileSync(
@@ -1364,14 +1381,35 @@ describe("ci workflow guards", () => {
       changedPaths: ["ui/src/components/app-sidebar.ts"],
       includeReleaseOnlyTests: true,
     },
+    {
+      name: "older Tooling without the real-Gateway shard helper",
+      eventName: "pull_request" as const,
+      changedPaths: ["ui/src/components/app-sidebar.ts"],
+      includeReleaseOnlyTests: false,
+      uiRealGatewayShards: false,
+    },
+    {
+      name: "frozen full release dispatches",
+      eventName: "workflow_dispatch" as const,
+      changedPaths: ["ui/src/components/app-sidebar.ts"],
+      includeReleaseOnlyTests: true,
+      frozenTarget: true,
+    },
   ])("forwards the UI release-tier selection for $name to all three test jobs", (scenario) => {
+    const frozenTarget = "frozenTarget" in scenario && scenario.frozenTarget;
+    const uiRealGatewayShards =
+      !("uiRealGatewayShards" in scenario) || scenario.uiRealGatewayShards;
     const manifest = runCiManifestFixture({
       bundledPlanner: true,
       uiReleaseTier: true,
+      uiRealGatewayShards,
       historicalCompatibility: false,
       eventName: scenario.eventName,
       changedPaths: scenario.changedPaths,
-      scopeEnv: { OPENCLAW_CI_RUN_UI_TESTS: "true" },
+      scopeEnv: {
+        OPENCLAW_CI_RUN_UI_TESTS: "true",
+        OPENCLAW_CI_WORKFLOW_REVISION: (frozenTarget ? "b" : "a").repeat(40),
+      },
     });
     expect(manifest.status, manifest.output).toBe(0);
     const workflow = readCiWorkflow();
@@ -1382,6 +1420,10 @@ describe("ci workflow guards", () => {
       preflightOutputs: manifest.outputs,
       steps: { manifest: { outputs: manifest.outputs } },
     };
+    const fixtureTier = JSON.stringify({
+      includeReleaseOnlyTests: scenario.includeReleaseOnlyTests,
+      changedPaths: scenario.changedPaths,
+    });
     for (const [name, config, output, job, stepName] of [
       ["ui", "ui/vitest.config.ts", "ui_test_groups_gzip_base64", "checks-ui", "Test Control UI"],
       [
@@ -1391,25 +1433,13 @@ describe("ci workflow guards", () => {
         "checks-ui-e2e",
         "Test Control UI end-to-end",
       ],
-      [
-        "e2e",
-        "test/vitest/vitest.ui-e2e.config.ts",
-        "ui_e2e_test_groups_gzip_base64",
-        "checks-ui-e2e-real-gateway",
-        "Test Control UI suites with a real Gateway",
-      ],
     ] as const) {
       const packed = expectDefined(manifest.outputs[output], `${name} packed test selection`);
       expect(decodeNodeTestGroups(packed)).toEqual([
         {
           configs: [config],
           shard_name: name,
-          env: {
-            fixtureTier: JSON.stringify({
-              includeReleaseOnlyTests: scenario.includeReleaseOnlyTests,
-              changedPaths: scenario.changedPaths,
-            }),
-          },
+          env: { fixtureTier },
         },
       ]);
       expect(evaluateWorkflowExpression(workflow.jobs.preflight.outputs[output], context)).toBe(
@@ -1421,6 +1451,59 @@ describe("ci workflow guards", () => {
       );
       expect(
         evaluateWorkflowExpression(step.env.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64, context),
+      ).toBe(packed);
+    }
+    const packedMatrix = expectDefined(
+      manifest.outputs.ui_real_gateway_matrix,
+      "real-Gateway matrix",
+    );
+    expect(
+      evaluateWorkflowExpression(workflow.jobs.preflight.outputs.ui_real_gateway_matrix, context),
+    ).toBe(packedMatrix);
+    const matrix: {
+      include: Array<{
+        shard: number;
+        shard_count: number;
+        run_desktop: boolean;
+        test_groups_gzip_base64: string;
+      }>;
+    } = JSON.parse(packedMatrix);
+    const sharded = !frozenTarget && uiRealGatewayShards;
+    expect(matrix.include.map(({ test_groups_gzip_base64: _groups, ...row }) => row)).toEqual(
+      sharded
+        ? [
+            { shard: 1, shard_count: 2, run_desktop: true },
+            { shard: 2, shard_count: 2, run_desktop: false },
+          ]
+        : [{ shard: 1, shard_count: 1, run_desktop: true }],
+    );
+    const job = workflow.jobs["checks-ui-e2e-real-gateway"];
+    const step = expectDefined(
+      job.steps.find(
+        (candidate: WorkflowStep) =>
+          candidate.name === "Test Control UI suites with a real Gateway",
+      ),
+      "real-Gateway test command",
+    );
+    for (const row of matrix.include) {
+      const packed = row.test_groups_gzip_base64;
+      expect(decodeNodeTestGroups(packed)).toEqual(
+        sharded
+          ? [
+              {
+                configs: ["test/vitest/vitest.ui-e2e-prebuilt.config.ts"],
+                shard_name: `real-gateway-${row.shard}`,
+                includePatterns: [`ui/src/e2e/fixture-${row.shard}.real-gateway.e2e.test.ts`],
+                env: { fixtureTier },
+              },
+            ]
+          : decodeNodeTestGroups(manifest.outputs.ui_e2e_test_groups_gzip_base64),
+      );
+      expect(
+        evaluateWorkflowExpression(step.env.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64, {
+          ...context,
+          matrix: row,
+        }),
       ).toBe(packed);
     }
   });
@@ -6998,6 +7081,9 @@ describe("ci workflow guards", () => {
         expect(manifest.outputs.compatibility_target).toBe("false");
         expect(manifest.outputs.ui_test_groups_gzip_base64).toBe("");
         expect(manifest.outputs.ui_e2e_test_groups_gzip_base64).toBe("");
+        expect(JSON.parse(manifest.outputs.ui_real_gateway_matrix)).toEqual({
+          include: [{ shard: 1, shard_count: 1, run_desktop: true, test_groups_gzip_base64: "" }],
+        });
         expect(
           JSON.parse(
             expectDefined(manifest.outputs.ui_e2e_matrix, `${runnerBackend} UI E2E matrix`),
@@ -7185,6 +7271,11 @@ describe("ci workflow guards", () => {
       "needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_ui_e2e == 'true' && needs.preflight.outputs.compatibility_target != 'true'",
     );
     expect(uiE2eRealGateway.env).toBeUndefined();
+    expect(uiE2eRealGateway.strategy).toEqual({
+      "fail-fast": false,
+      "max-parallel": 2,
+      matrix: "${{ fromJson(needs.preflight.outputs.ui_real_gateway_matrix) }}",
+    });
 
     const uiE2eSetup = expectDefined(
       uiE2e.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
@@ -7228,14 +7319,22 @@ describe("ci workflow guards", () => {
               ? "blacksmith-16vcpu-ubuntu-2404"
               : "blacksmith-8vcpu-ubuntu-2404",
         })),
-      {
+      ...[
+        { shard: 1, shard_count: 2, run_desktop: true },
+        { shard: 2, shard_count: 2, run_desktop: false },
+        { shard: 1, shard_count: 1, run_desktop: true },
+      ].map((matrix) => ({
         job: uiE2eRealGateway,
-        name: "checks-ui-e2e-real-gateway",
+        name:
+          matrix.shard_count === 1
+            ? "checks-ui-e2e-real-gateway"
+            : `checks-ui-e2e-real-gateway (${matrix.shard}/${matrix.shard_count})`,
         setup: realGatewaySetup,
-        matrix: {},
+        matrix,
         blacksmithRunner: "blacksmith-32vcpu-ubuntu-2404",
-      },
+      })),
     ] as const;
+    expect(new Set(routedUiE2eJobs.map((job) => job.name)).size).toBe(routedUiE2eJobs.length);
     const routingScenarios = [
       {
         name: "same-repo pull request first attempt",
@@ -7347,6 +7446,12 @@ describe("ci workflow guards", () => {
       for (const { context, expected, name: scenarioName } of routingScenarios) {
         const assertionName = `${jobName}: ${scenarioName}`;
         const expectedRunner = expected.blacksmith ? blacksmithRunner : "ubuntu-24.04";
+        expect(
+          String(job.name).replace(/\$\{\{[\s\S]*?\}\}/gu, (expression) =>
+            String(evaluateWorkflowExpression(expression, { ...context, matrix })),
+          ),
+          assertionName,
+        ).toBe(jobName);
         expect(
           evaluateWorkflowExpression(job["runs-on"], { ...context, matrix }),
           assertionName,
@@ -7467,7 +7572,7 @@ describe("ci workflow guards", () => {
       if: "failure()",
       uses: UPLOAD_ARTIFACT_V7,
       with: {
-        name: "control-ui-real-gateway-timeout-${{ github.run_attempt }}",
+        name: "control-ui-real-gateway-timeout-${{ github.run_attempt }}-${{ matrix.shard }}",
         path: [
           ".artifacts/control-ui-e2e-timeouts/real-gateway-attempt-${{ github.run_attempt }}/failure-*/failure.public.json",
           "",
@@ -7490,7 +7595,7 @@ describe("ci workflow guards", () => {
       if: "always()",
       uses: UPLOAD_ARTIFACT_V7,
       with: {
-        name: "control-ui-quota-diagnostics-${{ github.run_attempt }}",
+        name: "control-ui-quota-diagnostics-${{ github.run_attempt }}-${{ matrix.shard }}",
         path: ".artifacts/control-ui-e2e/real-gateway/quota-refresh-*/quota.public.json",
         "if-no-files-found": "ignore",
         "retention-days": 7,
@@ -7524,6 +7629,7 @@ describe("ci workflow guards", () => {
     );
     expect(desktopProof).toEqual({
       name: "Prove desktop resize over node and SSH",
+      if: "matrix.run_desktop",
       env: {
         FROZEN_TARGET: "${{ needs.preflight.outputs.frozen_target }}",
         DESKTOP_PROOF_CHECKOUT_SHA: "${{ needs.preflight.outputs.checkout_revision }}",
@@ -7543,7 +7649,7 @@ describe("ci workflow guards", () => {
     );
     expect(desktopUpload).toEqual({
       name: "Upload sanitized desktop resize proof",
-      if: "always()",
+      if: "always() && matrix.run_desktop",
       uses: UPLOAD_ARTIFACT_V7,
       with: {
         name: "desktop-resize-proof-${{ github.run_id }}-${{ github.run_attempt }}",
@@ -7560,10 +7666,46 @@ describe("ci workflow guards", () => {
       OPENCLAW_UI_E2E_ARTIFACT_DIR: proofUpload.with.path,
       OPENCLAW_UI_E2E_DIAGNOSTIC_DIR:
         ".artifacts/control-ui-e2e-timeouts/real-gateway-attempt-${{ github.run_attempt }}",
-      OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64:
-        "${{ needs.preflight.outputs.ui_e2e_test_groups_gzip_base64 }}",
+      OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: "${{ matrix.test_groups_gzip_base64 }}",
     });
     expect(proofUploadIndex).toBeGreaterThan(realGatewayIndex);
+    expect(proofUpload.with.name).toBe(
+      "control-ui-real-gateway-proof-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}",
+    );
+    const realGatewayRows = routedUiE2eJobs.filter(
+      (row) => row.job === uiE2eRealGateway && row.matrix.shard_count === 2,
+    );
+    for (const step of [desktopProof, desktopUpload]) {
+      expect(
+        realGatewayRows.filter(({ matrix }) =>
+          evaluateWorkflowExpression(`\${{ ${step.if} }}`, {
+            eventName: "push",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            matrix,
+          }),
+        ),
+      ).toHaveLength(1);
+    }
+    for (const step of uiE2eRealGateway.steps.filter(
+      (candidate: WorkflowStep) =>
+        candidate.uses === UPLOAD_ARTIFACT_V7 && candidate !== desktopUpload,
+    )) {
+      const names = realGatewayRows.map(({ matrix }) =>
+        String(step.with.name).replace(/\$\{\{[\s\S]*?\}\}/gu, (expression) =>
+          String(
+            evaluateWorkflowExpression(expression, {
+              eventName: "push",
+              repository: "openclaw/openclaw",
+              runAttempt: 1,
+              runId: 2,
+              matrix,
+            }),
+          ),
+        ),
+      );
+      expect(new Set(names).size, step.name).toBe(2);
+    }
   });
 
   it("keeps automatic source-only Control UI locale drift advisory and manual CI strict", () => {
