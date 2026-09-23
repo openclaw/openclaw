@@ -7026,11 +7026,19 @@ describe("ci workflow guards", () => {
     const commandBin = path.join(commandRoot, "bin");
     const commandArgs = path.join(commandRoot, "args");
     const commandInclude = path.join(commandRoot, "include-path");
+    const commandNativeWorkers = path.join(commandRoot, "native-workers");
+    const workerEnvKey = expectDefined(
+      Object.entries(scenario.env ?? {}).find(
+        ([, value]) => value === "${{ matrix.vitest_max_workers || 2 }}",
+      )?.[0],
+      "Control UI E2E worker count",
+    );
     mkdirSync(commandBin);
     writeExecutable(path.join(commandBin, "node"), [
       "#!/bin/sh",
       'printf "%s\\n" "$@" > "$UI_E2E_COMMAND_ARGS"',
       'printf "%s" "${OPENCLAW_VITEST_INCLUDE_FILE:-}" > "$UI_E2E_COMMAND_INCLUDE"',
+      'printf "%s" "${VITEST_MAX_WORKERS:-}" > "$UI_E2E_COMMAND_NATIVE_WORKERS"',
     ]);
     const runCommand = (env: Record<string, string>) => {
       const result = runWorkflowShellScript(expectDefined(scenario.run, "UI E2E command"), {
@@ -7039,14 +7047,19 @@ describe("ci workflow guards", () => {
           ...process.env,
           OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: "",
           OPENCLAW_VITEST_INCLUDE_FILE: "",
+          OPENCLAW_VITEST_MAX_WORKERS: undefined,
+          VITEST_MAX_WORKERS: undefined,
           RUNNER_TEMP: commandRoot,
           ...env,
           PATH: `${commandBin}:${process.env.PATH ?? ""}`,
           UI_E2E_COMMAND_ARGS: commandArgs,
           UI_E2E_COMMAND_INCLUDE: commandInclude,
+          UI_E2E_COMMAND_NATIVE_WORKERS: commandNativeWorkers,
         },
       });
       expect(result.status, result.stdout + result.stderr).toBe(0);
+      // Vitest's native env override defeats the source-server project's serial limit.
+      expect(readFileSync(commandNativeWorkers, "utf8")).toBe("");
       return readFileSync(commandArgs, "utf8").trim().split("\n");
     };
     const shardEnv = { VITEST_SHARD_COUNT: "3", VITEST_SHARD_INDEX: "1" };
@@ -7063,7 +7076,7 @@ describe("ci workflow guards", () => {
       "1/3",
     ];
     expect(runCommand(shardEnv)).toEqual(expectedArgs);
-    expect(runCommand({ ...shardEnv, VITEST_MAX_WORKERS: "3" })).toEqual(
+    expect(runCommand({ ...shardEnv, [workerEnvKey]: "3" })).toEqual(
       expectedArgs.with(expectedArgs.indexOf("--maxWorkers") + 1, "3"),
     );
     expect(readFileSync(commandInclude, "utf8")).toBe("");
@@ -7390,7 +7403,7 @@ describe("ci workflow guards", () => {
         ".artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}",
       VITEST_SHARD_INDEX: "${{ matrix.shard }}",
       VITEST_SHARD_COUNT: "${{ matrix.vitest_shard_count }}",
-      VITEST_MAX_WORKERS: "${{ matrix.vitest_max_workers || 2 }}",
+      OPENCLAW_VITEST_MAX_WORKERS: "${{ matrix.vitest_max_workers || 2 }}",
       OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64:
         "${{ needs.preflight.outputs.ui_e2e_test_groups_gzip_base64 }}",
     });

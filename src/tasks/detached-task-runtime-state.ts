@@ -5,7 +5,10 @@ import {
   isPluginRegistryLifecycleEpochActive,
 } from "../plugins/registry-lifecycle.js";
 import { getPluginRegistryForContext, requireActivePluginRegistry } from "../plugins/runtime.js";
-import type { DetachedTaskLifecycleRuntime } from "./detached-task-runtime-contract.js";
+import {
+  DetachedTaskRuntimeOwnerRetiredError,
+  type DetachedTaskLifecycleRuntime,
+} from "./detached-task-runtime-contract.js";
 
 export function getRegisteredDetachedTaskLifecycleRuntime():
   | DetachedTaskLifecycleRuntime
@@ -50,7 +53,7 @@ export function captureDetachedTaskRuntimeOwner(): {
       ) {
         return;
       }
-      throw new Error("Detached task runtime owner changed before task creation settled.");
+      throw new DetachedTaskRuntimeOwnerRetiredError();
     },
   };
 }

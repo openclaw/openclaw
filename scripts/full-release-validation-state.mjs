@@ -615,6 +615,11 @@ function manifestContextFromEnvironment(source) {
       "PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON",
       "plugin_prerelease_node_exclude_patterns_json",
     ],
+    [
+      "extensionTestExcludePatternsJson",
+      "EXTENSION_TEST_EXCLUDE_PATTERNS_JSON",
+      "extension_test_exclude_patterns_json",
+    ],
   ]) {
     inputs[key] = env[variable] ?? coverage[sourceKey] ?? "";
   }

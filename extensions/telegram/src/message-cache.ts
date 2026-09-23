@@ -341,13 +341,10 @@ async function persistCachedNode(params: {
 export function createTelegramMessageCache(params?: {
   maxMessages?: number;
   scope?: string;
-  persistentStore?: TelegramMessageCachePersistentStore;
-  bucketKey?: string;
 }): TelegramMessageCache {
-  // Custom bounded adapters and no-runtime construction retain their explicit memory-cache contract.
-  const runtime = params?.persistentStore ? undefined : getOptionalTelegramRuntime();
+  const runtime = getOptionalTelegramRuntime();
   const hasRetainedStore = runtime != null;
-  const persistentStore = params?.persistentStore ?? resolveDefaultPersistentStore();
+  const persistentStore = resolveDefaultPersistentStore();
   const maxMessages =
     params?.maxMessages ??
     (persistentStore ? TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES : DEFAULT_MAX_MESSAGES);
@@ -356,8 +353,7 @@ export function createTelegramMessageCache(params?: {
       ? resolveTelegramMessageCachePersistentScopeKey(params?.scope ?? "default")
       : undefined;
   const bucketKey =
-    params?.bucketKey ??
-    (persistentStore || hasRetainedStore ? `${PERSISTENT_BUCKET_KEY}:${scopeKey}` : undefined);
+    persistentStore || hasRetainedStore ? `${PERSISTENT_BUCKET_KEY}:${scopeKey}` : undefined;
   const bucket = resolveMessageCacheBucket({
     bucketKey,
     ...(persistentStore ? { persistentStore } : {}),

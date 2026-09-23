@@ -199,39 +199,52 @@ async function execGhRead(args, options = {}) {
   const attempts = options.attempts ?? 4;
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const remaining =
+      options.operationDeadline === undefined
+        ? Number.MAX_SAFE_INTEGER
+        : remainingOperationTime(options.operationDeadline);
     try {
-      return await execGh(args, options);
+      return await execGh(args, {
+        ...options,
+        timeoutMs: Math.min(options.timeoutMs ?? 60_000, remaining),
+      });
     } catch (error) {
       lastError = error;
       if (attempt === attempts || classifyReleaseGhTransportError(error) !== "transient") {
         throw error;
       }
-      await sleep(Math.min(attempt * 1000, 5000));
+      await sleep(
+        Math.min(
+          attempt * 1000,
+          5000,
+          options.operationDeadline === undefined
+            ? Number.MAX_SAFE_INTEGER
+            : remainingOperationTime(options.operationDeadline),
+        ),
+      );
     }
   }
   throw lastError;
 }
 
-function readFreshGhApi(repository, path, args = []) {
+function readFreshGhApi(repository, path, args = [], options = {}) {
   // Rerun decisions require current attempts and jobs, not a relay's earlier snapshot.
-  return execGhRead([
-    "api",
-    `repos/${repository}/${path}`,
-    "-H",
-    "Cache-Control: max-age=0",
-    ...args,
-  ]);
+  return execGhRead(
+    ["api", `repos/${repository}/${path}`, "-H", "Cache-Control: max-age=0", ...args],
+    options,
+  );
 }
 
-async function ghJson(repository, path) {
-  return JSON.parse(await readFreshGhApi(repository, path));
+async function ghJson(repository, path, options) {
+  return JSON.parse(await readFreshGhApi(repository, path, [], options));
 }
 
-async function ghAttemptJobs(repository, runId, runAttempt) {
+async function ghAttemptJobs(repository, runId, runAttempt, options) {
   const output = await readFreshGhApi(
     repository,
     `actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`,
     ["--paginate", "--jq", ".jobs[] | @json"],
+    options,
   );
   return output
     ? output
@@ -339,9 +352,9 @@ async function inspectArtifactProducers(producers, client) {
   );
 }
 
-async function inspectRecovery(plan, producers, client) {
+async function inspectRecovery(plan, producers, client, options) {
   const [diagnostics, artifacts] = await Promise.all([
-    inspectContinuation(plan, client),
+    inspectContinuation(plan, client, options),
     inspectArtifactProducers(producers, client),
   ]);
   const children = [...diagnostics.children, ...artifacts];
@@ -565,7 +578,100 @@ export async function preflightContinuation(
   return { ...sourceRun, artifactProducers };
 }
 
-export async function inspectContinuation(plan, client) {
+async function readChildAttemptEvidence(child, client, options) {
+  const repository = client.repository ?? DEFAULT_REPOSITORY;
+  let source;
+  let materializationDeadline;
+  let materializationError;
+  const assertReadBudget = () => {
+    if (materializationDeadline !== undefined && Date.now() >= materializationDeadline) {
+      throw materializationError;
+    }
+    if (options.operationDeadline !== undefined) {
+      remainingOperationTime(options.operationDeadline);
+    }
+  };
+  const readOptions = () => ({
+    operationDeadline: materializationDeadline ?? options.operationDeadline,
+  });
+  const assertMaterializationRun = (run) => {
+    if (
+      source &&
+      (JSON.stringify(runIdentity(run)) !== JSON.stringify(runIdentity(source)) ||
+        Number(run.run_attempt) !== Number(source.run_attempt) ||
+        run.triggering_actor?.login !== source.triggering_actor?.login)
+    ) {
+      throw new Error(`child changed during attempt materialization: ${child.key}`);
+    }
+  };
+  while (true) {
+    assertReadBudget();
+    const run = await client.getRun(child.runId, readOptions());
+    assertChildRunIdentity(child, run, repository);
+    const effectiveRunAttempt = positiveInteger(run.run_attempt, `${child.key} run attempt`);
+    assertMaterializationRun(run);
+    const attempts = await Promise.all(
+      Array.from({ length: effectiveRunAttempt - child.runAttempt + 1 }, async (_, index) => {
+        const runAttempt = child.runAttempt + index;
+        assertReadBudget();
+        return {
+          jobs: await client.getAttemptJobs(child.runId, runAttempt, readOptions()),
+          runAttempt,
+        };
+      }),
+    );
+    if (run.status !== "completed" && attempts.at(-1)?.jobs.length === 0) {
+      if (attempts.slice(0, -1).some((attempt) => attempt.jobs.length === 0)) {
+        throw new Error(`child attempt evidence is gapped: ${child.key}`);
+      }
+      return { run };
+    }
+    try {
+      const evidence = composeReleaseChildAttemptEvidence({
+        attempts,
+        expected: { ...child, plannedRunAttempt: child.runAttempt, repository },
+        run,
+      });
+      if (source) {
+        assertReadBudget();
+        const current = await client.getRun(child.runId, readOptions());
+        assertChildRunIdentity(child, current, repository);
+        assertMaterializationRun(current);
+        if (
+          run.status === "completed" &&
+          (current.status !== run.status || current.conclusion !== run.conclusion)
+        ) {
+          throw new Error(`child changed during attempt materialization: ${child.key}`);
+        }
+      }
+      return { run, evidence };
+    } catch (error) {
+      // GitHub briefly returns overlapping job identities while a new attempt
+      // materializes. Never normalize those rows into accepted evidence.
+      if (
+        error?.code !== "FRV_DUPLICATE_JOB_IDENTITY" ||
+        error.runAttempt !== effectiveRunAttempt ||
+        effectiveRunAttempt <= child.runAttempt
+      ) {
+        throw error;
+      }
+      source ??= run;
+      materializationError = error;
+      materializationDeadline ??= Math.min(
+        options.operationDeadline ?? Number.MAX_SAFE_INTEGER,
+        Date.now() +
+          configuredTimeout("OPENCLAW_FRV_RECONCILE_TIMEOUT_MS", DEFAULT_RECONCILE_TIMEOUT_MS),
+      );
+      const remaining = materializationDeadline - Date.now();
+      if (remaining <= 0) {
+        throw error;
+      }
+      await sleep(Math.min(configuredTimeout("OPENCLAW_FRV_POLL_MS", DEFAULT_POLL_MS), remaining));
+    }
+  }
+}
+
+export async function inspectContinuation(plan, client, options = {}) {
   const children = await Promise.all(
     selectedChildren(plan).map(async (child) => {
       if (!hasExactChildRunIdentity(child)) {
@@ -581,22 +687,9 @@ export async function inspectContinuation(plan, client) {
           url: String(child.url ?? ""),
         };
       }
-      const run = await client.getRun(child.runId);
-      assertChildRunIdentity(child, run, client.repository ?? DEFAULT_REPOSITORY);
-      const effectiveRunAttempt = positiveInteger(run.run_attempt, `${child.key} run attempt`);
-      const attempts = await Promise.all(
-        Array.from({ length: effectiveRunAttempt - child.runAttempt + 1 }, async (_, index) => {
-          const runAttempt = child.runAttempt + index;
-          return {
-            jobs: await client.getAttemptJobs(child.runId, runAttempt),
-            runAttempt,
-          };
-        }),
-      );
-      if (run.status !== "completed" && attempts.at(-1)?.jobs.length === 0) {
-        if (attempts.slice(0, -1).some((attempt) => attempt.jobs.length === 0)) {
-          throw new Error(`child attempt evidence is gapped: ${child.key}`);
-        }
+      const { run, evidence } = await readChildAttemptEvidence(child, client, options);
+      const effectiveRunAttempt = Number(run.run_attempt);
+      if (!evidence) {
         return {
           compositeJobsSha256: "",
           conclusion: String(run.conclusion ?? ""),
@@ -609,15 +702,6 @@ export async function inspectContinuation(plan, client) {
           url: String(run.html_url ?? child.url ?? ""),
         };
       }
-      const evidence = composeReleaseChildAttemptEvidence({
-        attempts,
-        expected: {
-          ...child,
-          plannedRunAttempt: child.runAttempt,
-          repository: client.repository ?? DEFAULT_REPOSITORY,
-        },
-        run,
-      });
       const active = run.status !== "completed";
       const passed =
         !active &&
@@ -658,7 +742,7 @@ export async function inspectContinuation(plan, client) {
 
 export function createClient(repository, dependencies = {}) {
   let releaseEvidenceClient;
-  const apiJson = dependencies.apiJson ?? ((path) => ghJson(repository, path));
+  const apiJson = dependencies.apiJson ?? ((path, options) => ghJson(repository, path, options));
   const apiText =
     dependencies.apiText ??
     ((path, jq, extraArgs = []) =>
@@ -669,7 +753,7 @@ export function createClient(repository, dependencies = {}) {
   const execute = dependencies.execCommand ?? execCommand;
   const attemptJobs =
     dependencies.getAttemptJobs ??
-    ((runId, runAttempt) => ghAttemptJobs(repository, runId, runAttempt));
+    ((runId, runAttempt, options) => ghAttemptJobs(repository, runId, runAttempt, options));
   const verify = async (runId, plan, operationDeadline, expectedRunAttempts) => {
     const sourceSha = plan.trustedWorkflow?.sha;
     return execute(
@@ -709,11 +793,11 @@ export function createClient(repository, dependencies = {}) {
       releaseEvidenceClient ??= createReleaseEvidenceClient(repository);
       return releaseEvidenceClient;
     },
-    getAttemptJobs(runId, runAttempt) {
-      return attemptJobs(runId, runAttempt);
+    getAttemptJobs(runId, runAttempt, options) {
+      return attemptJobs(runId, runAttempt, options);
     },
-    getRun(runId) {
-      return apiJson(`actions/runs/${runId}`);
+    getRun(runId, options) {
+      return apiJson(`actions/runs/${runId}`, options);
     },
     getRunAttempt(runId, runAttempt) {
       return apiJson(`actions/runs/${runId}/attempts/${runAttempt}`);
@@ -941,14 +1025,14 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
   if ((await client.getRun(rootRunId)).status !== "completed") {
     await waitForTerminal([rootRunId], client, operationDeadline);
   }
-  let status = await inspectRecovery(plan, artifactProducers, client);
+  let status = await inspectRecovery(plan, artifactProducers, client, { operationDeadline });
   if (status.active.length > 0) {
     await waitForTerminal(
       status.active.map((child) => child.runId),
       client,
       operationDeadline,
     );
-    status = await inspectRecovery(plan, artifactProducers, client);
+    status = await inspectRecovery(plan, artifactProducers, client, { operationDeadline });
   }
   if (status.failed.length > 0) {
     if (options.dryRun) {
@@ -1007,7 +1091,7 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
       operationDeadline,
       minimumAttempts,
     );
-    status = await inspectRecovery(plan, artifactProducers, client);
+    status = await inspectRecovery(plan, artifactProducers, client, { operationDeadline });
     for (const child of status.children) {
       const expectedAttempt = ownedAttempts.get(child.runId);
       if (expectedAttempt !== undefined) {

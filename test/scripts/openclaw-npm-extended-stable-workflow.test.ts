@@ -225,7 +225,10 @@ describe("minimal npm extended-stable workflow", () => {
         "--policy .release-harness/.github/actions/git-owner/release-ancestry.py",
       );
     }
-    expect(sourceCheck.run).toBe("pnpm check --include-test-types --include-architecture");
+    expect(sourceCheck.run).toContain('mv .release-harness "$harness_root"');
+    expect(sourceCheck.run).toContain("trap restore_harness EXIT");
+    expect(sourceCheck.run).toContain("pnpm check --include-test-types --include-architecture");
+    expect(sourceCheck.run).toContain('mv "$harness_root" .release-harness');
     expect(pluginCompatibility.run).toContain('.scripts["plugins:boundary-report:ci"]');
     expect(pluginCompatibility.run).toContain("38ba27834dd3f98c19d5833e0598dfef3abb7587");
     expect(pluginCompatibility.run).toContain("Target is not proven to predate");

@@ -6,8 +6,23 @@ export {
   normalizeAcceptedSessionSpawnResult,
   type AcceptedSessionSpawn,
 } from "../agents/accepted-session-spawn.js";
+export {
+  isAsyncStartedToolResult,
+  readAsyncStartedTaskIds,
+} from "../agents/embedded-agent-tool-results.js";
 export { getCoreTtsToolResultMediaUrls } from "../agents/tools/tts-tool-result-provenance.js";
 export { consumeTrustedToolNoStartError } from "../agents/tool-result-error.js";
+export {
+  recordAgentHarnessMessagingDelivery,
+  recordAgentHarnessToolResultTelemetry,
+  collectAgentHarnessMessagingMediaUrls,
+  type AgentHarnessToolResultTelemetry,
+  recordAgentHarnessToolResultMedia,
+  type AgentHarnessMessagingDeliveryFacts,
+  type AgentHarnessToolMediaFacts,
+} from "../agents/harness/tool-result-facts.js";
+export { runAgentHarnessToolInvocation } from "../agents/harness/tool-invocation.js";
+export { runWithToolExecutionValidation } from "../agents/agent-tools.execution-validation.js";
 export {
   createAgentHarnessToolExecutionRegistry,
   createAgentHarnessToolExecutionBoundaryRegistry,

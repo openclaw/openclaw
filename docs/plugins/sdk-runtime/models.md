@@ -10,6 +10,41 @@ sidebarTitle: "Model helpers"
 
 Call a model, resolve model-selection policy, and resolve provider auth without importing host internals. Part of the [Plugin runtime helpers](/plugins/sdk-runtime) reference.
 
+## Protected model egress for standalone commands
+
+`withConfiguredModelEgress` from `openclaw/plugin-sdk/secret-egress-runtime`
+runs an explicit standalone command for an official plugin with a destination-bound credential
+sentinel. It resolves the selected provider's configured API-key SecretRef
+through the normal secret resolver, including file-backed keys, and uses the
+provider's model route policy for its HTTPS endpoint on port 443. It supports
+OpenAI-compatible Responses and Completions routes. OAuth, auth-profile
+references, custom request headers, and custom request transport are unsupported.
+This is a private JavaScript-only host binding for bundled and separately
+published official plugins, not a third-party plugin API.
+
+```typescript
+const { withConfiguredModelEgress } = await import("openclaw/plugin-sdk/secret-egress-runtime");
+await withConfiguredModelEgress({ config, provider, model, signal }, async (egress) => {
+  // Keep hostEnv on the credential-owning host for the authenticated bridge.
+  // Send only sentinel, baseUrl, model, and public caBundle to the remote app.
+  await runRemoteAppThroughBridge(egress, signal);
+});
+```
+
+The callback receives `sentinel`, `baseUrl`, `model`, `allowedHosts`, `hostEnv`,
+and the public `caBundle` contents. Supply `onOutput(text, stream)` to receive
+live output with resolved credentials redacted, including values split between
+chunks; pass the callback's `onOutputChunk` to the command runner. The caller owns its bridge and remote
+process, must honor cancellation, and must join both before its callback
+settles. Cancellation revokes proxy access immediately; callback completion or
+failure revokes access, stops the isolated proxy, and removes its private CA
+directory. Credentials and proxy grants never enter the shared secret store.
+
+This is an explicit command-scoped proxy using the existing secret egress
+implementation. It does not require enabling or restarting the Gateway's
+persistent egress proxy. Import the SDK module only in the command execution
+path; importing it alone does not load model or secret runtime code.
+
 ## Prepared simple completions
 
 The `openclaw/plugin-sdk/simple-completion-runtime` helpers support preparing a

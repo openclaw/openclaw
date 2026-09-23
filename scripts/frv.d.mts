@@ -20,15 +20,23 @@ export interface FrvContinuationStatus {
   passed: FrvChildStatus[];
 }
 
+interface FrvReadOptions {
+  operationDeadline?: number;
+}
+
 export interface FrvClient {
   repository?: string;
   getReleaseEvidenceClient: () => ReturnType<
     typeof import("./release-ci-summary.mjs").createReleaseEvidenceClient
   >;
-  getAttemptJobs: (runId: string, runAttempt: number) => Promise<Record<string, unknown>[]>;
+  getAttemptJobs: (
+    runId: string,
+    runAttempt: number,
+    options?: FrvReadOptions,
+  ) => Promise<Record<string, unknown>[]>;
   getJobLog: (jobId: number) => Promise<string>;
   getParentJobs: (runId: string) => Promise<Record<string, unknown>[]>;
-  getRun: (runId: string) => Promise<Record<string, unknown>>;
+  getRun: (runId: string, options?: FrvReadOptions) => Promise<Record<string, unknown>>;
   getRunAttempt: (runId: string, runAttempt: number) => Promise<Record<string, unknown>>;
   rerunFailed?: (runId: string) => Promise<unknown>;
   rerunParent?: (runId: string) => Promise<unknown>;
@@ -52,6 +60,7 @@ export type FrvConcreteClient = FrvClient &
 export function inspectContinuation(
   plan: Record<string, unknown>,
   client: Pick<FrvClient, "getAttemptJobs" | "getRun" | "repository">,
+  options?: FrvReadOptions,
 ): Promise<FrvContinuationStatus>;
 export function createClient(
   repository: string,

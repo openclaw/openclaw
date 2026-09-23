@@ -402,6 +402,25 @@ describe("update progress", () => {
     expect(lines.join("\n")).toContain("service running; version verified");
   });
 
+  it("omits private capture receipts from final JSON without mutating retained history", async () => {
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    run.origin.updateRecoveryCapture = {
+      manifestSha256: "a".repeat(64),
+      status: "pending",
+      error: "private recovery detail",
+      configWrites: [],
+    };
+    const retained = structuredClone(run);
+    await printResult(result, { json: true, run: context });
+    expect(writeJson).toHaveBeenCalledExactlyOnceWith({
+      ...result,
+      run: { ...run, origin: {} },
+      reportPath,
+    });
+    expect(JSON.stringify(writeJson.mock.calls)).not.toContain("private recovery detail");
+    expect(run).toEqual(retained);
+  });
+
   it("keeps JSON stdout silent until one result containing the durable row", async () => {
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});

@@ -30,13 +30,20 @@ export function getComposerTextarea(container: Element): HTMLTextAreaElement {
   ) as HTMLTextAreaElement;
 }
 
-export function createTestTranscript(): ChatTranscriptController {
-  return new ChatTranscriptController({
-    addController: () => undefined,
-    removeController: () => undefined,
-    requestUpdate: () => undefined,
-    updateComplete: Promise.resolve(true),
-  } satisfies ReactiveControllerHost);
+let nextTestTranscriptId = 0;
+
+export function createTestTranscript(
+  paneId = `test-transcript-${++nextTestTranscriptId}`,
+): ChatTranscriptController {
+  return new ChatTranscriptController(
+    {
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: () => undefined,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost,
+    () => paneId,
+  );
 }
 
 export function createPasteEvent(
