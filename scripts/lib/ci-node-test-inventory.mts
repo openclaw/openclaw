@@ -30,7 +30,9 @@ export function listScopedOwnerTestFiles(owner: {
   // stripes on files the shard never runs and hands Vitest inert patterns.
   const unitFastFiles = new Set(getUnitFastTestFiles());
   return filterFilesByPatterns(
-    listTrackedTestFiles(owner.root).filter((file) => isStripeEligibleTestFile(file, unitFastFiles)),
+    listTrackedTestFiles(owner.root).filter((file) =>
+      isStripeEligibleTestFile(file, unitFastFiles),
+    ),
     owner.include,
     owner.exclude,
     matchesGlob,
