@@ -3,16 +3,24 @@ package ai.openclaw.app.gateway
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.CookieJar
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
+import java.util.concurrent.atomic.AtomicBoolean
 
 internal data class GatewayAccessAttention(
   val stableId: String,
@@ -31,6 +39,7 @@ internal class GatewayIngressController(
   persistence: CloudflareAccessSessionStore.Persistence,
   private val customHeaders: (String) -> Map<String, String>,
   private val retireTransports: suspend (CloudflareAccessOrigin) -> Unit,
+  private val now: () -> Double = { System.currentTimeMillis() / 1000.0 },
   private val clientForRoute: (GatewayEndpoint, GatewayTlsParams) -> CloudflareAccessClient = ::routeClient,
   // This observer must queue delivery; inline dispatch would invert Registry and ingress monitors.
   registryObserverDispatcher: CoroutineDispatcher = Dispatchers.Default,
@@ -48,11 +57,31 @@ internal class GatewayIngressController(
       get() = buildGatewayWebSocketUrl(endpoint.host, endpoint.port, true, endpoint.contextPath)
   }
 
+  private class DiscoveryOperation(
+    val registration: Registration,
+    val snapshot: CloudflareAccessSessionStore.Snapshot,
+    val task: Deferred<CloudflareAccessApplication?>,
+  )
+
   private val lock = Any()
   private val registrations = mutableMapOf<String, Registration>()
+  private val leases = mutableMapOf<String, Lease>()
+  private val expiryJobs = mutableMapOf<CloudflareAccessOrigin, Job>()
+  private val discoveries = mutableSetOf<DiscoveryOperation>()
   private val mutablePresentation = MutableStateFlow(GatewayAccessPresentation(browserRequired = requiredBrowserProfiles()))
   val presentation = mutablePresentation.asStateFlow()
-  private val store = CloudflareAccessSessionStore(scope, persistence, retireTransports = retireTransports)
+  private val store =
+    CloudflareAccessSessionStore(scope, persistence, now = now) { origin ->
+      val expiry =
+        synchronized(lock) {
+          leases.values.filter { it.origin == origin }.forEach { it.active.set(false) }
+          expiryJobs.remove(origin)
+        }
+      expiry?.cancel()
+      retireDiscoveries { it.snapshot.session.application.origin == origin }
+      // No connect task awaits its own drain. Rejections schedule this store-owned boundary.
+      retireTransports(origin)
+    }
 
   init {
     scope.launch(registryObserverDispatcher) {
@@ -95,11 +124,13 @@ internal class GatewayIngressController(
           previous?.takeIf { it.endpoint == endpoint && it.tls == tls }
             ?: Registration(endpoint, tls, clientForRoute(endpoint, tls))
         if (current !== previous) {
+          leases.remove(endpoint.stableId)?.active?.set(false)
           registrations[endpoint.stableId] = current
           publishLocked()
         }
         current
       }
+    retireDiscoveries { it.registration.endpoint.stableId == endpoint.stableId && it.registration !== registrations[endpoint.stableId] }
     checkRegistration(registration, isCurrent)
     return registration
   }
@@ -144,30 +175,35 @@ internal class GatewayIngressController(
     ) {
       throw CancellationException("Gateway association superseded")
     }
-
-    // Existing service headers or WARP remain independent of browser authentication.
-    // Only a verified Access challenge associates this profile with a managed origin.
-    val preCommitOrdinary =
+    // Existing service headers or WARP must remain independent of a cached browser
+    // grant. Only a verified Access challenge admits managed credentials for this profile.
+    val (preCommitOrdinary, preCommitRevision) =
       synchronized(lock) {
         checkRegistrationLocked(registration, isCurrent)
-        registration.ordinaryAdmission
+        registration.ordinaryAdmission to leases[endpoint.stableId]?.takeIf { it.registration === registration }?.snapshot?.revision
       }
     val ordinaryChallenge = registration.client.discover(registration.url, customHeaders = customHeaders(endpoint.stableId))
     checkRegistration(registration, isCurrent)
     if (ordinaryChallenge == null) {
-      val ordinary =
+      val (ordinary, pending) =
         synchronized(lock) {
           checkRegistrationLocked(registration, isCurrent)
-          if (registration.ordinaryAdmission != preCommitOrdinary) {
+          val revision = leases[endpoint.stableId]?.takeIf { it.registration === registration }?.snapshot?.revision
+          if (registration.ordinaryAdmission != preCommitOrdinary || revision != preCommitRevision) {
             throw CancellationException("Gateway admission superseded")
           }
+          // A new identity retires pending admissions tied to the old route classification.
           val ordinary =
             registration.takeIf { it.ordinaryAdmission == true }
               ?: Registration(endpoint, registration.tls, registration.client).also { registrations[endpoint.stableId] = it }
           ordinary.ordinaryAdmission = true
+          leases.remove(endpoint.stableId)?.active?.set(false)
+          val pending = discoveries.filter { it.registration === registration }
+          if (!isRegisteredLocked(ordinary) || ordinary.ordinaryAdmission != true) throw CancellationException("Gateway admission superseded")
           publishLocked(attention = mutablePresentation.value.attention.takeUnless { it?.stableId == endpoint.stableId })
-          ordinary
+          ordinary to pending
         }
+      retireDiscoveries(pending)
       kotlin.coroutines.coroutineContext.ensureActive()
       synchronized(lock) {
         checkRegistrationLocked(ordinary, isCurrent)
@@ -180,24 +216,106 @@ internal class GatewayIngressController(
       registration.ordinaryAdmission = false
       publishLocked()
     }
-
+    store.waitForRetirement(origin)
+    val previous = store.snapshot(origin)
+    store.waitForRetirement(origin)
+    checkRegistration(registration, managedIsCurrent)
+    val application = if (previous == null) ordinaryChallenge else discover(registration, previous, managedIsCurrent)
+    checkRegistration(registration, managedIsCurrent)
+    if (previous != null && store.snapshot(origin)?.revision != previous.revision) {
+      showRequired(registration, managedIsCurrent)
+      throw GatewayExternalAuthorizationException()
+    }
+    if (application == null) {
+      associate(registration, managedIsCurrent)
+      return admit(registration, checkNotNull(previous), admissionCheckpoint, managedIsCurrent)
+    }
+    if (previous != null) {
+      store.requireReauthentication(origin, previous.revision)?.task?.await()
+      checkRegistration(registration, managedIsCurrent)
+    }
+    // Signed application discovery (or cached verified grant above) owns this fact, before
+    // signIn can persist. Canceling browser return must not leave a grant without a Forget owner.
     associate(registration, managedIsCurrent)
     showRequired(registration, managedIsCurrent)
     throw GatewayExternalAuthorizationException()
   }
 
+  private suspend fun discover(
+    registration: Registration,
+    snapshot: CloudflareAccessSessionStore.Snapshot,
+    isCurrent: () -> Boolean,
+  ): CloudflareAccessApplication? {
+    val caller = kotlin.coroutines.coroutineContext
+    val operation =
+      synchronized(lock) {
+        caller.ensureActive()
+        checkRegistrationLocked(registration, isCurrent)
+        store.withCurrentSnapshot(registration.origin, snapshot.revision, snapshot.revision) {
+          val task =
+            scope.async(start = CoroutineStart.LAZY) {
+              val requestContext = kotlin.coroutines.coroutineContext
+              registration.client.discover(
+                registration.url,
+                snapshot.session,
+                customHeaders(registration.endpoint.stableId),
+              ) {
+                val current =
+                  synchronized(lock) {
+                    callerIsCurrent {
+                      caller.ensureActive()
+                      requestContext.ensureActive()
+                      isCurrent()
+                    } && isRegisteredLocked(registration) && registration.ordinaryAdmission == false &&
+                      runCatching { store.withCurrentSnapshot(registration.origin, snapshot.revision, snapshot.revision) { } }.isSuccess
+                  }
+                if (!current) throw GatewayExternalAuthorizationException()
+              }
+            }
+          DiscoveryOperation(registration, snapshot, task).also(discoveries::add)
+        }
+      }
+    try {
+      // Enroll while revocation is excluded; starting or canceling coroutine work
+      // under these monitors could synchronously reenter the owner.
+      operation.task.start()
+      return operation.task.await()
+    } finally {
+      withContext(NonCancellable) {
+        operation.task.cancel()
+        operation.task.join()
+        synchronized(lock) { discoveries.remove(operation) }
+      }
+    }
+  }
+
+  private suspend fun retireDiscoveries(matches: (DiscoveryOperation) -> Boolean) {
+    retireDiscoveries(synchronized(lock) { discoveries.filter(matches) })
+  }
+
+  private suspend fun retireDiscoveries(pending: List<DiscoveryOperation>) {
+    // Keep custody until the operation settles, including overlapping retirement
+    // and caller cancellation. Ordinary unauthenticated probes are independent.
+    pending.forEach { it.task.cancel() }
+    withContext(NonCancellable) { pending.forEach { it.task.join() } }
+  }
+
   fun authorization(endpoint: GatewayEndpoint): GatewayIngressAuthorization? =
     synchronized(lock) {
       if (registrations[endpoint.stableId]?.takeIf { it.endpoint == endpoint }?.ordinaryAdmission == true) return@synchronized null
-      registry.entries.value
-        .firstOrNull { it.stableId == endpoint.stableId }
-        ?.accessOrigin
-        ?.let { unavailable }
+      leases[endpoint.stableId]?.takeIf { it.registration.endpoint == endpoint }
+        ?: registry.entries.value
+          .firstOrNull { it.stableId == endpoint.stableId }
+          ?.accessOrigin
+          ?.let { unavailable }
     }
+
+  fun managedOrigin(endpoint: GatewayEndpoint): CloudflareAccessOrigin? = (authorization(endpoint) as? Lease)?.origin
 
   fun blocksAutomaticReconnect(stableId: String): Boolean =
     synchronized(lock) {
-      registrations[stableId]?.ordinaryAdmission != true && mutablePresentation.value.attention?.stableId == stableId
+      registrations[stableId]?.ordinaryAdmission != true &&
+        (mutablePresentation.value.attention?.stableId == stableId || leases[stableId]?.active?.get() == false)
     }
 
   private fun requiredBrowserProfiles(): Set<String> =
@@ -255,6 +373,11 @@ internal class GatewayIngressController(
     }
   }
 
+  fun revalidate() {
+    val expired = synchronized(lock) { leases.values.filter { it.active.get() && it.snapshot.session.expiresAt <= now() } }
+    expired.forEach(::invalidate)
+  }
+
   private suspend fun associate(
     registration: Registration,
     isCurrent: () -> Boolean,
@@ -270,6 +393,102 @@ internal class GatewayIngressController(
     }
   }
 
+  private fun observeRetirement(
+    retirement: CloudflareAccessSessionStore.Retirement,
+    completed: (Boolean) -> Unit,
+  ) {
+    scope.launch {
+      // Settings does not await this task. A success message must follow durable deletion,
+      // and neither completion may overwrite a newer browser or profile owner.
+      val succeeded =
+        try {
+          retirement.task.await()
+          true
+        } catch (error: CancellationException) {
+          throw error
+        } catch (_: Exception) {
+          false
+        }
+      kotlin.coroutines.coroutineContext.ensureActive()
+      synchronized(lock) { completed(succeeded) }
+    }
+  }
+
+  private suspend fun admit(
+    registration: Registration,
+    snapshot: CloudflareAccessSessionStore.Snapshot,
+    admissionCheckpoint: Long,
+    isCurrent: () -> Boolean,
+  ): Lease {
+    checkRegistration(registration, isCurrent)
+    val (lease, oldExpiry, expiry) =
+      synchronized(lock) {
+        val lease =
+          store.withCurrentSnapshot(registration.origin, snapshot.revision, admissionCheckpoint) {
+            checkRegistrationLocked(registration, isCurrent)
+            val lease = Lease(registration, snapshot)
+            registration.ordinaryAdmission = false
+            leases.put(registration.endpoint.stableId, lease)?.active?.set(false)
+            lease
+          }
+        val oldExpiry = expiryJobs[registration.origin]
+        val expiry =
+          scope.launch(start = CoroutineStart.LAZY) {
+            delay(((snapshot.session.expiresAt - now()) * 1000).toLong().coerceAtLeast(1))
+            invalidate(registration.origin, snapshot.revision)
+          }
+        expiryJobs[registration.origin] = expiry
+        publishLocked(attention = attentionAfterAdmissionLocked(registration))
+        Triple(lease, oldExpiry, expiry)
+      }
+    oldExpiry?.cancel()
+    expiry.start()
+    return lease
+  }
+
+  private fun invalidate(lease: Lease) {
+    val current =
+      synchronized(lock) {
+        registrations[lease.registration.endpoint.stableId] === lease.registration && lease.active.get()
+      }
+    if (current) invalidate(lease.origin, lease.snapshot.revision)
+  }
+
+  private fun invalidate(
+    origin: CloudflareAccessOrigin,
+    revision: Long,
+  ) {
+    val registration =
+      synchronized(lock) {
+        val retiring = leases.values.filter { it.origin == origin && it.snapshot.revision == revision && it.active.get() }
+        retiring.forEach { it.active.set(false) }
+        retiring.firstOrNull { registrations[it.registration.endpoint.stableId] === it.registration }?.registration
+      }
+    // Expiry belongs to the stored origin revision. A profile chosen for attention
+    // cannot veto its retirement after that profile was replaced or forgotten.
+    val retirement = store.requireReauthentication(origin, revision) ?: return
+    synchronized(lock) {
+      if (registration != null && ownsRetirementPresentationLocked(retirement, registration.endpoint.stableId, registration)) {
+        publishLocked(attention = requiredAttention(registration))
+      }
+    }
+    observeRetirement(retirement) { succeeded ->
+      if (!succeeded && registration != null && ownsRetirementPresentationLocked(retirement, registration.endpoint.stableId, registration)) {
+        publishLocked(attention = GatewayAccessAttention(registration.endpoint.stableId, "Could not retire this host’s Access session. Sign in to retry."))
+      }
+    }
+  }
+
+  private fun ownsRetirementPresentationLocked(
+    retirement: CloudflareAccessSessionStore.Retirement,
+    stableId: String,
+    registration: Registration?,
+    attention: GatewayAccessAttention? = mutablePresentation.value.attention,
+  ): Boolean =
+    store.isCurrent(retirement) && registrations[stableId] === registration && registration?.ordinaryAdmission != true &&
+      registry.entries.value.any { it.stableId == stableId && it.accessOrigin == retirement.origin.uri.toString() } &&
+      attention?.let { it.stableId != stableId } != true
+
   private fun showRequired(
     registration: Registration,
     isCurrent: () -> Boolean,
@@ -284,6 +503,16 @@ internal class GatewayIngressController(
   }
 
   private fun requiredAttention(registration: Registration) = GatewayAccessAttention(registration.endpoint.stableId, "Sign in to Cloudflare Access to connect to this gateway.")
+
+  private fun attentionAfterAdmissionLocked(registration: Registration): GatewayAccessAttention? =
+    mutablePresentation.value.attention.takeUnless { it?.stableId == registration.endpoint.stableId }
+
+  private fun callerIsCurrent(isCurrent: () -> Boolean): Boolean =
+    try {
+      isCurrent()
+    } catch (_: CancellationException) {
+      false
+    }
 
   private suspend fun checkRegistration(
     registration: Registration,
@@ -305,6 +534,51 @@ internal class GatewayIngressController(
   private fun isRegisteredLocked(registration: Registration): Boolean =
     registrations[registration.endpoint.stableId] === registration &&
       registry.entries.value.any { it.stableId == registration.endpoint.stableId }
+
+  private inner class Lease(
+    val registration: Registration,
+    val snapshot: CloudflareAccessSessionStore.Snapshot,
+  ) : GatewayIngressAuthorization {
+    val origin = registration.origin
+    val active = AtomicBoolean(true)
+
+    override suspend fun authorizeUpgrade(request: Request): Request {
+      requireCurrent(request)
+      if (discover(registration, snapshot) { active.get() } != null) {
+        invalidate(this)
+        throw GatewayExternalAuthorizationException()
+      }
+      requireCurrent(request)
+      val token = snapshot.session.authorizationHeader(request.url.toString(), now()) ?: throw GatewayExternalAuthorizationException()
+      return request.newBuilder().header("Cf-Access-Token", token).build()
+    }
+
+    fun hasCurrentSnapshot(): Boolean = runCatching { store.withCurrentSnapshot(origin, snapshot.revision, snapshot.revision) { } }.isSuccess
+
+    override fun requireCurrent(request: Request) {
+      val registered =
+        synchronized(lock) {
+          registrations[registration.endpoint.stableId] === registration &&
+            registry.entries.value.any { it.stableId == registration.endpoint.stableId } && hasCurrentSnapshot()
+        }
+      if (!registered || !active.get() || snapshot.session.authorizationHeader(request.url.toString(), now()) == null) {
+        if (snapshot.session.expiresAt <= now()) invalidate(this)
+        throw GatewayExternalAuthorizationException()
+      }
+    }
+
+    override fun rejection(response: Response): GatewayExternalAuthorizationException? {
+      if (!CloudflareAccessClient.isChallenge(
+          CloudflareAccessClient.Reply(response.request.url.toString(), response.code, response.headers, byteArrayOf()),
+          origin,
+        )
+      ) {
+        return null
+      }
+      invalidate(this)
+      return GatewayExternalAuthorizationException()
+    }
+  }
 
   companion object {
     private val unavailable =
