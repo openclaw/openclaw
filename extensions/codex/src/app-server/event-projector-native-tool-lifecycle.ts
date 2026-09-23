@@ -71,7 +71,7 @@ export class CodexNativeToolLifecycleProjector {
       toolName: string;
       unfinishedStatus: CodexNativeToolUnfinishedStatus;
       mcpToolCall?: CodexThreadItem;
-      commandProcessId?: string;
+      commandProcessId?: string | null;
     }
   >();
   private readonly webSearchCompletionByItem = new Map<
@@ -252,7 +252,9 @@ export class CodexNativeToolLifecycleProjector {
         auditNativeToolUnfinishedStatus(params.item),
         params.sourceTimestampMs,
         params.item.type === "mcpToolCall" ? params.item : undefined,
-        params.item.type === "commandExecution" ? readString(params.item, "processId") : undefined,
+        params.item.type === "commandExecution"
+          ? (readString(params.item, "processId") ?? null)
+          : undefined,
       );
       return;
     }
@@ -414,10 +416,10 @@ export class CodexNativeToolLifecycleProjector {
     });
   }
 
-  pendingCommands(): ReadonlyMap<string, string> {
-    const commands = new Map<string, string>();
+  pendingCommands(): ReadonlyMap<string, string | null> {
+    const commands = new Map<string, string | null>();
     for (const [id, item] of this.activeItems) {
-      if (item.commandProcessId) {
+      if (item.commandProcessId !== undefined) {
         commands.set(id, item.commandProcessId);
       }
     }
@@ -437,7 +439,8 @@ export class CodexNativeToolLifecycleProjector {
       const retained =
         !itemRunWasAborted &&
         commandProcessId !== undefined &&
-        retainedCommands.get(toolCallId) === commandProcessId;
+        retainedCommands.has(toolCallId) &&
+        (commandProcessId === null || retainedCommands.get(toolCallId) === commandProcessId);
       this.recordTerminal(toolCallId, toolName, retained ? "unknown" : unfinishedStatus, {
         runWasAborted: itemRunWasAborted,
         sourceTimestampMs: webSearchCompletion?.sourceTimestampMs,
@@ -495,7 +498,7 @@ export class CodexNativeToolLifecycleProjector {
     unfinishedStatus: CodexNativeToolUnfinishedStatus,
     sourceTimestampMs?: number,
     mcpToolCall?: CodexThreadItem,
-    commandProcessId?: string,
+    commandProcessId?: string | null,
   ): void {
     if (this.activeItems.has(toolCallId)) {
       return;

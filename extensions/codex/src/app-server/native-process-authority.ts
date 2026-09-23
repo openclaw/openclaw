@@ -52,7 +52,7 @@ export async function readCodexRetainedBackgroundCommands(params: {
   client: CodexAppServerClient;
   threadId: string;
   turnId: string;
-  commands: ReadonlyMap<string, string>;
+  commands: ReadonlyMap<string, string | null>;
   authority?: CodexNativeProcessAuthority;
   assertCurrent: () => void;
   signal: AbortSignal;
@@ -74,7 +74,9 @@ export async function readCodexRetainedBackgroundCommands(params: {
     const retained = new Map<string, string>();
     for (const { itemId, processId } of data) {
       if (
-        params.commands.get(itemId) === processId &&
+        params.commands.has(itemId) &&
+        // Approval starts omit the process ID; the native inventory supplies it.
+        (params.commands.get(itemId) === null || params.commands.get(itemId) === processId) &&
         (!params.authority ||
           params.authority.ownsCurrentCommand(params.client, {
             threadId: params.threadId,

@@ -187,7 +187,7 @@ export abstract class CodexTurnProjection {
       const pending = this.nativeToolLifecycleProjector.pendingCommands();
       for (const [id, processId] of options?.readRetainedNativeCommands?.() ?? []) {
         // A queued native completion wins over the earlier inventory snapshot.
-        if (pending.get(id) === processId) {
+        if (pending.has(id) && (pending.get(id) === null || pending.get(id) === processId)) {
           retainedCommands.set(id, processId);
         }
       }

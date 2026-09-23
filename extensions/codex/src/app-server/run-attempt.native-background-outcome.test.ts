@@ -12,14 +12,19 @@ setupRunAttemptTestHooks();
 
 describe("native background command outcomes", () => {
   it.each([
-    "retained",
-    "foreign item",
-    "foreign process",
-    "orphan",
-    "completion during inventory",
-    "revoked during inventory",
-    "inventory unavailable",
-  ] as const)("projects the native owner outcome: %s", async (scenario) => {
+    ["retained", "52627"],
+    ["foreign item", "52627"],
+    ["foreign process", "52627"],
+    ["orphan", "52627"],
+    ["completion during inventory", "52627"],
+    ["revoked during inventory", "52627"],
+    ["inventory unavailable", "52627"],
+    ["retained", null],
+    ["foreign item", null],
+    ["orphan", null],
+    ["completion during inventory", null],
+    ["revoked during inventory", null],
+  ] as const)("projects owner outcome: %s (%s)", async (scenario, startProcessId) => {
     const accepted = createDeferred<void>();
     const abort = new AbortController();
     const params = createTestParams();
@@ -34,7 +39,7 @@ describe("native background command outcomes", () => {
       id: "retained-command",
       command: "synthetic-controlled-command",
       cwd: "/workspace",
-      processId: "52627",
+      processId: startProcessId,
       status: "inProgress",
       commandActions: [],
       aggregatedOutput: null,
@@ -56,6 +61,7 @@ describe("native background command outcomes", () => {
         await harness.notify(
           itemNotification("item/completed", {
             ...command,
+            processId: "52627",
             status: "failed",
             exitCode: 7,
             aggregatedOutput: "Synthetic command failed after yielding",
@@ -73,7 +79,7 @@ describe("native background command outcomes", () => {
             : [
                 {
                   itemId: scenario === "foreign item" ? "another-command" : command.id,
-                  processId: scenario === "foreign process" ? "another-process" : command.processId,
+                  processId: scenario === "foreign process" ? "another-process" : "52627",
                 },
               ],
         nextCursor: null,

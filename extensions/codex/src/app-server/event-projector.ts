@@ -45,7 +45,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     return this.completedTurn?.status;
   }
 
-  getPendingNativeCommands(): ReadonlyMap<string, string> {
+  getPendingNativeCommands(): ReadonlyMap<string, string | null> {
     return !this.projectionClosed &&
       !this.aborted &&
       !this.options.runAbortSignal?.aborted &&
