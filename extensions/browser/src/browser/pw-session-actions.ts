@@ -530,6 +530,8 @@ export async function createPageViaPlaywright(
     url: string;
     cdpPolicy?: SsrFPolicy;
     signal?: AbortSignal;
+    /** Own an empty context; never reuse profile cookies for a session-scoped dashboard. */
+    isolatedContext?: true;
   } & BrowserNavigationPolicyOptions,
 ): Promise<{
   targetId: string;
@@ -537,6 +539,7 @@ export async function createPageViaPlaywright(
   url: string;
   type: string;
   close: () => Promise<void>;
+  isCurrent: () => boolean;
 }> {
   opts.signal?.throwIfAborted();
   const targetUrl = opts.url.trim() || "about:blank";
@@ -556,26 +559,30 @@ export async function createPageViaPlaywright(
     opts.engine,
   );
   opts.signal?.throwIfAborted();
-  const context = browser.contexts()[0] ?? (await browser.newContext());
-  opts.signal?.throwIfAborted();
-  ensureContextState(context);
-
   if (engine === "lightpanda" && (await getAllPages(browser)).length > 0) {
     throw new Error(
       "Lightpanda supports one page per connection. Navigate the existing tab, or close it before opening another.",
     );
   }
-
-  const page = await context.newPage();
+  opts.signal?.throwIfAborted();
+  const context = opts.isolatedContext
+    ? await browser.newContext({ acceptDownloads: false })
+    : (browser.contexts()[0] ?? (await browser.newContext()));
+  let page: Page | undefined;
   const close = async () => {
-    if (engine === "lightpanda") {
+    if (opts.isolatedContext) {
+      await context.close();
+    } else if (engine === "lightpanda") {
       await closeConnectionScopedPageBrowser(opts.cdpUrl, browser);
     } else {
-      await page.close();
+      await page?.close();
     }
   };
   let navigationClosedBlockedTarget = false;
   try {
+    opts.signal?.throwIfAborted();
+    ensureContextState(context);
+    page = await context.newPage();
     opts.signal?.throwIfAborted();
     ensurePageState(page);
     clearBlockedPageRef(opts.cdpUrl, page);
@@ -617,9 +624,18 @@ export async function createPageViaPlaywright(
     }
     const title = await page.title().catch(() => "");
     opts.signal?.throwIfAborted();
-    return { targetId: tid, title, url: page.url(), type: "page", close };
+    const retainedPage = page;
+    return {
+      targetId: tid,
+      title,
+      url: page.url(),
+      type: "page",
+      close,
+      isCurrent: () =>
+        browser.isConnected() && !retainedPage.isClosed() && context.pages().includes(retainedPage),
+    };
   } catch (error) {
-    if (!navigationClosedBlockedTarget) {
+    if (opts.isolatedContext || !navigationClosedBlockedTarget) {
       await close().catch(() => {});
     }
     throw error;
