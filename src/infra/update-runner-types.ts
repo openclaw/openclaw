@@ -153,6 +153,8 @@ export type UpdateRunnerOptions = {
   devTarget?: DevUpdateTarget;
   /** Expose a new checkout only after target admission; subsequent work uses the published path. */
   publishGitCheckout?: () => Promise<string>;
+  /** Owns preflight artifact storage when publication moves a newly cloned checkout. */
+  gitArtifactStorageRoot?: string;
   /** Read-only admission before executing a fetched candidate; never stops a service. */
   inspectGitTarget: (target: GitUpdateTarget) => Promise<void>;
   /** Admit required preparation after no-op detection, before allocating the candidate worktree. */

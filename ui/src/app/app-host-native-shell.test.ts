@@ -7,6 +7,7 @@ import "../components/sidebar-update-card.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import "./app-host.ts";
 import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
+import type { ShellViewCallbacks } from "./app-shell-view-callbacks.ts";
 import type { ApplicationContext } from "./context.ts";
 import {
   handleNavDrawerKeydown,
@@ -45,6 +46,7 @@ type MacosTitlebarControlsState = HTMLElement & {
   navCollapsed: boolean;
   historyOnly: boolean;
   newSessionDisabledReason?: string;
+  onToggleSidebar?: () => void;
   onOpenPalette?: () => void;
   onOpenNewSession?: () => void;
   updateComplete: Promise<boolean>;
@@ -449,6 +451,20 @@ describe("OpenClaw native shell", () => {
   });
 
   it("keeps the new-thread control in the native titlebar only while collapsed", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: true })),
+    );
+    const shell = document.createElement("openclaw-app-shell") as HTMLElement & {
+      runtime: { context: ApplicationContext };
+      viewCallbacks: ShellViewCallbacks;
+      navDrawerTrigger: HTMLElement | null;
+      navDrawerOpen: boolean;
+    };
+    shell.runtime = { context: {} as ApplicationContext };
+    const drawerTrigger = shell.appendChild(document.createElement("button"));
+    drawerTrigger.className = "topbar-nav-toggle";
+    Object.defineProperty(drawerTrigger, "checkVisibility", { value: () => true });
     const onOpenPalette = vi.fn();
     const onOpenNewSession = vi.fn();
     const controls = document.createElement(
@@ -456,11 +472,15 @@ describe("OpenClaw native shell", () => {
     ) as unknown as MacosTitlebarControlsState;
     controls.navCollapsed = false;
     controls.historyOnly = false;
+    controls.onToggleSidebar = shell.viewCallbacks.toggleSidebar;
     controls.onOpenPalette = onOpenPalette;
     controls.onOpenNewSession = onOpenNewSession;
     document.body.append(controls);
     await controls.updateComplete;
 
+    controls.querySelector<HTMLButtonElement>(".macos-titlebar-controls__sidebar-toggle")?.click();
+    expect(shell.navDrawerOpen).toBe(true);
+    expect(shell.navDrawerTrigger).toBe(drawerTrigger);
     controls.querySelector<HTMLButtonElement>(".macos-titlebar-controls__search")?.click();
     expect(controls.querySelector(".macos-titlebar-controls__new-session")).toBeNull();
 
@@ -688,14 +708,6 @@ describe("OpenClaw shell update affordance", () => {
     const shared = {
       mobileNavLayout: false,
       onboarding: false,
-      updateAvailable: {
-        currentVersion: "2026.7.1",
-        latestVersion: "2026.7.2",
-        channel: "stable" as const,
-      },
-      updateBusy: false,
-      canUpdate: true,
-      onUpdate: vi.fn(),
       refreshRequired: false,
       onRefresh: vi.fn(),
     };
@@ -715,7 +727,6 @@ describe("OpenClaw shell update affordance", () => {
       renderFloatingUpdateCard({
         ...shared,
         navigationSurfaceHidden: collapsed,
-        updateAvailable: null,
         refreshRequired: true,
       }),
       container,
@@ -726,7 +737,6 @@ describe("OpenClaw shell update affordance", () => {
     expect(refreshCard?.refreshRequired).toBe(true);
     refreshCard?.onRefresh();
     expect(shared.onRefresh).toHaveBeenCalledOnce();
-    expect(shared.onUpdate).not.toHaveBeenCalled();
 
     const visible = navigationSurfaceIsHidden({
       onboarding: false,
@@ -738,7 +748,6 @@ describe("OpenClaw shell update affordance", () => {
       renderFloatingUpdateCard({
         ...shared,
         navigationSurfaceHidden: visible,
-        updateAvailable: null,
         refreshRequired: true,
       }),
       container,
@@ -762,14 +771,6 @@ describe("OpenClaw shell update affordance", () => {
         navigationSurfaceHidden,
         mobileNavLayout: true,
         onboarding: false,
-        updateAvailable: {
-          currentVersion: "2026.7.1",
-          latestVersion: "2026.7.2",
-          channel: "stable" as const,
-        },
-        updateBusy: false,
-        canUpdate: true,
-        onUpdate: vi.fn(),
         refreshRequired: false,
         onRefresh: vi.fn(),
       };
@@ -779,10 +780,7 @@ describe("OpenClaw shell update affordance", () => {
         container.querySelector("openclaw-sidebar-attention.sidebar-attention--floating"),
       ).toBeNull();
 
-      render(
-        renderFloatingUpdateCard({ ...shared, updateAvailable: null, refreshRequired: true }),
-        container,
-      );
+      render(renderFloatingUpdateCard({ ...shared, refreshRequired: true }), container);
       const refreshCard = container.querySelector<
         HTMLElement & { updateComplete: Promise<boolean> }
       >("openclaw-sidebar-update-card");
@@ -798,9 +796,6 @@ describe("OpenClaw shell update affordance", () => {
     const shared = {
       mobileNavLayout: false,
       onboarding: true,
-      updateAvailable: null,
-      updateBusy: false,
-      onUpdate: vi.fn(),
       refreshRequired: true,
       onRefresh: vi.fn(),
     };
@@ -829,11 +824,6 @@ describe("OpenClaw shell update affordance", () => {
       renderFloatingUpdateCard({
         ...shared,
         navigationSurfaceHidden: true,
-        updateAvailable: {
-          currentVersion: "2026.7.1",
-          latestVersion: "2026.7.2",
-          channel: "stable",
-        },
         refreshRequired: false,
       }),
       container,

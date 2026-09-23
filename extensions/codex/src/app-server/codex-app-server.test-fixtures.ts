@@ -54,8 +54,11 @@ export function mockClientRuntimeMethods() {
     exited: true,
     cleanup: "closed",
   });
+  const protectPrivateTransportSecret =
+    vi.fn<CodexAppServerClient["protectPrivateTransportSecret"]>();
   return {
     closeAndWait,
+    protectPrivateTransportSecret,
     getInstanceId: () => "test-client-1",
     getTransportPid: (): number | undefined => undefined,
     getRuntimeIdentity: () => ({ serverVersion: getServerVersion() }),

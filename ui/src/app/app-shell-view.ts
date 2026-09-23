@@ -79,7 +79,6 @@ export interface ShellViewHost
   handleSettingsSearchQueryChange(query: string): Promise<void>;
   handleThemeChange(event: CustomEvent<ThemeModeChangeDetail>): void;
   nativeNavCollapsed(): boolean;
-  openApprovals(): void;
   readonly openPalette: () => void;
   readonly navigate: (routeId: string, options?: ApplicationNavigationOptions) => void;
   refreshControlUi: () => Promise<boolean>;
@@ -103,9 +102,6 @@ export function renderApplicationShell(host: ShellViewHost) {
   const config = context.config.current;
   const gatewayConnected = gatewaySnapshot.phase === "connected";
   const operatorAccess = readGatewayOperatorAccess(gatewaySnapshot);
-  const canUpdate = canCallGatewayMethod(gatewaySnapshot, "update.run", "operator.admin");
-  const canHoldUpdate =
-    canUpdate && canCallGatewayMethod(gatewaySnapshot, "update.hold", "operator.admin");
   const navigationSnapshot = context.navigation.snapshot;
   const overlaySnapshot = context.overlays.snapshot;
   const controlUiRefreshRequired = overlaySnapshot.controlUiRefreshRequired;
@@ -258,7 +254,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       watchUpdateProgress,
       onOpenPalette: host.openPalette,
       onRetryConnect: callbacks.retryGateway,
-      onToggleSidebar: host.toggleNavigationSurface,
+      onToggleSidebar: callbacks.toggleSidebar,
       onOpenNewSession: openNewSession,
       onUpdateSidebarEntries: callbacks.updateSidebarEntries,
       onPairMobile: callbacks.openDevicePairSetup,
@@ -303,9 +299,9 @@ export function renderApplicationShell(host: ShellViewHost) {
               host.navigate("settings");
             }
           },
-          onRetryConnect: () => context.gateway.connect(),
-          onNavigate: (routeId, options) => host.navigate(routeId, options),
-          onPreload: (routeId) => context.preload(routeId),
+          onRetryConnect: callbacks.retryGateway,
+          onNavigate: host.navigate,
+          onPreload: callbacks.preloadRoute,
           onSearchQueryChange: (nextQuery) => void host.handleSettingsSearchQueryChange(nextQuery),
           preloadTimers: host.settingsPreloadTimers,
           saveIndicator: {
@@ -360,7 +356,7 @@ export function renderApplicationShell(host: ShellViewHost) {
                 .newSessionDisabledReason=${
                   newSessionAccess.allowed ? undefined : newSessionAccess.reason
                 }
-                .onToggleSidebar=${host.toggleNavigationSurface}
+                .onToggleSidebar=${callbacks.toggleSidebar}
                 .onOpenPalette=${host.openPalette}
                 .onOpenNewSession=${host.handleNativeNewSession}
               ></openclaw-macos-titlebar-controls>
@@ -394,7 +390,7 @@ export function renderApplicationShell(host: ShellViewHost) {
                     data-env-avatar=${
                       config.environment ? config.assistantIdentity.name.charAt(0) : nothing
                     }
-                    @click=${() => host.toggleNavigationSurface()}
+                    @click=${callbacks.toggleSidebar}
                   >
                     ${icons.panelLeftOpen}
                   </button>
@@ -415,7 +411,7 @@ export function renderApplicationShell(host: ShellViewHost) {
                     type="button"
                     class="shell-chrome-controls__button shell-chrome-controls__search"
                     aria-label=${t("chat.openCommandPalette")}
-                    @click=${() => host.openPalette()}
+                    @click=${host.openPalette}
                   >
                     ${icons.search}
                   </button>
@@ -495,26 +491,11 @@ export function renderApplicationShell(host: ShellViewHost) {
           mobileNavLayout,
           onboarding,
           compact: mergedChatChrome && !controlUiRefreshRequired,
-          updateAvailable: overlaySnapshot.updateAvailable,
-          updateSchedule: overlaySnapshot.updateSchedule,
-          heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
-          updateBusy,
           statusBanner: overlaySnapshot.updateStatusBanner,
           updateRun: overlaySnapshot.updateRun,
-          updateRunAcknowledged: overlaySnapshot.updateRunAcknowledged,
-          connected: gatewayConnected,
-          onAcknowledge: () => context.overlays.acknowledgeUpdateRun(),
-          onCheckStatus: () => context.overlays.refreshUpdateStatus(),
-          watchUpdateProgress,
-          canUpdate,
-          canHoldUpdate,
-          onUpdate: () => void context.overlays.runUpdate(),
           refreshRequired: controlUiRefreshRequired,
           onRefresh: host.refreshControlUi,
-          onHoldUpdate: () => context.overlays.holdUpdate(),
-          onReviewUpdate: () => host.navigate("updates"),
-          onNavigate: (routeId, options) => host.navigate(routeId, options),
-          onOpenApprovals: () => host.openApprovals(),
+          onNavigate: host.navigate,
         })}
         ${nativeEmbed ? navigationContent : nothing}
         <openclaw-router-outlet
@@ -540,7 +521,7 @@ export function renderApplicationShell(host: ShellViewHost) {
               ${renderGatewayStatus({
                 kind: connectionStatus,
                 lastError: gatewaySnapshot.lastError,
-                onRetry: () => context.gateway.connect(),
+                onRetry: callbacks.retryGateway,
               })}
             </div>`
           : nothing

@@ -360,6 +360,10 @@ export async function executeMutableUpdate(
               await tryReadJson<unknown>(path.join(root, "package.json")),
             ) ?? admittedTargetSchemaVersions,
           );
+        } else {
+          // Git builds can outlive admission; reject drift before copying state and
+          // rehearsing migrations against a configuration activation cannot accept.
+          await recheckSchemas(admittedTargetSchemaVersions);
         }
         if (stagedPluginAdmission) {
           // Explicit artifacts acquire their version before rehearsal or activation.
