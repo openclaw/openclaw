@@ -101,6 +101,7 @@ function renderFact(fact: IdentityFact) {
         <span>${fact.label}</span>
         <span
           class="run-inspector__state run-inspector__state--${fact.state}"
+          role="img"
           aria-label=${t("activity.runInspector.evidenceStateLabel", {
             state: evidenceStateLabel(fact.state),
           })}

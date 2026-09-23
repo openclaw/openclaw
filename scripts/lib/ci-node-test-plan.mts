@@ -29,6 +29,7 @@ import {
   isUiBrowserTestFile,
   isUiTestTarget,
   uiTimingTestFiles,
+  uiE2eRealGatewayTestFiles,
 } from "../../test/vitest/vitest.ui-paths.mjs";
 import {
   getUnitFastIsolatedTestFiles,
@@ -1438,6 +1439,12 @@ const RELEASE_ONLY_UI_TEST_FILES = new Set([
   "ui/src/e2e/native-embed-settings.e2e.test.ts",
   "ui/src/e2e/chat-session-entry.e2e.test.ts",
   "ui/src/components/app-sidebar.stress.browser.test.ts",
+  "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
+  "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
+  "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
+  "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
+  "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
 ]);
 
 export function createUiTestShardGroups(
@@ -1459,8 +1466,11 @@ export function createUiTestShardGroups(
   ];
   return {
     ui: group("ui/vitest.config.ts", isUiTestTarget),
-    e2e: group("test/vitest/vitest.ui-e2e.config.ts", (file) =>
-      controlUiE2eTestGlobs.some((pattern) => matchesGlob(file, pattern)),
+    e2e: group(
+      "test/vitest/vitest.ui-e2e.config.ts",
+      (file) =>
+        controlUiE2eTestGlobs.some((pattern) => matchesGlob(file, pattern)) ||
+        uiE2eRealGatewayTestFiles.includes(file),
     ),
   };
 }
@@ -4458,6 +4468,16 @@ function createCompactNodeTestShardBundles(
   }
 
   for (const job of compactJobs) {
+    // Memory-gated plans need the measured 8-CPU/30.95-GiB allocation, even alone.
+    // Normalize the previous two-worker allowance onto their unmeasured siblings below.
+    if (
+      usesBlacksmithCapacity(job.runner) &&
+      job.runner !== EXTRA_LARGE_NODE_TEST_RUNNER &&
+      job.groups.some((group) => group.minTotalMemoryBytes !== undefined)
+    ) {
+      job.runner = EXTRA_LARGE_NODE_TEST_RUNNER;
+      job.env = { ...job.env, ...PINNED_COMPACT_GROUP_ENV };
+    }
     if (
       job.env?.OPENCLAW_VITEST_MAX_WORKERS !== "2" ||
       !job.groups.some((group) => usesMeasuredCompactWorkers(group, options.runnerBackend))

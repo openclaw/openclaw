@@ -1,4 +1,8 @@
 import type { SessionProviderReviewComparison } from "../config/sessions/provider-review.types.js";
+import type {
+  SessionEntryReplacementCommit,
+  SessionEntryReplacementCommitted,
+} from "../config/sessions/session-accessor.sqlite-replacement-state.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type {
   SqliteWorkerAdmissionFactory,
@@ -30,6 +34,10 @@ export type AgentDatabaseExecutionOpen = {
 
 export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
   "database.prepareWrite": { input: undefined; output: void };
+  "session.entries.replace": {
+    input: SessionEntryReplacementCommit;
+    output: SessionEntryReplacementCommitted;
+  };
   "session.providerReview.compare": {
     input: SessionProviderReviewComparison;
     output: SessionEntry;

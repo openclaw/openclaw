@@ -1,5 +1,6 @@
 import { render, type ReactiveControllerHost } from "lit";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
+import { buildFallbackSlashCommands, replaceSlashCommands } from "../../lib/chat/commands.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalScopeConfigured,
@@ -213,4 +214,83 @@ export function renderChatView(overrides: Partial<ChatProps> = {}) {
 
 export function renderChatInto(container: HTMLElement, overrides: Partial<ChatProps> = {}) {
   render(renderChat(createChatProps(overrides)), container);
+}
+
+export function replaceSkillCommands(
+  ...skills: Array<{ key: string; name?: string; skillDisplayName?: string; description: string }>
+) {
+  replaceSlashCommands([
+    ...buildFallbackSlashCommands(),
+    ...skills.map(({ key, name = key, skillDisplayName, description }) => ({
+      key,
+      name,
+      skillDisplayName,
+      description,
+      source: "skill" as const,
+      skillModelVisible: true,
+    })),
+  ]);
+}
+
+export function inputDraft(container: HTMLElement, value: string) {
+  const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+  expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
+  textarea!.value = value;
+  textarea!.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+export function inputDraftAtEnd(container: HTMLElement, value: string) {
+  const textarea = getComposerTextarea(container);
+  textarea.value = value;
+  textarea.setSelectionRange(value.length, value.length);
+  textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+}
+
+export function keydownComposer(container: HTMLElement, key: string, init: KeyboardEventInit = {}) {
+  const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+  expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
+  const event = new KeyboardEvent("keydown", { ...init, key, bubbles: true, cancelable: true });
+  textarea!.dispatchEvent(event);
+  return event;
+}
+
+export function createReactiveDraftHarness({
+  onDraftChange: observeDraftChange,
+  ...overrides
+}: Partial<ChatProps> = {}) {
+  let draft = "";
+  let currentOverrides = overrides;
+  const container = document.createElement("div");
+  const onDraftChange = vi.fn((next: string) => {
+    draft = next;
+    observeDraftChange?.(next);
+  });
+  const renderCurrent = (nextOverrides: Partial<ChatProps> = {}) => {
+    currentOverrides = { ...currentOverrides, ...nextOverrides };
+    renderChatInto(container, {
+      draft,
+      getDraft: () => draft,
+      onDraftChange,
+      onRequestUpdate: renderCurrent,
+      ...currentOverrides,
+    });
+  };
+  renderCurrent();
+  return { container, renderCurrent };
+}
+
+export function createSlashRerenderHarness() {
+  let draft = "";
+  const onDraftChange = vi.fn((next: string) => {
+    draft = next;
+  });
+  const renderCurrent = () => renderChatView({ draft, onDraftChange });
+  return {
+    container: renderCurrent(),
+    inputAndRender(container: HTMLElement, value: string) {
+      inputDraft(container, value);
+      return renderCurrent();
+    },
+    renderCurrent,
+  };
 }

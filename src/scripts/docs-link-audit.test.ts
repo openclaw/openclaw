@@ -7,7 +7,10 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { createDocsMarkdown, parseDocsDocument } from "../../scripts/lib/docs-markdown.mjs";
 import { normalizeRoute } from "../../scripts/lib/docs-published-routes.mts";
+import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mts";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { preparedScriptWrapperEnv } from "../../test/scripts/prepared-script-wrapper.test-support.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 
 const { auditDocsLinks, prepareExternalLinkAuditTree, prepareMirroredDocsDir, resolveRoute } =
   await import("../../scripts/docs-link-audit.mts");
@@ -440,13 +443,21 @@ describe("docs-link-audit", () => {
           {
             cwd: fixtureRoot,
             encoding: "utf8",
-            env: {
-              PATH: process.env.PATH,
-              HOME: home,
-              USERPROFILE: home,
-              TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
-              OPENCLAW_DOCS_SYNC_CLAWHUB_REPO: clawHubRoot,
-            },
+            env: preparedScriptWrapperEnv(
+              [
+                [
+                  new URL("../../scripts/docs-link-audit.mts", import.meta.url),
+                  resolveRuntimeWorkerUrl(scriptModuleEntrypoints.docsLinkAudit),
+                ],
+              ],
+              {
+                PATH: process.env.PATH,
+                HOME: home,
+                USERPROFILE: home,
+                TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
+                OPENCLAW_DOCS_SYNC_CLAWHUB_REPO: clawHubRoot,
+              },
+            ),
             timeout: 30_000,
           },
         );
@@ -565,12 +576,20 @@ describe("docs-link-audit", () => {
           {
             cwd: fixtureRoot,
             encoding: "utf8",
-            env: {
-              PATH: process.env.PATH,
-              HOME: home,
-              USERPROFILE: home,
-              TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
-            },
+            env: preparedScriptWrapperEnv(
+              [
+                [
+                  new URL("../../scripts/docs-link-audit.mts", import.meta.url),
+                  resolveRuntimeWorkerUrl(scriptModuleEntrypoints.docsLinkAudit),
+                ],
+              ],
+              {
+                PATH: process.env.PATH,
+                HOME: home,
+                USERPROFILE: home,
+                TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
+              },
+            ),
             timeout: 30_000,
           },
         );

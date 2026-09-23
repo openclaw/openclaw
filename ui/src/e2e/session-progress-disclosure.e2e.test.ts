@@ -132,6 +132,16 @@ suite.define(() => {
       await page.locator('.chat-scroll-to-bottom[data-visible="true"]').click();
       await waitForChatScrollIdle(page);
       expect(await open()).toBe(false);
+      await gateway.emitChatFinal({
+        sessionKey,
+        runId: "progress-run",
+        text: "Progress is complete.",
+      });
+      await page
+        .locator(".chat-bubble")
+        .getByText("Progress is complete.", { exact: true })
+        .waitFor();
+      expect(await open()).toBe(false);
       await card.locator("summary").press("Enter");
       expect(await open()).toBe(true);
       await gestures(2, 320);

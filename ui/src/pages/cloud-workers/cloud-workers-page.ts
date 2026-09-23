@@ -299,6 +299,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
         <button
           class="btn btn--sm"
           type="button"
+          aria-label=${`${t("cloudWorkersPage.editAction")}: ${profile.id}`}
           ?disabled=${!canManage}
           @click=${() => this.openEdit(profile)}
         >
@@ -307,6 +308,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
         <button
           class="btn btn--sm danger"
           type="button"
+          aria-label=${`${t("common.delete")}: ${profile.id}`}
           ?disabled=${!canManage}
           @click=${() => void this.deleteProfile(profile)}
         >

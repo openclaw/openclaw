@@ -665,6 +665,10 @@ const managedHandoffNativeLoaderModules = [
 // Other modules remain collisions, including while these consumers land separately.
 const sqliteWorkerProtocolModules = new Map<string, ReadonlySet<string>>([
   [
+    "createSqliteWorkerBackend",
+    new Set(["src/state/openclaw-state.worker.ts", "src/state/openclaw-agent-execution.worker.ts"]),
+  ],
+  [
     "openExistingSqliteWorkerBackend",
     new Set(["src/state/openclaw-state.worker.ts", "src/state/openclaw-agent-execution.worker.ts"]),
   ],

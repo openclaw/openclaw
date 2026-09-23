@@ -12,7 +12,7 @@ const WINDOWS_NT_CURRENT_VERSION_KEY = "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\C
 const WINDOWS_CURRENT_VERSION_KEY = "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion";
 const REG_QUERY_TIMEOUT_MS = 5_000;
 
-type QueryRegistryValue = (key: string, valueName: string) => string | null;
+type QueryRegistryValue = (key: string, valueName: string, deadlineMs?: number) => string | null;
 type IsReadableFile = (filePath: string) => boolean;
 type WindowsInstallRoots = {
   systemRoot: string;
@@ -21,13 +21,15 @@ type WindowsInstallRoots = {
   programW6432: string | null;
 };
 
-const queryRegistryValueFn: QueryRegistryValue = defaultQueryRegistryValue;
-const isReadableFileFn: IsReadableFile = defaultIsReadableFile;
-let cachedProcessRoots: {
+type WindowsProcessRoots = {
   env: Record<string, string | undefined>;
   systemRoot: string;
   installRoots?: WindowsInstallRoots;
-} | null = null;
+};
+
+const queryRegistryValueFn: QueryRegistryValue = defaultQueryRegistryValue;
+const isReadableFileFn: IsReadableFile = defaultIsReadableFile;
+let cachedProcessRoots: WindowsProcessRoots | null = null;
 
 function defaultIsReadableFile(filePath: string): boolean {
   try {
@@ -120,6 +122,7 @@ function runRegQuery(
   key: string,
   valueName: string,
   use64BitView: boolean,
+  timeoutMs: number,
 ): string {
   const args = ["query", key, "/v", valueName];
   if (use64BitView) {
@@ -129,20 +132,31 @@ function runRegQuery(
     env: resolveDiagnosticProcessEnv(),
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
-    timeout: REG_QUERY_TIMEOUT_MS,
+    timeout: timeoutMs,
     windowsHide: true,
   });
 }
 
-function defaultQueryRegistryValue(key: string, valueName: string): string | null {
+function defaultQueryRegistryValue(
+  key: string,
+  valueName: string,
+  deadlineMs?: number,
+): string | null {
   const regExe = locateWindowsRegExe();
   if (!regExe) {
     return null;
   }
 
   for (const use64BitView of [true, false]) {
+    const timeoutMs =
+      deadlineMs === undefined
+        ? REG_QUERY_TIMEOUT_MS
+        : Math.min(REG_QUERY_TIMEOUT_MS, Math.ceil(deadlineMs - performance.now()));
+    if (timeoutMs <= 0) {
+      return null;
+    }
     try {
-      const stdout = runRegQuery(regExe, key, valueName, use64BitView);
+      const stdout = runRegQuery(regExe, key, valueName, use64BitView, timeoutMs);
       const parsed = parseRegQueryValue(stdout, valueName);
       if (parsed) {
         return parsed;
@@ -203,7 +217,7 @@ function resolveSystemRootFromEnv(env: Record<string, string | undefined>): stri
   );
 }
 
-function getProcessRoots() {
+function getProcessRoots(deadlineMs?: number) {
   if (!cachedProcessRoots) {
     const env: Record<string, string | undefined> = {};
     for (const key of [
@@ -215,22 +229,31 @@ function getProcessRoots() {
     ]) {
       env[key] = getEnvValueCaseInsensitive(process.env, key);
     }
-    cachedProcessRoots = {
+    const roots: WindowsProcessRoots = {
       env,
       systemRoot:
         normalizeWindowsInstallRoot(
-          queryRegistryValueFn(WINDOWS_NT_CURRENT_VERSION_KEY, "SystemRoot") ?? undefined,
+          queryRegistryValueFn(WINDOWS_NT_CURRENT_VERSION_KEY, "SystemRoot", deadlineMs) ??
+            undefined,
         ) ?? resolveSystemRootFromEnv(env),
     };
+    // Do not make a budget-exhausted fallback authoritative for later reads.
+    if (deadlineMs !== undefined && performance.now() >= deadlineMs) {
+      return roots;
+    }
+    cachedProcessRoots = roots;
   }
   return cachedProcessRoots;
 }
 
-function getWindowsSystemRoot(env: Record<string, string | undefined>): string {
+function getWindowsSystemRoot(
+  env: Record<string, string | undefined>,
+  deadlineMs?: number,
+): string {
   if (env !== process.env) {
     return resolveSystemRootFromEnv(env);
   }
-  const roots = getProcessRoots();
+  const roots = getProcessRoots(deadlineMs);
   return roots.installRoots?.systemRoot ?? roots.systemRoot;
 }
 
@@ -295,9 +318,10 @@ export function getWindowsSystem32ExePath(
 
 export function getWindowsPowerShellExePath(
   env: Record<string, string | undefined> = process.env,
+  deadlineMs?: number,
 ): string {
   return path.win32.join(
-    getWindowsSystemRoot(env),
+    getWindowsSystemRoot(env, deadlineMs),
     "System32",
     "WindowsPowerShell",
     "v1.0",
@@ -307,6 +331,7 @@ export function getWindowsPowerShellExePath(
 
 export function getWindowsWmicExePath(
   env: Record<string, string | undefined> = process.env,
+  deadlineMs?: number,
 ): string {
-  return path.win32.join(getWindowsSystemRoot(env), "System32", "wbem", "wmic.exe");
+  return path.win32.join(getWindowsSystemRoot(env, deadlineMs), "System32", "wbem", "wmic.exe");
 }

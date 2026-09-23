@@ -25,6 +25,8 @@ const DOCKER_SEED_LANES_BY_PATH: Readonly<Record<string, readonly DockerSeedLane
   "scripts/e2e/update-channel-switch-docker.sh": ["update-channel-switch"],
   "scripts/lib/changed-path-facts.mjs": [...MCP_DOCKER_SEED_LANES, "published-upgrade-survivor"],
   "scripts/lib/ci-docker-seed-plan.mts": [...MCP_DOCKER_SEED_LANES, "published-upgrade-survivor"],
+  "src/agents/embedded-agent-runner/run/attempt-bundle-tools.ts": ["mcp-code-mode-gateway"],
+  "src/agents/runtime-plan/tools.ts": ["mcp-code-mode-gateway"],
 };
 // Keep the whole state owner: both schema-version constants and future migrations
 // must exercise an installed release's updater before they reach main.

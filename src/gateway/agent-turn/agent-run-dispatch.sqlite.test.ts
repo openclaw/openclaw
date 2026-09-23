@@ -1,11 +1,13 @@
-import { deserialize } from "node:v8";
+import { deserialize, serialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import { observeDeviceAuthHostSql } from "../../infra/device-auth-store.sql.test-support.js";
+import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   markPluginRegistryActive,
@@ -14,7 +16,9 @@ import {
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { captureTaskExecutionOwner } from "../../tasks/task-execution-owner.js";
+import { createRunningTaskRunCoreWithReceiptAsync } from "../../tasks/task-executor-create.async.js";
 import { loadTaskFlowRegistryStateFromSqlite } from "../../tasks/task-flow-registry.store.sqlite.js";
 import { requestTasks } from "../../tasks/task-registry-read.test-support.js";
 import { taskDeliveryStates, tasks } from "../../tasks/task-registry-state.js";
@@ -30,6 +34,7 @@ import {
   resetTaskRegistryForTests,
 } from "../../tasks/task-runtime.test-helpers.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { holdStateDatabaseCoordinator } from "../../test-utils/state-database-contention.js";
 import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
 import { createTrackedDispatch } from "./agent-run-dispatch.test-support.js";
 import type { AgentTurnIo } from "./types.js";
@@ -37,6 +42,302 @@ import type { AgentTurnIo } from "./types.js";
 const provider = vi.hoisted(() => ({
   execute: vi.fn<typeof import("../../commands/agent.js").agentCommandFromGatewayIngress>(),
 }));
+
+it.each([
+  "activate",
+  "reuse",
+  "large record",
+  "cancel",
+  "replace",
+  "pending terminal",
+  "pending start",
+  "active pending start",
+  "cancel pending start",
+  "replace pending start",
+  "commit error pending start",
+  "precommit error pending start",
+  "cancel pending event",
+] as const)(
+  "keeps Gateway activation responsive while the run-owner coordinator is held (%s)",
+  async (outcome) => {
+    const state = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "gateway-run-owner-contention-",
+    });
+    const registry = createEmptyPluginRegistry();
+    markPluginRegistryActive(registry);
+    try {
+      await withPluginRuntimeRegistryScope(registry, async () => {
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+        const { runId, sessionKey, context, entry, task } = createTrackedDispatch();
+        const cancelBeforeBinding =
+          outcome === "cancel" ||
+          outcome === "cancel pending event" ||
+          outcome === "cancel pending start";
+        const replaceBeforeBinding = outcome === "replace" || outcome === "replace pending start";
+        const startBeforeBinding = outcome.endsWith("pending start");
+        const eventCommitted = outcome === "commit error pending start";
+        const eventFailure =
+          eventCommitted || outcome === "precommit error pending start"
+            ? new SqliteWorkerError(
+                `Synthetic event failed ${eventCommitted ? "after commit" : "before mutation"}`,
+                "outcome-unknown",
+              )
+            : undefined;
+        const terminalBeforeBinding =
+          outcome === "pending terminal" || outcome === "cancel pending event";
+        const assertCurrent = () => {
+          entry.controller.signal.throwIfAborted();
+          if (context.chatAbortControllers.get(runId) !== entry) {
+            throw new Error("Gateway dispatch lost its original registration");
+          }
+        };
+        const create = () =>
+          createRunningTaskRunCoreWithReceiptAsync(
+            {
+              runtime: "cli",
+              sourceId: runId,
+              runId,
+              ownerKey: sessionKey,
+              childSessionKey: sessionKey,
+              scopeKind: "session",
+              task: task.task,
+              ...(outcome === "large record"
+                ? { detail: { payload: "x".repeat(1024 * 1024) } }
+                : {}),
+              deliveryStatus: "not_applicable",
+              startedAt: Date.now(),
+            },
+            assertCurrent,
+          );
+        const originalReceipt = await create();
+        const receipt = outcome === "reuse" ? await create() : originalReceipt;
+        if (!receipt) {
+          throw new Error("Expected the original durable Gateway task receipt");
+        }
+        expect(receipt.task.taskId).toBe(originalReceipt?.task.taskId);
+        const initialCreatedAt = receipt.task.createdAt;
+        const workerContext = captureOpenClawStateWorkerContext();
+        const held = holdStateDatabaseCoordinator(
+          workerContext.admission.databasePath,
+          workerContext.coordinatorRuntime,
+          5_000,
+        );
+        const entered = createDeferred();
+        const releaseProvider = createDeferred();
+        const timerObserved = createDeferred<number>();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        let sampleTimer: ReturnType<typeof setInterval> | undefined;
+        const mutations = vi.spyOn(getTaskRegistryStore(), "runInitialMutationAsync");
+        const store = getTaskRegistryStore();
+        const mutateEvent = store.runAgentEventMutationAsync.bind(store);
+        const eventMutation = eventFailure
+          ? vi
+              .spyOn(store, "runAgentEventMutationAsync")
+              .mockImplementationOnce(async (...args) => {
+                if (eventCommitted) {
+                  const committed = await mutateEvent(...args);
+                  expect(committed?.task.createdAt).toBe(initialCreatedAt - 1_000);
+                }
+                throw eventFailure;
+              })
+          : undefined;
+        let execution: ReturnType<typeof dispatchAgentRunFromGateway> | undefined;
+        provider.execute.mockImplementation(async (options) => {
+          entered.resolve();
+          if (outcome === "active pending start") {
+            await options.onExecutionStarted?.();
+          }
+          await releaseProvider.promise;
+          return { payloads: [], meta: { durationMs: 0 } };
+        });
+        try {
+          await held.ready;
+          if (terminalBeforeBinding) {
+            emitAgentEvent({
+              runId,
+              stream: "lifecycle",
+              data: { phase: "end", endedAt: Date.now() },
+            });
+          }
+          if (startBeforeBinding) {
+            emitAgentEvent({
+              runId,
+              stream: "lifecycle",
+              data: { phase: "start", startedAt: initialCreatedAt - 1_000 },
+            });
+          }
+          // The holder's independent watchdog releases a synchronously blocked host.
+          // An ordinary main-loop turn must instead run while that lease is held.
+          timer = setTimeout(() => {
+            timer = undefined;
+            timerObserved.resolve(Atomics.load(held.released, 0));
+          }, 0);
+          const started = performance.now();
+          const beforeMemory = process.memoryUsage();
+          let lastTimer = started;
+          let maxTimerGapMs = 0;
+          sampleTimer = setInterval(() => {
+            const now = performance.now();
+            maxTimerGapMs = Math.max(maxTimerGapMs, now - lastTimer);
+            lastTimer = now;
+          }, 1);
+          execution = dispatchAgentRunFromGateway({
+            assertCurrent,
+            assertSettlementCurrent: assertCurrent,
+            ingressOpts: { message: task.task, sessionKey, allowModelOverride: false },
+            runId,
+            dedupeKeys: [`agent:${runId}`],
+            admittedRunEntry: entry,
+            abortController: entry.controller,
+            cleanupAbortController() {
+              if (context.chatAbortControllers.get(runId) === entry) {
+                context.chatAbortControllers.delete(runId);
+              }
+            },
+            io: { emitAcceptance: vi.fn(), emitFinal: vi.fn() },
+            context,
+            taskTrackingMode: { kind: "receipt", ...receipt },
+          });
+          const releasedAtTimer = await withTestTimeout(
+            timerObserved.promise,
+            10_000,
+            "Gateway activation did not yield to its main timer",
+          );
+          console.info("Gateway run-owner coordinator wait", {
+            mainTimerMs: performance.now() - started,
+            releasedAtTimer,
+          });
+          expect(releasedAtTimer).toBe(0);
+          expect(provider.execute).not.toHaveBeenCalled();
+          if (cancelBeforeBinding) {
+            entry.controller.abort();
+          } else if (replaceBeforeBinding) {
+            context.chatAbortControllers.set(runId, {
+              ...entry,
+              controller: new AbortController(),
+            });
+          }
+          held.release();
+          await expect(held.joined).resolves.toBe(0);
+          if (eventFailure) {
+            await execution;
+            const renderedError = `${eventFailure.message} | outcome-unknown`;
+            expect(provider.execute).not.toHaveBeenCalled();
+            expect(getTaskRunOwner(receipt.task)).toBeUndefined();
+            expect(context.chatAbortControllers.has(runId)).toBe(false);
+            expect(context.dedupe.get(`agent:${runId}`)?.payload).toMatchObject({
+              status: "error",
+              summary: renderedError,
+            });
+            const persisted = loadTaskRegistryStateFromSqlite().tasks.get(receipt.task.taskId);
+            expect(persisted).toMatchObject({
+              status: "failed",
+              error: renderedError,
+              createdAt: eventCommitted ? initialCreatedAt - 1_000 : initialCreatedAt,
+            });
+            expect(receipt.task.createdAt).toBe(initialCreatedAt);
+            return;
+          }
+          if (cancelBeforeBinding || replaceBeforeBinding) {
+            await execution;
+            expect(provider.execute).not.toHaveBeenCalled();
+            expect(getTaskRunOwner(receipt.task)).toBeUndefined();
+            const persisted = loadTaskRegistryStateFromSqlite().tasks.get(receipt.task.taskId);
+            expect(persisted?.executionOwner).toEqual(receipt.task.executionOwner);
+            expect(persisted?.status).toBe(
+              terminalBeforeBinding ? "succeeded" : cancelBeforeBinding ? "cancelled" : "running",
+            );
+            expect(context.chatAbortControllers.has(runId)).toBe(replaceBeforeBinding);
+            if (startBeforeBinding) {
+              expect(persisted?.createdAt).toBe(initialCreatedAt - 1_000);
+              expect(receipt.task.createdAt).toBe(initialCreatedAt);
+            }
+            return;
+          }
+          await withTestTimeout(
+            Promise.race([
+              entered.promise,
+              execution.then(({ terminalOutcome }) => {
+                throw new Error(
+                  `Gateway settled before activation: ${terminalOutcome.error ?? terminalOutcome.status}`,
+                );
+              }),
+            ]),
+            5_000,
+            "Gateway did not activate after admission",
+          );
+          clearInterval(sampleTimer);
+          sampleTimer = undefined;
+          maxTimerGapMs = Math.max(maxTimerGapMs, performance.now() - lastTimer);
+          const afterMemory = process.memoryUsage();
+          const bindingIndex = mutations.mock.calls.findIndex(
+            ([, command]) => command.type === "tasks.bindRunOwner",
+          );
+          if (bindingIndex < 0) {
+            throw new Error("Expected the real run-owner worker mutation");
+          }
+          const requestBytes = serialize(mutations.mock.calls[bindingIndex]?.[1]).byteLength;
+          const receiptBytes = serialize(
+            await mutations.mock.results[bindingIndex]?.value,
+          ).byteLength;
+          expect(requestBytes).toBeLessThan(4096);
+          console.info("Gateway run-owner transfer", {
+            outcome,
+            requestBytes,
+            receiptBytes,
+            maxTimerGapMs,
+            rssDelta: afterMemory.rss - beforeMemory.rss,
+            heapUsedDelta: afterMemory.heapUsed - beforeMemory.heapUsed,
+          });
+          const persisted = loadTaskRegistryStateFromSqlite().tasks.get(receipt.task.taskId);
+          expect(persisted?.executionOwner).toEqual(
+            outcome === "pending terminal"
+              ? receipt.task.executionOwner
+              : captureTaskExecutionOwner(),
+          );
+          expect(persisted?.status).toBe(outcome === "pending terminal" ? "succeeded" : "running");
+          expect(persisted?.detail).toEqual(receipt.task.detail);
+          if (startBeforeBinding) {
+            expect(persisted).toMatchObject({
+              createdAt: initialCreatedAt - 1_000,
+              startedAt: initialCreatedAt - 1_000,
+            });
+            expect(receipt.task.createdAt).toBe(initialCreatedAt);
+          }
+          if (outcome === "large record") {
+            expect(receiptBytes).toBeGreaterThan(1024 * 1024);
+          }
+          expect(getTaskRunOwner(receipt.task)).toBeDefined();
+          releaseProvider.resolve();
+          await execution;
+          expect(getTaskRunOwner(receipt.task)).toBeUndefined();
+          expect(loadTaskRegistryStateFromSqlite().tasks.get(receipt.task.taskId)?.status).toBe(
+            "succeeded",
+          );
+        } finally {
+          held.release();
+          releaseProvider.resolve();
+          if (timer !== undefined) {
+            clearTimeout(timer);
+          }
+          clearInterval(sampleTimer);
+          await Promise.allSettled([execution, held.joined]);
+          mutations.mockRestore();
+          eventMutation?.mockRestore();
+          provider.execute.mockReset();
+          await closeOpenClawStateDatabaseAsync();
+          resetTaskRegistryForTests({ persist: false });
+          resetTaskFlowRegistryForTests({ persist: false });
+        }
+      });
+    } finally {
+      markPluginRegistryRetired(registry);
+      await state.cleanup();
+    }
+  },
+);
 vi.mock("../../commands/agent.js", () => ({
   agentCommandFromGatewayIngress: provider.execute,
 }));
@@ -203,10 +504,7 @@ it.each([
           ).toEqual(Array(28).fill(0));
           expect(running.parentFlowId).toBeUndefined();
           expect(observed.flowCount).toBe(0);
-          // Live run-owner binding is still a separate native writer in this initial-creation slice.
-          expect(observed.writes).toEqual(
-            expectedExecutionOwner ? { task: 1, delivery: 1, flow: 0 } : noWrites,
-          );
+          expect(observed.writes).toEqual(noWrites);
           expect(running.executionOwner).toEqual(expectedExecutionOwner);
           expect(getTaskRunOwner(running)).toBeDefined();
           expect(emitFinal).not.toHaveBeenCalled();
@@ -313,12 +611,16 @@ it.each([
           );
           expect(
             commands.filter((command) =>
-              ["tasks.createRecord", "tasks.settleUnstarted", "tasks.finalizeActive"].includes(
-                command,
-              ),
+              [
+                "tasks.createRecord",
+                "tasks.bindRunOwner",
+                "tasks.settleUnstarted",
+                "tasks.finalizeActive",
+              ].includes(command),
             ),
           ).toEqual([
             "tasks.createRecord",
+            "tasks.bindRunOwner",
             active ? "tasks.finalizeActive" : "tasks.settleUnstarted",
           ]);
         } finally {

@@ -82,6 +82,7 @@ export function createSessionRowProjectionArchive(params: {
       candidates: Iterable<records.Row>,
     ) {
       for (const row of candidates) {
+        row.pendingDatabaseFacts = undefined;
         if (row.entry?.archivedAt !== undefined) {
           if (row.materialized) {
             demote(row);
@@ -143,7 +144,7 @@ export function createSessionRowProjectionArchive(params: {
       if (initial?.entry?.archivedAt === undefined) {
         return initial;
       }
-      const row = initial.materialized ? initial : params.prepare(initial);
+      const row = records.ready(initial) ? initial : params.prepare(initial);
       if (records.ready(row) && row.entry.archivedAt !== undefined) {
         const id = records.identity(row);
         materialized.delete(id);

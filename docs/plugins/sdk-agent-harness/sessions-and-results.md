@@ -81,6 +81,12 @@ Pass host authority through `assertCurrent` and validate the expected generation
 in `assertRecordCurrent`. Leases coordinate storage; they grant no execution
 authority. Keep native cleanup after the host transaction commits.
 
+Inside `withLease`, call `captureLeaseAssertion(key)` to capture the exact owner
+and recheck its live, unexpired lease before native requests or transcript writes.
+Combine it with host authority for normal work. Cleanup may use retained lease
+ownership after host retirement, but must reject an expired, replaced, or closed
+lease even while the harness remains alive.
+
 `captureNativeSessionGenerationAuthority`, `reclaimNativeSessionGeneration`,
 and `resolveNativeSessionBinding` preserve the host generation and predecessor
 across waits, adopting a verified predecessor before stale reclamation. A missing

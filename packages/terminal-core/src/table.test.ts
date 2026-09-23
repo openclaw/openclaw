@@ -2,6 +2,10 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { note as clackNote } from "@clack/prompts";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../../src/infra/runtime-worker-url.js";
 import { sanitizeForLog, stripAnsi, visibleWidth } from "./ansi.js";
 import {
   noteToStream,
@@ -9,6 +13,7 @@ import {
   resolveNoteOutputColumns,
   wrapNoteMessage,
 } from "./note.js";
+import { tableStackEntrypoint } from "./table-runtime.test-support.js";
 import { renderTable } from "./table.js";
 
 function mockProcessPlatform(platform: NodeJS.Platform): void {
@@ -155,30 +160,7 @@ describe("renderTable", () => {
       // rows nor one heavily wrapped cell may depend on V8's argument-count limit.
       const result = spawnSync(
         process.execPath,
-        [
-          "--import",
-          new URL("../../../scripts/tsx.mjs", import.meta.url).href,
-          "--input-type=module",
-          "-e",
-          `import { renderTable } from ${JSON.stringify(new URL("./table.ts", import.meta.url).href)};
-const shape = ${JSON.stringify(shape)};
-const output = renderTable({
-  border: "ascii",
-  columns: [{ key: "Key", header: "Key", maxWidth: 5 }],
-  rows: shape === "rows"
-    ? Array.from({ length: 150_000 }, () => ({ Key: "row" }))
-    : [{ Key: shape === "wrapped lines" ? "row".repeat(150_000) : "a  " + "\\u200b".repeat(150_000) + "b" }],
-});
-const lines = output.trimEnd().split("\\n");
-console.log(JSON.stringify({
-  lineCount: lines.length,
-  rows: lines.filter(line => line === "| row |").length,
-  header: lines[1],
-  firstLine: lines[0],
-  lastLine: lines.at(-1),
-  softWrapRowsMatch: lines[3] === "| a   |" && lines[4] === "| " + "\\u200b".repeat(150_000) + "b   |",
-}));`,
-        ],
+        [...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(tableStackEntrypoint)), shape],
         { encoding: "utf8", timeout: 30_000 },
       );
 

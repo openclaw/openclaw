@@ -174,6 +174,7 @@ export function createNativeSessionBindingLifecycle<TRecord extends NativeSessio
   };
 
   return {
+    captureLeaseAssertion: leases.captureLeaseAssertion,
     transact: leases.transact,
     withLease: leases.withLease,
     hasLease: leases.hasLease,

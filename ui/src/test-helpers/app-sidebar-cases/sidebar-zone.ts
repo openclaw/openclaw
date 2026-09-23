@@ -226,7 +226,7 @@ describe("AppSidebar interleaved zone", () => {
     await sidebar.updateComplete;
 
     const labels = [...sidebar.querySelectorAll<HTMLElement>(".sidebar-zone-entry")].map((entry) =>
-      entry.textContent?.trim(),
+      entry.querySelector(".nav-item__text, .sidebar-recent-session__name")?.textContent?.trim(),
     );
     expect(labels).toEqual(["Usage", "Alpha", "Plugins"]);
     expect(sidebar.querySelector('[data-session-section="pinned"]')).toBeNull();

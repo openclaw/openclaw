@@ -434,6 +434,9 @@ describe("CommandPalette search", () => {
 
     expect(list).not.toHaveBeenCalled();
     expect(palette.querySelector('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
+    expect(palette.querySelector('[role="listbox"]')?.getAttribute("aria-label")).toBe(
+      palette.querySelector("textarea")?.getAttribute("aria-label"),
+    );
     expect(palette.textContent).not.toContain("Searching sessions");
   });
 
