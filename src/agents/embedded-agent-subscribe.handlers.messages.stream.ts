@@ -75,6 +75,7 @@ export function isOllamaAssistantMessage(message: AgentMessage | undefined): boo
   if (!message || message.role !== "assistant") {
     return false;
   }
+  // SAFETY: AgentMessage omits the provider api id; assistant messages carry it structurally.
   const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
   return api === "ollama";
 }
