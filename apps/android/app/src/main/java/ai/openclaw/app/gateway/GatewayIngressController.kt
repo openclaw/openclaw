@@ -71,6 +71,20 @@ internal class GatewayIngressController(
       get() = buildGatewayWebSocketUrl(endpoint.host, endpoint.port, true, endpoint.contextPath)
   }
 
+  private sealed interface RetryOwner {
+    class Captured(
+      val action: GatewayAccessAttention,
+      val entry: GatewayRegistryEntry,
+      val registration: Registration?,
+      val acknowledgement: SignOutAcknowledgement?,
+    ) : RetryOwner
+
+    class Acquired(
+      val registration: Registration,
+      val acknowledgement: SignOutAcknowledgement?,
+    ) : RetryOwner
+  }
+
   private class SignOutAcknowledgement(
     val action: GatewayAccessAttention,
     val entry: GatewayRegistryEntry,
@@ -159,6 +173,7 @@ internal class GatewayIngressController(
     endpoint: GatewayEndpoint,
     tls: GatewayTlsParams,
     isCurrent: () -> Boolean,
+    bind: (Registration) -> Unit = {},
   ): Registration {
     val context = kotlin.coroutines.coroutineContext
     val (registration, replacedIntent) =
@@ -171,6 +186,9 @@ internal class GatewayIngressController(
         val current =
           previous?.takeIf { it.endpoint == endpoint && it.tls == tls }
             ?: Registration(endpoint, tls, clientForRoute(endpoint, tls))
+        // A carried Retry validates its captured owner and adopts this registration
+        // in the same commit, before retiring any work or resuming UI observers.
+        bind(current)
         val acknowledgement =
           signOutAcknowledgement?.takeIf {
             previous == null && it.registration == null && it.action.stableId == endpoint.stableId &&
@@ -181,7 +199,7 @@ internal class GatewayIngressController(
           leases.remove(endpoint.stableId)?.active?.set(false)
           registrations[endpoint.stableId] = current
           // A cold Sign out belongs to the saved entry until its first registration.
-          // Bind before publication can invalidate that owner.
+          // Bind after Retry validation, and before publication can invalidate that owner.
           acknowledgement?.registration = current
           retired = previous?.let(::retireBrowserParticipationLocked)
           publishLocked()
@@ -638,6 +656,122 @@ internal class GatewayIngressController(
   fun revalidate() {
     val expired = synchronized(lock) { leases.values.filter { it.active.get() && it.snapshot.session.expiresAt <= now() } }
     expired.forEach(::invalidate)
+  }
+
+  fun retry(
+    admissionCheckpoint: Long,
+    isCurrent: () -> Boolean,
+  ): Retry? =
+    synchronized(lock) {
+      val action = mutablePresentation.value.attention ?: return@synchronized null
+      val entry = registry.entries.value.firstOrNull { it.stableId == action.stableId } ?: return@synchronized null
+      Retry(action, entry, admissionCheckpoint, isCurrent)
+    }
+
+  inner class Retry internal constructor(
+    action: GatewayAccessAttention,
+    entry: GatewayRegistryEntry,
+    private val admissionCheckpoint: Long,
+    private val isCurrent: () -> Boolean,
+  ) {
+    val stableId: String = action.stableId
+    private var owner: RetryOwner =
+      RetryOwner.Captured(
+        action,
+        entry,
+        registrations[stableId],
+        signOutAcknowledgement?.takeIf { it.currentAction === action && isAcknowledgementRegisteredLocked(it) },
+      )
+
+    suspend fun prepare(
+      endpoint: GatewayEndpoint,
+      tls: GatewayTlsParams,
+    ): GatewayIngressAuthorization? {
+      kotlin.coroutines.coroutineContext.ensureActive()
+      require(endpoint.stableId == stableId)
+      val prepared =
+        register(endpoint, tls, isCurrent) { selected ->
+          checkOwnerLocked()
+          owner = RetryOwner.Acquired(selected, signOutAcknowledgement)
+        }
+      return prepareRegistered(prepared, true, admissionCheckpoint, isCurrent)
+    }
+
+    private fun checkOwnerLocked() {
+      if (!ownsPresentationLocked() ||
+        !callerIsCurrent {
+          ownedOrigin()?.let { store.requireAdmission(it, admissionCheckpoint) }
+          isCurrent()
+        } || !ownsPresentationLocked()
+      ) {
+        throw CancellationException("Gateway retry superseded")
+      }
+    }
+
+    private fun ownsPresentationLocked(): Boolean =
+      when (val captured = owner) {
+        is RetryOwner.Captured -> {
+          // Only this captured Sign out owner may advance the action before Retry acquires it.
+          // Its completion still settles the UI when a queued Retry is stopped before running.
+          val acknowledgement = captured.acknowledgement
+          val action = acknowledgement?.currentAction ?: captured.action
+          (acknowledgement == null || signOutAcknowledgement === acknowledgement) &&
+            registrations[stableId] === (acknowledgement?.registration ?: captured.registration) &&
+            registry.entries.value.any { it === captured.entry } && mutablePresentation.value.attention === action
+        }
+
+        is RetryOwner.Acquired -> {
+          // Its own registration replacement may clear the old action, but a later
+          // explicit Sign out owns its result even when the persisted origin differs.
+          isRegisteredLocked(captured.registration) &&
+            (signOutAcknowledgement == null || signOutAcknowledgement === captured.acknowledgement)
+        }
+      }
+
+    private fun ownedRegistration(): Registration? =
+      when (val captured = owner) {
+        is RetryOwner.Captured -> captured.acknowledgement?.registration ?: captured.registration
+        is RetryOwner.Acquired -> captured.registration
+      }
+
+    // Before acquisition, Sign out owns the saved association even when an
+    // interrupted route replacement has already installed another registration.
+    private fun ownedOrigin(): CloudflareAccessOrigin? =
+      when (val captured = owner) {
+        is RetryOwner.Captured -> captured.entry.accessOrigin?.let(CloudflareAccessOrigin::from) ?: captured.registration?.origin
+        is RetryOwner.Acquired -> captured.registration.origin
+      }
+
+    fun reportFailure(message: String) {
+      synchronized(lock) {
+        val registration = ownedRegistration()
+        val origin = ownedOrigin()
+        // An acquired route owns even a failed raw probe. Its new origin need not
+        // have a verified grant association yet; that metadata is never admission.
+        val intent = browserIntent
+        val presentation = mutablePresentation.value
+        if (!callerIsCurrent {
+            origin?.let { store.requireAdmission(it, admissionCheckpoint) }
+            isCurrent()
+          } || intent?.let(::isLiveIntentLocked) == true || browserIntent !== intent ||
+          mutablePresentation.value !== presentation || !ownsPresentationLocked() ||
+          ownedRegistration() !== registration || registration?.ordinaryAdmission == true ||
+          mutablePresentation.value.attention?.let { it.stableId != stableId } == true
+        ) {
+          return
+        }
+        // Predicates may sign out again without changing an equal StateFlow presentation.
+        // Recheck revocation after every callout, without invoking another caller predicate.
+        if (!callerIsCurrent {
+            origin?.let { store.requireAdmission(it, admissionCheckpoint) }
+            true
+          }
+        ) {
+          return
+        }
+        publishLocked(attention = GatewayAccessAttention(stableId, message))
+      }
+    }
   }
 
   private suspend fun associate(
