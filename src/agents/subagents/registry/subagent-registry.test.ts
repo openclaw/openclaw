@@ -3465,8 +3465,8 @@ describe("subagent registry seam flow", () => {
   )(
     "preserves $kind alongside forced collector yield through $observation",
     async ({ observation, kind }) => {
-      const runId = "forced-yield-explicit-timeout";
-      const childSessionKey = "agent:main:subagent:forced-yield-explicit-timeout";
+      const runId = `forced-yield-${observation}-${kind}`;
+      const childSessionKey = `agent:main:subagent:${runId}`;
       const terminal = {
         startedAt: 111,
         endedAt: 222,
@@ -3492,6 +3492,7 @@ describe("subagent registry seam flow", () => {
       mocks.entries = {
         [childSessionKey]: createSessionEntry({ lifecycleRevision: "forced-timeout" }),
       };
+      const settleRootWork = observeRootWork();
       mod.registerSubagentRun({
         runId,
         childSessionKey,
@@ -3512,12 +3513,11 @@ describe("subagent registry seam flow", () => {
         getLifecycleHandler()({ runId, stream: "lifecycle", data: { phase: "end", ...terminal } });
       }
       await vi.advanceTimersByTimeAsync(20_000);
-      await waitForFast(() => {
-        const entry = findRequesterRun(runId);
-        expect(entry?.execution.outcome?.status).toBe(kind === "blocked" ? "error" : "timeout");
-        expect(entry?.collectorCompletion?.status).toBe(kind === "blocked" ? "failed" : "timeout");
-        expect(entry?.pauseReason).toBeUndefined();
-      });
+      await settleRootWork();
+      const entry = findRequesterRun(runId);
+      expect(entry?.execution.outcome?.status).toBe(kind === "blocked" ? "error" : "timeout");
+      expect(entry?.collectorCompletion?.status).toBe(kind === "blocked" ? "failed" : "timeout");
+      expect(entry?.pauseReason).toBeUndefined();
       expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
     },
   );
