@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { AssistantMessage } from "../llm/types.js";
 import { createStubSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
@@ -24,10 +24,10 @@ function postedText(onBlockReply: ReturnType<typeof vi.fn>): string {
 }
 
 describe("native Ollama pre-tool narration", () => {
-  it("withholds unsigned pre-tool narration from durable block replies", () => {
+  it("withholds two narrated tool rounds and delivers the final answer exactly once", async () => {
     const { session, emit } = createStubSessionHarness();
     const onBlockReply = vi.fn();
-    subscribeEmbeddedAgentSession({
+    const subscription = subscribeEmbeddedAgentSession({
       session: session as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"],
       runId: "run-ollama-withhold",
       onBlockReply,
@@ -35,33 +35,117 @@ describe("native Ollama pre-tool narration", () => {
       blockReplyChunking: { minChars: 4, maxChars: 200 },
     });
 
-    const narration = "Let me read the file before answering.";
+    onTestFinished(() => subscription.unsubscribe());
+
+    for (const [index, path] of ["README.md", "NOTES.md"].entries()) {
+      const narration = `Let me read ${path} before answering.`;
+      const toolCall = {
+        type: "toolCall" as const,
+        id: `tool-${index}`,
+        name: "read",
+        arguments: { path },
+      };
+      const unsigned = ollamaAssistant(narration);
+      emit({ type: "message_start", message: ollamaAssistant("") });
+      emit({
+        type: "message_update",
+        message: ollamaAssistant(""),
+        assistantMessageEvent: { type: "text_start", contentIndex: 0 },
+      });
+      emit({
+        type: "message_update",
+        message: unsigned,
+        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: narration },
+      });
+      await subscription.waitForPendingEvents();
+      expect(onBlockReply).not.toHaveBeenCalled();
+
+      // Native Ollama closes unsigned text before terminal tool classification.
+      // Await this boundary so a premature durable flush cannot hide in the queue.
+      emit({
+        type: "message_update",
+        message: unsigned,
+        assistantMessageEvent: {
+          type: "text_end",
+          contentIndex: 0,
+          content: narration,
+          partial: unsigned,
+        },
+      });
+      await subscription.waitForPendingEvents();
+      expect(onBlockReply).not.toHaveBeenCalled();
+
+      for (const event of [
+        {
+          type: "toolcall_start",
+          partial: ollamaAssistant(narration, [{ ...toolCall, arguments: {} }]),
+        },
+        {
+          type: "toolcall_delta",
+          delta: JSON.stringify(toolCall.arguments),
+          partial: ollamaAssistant(narration, [toolCall]),
+        },
+        {
+          type: "toolcall_end",
+          toolCall,
+          partial: ollamaAssistant(narration, [toolCall]),
+        },
+      ]) {
+        emit({
+          type: "message_update",
+          message: event.partial,
+          assistantMessageEvent: { ...event, contentIndex: 1 },
+        });
+      }
+      emit({
+        type: "message_end",
+        message: {
+          ...unsigned,
+          stopReason: "toolUse",
+          content: [commentarySignature(`commentary-${index}`, narration), toolCall],
+        },
+      });
+      emit({
+        type: "tool_execution_start",
+        toolName: toolCall.name,
+        toolCallId: toolCall.id,
+        args: toolCall.arguments,
+      });
+      emit({
+        type: "tool_execution_end",
+        toolName: toolCall.name,
+        toolCallId: toolCall.id,
+        result: { content: [{ type: "text", text: "File contents" }] },
+        isError: false,
+      });
+      await subscription.waitForPendingEvents();
+      expect(onBlockReply).not.toHaveBeenCalled();
+    }
+
+    const answer = "Both files are checked.";
+    const finalMessage = { ...ollamaAssistant(answer), stopReason: "stop" as const };
     emit({ type: "message_start", message: ollamaAssistant("") });
     emit({
       type: "message_update",
-      message: ollamaAssistant(narration),
-      assistantMessageEvent: { type: "text_delta", delta: narration },
+      message: finalMessage,
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: answer },
     });
     emit({
-      type: "tool_execution_start",
-      toolName: "read",
-      toolCallId: "tool-1",
-      args: { path: "README.md" },
+      type: "message_update",
+      message: finalMessage,
+      assistantMessageEvent: {
+        type: "text_end",
+        contentIndex: 0,
+        content: answer,
+        partial: finalMessage,
+      },
     });
-    emit({
-      type: "message_end",
-      message: {
-        role: "assistant",
-        api: "ollama",
-        stopReason: "toolUse",
-        content: [
-          commentarySignature("commentary-0-abc", narration),
-          { type: "toolCall", id: "tool-1", name: "read", arguments: {} },
-        ],
-      } as unknown as AssistantMessage,
-    });
-
-    expect(postedText(onBlockReply)).not.toContain("Let me read the file");
+    await subscription.waitForPendingEvents();
+    expect(onBlockReply).not.toHaveBeenCalled();
+    emit({ type: "message_end", message: finalMessage });
+    await subscription.waitForPendingEvents();
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply.mock.calls[0]?.[0]).toMatchObject({ text: answer });
   });
 
   it("delivers a permanent unphased Ollama answer as the final reply", async () => {
