@@ -50,10 +50,6 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import {
-  type JsonSchemaObject,
-  validateJsonSchemaValue,
-} from "openclaw/plugin-sdk/json-schema-runtime";
 import type { ImageContent, TextContent } from "openclaw/plugin-sdk/llm";
 import {
   asNonArrayRecord,
@@ -78,10 +74,15 @@ import {
   type CodexToolDescriptor,
 } from "./dynamic-tool-catalog.js";
 import {
+  assertCodexDynamicToolInputMatchesSchema,
+  shouldValidateCodexDynamicToolInput,
+} from "./dynamic-tool-input-validation.js";
+import {
   createFailedDynamicToolResponse,
   failedToolResult,
   type CodexDynamicToolRuntimeResponse,
 } from "./dynamic-tool-response-state.js";
+import { applyCurrentMessageProvider } from "./dynamic-tool-source-reply.js";
 import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
 import type {
   CodexDynamicToolCallOutputContentItem,
@@ -117,61 +118,6 @@ type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
 
 type ProjectedCodexDynamicTool = ProjectedTool<AnyAgentTool>;
 
-const MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERRORS = 4;
-const MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERROR_CHARS = 160;
-const CODEX_DYNAMIC_TOOL_VALIDATION_TRUNCATED_SUFFIX = " [detail truncated]";
-
-function shouldValidateCodexDynamicToolInput(tool: AnyAgentTool): boolean {
-  return getPluginToolMeta(tool)?.mcp?.operation !== "tool";
-}
-
-function assertCodexDynamicToolInputMatchesSchema(params: {
-  toolName: string;
-  schema: JsonSchemaObject;
-  value: unknown;
-}): void {
-  const validation = validateJsonSchemaValue({
-    schema: params.schema,
-    cacheKey: `codex-dynamic-tool-input:${params.toolName}:${JSON.stringify(params.schema)}`,
-    value: params.value,
-  });
-  if (validation.ok) {
-    return;
-  }
-  const visibleErrors = validation.errors.slice(0, MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERRORS);
-  const details = visibleErrors
-    .map((error) => {
-      if (error.text.length <= MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERROR_CHARS) {
-        return error.text;
-      }
-      return `${error.text.slice(
-        0,
-        MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERROR_CHARS -
-          CODEX_DYNAMIC_TOOL_VALIDATION_TRUNCATED_SUFFIX.length,
-      )}${CODEX_DYNAMIC_TOOL_VALIDATION_TRUNCATED_SUFFIX}`;
-    })
-    .join("; ");
-  const omitted = validation.errors.length - visibleErrors.length;
-  const omittedSuffix = omitted > 0 ? `; ${omitted} more violation(s) omitted` : "";
-  throw new Error(`Invalid arguments for tool "${params.toolName}": ${details}${omittedSuffix}.`);
-}
-
-function applyCurrentMessageProvider(
-  toolName: string,
-  args: Record<string, unknown>,
-  currentProvider: string | undefined,
-): Record<string, unknown> {
-  const hasProvider =
-    typeof args.provider === "string" && args.provider.trim().length > 0
-      ? true
-      : typeof args.channel === "string" && args.channel.trim().length > 0;
-  const provider = currentProvider?.trim();
-  if (toolName !== "message" || hasProvider || !provider) {
-    return args;
-  }
-  return { ...args, provider };
-}
-
 export type CodexConfirmedMediaDelivery = {
   sourceUrls: readonly string[];
 } & ({ kind: "outbound"; target: MessagingToolSend } | { kind: "sourceReply" });
@@ -191,6 +137,7 @@ export type CodexDynamicToolBridge = {
       onAgentToolResult?: EmbeddedRunAttemptParams["onAgentToolResult"];
       toolCallOrdinal?: number;
       retainExecutionSnapshot?: boolean;
+      onFinalSourceReplyDelivery?: () => void;
     },
   ) => Promise<CodexDynamicToolRuntimeResponse>;
   /** Consume exact boundary evidence retained while post-execution processing is incomplete. */
@@ -432,6 +379,7 @@ export function createCodexDynamicToolBridge(params: {
         confirmedMessagingTarget: MessagingToolSend | undefined;
         deliveredSourceReply: boolean;
       };
+      let rawFinalSourceReplyDeliveryRecorded = false;
       let executedArgsForPresentation = args;
       let rawIsErrorForPresentation = false;
       let telemetryRawResultForPresentation: unknown;
@@ -557,6 +505,32 @@ export function createCodexDynamicToolBridge(params: {
             confirmedMessagingTarget,
             deliveredSourceReply,
           };
+          if (deliveredSourceReply && executedArgs.final !== false) {
+            recordAgentHarnessToolResultTelemetry({
+              extractSourceReplyPayload: extractMessagingToolSourceReplyPayload,
+              collectMessagingMediaUrls: collectCodexMessageMediaUrls,
+              resolveMessagingMediaSourceUrls: (mediaUrls) =>
+                resolveCodexMediaSourceUrls(
+                  mediaUrls,
+                  preparedMessageMedia?.sourcePathsByStagedPath,
+                ),
+              toolName,
+              args: executedArgs,
+              result: rawResult,
+              mediaTrustResult: sanitizeToolResult(rawResult),
+              telemetry,
+              signal,
+              isError: false,
+              messagingDelivered,
+              mediaDeliveryConfirmed,
+              messagingTarget: confirmedMessagingTarget,
+              sourceReplyFinal: true,
+              trustedLocalMediaToolNames: pluginLocalMediaTrustByToolName.get(toolName),
+            });
+            telemetry.didDeliverSourceReplyViaMessageTool = true;
+            rawFinalSourceReplyDeliveryRecorded = true;
+            options?.onFinalSourceReplyDelivery?.();
+          }
         },
         snapshotResult: (rawResult) => {
           telemetryRawResultForPresentation = sanitizeToolResult(rawResult);
@@ -685,7 +659,7 @@ export function createCodexDynamicToolBridge(params: {
             telemetry,
             signal,
             isError: resultIsError,
-            messagingDelivered,
+            messagingDelivered: messagingDelivered && !rawFinalSourceReplyDeliveryRecorded,
             mediaDeliveryConfirmed,
             autoDeliveryTtsMediaUrls,
             coreTtsToolResult: autoDeliveryTtsMediaUrls?.length ? rawResult : undefined,
@@ -719,6 +693,11 @@ export function createCodexDynamicToolBridge(params: {
           response.executionStarted = executionBoundary.executionStarted;
           response.replaySafe = replaySafe;
           response.sideEffectEvidence = !replaySafe || undefined;
+          response.finalCurrentSourceReply =
+            (confirmedSourceReply && sourceReplyFinal === true) || undefined;
+          if (response.finalCurrentSourceReply && !rawFinalSourceReplyDeliveryRecorded) {
+            options?.onFinalSourceReplyDelivery?.();
+          }
           return response;
         },
         onError: ({

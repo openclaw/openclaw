@@ -1,7 +1,11 @@
-import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  embeddedAgentLog,
+  projectAgentToolActivity,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { onInternalDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
+import { buildCodexAppServerApprovalRejectionResponse } from "./approval-rejection.js";
 import { terminateCodexBackgroundTerminals } from "./attempt-client-cleanup.js";
 import { isCodexAppServerApprovalRequest } from "./client.js";
 import { shouldAutoApproveCodexAppServerApprovals } from "./config.js";
@@ -20,8 +24,10 @@ import {
   toCodexDynamicToolProgressResponse,
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
+import { createFailedDynamicToolResponse } from "./dynamic-tool-response-state.js";
 import { recordCodexDynamicToolResult } from "./dynamic-tool-result-projection.js";
 import { routeCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
+import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { shouldEmitTranscriptToolProgress } from "./event-projector-tool-progress.js";
 import { readCodexDynamicToolCallParams } from "./protocol-validators.js";
 import type { JsonValue } from "./protocol.js";
@@ -38,6 +44,7 @@ import {
   sanitizeCodexToolArguments,
 } from "./tool-progress-normalization.js";
 import type { CodexAppServerServerRequest, CodexThreadRouteScope } from "./turn-router.js";
+import { createCodexUserInputCancellationResponse } from "./user-input-bridge.js";
 
 const DYNAMIC_TOOL_TERMINAL_DIAGNOSTIC_TYPES = [
   "tool.execution.completed",
@@ -73,6 +80,8 @@ export function createCodexAttemptServerRequestController(
     noteProgress,
   } = turnRuntime;
   const {
+    commitFinalSourceReplyDelivery,
+    commitFinalSourceReply,
     emitExecutionPhaseOnce,
     scheduleTurnReleaseAfterTerminalDynamicTool,
     scheduleTerminalDynamicToolReleaseCheck,
@@ -115,7 +124,16 @@ export function createCodexAttemptServerRequestController(
     requestSignal: AbortSignal = new AbortController().signal,
     setExecutionTimeoutMs?: (timeoutMs: number) => void,
   ) => {
-    const signal = AbortSignal.any([runAbortController.signal, requestSignal]);
+    const requestAdmission = turnRuntime.serverRequestAdmission.admit({
+      // Once dispatched, a dynamic tool owns its terminal side-effect outcome.
+      // Final source delivery rejects later calls but drains existing owners.
+      preserveOnSeal: request.method === "item/tool/call",
+    });
+    const signal = AbortSignal.any([
+      runAbortController.signal,
+      requestSignal,
+      requestAdmission.signal,
+    ]);
     const turnId = turnIdRef.current;
     const projector = projectorRef.current;
     let requestCountsAsTurnActivity = false;
@@ -129,6 +147,9 @@ export function createCodexAttemptServerRequestController(
         return undefined;
       }
       if (request.method === "mcpServer/elicitation/request") {
+        if (state.finalSourceReplyCommit && (!scope.turnId || scope.turnId === turnId)) {
+          return createCodexElicitationResponse("decline");
+        }
         if (!scope.turnId || scope.turnId === turnId) {
           markCurrentTurnRequestProgress();
         }
@@ -146,23 +167,41 @@ export function createCodexAttemptServerRequestController(
             : {}),
           signal,
         });
+        if (state.finalSourceReplyCommit || requestAdmission.signal.aborted) {
+          return createCodexElicitationResponse("decline");
+        }
         if (approvalResult.kind === "handled") {
           return approvalResult.response;
         }
-        return await userInputBridgeRef.current?.handleElicitationRequest(request, signal);
+        const response = await userInputBridgeRef.current?.handleElicitationRequest(
+          request,
+          signal,
+        );
+        return state.finalSourceReplyCommit || requestAdmission.signal.aborted
+          ? createCodexElicitationResponse("decline")
+          : response;
       }
       if (request.method === "item/tool/requestUserInput") {
+        if (state.finalSourceReplyCommit && scope.turnId === turnId) {
+          return createCodexUserInputCancellationResponse();
+        }
         if (scope.turnId === turnId) {
           markCurrentTurnRequestProgress();
         }
-        return await userInputBridgeRef.current?.handleRequest(request, signal);
+        const response = await userInputBridgeRef.current?.handleRequest(request, signal);
+        return state.finalSourceReplyCommit || requestAdmission.signal.aborted
+          ? createCodexUserInputCancellationResponse()
+          : response;
       }
       if (request.method !== "item/tool/call") {
         if (isCodexAppServerApprovalRequest(request.method)) {
+          if (state.finalSourceReplyCommit && scope.turnId === turnId) {
+            return buildCodexAppServerApprovalRejectionResponse(request.method, request.params);
+          }
           if (scope.turnId === turnId) {
             markCurrentTurnRequestProgress();
           }
-          return await handleCodexAppServerApprovalRequest({
+          const response = await handleCodexAppServerApprovalRequest({
             method: request.method,
             requestParams: request.params,
             paramsForRun: params,
@@ -174,6 +213,9 @@ export function createCodexAttemptServerRequestController(
             onNativeToolFailureDisposition: (itemId, disposition, approvalKind) =>
               projector?.recordNativeToolApprovalFailure(itemId, disposition, approvalKind),
           });
+          return state.finalSourceReplyCommit || requestAdmission.signal.aborted
+            ? buildCodexAppServerApprovalRejectionResponse(request.method, request.params)
+            : response;
         }
         return undefined;
       }
@@ -187,6 +229,56 @@ export function createCodexAttemptServerRequestController(
         const response = await replayedExecution;
         await settlePluginRuntimeRefresh(turnId);
         return toCodexDynamicToolProtocolResponse(response) as JsonValue;
+      }
+      if (state.finalSourceReplyCommit) {
+        const { execution } = openClawDynamicToolExecutions.claim(call, async () => {
+          const response = createFailedDynamicToolResponse(
+            "OpenClaw rejected this dynamic tool call because the final source reply already ended the turn.",
+            { executionStarted: false, terminalReason: "cancelled" },
+          );
+          const protocolResponse = toCodexDynamicToolProtocolResponse(response);
+          trajectoryRecorder?.recordEvent("tool.call", {
+            threadId: call.threadId,
+            turnId: call.turnId,
+            toolCallId: call.callId,
+            name: call.tool,
+            arguments: call.arguments,
+            rejectedAfterFinalSourceReply: true,
+          });
+          projector?.recordDynamicToolCall({
+            callId: call.callId,
+            tool: call.tool,
+            arguments: call.arguments,
+          });
+          recordCodexDynamicToolResult(projector, call, response, protocolResponse);
+          trajectoryRecorder?.recordEvent("tool.result", {
+            threadId: call.threadId,
+            turnId: call.turnId,
+            toolCallId: call.callId,
+            name: call.tool,
+            success: false,
+            contentItems: protocolResponse.contentItems,
+            rejectedAfterFinalSourceReply: true,
+          });
+          emitDynamicToolTerminalDiagnostic({
+            response,
+            call,
+            agentId: sessionAgentId,
+            runId: params.runId,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            durationMs: 0,
+          });
+          embeddedAgentLog.warn("codex app-server rejected dynamic tool after final source reply", {
+            threadId: call.threadId,
+            turnId: call.turnId,
+            toolCallId: call.callId,
+            tool: call.tool,
+          });
+          return response;
+        });
+        // SAFETY: Codex dynamic-tool protocol responses contain only JSON-compatible fields.
+        return toCodexDynamicToolProtocolResponse(await execution) as JsonValue;
       }
       const toolCallOrdinal = allocateCodexToolOutcomeOrdinal?.(call.callId);
       markCurrentTurnRequestProgress();
@@ -283,6 +375,13 @@ export function createCodexAttemptServerRequestController(
             toolCallOrdinal,
             onAgentToolResult: params.onAgentToolResult,
             observeToolTerminal: params.observeToolTerminal,
+            onFinalSourceReplyDelivery: () => {
+              commitFinalSourceReplyDelivery({
+                call,
+                durationMs: Math.max(0, Date.now() - toolStartedAt),
+                requestAdmission,
+              });
+            },
             onFallbackSelected: () => {
               if (toolCallOrdinal !== undefined) {
                 suppressedDynamicToolOutcomeOrdinals.add(toolCallOrdinal);
@@ -297,6 +396,14 @@ export function createCodexAttemptServerRequestController(
                 timeoutMs: dynamicToolTimeoutMs,
               });
             },
+          });
+          // A post-middleware confirmation still owns the same monotonic
+          // boundary when the raw transport result was not independently enough.
+          commitFinalSourceReply({
+            call,
+            response,
+            durationMs: Math.max(0, Date.now() - toolStartedAt),
+            requestAdmission,
           });
           recordCodexDynamicToolResult(
             projector,
@@ -421,6 +528,7 @@ export function createCodexAttemptServerRequestController(
         unsubscribeToolDiagnosticObserver();
       }
     } finally {
+      requestAdmission.release();
       if (requestCountsAsTurnActivity) {
         state.activeAppServerTurnRequests -= 1;
         noteProgress(`request:${request.method}:response`);

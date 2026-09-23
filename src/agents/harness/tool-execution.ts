@@ -20,9 +20,24 @@ export function createAgentHarnessToolExecutionRegistry<TIdentity, TResult>(
       if (existing) {
         return { execution: existing, replayed: true } as const;
       }
-      const execution = start();
+      let resolveExecution!: (value: TResult) => void;
+      let rejectExecution!: (reason?: unknown) => void;
+      const execution = new Promise<TResult>((resolve, reject) => {
+        resolveExecution = resolve;
+        rejectExecution = reject;
+      });
+      // Publish ownership before invoking start: synchronous callbacks may
+      // re-enter with the same native call identity.
       executions.set(keyFor(call), execution);
+      try {
+        void start().then(resolveExecution, rejectExecution);
+      } catch (error) {
+        rejectExecution(error);
+      }
       return { execution, replayed: false } as const;
+    },
+    async drain() {
+      await Promise.allSettled(executions.values());
     },
   };
 }

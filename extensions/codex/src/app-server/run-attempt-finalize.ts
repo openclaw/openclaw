@@ -20,6 +20,8 @@ import { buildCodexContinuityCalibration } from "./context-engine-projection.js"
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { readCodexRateLimitsRevision, readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
+import { createCodexBindingRecoveryGuard } from "./run-attempt-binding-recovery.js";
+import { recordCommittedFinalSourceReplyResult } from "./run-attempt-final-source-result.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import {
   emitCodexAppServerEvent,
@@ -35,7 +37,6 @@ import {
 } from "./run-attempt-state.js";
 import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
-import { assertCodexBindingMayBeReplaced } from "./session-binding.js";
 import { captureCodexSettledTurnFinalizationContext } from "./settled-turn-context.js";
 import { normalizeCodexTrajectoryError, recordCodexTrajectoryCompletion } from "./trajectory.js";
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
@@ -78,22 +79,12 @@ export async function finalizeCodexAttempt(
     startupAuthProfileId,
   } = connection;
   const { toolBridge, toolState } = attemptTools;
-  const canClearBindingForRecovery = (operation: string) => {
-    if (params.expectedSessionRuntimeOwnership) {
-      // Optional recovery preserves both native ownership and the completed turn's outcome.
-      embeddedAgentLog.warn(
-        "codex app-server preserved native binding instead of recovery rotation",
-        {
-          threadId: resourceState.thread.threadId,
-          operation,
-        },
-      );
-      return false;
-    }
-    assertCodexBindingMayBeReplaced(resourceState.thread, operation);
-    return true;
-  };
-  const { state, completion, deadlines, settlementExpired } = turnRuntime;
+  const canClearBindingForRecovery = createCodexBindingRecoveryGuard(
+    resourceState.thread,
+    params.expectedSessionRuntimeOwnership,
+  );
+  const { state, completion, deadlines, settlementExpired, openClawDynamicToolExecutions } =
+    turnRuntime;
   const { emitLifecycleTerminal, buildLifecycleTerminalMeta } = lifecycle;
   const { drainNotificationQueue } = notifications;
   const { codexModelCallDiagnostics } = requestRuntime;
@@ -142,7 +133,10 @@ export async function finalizeCodexAttempt(
     // so a failed handoff still returns its completed effects and preserves its binding.
     await state.pluginRuntimeRefreshStop.catch(() => undefined);
   }
-  const settlement = drainNotificationQueue().then(async () => {
+  const settlement = Promise.all([
+    drainNotificationQueue(),
+    openClawDynamicToolExecutions.drain(),
+  ]).then(async () => {
     await closeProjection();
     await activeProjector.settlement.drain();
   });
@@ -167,6 +161,7 @@ export async function finalizeCodexAttempt(
         await resources.runCleanupStep("codex-transcript-checkpoint", closeProjection);
       }
     }
+    recordCommittedFinalSourceReplyResult(activeProjector, state.finalSourceReplyCommit?.call);
     const result = activeProjector.buildResult(toolBridge.telemetry, {
       yieldDetected: toolState.yieldDetected,
       // The original transcript fence excludes steering accepted during this turn.
