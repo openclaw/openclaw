@@ -36,15 +36,15 @@ type PortalToolOptions = {
   callGatewayRequest?: AgentToolGatewayRequestCaller;
 };
 
-export function createAvailablePortalTools(options?: {
-  sessionPortalTarget?: SessionPortalToolTarget;
-  senderIsOwner?: boolean;
-}): AnyAgentTool[] {
-  return options?.sessionPortalTarget
-    ? [createSessionPortalTool(options.sessionPortalTarget)]
-    : options?.senderIsOwner === false
-      ? []
-      : [createPortalTool()];
+export function createAvailablePortalTools(
+  options: PortalToolOptions & {
+    sessionPortalTarget?: SessionPortalToolTarget;
+    senderIsOwner?: boolean;
+  } = {},
+): AnyAgentTool[] {
+  return options.senderIsOwner === false && !options.sessionPortalTarget
+    ? []
+    : [portalTool(options, options.sessionPortalTarget)];
 }
 
 type PortalToolOutcome =
@@ -63,17 +63,6 @@ export function formatPortalResult(
         : `Portal ${outcome.id} closed. The Control UI Portals page has been updated.`;
   const result = jsonResult(outcome.result);
   return { ...result, content: [{ type: "text", text }, ...result.content] };
-}
-
-export function createPortalTool(options: PortalToolOptions = {}): AnyAgentTool {
-  return portalTool(options);
-}
-
-export function createSessionPortalTool(
-  target: SessionPortalToolTarget,
-  options: PortalToolOptions = {},
-): AnyAgentTool {
-  return portalTool(options, target);
 }
 
 function portalTool(options: PortalToolOptions, target?: SessionPortalToolTarget): AnyAgentTool {

@@ -120,18 +120,11 @@ export const portalHandlers: GatewayRequestHandlers = {
                   environmentId: owner.binding.environmentId,
                   ownerEpoch: owner.binding.ownerEpoch,
                   remotePort: request.port,
-                  connect: async () => {
-                    owner.environments.assertSessionAttachment(owner.binding);
-                    const stream = await connection.connect();
-                    try {
-                      await owner.environments.touchSessionAttachment(owner.binding);
-                      owner.environments.assertSessionAttachment(owner.binding);
-                      return stream;
-                    } catch (error) {
-                      stream.destroy();
-                      throw error;
-                    }
-                  },
+                  connect: () =>
+                    connection.connect(
+                      () => owner.environments.assertSessionAttachment(owner.binding),
+                      () => owner.environments.touchSessionAttachment(owner.binding),
+                    ),
                 },
                 assertCurrent: owner.assertCurrent,
                 onClose: connection.close,

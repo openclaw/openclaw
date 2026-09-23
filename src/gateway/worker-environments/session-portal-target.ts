@@ -9,14 +9,9 @@ export function captureSessionPortalTarget(
 ) {
   const attachment = environments.captureSessionAttachment(identity);
   const { binding } = attachment;
-  const environment = environments.get(binding.environmentId);
   const signal = environments.getDedicatedNodeLeaseSignal(binding.environmentId);
   if (
-    !environment ||
     (environmentId !== undefined && binding.environmentId !== environmentId) ||
-    !environment.leaseId ||
-    !environment.nodeDeviceId ||
-    environment.sharedHost !== false ||
     !signal ||
     signal.aborted
   ) {
@@ -27,13 +22,9 @@ export function captureSessionPortalTarget(
   const assertCurrent = () => {
     signal.throwIfAborted();
     attachment.assertCurrent();
-    const current = environments.get(binding.environmentId);
-    if (
-      environments.getDedicatedNodeLeaseSignal(binding.environmentId) !== signal ||
-      current?.leaseId !== environment.leaseId ||
-      current.nodeDeviceId !== environment.nodeDeviceId ||
-      current.ownerEpoch !== binding.ownerEpoch
-    ) {
+    // The provider owner validates the lease/node/epoch tuple; the attachment owner
+    // validates its exact generation. Do not duplicate either owner's projection here.
+    if (environments.getDedicatedNodeLeaseSignal(binding.environmentId) !== signal) {
       throw new Error("Session preview machine ownership changed");
     }
   };

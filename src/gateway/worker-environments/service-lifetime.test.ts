@@ -9,6 +9,46 @@ type WorkerLifecycleLease = support.WorkerLifecycleLease;
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
+  it.each([false, true])(
+    "withdraws dedicated access before persistence settles (rejected=%s)",
+    async (rejected) => {
+      const node = await support.seedReadyNodeDesktop("preview-withdrawal");
+      let sharedHost: boolean | undefined = false;
+      const service = support.createService(
+        support.createProvider({
+          resolveAllocation: async () => ({ leaseId: node.leaseId!, sharedHost: false }),
+          inspect: async () => ({ status: "active", sharedHost }),
+        }),
+      );
+      await service.reconcileOnce();
+      const qualification = service.getDedicatedNodeLeaseSignal(node.environmentId)!;
+      expect(qualification.aborted).toBe(false);
+      const entered = createDeferred();
+      const finish = createDeferred();
+      const store = support.testState.store;
+      const persist = store.reconcileSharedHost.bind(store);
+      vi.spyOn(store, "reconcileSharedHost").mockImplementationOnce(async (input) => {
+        entered.resolve();
+        await finish.promise;
+        if (rejected) {
+          throw new Error("fixture persistence failure");
+        }
+        return persist(input);
+      });
+      sharedHost = undefined;
+      const reconciliation = service.reconcileOnce();
+      try {
+        await entered.promise;
+        expect(qualification.aborted).toBe(true);
+        expect(service.getDedicatedNodeLeaseSignal(node.environmentId)).toBeUndefined();
+      } finally {
+        finish.resolve();
+        await reconciliation;
+      }
+      expect(service.getDedicatedNodeLeaseSignal(node.environmentId)).toBeUndefined();
+    },
+  );
+
   it("requires fresh explicit dedicated-node inspection for restricted previews without changing legacy classification", async () => {
     const node = await support.seedReadyNodeDesktop("preview-dedicated");
     let sharedHost: boolean | undefined;

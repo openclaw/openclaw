@@ -30,8 +30,6 @@ function sessionPortalOwner(options: GatewayRequestHandlerOptions, environmentId
     environmentId,
   );
   const assertInvocationCurrent = () => {
-    options.signal?.throwIfAborted();
-    options.sessionMutationCommitGuard?.();
     access.assertCurrent();
     target.assertCurrent();
   };
@@ -104,7 +102,6 @@ export const sessionPortalHandlers: GatewayRequestHandlers = {
       try {
         const request = options.params;
         const owner = sessionPortalOwner(options, request.environmentId);
-        const assertTargetCurrent = owner.assertCurrent;
         await owner.touch();
         owner.assertAllowed();
         const session = owner.access.retainSession();
@@ -144,20 +141,12 @@ export const sessionPortalHandlers: GatewayRequestHandlers = {
             environmentId: owner.binding.environmentId,
             ownerEpoch: owner.binding.ownerEpoch,
             remotePort: request.port,
-            connect: async () => {
-              // Published URLs are shareable resources owned by this environment, not the turn.
-              session.assertCurrent();
-              assertTargetCurrent();
-              const stream = await connection.connect();
-              try {
+            // Bearer connections retain resource authority, not the initiating actor or turn.
+            connect: () =>
+              connection.connect(() => {
                 session.assertCurrent();
-                assertTargetCurrent();
-                return stream;
-              } catch (error) {
-                stream.destroy();
-                throw error;
-              }
-            },
+                owner.assertCurrent();
+              }, owner.touch),
           },
           onClose: close,
           ...(request.title !== undefined ? { title: request.title } : {}),

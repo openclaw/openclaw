@@ -1,4 +1,8 @@
 import type { WorkerProvider } from "../../plugins/types.js";
+import {
+  isWorkerNodeCarrierBindingCurrent,
+  type WorkerNodeCarrierBinding,
+} from "./node-carrier-binding.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import { requireWorkerLeaseStatus } from "./service-validation.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
@@ -15,7 +19,7 @@ export function createDedicatedNodeLeaseAttestations(
   // also contains legacy omission defaults, so it cannot independently grant this access.
   const dedicatedNodeLeases = new Map<
     string,
-    { leaseId: string; nodeDeviceId: string; ownerEpoch: number; controller: AbortController }
+    { binding: WorkerNodeCarrierBinding; controller: AbortController }
   >();
   const retireDedicatedNodeLease = (environmentId: string) => {
     const proof = dedicatedNodeLeases.get(environmentId);
@@ -29,18 +33,19 @@ export function createDedicatedNodeLeaseAttestations(
       explicitDedicated &&
       record.sharedHost === false &&
       prior &&
-      prior.leaseId === record.leaseId &&
-      prior.nodeDeviceId === record.nodeDeviceId &&
-      prior.ownerEpoch === record.ownerEpoch
+      isWorkerNodeCarrierBindingCurrent(record, prior.binding)
     ) {
       return;
     }
     retireDedicatedNodeLease(record.environmentId);
     if (explicitDedicated && record.leaseId && record.nodeDeviceId && record.sharedHost === false) {
       dedicatedNodeLeases.set(record.environmentId, {
-        leaseId: record.leaseId,
-        nodeDeviceId: record.nodeDeviceId,
-        ownerEpoch: record.ownerEpoch,
+        binding: {
+          environmentId: record.environmentId,
+          leaseId: record.leaseId,
+          nodeDeviceId: record.nodeDeviceId,
+          ownerEpoch: record.ownerEpoch,
+        },
         controller: new AbortController(),
       });
     }
@@ -50,13 +55,8 @@ export function createDedicatedNodeLeaseAttestations(
     const current = store.get(environmentId);
     return !options.isStopping() &&
       proof &&
-      current &&
-      current.leaseId === proof.leaseId &&
-      current.nodeDeviceId === proof.nodeDeviceId &&
-      current.ownerEpoch === proof.ownerEpoch &&
-      current.sharedHost === false &&
-      current.destroyRequestedAtMs === null &&
-      ["ready", "idle", "attached"].includes(current.state)
+      current?.sharedHost === false &&
+      isWorkerNodeCarrierBindingCurrent(current, proof.binding)
       ? proof.controller.signal
       : undefined;
   };
@@ -113,7 +113,9 @@ export function createDedicatedNodeLeaseAttestations(
         });
       if (inspection) {
         assertCurrent(record);
-        if (inspection.status !== "active") {
+        // A successful observation withdraws access now, even if persistence later
+        // stalls or fails. Failed inspections preserve the last authoritative fact.
+        if (!inspection.explicitlyDedicated) {
           retireDedicatedNodeLease(record.environmentId);
         }
       }

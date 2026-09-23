@@ -126,7 +126,13 @@ export type WorkerEnvironmentServiceContract = {
     environmentId: string;
     ownerEpoch: number;
     remotePort: number;
-  }): Promise<{ connect: () => Promise<import("node:stream").Duplex>; close: () => Promise<void> }>;
+  }): Promise<{
+    connect: (
+      assertCurrent?: () => void,
+      touch?: () => Promise<void>,
+    ) => Promise<import("node:stream").Duplex>;
+    close: () => Promise<void>;
+  }>;
   list(): WorkerEnvironmentServiceRecord[];
   get(environmentId: string): WorkerEnvironmentServiceRecord | undefined;
   inventoryVersion(): number;

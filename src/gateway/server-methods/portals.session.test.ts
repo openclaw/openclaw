@@ -39,12 +39,20 @@ function fixture() {
     }
   };
   const close = vi.fn(async () => {});
-  const connect = vi.fn(async () => new PassThrough());
+  const touch = vi.fn(async () => {});
+  const connect = vi.fn(
+    async (assertCurrent?: () => void, touchAttachment?: () => Promise<void>) => {
+      assertCurrent?.();
+      await touchAttachment?.();
+      assertCurrent?.();
+      return new PassThrough();
+    },
+  );
   const environments = {
     captureSessionAttachment: vi.fn(() => ({
       binding,
       assertCurrent: assertAttachment,
-      touch: async () => {},
+      touch,
     })),
     get: () => ({ ...binding, leaseId: "lease-one", nodeDeviceId: "node-one", sharedHost: false }),
     getDedicatedNodeLeaseSignal: () => (dedicated ? qualification.signal : undefined),
@@ -89,6 +97,7 @@ function fixture() {
     release,
     close,
     connect,
+    touch,
     invoke,
     broadcast,
     revokeActor: () => {
@@ -256,8 +265,10 @@ describe("session-scoped attached worker portals", () => {
     f.revokeActor();
     const stream = await target.connect();
     stream.destroy();
+    expect(f.touch).toHaveBeenCalledTimes(2);
     f.replaceAttachment();
     await expect(target.connect()).rejects.toThrow("attachment replaced");
-    expect(f.connect).toHaveBeenCalledOnce();
+    expect(f.connect).toHaveBeenCalledTimes(2);
+    expect(f.touch).toHaveBeenCalledTimes(2);
   });
 });
