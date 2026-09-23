@@ -283,7 +283,9 @@ suite.define(() => {
       });
       const transcript = page.locator(".chat-thread-inner");
       const itemOccurrences = async () => {
-        const bubbles = await transcript.locator(".chat-bubble").allTextContents();
+        const bubbles = await transcript
+          .locator(".chat-bubble, .chat-working-indicator__preamble")
+          .allTextContents();
         return items.map(({ text }) => bubbles.filter((bubble) => bubble.trim() === text).length);
       };
 
@@ -293,6 +295,9 @@ suite.define(() => {
         await gateway.emitGatewayEvent("agent", event);
       }
       await expect.poll(itemOccurrences).toEqual([1, 1]);
+      await expect
+        .poll(() => transcript.locator(".chat-working-indicator__preamble").textContent())
+        .toBe(items[1].text);
 
       const startupCount = (await gateway.getRequests("chat.startup")).length;
       await gateway.setMethodResponse("chat.startup", {
@@ -372,7 +377,10 @@ suite.define(() => {
         (await page.locator(".chat-group.assistant .chat-text").allTextContents()).map((value) =>
           value.trim(),
         );
-      await expect.poll(assistantTexts).toEqual([...commentary, "Still working."]);
+      await expect.poll(assistantTexts).toEqual([commentary[0], "Still working."]);
+      await expect
+        .poll(() => page.locator(".chat-working-indicator__preamble").textContent())
+        .toBe(commentary[1]);
       expect(await page.locator(".chat-tool-msg-summary").count()).toBe(1);
 
       if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
