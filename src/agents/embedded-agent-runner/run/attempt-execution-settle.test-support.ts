@@ -1,6 +1,17 @@
+import path from "node:path";
 import { vi, type Mock } from "vitest";
+import {
+  loadSessionEntryReadOnly,
+  loadTranscriptEvents,
+  upsertSessionEntryCore,
+} from "../../../config/sessions/session-accessor.js";
+import { waitForSessionTranscriptProjection } from "../../../config/sessions/session-transcript-reconcile.js";
+import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
+import type { OpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
+import { SessionManager } from "../../sessions/session-manager.js";
 import type { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
+import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 
 type SettledInput = Parameters<typeof runEmbeddedAttemptSettledPhase>[0];
 
@@ -287,5 +298,92 @@ export function createFixture(mocks: {
     subscription,
     trajectoryRecorder,
     unsubscribe,
+  };
+}
+
+export async function createPersistedImageNoteFixture(
+  mocks: Parameters<typeof createFixture>[0],
+  testState: OpenClawTestState,
+  storage: "file-backed" | "incognito" = "file-backed",
+  reopen = false,
+) {
+  const fixture = createFixture(mocks);
+  const target = {
+    agentId: "main",
+    sessionId: "image-note",
+    sessionKey:
+      storage === "incognito"
+        ? "agent:main:dashboard:incognito-image-note"
+        : "agent:main:image-note",
+    storePath: path.join(testState.agentDir("main"), "openclaw-agent.sqlite"),
+  };
+  const entry = reopen
+    ? loadSessionEntryReadOnly(target)
+    : await upsertSessionEntryCore(target, {
+        sessionId: target.sessionId,
+        updatedAt: 1,
+        lifecycleRevision: "image-note-generation",
+        activeWriterRunId: fixture.input.attempt.runId,
+        ...(storage === "incognito" ? { incognito: true } : {}),
+      });
+  if (!entry?.lifecycleRevision) {
+    throw new Error("Expected a durable lifecycle revision for the admitted image-note writer");
+  }
+  const manager = reopen
+    ? await SessionManager.openAsync(target, testState.workspaceDir)
+    : SessionManager.open(target, testState.workspaceDir);
+  const activeSession = fixture.input.prepared.sessionRuntime.agentSession.activeSession;
+  if (!reopen) {
+    manager.appendMessage({ role: "user", content: "Describe this image", timestamp: 1 });
+    for (const message of activeSession.messages) {
+      if (message.role !== "assistant") {
+        throw new Error("Expected the completed assistant turn in the settlement fixture");
+      }
+      manager.appendMessage(message);
+    }
+  }
+  await waitForSessionTranscriptProjection(target);
+  const before = await loadTranscriptEvents(target);
+  const previousLeaf = manager.getLeafId();
+  const previousMessages = manager.buildSessionContext().messages;
+  activeSession.agent.state.messages = [...previousMessages];
+  Object.defineProperty(activeSession, "messages", {
+    get: () => activeSession.agent.state.messages,
+  });
+  fixture.input.prepared.sessionRuntime.sessionManager = manager;
+  fixture.input.attempt.sessionTarget = target;
+  fixture.input.attempt.sessionId = target.sessionId;
+  fixture.input.attempt.sessionKey = target.sessionKey;
+  fixture.input.getRepairedRejectedProviderReplay = () => false;
+  fixture.input.preparedStreamRuntime.stream.getBeforeAgentFinalizeRevisionReason = () => undefined;
+  fixture.sessionRuntimeState.currentTurnImageFailureCount = 1;
+  const settleStream = mocks.settleStream.getMockImplementation()!;
+  mocks.settleStream.mockImplementationOnce(async (...args) => ({
+    ...(await settleStream(...args)),
+    messagesSnapshot: [...previousMessages],
+  }));
+  const lifecycle = createEmbeddedAttemptTranscriptLifecycle(fixture.input.attempt);
+  fixture.input.sessionLock.withOwnedTranscriptWrite = (operation) =>
+    withOwnedSessionTranscriptWrites(
+      {
+        sessionTarget: {
+          ...target,
+          expectedLifecycleRevision: entry.lifecycleRevision,
+          expectedWriterRunId: fixture.input.attempt.runId,
+        },
+        assertCommitAllowed: () => fixture.input.runAbortController.signal.throwIfAborted(),
+        withTranscriptWrite: (write) => lifecycle.withTranscriptWrite(write),
+      },
+      () => lifecycle.withTranscriptWrite(operation),
+    );
+  return {
+    fixture,
+    target,
+    manager,
+    activeSession,
+    before,
+    previousLeaf,
+    previousMessages,
+    lifecycle,
   };
 }

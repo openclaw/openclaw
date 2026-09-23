@@ -1,10 +1,8 @@
-import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   appendTranscriptEvent,
-  loadSessionEntryReadOnly,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
@@ -17,7 +15,6 @@ import { sessionTranscriptIndexNeedsReconcile } from "../../../config/sessions/s
 import { waitForSessionTranscriptProjection } from "../../../config/sessions/session-transcript-reconcile.js";
 import { resolveSessionTranscriptActiveLeafEntryId } from "../../../config/sessions/transcript-tree.js";
 import { selectVisibleTranscriptEvents } from "../../../config/sessions/transcript-visible-events.js";
-import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../../../infra/sqlite-worker-operation-admission.js";
 import * as workerStore from "../../../infra/sqlite-worker-store.js";
@@ -28,10 +25,7 @@ import type {
 import { createNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
-import {
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../../../test-utils/openclaw-test-state.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { runWithModelFallback } from "../../model-fallback-runner.js";
 import { isRecordedModelFallbackStop } from "../../model-fallback-stop.js";
@@ -81,97 +75,13 @@ vi.mock("./attempt-stream-settle.js", () => ({
   settleEmbeddedAttemptStream: mocks.settleStream,
 }));
 
-import { createFixture } from "./attempt-execution-settle.test-support.js";
+import {
+  createFixture,
+  createPersistedImageNoteFixture,
+} from "./attempt-execution-settle.test-support.js";
 import { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
-import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import { prepareEmbeddedRunTerminal } from "./terminal-preparation.js";
-
-async function createPersistedImageNoteFixture(
-  testState: OpenClawTestState,
-  storage: "file-backed" | "incognito" = "file-backed",
-  reopen = false,
-) {
-  const fixture = createFixture(mocks);
-  const target = {
-    agentId: "main",
-    sessionId: "image-note",
-    sessionKey:
-      storage === "incognito"
-        ? "agent:main:dashboard:incognito-image-note"
-        : "agent:main:image-note",
-    storePath: path.join(testState.agentDir("main"), "openclaw-agent.sqlite"),
-  };
-  const entry = reopen
-    ? loadSessionEntryReadOnly(target)
-    : await upsertSessionEntryCore(target, {
-        sessionId: target.sessionId,
-        updatedAt: 1,
-        lifecycleRevision: "image-note-generation",
-        activeWriterRunId: fixture.input.attempt.runId,
-        ...(storage === "incognito" ? { incognito: true } : {}),
-      });
-  if (!entry?.lifecycleRevision) {
-    throw new Error("Expected a durable lifecycle revision for the admitted image-note writer");
-  }
-  const manager = reopen
-    ? await SessionManager.openAsync(target, testState.workspaceDir)
-    : SessionManager.open(target, testState.workspaceDir);
-  const activeSession = fixture.input.prepared.sessionRuntime.agentSession.activeSession;
-  if (!reopen) {
-    manager.appendMessage({ role: "user", content: "Describe this image", timestamp: 1 });
-    for (const message of activeSession.messages) {
-      if (message.role !== "assistant") {
-        throw new Error("Expected the completed assistant turn in the settlement fixture");
-      }
-      manager.appendMessage(message);
-    }
-  }
-  await waitForSessionTranscriptProjection(target);
-  const before = await loadTranscriptEvents(target);
-  const previousLeaf = manager.getLeafId();
-  const previousMessages = manager.buildSessionContext().messages;
-  activeSession.agent.state.messages = [...previousMessages];
-  Object.defineProperty(activeSession, "messages", {
-    get: () => activeSession.agent.state.messages,
-  });
-  fixture.input.prepared.sessionRuntime.sessionManager = manager;
-  fixture.input.attempt.sessionTarget = target;
-  fixture.input.attempt.sessionId = target.sessionId;
-  fixture.input.attempt.sessionKey = target.sessionKey;
-  fixture.input.getRepairedRejectedProviderReplay = () => false;
-  fixture.input.preparedStreamRuntime.stream.getBeforeAgentFinalizeRevisionReason = () => undefined;
-  fixture.sessionRuntimeState.currentTurnImageFailureCount = 1;
-  const settleStream = mocks.settleStream.getMockImplementation()!;
-  mocks.settleStream.mockImplementationOnce(async (...args) => ({
-    ...(await settleStream(...args)),
-    messagesSnapshot: [...previousMessages],
-  }));
-  const lifecycle = createEmbeddedAttemptTranscriptLifecycle(fixture.input.attempt);
-  fixture.input.sessionLock.withOwnedTranscriptWrite = (operation) =>
-    withOwnedSessionTranscriptWrites(
-      {
-        sessionTarget: {
-          ...target,
-          expectedLifecycleRevision: entry.lifecycleRevision,
-          expectedWriterRunId: fixture.input.attempt.runId,
-        },
-        assertCommitAllowed: () => fixture.input.runAbortController.signal.throwIfAborted(),
-        withTranscriptWrite: (write) => lifecycle.withTranscriptWrite(write),
-      },
-      () => lifecycle.withTranscriptWrite(operation),
-    );
-  return {
-    fixture,
-    target,
-    manager,
-    activeSession,
-    before,
-    previousLeaf,
-    previousMessages,
-    lifecycle,
-  };
-}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -259,7 +169,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
   it("persists and publishes image failure notes through settlement without parent SQL", async () => {
     await withOpenClawTestState({ label: "settled-image-note" }, async (testState) => {
       const { fixture, target, activeSession, before, previousLeaf, previousMessages, lifecycle } =
-        await createPersistedImageNoteFixture(testState);
+        await createPersistedImageNoteFixture(mocks, testState);
       const actualAttemptResult =
         await vi.importActual<typeof import("./attempt-result.js")>("./attempt-result.js");
       mocks.completeResult.mockImplementationOnce(
@@ -358,7 +268,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     "retains one canonical $storage image note through configured fallback (redacted: $redact)",
     async ({ storage, redact }) => {
       await withOpenClawTestState({ label: "settled-image-note-redaction" }, async (testState) => {
-        const first = await createPersistedImageNoteFixture(testState, storage);
+        const first = await createPersistedImageNoteFixture(mocks, testState, storage);
         const { target, before, previousMessages } = first;
         const config = redact ? { logging: { redactPatterns: ["run-1"] } } : undefined;
         const actualAttemptResult =
@@ -385,7 +295,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
               const current =
                 attempts.length === 0
                   ? first
-                  : await createPersistedImageNoteFixture(testState, storage, true);
+                  : await createPersistedImageNoteFixture(mocks, testState, storage, true);
               routes.push(provider);
               attempts.push(current);
               if (current !== first) {
@@ -457,7 +367,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     "does not republish a historical image note omitted by compaction (%s)",
     async (storage) => {
       await withOpenClawTestState({ label: "settled-image-note-context" }, async (testState) => {
-        const first = await createPersistedImageNoteFixture(testState, storage);
+        const first = await createPersistedImageNoteFixture(mocks, testState, storage);
         try {
           await runEmbeddedAttemptSettledPhase(first.fixture.input);
         } finally {
@@ -466,7 +376,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
         const source = await SessionManager.openAsync(first.target, testState.workspaceDir);
         const kept = source.appendCustomMessageEntry("retained-context", "Current context", true);
         source.appendCompaction("Earlier image failure summarized", kept, 100);
-        const current = await createPersistedImageNoteFixture(testState, storage, true);
+        const current = await createPersistedImageNoteFixture(mocks, testState, storage, true);
         try {
           const expected = current.manager.buildSessionContext().messages;
           expect(expected).not.toEqual(
@@ -517,7 +427,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
           previousLeaf,
           previousMessages,
           lifecycle,
-        } = await createPersistedImageNoteFixture(testState, storage);
+        } = await createPersistedImageNoteFixture(mocks, testState, storage);
         const state = activeSession.agent.state;
         const descriptor = Object.getOwnPropertyDescriptor(state, "messages");
         if (!descriptor) {
@@ -673,7 +583,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     async (transition) => {
       await withOpenClawTestState({ label: "settled-image-note-owner" }, async (testState) => {
         const { fixture, target, manager, activeSession, before, previousMessages, lifecycle } =
-          await createPersistedImageNoteFixture(testState);
+          await createPersistedImageNoteFixture(mocks, testState);
         const replacement = {
           ...target,
           sessionId: "replacement",
