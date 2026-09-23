@@ -291,6 +291,9 @@ suite.define(() => {
                 text: group.textContent ?? "",
               })),
             );
+            const firstUserIndex = reloadedGroups.findIndex(
+              (group) => group.user && group.text.includes(firstPrompt),
+            );
             const firstAssistantIndex = reloadedGroups.findIndex(
               (group) => group.assistant && group.text.includes(opening.trim()),
             );
@@ -300,7 +303,8 @@ suite.define(() => {
             const followUpAssistantIndex = reloadedGroups.findIndex(
               (group) => group.assistant && group.text.includes(followUpReply),
             );
-            expect(firstAssistantIndex).toBeGreaterThanOrEqual(0);
+            expect(firstUserIndex).toBeGreaterThanOrEqual(0);
+            expect(firstAssistantIndex).toBeGreaterThan(firstUserIndex);
             expect(followUpUserIndex).toBeGreaterThan(firstAssistantIndex);
             expect(followUpAssistantIndex).toBeGreaterThan(followUpUserIndex);
             expect(reloadedGroups[followUpAssistantIndex]?.text).not.toContain(offlineTail);
