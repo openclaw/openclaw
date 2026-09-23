@@ -150,6 +150,7 @@ describe("gateway lock", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("blocks concurrent acquisition until release", async () => {
@@ -984,15 +985,16 @@ describe("gateway lock", () => {
     };
 
     const openSpy = vi.spyOn(fs, "open").mockResolvedValueOnce(mockHandle as never);
-
+    // Inject the write failure through the Node FileHandle, not a native parent-directory open.
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
     await expect(acquireForTest(env)).rejects.toMatchObject({
       name: "GatewayLockError",
       cause: writeError,
     });
 
+    expect(mockHandle.writeFile).toHaveBeenCalledTimes(1);
     expect(close).toHaveBeenCalledTimes(1);
-    // fs-safe 0.5.2 failure cleanup removes the lock file only when it matches
-    // the snapshot fs-safe wrote itself; this out-of-band file is preserved.
+    // Failure cleanup must preserve the file created outside the lock's ownership receipt.
     await expect(fs.readFile(stateLockPath, "utf8")).resolves.toBe("partial");
 
     openSpy.mockRestore();
