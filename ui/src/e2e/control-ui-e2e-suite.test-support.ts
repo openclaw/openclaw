@@ -8,17 +8,7 @@ import {
   type Locator,
   type Page,
 } from "playwright";
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  inject,
-  vi,
-  type TestContext,
-} from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, inject, vi } from "vitest";
 import { getActiveGatewayRootWorkCount } from "../../../src/process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
@@ -57,7 +47,13 @@ type ControlUiE2eScenario<T> = {
   release?: () => Promise<void>;
   retainedState?: () => string | undefined;
 };
-type ControlUiE2eScenarioContext = Pick<TestContext, "signal" | "onTestFinished" | "task">;
+type ControlUiE2eScenarioContext = {
+  readonly signal: AbortSignal;
+  readonly onTestFinished: (cleanup: () => void | Promise<void>, timeout?: number) => void;
+  readonly task: {
+    readonly result?: { errors?: readonly unknown[] };
+  };
+};
 type ControlUiE2eSuite = {
   readonly artifactDir: string;
   readonly browser: Browser;
