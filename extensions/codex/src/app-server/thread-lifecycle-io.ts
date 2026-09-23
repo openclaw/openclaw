@@ -596,6 +596,7 @@ export async function startFreshCodexThread(
   }
   const rolloutPath = resolveCodexThreadRolloutPath(response.thread);
   const modelProvider = resolveCodexAppServerModelProvider({
+    homeScope: params.appServer.start.homeScope,
     provider: params.params.provider,
     authProfileId: params.params.authProfileId,
     authProfileStore: params.params.authProfileStore,

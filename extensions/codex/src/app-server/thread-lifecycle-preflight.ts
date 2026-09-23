@@ -106,6 +106,7 @@ export async function prepareCodexThreadRequestContext(
   },
 ): Promise<CodexThreadRequestContext> {
   const startModelSelection = resolveCodexAppServerThreadModelSelection({
+    homeScope: params.appServer.start.homeScope,
     provider: params.params.provider,
     model: params.runtimeModelId ?? params.params.modelId,
     binding: options.selectionBinding,

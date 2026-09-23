@@ -232,6 +232,42 @@ Engine startup, CDP connectivity, task completion, and full OpenClaw integration
 are separate checks. A running container or a successful `Browser.getVersion`
 does not prove that snapshots, references, and actions work through OpenClaw.
 
+### Chromium headless shell baseline
+
+For an alternative without Lightpanda's AGPL engine, first test Chromium's
+headless shell through the existing Chromium profile. It retains Chromium's
+third-party license obligations; this is not an MIT-only binary. It does not
+require another automation daemon or an OpenClaw engine adapter.
+
+Use the repository-pinned Playwright installer rather than an unpinned wrapper:
+
+```sh
+node node_modules/playwright-core/cli.js install chromium-headless-shell
+node node_modules/playwright-core/cli.js install --dry-run chromium-headless-shell
+```
+
+The second command prints the selected version, platform download, and install
+directory. Locate `chrome-headless-shell` (or `chrome-headless-shell.exe` on
+Windows) in that directory. Linux also needs the browser's system libraries and
+fonts; see [Linux troubleshooting](/tools/browser-linux-troubleshooting).
+Run from the repository root, quoting paths that contain spaces:
+
+```sh
+node --import ./scripts/tsx.mjs extensions/browser/scripts/bench-lightweight.ts --headless-shell "/path/to/chrome-headless-shell" --iterations 10 --output headless-shell-benchmark.json
+```
+
+The report labels the requested distribution separately from its Chromium
+protocol engine and the observed browser version. `--headless-shell` selects
+the benchmark executable only: it does not install a production browser,
+change a profile, or establish binary provenance. Preserve its complete
+distribution and `LICENSE.headless_shell` when reviewing deployment. The installer
+also downloads platform helper assets, including FFmpeg; review and retain their
+own notices separately. Use
+separate invocations for the full Chromium and headless-shell comparisons;
+memory or startup savings must be measured, not inferred from download size.
+
+### Native engine comparison
+
 Run the opt-in synthetic route benchmark from the repository root after
 installing development dependencies:
 
@@ -239,7 +275,7 @@ installing development dependencies:
 node --import ./scripts/tsx.mjs extensions/browser/scripts/bench-lightweight.ts --lightpanda /path/to/lightpanda --chromium /path/to/chrome --iterations 10 --output lightweight-benchmark.json
 ```
 
-Either binary flag can be used alone. The script creates isolated OpenClaw
+Any binary flag can be used alone. The script creates isolated OpenClaw
 state and browser data, serves a local form, then verifies navigation, the default
 efficient AI snapshot, reference-based typing/clicking, exactly one form
 submission, waiting, and text extraction through the browser route dispatcher.

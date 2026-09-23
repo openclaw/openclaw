@@ -268,7 +268,11 @@ describe("operator model policy on plugin completions", () => {
         expect(signals.get("model-b")?.aborted).toBe(false);
         expect(() => authority.assertCurrent()).not.toThrow();
         finishA.resolve();
-        await expect(first).rejects.toThrow("cannot use this model");
+        await expect(first).rejects.toMatchObject({
+          name: "LlmCompleteError",
+          code: "LLM_COMPLETION_NOT_AUTHORIZED",
+          message: expect.stringContaining("cannot use this model"),
+        });
         finishB.resolve();
         await expect(second).resolves.toMatchObject({ text: "Allowed answer." });
       } finally {
@@ -331,11 +335,15 @@ describe("operator model policy on plugin completions", () => {
                   invoke,
                 ),
         ),
-      ).rejects.toThrow(
-        source === "unbound-operator"
-          ? "requires original Gateway authority"
-          : "cannot use this model",
-      );
+      ).rejects.toMatchObject({
+        name: "LlmCompleteError",
+        code: "LLM_COMPLETION_NOT_AUTHORIZED",
+        message: expect.stringContaining(
+          source === "unbound-operator"
+            ? "requires original Gateway authority"
+            : "cannot use this model",
+        ),
+      });
       expect(mocks.acquire).not.toHaveBeenCalled();
       expect(mocks.complete).not.toHaveBeenCalled();
       expect(mocks.isolated).not.toHaveBeenCalled();
@@ -377,7 +385,11 @@ describe("operator model policy on plugin completions", () => {
     });
     await expect(
       withWork(() => asOperator(operator(), () => completion().complete(request("direct")))),
-    ).rejects.toThrow("cannot use this model");
+    ).rejects.toMatchObject({
+      name: "LlmCompleteError",
+      code: "LLM_COMPLETION_NOT_AUTHORIZED",
+      message: expect.stringContaining("cannot use this model"),
+    });
     expect(mocks.complete).not.toHaveBeenCalled();
   });
 
@@ -418,42 +430,149 @@ describe("operator model policy on plugin completions", () => {
     expect(mocks.complete).toHaveBeenCalledOnce();
   });
 
-  it("rechecks a retired requester after model preparation", async () => {
-    const started = createDeferredCore();
-    const resume = createDeferredCore();
-    let active = true;
-    mocks.acquire.mockImplementation(async () => {
-      started.resolve();
-      await resume.promise;
-      return preparedModel();
-    });
-    const authority = operator(() => {
-      if (!active) {
+  it.each(["direct", "isolated"] as const)(
+    "reports a retired requester before %s preparation",
+    async (mode) => {
+      const authority = operator(() => {
         throw new Error("requester retired");
-      }
-    });
-    const pending = withWork(() =>
-      asOperator(authority, () => completion().complete(request("direct"))),
-    );
-    await Promise.race([
-      started.promise,
-      pending.then(() => {
-        throw new Error("completion settled before model preparation started");
-      }),
-    ]);
-    active = false;
-    resume.resolve();
-    await expect(pending).rejects.toThrow("requester retired");
-    expect(mocks.complete).not.toHaveBeenCalled();
-  });
+      });
+      await expect(
+        withWork(() => asOperator(authority, () => completion().complete(request(mode)))),
+      ).rejects.toMatchObject({
+        name: "LlmCompleteError",
+        code: "LLM_COMPLETION_NOT_AUTHORIZED",
+        message: "requester retired",
+      });
+      expect(mocks.acquire).not.toHaveBeenCalled();
+      expect(mocks.complete).not.toHaveBeenCalled();
+      expect(mocks.isolated).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["direct", "isolated"] as const)(
-    "retains the requester through %s cleanup after returning the answer",
+    "rechecks a retired requester after awaited %s work",
     async (mode) => {
-      const cleanup = createDeferredCore();
+      const started = createDeferredCore();
+      const resume = createDeferredCore();
+      let active = true;
       const release = vi.fn();
       const retain = vi.fn(() => release);
       if (mode === "direct") {
+        mocks.acquire.mockImplementation(async () => {
+          started.resolve();
+          await resume.promise;
+          return preparedModel();
+        });
+      } else {
+        mocks.isolated.mockImplementation(async (params) => {
+          started.resolve();
+          await resume.promise;
+          params.assertCurrent?.();
+          return {
+            text: "Allowed answer.",
+            provider: "test-provider",
+            model: "allowed",
+            owner: { kind: "harness", id: "test-harness" },
+          };
+        });
+      }
+      const authority = operator(() => {
+        if (!active) {
+          throw new Error("requester retired");
+        }
+      }, retain);
+      const pending = withWork(() =>
+        asOperator(authority, () => completion().complete(request(mode))),
+      );
+      await Promise.race([
+        started.promise,
+        pending.then(() => {
+          throw new Error("completion settled before work started");
+        }),
+      ]);
+      active = false;
+      resume.resolve();
+      await expect(pending).rejects.toMatchObject({
+        name: "LlmCompleteError",
+        code: "LLM_COMPLETION_NOT_AUTHORIZED",
+        message: "requester retired",
+      });
+      expect(mocks.complete).not.toHaveBeenCalled();
+      expect(release).toHaveBeenCalledTimes(retain.mock.calls.length);
+    },
+  );
+
+  it.each(["direct", "isolated"] as const)(
+    "codes source revocation during %s work before the next guard",
+    async (mode) => {
+      const controller = new AbortController();
+      const revocation = new Error("source revoked");
+      const started = createDeferredCore();
+      const authority = createAdmittedRunOperatorAuthority({
+        profileId: "model-reader",
+        scopes: ["operator.write"],
+        signal: controller.signal,
+        assertCurrent: () => {},
+      });
+      const waitForAbort = async (signal: AbortSignal | undefined) => {
+        if (!signal) {
+          throw new Error("operator signal missing");
+        }
+        started.resolve();
+        await new Promise<never>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(revocation), { once: true });
+        });
+      };
+      if (mode === "direct") {
+        mocks.acquire.mockImplementation(async (params) => {
+          await waitForAbort(params.signal);
+          return preparedModel();
+        });
+      } else {
+        mocks.isolated.mockImplementation(async (params) => {
+          await waitForAbort(params.abortSignal);
+          return {
+            text: "unreachable",
+            provider: "test-provider",
+            model: "allowed",
+            owner: { kind: "harness", id: "test-harness" },
+          };
+        });
+      }
+      const pending = withWork(() =>
+        asOperator(authority, () => completion().complete(request(mode))),
+      );
+      await Promise.race([started.promise, pending]);
+      controller.abort(revocation);
+      await expect(pending).rejects.toMatchObject({
+        name: "LlmCompleteError",
+        code: "LLM_COMPLETION_NOT_AUTHORIZED",
+      });
+      expect(mocks.complete).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { mode: "direct", result: "answer" },
+    { mode: "isolated", result: "answer" },
+    { mode: "direct", result: "denial" },
+    { mode: "isolated", result: "denial" },
+  ] as const)(
+    "retains the requester through $mode cleanup after returning the $result",
+    async ({ mode, result }) => {
+      const cleanup = createDeferredCore();
+      const release = vi.fn();
+      const retain = vi.fn(() => release);
+      let active = true;
+      if (mode === "direct") {
+        if (result === "denial") {
+          mocks.complete.mockImplementation(async (params) => {
+            void trackAsyncWork(() => cleanup.promise);
+            active = false;
+            params.assertCurrent?.();
+            throw new Error("retired completion passed its guard");
+          });
+        }
         mocks.acquire.mockImplementation(async () => ({
           ...preparedModel(),
           async [Symbol.asyncDispose]() {
@@ -461,8 +580,12 @@ describe("operator model policy on plugin completions", () => {
           },
         }));
       } else {
-        mocks.isolated.mockImplementation(async () => {
+        mocks.isolated.mockImplementation(async (params) => {
           void trackAsyncWork(() => cleanup.promise);
+          if (result === "denial") {
+            active = false;
+            params.assertCurrent?.();
+          }
           return {
             text: "Allowed answer.",
             provider: "test-provider",
@@ -473,13 +596,24 @@ describe("operator model policy on plugin completions", () => {
       }
       const work = new AsyncWorkScope();
       try {
-        const result = await work.track(() =>
+        const pending = work.track(() =>
           asOperator(
-            operator(() => {}, retain),
+            operator(() => {
+              if (!active) {
+                throw new Error("requester retired");
+              }
+            }, retain),
             () => completion().complete(request(mode)),
           ),
         );
-        expect(result.text).toBe("Allowed answer.");
+        if (result === "answer") {
+          await expect(pending).resolves.toMatchObject({ text: "Allowed answer." });
+        } else {
+          await expect(pending).rejects.toMatchObject({
+            name: "LlmCompleteError",
+            code: "LLM_COMPLETION_NOT_AUTHORIZED",
+          });
+        }
         expect(retain).toHaveBeenCalled();
         expect(release).not.toHaveBeenCalled();
       } finally {

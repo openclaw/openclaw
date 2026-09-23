@@ -70,34 +70,20 @@ function resolveTagFetchRef(candidate: string): string | null {
 
 function buildDevTargetRefResolutionCandidates(devTargetRef: string): string[] {
   const trimmed = devTargetRef.trim();
-  const candidates: string[] = [];
-  const addCandidate = (candidate?: string | null) => {
-    if (candidate && !candidates.includes(candidate)) {
-      candidates.push(candidate);
-    }
-  };
   if (looksLikeFullCommitSha(trimmed) || trimmed.startsWith("refs/remotes/")) {
-    addCandidate(trimmed);
-    return candidates;
+    return [trimmed];
   }
   if (trimmed.startsWith("refs/heads/")) {
-    addCandidate(`refs/remotes/origin/${trimmed.slice("refs/heads/".length)}`);
-    return candidates;
+    return [`refs/remotes/origin/${trimmed.slice("refs/heads/".length)}`];
   }
   if (trimmed.startsWith("origin/")) {
-    addCandidate(`refs/remotes/${trimmed}`);
-    return candidates;
+    return [`refs/remotes/${trimmed}`];
   }
   if (trimmed.startsWith("refs/tags/")) {
-    addCandidate(`${trimmed}^{}`);
-    addCandidate(trimmed);
-    return candidates;
+    return [`${trimmed}^{}`, trimmed];
   }
   // Plain branch names resolve from the freshly fetched remote ref.
-  addCandidate(`refs/remotes/origin/${trimmed}`);
-  addCandidate(`refs/tags/${trimmed}^{}`);
-  addCandidate(`refs/tags/${trimmed}`);
-  return candidates;
+  return [`refs/remotes/origin/${trimmed}`, `refs/tags/${trimmed}^{}`, `refs/tags/${trimmed}`];
 }
 
 function resolvePreflightWorktreeDir(preflightRoot: string) {

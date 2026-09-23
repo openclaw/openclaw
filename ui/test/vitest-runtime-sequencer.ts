@@ -1,6 +1,6 @@
 import path from "node:path";
 import { BaseSequencer, type TestSpecification } from "vitest/node";
-import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
+import { loadPatternListFromEnv } from "../../test/vitest/vitest.pattern-file.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 

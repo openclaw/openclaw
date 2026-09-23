@@ -14,6 +14,7 @@ import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { findTaskByRunId } from "../tasks/task-registry.js";
 import { onTaskRegistryChange } from "../tasks/task-registry.store.js";
+import { getTaskRunOwner } from "../tasks/task-run-owner.js";
 import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { agentCommandMock, installGatewayTestHooks, rpcReq, testState } from "./test-helpers.js";
@@ -310,6 +311,22 @@ describe("accepted agent session ordering", () => {
     };
   }
 
+  async function observeExecutionWait(runId: string, signal: AbortSignal) {
+    const sessionOrder = await import("./agent-turn/agent-session-execution-order.js");
+    const waitForExecution = sessionOrder.waitForAgentSessionExecution;
+    const entered = createDeferred();
+    const seen = vi.fn();
+    vi.spyOn(sessionOrder, "waitForAgentSessionExecution").mockImplementation((lease, params) => {
+      if (params.runId === runId) {
+        // Dispatch reaches this existing wait only after binding the task's live owner.
+        seen();
+        entered.resolve();
+      }
+      return waitForExecution(lease, params);
+    });
+    return { seen, wait: () => racePromiseWithAbortSignal(entered.promise, signal) };
+  }
+
   it.for([false, true])(
     "orders fresh BASE/F1/F2 (inter-session=%s) despite delayed preparation",
     async (interSession, { signal }) => {
@@ -404,6 +421,8 @@ describe("accepted agent session ordering", () => {
     async (method, { signal }) => {
       const s = await scenario(signal);
       const base = s.hold("BASE", "runner");
+      const f1ExecutionWait =
+        method === "tasks.cancel" ? await observeExecutionWait(s.runId("F1"), signal) : undefined;
       try {
         await s.admit("BASE");
         await s.entered("BASE", base);
@@ -415,7 +434,13 @@ describe("accepted agent session ordering", () => {
           ).toBe(true);
         } else {
           const task = await s.taskRegistered("F1");
-          expect((await rpcReq(s.ws, method, { taskId: task.taskId })).ok).toBe(true);
+          await f1ExecutionWait?.wait();
+          expect(getTaskRunOwner(task)).toBeDefined();
+          const cancellation = await rpcReq(s.ws, method, { taskId: task.taskId });
+          expect(cancellation, JSON.stringify(cancellation)).toMatchObject({
+            ok: true,
+            payload: { found: true, cancelled: true },
+          });
         }
         await s.expectCancellation("F1");
         await s.peer();
@@ -431,6 +456,70 @@ describe("accepted agent session ordering", () => {
       }
     },
   );
+
+  it("waits for the live owner before cancelling a published queued task", async ({ signal }) => {
+    const s = await scenario(signal);
+    const base = s.hold("BASE", "runner");
+    const bindingEntered = createDeferred();
+    const bindingRelease = createDeferred();
+    const f1ExecutionWait = await observeExecutionWait(s.runId("F1"), signal);
+    const taskCreation = await import("../tasks/task-executor-create.async.js");
+    const createTask = taskCreation.createRunningTaskRunCoreWithReceiptAsync;
+    vi.spyOn(taskCreation, "createRunningTaskRunCoreWithReceiptAsync").mockImplementation(
+      async (...args) => {
+        const receipt = await createTask(...args);
+        if (!receipt || args[0].runId !== s.runId("F1")) {
+          return receipt;
+        }
+        const bindRunOwner = receipt.bindRunOwner;
+        return {
+          ...receipt,
+          async bindRunOwner(...bindArgs) {
+            // Widen the real publication-to-binding gap without replacing the owner.
+            bindingEntered.resolve();
+            await racePromiseWithAbortSignal(bindingRelease.promise, signal);
+            return await bindRunOwner(...bindArgs);
+          },
+        };
+      },
+    );
+    try {
+      await s.admit("BASE");
+      await s.entered("BASE", base);
+      await s.admit("F1");
+      await s.admit("F2");
+      const task = await s.taskRegistered("F1");
+      await racePromiseWithAbortSignal(bindingEntered.promise, signal);
+      expect(f1ExecutionWait.seen).not.toHaveBeenCalled();
+      expect(getTaskRunOwner(task)).toBeUndefined();
+      const premature = await rpcReq(s.ws, "tasks.cancel", { taskId: task.taskId });
+      expect(premature, JSON.stringify(premature)).toMatchObject({
+        ok: true,
+        payload: { found: true, cancelled: false },
+      });
+      expect(f1ExecutionWait.seen).not.toHaveBeenCalled();
+      expect(s.preparations).not.toContain(s.runId("F1"));
+      bindingRelease.resolve();
+      await f1ExecutionWait.wait();
+      expect(getTaskRunOwner(task)).toBeDefined();
+      const cancellation = await rpcReq(s.ws, "tasks.cancel", { taskId: task.taskId });
+      expect(cancellation, JSON.stringify(cancellation)).toMatchObject({
+        ok: true,
+        payload: { found: true, cancelled: true },
+      });
+      await s.expectCancellation("F1");
+      await s.peer();
+      expect(s.started).toEqual(["BASE", "peer"].map(s.runId));
+      expect(s.preparations).not.toContain(s.runId("F1"));
+      base.release.resolve();
+      await s.expectResult("BASE");
+      await s.expectResult("F2");
+      expect(s.started).toEqual(["BASE", "peer", "F2"].map(s.runId));
+    } finally {
+      bindingRelease.resolve();
+      await s.close();
+    }
+  });
 
   it("releases a cancelled startup for the next accepted turn", async ({ signal }) => {
     const s = await scenario(signal);

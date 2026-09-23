@@ -125,7 +125,7 @@ mitigation; production CLI exit behavior, assertions, and deadlines are unchange
 The script erasability gate uses Node's strip-only parser, including when package
 checks run under Bun. It selects an installed Node runtime and skips Bun's `node` shim.
 
-The test toolchain pins stable Vitest `5.0.0`, including its browser and coverage
+The test toolchain pins stable Vitest `5.0.1`, including its browser and coverage
 packages. Use `describe(name, { concurrent: false }, callback)` for ordered
 suites. Await asynchronous assertions, keep `vi.mock`/`vi.hoisted` at module
 scope, and perform actions whose mock calls you assert inside the test.

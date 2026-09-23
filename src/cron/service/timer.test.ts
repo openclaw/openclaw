@@ -27,9 +27,14 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 });
 
 function createCronServiceState(
-  params: Parameters<typeof createCronServiceStateBase>[0],
+  params: Omit<Parameters<typeof createCronServiceStateBase>[0], "cronEnabled" | "log">,
 ): ReturnType<typeof createCronServiceStateBase> {
-  return createCronServiceStateBase({ defaultAgentId: "main", ...params });
+  return createCronServiceStateBase({
+    defaultAgentId: "main",
+    cronEnabled: true,
+    log: logger,
+    ...params,
+  });
 }
 
 function createDueMainJob(params: { now: number; wakeMode: CronJob["wakeMode"] }): CronJob {
@@ -141,8 +146,6 @@ describe("cron service timer seam coverage", () => {
     const enqueueSystemEvent = vi.fn();
     const state = createCronServiceState({
       storePath,
-      cronEnabled: true,
-      log: logger,
       nowMs: () => now,
       enqueueSystemEvent,
       requestHeartbeat: vi.fn(),
@@ -198,8 +201,6 @@ describe("cron service timer seam coverage", () => {
 
     const state = createCronServiceState({
       storePath,
-      cronEnabled: true,
-      log: logger,
       nowMs: () => now,
       defaultAgentId: "main-pr-router",
       resolveSessionStorePath: () => sessionStorePath,
@@ -243,8 +244,6 @@ describe("cron service timer seam coverage", () => {
 
     const state = createCronServiceState({
       storePath,
-      cronEnabled: true,
-      log: logger,
       nowMs: () => now,
       defaultAgentId: "stale-default",
       resolveDefaultAgentId: () => "ops",
@@ -322,8 +321,6 @@ describe("cron service timer seam coverage", () => {
     });
     const state = createCronServiceState({
       storePath,
-      cronEnabled: true,
-      log: logger,
       nowMs: () => clock++,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
@@ -396,9 +393,7 @@ describe("cron service timer seam coverage", () => {
       const runIsolatedAgentJob = vi.fn(() => Promise.resolve({ status: "ok" as const }));
       const state = createCronServiceState({
         storePath,
-        cronEnabled: true,
         cronConfig: { triggers: { enabled: true } },
-        log: logger,
         nowMs: () => now,
         enqueueSystemEvent,
         requestHeartbeat,
@@ -455,8 +450,6 @@ describe("cron service timer seam coverage", () => {
     }));
     const state = createCronServiceState({
       storePath,
-      cronEnabled: true,
-      log: logger,
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
@@ -486,8 +479,6 @@ describe("cron service timer seam coverage", () => {
       const runPayload = vi.fn(async () => ({ status: "ok" as const }));
       const state = createCronServiceState({
         storePath,
-        cronEnabled: true,
-        log: logger,
         nowMs: () => now,
         enqueueSystemEvent: vi.fn(),
         requestHeartbeat: vi.fn(),
@@ -535,9 +526,7 @@ describe("cron service timer seam coverage", () => {
     const runScriptJob = vi.fn(async () => ({ status: "ok" as const }));
     const state = createCronServiceState({
       storePath,
-      cronEnabled: true,
       cronConfig: { triggers: { enabled: false } },
-      log: logger,
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
@@ -563,9 +552,7 @@ describe("cron service timer seam coverage", () => {
     const job = createDueScriptJob({ now, sessionTarget: "main" });
     const state = createCronServiceState({
       storePath,
-      cronEnabled: true,
       cronConfig: { triggers: { enabled: true } },
-      log: logger,
       nowMs: () => now,
       enqueueSystemEvent,
       requestHeartbeat,
@@ -692,9 +679,7 @@ describe("cron service timer seam coverage", () => {
     }
     const state = createCronServiceState({
       storePath,
-      cronEnabled: true,
       cronConfig: { triggers: { enabled: true } },
-      log: logger,
       nowMs: () => now,
       defaultAgentId: testCase.defaultAgentId,
       ...(currentDefaultAgentId ? { resolveDefaultAgentId: () => currentDefaultAgentId } : {}),
@@ -753,9 +738,7 @@ describe("cron service timer seam coverage", () => {
       };
       const state = createCronServiceState({
         storePath,
-        cronEnabled: true,
         cronConfig: { triggers: { enabled: true } },
-        log: logger,
         nowMs: () => now,
         defaultAgentId: undefined,
         resolveDefaultAgentId,
@@ -779,9 +762,7 @@ describe("cron service timer seam coverage", () => {
     const requestHeartbeat = vi.fn();
     const state = createCronServiceState({
       storePath,
-      cronEnabled: true,
       cronConfig: { triggers: { enabled: true } },
-      log: logger,
       nowMs: () => now,
       enqueueSystemEvent,
       requestHeartbeat,
@@ -807,9 +788,7 @@ describe("cron service timer seam coverage", () => {
     const now = Date.parse("2026-07-18T12:00:00.000Z");
     const state = createCronServiceState({
       storePath,
-      cronEnabled: true,
       cronConfig: { triggers: { enabled: true } },
-      log: logger,
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
@@ -856,9 +835,7 @@ describe("cron service timer seam coverage", () => {
       await writeCronStoreSnapshot({ storePath, jobs: [job] });
       const state = createCronServiceState({
         storePath,
-        cronEnabled: true,
         cronConfig: { triggers: { enabled: true } },
-        log: logger,
         nowMs: () => now,
         enqueueSystemEvent: vi.fn(),
         requestHeartbeat: vi.fn(),
@@ -881,9 +858,7 @@ describe("cron service timer seam coverage", () => {
     await writeCronStoreSnapshot({ storePath, jobs: [job] });
     const state = createCronServiceState({
       storePath,
-      cronEnabled: true,
       cronConfig: { triggers: { enabled: true } },
-      log: logger,
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
@@ -925,8 +900,6 @@ describe("cron service timer seam coverage", () => {
 
     const state = createCronServiceState({
       storePath,
-      cronEnabled: true,
-      log: logger,
       nowMs: () => now,
       enqueueSystemEvent,
       requestHeartbeat,
@@ -984,8 +957,6 @@ describe("cron service timer seam coverage", () => {
 
     const state = createCronServiceState({
       storePath,
-      cronEnabled: true,
-      log: logger,
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
@@ -1017,8 +988,6 @@ describe("cron service timer seam coverage", () => {
 
     const state = createCronServiceState({
       storePath,
-      cronEnabled: true,
-      log: logger,
       nowMs: () => now,
       enqueueSystemEvent,
       requestHeartbeat,
@@ -1076,8 +1045,6 @@ describe("cron service timer seam coverage", () => {
 
     const state = createCronServiceState({
       storePath,
-      cronEnabled: true,
-      log: logger,
       nowMs: () => now,
       enqueueSystemEvent,
       requestHeartbeat,
