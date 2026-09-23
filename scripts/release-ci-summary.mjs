@@ -1164,6 +1164,7 @@ export function releaseAdvisoryJobEvidence(
         .filter(({ reason }) => reason !== "")
         .toSorted((left, right) => compareReleaseJobsByName(left.job, right.job))
         .map(({ job, reason }) => {
+          /** @type {{ child: string, job: string, status: string, conclusion: string, policy: string, reason?: string }} */
           const entry = {
             child,
             job: job.name,
