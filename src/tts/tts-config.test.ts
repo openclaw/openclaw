@@ -10,7 +10,8 @@ import {
   resolveEffectiveTtsConfig,
   shouldAttemptTtsPayload,
 } from "./tts-config.js";
-import { resolveTtsSettingsSnapshot } from "./tts-settings.js";
+import { TTS_PREFS_MAX_BYTES, readBoundedTtsPrefsTextSync } from "./tts-prefs-read.js";
+import { readTtsPrefs, resolveTtsSettingsSnapshot } from "./tts-settings.js";
 
 describe("shouldAttemptTtsPayload", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
@@ -228,5 +229,92 @@ describe("shouldAttemptTtsPayload", () => {
       voices: ["override"],
     });
     expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+  });
+});
+
+describe("TTS prefs reads are bounded", () => {
+  let root = "";
+  let prefsPath = "";
+
+  beforeAll(() => {
+    root = mkdtempSync(path.join(tmpdir(), "openclaw-tts-prefs-bound-"));
+  });
+
+  afterAll(() => {
+    if (root) {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  beforeEach(() => {
+    prefsPath = path.join(root, `prefs-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+  });
+
+  it("readBoundedTtsPrefsTextSync returns the text for a normal-sized file", () => {
+    writeFileSync(prefsPath, '{"tts":{"auto":"always"}}', "utf8");
+
+    expect(readBoundedTtsPrefsTextSync(prefsPath)).toBe('{"tts":{"auto":"always"}}');
+  });
+
+  it("readBoundedTtsPrefsTextSync accepts a file of exactly the bound", () => {
+    // A file that fills the window exactly is not oversized; the one-byte probe
+    // past the window must not reject it.
+    const exactly = "x".repeat(TTS_PREFS_MAX_BYTES);
+    writeFileSync(prefsPath, exactly, "utf8");
+
+    expect(readBoundedTtsPrefsTextSync(prefsPath)).toBe(exactly);
+  });
+
+  it("readBoundedTtsPrefsTextSync rejects a file larger than the bound", () => {
+    // One byte past the limit is enough to reject; the old readFileSync path read
+    // the whole document into memory first.
+    writeFileSync(prefsPath, "x".repeat(TTS_PREFS_MAX_BYTES + 1), "utf8");
+
+    expect(readBoundedTtsPrefsTextSync(prefsPath)).toBeUndefined();
+  });
+
+  it("readTtsPrefs falls back to defaults for an oversized prefs file", () => {
+    // Pre-fix this parsed the oversized document and returned its contents.
+    writeFileSync(
+      prefsPath,
+      `{"tts":{"auto":"always","summarize":false},"pad":"${"x".repeat(TTS_PREFS_MAX_BYTES)}"}`,
+      "utf8",
+    );
+
+    expect(readTtsPrefs(prefsPath)).toEqual({});
+  });
+
+  it("readTtsPrefs still reads a normal prefs file", () => {
+    writeFileSync(prefsPath, '{"tts":{"auto":"always","summarize":false}}', "utf8");
+
+    expect(readTtsPrefs(prefsPath)).toEqual({ tts: { auto: "always", summarize: false } });
+  });
+
+  it("shouldAttemptTtsPayload uses the prefs auto mode for a normal file", () => {
+    writeFileSync(prefsPath, '{"tts":{"auto":"always"}}', "utf8");
+    const envSnapshot = captureEnv(["OPENCLAW_TTS_PREFS"]);
+    process.env.OPENCLAW_TTS_PREFS = prefsPath;
+    try {
+      expect(shouldAttemptTtsPayload({ cfg: {} as OpenClawConfig })).toBe(true);
+    } finally {
+      envSnapshot.restore();
+    }
+  });
+
+  it("shouldAttemptTtsPayload ignores an oversized prefs file named by OPENCLAW_TTS_PREFS", () => {
+    writeFileSync(
+      prefsPath,
+      `{"tts":{"auto":"always"},"pad":"${"x".repeat(TTS_PREFS_MAX_BYTES)}"}`,
+      "utf8",
+    );
+    const envSnapshot = captureEnv(["OPENCLAW_TTS_PREFS"]);
+    process.env.OPENCLAW_TTS_PREFS = prefsPath;
+    try {
+      // Pre-fix the unbounded read parsed the oversized document and honored
+      // `auto: "always"`; now the oversized file is ignored.
+      expect(shouldAttemptTtsPayload({ cfg: {} as OpenClawConfig })).toBe(false);
+    } finally {
+      envSnapshot.restore();
+    }
   });
 });

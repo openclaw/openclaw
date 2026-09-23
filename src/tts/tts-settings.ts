@@ -1,5 +1,5 @@
 // Lightweight TTS settings resolution shared by agent prompts, status, and speech runtime.
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { asNonArrayRecord, isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import {
@@ -25,9 +25,11 @@ import type { SpeechProviderConfig } from "./provider-types.js";
 import { withSpeakerSelectionCompat } from "./speaker.js";
 import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
 import { resolveEffectiveTtsConfig, type TtsConfigResolutionContext } from "./tts-config.js";
+import { readBoundedTtsPrefsTextSync } from "./tts-prefs-read.js";
 import type { ResolvedTtsConfig, ResolvedTtsModelOverrides } from "./tts-types.js";
 
 export type { ResolvedTtsConfig, ResolvedTtsModelOverrides };
+export { readBoundedTtsPrefsTextSync, TTS_PREFS_MAX_BYTES } from "./tts-prefs-read.js";
 
 export const DEFAULT_TTS_TIMEOUT_MS = 30_000;
 const DEFAULT_TTS_MAX_LENGTH = 1500;
@@ -238,7 +240,11 @@ export function readTtsPrefs(prefsPath: string): TtsUserPrefs {
     if (!existsSync(prefsPath)) {
       return {};
     }
-    const parsed: unknown = JSON.parse(readFileSync(prefsPath, "utf8"));
+    const raw = readBoundedTtsPrefsTextSync(prefsPath);
+    if (raw === undefined) {
+      return {};
+    }
+    const parsed: unknown = JSON.parse(raw);
     return asNonArrayRecord(parsed) as TtsUserPrefs;
   } catch {
     return {};
