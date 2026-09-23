@@ -39,9 +39,10 @@ function runPackageAssetBuild(plan: PluginRuntimeAssetPlan) {
 /** Uses the selected manifest so private source packages need no Git discovery. */
 export function preparePackageRuntimeAssets(plan: PluginRuntimeAssetPlan) {
   const assetBuildCommand = runPackageAssetBuild(plan);
-  const assets = resolvePackageStaticAssetEntries(plan.packageJson).map((asset) => ({
-    ...asset,
-    srcPath: resolvePackageStaticAssetSource(plan.packageDir, asset.source),
+  const assets = resolvePackageStaticAssetEntries(plan.packageJson).map(({ source, output }) => ({
+    source,
+    output,
+    srcPath: resolvePackageStaticAssetSource(plan.packageDir, source),
   }));
   const missing = assets
     .filter(({ srcPath }) => !fs.existsSync(srcPath))
