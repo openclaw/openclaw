@@ -144,6 +144,13 @@ Cold archive decoding and restoration retain the existing archive worker and
 host generation/commit authorization; transcript read fences still bind the
 subsequent read. No validation cache or new restoration owner is introduced.
 
+Single-message lookups and display-message counts use that same history worker.
+Session-message broadcasts await the stored content and sequence in their existing
+per-transcript queue, then recheck the live session before publishing. Message
+lookup keeps its current-only, byte-limit, and reset-archive behavior; counts keep
+their projection-readiness retry. Process-held incognito transcripts remain with
+their in-memory owner. Schemas, retained data, and update behavior are unchanged.
+
 The asynchronous transcript-search facade similarly moves durable FTS reads for
 all four Gateway/tool callers through the existing worker lifecycle. Each caller
 rechecks current scope and authorization after awaiting. Warm `sessions.list`

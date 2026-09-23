@@ -3,6 +3,7 @@ import type {
   SessionTranscriptReadScope,
   TranscriptEvent,
 } from "../config/sessions/session-accessor.sqlite-contract.js";
+import { resolveVisibleHistoryEventCount } from "../config/sessions/session-accessor.sqlite-history-projection.js";
 import {
   readRecentSessionTranscriptHistoryEventsFromProjection,
   readSessionTranscriptHistoryEventByIdFromProjection,
@@ -16,6 +17,7 @@ import type {
   CurrentTranscriptProjection,
   SessionTranscriptMessageEvent,
 } from "../config/sessions/session-accessor.sqlite-projection-read.js";
+import { SessionTranscriptStorageUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import type {
   TranscriptRecentReadLimits,
   TranscriptAnchorPageOptions,
@@ -67,7 +69,7 @@ type SessionTranscriptReadOptions = {
   readOnly?: boolean;
 };
 
-type ReadSessionMessageByIdResult = {
+export type ReadSessionMessageByIdResult = {
   message?: unknown;
   seq?: number;
   oversized: boolean;
@@ -152,6 +154,28 @@ type ReadSessionMessagesAroundIdResult = ReadRecentSessionMessagesResult & {
 
 /** Share pagination and archive policy while the caller owns acquisition and restoration. */
 export function createSessionTranscriptReader(access: SessionTranscriptReadAccess) {
+  async function readSnapshotIfPresent<T>(
+    target: ResolvedTranscriptReadTarget,
+    read: (projection: CurrentTranscriptProjection) => T,
+  ): Promise<T | undefined> {
+    try {
+      return await access.readSnapshot(target, read);
+    } catch (error) {
+      if (
+        error instanceof SessionTranscriptStorageUnavailableError &&
+        error.reason === "database-missing"
+      ) {
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
+  async function readSessionMessageCountAsync(scope: SessionTranscriptReadScope): Promise<number> {
+    const target = await access.resolveTarget(scope);
+    return (await readSnapshotIfPresent(target, resolveVisibleHistoryEventCount)) ?? 0;
+  }
+
   /** Reads display messages asynchronously through the reader seam. */
   async function readSessionMessagesAsync(
     scope: SessionTranscriptReadScope,
@@ -192,7 +216,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     opts?: SessionTranscriptMessageByIdOptions & { allowResetArchiveFallback?: boolean },
   ): Promise<ReadSessionMessageByIdResult> {
     const target = await access.resolveTarget(scope);
-    const foundEvent = await access.readSnapshot(target, (projection) =>
+    const foundEvent = await readSnapshotIfPresent(target, (projection) =>
       readSessionTranscriptHistoryEventByIdFromProjection(projection, messageId, opts),
     );
     if (foundEvent) {
@@ -352,6 +376,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
   }
 
   return {
+    readSessionMessageCountAsync,
     readSessionMessagesAsync,
     readSessionMessagesWithSourceAsync,
     readSessionMessageByIdAsync,
