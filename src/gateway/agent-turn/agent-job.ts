@@ -578,13 +578,13 @@ function getFreshestDedupeSnapshot(
 
 function getCanonicalAgentRunSnapshot(
   snapshotsBySource: Map<AgentJobSource, AgentRunSnapshot>,
-  source?: "chat",
+  source?: "agent" | "chat",
 ): AgentRunSnapshot | undefined {
   const dedupe = source
     ? snapshotsBySource.get(source)
     : getFreshestDedupeSnapshot(snapshotsBySource);
-  // A chat waiter must observe completed delivery before consuming the same
-  // run's lifecycle outcome and reply. An agent dedupe cannot close that barrier.
+  // RPC completion includes replay publication, after execution and delivery settle.
+  // Lifecycle events and another RPC source cannot close that publication barrier.
   if (source && !dedupe) {
     return undefined;
   }
@@ -599,7 +599,7 @@ function getCanonicalAgentRunSnapshot(
 
 function getAgentRunSnapshot(params: {
   runId: string;
-  source?: "chat";
+  source?: "agent" | "chat";
   afterVersion: number;
 }): AgentRunSnapshot | undefined {
   pruneAgentRunCache();
@@ -650,7 +650,7 @@ export async function waitForAgentJob(params: {
   runId: string;
   timeoutMs: number;
   ignoreCachedSnapshot?: boolean;
-  source?: "chat";
+  source?: "agent" | "chat";
 }): Promise<AgentJobObservation | null> {
   ensureAgentRunListener();
   const afterVersion = params.ignoreCachedSnapshot ? agentJobState.version : -1;
