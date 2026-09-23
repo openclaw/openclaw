@@ -52,6 +52,7 @@ import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
 import { createConfigAppliedRevisionTracker } from "./config-applied-revision.js";
 import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
+import { publishReloadObservation, trackReloadObservation } from "./config-reload-observed.js";
 import {
   buildGatewayReloadPlan,
   isNoopGatewayReloadPlan,
@@ -65,6 +66,7 @@ import type {
   GatewayHotReloadApplication,
   GatewayHotReloadStatus,
 } from "./config-reload-status.types.js";
+import { resolveChokidarUsePolling } from "./config-reload-watcher.js";
 import {
   assertReloadPublicationCurrent,
   GatewayConfigReloadSupersededError,
@@ -81,21 +83,6 @@ const MISSING_CONFIG_MAX_RETRIES = 2;
 // back to polling mode before giving up entirely.
 const WATCHER_RECREATE_MAX_RETRIES = 3;
 const WATCHER_RECREATE_BACKOFF_MS = [500, 2000, 5000] as const;
-
-function resolveChokidarUsePolling(degradedToPolling: boolean): boolean {
-  const envPoll = process.env.CHOKIDAR_USEPOLLING;
-  if (envPoll !== undefined) {
-    const envLower = envPoll.toLowerCase();
-    if (envLower === "false" || envLower === "0") {
-      return false;
-    }
-    if (envLower === "true" || envLower === "1") {
-      return true;
-    }
-    return Boolean(envLower);
-  }
-  return Boolean(process.env.VITEST) || degradedToPolling;
-}
 
 type PluginInstallRecords = Record<string, PluginInstallRecord>;
 
@@ -299,6 +286,8 @@ export function startGatewayConfigReloader(opts: {
     epoch: number;
     writerEpoch: number;
     read?: Promise<[ConfigFileSnapshot, PluginInstallRecords]>;
+    // The transaction begun at this epoch proved this observation reads its own source.
+    acceptedFromEpoch?: number;
   } = { epoch: 0, writerEpoch: 0 };
   let pendingInProcessConfig: InProcessConfigCandidate | null = null;
   let activeInProcessConfig: InProcessConfigCandidate | null = null;
@@ -524,6 +513,7 @@ export function startGatewayConfigReloader(opts: {
         }
         assertOwned();
         transactionEpoch = observed.epoch;
+        observed.acceptedFromEpoch = initialEpoch;
       }
       assertOwned();
       assertReloadPublicationCurrent(isCurrent(), false);
@@ -1020,17 +1010,20 @@ export function startGatewayConfigReloader(opts: {
     pending = false;
     clearReloadTimer();
     let attemptedCandidate: InProcessConfigCandidate | null = null;
+    const observation = trackReloadObservation(() => sourceObservation);
     try {
       assertLeaseOwned();
       if (pendingInProcessConfig) {
         const pendingWrite = pendingInProcessConfig;
         attemptedCandidate = pendingWrite;
+        observation.observe(pendingWrite.epoch, null);
         pendingInProcessConfig = null;
         activeInProcessConfig = pendingWrite;
         missingConfigRetries = 0;
         try {
           await runAcceptedTransaction(async () => {
             const snapshot = await opts.readSnapshot(currentRuntimeEnvSourceConfig);
+            observation.observeSnapshot(pendingWrite.epoch, snapshot);
             assertLeaseOwned();
             if (
               !snapshot.exists ||
@@ -1070,10 +1063,12 @@ export function startGatewayConfigReloader(opts: {
         return;
       }
       const transactionEpoch = sourceObservation.epoch;
+      observation.observe(transactionEpoch, null);
       const intentCandidate = watcherIntentCandidate;
       attemptedCandidate = intentCandidate;
       const intentCandidateCameFromPendingWrite = watcherIntentCameFromPendingWrite;
       const snapshot = await opts.readSnapshot(currentRuntimeEnvSourceConfig);
+      observation.observeSnapshot(transactionEpoch, snapshot);
       assertLeaseOwned();
       if (sourceObservation.epoch !== transactionEpoch) {
         throw new GatewayConfigReloadSupersededError();
@@ -1212,6 +1207,7 @@ export function startGatewayConfigReloader(opts: {
         opts.log.error(`config reload failed: ${String(err)}`);
       }
     } finally {
+      observation.publishIfCurrent();
       running = false;
     }
   };
@@ -1705,6 +1701,8 @@ export function startGatewayConfigReloader(opts: {
       }
       if (opts.initialSnapshotRawHash !== null && opts.initialSnapshotValid) {
         updateAcceptedSnapshot(opts.initialSnapshotRawHash, opts.initialAuthoredConfig);
+        // A write or watcher event during preparation publishes through its own transaction.
+        publishReloadObservation(initialSourceConfig);
       }
     }
     currentPluginInstallRecords = initialPluginInstallRecords;

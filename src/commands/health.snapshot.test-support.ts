@@ -4,6 +4,7 @@ import { isInternalSessionEffectsKey } from "../config/sessions/internal-session
 import type { collectGatewayHealthSnapshot } from "../gateway/health/collector.js";
 import type { HealthSummary } from "../gateway/health/types.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { installHealthConfigMock } from "./health.config.test-mocks.js";
 
 export type LegacyHealthSnapshotParams = Partial<
   Omit<Parameters<typeof collectGatewayHealthSnapshot>[0], "audience">
@@ -34,10 +35,7 @@ export async function loadFreshHealthModulesForTest(params: {
   getPlugins: () => HealthTestPlugin[];
   onSessionRead?: (scope: { agentId?: string; storePath?: string }) => void;
 }) {
-  vi.doMock("../config/config.js", () => ({
-    getRuntimeConfig: params.getConfig,
-    loadConfig: params.getConfig,
-  }));
+  installHealthConfigMock(params.getConfig);
   vi.doMock("../config/sessions.js", () => ({
     resolveSessionStorePathCore: params.getSessionStorePath,
     resolveSessionFilePathCore: vi.fn(params.getSessionStorePath),

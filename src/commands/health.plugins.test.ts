@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import { installHealthConfigMock } from "./health.config.test-mocks.js";
 
 const testConfig: OpenClawConfig = { session: { store: "/tmp/x" } };
 const tempDirs = createTempDirTracker();
@@ -24,10 +25,7 @@ let inventoryPlugins: ChannelPlugin[] = [];
 
 describe("collectGatewayHealthSnapshot plugin state", () => {
   beforeAll(async () => {
-    vi.doMock("../config/config.js", () => ({
-      getRuntimeConfig: () => testConfig,
-      loadConfig: () => testConfig,
-    }));
+    installHealthConfigMock(() => testConfig);
     vi.doMock("../config/sessions/paths.js", () => ({
       resolveSessionStorePathCore: () => sessionStorePath,
     }));

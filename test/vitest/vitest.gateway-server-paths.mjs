@@ -16,6 +16,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/board-store.test.ts",
   "src/gateway/chat-display-projection.cron.test.ts",
   "src/gateway/config-reload.activation.integration.test.ts",
+  "src/gateway/config-reload.observation.test.ts",
   "src/gateway/config-reload.test.ts",
   "src/gateway/config-reload.transcripts.test.ts",
   "src/gateway/control-ui-session-pr-access.test.ts",

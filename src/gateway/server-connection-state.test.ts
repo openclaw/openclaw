@@ -1,5 +1,6 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { WebSocket } from "ws";
+import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
@@ -441,6 +442,28 @@ describe("gateway connection state", () => {
     expect(state.getBufferedAmount("target")).toBeUndefined();
     expect(state.isConnectionActive("target")).toBe(false);
     expect(reads.count).toBe(0);
+  });
+
+  it("broadcasts health runtimeConfig only to clients that advertise runtime-config-health", () => {
+    const state = createGatewayConnectionState({
+      bootId: "health-runtime-config",
+      cfg: {} as OpenClawConfig,
+    });
+    onTestFinished(() => state.mentionInbox.dispose());
+    const reads = { count: 0 };
+    const legacy = makeClient("legacy", reads);
+    const advertised = makeClient("advertised", reads);
+    advertised.client.connect.caps = [GATEWAY_CLIENT_CAPS.RUNTIME_CONFIG_HEALTH];
+    state.clients.add(legacy.client);
+    state.clients.add(advertised.client);
+    const runtimeConfig = { state: "drift", driftPaths: ["agents.defaults.model"] };
+    const payloadSentTo = (send: ReturnType<typeof vi.fn>) =>
+      (JSON.parse(String(send.mock.calls.at(0)?.at(0))) as { payload?: unknown }).payload;
+
+    state.broadcast("health", { ok: true, ts: 1, runtimeConfig });
+
+    expect(payloadSentTo(legacy.send)).toEqual({ ok: true, ts: 1 });
+    expect(payloadSentTo(advertised.send)).toEqual({ ok: true, ts: 1, runtimeConfig });
   });
 
   it("preserves connection insertion order for targeted fanout", () => {

@@ -84,6 +84,7 @@ export const GATEWAY_CLIENT_CAPS = {
   MODEL_CATALOG_SNAPSHOT: "model-catalog-snapshot",
   MODEL_SELECTION_POLICY: "model-selection-policy",
   RUN_TOOL_BINDINGS: "run-tool-bindings",
+  RUNTIME_CONFIG_HEALTH: "runtime-config-health",
   SESSION_SCOPED_EVENTS: "session-scoped-events",
   SKILL_CURATOR_LIVE_INVENTORY: "skill-curator-live-inventory",
   PLUGIN_APPROVALS: "plugin-approvals",

@@ -8,6 +8,7 @@ import { getStatusSummary } from "../../status/summary.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import { buildContextEngineHealthSummary } from "../health/context-engine.js";
 import { buildDeliveryQueueHealthSummary } from "../health/delivery-queue.js";
+import { omitRuntimeConfigHealthForClient } from "../health/runtime-config-cap.js";
 import type { ChannelHealthSummary, HealthSummary } from "../health/types.js";
 import { createGatewayServerActiveWorkInspectors } from "../server-active-work.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
@@ -150,11 +151,14 @@ export const healthHandlers: GatewayRequestHandlers = {
     ) {
       respond(
         true,
-        await mergeCachedHealthRuntimeState({
-          cached,
-          getEventLoopHealth: context.getEventLoopHealth,
-          configReloadHotReloadStatus: context.getConfigReloaderHotReloadStatus?.(),
-        }),
+        omitRuntimeConfigHealthForClient(
+          await mergeCachedHealthRuntimeState({
+            cached,
+            getEventLoopHealth: context.getEventLoopHealth,
+            configReloadHotReloadStatus: context.getConfigReloaderHotReloadStatus?.(),
+          }),
+          client?.connect?.caps,
+        ),
         undefined,
         { cached: true },
       );
@@ -167,7 +171,14 @@ export const healthHandlers: GatewayRequestHandlers = {
     }
     await respondUnavailableOnThrow(respond, async () => {
       const snap = await refreshHealthSnapshot({ probe: wantsProbe, includeSensitive });
-      respond(true, { ...snap, modelRuntime: getPreparedModelRuntimeStartupStatus() }, undefined);
+      respond(
+        true,
+        omitRuntimeConfigHealthForClient(
+          { ...snap, modelRuntime: getPreparedModelRuntimeStartupStatus() },
+          client?.connect?.caps,
+        ),
+        undefined,
+      );
     });
   },
   status: async ({ respond, client, params, context }) => {

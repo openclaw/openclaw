@@ -1,10 +1,14 @@
 import { EventEmitter, once } from "node:events";
+import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
+import { GATEWAY_CLIENT_CAPS } from "../../../../packages/gateway-protocol/src/client-info.js";
 import {
   GATEWAY_SERVER_CAPS,
   type HelloOk,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { closedObject } from "../../../../packages/gateway-protocol/src/schema/closed-object.js";
+import { SnapshotSchema } from "../../../../packages/gateway-protocol/src/schema/snapshot.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { resolveGatewayAuth } from "../../auth-resolve.js";
@@ -16,12 +20,20 @@ import { prepareTailscalePublishedOrigin } from "../../tailscale-published-origi
 const {
   buildGatewaySnapshotMock,
   emitGatewayAuthSecurityEventMock,
+  getHealthCacheMock,
   listControlUiPluginTabsMock,
   listControlUiPluginWidgetKindsMock,
+  readCurrentRuntimeConfigHealthMock,
+  redeemDeviceBootstrapTokenProfileMock,
 } = vi.hoisted(() => ({
   emitGatewayAuthSecurityEventMock: vi.fn(),
+  getHealthCacheMock: vi.fn<() => HelloOk["snapshot"]["health"] | null>(() => null),
   listControlUiPluginTabsMock: vi.fn((_scopes: readonly string[]) => []),
   listControlUiPluginWidgetKindsMock: vi.fn((_scopes: readonly string[]) => []),
+  readCurrentRuntimeConfigHealthMock: vi.fn<() => HelloOk["snapshot"]["health"]["runtimeConfig"]>(
+    () => undefined,
+  ),
+  redeemDeviceBootstrapTokenProfileMock: vi.fn(),
   buildGatewaySnapshotMock: vi.fn((opts?: { includeUpdateDetails?: boolean }) => {
     const updateAvailable = {
       currentVersion: "2026.8.7",
@@ -62,10 +74,23 @@ const {
   }),
 }));
 
+vi.mock("../../../infra/device-bootstrap.js", () => ({
+  redeemDeviceBootstrapTokenProfile: redeemDeviceBootstrapTokenProfileMock,
+  restoreGenericDeviceBootstrapToken: vi.fn(async () => undefined),
+}));
+
+vi.mock("../../device-pair-setup-completion.js", () => ({
+  broadcastSetupHandoffDeliveryUncertain: vi.fn(),
+  broadcastSetupHandoffCompletion: vi.fn(),
+  confirmSetupHandoffDelivery: vi.fn(async () => undefined),
+  consumeSetupHandoff: vi.fn(async () => undefined),
+}));
+
 vi.mock("../health-state.js", () => ({
   buildGatewaySnapshot: buildGatewaySnapshotMock,
-  getHealthCache: vi.fn(() => null),
+  getHealthCache: getHealthCacheMock,
   getHealthVersion: vi.fn(() => 1),
+  readCurrentRuntimeConfigHealth: readCurrentRuntimeConfigHealthMock,
 }));
 
 vi.mock("../../../state/user-profiles.js", () => ({
@@ -96,7 +121,19 @@ vi.mock("../../../infra/tailscale.js", () => ({
 
 import { sendGatewayHello } from "./connect-hello.js";
 
-function makeContext(role: "operator" | "node", scopes: string[]) {
+const RUNTIME_CONFIG_CAPS = [GATEWAY_CLIENT_CAPS.RUNTIME_CONFIG_HEALTH];
+
+// The strict v4 snapshot decoder that shipped before runtimeConfig existed.
+function preChangeV4SnapshotSchema() {
+  const health = Object.fromEntries(
+    Object.entries(SnapshotSchema.properties.health.properties).filter(
+      ([key]) => key !== "runtimeConfig",
+    ),
+  );
+  return closedObject({ ...SnapshotSchema.properties, health: closedObject(health) });
+}
+
+function makeContext(role: "operator" | "node", scopes: string[], caps?: string[]) {
   return {
     handler: {
       socket: new EventEmitter(),
@@ -119,6 +156,7 @@ function makeContext(role: "operator" | "node", scopes: string[]) {
       client: { id: "gateway-client", version: "dev", platform: "test", mode: "backend" },
       role,
       scopes,
+      ...(caps ? { caps } : {}),
     },
     configSnapshot: {},
     sendFrame: vi.fn(async () => undefined),
@@ -174,6 +212,205 @@ describe("sendGatewayHello update detail scope", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    getHealthCacheMock.mockReturnValue(null);
+    readCurrentRuntimeConfigHealthMock.mockReturnValue(undefined);
+    redeemDeviceBootstrapTokenProfileMock.mockResolvedValue({ fullyRedeemed: false });
+  });
+
+  it("includes the synchronously current shared health publication before passive refresh", async () => {
+    getHealthCacheMock.mockReturnValue({
+      ok: true,
+      ts: 1,
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "sessions.db", count: 0, recent: [] },
+      runtimeConfig: {
+        state: "drift",
+        driftPaths: ["gateway.auth"],
+        message:
+          "Live gateway runtime config differs from the latest completed reload observation; restart is required.",
+      },
+    });
+    const context = makeContext("operator", ["operator.admin"], RUNTIME_CONFIG_CAPS);
+
+    await sendGatewayHello(
+      context as never,
+      makeState("operator", ["operator.admin"]) as never,
+      {},
+    );
+
+    expect(helloSnapshot(context)?.health.runtimeConfig).toEqual({
+      state: "drift",
+      driftPaths: ["gateway.auth"],
+      message:
+        "Live gateway runtime config differs from the latest completed reload observation; restart is required.",
+    });
+    expect(helloSnapshot(context)?.health.runtimeConfig).not.toHaveProperty(
+      "liveSourceFingerprint",
+    );
+    expect(helloSnapshot(context)?.health.runtimeConfig).not.toHaveProperty(
+      "observedSourceFingerprint",
+    );
+    expect(getHealthCacheMock.mock.invocationCallOrder[0]).toBeLessThan(
+      context.sendFrame.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(context.sendFrame.mock.invocationCallOrder[0]).toBeLessThan(
+      context.handler.refreshHealthSnapshot.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("projects current config health when observation invalidation clears the full cache", async () => {
+    readCurrentRuntimeConfigHealthMock.mockReturnValue({
+      state: "drift",
+      driftPaths: ["agents.entries"],
+      message:
+        "Live gateway runtime config differs from the latest completed reload observation; restart is required.",
+    });
+    const context = makeContext("operator", ["operator.read"], RUNTIME_CONFIG_CAPS);
+
+    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
+
+    expect(helloSnapshot(context)?.health.runtimeConfig).toEqual({
+      state: "drift",
+      driftPaths: ["agents.entries"],
+      message:
+        "Live gateway runtime config differs from the latest completed reload observation; restart is required.",
+    });
+    expect(getHealthCacheMock.mock.invocationCallOrder[0]).toBeLessThan(
+      readCurrentRuntimeConfigHealthMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(readCurrentRuntimeConfigHealthMock.mock.invocationCallOrder[0]).toBeLessThan(
+      context.sendFrame.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(context.sendFrame.mock.invocationCallOrder[0]).toBeLessThan(
+      context.handler.refreshHealthSnapshot.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("finalizes config health after awaited bootstrap bookkeeping", async () => {
+    const oldHealth: HelloOk["snapshot"]["health"] = {
+      ok: true,
+      ts: 1,
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "sessions.db", count: 0, recent: [] },
+      runtimeConfig: { state: "ok" as const },
+    };
+    let releaseRedemption: (() => void) | undefined;
+    const redemptionStarted = new Promise<void>((resolve) => {
+      redeemDeviceBootstrapTokenProfileMock.mockImplementationOnce(async () => {
+        resolve();
+        await new Promise<void>((release) => {
+          releaseRedemption = release;
+        });
+        return { fullyRedeemed: false };
+      });
+    });
+    getHealthCacheMock.mockReturnValue(oldHealth);
+    const context = makeContext("operator", ["operator.read"], RUNTIME_CONFIG_CAPS);
+    const state = {
+      ...makeState("operator", ["operator.read"]),
+      device: { id: "device-a" },
+      devicePublicKey: "public-key-a",
+      bootstrapTokenCandidate: "bootstrap-a",
+      authResult: { ok: true, method: "bootstrap-token" },
+      authMethod: "bootstrap-token",
+      issuedBootstrapProfile: { kind: "test" },
+    };
+
+    const hello = sendGatewayHello(context as never, state as never, {});
+    await redemptionStarted;
+    getHealthCacheMock.mockReturnValue(null);
+    readCurrentRuntimeConfigHealthMock.mockReturnValue({
+      state: "drift",
+      driftPaths: ["agents.entries"],
+      message:
+        "Live gateway runtime config differs from the latest completed reload observation; restart is required.",
+    });
+    releaseRedemption?.();
+    await hello;
+
+    expect(helloSnapshot(context)?.health).toEqual({
+      runtimeConfig: {
+        state: "drift",
+        driftPaths: ["agents.entries"],
+        message:
+          "Live gateway runtime config differs from the latest completed reload observation; restart is required.",
+      },
+    });
+    expect(helloSnapshot(context)?.health).not.toMatchObject(oldHealth);
+    expect(getHealthCacheMock).toHaveBeenCalledOnce();
+    expect(readCurrentRuntimeConfigHealthMock.mock.invocationCallOrder[0]).toBeLessThan(
+      context.sendFrame.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("sends runtimeConfig only to clients that advertise runtime-config-health", async () => {
+    const runtimeConfig = {
+      state: "drift" as const,
+      liveDefaultModel: "openai/gpt-5.6-sol",
+      observedDefaultModel: "openai/gpt-5.6-terra",
+      driftPaths: ["agents.defaults.model"],
+      message:
+        "Live gateway runtime config differs from the latest completed reload observation for model/provider/auth paths; restart is required or pending.",
+    };
+    const cachedHealth: HelloOk["snapshot"]["health"] = {
+      ok: true,
+      ts: 1,
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "sessions.db", count: 0, recent: [] },
+      runtimeConfig,
+    };
+    const hello = async (caps?: string[]) => {
+      const context = makeContext("operator", ["operator.read"], caps);
+      await sendGatewayHello(
+        context as never,
+        makeState("operator", ["operator.read"]) as never,
+        {},
+      );
+      return helloSnapshot(context);
+    };
+    const preChangeV4 = preChangeV4SnapshotSchema();
+
+    getHealthCacheMock.mockReturnValue(cachedHealth);
+    const cachedLegacy = await hello();
+    const cachedAdvertised = await hello(RUNTIME_CONFIG_CAPS);
+    getHealthCacheMock.mockReturnValue(null);
+    readCurrentRuntimeConfigHealthMock.mockReturnValue(runtimeConfig);
+    const projectedLegacy = await hello();
+    const projectedAdvertised = await hello(RUNTIME_CONFIG_CAPS);
+
+    // A client that does not advertise the capability gets the pre-change shape,
+    // which a strict v4 decoder built before runtimeConfig existed accepts.
+    expect(Value.Check(preChangeV4, cachedLegacy)).toBe(true);
+    expect(Value.Check(preChangeV4, projectedLegacy)).toBe(true);
+    expect(cachedLegacy?.health).not.toHaveProperty("runtimeConfig");
+    expect(projectedLegacy?.health).toEqual({});
+    expect(readCurrentRuntimeConfigHealthMock).toHaveBeenCalledOnce();
+    expect(cachedHealth.runtimeConfig).toBe(runtimeConfig);
+    // The advertising client keeps the diagnostic under the current schema; the
+    // pre-change decoder rejects exactly that, which is why it is gated.
+    for (const snapshot of [cachedAdvertised, projectedAdvertised]) {
+      expect(snapshot?.health.runtimeConfig).toEqual(runtimeConfig);
+      expect(Value.Check(SnapshotSchema, snapshot)).toBe(true);
+      expect(Value.Check(preChangeV4, snapshot)).toBe(false);
+    }
   });
 
   it.each([

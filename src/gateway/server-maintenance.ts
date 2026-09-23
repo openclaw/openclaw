@@ -43,6 +43,7 @@ import {
 } from "./chat-abort.js";
 import type { QueuedChatTurnMap } from "./chat-queued-turns.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
+import { omitRuntimeConfigHealthForClient } from "./health/runtime-config-cap.js";
 import type { HealthSummary } from "./health/types.js";
 import {
   createHostThawRecovery,
@@ -133,7 +134,8 @@ export function startGatewayMaintenanceTimers(params: {
         health: params.getHealthVersion(),
       },
     });
-    params.nodeSendToAllSubscribed("health", snap);
+    // Node subscriptions carry no advertised caps; websocket recipients are projected per client.
+    params.nodeSendToAllSubscribed("health", omitRuntimeConfigHealthForClient(snap, undefined));
   });
 
   const restartChannelsIfIdle = async (
