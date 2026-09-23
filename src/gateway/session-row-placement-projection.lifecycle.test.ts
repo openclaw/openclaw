@@ -9,7 +9,11 @@ import type { WorkerSessionPlacementProjection } from "./worker-environments/pla
 
 function placementReadView() {
   const projection: SessionRowReadView & { isCurrent(): boolean } = {
-    state: { cfg: {}, rowContext: buildSessionListRowMetadataContext({ now: 1 }) },
+    state: {
+      cfg: {},
+      policyConfig: {},
+      rowContext: buildSessionListRowMetadataContext({ now: 1 }),
+    },
     describe: () => undefined,
     selectEntries: () => [],
     present: () => {
