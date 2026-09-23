@@ -138,6 +138,7 @@ describe("importMemoryWikiOkfBundle", () => {
     const ordersRaw = await fs.readFile(path.join(config.vault.path, ordersPath!), "utf8");
     const orders = parseWikiMarkdown(ordersRaw);
     expect(orders.frontmatter).toMatchObject({
+      type: "BigQuery Table",
       pageType: "concept",
       title: "Orders",
       sourceType: "okf",
