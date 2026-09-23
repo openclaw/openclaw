@@ -7,6 +7,7 @@ import type {
 import { normalizeJsonSchemaForTypeBox } from "@openclaw/normalization-core/json-schema";
 import { Compile } from "typebox/compile";
 import { toErrorObject } from "../infra/errors.js";
+import { findUnsafePatternProperty } from "../plugins/schema-validator.js";
 import { findJsonSchemaShapeError } from "../shared/json-schema-defaults.js";
 
 const DRAFT_2020_12_SCHEMA = "https://json-schema.org/draft/2020-12/schema";
@@ -40,6 +41,12 @@ export function createMcpJsonSchemaValidator(): jsonSchemaValidator {
         const schemaError = findJsonSchemaShapeError(schema as never);
         if (schemaError) {
           throw new Error(schemaError);
+        }
+        const unsafePattern = findUnsafePatternProperty(schema);
+        if (unsafePattern) {
+          throw new Error(
+            `unsafe patternProperties pattern rejected before validation at ${unsafePattern}`,
+          );
         }
         validator = Compile(
           normalizeJsonSchemaForTypeBox(schema, { format: "annotation" }) as never,

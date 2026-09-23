@@ -1135,6 +1135,8 @@ src/secrets/target-registry-query.ts
 src/secrets/target-registry.ts
 src/secrets/unsupported-surface-policy.ts
 src/security/config-regex.ts
+src/security/safe-regex-atoms.ts
+src/security/safe-regex-numeric.ts
 src/security/safe-regex.ts
 src/security/scan-paths.ts
 src/sessions/session-diff-parser.ts
