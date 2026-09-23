@@ -110,6 +110,20 @@ export async function auditScheduledTaskDefinition(
     }
   }
   const nativeDefaults: Record<string, string> = {
+    // Task Scheduler may omit these effective defaults from exported XML, or
+    // expand them when the submitted policy omits them. Compare only exact
+    // schema defaults, never arbitrary missing fields or non-default values.
+    // https://learn.microsoft.com/windows/win32/taskschd/task-scheduler-schema
+    "Triggers.LogonTrigger.Enabled": "true",
+    "Settings.AllowHardTerminate": "true",
+    "Settings.StartWhenAvailable": "false",
+    "Settings.RunOnlyIfNetworkAvailable": "false",
+    "Settings.AllowStartOnDemand": "true",
+    "Settings.Hidden": "false",
+    "Settings.RunOnlyIfIdle": "false",
+    "Settings.WakeToRun": "false",
+    "Settings.Priority": "7",
+    "Principals.Principal.RunLevel": "LeastPrivilege",
     "Settings.UseUnifiedSchedulingEngine": "false",
     "Settings.DisallowStartOnRemoteAppSession": "false",
     "Settings.Volatile": "false",
@@ -208,8 +222,10 @@ export async function auditScheduledTaskDefinition(
       node.children.length ||
       (!expectedXml && preserved.test(key)) ||
       (expectedXml && key === "Settings.Enabled") ||
-      // Task Scheduler omits the default run level when exporting XML.
-      (key === "Principals.Principal.RunLevel" && node.textContent === "LeastPrivilege")
+      (nativeDefaults[key] === node.textContent &&
+        node.getAttributeNames().length === 0 &&
+        node.parentElement &&
+        seen.has(elementKey(node.parentElement)))
     ) {
       continue;
     }

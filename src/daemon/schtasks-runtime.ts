@@ -49,7 +49,7 @@ import {
 } from "./service-update-authority.js";
 import { WINDOWS_TASK_SUPERVISOR_FLAG } from "./windows-task-supervisor-contract.js";
 
-export const SCHEDULED_TASK_FALLBACK_POLL_MS = 250;
+const SCHEDULED_TASK_FALLBACK_POLL_MS = 250;
 export const SCHEDULED_TASK_FALLBACK_TIMEOUT_MS = 15_000;
 
 /** Read policy independently of runtime state; unavailable policy is not disabled. */
@@ -113,17 +113,37 @@ function createStartupEntryRemovalError(error: unknown): Error {
 
 export async function waitForScheduledTaskRunningEvidence(
   env: GatewayServiceEnv,
+  options?: { settleAfterRun?: boolean; assertCurrent?: () => void },
 ): Promise<boolean> {
   const deadline = Date.now() + SCHEDULED_TASK_FALLBACK_TIMEOUT_MS;
+  const settlingDeadline = deadline + SCHEDULED_TASK_FALLBACK_TIMEOUT_MS;
+  let runningSince: number | undefined;
+  let previousRunningSignature: string | undefined;
   while (true) {
+    options?.assertCurrent?.();
     const probe = probeScheduledTaskState(resolveTaskName(env));
+    const now = Date.now();
     // Only Scheduler supervision, not an old Startup process, proves takeover.
-    if (probe.status === "found" && probe.state === 4) {
+    const running = probe.status === "found" && probe.state === 4;
+    const signature = running ? (probe.lastRunTime ?? "running") : undefined;
+    if (running && !options?.settleAfterRun) {
       return true;
     }
-    if (Date.now() >= deadline) {
+    if (!running || signature !== previousRunningSignature) {
+      runningSince = undefined;
+    }
+    if (running && runningSince === undefined && now < deadline) {
+      runningSince = now;
+    }
+    // /Run is merely an accepted request. A late start still needs a full,
+    // continuous settling interval; a new run cannot extend the startup deadline.
+    if (runningSince !== undefined && now - runningSince >= SCHEDULED_TASK_FALLBACK_TIMEOUT_MS) {
+      return true;
+    }
+    if (now >= settlingDeadline || (now >= deadline && runningSince === undefined)) {
       return false;
     }
+    previousRunningSignature = signature;
     await sleep(SCHEDULED_TASK_FALLBACK_POLL_MS);
   }
 }

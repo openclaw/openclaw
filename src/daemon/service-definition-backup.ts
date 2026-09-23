@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { isDeepStrictEqual } from "node:util";
+import { DOMParser } from "linkedom";
 import { resolveStateDir } from "../config/paths.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
@@ -53,6 +54,43 @@ const backupPath = (file: string, id: string) => `${file}.reconcile-${id}.bak`;
 const taskBytes = (xml: string) =>
   Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(xml, "utf16le")]);
 const taskPolicy = (xml: string) => sha256Hex(setScheduledTaskXmlEnabled(xml, false));
+
+function matchesTaskPolicy(xml: string, expected: string): boolean {
+  if (taskPolicy(xml) === expected) {
+    return true;
+  }
+  // Scheduler omits Enabled=true, then inserts Enabled=false in native schema
+  // order on disable. Keep persisted receipt hashes compatible: try omitting
+  // only that plain, direct mutable field, without canonicalizing other XML.
+  const document = new DOMParser().parseFromString(xml, "text/xml");
+  if (document.documentElement?.tagName !== "Task" || document.doctype) {
+    return false;
+  }
+  const settings = [...document.documentElement.children].filter(
+    (node) => node.tagName === "Settings",
+  );
+  const enabled =
+    settings.length === 1
+      ? [...settings[0]!.children].filter((node) => node.tagName === "Enabled")
+      : [];
+  if (
+    enabled.length !== 1 ||
+    enabled[0]!.children.length !== 0 ||
+    enabled[0]!.getAttributeNames().length !== 0 ||
+    !/^(true|false)$/u.test(enabled[0]!.textContent.trim())
+  ) {
+    return false;
+  }
+  const omitted = xml.replace(
+    /(<Settings(?:\s[^>]*)?>)([\s\S]*?)(<\/Settings>)/u,
+    (match, open: string, body: string, close: string) => {
+      const fields = [...body.matchAll(/[\t \r\n]*<Enabled>\s*(true|false)\s*<\/Enabled>/gu)];
+      return fields.length === 1 ? `${open}${body.replace(fields[0]![0], "")}${close}` : match;
+    },
+  );
+  return omitted !== xml && taskPolicy(omitted) === expected;
+}
+
 const receiptPath = (receipt: GatewayServiceDefinitionBackupReceipt) =>
   `${receipt.files[0]!.sourcePath}.reconcile-${receipt.id}.receipt.bak`;
 type FileState = GatewayServiceDefinitionBackupReceipt["files"][number]["after"];
@@ -190,9 +228,10 @@ function mutationHooks(
       }
     }
     if (receipt.task) {
-      const current = taskPolicy(await readScheduledTaskDefinition(params.env));
+      const current = await readScheduledTaskDefinition(params.env);
+      const matchesReceiptPolicy = matchesTaskPolicy(current, receipt.task.afterPolicySha256);
       if (settlePrepared && receipt.task.preparedXml) {
-        const previous = current === receipt.task.afterPolicySha256;
+        const previous = matchesReceiptPolicy;
         receipt.task.recoveredPolicy = previous ? "previous" : "prepared";
         if (previous) {
           delete receipt.task.preparedXml;
@@ -202,7 +241,7 @@ function mutationHooks(
         }
         return beforeWrite(false);
       }
-      if (current !== receipt.task.afterPolicySha256) {
+      if (!matchesReceiptPolicy) {
         throw new Error("SERVICE_DEFINITION_UNKNOWN: Scheduled Task changed.");
       }
     }

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { decodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
 import {
   installScheduledTask,
@@ -14,6 +14,15 @@ import {
 } from "./schtasks.js";
 import { auditGatewayServiceConfig, SERVICE_AUDIT_CODES } from "./service-audit.js";
 import { buildServiceEnvironment } from "./service-env.js";
+
+// Registration fixtures advance the activation window without wall-clock sleeps.
+const activationClock = vi.hoisted(() => ({ now: 0 }));
+vi.mock("../utils.js", async () => ({
+  ...(await vi.importActual<typeof import("../utils.js")>("../utils.js")),
+  sleep: async (ms: number) => {
+    activationClock.now += ms;
+  },
+}));
 
 const taskProbe = vi.hoisted(() => vi.fn(() => ({ status: 0, stdout: '{"state":4}', stderr: "" })));
 
@@ -81,12 +90,18 @@ vi.mock("./schtasks-exec.js", () => ({
 }));
 
 beforeEach(() => {
+  activationClock.now = 0;
+  vi.spyOn(Date, "now").mockImplementation(() => activationClock.now);
   schtasksCalls.length = 0;
   schtasksResponses.length = 0;
   xmlPayloadCaptures.length = 0;
   taskProbe.mockReset().mockReturnValue({ status: 0, stdout: '{"state":4}', stderr: "" });
   resolveWindowsOemEncodingMock.mockReset();
   resolveWindowsOemEncodingMock.mockReturnValue(null);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("installScheduledTask", () => {

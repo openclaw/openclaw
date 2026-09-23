@@ -583,12 +583,16 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
         expect(path.relative(stateDir, scriptPath)).not.toMatch(/^\.\.(?:[\\/]|$)/u);
         expect(await canBindLoopbackPort(gatewayPort)).toBe(true);
 
-        await service.install({
-          env,
-          stdout,
-          ...installedCommand,
-          description: `OpenClaw CI Scheduled Task integration ${id}`,
-        });
+        // The first real action intentionally exits 23. Registration survives for
+        // recovery, but that failed action must not be reported as activation.
+        await expect(
+          service.install({
+            env,
+            stdout,
+            ...installedCommand,
+            description: `OpenClaw CI Scheduled Task integration ${id}`,
+          }),
+        ).rejects.toThrow("refusing a direct fallback");
 
         const failedProcesses = await waitForGatewayTaskSupervisorProcesses({
           probe,

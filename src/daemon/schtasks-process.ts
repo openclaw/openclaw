@@ -78,13 +78,14 @@ function getSnapshotProcessId(entry: WindowsProcessSnapshotEntry): number | null
   return typeof pid === "number" && Number.isFinite(pid) && pid > 0 ? pid : null;
 }
 
-export function findInstalledProcessPid(
+export function findInstalledProcessPids(
   entries: WindowsProcessSnapshotEntry[],
-  port: number,
+  port: number | null,
   installedArguments: string[],
   matchesProcess: (argv: string[]) => boolean,
   comparableArguments: (argv: string[]) => string[] = (argv) => argv,
-): number | null {
+): number[] {
+  const pids: number[] = [];
   for (const entry of entries) {
     const commandLine = normalizeLowercaseStringOrEmpty(entry.CommandLine ?? "");
     if (!commandLine) {
@@ -93,17 +94,35 @@ export function findInstalledProcessPid(
     const argv = parseCmdScriptCommandLine(entry.CommandLine ?? "");
     if (
       !matchesProcess(argv) ||
-      parseTcpPortFromArgs(argv) !== port ||
+      (port !== null && parseTcpPortFromArgs(argv) !== port) ||
       !matchesInstalledProgramArguments(comparableArguments(argv), installedArguments)
     ) {
       continue;
     }
     const pid = getSnapshotProcessId(entry);
     if (pid) {
-      return pid;
+      pids.push(pid);
     }
   }
-  return null;
+  return pids;
+}
+
+export function findInstalledProcessPid(
+  entries: WindowsProcessSnapshotEntry[],
+  port: number,
+  installedArguments: string[],
+  matchesProcess: (argv: string[]) => boolean,
+  comparableArguments: (argv: string[]) => string[] = (argv) => argv,
+): number | null {
+  return (
+    findInstalledProcessPids(
+      entries,
+      port,
+      installedArguments,
+      matchesProcess,
+      comparableArguments,
+    )[0] ?? null
+  );
 }
 
 function matchesInstalledGatewayChildArguments(
@@ -116,23 +135,31 @@ function matchesInstalledGatewayChildArguments(
   );
 }
 
-/** Finds the current supervised child or a legacy directly launched Gateway. */
+/** Finds all supervised children and legacy directly launched Gateways. */
+export function findInstalledGatewayChildPids(
+  entries: WindowsProcessSnapshotEntry[],
+  port: number,
+  installedArguments: string[],
+): number[] {
+  return [
+    ...findInstalledProcessPids(
+      entries,
+      port,
+      installedArguments,
+      (argv) => matchesInstalledGatewayChildArguments(argv, installedArguments),
+      (argv) => argv.slice(0, -1),
+    ),
+    ...findInstalledProcessPids(entries, port, installedArguments, () => true),
+  ];
+}
+
+/** Prefer the supervised child over a legacy directly launched Gateway. */
 export function findInstalledGatewayChildPid(
   entries: WindowsProcessSnapshotEntry[],
   port: number,
   installedArguments: string[],
 ): number | null {
-  const supervisedPid = findInstalledProcessPid(
-    entries,
-    port,
-    installedArguments,
-    (argv) => matchesInstalledGatewayChildArguments(argv, installedArguments),
-    (argv) => argv.slice(0, -1),
-  );
-  if (supervisedPid) {
-    return supervisedPid;
-  }
-  return findInstalledProcessPid(entries, port, installedArguments, () => true);
+  return findInstalledGatewayChildPids(entries, port, installedArguments)[0] ?? null;
 }
 
 async function resolveScheduledTaskProcess(

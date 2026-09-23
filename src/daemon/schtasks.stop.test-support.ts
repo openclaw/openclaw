@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import { hostname } from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.js";
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
@@ -284,3 +285,20 @@ export {
   busyPortUsage,
   freePortUsage,
 };
+
+export function mockSettledSchedulerSupervision() {
+  const processProbe = expectDefined(spawnSync.getMockImplementation(), "process fixture");
+  spawnSync.mockImplementation((command, args, options) => {
+    const encoded = args?.indexOf("-EncodedCommand") ?? -1;
+    if (
+      encoded >= 0 &&
+      Buffer.from(args?.[encoded + 1] ?? "", "base64")
+        .toString("utf16le")
+        .includes("Schedule.Service")
+    ) {
+      const stdout = JSON.stringify({ state: 4, lastRunResult: 267009 });
+      return { pid: 0, output: [null, stdout, ""], stdout, stderr: "", status: 0, signal: null };
+    }
+    return processProbe(command, args, options);
+  });
+}

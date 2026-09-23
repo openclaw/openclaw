@@ -11,6 +11,7 @@ import {
   findVerifiedGatewayListenerPidsOnPortSync,
   formatWindowsTaskSupervisorChildArgument,
   mockWindowsTaskkillSuccess,
+  mockSettledSchedulerSupervision,
   probeProcessState,
   pushSuccessfulSchtasksResponses,
   readGatewayOwnerLease,
@@ -834,7 +835,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
         { ...SUCCESS_RESPONSE },
         { ...SUCCESS_RESPONSE },
       );
-      setTaskStateProbeResult(4);
+      mockSettledSchedulerSupervision();
       const write = vi.fn();
       const onMutation = vi.fn(() => {
         throw new Error("audit failed");
@@ -981,6 +982,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
         const onMutation = vi.fn();
         pushSuccessfulSchtasksResponses(4);
         mockWindowsTaskkillSuccess();
+        mockSettledSchedulerSupervision();
         findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([5151]);
         inspectPortUsageMock
           .mockResolvedValueOnce(
@@ -1044,6 +1046,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
   it("does not wait on or force-kill the gateway port when restarting a node Scheduled Task", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
       pushSuccessfulSchtasksResponses(4);
+      mockSettledSchedulerSupervision();
       env.OPENCLAW_SERVICE_KIND = "node";
       env.OPENCLAW_WINDOWS_TASK_NAME = "OpenClaw Node";
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([5151]);
