@@ -12,7 +12,7 @@ type ClaudeCliAnthropicModelRefs = {
   rewriteRef?: string;
 };
 
-function splitTrailingModelAuthProfile(raw: string): { model: string; profile?: string } {
+export function splitTrailingModelAuthProfile(raw: string): { model: string; profile?: string } {
   const trimmed = raw.trim();
   if (!trimmed) {
     return { model: "" };
