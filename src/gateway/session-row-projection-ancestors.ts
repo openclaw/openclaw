@@ -22,7 +22,13 @@ export function createSessionRowRelationReads(owner: {
   return {
     readSourceEntry(this: void, row: records.Row, key: string, residentOnly = false) {
       const source = owner.referenced(
-        records.parentReference(owner.config(), key, row.agentId, row.storeTarget.storePath),
+        records.parentReference(
+          owner.config(),
+          key,
+          row.agentId,
+          row.storeTarget.storePath,
+          owner.referenced,
+        ),
       );
       return (
         source &&
@@ -74,6 +80,7 @@ function readSessionRowAncestors<T extends records.Row>(
               key,
               agentId,
               agentId === child.agentId ? child.storeTarget.storePath : undefined,
+              owner.referenced,
             ),
           );
         }

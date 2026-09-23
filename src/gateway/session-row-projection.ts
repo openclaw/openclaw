@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { isDeepStrictEqual } from "node:util";
 import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import {
   getSubagentSessionListReadSnapshotIdentity,
@@ -144,6 +145,30 @@ export async function createSessionRowProjection(params: {
     rows,
     dirty,
     put,
+    config: () => cfg,
+    refreshLineage(row) {
+      if (!row.storedEntry) {
+        return;
+      }
+      const lineage = records.readSessionRowLineage(
+        row,
+        row.storedEntry,
+        cfg,
+        metadata.current,
+        referenced,
+      );
+      if (
+        records.sameParents(row.parents, lineage.parents) &&
+        isDeepStrictEqual(row.entry, lineage.entry)
+      ) {
+        return;
+      }
+      // Cold children retain metadata/indices; both parents must drop stale child links.
+      const next = { ...row, ...lineage, pendingDatabaseFacts: undefined };
+      put(next);
+      markRelated(row, false);
+      markRelated(next, false);
+    },
     enqueue: (id, change) => backfill.enqueue(id, change),
     release(id) {
       transcriptUpdates.remove(id);
@@ -151,7 +176,7 @@ export async function createSessionRowProjection(params: {
       dirty.delete(id);
     },
     prepare(row) {
-      metadata.prepare(epoch, cfg, matching, put);
+      metadata.prepare(epoch, cfg, matching, put, referenced);
       const current = acquireEntry(row, readSessionRowEntry(row));
       if (current && materialize(current)) {
         backfill.enqueue(records.identity(current));
@@ -172,6 +197,8 @@ export async function createSessionRowProjection(params: {
       creators.update(row);
       records.index(row, indexes, true);
       rows.delete(id);
+      // Cold dependents reselect only after the removed parent is absent from the inventory.
+      markRelated(row);
       if (row.entry && !byKey.has(`id:${row.entry.sessionId}`)) {
         placementFacts.forget(row.entry.sessionId);
       }
@@ -197,13 +224,14 @@ export async function createSessionRowProjection(params: {
   }
   function acquireEntry(row: records.Row, storedEntry: SessionEntry | undefined) {
     if (storedEntry?.archivedAt !== undefined) {
-      inOwnerContext(() => metadata.prepare(epoch, cfg, matching, put));
+      inOwnerContext(() => metadata.prepare(epoch, cfg, matching, put, referenced));
     }
     return records.acquireSessionRowEntry({
       row,
       storedEntry,
       cfg,
       context: metadata.current,
+      referenced,
       remove,
       put,
       markRelated,
@@ -236,6 +264,7 @@ export async function createSessionRowProjection(params: {
         }
       },
     });
+    const acquisitions: Array<{ row: records.Row; entry: SessionEntry }> = [];
     for (const [key, target] of loaded.targetsBySessionKey) {
       const entry = target.entry;
       if (!entry || entry.incognito || isIncognitoSessionKey(key)) {
@@ -250,15 +279,13 @@ export async function createSessionRowProjection(params: {
       admitted.add(id);
       if (!rows.has(id) || storeRead.replaced.has(target.storeTarget.storePath)) {
         remove(id);
-        const row = acquireEntry(records.create(fields), entry);
-        if (row && !isCold(row)) {
-          dirty.add(id);
-          backfill.enqueue(id);
-        }
+        const row = records.create(fields, entry);
+        put(row);
+        acquisitions.push({ row, entry });
       } else {
         const row = rows.get(id)!;
         if (row.entry?.archivedAt !== undefined) {
-          acquireEntry(row, entry);
+          acquisitions.push({ row, entry });
         }
       }
     }
@@ -268,6 +295,14 @@ export async function createSessionRowProjection(params: {
       }
     }
     stores = storeRead.sources;
+    // Every stored identity must be visible before an earlier store selects a later parent.
+    for (const { row, entry } of acquisitions) {
+      const current = acquireEntry(row, entry);
+      if (current && !isCold(current)) {
+        dirty.add(records.identity(current));
+        backfill.enqueue(records.identity(current));
+      }
+    }
     membership.updateTargets(
       [...stores.values()].map((source) => ({
         agentId: source.target.agentId,
@@ -447,7 +482,7 @@ export async function createSessionRowProjection(params: {
     placementFacts,
     membership,
     prepare: () => {
-      metadata.prepare(epoch, cfg, matching, put);
+      metadata.prepare(epoch, cfg, matching, put, referenced);
       return cfg;
     },
     revision: () => epoch,
@@ -530,7 +565,7 @@ export async function createSessionRowProjection(params: {
     if (topologyDirty) {
       inOwnerContext(topology);
     }
-    metadata.prepare(epoch, cfg, matching, put);
+    metadata.prepare(epoch, cfg, matching, put, referenced);
   }
   const describe = (query: records.Lookup, captured?: records.Row) =>
     inOwnerContext(() => {
@@ -594,6 +629,7 @@ export async function createSessionRowProjection(params: {
             dirty,
             matching,
             acquire: (row) => acquireEntry(row, readSessionRowEntry(row)),
+            referenced,
           },
           query,
         ),

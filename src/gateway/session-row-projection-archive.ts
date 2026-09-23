@@ -16,6 +16,8 @@ export function createSessionRowProjectionArchive(params: {
   put: (row: records.Row) => void;
   release: (id: string) => void;
   prepare: (row: records.Row) => records.Row | undefined;
+  config: () => records.Inputs["cfg"];
+  refreshLineage: (row: records.Row) => void;
 }) {
   const materialized = new Set<string>();
   const readPins = new Map<symbol, ReadonlySet<string>>();
@@ -69,10 +71,12 @@ export function createSessionRowProjectionArchive(params: {
       includeChildren = true,
     ) {
       const related = new Set<string>();
-      records.markRelated(row, indexes, related, includeChildren);
+      records.markRelated(row, indexes, related, includeChildren, params.config());
       for (const id of related) {
         const current = params.rows.get(id);
-        if (current && !isColdArchivedSessionRow(current)) {
+        if (current && isColdArchivedSessionRow(current)) {
+          params.refreshLineage(current);
+        } else if (current) {
           params.dirty.add(id);
         }
       }

@@ -1,6 +1,6 @@
-import { resolveStoredSessionKeyForAgentStore } from "../../gateway/session-store-key.js";
+import { selectStoredSessionLineage } from "../../gateway/session-store-key.js";
 import type { GatewaySessionModelSource } from "../../gateway/session-utils-contracts.js";
-import { createGatewaySessionEntryReader } from "../../gateway/session-utils-store-lookup.js";
+import { createGatewaySessionLineageReader } from "../../gateway/session-utils-store-lookup.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -14,6 +14,7 @@ export type GatewayStoredSessionTarget = GatewaySessionModelSource & {
   /** Exact stored key when a list uses an internal key to retain sentinel owners. */
   storeKey?: string;
   storeTarget: SessionStoreTarget;
+  resolveSourceKey: (key: string) => string;
 };
 
 export type GatewayStoredSessionTargets = ReadonlyMap<string, GatewayStoredSessionTarget>;
@@ -27,7 +28,10 @@ export function createSessionModelSources(
     string,
     {
       entries: Record<string, SessionEntry>;
-      readers: Map<string, GatewaySessionModelSource["readSourceEntry"]>;
+      readers: Map<
+        string,
+        Pick<GatewayStoredSessionTarget, "readSourceEntry" | "resolveSourceKey">
+      >;
     }
   >();
   const logicalEntries = new Map<string, SessionEntry | undefined>();
@@ -41,11 +45,7 @@ export function createSessionModelSources(
         physicalStores.set(physicalKey, physical);
       }
       const { entries: store, readers } = physical;
-      return (
-        logicalAgentId: string,
-        key: string,
-        entry: SessionEntry,
-      ): GatewaySessionModelSource["readSourceEntry"] => {
+      return (logicalAgentId: string, key: string, entry: SessionEntry) => {
         store[key] = entry;
         const identity = logicalKey(logicalAgentId, key);
         // Preserve target-order selection within an owner, including hidden sentinels.
@@ -54,14 +54,15 @@ export function createSessionModelSources(
         }
         let read = readers.get(logicalAgentId);
         if (!read) {
-          const readQualifiedParent = createGatewaySessionEntryReader({
-            cfg,
-            agentId: logicalAgentId,
-            store,
-          });
-          read = (parentKey) => {
+          const readQualifiedParent = createGatewaySessionLineageReader(cfg);
+          // Capture the chosen fallback separately: it is not proof that the literal row exists.
+          const selectedParents = new Map<
+            string,
+            { key: string; value: SessionEntry | undefined }
+          >();
+          const select = (parentKey: string) => {
             if (parentKey === "global" || parentKey === "unknown") {
-              return store[parentKey];
+              return { key: parentKey, value: store[parentKey] };
             }
             // Stored qualified lineage retains its owner before a main alias collapses.
             const parsed = parseAgentSessionKey(parentKey);
@@ -72,25 +73,42 @@ export function createSessionModelSources(
               if (!diagnostics.includes(message)) {
                 diagnostics.push(message);
               }
-              return undefined;
+              return { key: parentKey, value: undefined };
             }
-            const canonicalKey = resolveStoredSessionKeyForAgentStore({
+            const captured = selectedParents.get(parentKey);
+            if (captured) {
+              return captured;
+            }
+            const selected = selectStoredSessionLineage({
               cfg,
               agentId,
               sessionKey: parentKey,
+              read(owner, key) {
+                const parentIdentity = logicalKey(owner, key);
+                // Prepared inventories prove absence; only missing owners need exact reads.
+                if (
+                  parsed &&
+                  preparedAgentIds &&
+                  !preparedAgentIds.has(owner) &&
+                  !logicalEntries.has(parentIdentity)
+                ) {
+                  logicalEntries.set(parentIdentity, readQualifiedParent.readStored(owner, key));
+                }
+                return logicalEntries.get(parentIdentity);
+              },
+              readAlias(owner, key) {
+                // Missing retired-default parents retain the shipped replacement-owner lookup.
+                return parsed && preparedAgentIds && !preparedAgentIds.has(owner)
+                  ? readQualifiedParent.readAlias(parentKey, logicalAgentId)
+                  : logicalEntries.get(logicalKey(owner, key));
+              },
             });
-            const parentIdentity = logicalKey(agentId, canonicalKey);
-            // Only unprepared qualified owners need an exact read. Cache absence too,
-            // without treating one parent read as a complete view of that owner's store.
-            if (
-              parsed &&
-              preparedAgentIds &&
-              !preparedAgentIds.has(agentId) &&
-              !logicalEntries.has(parentIdentity)
-            ) {
-              logicalEntries.set(parentIdentity, readQualifiedParent(parentKey));
-            }
-            return logicalEntries.get(parentIdentity);
+            selectedParents.set(parentKey, selected);
+            return selected;
+          };
+          read = {
+            readSourceEntry: (key) => select(key).value,
+            resolveSourceKey: (key) => select(key).key,
           };
           readers.set(logicalAgentId, read);
         }

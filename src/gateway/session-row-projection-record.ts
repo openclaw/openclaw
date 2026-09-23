@@ -15,7 +15,7 @@ import {
 } from "./server-methods/session-placement-read-projection.js";
 import { compareSessionEntryPairs } from "./session-list-order.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
-import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
+import { selectStoredSessionLineage } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import * as rowProjection from "./session-utils-row.js";
 
@@ -95,10 +95,17 @@ export function markRelated(
   },
   dirty: Set<string>,
   includeChildren = true,
+  cfg?: Inputs["cfg"],
 ) {
   if (includeChildren) {
     for (const id of dependents(row, indexes.byParent)) {
       dirty.add(id);
+    }
+    if (cfg && parseAgentSessionKey(row.key)) {
+      // A new literal parent must wake children still indexed under its absent-row alias.
+      for (const id of indexes.byParent.get(parentReference(cfg, row.key, row.agentId)) ?? []) {
+        dirty.add(id);
+      }
     }
   }
   for (const parent of row.parents) {
@@ -361,12 +368,28 @@ export function parentReference(
   key: string,
   fallbackAgentId: string,
   sourcePath?: string,
+  referenced?: (reference: string) => Row | undefined,
+) {
+  return selectSessionRowParent(cfg, key, fallbackAgentId, sourcePath, referenced).reference;
+}
+
+export function selectSessionRowParent(
+  cfg: Inputs["cfg"],
+  key: string,
+  fallbackAgentId: string,
+  sourcePath?: string,
+  referenced?: (reference: string) => Row | undefined,
 ) {
   if (sourcePath && (key === "global" || key === "unknown")) {
-    return physical(sourcePath, key);
+    return { key, reference: physical(sourcePath, key) };
   }
-  const agentId = parseAgentSessionKey(key)?.agentId ?? fallbackAgentId;
-  return logical(agentId, resolveStoredSessionKeyForAgentStore({ cfg, agentId, sessionKey: key }));
+  const selected = selectStoredSessionLineage({
+    cfg,
+    agentId: fallbackAgentId,
+    sessionKey: key,
+    read: (agentId, sessionKey) => referenced?.(logical(agentId, sessionKey))?.storedEntry,
+  });
+  return { key: selected.key, reference: logical(selected.agentId, selected.key) };
 }
 
 /** Drop reader-only graphs while retaining cold metadata and index identity. */
@@ -388,11 +411,12 @@ export function readSessionRowParents(
   storedEntry: SessionEntry,
   cfg: Inputs["cfg"],
   context: SessionListRowContext,
+  referenced?: (reference: string) => Row | undefined,
 ) {
   const parents = new Set<string>();
   const addParent = (key: string | null | undefined) => {
     if (key && key !== row.key) {
-      parents.add(parentReference(cfg, key, row.agentId, row.storeTarget.storePath));
+      parents.add(parentReference(cfg, key, row.agentId, row.storeTarget.storePath, referenced));
     }
   };
   addParent(storedEntry.parentSessionKey ?? resolveSessionParentSessionKey(row.key));
@@ -404,6 +428,27 @@ export function readSessionRowParents(
     }
   }
   return parents;
+}
+
+/** Reproject held lineage without acquiring board, transcript, or database facts. */
+export function readSessionRowLineage(
+  row: Row,
+  storedEntry: SessionEntry,
+  cfg: Inputs["cfg"],
+  context: SessionListRowContext,
+  referenced?: (reference: string) => Row | undefined,
+) {
+  const entry = projectGatewaySessionEntry(
+    cfg,
+    storedEntry,
+    (key) =>
+      selectSessionRowParent(cfg, key, row.agentId, row.storeTarget.storePath, referenced).key,
+  );
+  return {
+    entry,
+    parents: readSessionRowParents(row, storedEntry, cfg, context, referenced),
+    selection: readSessionListSelectionFacts(row.key, entry),
+  };
 }
 
 export function sameParents(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
@@ -423,6 +468,7 @@ export function acquireSessionRowEntry(params: {
   storedEntry: SessionEntry | undefined;
   cfg: Inputs["cfg"];
   context: SessionListRowContext;
+  referenced?: (reference: string) => Row | undefined;
   remove: (id: string) => void;
   put: (row: Row) => void;
   markRelated: (row: Row, includeChildren: boolean) => void;
@@ -433,8 +479,8 @@ export function acquireSessionRowEntry(params: {
     remove(identity(row));
     return undefined;
   }
-  const entry = projectGatewaySessionEntry(cfg, storedEntry);
-  const parents = readSessionRowParents(row, storedEntry, cfg, context);
+  const lineage = readSessionRowLineage(row, storedEntry, cfg, context, params.referenced);
+  const { entry, parents } = lineage;
   // Equal timestamps still need the full metadata comparison.
   const changed =
     !sameParents(row.parents, parents) ||
@@ -454,11 +500,8 @@ export function acquireSessionRowEntry(params: {
     ...row,
     storedEntry,
     pendingDatabaseFacts: undefined,
-    entry,
+    ...lineage,
     sharingEntry: entry,
-    // Selection metadata survives archive dematerialization and refreshes with the entry.
-    selection: readSessionListSelectionFacts(row.key, entry),
-    parents,
     generation,
     hasBoard:
       entry.archivedAt !== undefined ? (row.hasBoard ?? readSessionRowHasBoard(row)) : row.hasBoard,
