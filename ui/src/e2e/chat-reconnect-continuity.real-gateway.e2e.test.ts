@@ -99,6 +99,18 @@ suite.define(() => {
           JSON.stringify({ key: sessionKey, agentId: "main", label: "Reconnect continuity" }),
         ]);
         expect(create.code, create.stderr).toBe(0);
+        const readInFlightRun = async () => {
+          const history = await instance.cli([
+            "gateway",
+            "call",
+            "chat.history",
+            "--json",
+            "--params",
+            JSON.stringify({ sessionKey }),
+          ]);
+          expect(history.code, history.stderr).toBe(0);
+          return (JSON.parse(history.stdout) as Frame["payload"]).inFlightRun;
+        };
         const url = new URL(suite.server.baseUrl);
         url.pathname = "/chat/main/reconnect-continuity";
         url.hash = new URLSearchParams({ token: instance.gatewayToken }).toString();
@@ -184,6 +196,9 @@ suite.define(() => {
               .toBe("reconnecting");
 
             await firstTurn.append(offlineTail);
+            await expect
+              .poll(readInFlightRun, { timeout: 15_000 })
+              .toMatchObject({ runId: firstRunId, text: opening + offlineTail });
             reconnectGate.resolve();
             await expect.poll(() => connections).toBe(2);
             await waitForControlUiGatewayReady(page);
