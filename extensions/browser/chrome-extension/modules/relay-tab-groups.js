@@ -35,10 +35,9 @@ export async function addTabToOpenClawGroup(tabId, { chromeApi, getGroupColor, c
         ? created.groupOperationGroupId
         : undefined;
     const fallbackGroupWasOperationBacked = expectedGroupId !== undefined;
-    // Existing groups remain subject to current title authorization. Only a
-    // newly created group with observed membership gets the private naming
-    // exception during handoff. An attempted group operation is not proof of
-    // ownership when Chrome rejects before returning or emitting membership.
+    // Existing groups remain subject to current title authorization. A newly
+    // created group is exempt only while it is still unnamed; a readable
+    // unrelated title must never be accepted as creation ownership.
     const requiresOpenClawTitle =
       !created.initialGroup || !Number.isInteger(expectedGroupId) || expectedGroupId < 0;
     // The first snapshot can have been queued before the grouping failure was
@@ -56,19 +55,27 @@ export async function addTabToOpenClawGroup(tabId, { chromeApi, getGroupColor, c
     if (expectedGroupId !== undefined && currentTab.groupId !== expectedGroupId) {
       throw error instanceof Error ? error : new Error(String(error));
     }
-    if (requiresOpenClawTitle) {
-      let currentGroup;
-      try {
-        currentGroup = await chromeApi.tabGroups.get(currentTab.groupId);
-      } catch {
-        currentGroup = undefined;
-      }
-      if (
-        currentGroup?.title !== OPENCLAW_TAB_GROUP_TITLE ||
-        currentGroup.windowId !== currentTab.windowId
-      ) {
-        throw error instanceof Error ? error : new Error(String(error));
-      }
+    let currentGroup;
+    try {
+      currentGroup = await chromeApi.tabGroups.get(currentTab.groupId);
+    } catch {
+      currentGroup = undefined;
+    }
+    const readableGroupTitle = typeof currentGroup?.title === "string";
+    const allowedUnnamedCreationFallback =
+      created.initialGroup &&
+      currentGroup?.title === "" &&
+      currentGroup.windowId === currentTab.windowId;
+    if (
+      (requiresOpenClawTitle &&
+        (currentGroup?.title !== OPENCLAW_TAB_GROUP_TITLE ||
+          currentGroup.windowId !== currentTab.windowId)) ||
+      (!requiresOpenClawTitle &&
+        readableGroupTitle &&
+        !allowedUnnamedCreationFallback &&
+        currentGroup?.title !== OPENCLAW_TAB_GROUP_TITLE)
+    ) {
+      throw error instanceof Error ? error : new Error(String(error));
     }
     // Some Chromium shells expose grouping but do not reliably expose the
     // resulting group identity. Keep this exception scoped to creation.

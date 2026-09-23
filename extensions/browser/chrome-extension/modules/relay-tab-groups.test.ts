@@ -124,6 +124,30 @@ describe("addTabToOpenClawGroup", () => {
     expect(created.groupFallback).toBe(false);
   });
 
+  it("rejects a renamed creation fallback before granting debugger access", async () => {
+    const namingError = new Error("name failed");
+    const harness = createChromeApi({ renameError: namingError, groupTitle: "Unrelated" });
+    const created = {
+      tab: { ...harness.tab },
+      groupId: -1,
+      groupFallback: false,
+      grouping: false,
+      initialGroup: false,
+      expectedGroupId: undefined,
+      groupOperationGroupId: undefined,
+      assertCurrent: vi.fn(),
+    };
+
+    await expect(
+      addTabToOpenClawGroup(1, {
+        chromeApi: harness.chromeApi,
+        getGroupColor: async () => "orange",
+        created,
+      }),
+    ).rejects.toThrow(namingError.message);
+    expect(created.groupFallback).toBe(false);
+  });
+
   it.each([
     { label: "grouping", groupError: new Error("group failed") },
     { label: "naming", renameError: new Error("name failed") },
