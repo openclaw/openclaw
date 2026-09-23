@@ -901,9 +901,9 @@ suite.define(() => {
         repoRoot: REFRESHED_RESEARCH_WORKSPACE,
         includeRepositoryStatus: true,
       });
+      await placeTrigger.click();
       expect(await baseInput.inputValue()).toBe("");
       expect(await baseInput.getAttribute("placeholder")).toBe("Loading…");
-      await placeTrigger.click();
       await baseInput.fill("feature-choice");
       await gateway.resolveDeferred("worktrees.branches", {
         branches: [{ kind: "local", name: "beta" }],
