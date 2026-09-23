@@ -189,22 +189,36 @@ describe("SMS account config", () => {
     });
   });
 
-  it("normalizes numeric allowFrom entries accepted by config schema", () => {
-    const cfg = {
-      channels: {
-        sms: {
-          accountSid: "AC-parent",
-          authToken: "parent-token",
-          fromNumber: "+15550000000",
-          allowFrom: [1_555_333_4444],
-        },
+  it.each([
+    {
+      title: "normalizes numeric allowFrom entries accepted by config schema",
+      input: {
+        accountSid: "AC-parent",
+        authToken: "parent-token",
+        fromNumber: "+15550000000",
+        allowFrom: [1_555_333_4444],
       },
-    };
-
-    expect(parseSmsConfig(cfg.channels.sms).allowFrom).toEqual([1_555_333_4444]);
-    expect(resolveSmsAccount(cfg)).toMatchObject({
-      allowFrom: ["+15553334444"],
-    });
+      useParsedConfig: false,
+      expectedParsed: [1_555_333_4444],
+      expected: ["+15553334444"],
+    },
+    {
+      title: "coerces numeric allowFrom entries accepted by the config schema",
+      input: {
+        accountSid: "AC123",
+        authToken: "token",
+        fromNumber: "+15550001111",
+        allowFrom: [15551234567],
+      },
+      useParsedConfig: true,
+      expectedParsed: [15551234567],
+      expected: ["+15551234567"],
+    },
+  ])("$title", ({ input, useParsedConfig, expectedParsed, expected }) => {
+    const parsed = parseSmsConfig(input);
+    expect(parsed.allowFrom).toEqual(expectedParsed);
+    const cfg = { channels: { sms: useParsedConfig ? parsed : input } };
+    expect(resolveSmsAccount(cfg)).toMatchObject({ allowFrom: expected });
   });
 
   it("uses the configured default account when accountId is omitted", () => {
@@ -306,19 +320,6 @@ describe("SMS account config", () => {
       expect(resolveSmsAccount({}).textChunkLimit).toBe(1500);
     },
   );
-
-  it("coerces numeric allowFrom entries accepted by the config schema", () => {
-    const parsed = parseSmsConfig({
-      accountSid: "AC123",
-      authToken: "token",
-      fromNumber: "+15550001111",
-      allowFrom: [15551234567],
-    });
-
-    expect(resolveSmsAccount({ channels: { sms: parsed } })).toMatchObject({
-      allowFrom: ["+15551234567"],
-    });
-  });
 
   it("discovers env-only SMS credentials as the implicit default account", () => {
     process.env.TWILIO_ACCOUNT_SID = "AC-env";

@@ -1,5 +1,4 @@
 // Sms tests cover twilio plugin behavior.
-import { createHmac } from "node:crypto";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import {
   clearRuntimeConfigSnapshot,
@@ -20,6 +19,7 @@ import {
   verifyTwilioSignature,
 } from "./twilio.js";
 import type { ResolvedSmsAccount } from "./types.js";
+import { createSmsTestAccount, computeSmsTestTwilioSignature } from "./webhook.test-support.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
@@ -32,22 +32,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
 });
 
 function createAccount(overrides: Partial<ResolvedSmsAccount> = {}): ResolvedSmsAccount {
-  return {
-    accountId: "default",
-    enabled: true,
-    accountSid: "AC123",
-    authToken: "secret",
-    fromNumber: "+15557654321",
-    messagingServiceSid: "",
-    defaultTo: "",
-    webhookPath: "/webhooks/sms",
-    publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-    dangerouslyDisableSignatureValidation: false,
-    dmPolicy: "pairing",
-    allowFrom: [],
-    textChunkLimit: 1500,
-    ...overrides,
-  };
+  return createSmsTestAccount({ accountId: "default", ...overrides });
 }
 
 function readUrlEncodedRequestBody(init: RequestInit | undefined): URLSearchParams {
@@ -58,20 +43,6 @@ function readUrlEncodedRequestBody(init: RequestInit | undefined): URLSearchPara
     return init.body;
   }
   throw new Error("Expected Twilio request body to be URL-encoded.");
-}
-
-function computeTestTwilioSignature(params: {
-  url: string;
-  authToken: string;
-  form: Record<string, string>;
-}): string {
-  const data =
-    params.url +
-    Object.keys(params.form)
-      .toSorted()
-      .map((key) => `${key}${params.form[key] ?? ""}`)
-      .join("");
-  return createHmac("sha1", params.authToken).update(data).digest("base64");
 }
 
 async function readTestTwilioForm(body: string): Promise<Record<string, string>> {
@@ -209,41 +180,31 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("verifies Twilio signatures over sorted form fields", () => {
+    // Twilio's published vector keeps the expected signature independent of our signer.
+    // https://www.twilio.com/docs/usage/security
     const form = {
-      Body: "hello",
-      From: "+15551234567",
-      MessageSid: "SM123",
-      To: "+15557654321",
+      To: "+18005551212",
+      Digits: "1234",
+      From: "+14158675310",
+      CallSid: "CA1234567890ABCDE",
+      Caller: "+14158675310",
     };
-    const signature = computeTestTwilioSignature({
-      url: "https://gateway.example.com/webhooks/sms",
-      authToken: "secret",
-      form,
-    });
-
+    const url = "https://example.com/myapp.php?foo=1&bar=2";
+    const authToken = "12345";
+    const signature = "L/OH5YylLD5NRKLltdqwSvS0BnU=";
+    expect(computeSmsTestTwilioSignature({ url, authToken, form })).toBe(
+      "L/OH5YylLD5NRKLltdqwSvS0BnU=",
+    );
+    expect(verifyTwilioSignature({ signature, url, authToken, form })).toBe(true);
+    expect(verifyTwilioSignature({ signature, url: url + "&other=1", authToken, form })).toBe(
+      false,
+    );
+    expect(verifyTwilioSignature({ signature: signature.slice(0, -1), url, authToken, form })).toBe(
+      false,
+    );
+    expect(verifyTwilioSignature({ signature, url, authToken: "wrong-token", form })).toBe(false);
     expect(
-      verifyTwilioSignature({
-        signature,
-        url: "https://gateway.example.com/webhooks/sms",
-        authToken: "secret",
-        form,
-      }),
-    ).toBe(true);
-    expect(
-      verifyTwilioSignature({
-        signature,
-        url: "https://gateway.example.com/webhooks/sms/other",
-        authToken: "secret",
-        form,
-      }),
-    ).toBe(false);
-    expect(
-      verifyTwilioSignature({
-        signature: signature.slice(0, -1),
-        url: "https://gateway.example.com/webhooks/sms",
-        authToken: "secret",
-        form,
-      }),
+      verifyTwilioSignature({ signature, url, authToken, form: { ...form, Digits: "4321" } }),
     ).toBe(false);
   });
 
@@ -251,7 +212,7 @@ describe("Twilio SMS helpers", () => {
     const form = await readTestTwilioForm(
       "From=%2B15551234567&To=%2B15557654321&Body=+hello+&MessageSid=SM123&WaId=",
     );
-    const signature = computeTestTwilioSignature({
+    const signature = computeSmsTestTwilioSignature({
       url: "https://gateway.example.com/webhooks/sms",
       authToken: "secret",
       form,

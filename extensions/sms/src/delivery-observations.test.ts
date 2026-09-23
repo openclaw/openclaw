@@ -13,27 +13,13 @@ import {
 } from "./delivery-observations.js";
 import { setSmsRuntime } from "./runtime.js";
 import type { ResolvedSmsAccount } from "./types.js";
+import { createSmsTestAccount } from "./webhook.test-support.js";
 
 function createAccount(
   accountId = "default",
   overrides: Partial<ResolvedSmsAccount> = {},
 ): ResolvedSmsAccount {
-  return {
-    accountId,
-    enabled: true,
-    accountSid: "AC123",
-    authToken: "secret",
-    fromNumber: "+15557654321",
-    messagingServiceSid: "",
-    defaultTo: "",
-    webhookPath: "/webhooks/sms",
-    publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-    dangerouslyDisableSignatureValidation: false,
-    dmPolicy: "pairing",
-    allowFrom: [],
-    textChunkLimit: 1500,
-    ...overrides,
-  };
+  return createSmsTestAccount({ accountId, ...overrides });
 }
 
 function createStore(): PluginStateKeyedStore<SmsDeliveryRecord> {

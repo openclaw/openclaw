@@ -7,6 +7,7 @@ import { smsPlugin } from "./channel.js";
 import type { SmsDeliveryRecord } from "./delivery-observations.js";
 import type { probeSmsAccount as probeSmsAccountType } from "./status.js";
 import type { sendSmsViaTwilio as sendSmsViaTwilioType } from "./twilio.js";
+import { createSmsTestAccount } from "./webhook.test-support.js";
 
 const sendSmsViaTwilio = vi.hoisted(() =>
   vi.fn<typeof sendSmsViaTwilioType>(async ({ to, onPlatformSendDispatch }) => {
@@ -116,21 +117,7 @@ describe("smsPlugin status", () => {
   it("builds a status snapshot for configured SMS accounts", async () => {
     const snapshot = await smsPlugin.status?.buildAccountSnapshot?.({
       cfg: {},
-      account: {
-        accountId: "support",
-        enabled: true,
-        accountSid: "AC123",
-        authToken: "secret",
-        fromNumber: "+15557654321",
-        messagingServiceSid: "",
-        defaultTo: "",
-        webhookPath: "/webhooks/sms",
-        publicWebhookUrl: "",
-        dangerouslyDisableSignatureValidation: false,
-        dmPolicy: "pairing",
-        allowFrom: [],
-        textChunkLimit: 1500,
-      },
+      account: createSmsTestAccount({ accountId: "support", publicWebhookUrl: "" }),
     });
 
     expect(snapshot).toMatchObject({
@@ -145,21 +132,7 @@ describe("smsPlugin status", () => {
   it("projects lifecycle from the runtime status record", async () => {
     const snapshot = await smsPlugin.status?.buildAccountSnapshot?.({
       cfg: {},
-      account: {
-        accountId: "support",
-        enabled: true,
-        accountSid: "AC123",
-        authToken: "secret",
-        fromNumber: "+15557654321",
-        messagingServiceSid: "",
-        defaultTo: "",
-        webhookPath: "/webhooks/sms",
-        publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-        dangerouslyDisableSignatureValidation: false,
-        dmPolicy: "pairing",
-        allowFrom: [],
-        textChunkLimit: 1500,
-      },
+      account: createSmsTestAccount({ accountId: "support" }),
       runtime: { accountId: "support", lifecycle: "blocked", terminalDisconnect: true },
     });
 
@@ -167,21 +140,7 @@ describe("smsPlugin status", () => {
   });
 
   it("loads delivery observations with the full Twilio account identity", async () => {
-    const account = {
-      accountId: "support",
-      enabled: true,
-      accountSid: "AC-support",
-      authToken: "secret",
-      fromNumber: "+15557654321",
-      messagingServiceSid: "",
-      defaultTo: "",
-      webhookPath: "/webhooks/sms",
-      publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-      dangerouslyDisableSignatureValidation: false,
-      dmPolicy: "pairing" as const,
-      allowFrom: [],
-      textChunkLimit: 1500,
-    };
+    const account = createSmsTestAccount({ accountId: "support", accountSid: "AC-support" });
     const records = [
       {
         accountId: "support",
@@ -214,21 +173,7 @@ describe("smsPlugin status", () => {
 
   it("passes only the remaining probe budget after loading delivery observations", async () => {
     vi.useFakeTimers();
-    const account = {
-      accountId: "support",
-      enabled: true,
-      accountSid: "AC-support",
-      authToken: "secret",
-      fromNumber: "+15557654321",
-      messagingServiceSid: "",
-      defaultTo: "",
-      webhookPath: "/webhooks/sms",
-      publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-      dangerouslyDisableSignatureValidation: false,
-      dmPolicy: "pairing" as const,
-      allowFrom: [],
-      textChunkLimit: 1500,
-    };
+    const account = createSmsTestAccount({ accountId: "support", accountSid: "AC-support" });
     listRecentSmsDeliveryRecords.mockImplementationOnce(
       async () =>
         await new Promise<SmsDeliveryRecord[]>((resolve) => {

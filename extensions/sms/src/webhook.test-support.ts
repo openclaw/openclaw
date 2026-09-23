@@ -1,4 +1,5 @@
 // Sms test support shares webhook fixtures between the unit and raw-wire suites.
+import { createHmac } from "node:crypto";
 import { vi } from "vitest";
 import type { SmsDeliveryRecorder } from "./delivery-observations.js";
 import type { ResolvedSmsAccount } from "./types.js";
@@ -49,4 +50,44 @@ export function createSmsTestDeliveryRecorder(
   })),
 ): SmsDeliveryRecorder & { record: typeof record } {
   return { record };
+}
+
+export function computeSmsTestTwilioSignature(params: {
+  url: string;
+  authToken: string;
+  form: Record<string, string>;
+}): string {
+  const data =
+    params.url +
+    Object.keys(params.form)
+      .toSorted()
+      .map((key) => `${key}${params.form[key] ?? ""}`)
+      .join("");
+  return createHmac("sha1", params.authToken).update(data).digest("base64");
+}
+
+export function createSignedDeliveryPayload(params: {
+  messageSid: string;
+  status: string;
+  account?: ResolvedSmsAccount;
+  accountSid?: string;
+}): { body: string; signature: string; form: Record<string, string> } {
+  const account = params.account ?? createSmsTestAccount();
+  const form = {
+    AccountSid: params.accountSid ?? account.accountSid,
+    From: account.fromNumber,
+    To: "+15551234567",
+    MessageSid: params.messageSid,
+    MessageStatus: params.status,
+  };
+  const body = new URLSearchParams(form).toString();
+  return {
+    body,
+    form,
+    signature: computeSmsTestTwilioSignature({
+      url: account.publicWebhookUrl,
+      authToken: account.authToken,
+      form,
+    }),
+  };
 }

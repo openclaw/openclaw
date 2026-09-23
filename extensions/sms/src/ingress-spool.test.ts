@@ -1,38 +1,25 @@
 // Sms tests cover durable Twilio webhook admission and replay.
-import { createHmac } from "node:crypto";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { saveRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
+import { createFixtureLifetime } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SmsChannelRuntime } from "./inbound.js";
 import { createSmsIngressSpool } from "./ingress-spool.js";
-import type { ResolvedSmsAccount } from "./types.js";
 import { createSmsWebhookHandler } from "./webhook.js";
+import { createSmsTestAccount, computeSmsTestTwilioSignature } from "./webhook.test-support.js";
 
 type SmsIngressPayload = {
   version: 1;
   form: Record<string, string>;
 };
 
-const account: ResolvedSmsAccount = {
-  accountId: "default",
-  enabled: true,
-  accountSid: "AC123",
-  authToken: "secret",
-  fromNumber: "+15557654321",
-  messagingServiceSid: "",
-  defaultTo: "",
-  webhookPath: "/webhooks/sms",
-  publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-  dangerouslyDisableSignatureValidation: false,
-  dmPolicy: "pairing",
-  allowFrom: [],
-  textChunkLimit: 1500,
-};
+const account = createSmsTestAccount({ accountId: "default" });
 
 const stateDirs: string[] = [];
 const disposers: Array<() => void | Promise<void>> = [];
@@ -95,6 +82,12 @@ afterEach(async () => {
 });
 
 describe("createSmsIngressSpool", () => {
+  let finishHeldCase: (() => Promise<void>) | undefined;
+  afterEach(async () => {
+    const finish = finishHeldCase;
+    finishHeldCase = undefined;
+    await finish?.();
+  });
   it("retries acknowledged MMS provider outages before adopting later same-sender messages", async () => {
     const stateDir = await createStateDir();
     let now = 1_700_000_000_000;
@@ -212,15 +205,11 @@ describe("createSmsIngressSpool", () => {
     spool.start();
 
     async function postSignedCallback(callback: Record<string, string>) {
-      const signatureData =
-        testAccount.publicWebhookUrl +
-        Object.keys(callback)
-          .toSorted()
-          .map((key) => `${key}${callback[key] ?? ""}`)
-          .join("");
-      const signature = createHmac("sha1", testAccount.authToken)
-        .update(signatureData)
-        .digest("base64");
+      const signature = computeSmsTestTwilioSignature({
+        url: testAccount.publicWebhookUrl,
+        authToken: testAccount.authToken,
+        form: callback,
+      });
       return await fetch(testAccount.publicWebhookUrl, {
         method: "POST",
         headers: { "x-twilio-signature": signature },
@@ -331,31 +320,72 @@ describe("createSmsIngressSpool", () => {
   });
 
   it("does not let a non-cooperative delivery block route replacement shutdown", async () => {
-    const stateDir = await createStateDir();
-    let markDeliveryStarted!: () => void;
-    const deliveryStarted = new Promise<void>((resolve) => {
-      markDeliveryStarted = resolve;
-    });
-    let deliverySignal: AbortSignal | undefined;
-    const spool = createSmsIngressSpool({
-      cfg: {},
-      account,
-      channelRuntime: {} as SmsChannelRuntime,
-      queue: createQueue(stateDir),
-      deliver: vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
-        deliverySignal = lifecycle.abortSignal;
-        markDeliveryStarted();
-        await new Promise<void>(() => {});
-      }),
-    });
-    disposers.push(spool.stop);
-    spool.start();
-    await spool.enqueue(form("SM-non-cooperative-stop"));
-    await deliveryStarted;
+    const deliveryGate = createDeferred<void>();
+    const lifetime = createFixtureLifetime();
+    let finishing: Promise<void> | undefined;
+    const finishCase = () => {
+      deliveryGate.resolve();
+      return (finishing ??= lifetime.cleanup());
+    };
+    finishHeldCase = finishCase;
+    const scenario = lifetime.run(async () => {
+      let delivery: Promise<void> | undefined;
+      let spool: SmsIngressSpool | undefined;
+      try {
+        const stateDir = await createStateDir();
+        let deliverySignal: AbortSignal | undefined;
+        const deliver = vi.fn<SmsIngressDeliver>((_message, lifecycle) => {
+          delivery = lifetime.track(
+            (async () => {
+              deliverySignal = lifecycle.abortSignal;
+              await deliveryGate.promise;
+            })(),
+          );
+          return delivery;
+        });
+        spool = createSmsIngressSpool({
+          cfg: {},
+          account,
+          channelRuntime: {} as SmsChannelRuntime,
+          queue: createQueue(stateDir),
+          deliver,
+        });
+        disposers.push(spool.stop);
+        spool.start();
+        await spool.enqueue(form("SM-non-cooperative-stop"));
+        await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
 
-    await spool.stop();
-
-    expect(deliverySignal?.aborted).toBe(true);
+        // Stop must finish while delivery is still held; cooperative release would hide a regression.
+        await spool.stop();
+        expect(deliverySignal?.aborted).toBe(true);
+        deliveryGate.resolve();
+        await delivery;
+      } finally {
+        deliveryGate.resolve();
+        await Promise.allSettled(delivery ? [delivery] : []);
+        if (spool) {
+          // This callback has no post-gate state work. This is not a disposed-drain receipt.
+          lifetime.track(spool.waitForIdle(), true);
+        }
+      }
+    });
+    let failure: { error: unknown } | undefined;
+    try {
+      await scenario;
+    } catch (error) {
+      failure = { error };
+      throw error;
+    } finally {
+      try {
+        await finishCase();
+      } catch (cleanupError) {
+        throw failure
+          ? new AggregateError([failure.error, cleanupError], "SMS fixture cleanup failed", {
+              cause: failure.error,
+            })
+          : cleanupError;
+      }
+    }
   });
 
   it("keeps a completed MessageSid tombstone from dispatching twice", async () => {

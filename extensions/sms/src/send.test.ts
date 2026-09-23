@@ -11,6 +11,7 @@ import {
 } from "./send.js";
 import type { sendSmsViaTwilio as sendSmsViaTwilioType } from "./twilio.js";
 import type { ResolvedSmsAccount } from "./types.js";
+import { createSmsTestAccount } from "./webhook.test-support.js";
 
 type SendModule = typeof import("./send.js");
 type SendSmsMediaParams = Parameters<SendModule["prepareSmsMediaAttempt"]>[0] &
@@ -85,21 +86,7 @@ afterEach(() => {
 });
 
 function createAccount(textChunkLimit: number): ResolvedSmsAccount {
-  return {
-    accountId: "default",
-    enabled: true,
-    accountSid: "AC123",
-    authToken: "secret",
-    fromNumber: "+15557654321",
-    messagingServiceSid: "",
-    defaultTo: "",
-    webhookPath: "/webhooks/sms",
-    publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-    dangerouslyDisableSignatureValidation: false,
-    dmPolicy: "pairing",
-    allowFrom: [],
-    textChunkLimit,
-  };
+  return createSmsTestAccount({ accountId: "default", textChunkLimit });
 }
 
 async function sendSmsMedia(params: SendSmsMediaParams) {

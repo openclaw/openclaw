@@ -1,11 +1,14 @@
 // Sms tests cover gateway plugin behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createFixtureLifetime } from "openclaw/plugin-sdk/test-env";
 import type { registerPluginHttpRoute as registerPluginHttpRouteType } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { collectSmsStartupWarnings, startSmsGatewayAccount } from "./gateway.js";
 import type { SmsChannelRuntime } from "./inbound.js";
 import type { ResolvedSmsAccount } from "./types.js";
+import { createSmsTestAccount } from "./webhook.test-support.js";
 
 const smsWebhookHandler = vi.hoisted(() => vi.fn(async (_req: unknown, _res: unknown) => true));
 const createSmsWebhookHandler = vi.hoisted(() => vi.fn((_params: unknown) => smsWebhookHandler));
@@ -62,31 +65,23 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", () => ({
 }));
 
 function createAccount(accountId: string, webhookPath = "/webhooks/sms"): ResolvedSmsAccount {
-  return {
+  return createSmsTestAccount({
     accountId,
-    enabled: true,
     accountSid: `AC-${accountId}`,
-    authToken: "secret",
-    fromNumber: "+15557654321",
-    messagingServiceSid: "",
-    defaultTo: "",
     webhookPath,
     publicWebhookUrl: `https://gateway.example.com${webhookPath}`,
-    dangerouslyDisableSignatureValidation: false,
-    dmPolicy: "pairing",
-    allowFrom: [],
-    textChunkLimit: 1500,
-  };
+  });
 }
 
 describe("startSmsGatewayAccount", () => {
+  let finishHeldCase: (() => Promise<void>) | undefined;
   beforeEach(() => {
     registerPluginHttpRoute.mockClear();
     waitUntilAbort.mockClear();
     createSmsIngressSpool.mockClear();
     startSmsIngress.mockClear();
-    pauseSmsIngress.mockClear();
-    stopSmsIngress.mockClear();
+    pauseSmsIngress.mockReset().mockResolvedValue(undefined);
+    stopSmsIngress.mockReset().mockResolvedValue(undefined);
     createSmsWebhookHandler.mockClear();
     smsWebhookHandler.mockClear();
     tryHandleHostedSmsMediaRequest.mockClear();
@@ -94,10 +89,16 @@ describe("startSmsGatewayAccount", () => {
   });
 
   afterEach(async () => {
-    for (const unregister of registeredRoutes.toReversed()) {
-      await unregister();
+    const finish = finishHeldCase;
+    finishHeldCase = undefined;
+    try {
+      await finish?.();
+    } finally {
+      for (const unregister of registeredRoutes.toReversed()) {
+        await unregister();
+      }
+      registeredRoutes.length = 0;
     }
-    registeredRoutes.length = 0;
   });
 
   async function startRoute(
@@ -301,85 +302,163 @@ describe("startSmsGatewayAccount", () => {
   });
 
   it("serializes overlapping replacements of the same webhook route", async () => {
-    let releaseStop: (() => void) | undefined;
-    stopSmsIngress.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          releaseStop = resolve;
-        }),
-    );
-    const params = {
-      cfg: {},
-      account: createAccount("default"),
-      channelRuntime: {} as SmsChannelRuntime,
+    const stopGate = createDeferred<void>();
+    const lifetime = createFixtureLifetime();
+    let finishing: Promise<void> | undefined;
+    // Runner timeout does not unwind the callback. Release before joining its work.
+    const finishCase = () => {
+      stopGate.resolve();
+      return (finishing ??= lifetime.cleanup());
     };
-    await startRoute(params);
+    finishHeldCase = finishCase;
+    const scenario = lifetime.run(async () => {
+      try {
+        stopSmsIngress.mockImplementationOnce(() => stopGate.promise);
+        const params = {
+          cfg: {},
+          account: createAccount("default"),
+          channelRuntime: {} as SmsChannelRuntime,
+        };
+        await lifetime.track(startRoute(params));
 
-    const firstReplacement = startRoute(params);
-    await vi.waitFor(() => expect(stopSmsIngress).toHaveBeenCalledTimes(1));
-    expect(registerPluginHttpRoute).toHaveBeenCalledTimes(2);
-    expect(startSmsIngress).toHaveBeenCalledTimes(1);
-    const secondReplacement = startRoute(params);
-    await Promise.resolve();
+        const firstReplacement = lifetime.track(startRoute(params));
+        await vi.waitFor(() => expect(stopSmsIngress).toHaveBeenCalledTimes(1));
+        expect(registerPluginHttpRoute).toHaveBeenCalledTimes(2);
+        expect(startSmsIngress).toHaveBeenCalledTimes(1);
+        const secondReplacement = lifetime.track(startRoute(params));
+        await Promise.resolve();
 
-    expect(registerPluginHttpRoute).toHaveBeenCalledTimes(3);
-    expect(startSmsIngress).toHaveBeenCalledTimes(1);
-    releaseStop?.();
-    await Promise.all([firstReplacement, secondReplacement]);
-    expect(startSmsIngress).toHaveBeenCalledTimes(2);
+        expect(registerPluginHttpRoute).toHaveBeenCalledTimes(3);
+        expect(startSmsIngress).toHaveBeenCalledTimes(1);
+        stopGate.resolve();
+        await Promise.all([firstReplacement, secondReplacement]);
+        expect(startSmsIngress).toHaveBeenCalledTimes(2);
+      } finally {
+        stopGate.resolve();
+      }
+    });
+    let failure: { error: unknown } | undefined;
+    try {
+      await scenario;
+    } catch (error) {
+      failure = { error };
+      throw error;
+    } finally {
+      try {
+        await finishCase();
+      } catch (cleanupError) {
+        throw failure
+          ? new AggregateError([failure.error, cleanupError], "SMS fixture cleanup failed", {
+              cause: failure.error,
+            })
+          : cleanupError;
+      }
+    }
   });
 
   it("keeps a replacement route live while abort cleanup stops its predecessor", async () => {
-    let releaseStop: (() => void) | undefined;
-    stopSmsIngress.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          releaseStop = resolve;
-        }),
-    );
-    const params = {
-      cfg: {},
-      account: createAccount("default"),
-      channelRuntime: {} as SmsChannelRuntime,
+    const stopGate = createDeferred<void>();
+    const lifetime = createFixtureLifetime();
+    let finishing: Promise<void> | undefined;
+    // Runner timeout does not unwind the callback. Release before joining its work.
+    const finishCase = () => {
+      stopGate.resolve();
+      return (finishing ??= lifetime.cleanup());
     };
-    await startRoute(params);
+    finishHeldCase = finishCase;
+    const scenario = lifetime.run(async () => {
+      try {
+        stopSmsIngress.mockImplementationOnce(() => stopGate.promise);
+        const params = {
+          cfg: {},
+          account: createAccount("default"),
+          channelRuntime: {} as SmsChannelRuntime,
+        };
+        await lifetime.track(startRoute(params));
 
-    const shutdown = registeredRoutes[0]?.();
-    await vi.waitFor(() => expect(stopSmsIngress).toHaveBeenCalledTimes(1));
-    const replacement = startRoute(params);
-    await Promise.resolve();
+        const shutdown = lifetime.track(Promise.resolve(registeredRoutes[0]?.()));
+        await vi.waitFor(() => expect(stopSmsIngress).toHaveBeenCalledTimes(1));
+        const replacement = lifetime.track(startRoute(params));
+        await Promise.resolve();
 
-    expect(registerPluginHttpRoute).toHaveBeenCalledTimes(2);
-    expect(startSmsIngress).toHaveBeenCalledTimes(1);
-    releaseStop?.();
-    await Promise.all([shutdown, replacement]);
-    expect(startSmsIngress).toHaveBeenCalledTimes(2);
+        expect(registerPluginHttpRoute).toHaveBeenCalledTimes(2);
+        expect(startSmsIngress).toHaveBeenCalledTimes(1);
+        stopGate.resolve();
+        await Promise.all([shutdown, replacement]);
+        expect(startSmsIngress).toHaveBeenCalledTimes(2);
+      } finally {
+        stopGate.resolve();
+      }
+    });
+    let failure: { error: unknown } | undefined;
+    try {
+      await scenario;
+    } catch (error) {
+      failure = { error };
+      throw error;
+    } finally {
+      try {
+        await finishCase();
+      } catch (cleanupError) {
+        throw failure
+          ? new AggregateError([failure.error, cleanupError], "SMS fixture cleanup failed", {
+              cause: failure.error,
+            })
+          : cleanupError;
+      }
+    }
   });
 
   it("binds replacement abort cleanup before its predecessor finishes stopping", async () => {
-    let releaseStop: (() => void) | undefined;
-    stopSmsIngress.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          releaseStop = resolve;
-        }),
-    );
-    const params = {
-      cfg: {},
-      account: createAccount("default"),
-      channelRuntime: {} as SmsChannelRuntime,
+    const stopGate = createDeferred<void>();
+    const lifetime = createFixtureLifetime();
+    let finishing: Promise<void> | undefined;
+    // Runner timeout does not unwind the callback. Release before joining its work.
+    const finishCase = () => {
+      stopGate.resolve();
+      return (finishing ??= lifetime.cleanup());
     };
-    await startRoute(params);
+    finishHeldCase = finishCase;
+    const scenario = lifetime.run(async () => {
+      try {
+        stopSmsIngress.mockImplementationOnce(() => stopGate.promise);
+        const params = {
+          cfg: {},
+          account: createAccount("default"),
+          channelRuntime: {} as SmsChannelRuntime,
+        };
+        await lifetime.track(startRoute(params));
 
-    const replacement = startRoute(params);
-    await vi.waitFor(() => expect(registeredRoutes).toHaveLength(2));
-    await vi.waitFor(() => expect(stopSmsIngress).toHaveBeenCalledTimes(1));
-    const abortReplacement = registeredRoutes[1]?.();
+        const replacement = lifetime.track(startRoute(params));
+        await vi.waitFor(() => expect(registeredRoutes).toHaveLength(2));
+        await vi.waitFor(() => expect(stopSmsIngress).toHaveBeenCalledTimes(1));
+        const abortReplacement = lifetime.track(Promise.resolve(registeredRoutes[1]?.()));
 
-    expect(routeUnregisters[1]).toHaveBeenCalledOnce();
-    releaseStop?.();
-    await Promise.all([replacement, abortReplacement]);
-    expect(startSmsIngress).toHaveBeenCalledTimes(1);
+        expect(routeUnregisters[1]).toHaveBeenCalledOnce();
+        stopGate.resolve();
+        await Promise.all([replacement, abortReplacement]);
+        expect(startSmsIngress).toHaveBeenCalledTimes(1);
+      } finally {
+        stopGate.resolve();
+      }
+    });
+    let failure: { error: unknown } | undefined;
+    try {
+      await scenario;
+    } catch (error) {
+      failure = { error };
+      throw error;
+    } finally {
+      try {
+        await finishCase();
+      } catch (cleanupError) {
+        throw failure
+          ? new AggregateError([failure.error, cleanupError], "SMS fixture cleanup failed", {
+              cause: failure.error,
+            })
+          : cleanupError;
+      }
+    }
   });
 
   it("stops both ingress instances when predecessor pause fails", async () => {
@@ -411,29 +490,55 @@ describe("startSmsGatewayAccount", () => {
   });
 
   it("pauses the predecessor pump before exposing a replacement route", async () => {
-    let releasePause: (() => void) | undefined;
-    pauseSmsIngress.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          releasePause = resolve;
-        }),
-    );
-    const params = {
-      cfg: {},
-      account: createAccount("default"),
-      channelRuntime: {} as SmsChannelRuntime,
+    const pauseGate = createDeferred<void>();
+    const lifetime = createFixtureLifetime();
+    let finishing: Promise<void> | undefined;
+    // Runner timeout does not unwind the callback. Release before joining its work.
+    const finishCase = () => {
+      pauseGate.resolve();
+      return (finishing ??= lifetime.cleanup());
     };
-    await startRoute(params);
+    finishHeldCase = finishCase;
+    const scenario = lifetime.run(async () => {
+      try {
+        pauseSmsIngress.mockImplementationOnce(() => pauseGate.promise);
+        const params = {
+          cfg: {},
+          account: createAccount("default"),
+          channelRuntime: {} as SmsChannelRuntime,
+        };
+        await lifetime.track(startRoute(params));
 
-    const replacement = startRoute(params);
-    await vi.waitFor(() => expect(registerPluginHttpRoute).toHaveBeenCalledTimes(2));
+        const replacement = lifetime.track(startRoute(params));
+        await vi.waitFor(() => expect(registerPluginHttpRoute).toHaveBeenCalledTimes(2));
 
-    expect(pauseSmsIngress).toHaveBeenCalledTimes(1);
-    expect(stopSmsIngress).not.toHaveBeenCalled();
-    expect(createSmsIngressSpool.mock.calls[0]?.[0]).not.toHaveProperty("abortSignal");
-    releasePause?.();
-    await replacement;
-    expect(stopSmsIngress).toHaveBeenCalledTimes(1);
+        expect(pauseSmsIngress).toHaveBeenCalledTimes(1);
+        expect(stopSmsIngress).not.toHaveBeenCalled();
+        expect(createSmsIngressSpool.mock.calls[0]?.[0]).not.toHaveProperty("abortSignal");
+        pauseGate.resolve();
+        await replacement;
+        expect(stopSmsIngress).toHaveBeenCalledTimes(1);
+      } finally {
+        pauseGate.resolve();
+      }
+    });
+    let failure: { error: unknown } | undefined;
+    try {
+      await scenario;
+    } catch (error) {
+      failure = { error };
+      throw error;
+    } finally {
+      try {
+        await finishCase();
+      } catch (cleanupError) {
+        throw failure
+          ? new AggregateError([failure.error, cleanupError], "SMS fixture cleanup failed", {
+              cause: failure.error,
+            })
+          : cleanupError;
+      }
+    }
   });
 });
 
