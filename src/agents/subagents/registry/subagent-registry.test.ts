@@ -2019,14 +2019,11 @@ describe("subagent registry seam flow", () => {
     );
 
     const settleRootWork = observeRootWork();
-    try {
-      disposed = true;
-      pendingWait.resolve({ status: "ok", startedAt: 111, endedAt: 222 });
-      await announceStarted.promise;
-    } finally {
-      await settleRootWork();
-    }
+    disposed = true;
+    pendingWait.resolve({ status: "ok", startedAt: 111, endedAt: 222 });
+    await announceStarted.promise.finally(settleRootWork);
 
+    expect(findRequesterRun("run-detached-requester-owner")?.execution.status).toBe("terminal");
     expect(freshTranscriptWrite).toHaveBeenCalledOnce();
     expect(freshCompletionWrite).toHaveBeenCalledOnce();
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
