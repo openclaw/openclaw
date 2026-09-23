@@ -169,6 +169,7 @@ jobs:
       run_ios_screenshots: ${{ steps.changed_scope.outputs.run_ios_screenshots }}
       run_android_job: ${{ steps.manifest.outputs.run_android_job }}
       run_android_access_native: ${{ steps.manifest.outputs.run_android_access_native }}
+      run_android_access_persistence: ${{ steps.manifest.outputs.run_android_access_persistence }}
       use_compatible_android_ci: ${{ steps.manifest.outputs.use_compatible_android_ci }}
       run_protocol_event_coverage: ${{ steps.manifest.outputs.run_protocol_event_coverage }}
       android_matrix: ${{ steps.manifest.outputs.android_matrix }}
@@ -1522,6 +1523,10 @@ jobs:
             (!frozenTarget || existsSync(
               "apps/android/app/src/androidTest/java/ai/openclaw/app/gateway/CloudflareAccessNativeTest.kt",
             ));
+          const runAndroidAccessPersistence = runAndroidAccessNative &&
+            (!frozenTarget || existsSync(
+              "apps/android/app/src/androidTest/java/ai/openclaw/app/gateway/CloudflareAccessPersistenceNativeTest.kt",
+            ));
           const runWindows =
             parseBoolean(process.env.OPENCLAW_CI_RUN_WINDOWS) &&
             !docsOnly &&
@@ -2001,6 +2006,7 @@ jobs:
             run_ios_build: runIosBuild,
             run_android_job: runAndroid,
             run_android_access_native: runAndroidAccessNative,
+            run_android_access_persistence: runAndroidAccessPersistence,
             use_compatible_android_ci: useCompatibleAndroidCi,
             run_protocol_event_coverage: runProtocolEventCoverage,
             android_matrix: createMatrix(
@@ -6211,6 +6217,7 @@ jobs:
       - name: Run packaged Access crypto on Android
         shell: bash
         env:
+          RUN_ACCESS_PERSISTENCE: ${{ needs.preflight.outputs.run_android_access_persistence }}
           EXPECTED_PAGE_SIZE: ${{ matrix.page-size }}
           SYSTEM_IMAGE: system-images;android-36;${{ matrix.image }};x86_64
         run: |
@@ -6239,21 +6246,37 @@ jobs:
             test "$(adb -s emulator-5554 shell getprop bionic.linker.16kb.app_compat.enabled | tr -d '\r')" = false
             test "$(adb -s emulator-5554 shell getprop pm.16kb.app_compat.disabled | tr -d '\r')" = true
           fi
+          native_test_methods=(ai.openclaw.app.gateway.CloudflareAccessNativeTest#packagedSodiumLoadsAndDecryptsTheGoTransferVector)
+          if [[ "$RUN_ACCESS_PERSISTENCE" == true ]]; then
+            native_test_methods+=(ai.openclaw.app.gateway.CloudflareAccessPersistenceNativeTest#encryptedGrantRestoresAndDeletesWithoutChangingGatewayPairing)
+          fi
+          ACCESS_NATIVE_TEST_CLASSES=""
+          native_test_pattern=""
+          for method in "${native_test_methods[@]}"; do
+            ACCESS_NATIVE_TEST_CLASSES+="${ACCESS_NATIVE_TEST_CLASSES:+,}${method%%#*}"
+            native_test_pattern+="${native_test_pattern:+|}${method//./[.]}"
+          done
+          export ACCESS_NATIVE_TEST_CLASSES
+          # AGP 9.4 splits instrumentation values on commas; quote the exact regex for adb's remote shell.
+          native_test_filter="-Pandroid.testInstrumentationRunnerArguments.tests_regex='^(${native_test_pattern})$'"
           node --import ./scripts/tsx.mjs scripts/run-android-gradle.mts \
             :app:connectedPlayDebugAndroidTest \
             -Pandroid.testInstrumentationRunnerArguments.expectedPageSize="$EXPECTED_PAGE_SIZE" \
-            -Pandroid.testInstrumentationRunnerArguments.class=ai.openclaw.app.gateway.CloudflareAccessNativeTest \
+            "$native_test_filter" \
             -PopenclawBuildTimestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           apk="$(python3 - <<'PY'
           from pathlib import Path
           import json
+          import os
           import xml.etree.ElementTree as ET
           import zipfile
           reports = Path('apps/android/app/build/outputs/androidTest-results/connected').rglob('*.xml')
-          cases = [case for report in reports for case in ET.parse(report).getroot().iter('testcase')
-                   if case.get('classname') == 'ai.openclaw.app.gateway.CloudflareAccessNativeTest']
-          assert len(cases) == 1, 'The packaged native test must execute exactly once'
-          assert all(case.find(tag) is None for case in cases for tag in ('failure', 'error', 'skipped')), 'The packaged native test failed or skipped'
+          cases = [case for report in reports for case in ET.parse(report).getroot().iter('testcase')]
+          expected_classes = os.environ['ACCESS_NATIVE_TEST_CLASSES'].split(',')
+          assert len(cases) == len(expected_classes), 'Every selected native test must execute exactly once'
+          for expected in expected_classes:
+              assert sum(case.get('classname') == expected for case in cases) == 1, f'Missing or duplicate native test: {expected}'
+          assert all(case.find(tag) is None for case in cases for tag in ('failure', 'error', 'skipped')), 'A packaged native test failed or skipped'
           directory = Path('apps/android/app/build/outputs/apk/play/debug')
           metadata = json.loads((directory / 'output-metadata.json').read_text())
           assert metadata['variantName'] == 'playDebug' and metadata['artifactType']['type'] == 'APK'

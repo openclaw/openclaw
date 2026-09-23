@@ -46,6 +46,10 @@ import {
 } from "../../scripts/run-additional-boundary-checks.mts";
 import { buildVitestRunPlans } from "../../scripts/test-projects.test-support.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import {
+  selectAndroidAccessTests,
+  verifyAndroidAccessReports,
+} from "../helpers/android-access-workflow.js";
 import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
 import { sharedVitestConfig } from "../vitest/vitest.shared.config.ts";
@@ -610,6 +614,7 @@ function runCiManifestFixture(options: {
   iosBuildCapability?: boolean;
   androidCiCapabilities?: boolean;
   androidAccessNativeCapability?: boolean;
+  androidAccessPersistenceCapability?: boolean;
   nativeI18nCapabilities?: boolean;
   macosNodeParts?: boolean;
   windowsPlanner?: boolean;
@@ -864,6 +869,17 @@ function runCiManifestFixture(options: {
       writeFileSync(
         nativeTest,
         "package ai.openclaw.app.gateway\n\nclass CloudflareAccessNativeTest\n",
+      );
+    }
+    if (options.androidAccessPersistenceCapability ?? options.bundledPlanner) {
+      const persistenceTest = path.join(
+        root,
+        "apps/android/app/src/androidTest/java/ai/openclaw/app/gateway/CloudflareAccessPersistenceNativeTest.kt",
+      );
+      mkdirSync(path.dirname(persistenceTest), { recursive: true });
+      writeFileSync(
+        persistenceTest,
+        "package ai.openclaw.app.gateway\n\nclass CloudflareAccessPersistenceNativeTest\n",
       );
     }
     const targetWorkflow = path.join(root, ".github", "workflows", "ci.yml");
@@ -15425,16 +15441,24 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
   });
 
   it.each<
-    { label: string; selected: boolean; frozen: boolean } & Partial<
+    { label: string; selected: boolean; frozen: boolean; persistence?: boolean } & Partial<
       Parameters<typeof runCiManifestFixture>[0]
     >
   >([
     { label: "frozen target without native test", selected: false, frozen: true },
     {
-      label: "frozen target with native test",
+      label: "frozen target with crypto-only native test",
       androidAccessNativeCapability: true,
       selected: true,
       frozen: true,
+    },
+    {
+      label: "frozen target with both native tests",
+      androidAccessNativeCapability: true,
+      androidAccessPersistenceCapability: true,
+      selected: true,
+      frozen: true,
+      persistence: true,
     },
     {
       label: "current PR without native test",
@@ -15493,12 +15517,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     },
   ])(
     "binds native Access job and gate selection to $label",
-    ({ label: _label, selected, frozen, ...options }) => {
+    ({ label: _label, selected, frozen, persistence = selected && !frozen, ...options }) => {
       const manifest = runCiManifestFixture({
         bundledPlanner: true,
         eventName: "workflow_dispatch",
         historicalCompatibility: false,
         androidAccessNativeCapability: false,
+        androidAccessPersistenceCapability: false,
         changedPaths: [],
         ...options,
       });
@@ -15513,6 +15538,43 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       const job = readCiWorkflow().jobs["android-access-native"];
       expect(evaluateWorkflowExpression(`\${{ ${job.if} }}`, context)).toBe(selected);
       expect(manifest.outputs.run_android_access_native).toBe(String(selected));
+      if (selected) {
+        const step = expectDefined(
+          job.steps.find(
+            (entry: WorkflowStep) => entry.name === "Run packaged Access crypto on Android",
+          ),
+          "native Access runner",
+        );
+        const run = expectDefined(step.run, "native Access script");
+        const env = {
+          RUN_ACCESS_PERSISTENCE: step.env?.RUN_ACCESS_PERSISTENCE
+            ? String(evaluateWorkflowExpression(step.env.RUN_ACCESS_PERSISTENCE, context))
+            : "",
+        };
+        const selection = selectAndroidAccessTests(run, env);
+        expect(selection.status, selection.stderr).toBe(0);
+        const [classes = ""] = selection.stdout.trim().split("\n");
+        const availableClasses = [
+          "ai.openclaw.app.gateway.CloudflareAccessNativeTest",
+          ...(options.androidAccessPersistenceCapability
+            ? ["ai.openclaw.app.gateway.CloudflareAccessPersistenceNativeTest"]
+            : []),
+        ].join(",");
+        const reports = verifyAndroidAccessReports(
+          tempDirs.make("openclaw-access-target-reports-"),
+          run,
+          "passed",
+          classes,
+          availableClasses,
+        );
+        // Assert the actual selector/report contract before the newly emitted output.
+        // Current source must still fail when its required persistence test disappears.
+        expect(reports.status, reports.stderr).toBe(
+          persistence && !options.androidAccessPersistenceCapability ? 1 : 0,
+        );
+      }
+      expect(manifest.outputs.run_android_access_persistence).toBe(String(persistence));
+
       for (const result of ["success", "skipped", "failure", "cancelled"]) {
         const gate = runCiGateFixture(
           renderCiGateEnvironment(context, { "android-access-native": result }),
