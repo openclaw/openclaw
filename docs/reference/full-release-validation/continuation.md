@@ -153,9 +153,9 @@ outcomes remain read-only until the original witness or a newer child attempt
 resolves them; explicit retries after an observed second attempt remain
 available.
 
-A failed pre-dispatch read or authority check records a confirmed rejection
-because no POST was sent. An ambiguous POST response keeps an unknown outcome
-and permits only reconciliation.
+After claiming the intent, a failed final pre-dispatch read or authority check
+records a confirmed rejection because no POST was sent. An ambiguous POST
+response keeps an unknown outcome and permits only reconciliation.
 
 A dedicated step on parent attempt one records the rejected intent's digest.
 Manual admission, later-parent recovery, and final verification authenticate
