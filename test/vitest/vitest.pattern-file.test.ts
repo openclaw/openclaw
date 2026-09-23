@@ -3,10 +3,9 @@ import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { intersectIncludePatterns } from "./vitest.include-patterns.ts";
+import { filterFilesByPatterns, intersectIncludePatterns } from "./vitest.include-patterns.ts";
 import {
   collectVitestExcludePatterns,
-  filterVitestFiles,
   matchesVitestCliSelection,
   matchesVitestGlob,
   narrowIncludePatternsForCli,
@@ -31,10 +30,11 @@ describe("native CLI selection", () => {
         [
           "--input-type=module",
           "--eval",
-          `import { filterVitestFiles } from './test/vitest/vitest.pattern-file.ts';
-           console.log(JSON.stringify(filterVitestFiles(
+          `import { matchesVitestGlob } from './test/vitest/vitest.pattern-file.ts';
+           import { filterFilesByPatterns } from './test/vitest/vitest.include-patterns.ts';
+           console.log(JSON.stringify(filterFilesByPatterns(
              ['ui/src/example.test.ts', 'ui/src/example.browser.test.ts'],
-             ['ui/src/**/!(*.browser).test.ts']
+             ['ui/src/**/!(*.browser).test.ts'], [], matchesVitestGlob
            )));`,
         ],
         { cwd: root, encoding: "utf8", env: { ...process.env, NODE_OPTIONS: "", NODE_PATH: "" } },
@@ -116,12 +116,17 @@ describe("batch file selection", () => {
   ])("retains single-file matcher semantics and input order: $include", ({ include, exclude }) => {
     const expected = files.filter(
       (file) =>
-        include.some((pattern) => matchesVitestGlob(file, pattern)) &&
-        !exclude.some((pattern) => matchesVitestGlob(file, pattern)),
+        include.some((pattern) => path.matchesGlob(file, pattern)) &&
+        !exclude.some((pattern) => path.matchesGlob(file, pattern)),
     );
-    expect(filterVitestFiles(files, Object.freeze(include), Object.freeze(exclude))).toEqual(
-      expected,
-    );
+    expect(
+      filterFilesByPatterns(
+        files,
+        Object.freeze(include),
+        Object.freeze(exclude),
+        path.matchesGlob,
+      ),
+    ).toEqual(expected);
   });
 
   it.skipIf(Boolean(process.versions.bun))(
@@ -144,7 +149,9 @@ describe("batch file selection", () => {
         return nativeMatch(file, pattern);
       });
       try {
-        expect(filterVitestFiles(candidates, ["src/**/*.test.ts"], exclude)).toEqual(candidates);
+        expect(
+          filterFilesByPatterns(candidates, ["src/**/*.test.ts"], exclude, path.matchesGlob),
+        ).toEqual(candidates);
         expect(compilations).toBeLessThanOrEqual(exclude.length + 1);
       } finally {
         matcher.mockRestore();

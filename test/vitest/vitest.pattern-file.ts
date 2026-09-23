@@ -60,31 +60,6 @@ export function matchesVitestGlob(value: string, pattern: string): boolean {
   return matcher.match(value);
 }
 
-export function filterVitestFiles(
-  files: readonly string[],
-  include: readonly string[],
-  exclude: readonly string[] = [],
-): string[] {
-  const selected = new Set<string>();
-  // Finish each pattern before advancing so large inventories do not churn
-  // the runtime's bounded compiled-glob cache for every candidate file.
-  for (const pattern of include) {
-    for (const file of files) {
-      if (!selected.has(file) && matchesVitestGlob(file, pattern)) {
-        selected.add(file);
-      }
-    }
-  }
-  for (const pattern of exclude) {
-    for (const file of selected) {
-      if (matchesVitestGlob(file, pattern)) {
-        selected.delete(file);
-      }
-    }
-  }
-  return files.filter((file) => selected.has(file));
-}
-
 function normalizeCliPattern(value: string): string {
   let normalized = value
     .trim()

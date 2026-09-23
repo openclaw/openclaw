@@ -19,7 +19,7 @@ import {
   isGatewayServerBackedHttpTestFile,
   isGatewayServerTestFile,
 } from "../../test/vitest/vitest.gateway-server-paths.mjs";
-import { filterVitestFiles } from "../../test/vitest/vitest.pattern-file.ts";
+import { filterFilesByPatterns } from "../../test/vitest/vitest.include-patterns.ts";
 import { startupCorpusTestFiles } from "../../test/vitest/vitest.startup-corpus-paths.mjs";
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
 import { toolingIsolatedTestFiles } from "../../test/vitest/vitest.tooling-isolated-paths.mjs";
@@ -3111,10 +3111,11 @@ function listScopedOwnerTestFiles(owner: {
   // Scoped configs drop unit-fast files, so a lister that keeps them prices
   // stripes on files the shard never runs and hands Vitest inert patterns.
   const unitFastFiles = new Set(getUnitFastTestFiles());
-  return filterVitestFiles(
+  return filterFilesByPatterns(
     listTestFiles(owner.root).filter((file) => isStripeEligibleTestFile(file, unitFastFiles)),
     owner.include,
     owner.exclude,
+    matchesGlob,
   );
 }
 

@@ -1,9 +1,17 @@
 // Vitest unit path tests validate unit test include and exclude paths.
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { bundledPluginFile } from "../scripts/lib/bundled-plugin-paths.mjs";
 import { filterUnitConfigTestFiles, isUnitConfigTestFile } from "./vitest/vitest.unit-paths.mjs";
 
 describe("isUnitConfigTestFile", () => {
+  it("retains the runtime's hidden-file ownership in bulk and singleton discovery", () => {
+    const file = "src/.hidden-fixture.test.ts";
+    const included = path.matchesGlob(file, "src/**/*.test.ts");
+    expect(filterUnitConfigTestFiles([file])).toEqual(included ? [file] : []);
+    expect(isUnitConfigTestFile(file)).toBe(included);
+  });
+
   it("keeps bulk unit discovery ordered with shared exclusions", () => {
     const packageFile = "packages/plugin-package-contract/src/index.test.ts";
     const sourceFile = "src/unowned-fixture.test.ts";

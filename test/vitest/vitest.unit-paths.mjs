@@ -3,7 +3,8 @@ import path from "node:path";
 import { BUNDLED_PLUGIN_ROOT_DIR } from "../../scripts/lib/bundled-plugin-paths.mjs";
 import { cliProcessTestFiles } from "./vitest.cli-process-paths.mjs";
 import { databaseWorkerCoreTestFiles } from "./vitest.database-worker-core-paths.mjs";
-import { filterVitestFiles, isSharedVitestExcludedPath } from "./vitest.pattern-file.ts";
+import { filterFilesByPatterns } from "./vitest.include-patterns.ts";
+import { isSharedVitestExcludedPath } from "./vitest.pattern-file.ts";
 
 export const unitTestIncludePatterns = [
   "src/**/*.test.ts",
@@ -84,10 +85,11 @@ const normalizeRepoPath = (value) => value.split(path.sep).join("/");
 
 export function filterUnitConfigTestFiles(files) {
   const selected = new Set(
-    filterVitestFiles(
+    filterFilesByPatterns(
       files.map(normalizeRepoPath),
       unitTestIncludePatterns,
       unitTestAdditionalExcludePatterns,
+      path.matchesGlob,
     ).filter((file) => !isSharedVitestExcludedPath(file)),
   );
   return files.filter((file) => selected.has(normalizeRepoPath(file)));
