@@ -169,7 +169,7 @@ async function agentCommandInternal(
   try {
     const operatorSession =
       opts.operatorAuthority && sessionKey
-        ? (await import("../gateway/operator-run-authority.js")).prepareGatewayOperatorSessionRun({
+        ? (await import("../gateway/operator-session-run.js")).prepareGatewayOperatorSessionRun({
             authority: opts.operatorAuthority,
             cfg,
             agentId: sessionAgentId,
