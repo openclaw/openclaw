@@ -14,6 +14,7 @@ import {
   messageRecoveryKey,
   type AssistantMessageExpansionState,
 } from "./chat-message-recovery.ts";
+import type { PendingInputPlacement } from "./chat-pending-input-placement.ts";
 import { resetWorkingProgress } from "./chat-progress.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
 import { readChatThreadMessageIdentity, sanitizeStreamText } from "./chat-thread-items.ts";
@@ -36,6 +37,7 @@ type CachedChatItems = {
     identity: string;
     prefix: string | null;
   } | null;
+  pendingInputPlacements: Map<string, PendingInputPlacement>;
 };
 
 type RenderChatItem = ReturnType<typeof buildChatItems>[number];
@@ -325,6 +327,7 @@ export function buildCachedChatItems(
     input: null,
     items: [],
     liveStream: null,
+    pendingInputPlacements: new Map(),
   }));
   // Keep stream-only updates off the loaded-history path; structural changes
   // still use the full builder.
@@ -337,7 +340,10 @@ export function buildCachedChatItems(
       return cached.items;
     }
   }
-  const items = stabilizeChatItems(cached.items, buildChatItems(input));
+  const items = stabilizeChatItems(
+    cached.items,
+    buildChatItems(input, cached.pendingInputPlacements),
+  );
   cached.input = input;
   cached.items = items;
   const liveStreamIndex = items.findIndex((item) => item.kind === "stream" && item.isStreaming);

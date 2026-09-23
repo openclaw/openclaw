@@ -42,6 +42,15 @@ export function isLiveTerminalForRun(message: unknown, runId: string): boolean {
   );
 }
 
+/** An input's recovery ceiling uses owned output, never an imported or raw run hint. */
+export function isAssistantReplyForRun(message: unknown, runId: string): boolean {
+  const identity = readSessionMessageIdentity(message);
+  return (
+    isLiveTerminalForRun(message, runId) ||
+    (identity?.role === "assistant" && !identity.isImported && identity.runId === runId)
+  );
+}
+
 export function readLiveTerminalRunId(message: unknown): string | null {
   return message && typeof message === "object"
     ? (liveTerminalIdentities.get(message)?.runId ?? null)

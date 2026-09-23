@@ -17,16 +17,18 @@ export function safeNormalizeMessage(message: unknown): NormalizedMessage | null
   }
 }
 
+function messageIsForwardedBoundary(message: unknown): boolean {
+  const provenance = asRecord(asRecord(message)?.provenance);
+  return (
+    (provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send") ||
+    (provenance?.kind === "internal_system" &&
+      provenance.sourceTool === "cron" &&
+      Boolean(provenance.jobId && provenance.runId && provenance.sourceSessionKey))
+  );
+}
+
 export function assistantGroupIsForwardedBoundary(group: MessageGroup): boolean {
-  return group.messages.some(({ message }) => {
-    const provenance = asRecord(asRecord(message)?.provenance);
-    return (
-      (provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send") ||
-      (provenance?.kind === "internal_system" &&
-        provenance.sourceTool === "cron" &&
-        Boolean(provenance.jobId && provenance.runId && provenance.sourceSessionKey))
-    );
-  });
+  return group.messages.some(({ message }) => messageIsForwardedBoundary(message));
 }
 
 // Display attribution also accepts projected source metadata; turn ownership
@@ -45,7 +47,8 @@ export function chatItemStartsUserTurn(item: ChatItem | MessageGroup): boolean {
     return item.startsTurn === true;
   }
   if (item.kind === "message") {
-    return normalizeRoleForGrouping(resolveMessageRole(item.message)).toLowerCase() === "user";
+    const role = normalizeRoleForGrouping(resolveMessageRole(item.message)).toLowerCase();
+    return role === "user" || (role === "assistant" && messageIsForwardedBoundary(item.message));
   }
   if (item.kind !== "group") {
     return false;

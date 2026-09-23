@@ -55,9 +55,11 @@ waits in durable pending-input custody, including during workspace preparation.
 An optional `messageSeq` comes only from a committed transcript receipt. Clients
 must not predict it from history length or treat `status: "started"` as persistence.
 The Control UI replaces its provisional source with accepted custody, then with
-the canonical row. Accepted inputs stay below saved conversation history until
-they are committed to the transcript. Its renderer keeps a loaded local preview in the same image
-element during this handoff while canonical media metadata and image bytes load.
+the canonical row. Accepted inputs initially appear below saved conversation
+history. In an open chat pane, displayed inputs stay before later user turns,
+including when an input is cancelled or interrupted. Its renderer keeps a loaded local preview in
+the same image element during this handoff while canonical media metadata and
+image bytes load.
 Authoritative text, media replacements, and removals still win. Unavailable or
 access-denied media shows a visible reason.
 Once custody, a consumption record, or a committed user-message receipt retires
