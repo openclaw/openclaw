@@ -14,6 +14,7 @@ import {
   getChatSessionProjection,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
+  retireChatSubmissionDisplay,
   setChatRunOwner,
   publishChatSessionProjection,
   publishChatSessionProjectionMessages,
@@ -853,5 +854,57 @@ describe("pane-owned canonical session projection", () => {
         scope,
       }).messages,
     ).toEqual([persisted]);
+  });
+
+  it("keeps a pending user bubble until its canonical row is attached", () => {
+    const owner = { sessionKey: "agent:main:shared", chatMessages: [] as unknown[] };
+    const scope = { sessionKey: "agent:main:shared" };
+    const pending = createHistoryMessage("user", "second prompt", {
+      idempotencyKey: "second-run:user",
+    });
+    publishChatSessionProjectionMessages(owner, [pending], { scope });
+
+    retireChatSubmissionDisplay(owner, new Set(["second-run"]));
+
+    expect(owner.chatMessages).toEqual([pending]);
+  });
+
+  it("retires a pending user bubble when its canonical row is already attached", () => {
+    const owner = { sessionKey: "agent:main:shared", chatMessages: [] as unknown[] };
+    const scope = { sessionKey: "agent:main:shared" };
+    const canonical = createHistoryMessage("user", "second prompt", {
+      id: "second-user",
+      idempotencyKey: "second-run:user",
+      seq: 2,
+    });
+    const pending = createHistoryMessage("user", "second prompt", {
+      idempotencyKey: "second-run:user",
+    });
+    publishChatSessionProjectionMessages(owner, [canonical, pending], { scope });
+
+    retireChatSubmissionDisplay(owner, new Set(["second-run"]));
+
+    expect(owner.chatMessages).toEqual([canonical]);
+  });
+
+  it("adopts a retained pending bubble in place once custody precedes history", () => {
+    const owner = { sessionKey: "agent:main:shared", chatMessages: [] as unknown[] };
+    const scope = { sessionKey: "agent:main:shared" };
+    const pending = createHistoryMessage("user", "second prompt", {
+      idempotencyKey: "second-run:user",
+    });
+    const canonical = createHistoryMessage("user", "second prompt", {
+      id: "second-user",
+      idempotencyKey: "second-run:user",
+      seq: 2,
+    });
+    publishChatSessionProjectionMessages(owner, [pending], { scope });
+
+    retireChatSubmissionDisplay(owner, new Set(["second-run"]));
+    expect(owner.chatMessages).toEqual([pending]);
+
+    reduceChatSessionProjection(owner, { type: "messagePersisted", message: canonical, scope });
+
+    expect(owner.chatMessages).toEqual([canonical]);
   });
 });

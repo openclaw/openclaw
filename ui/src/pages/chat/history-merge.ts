@@ -452,11 +452,35 @@ export function retireChatSubmissionDisplay(
   submissions?.accept(acceptedRunIds);
   if (acceptedRunIds.size) {
     const projection = getChatSessionProjection(owner, scope);
-    const retired = retirePendingUserEntries(projection, acceptedRunIds);
+    // Custody alone must not drop a visible bubble: retire only those whose
+    // canonical row is already attached, so a missing row cannot leave a hole.
+    const attachedRunIds = new Set(
+      [...acceptedRunIds].filter((runId) => hasCanonicalUserEntry(projection, runId)),
+    );
+    const retired = attachedRunIds.size
+      ? retirePendingUserEntries(projection, attachedRunIds)
+      : projection;
     if (retired !== projection) {
       publishChatSessionProjection(owner, retired);
     }
   }
+}
+
+/** A pending local bubble retires only once its canonical persisted row is attached. */
+function hasCanonicalUserEntry(projection: SessionProjectionState, pendingRunId: string): boolean {
+  return projection.entries.some((entry) => {
+    const identity = entry.identity;
+    return (
+      !entry.pending &&
+      identity?.role === "user" &&
+      !identity.isImported &&
+      (identity.id !== null || identity.sequence !== null) &&
+      (identity.sendId === pendingRunId ||
+        identity.runId === pendingRunId ||
+        identity.idempotencyKey === pendingRunId ||
+        identity.idempotencyKey === `${pendingRunId}:user`)
+    );
+  });
 }
 
 function retirePendingUserEntries(
