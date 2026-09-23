@@ -111,15 +111,17 @@ it or Codex is unavailable for the review; report the concrete availability fail
 before switching. Do not switch because a review is slow, rate-limited, or returns
 findings, or to bypass a safety refusal or isolation failure.
 
-Codex defaults to `gpt-5.6-sol`, high reasoning, with a `gpt-5.6-terra` retry
-only for an account-access failure. Honor explicit user engine/model choices.
+Codex defaults to `gpt-6-astra`, high reasoning, with a `gpt-5.6-terra` retry
+only for an account-access failure. Explicit `gpt-5.6-sol` selections retain that
+access-only retry; other explicit models, including Astra, have no model fallback.
+Honor explicit user engine/model choices.
 The helper does not automatically fall back between engines.
 
 Use `--engine`, `--model`, and `--thinking` to override the defaults.
 `--codex-speed fast` selects priority service when supported. Only Claude accepts
 `--fallback-model`. Per-engine environment overrides use `AUTOREVIEW_<ENGINE>_*`.
 
-For GPT-6 Astra, select it explicitly on a Codex account with access:
+To require GPT-6 Astra without a model fallback, select it explicitly:
 
 ```bash
 "$AUTOREVIEW" --mode local --model gpt-6-astra --thinking high
