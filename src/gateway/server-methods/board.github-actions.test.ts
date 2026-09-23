@@ -446,28 +446,43 @@ describe("board authenticated GitHub Actions", () => {
     expect(http).toHaveBeenCalledTimes(callsBeforeRead);
   });
 
-  it.each([
-    { repository: "../repo" },
-    { repository: "owner/repo/extra" },
-    { repository: "owner/.." },
-    { perPage: 0 },
-    { perPage: 31 },
-    { perPage: 1.5 },
-    { workflow: "../ci.yml" },
-    { branch: "main\n" },
-    { branch: `bad${String.fromCharCode(0)}branch` },
-    { branch: `bad${String.fromCharCode(0x7f)}branch` },
-    { created: "2026-02-30" },
-    { status: "unknown" },
-    { excludePullRequests: "true" },
-    ...["agentId", "profile", "token", "headers", "url", "method", "maxBytes"].map((field) => ({
-      [field]: "forbidden",
-    })),
-  ])("rejects malformed or authority-overriding params before credentials: %j", async (invalid) => {
-    const { read } = await reader();
+  it("rejects malformed or authority-overriding params without changing a usable board", async () => {
+    const { read, store } = await reader();
+    const target = { sessionKey: "agent:main:runs", agentId: "main" };
+    const before = await store.getSnapshot(target);
     const callsBeforeRead = http.mock.calls.length;
-    expect((await read({ repository: "owner/repo", ...invalid })).mock.calls[0]?.[0]).toBe(false);
-    expect(http).toHaveBeenCalledTimes(callsBeforeRead);
+    for (const invalid of [
+      { repository: "../repo" },
+      { repository: "owner/repo/extra" },
+      { repository: "owner/.." },
+      { perPage: 0 },
+      { perPage: 31 },
+      { perPage: 1.5 },
+      { workflow: "../ci.yml" },
+      { branch: "main\n" },
+      { branch: `bad${String.fromCharCode(0)}branch` },
+      { branch: `bad${String.fromCharCode(0x7f)}branch` },
+      { created: "2026-02-30" },
+      { status: "unknown" },
+      { excludePullRequests: "true" },
+      ...["agentId", "profile", "token", "headers", "url", "method", "maxBytes"].map((field) => ({
+        [field]: "forbidden",
+      })),
+    ]) {
+      const response = await read({ repository: "owner/repo", ...invalid });
+      expect(response.mock.calls[0], JSON.stringify(invalid)).toEqual([
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: expect.stringContaining("Invalid GitHub Actions parameters"),
+        }),
+      ]);
+      expect(http).toHaveBeenCalledTimes(callsBeforeRead);
+    }
+    expect(await store.getSnapshot(target)).toEqual(before);
+    expect((await read()).mock.calls[0]).toEqual([true, result]);
+    expect(actionCalls()).toHaveLength(1);
   });
 
   it.each([23, "ci.yml"])(

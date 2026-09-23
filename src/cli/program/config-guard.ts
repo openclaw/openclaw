@@ -52,14 +52,6 @@ function resetConfigGuardStateForTests() {
   configSnapshotPromise = null;
 }
 
-function fileOrDirExists(pathname: string): boolean {
-  try {
-    return fs.existsSync(pathname);
-  } catch {
-    return false;
-  }
-}
-
 function dirHasFile(dir: string, predicate: (name: string) => boolean): boolean {
   try {
     return fs
@@ -88,16 +80,16 @@ function isLegacyTelegramStateFile(name: string): boolean {
 
 function hasLegacyIMessageStateFiles(stateDir: string): boolean {
   return (
-    fileOrDirExists(path.join(stateDir, "imessage", "reply-cache.jsonl")) ||
-    fileOrDirExists(path.join(stateDir, "imessage", "sent-echoes.jsonl")) ||
+    fs.existsSync(path.join(stateDir, "imessage", "reply-cache.jsonl")) ||
+    fs.existsSync(path.join(stateDir, "imessage", "sent-echoes.jsonl")) ||
     dirHasFile(path.join(stateDir, "imessage", "catchup"), (name) => name.endsWith(".json"))
   );
 }
 
 function hasBundledChannelLegacyStateMigrationInputs(stateDir: string, oauthDir: string): boolean {
   if (
-    fileOrDirExists(path.join(stateDir, "discord", "model-picker-preferences.json")) ||
-    fileOrDirExists(path.join(stateDir, "discord", "thread-bindings.json"))
+    fs.existsSync(path.join(stateDir, "discord", "model-picker-preferences.json")) ||
+    fs.existsSync(path.join(stateDir, "discord", "thread-bindings.json"))
   ) {
     return true;
   }
@@ -105,7 +97,7 @@ function hasBundledChannelLegacyStateMigrationInputs(stateDir: string, oauthDir:
     return true;
   }
   if (
-    fileOrDirExists(path.join(oauthDir, "telegram-allowFrom.json")) ||
+    fs.existsSync(path.join(oauthDir, "telegram-allowFrom.json")) ||
     dirHasFile(path.join(stateDir, "telegram"), isLegacyTelegramStateFile)
   ) {
     return true;
@@ -120,7 +112,7 @@ function hasLegacyStateMigrationInputs(): boolean {
   if (
     !process.env.OPENCLAW_STATE_DIR?.trim() &&
     resolveLegacyStateDirs(() => resolveRequiredHomeDir(process.env, os.homedir)).some(
-      fileOrDirExists,
+      fs.existsSync,
     )
   ) {
     return true;
@@ -137,7 +129,7 @@ function hasLegacyStateMigrationInputs(): boolean {
       path.join(stateDir, "restart-sentinel.json.doctor-importing"),
       path.join(stateDir, "sessions"),
       path.join(stateDir, "state", "openclaw.sqlite"),
-    ].some(fileOrDirExists) || hasBundledChannelLegacyStateMigrationInputs(stateDir, oauthDir)
+    ].some(fs.existsSync) || hasBundledChannelLegacyStateMigrationInputs(stateDir, oauthDir)
   );
 }
 
@@ -314,9 +306,8 @@ export async function ensureConfigReady(
 
   // Read-only diagnostics must not record config health. Core-only validation
   // also skips plugin metadata discovery, whose state reads create SQLite sidecars.
-  const configSnapshotOptions = params.validateConfigOnly
-    ? ({ observe: false, pluginValidation: "core-only" } as const)
-    : commandName === "logs"
+  const configSnapshotOptions =
+    params.validateConfigOnly || commandName === "logs"
       ? ({ observe: false, pluginValidation: "core-only" } as const)
       : isManagedNodeRuntime ||
           commandName === "status" ||
