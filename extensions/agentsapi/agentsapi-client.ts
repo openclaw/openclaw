@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import OpenAI from "openai";
-import type { AgentSessionEvent, AgentSessionItem } from "openai/resources/beta/agents/agents";
+import type {
+  AgentReasoningParam,
+  AgentSessionEvent,
+  AgentSessionItem,
+} from "openai/resources/beta/agents/agents";
 import type { Turn } from "openai/resources/beta/agents/sessions/turns";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -36,13 +40,18 @@ export class AgentsApiClient {
     }).beta.agents.sessions;
   }
 
-  async create(signal: AbortSignal, instructions: string, model: string): Promise<string> {
+  async create(
+    signal: AbortSignal,
+    instructions: string,
+    model: string,
+    reasoningEffort?: AgentReasoningParam["effort"],
+  ): Promise<string> {
     const session = await this.sessions.create(
       {
         agent: {
           model,
           instructions,
-          reasoning: { effort: "low" },
+          reasoning: reasoningEffort === undefined ? undefined : { effort: reasoningEffort },
           multi_agent: { enabled: false },
         },
         environment: { type: "openai_hosted" },
@@ -51,6 +60,27 @@ export class AgentsApiClient {
     );
     this.assertCurrent();
     return session.id;
+  }
+
+  async setReasoningEffort(
+    sessionId: string,
+    effort: AgentReasoningParam["effort"],
+    signal: AbortSignal,
+  ): Promise<void> {
+    const session = await this.sessions.update(
+      sessionId,
+      {},
+      {
+        signal,
+        headers: { "Idempotency-Key": randomUUID() },
+        // The API supports agent updates; this SDK version types only metadata.
+        body: { agent: { reasoning: { effort: effort ?? null } } },
+      },
+    );
+    this.assertCurrent();
+    if (session.id !== sessionId) {
+      throw new Error("Agents API returned a different session");
+    }
   }
 
   async subscribe(sessionId: string, signal: AbortSignal) {
