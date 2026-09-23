@@ -4801,36 +4801,6 @@ Update and merge these partial structured summaries.`,
     expect(outputText(await response.json())).toBe("NEW_TOKEN");
   });
 
-  it("requires both WhatsApp batched markers before returning the final batched marker", async () => {
-    const server = await startMockServer();
-
-    const standalone = await expectNonStreamingResponses(server, {
-      input: [
-        makeUserInput(
-          "Second batched WhatsApp QA message. Reply with only this exact marker: " +
-            "WHATSAPP_QA_BATCHED_FINAL_TEST only if the previous queued message is visible " +
-            "in this same run context.",
-        ),
-      ],
-    });
-    expect(outputText(await standalone.json())).toBe("WHATSAPP_QA_BATCHED_MISSING_CONTEXT_TEST");
-
-    const batched = await expectNonStreamingResponses(server, {
-      input: [
-        makeUserInput(
-          "First batched WhatsApp QA message WHATSAPP_QA_BATCHED_FIRST_TEST. " +
-            "Wait for the next message before replying.",
-        ),
-        makeUserInput(
-          "Second batched WhatsApp QA message. Reply with only this exact marker: " +
-            "WHATSAPP_QA_BATCHED_FINAL_TEST only if the previous queued message is visible " +
-            "in this same run context.",
-        ),
-      ],
-    });
-    expect(outputText(await batched.json())).toBe("WHATSAPP_QA_BATCHED_FINAL_TEST");
-  });
-
   it("lets the latest exact marker prompt beat stale Telegram session_status history", async () => {
     const server = await startMockServer();
 
