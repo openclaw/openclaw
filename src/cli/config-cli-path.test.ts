@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertNonDestructiveReplacement,
   mergeAtPath,
+  parseConfigSetPath,
   parseConfigSetValue,
 } from "./config-cli-path.js";
 
@@ -86,7 +87,12 @@ describe("parseConfigSetValue", () => {
 describe("replacement guard advice", () => {
   const root = {
     agents: { defaults: { models: { "openai/gpt-5.4": { alias: "GPT" } } } },
-    models: { providers: { ollama: { models: [{ id: "llama3.2" }, { id: "qwen3" }] } } },
+    models: {
+      providers: {
+        ollama: { models: [{ id: "llama3.2" }, { id: "qwen3" }] },
+        "local.service": { models: [{ id: "llama3.1:70b" }, { id: "qwen3:8b" }] },
+      },
+    },
   } as Record<string, unknown>;
 
   function refusal(run: () => void): string {
@@ -96,6 +102,14 @@ describe("replacement guard advice", () => {
       return (err as Error).message;
     }
     throw new Error("expected the replacement guard to refuse");
+  }
+
+  function requireReplacePathArgument(message: string): string {
+    const argument = /--replace-path (\S+) to replace/.exec(message)?.[1];
+    if (!argument) {
+      throw new Error(`refusal names no --replace-path argument: ${message}`);
+    }
+    return argument;
   }
 
   it.each([
@@ -142,5 +156,24 @@ describe("replacement guard advice", () => {
     expect(() =>
       mergeAtPath(root, ["models", "providers", "ollama", "models"], {}, { command }),
     ).toThrow(`Cannot merge models.providers.ollama.models; use ${flag} to replace intentionally.`);
+  });
+
+  it("brackets a dotted provider key so the suggested argument is a usable path", () => {
+    const path = ["models", "providers", "local.service", "models"];
+    const argument = requireReplacePathArgument(
+      refusal(() =>
+        assertNonDestructiveReplacement({
+          root,
+          path,
+          value: [{ id: "qwen3:8b" }],
+          command: "patch",
+        }),
+      ),
+    );
+    expect(argument).toBe('models.providers["local.service"].models');
+    expect(parseConfigSetPath(argument)).toEqual(path);
+    expect(refusal(() => mergeAtPath(root, path, {}, { command: "patch" }))).toBe(
+      `Cannot merge models.providers["local.service"].models; use --replace-path models.providers["local.service"].models to replace intentionally.`,
+    );
   });
 });

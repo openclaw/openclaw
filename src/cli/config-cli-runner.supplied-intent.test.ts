@@ -407,4 +407,19 @@ describe("replacement guard advice per subcommand", () => {
       );
     },
   );
+
+  it("recommends a re-parsable path for a dotted provider key", async () => {
+    const dottedPath = ["models", "providers", "local.service", "models"];
+    loadSnapshot({ models: { providers: { "local.service": { models: resolvedRows } } } });
+    await expect(
+      runConfigOperations({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        operations: [op(undefined, dottedPath, [{ id: "edited", name: "${TARGET}" }])],
+        options: {},
+        successMode: "patch",
+      }),
+    ).rejects.toThrow(
+      'Use --replace-path models.providers["local.service"].models to replace intentionally.',
+    );
+  });
 });

@@ -36,6 +36,11 @@ export type JsonSchemaRecord = {
 /** Subcommand that hit a replacement guard; it may only recommend flags that subcommand registers. */
 export type ConfigMutationCommand = "set" | "patch";
 
+/** Patch prints this path as its `--replace-path` argument, so a literal dot in a key needs brackets to re-parse. */
+function refusalPathLabel(command: ConfigMutationCommand, path: PathSegment[]): string {
+  return command === "patch" ? formatConfigSetPath(path) : toDotPath(path);
+}
+
 type SetAtPathOptions = {
   numericObjectKeys?: boolean;
   pathTokens?: readonly ConcreteConfigPathSegment[];
@@ -462,9 +467,10 @@ function mergeConfigValue(
     }
     return { value: next, suppliedPaths };
   }
+  const label = refusalPathLabel(command, path);
   throw new Error(
-    `Cannot merge ${toDotPath(path)}; use ${
-      command === "patch" ? `--replace-path ${toDotPath(path)}` : "--replace"
+    `Cannot merge ${label}; use ${
+      command === "patch" ? `--replace-path ${label}` : "--replace"
     } to replace intentionally.`,
   );
 }
@@ -532,7 +538,7 @@ export function assertNonDestructiveReplacement(params: {
   if (!existing.found) {
     return;
   }
-  const pathLabel = toDotPath(params.path);
+  const pathLabel = refusalPathLabel(params.command, params.path);
   if (isProtectedMapReplacementPath(params.path) && isPlainRecord(existing.value)) {
     if (!isPlainRecord(params.value)) {
       return;
