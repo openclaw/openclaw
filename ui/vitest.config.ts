@@ -28,7 +28,7 @@ import {
   uiTimingTestFiles,
 } from "../test/vitest/vitest.ui-paths.mjs";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
-import { UiRuntimePartitionSequencer } from "./config/vitest-runtime-sequencer.ts";
+import { UiRuntimePartitionSequencer } from "./test/vitest-runtime-sequencer.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");

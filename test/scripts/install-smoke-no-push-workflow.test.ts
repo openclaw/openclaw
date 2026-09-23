@@ -200,7 +200,9 @@ describe("install smoke no-push root image transport", () => {
         EXPECTED_WORKFLOW_REPOSITORY: "${{ github.repository }}",
         JOB_CONTEXT: "${{ toJSON(job) }}",
       });
-      expect(resolver.env?.HARNESS_PATH, jobName).toMatch(/^(\.|\.release-harness)$/u);
+      const harnessPath =
+        jobName === "install-smoke-fast" ? ".artifacts/build-warning-harness" : ".release-harness";
+      expect(resolver.env?.HARNESS_PATH, jobName).toBe(harnessPath);
       expect(resolver.run, jobName).toContain(
         "job.workflow_sha must be a full lowercase commit SHA",
       );
@@ -215,6 +217,7 @@ describe("install smoke no-push root image transport", () => {
         expect(checkout.with, jobName).toMatchObject({
           repository: "openclaw/openclaw",
           ref: "main",
+          path: harnessPath,
           "fetch-depth": 1,
           "persist-credentials": false,
         });
@@ -223,6 +226,7 @@ describe("install smoke no-push root image transport", () => {
     expect(trustedJobs.toSorted()).toEqual(
       [
         "bun_global_install_smoke",
+        "install-smoke-fast",
         "installer_smoke_candidate_payload",
         "installer_smoke_nonroot",
         "installer_smoke_nonroot_image",
