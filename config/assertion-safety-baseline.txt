@@ -494,7 +494,7 @@ extensions/google/music-generation-provider.ts	1
 extensions/google/oauth-token-shared.ts	1
 extensions/google/onboard.ts	3
 extensions/google/provider-registration.ts	2
-extensions/google/realtime-voice-provider.ts	5
+extensions/google/realtime-voice-provider.ts	4
 extensions/google/transport-stream.ts	13
 extensions/google/vertex-adc.ts	4
 extensions/google/video-generation-provider.ts	13
