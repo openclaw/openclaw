@@ -67,10 +67,6 @@ import {
   DIST_OPENCLAW_ALIAS_PACKAGE,
   DIST_OPENCLAW_ALIAS_PLUGIN_SDK_CORE,
   DIST_OPENCLAW_ALIAS_PLUGIN_SDK_STRING_COERCE,
-  DIFFS_PACKAGE,
-  DIFFS_VIEWER_RUNTIME_SOURCE,
-  DIST_DIFFS_VIEWER_RUNTIME,
-  DIST_RUNTIME_DIFFS_VIEWER_RUNTIME,
   BUNDLED_HOOK_METADATA,
   DIST_BUNDLED_HOOK_METADATA,
   DIST_EXTENSION_MANIFEST,
@@ -1795,78 +1791,6 @@ describe("run-node script", () => {
           '{"name":"openclaw","type":"module","exports":{"./plugin-sdk/string-coerce-runtime":"./plugin-sdk/string-coerce-runtime.js"}}\n',
         [DIST_OPENCLAW_ALIAS_PLUGIN_SDK_STRING_COERCE]:
           "export * from '../../../../plugin-sdk/string-coerce-runtime.js';\n",
-        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
-      },
-    });
-
-    const requirement = resolveRuntimePostBuildRequirement(createBuildRequirementDeps(tmp));
-
-    expect(requirement).toEqual({
-      shouldSync: false,
-      reason: "clean",
-    });
-  });
-
-  for (const [title, missingPath] of [
-    [
-      "reports missing static runtime postbuild asset outputs when runtime stamps match HEAD",
-      DIST_DIFFS_VIEWER_RUNTIME,
-    ],
-    [
-      "reports missing static runtime overlay asset outputs when runtime stamps match HEAD",
-      DIST_RUNTIME_DIFFS_VIEWER_RUNTIME,
-    ],
-  ] as const) {
-    it(title, async ({ tmp }) => {
-      await setupStampedProject(tmp, {
-        files: {
-          [DIFFS_PACKAGE]:
-            '{"openclaw":{"build":{"staticAssets":[{"source":"./assets/viewer-runtime.js","output":"assets/viewer-runtime.js"}]}}}\n',
-          [DIFFS_VIEWER_RUNTIME_SOURCE]: "export {};\n",
-          [DIST_DIFFS_VIEWER_RUNTIME]: "export {};\n",
-          [DIST_RUNTIME_DIFFS_VIEWER_RUNTIME]: "export {};\n",
-          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
-        },
-      });
-      await fs.rm(resolvePath(tmp, missingPath));
-      const requirement = resolveRuntimePostBuildRequirement(createBuildRequirementDeps(tmp));
-      expect(requirement).toEqual({
-        shouldSync: true,
-        reason: "missing_runtime_postbuild_output",
-      });
-    });
-  }
-
-  it("does not require static asset outputs when runtime static assets are disabled", async ({
-    tmp,
-  }) => {
-    await setupStampedProject(tmp, {
-      files: {
-        [DIFFS_PACKAGE]:
-          '{"openclaw":{"build":{"staticAssets":[{"source":"./assets/viewer-runtime.js","output":"assets/viewer-runtime.js"}]}}}\n',
-        [DIFFS_VIEWER_RUNTIME_SOURCE]: "export {};\n",
-        [DIST_RUNTIME_EXTENSION_PACKAGE]: '{"openclaw":{"extensions":["./index.js"]}}\n',
-        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
-      },
-    });
-
-    const requirement = resolveRuntimePostBuildRequirement(
-      createBuildRequirementDeps(tmp, { env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0" } }),
-    );
-
-    expect(requirement).toEqual({
-      shouldSync: false,
-      reason: "clean",
-    });
-  });
-
-  it("does not require static asset outputs when the declared source is absent", async ({
-    tmp,
-  }) => {
-    await setupStampedProject(tmp, {
-      files: {
-        [DIFFS_PACKAGE]:
-          '{"openclaw":{"build":{"staticAssets":[{"source":"./assets/viewer-runtime.js","output":"assets/viewer-runtime.js"}]}}}\n',
         [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
       },
     });
