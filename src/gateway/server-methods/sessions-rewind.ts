@@ -53,7 +53,7 @@ import {
   respondSessionWorkerPlacementMutationError,
 } from "./sessions-shared.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
 
 type MessageCutAction = "fork" | "rewind" | "switch";
 type MessageCutMutationResult =
@@ -105,58 +105,26 @@ async function resolveEditorMediaAttachments(
 }
 
 export const sessionRewindHandlers: GatewayRequestHandlers = {
-  "sessions.branches.list": async (options) => {
-    if (
-      !assertValidParams(
-        options.params,
-        validateSessionsBranchesListParams,
-        "sessions.branches.list",
-        options.respond,
-      )
-    ) {
-      return;
-    }
-    await listBranches(options);
-  },
-  "sessions.branches.switch": async (options) => {
-    if (
-      !assertValidParams(
-        options.params,
-        validateSessionsBranchesSwitchParams,
-        "sessions.branches.switch",
-        options.respond,
-      )
-    ) {
-      return;
-    }
-    await mutateSessionAtMessage(options, "switch");
-  },
-  "sessions.rewind": async (options) => {
-    if (
-      !assertValidParams(
-        options.params,
-        validateSessionsRewindParams,
-        "sessions.rewind",
-        options.respond,
-      )
-    ) {
-      return;
-    }
-    await mutateSessionAtMessage(options, "rewind");
-  },
-  "sessions.fork": async (options) => {
-    if (
-      !assertValidParams(
-        options.params,
-        validateSessionsForkParams,
-        "sessions.fork",
-        options.respond,
-      )
-    ) {
-      return;
-    }
-    await mutateSessionAtMessage(options, "fork");
-  },
+  "sessions.branches.list": defineValidatedGatewayHandler(
+    "sessions.branches.list",
+    validateSessionsBranchesListParams,
+    listBranches,
+  ),
+  "sessions.branches.switch": defineValidatedGatewayHandler(
+    "sessions.branches.switch",
+    validateSessionsBranchesSwitchParams,
+    (options) => mutateSessionAtMessage(options, "switch"),
+  ),
+  "sessions.rewind": defineValidatedGatewayHandler(
+    "sessions.rewind",
+    validateSessionsRewindParams,
+    (options) => mutateSessionAtMessage(options, "rewind"),
+  ),
+  "sessions.fork": defineValidatedGatewayHandler(
+    "sessions.fork",
+    validateSessionsForkParams,
+    (options) => mutateSessionAtMessage(options, "fork"),
+  ),
 };
 
 async function listBranches(options: GatewayRequestHandlerOptions): Promise<void> {

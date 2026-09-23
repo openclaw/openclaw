@@ -1,5 +1,5 @@
 diff --git a/build/src/McpPage.js b/build/src/McpPage.js
-index a07d159d9cca91ad4c5422ebd81625f53f03db83..bae59168385a1fc899ac989fe61ac477ab646f42 100644
+index 13eb306aea9d516c1e06f4d40a6a61f83bfada11..0c02d5fc9b164dad0f65b74ad926e5cbb6437fcf 100644
 --- a/build/src/McpPage.js
 +++ b/build/src/McpPage.js
 @@ -1,3 +1,4 @@
@@ -7,7 +7,7 @@ index a07d159d9cca91ad4c5422ebd81625f53f03db83..bae59168385a1fc899ac989fe61ac477
  /**
   * @license
   * Copyright 2025 Google LLC
-@@ -512,7 +513,7 @@ export class McpPage {
+@@ -516,7 +517,7 @@ export class McpPage {
                  logger?.(`No backendNodeId for stashed DOM element with index ${index}`);
                  return `stashed-${index}`;
              }
@@ -18,13 +18,13 @@ index a07d159d9cca91ad4c5422ebd81625f53f03db83..bae59168385a1fc899ac989fe61ac477
                  return `stashed-${index}`;
 diff --git a/build/src/OPENCLAW_PATCH_NOTICE.md b/build/src/OPENCLAW_PATCH_NOTICE.md
 new file mode 100644
-index 0000000000000000000000000000000000000000..cec2a575ff0f452274d0324ff3212490254e7ed2
+index 0000000000000000000000000000000000000000..7543bd478e184a709e45b54db944df3dd8231336
 --- /dev/null
 +++ b/build/src/OPENCLAW_PATCH_NOTICE.md
 @@ -0,0 +1,20 @@
 +# Temporary OpenClaw snapshot identity patch
 +
-+This package remains `chrome-devtools-mcp@1.8.0`. OpenClaw modifies three
++This package remains `chrome-devtools-mcp@1.9.0`. OpenClaw modifies three
 +published runtime files to backport the snapshot identity repair proposed in
 +https://github.com/ChromeDevTools/chrome-devtools-mcp/pull/2788.
 +
@@ -36,8 +36,8 @@ index 0000000000000000000000000000000000000000..cec2a575ff0f452274d0324ff3212490
 +- `third_party/index.js` exports its already-bundled `CdpFrame` class, required
 +  by the backport. No bundled dependency implementation is replaced.
 +
-+The original package is the published npm 1.8.0 tarball with integrity
-+`sha512-Wrm9z0/5WbVs778apjWgYRkpe9bvYQWjK2zVRwqoPAtz1IHQ5+GvotM07UGXJcfrA0rj6Gt1Pnn5+w/Tf1nU4w==`.
++The original package is the published npm 1.9.0 tarball with integrity
++`sha512-RnzXoJiUQ44hpOihWk90uOhLD/CnwDkDy0ldHMZONJ2nYQ+dWN1fq1luHHqyd+7FuYnyIlCY6uTThbN5ut9kSQ==`.
 +The original `LICENSE` and `third_party/THIRD_PARTY_NOTICES` remain unchanged.
 +
 +Remove this patch and notice after adopting a published upstream release that
@@ -448,17 +448,17 @@ index fe2bae7bc287e43d8a7f41f5886496a4f82c0cd7..5b2671a4b416633710886c9089762e0b
          }
          for (const { extraNode, attachTarget, descendantIds } of reorgInfo) {
 diff --git a/build/src/third_party/index.js b/build/src/third_party/index.js
-index 5e9417dcb19d48a59c722801467a51b9aa5dc221..c42d6876fa8a21123a107b476f032b407972f3c8 100644
+index 5bce2352d7dd5950547fbb83e1c7d495605d9de5..6a86c23c58dc18ca620977357f1c06220e602b6c 100644
 --- a/build/src/third_party/index.js
 +++ b/build/src/third_party/index.js
 @@ -1,3 +1,4 @@
 +// Modified by OpenClaw: expose existing CdpFrame for the snapshot backport; see ../OPENCLAW_PATCH_NOTICE.md.
  import childProcess, { execSync, execFile, spawnSync, spawn as spawn$1 } from 'node:child_process';
- import fs, { readdirSync as readdirSync$1, readFileSync as readFileSync$1, accessSync, existsSync } from 'node:fs';
+ import fs, { readdirSync as readdirSync$1, readFileSync as readFileSync$1, accessSync, existsSync, constants as constants$2 } from 'node:fs';
  import os, { tmpdir } from 'node:os';
-@@ -179769,4 +179770,4 @@ const snapshot = snapshot$1;
+@@ -181481,4 +181482,4 @@ const snapshot = snapshot$1;
  const navigation = navigation$1;
  const generateReport = generateReport$1;
  
--export { AsyncDisposableStack, Browser as BrowserEnum, CDPSessionEvent, Client, mcp as DevTools, DisposableStack, KnownDevices, ListRootsRequestSchema, ListRootsResultSchema, Locator, McpServer, Mutex$2 as Mutex, PipeTransport, PredefinedNetworkConditions, RootsListChangedNotificationSchema, SetLevelRequestSchema, StdioClientTransport, StdioServerTransport, SuppressedError$1 as SuppressedError, ajv, detectBrowserPlatform, generateReport, getGcfEncode, getToonEncode, hideBin, navigation, puppeteer, resolveDefaultUserDataDir, index as semver, snapshot, Yargs as yargs, z$2 as zod };
-+export { AsyncDisposableStack, Browser as BrowserEnum, CDPSessionEvent, CdpFrame, Client, mcp as DevTools, DisposableStack, KnownDevices, ListRootsRequestSchema, ListRootsResultSchema, Locator, McpServer, Mutex$2 as Mutex, PipeTransport, PredefinedNetworkConditions, RootsListChangedNotificationSchema, SetLevelRequestSchema, StdioClientTransport, StdioServerTransport, SuppressedError$1 as SuppressedError, ajv, detectBrowserPlatform, generateReport, getGcfEncode, getToonEncode, hideBin, navigation, puppeteer, resolveDefaultUserDataDir, index as semver, snapshot, Yargs as yargs, z$2 as zod };
+-export { AsyncDisposableStack, Browser as BrowserEnum, CDPSessionEvent, CdpPage, Client, mcp as DevTools, DisposableStack, KnownDevices, ListRootsRequestSchema, ListRootsResultSchema, Locator, McpServer, Mutex$2 as Mutex, PipeTransport, PredefinedNetworkConditions, RootsListChangedNotificationSchema, ScreenRecorder, SetLevelRequestSchema, StdioClientTransport, StdioServerTransport, SuppressedError$1 as SuppressedError, ajv, detectBrowserPlatform, generateReport, getGcfEncode, getToonEncode, hideBin, navigation, puppeteer, resolveDefaultUserDataDir, index as semver, snapshot, Yargs as yargs, z$2 as zod };
++export { AsyncDisposableStack, Browser as BrowserEnum, CDPSessionEvent, CdpFrame, CdpPage, Client, mcp as DevTools, DisposableStack, KnownDevices, ListRootsRequestSchema, ListRootsResultSchema, Locator, McpServer, Mutex$2 as Mutex, PipeTransport, PredefinedNetworkConditions, RootsListChangedNotificationSchema, ScreenRecorder, SetLevelRequestSchema, StdioClientTransport, StdioServerTransport, SuppressedError$1 as SuppressedError, ajv, detectBrowserPlatform, generateReport, getGcfEncode, getToonEncode, hideBin, navigation, puppeteer, resolveDefaultUserDataDir, index as semver, snapshot, Yargs as yargs, z$2 as zod };

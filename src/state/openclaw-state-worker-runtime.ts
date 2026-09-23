@@ -20,6 +20,7 @@ import {
   isWorktreeRegistryReadCommand,
   executeWorktreeRegistryReadCommand,
 } from "../agents/worktrees/registry-read.worker.js";
+import { releaseWorktreeRunLeaseInDatabase } from "../agents/worktrees/run-lease-store.kernel.js";
 import { listAuditEventsInDatabase } from "../audit/audit-event-read.kernel.js";
 import { executeAuditWriterCommand } from "../audit/audit-event-writer.worker.js";
 import { readClawInstallSchemaVersionRows } from "../claws/provenance-runtime-read.kernel.js";
@@ -633,6 +634,17 @@ export function executeSharedStateCommand(
   }
   if (isWorktreeRegistryReadCommand(command)) {
     return executeWorktreeRegistryReadCommand(database.db, command);
+  }
+  if (command.type === "worktrees.releaseRunLease") {
+    return runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+        releaseWorktreeRunLeaseInDatabase(db, command.input.worktreeId, command.input.token);
+        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+      },
+      writeOptions,
+      { operationLabel: command.type },
+    );
   }
   if (command.type === "projects.resolve") {
     ensureProjectRegistrySchema(writeOptions);

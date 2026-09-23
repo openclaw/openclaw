@@ -10,7 +10,6 @@ import {
 } from "../agents/agent-scope-config.js";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { formatPortRangeHint } from "../cli/error-format.js";
 import { parsePort } from "../cli/shared/parse-port.js";
 import { readConfigFileSnapshotForWrite, resolveGatewayPort } from "../config/config.js";
 import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
@@ -30,7 +29,7 @@ import { writeWizardConfigFile } from "../wizard/setup.shared.js";
 import { removeChannelConfigWizard } from "./configure.channels.js";
 import { maybeInstallDaemon, type DaemonSetupOutcome } from "./configure.daemon.js";
 import { promptAuthConfig } from "./configure.gateway-auth.js";
-import { promptGatewayConfig } from "./configure.gateway.js";
+import { promptGatewayConfig, validateGatewayPortInput } from "./configure.gateway.js";
 import type {
   ChannelsWizardMode,
   ConfigureWizardParams,
@@ -75,13 +74,6 @@ const GATEWAY_HINT_PROBE_TIMEOUT_MS = 300;
 const loadSetupPluginConfigModule = createLazyPromise(
   () => import("../wizard/setup.plugin-config.js"),
 );
-
-function validateGatewayPortInput(value: unknown): string | undefined {
-  if (parsePort(value) === null) {
-    return formatPortRangeHint();
-  }
-  return undefined;
-}
 
 async function runGatewayHealthCheck(params: {
   cfg: OpenClawConfig;

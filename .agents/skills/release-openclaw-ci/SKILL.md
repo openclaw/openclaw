@@ -463,6 +463,10 @@ publish workflow reads the effective profile from the full-validation manifest.
 Stable publication requires soak unless the operator supplies `stable_soak_waiver`
 with a reason; the publisher forwards and records that reason in release evidence
 without changing validation coverage or other publication gates.
+An operator lane waiver (repository variable `OPENCLAW_FRV_LANE_WAIVER="<target version> <reason>"`, cleared after the release) keeps
+non-proof lane failures advisory; install-smoke, upgrade-survivor, pack/qualify-npm,
+`resolve_target`, and artifact gates stay blocking, and publishing that manifest
+needs the same `lane_waiver` acknowledgement on the publish workflow.
 
 ### Extended-stable validation
 

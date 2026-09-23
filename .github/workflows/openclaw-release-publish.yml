@@ -33,6 +33,11 @@ on:
         required: false
         default: ""
         type: string
+      lane_waiver:
+        description: Operator acknowledgement (reason) for publishing from Full Release Validation evidence sealed under an operator lane waiver; required when the manifest carries one.
+        required: false
+        default: ""
+        type: string
       release_evidence_mode:
         description: Publication evidence contract
         required: true
@@ -448,6 +453,7 @@ jobs:
         if: ${{ inputs.release_evidence_mode == 'full-release-validation' && (inputs.publish_openclaw_npm || inputs.plugin_publish_scope == 'all-publishable' || inputs.preflight_run_id != '' || inputs.full_release_validation_run_id != '') }}
         env:
           STABLE_SOAK_WAIVER: ${{ inputs.stable_soak_waiver }}
+          LANE_WAIVER: ${{ inputs.lane_waiver }}
           FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ steps.full_run.outputs.attempt }}
           GH_TOKEN: ${{ github.token }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
@@ -1210,6 +1216,7 @@ jobs:
     if: ${{ !inputs.publish_docker_only }}
     env:
       STABLE_SOAK_WAIVER: ${{ fromJSON(needs.resolve_release_target.outputs.stable_soak_waiver || '""') }}
+      LANE_WAIVER_ACKNOWLEDGEMENT: ${{ inputs.lane_waiver }}
       # Artifact bytes may belong to an FRV child; the input run still authorizes npm dispatch.
       PREFLIGHT_ARTIFACT_RUN_ID: ${{ needs.resolve_release_target.outputs.preflight_artifact_run_id }}
       ANDROID_RELEASE_NOTE: ${{ needs.resolve_release_target.outputs.android_release_note }}

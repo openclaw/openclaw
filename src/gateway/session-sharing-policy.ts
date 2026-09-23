@@ -387,6 +387,8 @@ export function authorizeOwnSessionMutation(params: {
   target: SessionSharingTarget | null;
   /** Preserve the admitted person even if the retained client's scopes or identity change. */
   expectedProfileId?: string;
+  /** A resident session projection supplies the same canonical creator predicate. */
+  isCreator?: (actor: SessionEntry["createdActor"]) => boolean;
 }): ErrorShape | null {
   if (params.expectedProfileId === undefined) {
     return null;
@@ -396,7 +398,10 @@ export function authorizeOwnSessionMutation(params: {
     actor.profileId.trim() &&
     operatorScopeSatisfied("operator.sessions.write", params.client?.connect?.scopes ?? []) &&
     actor.profileId === params.expectedProfileId &&
-    (!params.target || isSessionCreatorProfile(params.target.entry.createdActor, actor.profileId))
+    (!params.target ||
+      (params.isCreator
+        ? params.isCreator(params.target.entry.createdActor)
+        : isSessionCreatorProfile(params.target.entry.createdActor, actor.profileId)))
     ? null
     : errorShape(ErrorCodes.FORBIDDEN, "Session-scoped writes require your own session.");
 }

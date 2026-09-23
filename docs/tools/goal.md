@@ -235,7 +235,9 @@ recovery notice, even if the goal changed or was cleared. This retries the saved
 unchanged to reconcile it with the Gateway receipt. The original request stays
 in this browser tab across reconnects and reloads; it is never retried
 automatically. The UI does not send goal controls if the connection has no
-account-scoped recovery identity. Incognito requests stay in memory only. A successful replay
+account-scoped recovery identity or the recovery request cannot be saved; it
+immediately shows an error explaining why the action was not sent.
+Incognito requests stay in memory only. A successful replay
 refreshes the current state instead of restoring an old Goal snapshot or
 starting another continuation. Dismissing an error or cancelling an editor
 does not cancel a mutation already sent to the Gateway. After 24 hours, the saved

@@ -3,6 +3,7 @@
  */
 export {
   callGatewayTool,
+  readGatewayToolOperatorScopes,
   hasGatewayToolRoutingContext,
   listNodes,
   resolveNodeIdFromList,
