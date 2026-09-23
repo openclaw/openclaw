@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { ChatGoalDraftMode } from "../../lib/chat/chat-types.ts";
 import * as draftStore from "../../lib/chat/composer-draft-store.runtime.ts";
 import { nextDraftRevision } from "../../lib/chat/outbox-store-draft-state.ts";
 import {
@@ -181,6 +182,60 @@ it("retires private tab input when a pending snapshot predates the authenticated
     await settleStorage();
   }
 });
+
+it.each([false, true])(
+  "restores authenticated draft metadata without replacing a pre-authentication edit (edited=%s)",
+  async (edited) => {
+    const goalMode: ChatGoalDraftMode = { action: "start", sessionId: "saved-session" };
+    vi.spyOn(draftStore, "readDurableComposerDraft").mockResolvedValue({
+      status: "found",
+      draft: {
+        revision: 1,
+        text: "Saved draft",
+        goalMode,
+        attachments: [],
+        writeId: "saved-draft",
+      },
+    });
+    const state = {
+      ...createState(),
+      connected: false,
+      client: { recoveryScope: "", recoveryScopeReady: false },
+      chatMessage: "Saved draft",
+      chatGoalDraftMode: null as ChatGoalDraftMode | null,
+    };
+    expect(persistChatComposerState(state, state.sessionKey, { draftRevision: 1 })).toBe(true);
+    let owner: typeof state | undefined = state;
+    const persistence = new ChatComposerPersistence(() => owner);
+    persistence.start();
+    try {
+      if (edited) {
+        state.chatMessage = "New edit before authentication";
+        persistence.schedule();
+      }
+      state.connected = true;
+      state.client.recoveryScope = "test-owner";
+      state.client.recoveryScopeReady = true;
+      persistence.persistChangedState();
+      await settleStorage();
+      expect(state.chatMessage).toBe(edited ? "New edit before authentication" : "Saved draft");
+      expect(state.chatGoalDraftMode).toEqual(edited ? null : goalMode);
+      if (edited) {
+        expect(draftStore.writeDurableComposerDraft).toHaveBeenCalledWith(
+          expect.objectContaining({ recoveryScope: "test-owner" }),
+          expect.objectContaining({ text: "New edit before authentication" }),
+          expect.anything(),
+        );
+      } else {
+        expect(draftStore.writeDurableComposerDraft).not.toHaveBeenCalled();
+      }
+    } finally {
+      owner = undefined;
+      persistence.stop();
+      await settleStorage();
+    }
+  },
+);
 
 it("captures once per restore admission while pending, settled, reset, and switching scope", async () => {
   const pending = createDeferred<Awaited<ReturnType<typeof draftStore.readDurableComposerDraft>>>();

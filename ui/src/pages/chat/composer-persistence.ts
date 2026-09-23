@@ -834,9 +834,9 @@ export class ChatComposerPersistence {
 
   private isUnchanged(state: ChatComposerPersistenceState): boolean {
     const last = this.lastPersisted;
+    // Authentication unlocks durable restoration; it does not edit the draft.
     return Boolean(
       last &&
-      isChatComposerOwnerCurrent(state, last.owner) &&
       last.sessionKey === state.sessionKey &&
       last.incognito === isIncognitoComposerScope(state, last.scope) &&
       this.matchesCurrentContent(last, state),
@@ -965,7 +965,10 @@ export class ChatComposerPersistence {
     const connectedScope = this.resolveConnectedDurableScope(state);
     if (isIncognitoComposerScope(state, resolveUiConversationIdentity(state, state.sessionKey))) {
       if (connectedScope) {
-        if (!this.isUnchanged(state)) {
+        if (
+          !this.isUnchanged(state) ||
+          (this.lastPersisted && !isChatComposerOwnerCurrent(state, this.lastPersisted.owner))
+        ) {
           loadCapturedChatComposerState(
             state,
             resolveUiConversationIdentity(state, state.sessionKey),
