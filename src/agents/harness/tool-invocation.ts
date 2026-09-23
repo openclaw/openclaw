@@ -1,10 +1,14 @@
-import { asNonArrayRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { asNonArrayRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentToolResult } from "../../../packages/agent-core/src/types.js";
 import type { AgentToolResultMiddlewareEvent } from "../../plugins/agent-tool-result-middleware-types.js";
 import { runWithToolExecutionValidation } from "../agent-tools.execution-validation.js";
 import type { AnyAgentTool } from "../agent-tools.types.js";
-import { consumeTrustedToolNoStartError, isToolResultError, resolveToolResultFailureKind } from "../tool-result-error.js";
+import {
+  consumeTrustedToolNoStartError,
+  isToolResultError,
+  resolveToolResultFailureKind,
+} from "../tool-result-error.js";
 import { createAgentHarnessToolExecutionBoundaryRegistry } from "./tool-execution.js";
 import { resolveAgentHarnessToolResultPresentation } from "./tool-result-facts.js";
 
@@ -32,7 +36,7 @@ export async function runAgentHarnessToolInvocation<TResult>(params: {
   onExecutionResult?: (execution: AgentHarnessToolExecution) => void;
   onResult: (result: AgentHarnessToolPresentation) => TResult | Promise<TResult>;
   onError: (failure: AgentHarnessToolInvocationFailure) => TResult | Promise<TResult>;
-}) : Promise<TResult> {
+}): Promise<TResult> {
   const startedAt = params.startedAt ?? Date.now();
   const initialArguments = params.initialArguments ?? asNonArrayRecord(params.call.arguments);
   const boundary = params.boundaries.begin({
@@ -46,7 +50,9 @@ export async function runAgentHarnessToolInvocation<TResult>(params: {
     // Compatibility preparation receives native bytes before record coercion.
     const tool = params.tool;
     if (!tool) {
-      throw new Error(params.unavailableToolMessage ?? `OpenClaw tool is unavailable: ${params.call.toolName}`);
+      throw new Error(
+        params.unavailableToolMessage ?? `OpenClaw tool is unavailable: ${params.call.toolName}`,
+      );
     }
     const prepare = tool.prepareArguments;
     const toolArgs = prepare
@@ -68,7 +74,11 @@ export async function runAgentHarnessToolInvocation<TResult>(params: {
       const shouldValidateArguments = params.shouldValidateArguments?.() ?? true;
       const invokeTool = () => tool.execute(params.call.toolCallId, preparedArgs, params.signal);
       return params.validateArguments && shouldValidateArguments
-        ? runWithToolExecutionValidation(params.call.toolCallId, params.validateArguments, invokeTool)
+        ? runWithToolExecutionValidation(
+            params.call.toolCallId,
+            params.validateArguments,
+            invokeTool,
+          )
         : invokeTool();
     };
     rawResult = await execute();

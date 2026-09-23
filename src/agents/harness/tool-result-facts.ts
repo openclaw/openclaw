@@ -1,6 +1,10 @@
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-import { HEARTBEAT_RESPONSE_TOOL_NAME, normalizeHeartbeatToolResponse, type HeartbeatToolResponse } from "../../auto-reply/heartbeat-tool-response.js";
 import type { AgentToolResult } from "../../../packages/agent-core/src/types.js";
+import {
+  HEARTBEAT_RESPONSE_TOOL_NAME,
+  normalizeHeartbeatToolResponse,
+  type HeartbeatToolResponse,
+} from "../../auto-reply/heartbeat-tool-response.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -106,7 +110,9 @@ export function recordAgentHarnessToolResultTelemetry(params: {
     if (params.mediaDeliveryConfirmed) {
       params.telemetry.confirmedMediaDeliveries.push({
         kind: "sourceReply",
-        sourceUrls: params.resolveMessagingMediaSourceUrls(params.collectMessagingMediaUrls(record)),
+        sourceUrls: params.resolveMessagingMediaSourceUrls(
+          params.collectMessagingMediaUrls(record),
+        ),
       });
     }
     return record;
@@ -115,7 +121,9 @@ export function recordAgentHarnessToolResultTelemetry(params: {
   if (text) {
     params.telemetry.messagingToolSentTexts.push(text);
   }
-  const mediaUrls = params.mediaDeliveryConfirmed ? params.collectMessagingMediaUrls(params.args) : [];
+  const mediaUrls = params.mediaDeliveryConfirmed
+    ? params.collectMessagingMediaUrls(params.args)
+    : [];
   params.telemetry.messagingToolSentMediaUrls.push(...mediaUrls);
   const record = {
     ...(params.messagingTarget ?? {
@@ -243,17 +251,20 @@ export type AgentHarnessToolMediaFacts = {
   toolAudioAsVoice?: boolean;
 };
 
-export type AgentHarnessToolResultTelemetry = AgentHarnessMessagingDeliveryFacts & AgentHarnessToolMediaFacts & {
-  toolAudioAsVoice: boolean;
-  toolAutoDeliveryMediaUrls: string[];
-  coreTtsToolResults: object[];
-  confirmedMediaDeliveries: Array<
-    { sourceUrls: readonly string[] } &
-      ({ kind: "outbound"; target: MessagingToolSend } | { kind: "sourceReply" })
-  >;
-  successfulCronAdds?: number;
-  heartbeatToolResponse?: HeartbeatToolResponse;
-};
+export type AgentHarnessToolResultTelemetry = AgentHarnessMessagingDeliveryFacts &
+  AgentHarnessToolMediaFacts & {
+    toolAudioAsVoice: boolean;
+    toolAutoDeliveryMediaUrls: string[];
+    coreTtsToolResults: object[];
+    confirmedMediaDeliveries: Array<
+      { sourceUrls: readonly string[] } & (
+        | { kind: "outbound"; target: MessagingToolSend }
+        | { kind: "sourceReply" }
+      )
+    >;
+    successfulCronAdds?: number;
+    heartbeatToolResponse?: HeartbeatToolResponse;
+  };
 
 function readFirstString(record: Record<string, unknown>, keys: string[]): string | undefined {
   for (const key of keys) {
