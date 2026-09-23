@@ -38,6 +38,7 @@ const ENERGETIC_METRICS = [
   "susceptibility",
   "resourcePressure",
 ] as const;
+const ENERGETIC_METRIC_KEYS = new Set<string>(ENERGETIC_METRICS);
 
 function readRecord(value: unknown, name: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -176,14 +177,8 @@ function readEnergeticState(
     temperature: readMetric(raw.temperature, `${name}.temperature`),
     mobility: readMetric(raw.mobility, `${name}.mobility`),
     noveltyRate: readMetric(raw.noveltyRate, `${name}.noveltyRate`),
-    evidenceCompleteness: readMetric(
-      raw.evidenceCompleteness,
-      `${name}.evidenceCompleteness`,
-    ),
-    verifierDisagreement: readMetric(
-      raw.verifierDisagreement,
-      `${name}.verifierDisagreement`,
-    ),
+    evidenceCompleteness: readMetric(raw.evidenceCompleteness, `${name}.evidenceCompleteness`),
+    verifierDisagreement: readMetric(raw.verifierDisagreement, `${name}.verifierDisagreement`),
     correlation: readMetric(raw.correlation, `${name}.correlation`),
     susceptibility: readMetric(raw.susceptibility, `${name}.susceptibility`),
     resourcePressure: readMetric(raw.resourcePressure, `${name}.resourcePressure`),
@@ -195,7 +190,7 @@ function readEnergeticPeer(value: unknown, index: number): AgentEnergeticObserva
   const raw = readRecord(value, name);
   if (
     Object.keys(raw).some(
-      (key) => key !== "replicaId" && !ENERGETIC_METRICS.includes(key as (typeof ENERGETIC_METRICS)[number]),
+      (key) => key !== "replicaId" && !ENERGETIC_METRIC_KEYS.has(key),
     )
   ) {
     throw new Error(`unsupported ${name} field`);
@@ -216,8 +211,7 @@ function readEnergeticLaunch(
   const raw = readRecord(value, "dynamics.energetics");
   if (
     Object.keys(raw).some(
-      (key) =>
-        key !== "peers" && !ENERGETIC_METRICS.includes(key as (typeof ENERGETIC_METRICS)[number]),
+      (key) => key !== "peers" && !ENERGETIC_METRIC_KEYS.has(key),
     )
   ) {
     throw new Error("unsupported dynamics.energetics field");
@@ -275,7 +269,8 @@ export function prepareDynamicsSpawn(params: {
     );
   }
 
-  const raw = options.handoff === undefined ? {} : readRecord(options.handoff, "dynamics.handoff");
+  const raw =
+    options.handoff === undefined ? {} : readRecord(options.handoff, "dynamics.handoff");
   if (
     Object.keys(raw).some(
       (key) => !["candidateDigest", "artifactRefs", "evidenceRefs", "summary"].includes(key),
@@ -338,11 +333,11 @@ export function prepareDynamicsSpawn(params: {
     "OpenClaw dynamics contract (experimental, search-only):",
     JSON.stringify(contract),
     "The contract filters explicit handoff data and may request stricter existing admission; it grants no authority.",
-    ...(energeticProjection
+    ...(energeticProjection && energeticPlan
       ? [
           "Energetic actuation (changes this child reasoning budget and search posture, never authority):",
           JSON.stringify(energeticProjection),
-          energeticPlan!.directive,
+          energeticPlan.directive,
         ]
       : []),
     ...(exactCandidate

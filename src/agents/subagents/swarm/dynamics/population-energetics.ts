@@ -1,4 +1,4 @@
-export const ENERGETIC_REGIMES = [
+const ENERGETIC_REGIMES = [
   "gas",
   "liquid",
   "critical",
@@ -8,8 +8,8 @@ export const ENERGETIC_REGIMES = [
   "unknown",
 ] as const;
 
-export type EnergeticRegime = (typeof ENERGETIC_REGIMES)[number];
-export type EnergyLevel = "low" | "medium" | "high" | "unknown";
+type EnergeticRegime = (typeof ENERGETIC_REGIMES)[number];
+type EnergyLevel = "low" | "medium" | "high" | "unknown";
 export type DynamicsMetric = number | null;
 
 export type AgentEnergeticState = {
@@ -33,7 +33,7 @@ export type AgentEnergeticObservation = AgentEnergeticState & {
   replicaId: string;
 };
 
-export type AgentEnergeticAssessment = {
+type AgentEnergeticAssessment = {
   replicaId: string;
   energyLevel: EnergyLevel;
   regime: EnergeticRegime;
@@ -41,7 +41,7 @@ export type AgentEnergeticAssessment = {
   reason: string;
 };
 
-export type EnergeticAction =
+type EnergeticAction =
   | {
       kind: "measure";
       targetReplicaIds: readonly string[];
@@ -72,7 +72,7 @@ export type EnergeticAction =
       reason: string;
     };
 
-export type PopulationEnergeticsDecision = {
+type PopulationEnergeticsDecision = {
   authority: "search-only";
   assessments: readonly AgentEnergeticAssessment[];
   meanEnergy: number | null;
@@ -88,6 +88,7 @@ export type EnergeticLaunchPlan = {
   regime: EnergeticRegime;
   energyLevel: EnergyLevel;
   actionKinds: readonly EnergeticAction["kind"][];
+  effectivePopulationSize: number | null;
   thinking?: "low" | "medium" | "high";
   fastMode?: boolean | "auto";
   directive: string;
@@ -124,7 +125,9 @@ function validateObservation(observation: AgentEnergeticObservation): void {
 
 function meanKnown(values: readonly DynamicsMetric[]): number | null {
   const known = values.filter((value): value is number => value !== null);
-  return known.length === 0 ? null : known.reduce((sum, value) => sum + value, 0) / known.length;
+  return known.length === 0
+    ? null
+    : known.reduce((sum, value) => sum + value, 0) / known.length;
 }
 
 function maxKnown(values: readonly DynamicsMetric[]): number | null {
@@ -136,7 +139,7 @@ function scoreMean(values: readonly number[]): number {
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
-export function classifyEnergyLevel(energy: DynamicsMetric): EnergyLevel {
+function classifyEnergyLevel(energy: DynamicsMetric): EnergyLevel {
   if (energy === null) {
     return "unknown";
   }
@@ -156,7 +159,7 @@ export function classifyEnergyLevel(energy: DynamicsMetric): EnergyLevel {
  * These are engineering control regimes, not claims of literal equilibrium
  * thermodynamics. Energy and temperature are intentionally orthogonal.
  */
-export function assessAgentEnergetics(
+function assessAgentEnergetics(
   observation: AgentEnergeticObservation,
 ): AgentEnergeticAssessment {
   validateObservation(observation);
@@ -266,7 +269,11 @@ export function assessAgentEnergetics(
       replicaId: observation.replicaId,
       energyLevel,
       regime: "liquid",
-      score: scoreMean([mobility, 1 - Math.abs(temperature - 0.5), 1 - correlation / 2]),
+      score: scoreMean([
+        mobility,
+        1 - Math.abs(temperature - 0.5),
+        1 - correlation / 2,
+      ]),
       reason: "mobile search combines exploration with partial coordination",
     };
   }
@@ -295,7 +302,7 @@ function idsFor(
  * The output describes where compute should move next; it does not spawn,
  * sandbox, approve, publish, merge, or deploy anything.
  */
-export function assessPopulationEnergetics(
+function assessPopulationEnergetics(
   observations: readonly AgentEnergeticObservation[],
 ): PopulationEnergeticsDecision {
   const seen = new Set<string>();
@@ -338,7 +345,7 @@ export function assessPopulationEnergetics(
     actions.push({
       kind: "reheat",
       targetReplicaIds: glass,
-      reason: "raise exploratory temperature without simply adding more compute to a trapped basin",
+      reason: "raise exploratory temperature without adding more compute to a trapped basin",
     });
   }
 
@@ -347,7 +354,7 @@ export function assessPopulationEnergetics(
     actions.push({
       kind: "freeze",
       targetReplicaIds: crystal,
-      reason: "stable low-temperature candidates should stop mutating and enter exact verification",
+      reason: "stable low-temperature candidates should stop mutating and enter verification",
     });
   }
 
@@ -455,13 +462,20 @@ export function planEnergeticLaunch(params: {
   state: AgentEnergeticState;
   peers?: readonly AgentEnergeticObservation[];
 }): EnergeticLaunchPlan {
-  const current: AgentEnergeticObservation = { replicaId: params.replicaId, ...params.state };
+  const current: AgentEnergeticObservation = {
+    replicaId: params.replicaId,
+    ...params.state,
+  };
   const decision = assessPopulationEnergetics([current, ...(params.peers ?? [])]);
-  const assessment = decision.assessments.find((item) => item.replicaId === params.replicaId);
+  const assessment = decision.assessments.find(
+    (item) => item.replicaId === params.replicaId,
+  );
   if (!assessment) {
     throw new Error("population energetics lost the target replica");
   }
-  const targeted = decision.actions.filter((action) => actionTargets(action, params.replicaId));
+  const targeted = decision.actions.filter((action) =>
+    actionTargets(action, params.replicaId),
+  );
   const actionKinds = targeted.map((action) => action.kind);
   const suppressSpawn = actionKinds.includes("drain");
   const controls = computeControls(assessment.energyLevel);
@@ -477,6 +491,7 @@ export function planEnergeticLaunch(params: {
     regime: assessment.regime,
     energyLevel: assessment.energyLevel,
     actionKinds,
+    effectivePopulationSize: decision.effectivePopulationSize,
     ...controls,
     directive: directiveFor({
       regime: assessment.regime,
