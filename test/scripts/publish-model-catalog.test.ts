@@ -657,7 +657,7 @@ describe("publish model catalog", () => {
         }),
     }).finally(() => stderr.mockRestore());
     expect(result.anthropic).toEqual({ added: 1, filled: 0, skipped: 0 });
-    expect(result.openai).toMatchObject({ added: 0, unavailable: "renamed-upstream" });
+    expect(result.openai).toBeUndefined();
     expect(JSON.stringify(bundle.providers.openai)).toBe(openaiBefore);
     expect(bundle.providers.anthropic?.models.map((model) => model.id)).toContain(
       "hydrated-claude",

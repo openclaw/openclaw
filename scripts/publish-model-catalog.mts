@@ -52,13 +52,7 @@ type ModelsDevModel = Record<string, unknown> & {
   modalities: { input: unknown[]; output: unknown[] };
   limit: Record<string, unknown>;
 };
-type ModelCatalogHydrationCounts = {
-  added: number;
-  filled: number;
-  skipped: number;
-  /** Mapped upstream provider absent or malformed in models.dev; manifest rows publish unhydrated. */
-  unavailable?: string;
-};
+type ModelCatalogHydrationCounts = { added: number; filled: number; skipped: number };
 type ModelCatalogHydrationResult = Record<string, ModelCatalogHydrationCounts>;
 type ModelCatalogSourceLoader = (url: string, label: string) => Promise<unknown>;
 const MODEL_CATALOG_MIN_VERSION = "2026.7.0";
@@ -512,7 +506,6 @@ export async function hydrateModelCatalogFromModelsDev(options: {
       process.stderr.write(
         `[${SCRIPT_LABEL}] warning: models.dev catalog missing or malformed for provider ${upstreamProviderId}; publishing ${providerId} without models.dev hydration\n`,
       );
-      result[providerId] = { added: 0, filled: 0, skipped: 0, unavailable: upstreamProviderId };
       continue;
     }
     if (provider.models.some((model) => model.api !== undefined)) {
@@ -900,8 +893,8 @@ async function runPublishModelCatalog(
   const hydrationSummary = Object.entries(hydrationResult)
     .toSorted(([left], [right]) => left.localeCompare(right))
     .map(
-      ([providerId, { added, filled, skipped, unavailable }]) =>
-        `[${SCRIPT_LABEL}] models.dev provider=${providerId} added=${added} filled=${filled} skipped=${skipped}${unavailable ? ` unavailable=${unavailable}` : ""}\n`,
+      ([providerId, { added, filled, skipped }]) =>
+        `[${SCRIPT_LABEL}] models.dev provider=${providerId} added=${added} filled=${filled} skipped=${skipped}\n`,
     )
     .join("");
   const stats = `schemaVersion=1 providers=${summary.providers} models=${summary.models} costModels=${summary.costModels} pricingEnriched=${pricingResult.modelsEnriched} pricingEntries=${pricingResult.pricingEntries} bundleBytes=${bundleBytes} generatedAt=${bundle.generatedAt} minVersion=${bundle.minVersion} sourceCommit=${bundle.sourceCommit}`;
