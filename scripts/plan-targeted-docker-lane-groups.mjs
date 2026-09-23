@@ -1,6 +1,7 @@
 // Plans grouped targeted Docker lane matrix entries without installed dependencies.
 import { fileURLToPath } from "node:url";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
+import { expandUpdateFirstHopCompatLanes } from "./lib/update-first-hop-lanes.mjs";
 import {
   CUSTOM_PLUGIN_SIBLINGS_BASELINE,
   normalizeUpgradeSurvivorBaselineSpec,
@@ -59,7 +60,8 @@ export function planTargetedDockerLaneGroups({
   upgradeSurvivorBaselines = "",
   upgradeSurvivorScenarios = "",
 } = {}) {
-  const selectedLanes = splitTokens(lanes);
+  // Each recorded first-hop source becomes its own job.
+  const selectedLanes = expandUpdateFirstHopCompatLanes(splitTokens(lanes));
   if (selectedLanes.length === 0) {
     throw new Error("docker_lanes is required when planning targeted Docker lane groups.");
   }

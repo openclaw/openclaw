@@ -44,7 +44,6 @@ import type { WorkerSessionToolExecutor } from "./worker-environments/worker-ses
 type WorkerEnvironmentStore = Awaited<
   ReturnType<typeof import("./worker-environments/store.js").createWorkerEnvironmentStore>
 >;
-type WorkerEnvironmentRecord = ReturnType<WorkerEnvironmentStore["list"]>[number];
 type WorkerEnvironmentLogger = {
   child: (name: string) => { warn: (message: string) => void };
 };
@@ -52,7 +51,6 @@ type WorkerEnvironmentLogger = {
 export type GatewayWorkerEnvironmentStartupState = {
   durableProviderIds: string[];
   listDurableProviderIds: () => string[];
-  records: WorkerEnvironmentRecord[];
   store: WorkerEnvironmentStore;
   placementStore: WorkerSessionPlacementStore;
 };
@@ -110,7 +108,6 @@ export async function loadGatewayWorkerEnvironmentStartupState(): Promise<Gatewa
   return {
     durableProviderIds,
     listDurableProviderIds,
-    records,
     store,
     placementStore,
   };
@@ -211,23 +208,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       });
     return await workerNpmArtifact;
   };
-  const startupBindings = params.startup.records.flatMap((record) =>
-    record.state === "attached" && record.attachedSessionIds.length === 1
-      ? [
-          {
-            environmentId: record.environmentId,
-            runEpoch: record.ownerEpoch,
-            sessionId: record.attachedSessionIds[0]!,
-          },
-        ]
-      : [],
-  );
-  const workerLiveEvents = createWorkerLiveEventReceiver({
-    startupBindings,
-    startupOwners: new Map(
-      startupBindings.map((binding) => [binding.environmentId, binding.runEpoch] as const),
-    ),
-  });
+  const workerLiveEvents = createWorkerLiveEventReceiver();
   const workerTunnelManager = createWorkerTunnelManager({
     desktopSessionRegistry: params.desktopSessionRegistry,
   });

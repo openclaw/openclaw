@@ -2,6 +2,7 @@ import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseInboundMediaUri, buildInboundMediaUriFromPath } from "../media/media-reference.js";
+import { STATE_CONTENTION_DIAGNOSTIC } from "../sessions/session-run-error-presentation.js";
 import {
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
@@ -462,7 +463,15 @@ export function sanitizeChatHistoryMessage(
       !conflictDetails && messageHasToolResultShape(entry)
         ? projectToolResultDetails(entry.details, maxChars)
         : undefined;
-    const projectedDetails = conflictDetails ?? toolResultDetails?.details;
+    // Only the terminal owner's presentation category crosses this report boundary.
+    // Correlation is projected separately; raw diagnostics and report fields stay private.
+    const runFailureDetails =
+      entry.role === "custom" &&
+      entry.customType === "run-failed-before-reply" &&
+      readRecord(entry.details)?.errorKind === "state_contention"
+        ? { errorKind: "state_contention", diagnostic: STATE_CONTENTION_DIAGNOSTIC }
+        : undefined;
+    const projectedDetails = conflictDetails ?? toolResultDetails?.details ?? runFailureDetails;
     if (projectedDetails) {
       entry.details = projectedDetails;
     } else {

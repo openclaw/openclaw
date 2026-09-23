@@ -719,6 +719,7 @@ src/infra/sqlite-integrity.ts
 src/infra/sqlite-live-snapshot.ts
 src/infra/sqlite-maintenance-cache.ts
 src/infra/sqlite-number.ts
+src/infra/sqlite-pinned-read-snapshot.ts
 src/infra/sqlite-post-commit.ts
 src/infra/sqlite-private-directory.ts
 src/infra/sqlite-read-cache.ts
@@ -734,6 +735,7 @@ src/infra/sqlite-readonly-worker.ts
 src/infra/sqlite-runtime-version.ts
 src/infra/sqlite-schema-contract-assembly.ts
 src/infra/sqlite-schema-contract.ts
+src/infra/sqlite-schema-facts.ts
 src/infra/sqlite-schema-header.ts
 src/infra/sqlite-schema-issues.ts
 src/infra/sqlite-schema-sql.ts
@@ -775,6 +777,7 @@ src/infra/startup-migration-checkpoint.ts
 src/infra/state-database-coordinator-delegate.ts
 src/infra/state-database-coordinator-errors.ts
 src/infra/state-database-coordinator-paths.ts
+src/infra/state-database-coordinator-acquisition.ts
 src/infra/state-database-coordinator.ts
 src/infra/state-lease-process-owner.ts
 src/infra/state-migrations.cron-run-logs.ts
@@ -1209,6 +1212,7 @@ src/state/openclaw-state-db-delivery-queue-backfill.ts
 src/state/openclaw-state-db-doctor-schema.ts
 src/state/openclaw-state-db-existing-schema.ts
 src/state/openclaw-state-db-existing-write.ts
+src/state/openclaw-state-db-failure.ts
 src/state/openclaw-state-db-fast-path.ts
 src/state/openclaw-state-db-handle.ts
 src/state/openclaw-state-db-legacy-backfills.ts

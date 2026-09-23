@@ -38,7 +38,9 @@ import {
   releaseWaivedJobs,
   validateReleaseLaneWaiverBinding,
   composeReleaseChildAttemptEvidence,
+  formatAdvisoryJobFailure,
   formatReleaseStateOutcome,
+  releaseAdvisoryJobFailures,
   releasePlanGateFailures,
   MAX_RELEASE_ARTIFACT_BYTES,
   serializeReleaseArtifact,
@@ -1404,6 +1406,9 @@ async function collectMode(mode) {
             (decision.state !== "qualifying" && decision.activeRunIds.length === 0));
     if (done) {
       const payload = writePayload(decision, { cancelledRunIds, requested: false });
+      for (const failure of releaseAdvisoryJobFailures(payload)) {
+        console.log(`::warning title=Advisory lane failed::${formatAdvisoryJobFailure(failure)}`);
+      }
       finished = true;
       process.exitCode =
         payload.state === "passed" ? 0 : payload.state === "orchestration_error" ? 2 : 1;

@@ -612,6 +612,7 @@ export const openClawStateDatabaseCache = {
   getCachedOpenClawStateDatabase,
   waitForCachedOpenClawStateSchemaProbe,
   getOpenClawStateDatabaseRuntimeFailure: runtimeFailures.get,
+  getOpenClawStateDatabaseRecordedFailure: terminalOpenLatch.peek,
   getOpenClawStateDatabaseIfOpenAtPath,
   getKnownOpenClawStateDatabaseIdentity: asyncResources.knownIdentity,
   isOpenClawStateDatabaseOpen,
