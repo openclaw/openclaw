@@ -164,9 +164,7 @@ export function registerUpdateCli(program: Command) {
         ["openclaw update wizard", "Interactive update wizard"],
         ["openclaw --update", "Shorthand for openclaw update"],
       ] as const;
-      const fmtExamples = examples
-        .map(([cmd, desc]) => `  ${theme.command(cmd)} ${theme.muted(`# ${desc}`)}`)
-        .join("\n");
+      const fmtExamples = formatHelpExamples(examples, true);
       return `
 ${theme.heading("What this does:")}
   - Git checkouts: fetches, rebases, installs deps, builds, and runs doctor

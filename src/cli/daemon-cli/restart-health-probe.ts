@@ -100,32 +100,17 @@ export async function waitForGatewayHttpReadiness(params: {
     if (remainingMs <= 0) {
       return latest;
     }
-    const [healthz, readyz] = await Promise.all([
-      probe
-        .requestHttp({
-          host: "127.0.0.1",
-          pathname: "/healthz",
-          port: params.port,
-          timeoutMs: Math.min(
-            remainingMs,
-            params.probeTimeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS,
-          ),
-          ...(params.signal ? { signal: params.signal } : {}),
-        })
-        .then((result) => result?.statusCode ?? null),
-      probe
-        .requestHttp({
-          host: "127.0.0.1",
-          pathname: "/readyz",
-          port: params.port,
-          timeoutMs: Math.min(
-            remainingMs,
-            params.probeTimeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS,
-          ),
-          ...(params.signal ? { signal: params.signal } : {}),
-        })
-        .then((result) => result?.statusCode ?? null),
-    ]);
+    const probeStatus = async (pathname: "/healthz" | "/readyz") => {
+      const result = await probe.requestHttp({
+        host: "127.0.0.1",
+        pathname,
+        port: params.port,
+        timeoutMs: Math.min(remainingMs, params.probeTimeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS),
+        ...(params.signal ? { signal: params.signal } : {}),
+      });
+      return result?.statusCode ?? null;
+    };
+    const [healthz, readyz] = await Promise.all([probeStatus("/healthz"), probeStatus("/readyz")]);
     params.signal?.throwIfAborted();
     latest = { healthz, readyz };
     if (healthz === 200 && readyz === 200) {

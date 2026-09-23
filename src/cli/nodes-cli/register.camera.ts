@@ -25,8 +25,7 @@ import {
   callNodesGatewayCli,
   nodesCallOpts,
   parseOptionalNodeFiniteNumber,
-  parseOptionalNodeNonNegativeInteger,
-  parseOptionalNodePositiveInteger,
+  parseOptionalNodeInteger,
   resolveCliNode,
   resolveCliNodeId,
 } from "./rpc.js";
@@ -142,17 +141,14 @@ export function registerNodesCameraCommands(nodes: Command) {
                     );
                   })();
 
-          const maxWidth = parseOptionalNodePositiveInteger(opts.maxWidth, "--max-width");
+          const maxWidth = parseOptionalNodeInteger(opts.maxWidth, "--max-width");
           const quality = parseOptionalNodeFiniteNumber(opts.quality, "--quality", {
             minInclusive: 0,
             maxInclusive: 1,
           });
-          const delayMs = parseOptionalNodeNonNegativeInteger(opts.delayMs, "--delay-ms");
+          const delayMs = parseOptionalNodeInteger(opts.delayMs, "--delay-ms", "non-negative");
           const deviceId = normalizeOptionalString(opts.deviceId);
-          const timeoutMs = parseOptionalNodePositiveInteger(
-            opts.invokeTimeout,
-            "--invoke-timeout",
-          );
+          const timeoutMs = parseOptionalNodeInteger(opts.invokeTimeout, "--invoke-timeout");
           const node = await resolveCliNode(opts, normalizeOptionalString(opts.node) ?? "");
           const nodeId = node.nodeId;
           if (deviceId && facing === "both" && node.platform?.toLowerCase() !== "linux") {
@@ -174,10 +170,10 @@ export function registerNodesCameraCommands(nodes: Command) {
               command: "camera.snap",
               params: {
                 ...(target.requestFacing ? { facing: target.requestFacing } : {}),
-                maxWidth: Number.isFinite(maxWidth) ? maxWidth : undefined,
-                quality: Number.isFinite(quality) ? quality : undefined,
+                maxWidth,
+                quality,
                 format: "jpg",
-                delayMs: Number.isFinite(delayMs) ? delayMs : undefined,
+                delayMs,
                 deviceId: deviceId || undefined,
               },
               timeoutMs,
@@ -243,10 +239,7 @@ export function registerNodesCameraCommands(nodes: Command) {
           const facing = parseFacing(opts.facing ?? "front");
           const durationMs = parseDurationMs(opts.duration ?? "3000");
           const includeAudio = opts.audio !== false;
-          const timeoutMs = parseOptionalNodePositiveInteger(
-            opts.invokeTimeout,
-            "--invoke-timeout",
-          );
+          const timeoutMs = parseOptionalNodeInteger(opts.invokeTimeout, "--invoke-timeout");
           const deviceId = normalizeOptionalString(opts.deviceId);
           const node = await resolveCliNode(opts, normalizeOptionalString(opts.node) ?? "");
           const nodeId = node.nodeId;
@@ -257,7 +250,7 @@ export function registerNodesCameraCommands(nodes: Command) {
             command: "camera.clip",
             params: {
               facing: target.requestFacing,
-              durationMs: Number.isFinite(durationMs) ? durationMs : undefined,
+              durationMs,
               includeAudio,
               format: "mp4",
               deviceId: deviceId || undefined,
