@@ -1,10 +1,13 @@
 // Covers preferred OpenClaw temp directory resolution.
-import { constants as fsConstants } from "node:fs";
+import fs, { constants as fsConstants } from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { DEFAULT_POSIX_TMP_ROOT, resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
 type TmpDirOptions = NonNullable<Parameters<typeof resolvePreferredOpenClawTmpDir>[0]>;
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function fallbackTmp(uid = 501) {
   return path.join("/var/fallback", `openclaw-${uid}`);
@@ -53,23 +56,16 @@ function resolveWithReadOnlyTmpFallback(params: {
   chmodSync?: NonNullable<TmpDirOptions["chmodSync"]>;
   warn?: NonNullable<TmpDirOptions["warn"]>;
 }) {
-  return resolvePreferredOpenClawTmpDir({
+  return resolveWithMocks({
     accessSync: readOnlyTmpAccessSync(),
-    lstatSync: vi.fn((target: string) => {
-      if (target === DEFAULT_POSIX_TMP_ROOT) {
-        throw nodeErrorWithCode("ENOENT");
-      }
-      if (target === params.fallbackPath) {
-        return params.fallbackLstatSync(target);
-      }
-      return secureDirStat(501);
+    lstatSync: vi.fn(() => {
+      throw nodeErrorWithCode("ENOENT");
     }),
-    mkdirSync: vi.fn(),
+    fallbackLstatSync: params.fallbackLstatSync,
     chmodSync: params.chmodSync,
-    getuid: vi.fn(() => 501),
-    tmpdir: vi.fn(() => "/var/fallback"),
+    tmpdirPath: path.dirname(params.fallbackPath),
     warn: params.warn,
-  });
+  }).resolved;
 }
 
 function symlinkTmpDirLstat() {
@@ -100,7 +96,7 @@ function missingThenSecureLstat(uid = 501) {
     .mockImplementationOnce(() => {
       throw nodeErrorWithCode("ENOENT");
     })
-    .mockImplementationOnce(() => secureDirStat(uid));
+    .mockImplementation(() => secureDirStat(uid));
 }
 
 function resolveWithMocks(params: {
@@ -113,7 +109,7 @@ function resolveWithMocks(params: {
   tmpdirPath?: string;
 }) {
   const uid = params.uid ?? 501;
-  const fallbackPath = fallbackTmp(uid);
+  const fallbackPath = path.join(params.tmpdirPath ?? "/var/fallback", `openclaw-${uid}`);
   const accessSync = params.accessSync ?? vi.fn();
   const chmodSync = params.chmodSync ?? vi.fn();
   const warn = params.warn ?? vi.fn();
@@ -128,14 +124,57 @@ function resolveWithMocks(params: {
       return secureDirStat(uid);
     }
     return secureDirStat(uid);
-  }) as NonNullable<TmpDirOptions["lstatSync"]>;
+  });
   const mkdirSync = vi.fn();
   const getuid = vi.fn(() => uid);
   const tmpdir = vi.fn(() => params.tmpdirPath ?? "/var/fallback");
+  let openedPath: string | undefined;
+  const descriptor: NonNullable<TmpDirOptions["descriptor"]> = {
+    // Exact descriptor receipts preserve identity across the repair's repeated checks.
+    lstatSync: (target) => {
+      const stat = wrappedLstatSync(target);
+      return {
+        ...stat,
+        dev: 1n,
+        ino: target === DEFAULT_POSIX_TMP_ROOT ? 1n : 2n,
+        uid: BigInt(stat.uid ?? uid),
+        mode: BigInt(stat.mode ?? 0o40700),
+      };
+    },
+    openSync: (target, flags) => {
+      expect(flags).toBe(
+        fsConstants.O_RDONLY |
+          fsConstants.O_DIRECTORY |
+          fsConstants.O_NOFOLLOW |
+          fsConstants.O_NONBLOCK,
+      );
+      openedPath = target;
+      return 10;
+    },
+    fstatSync: (fd) => {
+      expect(fd).toBe(10);
+      if (!openedPath) {
+        throw new Error("No open fixture descriptor");
+      }
+      return descriptor.lstatSync(openedPath, { bigint: true });
+    },
+    fchmodSync: (fd, mode) => {
+      expect(fd).toBe(10);
+      if (!openedPath) {
+        throw new Error("No open fixture descriptor");
+      }
+      chmodSync(openedPath, mode);
+    },
+    closeSync: (fd) => {
+      expect(fd).toBe(10);
+      openedPath = undefined;
+    },
+    constants: fsConstants,
+  };
   const resolved = resolvePreferredOpenClawTmpDir({
     accessSync,
-    chmodSync,
     lstatSync: wrappedLstatSync,
+    descriptor,
     mkdirSync,
     getuid,
     tmpdir,
@@ -145,6 +184,32 @@ function resolveWithMocks(params: {
 }
 
 describe("resolvePreferredOpenClawTmpDir", () => {
+  it.skipIf(process.platform === "win32")(
+    "creates and repairs a real preferred root with descriptor-bound permissions",
+    () => {
+      const preferredDir = path.join(tempDirs.make("openclaw-secure-temp-"), "preferred");
+      const warn = vi.fn();
+      const tmpdir = vi.fn(() => path.dirname(preferredDir));
+
+      expect(resolvePreferredOpenClawTmpDir({ preferredDir, tmpdir, warn })).toBe(preferredDir);
+      expect(fs.statSync(preferredDir).mode & 0o777).toBe(0o700);
+      const initial = fs.statSync(preferredDir, { bigint: true });
+      fs.chmodSync(preferredDir, 0o777);
+      warn.mockClear();
+
+      expect(resolvePreferredOpenClawTmpDir({ preferredDir, tmpdir, warn })).toBe(preferredDir);
+      const repaired = fs.statSync(preferredDir, { bigint: true });
+      expect(repaired.mode & 0o777n).toBe(0o700n);
+      expect(repaired.dev).toBe(initial.dev);
+      expect(repaired.ino).toBe(initial.ino);
+      expect(repaired.uid).toBe(initial.uid);
+      expect(warn).toHaveBeenCalledWith(
+        `[openclaw] tightened permissions on temp dir: ${preferredDir}`,
+      );
+      expect(tmpdir).not.toHaveBeenCalled();
+    },
+  );
+
   it("prefers /tmp/openclaw when it already exists and is writable", () => {
     const lstatSync: NonNullable<TmpDirOptions["lstatSync"]> = vi.fn(() => ({
       isDirectory: () => true,
@@ -262,7 +327,6 @@ describe("resolvePreferredOpenClawTmpDir", () => {
 
   it("repairs /tmp/openclaw after create when the initial mode stays too broad", () => {
     let preferredMode = 0o40775;
-    let chmodCalls = 0;
     const lstatSync = vi
       .fn<NonNullable<TmpDirOptions["lstatSync"]>>()
       .mockImplementationOnce(() => {
@@ -274,8 +338,7 @@ describe("resolvePreferredOpenClawTmpDir", () => {
         }),
       );
     const chmodSync = vi.fn((target: string, mode: number) => {
-      chmodCalls += 1;
-      if (target === DEFAULT_POSIX_TMP_ROOT && mode === 0o700 && chmodCalls > 1) {
+      if (target === DEFAULT_POSIX_TMP_ROOT && mode === 0o700) {
         preferredMode = 0o40700;
       }
     });
@@ -424,7 +487,6 @@ describe("resolvePreferredOpenClawTmpDir", () => {
   it("uses /tmp/openclaw when another process tightened permissions before repair", () => {
     const chmodSync = vi.fn();
     const warn = vi.fn();
-    const tmpdir = vi.fn(() => "/var/fallback");
     const states = [0o40777, 0o40700, 0o40700];
     const lstatSync = vi.fn<NonNullable<TmpDirOptions["lstatSync"]>>((target: string) => {
       if (target === DEFAULT_POSIX_TMP_ROOT) {
@@ -433,13 +495,9 @@ describe("resolvePreferredOpenClawTmpDir", () => {
       return secureDirStat();
     });
 
-    const resolved = resolvePreferredOpenClawTmpDir({
-      accessSync: vi.fn(),
+    const { resolved, tmpdir } = resolveWithMocks({
       lstatSync,
       chmodSync,
-      mkdirSync: vi.fn(),
-      getuid: vi.fn(() => 501),
-      tmpdir,
       warn,
     });
 
@@ -468,27 +526,24 @@ describe("resolvePreferredOpenClawTmpDir", () => {
   });
 
   it("uses /tmp/openclaw when chmod loses a concurrent repair race", () => {
+    let currentMode = 0o40777;
     const chmodSync = vi.fn((target: string, mode: number) => {
       if (target === DEFAULT_POSIX_TMP_ROOT && mode === 0o700) {
+        currentMode = 0o40700;
         throw nodeErrorWithCode("EPERM");
       }
     });
     const warn = vi.fn();
-    const states = [0o40777, 0o40777, 0o40700];
     const lstatSync = vi.fn<NonNullable<TmpDirOptions["lstatSync"]>>((target: string) => {
       if (target === DEFAULT_POSIX_TMP_ROOT) {
-        return makeDirStat({ mode: states.shift() ?? 0o40700 });
+        return makeDirStat({ mode: currentMode });
       }
       return secureDirStat();
     });
 
-    const resolved = resolvePreferredOpenClawTmpDir({
-      accessSync: vi.fn(),
+    const { resolved } = resolveWithMocks({
       lstatSync,
       chmodSync,
-      mkdirSync: vi.fn(),
-      getuid: vi.fn(() => 501),
-      tmpdir: vi.fn(() => "/var/fallback"),
       warn,
     });
 
@@ -499,17 +554,18 @@ describe("resolvePreferredOpenClawTmpDir", () => {
 
   it("uses fallback when chmod loses a concurrent fallback repair race", () => {
     const fallbackPath = fallbackTmp();
+    let currentMode = 0o40777;
     const chmodSync = vi.fn((target: string, mode: number) => {
       if (target === fallbackPath && mode === 0o700) {
+        currentMode = 0o40700;
         throw nodeErrorWithCode("EACCES");
       }
     });
     const warn = vi.fn();
-    const states = [0o40777, 0o40777, 0o40700];
 
     const resolved = resolveWithReadOnlyTmpFallback({
       fallbackPath,
-      fallbackLstatSync: vi.fn(() => makeDirStat({ mode: states.shift() ?? 0o40700 })),
+      fallbackLstatSync: vi.fn(() => makeDirStat({ mode: currentMode })),
       chmodSync,
       warn,
     });

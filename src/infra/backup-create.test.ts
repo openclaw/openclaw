@@ -4125,6 +4125,8 @@ describe("createBackupArchive", () => {
     });
 
     it("fails closed when the destination does not support hard links", async () => {
+      // This fault injection targets the supported Node hard-link publisher.
+      vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
       const linkSpy = vi
         .spyOn(fs, "link")
         .mockRejectedValue(Object.assign(new Error("hard links unsupported"), { code: "EPERM" }));

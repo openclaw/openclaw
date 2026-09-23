@@ -1,4 +1,5 @@
 /** Tests SecretRef provider resolution for env, file, and exec sources. */
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -941,17 +942,18 @@ describe("secret ref resolver", () => {
         0o700,
       );
 
-      const originalLstat = fs.lstat.bind(fs);
+      const originalLstat = fsSync.lstatSync.bind(fsSync);
       let commandPathStats = 0;
-      const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      const lstatSpy = vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
         if (String(args[0]) === commandPath && ++commandPathStats === 2) {
           throw Object.assign(new Error("provider command disappeared"), { code: "ENOENT" });
         }
-        return await originalLstat(...args);
+        return originalLstat(...args);
       });
       try {
         const error = await resolveExecSecret(commandPath).catch((caught: unknown) => caught);
 
+        expect(commandPathStats).toBe(2);
         expect(isProviderScopedSecretResolutionError(error)).toBe(true);
         if (!isProviderScopedSecretResolutionError(error)) {
           return;

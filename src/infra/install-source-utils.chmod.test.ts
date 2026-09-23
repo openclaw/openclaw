@@ -24,7 +24,8 @@ describe("withInstallWorkspace private root", () => {
       const mockParentRoot = tempDirs.make("openclaw-chmod-test-");
       const mockOpenClawDir = path.join(mockParentRoot, "openclaw");
 
-      await fs.mkdir(mockOpenClawDir, { recursive: true });
+      // The resolver owns this private root; workspace creation must not chmod its parents.
+      await fs.mkdir(mockOpenClawDir, { recursive: true, mode: 0o700 });
       await fs.chmod(mockParentRoot, 0o1777);
       const canonicalOpenClawDir = await fs.realpath(mockOpenClawDir);
 
@@ -34,6 +35,7 @@ describe("withInstallWorkspace private root", () => {
       const value = await withInstallWorkspace("openclaw-test-", async (tmpDir) => {
         observedDir = tmpDir;
         expect(path.dirname(tmpDir)).toBe(canonicalOpenClawDir);
+        expect((await fs.stat(tmpDir)).mode & 0o7777).toBe(0o700);
         await fs.writeFile(path.join(tmpDir, "marker.txt"), "ok");
         return "done";
       });

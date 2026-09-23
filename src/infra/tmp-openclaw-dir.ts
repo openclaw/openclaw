@@ -15,6 +15,7 @@ type SecureDirStat = {
 export type ResolvePreferredOpenClawTmpDirOptions = {
   accessSync?: (path: string, mode?: number) => void;
   chmodSync?: (path: string, mode: number) => void;
+  descriptor?: Parameters<ResolveSecureTempRoot>[0]["descriptor"];
   getuid?: () => number | undefined;
   lstatSync?: (path: string) => SecureDirStat;
   mkdirSync?: (path: string, opts: { recursive: boolean; mode?: number }) => void;

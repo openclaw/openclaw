@@ -338,6 +338,7 @@ describe("createReplyMediaPathNormalizer", () => {
     ensureSandboxWorkspaceForSession.mockResolvedValue({
       workspaceDir: "/tmp/sandboxes/session-1",
       containerWorkdir: "/workspace",
+      workspaceAccess: "ro",
     });
     const absolutePath = "/Users/peter/.openclaw/workspace/reports/screenshot.png";
     const normalize = createReplyMediaPathNormalizer({

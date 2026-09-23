@@ -1,4 +1,5 @@
 // Tests archive creation and extraction helpers.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
@@ -257,14 +258,16 @@ describe("archive utils", () => {
           "payload.bin",
         );
 
-        const realLstat = fs.lstat.bind(fs);
+        const realLstat = fsSync.lstatSync.bind(fsSync);
         let linked = false;
-        const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-          if (!linked && String(args[0]) === extractedRealPath) {
-            await fs.link(extractedRealPath, outsideAlias);
+        const lstatSpy = vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+          const stat = realLstat(...args);
+          if (!linked && String(args[0]) === extractedRealPath && stat?.isFile()) {
+            fsSync.linkSync(extractedRealPath, outsideAlias);
             linked = true;
+            return realLstat(...args);
           }
-          return await realLstat(...args);
+          return stat;
         });
 
         try {

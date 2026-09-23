@@ -90,6 +90,8 @@ describe("backup archive publication", () => {
   it.each(["EPERM", "EXDEV", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"])(
     "fails closed when hard-link publication returns %s",
     async (code) => {
+      // This fault injection targets the supported Node hard-link publisher.
+      vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
       const { outputPath, plan } = await createPublication("openclaw-backup-no-link-");
       const prepared = await prepareArchive(plan);
       const linkSpy = vi

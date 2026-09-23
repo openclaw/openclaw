@@ -85,39 +85,6 @@ async function rebindInstallBasePath(params: {
   );
 }
 
-async function withInstallBaseReboundOnRealpathCall<T>(params: {
-  installBaseDir: string;
-  preservedDir: string;
-  outsideTarget: string;
-  rebindAtCall: number;
-  run: () => Promise<T>;
-}): Promise<T> {
-  const installBasePath = normalizeComparablePath(params.installBaseDir);
-  const realRealpath = fs.realpath.bind(fs);
-  let installBaseRealpathCalls = 0;
-  const realpathSpy = vi
-    .spyOn(fs, "realpath")
-    .mockImplementation(async (...args: Parameters<typeof fs.realpath>) => {
-      const filePath = normalizeComparablePath(String(args[0]));
-      if (filePath === installBasePath) {
-        installBaseRealpathCalls += 1;
-        if (installBaseRealpathCalls === params.rebindAtCall) {
-          await rebindInstallBasePath({
-            installBaseDir: params.installBaseDir,
-            preservedDir: params.preservedDir,
-            outsideTarget: params.outsideTarget,
-          });
-        }
-      }
-      return await realRealpath(...args);
-    });
-  try {
-    return await params.run();
-  } finally {
-    realpathSpy.mockRestore();
-  }
-}
-
 async function addHardlinkedFile(filePath: string, linkPath: string): Promise<void> {
   await fs.mkdir(path.dirname(linkPath), { recursive: true });
   await fs.link(filePath, linkPath);
@@ -332,15 +299,16 @@ describe("installPackageDir", () => {
     let backupDir = "";
     let pauseConsumed = false;
 
-    const realLstat = fs.lstat.bind(fs);
-    vi.spyOn(fs, "lstat").mockImplementation(async (...args: Parameters<typeof fs.lstat>) => {
-      const stat = await realLstat(...args);
+    const realOpendir = fs.opendir.bind(fs);
+    vi.spyOn(fs, "opendir").mockImplementation(async (...args) => {
+      const directory = await realOpendir(...args);
+      // The move preflight opens the staged tree before its mutation guard.
       if (!pauseConsumed && String(args[0]) === stageDir) {
         pauseConsumed = true;
         paused.resolve();
         await release.promise;
       }
-      return stat;
+      return directory;
     });
     const realRename = fs.rename.bind(fs);
     vi.spyOn(fs, "rename").mockImplementation((...args: Parameters<typeof fs.rename>) => {
@@ -605,28 +573,28 @@ describe("installPackageDir", () => {
       await createReboundInstallFixture({ fixtureRoot });
 
     const warnings: string[] = [];
-    await withInstallBaseReboundOnRealpathCall({
-      installBaseDir,
-      preservedDir: preservedInstallRoot,
-      outsideTarget: outsideInstallRoot,
-      rebindAtCall: 4,
-      run: async () => {
-        await expect(
-          installPackageDir({
-            sourceDir,
-            targetDir,
-            mode: "install",
-            timeoutMs: 1_000,
-            copyErrorPrefix: "failed to copy plugin",
-            hasDeps: false,
-            depsLogMessage: "Installing deps…",
-            logger: { warn: (message) => warnings.push(message) },
-          }),
-        ).resolves.toEqual({
-          ok: false,
-          error: "failed to copy plugin: Error: install base directory changed during install",
-        });
-      },
+    await expect(
+      installPackageDir({
+        sourceDir,
+        targetDir,
+        mode: "install",
+        timeoutMs: 1_000,
+        copyErrorPrefix: "failed to copy plugin",
+        hasDeps: false,
+        depsLogMessage: "Installing deps…",
+        logger: { warn: (message) => warnings.push(message) },
+        afterInstall: async () => {
+          await rebindInstallBasePath({
+            installBaseDir,
+            preservedDir: preservedInstallRoot,
+            outsideTarget: outsideInstallRoot,
+          });
+          return { ok: true as const };
+        },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: "failed to copy plugin: Error: install base directory changed during install",
     });
 
     await expectMissingPath(path.join(outsideInstallRoot, "demo", "marker.txt"));
