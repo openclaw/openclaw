@@ -199,14 +199,14 @@ suite.define(() => {
           scheduledToolPolicy: { mode: "account" },
           payload: {
             kind: "agentTurn",
-            toolsAllow: expect.arrayContaining(["automations"]),
-            toolsAllowIsDefault: true,
           },
         });
         if (!isRecord(created.payload)) {
           throw new Error("Created automation has no payload");
         }
         const creatorPayload = created.payload;
+        expect(creatorPayload).not.toHaveProperty("toolsAllow");
+        expect(creatorPayload).not.toHaveProperty("toolsAllowIsDefault");
         expect(typeof created.id).toBe("string");
         const jobId = String(created.id);
         const channelResults: Record<string, string> = {};
@@ -330,7 +330,8 @@ suite.define(() => {
           .logs()
           .split("\n")
           .filter((line) => line.includes("cron: admin management"));
-        expect(auditEvents).toHaveLength(actions.length);
+        // Updating the payload first reads its current revision through an audited cron.get.
+        expect(auditEvents).toHaveLength(actions.length + 1);
         await writeFile(
           path.join(proofDir, "verdict.json"),
           `${JSON.stringify(

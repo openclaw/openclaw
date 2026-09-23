@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { forceFreePort, forceFreePortAndWait } from "../cli/ports.js";
+import { setLoggerConfigLoaderForTests } from "../logging/logger.js";
 import {
   createDiagnosticFixtureRouting,
   diagnosticCanaries,
@@ -40,6 +41,12 @@ it.each([
 ])("projects the environment at the %s launch boundary", async (surface) => {
   const native = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "diagnostic-siblings-")));
+  // Platform probes must not initialize a POSIX log directory on a Windows host.
+  setLoggerConfigLoaderForTests(() => ({
+    file: path.join(root, "diagnostic.log"),
+    level: "silent",
+    consoleLevel: "silent",
+  }));
   const routing = createDiagnosticFixtureRouting({
     PATH: root,
     HOME: root,
@@ -169,6 +176,7 @@ it.each([
       }
     });
   } finally {
+    setLoggerConfigLoaderForTests();
     await rm(root, { recursive: true, force: true });
   }
 });

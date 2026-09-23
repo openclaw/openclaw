@@ -668,14 +668,13 @@ suite.define(() => {
   it("clone payload policy: preserves public options through the real Gateway and CLI readback", async () => {
     await withGatewayCommands("real-clone-policy-commands.json", async (cliJson) => {
       for (const variant of [
-        { name: "finite-cap", toolsAllow: ["read"], allowUnsafeExternalContent: false },
-        { name: "empty-cap", toolsAllow: [], allowUnsafeExternalContent: true },
+        { name: "default-external-content", allowUnsafeExternalContent: false },
+        { name: "allowed-external-content", allowUnsafeExternalContent: true },
       ]) {
         const sourceName = `Synthetic clone ${variant.name} source`;
         const payload = {
           kind: "agentTurn" as const,
           message: "node -e \"console.log('synthetic clone fixture')\"",
-          toolsAllow: variant.toolsAllow,
           fallbacks: [],
           lightContext: false,
           allowUnsafeExternalContent: variant.allowUnsafeExternalContent,
@@ -756,7 +755,12 @@ suite.define(() => {
               .toEqual(value);
             expect.soft(storedPayload[field], `${variant.name}: stored ${field}`).toEqual(value);
           }
-          for (const field of ["toolsAllowIsDefault", "externalContentSource"]) {
+          for (const field of ["toolsAllow", "toolsAllowIsDefault"]) {
+            expect
+              .soft(storedPayload, `${variant.name}: omitted ${field}`)
+              .not.toHaveProperty(field);
+          }
+          for (const field of ["toolsAllow", "toolsAllowIsDefault", "externalContentSource"]) {
             expect
               .soft(submittedPayload, `${variant.name}: omitted ${field}`)
               .not.toHaveProperty(field);
