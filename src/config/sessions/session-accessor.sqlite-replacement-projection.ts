@@ -33,6 +33,7 @@ import {
 } from "./session-accessor.sqlite-replacement-worker.js";
 import {
   resolveSqliteScope,
+  resolveSqliteWriteAdmissionScope,
   prepareSqliteScope,
   resolveSqliteTranscriptArchiveDirectory,
   toDatabaseOptions,
@@ -89,19 +90,19 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
     storePath: params.storePath,
     env,
   };
-  const resolved = {
-    ...(isMainThread ? await prepareSqliteScope(target) : resolveSqliteScope(target)),
-    env,
-  };
-  const databaseOptions = {
-    ...toDatabaseOptions(resolved),
-    path: resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved)),
-  };
-  resolved.path = databaseOptions.path;
-  const useWorker = isMainThread && supportsOpenClawAgentDatabaseExecution(databaseOptions);
+  const admission = isMainThread ? resolveSqliteWriteAdmissionScope(target) : undefined;
+  const scope =
+    admission ?? (isMainThread ? await prepareSqliteScope(target) : resolveSqliteScope(target));
+  scope.path ??= resolveOpenClawAgentSqlitePath(toDatabaseOptions(scope));
   const preparedWrite = await runPreparedSqliteSessionWrite(
-    resolved,
-    async () => {
+    scope,
+    async (preparedScope) => {
+      const resolved = { ...preparedScope, env };
+      const databaseOptions = {
+        ...toDatabaseOptions(resolved),
+        path: resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved)),
+      };
+      const useWorker = isMainThread && supportsOpenClawAgentDatabaseExecution(databaseOptions);
       const readNative = () =>
         withSqliteSessionDatabase(databaseOptions, (database) => ({
           ...readSessionEntryReplacementState(database, params),
@@ -320,10 +321,11 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
     },
     "session.entry-replacements",
     params.withCommit,
+    admission ? () => prepareSqliteScope(target) : undefined,
   );
   const committed = preparedWrite.result;
   await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
-    resolved,
+    preparedWrite.scope,
     committed.maintenancePlans,
     { deletedEntriesBeforeMaintenance: preparedWrite.deletedEntries },
   );

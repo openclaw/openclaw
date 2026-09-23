@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import {
   onSessionIdentityMutation,
@@ -199,6 +200,34 @@ it("publishes committed sharing and reader invalidation before observers, and ro
       sharing.release();
       reader.close();
     }
+  });
+});
+
+it("discovers the schema owner for an unkeyed exact-store replacement without host SQL", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const database = openOpenClawAgentDatabase({
+      agentId: "ops",
+      path: state.statePath("shared.sqlite"),
+    });
+    const key = "agent:ops:unkeyed-replacement";
+    writeSessionEntry(database, key, { sessionId: "unkeyed", updatedAt: 1 });
+    const sql = observeHostDataSql();
+    try {
+      await applySessionEntryExactReplacements({
+        storePath: database.path,
+        update: (entries) => ({
+          result: undefined,
+          replacements: entries.map(({ sessionKey, entry }) => ({
+            sessionKey,
+            entry: { ...entry, label: "updated" },
+          })),
+        }),
+      });
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+    expect(readExactSessionEntryRow(database, key)?.entry.label).toBe("updated");
   });
 });
 

@@ -69,7 +69,11 @@ cleanup worker releases the exact retained lease. Retirement joins lease deletio
 store close, keeping those writes off the host connection used by live snapshots.
 Automatic process-exit cleanup makes one attempt. A failed attempt retains worker
 and lease custody for an explicit lifecycle retry instead of repeatedly scheduling
-cleanup whenever the event loop drains.
+cleanup whenever the event loop drains. Revocation removes only pending writer
+admissions from the existing FIFO. A worker waiting for its first or next permit
+receives a refusal and settles cleanup without waiting behind the foreground
+callback that requested close. Already admitted write-capable work retains its
+permit through native settlement; cancellation never releases it early.
 
 Physical page reclamation releases the session writer permit between vacuum units,
 so queued foreground writers receive their FIFO turn before the next unit. Each
@@ -91,9 +95,12 @@ separate migration work.
 Durable session entry replacement reads its detached snapshot in the history
 worker and commits through the existing agent database executor. The transaction
 rereads comparison bytes and current rows, and the host rechecks caller authority
-at admission and commit. Committed receipts invalidate retained entry projections
-and publish sharing facts before observers. Missing databases are prepared by the
-same worker owner. Incognito stores, already executing workers, Doctor maintenance,
+at admission and commit. Exact database locators reserve their existing writer
+FIFO before asynchronous schema-owner discovery; unresolved logical stores first
+select their physical target without borrowing another store's queue. Committed
+receipts invalidate retained entry projections and publish sharing facts before
+observers. Missing databases are prepared by the same worker owner. Incognito
+stores, already executing workers, Doctor maintenance,
 and prepared native deletion rollback closures retain their synchronous kernels.
 Schemas, retained bytes, configuration, and update behavior are unchanged.
 

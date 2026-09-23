@@ -44,6 +44,7 @@ import type { SqliteSessionWriteOperation } from "./session-accessor.sqlite-writ
 import {
   prepareSqliteTargetFromSessionStorePath,
   resolveSqliteTargetFromSessionStorePath,
+  resolveUnsuffixedSqliteTargetFromSessionStorePath,
   type ResolvedSqliteStoreTarget,
 } from "./session-sqlite-target.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
@@ -198,6 +199,7 @@ export async function runExclusiveSqliteSessionWrite<T>(
   operation: SqliteSessionWriteOperation,
   diagnostics?: SqliteSessionWriteDiagnostics,
   writer: "foreground" | "worker" = "foreground",
+  signal?: AbortSignal,
 ): Promise<T> {
   const databaseOptions = toDatabaseOptions(scope);
   const timing: StoreWriterTiming = {};
@@ -205,8 +207,8 @@ export async function runExclusiveSqliteSessionWrite<T>(
     scope,
     () =>
       writer === "worker"
-        ? runOpenClawAgentWorkerWrite(databaseOptions, fn, timing)
-        : runOpenClawAgentWriteAdmission(databaseOptions, fn, false, timing),
+        ? runOpenClawAgentWorkerWrite(databaseOptions, fn, timing, signal)
+        : runOpenClawAgentWriteAdmission(databaseOptions, fn, false, timing, signal),
     operation,
     diagnostics,
     writer,
@@ -529,7 +531,29 @@ export async function prepareSqliteTranscriptReadScope(
   };
 }
 
-/** Writers resolve the same physical target in the existing read worker before admission. */
+/** Exact locators can reserve their FIFO before worker-owned schema-owner discovery. */
+export function resolveSqliteWriteAdmissionScope(
+  scope: SqliteScopeInput & { sessionKey: string },
+): ResolvedSqliteReadScope | undefined {
+  const { effectiveAgentId, effectiveStorePath } = resolveSqliteDatabaseScopeIdentity(scope);
+  const target = effectiveStorePath
+    ? resolveUnsuffixedSqliteTargetFromSessionStorePath(effectiveStorePath)
+    : undefined;
+  // Custom logical stores may select a persisted suffix; do not reserve the wrong file.
+  if (target && !target.agentId && !target.shared) {
+    return undefined;
+  }
+  // This names only the physical queue, not schema authority. Worker preparation
+  // supplies the actual logical and database owners before reading or committing.
+  const agentId = effectiveAgentId ?? target?.agentId ?? normalizeAgentId(scope.defaultAgentId);
+  return {
+    agentId,
+    env: scope.env,
+    path: target?.path ?? resolveOpenClawAgentSqlitePath({ agentId, env: scope.env }),
+  };
+}
+
+/** Writers resolve physical ownership in the existing read worker inside exact-path admission. */
 export async function prepareSqliteScope(
   scope: SqliteScopeInput & { sessionKey: string },
 ): Promise<ResolvedSqliteScope> {
