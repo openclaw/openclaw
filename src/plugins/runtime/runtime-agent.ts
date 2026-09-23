@@ -32,6 +32,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../../config/sessions/store-maintenance.js";
 import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
+import { filterSessionEntriesByProfile } from "../../gateway/session-identity-projection.js";
 import {
   captureSessionInitializationOwner,
   createSessionInitialization,
@@ -95,7 +96,7 @@ function listSessionEntries(
   const listEntries = params.readOnly
     ? listAccessorSessionEntriesReadOnly
     : listAccessorSessionEntries;
-  return listEntries({
+  const entries = listEntries({
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
     ...(params.env !== undefined ? { env: params.env } : {}),
     ...(params.hydrateSkillPromptRefs !== undefined
@@ -103,6 +104,14 @@ function listSessionEntries(
       : {}),
     ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
   });
+  return params.involvingProfileId !== undefined
+    ? filterSessionEntriesByProfile({
+        entries,
+        profileId: params.involvingProfileId,
+        cfg: getRuntimeConfig(),
+        env: params.env,
+      })
+    : entries;
 }
 
 async function patchSessionEntry(

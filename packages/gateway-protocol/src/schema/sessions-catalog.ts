@@ -80,6 +80,8 @@ export const SessionCatalogSessionSchema = closedObject({
   archived: Type.Boolean(),
   sessionKey: Type.Optional(NonEmptyString),
   createdActor: Type.Optional(SessionCreatedActorSchema),
+  /** Receiver-approved, credential-free HTTP(S) link; never implies local write access. */
+  originalUrl: Type.Optional(NonEmptyString),
   canContinue: Type.Boolean(),
   canArchive: Type.Boolean(),
   canOpenTerminal: Type.Optional(Type.Boolean()),

@@ -59,6 +59,14 @@ export default definePluginEntry({
   `onHost(host)` callback as each host settles; the returned host array remains
   required as the final compatibility snapshot.
 
+  A session may include `originalUrl` for **Open original** in its shared menu and
+  view-only transcript. Supply an explicit receiver-approved absolute HTTP(S)
+  URL without credentials, query, or fragment; never trust a remote row to choose
+  the destination. This navigation opens a separate tab and grants no local
+  continuation, archive, or terminal capability. For OpenClaw source sessions,
+  use `buildControlUiSessionPath` with `exactKey: true` from
+  `openclaw/plugin-sdk/session-discussion`.
+
   The optional `allowPartialResults` flag is true only when a connected caller
   explicitly opts in while receiving host progress on a list without host selection
   or cursors. When true, a provider may return retained host snapshots or mark a

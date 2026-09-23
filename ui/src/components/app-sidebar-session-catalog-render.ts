@@ -534,6 +534,7 @@ function renderCatalogSessionRow(
     agentId: params.newSessionAgentId,
     routeId,
     navigation,
+    originalUrl: session.originalUrl,
     canOpenTerminal: session.canOpenTerminal === true,
     canDelete: session.canArchive && catalog.capabilities.archive,
     name: session.name ?? session.threadId,

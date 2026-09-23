@@ -87,6 +87,82 @@ async function catalogFixture() {
 }
 
 describe("session-share receiver catalog", () => {
+  it.each([
+    [
+      "agent:research:dashboard:01234567-89ab-cdef-0123-456789abcdef",
+      "/chat/research/dashboard/01234567-89ab-cdef-0123-456789abcdef",
+    ],
+    ["agent:research:shared", "/chat/research/shared"],
+    ["agent:research:global", "/chat/research/~key/global"],
+    ["session-share:research:global", "/chat/research"],
+    ["global", undefined],
+  ])("builds source-owned links for %s and withdraws them on reload", async (threadId, path) => {
+    const fixture = await catalogFixture();
+    fixture.invoke.mockResolvedValue({ sessions: [{ ...nativeSession, threadId }] });
+    expect((await fixture.catalog.list({}))[0]?.sessions[0]?.originalUrl).toBeUndefined();
+    fixture.configure({
+      plugins: {
+        entries: {
+          "session-share": {
+            config: {
+              nodes: { alpha: { controlUiOrigin: "https://team.example.com/" } },
+            },
+          },
+        },
+      },
+    });
+    const row = (await fixture.catalog.list({}))[0]?.sessions[0];
+    expect(row?.originalUrl).toBe(path ? `https://team.example.com${path}` : undefined);
+    expect(row?.canContinue).toBe(false);
+    fixture.configure({});
+    expect((await fixture.catalog.list({}))[0]?.sessions[0]?.originalUrl).toBeUndefined();
+  });
+
+  it.each([
+    "javascript:alert(1)",
+    "//team.example.com",
+    "https://user:secret@team.example.com",
+    "https://team.example.com/path",
+    "https://team.example.com/..",
+    "https://team.example.com?token=secret",
+    "https://team.example.com#token",
+    "https://team.example.com?",
+    "https://team.example.com#",
+    "https://team.example.com\\evil",
+    "https://team.example.com\n",
+    "https:team.example.com",
+    "https://[",
+  ])(
+    "does not publish an original link for invalid receiver origin %j",
+    async (controlUiOrigin) => {
+      const fixture = await catalogFixture();
+      fixture.configure({
+        plugins: {
+          entries: {
+            "session-share": {
+              config: {
+                nodes: { alpha: { controlUiOrigin } },
+              },
+            },
+          },
+        },
+      });
+      const row = (await fixture.catalog.list({}))[0]?.sessions[0];
+      expect(row?.threadId).toBe(nativeSession.threadId);
+      expect(row?.originalUrl).toBeUndefined();
+    },
+  );
+
+  it("rejects source-supplied original URLs instead of trusting remote navigation", async () => {
+    const fixture = await catalogFixture();
+    fixture.invoke.mockResolvedValue({
+      sessions: [{ ...nativeSession, originalUrl: "https://evil.example" }],
+    });
+    const host = (await fixture.catalog.list({}))[0];
+    expect(host?.sessions).toEqual([]);
+    expect(host?.error?.code).toBe("NODE_INVOKE_FAILED");
+  });
+
   it("serves complete lookups during cache saturation without losing active publications", async () => {
     vi.useFakeTimers();
     const fixture = await catalogFixture();

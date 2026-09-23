@@ -78,6 +78,8 @@ type RuntimeSessionStoreReadParams = {
 };
 type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">> & {
   readOnly?: boolean;
+  /** Exact source-local profile ID or merge alias; unknown references match nothing. */
+  involvingProfileId?: string;
 };
 type RuntimeSessionStoreEntrySummary = {
   sessionKey: string;

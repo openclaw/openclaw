@@ -23,6 +23,7 @@ import {
   SESSION_SHARE_LIST_COMMAND,
   SESSION_SHARE_READ_COMMAND,
 } from "./node-commands.js";
+import { sessionShareOriginalUrl } from "./original-url.js";
 import { parseSessionSharePage, parseSessionShareTranscriptPage } from "./wire.js";
 
 type CatalogNode = Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"][number];
@@ -211,9 +212,10 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
       return {
         ...common,
         ...page,
-        sessions: page.sessions.map((session) =>
-          bindSession(session, hostId, owner, linkParticipant),
-        ),
+        sessions: page.sessions.map((session) => ({
+          ...bindSession(session, hostId, owner, linkParticipant),
+          originalUrl: sessionShareOriginalUrl(binding.controlUiOrigin, session.threadId),
+        })),
       };
     };
     try {

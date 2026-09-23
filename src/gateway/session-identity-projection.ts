@@ -25,8 +25,12 @@ import { SESSIONS_LIST_OWNER_LIMIT } from "../shared/session-list-limits.js";
 import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import type { SynchronousWork } from "../shared/synchronous-work.js";
-import { resolveUserProfileReference } from "../state/user-profile-list.js";
-import { buildControlUiResourcePath } from "./control-ui-contract.js";
+import {
+  getUserProfileDisplays,
+  readUserProfileIdentity,
+  resolveUserProfileReference,
+} from "../state/user-profile-list.js";
+import { buildControlUiResourcePath, buildControlUiUserAvatarPath } from "./control-ui-contract.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import type { SessionEntryPair } from "./session-list-order.js";
@@ -226,6 +230,86 @@ export function projectSessionParticipants(
     participants.set(JSON.stringify(participant.identity), participant);
   }
   return participants;
+}
+
+/** Filter stored rows using exact durable identity, never display-reference prefixes. */
+export function filterSessionEntriesByProfile<T extends { entry: SessionEntry }>(params: {
+  entries: T[];
+  profileId: string;
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): T[] {
+  const profile = readUserProfileIdentity(params.profileId, { env: params.env });
+  if (!profile) {
+    return [];
+  }
+  const ids = new Set<string>();
+  for (const { entry } of params.entries) {
+    for (const id of [
+      normalizeOptionalString(
+        entry.owner?.actor.type === "human" ? entry.owner.actor.id : undefined,
+      ),
+      normalizeOptionalString(sessionCreatorProfileId(entry.createdActor)),
+      normalizeOptionalString(
+        entry.owner?.assignedBy?.type === "human" ? entry.owner.assignedBy.id : undefined,
+      ),
+      ...(entry.participants ?? []).flatMap(({ identity }) =>
+        identity.type === "profile" ? [identity.id] : [],
+      ),
+      ...Object.keys(entry.profileInvolvement?.profiles ?? {}),
+    ]) {
+      if (id) {
+        ids.add(id);
+      }
+    }
+  }
+  const displays = getUserProfileDisplays([...ids], { env: params.env });
+  const identities = new Map<string, SessionActorProfileIdentity | undefined>();
+  for (const id of ids) {
+    const display = displays.get(id);
+    identities.set(
+      id,
+      display
+        ? {
+            kind: "resolved",
+            profileId: display.id,
+            avatarUrl: buildControlUiUserAvatarPath(display.id, display.avatarRevision),
+            hasUploadedAvatar: display.hasAvatar,
+          }
+        : undefined,
+    );
+  }
+  return params.entries.filter(({ entry }) =>
+    matchesSessionProfileInvolvement({
+      entry,
+      profileId: profile.profileId,
+      identities,
+      cfg: params.cfg,
+      effectiveOwner: projectSessionOwner(entry, identities, params.cfg)?.actor,
+    }),
+  );
+}
+
+/** Shared person-involvement semantics for Activity and source catalog selection. */
+export function matchesSessionProfileInvolvement(params: {
+  entry: SessionEntry;
+  profileId: string;
+  identities: Map<string, SessionActorProfileIdentity | undefined>;
+  cfg: OpenClawConfig;
+  effectiveOwner?: SessionOwnerFacetIdentity;
+  personal?: boolean;
+  projectParticipants?: SessionIdentityProjection["participants"];
+}): boolean {
+  const { entry, profileId, identities, cfg, effectiveOwner, personal = false } = params;
+  const state = projectSessionProfileInvolvement(entry, profileId, identities);
+  return (
+    !(personal && state?.hidden) &&
+    (Boolean(state?.lastMention || (personal && state?.hidden === false)) ||
+      (effectiveOwner?.identity?.type === "profile" && effectiveOwner.identity.id === profileId) ||
+      (params.projectParticipants ?? projectSessionParticipants)(entry, identities, cfg).has(
+        JSON.stringify({ type: "profile", id: profileId }),
+      ))
+  );
 }
 
 /** Participation, creation, and responsibility are associations, never access grants. */

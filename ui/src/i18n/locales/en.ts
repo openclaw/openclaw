@@ -3589,6 +3589,7 @@ export const en: TranslationMap & {
       unsupportedViewOnly: "This external session source is view-only.",
       sessionMenu: "External session actions",
       openInOpenClaw: "Open in OpenClaw",
+      openOriginal: "Open original",
       openInTerminal: "Open in terminal",
       deleteSession: "Delete",
       deleteSessionConfirm:

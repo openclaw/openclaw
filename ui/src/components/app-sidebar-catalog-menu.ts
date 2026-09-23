@@ -4,7 +4,9 @@ import { html, nothing } from "lit";
 import { pathForRoute } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { parseCatalogSessionKey, type CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
+import { resolveCatalogOriginalUrl } from "../lib/sessions/catalog-original-url.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import { showToast } from "../lib/toast.ts";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
@@ -96,6 +98,13 @@ export class SidebarCatalogMenuController {
     menu: SidebarCatalogSessionMenuState,
     action: CatalogSessionMenuAction,
   ): void {
+    if (action === "original") {
+      const url = resolveCatalogOriginalUrl(menu.originalUrl);
+      if (url) {
+        openExternalUrlSafe(url);
+      }
+      return;
+    }
     if (action === "terminal") {
       if (menu.canOpenTerminal && this.hooks.terminalAvailable()) {
         this.hooks.openTerminal(menu.key, menu.agentId);
@@ -158,6 +167,7 @@ export class SidebarCatalogMenuController {
         .trigger=${this.trigger}
         .lastActive=${menu.meta}
         .canDelete=${menu.canDelete}
+        .canOpenOriginal=${Boolean(resolveCatalogOriginalUrl(menu.originalUrl))}
         .terminalDisabled=${!menu.canOpenTerminal || !this.hooks.terminalAvailable()}
         .onAction=${(action: CatalogSessionMenuAction) => this.handleAction(menu, action)}
         .onClose=${() => this.close()}

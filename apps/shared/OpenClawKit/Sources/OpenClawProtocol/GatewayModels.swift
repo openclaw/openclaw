@@ -13798,6 +13798,7 @@ public struct SessionCatalogSession: Codable, Sendable {
     public let archived: Bool
     public let sessionkey: String?
     public let createdactor: SessionCreatedActor?
+    public let originalurl: String?
     public let cancontinue: Bool
     public let canarchive: Bool
     public let canopenterminal: Bool?
@@ -13821,6 +13822,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         archived: Bool,
         sessionkey: String? = nil,
         createdactor: SessionCreatedActor? = nil,
+        originalurl: String? = nil,
         cancontinue: Bool,
         canarchive: Bool,
         canopenterminal: Bool? = nil)
@@ -13843,6 +13845,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         self.archived = archived
         self.sessionkey = sessionkey
         self.createdactor = createdactor
+        self.originalurl = originalurl
         self.cancontinue = cancontinue
         self.canarchive = canarchive
         self.canopenterminal = canopenterminal
@@ -13867,6 +13870,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         case archived
         case sessionkey = "sessionKey"
         case createdactor = "createdActor"
+        case originalurl = "originalUrl"
         case cancontinue = "canContinue"
         case canarchive = "canArchive"
         case canopenterminal = "canOpenTerminal"

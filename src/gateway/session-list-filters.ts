@@ -23,7 +23,7 @@ import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import type { SynchronousWork } from "../shared/synchronous-work.js";
 import {
   projectSessionOwner,
-  projectSessionProfileInvolvement,
+  matchesSessionProfileInvolvement,
   addSessionOwnerFacetIdentity,
   sortSessionOwnerFacet,
   projectSessionParticipants,
@@ -304,16 +304,15 @@ export function* filterSessionEntries(
     profileId: string,
     personal: boolean,
   ) => {
-    const state = projectSessionProfileInvolvement(entry, profileId, identities);
-    return (
-      !(personal && state?.hidden) &&
-      (Boolean(state?.lastMention || (personal && state?.hidden === false)) ||
-        (effectiveOwner?.identity?.type === "profile" &&
-          effectiveOwner.identity.id === profileId) ||
-        projectParticipants(entry, identities, cfg).has(
-          JSON.stringify({ type: "profile", id: profileId }),
-        ))
-    );
+    return matchesSessionProfileInvolvement({
+      entry,
+      profileId,
+      identities,
+      cfg,
+      effectiveOwner,
+      personal,
+      projectParticipants,
+    });
   };
 
   for (const pair of candidateEntries) {

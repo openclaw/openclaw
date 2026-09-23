@@ -1,29 +1,21 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
-import type {
-  OpenClawPluginNodeHostCommand,
-  OpenClawPluginService,
-} from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   sessionCatalogPaging,
   type SessionCatalogProvider,
   type SessionCatalogSession,
-  type SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import sessionSharePlugin from "../../extensions/session-share/index.js";
 import {
   replaceSessionEntry,
   upsertSessionEntryCore,
 } from "../../src/config/sessions/session-accessor.js";
-import { createPluginRuntime } from "../../src/plugins/runtime/index.js";
 import { openOpenClawAgentDatabase } from "../../src/state/openclaw-agent-db.js";
 import { openClawStateDatabaseCache } from "../../src/state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../src/state/openclaw-state-db.js";
@@ -34,59 +26,13 @@ import {
   syncGitHubIdentity,
 } from "../../src/state/user-profiles.js";
 import { trackSqliteStatementExecutions } from "../helpers/sqlite-statement-execution-counter.js";
+import {
+  commandFixture,
+  registerSessionShare,
+  type SessionPage,
+} from "./session-share.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
-
-function registerSessionShare(runtime: PluginRuntime, config: OpenClawConfig = {}) {
-  const nodeCommands: OpenClawPluginNodeHostCommand[] = [];
-  const catalogs: SessionCatalogProvider[] = [];
-  const services: OpenClawPluginService[] = [];
-  const api = createTestPluginApi({
-    runtime,
-    config,
-    registerNodeHostCommand: (command) => {
-      nodeCommands.push(command);
-    },
-    registerSessionCatalog: (catalog) => {
-      catalogs.push(catalog);
-    },
-    registerService: (service) => {
-      services.push(service);
-    },
-  });
-  sessionSharePlugin.register(api);
-  const catalog = catalogs.find((entry) => entry.id === "openclaw");
-  if (!catalog) {
-    throw new Error("Session Share did not register its catalog");
-  }
-  return { commands: nodeCommands, catalog, services, logger: api.logger };
-}
-
-type SessionPage = { sessions: SessionCatalogSession[]; nextCursor?: string };
-type TranscriptPage = {
-  threadId: string;
-  items: SessionCatalogTranscriptItem[];
-  nextCursor?: string;
-};
-
-function commandFixture(groups: string[] = ["Team"]) {
-  const config: OpenClawConfig = {
-    plugins: { entries: { "session-share": { enabled: true, config: { share: { groups } } } } },
-  };
-  const runtime = createPluginRuntime();
-  runtime.config.current = () => config;
-  const commands = registerSessionShare(runtime, config).commands;
-  const list = commands.find((command) => command.command === "openclaw.sessions.list.v1")!;
-  const read = commands.find((command) => command.command === "openclaw.sessions.read.v1")!;
-  return {
-    config,
-    commands,
-    list: async (params: Record<string, unknown> = {}) =>
-      JSON.parse(await list.handle(JSON.stringify(params))) as SessionPage,
-    read: async (threadId: string, params: Record<string, unknown> = {}) =>
-      JSON.parse(await read.handle(JSON.stringify({ threadId, ...params }))) as TranscriptPage,
-  };
-}
 
 const commands = ["openclaw.sessions.list.v1", "openclaw.sessions.read.v1"];
 const nativeSession: SessionCatalogSession = {
@@ -169,6 +115,70 @@ async function withCatalogFixture(
 }
 
 describe("session-share node commands", () => {
+  it("keeps global source agents distinct through catalog links and transcript reads", async () => {
+    await withCatalogFixture(async (receiver) => {
+      const source = commandFixture();
+      source.config.agents = { entries: { research: { default: true }, ops: {} } };
+      receiver.setConfig({
+        agents: { entries: { receiver: { default: true } } },
+        plugins: {
+          entries: {
+            "session-share": {
+              config: { nodes: { alpha: { controlUiOrigin: "https://team.example.com" } } },
+            },
+          },
+        },
+      });
+      receiver.invoke.mockImplementation(async ({ command, params }) => {
+        const handler = source.commands.find((candidate) => candidate.command === command)!;
+        return { payloadJSON: await handler.handle(JSON.stringify(params)) };
+      });
+      const cases = [
+        { agentId: "research", sessionKey: "global", path: "/chat/research" },
+        { agentId: "ops", sessionKey: "global", path: "/chat/ops" },
+        {
+          agentId: "research",
+          sessionKey: "agent:research:global",
+          path: "/chat/research/~key/global",
+        },
+        {
+          agentId: "research",
+          sessionKey: "agent:research:shared",
+          path: "/chat/research/shared",
+        },
+      ];
+      for (const [index, { agentId, sessionKey }] of cases.entries()) {
+        const scope = { agentId, sessionKey, sessionId: `source-${index}` };
+        await replaceSessionEntry(scope, {
+          sessionId: scope.sessionId,
+          updatedAt: Date.now(),
+          category: "Team",
+          label: scope.sessionId,
+        });
+        await appendSessionTranscriptMessageByIdentity({
+          ...scope,
+          message: { role: "user", content: `Message from ${scope.sessionId}` },
+        });
+      }
+      const rows = (await receiver.catalog.list({}))[0]?.sessions ?? [];
+      expect(rows).toHaveLength(cases.length);
+      expect(new Set(rows.map(({ threadId }) => threadId)).size).toBe(cases.length);
+      for (const [index, { path }] of cases.entries()) {
+        const row = rows.find(({ name }) => name === `source-${index}`)!;
+        expect(row.originalUrl).toBe(`https://team.example.com${path}`);
+        expect(row.canContinue).toBe(false);
+        const transcript = await receiver.catalog.read({
+          hostId: "node:alpha",
+          threadId: row.threadId,
+        });
+        expect(transcript.threadId).toBe(row.threadId);
+        expect(transcript.items).toEqual([
+          expect.objectContaining({ type: "userMessage", text: `Message from source-${index}` }),
+        ]);
+      }
+    });
+  });
+
   it("derives titles only for the requested page while preserving transcript-title search", async () => {
     await withCatalogFixture(async (receiver) => {
       const source = commandFixture();
