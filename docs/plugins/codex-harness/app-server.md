@@ -42,8 +42,11 @@ already running elsewhere:
 }
 ```
 
-Ask OpenClaw and verified setup can use an explicitly configured WebSocket or
-Unix socket app-server. Remote verification binds the selected endpoint,
+Ask OpenClaw can verify an already configured model through an explicitly
+configured WebSocket or Unix socket app-server. The initial Codex setup and
+sign-in flow still requires local stdio; finish sign-in on the remote host and
+configure the remote endpoint before using this verification path.
+Remote verification binds the selected endpoint,
 connection credentials, and initialized Codex identity. It trusts that configured
 service; it does not attest the remote executable's bytes. OpenClaw rechecks the
 connection selection before reuse and compares the initialized identity on a
