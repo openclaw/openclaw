@@ -87,6 +87,15 @@ export function renderCardPriority(card: WorkboardCard) {
       </span>`;
 }
 
+type LabelOverflowMeasurements = {
+  labels: readonly string[];
+  chipWidths: readonly number[];
+  overflowWidth: number;
+  gap: number;
+};
+
+const labelOverflowMeasurements = new WeakMap<HTMLElement, LabelOverflowMeasurements>();
+
 function labelOverflowRef(labels: readonly string[]) {
   let dispose = () => {};
   return (element: Element | undefined) => {
@@ -100,49 +109,79 @@ function labelOverflowRef(labels: readonly string[]) {
       if (!overflow) {
         return;
       }
-      for (const chip of chips) {
-        chip.hidden = false;
+      let measurements = labelOverflowMeasurements.get(element);
+      if (
+        !measurements ||
+        measurements.labels.length !== labels.length ||
+        measurements.labels.some((label, index) => label !== labels[index])
+      ) {
+        for (const chip of chips) {
+          if (chip.hidden) {
+            chip.hidden = false;
+          }
+        }
+        const fullOverflow = `+${labels.length}`;
+        if (overflow.hidden) {
+          overflow.hidden = false;
+        }
+        if (overflow.textContent !== fullOverflow) {
+          overflow.textContent = fullOverflow;
+        }
+        measurements = {
+          labels: [...labels],
+          chipWidths: chips.map((chip) => chip.getBoundingClientRect().width),
+          overflowWidth: overflow.getBoundingClientRect().width,
+          gap: Number.parseFloat(getComputedStyle(element).columnGap) || 0,
+        };
+        labelOverflowMeasurements.set(element, measurements);
       }
-      overflow.hidden = false;
-      overflow.textContent = `+${labels.length}`;
-      const gap = Number.parseFloat(getComputedStyle(element).columnGap) || 0;
-      const widths = chips.map((chip) => chip.getBoundingClientRect().width);
       const available = element.clientWidth;
       const total =
-        widths.reduce((sum, width) => sum + width, 0) + gap * Math.max(0, chips.length - 1);
+        measurements.chipWidths.reduce((sum, width) => sum + width, 0) +
+        measurements.gap * Math.max(0, chips.length - 1);
       let visible = chips.length;
       if (total > available) {
-        let used = overflow.getBoundingClientRect().width;
+        let used = measurements.overflowWidth;
         visible = 0;
-        for (const width of widths) {
-          if (used + gap + width > available) {
+        for (const width of measurements.chipWidths) {
+          if (used + measurements.gap + width > available) {
             break;
           }
-          used += gap + width;
+          used += measurements.gap + width;
           visible++;
         }
       }
       chips.forEach((chip, index) => {
-        chip.hidden = index >= visible;
+        const hidden = index >= visible;
+        if (chip.hidden !== hidden) {
+          chip.hidden = hidden;
+        }
       });
-      overflow.hidden = visible === chips.length;
-      overflow.textContent = `+${chips.length - visible}`;
-      overflow.title = labels.slice(visible).join(", ");
-      overflow.setAttribute(
-        "aria-label",
-        t("workboard.cardMoreLabels", {
-          count: String(chips.length - visible),
-          labels: labels.slice(visible).join(", "),
-        }),
-      );
+      const overflowHidden = visible === chips.length;
+      if (overflow.hidden !== overflowHidden) {
+        overflow.hidden = overflowHidden;
+      }
+      const overflowText = `+${chips.length - visible}`;
+      if (overflow.textContent !== overflowText) {
+        overflow.textContent = overflowText;
+      }
+      const hiddenLabels = labels.slice(visible).join(", ");
+      if (overflow.title !== hiddenLabels) {
+        overflow.title = hiddenLabels;
+      }
+      const ariaLabel = t("workboard.cardMoreLabels", {
+        count: String(chips.length - visible),
+        labels: hiddenLabels,
+      });
+      if (overflow.getAttribute("aria-label") !== ariaLabel) {
+        overflow.setAttribute("aria-label", ariaLabel);
+      }
     };
     const observer = typeof ResizeObserver === "function" ? new ResizeObserver(update) : null;
     const frame = requestAnimationFrame(() => {
       update();
+      // Child visibility is controlled by update; observe only the width constraint.
       observer?.observe(element);
-      for (const child of element.children) {
-        observer?.observe(child);
-      }
     });
     dispose = () => {
       cancelAnimationFrame(frame);
