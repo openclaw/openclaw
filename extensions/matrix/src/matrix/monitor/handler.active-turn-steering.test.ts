@@ -5,8 +5,12 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { FinalizedMsgContext, GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import {
+  resetInboundDedupe,
+  type FinalizedMsgContext,
+  type GetReplyOptions,
+} from "openclaw/plugin-sdk/reply-runtime";
+import { createFixtureLifetime } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import type { MatrixMonitorHandlerParams } from "./handler-types.js";
@@ -20,7 +24,32 @@ type MatrixInboundRun = MatrixMonitorHandlerParams["core"]["channel"]["inbound"]
 type MatrixInboundRunParams = Parameters<MatrixInboundRun>[0];
 type TurnAdoptionLifecycle = NonNullable<GetReplyOptions["turnAdoptionLifecycle"]>;
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+// Timeout teardown can precede the callback's finally. Retain its session store
+// until that callback has released and joined both Matrix handlers.
+const fixture = createFixtureLifetime();
+afterEach(() => fixture.cleanup());
+
+async function waitForTurnSignal(
+  ready: Promise<void>,
+  turn: Promise<void>,
+  signal: AbortSignal,
+): Promise<void> {
+  signal.throwIfAborted();
+  const aborted = createDeferred<never>();
+  const onAbort = () => aborted.reject(signal.reason);
+  signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    await Promise.race([
+      ready,
+      turn.then(() => {
+        throw new Error("Matrix handler returned before its fixture admission signal");
+      }),
+      aborted.promise,
+    ]);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+}
 
 function createClaimSpies() {
   return {
@@ -55,7 +84,7 @@ function releaseSyntheticResolverAdmissionTicket(options: GetReplyOptions | unde
 }
 
 describe("Matrix active-turn steering admission", () => {
-  it.each([
+  it.for([
     {
       name: "configured steer mode",
       followupBody: "use the monochrome version instead",
@@ -68,143 +97,163 @@ describe("Matrix active-turn steering admission", () => {
     },
   ])(
     "lets $name reach queue policy while the prior Matrix turn is active",
-    async ({ followupBody, explicitSteer }) => {
-      installMatrixMonitorTestRuntime();
-      const tempDir = tempDirs.make("openclaw-matrix-steer-");
-      const storePath = path.join(tempDir, "sessions.json");
-      const activeEventId = explicitSteer ? "$active-explicit-steer" : "$active-configured-steer";
-      const followupEventId = explicitSteer ? "$explicit-steer" : "$configured-steer";
-      const activeResolverStarted = createDeferred<void>();
-      const releaseActiveResolver = createDeferred<void>();
-      const followupTurnResolved = createDeferred<void>();
-      const claimsByEvent = new Map<string, ReturnType<typeof createClaimSpies>>();
-      const inboundLifecycles = new Map<string, TurnAdoptionLifecycle | undefined>();
-      let followupResolverLifecycle: TurnAdoptionLifecycle | undefined;
-      let followupResolverContext: FinalizedMsgContext | undefined;
+    ({ followupBody, explicitSteer }, { signal }) =>
+      fixture.run(async () => {
+        signal.throwIfAborted();
+        installMatrixMonitorTestRuntime();
+        const tempDir = fixture.createTempDir("openclaw-matrix-steer-");
+        const storePath = path.join(tempDir, "sessions.json");
+        const activeEventId = explicitSteer ? "$active-explicit-steer" : "$active-configured-steer";
+        const followupEventId = explicitSteer ? "$explicit-steer" : "$configured-steer";
+        const activeResolverStarted = createDeferred<void>();
+        const releaseActiveResolver = createDeferred<void>();
+        const followupTurnResolved = createDeferred<void>();
+        const claimsByEvent = new Map<string, ReturnType<typeof createClaimSpies>>();
+        const inboundLifecycles = new Map<string, TurnAdoptionLifecycle | undefined>();
+        let followupResolverLifecycle: TurnAdoptionLifecycle | undefined;
+        let followupResolverContext: FinalizedMsgContext | undefined;
 
-      const cfg = {
-        session: { store: storePath },
-        messages: { queue: { mode: "steer" } },
-        channels: { matrix: { dm: { allowFrom: ["*"] } } },
-      } satisfies OpenClawConfig;
-      const inboundDeduper: NonNullable<MatrixMonitorHandlerParams["inboundDeduper"]> = {
-        claim: vi.fn(async ({ eventId }) => {
-          const claim = createClaimSpies();
-          claimsByEvent.set(eventId, claim);
-          return {
-            kind: "claimed" as const,
-            handle: {
-              keys: [eventId] as const,
-              commit: claim.commit,
-              release: claim.release,
-            },
-          };
-        }),
-      };
-      const queuePolicyResolver = vi.fn(
-        async (ctx: FinalizedMsgContext, options?: GetReplyOptions) => {
-          releaseSyntheticResolverAdmissionTicket(options);
-          const eventId = ctx.MessageSid;
-          if (eventId === activeEventId) {
-            await options?.turnAdoptionLifecycle?.onAdopted();
-            activeResolverStarted.resolve();
-            await releaseActiveResolver.promise;
-            return undefined;
-          }
-          if (eventId === followupEventId) {
-            followupResolverContext = ctx;
-            followupResolverLifecycle = options?.turnAdoptionLifecycle;
-            if (!followupResolverLifecycle?.onDeferred) {
-              throw new Error("expected Matrix follow-up deferral ownership");
+        const cfg = {
+          session: { store: storePath },
+          messages: { queue: { mode: "steer" } },
+          channels: { matrix: { dm: { allowFrom: ["*"] } } },
+        } satisfies OpenClawConfig;
+        const inboundDeduper: NonNullable<MatrixMonitorHandlerParams["inboundDeduper"]> = {
+          claim: vi.fn(async ({ eventId }) => {
+            const claim = createClaimSpies();
+            claimsByEvent.set(eventId, claim);
+            return {
+              kind: "claimed" as const,
+              handle: {
+                keys: [eventId] as const,
+                commit: claim.commit,
+                release: claim.release,
+              },
+            };
+          }),
+        };
+        const queuePolicyResolver = vi.fn(
+          async (ctx: FinalizedMsgContext, options?: GetReplyOptions) => {
+            releaseSyntheticResolverAdmissionTicket(options);
+            const eventId = ctx.MessageSid;
+            if (eventId === activeEventId) {
+              await options?.turnAdoptionLifecycle?.onAdopted();
+              activeResolverStarted.resolve();
+              await releaseActiveResolver.promise;
+              return undefined;
             }
-            expect(followupResolverLifecycle.onDeferred()).not.toBe(false);
-            await followupResolverLifecycle.onAdopted();
-          }
-          return undefined;
-        },
-      );
-      const runWithQueuePolicyResolver = (async (params: MatrixInboundRunParams) => {
-        const eventId = (params.raw as MatrixRawEvent).event_id;
-        if (eventId) {
-          inboundLifecycles.set(eventId, params.turnAdoptionLifecycle);
-        }
-        const adapter = params.adapter;
-        return await runChannelInboundEvent({
-          ...params,
-          adapter: {
-            ...adapter,
-            resolveTurn: async (...args: Parameters<typeof adapter.resolveTurn>) => {
-              const turn = await adapter.resolveTurn(...args);
-              if (eventId === followupEventId) {
-                followupTurnResolved.resolve();
+            if (eventId === followupEventId) {
+              followupResolverContext = ctx;
+              followupResolverLifecycle = options?.turnAdoptionLifecycle;
+              if (!followupResolverLifecycle?.onDeferred) {
+                throw new Error("expected Matrix follow-up deferral ownership");
               }
-              if (!("route" in turn) || "runDispatch" in turn) {
-                throw new Error("expected Matrix to resolve a routed channel turn");
-              }
-              return { ...turn, replyResolver: queuePolicyResolver as never };
-            },
+              expect(followupResolverLifecycle.onDeferred()).not.toBe(false);
+              await followupResolverLifecycle.onAdopted();
+            }
+            return undefined;
           },
-        } as ChannelInboundEventRunnerParams<MatrixRawEvent>);
-      }) as MatrixInboundRun;
-      const runtime = { error: vi.fn() };
-      const { handler } = createMatrixHandlerTestHarness({
-        cfg,
-        inboundDeduper,
-        runtime: runtime as never,
-        shouldHandleTextCommands: () => true,
-        hasControlCommand: (text?: string) => text?.startsWith("/steer") === true,
-        runChannelInboundEvent: runWithQueuePolicyResolver,
-      });
-
-      let activeTurn: Promise<void> | undefined;
-      let followupTurn: Promise<void> | undefined;
-      try {
-        activeTurn = handler(
-          "!room:example.org",
-          createMatrixTextMessageEvent({
-            eventId: activeEventId,
-            body: "keep this run active",
-          }),
         );
-        // The first turn in a worker also pays the cold reply-dispatch path (module
-        // graph, session store, plugin discovery); on a starved 2-vCPU runner that
-        // alone exceeded a 10 s budget. The resolver signals its own admission, so
-        // wait on that signal instead of a wall-clock poll.
-        await activeResolverStarted.promise;
-        expect(queuePolicyResolver).toHaveBeenCalledTimes(1);
-
-        followupTurn = handler(
-          "!room:example.org",
-          createMatrixTextMessageEvent({
-            eventId: followupEventId,
-            body: followupBody,
-          }),
-        );
-        await followupTurnResolved.promise;
-
-        // Before the fix, the second Matrix turn waits at reply-operation admission here;
-        // queue policy cannot see either configured steer mode or the explicit command.
-        await vi.waitFor(() => expect(queuePolicyResolver).toHaveBeenCalledTimes(2), {
-          timeout: 500,
-          interval: 10,
+        const runWithQueuePolicyResolver = (async (params: MatrixInboundRunParams) => {
+          const eventId = (params.raw as MatrixRawEvent).event_id;
+          if (eventId) {
+            inboundLifecycles.set(eventId, params.turnAdoptionLifecycle);
+          }
+          const adapter = params.adapter;
+          return await runChannelInboundEvent({
+            ...params,
+            adapter: {
+              ...adapter,
+              resolveTurn: async (...args: Parameters<typeof adapter.resolveTurn>) => {
+                const turn = await adapter.resolveTurn(...args);
+                if (eventId === followupEventId) {
+                  followupTurnResolved.resolve();
+                }
+                if (!("route" in turn) || "runDispatch" in turn) {
+                  throw new Error("expected Matrix to resolve a routed channel turn");
+                }
+                return {
+                  ...turn,
+                  replyOptions: { ...turn.replyOptions, abortSignal: signal },
+                  replyResolver: queuePolicyResolver as never,
+                };
+              },
+            },
+          } as ChannelInboundEventRunnerParams<MatrixRawEvent>);
+        }) as MatrixInboundRun;
+        const runtime = { error: vi.fn() };
+        const { handler } = createMatrixHandlerTestHarness({
+          cfg,
+          inboundDeduper,
+          runtime: runtime as never,
+          shouldHandleTextCommands: () => true,
+          hasControlCommand: (text?: string) => text?.startsWith("/steer") === true,
+          runChannelInboundEvent: runWithQueuePolicyResolver,
         });
 
-        expect(followupResolverContext?.CommandBody).toBe(followupBody);
-        expect(inboundLifecycles.get(followupEventId)).toMatchObject({ admission: "exclusive" });
-        // Core wraps the lifecycle to record adoption state; invoking that wrapper must still
-        // settle the exact replay claim captured by the Matrix handler above.
-        expect(followupResolverLifecycle).toMatchObject({ admission: "exclusive" });
-        expect(claimsByEvent.get(followupEventId)?.commit).toHaveBeenCalledOnce();
-        expect(claimsByEvent.get(followupEventId)?.release).not.toHaveBeenCalled();
-        expect(runtime.error).not.toHaveBeenCalled();
-      } finally {
-        releaseActiveResolver.resolve();
-        const turns = [activeTurn, followupTurn].filter(
-          (turn): turn is Promise<void> => turn !== undefined,
-        );
-        await Promise.allSettled(turns);
-      }
-    },
+        let activeTurn: Promise<void> | undefined;
+        let followupTurn: Promise<void> | undefined;
+        let assertionFailed = false;
+        try {
+          activeTurn = handler(
+            "!room:example.org",
+            createMatrixTextMessageEvent({
+              eventId: activeEventId,
+              body: "keep this run active",
+            }),
+          );
+          // The first turn in a worker also pays the cold reply-dispatch path (module
+          // graph, session store, plugin discovery); on a starved 2-vCPU runner that
+          // alone exceeded a 10 s budget. The resolver signals its own admission, so
+          // wait on that signal instead of a wall-clock poll.
+          await waitForTurnSignal(activeResolverStarted.promise, activeTurn, signal);
+          expect(queuePolicyResolver).toHaveBeenCalledTimes(1);
+
+          followupTurn = handler(
+            "!room:example.org",
+            createMatrixTextMessageEvent({
+              eventId: followupEventId,
+              body: followupBody,
+            }),
+          );
+          await waitForTurnSignal(followupTurnResolved.promise, followupTurn, signal);
+
+          // Before the fix, the second Matrix turn waits at reply-operation admission here;
+          // queue policy cannot see either configured steer mode or the explicit command.
+          await vi.waitFor(() => expect(queuePolicyResolver).toHaveBeenCalledTimes(2), {
+            timeout: 500,
+            interval: 10,
+          });
+
+          expect(followupResolverContext?.CommandBody).toBe(followupBody);
+          expect(inboundLifecycles.get(followupEventId)).toMatchObject({ admission: "exclusive" });
+          // Core wraps the lifecycle to record adoption state; invoking that wrapper must still
+          // settle the exact replay claim captured by the Matrix handler above.
+          expect(followupResolverLifecycle).toMatchObject({ admission: "exclusive" });
+          expect(claimsByEvent.get(followupEventId)?.commit).toHaveBeenCalledOnce();
+          expect(claimsByEvent.get(followupEventId)?.release).not.toHaveBeenCalled();
+          expect(runtime.error).not.toHaveBeenCalled();
+        } catch (error) {
+          assertionFailed = true;
+          throw error;
+        } finally {
+          releaseActiveResolver.resolve();
+          const turns = [activeTurn, followupTurn].filter(
+            (turn): turn is Promise<void> => turn !== undefined,
+          );
+          const results = await Promise.allSettled(turns);
+          // Core dedupe outlives the temporary store and Vitest retries. Never clear
+          // its in-flight ownership until both handlers have actually settled.
+          resetInboundDedupe();
+          // Preserve the primary assertion error when cleanup also rejects.
+          if (!assertionFailed) {
+            const rejected = results.find((result) => result.status === "rejected");
+            if (rejected?.status === "rejected") {
+              throw rejected.reason;
+            }
+          }
+        }
+      }),
   );
 
   it.each([

@@ -71,7 +71,6 @@ const hoisted = vi.hoisted(() => {
   const client = Object.assign(createEmitter(), {
     id: "matrix-client",
     hasPersistedSyncState: vi.fn(() => false),
-    drainPendingDecryptions: vi.fn(async () => undefined),
   });
   const createMatrixRoomMessageHandler = vi.fn(() => vi.fn());
   const createDirectRoomTracker = vi.fn(
@@ -295,25 +294,6 @@ vi.mock("../client.js", () => ({
   })),
 }));
 
-vi.mock("../config-update.js", () => ({
-  updateMatrixAccountConfig: vi.fn((cfg: unknown) => cfg),
-}));
-
-vi.mock("../device-health.js", () => ({
-  summarizeMatrixDeviceHealth: vi.fn(() => ({
-    staleOpenClawDevices: [],
-  })),
-}));
-
-vi.mock("../profile.js", () => ({
-  syncMatrixOwnProfile: vi.fn(async () => ({
-    displayNameUpdated: false,
-    avatarUpdated: false,
-    convertedAvatarFromHttp: false,
-    resolvedAvatarUrl: undefined,
-  })),
-}));
-
 vi.mock("../thread-bindings.js", () => ({
   createMatrixThreadBindingManager: hoisted.createThreadBindingManager,
 }));
@@ -363,10 +343,6 @@ vi.mock("./room-info.js", () => ({
     getRoomInfo: hoisted.getRoomInfo,
     getMemberDisplayName: hoisted.getMemberDisplayName,
   })),
-}));
-
-vi.mock("./startup-verification.js", () => ({
-  ensureMatrixStartupVerification: vi.fn(),
 }));
 
 vi.mock("./startup.js", () => ({

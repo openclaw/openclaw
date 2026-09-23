@@ -132,7 +132,6 @@ describe("monitorMatrixProvider", () => {
     hoisted.stopThreadBindingManager.mockReset().mockResolvedValue(undefined);
     hoisted.client.removeAllListeners();
     hoisted.client.hasPersistedSyncState.mockReset().mockReturnValue(false);
-    hoisted.client.drainPendingDecryptions.mockReset().mockResolvedValue(undefined);
     hoisted.inboundDeduper.claim
       .mockReset()
       .mockResolvedValue({ kind: "claimed" as const, handle: hoisted.inboundReplayClaim });
@@ -398,7 +397,6 @@ describe("monitorMatrixProvider", () => {
     expect(hoisted.releaseSharedClientInstance).toHaveBeenCalledWith(
       expect.objectContaining({ mode: "stop" }),
     );
-    expect(hoisted.client.drainPendingDecryptions).not.toHaveBeenCalled();
   });
 
   it("aborts during startup maintenance and releases the shared client without persist", async () => {
@@ -433,7 +431,6 @@ describe("monitorMatrixProvider", () => {
     expect(hoisted.releaseSharedClientInstance).toHaveBeenCalledWith(
       expect.objectContaining({ mode: "stop" }),
     );
-    expect(hoisted.client.drainPendingDecryptions).not.toHaveBeenCalled();
     await hoisted.registeredOnRoomMessage?.("!room:example.org", { event_id: "$late" });
     expect(handler).not.toHaveBeenCalled();
   });
@@ -602,9 +599,6 @@ describe("monitorMatrixProvider", () => {
         });
       }),
     );
-    hoisted.client.drainPendingDecryptions.mockImplementation(async () => {
-      hoisted.callOrder.push("drain-decrypts");
-    });
     hoisted.stopThreadBindingManager.mockImplementation(async () => {
       hoisted.callOrder.push("stop-manager");
       await new Promise<void>((resolve) => {
@@ -615,7 +609,6 @@ describe("monitorMatrixProvider", () => {
       });
     });
     hoisted.releaseSharedClientInstance.mockImplementation(async () => {
-      await hoisted.client.drainPendingDecryptions();
       await hoisted.runRegisteredMonitorRetirement();
       hoisted.callOrder.push("release-client");
     });
@@ -641,9 +634,6 @@ describe("monitorMatrixProvider", () => {
     finishManagerStop?.();
     await monitorPromise;
 
-    expect(hoisted.callOrder.indexOf("drain-decrypts")).toBeLessThan(
-      hoisted.callOrder.indexOf("dispose-auto-join"),
-    );
     expect(hoisted.callOrder.indexOf("dispose-auto-join")).toBeLessThan(
       hoisted.callOrder.indexOf("handler-done:$event"),
     );
@@ -692,7 +682,6 @@ describe("monitorMatrixProvider", () => {
     abortController.abort();
     await waitForCallOrderEntry("dispose-monitor-events");
 
-    expect(hoisted.client.drainPendingDecryptions).not.toHaveBeenCalled();
     expect(hoisted.callOrder).not.toContain("release-retained");
 
     finishHandler?.();
