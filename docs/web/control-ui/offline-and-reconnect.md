@@ -46,6 +46,11 @@ The current route and stored drafts survive the reload. If browser storage is un
 or reload protection blocks recovery, reload the tab after saving your work;
 do not clear site data while drafts or queued messages still need recovery.
 
+Unsaved file edits block automatic and in-app reloads, even after you close their
+previews or switch conversations. Reopen each edited file and save or discard its
+changes, then retry the reload. File edits stay in memory in the current page;
+an explicit browser reload or closing the browser tab discards them.
+
 ## Connection loss and reconnect
 
 Once a session is established, a dropped Gateway connection does not log you out. The dashboard
