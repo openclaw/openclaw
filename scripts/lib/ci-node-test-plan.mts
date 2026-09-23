@@ -701,6 +701,9 @@ const COMPACT_GITHUB_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["agentic-gateway-core-3", 141],
   ["agentic-gateway-core-inventory", 40],
   ["agentic-gateway-methods", 169],
+  // Full Release Validation job 106995310855 (4-core ubuntu-24.04, two workers)
+  // ran the whole cohort in 2914s wall; 1.6x the Blacksmith median predicted 1669s.
+  ["agentic-gateway-server-isolated", 2914],
   ["agentic-plugin-sdk", 70],
   ["auto-reply-core-top-level", 43],
   ["auto-reply-reply-agent-runner", 169],
