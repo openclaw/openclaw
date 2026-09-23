@@ -4977,7 +4977,7 @@ export const en: TranslationMap & {
       agentMessageRequired: "Agent message is required.",
       timeoutInvalid: "If set, timeout must be 0 or greater (0 disables this timeout).",
       webhookUrlRequired: "Webhook URL is required.",
-      webhookUrlInvalid: "Webhook URL must start with http:// or https://.",
+      webhookUrlInvalid: "Webhook URL must be a valid http(s):// URL without embedded credentials.",
       invalidRunTime: "Invalid run time.",
       invalidIntervalAmount: "Invalid interval amount.",
       cronExprRequiredShort: "Cron expression required.",
