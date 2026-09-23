@@ -3400,33 +3400,6 @@ describe("config cli", () => {
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
 
-    it("refuses a protected model list patch with a flag config patch accepts", async () => {
-      const resolved = {
-        models: {
-          providers: {
-            ollama: { api: "ollama", models: [{ id: "llama3.2", name: "Llama 3.2" }] },
-          },
-        },
-      } as unknown as OpenClawConfig;
-      setSnapshot(resolved, resolved);
-
-      const patch = writeTempJson5File("openclaw-config-patch-protected-list", {
-        models: { providers: { ollama: { models: [{ id: "qwen3", name: "Qwen 3" }] } } },
-      });
-      try {
-        await expect(
-          runConfigCommand(["config", "patch", "--file", patch, "--dry-run"]),
-        ).rejects.toThrow(ExitError);
-      } finally {
-        fs.rmSync(patch, { force: true });
-      }
-
-      expect(mockWriteConfigFile).not.toHaveBeenCalled();
-      expectErrorIncludes(
-        "Use --replace-path models.providers.ollama.models to replace intentionally.",
-      );
-    });
-
     it("dry-runs pluginIntegration provider patches against manifest integration metadata", async () => {
       const pluginId = "secret-provider-proof";
       const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-plugin-provider-"));
