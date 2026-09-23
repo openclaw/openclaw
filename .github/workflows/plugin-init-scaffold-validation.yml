@@ -36,7 +36,8 @@ concurrency:
   group: >-
     ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.action != 'converted_to_draft'
       && format('{0}-passive-draft-{1}', github.workflow, github.run_id)
-      || format('{0}-{1}-{2}', github.workflow, github.event_name, github.event_name == 'pull_request' && github.event.pull_request.number || github.ref) }}
+      || ((github.event_name == 'push' || github.event_name == 'schedule') && format('{0}-{1}-{2}', github.workflow, github.event_name, github.ref))
+      || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && github.event.pull_request.number || github.ref) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
