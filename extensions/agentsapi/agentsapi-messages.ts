@@ -59,8 +59,7 @@ export function createAgentsApiMessageProjection(
         usage.input += normalized.input ?? 0;
         usage.output += normalized.output ?? 0;
         usage.cacheRead += normalized.cacheRead ?? 0;
-        usage.totalTokens +=
-          normalized.total ?? turn.usage.input_tokens + turn.usage.output_tokens;
+        usage.totalTokens += normalized.total ?? turn.usage.input_tokens + turn.usage.output_tokens;
         if (normalized.reasoningTokens !== undefined) {
           reasoningTokens = (reasoningTokens ?? 0) + normalized.reasoningTokens;
         }
