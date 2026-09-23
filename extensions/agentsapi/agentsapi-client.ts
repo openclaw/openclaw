@@ -24,6 +24,11 @@ export class AgentsApiClient {
       baseURL: null,
       // SDK retry backoff ignores aborts; preserve the harness's operation deadlines.
       maxRetries: 0,
+      defaultHeaders: {
+        Authorization: `Bearer ${apiKey}`,
+        "OpenAI-Organization": null,
+        "OpenAI-Project": null,
+      },
       fetch: async (input, init) => {
         this.assertCurrent();
         const guarded = await fetchWithSsrFGuard({
