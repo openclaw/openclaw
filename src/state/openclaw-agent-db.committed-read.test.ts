@@ -158,7 +158,7 @@ describe("committed agent database reads", () => {
         const options = { agentId: "main", env };
         closeOpenClawAgentDatabaseByPath(resolveOpenClawAgentSqlitePath(options));
         const { path: databasePath } = openOpenClawAgentDatabase(options);
-        let admitted = false;
+        let admitted: boolean;
         const read = () =>
           withOpenClawAgentDatabaseReadOnly(({ db }) => {
             admitted = true;
