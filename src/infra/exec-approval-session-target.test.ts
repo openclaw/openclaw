@@ -374,7 +374,7 @@ describe("exec approval session target", () => {
           lastChannel: "discord",
           lastTo: "channel:123",
           lastAccountId: " Work ",
-          lastThreadId: "55",
+          lastThreadId: "777888999111222333",
         },
       } as Record<string, Partial<SessionEntry>>,
       request: buildRequest({ sessionKey: "agent:helper:main" }),
@@ -382,7 +382,7 @@ describe("exec approval session target", () => {
         channel: "discord",
         to: "channel:123",
         accountId: "work",
-        threadId: "55",
+        threadId: "777888999111222333",
       },
     },
     {
@@ -421,29 +421,6 @@ describe("exec approval session target", () => {
       });
     },
   );
-
-  it("preserves string thread ids from the session store", async () => {
-    await withTestDir({ prefix: "openclaw-exec-approval-session-target-" }, async (tmpDir) => {
-      const storePath = path.join(tmpDir, "sessions.json");
-      const cfg = await writeStoreFile(storePath, {
-        "agent:main:main": {
-          sessionId: "main",
-          updatedAt: 1,
-          lastChannel: "discord",
-          lastTo: "channel:123",
-          lastAccountId: " Work ",
-          lastThreadId: "777888999111222333",
-        },
-      });
-
-      expect(expectResolvedSessionTarget(cfg, baseRequest)).toEqual({
-        channel: "discord",
-        to: "channel:123",
-        accountId: "work",
-        threadId: "777888999111222333",
-      });
-    });
-  });
 
   it("parses channel-scoped session conversation fallbacks for approval requests", () => {
     const request = buildPluginRequest({

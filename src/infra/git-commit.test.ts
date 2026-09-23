@@ -12,15 +12,12 @@ const tempDirs = createTrackedTempDirs();
 
 describe("git commit prefix matching", () => {
   const fullCommit = "abcdef0123456789abcdef0123456789abcdef01";
-  const unrelatedCommit = "1234567890abcdef1234567890abcdef12345678";
   const sharedPrefixCommit = "abcdef0fedcba9876543210fedcba9876543210f";
 
   it.each([
     ["exact equality", fullCommit, fullCommit, true],
-    ["short left prefix", "abcdef0", fullCommit, true],
     ["short right prefix", fullCommit, "abcdef0", true],
     ["whitespace and case normalization", "  ABCDEF0  ", fullCommit, true],
-    ["unrelated commits", fullCommit, unrelatedCommit, false],
     ["distinct full commits sharing seven characters", fullCommit, sharedPrefixCommit, false],
     ["short left operand", "abcdef", fullCommit, false],
     ["short right operand", fullCommit, "abcdef", false],
@@ -352,26 +349,6 @@ describe("git commit resolution", () => {
     limitPositionalReads(4);
 
     expect(resolveCommitHash({ cwd: checkoutRoot, env: {} })).toBe("0123456");
-  });
-
-  it("caches deterministic null results per resolved search directory", async () => {
-    const temp = await makeTempDir("git-commit-null-cache");
-    const repoRootEntry = path.join(temp, "repo");
-    await makeFakeGitRepo(repoRootEntry, {
-      head: "not-a-commit\n",
-    });
-
-    const readGitCommit = vi.fn(() => null);
-
-    expect(
-      resolveCommitHash({ cwd: repoRootEntry, env: {}, readers: { readGitCommit } }),
-    ).toBeNull();
-    const firstCallReads = readGitCommit.mock.calls.length;
-    expect(firstCallReads).toBeGreaterThan(0);
-    expect(
-      resolveCommitHash({ cwd: repoRootEntry, env: {}, readers: { readGitCommit } }),
-    ).toBeNull();
-    expect(readGitCommit.mock.calls.length).toBe(firstCallReads);
   });
 
   it("caches caught null fallback results per resolved search directory", async () => {

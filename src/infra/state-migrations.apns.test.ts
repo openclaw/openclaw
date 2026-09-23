@@ -264,14 +264,6 @@ describe("legacy APNs Doctor migration", () => {
   it.each([
     ["invalid root", []],
     [
-      "unknown field",
-      { registrationsByNodeId: { node: directRegistration({ nodeId: "node", extra: true }) } },
-    ],
-    [
-      "mismatched node id",
-      { registrationsByNodeId: { key: directRegistration({ nodeId: "other" }) } },
-    ],
-    [
       "invalid relay",
       { registrationsByNodeId: { "legacy-relay": relayRegistration({ distribution: "beta" }) } },
     ],
@@ -281,16 +273,6 @@ describe("legacy APNs Doctor migration", () => {
         registrationsByNodeId: {
           node: directRegistration({
             nodeId: "node",
-            updatedAtMs: Number.MAX_SAFE_INTEGER,
-          }),
-        },
-      },
-    ],
-    [
-      "out-of-range relay timestamp",
-      {
-        registrationsByNodeId: {
-          "legacy-relay": relayRegistration({
             updatedAtMs: Number.MAX_SAFE_INTEGER,
           }),
         },

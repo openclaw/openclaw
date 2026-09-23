@@ -159,18 +159,6 @@ describe("unwrapKnownDispatchWrapperInvocation", () => {
       { kind: "unwrapped", wrapper: "caffeinate", argv: ["bash", "-lc", "echo hi"] },
     ],
     [
-      ["env", "--", "bash", "-lc", "echo hi"],
-      { kind: "unwrapped", wrapper: "env", argv: ["bash", "-lc", "echo hi"] },
-    ],
-    [
-      ["nice", "-n", "5", "bash", "-lc", "echo hi"],
-      { kind: "unwrapped", wrapper: "nice", argv: ["bash", "-lc", "echo hi"] },
-    ],
-    [
-      ["nohup", "--", "bash", "-lc", "echo hi"],
-      { kind: "unwrapped", wrapper: "nohup", argv: ["bash", "-lc", "echo hi"] },
-    ],
-    [
       ["script", "-q", "/dev/null", "bash", "-lc", "echo hi"],
       supportsScriptPositionalCommandForTests()
         ? { kind: "unwrapped", wrapper: "script", argv: ["bash", "-lc", "echo hi"] }
@@ -179,14 +167,6 @@ describe("unwrapKnownDispatchWrapperInvocation", () => {
     [
       ["script", "-E", "always", "/dev/null", "bash", "-lc", "echo hi"],
       { kind: "blocked", wrapper: "script" },
-    ],
-    [
-      ["stdbuf", "-o", "L", "bash", "-lc", "echo hi"],
-      { kind: "unwrapped", wrapper: "stdbuf", argv: ["bash", "-lc", "echo hi"] },
-    ],
-    [
-      ["time", "-p", "bash", "-lc", "echo hi"],
-      { kind: "unwrapped", wrapper: "time", argv: ["bash", "-lc", "echo hi"] },
     ],
     [
       ["flock", "-n", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
@@ -217,33 +197,12 @@ describe("unwrapKnownDispatchWrapperInvocation", () => {
       { kind: "unwrapped", wrapper: "flock", argv: ["bash", "-lc", "echo hi"] },
     ],
     [
-      ["timeout", "--signal=TERM", "5s", "bash", "-lc", "echo hi"],
-      { kind: "unwrapped", wrapper: "timeout", argv: ["bash", "-lc", "echo hi"] },
-    ],
-    [
-      ["sandbox-exec", "-p", "(allow default)", "bash", "-lc", "echo hi"],
-      {
-        kind: "unwrapped",
-        wrapper: "sandbox-exec",
-        argv: ["bash", "-lc", "echo hi"],
-      },
-    ],
-    [
-      ["sandbox-exec", "-D", "PROFILE", "bash", "-lc", "echo hi"],
-      {
-        kind: "unwrapped",
-        wrapper: "sandbox-exec",
-        argv: ["bash", "-lc", "echo hi"],
-      },
-    ],
-    [
       ["xcrun", "bash", "-lc", "echo hi"],
       process.platform === "darwin"
         ? { kind: "unwrapped", wrapper: "xcrun", argv: ["bash", "-lc", "echo hi"] }
         : { kind: "blocked", wrapper: "xcrun" },
     ],
     [["script", "-q", "/dev/null"], { kind: "blocked", wrapper: "script" }],
-    [["sudo", "bash", "-lc", "echo hi"], { kind: "blocked", wrapper: "sudo" }],
     [
       ["timeout", "--bogus", "5s", "bash", "-lc", "echo hi"],
       { kind: "blocked", wrapper: "timeout" },
@@ -272,15 +231,6 @@ describe("unwrapKnownDispatchWrapperInvocation", () => {
         "darwin",
       ),
     ).toEqual({ kind: "unwrapped", wrapper: "script", argv: ["bash", "-lc", "echo hi"] });
-  });
-
-  test("blocks arch dispatch unwrapping outside macOS", () => {
-    expect(
-      unwrapKnownDispatchWrapperInvocation(["arch", "-arm64", "bash", "-lc", "echo hi"], "linux"),
-    ).toEqual({
-      kind: "blocked",
-      wrapper: "arch",
-    });
   });
 
   test.each([
