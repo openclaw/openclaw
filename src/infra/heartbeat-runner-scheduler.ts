@@ -28,6 +28,7 @@ import {
   isRetryableHeartbeatSkipReason,
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
+import { isSessionEventWakePollDeferred } from "./session-event-wake.js";
 
 const loadHeartbeatExecution = createLazyRuntimeModule(() => import("./heartbeat-runner-run.js"));
 
@@ -175,13 +176,7 @@ export function startHeartbeatRunner(opts: {
   };
 
   const run: HeartbeatWakeHandler = async (params) => {
-    if (state.stopped) {
-      return {
-        status: "skipped",
-        reason: "disabled",
-      } satisfies HeartbeatRunResult;
-    }
-    if (!areHeartbeatsEnabled()) {
+    if (state.stopped || !areHeartbeatsEnabled()) {
       return {
         status: "skipped",
         reason: "disabled",
@@ -296,6 +291,11 @@ export function startHeartbeatRunner(opts: {
         });
         recordRunBookkeeping(agent, now);
         return { ran: false, result: { status: "failed", reason: errMsg } };
+      }
+      if (res.status === "skipped" && isSessionEventWakePollDeferred()) {
+        // This occurrence ended before admission; the next persisted poll owns the next turn.
+        recordRunBookkeeping(agent, now);
+        return { ran: false, result: res };
       }
       if (res.status === "skipped" && isRetryableHeartbeatSkipReason(res.reason)) {
         // Retryable busy attempts own no cooldown; the wake layer retains them.

@@ -173,7 +173,7 @@ export async function submitInputDialog(value: string): Promise<void> {
   input.closest("form")?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
 }
 
-export async function getRenderedModalDialog(container: HTMLElement) {
+export async function getRenderedModalDialog(container: ParentNode) {
   const modal = container.querySelector<OpenClawModalDialog>("openclaw-modal-dialog");
   expect(modal).toBeInstanceOf(HTMLElement);
   if (!modal) {

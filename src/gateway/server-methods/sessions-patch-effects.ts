@@ -1,12 +1,14 @@
 import type { SessionsPatchParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { SessionEntryCommitContext } from "../../config/sessions/session-accessor.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { disableCronJobsBoundToSessions } from "../../cron/job-session-bindings.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { ensureSessionGroupRegistered } from "../session-groups.js";
 import { triggerSessionPatchHook } from "../session-patch-hooks.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import { registerCommittedSessionCategory } from "./session-create-category.js";
 import { persistSessionPatchModelSelection } from "./sessions-patch-model-selection.js";
+import type { GroupAdmissionResult } from "./sessions-patch-types.js";
 import { sessionLog } from "./sessions-shared.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -16,7 +18,6 @@ export async function publishSessionPatchEffects(params: {
   context: GatewayRequestContext;
   callerScopes: readonly string[];
   callerCanManageCron: boolean;
-  category: SessionsPatchParams["category"];
   targets: Array<{
     accessChanged: boolean;
     entry: SessionEntry;
@@ -68,14 +69,6 @@ export async function publishSessionPatchEffects(params: {
     }
   }
 
-  const category = params.category;
-  if (params.targets.length > 0 && typeof category === "string" && category.trim()) {
-    // A first-use category is a group-catalog mutation: clients reload the
-    // catalog only on reason "groups" (the sessions.groups.* siblings emit it).
-    if (ensureSessionGroupRegistered(category)) {
-      emitSessionsChanged(params.context, { reason: "groups" }, { accessChanged: false });
-    }
-  }
   if (params.callerCanManageCron && archivedSessionKeys.size > 0) {
     try {
       const disabledBySession = await disableCronJobsBoundToSessions({
@@ -96,4 +89,23 @@ export async function publishSessionPatchEffects(params: {
       );
     }
   }
+}
+
+/** Only applied assignments may repair the catalog; detached and status-model no-ops cannot. */
+export function createSessionPatchCategoryRegistration(params: {
+  patch: { category?: SessionsPatchParams["category"] };
+  context: GatewayRequestContext;
+}) {
+  const category = params.patch.category;
+  return async (result: GroupAdmissionResult, source: SessionEntryCommitContext): Promise<void> => {
+    if (
+      typeof category === "string" &&
+      result.kind === "complete" &&
+      result.outcomes.some(
+        (outcome) => outcome.ok && outcome.applied && outcome.entry.category === category.trim(),
+      )
+    ) {
+      await registerCommittedSessionCategory(category, params.context, source);
+    }
+  };
 }

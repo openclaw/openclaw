@@ -1,9 +1,10 @@
 import { once } from "node:events";
 import { createServer, type ServerResponse } from "node:http";
-import { setTimeout as delay } from "node:timers/promises";
 import { expect, it } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../../agents/prepared-model-catalog.js";
+import { resolvePreparedModelRuntimeOwnerBySnapshot } from "../../agents/prepared-model-runtime.owner.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
@@ -34,6 +35,7 @@ it.for([
     const providers = withSibling ? [provider, sibling] : [provider];
     let requests = 0;
     let hold = false;
+    const renewal = createDeferred();
     let fail = false;
     let failSibling = false;
     const original = initiallyEmpty ? [] : ["original"];
@@ -50,9 +52,9 @@ it.for([
         return;
       }
       requests++;
-      endpoint.emit("primary-provider-request");
       if (hold) {
         held.push(response);
+        renewal.resolve();
       } else {
         reply(response);
       }
@@ -78,10 +80,12 @@ it.for([
           catalog: { order: "profile", async run(ctx) {
             const auth = ctx.resolveProviderAuth(provider);
             if (!auth.discoveryApiKey) return null;
-            const { buildLiveModelProviderConfig } = await import("openclaw/plugin-sdk/provider-catalog-live-runtime");
+            const { buildLiveModelProviderConfig, clearLiveCatalogCacheForTests } = await import("openclaw/plugin-sdk/provider-catalog-live-runtime");
+            // The Gateway fixture controls inventory expiry; each acquisition crosses HTTP.
+            clearLiveCatalogCacheForTests();
             const accepted = await buildLiveModelProviderConfig({
               providerId: provider, discoveryMode: "strict", discoveryApiKey: auth.discoveryApiKey,
-              endpoint: ${JSON.stringify(baseUrl)} + "/" + provider, ttlMs: ${initiallyEmpty ? 1_000 : 1},
+              endpoint: ${JSON.stringify(baseUrl)} + "/" + provider, ttlMs: 86_400_000,
               providerConfig: { baseUrl: ${JSON.stringify(baseUrl)}, api: "openai-completions" }, models: [],
               fetchGuard: async ({ url, init }) => ({ response: await fetch(url, init), finalUrl: url, release: async () => {} }),
               readRows: body => body,
@@ -151,23 +155,58 @@ it.for([
         };
         const initial = await waitForCatalogPublication({
           signal,
-          start: () => list(true),
+          // Startup discovers nonempty inventory; forcing refresh would bypass TTL renewal.
+          start: initiallyEmpty ? () => list(true) : list,
           read: list,
           ready: (result) =>
-            initiallyEmpty
-              ? result.siblingModels.includes("sibling")
-              : result.models.some((row) => row.id === "original"),
+            (initiallyEmpty
+              ? !result.pendingProviders?.includes(provider)
+              : result.models.some((row) => row.id === "original")) &&
+            (!withSibling || result.siblingModels.includes("sibling")),
         });
         expect(initial.models.map((row) => row.id)).toEqual(original);
+        const owner = getPublishedPreparedModelCatalogOwnerSnapshot({ agentId: "main" });
+        if (!owner?.readPublishedModelCatalog) {
+          throw new Error("Missing published freshness fixture inventory");
+        }
+        const readPublished = async () => owner.readPublishedModelCatalog!();
+        const expire = (providerIds: string[]) => {
+          for (const id of providerIds) {
+            const facts =
+              resolvePreparedModelRuntimeOwnerBySnapshot(owner)?.catalogInventory?.providers.get(
+                id,
+              );
+            // Successful empty catalogs must carry the cache expiry too.
+            expect(facts?.expiresAt).toEqual(expect.any(Number));
+            facts!.expiresAt = 0;
+          }
+        };
+        const acceptRenewal = async (start: () => unknown) => {
+          const accepted = await readPublished();
+          expect(accepted).toBeDefined();
+          await waitForCatalogPublication({
+            signal,
+            start: async () => {
+              await start();
+              return readPublished();
+            },
+            read: readPublished,
+            ready: (catalog) => catalog !== accepted,
+          });
+          return list();
+        };
         const initialRequests = requests;
+        if (!initiallyEmpty) {
+          expect(initialRequests).toBe(1);
+        }
+        hold = true;
         advertised = [...original, "newly-published"];
         if (initiallyEmpty) {
           expect((await list()).models).toEqual([]);
           expect(requests).toBe(initialRequests);
-          await delay(1_100);
         }
-        hold = true;
-        const renewal = once(endpoint, "primary-provider-request");
+        // Arm the response hold before making any accepted inventory due.
+        expire(withSibling && !initiallyEmpty ? providers : [provider]);
         const saved = await withTestTimeout(
           list(),
           1_000,
@@ -175,7 +214,11 @@ it.for([
         );
         expect(saved.models.map((row) => row.id)).toEqual(original);
         expect(saved.siblingModels).toEqual(withSibling ? ["sibling"] : []);
-        await withTestTimeout(renewal, 3_000, "models.list did not refresh the expired provider");
+        await withTestTimeout(
+          renewal.promise,
+          3_000,
+          "models.list did not refresh the expired provider",
+        );
         const concurrent = await withTestTimeout(
           Promise.all([list(), list()]),
           1_000,
@@ -187,23 +230,17 @@ it.for([
         ]);
         expect(requests).toBe(initialRequests + 1);
         failSibling = withSibling && !initiallyEmpty;
-        hold = false;
-        for (const response of held.splice(0)) {
-          // Exercise publication after a slow provider response.
-          setTimeout(() => reply(response), 3_500);
-        }
-        const renewed = await waitForCatalogPublication({
-          signal,
-          read: list,
-          ready: (result) => result.models.some((row) => row.id === "newly-published"),
+        const renewed = await acceptRenewal(() => {
+          hold = false;
+          for (const response of held.splice(0)) {
+            reply(response);
+          }
         });
         expect(renewed.models.map((row) => row.id)).toEqual(["newly-published", ...original]);
 
         if (!withSibling || initiallyEmpty) {
           fail = true;
-          if (initiallyEmpty) {
-            await delay(1_100);
-          }
+          expire([provider]);
         }
         const failed = await waitForCatalogPublication({
           signal,
@@ -213,10 +250,9 @@ it.for([
         expect(failed.refreshFailed).toBe(true);
         if (withSibling && !initiallyEmpty) {
           advertised = ["original", "newly-published", "after-sibling-failure"];
-          const afterSiblingFailure = await waitForCatalogPublication({
-            signal,
-            read: list,
-            ready: (result) => result.models.some((row) => row.id === "after-sibling-failure"),
+          const afterSiblingFailure = await acceptRenewal(() => {
+            expire([provider]);
+            return list();
           });
           expect(afterSiblingFailure.models.map((row) => row.id)).toEqual([
             "after-sibling-failure",

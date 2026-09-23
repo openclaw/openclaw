@@ -37,7 +37,7 @@ class CodexInferenceRouteTests(unittest.TestCase):
         self.catalogue = self.home / "models.json"
         self.catalogue_bytes = json.dumps({
             "models": [{
-                "slug": "gpt-5.6-luna", "context_window": 120000,
+                "slug": "gpt-6-astra", "context_window": 120000,
                 "max_context_window": 120000, "auto_compact_token_limit": 90000,
                 "display_name": "Synthetic model", "supported_reasoning_levels": [],
                 "shell_type": "unified_exec", "visibility": "list",
@@ -67,7 +67,7 @@ class CodexInferenceRouteTests(unittest.TestCase):
         self.helper = load_helper()
         self.args = argparse.Namespace(
             engine="codex", codex_bin="synthetic-codex", codex_config=['model_provider="review_api"'], codex_speed=None,
-            fallback_model=None, model="gpt-5.6-luna", stream_engine_output=False,
+            fallback_model=None, model="gpt-6-astra", stream_engine_output=False,
             thinking="high", tools=True, web_search=False,
         )
         self.environment = mock.patch.dict(os.environ, {
@@ -195,10 +195,6 @@ class CodexInferenceRouteTests(unittest.TestCase):
             "env_defaults_for": lambda _: (None, {}),
         }):
             self.args = self.helper["reviewer_args"](args)[0]
-        catalogue = json.loads(self.catalogue_bytes)
-        catalogue["models"][0]["slug"] = self.args.model
-        self.catalogue_bytes = json.dumps(catalogue).encode()
-        self.catalogue.write_bytes(self.catalogue_bytes)
 
     def test_primary_only_catalogue_keeps_normal_fallback_and_frozen_route(self):
         self.use_default_models()

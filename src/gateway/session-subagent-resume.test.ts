@@ -1,9 +1,12 @@
 /** Real registry and SQLite proof for explicit parent-owned resume admission. */
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useSubagentControlFixture } from "../agents/subagents/registry/subagent-control.test-support.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { AgentWaitResult } from "../agents/run-wait.js";
-import { useSubagentControlFixture } from "../agents/subagents/registry/subagent-control.test-support.js";
-import { subagentRegistryDeps } from "../agents/subagents/registry/subagent-registry-deps.js";
+import { resolveSubagentController } from "../agents/subagents/registry/subagent-control-scope.js";
+import { killAllControlledSubagentRuns } from "../agents/subagents/registry/subagent-control.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { markSubagentRunPausedAfterYield } from "../agents/subagents/registry/subagent-registry-run-pause.js";
 import { persistSubagentRunsToDiskOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
@@ -12,6 +15,7 @@ import { writeSubagentSessionEntry } from "../agents/subagents/registry/subagent
 import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { publishSystemEventStoreResolver } from "../infra/system-event-ownership.js";
 import { findTaskByRunId } from "../tasks/task-registry.js";
 import { resolveGatewayAgentTaskTrackingMode } from "./server-methods/agent-task-tracking.js";
 import {
@@ -19,6 +23,7 @@ import {
   assertParentSubagentResumeSuccessorCurrent,
   bindParentSubagentResume,
   prepareParentSubagentResume,
+  shouldResumeParentSubagent,
 } from "./session-subagent-resume.js";
 
 const fixture = useSubagentControlFixture();
@@ -26,7 +31,10 @@ const parent = "agent:main:main";
 const sessionId = "resume-child-session";
 const previousRunId = "resume-previous";
 const nextRunId = "resume-successor";
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  publishSystemEventStoreResolver(undefined);
+  vi.useRealTimers();
+});
 
 // Seed the same paused registry state that the yield terminal observer records.
 async function arrangePausedChild(childSessionKey = "agent:main:subagent:resume-child") {
@@ -153,6 +161,67 @@ it("rejects adoption when task-owned completion is disabled after binding", asyn
   expect(findTaskByRunId(previousRunId)).toEqual(task);
 });
 
+it.each(["selection", "admission"] as const)(
+  "rejects a copied-store parent with matching session identities during %s",
+  async (stage) => {
+    const state = await arrangePausedChild();
+    const originalStorePath = state.entry.controllerStorePath;
+    if (!originalStorePath) {
+      throw new Error("The registered task must retain its controller store");
+    }
+    publishSystemEventStoreResolver(() => originalStorePath);
+    expect(shouldResumeParentSubagent(state)).toBe(true);
+    const adopt = await state.prepare();
+    publishSystemEventStoreResolver(() => `${originalStorePath}.replacement`);
+    const task = findTaskByRunId(previousRunId);
+    if (stage === "selection") {
+      expect(shouldResumeParentSubagent(state)).toBe(false);
+      expect(() => bindParentSubagentResume({ ...state, childSessionId: sessionId })).toThrow(
+        /controlled/,
+      );
+    } else {
+      expect(() => adopt()).toThrow(/controlled/);
+    }
+    expect(subagentRuns.has(nextRunId)).toBe(false);
+    expect(subagentRuns.get(previousRunId)?.pauseReason).toBe("sessions_yield");
+    expect(findTaskByRunId(previousRunId)).toEqual(task);
+  },
+);
+
+it.each(["resume", "cancel"] as const)(
+  "preserves %s for retained release-era tasks without store provenance",
+  async (action) => {
+    const state = await arrangePausedChild();
+    const storePath = state.entry.controllerStorePath!;
+    // v2026.9.5 registration persisted neither physical-store field.
+    delete state.entry.controllerStorePath;
+    delete state.entry.requesterStorePath;
+    persistSubagentRunsToDiskOrThrow(subagentRuns, [previousRunId]);
+    subagentRuns.set(previousRunId, loadSubagentRegistryFromSqlite().get(previousRunId)!);
+    publishSystemEventStoreResolver(() => storePath);
+    expect(shouldResumeParentSubagent(state)).toBe(false);
+    if (action === "resume") {
+      const resume = bindParentSubagentResume({ ...state, childSessionId: sessionId });
+      const adopt = await state.prepare({ resume });
+      expect(adopt()).toBe(previousRunId);
+      expect(subagentRuns.get(nextRunId)?.taskRunId).toBe(previousRunId);
+    } else {
+      const result = await killAllControlledSubagentRuns({
+        cfg: state.cfg,
+        controller: resolveSubagentController({
+          cfg: state.cfg,
+          agentId: state.caller.agentId,
+          agentSessionKey: state.caller.sessionKey,
+        }),
+        runs: [subagentRuns.get(previousRunId)!],
+        suppressTaskDelivery: true,
+      });
+      expect(result).toMatchObject({ killed: 1 });
+      expect(findTaskByRunId(previousRunId)?.status).toBe("cancelled");
+    }
+  },
+);
+
 it("does not adopt ordinary peer messages or forged message provenance", async () => {
   const state = await arrangePausedChild();
   expect(
@@ -242,12 +311,8 @@ it("rolls back a rejected durable replacement instead of accepting untracked wor
 it("delivers a result once after the former synchronous wait window, through the task owner", async () => {
   const state = await arrangePausedChild();
   const completion = createDeferred<AgentWaitResult>();
-  const announce = vi
-    .spyOn(subagentRegistryDeps, "runSubagentAnnounceFlow")
-    .mockResolvedValue("delivered");
-  vi.spyOn(subagentRegistryDeps, "callGateway").mockImplementation(
-    async () => await completion.promise,
-  );
+  const announce = fixture.announce.mockResolvedValue("delivered");
+  fixture.gateway.mockReturnValue(completion.promise);
   const now = Date.now();
   vi.useFakeTimers({ toFake: ["Date"] });
   const adopt = await state.prepare();
@@ -260,7 +325,8 @@ it("delivers a result once after the former synchronous wait window, through the
     endedAt: Date.now(),
     terminalReply: { disposition: "visible", text: "The resumed task is complete." },
   });
-  await vi.waitFor(() => expect(announce).toHaveBeenCalledTimes(1));
+  await fixture.settle();
+  expect(announce).toHaveBeenCalledTimes(1);
   expect(announce).toHaveBeenCalledWith(
     expect.objectContaining({
       childRunId: nextRunId,
@@ -273,7 +339,8 @@ it("delivers a result once after the former synchronous wait window, through the
     stream: "lifecycle",
     data: { phase: "end", endedAt: Date.now(), yielded: true },
   });
-  await vi.waitFor(() => expect(findTaskByRunId(previousRunId)?.status).toBe("succeeded"));
+  await fixture.settle();
+  expect(findTaskByRunId(previousRunId)?.status).toBe("succeeded");
   expect(subagentRuns.get(nextRunId)?.pauseReason).toBeUndefined();
   expect(announce).toHaveBeenCalledTimes(1);
 });
@@ -281,6 +348,11 @@ it("delivers a result once after the former synchronous wait window, through the
 it("does not grant control to a separate completion recipient", async () => {
   const state = await arrangePausedChild();
   state.entry.controllerSessionKey = "agent:main:dashboard:actual-controller";
+  state.entry.controllerStorePath = "controller-store";
+  state.entry.requesterStorePath = "completion-store";
+  publishSystemEventStoreResolver((key) =>
+    key === state.entry.controllerSessionKey ? "controller-store" : "completion-store",
+  );
   expect(() =>
     bindParentSubagentResume({
       cfg: state.cfg,

@@ -57,7 +57,7 @@ const FeishuGroupPolicySchema = z.union([
   // Preserve the shipped Feishu alias while the canonical value remains "open".
   z.literal("allowall").transform(() => "open" as const),
 ]);
-const FeishuDomainSchema = z.union([
+export const FeishuDomainSchema = z.union([
   z.enum(["feishu", "lark"]),
   // Keep URL last for its JSON Schema format; regex flags are not exported.
   z
@@ -161,7 +161,7 @@ const ChannelHeartbeatVisibilitySchema = z
  * Dynamic agent creation configuration.
  * When enabled, a new agent is created for each unique DM user.
  */
-const DynamicAgentCreationSchema = z
+export const DynamicAgentCreationSchema = z
   .object({
     enabled: z.boolean().optional(),
     workspaceTemplate: z.string().optional(),
@@ -179,7 +179,7 @@ const DynamicAgentCreationSchema = z
  * - wiki requires doc (wiki content is edited via doc tools)
  * - perm can work independently but is typically used with drive
  */
-const FeishuToolsConfigSchema = z
+export const FeishuToolsConfigSchema = z
   .object({
     doc: z.boolean().optional(), // Document operations (default: true)
     chat: z.boolean().optional(), // Chat info + member query operations (default: true)

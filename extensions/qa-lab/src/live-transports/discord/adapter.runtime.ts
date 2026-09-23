@@ -5,6 +5,7 @@ import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
 } from "../shared/credential-lease.runtime.js";
+import { createDiscordChannelE2eSession, type DiscordChannelE2eSession } from "./channel-e2e.js";
 import { discordQaScenarioSupport } from "./discord-live.runtime.js";
 import { createDiscordQaScenarioEnvironment } from "./scenario-environment.js";
 
@@ -25,6 +26,7 @@ export async function createDiscordQaTransportAdapter(
     kind: "discord",
     source: options.credentialSource,
     role: options.credentialRole,
+    cwd: options.repoRoot,
     resolveEnvPayload: () => discordQaScenarioSupport.testing.resolveDiscordQaRuntimeEnv(),
     parsePayload: discordQaScenarioSupport.testing.parseDiscordQaCredentialPayload,
   });
@@ -37,10 +39,12 @@ export async function createDiscordQaTransportAdapter(
     ReturnType<typeof discordQaScenarioSupport.testing.getCurrentDiscordUser>
   >;
   try {
+    heartbeat.throwIfFailed();
     [driverIdentity, sutIdentity] = await Promise.all([
       discordQaScenarioSupport.testing.getCurrentDiscordUser(runtimeEnv.driverBotToken),
       discordQaScenarioSupport.testing.getCurrentDiscordUser(runtimeEnv.sutBotToken),
     ]);
+    heartbeat.throwIfFailed();
     if (driverIdentity.id === sutIdentity.id) {
       throw new Error("Discord QA requires two distinct bots for driver and SUT.");
     }
@@ -57,6 +61,22 @@ export async function createDiscordQaTransportAdapter(
   }
   const accountId = options.sutAccountId?.trim() || "sut";
   let stopped = false;
+  const e2eSessions: DiscordChannelE2eSession[] = [];
+  let activeE2eSession: DiscordChannelE2eSession | undefined;
+  const assertActive = () => {
+    heartbeat.throwIfFailed();
+    if (stopped) {
+      throw new Error("Discord QA adapter is stopped");
+    }
+  };
+  const waitReady: AdapterDefinition["waitReady"] = async ({ gateway }) => {
+    assertActive();
+    await discordQaScenarioSupport.testing.waitForDiscordChannelRunning(
+      gateway as never,
+      accountId,
+    );
+    assertActive();
+  };
   let pollingError: Error | undefined;
   let afterSnowflake = discordSnowflakeForTimestamp(Date.now());
   const polling = (async () => {
@@ -65,6 +85,7 @@ export async function createDiscordQaTransportAdapter(
         return;
       }
       try {
+        assertActive();
         const observed: Parameters<
           typeof discordQaScenarioSupport.testing.pollChannelMessages
         >[0]["observedMessages"] = [];
@@ -78,6 +99,7 @@ export async function createDiscordQaTransportAdapter(
           observationScenarioTitle: "Discord adapter",
           predicate: (message: { senderId: string }) => message.senderId === sutIdentity.id,
         });
+        assertActive();
         afterSnowflake = matched.afterSnowflake;
         await context.messages.addOutboundMessage({
           accountId,
@@ -112,19 +134,38 @@ export async function createDiscordQaTransportAdapter(
     accountId,
     requiredPluginIds: ["discord"],
     supportedActions: [],
+    ...(options.agentE2e ? { whenUnhealthy: heartbeat.whenFailed } : {}),
     assertTransportHealthy() {
+      assertActive();
       if (pollingError) {
         throw pollingError;
       }
-      heartbeat.throwIfFailed();
+      activeE2eSession?.assertHealthy();
     },
     async sendInbound(input) {
+      assertActive();
+      if (options.agentE2e) {
+        if (!activeE2eSession) {
+          throw new Error("Discord agent E2E inbound requires a prepared scenario");
+        }
+        await activeE2eSession.driver.send({
+          text: input.text,
+          mention: input.text.includes("@openclaw"),
+        });
+        assertActive();
+        return await context.messages.addInboundMessage({
+          ...input,
+          accountId,
+          senderId: driverIdentity.id,
+        });
+      }
       const text = input.text.replaceAll("@openclaw", `<@${runtimeEnv.sutApplicationId}>`);
       const sent = await discordQaScenarioSupport.testing.sendChannelMessage(
         runtimeEnv.driverBotToken,
         runtimeEnv.channelId,
         text,
       );
+      assertActive();
       afterSnowflake = sent.id;
       return await context.messages.addInboundMessage({
         ...input,
@@ -141,12 +182,43 @@ export async function createDiscordQaTransportAdapter(
         sutAccountId: accountId,
         sutBotToken: runtimeEnv.sutBotToken,
       }),
-    prepareFlow: scenarioEnvironment.prepareFlow,
-    waitReady: async ({ gateway }) =>
-      await discordQaScenarioSupport.testing.waitForDiscordChannelRunning(
-        gateway as never,
-        accountId,
-      ),
+    async prepareFlow(input) {
+      assertActive();
+      input.signal?.throwIfAborted();
+      const prepared = await scenarioEnvironment.prepareFlow(input);
+      assertActive();
+      input.signal?.throwIfAborted();
+      if (!options.agentE2e) {
+        return prepared;
+      }
+      const session = createDiscordChannelE2eSession({
+        runtimeEnv,
+        driverId: driverIdentity.id,
+        sutId: sutIdentity.id,
+        outputDir: input.outputDir,
+        scenarioId: input.scenarioId,
+        signal: input.signal,
+        assertActive,
+        assertLeaseActive: () => heartbeat.throwIfFailed(),
+        waitForSutReady: async () => {
+          await waitReady({ gateway: input.gateway });
+          input.signal?.throwIfAborted();
+        },
+      });
+      e2eSessions.push(session);
+      activeE2eSession = session;
+      const readiness = await session.driver.doctor();
+      if (!readiness.ok) {
+        throw new Error(
+          `Discord E2E readiness failed: ${readiness.checks
+            .filter((check) => !check.ok)
+            .map((check) => check.detail)
+            .join("; ")}`,
+        );
+      }
+      return { ...prepared, channelE2e: session.driver };
+    },
+    waitReady,
     buildAgentDelivery: () => ({
       channel: "discord",
       to: `channel:${runtimeEnv.channelId}`,
@@ -159,15 +231,34 @@ export async function createDiscordQaTransportAdapter(
     createReportNotes: () => ["Uses the Discord live adapter."],
     async cleanup() {
       stopped = true;
+      await Promise.all(e2eSessions.map((session) => session.stop()));
       await polling.catch(() => undefined);
     },
     async cleanupAfterGatewayStop() {
-      // Keep renewing the lease until the child gateway stops.
-      // Lease release must still run when heartbeat shutdown reports an error.
+      const failures: unknown[] = [];
+      for (const session of e2eSessions) {
+        try {
+          await session.cleanup();
+        } catch (error) {
+          failures.push(error);
+        }
+      }
       try {
         await heartbeat.stop();
+      } catch (error) {
+        failures.push(error);
       } finally {
-        await lease.release();
+        try {
+          await lease.release();
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (failures.length === 1) {
+        throw failures[0];
+      }
+      if (failures.length) {
+        throw new AggregateError(failures, "Discord QA cleanup failed");
       }
     },
   };

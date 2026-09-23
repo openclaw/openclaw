@@ -1,5 +1,5 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
-import type { ChatAccountSelection, UserModelAccount } from "@openclaw/gateway-protocol";
+import type { UserModelAccount } from "@openclaw/gateway-protocol";
 import type {
   FastMode,
   GatewayAgentRow,
@@ -8,17 +8,13 @@ import type {
 } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
-import { t } from "../../i18n/index.ts";
-import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import { buildQualifiedChatModelValue } from "../../lib/chat/model-ref.ts";
-import {
-  isChatFastModeProviderSupported,
-  chatModelUnavailableMessage,
-  normalizeChatFastModeInput,
-} from "../../lib/chat/model-select-state.ts";
+import { normalizeChatFastModeInput } from "../../lib/chat/model-select-state.ts";
 import { normalizeThinkingOptionValue } from "../../lib/chat/thinking.ts";
 import {
+  hasUnrestrictedModelCatalogSnapshot,
   invalidateModelCatalogCache,
+  isModelCatalogRetired,
   type ModelCatalogReadScope,
 } from "../../lib/model-catalog-cache.ts";
 import {
@@ -28,41 +24,38 @@ import {
   subscribeModelCatalogChanges,
 } from "../../lib/model-catalog-store.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
+import { requiresChatModelSetup } from "../chat/chat-model-setup.ts";
 import { renderChatModelAccountControl } from "../chat/components/chat-model-account-control.ts";
-import {
-  renderChatModelControls,
-  type ChatModelCatalogState,
-} from "../chat/components/chat-model-controls.ts";
+import { renderChatModelControls } from "../chat/components/chat-model-controls.ts";
 import { CatalogTargetDiscovery } from "./catalog-target.ts";
-import { draftCloudProfileSupportsExecutionMode, type DraftCloudProfile } from "./discovery.ts";
+import type { DraftCloudProfile } from "./discovery.ts";
 import {
   reconcileDraftModelSelection,
+  isDraftAccountModelAvailable,
+  resolveDraftDevicePlacementUnsupportedReason,
+  resolveDraftCloudRuntimeUnsupportedReason,
   resolveDraftAgentRuntime,
-  resolveDraftContextWindowTarget,
+  resolveDraftModelControls,
   resolveDraftModelTarget,
   resolveDraftModelUnavailableReason,
-  resolveDraftThinkingDefaults,
-  resolveDraftThinkingTarget,
+  resolveDraftModelSelectionBlockedReason,
+  type NewSessionModelMetadata,
 } from "./model-target.ts";
-import type { NewSessionPreference } from "./preferences.ts";
-
-registerModelControlsEnglish();
+import { hasNewSessionModelPreference, type NewSessionPreference } from "./preferences.ts";
 
 type NewSessionMetadataClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
-type NewSessionMetadataState = ChatModelCatalogState & {
-  catalog: ModelCatalogEntry[];
-  accountSelection?: ChatAccountSelection;
-  displayOnly?: boolean;
-};
 type NewSessionMetadataLoadOptions = {
   agent?: GatewayAgentRow;
   preference?: NewSessionPreference | null;
+  initialModel?: string;
 };
 
 export class NewSessionModelControl {
   private selectionGeneration = 0;
+  private initialModel: string | undefined;
+  private initialModelPending = false;
   private agentId = "";
-  private metadataState: NewSessionMetadataState = {
+  private metadataState: NewSessionModelMetadata = {
     catalog: [],
     hasSnapshot: false,
     status: "idle",
@@ -91,11 +84,12 @@ export class NewSessionModelControl {
 
   constructor(
     private readonly notify: () => void,
-    private readonly onSelectionChange: (selection: {
-      model: string;
-      agentRuntime?: string;
-      thinkingLevel: string;
-    }) => void = () => undefined,
+    private readonly onSelectionChange: (
+      selection: Pick<
+        NewSessionPreference,
+        "model" | "agentRuntime" | "thinkingLevel" | "fastMode"
+      >,
+    ) => void = () => undefined,
     private readonly onCatalogTargetSelect: (catalogId: string) => void = () => undefined,
   ) {
     this.catalogTargets = new CatalogTargetDiscovery(notify);
@@ -150,13 +144,21 @@ export class NewSessionModelControl {
     this.metadataUnsubscribe = gateway
       ? subscribeModelCatalogChanges(
           gateway,
-          () => {
+          (invalidation) => {
             if (!this.ownsMetadata(client, scope)) {
               this.restoringPreference = false;
               this.draftAccount = undefined;
               this.clearMetadataSubscription();
               this.updateMetadataState({ catalog: [], hasSnapshot: false, status: "offline" });
               return;
+            }
+            if (invalidation === "clear") {
+              this.updateMetadataState({
+                catalog: [],
+                hasSnapshot: false,
+                retired: true,
+                status: "loading",
+              });
             }
             void this.startMetadataRequest(client, scope);
           },
@@ -170,8 +172,14 @@ export class NewSessionModelControl {
     this.catalogTargets.load(context, agentId, enabled);
   }
 
-  private updateMetadataState(next: NewSessionMetadataState) {
-    this.metadataState = next;
+  private updateMetadataState(next: NewSessionModelMetadata) {
+    this.metadataState = {
+      ...next,
+      initialized:
+        !next.retired &&
+        next.status !== "offline" &&
+        (next.hasSnapshot || hasUnrestrictedModelCatalogSnapshot(this.metadataClient)),
+    };
     this.notify();
   }
 
@@ -188,7 +196,23 @@ export class NewSessionModelControl {
     this.assignMetadataCatalog(result);
     this.metadataState.accountSelection = result.accountSelection;
     if (!this.draftAccount && this.pendingSelectionGeneration === this.selectionGeneration) {
-      this.restorePreference();
+      if (this.initialModelPending && !result.modelSelectionPolicy?.restricted) {
+        this.resetSelection(this.initialModel);
+      } else {
+        this.restorePreference();
+      }
+    }
+    this.initialModelPending = false;
+    if (!this.draftAccount && result.modelSelectionPolicy?.restricted && this.selected) {
+      const selection = reconcileDraftModelSelection({
+        model: this.selected,
+        agentRuntime: this.agentRuntime,
+        thinkingLevel: this.thinkingLevel,
+        fastMode: this.fastMode,
+        modelSelectionPolicy: result.modelSelectionPolicy,
+        catalog: result.models,
+      });
+      this.applyModelSelection(selection);
     }
     this.restoringPreference = false;
     this.notify();
@@ -206,6 +230,9 @@ export class NewSessionModelControl {
     this.metadataRequest = controller;
     const ownsRequest = () =>
       this.metadataRequest === controller && this.ownsMetadata(client, scope);
+    if (isModelCatalogRetired(client, scope)) {
+      this.metadataState = { catalog: [], hasSnapshot: false, retired: true, status: "loading" };
+    }
     const previousStatus = this.metadataState.status;
     const retained = peekModelCatalog(client, scope, { allowStale: true });
     if (retained && !this.metadataState.hasSnapshot) {
@@ -238,13 +265,20 @@ export class NewSessionModelControl {
         }
         this.metadataRequest = undefined;
         if (
+          !this.metadataState.retired &&
+          !this.metadataState.modelSelectionPolicy?.restricted &&
           !this.draftAccount &&
-          this.pendingSelectionGeneration === this.selectionGeneration &&
-          (this.pendingPreference?.model || this.pendingPreference?.thinkingLevel)
+          this.pendingSelectionGeneration === this.selectionGeneration
         ) {
-          this.selected = this.pendingPreference.model ?? "";
-          this.agentRuntime = this.pendingPreference.agentRuntime;
-          this.thinkingLevel = this.pendingPreference.thinkingLevel ?? "";
+          if (this.initialModelPending) {
+            this.resetSelection(this.initialModel);
+            this.initialModelPending = false;
+          } else if (hasNewSessionModelPreference(this.pendingPreference)) {
+            this.selected = this.pendingPreference.model ?? "";
+            this.agentRuntime = this.pendingPreference.agentRuntime;
+            this.thinkingLevel = this.pendingPreference.thinkingLevel ?? "";
+            this.fastMode = this.pendingPreference.fastMode;
+          }
         }
         this.restoringPreference = false;
         this.updateMetadataState({ ...this.metadataState, status: "error" });
@@ -292,6 +326,14 @@ export class NewSessionModelControl {
     this.catalogTargets.retry(client, this.agentId);
   }
 
+  private resetSelection(model = "") {
+    this.selected = model;
+    this.agentRuntime = undefined;
+    this.contextWindow = "";
+    this.thinkingLevel = "";
+    this.fastMode = undefined;
+  }
+
   invalidate(resetSelection = false) {
     if (!resetSelection && this.metadataClient) {
       invalidateModelCatalogCache(this.metadataClient, this.metadataScope);
@@ -303,11 +345,9 @@ export class NewSessionModelControl {
     if (resetSelection) {
       this.agentId = "";
       this.metadataClient = undefined;
-      this.selected = "";
-      this.agentRuntime = undefined;
-      this.contextWindow = "";
-      this.thinkingLevel = "";
-      this.fastMode = undefined;
+      this.resetSelection();
+      this.initialModel = undefined;
+      this.initialModelPending = false;
       this.updateMetadataState({
         catalog: [],
         hasSnapshot: false,
@@ -347,11 +387,9 @@ export class NewSessionModelControl {
       this.draftAccount = undefined;
       this.clearMetadataSubscription();
       if (this.agentId !== normalizedAgentId) {
-        this.selected = "";
-        this.agentRuntime = undefined;
-        this.contextWindow = "";
-        this.thinkingLevel = "";
-        this.fastMode = undefined;
+        this.resetSelection();
+        this.initialModel = undefined;
+        this.initialModelPending = false;
       }
       this.agentId = normalizedAgentId;
       this.metadataClient = undefined;
@@ -363,7 +401,6 @@ export class NewSessionModelControl {
     }
     this.metadataIdentityId = snapshot?.selfUser?.id;
     this.metadataHello = snapshot?.hello;
-    const selectionGeneration = this.selectionGeneration;
     if (!context || snapshot?.phase !== "connected" || !client || !normalizedAgentId || !enabled) {
       this.clearDraftAccount();
       this.clearMetadataSubscription();
@@ -379,6 +416,14 @@ export class NewSessionModelControl {
       this.notify();
       return;
     }
+    const initialModel = options.initialModel;
+    if (initialModel && initialModel !== this.initialModel) {
+      this.resetSelection();
+      this.selectionGeneration += 1;
+      this.initialModel = initialModel;
+      this.initialModelPending = true;
+    }
+    const selectionGeneration = this.selectionGeneration;
     const scope = {
       agentId: normalizedAgentId,
       ...(this.draftAccount ? { authProfileId: this.draftAccount.authProfileId } : {}),
@@ -386,12 +431,16 @@ export class NewSessionModelControl {
     const previousScope = this.metadataScope;
     const boundScope = this.bindMetadataSubscription(client, scope);
     const rebound = boundScope !== previousScope;
-    this.pendingPreference = options.preference;
+    // URL intent seeds this draft once; saved preferences and catalog refreshes cannot replace it.
+    this.pendingPreference = this.initialModelPending
+      ? { model: this.initialModel }
+      : this.initialModel
+        ? undefined
+        : options.preference;
     this.pendingAgent = options.agent;
     this.pendingSelectionGeneration = selectionGeneration;
-    this.restoringPreference = Boolean(
-      !this.draftAccount && (options.preference?.model || options.preference?.thinkingLevel),
-    );
+    this.restoringPreference =
+      !this.draftAccount && hasNewSessionModelPreference(this.pendingPreference);
     if (this.metadataRequest) {
       this.notify();
       return;
@@ -416,40 +465,39 @@ export class NewSessionModelControl {
     return this.restoringPreference;
   }
 
+  requiresModelSetup(
+    state: Omit<
+      Parameters<typeof requiresChatModelSetup>[0],
+      "modelSelectionPolicy" | "catalogRetired" | "catalogInitialized"
+    >,
+  ): boolean {
+    return requiresChatModelSetup({
+      ...state,
+      modelSelectionPolicy: this.metadataState.modelSelectionPolicy,
+      catalogInitialized: this.metadataState.hasSnapshot && !this.metadataState.retired,
+    });
+  }
+
   modelUnavailableReason(agent: GatewayAgentRow | undefined) {
-    return this.metadataState.hasSnapshot && this.metadataState.status !== "offline"
-      ? resolveDraftModelUnavailableReason({
-          model: this.effectiveModel || agent?.model?.primary,
-          catalog: this.catalog,
-          agentRuntime: this.agentRuntime,
-        })
-      : undefined;
+    return resolveDraftModelUnavailableReason({
+      model: this.effectiveModel,
+      agentRuntime: this.agentRuntime,
+      metadata: this.metadataState,
+      agent,
+    });
   }
 
   modelSelectionBlockedReason(agent: GatewayAgentRow | undefined): string | undefined {
-    if (
-      this.agentRuntime &&
-      this.metadataState.hasSnapshot &&
-      !resolveDraftModelTarget(this.effectiveModel, undefined, this.catalog, this.agentRuntime)
-        ?.entry
-    ) {
-      return t("chat.modelControls.modelsUnavailable");
-    }
-    if (this.draftAccount) {
-      if (this.metadataState.status === "error") {
-        return t("chat.modelControls.modelsUnavailable");
-      }
-      if (this.metadataRequest || !this.metadataState.hasSnapshot) {
-        return t("chat.modelControls.loadingModels");
-      }
-      if (!this.accountSelectionReady()) {
-        return (
-          chatModelUnavailableMessage(this.modelUnavailableReason(agent)) ??
-          t("chat.modelControls.modelsUnavailable")
-        );
-      }
-    }
-    return chatModelUnavailableMessage(this.modelUnavailableReason(agent));
+    return resolveDraftModelSelectionBlockedReason({
+      model: this.effectiveModel,
+      agentRuntime: this.agentRuntime,
+      metadata: this.metadataState,
+      agent,
+      initialModelPending: this.initialModelPending,
+      accountSelected: Boolean(this.draftAccount),
+      accountReady: this.accountSelectionReady(),
+      metadataPending: Boolean(this.metadataRequest),
+    });
   }
 
   modelForSubmission(): string {
@@ -476,13 +524,7 @@ export class NewSessionModelControl {
     ) {
       return false;
     }
-    const target = resolveDraftModelTarget(
-      this.draftAccount.model,
-      undefined,
-      this.catalog,
-      this.agentRuntime,
-    );
-    return target?.entry?.available === true && target.provider === this.draftAccount.provider;
+    return isDraftAccountModelAvailable(this.draftAccount, this.catalog, this.agentRuntime);
   }
 
   private restorePreference() {
@@ -490,24 +532,38 @@ export class NewSessionModelControl {
     if (!preference) {
       return;
     }
+    const policy = this.metadataState.modelSelectionPolicy;
     const selection = reconcileDraftModelSelection({
       model: preference.model ?? "",
       agentRuntime: preference.agentRuntime,
       thinkingLevel: preference.thinkingLevel ?? "",
+      fastMode: preference.fastMode,
       agent: this.pendingAgent,
       defaults: this.pendingContext?.sessions.state.result?.defaults,
+      modelSelectionPolicy: policy,
       catalog: this.catalog,
     });
+    this.applyModelSelection(selection);
+    // Role filtering can hide a valid saved preference until access is restored.
+    if (selection.repaired && !this.initialModelPending && !policy?.restricted) {
+      this.persistSelection(preference.agentRuntime ? (this.agentRuntime ?? "") : undefined);
+    }
+  }
+
+  private applyModelSelection(selection: ReturnType<typeof reconcileDraftModelSelection>) {
     this.selected = selection.model;
     this.agentRuntime = selection.agentRuntime;
     this.thinkingLevel = selection.thinkingLevel;
-    if (selection.repaired) {
-      this.onSelectionChange({
-        model: selection.model,
-        ...(preference.agentRuntime ? { agentRuntime: this.agentRuntime ?? "" } : {}),
-        thinkingLevel: selection.thinkingLevel,
-      });
-    }
+    this.fastMode = selection.fastMode;
+  }
+
+  private persistSelection(agentRuntime = this.agentRuntime) {
+    this.onSelectionChange({
+      model: this.selected,
+      ...(agentRuntime !== undefined ? { agentRuntime } : {}),
+      thinkingLevel: this.thinkingLevel,
+      fastMode: this.fastMode,
+    });
   }
 
   resolveAgentRuntime(
@@ -522,14 +578,13 @@ export class NewSessionModelControl {
       agent: options.agent,
       defaults: options.context?.sessions.state.result?.defaults,
       catalog: this.metadataState.displayOnly ? [] : this.catalog,
+      modelSelectionPolicy: this.metadataState.modelSelectionPolicy,
+      retired: this.metadataState.retired,
     });
   }
 
   devicePlacementUnsupportedReason(): string | undefined {
-    const runtime = this.resolveAgentRuntime();
-    return runtime && !runtime.devicePlacement
-      ? t("newSession.deviceRuntimeUnsupported")
-      : undefined;
+    return resolveDraftDevicePlacementUnsupportedReason(this.resolveAgentRuntime());
   }
 
   // Worker-turn runtimes rank automatic placement by free worker slots;
@@ -542,16 +597,7 @@ export class NewSessionModelControl {
   }
 
   cloudRuntimeUnsupportedReason(profile?: DraftCloudProfile): string | undefined {
-    const runtime = this.resolveAgentRuntime();
-    if (runtime?.cloudPlacementSupported === false) {
-      return t("newSession.cloudRuntimeUnsupported", { runtime: runtime.id });
-    }
-    return runtime &&
-      profile &&
-      runtime.cloudPlacementExecutionMode &&
-      !draftCloudProfileSupportsExecutionMode(profile, runtime.cloudPlacementExecutionMode)
-      ? t("newSession.cloudProfileRuntimeUnsupported", { runtime: runtime.id })
-      : undefined;
+    return resolveDraftCloudRuntimeUnsupportedReason(this.resolveAgentRuntime(), profile);
   }
 
   render(options: {
@@ -564,18 +610,13 @@ export class NewSessionModelControl {
     const sessionKey = `new-session:${normalizeAgentId(options.agentId)}`;
     const sourceResult = options.context?.sessions.state.result ?? null;
     const agentDefaultsAvailable = options.agent !== undefined;
-    const agentDefaultModel = options.agent?.model?.primary;
-    const defaultTarget = resolveDraftModelTarget(
-      agentDefaultModel ?? sourceResult?.defaults.model,
-      agentDefaultModel ? undefined : sourceResult?.defaults.modelProvider,
-      this.catalog,
-    );
-    const selectedTarget = resolveDraftModelTarget(
-      this.effectiveModel,
-      undefined,
-      this.catalog,
-      this.agentRuntime,
-    );
+    const { defaultTarget, ...modelControls } = resolveDraftModelControls({
+      model: this.effectiveModel,
+      selection: this,
+      metadata: this.metadataState,
+      agent: options.agent,
+      defaults: sourceResult?.defaults,
+    });
     const client = snapshot?.client;
     const scope = this.metadataScope;
     const accountSelection = this.metadataState.accountSelection;
@@ -586,13 +627,8 @@ export class NewSessionModelControl {
         this.ownsMetadata(client, scope) &&
         this.metadataState.accountSelection === accountSelection,
       );
-    const thinkingDefaults = resolveDraftThinkingDefaults(
-      defaultTarget,
-      options.agent,
-      sourceResult?.defaults,
-      this.catalog,
-    );
     return renderChatModelControls({
+      ...modelControls,
       renderAccountSection: (model) =>
         renderChatModelAccountControl({
           owner: this,
@@ -617,34 +653,10 @@ export class NewSessionModelControl {
           onRequestUpdate: this.notify,
         }),
       activeRunId: null,
-      agentDefaultModel,
       connected: snapshot?.phase === "connected",
       gatewayAvailable: Boolean(snapshot?.client),
       loading: false,
       modelCatalog: this.catalog,
-      modelCatalogState: {
-        // The model catalog and agents.list hydrate independently. Do not expose a
-        // ready catalog until the selected agent can supply its concrete defaults.
-        hasSnapshot: agentDefaultsAvailable && this.metadataState.hasSnapshot,
-        refreshFailed: this.metadataState.refreshFailed,
-        pendingProviders: this.metadataState.pendingProviders,
-        status:
-          !agentDefaultsAvailable && this.metadataState.status !== "error"
-            ? "loading"
-            : this.metadataState.status,
-      },
-      contextWindowTarget: resolveDraftContextWindowTarget(
-        selectedTarget?.entry ?? defaultTarget?.entry,
-        this.contextWindow,
-      ),
-      fastModeTarget: {
-        agentRuntime: selectedTarget?.entry?.agentRuntime ?? defaultTarget?.entry?.agentRuntime,
-        model: selectedTarget?.model ?? defaultTarget?.model,
-        modelProvider: selectedTarget?.provider ?? defaultTarget?.provider ?? undefined,
-        fastMode: this.fastMode,
-        effectiveFastMode:
-          this.fastMode ?? (selectedTarget?.entry ?? defaultTarget?.entry)?.effectiveFastMode,
-      },
       modelOverrides: { [sessionKey]: this.effectiveModel || null },
       modelPickerTargetGroups: this.catalogTargets.groups(),
       modelSwitching: false,
@@ -654,31 +666,32 @@ export class NewSessionModelControl {
       selectedAgentRuntime: this.agentRuntime,
       sessionsResult: agentDefaultsAvailable ? sourceResult : null,
       stream: null,
-      thinkingDefaults,
-      thinkingSession: resolveDraftThinkingTarget(selectedTarget, undefined, this),
       onModelSelect: (value, _sessionKey, agentRuntime) => {
         this.selectionGeneration += 1;
+        this.initialModelPending = false;
         this.restoringPreference = false;
         const selection = reconcileDraftModelSelection({
           model: value,
           agentRuntime: agentRuntime ?? undefined,
           thinkingLevel: this.thinkingLevel,
+          fastMode: this.fastMode,
           agent: options.agent,
           defaults: options.context?.sessions.state.result?.defaults,
+          modelSelectionPolicy: this.metadataState.modelSelectionPolicy,
           catalog: this.catalog,
         });
         if (
           selection.model === this.effectiveModel &&
           selection.agentRuntime === this.agentRuntime &&
+          selection.fastMode === this.fastMode &&
           normalizeThinkingOptionValue(selection.thinkingLevel) ===
             normalizeThinkingOptionValue(this.thinkingLevel)
         ) {
           return;
         }
         this.metadataState.displayOnly = false;
-        this.selected = selection.model;
         const runtimeChanged = this.agentRuntime !== selection.agentRuntime;
-        this.agentRuntime = selection.agentRuntime;
+        this.applyModelSelection(selection);
         const target =
           resolveDraftModelTarget(selection.model, undefined, this.catalog, this.agentRuntime) ??
           defaultTarget;
@@ -692,15 +705,7 @@ export class NewSessionModelControl {
           };
         }
         this.contextWindow = "";
-        this.thinkingLevel = selection.thinkingLevel;
-        this.fastMode = isChatFastModeProviderSupported(target?.provider)
-          ? this.fastMode
-          : undefined;
-        this.onSelectionChange({
-          model: selection.model,
-          ...(runtimeChanged || this.agentRuntime ? { agentRuntime: this.agentRuntime ?? "" } : {}),
-          thinkingLevel: this.thinkingLevel,
-        });
+        this.persistSelection(runtimeChanged ? (this.agentRuntime ?? "") : undefined);
       },
       onModelPickerTargetSelect: (groupId, catalogId) => {
         if (groupId === "cliAgents") {
@@ -716,16 +721,13 @@ export class NewSessionModelControl {
         this.selectionGeneration += 1;
         this.restoringPreference = false;
         this.thinkingLevel = value;
-        this.onSelectionChange({
-          model: this.selected,
-          ...(this.agentRuntime ? { agentRuntime: this.agentRuntime } : {}),
-          thinkingLevel: this.thinkingLevel,
-        });
+        this.persistSelection();
       },
       onFastModeSelect: (value) => {
         this.selectionGeneration += 1;
         this.restoringPreference = false;
         this.fastMode = normalizeChatFastModeInput(value);
+        this.persistSelection();
         this.notify();
       },
       onContextWindowSelect: (value) => {

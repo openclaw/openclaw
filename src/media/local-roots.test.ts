@@ -1,4 +1,6 @@
 // Local media root tests cover allowed root normalization and matching.
+import { realpathSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -12,6 +14,8 @@ import {
   getDefaultMediaLocalRoots,
   getSessionSafeDefaultMediaLocalRoots,
 } from "./local-roots.js";
+
+const testTempRoot = realpathSync(os.tmpdir());
 
 function loadedConfig(config: OpenClawConfig): OpenClawConfig {
   return migratePersistedImplicitMainRoster(config).config as OpenClawConfig;
@@ -99,7 +103,7 @@ describe("local media roots", () => {
   it.each([
     {
       name: "keeps temp, media cache, canvas, and workspace roots by default",
-      stateDir: path.join("/tmp", "openclaw-media-roots-state"),
+      stateDir: path.join(testTempRoot, "openclaw-media-roots-state"),
       getRoots: () => getDefaultMediaLocalRoots(),
       expectedContained: ["media", "canvas", "workspace", "sandboxes"],
       expectedExcluded: ["agents"],
@@ -107,31 +111,31 @@ describe("local media roots", () => {
     },
     {
       name: "adds the active agent workspace without re-opening broad agent or sandbox roots",
-      stateDir: path.join("/tmp", "openclaw-agent-media-roots-state"),
+      stateDir: path.join(testTempRoot, "openclaw-agent-media-roots-state"),
       getRoots: () => getAgentScopedMediaLocalRoots({}, "ops"),
       expectedContained: ["workspace-ops"],
       expectedExcluded: ["agents", "sandboxes"],
     },
     {
       name: "replaces broad workspace and sandbox roots with the exact session workspace",
-      stateDir: path.join("/tmp", "openclaw-session-media-roots-state"),
+      stateDir: path.join(testTempRoot, "openclaw-session-media-roots-state"),
       getRoots: () =>
         getAgentScopedMediaLocalRoots(
           {},
           "ops",
-          path.join("/tmp", "openclaw-session-media-roots-state", "sandboxes", "session-a"),
+          path.join(testTempRoot, "openclaw-session-media-roots-state", "sandboxes", "session-a"),
         ),
       expectedContained: ["sandboxes/session-a"],
       expectedExcluded: ["agents", "workspace", "sandboxes"],
     },
     {
       name: "does not accept the shared sandbox parent as an exact session workspace",
-      stateDir: path.join("/tmp", "openclaw-shared-sandbox-parent-state"),
+      stateDir: path.join(testTempRoot, "openclaw-shared-sandbox-parent-state"),
       getRoots: () =>
         getAgentScopedMediaLocalRoots(
           {},
           "ops",
-          path.join("/tmp", "openclaw-shared-sandbox-parent-state", "sandboxes"),
+          path.join(testTempRoot, "openclaw-shared-sandbox-parent-state", "sandboxes"),
         ),
       expectedContained: [],
       expectedExcluded: ["agents", "workspace", "sandboxes"],
@@ -147,7 +151,7 @@ describe("local media roots", () => {
   });
 
   it("does not promote sibling sandbox directories via source-parent expansion", () => {
-    const stateDir = path.join("/tmp", "openclaw-sibling-sandbox-expansion-state");
+    const stateDir = path.join(testTempRoot, "openclaw-sibling-sandbox-expansion-state");
     const sessionWorkspaceDir = path.join(stateDir, "sandboxes", "session-a");
     const siblingFile = path.join(stateDir, "sandboxes", "session-b", "secret.txt");
 
@@ -168,7 +172,7 @@ describe("local media roots", () => {
   });
 
   it("does not re-add the shared workspace via source-parent expansion for sandboxed sessions", () => {
-    const stateDir = path.join("/tmp", "openclaw-shared-workspace-expansion-state");
+    const stateDir = path.join(testTempRoot, "openclaw-shared-workspace-expansion-state");
     const sessionWorkspaceDir = path.join(stateDir, "sandboxes", "session-a");
     const sharedWorkspaceFile = path.join(stateDir, "workspace", "notes.png");
 
@@ -185,7 +189,7 @@ describe("local media roots", () => {
   });
 
   it("keeps parent expansion for locations outside shared isolation parents", () => {
-    const stateDir = path.join("/tmp", "openclaw-parent-expansion-state");
+    const stateDir = path.join(testTempRoot, "openclaw-parent-expansion-state");
     const externalDir =
       process.platform === "win32" ? "C:\\Users\\peter\\Downloads" : "/Users/peter/Downloads";
 
@@ -202,7 +206,7 @@ describe("local media roots", () => {
   });
 
   it("keeps own sandbox parents readable via source-parent expansion", () => {
-    const stateDir = path.join("/tmp", "openclaw-own-sandbox-expansion-state");
+    const stateDir = path.join(testTempRoot, "openclaw-own-sandbox-expansion-state");
     const sessionWorkspaceDir = path.join(stateDir, "sandboxes", "session-a");
     const ownFile = path.join(sessionWorkspaceDir, "media", "clip.mp4");
 
@@ -219,7 +223,7 @@ describe("local media roots", () => {
   });
 
   it("excludes shared sandbox parents from session-safe default attachment roots", () => {
-    const stateDir = path.join("/tmp", "openclaw-session-safe-defaults-state");
+    const stateDir = path.join(testTempRoot, "openclaw-session-safe-defaults-state");
 
     const roots = withStateDir(stateDir, () => getSessionSafeDefaultMediaLocalRoots());
 
@@ -231,7 +235,7 @@ describe("local media roots", () => {
   });
 
   it("drops the shared workspace from session-safe attachment roots for sandboxed sessions", () => {
-    const stateDir = path.join("/tmp", "openclaw-session-safe-sandbox-state");
+    const stateDir = path.join(testTempRoot, "openclaw-session-safe-sandbox-state");
     const sessionWorkspaceDir = path.join(stateDir, "sandboxes", "session-a");
 
     const roots = withStateDir(stateDir, () =>
@@ -248,7 +252,7 @@ describe("local media roots", () => {
   });
 
   it("keeps the shared workspace in session-safe attachment roots when the session workspace lives inside it", () => {
-    const stateDir = path.join("/tmp", "openclaw-session-safe-host-workspace-state");
+    const stateDir = path.join(testTempRoot, "openclaw-session-safe-host-workspace-state");
 
     const roots = withStateDir(stateDir, () =>
       getSessionSafeDefaultMediaLocalRoots(path.join(stateDir, "workspace")),
@@ -294,25 +298,25 @@ describe("local media roots", () => {
   it.each([
     {
       name: "widens agent media roots for concrete local sources when workspaceOnly is disabled",
-      stateDir: path.join("/tmp", "openclaw-flexible-media-roots-state"),
+      stateDir: path.join(testTempRoot, "openclaw-flexible-media-roots-state"),
       cfg: {},
       shouldContainPictures: true,
     },
     {
       name: "does not widen agent media roots when workspaceOnly is enabled",
-      stateDir: path.join("/tmp", "openclaw-flexible-media-roots-state"),
+      stateDir: path.join(testTempRoot, "openclaw-flexible-media-roots-state"),
       cfg: { tools: { fs: { workspaceOnly: true } } },
       shouldContainPictures: false,
     },
     {
       name: "does not widen media roots for messaging-profile agents without filesystem tools",
-      stateDir: path.join("/tmp", "openclaw-messaging-media-roots-state"),
+      stateDir: path.join(testTempRoot, "openclaw-messaging-media-roots-state"),
       cfg: { tools: { profile: "messaging" } },
       shouldContainPictures: false,
     },
     {
       name: "does not widen media roots when messaging-profile agents only configure filesystem guards",
-      stateDir: path.join("/tmp", "openclaw-messaging-fs-media-roots-state"),
+      stateDir: path.join(testTempRoot, "openclaw-messaging-fs-media-roots-state"),
       cfg: {
         tools: {
           profile: "messaging",
@@ -323,7 +327,7 @@ describe("local media roots", () => {
     },
     {
       name: "widens media roots when messaging-profile agents explicitly allow reads",
-      stateDir: path.join("/tmp", "openclaw-messaging-read-media-roots-state"),
+      stateDir: path.join(testTempRoot, "openclaw-messaging-read-media-roots-state"),
       cfg: {
         tools: {
           profile: "messaging",

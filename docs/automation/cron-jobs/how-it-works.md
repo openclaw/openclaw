@@ -23,9 +23,9 @@ How the Gateway scheduler runs a job, what it keeps between runs, and how a repe
 
 <AccordionGroup>
   <Accordion title="Isolated run hardening">
-    - Scheduled runs have their own execution lifetime. Ending the conversation turn that created or updated a schedule does not revoke later scheduled work.
+    - Scheduled runs have their own execution lifetime from admission through result persistence and cleanup. Timer ticks, startup catch-up, and event-source watchers do not inherit the request state of the conversation that created or updated them. Manual runs retain their caller authority.
     - Isolated runs best-effort close tracked browser tabs/processes for their `cron:<jobId>` session on completion, and dispose any bundled MCP runtime instances created for the job through the same shared teardown path used by main-session and custom-session runs. Cleanup failures are ignored so the run result still wins.
-    - A run's continuation session stays available while descendant subagents are running or their completion delivery is pending, so cleanup cannot strand their results.
+    - A run's continuation session stays available while descendant subagents are running or their completion delivery is pending, including during retention sweeps, so cleanup cannot strand their results.
     - Isolated runs with the narrow automation self-cleanup grant can read scheduler status, a self-filtered list containing only their own job, and that job's run history, and may remove only their own job.
     - Isolated runs guard against stale acknowledgement replies: if the first result is only an interim status update (`on it`, `pulling everything together`, and similar hints) and no descendant subagent is still responsible for the final answer, OpenClaw re-prompts once for the actual result before delivery. Run totals include both completed prompts, priced by their respective models; session context usage still reflects the final model request.
     - Structured execution-denial metadata (including node-host `UNAVAILABLE` wrappers whose nested error starts with `SYSTEM_RUN_DENIED` or `INVALID_REQUEST`) is recognized so a blocked command is not reported as a green run, while ordinary assistant prose is not mistaken for a denial.

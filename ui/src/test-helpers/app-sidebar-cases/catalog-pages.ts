@@ -9,6 +9,7 @@ import {
   createGatewayHarness,
   createSessions,
   mountSidebar,
+  mountSessionCatalogSidebar,
   TWO_AGENTS,
 } from "../app-sidebar.ts";
 import { registerCatalogPageHostTests } from "./catalog-page-hosts.ts";
@@ -246,20 +247,9 @@ describe("AppSidebar session catalog pagination", () => {
           .mockResolvedValueOnce(catalogPage([{ threadId: "thread-1", name: "Newest" }], "page-2"))
           .mockResolvedValueOnce(structuredError)
           .mockResolvedValueOnce(catalogPage([{ threadId: "thread-2", name: "Older" }]));
-        const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-        gateway.publish({
-          hello: {
-            features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
-          } as ApplicationGatewaySnapshot["hello"],
-        });
-        const { sidebar } = await mountSidebar(
-          gateway.gateway,
-          createSessions("main", ["agent:main:main"]),
-        );
-        sidebar.connected = true;
-        await sidebar.updateComplete;
-        await vi.advanceTimersByTimeAsync(0);
-        await sidebar.updateComplete;
+        const { sidebar } = await mountSessionCatalogSidebar({
+          request,
+        } as unknown as GatewayBrowserClient);
 
         const loadMore = () =>
           sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]');
@@ -303,26 +293,15 @@ describe("AppSidebar session catalog pagination", () => {
           catalogPage([{ threadId: "thread-1", name: "Updated" }], "replacement-page"),
         )
         .mockResolvedValueOnce(catalogPage([{ threadId: "thread-3", name: "Replacement" }]));
-      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-      gateway.publish({
-        hello: {
-          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
-        } as ApplicationGatewaySnapshot["hello"],
-      });
-      const { sidebar } = await mountSidebar(
-        gateway.gateway,
-        createSessions("main", ["agent:main:main"]),
-      );
-      sidebar.connected = true;
-      await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
+      const { gateway, sidebar } = await mountSessionCatalogSidebar({
+        request,
+      } as unknown as GatewayBrowserClient);
 
       const loadMore = () =>
         sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]');
       loadMore()?.click();
       gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       await sidebar.updateComplete;
       expect(sidebar.textContent).toContain("Updated");
 
@@ -358,24 +337,13 @@ describe("AppSidebar session catalog pagination", () => {
         .mockResolvedValueOnce(catalogPage([{ threadId: "thread-1", name: "Initial" }], "page-2"))
         .mockReturnValueOnce(stalePage)
         .mockResolvedValueOnce(catalogPage([{ threadId: "thread-1", name: "Updated" }], "page-2"));
-      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-      gateway.publish({
-        hello: {
-          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
-        } as ApplicationGatewaySnapshot["hello"],
-      });
-      const { sidebar } = await mountSidebar(
-        gateway.gateway,
-        createSessions("main", ["agent:main:main"]),
-      );
-      sidebar.connected = true;
-      await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
+      const { gateway, sidebar } = await mountSessionCatalogSidebar({
+        request,
+      } as unknown as GatewayBrowserClient);
 
       sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]')?.click();
       gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       await sidebar.updateComplete;
       expect(sidebar.textContent).toContain("Updated");
 
@@ -406,20 +374,9 @@ describe("AppSidebar session catalog pagination", () => {
         if (errorPage === "expanded page") {
           request.mockResolvedValueOnce(catalogErrorPage("Page refresh failed"));
         }
-        const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-        gateway.publish({
-          hello: {
-            features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
-          } as ApplicationGatewaySnapshot["hello"],
-        });
-        const { sidebar } = await mountSidebar(
-          gateway.gateway,
-          createSessions("main", ["agent:main:main"]),
-        );
-        sidebar.connected = true;
-        await sidebar.updateComplete;
-        await vi.advanceTimersByTimeAsync(0);
-        await sidebar.updateComplete;
+        const { gateway, sidebar } = await mountSessionCatalogSidebar({
+          request,
+        } as unknown as GatewayBrowserClient);
 
         sidebar
           .querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]')
@@ -429,7 +386,7 @@ describe("AppSidebar session catalog pagination", () => {
         expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.sessions).toHaveLength(2);
 
         gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-        await vi.advanceTimersByTimeAsync(200);
+        await vi.advanceTimersByTimeAsync(5_000);
         await sidebar.updateComplete;
         const host = sidebar.sessionData.sessionCatalogs[0]?.hosts[0];
         expect(host?.sessions.map((session) => session.threadId)).toEqual(["thread-1", "thread-2"]);
@@ -468,31 +425,20 @@ describe("AppSidebar session catalog pagination", () => {
           catalogPage([{ threadId: "thread-3", name: "Reappeared" }], "page-2"),
         )
         .mockResolvedValue(catalogErrorPage("Replay failed"));
-      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-      gateway.publish({
-        hello: {
-          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
-        } as ApplicationGatewaySnapshot["hello"],
-      });
-      const { sidebar } = await mountSidebar(
-        gateway.gateway,
-        createSessions("main", ["agent:main:main"]),
-      );
-      sidebar.connected = true;
-      await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
+      const { gateway, sidebar } = await mountSessionCatalogSidebar({
+        request,
+      } as unknown as GatewayBrowserClient);
       sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]')?.click();
       await vi.advanceTimersByTimeAsync(0);
       await sidebar.updateComplete;
 
       gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       await sidebar.updateComplete;
       expect(sidebar.sessionData.sessionCatalogs[0]?.hosts).toEqual([]);
 
       gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-      await vi.advanceTimersByTimeAsync(999);
+      await vi.advanceTimersByTimeAsync(4_999);
       expect(sidebar.sessionData.sessionCatalogs[0]?.hosts).toEqual([]);
       await vi.advanceTimersByTimeAsync(1);
       await sidebar.updateComplete;
@@ -533,20 +479,9 @@ describe("AppSidebar session catalog pagination", () => {
         })
         .mockReturnValueOnce(codexPage)
         .mockReturnValueOnce(claudePage);
-      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-      gateway.publish({
-        hello: {
-          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
-        } as ApplicationGatewaySnapshot["hello"],
-      });
-      const { sidebar } = await mountSidebar(
-        gateway.gateway,
-        createSessions("main", ["agent:main:main"]),
-      );
-      sidebar.connected = true;
-      await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
+      const { sidebar } = await mountSessionCatalogSidebar({
+        request,
+      } as unknown as GatewayBrowserClient);
 
       sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]')?.click();
       sidebar

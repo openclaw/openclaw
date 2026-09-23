@@ -13,7 +13,6 @@ import {
   type ReportEnvelope,
   type RunnerResolvedPlan,
   type RunnerSelection,
-  type TabId,
   type CaptureEventsEnvelope,
   type CaptureCoverageEnvelope,
   type CaptureQueryEnvelope,
@@ -23,6 +22,8 @@ import {
   type UiState,
   renderQaLabUi,
 } from "./ui-render.js";
+import { stateFingerprint } from "./ui-state-fingerprint.js";
+import { bindTabNavigation } from "./ui-tab-navigation.js";
 
 function formatErrorMessage(error: unknown): string {
   return redactSensitiveText(formatSharedErrorMessage(error));
@@ -251,91 +252,6 @@ export async function createQaLabApp(root: HTMLDivElement) {
   let sparklineSweepCurrentEndPct: number | null = null;
   let captureGlobalListenersBound = false;
 
-  function stateFingerprint(): string {
-    const msgs = state.snapshot?.messages;
-    const ev = state.snapshot?.events;
-    return JSON.stringify({
-      mc: msgs?.length ?? 0,
-      lm: msgs?.at(-1)?.id ?? null,
-      cc: state.snapshot?.conversations.length ?? 0,
-      tc: state.snapshot?.threads.length ?? 0,
-      ec: ev?.length ?? 0,
-      lc: ev?.at(-1)?.cursor ?? -1,
-      rs: state.bootstrap?.runner.status,
-      ra: state.bootstrap?.runner.startedAt,
-      rf: state.bootstrap?.runner.finishedAt,
-      re: state.bootstrap?.runner.error,
-      rpo: state.runnerPlanOverride
-        ? `${state.runnerPlanOverride.status}:${state.runnerPlanOverride.selectedScenarios.length}:${state.runnerPlanOverride.exclusions.length}:${state.runnerPlanOverride.errors.join("|")}`
-        : null,
-      ss: state.scenarioRun?.status,
-      sc: state.scenarioRun?.counts,
-      so: state.scenarioRun?.scenarios.map((o) => o.status).join(","),
-      rp: state.latestReport?.generatedAt,
-      cs: state.bootstrap?.runnerCatalog.status,
-      cl: state.bootstrap?.runnerCatalog.real.length ?? 0,
-      cps: state.captureSessions.length,
-      cse: state.captureSessions[0]?.eventCount ?? 0,
-      cei: state.selectedCaptureSessionIds.join(","),
-      cec: state.captureEvents.length,
-      ceh: state.captureEvents[0]?.host ?? null,
-      ccp: state.captureQueryPreset,
-      ccq: state.captureQueryRows.length,
-      ccv: state.captureCoverage?.totalEvents ?? 0,
-      ccpv: state.captureCoverage?.providers[0]?.value ?? null,
-      ccss: state.captureStartupStatus?.proxy.ok ?? null,
-      ccsg: state.captureStartupStatus?.gateway.ok ?? null,
-      ccce: state.captureControlsExpanded,
-      ccse: state.captureSummaryExpanded,
-      ccsx: state.captureSelectedSessionsExpanded,
-      ccsv: state.captureSavedViews.map((view) => `${view.id}:${view.name}`).join("|"),
-      scc: state.sidebarCollapsed,
-      scp: state.sidebarPanel,
-      cck: state.captureKindFilter.join(","),
-      ccpf: state.captureProviderFilter.join(","),
-      cchf: state.captureHostFilter.join(","),
-      cchm: state.captureHeaderMode,
-      ccgm: state.captureGroupMode,
-      cctl: state.captureTimelineLaneMode,
-      ccts: state.captureTimelineLaneSort,
-      cctps: state.captureTimelinePreviousLaneSort,
-      cctq: state.captureTimelineLaneSearch,
-      cctz: state.captureTimelineZoom,
-      cctsm: state.captureTimelineSparklineMode,
-      cctws: state.captureTimelineWindowStartPct,
-      cctwe: state.captureTimelineWindowEndPct,
-      cctba: state.captureTimelineBrushAnchorPct,
-      cctbc: state.captureTimelineBrushCurrentPct,
-      cctff: state.captureTimelineFocusSelectedFlow,
-      cctfm: state.captureTimelineFocusedLaneMode,
-      cctft: state.captureTimelineFocusedLaneThreshold,
-      ccdp: state.captureDetailPlacement,
-      ccds: state.captureDetailSplitPct,
-      ccdsd: state.captureDetailSplitDragging,
-      ccdv: state.captureDetailView,
-      ccpdv: state.capturePreferredDetailView,
-      ccdfl: state.captureFlowDetailLayout,
-      ccdpl: state.capturePayloadDetailLayout,
-      ccdpe: state.capturePayloadExtent,
-      ccpes: state.capturePayloadEventSort,
-      ccpef: state.capturePayloadEventFilter,
-      ccli: state.captureCollapsedLaneIds.join(","),
-      ccpi: state.capturePinnedLaneIds.join(","),
-      er: state.error,
-      el: state.evidenceLoading,
-      ee: state.evidenceError,
-      ep: state.evidence?.evidencePath ?? null,
-      eg: state.evidence?.generatedAt ?? null,
-      ecnt: state.evidence?.entries.length ?? 0,
-      eac: state.evidence?.entries.reduce((sum, entry) => sum + entry.artifacts.length, 0) ?? 0,
-      epr: state.evidence?.producerContext?.rootPath ?? null,
-      esf: state.evidenceStatusFilter,
-      eaf: state.evidenceArtifactFilter,
-      esq: state.evidenceSearchText,
-      ese: state.selectedEvidenceEntryKey,
-    });
-  }
-
   function isSelectOpen(): boolean {
     const active = document.activeElement;
     return active !== null && root.contains(active) && active.tagName === "SELECT";
@@ -478,7 +394,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
     previousRunnerStatus = currentRunnerStatus;
 
     /* Only re-render when data actually changed; defer if a <select> is open */
-    const fp = stateFingerprint();
+    const fp = stateFingerprint(state);
     if (fp !== lastFingerprint) {
       lastFingerprint = fp;
       renderDeferred = true;
@@ -826,14 +742,9 @@ export async function createQaLabApp(root: HTMLDivElement) {
 
   function bindEvents() {
     /* Tabs */
-    root.querySelectorAll<HTMLElement>("[data-tab]").forEach((node) => {
-      node.addEventListener("click", () => {
-        const nextTab = node.dataset.tab as TabId | undefined;
-        if (nextTab) {
-          state.activeTab = nextTab;
-          render();
-        }
-      });
+    bindTabNavigation(root, (nextTab) => {
+      state.activeTab = nextTab;
+      render();
     });
 
     /* Conversation chips */

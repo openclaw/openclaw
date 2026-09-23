@@ -18,7 +18,14 @@ type EmbeddedMessageDeliveryFact = {
 const NON_DELIVERY_IDS = new Set(["skipped", "suppressed"]);
 const NON_DELIVERY_STATUSES = new Set(["failed", ...NON_DELIVERY_IDS]);
 const STATUSES = new Set(["settled", "suppressed", "dryRun", "failed"]);
-const PLUGIN_ENVELOPE_KEYS = ["details", "payload", "result", "results", "toolResult"];
+const PLUGIN_ENVELOPE_KEYS = [
+  "details",
+  "payload",
+  "result",
+  "results",
+  "sendResult",
+  "toolResult",
+];
 
 const EMPTY_DELIVERY_FACT: Pick<
   EmbeddedMessageDeliveryFact,
@@ -203,7 +210,7 @@ export function projectPluginMessageDeliveryFact(
   if (pluginEnvelopeHas(value, "nonDelivery")) {
     return { status: "suppressed", ...EMPTY_DELIVERY_FACT };
   }
-  if (pluginEnvelopeHas(value, "noOp")) {
+  if (pluginEnvelopeHas(value, "noOp") || pluginEnvelopeHas(value, "failure")) {
     return { status: "failed", ...EMPTY_DELIVERY_FACT };
   }
   if (!pluginEnvelopeHas(value, "delivery") && !pluginEnvelopeHas(value, "ok")) {

@@ -12,10 +12,7 @@ import {
   runAgentHarnessBeforeCompactionHook,
   clearActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  asOptionalRecord,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeAcceptedSessionSpawnResult } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { registerCopilotActiveRun } from "./attempt-active-run.js";
 import { deferBackgroundCompactionCleanup } from "./attempt-cleanup.js";
 import {
@@ -269,13 +266,11 @@ export async function runCopilotExecution(context: {
           modelId: modelRef.id,
           agentId: readNonEmptyString(params.agentId) ?? "copilot",
           sessionId: readNonEmptyString(input.sessionId) ?? "copilot-session",
-          sessionKey: readNonEmptyString((input as { sessionKey?: unknown }).sessionKey),
           agentDir: readNonEmptyString(input.agentDir),
           workspaceDir: effectiveWorkspaceDir,
           cwd: effectiveCwd,
           sandbox,
           spawnWorkspaceDir: sandboxAwareSpawnWorkspaceDir,
-          abortSignal: params.abortSignal,
           attemptParams: observeToolTerminal ? { ...input, observeToolTerminal } : input,
           computerContextEpoch,
           sessionRef,
@@ -286,21 +281,12 @@ export async function runCopilotExecution(context: {
           onToolCompleted: async (completion) => {
             bridge?.completeTool(completion);
             const { args, error, result, startedAt, toolCallId, toolName } = completion;
-            const acceptedSessionSpawnDetails =
+            const acceptedSessionSpawn =
               toolName === "sessions_spawn" && !completion.isError
-                ? asOptionalRecord(asOptionalRecord(result)?.details)
-                : undefined;
-            const runId = normalizeOptionalString(acceptedSessionSpawnDetails?.runId);
-            const childSessionKey = normalizeOptionalString(
-              acceptedSessionSpawnDetails?.childSessionKey,
-            );
-            if (acceptedSessionSpawnDetails?.status === "accepted" && runId && childSessionKey) {
-              acceptedSessionSpawns.push({
-                runId,
-                childSessionKey,
-                expectsCompletionMessage:
-                  acceptedSessionSpawnDetails.expectsCompletionMessage === true,
-              });
+                ? normalizeAcceptedSessionSpawnResult(result)
+                : null;
+            if (acceptedSessionSpawn) {
+              acceptedSessionSpawns.push(acceptedSessionSpawn);
             }
             await runAgentHarnessAfterToolCallHook({
               toolName,

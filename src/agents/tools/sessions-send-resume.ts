@@ -1,4 +1,4 @@
-/** Explicit parent task resume; ordinary session messages never enter this route. */
+/** Parent task continuation with one completion owner across execution turns. */
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { bindInProcessSubagentResume } from "../../gateway/in-process-subagent-resume.js";
@@ -7,8 +7,21 @@ import { bindParentSubagentResume } from "../../gateway/session-subagent-resume.
 import { formatErrorMessage } from "../../infra/errors.js";
 import { loadSessionEntryByKey } from "../subagents/announce/subagent-announce-delivery.js";
 import { jsonResult } from "./common.js";
+import {
+  captureGatewayToolCallerAssertion,
+  getGatewayToolCallerIdentity,
+} from "./gateway-caller-context.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import { recordSessionToolActionFact } from "./sessions-helpers.js";
+
+/** Retain the admitted caller before asynchronous session resolution. */
+export function captureSessionsSendResumeCaller(): TrustedAgentToolCaller | undefined {
+  const caller = getGatewayToolCallerIdentity();
+  const assertCurrent = captureGatewayToolCallerAssertion();
+  return caller && assertCurrent
+    ? { agentId: caller.agentId, sessionKey: caller.sessionKey, assertCurrent }
+    : undefined;
+}
 
 /** Dispatches one exact paused-task successor and leaves final delivery to its registry owner. */
 export async function resumeSessionsSendTask(params: {

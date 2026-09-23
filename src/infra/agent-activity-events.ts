@@ -138,7 +138,11 @@ export function projectAgentHistoryActivity(
   const entries = messages.map(({ messageId, message }) => {
     const record = asOptionalRecord(message);
     const metadata = asOptionalRecord(record?.["__openclaw"]);
-    if (record?.role === "user" && !metadata?.steerTargetRunId) {
+    if (
+      record?.role === "user" &&
+      !metadata?.steerTargetRunId &&
+      !(record.excludeFromContext === true && metadata?.contextFreeCommand === true)
+    ) {
       turn += 1;
     }
     const nestedActivity = readNestedToolActivity(message);

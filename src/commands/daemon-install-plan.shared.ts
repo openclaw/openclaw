@@ -7,6 +7,7 @@ import {
   resolvePreferredNodePath,
 } from "../daemon/runtime-paths.js";
 import type { GatewayServiceEnvironmentValueSource } from "../daemon/service-types.js";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import {
   emitNodeRuntimeWarning,
   type DaemonInstallWarnFn,
@@ -156,7 +157,14 @@ function resolveDaemonOpenClawBinDir(
     }
     const candidateRealpath = safeRealpathSync(candidate, realpathSync);
     if (argvRealpath && candidateRealpath && candidateRealpath !== argvRealpath) {
-      continue;
+      // Update invokes dist/index.js; the same installation's shim targets openclaw.mjs.
+      const activeRoot = resolveOpenClawPackageRootSync({ argv1: argvRealpath });
+      if (
+        !activeRoot ||
+        resolveOpenClawPackageRootSync({ argv1: candidateRealpath }) !== activeRoot
+      ) {
+        continue;
+      }
     }
     addUniquePathDir(dirs, segment);
   }

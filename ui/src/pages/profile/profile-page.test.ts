@@ -4,7 +4,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { UserProfile } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { i18n, t } from "../../i18n/index.ts";
@@ -33,7 +32,7 @@ const modelAccountStep = {
 function createContext(
   client: GatewayBrowserClient | null = null,
   connected = false,
-): ApplicationContext<RouteId> {
+): ApplicationContext {
   const snapshot: ApplicationGatewaySnapshot = {
     client,
     phase: connected ? "connected" : "stopped",
@@ -59,8 +58,10 @@ function createContext(
       subscribe,
     },
     agents: { subscribe, ensureList: vi.fn(async () => null) },
+    // The Profile editor follows the app-owned Settings sidebar selector.
+    settingsAgentSelection: { state: { selectedId: null, scopeId: null }, subscribe },
     agentIdentity: { subscribe, ensure: vi.fn(async () => undefined) },
-  } as unknown as ApplicationContext<RouteId>;
+  } as unknown as ApplicationContext;
 }
 
 function stubProfileAvatarProcessing(decode = vi.fn<() => Promise<void>>(async () => undefined)) {
@@ -274,8 +275,12 @@ it("renders a write-access note without calling users.self for read-only viewers
 
   await page.updateComplete;
   expect(request.mock.calls).toEqual([["users.github.status", {}]]);
-  expect(page.textContent).toContain("Profile editing requires operator.write access.");
+  expect(page.textContent).toContain("Your current access does not allow profile editing.");
+  expect(page.querySelector("#settings-profile-access .settings-row__value")?.textContent).toBe(
+    "operator.read",
+  );
   expect(page.querySelector(".identity-name-control")).toBeNull();
+  expect(page.querySelector(".profile-refresh")).toBeNull();
 });
 
 it("offers identity connection setup without profile RPCs or secret inputs for unidentified connections", async () => {

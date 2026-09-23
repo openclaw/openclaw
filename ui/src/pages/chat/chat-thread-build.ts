@@ -3,8 +3,8 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
+import { readAssistantTextBlocksForPhase } from "../../../../src/shared/chat-message-content.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
-import { t } from "../../i18n/index.ts";
 import {
   type ChatGuardianNotice,
   type ChatItem,
@@ -27,7 +27,6 @@ import {
   normalizeRoleForGrouping,
 } from "../../lib/chat/message-normalizer.ts";
 import type { CanvasToolPreview } from "../../lib/chat/tool-cards.ts";
-import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { ChatMessageRecovery } from "./chat-message-recovery.ts";
 import { buildPendingInputItems } from "./chat-pending-inputs.ts";
 import {
@@ -40,6 +39,7 @@ import {
   resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
+import { projectChatSystemNotice } from "./chat-system-notice.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import {
   appendCanvasBlockToAssistantMessage,
@@ -60,8 +60,8 @@ import {
   timestampAfterVisibleItems,
   transcriptPositionTimestamp,
   type TurnInsertionBounds,
-  userTurnRunId,
 } from "./chat-thread-items.ts";
+import { latestWorkingPreamble } from "./chat-thread-preamble.ts";
 import {
   applyPersistedToolInvocationBounds,
   findCurrentTurnBounds,
@@ -75,8 +75,11 @@ import {
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { selectChatInputDisplay } from "./history-merge.ts";
-import { resolveSystemNoticeKind } from "./system-notice-kinds.ts";
-import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
+import {
+  isLiveTerminalForRun,
+  readLiveTerminalRunId,
+  readLiveTerminalAfterBoundaryRunId,
+} from "./terminal-message-identity.ts";
 import type { CompactionStatus } from "./tool-stream-contract.ts";
 
 export type BuildChatItemsProps = {
@@ -275,31 +278,10 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       continue;
     }
 
-    const provenance = asRecord(raw.provenance);
-    if (role === "user" && provenance?.kind === "internal_system") {
-      const noticeKind = resolveSystemNoticeKind(
-        typeof provenance.sourceTool === "string" ? provenance.sourceTool : undefined,
-      );
-      const text = noticeKind?.summaryKey
-        ? t(noticeKind.summaryKey)
-        : extractTextCached(msg)?.replace(/^\[System\] /u, "");
-      if (text?.trim()) {
-        items.push({
-          kind: "notice",
-          key: itemKey,
-          icon: noticeKind?.icon ?? "cpu",
-          label: noticeKind ? t(noticeKind.labelKey) : t("common.system"),
-          ...(noticeKind?.startsTurn === false ? {} : { startsTurn: true }),
-          ...(noticeKind?.collapsedBody ? { collapsedBody: true } : {}),
-          text,
-          timestamp: normalized.timestamp,
-          ...optionalBoundaryIdentity(userTurnRunId(msg)),
-        });
-      }
-      continue;
+    const projected = projectChatSystemNotice(item, normalized);
+    if (projected) {
+      items.push(projected);
     }
-
-    items.push(item);
   }
   const queuedSends = props.queue ?? [];
   const { queue: threadQueuedSends, pendingInputs } = selectChatInputDisplay(
@@ -324,30 +306,6 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       earliest == null ? queued.createdAt : Math.min(earliest, queued.createdAt),
     null,
   );
-  // Transient projections merge into stable history + queued-send rows by timestamp.
-  // Stable rows keep their relative order despite client and Gateway clock skew.
-  const projections: ChatProjection[] = buildPendingInputItems(
-    pendingInputs,
-    props.searchOpen ? props.searchQuery : undefined,
-    props.queue,
-    props.workspaceSyncPendingRunIds,
-    props.workerSetupPending,
-    props.messageRecovery,
-  ).map((item) => ({ item }));
-  if (compaction && compactionKey && !hasPersistedCompaction) {
-    const timestamp = compaction.startedAt ?? compaction.completedAt ?? Date.now();
-    projections.push({
-      item: {
-        ...buildCompactionDividerItem(
-          {},
-          timestamp,
-          0,
-          compaction.phase === "complete" ? "complete" : "active",
-        ),
-        key: compactionKey,
-      },
-    });
-  }
   const appendQueuedSend = (queued: ChatQueueItem) => {
     if (!shouldRenderQueuedSendInThread(queued)) {
       return;
@@ -461,6 +419,37 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   items = items.filter(
     (item) => item.kind !== "message" || hasRenderableNormalizedMessage(item.message),
   );
+  // Transient projections merge into stable history + queued-send rows by timestamp.
+  // Stable rows keep their relative order despite client and Gateway clock skew.
+  const pendingInputItems = buildPendingInputItems(
+    pendingInputs,
+    props.searchOpen ? props.searchQuery : undefined,
+    props.queue,
+    props.workspaceSyncPendingRunIds,
+    props.workerSetupPending,
+    props.messageRecovery,
+  );
+  // Custody follows visible history. Choose its floor after canvas placement and
+  // hidden-row filtering so the anchor survives projection insertion.
+  const custodyFloor = items.at(-1)?.key;
+  const projections: ChatProjection[] = pendingInputItems.map((item) => ({
+    item,
+    ...(custodyFloor ? { bounds: { afterKey: custodyFloor } } : {}),
+  }));
+  if (compaction && compactionKey && !hasPersistedCompaction) {
+    const timestamp = compaction.startedAt ?? compaction.completedAt ?? Date.now();
+    projections.push({
+      item: {
+        ...buildCompactionDividerItem(
+          {},
+          timestamp,
+          0,
+          compaction.phase === "complete" ? "complete" : "active",
+        ),
+        key: compactionKey,
+      },
+    });
+  }
   const segments = props.streamSegments;
   const afterBoundaryBySegment = new Map<ChatStreamSegment, string>();
   let latestBoundaryRunId: string | undefined;
@@ -595,11 +584,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   for (const prompt of props.questionPrompts ?? []) {
     // Pending questions live in the composer dock. Their terminal summaries are
     // timestamped transient projections, so keep their historical placement.
-    if (
-      prompt.status === "pending" ||
-      !prompt.sessionKey ||
-      !areUiSessionKeysEquivalent(prompt.sessionKey, props.sessionKey)
-    ) {
+    if (prompt.status === "pending") {
       continue;
     }
     const questionItem: ChatItem = {
@@ -621,6 +606,39 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     toolItems.map((tool) => tool.projection),
   );
   insertChatItemsByTimestamp(items, projections);
+
+  // Completion time must not move an already visible reply across queued custody.
+  // Only unsequenced live terminals use the same causal ceiling as their stream;
+  // canonical history order is never rewritten.
+  if (pendingInputItems.length) {
+    const pendingKeys = new Set(pendingInputItems.map((item) => item.key));
+    const findTerminalBounds = createRunTurnLookup(items);
+    // Relocation mutates items, so iterate a narrowed snapshot of message candidates.
+    for (const item of items.filter((candidate) => candidate.kind === "message")) {
+      const runId =
+        readLiveTerminalAfterBoundaryRunId(item.message) ?? readLiveTerminalRunId(item.message);
+      const identity = readSessionMessageIdentity(item.message);
+      if (
+        !runId ||
+        identity?.role !== "assistant" ||
+        identity.id !== null ||
+        identity.sequence !== null ||
+        identity.isImported
+      ) {
+        continue;
+      }
+      const bounds = findTerminalBounds(runId);
+      if (!bounds?.beforeKey || !pendingKeys.has(bounds.beforeKey)) {
+        continue;
+      }
+      const index = items.indexOf(item);
+      const { maximum } = insertionIndexesForBounds(items, bounds);
+      if (index > maximum) {
+        items.splice(index, 1);
+        items.splice(maximum, 0, item);
+      }
+    }
+  }
 
   // The active claw is telemetry, not a placeholder: it stays through visible
   // assistant text and tool cards until the run settles. The initial-load
@@ -651,6 +669,18 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       segments,
       tools,
     ));
+  const activeTurnRunId = latestBoundaryRunId ?? normalizeOptionalString(props.runId);
+  const activeTurnBounds = activeTurnRunId ? createRunTurnLookup(items)(activeTurnRunId) : null;
+  const appendActiveRunItem = (item: ChatItem) => {
+    // Queued custody is a ceiling for the whole live response, not just its text.
+    // Moving its working indicator past that ceiling splits and remeasures the run.
+    if (activeTurnBounds) {
+      const { maximum } = insertionIndexesForBounds(items, activeTurnBounds);
+      items.splice(maximum, 0, item);
+    } else {
+      items.push(item);
+    }
+  };
   if (props.stream !== null) {
     const text = sanitizeStreamText(props.stream);
     const prefix = accumulatedStreamText(segments, sanitizeStreamText);
@@ -669,24 +699,42 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         ...optionalRunIdentity(liveRunId),
         ...optionalBoundaryIdentity(latestBoundaryRunId ?? liveRunId),
       };
-      const liveTurnRunId = latestBoundaryRunId ?? normalizeOptionalString(props.runId);
-      // Pending-custody user rows now participate in the live tail's ceiling.
-      const liveTurnBounds = liveTurnRunId ? createRunTurnLookup(items)(liveTurnRunId) : null;
-      if (liveTurnBounds) {
-        const { maximum } = insertionIndexesForBounds(items, liveTurnBounds);
-        items.splice(maximum, 0, liveStreamItem);
-      } else {
-        items.push(liveStreamItem);
-      }
+      appendActiveRunItem(liveStreamItem);
     }
   }
   if (showWorkingIndicator) {
     const workingProgress = resolveProgress();
     const workingRunId = props.runId ?? workingProgress.runId;
-    items.push({
+    const preamble = latestWorkingPreamble(props, workingRunId);
+    if (preamble) {
+      // Move only this live presentation into the status row. The canonical
+      // messages remain intact for history, reconnect, and terminal settlement.
+      items = items.flatMap((item): ChatItem[] => {
+        if (item.kind === "message" && item.message === preamble.message) {
+          const message = asRecord(item.message)!;
+          const commentary = new Set(readAssistantTextBlocksForPhase(message, "commentary"));
+          const content = Array.isArray(message.content)
+            ? message.content.filter((block) => !commentary.has(block))
+            : [];
+          // Mixed envelopes can carry answers or tool calls beside commentary.
+          // Project those blocks unchanged instead of hiding the whole message.
+          return commentary.size && content.length
+            ? [{ ...item, message: { ...message, content, phase: undefined } }]
+            : [];
+        }
+        return item.kind === "stream" &&
+          item.runId === workingRunId &&
+          preamble.itemId &&
+          item.key === `stream-seg:${props.sessionKey}:${preamble.itemId}`
+          ? []
+          : [item];
+      });
+    }
+    appendActiveRunItem({
       kind: "reading-indicator",
       key: workingProgress.key,
       startedAt: workingProgress.startedAt,
+      ...(preamble ? { preamble: preamble.text } : {}),
       ...optionalRunIdentity(workingRunId),
       ...optionalBoundaryIdentity(latestBoundaryRunId ?? workingRunId),
     });

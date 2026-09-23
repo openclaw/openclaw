@@ -152,6 +152,7 @@ module.exports = {
     { value: "action" },
   ]);
   expect(result.stderr).toContain("native-resource diagnostic");
+  expect(fs.readdirSync(path.join(stateDir, "tmp", "plugin-captures"))).toEqual([]);
 
   const events = readEvents();
   const opened = events.filter((event) => event.event === "opened");

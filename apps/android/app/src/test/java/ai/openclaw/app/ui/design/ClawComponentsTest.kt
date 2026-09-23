@@ -725,7 +725,7 @@ class ClawComponentsTest {
 
   @Test
   fun emptySegmentedOptionsProduceNoRows() {
-    assertEquals(emptyList<List<String>>(), segmentedControlRows(emptyList()))
+    assertEquals(emptyList<List<String>>(), segmentedControlRows(emptyList<String>()))
   }
 
   @Test

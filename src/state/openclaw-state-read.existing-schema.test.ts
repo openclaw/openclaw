@@ -4,7 +4,11 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listFleetCells, reserveFleetCell } from "../fleet/registry.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
+import { iterateOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-read-connection.js";
+import {
+  withArtifactPreservingStateReads,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "./openclaw-state-db-readonly.js";
 import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -58,16 +62,20 @@ async function withoutHostSql(run: () => Promise<void>) {
   }
 }
 
-it.each(["fresh", "cached"] as const)(
+it.each(["fresh", "cached", "artifact"] as const)(
   "validates existing runtime shape on %s fixed reads without host SQL or schema repair",
   async (mode) => {
     const { env, options, record } = await fixture();
+    const read = () =>
+      mode === "artifact"
+        ? withArtifactPreservingStateReads(() => listFleetCells(env))
+        : listFleetCells(env);
     await withExistingOpenClawStateSchema(options, async () => {
       if (mode === "cached") {
         openOpenClawStateDatabase(options);
       }
       await withoutHostSql(async () => {
-        expect(await listFleetCells(env)).toEqual([record]);
+        expect(await read()).toEqual([record]);
       });
       const { DatabaseSync } = requireNodeSqlite();
       const external = new DatabaseSync(options.path);
@@ -77,7 +85,7 @@ it.each(["fresh", "cached"] as const)(
         external.close();
       }
       await withoutHostSql(async () => {
-        await expect(listFleetCells(env)).rejects.toThrow(/idx_plugin_state_listing|schema/i);
+        await expect(read()).rejects.toThrow(/idx_plugin_state_listing|schema/i);
       });
     });
     await closeOpenClawStateDatabaseAsync();
@@ -126,20 +134,35 @@ it("rejects detached fixed reads after their existing-schema scope ends", async 
   });
 });
 
-it("validates existing runtime shape before a fresh native read callback", async () => {
-  const { options } = await fixture();
-  const { DatabaseSync } = requireNodeSqlite();
-  const external = new DatabaseSync(options.path);
-  try {
-    external.exec("DROP INDEX idx_plugin_state_listing");
-  } finally {
-    external.close();
-  }
-  const read = vi.fn(() => "must not run");
-  expect(() =>
-    withExistingOpenClawStateSchema(options, () =>
-      withExistingOpenClawStateDatabaseReadOnly(read, options),
-    ),
-  ).toThrow(/idx_plugin_state_listing|schema/i);
-  expect(read).not.toHaveBeenCalled();
-});
+it.each(["fresh", "streaming"] as const)(
+  "validates existing runtime shape before a %s native read callback",
+  async (mode) => {
+    const { env, options } = await fixture();
+    await withExistingOpenClawStateSchema(options, async () => {
+      const source = mode === "streaming" ? openOpenClawStateDatabase(options) : undefined;
+      const { DatabaseSync } = requireNodeSqlite();
+      const external = new DatabaseSync(options.path);
+      try {
+        external.exec("DROP INDEX idx_plugin_state_listing");
+      } finally {
+        external.close();
+      }
+      const read = vi.fn(() => "must not run");
+      if (source) {
+        const rows = iterateOpenClawStateDatabaseReadOnly(
+          source,
+          function* () {
+            yield read();
+          },
+          env,
+        );
+        await expect(rows.next()).rejects.toThrow(/idx_plugin_state_listing|schema/i);
+      } else {
+        expect(() => withExistingOpenClawStateDatabaseReadOnly(read, options)).toThrow(
+          /idx_plugin_state_listing|schema/i,
+        );
+      }
+      expect(read).not.toHaveBeenCalled();
+    });
+  },
+);

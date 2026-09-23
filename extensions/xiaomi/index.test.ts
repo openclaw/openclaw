@@ -69,7 +69,12 @@ async function getXiaomiTokenPlanProvider() {
 }
 
 function mimoReasoningModel(
-  id: "mimo-v2.5" | "mimo-v2.5-pro" | "mimo-v2.6-pro",
+  id:
+    | "mimo-v2.5"
+    | "mimo-v2.5-pro"
+    | "mimo-v2.6-flash"
+    | "mimo-v2.6-pro"
+    | "mimo-v2.6-pro-ultraspeed",
   provider: "xiaomi" | "xiaomi-token-plan" = "xiaomi",
 ): OpenAICompletionsModel {
   return {
@@ -255,18 +260,46 @@ describe("xiaomi provider plugin", () => {
     expect(catalogProvider.baseUrl).toBe("https://api.xiaomimimo.com/v1");
 
     expect(catalogProvider.models?.map((model) => model.id)).toEqual([
+      "mimo-v2.6-pro",
+      "mimo-v2.6-flash",
+      "mimo-v2.6-pro-ultraspeed",
       "mimo-v2.5",
       "mimo-v2.5-pro",
     ]);
-    expect(catalogProvider.models?.find((m) => m.id === "mimo-v2.5")?.input).toEqual([
+    expect(catalogProvider.models?.find((m) => m.id === "mimo-v2.6-flash")?.input).toEqual([
       "text",
       "image",
     ]);
+    expect(catalogProvider.models?.find((m) => m.id === "mimo-v2.6-flash")?.cost).toEqual({
+      input: 0.14,
+      output: 0.28,
+      cacheRead: 0.0028,
+      cacheWrite: 0,
+    });
+    expect(catalogProvider.models?.find((m) => m.id === "mimo-v2.6-pro")?.cost).toEqual({
+      input: 0.435,
+      output: 0.87,
+      cacheRead: 0.0036,
+      cacheWrite: 0,
+    });
+    expect(catalogProvider.models?.find((m) => m.id === "mimo-v2.6-pro-ultraspeed")?.cost).toEqual({
+      input: 4.35,
+      output: 8.7,
+      cacheRead: 0.036,
+      cacheWrite: 0,
+    });
     expect(catalogProvider.models?.every((model) => model.reasoning)).toBe(true);
   });
 
-  it("exposes Token Plan v2.5 catalog rows only after a provider config selects a region", async () => {
-    const response = Response.json({ data: [{ id: "mimo-v2.5" }, { id: "mimo-v2.5-pro" }] });
+  it("exposes Token Plan catalog rows only after a provider config selects a region", async () => {
+    const response = Response.json({
+      data: [
+        { id: "mimo-v2.6-pro" },
+        { id: "mimo-v2.6-flash" },
+        { id: "mimo-v2.5" },
+        { id: "mimo-v2.5-pro" },
+      ],
+    });
     const release = vi.fn(async () => undefined);
     const guardedFetch = vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockResolvedValue({
       response,
@@ -317,11 +350,12 @@ describe("xiaomi provider plugin", () => {
       expect(configured.provider.models?.map((model) => model.id)).toEqual([
         "mimo-v2.5",
         "mimo-v2.5-pro",
+        "mimo-v2.6-flash",
+        "mimo-v2.6-pro",
       ]);
-      expect(configured.provider.models?.find((model) => model.id === "mimo-v2.5")?.input).toEqual([
-        "text",
-        "image",
-      ]);
+      expect(
+        configured.provider.models?.find((model) => model.id === "mimo-v2.6-flash")?.input,
+      ).toEqual(["text", "image"]);
       for (const model of configured.provider.models ?? []) {
         expect(model.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
       }
@@ -474,7 +508,13 @@ describe("xiaomi provider plugin", () => {
     );
     const expectedLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
-    for (const modelId of ["mimo-v2.5", "mimo-v2.5-pro", "mimo-v2.6-pro"]) {
+    for (const modelId of [
+      "mimo-v2.5",
+      "mimo-v2.5-pro",
+      "mimo-v2.6-flash",
+      "mimo-v2.6-pro",
+      "mimo-v2.6-pro-ultraspeed",
+    ]) {
       const profile = resolveThinkingProfile({ provider: "xiaomi", modelId } as never);
       expect(profile?.levels.map((l) => l.id)).toEqual(expectedLevels);
       expect(profile?.defaultLevel).toBe("high");
@@ -493,6 +533,12 @@ describe("xiaomi provider plugin", () => {
     ).toBe(true);
     expect(
       provider.isModernModelRef?.({ provider: "xiaomi", modelId: "mimo-v2.6-pro" } as never),
+    ).toBe(true);
+    expect(
+      provider.isModernModelRef?.({
+        provider: "xiaomi",
+        modelId: "mimo-v2.6-pro-ultraspeed",
+      } as never),
     ).toBe(true);
     expect(
       provider.isModernModelRef?.({ provider: "xiaomi", modelId: "custom-model" } as never),

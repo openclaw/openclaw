@@ -39,14 +39,14 @@ export function inspectDatabasePathIdentitySync(
     if (!file.isFile()) {
       return undefined;
     }
-    const canonicalPath = realpathSync(resolvedPath);
+    const canonicalPath = realpathSync.native(resolvedPath);
     return existingIdentity(file, statSync(canonicalPath, { bigint: true }), canonicalPath);
   }
   const missing: string[] = [];
   let ancestor = resolvedPath;
   while (true) {
     try {
-      const canonicalPath = path.join(realpathSync(ancestor), ...missing);
+      const canonicalPath = path.join(realpathSync.native(ancestor), ...missing);
       return { key: `path:${canonicalPath}`, canonicalPath };
     } catch (error) {
       if (!hasErrnoCode(error, "ENOENT")) {

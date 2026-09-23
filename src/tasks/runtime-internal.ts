@@ -77,3 +77,8 @@ export {
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
 export type { TaskRecord } from "./task-registry.types.js";
+export { listTaskStatesForFlowIds } from "./task-registry-query.js";
+export {
+  createTaskRegistryReadPreparation,
+  prepareTaskRegistryRead,
+} from "./task-registry-read.js";

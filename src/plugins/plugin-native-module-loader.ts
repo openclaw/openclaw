@@ -65,7 +65,7 @@ export function bindNativePluginInstanceModuleLoader(
       ? target
       : undefined;
   };
-  params.instance.lifecycle.onDispose(
+  params.instance.onModuleDispose(
     registerCapturedPluginModuleResolver({
       ...(jsxEnabled && bun
         ? {

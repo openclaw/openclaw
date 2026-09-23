@@ -1,9 +1,18 @@
 import { execFileSync } from "node:child_process";
-import { copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  copyFileSync,
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, assert, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const source = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
 type Workflow = {
@@ -14,6 +23,7 @@ type Workflow = {
   on: { workflow_dispatch: { inputs: Record<string, unknown> } };
 };
 const workflow = parse(source) as Workflow;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function step(job: string, name: string, owner = workflow) {
   const match = owner.jobs[job]?.steps.find((entry) => entry.name === name);
@@ -43,6 +53,47 @@ function checkoutPath(checkout: Record<string, unknown>) {
   }
   return checkout.path;
 }
+
+describe("automatic release flake retry boundary", () => {
+  it("gates the sole retry writer on a durable intent and makes both collectors await it", () => {
+    const owner = workflow.jobs.automatic_flake_retry;
+    assert(owner);
+    const names = owner.steps.map((entry) => entry.name);
+    const order = [
+      "Prepare automatic retry intent",
+      "Upload automatic retry intent",
+      "Record automatic retry intent digest",
+      "Save automatic retry intent",
+      "Execute automatic retry",
+      "Record automatic retry rejection digest",
+      "Upload automatic retry record",
+    ];
+    expect(order.map((name) => names.indexOf(name))).toEqual(
+      order.map((name) => names.indexOf(name)).toSorted((a, b) => a - b),
+    );
+    expect(order.every((name) => names.includes(name))).toBe(true);
+    expect(step("automatic_flake_retry", "Upload automatic retry intent").with).toMatchObject({
+      overwrite: false,
+    });
+    expect(step("automatic_flake_retry", "Execute automatic retry").if).toBe(
+      "${{ (steps.prepare.outputs.prepared == 'true' && steps.intent_witness.outcome == 'success' && steps.intent_save.outcome == 'success') || steps.prepare.outputs.restored == 'true' }}",
+    );
+    expect(step("automatic_flake_retry", "Record automatic retry rejection digest")).toMatchObject({
+      if: "${{ always() && github.run_attempt == 1 && steps.record.outputs.exists == 'true' }}",
+      run: "node scripts/full-release-flake-retry.mjs witness",
+    });
+    for (const key of ["release_decision", "diagnostic_drain"]) {
+      expect(workflow.jobs[key]).toHaveProperty("needs", [
+        "resolve_target",
+        "release_execution_plan",
+        "automatic_flake_retry",
+      ]);
+      expect(step(key, "Download automatic retry records").with).toMatchObject({
+        pattern: "full-release-flake-retry-${{ github.run_id }}-*-${{ github.run_attempt }}",
+      });
+    }
+  });
+});
 
 describe("full release metadata checkouts", () => {
   it.each([
@@ -198,6 +249,53 @@ describe("full release metadata checkouts", () => {
 });
 
 describe("full release same-parent recovery workflow", () => {
+  it.each(["failure", "success", "missing"])(
+    "reports %s locale diagnostics without changing validation evidence",
+    (conclusion) => {
+      const summaryStep = step("diagnostic_drain", "Summarize locale validation");
+      const root = tempDirs.make("openclaw-release-locales-");
+      const diagnosticPath = join(root, "diagnostics.json");
+      const summaryPath = join(root, "summary.md");
+      const diagnostic = JSON.stringify({
+        state: "blocked_complete",
+        children:
+          conclusion === "missing"
+            ? {}
+            : {
+                normalCi: {
+                  timing: {
+                    jobs: [
+                      { name: "native-i18n", conclusion: "success" },
+                      { name: "control-ui-i18n", conclusion },
+                    ],
+                  },
+                },
+              },
+      });
+      writeFileSync(diagnosticPath, diagnostic);
+      const output = execFileSync("bash", ["-e", "-c", String(summaryStep.run)], {
+        env: {
+          PATH: process.env.PATH,
+          DIAGNOSTIC_DRAIN_PATH: diagnosticPath,
+          GITHUB_STEP_SUMMARY: summaryPath,
+        },
+        encoding: "utf8",
+      });
+      const summary = readFileSync(summaryPath, "utf8");
+      expect(summary).toContain(
+        `| control-ui-i18n | ${conclusion === "missing" ? "not recorded" : conclusion} |`,
+      );
+      expect(summary).toContain(
+        `| native-i18n | ${conclusion === "missing" ? "not recorded" : "success"} |`,
+      );
+      expect(output.includes("::warning::")).toBe(conclusion === "failure");
+      if (conclusion === "failure") {
+        expect(summary).toContain("> [!WARNING]");
+      }
+      expect(readFileSync(diagnosticPath, "utf8")).toBe(diagnostic);
+    },
+  );
+
   it("has no continuation payload and dispatches child work only on attempt one", () => {
     expect(workflow.on.workflow_dispatch.inputs).not.toHaveProperty("continuation_plan_json");
     for (const job of [

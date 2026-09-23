@@ -1,4 +1,3 @@
-// Discord plugin module implements resolve allowlist common behavior.
 import type { DiscordGuildSummary } from "./guilds.js";
 import { normalizeDiscordSlug } from "./monitor/allow-list.js";
 import { normalizeDiscordToken } from "./token.js";

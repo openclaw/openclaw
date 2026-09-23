@@ -7,14 +7,16 @@ import { broadcastPresenceSnapshot } from "./presence-events.js";
 describe("broadcastPresenceSnapshot", () => {
   it("increments version and broadcasts presence with state versions", () => {
     const broadcast = vi.fn();
-    const incrementPresenceVersion = vi.fn(() => 7);
+    let nextPresenceVersion = 6;
+    const incrementPresenceVersion = vi.fn(() => ++nextPresenceVersion);
     const getHealthVersion = vi.fn(() => 11);
 
-    const presenceVersion = broadcastPresenceSnapshot({
+    const context = {
       broadcast,
       incrementPresenceVersion,
       getHealthVersion,
-    });
+    };
+    const presenceVersion = broadcastPresenceSnapshot(context);
 
     expect(presenceVersion).toBe(7);
     expect(incrementPresenceVersion).toHaveBeenCalledTimes(1);
@@ -34,5 +36,15 @@ describe("broadcastPresenceSnapshot", () => {
     expect(Array.isArray((payload as { presence?: unknown }).presence)).toBe(true);
     expect(opts?.dropIfSlow).toBe(true);
     expect(opts?.stateVersion).toEqual({ presence: 7, health: 11 });
+
+    // Explicit recovery and beacon snapshots bypass activity publication coalescing.
+    getHealthVersion.mockReturnValue(12);
+    expect(broadcastPresenceSnapshot(context)).toBe(8);
+    expect(broadcastPresenceSnapshot(context)).toBe(9);
+    expect(broadcast.mock.calls.map((call) => call[2].stateVersion)).toEqual([
+      { presence: 7, health: 11 },
+      { presence: 8, health: 12 },
+      { presence: 9, health: 12 },
+    ]);
   });
 });

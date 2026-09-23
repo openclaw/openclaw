@@ -63,7 +63,7 @@ it("reconciles remote membership without reparsing unchanged visible or hidden p
   const preview = vi.fn(() => {
     throw new Error("Unchanged resident rows must not reparse native previews");
   });
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   try {
     await control.initialize();
     expect((await control.listPage({})).sessions.map((row) => row.threadId).toSorted()).toEqual([
@@ -97,7 +97,7 @@ it("reconciles remote membership without reparsing unchanged visible or hidden p
       "removed",
     ]);
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
     await vi.waitFor(async () => {
       const sessions = (await control.listPage({})).sessions;
       expect(sessions.map((row) => row.threadId).toSorted()).toEqual([
@@ -169,7 +169,7 @@ it("walks remote pages beyond the resident bound without projecting the uncached
   const tailPreview = vi.fn(() => {
     throw new Error("Uncached native tail must not be projected on each refresh");
   });
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   try {
     await control.initialize();
     const first = await control.listPage({ limit: 64 });
@@ -179,7 +179,7 @@ it("walks remote pages beyond the resident bound without projecting the uncached
     const pages = Math.ceil(native.length / 64);
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(pages);
     Object.defineProperty(native[20_000]!, "preview", { get: tailPreview });
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
     await lastPage.promise;
     const refreshed = await control.listPage({ limit: 64 });
     await factory.stop();
@@ -223,13 +223,14 @@ it("reconciles displayed native metadata and explicit Git clears without activit
   const source = (await factory.homesForAgent("main"))[0]!;
   const control = factory.forRequest("main", source);
   const client = createClientHarness();
+  const nativeRead = vi.spyOn(client.client, "request");
   const requested = createDeferred<void>();
   const release = createDeferred<void>();
   await observeCodexCatalogClient(client.client, {
     startOptions: source.appServer.start,
     agentDir: source.agentDir,
   });
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   try {
     await control.initialize();
     expect((await control.listPage({})).sessions[0]).toMatchObject({
@@ -244,7 +245,7 @@ it("reconciles displayed native metadata and explicit Git clears without activit
       sessionId: "current-session",
       source: "vscode",
     });
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
     await vi.waitFor(async () => {
       expect((await control.listPage({})).sessions[0]).toMatchObject({
         gitBranch: "updated-branch",
@@ -258,18 +259,20 @@ it("reconciles displayed native metadata and explicit Git clears without activit
       });
     });
     Object.assign(native, { gitInfo: null });
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.waitFor(() => expect(factory.hasActiveWork()).toBe(false));
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
     await vi.waitFor(async () => {
       expect((await control.listPage({})).sessions[0]).not.toHaveProperty("gitBranch");
     });
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(3);
+    await vi.waitFor(() => expect(factory.hasActiveWork()).toBe(false));
     const older = structuredClone(native);
     commandRpcMocks.codexControlRequest.mockImplementationOnce(async () => {
       requested.resolve();
       await release.promise;
       return { data: [older] };
     });
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
     await requested.promise;
     client.send({ method: "turn/completed", params: { threadId: native.id, turn: {} } });
     const request = JSON.parse(await client.waitForWrite(0));
@@ -278,6 +281,7 @@ it("reconciles displayed native metadata and explicit Git clears without activit
       id: request.id,
       result: { thread: { ...native, gitInfo: { branch: "newer-completion" } } },
     });
+    await nativeRead.mock.results[0]!.value;
     await vi.waitFor(async () => {
       expect((await control.listPage({})).sessions[0]?.gitBranch).toBe("newer-completion");
     });

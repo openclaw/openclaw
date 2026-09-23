@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/io.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -8,6 +8,10 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  onInternalSessionTranscriptUpdate,
+  type InternalSessionTranscriptUpdate,
+} from "../sessions/transcript-events.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   resolveIncognitoOpenClawAgentSqlitePath,
@@ -21,6 +25,7 @@ import {
   appendSessionTranscriptMessageByIdentityStrict,
   appendSessionTranscriptMessagesByIdentity,
   readSessionTranscriptEvents,
+  readVisibleSessionTranscriptMessageEntries,
   type SessionTranscriptReadParams,
 } from "./session-transcript-runtime.js";
 
@@ -164,6 +169,62 @@ describe("guarded session transcript runtime SDK", () => {
       await expect(
         readSessionTranscriptEvents({ ...persistedScope, sessionId: "replacement-session" }),
       ).resolves.toEqual([]);
+    });
+
+    it("publishes a committed strict assistant with run ownership once and keeps default writes silent", async () => {
+      const updates: InternalSessionTranscriptUpdate[] = [];
+      const unsubscribe = onInternalSessionTranscriptUpdate((update) => updates.push(update));
+      try {
+        const message = {
+          role: "assistant",
+          content: [{ type: "text", text: "persisted answer" }],
+          stopReason: "stop",
+          timestamp: 1_000,
+          idempotencyKey: "native:attempt:assistant",
+        };
+        const params = {
+          ...scope,
+          message,
+          runId: "current-writer",
+          updateMode: "inline" as const,
+        };
+        const written = await appendSessionTranscriptMessageByIdentityStrict(params);
+        expect(written.kind).toBe("result");
+        if (written.kind !== "result") {
+          throw new Error("Expected a committed assistant");
+        }
+        const [entry] = await readVisibleSessionTranscriptMessageEntries(persistedScope);
+        assert(entry);
+        expect(entry.message).toMatchObject({
+          ...message,
+          __openclaw: { runId: "current-writer" },
+        });
+        expect(written.result.message).toEqual(entry.message);
+        expect(updates).toEqual([
+          expect.objectContaining({
+            message: entry.message,
+            messageId: entry.entryId,
+            messageSeq: 1,
+            runId: "current-writer",
+          }),
+        ]);
+        await expect(appendSessionTranscriptMessageByIdentityStrict(params)).resolves.toMatchObject(
+          {
+            kind: "result",
+            result: { appended: false, messageId: entry.entryId },
+          },
+        );
+        await expect(
+          appendSessionTranscriptMessageByIdentityStrict({
+            ...scope,
+            message: { ...message, idempotencyKey: "separate-journal:assistant" },
+          }),
+        ).resolves.toMatchObject({ kind: "result", result: { appended: true } });
+        expect(updates).toHaveLength(1);
+        expect(await readVisibleSessionTranscriptMessageEntries(persistedScope)).toHaveLength(2);
+      } finally {
+        unsubscribe();
+      }
     });
 
     it("distinguishes strict singleton results, suppression, and session rebound", async () => {

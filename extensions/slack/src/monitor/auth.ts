@@ -1,10 +1,8 @@
-// Slack plugin module implements auth behavior.
 import {
   type ChannelIngressEventInput,
   type ChannelIngressContextBinding,
   type ChannelIngressPolicyInput,
   type ChannelIngressStateInput,
-  createChannelIngressResolver,
   readChannelIngressStoreAllowFromForDmPolicy,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -14,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { collectSlackCursorPages } from "../cursor-pages.js";
+import { getSlackRuntime } from "../runtime.js";
 import {
   allowListMatches,
   normalizeAllowListLower,
@@ -51,7 +50,7 @@ const SLACK_CHANNEL_ID = "slack";
 export class SlackSystemEventAuthRetryError extends Error {}
 
 function createSlackIngressResolver(ctx: SlackMonitorContext) {
-  return createChannelIngressResolver({
+  return getSlackRuntime().channel.inbound.ingress.createResolver({
     channelId: SLACK_CHANNEL_ID,
     accountId: ctx.accountId,
     identity: slackIngressIdentity,

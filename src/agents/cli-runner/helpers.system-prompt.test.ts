@@ -61,7 +61,9 @@ describe("buildCliAgentSystemPrompt", () => {
         modelDisplay: "test/model",
       });
 
-      expect(prompt.includes("including when it is already installed")).toBe(available);
+      expect(
+        prompt.includes("For explicit plugin/skill search/install or missing capability"),
+      ).toBe(available);
     },
   );
 
@@ -227,7 +229,6 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "Runtime: name=Ops Navigator | agent=team-ops | session=agent:team-ops:telegram:direct:peer",
     );
-    expect(prompt).toContain("sessionId=session-123");
   });
 
   it("includes Telegram channel context for CLI final replies without core rich guidance", () => {

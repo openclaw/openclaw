@@ -21,7 +21,7 @@ struct QuickChatTextView: NSViewRepresentable {
         textView.isRichText = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
-        textView.font = .systemFont(ofSize: 13.5)
+        textView.font = .systemFont(ofSize: 16)
         textView.textColor = .labelColor
         textView.insertionPointColor = .controlAccentColor
         textView.textContainer?.lineBreakMode = .byWordWrapping
@@ -116,7 +116,7 @@ struct QuickChatTextView: NSViewRepresentable {
             guard let layoutManager = textView.layoutManager,
                   let textContainer = textView.textContainer else { return }
             layoutManager.ensureLayout(for: textContainer)
-            let font = textView.font ?? .systemFont(ofSize: 13.5)
+            let font = textView.font ?? .systemFont(ofSize: 16)
             let lineHeight = ceil(layoutManager.defaultLineHeight(for: font))
             let naturalHeight = ceil(layoutManager.usedRect(for: textContainer).height + 12)
             let minHeight = lineHeight + 12

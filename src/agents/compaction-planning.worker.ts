@@ -1,7 +1,7 @@
 /**
  * Worker-thread entrypoint for serializable compaction planning requests.
  */
-import { serveWorkerTasks } from "../infra/worker-task-pool.js";
+import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import {
   buildOversizedFallbackPlan,
   buildStageSplitPlan,

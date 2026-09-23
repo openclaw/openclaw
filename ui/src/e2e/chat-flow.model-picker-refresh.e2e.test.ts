@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   controlUiSessionUrl,
   createChatFlowE2eSuite,
@@ -56,6 +57,7 @@ suite.define(() => {
       );
       await picker.locator("[data-chat-model-select]").click();
       const preparedRow = picker.locator('[data-chat-model-option="fixture/prepared"]');
+      await revealChatModelOption(preparedRow);
       await expect.poll(() => preparedRow.isVisible()).toBe(true);
       expect(await preparedRow.isEnabled()).toBe(true);
 
@@ -65,7 +67,7 @@ suite.define(() => {
         .toBe(true);
       expect(await picker.getAttribute("open")).not.toBeNull();
     } finally {
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 
@@ -120,6 +122,9 @@ suite.define(() => {
         'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
       );
       await picker.locator('[data-chat-model-select="true"]').tap();
+      await picker
+        .locator('[data-chat-model-provider-group="openai"] [data-chat-model-provider-toggle]')
+        .tap();
       await picker.getByRole("option", { name: "GPT-5.6 Terra", exact: true }).waitFor();
       await expect.poll(() => picker.locator("[data-chat-model-selection-target]").count()).toBe(0);
       await screenshot(page, "05-picker-before-touch-selection.png");
@@ -160,6 +165,9 @@ suite.define(() => {
       await page.reload();
       picker = page.locator('openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker');
       await picker.locator('[data-chat-model-select="true"]').tap();
+      await picker
+        .locator('[data-chat-model-provider-group="openai"] [data-chat-model-provider-toggle]')
+        .tap();
       await picker.locator('[data-chat-model-default="true"]').waitFor();
       await expect.poll(() => picker.locator("[data-chat-model-selection-target]").count()).toBe(0);
       await expect
@@ -211,7 +219,7 @@ suite.define(() => {
       await page.locator("[data-models-login-search]").waitFor({ state: "visible" });
       await screenshot(page, "10-models-connection-navigation.png");
     } finally {
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 
@@ -259,7 +267,7 @@ suite.define(() => {
         'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
       );
       await picker.locator('[data-chat-model-select="true"]').click();
-      await picker.locator('[data-chat-model-default="true"]').waitFor();
+      await revealChatModelOption(picker.locator('[data-chat-model-default="true"]'));
       await screenshot(page, "03-pin-matching-default.png");
       await picker.getByRole("option", { name: "Proof Model", exact: true }).click();
       const request = await gateway.waitForRequest("sessions.patch");
@@ -272,7 +280,7 @@ suite.define(() => {
       await picker.locator('[data-chat-model-select="true"]').click();
       await screenshot(page, "04-pin-cleared.png");
     } finally {
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 
@@ -296,6 +304,8 @@ suite.define(() => {
 
       await gateway.deferNext("models.list", { view: "configured" });
       await picker.locator('[data-chat-model-select="true"]').click();
+      await revealChatModelOption(picker.locator('[data-chat-model-option="openai/gpt-5.6-luna"]'));
+      await revealChatModelOption(picker.locator('[data-chat-model-option="anthropic/fable-5"]'));
       await picker.getByRole("option", { name: "GPT-5.6 Luna", exact: true }).waitFor();
       expect(await gateway.getRequests("models.list")).toHaveLength(1);
 
@@ -330,7 +340,7 @@ suite.define(() => {
       expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
       await screenshot(page, "02-picker-after-background-apply.png");
     } finally {
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 
@@ -417,7 +427,7 @@ suite.define(() => {
       });
       await expect.poll(() => picker.getAttribute("open")).toBe(null);
     } finally {
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 });

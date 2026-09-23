@@ -41,6 +41,10 @@ import {
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
+import { resolveBrowserEngine } from "./engines/registry.js";
+import type { BrowserEngineId } from "./engines/types.js";
+import type { ResolvedBrowserProfile } from "./profile.types.js";
+export type { ResolvedBrowserProfile } from "./profile.types.js";
 
 export {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
@@ -109,24 +113,6 @@ export type ResolvedBrowserTabCleanupConfig = {
   idleMinutes: number;
   maxTabsPerSession: number;
   sweepMinutes: number;
-};
-
-/** Runtime browser profile settings resolved from global and profile config. */
-export type ResolvedBrowserProfile = {
-  name: string;
-  cdpPort: number;
-  cdpUrl: string;
-  cdpHost: string;
-  cdpIsLoopback: boolean;
-  userDataDir?: string;
-  mcpCommand?: string;
-  mcpArgs?: string[];
-  color: string;
-  driver: "openclaw" | "existing-session" | "extension";
-  executablePath?: string;
-  headless: boolean;
-  headlessSource?: "profile" | "config" | "default";
-  attachOnly: boolean;
 };
 
 /** Read a named browser profile without falling through to inherited object keys. */
@@ -223,7 +209,12 @@ function hasLinuxDisplay(env: NodeJS.ProcessEnv): boolean {
 }
 
 export function isLocalManagedProfile(profile: ResolvedBrowserProfile): boolean {
-  return profile.driver === "openclaw" && profile.cdpIsLoopback && !profile.attachOnly;
+  return (
+    resolveBrowserEngine(profile.engine).descriptor.launchMode !== "attach-only" &&
+    profile.driver === "openclaw" &&
+    profile.cdpIsLoopback &&
+    !profile.attachOnly
+  );
 }
 
 function resolveBrowserTabCleanupConfig(
@@ -303,6 +294,28 @@ function resolveExtensionRelayPorts(
   return ports;
 }
 
+function assertDedicatedEngineEndpoints(profiles: Record<string, BrowserProfileConfig>): void {
+  const endpoints = new Map<string, { name: string; engine?: BrowserEngineId }>();
+  for (const [name, profile] of Object.entries(profiles)) {
+    const endpoint = profile.cdpUrl ? URL.parse(profile.cdpUrl) : null;
+    if (!endpoint) {
+      continue;
+    }
+    const key = endpoint.toString().replace(/\/$/, "");
+    const previous = endpoints.get(key);
+    const adapter = resolveBrowserEngine(profile.engine);
+    const dedicated = adapter.requiresDedicatedEndpoint
+      ? adapter
+      : previous && resolveBrowserEngine(previous.engine);
+    if (previous && dedicated?.requiresDedicatedEndpoint) {
+      throw new Error(
+        `${dedicated.descriptor.label} requires a dedicated CDP endpoint; profiles "${previous.name}" and "${name}" share one.`,
+      );
+    }
+    endpoints.set(key, { name, engine: profile.engine });
+  }
+}
+
 /** Resolve raw browser config into runtime browser defaults. */
 export function resolveBrowserConfig(
   cfg: BrowserConfig | undefined,
@@ -379,6 +392,8 @@ export function resolveBrowserConfig(
       )
     : [];
 
+  assertDedicatedEngineEndpoints(profiles);
+
   return {
     enabled,
     evaluateEnabled,
@@ -416,6 +431,15 @@ export function resolveBrowserConfig(
   };
 }
 
+/** Selector-free extension pairing follows configuration order, independently of defaultProfile. */
+export function resolveFirstExtensionProfileName(
+  resolved: Pick<ResolvedBrowserConfig, "profiles">,
+): string | undefined {
+  return Object.entries(resolved.profiles).find(
+    ([, profile]) => profile.driver === "extension",
+  )?.[0];
+}
+
 /** Resolve one configured browser profile by name. */
 export function resolveProfile(
   resolved: ResolvedBrowserConfig,
@@ -424,6 +448,12 @@ export function resolveProfile(
   const profile = getOwnBrowserProfile(resolved.profiles, profileName);
   if (!profile) {
     return null;
+  }
+
+  const adapter = resolveBrowserEngine(profile.engine);
+  const engine = adapter.descriptor.id;
+  if (adapter.resolveExternalProfile) {
+    return adapter.resolveExternalProfile(profileName, profile);
   }
 
   const rawProfileUrl = profile.cdpUrl?.trim() ?? "";
@@ -456,6 +486,7 @@ export function resolveProfile(
       : `http://127.0.0.1:${relayPort}`;
     return {
       name: profileName,
+      engine,
       cdpPort: relayPort,
       cdpUrl: relayCdpUrl,
       cdpHost: "127.0.0.1",
@@ -477,6 +508,7 @@ export function resolveProfile(
     );
     return {
       name: profileName,
+      engine,
       cdpPort: 0,
       cdpUrl: existingSessionCdp?.cdpUrl ?? "",
       cdpHost: existingSessionCdp?.cdpHost ?? "",
@@ -528,6 +560,7 @@ export function resolveProfile(
 
   return {
     name: profileName,
+    engine,
     cdpPort,
     cdpUrl,
     cdpHost,

@@ -5,7 +5,7 @@ import { expect, it, vi } from "vitest";
 import { resolveDeferredPluginMigrationConfigPaths } from "../config/deferred-plugin-migration-config.js";
 import { readConfigFileSnapshot } from "../config/io.js";
 import { readBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
-import { readPersistedInstalledPluginIndexRowSync } from "../plugins/installed-plugin-index-row.js";
+import { readPersistedInstalledPluginIndexRowSync } from "../plugins/installed-plugin-index-record-state.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -131,14 +131,15 @@ it("admits active pending-plugin inputs without selecting an older valid backup"
     const initial = await readConfigFileSnapshot({ observe: false, pluginValidation: "core-only" });
     expect(initial.valid).toBe(false);
 
-    const readiness = await import("../state/openclaw-database-preflight.js");
-    const assertReady = readiness.assertOpenClawDatabasesReady;
-    let databaseAdmitted = false;
+    const preflight = await import("./doctor-database-preflight.js");
+    const prepareDatabases = preflight.prepareDoctorDatabasePreflight;
+    let databaseInspected = false;
     const admission = vi
-      .spyOn(readiness, "assertOpenClawDatabasesReady")
+      .spyOn(preflight, "prepareDoctorDatabasePreflight")
       .mockImplementation(async (params) => {
-        await assertReady(params);
-        databaseAdmitted = true;
+        const result = await prepareDatabases(params);
+        databaseInspected = true;
+        return result;
       });
     try {
       const result = await readStartupMigrationSnapshot({
@@ -149,7 +150,7 @@ it("admits active pending-plugin inputs without selecting an older valid backup"
         }),
         planRepair: ({ snapshot }) => planAutomaticConfigRepair(snapshot),
         preparePluginMigrations: async (snapshot) => {
-          expect(databaseAdmitted).toBe(true);
+          expect(databaseInspected).toBe(true);
           expect(snapshot.raw).toBe(activeRaw);
           expect(snapshot.hash).toBe(initial.hash);
           expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
@@ -168,6 +169,9 @@ it("admits active pending-plugin inputs without selecting an older valid backup"
         },
       });
       expect(result.recovery).toBeUndefined();
+      expect(admission).toHaveBeenCalledWith({
+        cfg: expect.objectContaining({ ...source, agents: { entries: { main: {} } } }),
+      });
       expect(result.snapshot.valid).toBe(true);
       expect(result.snapshot.hash).toBe(initial.hash);
       expect(result.snapshot.raw).toBe(activeRaw);

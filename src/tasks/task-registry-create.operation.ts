@@ -44,6 +44,7 @@ export type TaskCreateOperations = {
   upsertTask: (task: TaskRecord, deliveryState?: TaskDeliveryState) => void;
   /** Publish after the successful transaction, or immediately after a store-owned commit. */
   deferCommit: (publish: () => void) => void;
+  retainTaskCommit?: (taskId: string) => void;
   onCommitted: (commit: TaskCreateCommit) => void;
   assertCurrent?: (existing: TaskRecord | undefined) => void;
 };
@@ -57,6 +58,7 @@ export function runTaskCreateOperation(
   const identity = resolveTaskCreateIdentity(params);
   assertTaskOwner(identity);
   const publishResult = (result: TaskCreateResult) => {
+    operations.retainTaskCommit?.(result.task.taskId);
     operations.deferCommit(() => operations.onCommitted({ kind: "task", result }));
     return result;
   };
@@ -89,6 +91,7 @@ export function runTaskCreateOperation(
         };
         operations.assertCurrent?.(existing);
         operations.upsertDelivery(nextDeliveryState);
+        operations.retainTaskCommit?.(existing.taskId);
         operations.deferCommit(() =>
           operations.onCommitted({
             kind: "delivery",

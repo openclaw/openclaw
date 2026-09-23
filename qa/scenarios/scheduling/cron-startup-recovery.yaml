@@ -1,0 +1,35 @@
+title: Cron startup recovery from persisted run state
+
+scenario:
+  id: cron-startup-recovery
+  surface: automation
+  category: automation.scheduler-persistence
+  coverage:
+    primary:
+      - automation.scheduler-persistence
+    secondary:
+      - automation.run-history-cron
+      - automation.run-history-dedup
+  objective: >-
+    Verify a real Gateway startup reconciles persisted cron running markers with
+    durable run history and exposes the recovered schedule through cron.list.
+  successCriteria:
+    - Startup retires every stale running marker before the recovered schedule is observed.
+    - A persisted future retry remains authoritative when history is absent or older.
+    - A history-owned retry is restored when persisted schedule state is stale.
+    - Disabled jobs remain disabled without a next run after recovery.
+    - Recurring jobs recover their history-owned next run without duplicate execution.
+  docsRefs:
+    - docs/automation/cron-jobs.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - src/cron/service/task-runs.ts
+    - src/cron/store.ts
+    - src/gateway/server-runtime-services.ts
+    - test/e2e/qa-lab/runtime/gateway-cron-startup-recovery.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/gateway-cron-startup-recovery.e2e.test.ts
+    summary: >-
+      Seed persisted cron jobs and task-run history, start a real Gateway, wait
+      for post-ready recovery, and inspect the authoritative cron.list result.

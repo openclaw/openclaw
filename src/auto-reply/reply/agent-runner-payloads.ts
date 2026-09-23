@@ -17,6 +17,7 @@ import {
   getReplyPayloadMetadata,
   isReplyPayloadTerminalContent,
   setReplyPayloadMetadata,
+  isRenderablePayload,
 } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -26,20 +27,12 @@ import { createBlockReplyContentKey, type BlockReplyPipeline } from "./block-rep
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { normalizeReplyPayloadDirectives, type DirectBlockDelivery } from "./reply-delivery.js";
 import { shouldRetryReplyDispatch } from "./reply-dispatch-outcome.js";
-import {
-  applyReplyThreading,
-  isRenderablePayload,
-  resolveReplyThreadingPayloads,
-} from "./reply-payloads-base.js";
+import { applyReplyThreading, resolveReplyThreadingPayloads } from "./reply-payloads-base.js";
 import { createReplyDeliveryContext } from "./reply-threading.js";
 
 const replyPayloadsDedupeRuntimeLoader = createLazyImportLoader(
   () => import("./reply-payloads-dedupe.runtime.js"),
 );
-
-export function loadReplyPayloadsDedupeRuntime() {
-  return replyPayloadsDedupeRuntimeLoader.load();
-}
 
 async function normalizeReplyPayloadMedia(params: {
   payload: ReplyPayload;
@@ -95,7 +88,7 @@ async function normalizeSentMediaUrlsForDedupe(params: {
 }
 
 function shouldKeepPayloadDuringSilentTurn(payload: ReplyPayload): boolean {
-  if (payload.isError) {
+  if (payload.isError || getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression) {
     return true;
   }
   return payload.audioAsVoice === true && resolveSendableOutboundReplyParts(payload).hasMedia;
@@ -178,6 +171,7 @@ export async function buildReplyPayloads(params: {
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: MessagingToolSend[];
+  onDeliveredTerminalDuplicate?: () => void;
   originatingChannel?: OriginatingChannelType;
   originatingChatType?: string | null;
   originatingTo?: string;
@@ -286,7 +280,7 @@ export async function buildReplyPayloads(params: {
     messagingToolSentTargets.length > 0;
   let dedupedPayloads = threadedPayloads;
   if (shouldCheckMessagingToolDedupe) {
-    const dedupeRuntime = await loadReplyPayloadsDedupeRuntime();
+    const dedupeRuntime = await replyPayloadsDedupeRuntimeLoader.load();
     const originatingTo = params.originatingTo;
     dedupedPayloads = [];
     for (const payload of threadedPayloads) {
@@ -307,6 +301,7 @@ export async function buildReplyPayloads(params: {
           accountId,
           sentMediaUrls: params.messagingToolSentMediaUrls,
           sentTexts: messagingToolSentTexts,
+          onDeliveredTerminalDuplicate: params.onDeliveredTerminalDuplicate,
           normalizeSentMediaUrls: (sentMediaUrls) =>
             normalizeSentMediaUrlsForDedupe({
               sentMediaUrls,
@@ -465,7 +460,7 @@ export async function buildReplyPayloads(params: {
   });
   const filteredPayloads =
     blockMediaUrlsToOmit.length > 0
-      ? (await loadReplyPayloadsDedupeRuntime()).filterMessagingToolMediaDuplicates({
+      ? (await replyPayloadsDedupeRuntimeLoader.load()).filterMessagingToolMediaDuplicates({
           payloads: contentSuppressedPayloads,
           sentMediaUrls: blockMediaUrlsToOmit,
         })

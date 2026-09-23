@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { CodeModeHeadlessAbortError, CodeModeHeadlessTimeoutError } from "./code-mode-worker.js";
+import { CodeModeHeadlessAbortError, CodeModeHeadlessTimeoutError } from "./code-mode-errors.js";
 import { runCodeModeScriptHeadless } from "./code-mode.js";
 import {
   createHeadlessCodeModeHarness,
@@ -11,12 +11,12 @@ import {
 import { jsonResult } from "./tools/common.js";
 
 describe("headless Code Mode cancellation", () => {
-  afterEach(() => {
+  afterEach(async () => {
     try {
       expect(testing.activeRuns.size).toBe(0);
     } finally {
       vi.useRealTimers();
-      resetCodeModeTestState();
+      await resetCodeModeTestState();
     }
   });
 
@@ -90,7 +90,7 @@ describe("headless Code Mode cancellation", () => {
     const ctx = createHeadlessCodeModeHarness();
     const config = testing.resolveCodeModeHeadlessConfig(ctx);
     const controller = new AbortController();
-    const resultPromise = testing.runCodeModeWorker(
+    const resultPromise = testing.runCodeModeExecutor(
       {
         kind: "exec",
         source: "while (true) {}",
@@ -99,9 +99,7 @@ describe("headless Code Mode cancellation", () => {
         apiFiles: [],
         namespaces: [],
       },
-      5000,
-      undefined,
-      controller.signal,
+      { timeoutMs: 5000, executor: config.executor, signal: controller.signal },
     );
     setTimeout(() => controller.abort(), 100);
 
@@ -151,7 +149,7 @@ describe("headless Code Mode cancellation", () => {
       // can reject before the abort controller that shares that deadline settles.
       const scopeSignal = new AbortController().signal;
 
-      const result = await testing.runCodeModeWorker(
+      const result = await testing.runCodeModeExecutor(
         {
           kind: "exec",
           source: "await new Promise((resolve) => setTimeout(resolve, 0)); return 1;",
@@ -160,12 +158,14 @@ describe("headless Code Mode cancellation", () => {
           apiFiles: [],
           namespaces: [],
         },
-        config.timeoutMs + 2000,
-        undefined,
-        scopeSignal,
         {
-          onBoundary: async () => {
-            throw createError();
+          timeoutMs: config.timeoutMs + 2000,
+          executor: config.executor,
+          signal: scopeSignal,
+          inlineHost: {
+            onBoundary: async () => {
+              throw createError();
+            },
           },
         },
       );

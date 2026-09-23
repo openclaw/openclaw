@@ -7,7 +7,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
-import { readPersistedInstalledPluginIndexRowSync } from "./installed-plugin-index-row.js";
+import { readPersistedInstalledPluginIndexRowSync } from "./installed-plugin-index-record-state.js";
 import type { InstalledPluginIndexWriteReceipt } from "./installed-plugin-index-store-write.js";
 import { parseInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";

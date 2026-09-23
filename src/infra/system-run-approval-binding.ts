@@ -21,6 +21,7 @@ import {
   isSystemRunCommandTextBoundInterpreterInvocation,
   resolveSystemRunMutableFileOperandTarget,
   unwrapSystemRunMutableFileOperandArgv,
+  type SystemRunBindingFailure,
 } from "./system-run-mutable-file-operand.js";
 import {
   looksLikeExplicitPathToken,
@@ -222,7 +223,7 @@ export function resolveMutableFileOperandSnapshotSync(params: {
   argv: string[];
   cwd: string | undefined;
   shellCommand: string | null;
-}): { ok: true; snapshot: SystemRunApprovalFileOperand | null } | { ok: false; message: string } {
+}): { ok: true; snapshot: SystemRunApprovalFileOperand | null } | SystemRunBindingFailure {
   const target = resolveSystemRunMutableFileOperandTarget(params);
   if (!target.ok) {
     return target;
@@ -271,7 +272,7 @@ type SystemRunMutableFileBindingCommand =
 
 type SystemRunMutableFileBindingResult =
   | { ok: true; binding: SystemRunMutableFileBinding }
-  | { ok: false; message: string };
+  | SystemRunBindingFailure;
 
 const SHELL_CWD_MUTATORS = new Set(["cd", "chdir", "popd", "pushd"]);
 const SHELL_BUILTIN_DISPATCHERS = new Set(["builtin", "command"]);
@@ -297,8 +298,7 @@ function prepareMutableFileBindingsForArgv(params: {
     });
     if (!prepared.ok) {
       if (
-        prepared.message ===
-          "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command" &&
+        prepared.reason === "unsupported-command-shape" &&
         isSystemRunCommandTextBoundInterpreterInvocation(argv)
       ) {
         continue;
@@ -666,7 +666,7 @@ export async function prepareSystemRunMutableFileApproval(params: {
     cwd: params.cwd,
   });
   if (!prepared.ok) {
-    return prepared;
+    return { ok: false, message: prepared.message };
   }
   const binding = prepared.binding;
   return {

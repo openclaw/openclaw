@@ -1,6 +1,5 @@
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
-  commitStagedDeliveryQueueEntryOnceAcrossNamespacesInDatabase,
   upsertDeliveryQueueEntryOnceAcrossNamespacesInDatabase,
   replacePendingDeliveryQueueEntryInDatabase,
   completePendingDeliveryQueueEntryInDatabase,
@@ -11,25 +10,6 @@ import {
   type DeliveryQueueStateContext,
   type DeliveryQueueEntryState,
 } from "./delivery-queue-sqlite.js";
-
-/** Atomically publishes one staged owner only when retired namespaces do not own its id. */
-export function commitStagedDeliveryQueueEntryOnceAcrossNamespaces(
-  params: {
-    queueName: string;
-    conflictQueueNames: readonly string[];
-    entry: DeliveryQueueEntryState;
-    stagingId: string;
-    stagingQueueName: string;
-    stateDir?: string;
-  },
-  context?: DeliveryQueueStateContext,
-): "created" | "existing" | "missing" {
-  return runOpenClawStateWriteTransaction(
-    (database) => commitStagedDeliveryQueueEntryOnceAcrossNamespacesInDatabase(database, params),
-    { env: resolveDeliveryQueueStateEnv(params.stateDir, context) },
-    { operationLabel: "commit staged stable delivery queue owner" },
-  );
-}
 
 /** Inserts one stable owner only when no current or retired namespace owns its id. */
 export function upsertDeliveryQueueEntryOnceAcrossNamespaces(

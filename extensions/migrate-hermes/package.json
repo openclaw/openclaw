@@ -1,19 +1,19 @@
 {
   "name": "@openclaw/migrate-hermes",
-  "version": "2026.9.4",
+  "version": "2026.9.5",
   "private": true,
   "description": "Hermes to OpenClaw migration provider",
   "type": "module",
   "dependencies": {
     "dotenv": "17.4.2",
-    "yaml": "2.9.0"
+    "yaml": "2.9.1"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.9.4"
+    "openclaw": ">=2026.9.5"
   },
   "peerDependenciesMeta": {
     "openclaw": {

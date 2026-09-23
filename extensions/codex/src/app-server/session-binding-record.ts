@@ -419,7 +419,14 @@ export function readCurrentCodexAppServerBinding(
   identity: CodexAppServerBindingIdentity,
 ): CodexAppServerThreadBinding | undefined {
   const key = bindingStoreKey(identity);
-  const raw = state.lookup(key);
+  return decodeCurrentCodexAppServerBinding(key, state.lookup(key), identity);
+}
+
+function decodeCurrentCodexAppServerBinding(
+  key: string,
+  raw: unknown,
+  identity: CodexAppServerBindingIdentity,
+): CodexAppServerThreadBinding | undefined {
   const stored = readStoredCodexAppServerBinding(raw);
   if (raw !== undefined && !stored) {
     throw new Error(`Invalid Codex app-server binding row: ${key}`);
@@ -427,6 +434,36 @@ export function readCurrentCodexAppServerBinding(
   return stored?.state === "active" && ownsStoredSessionGeneration(identity, stored)
     ? stored.binding
     : undefined;
+}
+
+/** Consume synchronously so each list phase acquires fresh binding authority. */
+export function* readCurrentCodexAppServerBindings(
+  state: Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "lookup" | "lookupMany">,
+  identities: readonly CodexAppServerBindingIdentity[],
+): Generator<CodexAppServerThreadBinding | undefined, undefined, void> {
+  let keys: string[] | undefined;
+  if (state.lookupMany && identities.length > 1 && identities.length <= 10_000) {
+    try {
+      keys = identities.map(bindingStoreKey);
+    } catch {
+      // A later invalid identity must not precede an earlier row's validation.
+    }
+  }
+  if (!keys || !state.lookupMany) {
+    for (const identity of identities) {
+      yield readCurrentCodexAppServerBinding(state, identity);
+    }
+    return;
+  }
+  // Query failures retain the storage owner's terminal handling; never retry the read.
+  const values = state.lookupMany(keys);
+  for (let index = 0; index < identities.length; index++) {
+    const value = values[index]!;
+    if (!value.ok) {
+      throw value.error;
+    }
+    yield decodeCurrentCodexAppServerBinding(keys[index]!, value.value, identities[index]!);
+  }
 }
 
 export function matchesCodexNativeSubagentSubmissionBinding(

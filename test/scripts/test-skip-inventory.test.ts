@@ -289,4 +289,51 @@ describe("collectTestSkipInventoryReport", () => {
       ]),
     ).toThrow("--limit expects a non-negative integer");
   });
+
+  it.each([
+    { limit: 1, shown: 1 },
+    { limit: 2, shown: 2 },
+    { limit: 0, shown: 3 },
+  ])("preserves first-seen groups and the global cap with limit $limit", ({ limit, shown }) => {
+    const repoRoot = createTempDir("openclaw-skip-groups-");
+    writeRepoFile(repoRoot, "src/a.test.ts", 'test.todo("a");\n');
+    writeRepoFile(
+      repoRoot,
+      "src/z.test.ts",
+      'it.skip("z", () => {});\nit.only("second", () => {});\n',
+    );
+    const report = collectTestSkipInventoryReport({ repoRoot });
+    const findings = report.findings;
+    report.findings = [...findings.slice(1, 2), ...findings.slice(0, 1), ...findings.slice(2)];
+    const rows = [
+      "- src/z.test.ts (2)",
+      '  L1 it.skip explicit-skip: it.skip("z", () => {});',
+      ...(shown >= 2 ? ['  L2 it.only focused-only: it.only("second", () => {});'] : []),
+      ...(shown === 3 ? ["- src/a.test.ts (1)", '  L1 test.todo todo: test.todo("a");'] : []),
+      ...(shown < 3
+        ? [`... ${3 - shown} more finding(s) not shown; pass --limit 0 to show all.`]
+        : []),
+    ];
+    expect(renderTestSkipInventoryReport(report, { limit })).toBe(
+      [
+        "OpenClaw test skip inventory",
+        "Scanned files: 2",
+        "Findings: 3 in 2 file(s)",
+        "Reasons: explicit-skip: 1, focused-only: 1, todo: 1",
+        "",
+        "Findings:",
+        ...rows,
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("keeps the empty report output unchanged", () => {
+    const report = collectTestSkipInventoryReport({
+      repoRoot: createTempDir("openclaw-skip-empty-"),
+    });
+    expect(renderTestSkipInventoryReport(report)).toBe(
+      "OpenClaw test skip inventory\nScanned files: 0\nFindings: 0 in 0 file(s)\nReasons: none\n\nFindings: none\n",
+    );
+  });
 });

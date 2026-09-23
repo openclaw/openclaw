@@ -4,7 +4,10 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord,
+  readStringField as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import {
@@ -27,7 +30,6 @@ import {
   formatToolOutput,
   formatToolSummary,
   MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM,
-  normalizeToolTranscriptArguments,
   TOOL_PROGRESS_ECHO_PREFIX_MIN_CHARS,
   TOOL_PROGRESS_ECHO_SIGNATURE_CAP,
   TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS,
@@ -56,7 +58,7 @@ const TRANSCRIPT_PROGRESS_SUPPRESSED_TOOL_NAMES = new Set([
   "typing",
 ]);
 
-export function shouldEmitTranscriptToolProgress(toolName: unknown, _args?: unknown): boolean {
+export function shouldEmitTranscriptToolProgress(toolName: unknown): boolean {
   const normalized = typeof toolName === "string" ? toolName.trim().toLowerCase() : "";
   return Boolean(normalized && !TRANSCRIPT_PROGRESS_SUPPRESSED_TOOL_NAMES.has(normalized));
 }
@@ -72,6 +74,8 @@ export type ToolTranscriptResultInput = {
   name: string;
   text?: string;
   isError: boolean;
+  outcomeUnknown?: true;
+  captureTruncated?: true;
   details?: unknown;
   resultContentSource?: "network";
 };
@@ -91,7 +95,6 @@ export class CodexToolProgressProjection {
   private readonly resultOutputItemIds = new Set<string>();
   private readonly resultOutputStreamedItemIds = new Set<string>();
   private readonly transcriptProgressSuppressedIds = new Set<string>();
-  private readonly transcriptArgumentsById = new Map<string, unknown>();
   private readonly resultOutputDeltaState = new Map<
     string,
     { chars: number; messages: number; truncated: boolean }
@@ -108,6 +111,10 @@ export class CodexToolProgressProjection {
 
   get outputTextByItem(): ReadonlyMap<string, string> {
     return this.output.textByItem;
+  }
+
+  isOutputTruncated(itemId: string): boolean {
+    return this.output.isTruncated(itemId);
   }
 
   get toolMetas(): EmbeddedRunAttemptResult["toolMetas"] {
@@ -216,7 +223,7 @@ export class CodexToolProgressProjection {
     }
     if (
       this.transcriptProgressSuppressedIds.has(itemId) ||
-      !shouldEmitTranscriptToolProgress(toolName, this.transcriptArgumentsById.get(itemId))
+      !shouldEmitTranscriptToolProgress(toolName)
     ) {
       return;
     }
@@ -229,16 +236,6 @@ export class CodexToolProgressProjection {
       return;
     }
     const remainingChars = Math.max(0, TOOL_PROGRESS_OUTPUT_MAX_CHARS - state.chars);
-    const remainingMessages = Math.max(0, MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM - state.messages);
-    if (remainingChars === 0 || remainingMessages === 0) {
-      state.truncated = true;
-      this.resultOutputDeltaState.set(itemId, state);
-      this.emitToolResultMessage({
-        itemId,
-        text: formatToolOutput(toolName, undefined, "(output truncated)"),
-      });
-      return;
-    }
     const chunk = delta.length > remainingChars ? truncateUtf16Safe(delta, remainingChars) : delta;
     state.chars += chunk.length;
     state.messages += 1;
@@ -327,7 +324,7 @@ export class CodexToolProgressProjection {
     }
     const toolName = itemName(item);
     const args = itemToolArgs(item);
-    if (!toolName || !shouldEmitTranscriptToolProgress(toolName, args)) {
+    if (!toolName || !shouldEmitTranscriptToolProgress(toolName)) {
       return;
     }
     this.resultSummaryItemIds.add(item.id);
@@ -352,7 +349,7 @@ export class CodexToolProgressProjection {
     }
     const toolName = itemName(item);
     const output = itemOutputText(item, this.output.textByItem);
-    if (!toolName || !output || !shouldEmitTranscriptToolProgress(toolName, itemToolArgs(item))) {
+    if (!toolName || !output || !shouldEmitTranscriptToolProgress(toolName)) {
       return;
     }
     const meta = this.shouldIncludeFormattedMeta(isCommandBearingToolItem(item, itemToolArgs(item)))
@@ -399,8 +396,7 @@ export class CodexToolProgressProjection {
   }
 
   recordTranscriptCall(params: ToolTranscriptCallInput): void {
-    this.transcriptArgumentsById.set(params.id, params.arguments);
-    if (!shouldEmitTranscriptToolProgress(params.name, params.arguments)) {
+    if (!shouldEmitTranscriptToolProgress(params.name)) {
       this.transcriptProgressSuppressedIds.add(params.id);
     } else {
       this.transcriptProgressSuppressedIds.delete(params.id);
@@ -497,14 +493,11 @@ export class CodexToolProgressProjection {
 
   private emitTranscriptToolCallProgress(params: ToolTranscriptCallInput): void {
     // Successful cards use the typed plan stream after the write completes.
-    if (
-      params.name === "progress_card" ||
-      !shouldEmitTranscriptToolProgress(params.name, params.arguments)
-    ) {
+    if (params.name === "progress_card" || !shouldEmitTranscriptToolProgress(params.name)) {
       return;
     }
     this.transcriptProgressCallIds.add(params.id);
-    const args = normalizeToolTranscriptArguments(params.arguments);
+    const args = asNonArrayRecord(params.arguments);
     const meta = this.shouldIncludeFormattedMeta(isCodexCommandBearingToolCall(params.name, args))
       ? inferToolMetaFromArgs(params.name, args, {
           detailMode: this.toolProgressDetailMode(),
@@ -529,7 +522,7 @@ export class CodexToolProgressProjection {
     if (
       (params.name === "progress_card" && !params.isError) ||
       this.transcriptProgressSuppressedIds.has(params.id) ||
-      !shouldEmitTranscriptToolProgress(params.name, this.transcriptArgumentsById.get(params.id))
+      !shouldEmitTranscriptToolProgress(params.name)
     ) {
       return;
     }

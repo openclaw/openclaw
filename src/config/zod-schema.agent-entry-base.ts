@@ -1,8 +1,8 @@
 import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { z } from "zod";
-import { AgentModelSchema } from "./zod-schema.agent-model.js";
+import { AgentModelSchema, DecisionModelSchema } from "./zod-schema.agent-model.js";
 
-const AgentRuntimePolicySchema = z
+export const AgentRuntimePolicySchema = z
   .object({
     id: z.string().optional(),
   })
@@ -107,6 +107,7 @@ export const AgentEntryBaseSchema = z
     agentDir: z.string().optional(),
     model: AgentModelSchema.optional(),
     utilityModel: z.string().optional(),
+    decisionModel: DecisionModelSchema.optional(),
     models: AgentModelMapSchema.optional(),
     modelPolicy: AgentModelPolicySchema.optional(),
     thinkingDefault: z
@@ -121,7 +122,12 @@ export const AgentEntryBaseSchema = z
       .optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
-    experimental: z.object({ localModelLean: z.boolean().optional() }).strict().optional(),
+    experimental: z
+      .object({
+        localModelLean: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     skills: z.array(z.string()).optional(),
     subagents: z
       .object({

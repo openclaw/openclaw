@@ -11,12 +11,14 @@ read_when:
 The `pnpm tsgo` lanes use stable TypeScript 7 through the `typescript-native`
 package alias. Their existing tool owner resolves that package's native executable
 directly, so a `tsc` bin link cannot accidentally select TypeScript 6. TypeScript 6
-remains the in-process compiler API dependency for Code Mode's filesystem-free
-preflight, plugin source transforms, and packaged declaration compilation with
+remains the in-process compiler API dependency for plugin source transforms
+and packaged declaration compilation with
 hermetic `Program` membership receipts. TypeScript 7's package root exports version
 metadata instead of that API. Remove the TypeScript 6 dependency only after its
 callers can preserve those contracts through a maintained replacement, including
 declaration input capture and failure handling.
+Code Mode executes JavaScript directly and does not use this compiler;
+its TypeScript-style tool declarations are model-facing documentation.
 
 `build-all`, standalone tsdown builds, tsgo, SDK declaration preparation,
 package-boundary checks, and dependent lint use checkout-local ownership at
@@ -137,6 +139,11 @@ threads, named builtin imports, and import-time captures; changing only a worker
 JavaScript `process.env` does not change native thread home lookup. Per-worker and
 per-test fixture homes remain separate. Installed Corepack and Playwright browser
 caches retain their caller-selected locations.
+
+Gateway port claims remain in the common temporary directory outside all enclosing
+Vitest namespaces, found through their explicit resource owners. Parallel invocations
+therefore share port ownership while a fixture hands its reserved socket to a child;
+removing one invocation's files cannot remove another fixture's port claim.
 
 Live-aware setup still loads the original profile and stages live state when
 requested. A bounded invocation artifact carries the original home to that setup;

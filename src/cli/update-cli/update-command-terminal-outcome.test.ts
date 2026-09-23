@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { finalizeRestartUpdateRun } from "../../gateway/server-restart-update-run.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
 import {
   swapStagedPackageInstall,
@@ -14,26 +15,41 @@ import {
   createRetainedPackageSwap,
 } from "../../infra/package-update-swap.test-support.js";
 import { readRestartSentinel } from "../../infra/restart-sentinel.js";
+import * as snapshot from "../../infra/sqlite-snapshot-source.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { prepareNativePackageStage } from "../../infra/update-native-package-stage.js";
-import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import {
+  createUpdateRun,
+  finishUpdateRun,
+  getUpdateRun,
+  recordUpdateRunVerification,
+} from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
-import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { VERSION } from "../../version.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
   finishSuccessfulPackageSwitch,
+  mockVerifiedGatewayRun,
   validConfigSnapshot,
 } from "./update-command-post-update.test-support.js";
 import {
   UpdateCommandFailure,
   UpdateCommandPendingRecoveryFailure,
 } from "./update-command-result.js";
+import { completeUpdateCommandRun } from "./update-command-run.js";
 import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
+import { verifyUpdatedGateway } from "./update-command-verification.js";
+
+vi.mock("../../infra/gateway-lock.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/gateway-lock.js")>()),
+  readActiveGatewayLockPort: async () => 19101,
+}));
 
 // Keep the finalizer, swap/completion, executor, SQLite lease, ledger, and both
 // report consumers real. Unrelated plugin/native work has already succeeded.
@@ -62,6 +78,7 @@ let temporary: string;
 let jsonOutput: unknown[];
 let humanOutput: string[];
 beforeEach(async () => {
+  vi.mocked(verifyUpdatedGateway).mockReset();
   base = await fs.realpath(dirs.make("update-terminal-outcome-"));
   temporary = path.join(base, "private-tmp");
   await fs.mkdir(temporary, { mode: 0o700 });
@@ -154,6 +171,7 @@ async function scenario(
   repeat = false,
   deferred = true,
   preparedRecovery = false,
+  completedByGateway = false,
 ) {
   let swap;
   let nativeManifest: string | undefined;
@@ -335,9 +353,30 @@ async function scenario(
   const observedResults: UpdateRunResult[] = [];
   const observationLeases: string[] = [];
   let failure: unknown;
+  let reportSnapshotFailure: { mockRestore: () => void } | undefined;
   const execute = () =>
     withUpdateCommandExecutor(run.runId, async (executor) => {
       run.executorFence = await executor.enter(swap.packageRoot);
+      if (completedByGateway) {
+        recordUpdateRunVerification(
+          run.runId,
+          {
+            serviceRunning: true,
+            versionMatch: true,
+            channelsReady: true,
+            readyz: true,
+            settled: true,
+            runningVersion: "2.0.0",
+            pluginErrors: [],
+          },
+          { env: run.env },
+        );
+        finishUpdateRun(
+          run.runId,
+          { status: "succeeded", after: { version: "2.0.0" } },
+          { env: run.env },
+        );
+      }
       if (nativeManifest) {
         await fs.writeFile(
           nativeManifest,
@@ -349,6 +388,9 @@ async function scenario(
         );
       }
       try {
+        if (preparedRecovery) {
+          mockVerifiedGatewayRun(run);
+        }
         await finishSuccessfulPackageSwitch(
           { packageRoot: swap.packageRoot, run, json },
           {
@@ -408,6 +450,15 @@ async function scenario(
           "CREATE TRIGGER deny_terminal_release BEFORE DELETE ON managed_update_handoffs BEGIN SELECT RAISE(FAIL, 'fixture final lease delete denied'); END",
         );
       }
+    }).then(() => {
+      if (completedByGateway) {
+        closeOpenClawStateDatabaseForTest();
+        reportSnapshotFailure = vi
+          .spyOn(snapshot, "prepareSqliteReadOnlyLocationSync")
+          .mockImplementation(() => {
+            throw new Error("live database changed during terminal publication");
+          });
+      }
     });
   try {
     if (deferred) {
@@ -428,6 +479,8 @@ async function scenario(
     }
   } catch (error) {
     failure = error;
+  } finally {
+    reportSnapshotFailure?.mockRestore();
   }
   if (kind === "foreign-revoked" && failure instanceof UpdateCommandPendingRecoveryFailure) {
     vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {
@@ -499,6 +552,19 @@ async function scenario(
 }
 
 describe("composed cleanup and terminal outcome", () => {
+  it.each([true, false])(
+    "publishes the Gateway's completed row after real executor release (json=%s)",
+    async (json) => {
+      const value = await scenario("healthy", json, false, true, false, true);
+      expect(value.exitCode).toBe(0);
+      expect(value.history?.status).toBe("succeeded");
+      expect(value.lease).toBe("absent");
+      expect(value.retainedExists).toBe(false);
+      expect(value.observedResults).toEqual([expect.objectContaining({ status: "ok" })]);
+      expect(value.observationLeases).toEqual(["absent"]);
+      expect(value.afterRepeat).toEqual(value.beforeRepeat);
+    },
+  );
   it.each(["release-failure", "revoked", "link-retained"] as const)(
     "qualifies pending recovery claims after %s settlement",
     async (kind) => {
@@ -516,7 +582,7 @@ describe("composed cleanup and terminal outcome", () => {
         status: "error",
         reason,
         failedStep: {
-          name: settlementFailed ? "update executor settlement" : "global install backup retention",
+          name: settlementFailed ? "update-executor-settlement" : "package-backup-retention",
         },
       });
       expect(value.sentinel).toMatchObject({ payload: { status: "error", stats: { reason } } });
@@ -624,7 +690,7 @@ describe("composed cleanup and terminal outcome", () => {
     expect(value.jsonOutput[0]).toMatchObject({ status: "error" });
     expect(value.retainedExists).toBe(true);
     expect(JSON.stringify(value.jsonOutput)).toContain(value.expectedRetained);
-    // Hard failures use the canonical bounded summary; JSON above retains the full path.
+    // The recovery location survives separately from the bounded failure cause.
     expect(JSON.stringify(value.history)).toContain(path.basename(value.expectedRetained));
     expect(value.report).toContain(path.basename(value.expectedRetained));
     expect(
@@ -712,3 +778,98 @@ describe("composed cleanup and terminal outcome", () => {
     },
   );
 });
+
+it("keeps foreground success pending until the replacement Gateway observes the final sentinel", async () => {
+  const swap = await createRetainedPackageSwap(base);
+  const root = swap.packageRoot;
+  await writePackageRoot(root, VERSION);
+  const backupManifest = path.join(swap.transaction.backupRoot, "package.json");
+  const backupBytes = await fs.readFile(backupManifest);
+  const complete = vi.spyOn(swap.transaction, "complete");
+  const run: NonNullable<UpdateCommandOptions["run"]> = {
+    runId: createUpdateRun({ trigger: "api" }, { env: process.env }).runId,
+    env: { ...process.env },
+    completionOwner: "gateway-restart",
+    gatewayRestartRequired: true,
+  };
+  const meta = { runId: run.runId, completionOwner: "gateway-restart" as const };
+  await withUpdateCommandTerminalResult(async (registerRun) => {
+    registerRun(run);
+    await withUpdateCommandExecutor(run.runId, async (executor) => {
+      run.executorFence = await executor.enter(root);
+      await finishSuccessfulPackageSwitch(
+        { packageRoot: root, run, json: true },
+        {
+          packageTransaction: swap.transaction,
+          shouldRestart: false,
+          installKindChanged: false,
+          downgradeRisk: false,
+          controlPlaneUpdateSentinelMeta: meta,
+          result: {
+            status: "ok",
+            mode: "git",
+            root,
+            before: { version: "1.0.0", sha: "aaa" },
+            after: { version: VERSION, sha: "bbb" },
+            steps: [],
+            durationMs: 0,
+          },
+        },
+      );
+    });
+  });
+  expect(complete).not.toHaveBeenCalled();
+  expect(await fs.readFile(backupManifest)).toEqual(backupBytes);
+  expect(jsonOutput).toHaveLength(1);
+  expect(jsonOutput[0]).toMatchObject({ runId: run.runId, status: "ok" });
+  expect(getUpdateRun(run.runId)).toMatchObject({
+    trigger: "api",
+    status: "running",
+    phase: "restarting",
+    after: { version: VERSION },
+  });
+  const sentinel = await readRestartSentinel();
+  expect(sentinel?.payload).toMatchObject({
+    kind: "update",
+    status: "ok",
+    stats: { runId: run.runId },
+  });
+  expect(sentinel?.payload.stats?.handoffId).toBeUndefined();
+  if (!sentinel) {
+    throw new Error("Expected the canonical final sentinel");
+  }
+  await finalizeRestartUpdateRun(sentinel.payload);
+  expect(getUpdateRun(run.runId)).toMatchObject({
+    status: "succeeded",
+    verification: { booted: true, serviceRunning: true, versionMatch: true },
+  });
+});
+
+it.each([
+  { status: "error" as const, reason: "build-failed", expected: "failed" },
+  { status: "skipped" as const, reason: "already-current", expected: "skipped" },
+  { status: "ok" as const, reason: undefined, expected: "succeeded" },
+])(
+  "terminalizes the foreground $expected outcome without waiting for restart",
+  async ({ status, reason, expected }) => {
+    const created = createUpdateRun({ trigger: "api" });
+    completeUpdateCommandRun(
+      {
+        status,
+        reason,
+        mode: "npm",
+        root: base,
+        before: { version: "1.0.0" },
+        after: { version: "1.0.0" },
+        steps: [],
+        durationMs: 0,
+      },
+      { runId: created.runId, env: { ...process.env }, completionOwner: "gateway-restart" },
+    );
+    expect(getUpdateRun(created.runId)).toMatchObject({
+      status: expected,
+      phase: "finished",
+      ...(reason ? { reason } : {}),
+    });
+  },
+);

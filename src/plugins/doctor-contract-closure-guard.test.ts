@@ -5,7 +5,7 @@ import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { collectModuleReferencesFromSource } from "../../scripts/lib/guard-inventory-utils.mjs";
 import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
-import { loadBundledPluginManifestRegistry } from "./manifest-registry.js";
+import { loadBundledPluginManifestRegistry } from "./manifest-registry-build.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 const SOURCE_MODULE_EXTENSIONS = [".ts", ".mts", ".cts", ".js", ".mjs", ".cjs"] as const;

@@ -50,6 +50,7 @@ import {
   projectSessionParticipants,
 } from "./session-identity-projection.js";
 import { isSessionPermissionChangePending } from "./session-permission-change.js";
+import { projectSessionProviderReview } from "./session-provider-review-projection.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
 import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
@@ -65,7 +66,6 @@ import {
   buildStoreChildSessionLinksWork,
   type SessionChildLink,
   resolveSessionChildOwners,
-  resolveSessionCompactionSummary,
 } from "./session-utils-core.js";
 import {
   resolveGatewaySessionDisplayName,
@@ -93,6 +93,7 @@ export function readSessionRowInputs(params: {
   modelSource?: GatewaySessionModelSource;
   key: string;
   entry?: InternalSessionEntry;
+  preparedAcpMeta?: SessionEntry["acp"] | null;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   now?: number;
   includeDerivedTitles?: boolean;
@@ -113,22 +114,13 @@ export function readSessionRowInputs(params: {
   const rowContext =
     params.rowContext ??
     buildSessionListRowMetadataContext({ now, sessionKeys: [key, ...Object.keys(store)] });
-  const owner = projectSessionOwner(
-    entry,
-    rowContext.userProfileIdentityById,
-    cfg,
-    params.configuredAgentIds,
-  );
-  const participants = projectSessionParticipants(entry, rowContext.userProfileIdentityById, cfg);
-  if (owner?.actor.identity) {
-    participants.delete(JSON.stringify(owner.actor.identity));
-  }
   const displayName = resolveGatewaySessionDisplayName(key, entry);
   const { selectedModel, rowModelIdentity, thinkingProjection, catalogEntry } =
     readSessionRowModelFacts({
       cfg,
       key,
       entry,
+      preparedAcpMeta: params.preparedAcpMeta,
       source: params.modelSource ?? { entry, readSourceEntry: (parentKey) => store[parentKey] },
       agentId,
       rowContext,
@@ -231,19 +223,13 @@ export function readSessionRowInputs(params: {
               branch: repositoryWorkspace.branch,
             }
           : undefined,
-      createdActor: projectSessionActor(
-        entry?.createdActor,
-        rowContext.userProfileIdentityById,
-        cfg,
-        Boolean(sessionCreatorProfileId(entry?.createdActor)),
-      ),
-      owner,
-      participants,
+      userProfileIdentityById: rowContext.userProfileIdentityById,
+      identityProjection: rowContext.identityProjection,
+      configuredAgentIds: params.configuredAgentIds,
       agentId,
       displayName,
       derivedTitle,
       lastMessagePreview,
-      archivedBy: projectSessionActor(entry?.archivedBy, rowContext.userProfileIdentityById, cfg),
       thinkingProjection,
       agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),
       contextWindowProfile,
@@ -298,6 +284,8 @@ export function readSessionRowInputs(params: {
     presentation: {
       now,
       subagentRuns: rowContext.subagentRuns,
+      projectedAgentRuns: rowContext.projectedAgentRuns,
+      projectedSubagentActivity: rowContext.projectedSubagentActivity,
       activeModel,
       excludedChildKeys: params.excludedChildKeys,
     },
@@ -311,7 +299,7 @@ export function buildGatewaySessionRow(
   return presentSessionRow(materializeSessionRow(inputs), presentation);
 }
 
-function resolveGatewaySessionActiveModel(params: {
+export function resolveGatewaySessionActiveModel(params: {
   cfg: OpenClawConfig;
   active?: boolean;
   activeModel?: { provider: string; model: string } | null;
@@ -389,6 +377,48 @@ function channelAvatarRevision(reference: string): string {
   return createHash("sha256").update(reference).digest("base64url").slice(0, 12);
 }
 
+/** Profile publications invalidate display facts independently of stored session metadata. */
+function projectSessionRowProfiles(input: ReturnType<typeof readSessionRowInputs>["inputs"]) {
+  const { entry, cfg, userProfileIdentityById, configuredAgentIds, identityProjection } = input;
+  const owner = (identityProjection?.owner ?? projectSessionOwner)(
+    entry,
+    userProfileIdentityById,
+    cfg,
+    configuredAgentIds,
+  );
+  const projected = (identityProjection?.participants ?? projectSessionParticipants)(
+    entry,
+    userProfileIdentityById,
+    cfg,
+  );
+  const ownerKey = owner?.actor.identity && JSON.stringify(owner.actor.identity);
+  const participants = [...projected].flatMap(([key, participant]) =>
+    key === ownerKey ? [] : [participant],
+  );
+  return {
+    createdActor: projectSessionActor(
+      entry?.createdActor,
+      userProfileIdentityById,
+      cfg,
+      Boolean(sessionCreatorProfileId(entry?.createdActor)),
+    ),
+    owner,
+    // Keep the released v4 summary stable; expanded identities are additive for newer clients.
+    participants: participants.length
+      ? participants.slice(0, SESSION_PARTICIPANT_LIMIT)
+      : undefined,
+    expandedParticipants: participants.length
+      ? participants.slice(0, MAX_SESSION_PARTICIPANTS)
+      : undefined,
+    participantCount: participants.length || undefined,
+    archivedBy: projectSessionActor(entry?.archivedBy, userProfileIdentityById, cfg),
+  };
+}
+
+export function refreshSessionRowProfiles(materialized: ReturnType<typeof materializeSessionRow>) {
+  Object.assign(materialized.row, projectSessionRowProfiles(materialized.source));
+}
+
 export function materializeSessionRow(input: ReturnType<typeof readSessionRowInputs>["inputs"]) {
   const { cfg, key, entry } = input;
   const observerDigest =
@@ -407,9 +437,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     entry?.pinnedAt !== undefined && isPinnableSessionEntry(key, entry)
       ? entry.pinnedAt
       : undefined;
-  const compactionSummary = resolveSessionCompactionSummary(entry);
 
-  const participants = input.participants.size ? [...input.participants.values()] : undefined;
   // Reserve temporal fields in wire order; presentation fills a fresh copy.
   const row: GatewaySessionRow = {
     key,
@@ -425,6 +453,8 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     workspaceDir: entry?.spawnedCwd ?? entry?.spawnedWorkspaceDir,
     projectId: entry?.projectId,
     permissionMode: entry?.permissionMode,
+    sandboxMode: entry?.sandboxMode,
+    nativeRuntimeConsent: entry?.nativeRuntimeConsent,
     permissionModePending: input.permissionModePending,
     ...(entry?.permissionMode !== undefined && entry.sessionRoot !== undefined
       ? { sessionRoot: entry.sessionRoot }
@@ -439,12 +469,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     subagentRole: entry?.subagentRole,
     subagentControlScope: entry?.subagentControlScope,
     createdVia: entry?.createdVia,
-    createdActor: input.createdActor,
-    owner: input.owner,
-    // Keep the released v4 summary stable; expanded identities are additive for newer clients.
-    participants: participants?.slice(0, SESSION_PARTICIPANT_LIMIT),
-    expandedParticipants: participants?.slice(0, MAX_SESSION_PARTICIPANTS),
-    participantCount: participants?.length,
+    ...projectSessionRowProfiles(input),
     createdAt: entry?.createdAt,
     forkSource: entry?.forkSource,
     previousSessionId: entry?.previousSessionId,
@@ -474,7 +499,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     updatedAt: entry?.updatedAt ?? null,
     archived: entry?.archivedAt !== undefined,
     archivedAt: entry?.archivedAt,
-    archivedBy: input.archivedBy,
     archiveReason: entry?.archiveReason,
     pinned: pinnedAt !== undefined,
     pinnedAt,
@@ -528,6 +552,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     endedAt: undefined,
     runtimeMs: undefined,
     lastRunError: entry?.lastRunError,
+    providerReview: projectSessionProviderReview(entry, key),
     lastRunId: entry?.lastRunId,
     hasAutomation: input.hasAutomation,
     // Navigation lineage is persisted; runtime control is exposed separately above.
@@ -569,8 +594,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     lastTo: deliveryFields.lastTo,
     lastAccountId: deliveryFields.lastAccountId,
     lastThreadId: deliveryFields.lastThreadId,
-    compactionCheckpointCount: compactionSummary.compactionCheckpointCount,
-    latestCompactionCheckpoint: compactionSummary.latestCompactionCheckpoint,
     pluginExtensions: input.pluginExtensions.length > 0 ? input.pluginExtensions : undefined,
   };
   return { row, source: input };
@@ -593,7 +616,11 @@ export function presentSessionRow(
     key: row.key,
     entry,
     now,
-    rowContext: { subagentRuns },
+    rowContext: {
+      subagentRuns,
+      projectedAgentRuns: options.projectedAgentRuns,
+      projectedSubagentActivity: options.projectedSubagentActivity,
+    },
   });
   Object.assign(row, fields);
   const usage = source.usageByFallbackModel?.get(subagentRun?.model);
@@ -612,12 +639,36 @@ export function presentSessionRow(
   row.estimatedCostUsd =
     source.estimatedCostUsd ??
     asNonNegativeFiniteNumber(source.lightweight ? undefined : usage?.estimatedCostUsd);
-  const children = source.childLinks?.flatMap(({ key, entry: childEntry }) =>
-    !options.excludedChildKeys?.has(key) &&
-    resolveSessionChildOwners({ key, entry: childEntry, now, subagentRuns }).includes(row.key)
-      ? [key]
-      : [],
-  );
+  const children = source.childLinks?.flatMap(({ key, entry: childEntry }) => {
+    if (options.excludedChildKeys?.has(key)) {
+      return [];
+    }
+    const childActive = projectGatewaySessionRunState({
+      key,
+      entry: childEntry,
+      now,
+      rowContext: {
+        subagentRuns,
+        projectedAgentRuns: options.projectedAgentRuns,
+        projectedSubagentActivity: options.projectedSubagentActivity,
+      },
+    }).fields.hasActiveSubagentRun;
+    if (
+      !resolveSessionChildOwners({
+        key,
+        entry: childEntry,
+        now,
+        subagentRuns,
+        hasActiveRun: childActive,
+      }).includes(row.key)
+    ) {
+      return [];
+    }
+    if (childActive) {
+      row.hasActiveSubagentRun = true;
+    }
+    return [key];
+  });
   row.childSessions = children?.length ? children : undefined;
   row.activeModelProvider = options.activeModel?.provider;
   row.activeModel = options.activeModel?.model;

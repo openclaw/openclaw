@@ -1,4 +1,3 @@
-// Discord plugin module implements native command.args behavior.
 import type {
   ChatCommandDefinition,
   CommandArgDefinition,

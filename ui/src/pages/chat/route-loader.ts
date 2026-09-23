@@ -1,6 +1,5 @@
 import type { RouteLoaderOptions, RouteLocation } from "@openclaw/uirouter";
 import { notFound } from "@openclaw/uirouter";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import { INTERNAL_SESSION_PATH_PARAM } from "../../app-route-paths.ts";
 import { pathForSession } from "../../app-session-path-builder.ts";
 import { sessionRefFromPath, type SessionPathTarget } from "../../app-session-route-paths.ts";
@@ -14,6 +13,7 @@ import {
 import { prepareSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
 import {
   findUiSessionRow,
+  resolveSessionPreferredFace,
   SESSION_DASHBOARD_EXPANDED_PARAM,
   SESSION_FACE_PREFERENCE_PARAM,
   SESSION_NAVIGATION_KEY_PARAM,
@@ -72,10 +72,6 @@ function locationWithoutNavigationHints(location: RouteLocation): RouteLocation 
     locationWithoutSearchParam(location, SESSION_FACE_PREFERENCE_PARAM),
     SESSION_NAVIGATION_KEY_PARAM,
   );
-}
-
-function preferredFace(row: Pick<GatewaySessionRow, "boardFace">): BoardFace {
-  return row.boardFace === "dashboard" ? "dashboard" : "chat";
 }
 
 function configuredMainKey(context: ApplicationContext): string {
@@ -189,7 +185,7 @@ function candidatesForResolution(
       return [];
     }
     const agentId = resolveAgentIdFromSessionKey(row.key);
-    const candidateFace = preferenceDerived ? preferredFace(row) : face;
+    const candidateFace = preferenceDerived ? resolveSessionPreferredFace(row) : face;
     const href = pathForSession(candidateFace, agentId, row.key, context.basePath, {
       displayName: row.displayName,
       mainKey: configuredMainKey(context),
@@ -220,7 +216,7 @@ function resolvedSessionRouteData(params: {
   // The loader owns face resolution: a preference-derived open adopts the row's stored
   // face, so the page renders that board directly and replaces the URL with the matching
   // namespace instead of re-deriving a face from the path it was handed.
-  const face = params.preferenceDerived ? preferredFace(params.row) : params.face;
+  const face = params.preferenceDerived ? resolveSessionPreferredFace(params.row) : params.face;
   const canonicalLocation = canonicalSessionLocation({
     context: params.context,
     location: params.location,
@@ -262,7 +258,7 @@ function resolvedMainSessionRouteData(params: {
   if (!isUiGlobalSessionKey(params.row.key)) {
     return resolvedSessionRouteData(params);
   }
-  const face = params.preferenceDerived ? preferredFace(params.row) : params.face;
+  const face = params.preferenceDerived ? resolveSessionPreferredFace(params.row) : params.face;
   const pathname = pathForSession(
     face,
     params.target.agentId,
@@ -341,7 +337,7 @@ export async function loadChatRoute(
         signal,
       );
       if (resolution?.kind === "unique") {
-        resolvedFace = preferredFace(resolution.session);
+        resolvedFace = resolveSessionPreferredFace(resolution.session);
         const pathname = pathForSession(
           resolvedFace,
           target.agentId,
@@ -529,11 +525,11 @@ export async function loadChatRoute(
       );
     }
   }
-  const resolution =
-    revalidatedResolution ??
-    (localRow
-      ? ({ kind: "unique", session: localRow } as const)
-      : await resolveShortSessionReference(context, target, routeLocation, signal));
+  const resolution = revalidatedResolution
+    ? { ...revalidatedResolution, isCurrent: isResolutionSourceCurrent }
+    : localRow
+      ? { kind: "unique" as const, session: localRow, isCurrent: isResolutionSourceCurrent }
+      : await resolveShortSessionReference(context, target, routeLocation, signal);
   if (resolution.kind === "prepared") {
     const canonicalLocationReady = resolution.resolution
       .then((resolved) => {
@@ -612,7 +608,8 @@ export async function loadChatRoute(
   }
   const resolved = resolvedSessionRouteData({
     context,
-    isResolutionSourceCurrent,
+    // RPC resolution owns the connection acquired after a cold route waited for hello.
+    isResolutionSourceCurrent: resolution.isCurrent,
     location: routeLocation,
     face,
     row: resolution.session,
@@ -654,11 +651,15 @@ export async function loadSessionPage(
       : undefined,
   );
   const creation = context.chatSubmissions.creation;
-  if ("kind" in result && result.kind === "session" && creation?.sessionKey === result.sessionKey) {
-    result.creation = creation;
-    // Admission alone needs the submitted-draft display; ordinary chat stays independent.
-    await import("./pending-session-create.ts");
-    signal.throwIfAborted();
+  if ("kind" in result && result.kind === "session") {
+    if (creation?.sessionKey === result.sessionKey) {
+      result.creation = creation;
+    }
+    if (result.creation || context.placementStartup.get(result.sessionKey)?.initialTurn) {
+      // Startup owns a display-only view even if an interrupted temporary session is cleaned up.
+      await import("./pending-session-create.ts");
+      signal.throwIfAborted();
+    }
   }
   return result;
 }

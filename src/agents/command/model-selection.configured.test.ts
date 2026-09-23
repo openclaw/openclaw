@@ -8,10 +8,13 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import * as authProfiles from "../auth-profiles/store-runtime.js";
 import * as harnessRuntime from "../harness/runtime-plugin.js";
 import { loadManifestModelCatalog } from "../model-catalog.js";
 import type { ModelCatalogEntry } from "../model-catalog.types.js";
 import { buildConfiguredModelCatalog } from "../model-selection-shared.js";
+import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
 import * as sessionPersistence from "./attempt-execution.shared.js";
 import { resolveEmbeddedModelSelection } from "./model-selection.js";
 import * as runtimeLoaders from "./runtime-loaders.js";
@@ -141,10 +144,184 @@ function createFixture(options: { manifestOwner?: boolean } = {}) {
         ...overrides,
       }),
     );
-  return { cfg, defaults, custom, store, entry, inventory, select };
+  return { cfg, defaults, custom, store, entry, inventory, registry, select };
+}
+
+function createRestrictedFixture() {
+  const fixture = createFixture();
+  fixture.defaults.model = { primary: "custom/child", fallbacks: ["custom/manual"] };
+  fixture.defaults.modelPolicy = { allow: ["custom/*"] };
+  fixture.defaults.models = {
+    "custom/child": { alias: "blocked" },
+    "custom/manual": { alias: "permitted" },
+  };
+  fixture.inventory.mockReturnValue([
+    catalogEntry("custom", "base"),
+    catalogEntry("custom", "child"),
+    catalogEntry("custom", "manual"),
+  ]);
+  const operatorAuthority = createAdmittedRunOperatorAuthority({
+    profileId: "limited-operator",
+    scopes: ["operator.write"],
+    assertCurrent: () => {},
+    modelPolicy: prepareOperatorModelPolicy({
+      cfg: fixture.cfg,
+      policy: { sourceAgent: "main", deny: ["custom/child"] },
+    }),
+  });
+  return { ...fixture, operatorAuthority };
 }
 
 describe("command selection with configured model facts", () => {
+  it("does not probe a primary excluded by the original operator policy", async () => {
+    const fixture = createRestrictedFixture();
+    fixture.store[sessionKey] = {
+      ...automaticEntry("manual"),
+      modelOverrideFallbackOriginModel: "child",
+    };
+    const selected = await fixture.select({
+      opts: { message: "Continue", operatorAuthority: fixture.operatorAuthority },
+    });
+    expect(selected).toMatchObject({ provider: "custom", model: "manual" });
+    expect(selected.autoFallbackPrimaryProbe).toBeUndefined();
+  });
+
+  it("keeps an incompatible shared account pin when role policy selects another provider", async () => {
+    const fixture = createRestrictedFixture();
+    fixture.defaults.model = { primary: "other/default", fallbacks: ["custom/manual"] };
+    fixture.defaults.modelPolicy = { allow: ["custom/*", "other/*"] };
+    fixture.cfg.models!.providers!.other = {
+      ...fixture.custom,
+      models: [configuredModel("default")],
+    };
+    fixture.store[sessionKey] = {
+      sessionId: "configured-child",
+      updatedAt: 1,
+      providerOverride: "other",
+      modelOverride: "default",
+      modelOverrideSource: "user",
+      authProfileOverride: "other:shared",
+      authProfileOverrideSource: "user",
+    };
+    vi.spyOn(authProfiles, "ensureAuthProfileStore").mockReturnValue({
+      version: 1,
+      profiles: {
+        "other:shared": { type: "api_key", provider: "other", key: "synthetic-model-policy-key" },
+      },
+    });
+    const before = structuredClone(fixture.store);
+
+    const selected = await fixture.select({
+      opts: { message: "Continue", operatorAuthority: fixture.operatorAuthority },
+    });
+    expect(selected).toMatchObject({ provider: "custom", model: "manual" });
+    expect(selected.sessionEntryForAttempt?.authProfileOverride).toBeUndefined();
+    expect(fixture.store).toEqual(before);
+  });
+
+  it.each(["custom/child", "blocked"])(
+    "rejects a role-denied explicit %s before selection or runtime effects",
+    async (model) => {
+      const fixture = createRestrictedFixture();
+      const before = structuredClone(fixture.store);
+
+      await expect(
+        fixture.select({
+          opts: {
+            message: "Use requested model",
+            model,
+            allowModelOverride: true,
+            operatorAuthority: fixture.operatorAuthority,
+          },
+        }),
+      ).rejects.toThrow("Your operator role cannot use this model");
+
+      expect(fixture.store).toEqual(before);
+      expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
+      expect(harnessRuntime.ensureSelectedAgentHarnessPlugin).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])(
+    "constrains stored automatic selection only for a restricted caller (%s)",
+    async (restricted) => {
+      const fixture = createRestrictedFixture();
+      const selected = await fixture.select({
+        opts: {
+          message: "Continue",
+          ...(restricted ? { operatorAuthority: fixture.operatorAuthority } : {}),
+        },
+      });
+
+      expect(selected).toMatchObject({
+        provider: "custom",
+        model: restricted ? "manual" : "child",
+      });
+      expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
+    },
+  );
+
+  it("allows an explicit permitted alias without weakening the agent's manual policy", async () => {
+    const fixture = createRestrictedFixture();
+    const opts = {
+      message: "Use permitted model",
+      model: "permitted",
+      allowModelOverride: true,
+      operatorAuthority: fixture.operatorAuthority,
+    };
+    expect(await fixture.select({ opts })).toMatchObject({ provider: "custom", model: "manual" });
+
+    fixture.defaults.modelPolicy = { allow: ["custom/base"] };
+    await expect(fixture.select({ opts })).rejects.toThrow(
+      'Model override "custom/manual" is not allowed',
+    );
+  });
+
+  it("does not let a model lock bypass the original caller's model policy", async () => {
+    const fixture = createRestrictedFixture();
+    fixture.entry().modelSelectionLocked = true;
+    const before = structuredClone(fixture.store);
+
+    await expect(
+      fixture.select({
+        opts: { message: "Continue", operatorAuthority: fixture.operatorAuthority },
+      }),
+    ).rejects.toThrow("Your operator role cannot use this model");
+
+    expect(fixture.store).toEqual(before);
+    expect(harnessRuntime.ensureSelectedAgentHarnessPlugin).not.toHaveBeenCalled();
+  });
+
+  it("preserves an explicit CLI route across resumed command turns and a later API selection", async () => {
+    const fixture = createFixture();
+    fixture.defaults.modelPolicy = { allow: ["custom-cli/child", "custom/child"] };
+    const select = () => fixture.select({ pluginsEnabled: false, requestedThinkLevel: "off" });
+    fixture.registry.cliBackends.push({
+      pluginId: "custom",
+      source: "fixture",
+      backend: {
+        id: "custom-cli",
+        modelProvider: "custom",
+        config: { command: "custom-cli" },
+      },
+    });
+    fixture.inventory.mockReturnValue([catalogEntry("custom-cli", "child")]);
+    fixture.store[sessionKey] = {
+      sessionId: "configured-child",
+      updatedAt: 1,
+      providerOverride: "custom-cli",
+      modelOverride: "child",
+      modelOverrideSource: "user",
+      modelOverrideRouteResolution: "resolved",
+    };
+
+    expect(await select()).toMatchObject({ provider: "custom-cli", model: "child" });
+    fixture.entry().cliSessionBindings = { "custom-cli": { sessionId: "native-command-session" } };
+    expect(await select()).toMatchObject({ provider: "custom-cli", model: "child" });
+    fixture.entry().providerOverride = "custom";
+    expect(await select()).toMatchObject({ provider: "custom", model: "child" });
+  });
+
   it("retains a resolved self-origin child outside manual policy without manifest inventory", async () => {
     const fixture = createFixture();
     const before = structuredClone({ cfg: fixture.cfg, store: fixture.store });

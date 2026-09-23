@@ -1,4 +1,14 @@
 import { EventEmitter } from "node:events";
+import { vi } from "vitest";
+
+vi.mock("./audio-worker-thread.js", async () => {
+  const { InProcessDiscordAudioWorker } = await import("./audio-worker.test-support.js");
+  return {
+    createDiscordAudioWorkerThread: (
+      options: import("./audio-worker-protocol.js").DiscordAudioWorkerOptions,
+    ) => new InProcessDiscordAudioWorker(undefined, { workerData: options }),
+  };
+});
 import fs from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
@@ -33,7 +43,7 @@ export function createDiscordGatewayCaptureFixture(params: {
   cfg: OpenClawConfig;
   test: { expect: typeof import("vitest").expect; vi: typeof import("vitest").vi };
 }) {
-  const { expect, vi } = params.test;
+  const { expect, vi: testVi } = params.test;
   const runtimeStore = createPluginRuntimeStore<PluginRuntime>({
     pluginId: "discord",
     errorMessage: "Discord runtime not initialized",
@@ -46,21 +56,21 @@ export function createDiscordGatewayCaptureFixture(params: {
       users: new Map([[speakerId, Date.now()]]),
     });
     const streams: PassThrough[] = [];
-    const subscribe = vi.fn(() => {
+    const subscribe = testVi.fn(() => {
       const stream = new PassThrough();
       streams.push(stream);
       return stream;
     });
     const player = Object.assign(new EventEmitter(), {
       state: { status: sdk.AudioPlayerStatus.Idle },
-      stop: vi.fn(() => true),
-      play: vi.fn(),
+      stop: testVi.fn(() => true),
+      play: testVi.fn(),
     });
     const connection = Object.assign(new EventEmitter(), {
       state: { status: sdk.VoiceConnectionStatus.Ready },
       receiver: { speaking, subscribe },
-      subscribe: vi.fn(),
-      destroy: vi.fn(() => {
+      subscribe: testVi.fn(),
+      destroy: testVi.fn(() => {
         connection.state.status = sdk.VoiceConnectionStatus.Destroyed;
         connection.emit(sdk.VoiceConnectionStatus.Destroyed);
       }),
@@ -71,16 +81,16 @@ export function createDiscordGatewayCaptureFixture(params: {
   const transports = [transport];
   const firstTransport = transport;
   // Canonical consumers retain initial spy bindings, so spies must outlive manager rotation.
-  const sdkSpy = vi.spyOn(sdkRuntime, "loadDiscordVoiceSdk").mockReturnValue({
+  const sdkSpy = testVi.spyOn(sdkRuntime, "loadDiscordVoiceSdk").mockReturnValue({
     ...sdk,
     getVoiceConnection: () => undefined,
-    joinVoiceChannel: vi.fn(() => transport.connection),
-    createAudioPlayer: vi.fn(() => transport.player),
-    entersState: vi.fn(async (target) => target),
+    joinVoiceChannel: testVi.fn(() => transport.connection),
+    createAudioPlayer: testVi.fn(() => transport.player),
+    entersState: testVi.fn(async (target) => target),
   } as unknown as ReturnType<typeof sdkRuntime.loadDiscordVoiceSdk>);
   const writeWav = audio.writeVoiceWavFile;
   const wavCleanups: Promise<void>[] = [];
-  const wavSpy = vi.spyOn(audio, "writeVoiceWavFile").mockImplementation(async (pcm) => {
+  const wavSpy = testVi.spyOn(audio, "writeVoiceWavFile").mockImplementation(async (pcm) => {
     const wav = await writeWav(pcm);
     const released = createDeferred<void>();
     wavCleanups.push(released.promise);
@@ -118,7 +128,7 @@ export function createDiscordGatewayCaptureFixture(params: {
   const wavPaths: string[] = [];
   let installedRuntime: PluginRuntime | undefined;
   let sttSpy: { mockRestore(): void } | undefined;
-  const stt = vi.fn<PluginRuntime["mediaUnderstanding"]["transcribeAudioFile"]>(
+  const stt = testVi.fn<PluginRuntime["mediaUnderstanding"]["transcribeAudioFile"]>(
     async ({ filePath, mime }) => {
       const wav = await fs.readFile(filePath);
       expect(mime).toBe("audio/wav");
@@ -284,7 +294,7 @@ export function createDiscordGatewayCaptureFixture(params: {
       // Registration owns the runtime slot. Intercept only its external STT edge.
       installedRuntime = runtimeStore.getRuntime();
       const media = installedRuntime.mediaUnderstanding;
-      sttSpy = vi.spyOn(media, "transcribeAudioFile").mockImplementation(stt);
+      sttSpy = testVi.spyOn(media, "transcribeAudioFile").mockImplementation(stt);
     },
     async rotateManager(cfg: OpenClawConfig) {
       await closeCurrentManager();

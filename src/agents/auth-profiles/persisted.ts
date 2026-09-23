@@ -182,7 +182,8 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
     const keyRef = coerceSecretRef(entry.keyRef);
     const metadata = normalizeCredentialMetadata(entry.metadata);
     if (keyRef) {
-      normalized.keyRef = keyRef;
+      // Canonical refs can alias frozen cached rows; runtime stores remain mutable.
+      normalized.keyRef = structuredClone(keyRef);
     } else if (key !== undefined) {
       normalized.key = key;
     }
@@ -203,7 +204,7 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
       normalized.token = token;
     }
     if (tokenRef) {
-      normalized.tokenRef = tokenRef;
+      normalized.tokenRef = structuredClone(tokenRef);
     }
     if (expires !== undefined) {
       normalized.expires = expires;
@@ -216,7 +217,7 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
       ...normalizeCommonCredentialFields(entry),
     };
     if (isLegacyOAuthRef(entry.oauthRef)) {
-      normalized.oauthRef = entry.oauthRef;
+      normalized.oauthRef = structuredClone(entry.oauthRef);
     }
     for (const field of [
       "access",

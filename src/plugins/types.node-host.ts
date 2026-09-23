@@ -36,13 +36,19 @@ export type OpenClawPluginNodeHostCommandContext = {
   signal?: AbortSignal;
   /** Prepare local exec policy; call the returned guard synchronously immediately before spawn. */
   prepareExecAuthorization?: (source: "human-approved" | "session-full") => () => void;
-  /** Protect one exact node-owned placement workspace for this invocation's lifetime. */
+  /** @deprecated Use acquireManagedWorkspaceAsync; retained for synchronous plugin compatibility. */
   acquireManagedWorkspace?: (request: OpenClawPluginNodeWorkspace) => {
     workspaceDir: string;
     /** Stable HOME owned and validated by this exact prepared workspace binding. */
     homeDir?: string;
     release: () => void;
   };
+  /** Protect an exact node-owned workspace after durable worker-backed binding validation. */
+  acquireManagedWorkspaceAsync?: (request: OpenClawPluginNodeWorkspace) => Promise<{
+    workspaceDir: string;
+    homeDir?: string;
+    release: () => void;
+  }>;
 };
 
 type OpenClawPluginNodeHostCommandBase = {
@@ -77,8 +83,8 @@ type OpenClawPluginNodeHostCommandBase = {
 export type OpenClawPluginNodeHostCommand = OpenClawPluginNodeHostCommandBase & {
   // Not a discriminated handle signature: a union of different arities makes
   // plain `command.handle(params)` uncallable for consumers holding the union.
-  // The node host enforces io presence for duplex commands at runtime.
-  duplex?: boolean;
+  // true requires IO; optional commands also retain their unary invocation.
+  duplex?: boolean | "optional";
   handle: (
     paramsJSON?: string | null,
     io?: OpenClawPluginNodeHostCommandIo,

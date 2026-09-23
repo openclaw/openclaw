@@ -18,7 +18,7 @@ export type PullRequestRefreshHost = UiSessionDefaultsHost & {
   client: GatewayBrowserClient | null;
   connectionEpoch: number;
   sessionKey: string;
-  refreshSessionPullRequests?: (options?: { refresh?: boolean }) => boolean;
+  refreshSessionPullRequests?: (options?: { refresh?: boolean; automatic?: boolean }) => boolean;
 };
 
 type RefreshOwner = {
@@ -76,7 +76,7 @@ function requestRefresh(
   }
   // Hidden or disconnected panes may decline. Remember actual queue admission,
   // never presentation acceptance or an attempted callback that did no work.
-  if (state.refreshSessionPullRequests?.({ refresh: true }) !== true) {
+  if (state.refreshSessionPullRequests?.({ refresh: true, automatic: true }) !== true) {
     return;
   }
   // Content identities can contain a whole reply. Oversized and evicted receipts
@@ -98,7 +98,7 @@ export function retirePullRequestRefreshes(state: object): void {
   refreshOwners.delete(state);
 }
 
-/** The first streamed link refreshes promptly; the final separately observes later PR changes. */
+/** The first streamed link queues a refresh; the final can include later PR changes. */
 export function refreshPullRequestsForStreamedLinks(
   state: PullRequestRefreshHost,
   runId: string | undefined,

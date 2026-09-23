@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import {
   getSessionCacheValue,
   MAX_CACHED_CHAT_SESSIONS,
@@ -325,6 +326,10 @@ export class SessionSnapshotStore implements ChatCacheObserver {
   }
 
   write(sessionKey: string, snapshot: ChatSessionSnapshot): void {
+    // The message cache remains the live UI owner; only durable admission is denied.
+    if (isIncognitoSessionKey(sessionKey)) {
+      return;
+    }
     discardPrewarmedChatSnapshot(sessionKey);
     this.revisions.set(sessionKey, (this.revisions.get(sessionKey) ?? 0) + 1);
     if (getSessionCacheValue(this.hydratedSnapshots, sessionKey)?.deref() === snapshot) {

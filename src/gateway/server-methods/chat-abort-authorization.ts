@@ -2,10 +2,11 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
+import { listQueuedChatTurnsForSession } from "../chat-queued-turns.js";
 import { chatRunBelongsToAgent, resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { createChatAbortMarker } from "../server-chat-state.js";
-import { pendingChatSendDedupeKey } from "../server-shared.js";
+import { pendingChatSendDedupeKey, PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
 import {
   normalizeOptionalChatText as normalizeOptionalText,
   normalizeUnknownChatText as normalizeUnknownText,
@@ -29,6 +30,7 @@ type PreRegisteredAgentDedupePayload = {
   ownerDeviceId?: unknown;
   runId?: unknown;
   sessionKey?: unknown;
+  sessionId?: unknown;
   sessionKeyAliases?: unknown;
   status?: unknown;
   turnKind?: unknown;
@@ -89,6 +91,7 @@ export function readPreRegisteredAgentDedupePayloadForSession(params: {
   agentId?: string;
   defaultAgentId?: string;
   includeHidden?: boolean;
+  requiredSessionId?: string;
 }): PreRegisteredAgentDedupePayload | undefined {
   if (!params.entry?.ok) {
     return undefined;
@@ -111,6 +114,13 @@ export function readPreRegisteredAgentDedupePayloadForSession(params: {
       : []),
   ]);
   const hasPayloadSessionKey = [...payloadSessionKeys].some(Boolean);
+  if (
+    params.requiredSessionId !== undefined &&
+    (!payloadSessionKeys.has(params.sessionKey) ||
+      normalizeUnknownText(payload.sessionId) !== params.requiredSessionId)
+  ) {
+    return undefined;
+  }
   if (
     (hasPayloadSessionKey && !payloadSessionKeys.has(params.sessionKey)) ||
     (!hasPayloadSessionKey && payloadRunId !== params.runId)
@@ -192,10 +202,23 @@ export function writePreRegisteredAgentAbort(params: {
   payload: PreRegisteredAgentDedupePayload;
   stopReason: string;
   endedAt?: number;
+  expectedPayload?: PreRegisteredAgentDedupePayload;
 }) {
+  if (
+    params.expectedPayload &&
+    params.context.dedupe.get(`agent:${params.runId}`)?.payload !== params.expectedPayload
+  ) {
+    return false;
+  }
   const endedAt = params.endedAt ?? Date.now();
   const payloadAgentId = normalizeUnknownText(params.payload.agentId);
   for (const key of resolvePreRegisteredAgentDedupeKeys(params.payload, params.runId)) {
+    if (
+      params.expectedPayload &&
+      params.context.dedupe.get(key)?.payload !== params.expectedPayload
+    ) {
+      continue;
+    }
     setGatewayDedupeEntry({
       dedupe: params.context.dedupe,
       key,
@@ -215,6 +238,7 @@ export function writePreRegisteredAgentAbort(params: {
       },
     });
   }
+  return true;
 }
 
 export function writePreRegisteredChatAbort(params: {
@@ -223,7 +247,15 @@ export function writePreRegisteredChatAbort(params: {
   stopReason: string;
   endedAt?: number;
   attemptId?: string;
+  expectedPayload?: PreRegisteredAgentDedupePayload;
 }) {
+  if (
+    params.expectedPayload &&
+    params.context.dedupe.get(pendingChatSendDedupeKey(params.runId))?.payload !==
+      params.expectedPayload
+  ) {
+    return false;
+  }
   const endedAt = params.endedAt ?? Date.now();
   const payload = buildAbortedChatSendPayload({
     runId: params.runId,
@@ -253,12 +285,43 @@ export function writePreRegisteredChatAbort(params: {
         : {}),
     },
   });
+  return true;
+}
+
+function createChatAbortRunSelection<T extends { runId: string }>() {
+  const authorizedByRunId = new Map<string, T>();
+  const matchedRunIds = new Set<string>();
+  const authorization = {
+    hasUnauthorizedRuns: false,
+    hasUnauthorizedProtectedRuns: false,
+    hasProtectedRuns: false,
+  };
+  return {
+    add(run: T, requesterCanAbort: boolean, isProtected: boolean | undefined) {
+      matchedRunIds.add(run.runId);
+      if (isProtected) {
+        // Lifecycle cleanup still checks ownership of hidden and preserved work.
+        authorization.hasProtectedRuns = true;
+        authorization.hasUnauthorizedProtectedRuns ||= !requesterCanAbort;
+      } else if (requesterCanAbort) {
+        authorizedByRunId.set(run.runId, run);
+      } else {
+        authorization.hasUnauthorizedRuns = true;
+      }
+    },
+    result: () => ({
+      authorizedRuns: [...authorizedByRunId.values()],
+      matchedRunIds: [...matchedRunIds],
+      ...authorization,
+    }),
+  };
 }
 
 export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
   context: GatewayRequestContext;
   sessionKeys: Iterable<string>;
   agentId?: string;
+  requiredSessionId?: string;
   defaultAgentId?: string;
   requester: ChatAbortRequester;
   keyPrefix: string;
@@ -271,11 +334,7 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
       (sessionKey): sessionKey is string => Boolean(sessionKey),
     ),
   );
-  const authorizedByRunId = new Map<string, PreRegisteredAgentRun>();
-  const matchedRunIds = new Set<string>();
-  let hasUnauthorizedRuns = false;
-  let hasUnauthorizedProtectedRuns = false;
-  let hasProtectedRuns = false;
+  const selection = createChatAbortRunSelection<PreRegisteredAgentRun>();
   for (const [key, entry] of params.context.dedupe) {
     const run = readPreRegisteredRun({
       key,
@@ -284,6 +343,12 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
       includeHidden: true,
     });
     if (!run) {
+      continue;
+    }
+    if (
+      params.requiredSessionId !== undefined &&
+      normalizeUnknownText(run.payload.sessionId) !== params.requiredSessionId
+    ) {
       continue;
     }
     if (params.excludeRunIds?.has(run.runId)) {
@@ -315,40 +380,21 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
     ) {
       continue;
     }
-    matchedRunIds.add(run.runId);
     const requesterCanAbort = canRequesterAbortPreRegisteredRun(run.payload, params.requester);
     const isProtected =
       params.includeProtectedRuns !== true &&
       (run.payload.controlUiVisible === false ||
         (params.preserveSideRuns && normalizeUnknownText(run.payload.turnKind) === "btw"));
-    if (isProtected) {
-      // Broad lifecycle cleanup still needs ownership, while ordinary chat.abort
-      // must keep treating hidden or preserved work as a non-match.
-      hasProtectedRuns = true;
-      if (!requesterCanAbort) {
-        hasUnauthorizedProtectedRuns = true;
-      }
-      continue;
-    }
-    if (requesterCanAbort) {
-      authorizedByRunId.set(run.runId, run);
-    } else {
-      hasUnauthorizedRuns = true;
-    }
+    selection.add(run, requesterCanAbort, isProtected);
   }
-  return {
-    authorizedRuns: [...authorizedByRunId.values()],
-    matchedRunIds: [...matchedRunIds],
-    hasUnauthorizedRuns,
-    hasUnauthorizedProtectedRuns,
-    hasProtectedRuns,
-  };
+  return selection.result();
 }
 
 export function resolveAuthorizedRunsForSessionKeys(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   sessionKeys: Iterable<string>;
   sessionIds?: Iterable<string | undefined>;
+  requiredSessionId?: string;
   agentId?: string;
   defaultAgentId?: string;
   requester: ChatAbortRequester;
@@ -367,20 +413,24 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
     ),
   );
   const agentId = normalizeOptionalText(params.agentId)?.toLowerCase();
-  const authorizedRuns: Array<{
+  const selection = createChatAbortRunSelection<{
     runId: string;
     sessionKey: string;
+    sessionId: string;
+    agentId?: string;
     entry: ChatAbortControllerEntry;
-  }> = [];
-  const matchedRunIds: string[] = [];
-  let hasUnauthorizedRuns = false;
-  let hasUnauthorizedProtectedRuns = false;
-  let hasProtectedRuns = false;
+  }>();
   for (const [runId, active] of params.chatAbortControllers) {
     if (params.excludeRunIds?.has(runId)) {
       continue;
     }
     if (!sessionKeys.has(active.sessionKey) && !sessionIds.has(active.sessionId)) {
+      continue;
+    }
+    if (
+      params.requiredSessionId !== undefined &&
+      (!sessionKeys.has(active.sessionKey) || active.sessionId !== params.requiredSessionId)
+    ) {
       continue;
     }
     if (
@@ -396,31 +446,97 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
     ) {
       continue;
     }
-    matchedRunIds.push(runId);
     const requesterCanAbort = canRequesterAbortChatRun(active, params.requester);
     const isProtected =
       params.includeProtectedRuns !== true &&
       (active.controlUiVisible === false || (params.preserveSideRuns && active.turnKind === "btw"));
-    if (isProtected) {
-      // Broad lifecycle cleanup still needs ownership, while ordinary chat.abort
-      // must keep treating hidden or preserved work as a non-match.
-      hasProtectedRuns = true;
-      if (!requesterCanAbort) {
-        hasUnauthorizedProtectedRuns = true;
-      }
-      continue;
-    }
-    if (requesterCanAbort) {
-      authorizedRuns.push({ runId, sessionKey: active.sessionKey, entry: active });
-    } else {
-      hasUnauthorizedRuns = true;
-    }
+    selection.add(
+      {
+        runId,
+        sessionKey: active.sessionKey,
+        sessionId: active.sessionId,
+        agentId: active.agentId,
+        entry: active,
+      },
+      requesterCanAbort,
+      isProtected,
+    );
   }
+  return selection.result();
+}
+
+const SESSION_LIFECYCLE_ABORT_REQUESTER: ChatAbortRequester = { isAdmin: true };
+
+export function resolveAuthorizedQueuedTurnsForSession(params: {
+  context: GatewayRequestContext;
+  sessionKeys: string[];
+  sessionId?: string;
+  requiredSessionId?: string;
+  agentId?: string;
+  defaultAgentId?: string;
+  requester: ChatAbortRequester;
+  excludeRunIds?: ReadonlySet<string>;
+}) {
+  const matches = listQueuedChatTurnsForSession({
+    chatQueuedTurns: params.context.chatQueuedTurns,
+    sessionKeys: params.sessionKeys,
+    sessionIds: [params.sessionId],
+    requiredSessionId: params.requiredSessionId,
+    agentId: params.agentId,
+    defaultAgentId: params.defaultAgentId,
+  }).filter((match) => !params.excludeRunIds?.has(match.runId));
+  const authorized = matches
+    .filter((match) => canRequesterAbortChatRun(match.entry, params.requester))
+    .map((match) => ({
+      runId: match.runId,
+      entry: match.entry,
+      sessionKey: match.entry.sessionKey,
+      sessionId: match.entry.sessionId,
+      agentId: match.entry.agentId,
+    }));
   return {
-    authorizedRuns,
-    matchedRunIds,
-    hasUnauthorizedRuns,
-    hasUnauthorizedProtectedRuns,
-    hasProtectedRuns,
+    authorized,
+    matchedRunIds: matches.map((match) => match.runId),
+    hasUnauthorizedRuns: authorized.length < matches.length,
   };
+}
+
+type SessionAbortOwnerParams = {
+  context: GatewayRequestContext;
+  sessionKeys: string[];
+  sessionId?: string;
+  agentId?: string;
+  defaultAgentId?: string;
+};
+
+/** Authoritative active, pending, or queued Gateway owner for an exact session. */
+export function hasGatewaySessionAbortOwner(params: SessionAbortOwnerParams): boolean {
+  const ownerScope = {
+    sessionKeys: params.sessionKeys,
+    agentId: params.agentId,
+    defaultAgentId: params.defaultAgentId,
+    requester: SESSION_LIFECYCLE_ABORT_REQUESTER,
+  };
+  return (
+    resolveAuthorizedRunsForSessionKeys({
+      chatAbortControllers: params.context.chatAbortControllers,
+      sessionIds: [params.sessionId],
+      ...ownerScope,
+      includeProtectedRuns: true,
+    }).authorizedRuns.length > 0 ||
+    resolveAuthorizedQueuedTurnsForSession({
+      context: params.context,
+      sessionId: params.sessionId,
+      ...ownerScope,
+    }).authorized.length > 0 ||
+    ["agent:", PENDING_CHAT_SEND_DEDUPE_PREFIX].some(
+      (keyPrefix) =>
+        resolveAuthorizedPreRegisteredRunsForSessionKeys({
+          context: params.context,
+          ...ownerScope,
+          keyPrefix,
+          includeProtectedRuns: true,
+        }).authorizedRuns.length > 0,
+    )
+  );
 }

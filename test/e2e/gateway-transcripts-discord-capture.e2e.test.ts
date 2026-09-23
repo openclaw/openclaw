@@ -362,7 +362,10 @@ describe("Gateway admitted Discord transcript capture", () => {
           return target!;
         },
       );
-      const runtimeModule = resolvePluginRuntimeModulePathWithDiagnostics({ devSourceRoot });
+      const runtimeModule = resolvePluginRuntimeModulePathWithDiagnostics({
+        devSourceRoot,
+        pluginSdkResolution: "dist",
+      });
       expect(runtimeModule.resolvedPath, JSON.stringify(runtimeModule)).toBeDefined();
       expect(isBuiltPath(runtimeModule.resolvedPath!)).toBe(true);
       await Promise.all(
@@ -409,8 +412,10 @@ describe("Gateway admitted Discord transcript capture", () => {
       const { clearConfigCache, clearRuntimeConfigSnapshot, getRuntimeConfig } =
         await import("../../src/config/config.js");
       const { resetConfigOverrides } = await import("../../src/config/runtime-overrides.js");
-      const { drainSessionStoreWriterQueuesForTest, clearSessionStoreCacheForTest } =
+      const { clearSessionStoreCacheForTest } =
         await import("../../src/config/sessions/store-writer-state.js");
+      const { drainSessionStoreWriterQueuesForTest } =
+        await import("../../src/config/sessions/store-writer-state.test-support.js");
       const { closeOpenClawStateDatabaseByPathAsync } =
         await import("../../src/state/openclaw-state-db-cache.js");
       const { activeSessions, resolveSourceProvider } =
@@ -429,7 +434,7 @@ describe("Gateway admitted Discord transcript capture", () => {
           );
         try {
           for (const capture of ownedCaptures()) {
-            await capture.finalization;
+            await capture.finalization?.released;
           }
           expect(ownedCaptures()).toEqual([]);
         } finally {
@@ -799,7 +804,7 @@ describe("Gateway admitted Discord transcript capture", () => {
       expect(await store.readSession(selector!)).toEqual(stoppedSession);
       expect(await store.readUtterancesForSession(stoppedSession!)).toEqual(utterances);
       const savedSummary = await store.readSummary(stoppedSession!);
-      const providerStop = vi.spyOn(replacement.provider, "stop");
+      const providerStop = vi.spyOn(replacement, "stopProvider");
       const sessionWrite = vi.spyOn(TranscriptsStore.prototype, "writeSession");
       const summaryWrite = vi.spyOn(TranscriptsStore.prototype, "writeSummary");
       try {

@@ -6,9 +6,10 @@ import { resolveGatewayService } from "../daemon/service.js";
 import { readLegacyGatewayLockIdentity } from "../infra/gateway-lock-legacy.js";
 import { readPackageVersion } from "../infra/package-json.js";
 import { probePortUsage } from "../infra/ports-probe.js";
-import { UpdateDoctorError } from "../infra/update-doctor-result.js";
+import { DoctorMaintenanceRefusalError, UpdateDoctorError } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
 import { readBuiltGatewayBuildId } from "../infra/update-git-runtime.js";
+import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 
 export type DoctorStaleGateway = {
   version: string;
@@ -28,20 +29,24 @@ export function doctorGatewayMaintenanceError(params: {
   const status = formatCliCommand("openclaw gateway status --deep", params.env);
   const doctor = formatCliCommand("openclaw doctor --fix", params.env);
   const next = `Run ${status}; resolve the reported failure, then ${doctor} and ${restart}.`;
-  return new UpdateDoctorError(
-    `Doctor ${params.phase} failed. ${params.detail} ${next}`,
-    [
-      createUpdateFailureFact(
-        { check: params.phase, code: params.code, message: params.detail },
-        params.env,
-      ),
-      createUpdateFailureFact(
-        { check: params.phase, code: "stale-gateway-recovery-command", message: next },
-        params.env,
-      ),
-    ],
-    { cause: params.cause },
-  );
+  const message = `Doctor ${params.phase} failed. ${params.detail} ${next}`;
+  const failureFacts = [
+    createUpdateFailureFact(
+      { check: params.phase, code: params.code, message: params.detail },
+      params.env,
+    ),
+    createUpdateFailureFact(
+      { check: params.phase, code: "stale-gateway-recovery-command", message: next },
+      params.env,
+    ),
+  ];
+  return params.phase === "gateway-stop"
+    ? new DoctorMaintenanceRefusalError(
+        message,
+        { kind: "data-at-risk", reason: "gateway-state-unverified" },
+        { cause: params.cause, failureFacts },
+      )
+    : new UpdateDoctorError(message, failureFacts, { cause: params.cause });
 }
 
 /** Identify predecessor code without requiring startup before offline migrations. */
@@ -78,6 +83,7 @@ export async function inspectStaleDoctorGateway(params: {
         env: serviceEnv,
         expectedVersion: version,
         expectedBuildId: buildId,
+        openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
         requirePluginHealth: false,
       });
   params.assertCurrent?.();

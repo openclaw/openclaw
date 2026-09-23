@@ -4,11 +4,16 @@ import { fileURLToPath } from "node:url";
 import { inheritLegacyDefaultAgentId } from "../../../config/legacy.default-agent-owner.js";
 import type { LegacyConfigMigrationContext } from "../../../config/legacy.shared.js";
 import { cloneConfigWithResolutionFacts } from "../../../config/resolution-facts.js";
-import { isPluginSourceModulePath } from "../../../plugins/native-module-require.js";
+import {
+  isPluginSourceModulePath,
+  tryNativeRequireModule,
+} from "../../../plugins/native-module-require.js";
 import { getCachedPluginModuleLoader } from "../../../plugins/plugin-module-loader-cache.js";
+import { preparePluginLoaderAliases } from "../../../plugins/sdk-alias.js";
 import { applyChannelDoctorCompatibilityMigrations } from "./channel-legacy-config-migrate.js";
 import { resolveChannelAccountBindingRepairInput } from "./legacy-config-binding-repair-input.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
+import { collectToolPolicyConflictWarnings } from "./legacy-config-migrations.runtime.tool-policy-conflicts.js";
 
 const require = createRequire(import.meta.url);
 
@@ -24,11 +29,20 @@ function loadBindingRepair(): typeof import("./legacy-config-binding-repair.runt
       import.meta.url,
     ),
   );
-  const loaded: unknown = source
-    ? getCachedPluginModuleLoader({ modulePath, importerUrl: import.meta.url, tryNative: false })(
-        modulePath,
-      )
-    : require(modulePath);
+  // Host repairs share native module owners; unsupported source loaders keep the transform path.
+  const native = source
+    ? tryNativeRequireModule(modulePath, {
+        aliasMap: preparePluginLoaderAliases({ modulePath, moduleUrl: import.meta.url })
+          .resolveAlias,
+      })
+    : undefined;
+  const loaded: unknown = native?.ok
+    ? native.moduleExport
+    : source
+      ? getCachedPluginModuleLoader({ modulePath, importerUrl: import.meta.url, tryNative: false })(
+          modulePath,
+        )
+      : require(modulePath);
   // SAFETY: Both fixed targets expose the same typed repair owner.
   return loaded as typeof import("./legacy-config-binding-repair.runtime.js");
 }
@@ -73,11 +87,16 @@ export function applyLegacyDoctorMigrations(
         })
       : { config: compat.next, changes: [] };
   changes.push(...ownership.changes);
+  const warnings = [
+    ...(compat.warnings ?? []),
+    ...(ownership.warnings ?? []),
+    ...collectToolPolicyConflictWarnings(ownership.config),
+  ];
   // The config reader keeps the retired default-agent marker outside the object.
   // Cloning must retain that owner so validation does not roll back a repairable roster.
   return {
     next: changes.length > 0 ? inheritLegacyDefaultAgentId(original, ownership.config) : null,
     changes,
-    ...(ownership.warnings?.length ? { warnings: ownership.warnings } : {}),
+    ...(warnings.length ? { warnings } : {}),
   };
 }

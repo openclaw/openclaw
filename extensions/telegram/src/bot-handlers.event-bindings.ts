@@ -262,7 +262,7 @@ export function createTelegramEventBindings({
           }
         }
 
-        const sessionKey = resolveTelegramConversationRoute({
+        const { route } = resolveTelegramConversationRoute({
           cfg: eventAuthContext.cfg,
           accountId,
           chatId,
@@ -270,7 +270,7 @@ export function createTelegramEventBindings({
           threadSpec: recoveredThreadSpec ?? eventAuthContext.threadSpec,
           senderId,
           topicAgentId: eventAuthContext.topicConfig?.agentId,
-        }).route.sessionKey;
+        });
 
         const senderName = user
           ? [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || user.username
@@ -290,8 +290,7 @@ export function createTelegramEventBindings({
         for (const addedReaction of addedReactions) {
           const emoji = addedReaction.emoji;
           const text = `Telegram reaction added: ${emoji} by ${senderLabel} on msg ${messageId}`;
-          telegramDeps.enqueueSystemEvent(text, {
-            sessionKey,
+          telegramDeps.enqueueRoutedSystemEvent(text, route, {
             contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:${emoji}`,
           });
           logVerbose(`telegram: reaction event enqueued: ${text}`);

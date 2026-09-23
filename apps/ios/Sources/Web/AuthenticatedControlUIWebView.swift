@@ -478,10 +478,6 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
         }
     }
 
-    func allowsNavigation(to candidateURL: URL?, isMainFrame: Bool?) -> Bool {
-        self.navigationDecision(to: candidateURL, isMainFrame: isMainFrame) == .allow
-    }
-
     func navigationDecision(
         to candidateURL: URL?,
         isMainFrame: Bool?) -> AuthenticatedControlUIWebViewNavigationDecision

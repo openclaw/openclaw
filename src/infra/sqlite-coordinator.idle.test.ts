@@ -4,28 +4,38 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// QA cleanup imports worker-backed stores lazily; admit their inert declarations during collection.
+import "./runtime-process-entrypoints.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { drainSqliteTestSingletons } from "../../test/sqlite-test-lifecycle.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import * as nodeSqlite from "./node-sqlite.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
+  closeIdleSqliteCoordinators,
   tryAcquireExclusiveSqliteCoordinator,
   tryAcquireSharedSqliteCoordinator,
 } from "./sqlite-coordinator.js";
+import { captureCoordinatorDatabase } from "./sqlite-coordinator.test-support.js";
+import { SQLITE_IDLE_HANDLE_TTL_MS } from "./sqlite-handle-lifecycle.js";
 import {
   acquireStateDatabaseCoordinator,
   acquireStateDatabaseHandleExclusion,
+  acquireStateDatabaseHandleLease,
   captureStateDatabaseCoordinatorRuntime,
   resolveStateDatabaseCoordinatorPath,
   withStateDatabaseCoordinatorRuntimeDirectory,
 } from "./state-database-coordinator.js";
+import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const loader = new URL("../../scripts/tsx.mjs", import.meta.url).href;
-const ownerUrl = new URL("./state-database-coordinator.ts", import.meta.url).href;
+const ownerUrl = resolveRuntimeWorkerUrl(storageProcessTestEntrypoints.stateDatabaseCoordinator);
 
 function observeConnections() {
   const { DatabaseSync } = requireNodeSqlite();
-  const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+  const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockClear();
   return () => new Set(exec.mock.contexts.filter((context) => context instanceof DatabaseSync));
 }
 
@@ -83,6 +93,41 @@ describe("idle SQLite coordinator connections", () => {
     vi.useRealTimers();
   });
 
+  it("reuses released state-handle locks until idle eviction and then reopens", async () => {
+    const { directory } = fixture();
+    const params = { databasePath: path.join(directory, "state.sqlite") };
+    await withStateDatabaseCoordinatorRuntimeDirectory({ directory, keepAlive: true }, async () => {
+      acquireStateDatabaseHandleLease({ ...params, keepAlive: false }).release();
+      const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+      const databases = observeConnections();
+      for (let operation = 0; operation < 100; operation++) {
+        acquireStateDatabaseHandleLease(params).release();
+      }
+      expect(open).toHaveBeenCalledTimes(1);
+      const database = firstConnection(databases());
+      const location = open.mock.calls[0]?.[0];
+      if (!location) {
+        throw new Error("Coordinator did not open a lock file");
+      }
+      expect(database.isOpen).toBe(true);
+      expect(database.isTransaction).toBe(false);
+      const releasePeer = await holdPeer(location);
+      await releasePeer();
+      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+      expect(database.isOpen).toBe(true);
+      acquireStateDatabaseHandleLease(params).release();
+      vi.advanceTimersByTime(1);
+      expect(database.isOpen).toBe(true);
+      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+      expect(database.isOpen).toBe(false);
+      acquireStateDatabaseHandleLease(params).release();
+      expect(open).toHaveBeenCalledTimes(2);
+      acquireStateDatabaseHandleExclusion(params).release();
+      expect([...databases()].every((connection) => !connection.isOpen)).toBe(true);
+      fs.unlinkSync(location);
+    });
+  });
+
   it("reuses the default state owner connection while releasing each lock and resetting timeout", async () => {
     const { directory } = fixture();
     const params = { databasePath: path.join(directory, "state.sqlite") };
@@ -129,6 +174,153 @@ describe("idle SQLite coordinator connections", () => {
     vi.advanceTimersByTime(30 * 60_000);
     expect(database.isOpen).toBe(false);
   });
+
+  it("drains idle coordinators at the file boundary without closing checked-out owners", async () => {
+    const { directory, location } = fixture();
+    const heldPath = path.join(directory, "held.sqlite");
+    fs.writeFileSync(heldPath, "");
+    const timer = vi.spyOn(globalThis, "setTimeout");
+    const idle = captureCoordinatorDatabase(() =>
+      tryAcquireExclusiveSqliteCoordinator(location, { keepAlive: true }),
+    );
+    const held = captureCoordinatorDatabase(() =>
+      tryAcquireSharedSqliteCoordinator(heldPath, { keepAlive: true }),
+    );
+    idle.result?.release();
+    const expiry = timer.mock.calls.at(-1)?.[0];
+    const onError = vi.fn();
+    try {
+      expect(typeof expiry).toBe("function");
+      await drainGlobalSingletonLifecycleState("restart");
+      expect(idle.database.isOpen).toBe(true);
+      await drainSqliteTestSingletons(onError);
+      expect(onError).not.toHaveBeenCalled();
+      expect(idle.database.isOpen).toBe(false);
+      expect(held.database.isOpen).toBe(true);
+      expect(held.database.isTransaction).toBe(true);
+      const close = vi.spyOn(idle.database, "close");
+      if (typeof expiry === "function") {
+        expiry();
+      }
+      expect(close).not.toHaveBeenCalled();
+    } finally {
+      held.result?.release({ keepAlive: false });
+      closeIdleSqliteCoordinators(directory);
+    }
+  });
+
+  it.each(["coordinator", "qa-runtime"] as const)(
+    "disposes only idle connections inside a removed runtime root through %s",
+    async (entryPoint) => {
+      const qaCloser =
+        entryPoint === "qa-runtime"
+          ? (await import("../plugin-sdk/qa-runtime.js")).closeQaRuntimeStores
+          : undefined;
+      const dispose = async (root: string) => {
+        if (qaCloser) {
+          await qaCloser(root);
+        } else {
+          closeIdleSqliteCoordinators(root);
+        }
+      };
+      const { directory } = fixture();
+      const root = path.join(directory, "owned");
+      fs.mkdirSync(root);
+      const idlePath = path.join(root, "idle.sqlite");
+      const heldPath = path.join(root, "held.sqlite");
+      const otherPath = path.join(directory, "owned-other.sqlite");
+      for (const location of [idlePath, heldPath, otherPath]) {
+        fs.writeFileSync(location, "");
+      }
+      const acquire = (location: string) =>
+        captureCoordinatorDatabase(() =>
+          tryAcquireSharedSqliteCoordinator(location, { keepAlive: true }),
+        );
+      const idle = acquire(idlePath);
+      const held = acquire(heldPath);
+      const other = acquire(otherPath);
+      idle.result?.release();
+      other.result?.release();
+      try {
+        await dispose(root);
+        expect(idle.database.isOpen).toBe(false);
+        fs.unlinkSync(idlePath);
+        expect(held.database.isOpen).toBe(true);
+        expect(held.database.isTransaction).toBe(true);
+        expect(other.database.isOpen).toBe(true);
+        const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+        const reused = tryAcquireSharedSqliteCoordinator(otherPath, { keepAlive: true });
+        try {
+          expect(reused).not.toBeNull();
+          expect(open).not.toHaveBeenCalled();
+        } finally {
+          reused?.release();
+          open.mockRestore();
+        }
+        held.result?.release();
+        await dispose(root);
+        fs.rmSync(root, { recursive: true });
+        expect(other.database.isOpen).toBe(true);
+      } finally {
+        held.result?.release({ keepAlive: false });
+        closeIdleSqliteCoordinators(directory);
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "retains only unfinished scoped cleanup after close failures (physically closed: %s)",
+    (physicallyClosed) => {
+      const { directory, location } = fixture();
+      const secondPath = path.join(directory, "second.sqlite");
+      fs.writeFileSync(secondPath, "");
+      const owners = [location, secondPath].map((pathname) => {
+        const owner = captureCoordinatorDatabase(() =>
+          tryAcquireExclusiveSqliteCoordinator(pathname, { keepAlive: true }),
+        );
+        owner.result?.release();
+        return owner;
+      });
+      const failures: Error[] = [];
+      const closes = owners.map(({ database }, index) => {
+        const failure = new Error(`native close ${index} failed`);
+        failures.push(failure);
+        const close = database.close.bind(database);
+        return vi.spyOn(database, "close").mockImplementationOnce(() => {
+          if (physicallyClosed) {
+            close();
+          }
+          throw failure;
+        });
+      });
+      try {
+        expect(() => closeIdleSqliteCoordinators(directory)).toThrow(
+          expect.objectContaining({ errors: failures, cause: failures[0] }),
+        );
+        for (const { database } of owners) {
+          expect(database.isOpen).toBe(!physicallyClosed);
+        }
+        closeIdleSqliteCoordinators(path.join(directory, "unrelated"));
+        for (const close of closes) {
+          expect(close).toHaveBeenCalledTimes(1);
+        }
+        for (const { database } of owners) {
+          expect(database.isOpen).toBe(!physicallyClosed);
+        }
+        // The next explicit disposal recovers retained custody without a timer or a new open.
+        closeIdleSqliteCoordinators(directory);
+        for (const close of closes) {
+          expect(close).toHaveBeenCalledTimes(physicallyClosed ? 1 : 2);
+        }
+        fs.rmSync(directory, { recursive: true });
+      } finally {
+        for (const close of closes) {
+          close.mockRestore();
+        }
+        closeIdleSqliteCoordinators(directory);
+      }
+    },
+  );
 
   it("ends the released lease's custody when its connection enters the idle pool", () => {
     const { location } = fixture();
@@ -327,7 +519,7 @@ describe("idle SQLite coordinator connections", () => {
     },
   );
 
-  it("bounds idle connections and never evicts a borrowed lock", () => {
+  it("retains every idle connection until expiry and never evicts a borrowed lock", () => {
     const databases = observeConnections();
     const { location } = fixture();
     const held = tryAcquireExclusiveSqliteCoordinator(location, { keepAlive: true });
@@ -335,11 +527,11 @@ describe("idle SQLite coordinator connections", () => {
     for (let index = 0; index < 20; index++) {
       tryAcquireExclusiveSqliteCoordinator(fixture().location, { keepAlive: true })?.release();
     }
-    expect([...databases()].filter((database) => database.isOpen)).toHaveLength(17);
+    expect([...databases()].filter((database) => database.isOpen)).toHaveLength(21);
     expect(activeDatabase.isTransaction).toBe(true);
     held?.release();
-    expect([...databases()].filter((database) => database.isOpen)).toHaveLength(16);
-    vi.advanceTimersByTime(30 * 60_000);
+    expect([...databases()].filter((database) => database.isOpen)).toHaveLength(21);
+    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
     expect([...databases()].some((database) => database.isOpen)).toBe(false);
   });
 
@@ -359,16 +551,22 @@ describe("idle SQLite coordinator connections", () => {
     (override) => {
       const { directory, location } = fixture();
       const databases = observeConnections();
+      const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
       const params = {
         databasePath: path.join(directory, "state.sqlite"),
         ...(override === "runtimeDirectory"
           ? { runtimeDirectory: directory }
           : { coordinatorPath: location }),
       };
-      const coordinator = acquireStateDatabaseCoordinator(params);
-      coordinator.release();
-      expect([...databases()].every((database) => !database.isOpen)).toBe(true);
-      fs.unlinkSync(coordinator.path);
+      for (const acquire of [acquireStateDatabaseCoordinator, acquireStateDatabaseHandleLease]) {
+        acquire(params).release();
+        expect([...databases()].every((database) => !database.isOpen)).toBe(true);
+        const pathname = open.mock.calls.at(-1)?.[0];
+        if (!pathname) {
+          throw new Error("Coordinator did not open a lock file");
+        }
+        fs.unlinkSync(pathname);
+      }
     },
   );
 
@@ -508,13 +706,12 @@ describe("idle SQLite coordinator connections", () => {
     const result = execFileSync(
       process.execPath,
       [
-        "--import",
-        loader,
+        ...resolveRuntimeWorkerArgv(ownerUrl).slice(0, -1),
         "--input-type=module",
         "--eval",
         `
       import { AsyncLocalStorage, createHook } from "node:async_hooks";
-      import { acquireStateDatabaseCoordinator } from ${JSON.stringify(ownerUrl)};
+      import { acquireStateDatabaseCoordinator } from ${JSON.stringify(ownerUrl.href)};
       const params = { databasePath: process.argv[1] };
       acquireStateDatabaseCoordinator(params).release();
       const request = new AsyncLocalStorage();

@@ -11,7 +11,10 @@ import * as commandRunner from "../../process/exec.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { updateRegistryWorktree } from "./registry.js";
 import { ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
@@ -44,6 +47,7 @@ describe("ManagedWorktreeService repository code isolation", () => {
   });
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -334,7 +338,7 @@ describe("ManagedWorktreeService repository code isolation", () => {
             "completion",
             "checkout-cleanup",
           ]);
-          expect(service.listRegistryRecords()).toEqual([]);
+          expect(await service.listRegistryRecords()).toEqual([]);
           const branches = await execFileAsync("git", [
             "-C",
             repo,
@@ -349,7 +353,7 @@ describe("ManagedWorktreeService repository code isolation", () => {
           const result = await outcome;
           expect(result).toHaveProperty("value");
           expect(events).toEqual(["dispatch", "source-released", "completion"]);
-          expect(service.listRegistryRecords()).toHaveLength(1);
+          expect(await service.listRegistryRecords()).toHaveLength(1);
         }
       } finally {
         completion.resolve(success);
@@ -403,7 +407,9 @@ describe("ManagedWorktreeService repository code isolation", () => {
       if (mode === "new") {
         expect(failure).toBe(sourceFailure);
         expect(service.findLiveByOwner("session", ownerId)).toBeUndefined();
-        const retained = service.listRegistryRecords().find((record) => record.id === published.id);
+        const retained = (await service.listRegistryRecords()).find(
+          (record) => record.id === published.id,
+        );
         expect(retained?.removedAt).toBeDefined();
         await expect(fs.stat(published.path)).rejects.toMatchObject({ code: "ENOENT" });
       } else {

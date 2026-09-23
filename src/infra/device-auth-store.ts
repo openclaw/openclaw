@@ -3,24 +3,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
-import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
+import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import {
-  clearDeviceAuthTokenFromDatabase,
-  clearOriginDeviceTokenInDatabase,
   createDeviceAuthEntry,
   type DeviceAuthTokenObservation,
-  readDeviceAuthTokenObservationFromDatabase,
-  readOriginDeviceTokenObservationFromDatabase,
-  storeDeviceAuthTokenInDatabase,
-  storeOriginDeviceTokenInDatabase,
 } from "./device-auth-store.kernel.js";
-
-export { clearDeviceAuthTokenFromDatabase } from "./device-auth-store.kernel.js";
+import type { SqliteWorkerStore } from "./sqlite-worker-contract.js";
+import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
 // The Gateway lock makes state-directory contents process-stable. Cache both
 // outcomes to keep reconnects free of freshness polling; Doctor invalidates
@@ -46,7 +37,12 @@ export function resetLegacyDeviceAuthPresenceCache(env: NodeJS.ProcessEnv): void
   legacyPresenceCache.delete(resolveStateDir(env));
 }
 
-type DeviceAuthLookup = { deviceId: string; role: string; env?: NodeJS.ProcessEnv };
+type DeviceAuthOperation = {
+  env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
+  assertCurrent?: () => void;
+};
+type DeviceAuthLookup = DeviceAuthOperation & { deviceId: string; role: string };
 type OriginDeviceAuthLookup = DeviceAuthLookup & { gatewayScope: string };
 type DeviceAuthRead = {
   onSnapshot?: (observation: DeviceAuthTokenObservation) => void;
@@ -61,109 +57,185 @@ type DeviceAuthClear = DeviceAuthLookup & {
   observedToken?: string;
 };
 
+type DeviceAuthCommand = Extract<keyof OpenClawStateWorkerOperations, `deviceAuth.${string}`>;
+
+function captureDeviceAuthOperation(params: DeviceAuthOperation) {
+  assertNoLegacyDeviceAuth(params.env);
+  const context = captureOpenClawStateWorkerContext({ env: params.env });
+  const { signal, assertCurrent } = params;
+  const assertActive = () => {
+    context.admission.assertCurrent();
+    signal?.throwIfAborted();
+    assertCurrent?.();
+  };
+  return { context, signal, assertActive };
+}
+
+type CapturedDeviceAuthOperation = ReturnType<typeof captureDeviceAuthOperation>;
+
+function executeDeviceAuth<Type extends DeviceAuthCommand>(
+  captured: CapturedDeviceAuthOperation,
+  type: Type,
+  input: OpenClawStateWorkerOperations[Type]["input"],
+): Promise<OpenClawStateWorkerOperations[Type]["output"]>;
+function executeDeviceAuth<Type extends DeviceAuthCommand>(
+  captured: CapturedDeviceAuthOperation,
+  type: Type,
+  input: OpenClawStateWorkerOperations[Type]["input"],
+  readOnly: boolean,
+): Promise<OpenClawStateWorkerOperations[Type]["output"] | undefined>;
+async function executeDeviceAuth<Type extends DeviceAuthCommand>(
+  captured: CapturedDeviceAuthOperation,
+  type: Type,
+  input: OpenClawStateWorkerOperations[Type]["input"],
+  readOnly = false,
+): Promise<OpenClawStateWorkerOperations[Type]["output"] | undefined> {
+  const { context, signal, assertActive } = captured;
+  const mutation =
+    type === "deviceAuth.store" ||
+    type === "deviceAuth.storeOrigin" ||
+    type === "deviceAuth.clear" ||
+    type === "deviceAuth.clearOrigin";
+  const operation = (scope: Pick<SqliteWorkerStore<OpenClawStateWorkerOperations>, "execute">) =>
+    scope.execute({ type, input }, { signal });
+  const options = {
+    assertCurrent: assertActive,
+    ...(mutation
+      ? {
+          createAdmission: () => ({
+            nativeLocations: [context.admission.databasePath],
+            admission: createSqliteWorkerOperationAdmission((request, grant) => {
+              if (request.stage !== "transaction" && request.stage !== "commit") {
+                throw new Error("Device token mutation requires transaction admission");
+              }
+              assertActive();
+              grant();
+            }),
+          }),
+        }
+      : {}),
+  };
+  const result = await (readOnly
+    ? runOpenClawStateWorkerOperation(context, operation, { ...options, existingOnly: true })
+    : runOpenClawStateWorkerOperation(context, operation, options));
+  // Missing stores settle without dispatching the callback, but still need current read authority.
+  if (!mutation) {
+    assertActive();
+  }
+  return result;
+}
+
+/** Prepare the command runtime before connection work, without reading or caching token facts. */
+export async function prepareDeviceAuthStore(
+  params: DeviceAuthOperation & { readOnly?: boolean },
+): Promise<void> {
+  await executeDeviceAuth(
+    captureDeviceAuthOperation(params),
+    "deviceAuth.prepare",
+    undefined,
+    params.readOnly === true,
+  );
+}
+
+async function readDeviceAuth(
+  params: DeviceAuthLookup & DeviceAuthRead & { gatewayScope?: string },
+  readOnly: boolean,
+): Promise<DeviceAuthEntry | null> {
+  const { deviceId, role, gatewayScope, onSnapshot } = params;
+  const captured = captureDeviceAuthOperation(params);
+  const observation = (await (gatewayScope === undefined
+    ? executeDeviceAuth(captured, "deviceAuth.read", { deviceId, role, readOnly }, readOnly)
+    : executeDeviceAuth(
+        captured,
+        "deviceAuth.readOrigin",
+        { deviceId, role, gatewayScope, readOnly },
+        readOnly,
+      ))) ?? { entry: null, expectedToken: null };
+  // Recheck the captured source in the frame that publishes the observation.
+  captured.assertActive();
+  onSnapshot?.(observation);
+  return observation.entry;
+}
+
 export function loadDeviceAuthToken(
   params: DeviceAuthLookup & DeviceAuthRead,
-): DeviceAuthEntry | null {
-  assertNoLegacyDeviceAuth(params.env);
-  const { db } = openOpenClawStateDatabase({ env: params.env });
-  const observation = readDeviceAuthTokenObservationFromDatabase(db, params);
-  params.onSnapshot?.(observation);
-  return observation.entry;
+): Promise<DeviceAuthEntry | null> {
+  return readDeviceAuth(params, false);
 }
 
 export function loadDeviceAuthTokenReadOnly(
   params: DeviceAuthLookup & DeviceAuthRead,
-): DeviceAuthEntry | null {
-  assertNoLegacyDeviceAuth(params.env);
-  const observation = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-    ({ db }) => readDeviceAuthTokenObservationFromDatabase(db, params),
-    { env: params.env },
-  ) ?? { entry: null, expectedToken: null };
-  params.onSnapshot?.(observation);
-  return observation.entry;
+): Promise<DeviceAuthEntry | null> {
+  return readDeviceAuth(params, true);
 }
 
-export async function loadDeviceAuthTokens(params: {
-  deviceId: string;
-  env?: NodeJS.ProcessEnv;
-}): Promise<DeviceAuthEntry[]> {
-  assertNoLegacyDeviceAuth(params.env);
-  const context = captureOpenClawStateWorkerContext({ env: params.env });
+export async function loadDeviceAuthTokens(
+  params: DeviceAuthOperation & { deviceId: string },
+): Promise<DeviceAuthEntry[]> {
   const deviceId = params.deviceId;
-  const { executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js");
-  return executeOpenClawStateWorker(context, {
-    type: "deviceAuth.list",
-    input: { deviceId },
+  return await executeDeviceAuth(captureDeviceAuthOperation(params), "deviceAuth.list", {
+    deviceId,
   });
 }
 
-export function storeDeviceAuthToken(params: DeviceAuthWrite): DeviceAuthEntry | null {
-  assertNoLegacyDeviceAuth(params.env);
-  const entry = createDeviceAuthEntry(params);
-  return runOpenClawStateWriteTransaction(
-    ({ db }) =>
-      storeDeviceAuthTokenInDatabase(db, {
-        deviceId: params.deviceId,
-        ...entry,
-        expectedToken: params.expectedToken,
-      }),
-    { env: params.env },
-  );
+export async function storeDeviceAuthToken(
+  params: DeviceAuthWrite,
+): Promise<DeviceAuthEntry | null> {
+  const input = {
+    deviceId: params.deviceId,
+    ...createDeviceAuthEntry(params),
+    expectedToken: params.expectedToken,
+  };
+  return await executeDeviceAuth(captureDeviceAuthOperation(params), "deviceAuth.store", input);
 }
 
-export function clearDeviceAuthToken(params: DeviceAuthClear): boolean {
-  assertNoLegacyDeviceAuth(params.env);
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => clearDeviceAuthTokenFromDatabase(db, params),
-    { env: params.env },
-  );
+export async function clearDeviceAuthToken(params: DeviceAuthClear): Promise<boolean> {
+  const { deviceId, role, expectedToken, observedToken } = params;
+  return await executeDeviceAuth(captureDeviceAuthOperation(params), "deviceAuth.clear", {
+    deviceId,
+    role,
+    expectedToken,
+    observedToken,
+  });
 }
 
 export function loadOriginDeviceToken(
   params: OriginDeviceAuthLookup & DeviceAuthRead,
-): DeviceAuthEntry | null {
-  assertNoLegacyDeviceAuth(params.env);
-  const { db } = openOpenClawStateDatabase({ env: params.env });
-  const observation = readOriginDeviceTokenObservationFromDatabase(db, params);
-  params.onSnapshot?.(observation);
-  return observation.entry;
+): Promise<DeviceAuthEntry | null> {
+  return readDeviceAuth(params, false);
 }
 
 export function loadOriginDeviceTokenReadOnly(
   params: OriginDeviceAuthLookup & DeviceAuthRead,
-): DeviceAuthEntry | null {
-  assertNoLegacyDeviceAuth(params.env);
-  const observation = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-    ({ db }) => readOriginDeviceTokenObservationFromDatabase(db, params),
-    { env: params.env },
-  ) ?? { entry: null, expectedToken: null };
-  params.onSnapshot?.(observation);
-  return observation.entry;
+): Promise<DeviceAuthEntry | null> {
+  return readDeviceAuth(params, true);
 }
 
-export function storeOriginDeviceToken(
+export async function storeOriginDeviceToken(
   params: DeviceAuthWrite & { gatewayScope: string },
-): DeviceAuthEntry | null {
-  assertNoLegacyDeviceAuth(params.env);
-  const entry = createDeviceAuthEntry(params);
-  return runOpenClawStateWriteTransaction(
-    ({ db }) =>
-      storeOriginDeviceTokenInDatabase(db, {
-        gatewayScope: params.gatewayScope,
-        deviceId: params.deviceId,
-        ...entry,
-        expectedToken: params.expectedToken,
-      }),
-    { env: params.env },
+): Promise<DeviceAuthEntry | null> {
+  const input = {
+    gatewayScope: params.gatewayScope,
+    deviceId: params.deviceId,
+    ...createDeviceAuthEntry(params),
+    expectedToken: params.expectedToken,
+  };
+  return await executeDeviceAuth(
+    captureDeviceAuthOperation(params),
+    "deviceAuth.storeOrigin",
+    input,
   );
 }
 
-export function clearOriginDeviceToken(
+export async function clearOriginDeviceToken(
   params: DeviceAuthClear & { gatewayScope: string },
-): boolean {
-  assertNoLegacyDeviceAuth(params.env);
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => clearOriginDeviceTokenInDatabase(db, params),
-    { env: params.env },
-  );
+): Promise<boolean> {
+  const { deviceId, role, gatewayScope, expectedToken, observedToken } = params;
+  return await executeDeviceAuth(captureDeviceAuthOperation(params), "deviceAuth.clearOrigin", {
+    deviceId,
+    role,
+    gatewayScope,
+    expectedToken,
+    observedToken,
+  });
 }

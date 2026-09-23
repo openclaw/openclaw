@@ -67,7 +67,9 @@ describe("Codex attempt TTS media lifetime", () => {
       setCodexTestModelSupportsTools(params, true);
       const audioPath = path.join(tempDir, "reply.opus");
       const earlierPath = path.join(tempDir, "earlier.opus");
-      const host = await createHostTtsRuntimeContract(params, audioPath);
+      const host = await createHostTtsRuntimeContract(params, audioPath, {
+        nativeModelPolicySupport: "exact",
+      });
       params.hostCapabilities = host.hostCapabilities;
       // Own the attempt clock before cold preparation arms its watchdog.
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
@@ -157,7 +159,6 @@ describe("Codex attempt TTS media lifetime", () => {
         await Promise.allSettled(handle?.mock.results.map((entry) => entry.value) ?? []);
         vi.useRealTimers();
         host.close();
-        setActivePluginRegistry(createEmptyPluginRegistry());
       }
     },
   );

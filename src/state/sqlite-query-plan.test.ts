@@ -200,6 +200,16 @@ describe("sqlite hot query plans", () => {
          ORDER BY session_key
       `,
     });
+    for (const activeOnly of [false, true]) {
+      expectPlanUsesIndex({
+        db: database.db,
+        indexName: "idx_agent_session_nodes_entry_not_valid",
+        params: [1],
+        sql: `SELECT entry_json FROM session_nodes WHERE entry_valid != ?${
+          activeOnly ? " AND archived_at IS NULL" : ""
+        }`,
+      });
+    }
     const latestMessagePlan = explainQueryPlan(
       database.db,
       `

@@ -86,6 +86,9 @@ describe("file-transfer standalone guidance", () => {
     pluginEntry.register(
       createTestPluginApi({
         registerTool(tool) {
+          if (typeof tool !== "function" && "contextVersion" in tool) {
+            throw new Error("expected legacy file-transfer registration");
+          }
           const resolved = typeof tool === "function" ? tool({ config: {} }) : tool;
           if (resolved) {
             registered.push(...(Array.isArray(resolved) ? resolved : [resolved]));

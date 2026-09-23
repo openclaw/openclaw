@@ -1,4 +1,3 @@
-// Matrix plugin module implements reaction events behavior.
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
@@ -271,6 +270,7 @@ export async function handleInboundMatrixReaction(params: {
   const text = `Matrix reaction added: ${reaction.key} by ${params.senderLabel} on msg ${reaction.eventId}`;
   params.core.system.enqueueSystemEvent(text, {
     sessionKey: route.sessionKey,
+    agentId: route.agentId,
     contextKey: `matrix:reaction:add:${params.roomId}:${reaction.eventId}:${params.senderId}:${reaction.key}`,
   });
   params.logVerboseMessage(

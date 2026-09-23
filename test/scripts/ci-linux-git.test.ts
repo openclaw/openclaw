@@ -1,16 +1,21 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it } from "vitest";
+import { beforeAll, expect, it, vi } from "vitest";
 import { runCiGitStep, type FetchResult } from "./ci-git-owner.test-support.js";
+
+beforeAll(() => {
+  vi.setConfig({ maxConcurrency: 2 });
+  return () => vi.resetConfig();
+});
 
 const candidate = "a".repeat(40);
 const harness = "b".repeat(40);
 const base = "c".repeat(40);
 const moved = "d".repeat(40);
 const merge = "e".repeat(40);
-const linuxIt = it.skipIf(process.platform !== "linux");
+const linuxIt = it.skipIf(process.platform !== "linux").concurrent;
 // Raw owner lifecycle checks use the shared POSIX census on Linux and macOS.
-const posixIt = it.skipIf(process.platform === "win32");
+const posixIt = it.skipIf(process.platform === "win32").concurrent;
 
 const resetProfiles = [
   {

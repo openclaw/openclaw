@@ -1,6 +1,13 @@
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
+import { runOutsidePluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
-import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
+import {
+  isPreparedModelRuntimePluginLifecycleFailure,
+  PreparedModelRuntimePublicationSupersededError,
+} from "./prepared-model-runtime.errors.js";
+import { retirePreparedModelRuntimeGeneration } from "./prepared-model-runtime.lifecycle.js";
 import {
   normalizeOptionalDir,
   normalizePreparedModelRuntimeInput,
@@ -22,7 +29,10 @@ export type PreparedModelRuntimeAuthMutation = {
 
 type PreparedModelRuntimeAuthTransaction = {
   adoptedBy?: PreparedModelRuntimeReplacementGateId;
-  ownerGates: Map<PreparedModelRuntimeOwner, Deferred<PreparedModelRuntimeSnapshot>>;
+  ownerGates: Map<
+    PreparedModelRuntimeOwner,
+    Deferred<PreparedModelRuntimeSnapshot> & { retried?: boolean }
+  >;
   publicationQueued: boolean;
   profileSetChanged: boolean;
 };
@@ -227,11 +237,9 @@ export class PreparedModelRuntimeAuthPublicationOwner {
   async drain(params: {
     owners: Map<string, PreparedModelRuntimeOwner>;
     publish: (
-      entries: Array<{
-        owner: PreparedModelRuntimeOwner;
-        input: PreparedModelRuntimeOwner["input"];
-      }>,
+      owners: PreparedModelRuntimeOwner[],
       includeCredentialProviders: boolean,
+      reusePluginGenerations: boolean,
     ) => Promise<void>;
     publishOwners: (owners: readonly PreparedModelRuntimeOwner[]) => void;
     commit?: () => void;
@@ -251,12 +259,26 @@ export class PreparedModelRuntimeAuthPublicationOwner {
     while (this.#events.length > 0) {
       const components = partitionAuthMutationOwners(this.#events.splice(0));
       for (const componentOwners of components) {
-        const entries = componentOwners.flatMap((owner) =>
-          params.owners.get(ownerKey(owner.input)) === owner ? [{ owner, input: owner.input }] : [],
+        const owners = componentOwners.filter(
+          (owner) => params.owners.get(ownerKey(owner.input)) === owner,
         );
+        const reusedOwners = new Set(
+          owners.filter((owner) => owner.pluginGeneration !== undefined),
+        );
+        const gates = owners.flatMap((owner) => this.#transaction?.ownerGates.get(owner) ?? []);
+        const retrying = gates.some((gate) => gate.retried);
+        for (const gate of gates) {
+          gate.retried = retrying;
+        }
         try {
-          if (entries.length > 0) {
-            await params.publish(entries, this.#transaction?.profileSetChanged === true);
+          if (owners.length > 0) {
+            const publish = () =>
+              params.publish(owners, this.#transaction?.profileSetChanged === true, !retrying);
+            await (retrying
+              ? runOutsidePreparedModelRuntimePluginGenerationScope(() =>
+                  runOutsidePluginRuntimeGenerationScope(publish),
+                )
+              : publish());
           }
           const transaction = this.#transaction;
           if (transaction) {
@@ -268,8 +290,36 @@ export class PreparedModelRuntimeAuthPublicationOwner {
             throw error;
           }
           const transaction = this.#transaction;
-          if (transaction && this.rejectComponentOwners(transaction, componentOwners, error) > 0) {
-            params.onOwnerFailure?.(error);
+          const currentOwners = owners.filter(
+            (owner) =>
+              owner.pending !== undefined &&
+              params.owners.get(ownerKey(owner.input)) === owner &&
+              transaction?.ownerGates.get(owner)?.promise === owner.pending,
+          );
+          if (
+            transaction &&
+            !retrying &&
+            isPreparedModelRuntimePluginLifecycleFailure(error) &&
+            currentOwners.some((owner) => reusedOwners.has(owner))
+          ) {
+            for (const owner of currentOwners) {
+              transaction.ownerGates.get(owner)!.retried = true;
+            }
+            // Preserve the exact gates and atomic component, including superseded members.
+            this.#events.push(componentOwners);
+            continue;
+          }
+          const failure = retrying
+            ? new Error(
+                `Auth-triggered model runtime refresh failed after 1 fresh-generation retry: ${toStringifiedError(error).message}`,
+                { cause: error },
+              )
+            : error;
+          if (
+            transaction &&
+            this.rejectComponentOwners(transaction, componentOwners, failure, retrying) > 0
+          ) {
+            params.onOwnerFailure?.(failure);
           }
         }
       }
@@ -297,6 +347,7 @@ export class PreparedModelRuntimeAuthPublicationOwner {
     transaction: PreparedModelRuntimeAuthTransaction,
     componentOwners: readonly PreparedModelRuntimeOwner[],
     error: unknown,
+    recordRefreshError = false,
   ): number {
     const queuedOwners = new Set(this.#events.flat());
     let rejected = 0;
@@ -310,6 +361,9 @@ export class PreparedModelRuntimeAuthPublicationOwner {
       }
       if (owner.pending === gate.promise) {
         owner.pending = undefined;
+        if (recordRefreshError && owner.needsRefresh) {
+          owner.refreshError = toStringifiedError(error);
+        }
       }
       transaction.ownerGates.delete(owner);
       gate.reject(error);
@@ -348,6 +402,7 @@ export function invalidatePreparedModelRuntimeOwnersForAuthMutation(
     }
     invalidatedOwners.push(owner);
     owner.generation += 1;
+    retirePreparedModelRuntimeGeneration(owner);
     owner.needsRefresh = true;
     owner.refreshError = staleError;
     if (normalizedEvent.profileSetChanged) {
@@ -372,7 +427,12 @@ export function invalidatePreparedModelRuntimeOwnersForAuthMutation(
     const input = normalizePreparedModelRuntimeInput({ ...owner.input, inheritedAuthDir });
     prepareModelRuntimeOwner(input, "configured", owner.catalogMode, owner);
     owners.delete(previousKey);
-    owners.set(ownerKey(input), owner);
+    const key = ownerKey(input);
+    const previous = owners.get(key);
+    owners.set(key, owner);
+    if (previous && previous !== owner) {
+      retirePreparedModelRuntimeGeneration(previous);
+    }
   }
   return { invalidatedOwners, invalidatedConfiguredAgentIds };
 }

@@ -7,7 +7,10 @@ import {
 } from "../logging/diagnostic-support-redaction.js";
 import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
 import { formatErrorMessageWithCode } from "./errors.js";
-import { getActiveManagedProxyUrl } from "./net/proxy/active-proxy-state.js";
+import {
+  getActiveManagedProxyLoopbackMode,
+  getActiveManagedProxyUrl,
+} from "./net/proxy/active-proxy-state.js";
 import { registerManagedProxyGatewayLoopbackBypass } from "./net/proxy/proxy-lifecycle.js";
 import { createUpdateFailureFact, type UpdateFailureFact } from "./update-failure-facts.js";
 
@@ -40,7 +43,8 @@ export async function waitForUpdateCandidateReadiness(
       params.onEndpoint(endpoint);
       const url = `http://127.0.0.1:${params.port}/${endpoint}`;
       const releaseBypass = registerManagedProxyGatewayLoopbackBypass(url);
-      const proxy = releaseBypass ? undefined : getActiveManagedProxyUrl();
+      const proxy =
+        getActiveManagedProxyLoopbackMode() === "proxy" ? getActiveManagedProxyUrl() : undefined;
       let failure: { fact: UpdateFailureFact; message: string } | undefined;
       try {
         while (true) {

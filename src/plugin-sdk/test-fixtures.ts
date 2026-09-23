@@ -21,7 +21,10 @@ export {
   makeAgentUserMessage,
 } from "../agents/test-helpers/agent-message-fixtures.js";
 export { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
-export { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
+export {
+  peekSystemEventsFromSdk as peekSystemEvents,
+  resetSystemEventsForTest,
+} from "../plugins/runtime/system-events.js";
 export { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 export { countLines, hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
 export { expectGeneratedTokenPersistedToGatewayAuth } from "../test-utils/auth-token-assertions.js";

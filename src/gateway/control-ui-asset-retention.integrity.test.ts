@@ -143,21 +143,11 @@ describe("Control UI retained integrity", () => {
         if (args[0] !== asset) {
           return handle;
         }
-        const read = handle.read.bind(handle);
-        vi.spyOn(handle, "read").mockImplementation((async (
-          buffer: Buffer,
-          offset: number,
-          length: number,
-          position: number | null,
-        ) => {
-          const result = await read(buffer, offset, length, position);
-          if (!replaced && result.bytesRead > 0) {
-            replaced = true;
-            await fs.rename(asset, `${asset}.old`);
-            await fs.writeFile(asset, Buffer.alloc(cached.manifest.assets[0]!.size, 120));
-          }
-          return result;
-        }) as typeof handle.read);
+        if (!replaced) {
+          replaced = true;
+          await fs.rename(asset, `${asset}.old`);
+          await fs.writeFile(asset, Buffer.alloc(cached.manifest.assets[0]!.size, 120));
+        }
         return handle;
       });
       const owner = createControlUiAssetRetention(current.root);

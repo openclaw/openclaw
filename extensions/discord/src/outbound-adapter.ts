@@ -1,4 +1,3 @@
-// Discord plugin module implements outbound adapter behavior.
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
 import {
   attachChannelToResult,

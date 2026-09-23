@@ -27,6 +27,7 @@ import type { McpConnectAction } from "../../mcp-connect-action.js";
 import type { McpAppChannelView } from "../../mcp-ui-resource.js";
 import type { ModelRef } from "../../model-selection.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
+import type { ReplyDeliveryState } from "../../reply-completion.js";
 import type { AgentRuntimeModelAttempt, AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SandboxContext } from "../../sandbox/types.js";
@@ -42,6 +43,13 @@ import type {
 } from "./deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
+
+export type StreamRunState = {
+  aborted: boolean;
+  promptError: unknown;
+  timedOut: boolean;
+  yieldDetected: boolean;
+};
 
 export type EmbeddedAttemptExecutionState = {
   beforeAgentRunBlockedBy: string | undefined;
@@ -353,6 +361,8 @@ export type EmbeddedRunAttemptResult = {
   modelIterations?: number;
   /** Saved provider retry setting resolved by the prepared session owner. */
   providerRetryMaxRetries?: number;
+  /** Saved retry.provider.maxRetryDelayMs from the same owner; 0 disables the cap. */
+  providerRetryMaxDelayMs?: number;
   messagesSnapshot: AgentMessage[];
   pluginRuntimeRefreshMessages?: AgentMessage[];
   /** Owner-eligible settled finalization, with frozen evidence or an unavailable projection. */
@@ -362,6 +372,8 @@ export type EmbeddedRunAttemptResult = {
     | { readonly source: "unavailable" };
   beforeAgentFinalizeRevisionReason?: string;
   assistantTexts: string[];
+  /** Immutable delivery facts prepared before a remote harness releases its file reader. */
+  preparedReplyMedia?: import("../../../auto-reply/reply/reply-media-paths.js").PreparedReplyMedia;
   latestMcpAppChannelView?: McpAppChannelView;
   latestMcpConnectAction?: McpConnectAction;
   lastAssistantTextMessageIndex?: number;
@@ -397,6 +409,7 @@ export type EmbeddedRunAttemptResult = {
   didSendViaMessagingTool: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
   sourceReplyDelivered?: true;
+  sourceReplyDeliveryState?: ReplyDeliveryState;
   didSendDeterministicApprovalPrompt?: boolean;
   messagingToolSentTexts: string[];
   messagingToolSentMediaUrls: string[];

@@ -1,15 +1,48 @@
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
+import { ref } from "lit/directives/ref.js";
 import { icons } from "../../components/icons.ts";
+import { syncDropdownItemRadio } from "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSystemsEnglish } from "../../i18n/locales/en-systems.ts";
+import { prettifyPlatform } from "../../lib/platform-label.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import type { SystemsController } from "./systems-controller.ts";
+import type {
+  SystemsController,
+  SystemsSortMode,
+  SystemsStatusFilter,
+} from "./systems-controller.ts";
 import type { SystemsInventoryRow } from "./systems-data.ts";
 import "../../styles/systems.css";
 
 registerSystemsEnglish();
+
+const sortOptions = [
+  { value: "name", labelKey: "systems.alphabetical" },
+  { value: "online-first", labelKey: "systems.onlineFirst" },
+  { value: "offline-first", labelKey: "systems.offlineFirst" },
+] as const satisfies ReadonlyArray<{ value: SystemsSortMode; labelKey: string }>;
+const statusOptions = [
+  { value: "all", labelKey: "systems.all" },
+  { value: "online", labelKey: "systems.online" },
+  { value: "offline", labelKey: "systems.offline" },
+] as const satisfies ReadonlyArray<{ value: SystemsStatusFilter; labelKey: string }>;
+
+function renderMenuOption(value: string, label: string, checked: boolean) {
+  return html`<wa-dropdown-item
+    class="sidebar-session-sort-menu__item"
+    value=${value}
+    role="menuitemradio"
+    aria-checked=${String(checked)}
+    ${ref((element) => syncDropdownItemRadio(element, checked))}
+  >
+    <span class="session-menu__text">${t(label)}</span>
+    <span slot="details" class="session-menu__check" aria-hidden="true"
+      >${checked ? icons.check : nothing}</span
+    >
+  </wa-dropdown-item>`;
+}
 
 export function systemName(row: SystemsInventoryRow): string {
   const named =
@@ -58,6 +91,11 @@ export function systemStatus(row: SystemsInventoryRow): string {
   );
 }
 
+export function systemPlatform(row: SystemsInventoryRow): string | undefined {
+  const platform = row.gatewaySystemInfo?.osLabel ?? row.environment.platform ?? row.node?.platform;
+  return platform ? prettifyPlatform(platform, row.node?.deviceFamily) : undefined;
+}
+
 class SystemsSidebar extends OpenClawLightDomElement {
   @property({ attribute: false }) controller?: SystemsController;
 
@@ -75,23 +113,49 @@ class SystemsSidebar extends OpenClawLightDomElement {
       return nothing;
     }
     const query = controller.query.trim().toLocaleLowerCase();
-    const rows = controller.rows.filter((row) =>
-      [
-        systemName(row),
-        row.environment.id,
-        row.environment.platform ?? row.node?.platform ?? "",
-      ].some((value) => value.toLocaleLowerCase().includes(query)),
-    );
+    const rows = controller.rows
+      .filter((row) => {
+        const matchesStatus =
+          controller.statusFilter === "all" ||
+          row.environment.status ===
+            (controller.statusFilter === "online" ? "available" : "unavailable");
+        return (
+          matchesStatus &&
+          [
+            systemName(row),
+            row.environment.id,
+            systemPlatform(row) ?? "",
+            row.environment.platform ?? row.node?.platform ?? "",
+          ].some((value) => value.toLocaleLowerCase().includes(query))
+        );
+      })
+      .toSorted((a, b) => {
+        if (controller.sortMode !== "name") {
+          const firstStatus = controller.sortMode === "online-first" ? "available" : "unavailable";
+          const statusOrder =
+            Number(b.environment.status === firstStatus) -
+            Number(a.environment.status === firstStatus);
+          if (statusOrder) {
+            return statusOrder;
+          }
+        }
+        return (
+          systemName(a).localeCompare(systemName(b), undefined, {
+            numeric: true,
+            sensitivity: "base",
+          }) || a.environment.id.localeCompare(b.environment.id)
+        );
+      });
     const renderRow = (row: SystemsInventoryRow) => {
       const online = row.environment.status === "available";
-      const platform = row.environment.platform ?? row.node?.platform;
+      const platform = systemPlatform(row);
       const status = systemStatus(row);
       return html`<button
         class="systems-machine"
         type="button"
         data-status=${row.environment.status}
         aria-pressed=${row.environment.id === controller.selectedId}
-        title=${platform ? `${status} · ${platform}` : status}
+        aria-description=${platform ? `${status} · ${platform}` : status}
         @click=${() => controller.select(row.environment.id)}
       >
         <i class="systems-machine__dot" aria-hidden="true"></i>
@@ -101,7 +165,7 @@ class SystemsSidebar extends OpenClawLightDomElement {
         >
         ${
           row.environment.desktop
-            ? html`<span class="systems-machine__desktop" title=${t("systems.desktop")}
+            ? html`<span class="systems-machine__desktop"
                 >${icons.monitor}<span class="sr-only">${t("systems.desktop")}</span></span
               >`
             : nothing
@@ -122,13 +186,43 @@ class SystemsSidebar extends OpenClawLightDomElement {
             }
           }}
         />
+        <wa-dropdown
+          class="systems-filter-menu sidebar-session-sort-menu"
+          placement="bottom-end"
+          aria-label=${t("systems.filterSort")}
+          @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+            const value = event.detail.item.value;
+            const sort = sortOptions.find((option) => value === `sort:${option.value}`);
+            const status = statusOptions.find((option) => value === `status:${option.value}`);
+            if (sort) {
+              controller.setSortMode(sort.value);
+            } else if (status) {
+              controller.setStatusFilter(status.value);
+            }
+          }}
+        >
+          <button
+            slot="trigger"
+            type="button"
+            class="systems-filter__sort sidebar-session-sort ${controller.statusFilter !== "all" ? "sidebar-session-sort--filtered" : ""}"
+            aria-label=${t("systems.filterSort")}
+            title=${t("systems.filterSort")}
+          >
+            ${icons.listFilter}
+          </button>
+          <div class="sidebar-session-sort-menu__title">${t("systems.sortBy")}</div>
+          ${sortOptions.map((option) => renderMenuOption(`sort:${option.value}`, option.labelKey, controller.sortMode === option.value))}
+          <div class="session-menu__separator" role="separator"></div>
+          <div class="sidebar-session-sort-menu__title">${t("systems.status")}</div>
+          ${statusOptions.map((option) => renderMenuOption(`status:${option.value}`, option.labelKey, controller.statusFilter === option.value))}
+        </wa-dropdown>
         <button
           type="button"
           class="systems-filter__refresh"
           aria-label=${t("systems.refresh")}
           title=${t("systems.refresh")}
           ?disabled=${controller.loading || !controller.connected}
-          @click=${() => void controller.refresh()}
+          @click=${() => void controller.refresh("manual")}
         >
           ${icons.refresh}
         </button>
@@ -148,7 +242,7 @@ class SystemsSidebar extends OpenClawLightDomElement {
               </section>`
             : nothing;
         })}
-        ${!controller.loading && rows.length === 0 ? html`<p class="systems-sidebar__empty">${t(query ? "systems.noMatches" : "systems.empty")}</p>` : nothing}
+        ${!controller.loading && rows.length === 0 ? html`<p class="systems-sidebar__empty">${t(query || controller.statusFilter !== "all" ? "systems.noMatches" : "systems.empty")}</p>` : nothing}
       </div>
     </section>`;
   }

@@ -5,12 +5,11 @@ import type { prepareModelChoice } from "../model-runtime-choice.js";
 import { createSessionsSpawnTool } from "./sessions-spawn-tool.js";
 
 const hoisted = vi.hoisted(() => ({ prepareModelChoiceMock: vi.fn<typeof prepareModelChoice>() }));
-vi.mock("../subagents/spawn/subagent-spawn-deps.js", () => ({
-  getSubagentSpawnDeps: () => ({ prepareModelChoice: hoisted.prepareModelChoiceMock }),
+vi.mock("../subagents/spawn/subagent-spawn.runtime.js", () => ({
+  prepareModelChoice: hoisted.prepareModelChoiceMock,
 }));
 vi.mock("../subagents/registry/subagent-registry.js", () => ({
   registerSubagentRun: vi.fn(),
-  getSubagentDeliveryBacklogPressure: () => ({ suspended: 0, blocked: false }),
 }));
 
 it("rejects an unsupported visible model before creating a session or registering a run", async () => {
@@ -47,6 +46,76 @@ it("rejects an unsupported visible model before creating a session or registerin
     expect(hoisted.prepareModelChoiceMock).toHaveBeenCalledWith(
       expect.objectContaining({ raw: "xai/nonexistent-native-fixture", source: "override" }),
     );
+  });
+});
+
+it("reports the human owner returned by visible session creation", async () => {
+  hoisted.prepareModelChoiceMock.mockResolvedValue({
+    kind: "automatic",
+    ref: { provider: "mock-provider", model: "primary" },
+  });
+  const callGateway = vi.fn(async () => ({
+    key: "agent:main:dashboard:human-owned-child",
+    runStarted: true,
+    runId: "run-visible",
+    entry: { owner: { actor: { type: "human", id: "profile-vito" } } },
+  }));
+  const tool = createSessionsSpawnTool({
+    agentSessionKey: "agent:main:main",
+    config: {
+      agents: {
+        defaults: { model: "mock-provider/primary" },
+        entries: { main: {} },
+      },
+    },
+    callGateway: callGateway as never,
+    registerRun: vi.fn(),
+    countActiveRuns: () => 0,
+  });
+
+  const result = await tool.execute("human-owned-visible", {
+    task: "inspect the repository",
+    visible: true,
+  });
+
+  expect(result.details).toMatchObject({
+    status: "accepted",
+    owner: { type: "human", id: "profile-vito" },
+  });
+});
+
+it("preserves the configured agent label for an ID-only stored owner", async () => {
+  hoisted.prepareModelChoiceMock.mockResolvedValue({
+    kind: "automatic",
+    ref: { provider: "mock-provider", model: "primary" },
+  });
+  const callGateway = vi.fn(async () => ({
+    key: "agent:main:dashboard:agent-owned-child",
+    runStarted: true,
+    runId: "run-visible-agent-owner",
+    entry: { owner: { actor: { type: "agent", id: "main" } } },
+  }));
+  const tool = createSessionsSpawnTool({
+    agentSessionKey: "agent:main:main",
+    config: {
+      agents: {
+        defaults: { model: "mock-provider/primary" },
+        entries: { main: { identity: { name: "Roboclaw" } } },
+      },
+    },
+    callGateway: callGateway as never,
+    registerRun: vi.fn(),
+    countActiveRuns: () => 0,
+  });
+
+  const result = await tool.execute("agent-owned-visible", {
+    task: "inspect the repository",
+    visible: true,
+  });
+
+  expect(result.details).toMatchObject({
+    status: "accepted",
+    owner: { type: "agent", id: "main", label: "Roboclaw" },
   });
 });
 

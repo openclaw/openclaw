@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { constants, DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -9,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { hasNodeErrorCode } from "../infra/path-guards.js";
 import * as sqliteReadOnly from "../infra/sqlite-snapshot-source.js";
+import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
@@ -21,10 +23,11 @@ import {
   acquireOpenClawStateDatabaseFileExclusion,
   recordOpenClawStateDatabaseOpenFailure,
 } from "./openclaw-state-db-cache.js";
+import { iterateOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-read-connection.js";
 import {
+  isOpenClawStateDatabaseDefinitelyAbsent,
   withSynchronousArtifactPreservingStateSnapshot,
   isArtifactPreservingStateRead,
-  iterateOpenClawStateDatabaseReadOnly,
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
   withExistingOpenClawStateDatabaseReadOnly,
@@ -48,6 +51,56 @@ afterEach(() => {
   vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
 });
+
+it("keeps retained readers authoritative over an absent-path observation", async () => {
+  await withTempDir("openclaw-state-availability-", async (root) => {
+    const options = createOptions(root);
+    expect(isOpenClawStateDatabaseDefinitelyAbsent(options.env)).toBe(true);
+    openOpenClawStateDatabase(options);
+    const observeMissingPath = (retained: boolean) => {
+      const probe = vi.spyOn(fs, "lstatSync").mockImplementation(() => {
+        throw Object.assign(new Error("synthetic missing-path observation"), { code: "ENOENT" });
+      });
+      syncBuiltinESMExports();
+      try {
+        expect(isOpenClawStateDatabaseDefinitelyAbsent(options.env)).toBe(!retained);
+        expect(probe).toHaveBeenCalledTimes(retained ? 0 : 1);
+      } finally {
+        probe.mockRestore();
+        syncBuiltinESMExports();
+      }
+    };
+    observeMissingPath(true);
+    closeOpenClawStateDatabaseForTest();
+    await withOpenClawStateDatabaseReadSnapshot(async () => observeMissingPath(true), options);
+    withArtifactPreservingStateReads(() =>
+      withSynchronousArtifactPreservingStateSnapshot(() => {
+        withExistingOpenClawStateDatabaseReadOnly(() => observeMissingPath(true), options);
+      }),
+    );
+    observeMissingPath(false);
+    expect(fs.existsSync(options.path)).toBe(true);
+  });
+});
+
+it.each(["EACCES", "ENOTDIR"])(
+  "keeps uncertain state availability on %s with the reader",
+  async (code) => {
+    await withTempDir("openclaw-state-availability-error-", async (root) => {
+      const probe = vi.spyOn(fs, "lstatSync").mockImplementation(() => {
+        throw Object.assign(new Error("synthetic filesystem observation"), { code });
+      });
+      syncBuiltinESMExports();
+      try {
+        expect(isOpenClawStateDatabaseDefinitelyAbsent(createOptions(root).env)).toBe(false);
+        expect(probe).toHaveBeenCalledOnce();
+      } finally {
+        probe.mockRestore();
+        syncBuiltinESMExports();
+      }
+    });
+  },
+);
 
 it("keeps fresh synchronous read callbacks from returning asynchronous work", async () => {
   await withTempDir("openclaw-state-sync-read-", async (root) => {
@@ -186,7 +239,15 @@ it("rejects non-filesystem stream sources without interpreting their logical pat
     const db = new DatabaseSync(":memory:");
     const pathname = path.join(root, "logical-state.sqlite");
     const rows = iterateOpenClawStateDatabaseReadOnly(
-      { db, path: pathname, walMaintenance: { checkpoint: () => false, close: () => false } },
+      {
+        db,
+        path: pathname,
+        walMaintenance: {
+          checkpoint: () => false,
+          close: () => false,
+          reclaimFreePages: createSqliteWalReclamationResult,
+        },
+      },
       function* () {
         yield "unreachable";
       },
@@ -524,7 +585,7 @@ it("keeps missing and non-missing filesystem failures distinct for async reads",
   });
 });
 
-it("reads under its live mutation owner but refuses an unrelated caller", async () => {
+it("reads under its live source exclusion but refuses an unrelated caller", async () => {
   await withOpenClawTestState({ label: "owned-ledger-read" }, async ({ env }) => {
     const options = { env };
     const initial = openOpenClawStateDatabase(options);
@@ -554,21 +615,12 @@ it("reads under its live mutation owner but refuses an unrelated caller", async 
     let running: Promise<void> | undefined;
     try {
       const before = await family();
-      running = owner.mutate(owner.assertCurrent, async () => {
+      running = owner.runWithSourceReads(async () => {
         expect(await read()).toBe("original");
         expect(await family()).toEqual(before);
         entered.resolve();
         await resume.promise;
         owner.assertCurrent();
-        const opened = openOpenClawStateDatabase(options);
-        opened.db.exec("BEGIN; UPDATE held SET value = 'uncommitted'");
-        try {
-          await expect(read()).rejects.toThrow(/outside a transaction/);
-          expect(opened.db.isTransaction).toBe(true);
-          expect(opened.db.prepare("SELECT value FROM held").get()?.value).toBe("uncommitted");
-        } finally {
-          opened.db.exec("ROLLBACK");
-        }
         expect(await read()).toBe("original");
       });
       await Promise.race([entered.promise, running]);

@@ -317,6 +317,24 @@ describe("parseInlineDirectives", () => {
     expect(result.text).toBe("plain text with extra spaces\n\n```\n    code  preserved\n```");
   });
 
+  test.each([
+    { name: "spaces before a newline", suffix: "  \n" },
+    { name: "CRLF paragraph boundaries", suffix: "\r\n\r\n\r\n" },
+    { name: "mixed spaces and tabs", suffix: " \t\r\n \t\r\n\t " },
+    {
+      name: "inline directive CRLF spacing",
+      suffix: " \t\r\n \t\r\n\r\n\t ",
+      inline: true,
+    },
+  ])("preserves the complete $name suffix only when requested", ({ suffix, inline }) => {
+    const input = `first  line\r\nlast  line${inline ? "[[reply_to_current]]" : ""}${suffix}`;
+
+    expect(parseInlineDirectives(input).text).toBe("first line\nlast line");
+    expect(parseInlineDirectives(input, { preserveTrailingWhitespace: true }).text).toBe(
+      `first line\nlast line${suffix}`,
+    );
+  });
+
   test("audio_as_voice directive does not corrupt adjacent fenced code block indentation", () => {
     const input = ["[[audio_as_voice]]", "```bash", "  echo 'hello'", "    indented", "```"].join(
       "\n",

@@ -36,19 +36,21 @@ export function stripReasoningTagsFromText(
 
   let cleaned = text;
   const matches = findFinalTagMatches(cleaned);
+  if (matches.length > 0) {
+    cleaned = stripFinalTags(cleaned);
+  }
   const hasThinkingTag = scanReasoningTags(cleaned).tags.length > 0;
   if (matches.length === 0 && !hasThinkingTag) {
     return text;
   }
-  if (matches.length > 0) {
-    cleaned = stripFinalTags(cleaned);
-  }
 
-  const stripped = stripReasoningTagsFromMarkdown(cleaned, {
-    mode,
-    scope,
-    recoverUnclosed: options?.recoverUnclosed,
-  });
+  const stripped = hasThinkingTag
+    ? stripReasoningTagsFromMarkdown(cleaned, {
+        mode,
+        scope,
+        recoverUnclosed: options?.recoverUnclosed,
+      })
+    : cleaned;
   if (trimMode === "none") {
     return stripped;
   }

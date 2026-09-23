@@ -1,15 +1,7 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import {
-  cleanupPreparedModelRuntimeHarness,
-  getPreparedModelRuntimeMocks,
-  resetPreparedModelRuntimeHarness,
-} from "./prepared-model-runtime.test-harness.js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
+import { describe, expect, it, vi } from "vitest";
 import type { RuntimeAuthProfileStore } from "./auth-profiles/types.js";
 import {
   prepareModelRuntimeSnapshot,
@@ -17,24 +9,15 @@ import {
   registerPreparedModelRuntimePublicationListener,
 } from "./prepared-model-runtime.js";
 
-const mocks = getPreparedModelRuntimeMocks();
-let state: OpenClawTestState;
-
-beforeEach(async () => {
-  state = await createOpenClawTestState({ label: "prepared-model-auth-usage" });
-  await resetPreparedModelRuntimeHarness(state);
-});
-
-afterEach(async ({ task }) => {
-  await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
-});
+const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-auth-usage" });
+const { mocks } = fixture;
 
 describe("prepared model auth publication", () => {
   it("retains the prepared owner on bookkeeping and refreshes on auth availability changes", async () => {
     const snapshots = await vi.importActual<typeof import("./auth-profiles/runtime-snapshots.js")>(
       "./auth-profiles/runtime-snapshots.js",
     );
-    const agentDir = state.agentDir("usage-publication");
+    const agentDir = fixture.state.agentDir("usage-publication");
     const input = { config: {}, agentDir };
     const store: RuntimeAuthProfileStore = {
       version: 1,

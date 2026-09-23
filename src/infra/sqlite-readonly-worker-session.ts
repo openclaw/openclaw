@@ -1,9 +1,14 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { BrokerChild } from "../process/spawn-broker/child.js";
+import type { SpawnBrokerHost } from "../process/spawn-broker/host.js";
+import { recordChildProcessSpawn } from "../process/spawn-diagnostics.js";
 import { createSqliteAuthTransferReceiver } from "./sqlite-readonly-auth-transfer.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
 import {
   createSqliteReadOnlyWorkerError,
+  isSqliteReadOnlyWorkerResult,
+  isSqliteSnapshotStagingMode,
   readSqliteReadOnlyWorkerValue,
   SQLITE_READONLY_STDERR_TAIL_CHARS,
   SQLITE_READONLY_WORKER_MAX_BUFFER,
@@ -12,22 +17,70 @@ import {
   type SqliteReadOnlyWorkerValue,
 } from "./sqlite-readonly-worker-protocol.js";
 
-export function createSqliteReadOnlyWorkerSession(host: {
+export type SqliteReadOnlyWorkerLaunch = {
   env: NodeJS.ProcessEnv;
-  currentEnv: () => NodeJS.ProcessEnv;
-  argv: string[];
-  requestArgs: (pathname: string, options: SqliteReadOnlyWorkerOptions) => string[];
-  readBudget: (pathname: string) => { timeoutMs: number; size: string };
-  deadlineOwnedByCaller: () => boolean;
-  timeoutError: (pathname: string, timeoutMs: number, size: string) => Error;
-  closeTimeoutMs: number;
-}) {
+  cwd: string;
+  transport: { kind: "native" } | { kind: "broker"; owner: SpawnBrokerHost };
+};
+
+export function isSameSqliteReadOnlyWorkerLaunch(
+  captured: SqliteReadOnlyWorkerLaunch,
+  requested: SqliteReadOnlyWorkerLaunch,
+): boolean {
+  const keys = Object.keys(requested.env);
+  return (
+    captured.transport.kind === requested.transport.kind &&
+    (captured.transport.kind === "native" ||
+      (requested.transport.kind === "broker" &&
+        captured.transport.owner === requested.transport.owner)) &&
+    requested.cwd === captured.cwd &&
+    keys.length === Object.keys(captured.env).length &&
+    keys.every((key) => requested.env[key] === captured.env[key])
+  );
+}
+
+type SqliteReadOnlyWorkerSession = {
+  readonly notStarted: boolean;
+  createNativeReplacement: () => SqliteReadOnlyWorkerSession;
+  isRetired: () => boolean;
+  compatible: (launch: SqliteReadOnlyWorkerLaunch) => boolean;
+  run: (
+    pathname: string,
+    options: SqliteReadOnlyWorkerOptions,
+  ) => Promise<SqliteReadOnlyWorkerValue>;
+  close: () => Promise<void>;
+};
+
+export function createSqliteReadOnlyWorkerSession(
+  host: SqliteReadOnlyWorkerLaunch & {
+    retainLifetime?: boolean;
+    retainOnOperationError?: boolean;
+    argv: string[];
+    requestArgs: (pathname: string, options: SqliteReadOnlyWorkerOptions) => string[];
+    readBudget: (pathname: string) => { timeoutMs: number; size: string };
+    deadlineOwnedByCaller: () => boolean;
+    timeoutError: (pathname: string, timeoutMs: number, size: string) => Error;
+    closeTimeoutMs: number;
+  },
+): SqliteReadOnlyWorkerSession {
   const env = { ...host.env };
-  const cwd = process.cwd();
-  const child = spawn(process.execPath, host.argv, {
+  const cwd = host.cwd;
+  const transport: SqliteReadOnlyWorkerLaunch["transport"] =
+    host.transport.kind === "broker"
+      ? { kind: "broker", owner: host.transport.owner }
+      : { kind: "native" };
+  const capturedLaunch = { env, cwd, transport };
+  const argv = [...host.argv];
+  const spawnOptions: SpawnOptions = {
     env,
+    cwd,
     stdio: ["ignore", "pipe", "pipe", "ipc"],
-  });
+  };
+  const child: ChildProcess =
+    transport.kind === "broker"
+      ? transport.owner.spawn(process.execPath, argv, spawnOptions)
+      : spawn(process.execPath, argv, spawnOptions);
+  recordChildProcessSpawn(process.execPath, child);
   let retired = false;
   let sequence = 0;
   let stderr = "";
@@ -44,8 +97,20 @@ export function createSqliteReadOnlyWorkerSession(host: {
       }
     | undefined;
   let resolveClosed: () => void;
+  // Broker loss retains group cleanup later in the same turn as proxy close.
   const closed = new Promise<void>((resolve) => {
     resolveClosed = resolve;
+  }).then(() => {
+    if (
+      transport.kind === "broker" &&
+      child instanceof BrokerChild &&
+      !child.notStarted &&
+      child.exitCode === null &&
+      child.signalCode === null
+    ) {
+      return transport.owner.waitForCleanup();
+    }
+    return undefined;
   });
   const retire = (error?: unknown) => {
     retired = true;
@@ -54,7 +119,9 @@ export function createSqliteReadOnlyWorkerSession(host: {
     }
     child.kill("SIGKILL");
   };
-  void retainSnapshotWork(closed, () => retire(new Error("SQLite snapshot owner stopped")));
+  if (host.retainLifetime !== false) {
+    void retainSnapshotWork(closed, () => retire(new Error("SQLite snapshot owner stopped")));
+  }
   child.on("error", (error) => retire(error));
   child.once("close", (code, signal) => {
     retired = true;
@@ -81,8 +148,16 @@ export function createSqliteReadOnlyWorkerSession(host: {
       retire(createSqliteReadOnlyWorkerError("exceeded its output buffer", stderr));
     }
   };
-  child.stdout?.on("data", (data: Buffer) => captureOutput(data, false));
-  child.stderr?.on("data", (data: Buffer) => captureOutput(data, true));
+  const attachOutput = () => {
+    child.stdout?.on("data", (data: Buffer) => captureOutput(data, false));
+    child.stderr?.on("data", (data: Buffer) => captureOutput(data, true));
+  };
+  // The broker publishes IPC connectivity and transferred pipes asynchronously.
+  const ready =
+    child instanceof BrokerChild ? child.ready().then(attachOutput).catch(retire) : undefined;
+  if (!ready) {
+    attachOutput();
+  }
   child.on("message", (message: unknown) => {
     if (retired) {
       return;
@@ -131,23 +206,47 @@ export function createSqliteReadOnlyWorkerSession(host: {
       request.cleanup();
       request.resolve(value);
     } catch (error) {
+      if (
+        pending &&
+        host.retainOnOperationError &&
+        isSqliteSnapshotStagingMode(pending.mode) &&
+        isSqliteReadOnlyWorkerResult(message.result) &&
+        !message.result.ok
+      ) {
+        const request = pending;
+        pending = undefined;
+        request.cleanup();
+        request.reject(error);
+        return;
+      }
       // A failed native close can retain a source lease. Do not reject the
       // request (and let its staging directory disappear) until process close.
       retire(error);
     }
   });
   return {
-    compatible() {
-      const currentEnv = host.currentEnv();
-      const keys = Object.keys(currentEnv);
-      return (
-        !retired &&
-        process.cwd() === cwd &&
-        keys.length === Object.keys(env).length &&
-        keys.every((key) => currentEnv[key] === env[key])
-      );
+    isRetired() {
+      return retired;
+    },
+    get notStarted() {
+      return child instanceof BrokerChild && child.notStarted;
+    },
+    createNativeReplacement() {
+      return createSqliteReadOnlyWorkerSession({
+        ...host,
+        env,
+        cwd,
+        argv,
+        transport: { kind: "native" },
+      });
+    },
+    compatible(launch: SqliteReadOnlyWorkerLaunch) {
+      return !retired && isSameSqliteReadOnlyWorkerLaunch(capturedLaunch, launch);
     },
     run(pathname: string, options: SqliteReadOnlyWorkerOptions) {
+      if (retired) {
+        return Promise.reject(new Error("SQLite read-only worker is closed"));
+      }
       return new Promise<SqliteReadOnlyWorkerValue>((resolve, reject) => {
         const { timeoutMs, size } = host.readBudget(pathname);
         stderr = "";
@@ -175,28 +274,38 @@ export function createSqliteReadOnlyWorkerSession(host: {
           abort();
           return;
         }
-        try {
-          child.send(
-            {
-              id,
-              args: host.requestArgs(pathname, options),
-              ...(options.mode === "auth-profile-rows"
-                ? {
-                    auth: {
-                      expectedIdentity: options.expectedIdentity,
-                      coordinatorRuntime: options.coordinatorRuntime,
-                    },
-                  }
-                : {}),
-            },
-            (error) => {
-              if (error) {
-                retire(error);
-              }
-            },
-          );
-        } catch (error) {
-          retire(error);
+        const send = () => {
+          if (retired) {
+            return;
+          }
+          try {
+            child.send(
+              {
+                id,
+                args: host.requestArgs(pathname, options),
+                ...(options.mode === "auth-profile-rows"
+                  ? {
+                      auth: {
+                        expectedIdentity: options.expectedIdentity,
+                        coordinatorRuntime: options.coordinatorRuntime,
+                      },
+                    }
+                  : {}),
+              },
+              (error) => {
+                if (error) {
+                  retire(error);
+                }
+              },
+            );
+          } catch (error) {
+            retire(error);
+          }
+        };
+        if (ready) {
+          void ready.then(send);
+        } else {
+          send();
         }
       });
     },

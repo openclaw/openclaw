@@ -35,6 +35,8 @@ type CloseTab = (tab: {
   profile?: string;
 }) => Promise<void>;
 export type CloseParams = {
+  /** Gates new cleanup claims, without revoking an already admitted close. */
+  isCurrent?: () => boolean;
   closeTab?: CloseTab;
   closeDurableTab?: (
     tab: DurableTab,
@@ -177,7 +179,11 @@ export async function closeDurableTab(
   now: number,
   cleanupKind: CleanupKind,
 ): Promise<number> {
-  if (candidate.dashboard?.state === "active" || candidate.dashboard?.state === "stopped") {
+  if (
+    params.isCurrent?.() === false ||
+    candidate.dashboard?.state === "active" ||
+    candidate.dashboard?.state === "stopped"
+  ) {
     return 0;
   }
   const tab = claimCleanup(candidate, now, cleanupKind);

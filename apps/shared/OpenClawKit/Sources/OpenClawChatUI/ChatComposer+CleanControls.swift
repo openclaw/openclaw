@@ -85,47 +85,12 @@ extension OpenClawChatComposer {
     @ViewBuilder
     var cleanContextUsageMenu: some View {
         if let usage = self.viewModel.contextUsage {
-            let tokensLine = self.cleanContextUsageTokensLine(usage)
-            Menu {
-                Text(tokensLine)
-                    .font(OpenClawChatTypography.body)
-                if let cost = usage.totalCost {
-                    Text(verbatim: String(
-                        format: String(localized: "Thread cost %@"),
-                        ChatContextUsageFormatter.cost(cost)))
-                        .font(OpenClawChatTypography.body)
-                }
-                Divider()
-                Button {
-                    self.viewModel.requestSessionCompact()
-                } label: {
-                    Text("Compact Thread")
-                        .font(OpenClawChatTypography.body)
-                }
-                .disabled(!self.viewModel.canRequestSessionCompact)
-            } label: {
-                CleanChatContextUsageLabel(usage: usage, controlSize: self.cleanControlHeight)
-            }
-            #if os(macOS)
-            .fixedSize()
-            #endif
-            .menuIndicator(.hidden)
-            .help(tokensLine)
-            .accessibilityIdentifier("chat-context-usage")
+            OpenClawChatContextUsageControl(
+                usage: usage,
+                canCompact: self.viewModel.canRequestSessionCompact,
+                controlSize: self.cleanControlHeight,
+                onCompact: self.viewModel.requestSessionCompact)
         }
-    }
-
-    private func cleanContextUsageTokensLine(_ usage: OpenClawChatContextUsage) -> String {
-        let used = ChatContextUsageFormatter.tokens(usage.usedTokens)
-        guard let window = usage.contextWindowTokens else {
-            return String(
-                format: String(localized: "%@ tokens used"),
-                used)
-        }
-        return String(
-            format: String(localized: "%@ of %@ tokens used"),
-            used,
-            ChatContextUsageFormatter.tokens(window))
     }
 
     var cleanTrailingControls: some View {
@@ -162,9 +127,11 @@ extension OpenClawChatComposer {
                 Divider()
             }
             Group {
-                self.modelMenuOption(
-                    self.viewModel.defaultModelLabel,
-                    selectionID: OpenClawChatViewModel.defaultModelSelectionID)
+                if self.viewModel.canSelectDefaultModel {
+                    self.modelMenuOption(
+                        self.viewModel.defaultModelLabel,
+                        selectionID: OpenClawChatViewModel.defaultModelSelectionID)
+                }
                 if !sections.pinned.isEmpty {
                     Section("Pinned") {
                         self.cleanInlineModelOptions(sections.pinned)
@@ -276,6 +243,30 @@ extension OpenClawChatComposer {
     }
 
     private var cleanInlineEffortMenu: some View {
+        #if os(macOS)
+        OpenClawChatEffortControl(
+            thinkingOptions: self.viewModel.showsThinkingPicker ? self.viewModel.thinkingLevelOptions : [],
+            thinkingLevel: self.viewModel.thinkingLevel,
+            thinkingIsInherited: self.viewModel.thinkingOverrideIsInherited,
+            fastModeEnabled: self.viewModel.fastModeIsEnabled,
+            fastModeIsInherited: self.viewModel.fastModeSelectionID == OpenClawChatViewModel
+                .inheritedThinkingSelectionID,
+            showsFastMode: self.viewModel.showsFastModeControls,
+            supportsFastMode: self.viewModel.selectedModelSupportsFastMode,
+            isEnabled: self.viewModel.composerEffortMutationAvailable && !self.viewModel.isUpdatingSessionSettings,
+            controlHeight: self.cleanControlHeight,
+            showsLabel: false,
+            onSelectThinkingLevel: {
+                self.viewModel.selectThinkingLevel($0 ?? OpenClawChatViewModel.inheritedThinkingSelectionID)
+            },
+            onSelectFastMode: {
+                self.viewModel.selectFastMode($0.map { $0 ? "on" : "off" }
+                    ?? OpenClawChatViewModel.inheritedThinkingSelectionID)
+            })
+            .help(self.cleanInlineEffortDisabledHint ?? self.viewModel.composerInlineEffortLabel)
+            .accessibilityHint(self.cleanInlineEffortDisabledHint ?? "")
+            .fixedSize()
+        #else
         Menu {
             if self.viewModel.showsThinkingPicker {
                 self.thinkingPicker
@@ -314,16 +305,13 @@ extension OpenClawChatComposer {
         .disabled(
             !self.viewModel.composerEffortMutationAvailable ||
                 self.viewModel.isUpdatingSessionSettings)
-        #if os(macOS)
-        .fixedSize()
-        #else
         .disabled(self.viewModel.hasActiveRunForComposerSettings)
-        #endif
         .help(self.cleanInlineEffortDisabledHint ?? self.viewModel.composerInlineEffortLabel)
         .accessibilityLabel("Effort")
         .accessibilityValue(self.viewModel.composerInlineEffortLabel)
         .accessibilityHint(self.cleanInlineEffortDisabledHint ?? "")
         .accessibilityIdentifier("chat-composer-inline-effort")
+        #endif
     }
 
     private var cleanInlineModelDisabledHint: String? {

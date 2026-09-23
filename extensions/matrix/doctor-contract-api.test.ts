@@ -373,7 +373,7 @@ describe("matrix doctor contract state migrations", () => {
     expect(archivePath).toMatch(/crypto-idb-snapshot\.json\.migrated-\d{4}-/u);
     expect(JSON.parse(fs.readFileSync(archivePath ?? "", "utf8"))).toEqual(snapshot);
 
-    expect(scoreMatrixCryptoStateInStore(storageRootDir)).toBe(5);
+    expect(await scoreMatrixCryptoStateInStore(storageRootDir)).toBe(5);
     expect(JSON.parse((await readMatrixIdbSnapshotJson(storageRootDir)) ?? "null")).toEqual(
       snapshot,
     );

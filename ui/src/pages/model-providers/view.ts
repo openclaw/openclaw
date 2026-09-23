@@ -1,7 +1,6 @@
 // Control UI view renders the Models settings page content.
 import { html, nothing, type TemplateResult } from "lit";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { FastMode, ModelAuthStatusResult, ModelsProbeResult } from "../../api/types.ts";
+import type { ModelsProbeResult } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { icons } from "../../components/icons.ts";
 import { renderProviderBrandIcon } from "../../components/provider-icon.ts";
@@ -31,11 +30,10 @@ import type {
   DefaultModelSelection,
   ModelPickerEntry,
   ModelProviderCard,
-  ModelProviderPendingLogout,
   ProviderOption,
 } from "./data.ts";
-import { renderDefaultModels } from "./default-models-view.ts";
-import { renderProviderProfiles } from "./profiles-view.ts";
+import { renderDefaultModels, type DefaultModelsViewProps } from "./default-models-view.ts";
+import { renderProviderProfiles, type ProviderProfilesViewProps } from "./profiles-view.ts";
 import {
   hasVerifiedProvider,
   renderProviderStatus,
@@ -45,79 +43,57 @@ import {
 
 registerSettingsEnglish();
 
-type ModelProvidersViewProps = {
-  usageClient?: GatewayBrowserClient | null;
-  usageAgentId?: string;
-  connected: boolean;
-  loading: boolean;
-  refreshing: boolean;
-  error: string | null;
-  providerUsageFailed: boolean;
-  supplementalLoading: boolean;
-  updatedAt: number | null;
-  costDays: number;
-  credentialAgentLabel: string;
-  cards: ModelProviderCard[];
-  configuredModels: ModelPickerEntry[];
-  defaultModels: DefaultModelSelection;
-  authStatus?: ModelAuthStatusResult | null;
-  automaticUtilityModel?: string | null;
-  thinkingLevel: string | undefined;
-  thinkingOverridden: boolean;
-  fastMode: FastMode | undefined;
-  fastModeOverridden: boolean;
-  /** True while picker-triggered catalog discovery is in flight. */
-  catalogDiscovering: boolean;
-  /** Retryable error from a picker-triggered catalog discovery. */
-  catalogDiscoveryError: string | null;
-  configBusy: boolean;
-  quickAddSupported: boolean;
-  unconfiguredProviders: ProviderOption[];
-  canViewProfiles: boolean;
-  canMutate: boolean;
-  mutationBlockedReason: string | null;
-  defaultsMutationBlockedReason: string | null;
-  /** Usage never converged before the retry budget ran out; cards lack usage. */
-  providerUsageStalled: boolean;
-  probeAvailable: boolean;
-  busy: Record<string, boolean>;
-  messages: Record<string, ModelProviderRowMessage>;
-  probeResults: Record<string, ModelsProbeResult>;
-  keyEditorProvider: string | null;
-  keyDraft: string;
-  profileOrders: Record<string, string[]>;
-  addProviderOpen: boolean;
-  addProviderId: string;
-  addProviderKey: string;
-  onRefresh: () => void;
-  onOpenKeyEditor: (provider: string) => void;
-  onCloseKeyEditor: () => void;
-  onKeyDraftChange: (value: string) => void;
-  onSaveKey: (provider: string, configKey: string) => void;
-  onRemoveKey: (provider: string, configKey: string) => void;
-  onProbe: (cardId: string, providers: string[]) => void;
-  onRequestLogout: (pending: ModelProviderPendingLogout) => void;
-  onProfileOrderChange: (cardId: string, provider: string, profileIds: string[] | null) => void;
-  onAddProviderToggle: () => void;
-  onAddProviderIdChange: (provider: string) => void;
-  onAddProviderKeyChange: (value: string) => void;
-  onAddProvider: () => void;
-  onPrimaryChange: (model: string) => void;
-  onFallbackChange: (model: string | null) => void;
-  onUtilityChange: (model: string | null) => void;
-  onThinkingChange: (level: string, element: HTMLElement) => void;
-  onThinkingReset: () => void;
-  onFastModeChange: (mode: FastMode) => void;
-  onFastModeReset: () => void;
-  onCatalogRetry: () => void;
-  providerScope?: TemplateResult;
-  providerQuery?: string;
-  onProviderQueryChange?: (value: string) => void;
-  onConnectProvider: () => void;
-  onConnect: (card: ModelProviderCard) => void;
-  canConnect: (card: ModelProviderCard) => boolean;
-  loginBusy: boolean;
-};
+type ModelProvidersViewProps = Omit<DefaultModelsViewProps, "models" | "selection" | "message"> &
+  Omit<ProviderProfilesViewProps, "onAddAccount" | "addAccountDisabled"> & {
+    connected: boolean;
+    loading: boolean;
+    refreshing: boolean;
+    error: string | null;
+    providerUsageFailed: boolean;
+    supplementalLoading: boolean;
+    updatedAt: number | null;
+    costDays: number;
+    credentialAgentLabel: string;
+    cards: ModelProviderCard[];
+    configuredModels: ModelPickerEntry[];
+    defaultModels: DefaultModelSelection;
+    /** True while picker-triggered catalog discovery is in flight. */
+    catalogDiscovering: boolean;
+    /** Retryable error from a picker-triggered catalog discovery. */
+    catalogDiscoveryError: string | null;
+    configBusy: boolean;
+    unconfiguredProviders: ProviderOption[];
+    canViewProfiles: boolean;
+    defaultsMutationBlockedReason: string | null;
+    /** Usage never converged before the retry budget ran out; cards lack usage. */
+    providerUsageStalled: boolean;
+    probeAvailable: boolean;
+    messages: Record<string, ModelProviderRowMessage>;
+    probeResults: Record<string, ModelsProbeResult>;
+    keyEditorProvider: string | null;
+    keyDraft: string;
+    addProviderOpen: boolean;
+    addProviderId: string;
+    addProviderKey: string;
+    installedAgents: TemplateResult | typeof nothing;
+    onRefresh: () => void;
+    onOpenKeyEditor: (provider: string) => void;
+    onCloseKeyEditor: () => void;
+    onKeyDraftChange: (value: string) => void;
+    onSaveKey: (provider: string, configKey: string) => void;
+    onRemoveKey: (provider: string, configKey: string) => void;
+    onProbe: (cardId: string, providers: string[]) => void;
+    onAddProviderToggle: () => void;
+    onAddProviderKeyChange: (value: string) => void;
+    onAddProvider: () => void;
+    providerScope?: TemplateResult;
+    providerQuery?: string;
+    onProviderQueryChange?: (value: string) => void;
+    onConnectProvider: () => void;
+    onConnect: (card: ModelProviderCard) => void;
+    canConnect: (card: ModelProviderCard) => boolean;
+    loginBusy: boolean;
+  };
 
 function configMutationDisabled(props: ModelProvidersViewProps): boolean {
   return !props.canMutate || props.configBusy;
@@ -379,16 +355,10 @@ function renderProviderRow(card: ModelProviderCard, props: ModelProvidersViewPro
       ${
         card.profiles.length > 0 && props.canViewProfiles
           ? renderProviderProfiles(card, {
-              usageClient: props.usageClient,
-              usageAgentId: props.usageAgentId,
-              busy: props.busy,
+              ...props,
               canMutate: props.canMutate && !props.configBusy,
-              mutationBlockedReason: props.mutationBlockedReason,
-              profileOrders: props.profileOrders,
               onAddAccount: props.canConnect(card) ? () => props.onConnect(card) : undefined,
               addAccountDisabled: props.loginBusy || configMutationDisabled(props),
-              onProfileOrderChange: props.onProfileOrderChange,
-              onRequestLogout: props.onRequestLogout,
             })
           : renderCredentialSummary(card, props.credentialAgentLabel)
       }
@@ -557,31 +527,15 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
     ${needsModelSetup ? renderModelReadiness(props) : nothing}
     <div id=${MODEL_SETTINGS_TARGET_IDS.behavior}>
       ${renderDefaultModels({
+        ...props,
         models: props.configuredModels,
         selection: props.defaultModels,
-        authStatus: props.authStatus,
-        automaticUtilityModel: props.automaticUtilityModel,
-        thinkingLevel: props.thinkingLevel,
-        thinkingOverridden: props.thinkingOverridden,
-        fastMode: props.fastMode,
-        fastModeOverridden: props.fastModeOverridden,
-        loading: props.loading,
-        catalogDiscovering: props.catalogDiscovering,
-        catalogDiscoveryError: props.catalogDiscoveryError,
         canMutate: props.defaultsMutationBlockedReason === null && !props.configBusy,
         mutationBlockedReason: props.defaultsMutationBlockedReason,
-        busy: props.busy,
         message: props.messages.defaults,
-        onPrimaryChange: props.onPrimaryChange,
-        onFallbackChange: props.onFallbackChange,
-        onUtilityChange: props.onUtilityChange,
-        onThinkingChange: props.onThinkingChange,
-        onThinkingReset: props.onThinkingReset,
-        onFastModeChange: props.onFastModeChange,
-        onFastModeReset: props.onFastModeReset,
-        onCatalogRetry: props.onCatalogRetry,
       })}
     </div>
+    ${props.installedAgents}
     ${renderSettingsSection(
       {
         title: t("modelProviders.accessTitle"),
@@ -616,7 +570,14 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
           </openclaw-tooltip>
         `,
       },
-      props.loading ? renderSettingsGroup(renderSettingsLoadingSkeleton()) : providerRows,
+      props.loading
+        ? renderSettingsGroup(renderSettingsLoadingSkeleton())
+        : props.cards.length === 0 &&
+            props.installedAgents !== nothing &&
+            !props.error &&
+            !props.providerUsageFailed
+          ? nothing
+          : providerRows,
     )}
     ${
       props.providerUsageStalled

@@ -28,12 +28,13 @@ import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
 import type { Agent, AgentMessage, StreamFn } from "../../runtime/index.js";
 import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import { agentSessionSetPromptPreparation } from "../../sessions/agent-session-prompting.js";
-import type { CreateAgentSessionOptions } from "../../sessions/index.js";
+import type { AgentSession, CreateAgentSessionOptions } from "../../sessions/index.js";
 import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
 } from "../../sessions/model-registry-runtime.js";
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
+import type { SessionManagerMocks } from "./attempt-spawn-workspace.session-manager-mock.test-support.js";
 import { createSubscriptionMock } from "./attempt-spawn-workspace.subscription-mock.test-support.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -65,32 +66,6 @@ function normalizeMockProviderId(providerId?: string): string {
   return normalizeLowercaseStringOrEmpty(providerId);
 }
 
-type SessionManagerMocks = {
-  getSessionTarget: Mock<() => undefined>;
-  getAppendParentId: Mock<() => string | null>;
-  getHeader: UnknownMock;
-  getLeafId: Mock<() => string | null>;
-  getLeafEntry: UnknownMock;
-  getEntry: UnknownMock;
-  getEntries: UnknownMock;
-  getBranch: UnknownMock;
-  getBoundaryCount: UnknownMock;
-  branch: UnknownMock;
-  resetLeaf: UnknownMock;
-  buildSessionContext: Mock<() => { messages: AgentMessage[] }>;
-  appendThinkingLevelChange: UnknownMock;
-  appendModelChange: UnknownMock;
-  appendCustomEntry: UnknownMock;
-  appendMessage: UnknownMock;
-  appendSessionInfo: UnknownMock;
-  appendLabelChange: UnknownMock;
-  flushPendingPersistence: UnknownMock;
-  flushPendingToolResults: UnknownMock;
-  clearPendingToolResults: UnknownMock;
-  reloadPersistedTranscript: UnknownMock;
-  clearNextUserMessagePersistenceSuppression: UnknownMock;
-  removeTrailingEntries: UnknownMock;
-};
 type AttemptSpawnWorkspaceHoisted = {
   spawnSubagentDirectMock: UnknownMock;
   createAgentSessionMock: Mock<(options: CreateAgentSessionOptions) => unknown>;
@@ -199,6 +174,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const trajectoryEvents: CapturedTrajectoryEvent[] = [];
   const sessionManager = {
     getSessionTarget: vi.fn(() => undefined),
+    getSessionId: vi.fn(() => "embedded-session"),
     getAppendParentId: vi.fn<() => string | null>(() => null),
     getHeader: vi.fn(() => ({ version: 3 })),
     getLeafId: vi.fn<() => string | null>(() => null),
@@ -378,7 +354,7 @@ vi.mock("../../sessions/index.js", () => {
     ModelRegistry,
     SessionManager: {
       inMemory: (...args: unknown[]) => hoisted.sessionManagerOpenMock(...args),
-      open: (...args: unknown[]) => hoisted.sessionManagerOpenMock(...args),
+      openAsync: async (...args: unknown[]) => hoisted.sessionManagerOpenMock(...args),
     },
   };
 });
@@ -715,7 +691,6 @@ vi.mock("../../transcript-policy.js", () => ({
     allowSyntheticToolResults: false,
     repairToolUseResultPairing: true,
   }),
-  shouldAllowProviderOwnedThinkingReplay: () => false,
 }));
 
 vi.mock("../cache-ttl.js", () => ({
@@ -880,6 +855,7 @@ type MutableSession = {
   messages: unknown[];
   isCompacting: boolean;
   isStreaming: boolean;
+  subscribe: AgentSession["subscribe"];
   agent: {
     convertToLlm?: (messages: AgentMessage[]) => AgentMessage[] | Promise<AgentMessage[]>;
     prompt?: (...args: unknown[]) => Promise<unknown>;
@@ -1047,6 +1023,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.embeddedSystemPromptInputs.length = 0;
   hoisted.trajectoryEvents.length = 0;
   hoisted.sessionManager.getSessionTarget.mockReset().mockReturnValue(undefined);
+  hoisted.sessionManager.getSessionId.mockReset().mockReturnValue("embedded-session");
   hoisted.sessionManager.getAppendParentId.mockReset().mockReturnValue(null);
   hoisted.sessionManager.getHeader.mockReset().mockReturnValue({ version: 3 });
   hoisted.sessionManager.getLeafId.mockReset().mockReturnValue(null);
@@ -1105,14 +1082,12 @@ export function createDefaultEmbeddedSession(params?: {
     messages: [...(params?.initialMessages ?? [])],
     isCompacting: false,
     isStreaming: false,
+    subscribe: () => () => {},
     agent: {
       prompt: async (prompt, options) => {
         pendingPrompt = {
           prompt: String(prompt),
-          options: options as {
-            images?: unknown[];
-            preflightResult?: (submitted: boolean) => void;
-          },
+          options: options as Parameters<MutableSession["prompt"]>[1],
         };
         await session.agent.streamFn?.(
           testModel,

@@ -83,8 +83,6 @@ vi.mock("../model-suppression.js", async (importOriginal) => {
       const errorMessage = suppressionError(input);
       return errorMessage ? { suppress: true, errorMessage } : undefined;
     },
-    shouldSuppressBuiltInModelCore: (input: Parameters<typeof suppressionError>[0]) =>
-      Boolean(suppressionError(input)),
     shouldUnconditionallySuppress: () => false,
     buildSuppressedBuiltInModelError: suppressionError,
   };

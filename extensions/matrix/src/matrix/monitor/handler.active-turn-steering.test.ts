@@ -55,7 +55,7 @@ function releaseSyntheticResolverAdmissionTicket(options: GetReplyOptions | unde
 }
 
 describe("Matrix active-turn steering admission", () => {
-  it.each([
+  it.for([
     {
       name: "configured steer mode",
       followupBody: "use the monochrome version instead",
@@ -68,7 +68,7 @@ describe("Matrix active-turn steering admission", () => {
     },
   ])(
     "lets $name reach queue policy while the prior Matrix turn is active",
-    async ({ followupBody, explicitSteer }) => {
+    async ({ followupBody, explicitSteer }, { signal }) => {
       installMatrixMonitorTestRuntime();
       const tempDir = tempDirs.make("openclaw-matrix-steer-");
       const storePath = path.join(tempDir, "sessions.json");
@@ -76,7 +76,7 @@ describe("Matrix active-turn steering admission", () => {
       const followupEventId = explicitSteer ? "$explicit-steer" : "$configured-steer";
       const activeResolverStarted = createDeferred<void>();
       const releaseActiveResolver = createDeferred<void>();
-      const followupTurnResolved = createDeferred<void>();
+      const followupResolverAdopted = createDeferred<void>();
       const claimsByEvent = new Map<string, ReturnType<typeof createClaimSpies>>();
       const inboundLifecycles = new Map<string, TurnAdoptionLifecycle | undefined>();
       let followupResolverLifecycle: TurnAdoptionLifecycle | undefined;
@@ -119,6 +119,7 @@ describe("Matrix active-turn steering admission", () => {
             }
             expect(followupResolverLifecycle.onDeferred()).not.toBe(false);
             await followupResolverLifecycle.onAdopted();
+            followupResolverAdopted.resolve();
           }
           return undefined;
         },
@@ -135,9 +136,6 @@ describe("Matrix active-turn steering admission", () => {
             ...adapter,
             resolveTurn: async (...args: Parameters<typeof adapter.resolveTurn>) => {
               const turn = await adapter.resolveTurn(...args);
-              if (eventId === followupEventId) {
-                followupTurnResolved.resolve();
-              }
               if (!("route" in turn) || "runDispatch" in turn) {
                 throw new Error("expected Matrix to resolve a routed channel turn");
               }
@@ -158,6 +156,8 @@ describe("Matrix active-turn steering admission", () => {
 
       let activeTurn: Promise<void> | undefined;
       let followupTurn: Promise<void> | undefined;
+      const releaseActiveTurn = () => releaseActiveResolver.resolve();
+      signal.addEventListener("abort", releaseActiveTurn, { once: true });
       try {
         activeTurn = handler(
           "!room:example.org",
@@ -170,7 +170,12 @@ describe("Matrix active-turn steering admission", () => {
         // graph, session store, plugin discovery); on a starved 2-vCPU runner that
         // alone exceeded a 10 s budget. The resolver signals its own admission, so
         // wait on that signal instead of a wall-clock poll.
-        await activeResolverStarted.promise;
+        const activeOutcome = await Promise.race([
+          activeResolverStarted.promise.then(() => "admitted"),
+          activeTurn.then(() => "returned"),
+        ]);
+        expect(runtime.error).not.toHaveBeenCalled();
+        expect(activeOutcome).toBe("admitted");
         expect(queuePolicyResolver).toHaveBeenCalledTimes(1);
 
         followupTurn = handler(
@@ -180,14 +185,15 @@ describe("Matrix active-turn steering admission", () => {
             body: followupBody,
           }),
         );
-        await followupTurnResolved.promise;
-
-        // Before the fix, the second Matrix turn waits at reply-operation admission here;
-        // queue policy cannot see either configured steer mode or the explicit command.
-        await vi.waitFor(() => expect(queuePolicyResolver).toHaveBeenCalledTimes(2), {
-          timeout: 500,
-          interval: 10,
-        });
+        // Adoption can finish beside an active turn; handler cleanup still waits
+        // for that turn's foreground delivery lease.
+        const followupOutcome = await Promise.race([
+          followupResolverAdopted.promise.then(() => "adopted"),
+          followupTurn.then(() => "returned"),
+        ]);
+        expect(runtime.error).not.toHaveBeenCalled();
+        expect(followupOutcome).toBe("adopted");
+        expect(queuePolicyResolver).toHaveBeenCalledTimes(2);
 
         expect(followupResolverContext?.CommandBody).toBe(followupBody);
         expect(inboundLifecycles.get(followupEventId)).toMatchObject({ admission: "exclusive" });
@@ -198,7 +204,8 @@ describe("Matrix active-turn steering admission", () => {
         expect(claimsByEvent.get(followupEventId)?.release).not.toHaveBeenCalled();
         expect(runtime.error).not.toHaveBeenCalled();
       } finally {
-        releaseActiveResolver.resolve();
+        signal.removeEventListener("abort", releaseActiveTurn);
+        releaseActiveTurn();
         const turns = [activeTurn, followupTurn].filter(
           (turn): turn is Promise<void> => turn !== undefined,
         );

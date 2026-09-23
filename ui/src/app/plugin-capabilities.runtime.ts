@@ -1,28 +1,42 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PluginsUiDescriptorsResult } from "../../../packages/gateway-protocol/src/schema/plugins.js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 
 const requests = new WeakMap<GatewayBrowserClient, object>();
 
 /** Load a complete published surface while preserving the current connection and session. */
 export async function refreshPluginCapabilities(
-  payload: unknown,
+  event: Pick<GatewayEventFrame, "event" | "payload">,
   client: GatewayBrowserClient,
   readCurrent: () => ApplicationGatewaySnapshot | null,
   publish: (snapshot: ApplicationGatewaySnapshot) => void,
   updateCanvas: (url: string | undefined) => void,
 ): Promise<void> {
-  const generation = isRecord(payload) ? payload.generation : undefined;
   const current = readCurrent();
-  if (
-    !current ||
-    typeof generation !== "number" ||
-    !Number.isSafeInteger(generation) ||
-    generation < 0 ||
-    generation <= (current.pluginCapabilities?.generation ?? -1)
-  ) {
+  if (!current) {
     return;
+  }
+  const payload = isRecord(event.payload) ? event.payload : undefined;
+  let generation: number;
+  if (event.event === "plugins.controlUi.changed") {
+    if (typeof payload?.revision !== "string" || !payload.revision) {
+      return;
+    }
+    // UI policy can change the advertised widgets without replacing backend plugins.
+    generation = current.pluginCapabilities?.generation ?? 0;
+  } else {
+    const nextGeneration = payload?.generation;
+    if (
+      event.event !== "plugins.changed" ||
+      typeof nextGeneration !== "number" ||
+      !Number.isSafeInteger(nextGeneration) ||
+      nextGeneration < 0 ||
+      nextGeneration <= (current.pluginCapabilities?.generation ?? -1)
+    ) {
+      return;
+    }
+    generation = nextGeneration;
   }
   const request = {};
   requests.set(client, request);
@@ -39,7 +53,9 @@ export async function refreshPluginCapabilities(
   if (!snapshot?.hello) {
     return;
   }
-  if (capabilities.generation < generation) {
+  if (
+    capabilities.generation < Math.max(generation, snapshot.pluginCapabilities?.generation ?? -1)
+  ) {
     throw new Error("Plugin capabilities did not reach the applied generation.");
   }
   const canvasPluginSurfaceUrl = capabilities.pluginSurfaceUrls.canvas?.trim() || null;
@@ -52,6 +68,7 @@ export async function refreshPluginCapabilities(
     features: { ...snapshot.hello.features, methods: capabilities.methods },
     controlUiTabs: capabilities.controlUiTabs,
     controlUiWidgetKinds: capabilities.controlUiWidgetKinds,
+    controlUiLinkReaders: capabilities.controlUiLinkReaders,
     pluginSurfaceUrls: capabilities.pluginSurfaceUrls,
   });
   publish({ ...snapshot, pluginCapabilities: capabilities, canvasPluginSurfaceUrl });

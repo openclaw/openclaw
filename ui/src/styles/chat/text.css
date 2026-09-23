@@ -390,9 +390,10 @@
 }
 
 /* Keep bullets, checkboxes, and numbers in one marker column while their text
-   shares the same start edge. */
-:is(.chat-text, .chat-thinking) :where(ul > li:not(.task-list-item))::marker {
-  content: "";
+   shares the same start edge. Suppress native bullets on the item itself:
+   Safari does not reliably support content on ::marker. */
+:is(.chat-text, .chat-thinking) :where(ul > li:not(.task-list-item)) {
+  list-style: none;
 }
 
 :is(.chat-text, .chat-thinking) :where(ul > .task-list-item) {
@@ -585,16 +586,15 @@
   line-break: auto;
 }
 
-.chat-text a.markdown-github-item[data-github-state="open"] {
+.chat-text a.markdown-github-item[data-link-reader-tone="positive"] {
   color: var(--ok);
 }
 
-.chat-text a.markdown-github-item[data-github-kind="issue"][data-github-state="closed"],
-.chat-text a.markdown-github-item[data-github-state="merged"] {
+.chat-text a.markdown-github-item[data-link-reader-tone="accent"] {
   color: var(--pr-merged);
 }
 
-.chat-text a.markdown-github-item[data-github-kind="pull"][data-github-state="closed"] {
+.chat-text a.markdown-github-item[data-link-reader-tone="negative"] {
   color: var(--danger);
 }
 
@@ -627,7 +627,7 @@
   display: inline;
   padding: 0.1em 0.2em;
   padding-inline-start: 1.5em;
-  border: 1px solid var(--border-strong);
+  border: 0;
   border-radius: var(--radius-sm);
   background: var(--bg-muted);
   color: var(--link);
@@ -825,6 +825,11 @@
   --file-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20'/%3E%3C/svg%3E");
 }
 
+/* Same glyph as icons.pencilSparkles, using the file-kind mask convention. */
+:is(.chat-text, .sidebar-markdown) a.markdown-file-link[data-file-kind="skill"]::before {
+  --file-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 3H8'/%3E%3Cpath d='m15.007 5.008 3.987 3.986'/%3E%3Cpath d='M20 15v4'/%3E%3Cpath d='M21.174 6.813a2.82 2.82 0 0 0-3.986-3.987L3.842 16.175a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z'/%3E%3Cpath d='M22 17h-4'/%3E%3Cpath d='M4 5v4'/%3E%3Cpath d='M6 7H2'/%3E%3Cpath d='M9 2v2'/%3E%3C/svg%3E");
+}
+
 :is(.chat-text, .sidebar-markdown) a.markdown-file-link[data-file-kind="component"]::before {
   --file-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='7' height='7' x='3' y='3' rx='1'/%3E%3Crect width='7' height='7' x='14' y='3' rx='1'/%3E%3Crect width='7' height='7' x='14' y='14' rx='1'/%3E%3Crect width='7' height='7' x='3' y='14' rx='1'/%3E%3C/svg%3E");
 }
@@ -988,10 +993,11 @@
   line-height: var(--code-block-line-height);
 }
 
-/* The preview lines plus the code element's own 4px/8px/6px vertical box. */
-.code-block-wrapper.is-collapsible:not(.is-expanded) .code-block-viewport {
-  max-height: calc(var(--code-block-line-height) * var(--code-block-preview-lines) + 18px);
-  overflow-y: hidden;
+/* Clip the code itself so surrounding spacing cannot reveal another line.
+   The element-relative line height also preserves compact block-art previews. */
+.code-block-wrapper.is-collapsible:not(.is-expanded) .code-block-viewport :where(pre code) {
+  max-height: calc(1lh * var(--code-block-preview-lines));
+  overflow: hidden;
 }
 
 .code-block-wrapper.is-collapsible:not(.is-expanded) .code-block-wrap {
@@ -1206,103 +1212,6 @@
   }
 }
 
-/* ── Inline JSON disclosure ── */
-
-.chat-json-collapse {
-  margin-top: 4px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--secondary) 60%, transparent);
-  overflow: hidden;
-}
-
-.chat-json-summary {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  font-size: 12px;
-  color: var(--muted);
-  user-select: none;
-  list-style: none;
-  transition:
-    color 150ms ease,
-    background 150ms ease;
-}
-
-.chat-json-summary::-webkit-details-marker {
-  display: none;
-}
-
-.chat-json-summary::before {
-  content: "▸";
-  font-size: 12px;
-  flex-shrink: 0;
-  transition: transform 150ms ease;
-}
-
-.chat-json-collapse[open] > .chat-json-summary::before {
-  transform: rotate(90deg);
-}
-
-.chat-json-summary:hover {
-  color: var(--text);
-  background: color-mix(in srgb, var(--bg-hover) 50%, transparent);
-}
-
-.chat-json-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 5px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
-  color: var(--accent);
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  line-height: 1.4;
-  flex-shrink: 0;
-}
-
-.chat-json-label {
-  font-family: var(--mono);
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-json-content {
-  margin: 0;
-  padding: 10px 12px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-  font-family: var(--mono);
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text);
-  overflow-x: auto;
-  max-height: 400px;
-  overflow-y: auto;
-}
-
-.chat-json-content code {
-  font-family: inherit;
-  font-size: inherit;
-}
-
-@media (max-width: 768px) {
-  .chat-json-content {
-    padding: 8px 10px;
-    max-height: 300px;
-  }
-}
-
-@media (max-width: 560px) {
-  .chat-json-content {
-    max-height: 200px;
-  }
-}
-
 /* Only top-level blocks share message rhythm; list/quote interiors keep their
    own spacing. Reset edge margins so a first or last block adds no extra gap. */
 .chat-text > *,
@@ -1320,7 +1229,6 @@
     .chat-thinking,
     .chat-tool-card__widget-host,
     .chat-text,
-    .chat-json-collapse,
     .chat-message-disclosure,
     .chat-message-avatar-anchor,
     .chat-tools-inline
@@ -1335,7 +1243,6 @@
       .chat-thinking,
       .chat-tool-card__widget-host,
       .chat-text,
-      .chat-json-collapse,
       .chat-message-disclosure,
       .chat-message-avatar-anchor,
       .chat-tools-inline
@@ -1349,7 +1256,7 @@
 .chat-group.user
   .chat-bubble--with-images
   > .chat-message-images
-  + :is(.chat-text, .chat-message-disclosure, .chat-json-collapse, .chat-message-avatar-anchor) {
+  + :is(.chat-text, .chat-message-disclosure, .chat-message-avatar-anchor) {
   margin-block-start: var(--space-2);
 }
 

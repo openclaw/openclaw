@@ -14,7 +14,6 @@ import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
-import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../security/dangerous-tools.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
@@ -22,6 +21,7 @@ import {
   bindAssembledAgentToolActionDescriptor,
   copyAgentToolMetadata,
 } from "./agent-tool-metadata.js";
+import { createCodingToolsGatewayCaller } from "./agent-tools.caller.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import {
   filterToolsByMessageProvider,
@@ -35,7 +35,7 @@ import {
   mergeAgentRingZeroTools,
 } from "./agent-tools.ring-zero-context.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { isApplyPatchAllowedForModel } from "./apply-patch-model-policy.js";
+import { resolveConfiguredApplyPatchPolicy } from "./apply-patch-policy.js";
 import { waitForExecScope } from "./bash-process-registry.js";
 import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
@@ -84,9 +84,8 @@ import {
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "./tool-search.js";
-import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import { replaceWithEffectiveCronCreatorToolAllowlist } from "./tools/cron-tool.js";
-import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-context.js";
+import { prepareSessionPortalToolAccess } from "./tools/session-portal-target.js";
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
@@ -294,19 +293,15 @@ export function createOpenClawCodingToolsInternal(
     ...(attachmentReadRoot ? { readOnlyRoots: [attachmentReadRoot] } : {}),
   };
   const readOnly = sessionCoreToolPolicy?.readOnly ?? false;
-  const applyPatchConfig = execConfig.applyPatch;
-  // Required file roots still constrain patches after a full-mode change; shell policy is separate.
-  const applyPatchWorkspaceOnly =
-    workspaceOnly ||
-    (sessionCoreToolPolicy?.applyPatchWorkspaceOnly ?? applyPatchConfig?.workspaceOnly !== false);
-  const applyPatchEnabled =
-    !readOnly &&
-    applyPatchConfig?.enabled !== false &&
-    isApplyPatchAllowedForModel({
-      modelProvider: options?.modelProvider,
-      modelId: options?.modelId,
-      allowModels: applyPatchConfig?.allowModels,
-    });
+  const applyPatchPolicy = resolveConfiguredApplyPatchPolicy({
+    config: execConfig.applyPatch,
+    workspaceOnly,
+    readOnly,
+    requireWorkspaceOnly: options?.requireWorkspaceOnly === true,
+    sessionPolicy: sessionCoreToolPolicy,
+    modelProvider: options?.modelProvider,
+    modelId: options?.modelId,
+  });
 
   const imageSanitization = resolveImageSanitizationLimits(options?.config);
   options?.recordToolPrepStage?.("workspace-policy");
@@ -338,8 +333,7 @@ export function createOpenClawCodingToolsInternal(
     imageSanitization,
     modelHasVision: options?.modelHasVision,
     memoryWriteProvenance,
-    applyPatchEnabled,
-    applyPatchWorkspaceOnly,
+    ...applyPatchPolicy,
     execDefaults: {
       ...execDefaults,
       ...effectiveExecPolicy,
@@ -393,18 +387,15 @@ export function createOpenClawCodingToolsInternal(
   });
   const cronCreatorAuthorityResolver = bindActiveCronCreatorAuthorityResolver(options?.runId);
   const cronManagementGrant = bindCronManagementGrant(options?.runId);
-  // Exact-run capabilities authorize only their automation operations. Keep every
-  // other owner-only control-plane tool denied for senderless operator turns.
-  const ownerOnlyCoreToolDenylist =
-    options?.senderIsOwner === false
-      ? GATEWAY_OWNER_ONLY_CORE_TOOLS.filter(
-          (toolName) =>
-            toolName !== AUTOMATIONS_TOOL_NAME ||
-            !(cronCreatorAuthorityResolver || cronManagementGrant),
-        )
-      : [];
-  const ownerOnlyCoreToolPolicy =
-    ownerOnlyCoreToolDenylist.length > 0 ? { deny: ownerOnlyCoreToolDenylist } : undefined;
+  const { sessionPortalTarget, ownerOnlyCoreToolDenylist, ownerOnlyCoreToolPolicy } =
+    prepareSessionPortalToolAccess({
+      sessionKey: executionSessionKey,
+      agentId: executionAgentId,
+      sessionId: options?.sessionId,
+      senderIsOwner: options?.senderIsOwner,
+      sandboxed: Boolean(sandbox),
+      hasAutomationGrant: Boolean(cronCreatorAuthorityResolver || cronManagementGrant),
+    });
   const pluginToolAllowlist = appendRuntimePluginToolGrant(
     capabilityProfile.policy.explicitToolAllowlist,
     runtimePluginToolGrant,
@@ -429,21 +420,13 @@ export function createOpenClawCodingToolsInternal(
   });
   // Plugin-only plans bypass createOpenClawTools, so the capability gate must
   // apply here too or narrow allowlists leak gated tools onto capless surfaces.
-  const toolCallerIdentity =
-    options && executionAgentId && executionSessionKey?.trim()
-      ? {
-          agentId: executionAgentId,
-          sessionKey: executionSessionKey.trim(),
-          ...(options.abortSignal ? { approvalSignals: [options.abortSignal] } : {}),
-          turnSourceChannel: resolveGatewayMessageChannel(
-            options.messageChannel ?? options.messageProvider,
-          ),
-          turnSourceTo:
-            options.currentMessagingTarget ?? options.currentChannelId ?? options.messageTo,
-          turnSourceAccountId: gatewayCaller.accountId,
-          turnSourceThreadId: options.currentThreadTs ?? options.messageThreadId,
-        }
-      : undefined;
+  const wrapGatewayCaller = createCodingToolsGatewayCaller({
+    options,
+    agentId: executionAgentId,
+    sessionKey: executionSessionKey,
+    accountId: gatewayCaller.accountId,
+    capabilityProfile,
+  });
   const pluginToolsOnly = filterToolsByClientCaps(
     includeOpenClawTools || !includePluginTools
       ? []
@@ -540,6 +523,7 @@ export function createOpenClawCodingToolsInternal(
       ? mergeAgentRingZeroTools(
           ringZeroTools,
           createOpenClawTools({
+            sessionPortalTarget,
             ...(options?.systemAgentTool ? { systemAgentTool: options.systemAgentTool } : {}),
             sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
             allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
@@ -709,16 +693,8 @@ export function createOpenClawCodingToolsInternal(
   );
   options?.recordToolPrepStage?.("message-provider-policy");
   const toolsForModelProvider = applyModelProviderToolPolicy(toolsForMessageProvider, {
-    config: options?.config,
-    modelProvider: options?.modelProvider,
-    modelApi: options?.modelApi,
-    modelId: options?.modelId,
+    ...options,
     agentId,
-    sessionKey: options?.sessionKey,
-    agentDir: options?.agentDir,
-    modelCompat: options?.modelCompat,
-    suppressManagedWebSearch: options?.suppressManagedWebSearch,
-    runtimeToolAllowlist: options?.runtimeToolAllowlist,
     localModelLeanPreserveToolNames,
   });
   options?.recordToolPrepStage?.("model-provider-policy");
@@ -823,7 +799,7 @@ export function createOpenClawCodingToolsInternal(
     ...(options?.swarmCollector ? { approvalMode: "deny" as const } : {}),
     abortSignal: options?.abortSignal,
     recordToolPrepStage: options?.recordToolPrepStage,
-  }).map((tool) => wrapToolWithGatewayCallerIdentity(tool, toolCallerIdentity));
+  }).map(wrapGatewayCaller);
 }
 
 /** Build the SDK tool list without exposing core-only auxiliary read scope. */

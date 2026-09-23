@@ -23,6 +23,7 @@ import { assertPreparedSkillLibrarySelection } from "../../skills/library/select
 import { buildDashboardSessionTitleSource } from "../dashboard-session-title.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
+import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { resolveSessionCreateCatalogSelectionError } from "../session-create-model-selection.js";
 import { buildDashboardSessionKey, createGatewaySession } from "../session-create-service.js";
 import type { PreparedGatewaySessionLifecycle } from "../session-lifecycle-preparation.js";
@@ -38,11 +39,11 @@ import {
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import { scheduleCreatedDashboardSessionTitle } from "./chat-send-background.js";
+import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
-import { chatHandlers } from "./chat.js";
 import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged } from "./session-change-event.js";
-import { registerCreatedSessionCategory } from "./session-create-category.js";
+import { registerCommittedSessionCategory } from "./session-create-category.js";
 import { idempotentSessionCreate } from "./session-create-idempotency.js";
 import {
   resolveSessionCreateInitialTurn,
@@ -60,6 +61,7 @@ import {
 } from "./session-create-root.js";
 import { resolveSessionCreateSpawnContext } from "./session-create-spawn.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
+import { bindGatewayRequestHandlerMutationAuthority } from "./session-mutation-guards.js";
 import { sessionLog } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { prepareSessionModelAccountAccess } from "./users-model-account-access.js";
@@ -67,17 +69,17 @@ import { assertValidParams } from "./validation.js";
 import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
 
 export const sessionCreateHandlers: GatewayRequestHandlers = {
-  "sessions.create": async ({
-    req,
-    params,
-    respond,
-    context,
-    client,
-    isWebchatConnect,
-    sessionMutationCommitGuard,
-    sessionMutationAuthorization,
-    signal,
-  }) => {
+  "sessions.create": async (options) => {
+    const {
+      params,
+      respond,
+      context,
+      client,
+      sessionMutationCommitGuard,
+      sessionMutationAuthorization,
+      signal,
+      hasCurrentClientAuthority,
+    } = options;
     if (!assertValidParams(params, validateSessionsCreateParams, "sessions.create", respond)) {
       return;
     }
@@ -109,10 +111,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const requestedModel = normalizeOptionalString(p.model);
     let personalAccounts: ReturnType<typeof prepareSessionModelAccountAccess>;
     try {
-      personalAccounts = prepareSessionModelAccountAccess(
-        { client, context, signal },
-        requestedModel,
-      );
+      personalAccounts = prepareSessionModelAccountAccess(options, requestedModel);
     } catch (error) {
       if (!(error instanceof ModelAccountConnectAuthorityError)) {
         throw error;
@@ -359,7 +358,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         : prepareSessionCreateFilesystemRoot({
             cfg,
             enforceSandboxContainment: Boolean(
-              sessionCwd && !requestedExecNode && (requestedProjectId || p.worktree !== true),
+              sessionCwd && !requestedExecNode && p.worktree !== true,
             ),
             requestedExecNode,
             requestedProjectId,
@@ -462,7 +461,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     if (!authority.ensureActive()) {
       return;
     }
-    const created = await createGatewaySession({
+    const createParams: Parameters<typeof createGatewaySession>[0] = {
       cfg,
       key: sessionKey,
       agentId: sessionAgentId,
@@ -527,6 +526,21 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       loadGatewayModelCatalogSnapshot: () =>
         context.loadGatewayModelCatalogSnapshot({ agentId: sessionAgentId }),
       commitGuard,
+      afterSessionCommitted: (entry, source) =>
+        registerCommittedSessionCategory(
+          entry.category === normalizeOptionalString(p.category) ? entry.category : undefined,
+          context,
+          source,
+        ),
+      onCreatedSessionCommitted: (committed) => {
+        sessionMutationAuthorization?.recordCreatedSession?.({
+          agentId: committed.agentId,
+          sessionKey: committed.key,
+          storePath: committed.storePath,
+          sessionId: committed.entry.sessionId,
+          lifecycleRevision: committed.entry.lifecycleRevision,
+        });
+      },
       afterCreate: async (session) => {
         if (!authority.hasActive()) {
           return;
@@ -535,38 +549,57 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           scheduleCreatedDashboardSessionTitle(session, cfg, context, p.titleSource);
           return;
         }
-        const sendChat = expectDefined(chatHandlers["chat.send"], "chat.send handler");
-        await sendChat({
-          req,
-          params: {
-            sessionKey: session.key,
-            agentId: session.agentId,
-            message: message ?? "",
-            idempotencyKey: initialRunId,
-            ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs } : {}),
-            ...(p.mentions ? { mentions: p.mentions } : {}),
-            ...(attachments ? { attachments } : {}),
+        const sendOptions = bindGatewayRequestHandlerMutationAuthority(
+          options,
+          {
+            ...options,
+            params: {
+              sessionKey: session.key,
+              agentId: session.agentId,
+              message: message ?? "",
+              idempotencyKey: initialRunId,
+              ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs } : {}),
+              ...(p.mentions ? { mentions: p.mentions } : {}),
+              ...(attachments ? { attachments } : {}),
+            },
+            respond: (ok, payload, error, meta) => {
+              if (ok && payload && typeof payload === "object") {
+                runPayload = payload as Record<string, unknown>;
+              } else {
+                runError = error;
+              }
+              runMeta = meta;
+            },
           },
-          respond: (ok, payload, error, meta) => {
-            if (ok && payload && typeof payload === "object") {
-              runPayload = payload as Record<string, unknown>;
-            } else {
-              runError = error;
-            }
-            runMeta = meta;
-          },
-          context,
-          client,
-          isWebchatConnect,
-        });
+          undefined,
+        );
+        await handleDirectExternalChatSend(sendOptions);
       },
-    }).catch((error: unknown) => {
-      if (error instanceof ModelAccountConnectAuthorityError) {
-        respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
-        return undefined;
-      }
-      return authority.handleClosedError(error);
-    });
+    };
+    let capturedOperator: ReturnType<typeof captureGatewayOperatorRunAuthority>;
+    try {
+      capturedOperator = captureGatewayOperatorRunAuthority({
+        client,
+        context,
+        hasCurrentClientAuthority,
+        invocationAuthority: { assertCurrent: commitGuard, signal },
+      });
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, formatErrorMessage(error)));
+      return;
+    }
+    const created = await createGatewaySession({
+      ...createParams,
+      operatorAuthority: capturedOperator?.authority,
+    })
+      .catch((error: unknown) => {
+        if (error instanceof ModelAccountConnectAuthorityError) {
+          respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
+          return undefined;
+        }
+        return authority.handleClosedError(error);
+      })
+      .finally(() => capturedOperator?.release());
     if (!created) {
       return;
     }
@@ -577,7 +610,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     if (created.postCommit.status === "failed") {
       runError = errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(created.postCommit.error));
     }
-    registerCreatedSessionCategory(normalizeOptionalString(p.category), context);
     const createdWorktree = preparedWorktree?.worktree
       ? {
           id: preparedWorktree.worktree.id,

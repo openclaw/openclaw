@@ -71,6 +71,7 @@ function decodeFrame(value: unknown): SqliteWorkerTransferFrame {
 export function createSqliteAuthTransferReceiver() {
   let receiver: ReturnType<typeof createSqliteWorkerTransferReceiver> | undefined;
   let transferId: number | undefined;
+  let cacheable = false;
   let ending = false;
   let completed = false;
   const records = new Map<string, unknown>();
@@ -88,6 +89,7 @@ export function createSqliteAuthTransferReceiver() {
           typeof handle.id !== "number" ||
           !Number.isSafeInteger(handle.id) ||
           handle.id < 1 ||
+          typeof handle.cacheable !== "boolean" ||
           !Array.isArray(handle.kinds) ||
           handle.kinds.length !== 2 ||
           handle.kinds[0] !== "store" ||
@@ -96,6 +98,7 @@ export function createSqliteAuthTransferReceiver() {
           throw new Error("Invalid auth profile transfer handle");
         }
         transferId = handle.id;
+        cacheable = handle.cacheable;
         receiver = createSqliteWorkerTransferReceiver(
           { id: transferId, kinds: ["store", "state"] },
           ({ kind, value: record }) => {
@@ -122,7 +125,7 @@ export function createSqliteAuthTransferReceiver() {
       }
       if (value.type === "complete" && ending) {
         completed = true;
-        const rows = { store: records.get("store"), state: records.get("state") };
+        const rows = { store: records.get("store"), state: records.get("state"), cacheable };
         records.clear();
         return { rows };
       }

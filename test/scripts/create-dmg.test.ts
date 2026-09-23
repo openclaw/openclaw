@@ -83,6 +83,8 @@ case "$command_name" in
       mkdir -p "$mountpoint"
       printf mounted > "$mountpoint/live-volume-file"
     fi
+    printf '%s' "$mountpoint" > "\${HDIUTIL_LOG}.attached"
+    printf '/dev/disk99\tGUID_partition_scheme\t\n/dev/disk99s1\tApple_HFS\t%s\n' "$mountpoint"
     ;;
   detach)
     if [[ "\${HDIUTIL_DETACH_FAIL:-0}" == "1" ]]; then
@@ -95,9 +97,16 @@ case "$command_name" in
     fi
     detach_attempts=$((detach_attempts + 1))
     printf '%s' "$detach_attempts" > "$detach_attempts_file"
+    vanish_at="\${HDIUTIL_DETACH_VANISH_AT:-0}"
+    if (( vanish_at > 0 && detach_attempts >= vanish_at )); then
+      rm -f "\${HDIUTIL_LOG}.attached"
+      echo "hdiutil: detach failed - No such file or directory" >&2
+      exit 1
+    fi
     if (( detach_attempts <= \${HDIUTIL_DETACH_FAIL_COUNT:-0} )); then
       exit 9
     fi
+    rm -f "\${HDIUTIL_LOG}.attached"
     ;;
   resize)
     if [[ "\${1:-}" == "-limits" ]]; then
@@ -127,9 +136,22 @@ esac
   const osascript = path.join(bin, "osascript");
   writeFileSync(osascript, '#!/usr/bin/env bash\ncat > "$OSASCRIPT_LOG"\nexit 0\n', "utf8");
   chmodSync(osascript, 0o755);
-  const sleep = path.join(bin, "sleep");
-  writeFileSync(sleep, "#!/usr/bin/env bash\nexit 0\n", "utf8");
-  chmodSync(sleep, 0o755);
+  for (const command of ["sleep", "sync"]) {
+    const tool = path.join(bin, command);
+    writeFileSync(tool, `#!/bin/bash\nprintf '${command} %s\\n' "$*" >> "$HDIUTIL_LOG"\n`, "utf8");
+    chmodSync(tool, 0o755);
+  }
+  const mount = path.join(bin, "mount");
+  writeFileSync(
+    mount,
+    `#!/bin/bash
+echo '/dev/disk1s1 on / (apfs, sealed, local, read-only, journaled)'
+[[ -f "$HDIUTIL_LOG.attached" ]] && echo "/dev/disk99s1 on $(cat "$HDIUTIL_LOG.attached") (hfs, local, nobrowse)"
+exit 0
+`,
+    "utf8",
+  );
+  chmodSync(mount, 0o755);
   return {
     env: {
       HDIUTIL_LOG: hdiutilLog,
@@ -170,7 +192,10 @@ function expectPrivateDmgMount(log: string): string {
     log.matchAll(/^detach (.+?)(?: -(?:quiet|force))?$/gm),
     ([, target]) => target,
   );
-  expect(new Set(detachTargets)).toEqual(new Set([mountPoint]));
+  expect(detachTargets).toContain(mountPoint);
+  expect(detachTargets.filter((target) => target !== "/dev/disk99s1")).toEqual(
+    detachTargets.filter((target) => target === mountPoint),
+  );
   return mountPoint;
 }
 
@@ -394,14 +419,54 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
     expect(result.stderr).toContain("Failed to detach DMG mount");
     expect(result.stderr).toContain("Preserving DMG temp root");
     const log = readFileSync(tools.hdiutilLog, "utf8");
+    const mountPoint = expectPrivateDmgMount(log);
     expect(log).not.toContain("resize");
     expect(log).not.toContain("convert");
-    const mountPoint = expectPrivateDmgMount(log);
+    // Nine polite attempts, three forced rounds by device then path, and the
+    // EXIT trap's last cleanup attempt.
+    expect(log.match(/^detach /gm)).toHaveLength(16);
+    expect(log.match(/^detach \/dev\/disk99s1 -force$/gm)).toHaveLength(4);
+    expect(log).toContain(`detach ${mountPoint} -force`);
     expect(readFileSync(path.join(mountPoint, "live-volume-file"), "utf8")).toBe("mounted");
     rmSync(path.dirname(mountPoint), { recursive: true, force: true });
   });
 
-  it("retries a delayed DMG detach before finalizing the artifact", () => {
+  it.each([
+    { vanishAt: 5, detaches: 5, forced: false },
+    { vanishAt: 10, detaches: 11, forced: true },
+  ])(
+    "treats a busy volume that vanished at detach attempt $vanishAt as detached",
+    ({ vanishAt, detaches, forced }) => {
+      const app = makeValidApp();
+      const outputDir = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));
+      tempDirs.push(outputDir);
+      const output = path.join(outputDir, "OpenClaw.dmg");
+      const tools = makeFakeDmgTools();
+
+      const result = runScript([app, output], {
+        ...tools.env,
+        HDIUTIL_DETACH_FAIL_COUNT: "9",
+        HDIUTIL_DETACH_VANISH_AT: String(vanishAt),
+      });
+
+      expect(result.status).toBe(0);
+      expect(readFileSync(output, "utf8")).toBe("converted");
+      expect(result.stderr).not.toContain("Preserving DMG temp root");
+      const log = readFileSync(tools.hdiutilLog, "utf8");
+      const mountPoint = expectPrivateDmgMount(log);
+      expect(existsSync(path.dirname(mountPoint))).toBe(false);
+      const detachLines = log.split("\n").filter((line) => line.startsWith("detach "));
+      expect(detachLines).toHaveLength(detaches);
+      // The forced round tries the device node first, then the mount path.
+      expect(detachLines.filter((line) => line.endsWith("-force"))).toEqual(
+        forced ? ["detach /dev/disk99s1 -force", `detach ${mountPoint} -force`] : [],
+      );
+      expect(log).toContain("resize");
+      expect(log).toContain("convert ");
+    },
+  );
+
+  it.each([6, 9])("retries %i failed DMG detaches before finalizing the artifact", (failures) => {
     const app = makeValidApp();
     const outputDir = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));
     tempDirs.push(outputDir);
@@ -410,15 +475,21 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
 
     const result = runScript([app, output], {
       ...tools.env,
-      HDIUTIL_DETACH_FAIL_COUNT: "6",
+      HDIUTIL_DETACH_FAIL_COUNT: String(failures),
     });
 
     expect(result.status).toBe(0);
     expect(readFileSync(output, "utf8")).toBe("converted");
     const log = readFileSync(tools.hdiutilLog, "utf8");
-    expect(log.match(/^detach /gm)).toHaveLength(7);
-    expect(log).toContain("detach ");
-    expect(log).toContain("-force");
+    const detaches = log.split("\n").filter((line) => line.startsWith("detach "));
+    expect(detaches).toHaveLength(failures + 1);
+    expect(detaches.slice(0, -1).every((line) => line.endsWith("-quiet"))).toBe(true);
+    expect(detaches.at(-1)).toMatch(failures === 9 ? /-force$/ : /-quiet$/);
+    expect(log.indexOf("sync ")).toBeGreaterThan(log.indexOf("attach "));
+    expect(log.indexOf("sync ")).toBeLessThan(log.indexOf("sleep "));
+    const delays = Array.from(log.matchAll(/^sleep (\d+)$/gm), ([, delay]) => Number(delay));
+    expect(delays).toHaveLength(Math.min(failures + 1, 9));
+    expect(delays.reduce((sum, delay) => sum + delay, 0)).toBe(failures === 9 ? 54 : 35);
     expect(log).toContain("resize");
     expect(log).toContain("convert ");
   });

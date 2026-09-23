@@ -15,6 +15,7 @@ import {
   registrationIncludesHostRestrictedConversationReadTool,
 } from "./compat/conversation-read-tools.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
+import type { PluginMetadataSnapshotScopeRunner } from "./current-plugin-metadata-snapshot.js";
 import { createInstalledPluginEnabledPredicate } from "./installed-plugin-index.js";
 import {
   acquirePluginRegistryForInspection,
@@ -25,14 +26,23 @@ import {
   isManifestPluginAvailableForControlPlane,
   loadManifestContractSnapshot,
 } from "./manifest-contract-eligibility.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import { hasManifestToolAvailability } from "./manifest-tool-availability.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { PluginMetadataManifestView } from "./plugin-metadata-snapshot.types.js";
 import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
 import type { PluginRegistry, PluginToolRegistration } from "./registry-types.js";
-import { buildPluginRuntimeLoadOptions } from "./runtime/load-context.js";
+import {
+  buildPluginRuntimeLoadOptions,
+  setPluginRuntimeLoadContext,
+  type PluginRuntimeLoadContext,
+} from "./runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
 import { findUndeclaredPluginToolNames } from "./tool-contracts.js";
+import {
+  createPluginToolFactoryContext,
+  type PluginToolOwnerContinuation,
+} from "./tool-factory-context.js";
 import {
   bindPluginToolCallbacks,
   createPluginToolFactoryResolver,
@@ -69,6 +79,7 @@ function inspectPluginTool(
   clientCaps: ReadonlySet<string>,
   entry: PluginToolRegistration,
   registry: PluginRegistry,
+  assertInvocationCurrent?: () => void,
 ): { tool: AnyAgentTool } | { error: string } | null {
   try {
     if (!isRecord(tool)) {
@@ -92,7 +103,14 @@ function inspectPluginTool(
             : undefined;
     return error
       ? { error }
-      : { tool: bindPluginToolCallbacks(entry, registry, tool as AnyAgentTool) };
+      : {
+          tool: bindPluginToolCallbacks(
+            entry,
+            registry,
+            tool as AnyAgentTool,
+            assertInvocationCurrent,
+          ),
+        };
   } catch (error) {
     return { error: formatErrorMessage(error) };
   }
@@ -256,6 +274,9 @@ export function ensureStandalonePluginToolRegistryLoaded(params: {
 
 type PluginToolResolutionParams = {
   context: OpenClawPluginToolContext;
+  /** Host-owned turn fence for factories and retained tool callbacks. */
+  assertInvocationCurrent?: () => void;
+  ownerContinuation?: PluginToolOwnerContinuation;
   existingToolNames?: Set<string>;
   clientCaps?: string[];
   toolAllowlist?: string[];
@@ -284,6 +305,103 @@ function recordToolDiagnostic(
     )
   ) {
     registry.diagnostics.push(diagnostic);
+  }
+}
+
+export type PluginToolInspectionScope = Omit<
+  Parameters<typeof resolvePluginToolLoadState>[0],
+  "preparedRuntime"
+>;
+
+const inspectionToolOwners = new WeakMap<
+  PluginRegistry,
+  { manifests: ReadonlyMap<string, PluginManifestRecord>; assertCurrent: () => void }
+>();
+
+function samePluginToolSource(
+  left: PluginManifestRecord | undefined,
+  right: PluginManifestRecord | undefined,
+): boolean {
+  return Boolean(
+    left &&
+    right &&
+    left.origin === right.origin &&
+    left.rootDir === right.rootDir &&
+    left.source === right.source &&
+    left.setupSource === right.setupSource &&
+    (left.sourcePreferred === true) === (right.sourcePreferred === true) &&
+    (left.packageManifest?.build?.bundledDist === false) ===
+      (right.packageManifest?.build?.bundledDist === false),
+  );
+}
+
+/** One inspection owns registration; each selected agent still invokes its own tool factories. */
+export async function acquirePluginToolInspectionRegistry(params: {
+  loadContext: PluginRuntimeLoadContext;
+  scopes: readonly PluginToolInspectionScope[];
+  runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
+}): Promise<{ registry?: PluginRegistry; release: () => Promise<void> }> {
+  const inventory = new Map(
+    (params.loadContext.manifestRegistry?.plugins ?? []).map((plugin) => [plugin.id, plugin]),
+  );
+  const selected = new Map<string, PluginManifestRecord>();
+  for (const scope of params.scopes) {
+    const select = () => resolvePluginToolLoadState({ ...scope, env: params.loadContext.env });
+    const state = params.runWithPluginMetadataSnapshot
+      ? params.runWithPluginMetadataSnapshot(
+          {
+            config: scope.context.config ?? params.loadContext.rawConfig,
+            workspaceDir: scope.context.workspaceDir,
+          },
+          select,
+        )
+      : select();
+    for (const id of state?.onlyPluginIds ?? []) {
+      const manifest = inventory.get(id);
+      if (!manifest || !samePluginToolSource(manifest, state?.snapshot.byPluginId.get(id))) {
+        throw new Error(`Plugin tool inspection has conflicting source ownership for ${id}`);
+      }
+      selected.set(id, manifest);
+    }
+  }
+  if (selected.size === 0) {
+    return { release: async () => {} };
+  }
+  const acquisition = await acquirePluginRegistryForInspection(
+    buildPluginRuntimeLoadOptions(params.loadContext, {
+      onlyPluginIds: [...selected.keys()].toSorted(),
+      toolDiscovery: true,
+      runtimeSideEffects: false,
+      ...(params.scopes.some((scope) => scope.allowGatewaySubagentBinding)
+        ? { runtimeOptions: { allowGatewaySubagentBinding: true } }
+        : {}),
+    }),
+  );
+  try {
+    setPluginRuntimeLoadContext(acquisition.registry, params.loadContext);
+    const current = capturePluginLifecycleAuthority(acquisition.registry, undefined, {
+      scopedRuntime: true,
+    });
+    inspectionToolOwners.set(acquisition.registry, {
+      manifests: selected,
+      assertCurrent: () => {
+        if (!current?.()) {
+          throw new Error("Plugin tool inspection has been released");
+        }
+      },
+    });
+    return acquisition;
+  } catch (error) {
+    try {
+      await acquisition.release();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "Plugin tool inspection setup and cleanup failed",
+        { cause: cleanupError },
+      );
+    }
+    throw error;
   }
 }
 
@@ -345,6 +463,8 @@ function resolvePluginToolsFromRegistry(
       ? params.preparedRuntime.registry
       : params.runtimeRegistry) ??
     getLoadedRuntimePluginRegistry({ workspaceDir: context.workspaceDir });
+  const inspection = runtimeRegistry && inspectionToolOwners.get(runtimeRegistry);
+  inspection?.assertCurrent();
   // A supplied generation keeps its covered owners even when another plugin must
   // load. Registry caching owns reuse; every assembly calls current-context factories.
   const toolOwners = new Map<
@@ -366,7 +486,12 @@ function resolvePluginToolsFromRegistry(
       toolOwners.set(pluginId, { registry: runtimeRegistry, tools: [] });
     }
   }
-  const missingPluginIds = onlyPluginIds.filter((pluginId) => !toolOwners.has(pluginId));
+  // Failed registrations are settled facts of this inspection, not new cold-load requests.
+  const missingPluginIds = onlyPluginIds.filter(
+    (pluginId) =>
+      !toolOwners.has(pluginId) &&
+      !samePluginToolSource(inspection?.manifests.get(pluginId), snapshot.byPluginId.get(pluginId)),
+  );
   if (missingPluginIds.length > 0) {
     const registry = loadPluginRegistryHandle({
       ...loadState.loadOptions,
@@ -469,7 +594,16 @@ function resolvePluginToolsFromRegistry(
       ) {
         continue;
       }
-      const factoryResult = factories.resolve(entry, params.context, declaredNames, owner.registry);
+      const factoryContext = createPluginToolFactoryContext({
+        entry,
+        registry: owner.registry,
+        context: params.context,
+        assertInvocationCurrent: params.assertInvocationCurrent,
+        ownerContinuation: params.ownerContinuation,
+      });
+      // Catalog discovery may construct tools without an admitted run; their V2 execution stays fenced.
+      params.assertInvocationCurrent?.();
+      const factoryResult = factories.resolve(entry, factoryContext, declaredNames, owner.registry);
       if (factoryResult.failed) {
         continue;
       }
@@ -530,7 +664,14 @@ function resolvePluginToolsFromRegistry(
         ) {
           continue;
         }
-        const inspected = inspectPluginTool(toolRaw, toolName, clientCaps, entry, owner.registry);
+        const inspected = inspectPluginTool(
+          toolRaw,
+          toolName,
+          clientCaps,
+          entry,
+          owner.registry,
+          factoryContext.assertInvocationCurrent,
+        );
         if (!inspected) {
           continue;
         }

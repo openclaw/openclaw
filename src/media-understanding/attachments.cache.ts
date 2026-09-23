@@ -15,9 +15,11 @@ import { MediaUnderstandingSkipError } from "../../packages/media-understanding-
 import { resolveStateDir } from "../config/paths.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { isAbortError } from "../infra/abort-signal.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { readFileHandleBounded } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, openLocalFileSafely, type OpenResult } from "../infra/fs-safe.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { buildRandomTempFilePath } from "../infra/temp-download.js";
 import {
   readRemoteMediaBuffer,
   type MediaFetchRetryOptions,
@@ -29,7 +31,6 @@ import {
   normalizeMediaReferenceSource,
   resolveInboundMediaReference,
 } from "../media/media-reference.js";
-import { buildRandomTempFilePath } from "../plugin-sdk/temp-path.js";
 import { normalizeAttachmentPath } from "./attachments.normalize.js";
 import type { MediaAttachment } from "./types.js";
 
@@ -41,11 +42,6 @@ type MediaBufferResult = {
   size: number;
   /** Set only when bytes came from an approved local read under the root policy. */
   localPath?: string;
-};
-
-type MediaPathResult = {
-  path: string;
-  cleanup?: () => Promise<void> | void;
 };
 
 const REMOTE_MEDIA_FETCH_RETRY: MediaFetchRetryOptions = {
@@ -61,11 +57,17 @@ type AttachmentCacheEntry = {
   statSize?: number;
   bufferResult?: MediaBufferResult;
   tempPath?: string;
-  tempCleanup?: () => Promise<void>;
   localResolutionAttempted?: boolean;
   storeAliasAttempted?: boolean;
   lastLocalError?: MediaUnderstandingSkipError;
 };
+
+function maxBytesError(params: { attachmentIndex: number; maxBytes: number }) {
+  return new MediaUnderstandingSkipError(
+    "maxBytes",
+    `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
+  );
+}
 
 let defaultLocalPathRoots: readonly string[] | undefined;
 
@@ -140,6 +142,7 @@ export type MediaAttachmentCacheOptions = {
  */
 export class MediaAttachmentCache {
   private readonly entries = new Map<number, AttachmentCacheEntry>();
+  private readonly stagedPaths = new Set<string>();
   private readonly attachments: MediaAttachment[];
   private readonly localPathRoots: readonly string[];
   private readonly ssrfPolicy: SsrFPolicy | undefined;
@@ -169,38 +172,14 @@ export class MediaAttachmentCache {
     const url = remoteFetchUrl(entry.attachment.url);
     if (entry.bufferResult) {
       if (entry.bufferResult.size > params.maxBytes) {
-        throw new MediaUnderstandingSkipError(
-          "maxBytes",
-          `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
-        );
+        throw maxBytesError(params);
       }
       return entry.bufferResult;
     }
 
-    if (entry.resolvedPath) {
-      try {
-        const local = await this.readEntryLocalBuffer(entry, params);
-        if (local) {
-          return local;
-        }
-      } catch (err) {
-        if (!this.recordRecoverableLocalError(entry, err)) {
-          throw err;
-        }
-      }
-    }
-
-    if (await this.activateStoreAlias(entry)) {
-      try {
-        const local = await this.readEntryLocalBuffer(entry, params);
-        if (local) {
-          return local;
-        }
-      } catch (err) {
-        if (!this.recordRecoverableLocalError(entry, err)) {
-          throw err;
-        }
-      }
+    const local = await this.withLocalFile(entry, () => this.readEntryLocalBuffer(entry, params));
+    if (local) {
+      return local;
     }
 
     if (!url) {
@@ -239,10 +218,7 @@ export class MediaAttachmentCache {
       return entry.bufferResult;
     } catch (err) {
       if (err instanceof MediaFetchError && err.code === "max_bytes") {
-        throw new MediaUnderstandingSkipError(
-          "maxBytes",
-          `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
-        );
+        throw maxBytesError(params);
       }
       if (isAbortError(err)) {
         throw new MediaUnderstandingSkipError(
@@ -266,17 +242,11 @@ export class MediaAttachmentCache {
         return undefined;
       }
       if (entry.statSize !== undefined && entry.statSize > params.maxBytes) {
-        throw new MediaUnderstandingSkipError(
-          "maxBytes",
-          `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
-        );
+        throw maxBytesError(params);
       }
       opened ??= await openLocalFileSafely({ filePath: entry.resolvedPath });
       if (opened.stat.size > params.maxBytes) {
-        throw new MediaUnderstandingSkipError(
-          "maxBytes",
-          `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
-        );
+        throw maxBytesError(params);
       }
       const canonicalRoots = await this.getCanonicalLocalPathRoots();
       if (!isInboundPathAllowed({ filePath: opened.realPath, roots: canonicalRoots })) {
@@ -289,10 +259,7 @@ export class MediaAttachmentCache {
     } catch (err) {
       if (err instanceof FsSafeError) {
         if (err.code === "too-large") {
-          throw new MediaUnderstandingSkipError(
-            "maxBytes",
-            `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
-          );
+          throw maxBytesError(params);
         }
         if (err.code === "not-file" || err.code === "not-found") {
           throw new MediaUnderstandingSkipError(
@@ -329,15 +296,30 @@ export class MediaAttachmentCache {
     return entry.bufferResult;
   }
 
-  private recordRecoverableLocalError(entry: AttachmentCacheEntry, err: unknown): boolean {
-    if (
-      !(err instanceof MediaUnderstandingSkipError) ||
-      (err.reason !== "blocked" && err.reason !== "empty")
-    ) {
-      return false;
-    }
-    entry.lastLocalError = err;
-    return true;
+  private async withLocalFile<T>(
+    entry: AttachmentCacheEntry,
+    read: () => Promise<T | undefined>,
+  ): Promise<T | undefined> {
+    do {
+      if (!entry.resolvedPath) {
+        continue;
+      }
+      try {
+        const result = await read();
+        if (result !== undefined) {
+          return result;
+        }
+      } catch (err) {
+        if (
+          !(err instanceof MediaUnderstandingSkipError) ||
+          (err.reason !== "blocked" && err.reason !== "empty")
+        ) {
+          throw err;
+        }
+        entry.lastLocalError = err;
+      }
+    } while (await this.activateStoreAlias(entry));
+    return undefined;
   }
 
   private async activateStoreAlias(entry: AttachmentCacheEntry): Promise<boolean> {
@@ -363,56 +345,28 @@ export class MediaAttachmentCache {
     attachmentIndex: number;
     maxBytes: number;
     timeoutMs: number;
-  }): Promise<MediaPathResult> {
+  }): Promise<string> {
     const entry = await this.ensureEntry(params.attachmentIndex);
-    if (entry.resolvedPath) {
-      try {
-        await (await this.prepareLocalFile(entry))?.handle.close().catch(() => {});
-        const size = entry.statSize;
-        if (entry.resolvedPath && size !== undefined && size > params.maxBytes) {
-          throw new MediaUnderstandingSkipError(
-            "maxBytes",
-            `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
-          );
-        }
-      } catch (err) {
-        if (!this.recordRecoverableLocalError(entry, err)) {
-          throw err;
-        }
-      }
+    const local = await this.withLocalFile(entry, async () => {
+      await (await this.prepareLocalFile(entry))?.handle.close().catch(() => {});
+      const size = entry.statSize;
       if (entry.resolvedPath) {
-        return { path: entry.resolvedPath };
-      }
-    }
-
-    if (await this.activateStoreAlias(entry)) {
-      try {
-        await (await this.prepareLocalFile(entry))?.handle.close().catch(() => {});
-        const size = entry.statSize;
-        if (entry.resolvedPath) {
-          if (size !== undefined && size > params.maxBytes) {
-            throw new MediaUnderstandingSkipError(
-              "maxBytes",
-              `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
-            );
-          }
-          return { path: entry.resolvedPath };
+        if (size !== undefined && size > params.maxBytes) {
+          throw maxBytesError(params);
         }
-      } catch (err) {
-        if (!this.recordRecoverableLocalError(entry, err)) {
-          throw err;
-        }
+        return entry.resolvedPath;
       }
+      return undefined;
+    });
+    if (local) {
+      return local;
     }
 
     if (entry.tempPath) {
       if (entry.bufferResult && entry.bufferResult.size > params.maxBytes) {
-        throw new MediaUnderstandingSkipError(
-          "maxBytes",
-          `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
-        );
+        throw maxBytesError(params);
       }
-      return { path: entry.tempPath, cleanup: entry.tempCleanup };
+      return entry.tempPath;
     }
 
     const bufferResult = await this.getBuffer(params);
@@ -421,34 +375,34 @@ export class MediaAttachmentCache {
       prefix: "openclaw-media",
       extension,
     });
-    // Keep failed staging owned when model fallback retries the same attachment.
-    const previousCleanup = entry.tempCleanup;
-    entry.tempCleanup = async () => {
-      // Returned cleanup callbacks may outlive a restaged file; invalidate only their path.
-      if (entry.tempPath === tmpPath) {
-        entry.tempPath = undefined;
-      }
-      await previousCleanup?.();
-      await fs.unlink(tmpPath).catch(() => {});
-    };
+    this.stagedPaths.add(tmpPath);
     await fs.writeFile(tmpPath, bufferResult.buffer).catch(async (error: unknown) => {
-      await entry.tempCleanup?.();
+      // A failed attempt cannot remove another borrower's file; retain failed removals for cleanup.
+      await this.removeStagedPath(tmpPath);
       throw error;
     });
     entry.tempPath = tmpPath;
-    return { path: tmpPath, cleanup: entry.tempCleanup };
+    return tmpPath;
   }
 
   /** Removes temporary files created by `getPath`; callers should run this after provider use. */
   async cleanup(): Promise<void> {
-    const cleanups: Promise<void>[] = [];
+    const paths = [...this.stagedPaths];
     for (const entry of this.entries.values()) {
-      if (entry.tempCleanup) {
-        cleanups.push(entry.tempCleanup());
-        entry.tempCleanup = undefined;
+      entry.tempPath = undefined;
+    }
+    await Promise.all(paths.map((tmpPath) => this.removeStagedPath(tmpPath)));
+  }
+
+  private async removeStagedPath(tmpPath: string): Promise<void> {
+    try {
+      await fs.unlink(tmpPath);
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT")) {
+        return;
       }
     }
-    await Promise.all(cleanups);
+    this.stagedPaths.delete(tmpPath);
   }
 
   /** Drops this cache's bytes after terminal file processing; earlier borrowers keep ownership. */
@@ -515,7 +469,10 @@ export class MediaAttachmentCache {
     }
     if (!isInboundPathAllowed({ filePath: entry.resolvedPath, roots: this.localPathRoots })) {
       const canonicalRoots = await this.getCanonicalLocalPathRoots();
-      if (!isInboundPathAllowed({ filePath: entry.resolvedPath, roots: canonicalRoots })) {
+      // Roots may already be canonical while macOS attachments still use /tmp or /var aliases.
+      const candidatePath = entry.resolvedPath;
+      const canonicalPath = await fs.realpath(candidatePath).catch(() => candidatePath);
+      if (!isInboundPathAllowed({ filePath: canonicalPath, roots: canonicalRoots })) {
         entry.resolvedPath = undefined;
         if (shouldLogVerbose()) {
           logVerbose(

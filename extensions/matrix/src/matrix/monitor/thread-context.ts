@@ -1,4 +1,3 @@
-// Matrix plugin module implements thread context behavior.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MatrixClient } from "../sdk.js";
 import { setBoundedMap } from "./bounded-cache.js";

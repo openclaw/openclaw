@@ -104,7 +104,7 @@ describe("git-hooks/pre-commit (integration)", () => {
       });
 
       expect(readFormatterLog(logPath)).toEqual([
-        "oxfmt --write --no-error-on-unmatched-pattern changed.ts",
+        "oxfmt --write --threads=1 --no-error-on-unmatched-pattern changed.ts",
       ]);
       if (mode === "external") {
         writeFileSync(path.join(dir, "changed.ts"), literals[0]);

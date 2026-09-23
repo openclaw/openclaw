@@ -79,6 +79,19 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
+  it("keeps an explicit misalignment refusal terminal despite a fallback-safe error projection", () => {
+    const result = cyberRefusalResult();
+    result.meta.agentMeta.providerRefusal.category = "misalignment";
+    result.meta.error.fallbackSafe = true;
+    expect(
+      classifyEmbeddedAgentRunResultForModelFallback({
+        provider: "openai",
+        model: "gpt-general",
+        result,
+      }),
+    ).toBeNull();
+  });
+
   it.each([
     { label: "another provider", provider: "anthropic", harness: "openclaw", replayInvalid: false },
     { label: "another harness", provider: "openai", harness: "codex", replayInvalid: false },
@@ -445,7 +458,11 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     expect(result).toBeNull();
   });
 
-  it("retries transient transport error payloads via the shared timeout lane (#138531)", () => {
+  it("treats a provider 500 error payload as a fallback-eligible server_error", () => {
+    // An untyped 500 is a provider-side failure, not a timing one. #143649 already
+    // made `timeout` payloads fallback-eligible, so this payload reached the chain
+    // before, but labelled `timeout`; it now carries `server_error`, which is also
+    // an allowlisted ProviderErrorPayloadFailoverReason.
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "custom",
       model: "llama-3.1",
@@ -464,7 +481,7 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
 
     expect(result).toEqual({
       message: "custom/llama-3.1 ended with a provider error: HTTP 500: internal server error",
-      reason: "timeout",
+      reason: "server_error",
       code: "embedded_error_payload",
       rawError: "HTTP 500: internal server error",
     });
@@ -487,6 +504,26 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
       code: "embedded_error_payload",
       rawError,
     });
+  });
+
+  it("does not retry non-business transport error payloads", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "custom",
+      model: "llama-3.1",
+      result: {
+        payloads: [
+          {
+            isError: true,
+            text: "connection closed before a response arrived",
+          },
+        ],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toBeNull();
   });
 
   it("keeps tool-authored incomplete summaries fallback-eligible", () => {

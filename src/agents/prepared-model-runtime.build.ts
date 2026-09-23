@@ -23,8 +23,10 @@ import {
 } from "./prepared-model-runtime.errors.js";
 import {
   fingerprintPreparedRuntimeFacts,
+  prepareConfiguredModelFacts,
   prepareConfiguredRuntimeFactsBatch,
   prepareWorkspaceBuildGroup,
+  type PreparedConfiguredModelRegistries,
 } from "./prepared-model-runtime.facts.js";
 import {
   createPreparedModelRuntimeSnapshot,
@@ -38,6 +40,7 @@ import { registerPreparedModelRuntimeClose } from "./prepared-model-runtime.life
 import {
   discardPreparedPluginGeneration,
   registerPreparedPluginLifetime,
+  retainPreparedPluginRegistry,
 } from "./prepared-model-runtime.plugin-lifetime.js";
 import { PreparedModelRuntimeBuildResources } from "./prepared-model-runtime.resources.js";
 import { prepareAgentCatalogSource } from "./prepared-model-runtime.scoped-catalog.js";
@@ -58,9 +61,10 @@ export type PreparedModelRuntimeBuildCandidate = Readonly<{
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
   prepareInboundPluginRegistry?: boolean;
   isGenerationCurrent?: () => boolean;
+  retirementSignal: AbortSignal;
   isBuildCurrent?: () => boolean;
   onBeforeAuthCapture?: () => void;
-  ownsRegistryResources?: boolean;
+  inspectRegistry?: boolean;
 }>;
 
 export type PreparedModelRuntimeBuildResult = Readonly<{
@@ -84,12 +88,12 @@ function groupBuildCandidates<K>(
 
 async function buildSnapshotBatch(
   requestedCandidates: readonly PreparedModelRuntimeBuildCandidate[],
+  registryResources: PreparedModelRuntimeBuildResources,
   catalogMode: PreparedModelRuntimeCatalogMode,
   pluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void,
   includeCredentialProviders = catalogMode === "live",
   onStage?: (stage: string) => void,
-  registryResources?: PreparedModelRuntimeBuildResources,
   onPrepared?: (input: PreparedModelRuntimeInput, result: PreparedModelRuntimeBuildResult) => void,
   signal?: AbortSignal,
 ): Promise<PreparedModelRuntimeBuildResult[]> {
@@ -139,6 +143,7 @@ async function buildSnapshotBatch(
         catalogFacts,
         pluginGeneration,
         isCurrent: candidate.isGenerationCurrent ?? (() => false),
+        retirementSignal: candidate.retirementSignal,
         inventoryOwner: candidate.inventoryOwner ?? {},
       }),
       requestedByInput.get(candidate.input)!.config,
@@ -160,8 +165,8 @@ async function buildSnapshotBatch(
       [
         ...groupBuildCandidates(generationCandidates, (candidate) => {
           const workspace = preparedModelRuntimeWorkspaceFactsKey(candidate.input);
-          if (candidate.ownsRegistryResources) {
-            return `owned\0${workspace}`;
+          if (candidate.inspectRegistry) {
+            return `inspection\0${workspace}`;
           }
           const kind = candidate.prepareInboundPluginRegistry ? "configured" : "dynamic";
           return pluginGeneration ? workspace : `${kind}\0${workspace}`;
@@ -183,9 +188,30 @@ async function buildSnapshotBatch(
       return prepared;
     };
     const loadInboundPluginRegistry = createPreparedInboundRegistryLoader();
+    const configuredModelRegistries: PreparedConfiguredModelRegistries = new Map();
     // Config objects can change between publications. Share this projection only
     // inside the current build batch so every later publication reads fresh config.
     const configuredHarnessRuntimesByConfig = new Map<OpenClawConfig, readonly string[]>();
+    const configuredModelFactsByConfig = new Map<
+      OpenClawConfig,
+      Map<
+        PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
+        ReturnType<typeof prepareConfiguredModelFacts>
+      >
+    >();
+    const getConfiguredModelFacts: typeof prepareConfiguredModelFacts = (config, metadata) => {
+      let factsByMetadata = configuredModelFactsByConfig.get(config);
+      if (!factsByMetadata) {
+        factsByMetadata = new Map();
+        configuredModelFactsByConfig.set(config, factsByMetadata);
+      }
+      let facts = factsByMetadata.get(metadata);
+      if (!facts) {
+        facts = prepareConfiguredModelFacts(config, metadata);
+        factsByMetadata.set(metadata, facts);
+      }
+      return facts;
+    };
     let runtimePluginMs = 0;
     let pluginMetadataMs = 0;
     let staticProviderCatalogMs = 0;
@@ -225,12 +251,14 @@ async function buildSnapshotBatch(
           preferBuiltPluginArtifacts,
           includeCredentialProviders,
           getConfiguredHarnessRuntimes,
+          getConfiguredModelFacts,
           assertCurrent: assertBuildCurrent,
           onBeforeAuthCapture: (input) => candidateByInput.get(input)!.onBeforeAuthCapture?.(),
           onStage,
           signal,
-          ...(groupCandidates.some((candidate) => candidate.ownsRegistryResources)
-            ? { registryResources }
+          registryResources,
+          ...(groupCandidates.some((candidate) => candidate.inspectRegistry)
+            ? { loadRuntimeRegistry: registryResources.load.bind(registryResources) }
             : {}),
         },
         prepareInboundPluginRegistry ? loadInboundPluginRegistry : undefined,
@@ -257,6 +285,7 @@ async function buildSnapshotBatch(
           agentFacts: prepared.agentFacts,
           pluginGeneration: prepared.pluginGeneration,
           assertCurrent: assertBuildCurrent,
+          registries: configuredModelRegistries,
         });
         runtimeRegistryCount += batch.registryCount;
         registryMs += performance.now() - startedAt;
@@ -462,7 +491,9 @@ export function startSerializedSnapshotBuildBatch(
   const startBuild = (async () => {
     // Register before waiting: shutdown also owns resources from unfinished builds.
     registerPreparedPluginLifetime();
-    await using registryResources = new PreparedModelRuntimeBuildResources();
+    await using registryResources = new PreparedModelRuntimeBuildResources(
+      retainPreparedPluginRegistry,
+    );
     if (previousBuildCompletions.length > 0) {
       await Promise.all(previousBuildCompletions);
       // Queued publications register while the prior build settles. Recheck them here so a
@@ -472,6 +503,7 @@ export function startSerializedSnapshotBuildBatch(
     signal.throwIfAborted();
     return await buildSnapshotBatch(
       candidates,
+      registryResources,
       catalogMode,
       pluginMetadataSnapshot,
       onBuildStats,
@@ -480,7 +512,6 @@ export function startSerializedSnapshotBuildBatch(
         stage = nextStage;
         progress?.onStage(nextStage);
       },
-      registryResources,
       progress
         ? (input, result) => {
             progress.onPrepared(input, result);

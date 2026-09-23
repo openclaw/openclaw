@@ -115,14 +115,14 @@ describe("summarizeToolGroup", () => {
     ...extra,
   });
 
-  it("uses prepared titles, preserves order, and groups repeated work", () => {
+  it("counts prepared operations without copying their free-form titles", () => {
     expect(
       summarizeToolGroup([
         prepared("first", "Check samples", { name: "custom_tool" }),
-        prepared("second", "Edit report"),
+        prepared("second", "Edit report", { name: "edit" }),
         prepared("third", "Check samples"),
       ]),
-    ).toBe("Check samples ×2, Edit report");
+    ).toBe("1 edit · 2 other operations");
   });
 
   it("replaces running state with the same operation's outcome without counting suppressed siblings", () => {
@@ -132,7 +132,7 @@ describe("summarizeToolGroup", () => {
         prepared("tool:call", "Inspect", { toolCallId: "call", status: "failed" }),
         prepared("command:call", "Command", { toolCallId: "call", suppressChannelProgress: true }),
       ]),
-    ).toBe("Inspect (failed)");
+    ).toBe("1 other operation · 1 failed");
   });
 
   it("keeps failure, approval, and unknown outcomes while quiet work stays out", () => {
@@ -143,7 +143,7 @@ describe("summarizeToolGroup", () => {
         prepared("approval", "Write report", { status: "blocked" }),
         prepared("unknown", "Outcome unknown", { status: undefined }),
       ]),
-    ).toBe("Check process (failed), Write report (blocked), Outcome unknown");
+    ).toBe("3 other operations · 1 failed · 1 blocked · 1 unknown");
   });
 
   it("keeps the diagnostic disclosure label when all prepared work is quiet", () => {
@@ -151,5 +151,20 @@ describe("summarizeToolGroup", () => {
       summarizeToolGroup([prepared("quiet", "Wait", { hideFromChannelProgress: true })]),
     );
     expect(summarizeToolGroup([])).not.toBe("");
+  });
+
+  it("bounds dense summaries independently of command, title, and custom-name length", () => {
+    const items = Array.from({ length: 500 }, (_, index) =>
+      prepared(`call-${index}`, `print text → ${"/workspace/deep/path ".repeat(100)}`, {
+        name: index % 2 === 0 ? "exec" : `custom_${"long".repeat(100)}_${index}`,
+      }),
+    );
+    expect(summarizeToolGroup(items)).toBe("250 commands · 250 other operations");
+    expect(summarizeToolGroup([prepared("custom", "constructor", { name: "constructor" })])).toBe(
+      "1 other operation",
+    );
+    expect(
+      summarizeToolGroup([prepared("command", "Native command", { commandBearing: true })]),
+    ).toBe("1 command");
   });
 });

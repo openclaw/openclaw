@@ -88,49 +88,20 @@ export function resolveExtraParams(params: {
     });
   const sources = [defaultParams, modelParams, agentModelParams, agentParams];
   const merged = Object.assign({}, ...sources);
-  const resolvedParallelToolCalls = resolveAliasedParamValue(
-    sources,
-    "parallel_tool_calls",
-    "parallelToolCalls",
-  );
-  if (resolvedParallelToolCalls !== undefined) {
-    merged.parallel_tool_calls = resolvedParallelToolCalls;
-    delete merged.parallelToolCalls;
-  }
-
-  const resolvedTextVerbosity = resolveAliasedParamValue(
+  canonicalizeExtraParamAlias(merged, sources, ["parallel_tool_calls", "parallelToolCalls"]);
+  canonicalizeExtraParamAlias(
+    merged,
     [modelParams, agentModelParams, agentParams],
-    "text_verbosity",
-    "textVerbosity",
+    ["text_verbosity", "textVerbosity"],
   );
-  if (resolvedTextVerbosity !== undefined) {
-    merged.text_verbosity = resolvedTextVerbosity;
-    delete merged.textVerbosity;
-  }
-
-  const resolvedResponseFormat = resolveAliasedParamValue(
-    sources,
-    "response_format",
-    "responseFormat",
-  );
-  if (resolvedResponseFormat !== undefined) {
-    merged.response_format = resolvedResponseFormat;
-    delete merged.responseFormat;
-  }
-  canonicalizeMaxTokensParam({
+  canonicalizeExtraParamAlias(merged, sources, ["response_format", "responseFormat"]);
+  canonicalizeMaxTokensParam({ merged, sources });
+  canonicalizeExtraParamAlias(
     merged,
     sources,
-  });
-
-  const resolvedCachedContent = resolveAliasedParamValue(
-    sources,
-    "cached_content",
+    ["cached_content", "cachedContent"],
     "cachedContent",
   );
-  if (resolvedCachedContent !== undefined) {
-    merged.cachedContent = resolvedCachedContent;
-    delete merged.cached_content;
-  }
   if (params.provider === "openrouter") {
     canonicalizeOpenRouterResponseCacheParams(merged, sources);
   }
@@ -186,16 +157,9 @@ export function resolvePreparedExtraParams(params: {
       modelId: params.modelId,
       agentId: params.agentId,
     });
-  const override =
-    params.extraParamsOverride && Object.keys(params.extraParamsOverride).length > 0
-      ? stripRequestScopedExtraParams(
-          sanitizeExtraParamsRecord(
-            Object.fromEntries(
-              Object.entries(params.extraParamsOverride).filter(([, value]) => value !== undefined),
-            ),
-          ),
-        )
-      : undefined;
+  const override = stripRequestScopedExtraParams(
+    sanitizeExtraParamsOverride(params.extraParamsOverride),
+  );
   const merged = {
     ...sanitizeExtraParamsRecord(resolvedExtraParams),
     ...override,
@@ -204,15 +168,12 @@ export function resolvePreparedExtraParams(params: {
     merged,
     sources: [resolvedExtraParams, override],
   });
-  const resolvedCachedContent = resolveAliasedParamValue(
+  canonicalizeExtraParamAlias(
+    merged,
     [resolvedExtraParams, override],
-    "cached_content",
+    ["cached_content", "cachedContent"],
     "cachedContent",
   );
-  if (resolvedCachedContent !== undefined) {
-    merged.cachedContent = resolvedCachedContent;
-    delete merged.cached_content;
-  }
   if (params.provider === "openrouter") {
     canonicalizeOpenRouterResponseCacheParams(merged, [resolvedExtraParams, override]);
   }
@@ -260,6 +221,14 @@ function sanitizeExtraParamsRecord(
       ([key]) => key !== "__proto__" && key !== "prototype" && key !== "constructor",
     ),
   );
+}
+
+function sanitizeExtraParamsOverride(value: Record<string, unknown> | undefined) {
+  return value && Object.keys(value).length > 0
+    ? sanitizeExtraParamsRecord(
+        Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)),
+      )
+    : undefined;
 }
 
 function stripRequestScopedExtraParams(
@@ -509,6 +478,19 @@ function resolveAliasedParamValueFromKeys(
   return seen ? resolved : undefined;
 }
 
+function canonicalizeExtraParamAlias(
+  merged: Record<string, unknown>,
+  sources: Array<Record<string, unknown> | undefined>,
+  keys: readonly [string, string],
+  canonical = keys[0],
+): void {
+  const resolved = resolveAliasedParamValueFromKeys(sources, keys);
+  if (resolved !== undefined) {
+    merged[canonical] = resolved;
+    delete merged[keys[0] === canonical ? keys[1] : keys[0]];
+  }
+}
+
 function applyCanonicalAliasedParamValue(params: {
   merged: Record<string, unknown>;
   sources: Array<Record<string, unknown> | undefined>;
@@ -613,37 +595,21 @@ function sanitizeExtraBodyRecord(value: Record<string, unknown>): Record<string,
   );
 }
 
-function resolveExtraBodyParam(rawExtraBody: unknown): Record<string, unknown> | undefined {
-  if (rawExtraBody === undefined || rawExtraBody === null) {
-    return undefined;
-  }
-  if (typeof rawExtraBody !== "object" || Array.isArray(rawExtraBody)) {
-    const summary = typeof rawExtraBody === "string" ? rawExtraBody : typeof rawExtraBody;
-    log.warn(`ignoring invalid extra_body param: ${summary}`);
-    return undefined;
-  }
-  const extraBody = sanitizeExtraBodyRecord(rawExtraBody as Record<string, unknown>);
-  return Object.keys(extraBody).length > 0 ? extraBody : undefined;
-}
-
-function resolveChatTemplateKwargsParam(
-  rawChatTemplateKwargs: unknown,
+function resolveExtraBodyRecord(
+  value: unknown,
+  param: "extra_body" | "chat_template_kwargs",
 ): Record<string, unknown> | undefined {
-  if (rawChatTemplateKwargs === undefined || rawChatTemplateKwargs === null) {
+  if (value === undefined || value === null) {
     return undefined;
   }
-  if (typeof rawChatTemplateKwargs !== "object" || Array.isArray(rawChatTemplateKwargs)) {
-    const summary =
-      typeof rawChatTemplateKwargs === "string"
-        ? rawChatTemplateKwargs
-        : typeof rawChatTemplateKwargs;
-    log.warn(`ignoring invalid chat_template_kwargs param: ${summary}`);
+  if (typeof value !== "object" || Array.isArray(value)) {
+    log.warn(
+      `ignoring invalid ${param} param: ${typeof value === "string" ? value : typeof value}`,
+    );
     return undefined;
   }
-  const chatTemplateKwargs = sanitizeExtraBodyRecord(
-    rawChatTemplateKwargs as Record<string, unknown>,
-  );
-  return Object.keys(chatTemplateKwargs).length > 0 ? chatTemplateKwargs : undefined;
+  const record = sanitizeExtraBodyRecord(value as Record<string, unknown>);
+  return Object.keys(record).length > 0 ? record : undefined;
 }
 
 function createOpenAICompletionsChatTemplateKwargsWrapper(params: {
@@ -800,7 +766,10 @@ function applyPostPluginStreamWrappers(
     "chat_template_kwargs",
     "chatTemplateKwargs",
   );
-  const configuredChatTemplateKwargs = resolveChatTemplateKwargsParam(rawChatTemplateKwargs);
+  const configuredChatTemplateKwargs = resolveExtraBodyRecord(
+    rawChatTemplateKwargs,
+    "chat_template_kwargs",
+  );
   if (configuredChatTemplateKwargs) {
     ctx.agent.streamFn = createOpenAICompletionsChatTemplateKwargsWrapper({
       baseStreamFn: ctx.agent.streamFn,
@@ -813,7 +782,7 @@ function applyPostPluginStreamWrappers(
     "extra_body",
     "extraBody",
   );
-  const extraBody = resolveExtraBodyParam(rawExtraBody);
+  const extraBody = resolveExtraBodyRecord(rawExtraBody, "extra_body");
   if (extraBody) {
     ctx.agent.streamFn = createOpenAICompletionsExtraBodyWrapper(ctx.agent.streamFn, extraBody);
   }
@@ -945,7 +914,7 @@ const MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS = new Set([
   "mimo-v2-omni",
   "mimo-v2.5",
   "mimo-v2.5-pro",
-  "mimo-v2.6-pro",
+  ...["flash", "pro", "pro-ultraspeed"].map((variant) => `mimo-v2.6-${variant}`),
 ]);
 const MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS = new Set(["mimo-v2-pro", "mimo-v2-omni"]);
 
@@ -1003,14 +972,7 @@ export function applyExtraParamsToAgent(
     modelId,
     agentId,
   });
-  const override =
-    extraParamsOverride && Object.keys(extraParamsOverride).length > 0
-      ? sanitizeExtraParamsRecord(
-          Object.fromEntries(
-            Object.entries(extraParamsOverride).filter(([, value]) => value !== undefined),
-          ),
-        )
-      : undefined;
+  const override = sanitizeExtraParamsOverride(extraParamsOverride);
   const effectiveExtraParams =
     options?.preparedExtraParams ??
     resolvePreparedExtraParams({

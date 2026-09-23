@@ -1,4 +1,3 @@
-// Slack plugin module implements action runtime behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
@@ -13,7 +12,10 @@ import {
 } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import {
+  createLazyRuntimeMethodBinder,
+  createLazyRuntimeModule,
+} from "openclaw/plugin-sdk/lazy-runtime";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -55,55 +57,39 @@ const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
 const SLACK_REACTION_RESULT_LIMIT = 100;
 
-type SlackActionsRuntimeModule = typeof import("./actions.js");
-
 const loadSlackActionsRuntime = createLazyRuntimeModule(() => import("./actions.js"));
+const bindSlackAction = createLazyRuntimeMethodBinder(loadSlackActionsRuntime);
 
 const loadSlackAccountsRuntime = createLazyRuntimeModule(() => import("./accounts.runtime.js"));
 const loadSlackChannelTypeRuntime = createLazyRuntimeModule(() => import("./channel-type.js"));
-
-function createLazySlackAction<K extends keyof SlackActionsRuntimeModule>(
-  key: K,
-): SlackActionsRuntimeModule[K] {
-  return (async (...args: unknown[]) => {
-    const runtime = await loadSlackActionsRuntime();
-    const action = runtime[key] as (...actionArgs: unknown[]) => unknown;
-    return action(...args);
-  }) as SlackActionsRuntimeModule[K];
-}
+const bindSlackChannelType = createLazyRuntimeMethodBinder(loadSlackChannelTypeRuntime);
 
 export const slackActionRuntime = {
-  deleteSlackMessage: createLazySlackAction("deleteSlackMessage"),
-  downloadSlackFile: createLazySlackAction("downloadSlackFile"),
-  editSlackMessage: createLazySlackAction("editSlackMessage"),
-  getSlackMemberInfo: createLazySlackAction("getSlackMemberInfo"),
-  listSlackEmojis: createLazySlackAction("listSlackEmojis"),
-  listSlackPins: createLazySlackAction("listSlackPins"),
-  listSlackReactions: createLazySlackAction("listSlackReactions"),
-  openSlackConversation: createLazySlackAction("openSlackConversation"),
+  deleteSlackMessage: bindSlackAction((runtime) => runtime.deleteSlackMessage),
+  downloadSlackFile: bindSlackAction((runtime) => runtime.downloadSlackFile),
+  editSlackMessage: bindSlackAction((runtime) => runtime.editSlackMessage),
+  getSlackMemberInfo: bindSlackAction((runtime) => runtime.getSlackMemberInfo),
+  listSlackEmojis: bindSlackAction((runtime) => runtime.listSlackEmojis),
+  listSlackPins: bindSlackAction((runtime) => runtime.listSlackPins),
+  listSlackReactions: bindSlackAction((runtime) => runtime.listSlackReactions),
+  openSlackConversation: bindSlackAction((runtime) => runtime.openSlackConversation),
   parseSlackBlocksInput,
-  pinSlackMessage: createLazySlackAction("pinSlackMessage"),
-  reactSlackMessage: createLazySlackAction("reactSlackMessage"),
-  readSlackMessages: createLazySlackAction("readSlackMessages"),
-  removeOwnSlackReactions: createLazySlackAction("removeOwnSlackReactions"),
-  removeSlackReaction: createLazySlackAction("removeSlackReaction"),
-  resolveSlackConversationName: createLazySlackAction("resolveSlackConversationName"),
-  resolveSlackConversationInfo: async (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    channelId: string;
-    teamId?: string;
-    operation?: "read" | "write";
-    requireFreshName?: boolean;
-    assertDirectAdapterHandoff?: () => void;
-  }) => (await loadSlackChannelTypeRuntime()).resolveSlackConversationInfo(params),
+  pinSlackMessage: bindSlackAction((runtime) => runtime.pinSlackMessage),
+  reactSlackMessage: bindSlackAction((runtime) => runtime.reactSlackMessage),
+  readSlackMessages: bindSlackAction((runtime) => runtime.readSlackMessages),
+  removeOwnSlackReactions: bindSlackAction((runtime) => runtime.removeOwnSlackReactions),
+  removeSlackReaction: bindSlackAction((runtime) => runtime.removeSlackReaction),
+  resolveSlackConversationName: bindSlackAction((runtime) => runtime.resolveSlackConversationName),
+  resolveSlackConversationInfo: bindSlackChannelType(
+    (runtime) => runtime.resolveSlackConversationInfo,
+  ),
   resolveSlackChannelType: async (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
     channelId: string;
   }) => (await loadSlackChannelTypeRuntime()).resolveSlackChannelType(params),
-  sendSlackMessage: createLazySlackAction("sendSlackMessage"),
-  unpinSlackMessage: createLazySlackAction("unpinSlackMessage"),
+  sendSlackMessage: bindSlackAction((runtime) => runtime.sendSlackMessage),
+  unpinSlackMessage: bindSlackAction((runtime) => runtime.unpinSlackMessage),
 };
 
 export type { SlackActionContext } from "./action-context.js";

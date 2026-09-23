@@ -79,12 +79,15 @@ export const UpdateAvailableSchema = closedObject({
   currentSha: Type.Optional(NonEmptyString),
   upstreamRef: Type.Optional(NonEmptyString),
   upstreamSha: Type.Optional(NonEmptyString),
+  repositoryUrl: Type.Optional(NonEmptyString),
   commitsBehind: Type.Optional(Type.Integer({ minimum: 0 })),
   commits: Type.Optional(Type.Array(UpdateCommitSchema, { maxItems: 5 })),
 });
 
 const GitInstallMetadataProperties = {
   currentSha: Type.Optional(NonEmptyString),
+  upstreamSha: Type.Optional(NonEmptyString),
+  repositoryUrl: Type.Optional(NonEmptyString),
   commitAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   installedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
 } as const;

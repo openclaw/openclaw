@@ -28,7 +28,7 @@ import {
   withPluginRegistrationContext,
 } from "../../plugins/runtime.js";
 import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import * as agentDatabases from "../../state/openclaw-agent-db.js";
 import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
@@ -124,10 +124,18 @@ let onInternalSessionTranscriptUpdate: typeof import("../../sessions/transcript-
 let diagnosticEvents: typeof import("../../infra/diagnostic-events.js");
 let diagnosticRunActivity: typeof import("../../logging/diagnostic-run-activity.js");
 
+async function cleanupCompactionFixture(directory?: string): Promise<void> {
+  await agentDatabases.closeOpenClawAgentDatabasesAsync();
+  agentDatabases.closeOpenClawAgentDatabasesForTest();
+  if (directory) {
+    await rm(directory, { force: true, recursive: true });
+  }
+}
+
 // Target resolution still reads real SQLite metadata even when compaction is mocked.
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
+  afterEach(async () => {
+    await cleanupCompactionFixture();
     cleanup();
   }),
 );
@@ -1652,7 +1660,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     );
   });
 
-  it("maps logical Ultra to max before compaction provider hooks", async () => {
+  it("maps logical Ultra to supported effort before compaction provider hooks", async () => {
     const resolveExtraParams = vi.fn(() => undefined);
     await compactTesting.prepareCompactionSessionAgent({
       session: {
@@ -1680,7 +1688,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
 
     expect(resolveExtraParams).toHaveBeenCalledWith(
-      expect.objectContaining({ thinkingLevel: "max" }),
+      expect.objectContaining({ thinkingLevel: "high" }),
     );
     expect(applyExtraParamsToAgentMock).toHaveBeenCalledWith(
       expect.anything(),
@@ -1688,7 +1696,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       "openai",
       "gpt-5.6-sol",
       undefined,
-      "max",
+      "high",
       "main",
       join(TEST_WORKSPACE_DIR, "workspace"),
       expect.anything(),
@@ -2327,7 +2335,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
               settingsManager,
               resourceLoader: createResourceLoader(extension.handlers),
             });
-            created.session.setThinkingLevel(thinkingLevel ?? "off");
+            await created.session.setThinkingLevel(thinkingLevel ?? "off");
             return created;
           },
         );
@@ -2560,7 +2568,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       createAgentSessionMock.mock.calls.map(
         (call) => (call[0] as { thinkingLevel?: string }).thinkingLevel,
       ),
-    ).toEqual(["ultra", "high"]);
+    ).toEqual(["max", "high"]);
     expect(params.thinkLevel).toBe("ultra");
   });
 
@@ -2786,16 +2794,16 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(resolveAgentHarnessPolicyMock).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "openai", modelId: "fake-model" }),
     );
-    expect(selectAgentHarnessForPreparedModelProvidersMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelProviders: expect.arrayContaining([
-          expect.objectContaining({
-            preparedAuth: expect.objectContaining({ source: "profile" }),
-            runtimePolicy: expect.objectContaining({ compatibleIds: ["openclaw", "codex"] }),
+    expectRecordFields(mockCallArg(selectAgentHarnessForPreparedModelProvidersMock), {
+      modelProviders: expect.arrayContaining([
+        expect.objectContaining({
+          preparedAuth: expect.objectContaining({ source: "profile" }),
+          runtimePolicy: expect.objectContaining({
+            compatibleIds: ["openclaw", "codex", "agentsapi"],
           }),
-        ]),
-      }),
-    );
+        }),
+      ]),
+    });
     expect(mockCallArg(resolveModelMock)).toBe("openai");
     expectRecordFields(mockCallArg(resolveContextWindowInfoMock), {
       provider: "openai",
@@ -4030,8 +4038,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       expectRecordFields(mockCallArg(hookRunner.runBeforeCompaction, 0, 1), { sessionKey });
       expectRecordFields(mockCallArg(hookRunner.runAfterCompaction, 0, 1), { sessionKey });
     } finally {
-      closeOpenClawAgentDatabasesForTest();
-      await rm(dir, { force: true, recursive: true });
+      await cleanupCompactionFixture(dir);
     }
   });
 
@@ -5191,8 +5198,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       );
       expect(resolveContextEngineMock).not.toHaveBeenCalled();
     } finally {
-      closeOpenClawAgentDatabasesForTest();
-      await rm(agentDir, { force: true, recursive: true });
+      await cleanupCompactionFixture(agentDir);
     }
   });
 
@@ -5262,7 +5268,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       expect(resolveContextEngineMock).not.toHaveBeenCalled();
       expect(isEmbeddedAgentRunHandleActive(TEST_SESSION_ID)).toBe(false);
     } finally {
-      closeOpenClawAgentDatabasesForTest();
+      await cleanupCompactionFixture();
     }
   });
 
@@ -5322,8 +5328,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       });
       expect(runCliAgentMock).not.toHaveBeenCalled();
     } finally {
-      closeOpenClawAgentDatabasesForTest();
-      await rm(agentDir, { force: true, recursive: true });
+      await cleanupCompactionFixture(agentDir);
     }
   });
 
@@ -5388,8 +5393,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         },
       );
     } finally {
-      closeOpenClawAgentDatabasesForTest();
-      await rm(agentDir, { force: true, recursive: true });
+      await cleanupCompactionFixture(agentDir);
     }
   });
 
@@ -6269,8 +6273,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       expect(acquireAgentRunPreparedModelRuntimeMock).not.toHaveBeenCalled();
       expect(contextEngineCompactMock).not.toHaveBeenCalled();
     } finally {
-      closeOpenClawAgentDatabasesForTest();
-      await rm(agentDir, { force: true, recursive: true });
+      await cleanupCompactionFixture(agentDir);
     }
   });
 
@@ -6899,8 +6902,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       ).rejects.toThrow("successor target changed the active session binding");
       expect(contextEngineCompactMock).toHaveBeenCalledOnce();
     } finally {
-      closeOpenClawAgentDatabasesForTest();
-      await rm(dir, { force: true, recursive: true });
+      await cleanupCompactionFixture(dir);
     }
   });
 
@@ -6935,8 +6937,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       ).rejects.toThrow("successor identity is inconsistent");
       expect(contextEngineCompactMock).toHaveBeenCalledOnce();
     } finally {
-      closeOpenClawAgentDatabasesForTest();
-      await rm(dir, { force: true, recursive: true });
+      await cleanupCompactionFixture(dir);
     }
   });
 
@@ -7046,8 +7047,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         }),
       });
     } finally {
-      closeOpenClawAgentDatabasesForTest();
-      await rm(dir, { force: true, recursive: true });
+      await cleanupCompactionFixture(dir);
     }
   });
 

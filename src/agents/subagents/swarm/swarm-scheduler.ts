@@ -18,6 +18,7 @@ type SwarmLaunch = {
   /** Release preparation only after an abandoned launch can no longer use it. */
   onRemoved?: (reason: SwarmRemovalReason) => Promise<void>;
   lifecycleOwner?: object;
+  signal?: AbortSignal;
 };
 
 type QueuedSwarmRun = {
@@ -28,6 +29,8 @@ type QueuedSwarmRun = {
   launch?: SwarmLaunch;
   pendingLaunch?: Promise<void>;
   removal?: Promise<void>;
+  callbackWork?: AsyncWorkScope;
+  removeAbortListener?: () => void;
   holds: number;
   retryReady: boolean;
 };
@@ -42,17 +45,30 @@ type SwarmGroupLane = {
 
 function bindSwarmLaunchWork<Args extends unknown[], Result>(
   run: (...args: Args) => Result | Promise<Result>,
+  owner?: QueuedSwarmRun,
 ): (...args: Args) => Promise<Result> {
   // Keep activation identity without re-entering its retired request's work scope.
   return AsyncLocalStorage.bind(async (...args: Args) => {
     const work = new AsyncWorkScope();
+    if (owner) {
+      owner.callbackWork = work;
+      if (owner.removal) {
+        work.beginClose();
+      }
+    }
     try {
       return await work.track(() => run(...args));
     } finally {
-      await AsyncWorkScope.runWhenAllIdle(
-        () => [work],
-        () => work.run(() => work.drain()),
-      );
+      try {
+        await AsyncWorkScope.runWhenAllIdle(
+          () => [work],
+          () => work.run(() => work.drain()),
+        );
+      } finally {
+        if (owner?.callbackWork === work) {
+          owner.callbackWork = undefined;
+        }
+      }
     }
   });
 }
@@ -90,6 +106,8 @@ function finalizeRemovedRun(
   item: QueuedSwarmRun,
   reason: SwarmRemovalReason = "cancelled",
 ): Promise<void> {
+  item.removeAbortListener?.();
+  item.removeAbortListener = undefined;
   const onRemoved = item.launch?.onRemoved;
   if (item.launch && !item.removal) {
     pendingRemovals.add(item);
@@ -102,6 +120,8 @@ function finalizeRemovedRun(
     };
     // A retained launch can finish after its triggering request's work scope closes.
     item.removal = getAsyncWorkSignal()?.aborted ? cleanup() : trackAsyncWork(cleanup);
+    // Retire claim waits now; removal still joins the admitted launch and its physical tails.
+    item.callbackWork?.beginClose();
     void item.removal.then(
       () => pendingRemovals.delete(item),
       (error: unknown) => {
@@ -113,6 +133,8 @@ function finalizeRemovedRun(
 }
 
 async function startQueuedRun(lane: SwarmGroupLane, item: QueuedSwarmRun, launch: SwarmLaunch) {
+  item.removeAbortListener?.();
+  item.removeAbortListener = undefined;
   lane.active.add(item.runId);
   runLocations.set(item.runId, { lane, state: "active", item });
   publishCapacityChange(item);
@@ -142,6 +164,10 @@ async function startQueuedRun(lane: SwarmGroupLane, item: QueuedSwarmRun, launch
     lane.queue.unshift(item);
     runLocations.set(item.runId, { lane, state: "queued", item });
     publishLaneCapacityChange(lane, previouslyFull);
+    bindSwarmLaunchSignal(item, launch.signal);
+    if (runLocations.get(item.runId)?.item !== item) {
+      return;
+    }
     const timer = setTimeout(
       () => {
         item.retryReady = true;
@@ -153,6 +179,25 @@ async function startQueuedRun(lane: SwarmGroupLane, item: QueuedSwarmRun, launch
       isFastTestRuntimeEnv() ? 1 : 1_000,
     );
     timer.unref?.();
+  }
+}
+
+function bindSwarmLaunchSignal(item: QueuedSwarmRun, signal?: AbortSignal): void {
+  item.removeAbortListener?.();
+  item.removeAbortListener = undefined;
+  if (!signal) {
+    return;
+  }
+  const abort = () => {
+    const location = runLocations.get(item.runId);
+    if (location?.state === "queued" && location.item === item) {
+      removeQueuedSwarmRun(item.runId);
+    }
+  };
+  item.removeAbortListener = () => signal.removeEventListener("abort", abort);
+  signal.addEventListener("abort", abort, { once: true });
+  if (signal.aborted) {
+    abort();
   }
 }
 
@@ -278,11 +323,13 @@ export function activateSwarmRun(
   const onRemoved = params.onRemoved;
   // Capacity can be released by another run or Stop; callbacks keep their activation owner.
   item.launch = {
-    start: bindSwarmLaunchWork(params.start),
-    onStartFailure: bindSwarmLaunchWork(params.onStartFailure),
+    start: bindSwarmLaunchWork(params.start, item),
+    onStartFailure: bindSwarmLaunchWork(params.onStartFailure, item),
     onRemoved: onRemoved && bindSwarmLaunchWork(onRemoved),
     lifecycleOwner: params.lifecycleOwner,
+    signal: params.signal,
   };
+  bindSwarmLaunchSignal(item, params.signal);
   publishCapacityChange(item);
   pumpLane(lane);
 }
@@ -374,6 +421,7 @@ export function holdQueuedSwarmRun(runId: string) {
   publishCapacityChange(item);
   let released = false;
   return {
+    isCurrent: () => !released && runLocations.get(runId) === location,
     async release() {
       if (!released) {
         released = true;
@@ -395,6 +443,9 @@ export function holdQueuedSwarmRun(runId: string) {
 
 const testing = {
   reset() {
+    for (const location of runLocations.values()) {
+      location.item?.removeAbortListener?.();
+    }
     lanes.clear();
     runLocations.clear();
     pendingRemovals.clear();

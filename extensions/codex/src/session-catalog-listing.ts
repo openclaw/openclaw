@@ -51,10 +51,18 @@ export function createCodexSessionCatalogNodeHostCommands(
       throw new CatalogParamsError("Codex session catalog parameters must be an object");
     }
     const agentId = readBoundedOptionalString(parsed, "agentId", MAX_SESSION_ID_LENGTH);
+    const sourceHomeId = readBoundedOptionalString(parsed, "sourceHomeId", MAX_SESSION_ID_LENGTH);
+    const source = await controlFactory.forNode(agentId);
+    if (sourceHomeId && sourceHomeId !== source.sourceHomeId) {
+      throw new CatalogParamsError(
+        "Codex catalog source home changed. Reopen the session from the catalog.",
+      );
+    }
     const request = { ...parsed };
     delete request.agentId;
+    delete request.sourceHomeId;
     return {
-      ...(await controlFactory.forNode(agentId)),
+      ...source,
       params: request,
       paramsJSON: JSON.stringify(request),
     };
@@ -94,7 +102,11 @@ export function createCodexSessionCatalogNodeHostCommands(
               : {}),
             searchTerm: pageParams.searchTerm,
           });
-          return JSON.stringify(page);
+          return JSON.stringify({
+            ...page,
+            sourceHomeId: request.sourceHomeId,
+            canContinueCodex: request.transport === "stdio",
+          });
         } catch {
           // App-server stderr and transport details stay on the node boundary.
           throw new Error("Codex app-server catalog is unavailable");
@@ -201,6 +213,7 @@ export async function readCodexSessionTranscript(params: {
   control: CodexSessionCatalogControl;
   hostId: string;
   threadId: string;
+  sourceHomeId?: string;
   cursor?: string;
   limit: number;
   source?: CodexCatalogHome;
@@ -245,6 +258,7 @@ export async function readCodexSessionTranscript(params: {
         params: {
           agentId: params.agentId,
           threadId: params.threadId,
+          ...(params.sourceHomeId ? { sourceHomeId: params.sourceHomeId } : {}),
           ...request,
         },
         timeoutMs: NODE_INVOKE_TIMEOUT_MS,

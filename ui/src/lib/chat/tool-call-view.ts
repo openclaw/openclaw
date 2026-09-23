@@ -8,7 +8,7 @@
 
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
-import { resolveExecTitle } from "../../../../src/agents/tool-display-exec.js";
+import { resolveExecCode, resolveExecTitle } from "../../../../src/agents/tool-display-exec.js";
 import {
   buildWriteDiffLines,
   computeLineDiff,
@@ -199,36 +199,30 @@ function resolvePatchView(args: Record<string, unknown> | null): ToolCallView | 
   if (!patch) {
     return null;
   }
+  const view: ToolCallView = {
+    kind: "edit",
+    fileOperations: patch.fileOperations,
+    diff: patch.lines,
+    stat: patch.stat,
+  };
   if (patch.paths.length > 1) {
-    return {
-      kind: "edit",
-      target: `${patch.paths.length} files`,
-      fileOperations: patch.fileOperations,
-      diff: patch.lines,
-      stat: patch.stat,
-    };
+    return { ...view, target: `${patch.paths.length} files` };
   }
   if (patch.move) {
     const from = splitPathForDisplay(patch.move.from);
     const to = splitPathForDisplay(patch.move.to);
     const commonDir = from.dir === to.dir ? from.dir : undefined;
     return {
-      kind: "edit",
+      ...view,
       target: commonDir ? `${from.base} → ${to.base}` : `${patch.move.from} → ${patch.move.to}`,
       targetDetail: commonDir,
-      fileOperations: patch.fileOperations,
-      diff: patch.lines,
-      stat: patch.stat,
     };
   }
   const pathParts = patch.paths[0] ? splitPathForDisplay(patch.paths[0]) : null;
   return {
-    kind: "edit",
+    ...view,
     target: pathParts?.base,
     targetDetail: pathParts?.dir,
-    fileOperations: patch.fileOperations,
-    diff: patch.lines,
-    stat: patch.stat,
   };
 }
 
@@ -250,15 +244,6 @@ function resolveTextEditorCommand(args: unknown): TextEditorCommand | undefined 
     default:
       return undefined;
   }
-}
-
-export function resolveToolCallTargetPaths(name: string, args?: unknown): string[] {
-  const record = asRecord(args);
-  if (PATCH_TOOL_NAMES.has(normalizeKey(name))) {
-    return parsePatchView(record)?.paths ?? [];
-  }
-  const path = resolvePathArg(record);
-  return path ? [path] : [];
 }
 
 function resolveToolCallKind(name: string, args?: unknown): ToolCallKind {
@@ -355,61 +340,48 @@ function buildToolCallView(
       kind,
       title: COMMAND_TOOL_NAMES.has(key) ? resolveExecTitle(args) : undefined,
       command: command ? unwrapShellWrapperCommand(command) : command,
-      code: args ? readNonBlankString(args.code) : undefined,
+      code: resolveExecCode(args),
     };
   }
 
-  if (kind === "read") {
-    const path = resolvePathArg(args);
-    if (!path) {
-      return { kind: "generic" };
-    }
-    const { base, dir } = splitPathForDisplay(path);
-    return { kind, target: base, targetDetail: dir };
+  if (kind === "edit" && PATCH_TOOL_NAMES.has(key)) {
+    return resolvePatchView(args) ?? { kind: "generic" };
   }
 
-  if (kind === "edit") {
-    if (PATCH_TOOL_NAMES.has(key)) {
-      return resolvePatchView(args) ?? { kind: "generic" };
-    }
+  if (kind === "read" || kind === "edit" || kind === "write") {
     const path = resolvePathArg(args);
     if (!path) {
       return { kind: "generic" };
     }
     const { base, dir } = splitPathForDisplay(path);
-    const diff =
-      editorCommand === "insert"
-        ? resolveInsertionDiff(source, args)
-        : editorCommand === "undo_edit"
-          ? readDetailsDiff(source.details)
-          : resolveEditDiff(source);
-    return {
-      kind,
-      target: base,
-      targetDetail: dir,
-      ...(diff ? { diff: diff.lines, ...(diff.stat ? { stat: diff.stat } : {}) } : {}),
-    };
-  }
+    const view: ToolCallView = { kind, target: base, targetDetail: dir };
+    if (kind === "read") {
+      return view;
+    }
 
-  if (kind === "write") {
-    const path = resolvePathArg(args);
-    if (!path) {
-      return { kind: "generic" };
+    if (kind === "edit") {
+      const diff =
+        editorCommand === "insert"
+          ? resolveInsertionDiff(source, args)
+          : editorCommand === "undo_edit"
+            ? readDetailsDiff(source.details)
+            : resolveEditDiff(source);
+      return {
+        ...view,
+        ...(diff ? { diff: diff.lines, ...(diff.stat ? { stat: diff.stat } : {}) } : {}),
+      };
     }
-    const { base, dir } = splitPathForDisplay(path);
     const authoritativeDiff = readDetailsDiff(source.details);
     if (authoritativeDiff) {
       return {
-        kind,
-        target: base,
-        targetDetail: dir,
+        ...view,
         diff: authoritativeDiff.lines,
         ...(authoritativeDiff.stat ? { stat: authoritativeDiff.stat } : {}),
       };
     }
     const details = asRecord(source.details);
     if (details?.changed === false) {
-      return { kind, target: base, targetDetail: dir };
+      return view;
     }
     const content = args
       ? editorCommand === "create"
@@ -417,13 +389,11 @@ function buildToolCallView(
         : readNonBlankString(args.content)
       : undefined;
     if (!content) {
-      return { kind, target: base, targetDetail: dir };
+      return view;
     }
     const diff = buildWriteDiffLines(content);
     return {
-      kind,
-      target: base,
-      targetDetail: dir,
+      ...view,
       diff,
       // Present details need created=true before zero removals are authoritative.
       ...(details && details.created !== true

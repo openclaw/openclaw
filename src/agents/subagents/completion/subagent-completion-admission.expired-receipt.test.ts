@@ -122,6 +122,29 @@ describe("requester receipts after completion expiry", () => {
     ensureTaskRegistryReady();
   }
 
+  it("retains an admitted cleanup lock while publishing the requester receipt", () => {
+    const input = armRequesterWake(records());
+    input.subagent.cleanupCompletedAt = undefined;
+    input.subagent.delivery = { status: "pending", generation: 1 };
+    input.task.deliveryStatus = "pending";
+    settleSubagentCompletionDelivery({ ...input, databaseOptions: { database } });
+    subagentRuns.set(input.subagent.runId, input.subagent);
+    ensureTaskRegistryReady();
+    publishTaskRecordAfterAtomicStore(input.task);
+
+    settle(input, true);
+
+    expect(subagentRuns.get(input.subagent.runId)).toBe(input.subagent);
+    expect(input.subagent.cleanupHandled).toBe(true);
+    expect(input.subagent.cleanupCompletedAt).toBeUndefined();
+    expect(input.subagent.requesterSettleWake).toBeUndefined();
+    expect(input.subagent.delivery?.status).toBe("delivered");
+    reopen();
+    // Process-local custody cannot survive a restart without durable completion.
+    expect(subagentRuns.get(input.subagent.runId)?.cleanupHandled).toBe(false);
+    expect(subagentRuns.get(input.subagent.runId)?.delivery?.status).toBe("delivered");
+  });
+
   it.each([undefined, "parent"] as const)(
     "records a successful requester wake after expiry (target=%s)",
     async (completionTarget) => {

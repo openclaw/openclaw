@@ -2,9 +2,10 @@ import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
+import { BUILTIN_THEME_IDS } from "../../../packages/gateway-protocol/src/theme-ids.ts";
 import "../test-helpers/load-styles.ts";
 import { resolveTheme, syncThemePaletteStylesheet, type ThemeName } from "../app/theme.ts";
-import { THEME_TYPEFACES, TYPEFACES, syncTypefaceStylesheets } from "../app/typography.ts";
+import { TYPEFACES, resolveTypefaces, syncTypefaceStylesheets } from "../app/typography.ts";
 import {
   readAvatarGatewayContext,
   setAvatarGatewayOrigin,
@@ -81,7 +82,7 @@ async function applyTheme(theme: ThemeName, mode: "light" | "dark") {
   });
   document.documentElement.dataset.theme = resolveTheme(theme, mode);
   document.documentElement.dataset.themeMode = mode;
-  const typefaces = THEME_TYPEFACES[theme];
+  const typefaces = resolveTypefaces(theme);
   syncTypefaceStylesheets(typefaces);
   await expect
     .poll(
@@ -180,22 +181,20 @@ async function mountOwnerChip(params: {
 
 describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
   it.each(
-    (Object.keys(THEME_TYPEFACES) as ThemeName[])
-      .filter((theme) => theme !== "custom")
-      .flatMap((theme) =>
-        (["light", "dark"] as const).flatMap((mode) =>
-          (theme === "claw" ? [2, 3, 5, 12, 13] : [12]).flatMap((ownerCount) =>
-            (theme === "claw"
-              ? ["present", "running", "away", "unread"]
-              : ["present", "away"]
-            ).flatMap((presence) =>
-              (presence === "present" && ownerCount === 12 ? [false, true] : [false]).map(
-                (pinned) => ({ theme, mode, ownerCount, presence, pinned }),
-              ),
+    BUILTIN_THEME_IDS.flatMap((theme) =>
+      (["light", "dark"] as const).flatMap((mode) =>
+        (theme === "claw" ? [2, 3, 5, 12, 13] : [12]).flatMap((ownerCount) =>
+          (theme === "claw"
+            ? ["present", "running", "away", "unread"]
+            : ["present", "away"]
+          ).flatMap((presence) =>
+            (presence === "present" && ownerCount === 12 ? [false, true] : [false]).map(
+              (pinned) => ({ theme, mode, ownerCount, presence, pinned }),
             ),
           ),
         ),
       ),
+    ),
   )(
     "keeps $ownerCount owners in an equal pair in $theme $mode while $presence (pinned=$pinned)",
     async ({ theme, mode, ownerCount, presence, pinned }) => {

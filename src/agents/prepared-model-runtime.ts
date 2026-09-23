@@ -15,17 +15,17 @@ import {
   registerPreparedRuntimeAuthMaterializationPublisher,
 } from "./prepared-model-runtime-materializations.js";
 import { refreshPreparedModelRuntimeSnapshotsNow } from "./prepared-model-runtime.configured-refresh.js";
-import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import {
   capturePreparedModelRuntimeLifetime,
   closePreparedModelRuntimeSnapshots,
   registerPreparedModelRuntimeClose,
+  createPreparedModelRuntimeReplacement,
+  retirePreparedModelRuntimeGeneration,
 } from "./prepared-model-runtime.lifecycle.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
   advancePreparedModelRuntimeOwnerConfig,
-  createPreparedModelRuntimeReplacement,
   hasSameLifecycleInput,
   normalizeOptionalDir,
   normalizePreparedModelRuntimeInput,
@@ -33,7 +33,6 @@ import {
   publishPreparedModelRuntimeOwnerBatch,
   publishModelRuntimeSnapshot,
   rebindInputToCommittedConfiguredOwner,
-  resolvePreparedModelRuntimeOwnerBySnapshot,
   resolveConfiguredOwnerPublication,
   readPublishedModelRuntimeSnapshot,
   type PreparedModelRuntimeOwner,
@@ -53,6 +52,7 @@ import {
 import { PreparedModelRuntimePublicationQueue } from "./prepared-model-runtime.publication-queue.js";
 import {
   projectPublishedModelRuntimeOwner,
+  refreshPublishedModelRuntimeCatalog,
   retainPublishedModelRuntimeOwner,
 } from "./prepared-model-runtime.published-owner.js";
 import {
@@ -62,7 +62,10 @@ import {
   updateOwnersForScopedRefresh,
 } from "./prepared-model-runtime.refresh-scope.js";
 import { closeEphemeralPreparedModelRuntimeResources } from "./prepared-model-runtime.resources.js";
-import { PreparedModelRuntimeOwnerRetention } from "./prepared-model-runtime.retention.js";
+import {
+  acquireRetainedAgentRuntimeCleanupRegistries,
+  PreparedModelRuntimeOwnerRetention,
+} from "./prepared-model-runtime.retention.js";
 import { setPreparedModelRuntimeStartupStatus } from "./prepared-model-runtime.startup-status.js";
 import { PreparedModelRuntimeStartup } from "./prepared-model-runtime.startup.js";
 import type {
@@ -134,6 +137,7 @@ async function closeModelRuntime(error: Error): Promise<void> {
   void closeEphemeralPreparedModelRuntimeResources().catch(() => {});
   const closingOwners = [...owners.values()];
   owners.clear();
+  closingOwners.forEach(retirePreparedModelRuntimeGeneration);
   retainedDirectRunOwners.clear(owners);
   retainedGatewayRunOwners.clear(owners);
   gatewayLifecycleActive = false;
@@ -189,6 +193,14 @@ export async function acquirePreparedModelRuntimeSnapshot(
     rawInput,
     preparedModelRuntimeLeaseContext,
     retainPublishedModelRuntimeOwner,
+  );
+}
+
+/** Retains existing execution owners, including switched-away models, without loading plugins. */
+export async function acquireAgentRuntimeCleanupRegistries(agentDir: string) {
+  return await acquireRetainedAgentRuntimeCleanupRegistries(
+    normalizeOptionalDir(agentDir),
+    preparedModelRuntimeLeaseContext,
   );
 }
 
@@ -377,7 +389,6 @@ const preparedModelRuntimeLeaseContext = {
   getBuildTimeoutMs: () => modelRuntimeBuildTimeoutMs,
   getGatewayLifecycleActive: () => gatewayLifecycleActive,
   getPendingReplacement: getBlockingReplacement,
-  prepareSnapshot: prepareModelRuntimeSnapshot,
 };
 
 /** Acquires a run generation from configured facts; full catalog discovery is explicit. */
@@ -422,31 +433,7 @@ export async function refreshPreparedModelRuntimeCatalog(
   snapshot: PreparedModelRuntimeSnapshot,
   options: PreparedModelCatalogRefreshOptions = {},
 ): Promise<ModelCatalogSnapshot | undefined> {
-  const owner = resolvePreparedModelRuntimeOwnerBySnapshot(snapshot);
-  if (!owner || owners.get(ownerKey(owner.input)) !== owner || !snapshot.loadFullModelCatalog) {
-    return undefined;
-  }
-  const currentCatalog = snapshot.readFullModelCatalog?.() ?? snapshot.modelCatalog;
-  const refresh = options.refresh === true || owner.catalogStale;
-  if (
-    !refresh &&
-    !options.providerIds &&
-    !options.changedOnly &&
-    isPreparedModelCatalogFull(currentCatalog)
-  ) {
-    return undefined;
-  }
-  const generation = owner.generation;
-  const catalog = await snapshot.loadFullModelCatalog({ ...options, refresh });
-  if (
-    owner.catalogStale &&
-    !catalog.pendingProviders?.length &&
-    owner.generation === generation &&
-    owners.get(ownerKey(owner.input)) === owner
-  ) {
-    owner.catalogStale = false;
-  }
-  return catalog;
+  return await refreshPublishedModelRuntimeCatalog(snapshot, owners, options);
 }
 
 /** Invalidates every published generation before config/plugin runtime replacement. */
@@ -482,7 +469,11 @@ export function markPreparedModelRuntimeSnapshotsStale(
   });
   // Fence epochs and admission before cancellation can reenter a plugin callback.
   previousCancellation.abort(new PreparedModelRuntimePublicationSupersededError(reason));
-  notifyPreparedModelRuntimePublication({ phase: "invalidated" });
+  const replacement = getBlockingReplacement();
+  notifyPreparedModelRuntimePublication({
+    phase: "invalidated",
+    ...(replacement ? { replacement: replacement.promise } : {}),
+  });
   if (!pendingModelRuntimeReplacement) {
     notifyPreparedModelRuntimePublication({ phase: "failed", error: staleError });
   }
@@ -646,20 +637,20 @@ export function refreshPreparedModelRuntimeSnapshots(
       }
       throw refreshError;
     });
-  return startup ? startup.wait(publication) : publication;
+  return publicationQueue.complete(publication, isPublicationCurrent, options, startup);
 }
 
 async function drainPendingAuthMutations(commit?: () => void): Promise<void> {
   await authPublication.drain({
     owners,
-    publish: async (entries, includeCredentialProviders) =>
+    publish: async (ownersToPublish, includeCredentialProviders, reuseGenerations) =>
       await publishPreparedModelRuntimeOwnerBatch({
-        entries,
+        ownersToPublish,
         owners,
         agentBuildCompletions,
         buildTimeoutMs: modelRuntimeBuildTimeoutMs,
         ...(includeCredentialProviders ? { includeCredentialProviders: true } : {}),
-        reusePluginGenerations: true,
+        selectPluginGeneration: reuseGenerations ? (owner) => owner.pluginGeneration : undefined,
       }),
     publishOwners: (publishedOwners) => replyDispatchPublication.replace(publishedOwners),
     commit,

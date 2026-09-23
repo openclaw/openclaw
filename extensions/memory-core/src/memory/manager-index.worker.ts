@@ -1,4 +1,4 @@
-import { serveWorkerTasks } from "openclaw/plugin-sdk/process-runtime";
+import { serveWorkerTasks } from "openclaw/plugin-sdk/worker-task-server";
 import type { MemoryIndexTask, MemoryIndexTaskResult } from "./manager-cpu-worker-runtime.js";
 import { prepareMemoryIndexChunks } from "./manager-index-preparation.js";
 

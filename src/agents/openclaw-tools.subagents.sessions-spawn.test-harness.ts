@@ -17,8 +17,6 @@ type RunSubagentAnnounceFlow =
   (typeof import("./subagents/announce/subagent-announce.js"))["runSubagentAnnounceFlow"];
 type CreateSessionsSpawnTool =
   (typeof import("./tools/sessions-spawn-tool.js"))["createSessionsSpawnTool"];
-type SubagentRegistryTesting =
-  (typeof import("./subagents/registry/subagent-registry.test-helpers.js"))["testing"];
 type SubagentSpawnTesting =
   (typeof import("./subagents/spawn/subagent-spawn.test-support.js"))["testing"];
 type CreateOpenClawToolsOpts = Parameters<CreateSessionsSpawnTool>[0];
@@ -143,7 +141,6 @@ const hoisted = vi.hoisted(() => {
 });
 
 let cachedCreateSessionsSpawnTool: CreateSessionsSpawnTool | null = null;
-let cachedSubagentRegistryTesting: SubagentRegistryTesting | null = null;
 let cachedSubagentSpawnTesting: SubagentSpawnTesting | null = null;
 const sessionStorePath = path.join(
   os.tmpdir(),
@@ -201,14 +198,10 @@ export function setSessionsSpawnAnnounceFlowOverride(next: RunSubagentAnnounceFl
 
 export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
   // Lazily installs test deps before constructing the real sessions_spawn tool.
-  if (!cachedSubagentSpawnTesting || !cachedSubagentRegistryTesting) {
-    const [{ testing: subagentSpawnTesting }, { testing: subagentRegistryTesting }] =
-      await Promise.all([
-        import("./subagents/spawn/subagent-spawn.test-support.js"),
-        import("./subagents/registry/subagent-registry.test-helpers.js"),
-      ]);
+  if (!cachedSubagentSpawnTesting) {
+    const { testing: subagentSpawnTesting } =
+      await import("./subagents/spawn/subagent-spawn.test-support.js");
     cachedSubagentSpawnTesting = subagentSpawnTesting;
-    cachedSubagentRegistryTesting = subagentRegistryTesting;
   }
   cachedSubagentSpawnTesting.setDepsForTest({
     prepareModelChoice: supportedSpawnModelChoice,
@@ -243,29 +236,14 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
       },
     }),
   });
-  cachedSubagentRegistryTesting.setDepsForTest({
-    callGateway: (optsUnknown) => hoisted.callGatewayMock(optsUnknown),
-    getRuntimeConfig: () => hoisted.state.configOverride,
-    cleanupBrowserSessionsForLifecycleEnd: async () => {},
-    ensureContextEnginesInitialized: () => {},
-    loadAgentRuntimePluginRegistryHandle: () => undefined,
-    persistSubagentRunsToDisk: () => {
-      hoisted.notifyEventWaiters();
-    },
-    persistSubagentRunsToDiskOrThrow: () => {
-      hoisted.notifyEventWaiters();
-    },
-    restoreSubagentRunsFromDisk: () => 0,
-    resolveContextEngine: async () => ({
-      info: { id: "test", name: "Test" },
-      assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
-      compact: async () => ({ ok: true, compacted: false }),
-      ingest: async () => ({ ingested: false }),
-    }),
-    captureSubagentCompletionReply: (sessionKey) =>
-      hoisted.state.captureSubagentCompletionReplyOverride(sessionKey),
-    runSubagentAnnounceFlow: (params) => hoisted.state.runSubagentAnnounceFlowOverride(params),
-  });
+  const persistence = await import("./subagents/registry/subagent-registry-state.js");
+  vi.mocked(persistence.persistSubagentRunsToDisk).mockImplementation(hoisted.notifyEventWaiters);
+  vi.mocked(persistence.persistSubagentRunsToDiskOrThrow).mockImplementation(
+    hoisted.notifyEventWaiters,
+  );
+  vi.mocked(persistence.restoreSubagentRunsFromDisk).mockReturnValue(0);
+  // Prepare the async announcement mock before lifecycle assertions start waiting.
+  await import("./subagents/announce/subagent-announce.js");
   if (!cachedCreateSessionsSpawnTool) {
     ({ createSessionsSpawnTool: cachedCreateSessionsSpawnTool } =
       await import("./tools/sessions-spawn-tool.js"));
@@ -374,6 +352,40 @@ export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMoc
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => hoisted.callGatewayMock(opts),
 }));
+
+vi.mock("./subagents/registry/subagent-registry-state.js", { spy: true });
+vi.mock("../browser-lifecycle-cleanup.js", () => ({
+  cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
+}));
+vi.mock("../context-engine/init.js", () => ({ ensureContextEnginesInitialized: vi.fn() }));
+vi.mock("../context-engine/registry.js", () => ({
+  resolveContextEngine: vi.fn(async () => ({
+    info: { id: "test", name: "Test" },
+    assemble: async ({
+      messages,
+    }: Parameters<import("../context-engine/types.js").ContextEngine["assemble"]>[0]) => ({
+      messages,
+      estimatedTokens: 0,
+    }),
+    compact: async () => ({ ok: true, compacted: false }),
+    ingest: async () => ({ ingested: false }),
+  })),
+}));
+vi.mock("./runtime-plugins.js", async () => {
+  const { createEmptyPluginRegistry } = await import("../plugins/registry-empty.js");
+  return { loadAgentRuntimePluginRegistryHandle: vi.fn(() => createEmptyPluginRegistry()) };
+});
+vi.mock("./subagents/announce/subagent-announce.js", async (importOriginal) => {
+  const { hasUsableSessionEntry } =
+    await importOriginal<typeof import("./subagents/announce/subagent-announce.js")>();
+  return {
+    hasUsableSessionEntry,
+    captureSubagentCompletionReply: (sessionKey: Parameters<CaptureSubagentCompletionReply>[0]) =>
+      hoisted.state.captureSubagentCompletionReplyOverride(sessionKey),
+    runSubagentAnnounceFlow: (params: Parameters<RunSubagentAnnounceFlow>[0]) =>
+      hoisted.state.runSubagentAnnounceFlowOverride(params),
+  };
+});
 // Some tools import callGateway via "../../gateway/call.js" (from nested folders). Mock that too.
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => hoisted.callGatewayMock(opts),
@@ -413,12 +425,15 @@ vi.mock("../config/sessions.js", async () => ({
 }));
 
 vi.mock("../tasks/detached-task-runtime.js", () => ({
-  completeTaskRunByRunId: vi.fn(),
   createQueuedTaskRun: vi.fn(() => ({})),
   createRunningTaskRun: vi.fn(() => ({})),
-  failTaskRunByRunId: vi.fn(),
   findDetachedTaskRun: vi.fn(() => ({ lookup: "available" as const })),
-  setDetachedTaskDeliveryStatusByRunId: vi.fn(),
+}));
+
+vi.mock("../tasks/detached-task-runtime.async.js", () => ({
+  completeTaskRunByRunIdAsync: vi.fn(async () => []),
+  failTaskRunByRunIdAsync: vi.fn(async () => []),
+  setDetachedTaskDeliveryStatusByRunIdAsync: vi.fn(async () => []),
 }));
 
 // Same module, different specifier (used by tools under src/agents/tools/*).

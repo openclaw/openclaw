@@ -488,7 +488,6 @@ describe("frozen admission upgrade Docker aliases", () => {
     "live-cli-backend-claude",
     "live-cli-backend-gemini",
     "update-first-hop-compat",
-    "update-run-package-self-upgrade",
     "release-user-journey",
     "release-upgrade-user-journey",
   ])("keeps unselected upgrade contracts inert for %s", (lane) => {

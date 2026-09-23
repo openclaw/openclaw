@@ -37,6 +37,7 @@ describe("SessionRowSchema", () => {
       sharingRole: "owner",
       restartRecoveryStatus: "tombstoned",
       permissionMode: "workspace",
+      sandboxMode: "off",
       sessionRoot: "/workspace/project",
     };
     const roundTripped = structuredClone(row);
@@ -49,6 +50,7 @@ describe("SessionRowSchema", () => {
     expect(Value.Check(SessionRowSchema, roundTripped)).toBe(true);
     expect(Value.Check(SessionRowSchema, { key: "agent:main:main", kind: "global" })).toBe(true);
     expect(Value.Check(SessionRowSchema, { ...roundTripped, parentSessionId: 42 })).toBe(false);
+    expect(Value.Check(SessionRowSchema, { ...roundTripped, sandboxMode: "required" })).toBe(false);
     expect(Value.Check(SessionRowSchema, { ...roundTripped, activeLeafEntryId: null })).toBe(true);
     expect(
       Value.Check(SessionRowSchema, {

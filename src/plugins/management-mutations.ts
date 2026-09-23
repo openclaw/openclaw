@@ -189,7 +189,13 @@ export async function installManagedPlugin(
         enable: params.request.enable,
         snapshot,
         env,
-        logger: params.logger ?? { warn: (message) => warnings.push(message) },
+        logger: {
+          ...params.logger,
+          warn: (message) => {
+            warnings.push(message);
+            params.logger?.warn?.(message);
+          },
+        },
         onCapabilityConsent: params.onCapabilityConsent,
         beforePersistentEffect: params.beforePersistentEffect,
         ...(params.request.acknowledgeCapabilities

@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
@@ -21,13 +20,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import {
+  projectExistingAgentDatabaseTargets,
+  resolveTargetSqliteOptions,
+} from "../infra/session-sqlite-migration-readers.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
-  resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { resolveTargetSqliteOptions } from "./doctor-session-sqlite-readers.js";
 import { ReadOnlySqliteTranscriptReader } from "./doctor-session-sqlite-transcript-readers.js";
 
 const NOTE_TITLE = "Session transcript headers";
@@ -212,14 +213,13 @@ export async function noteSessionTranscriptHeaderHealth(params: {
   let found = 0;
   let repaired = 0;
 
-  const seenPaths = new Set<string>();
-  for (const target of resolveAllAgentSessionStoreTargetsSync(params.cfg, { env })) {
+  for (const target of projectExistingAgentDatabaseTargets(
+    resolveAllAgentSessionStoreTargetsSync(params.cfg, { env }),
+    env,
+    params.cfg,
+  )) {
     const databaseOptions = resolveTargetSqliteOptions(target, env);
-    const sqlitePath = resolveOpenClawAgentSqlitePath(databaseOptions);
-    if (seenPaths.has(sqlitePath) || !fs.existsSync(sqlitePath)) {
-      continue;
-    }
-    seenPaths.add(sqlitePath);
+    const sqlitePath = target.sqlitePath;
     let readDatabase: DatabaseSync | undefined;
     try {
       // Each snapshot exhausts or closes its iterators before repair, so this read-only

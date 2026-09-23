@@ -32,6 +32,7 @@ import { isRecord as isJsonRecord } from "../packages/normalization-core/src/rec
 import {
   decodePublicationDispatchEnvelope,
   normalizePublicationIntent,
+  normalizePublicationLaneInputs,
   publicationDispatchEnvelope,
   publicationIntentInputs,
 } from "./full-release-publication-contract.mjs";
@@ -854,7 +855,9 @@ function validateDispatchRecord(value: unknown): asserts value is DispatchRecord
     requireDispatch(
       !enveloped ||
         (!Object.hasOwn(request.inputs, "validation_purpose") &&
-          !Object.hasOwn(request.inputs, "publication_selection_json")),
+          !Object.hasOwn(request.inputs, "publication_selection_json") &&
+          !Object.hasOwn(request.inputs, "extension_test_exclude_patterns_json") &&
+          !Object.hasOwn(request.inputs, "known_flaky_jobs_json")),
       "Retained dispatch contains conflicting source intent representations",
     );
     requireDispatch(
@@ -995,7 +998,30 @@ function resolveDispatchSelection(workflowSha: string, overrides: Record<string,
     Object.keys(definitions).length <= 25,
     "Pinned workflow exceeds 25 dispatch inputs",
   );
-  const { validation_purpose, publication_selection_json, ...wireOverrides } = overrides;
+  const {
+    validation_purpose,
+    publication_selection_json,
+    extension_test_exclude_patterns_json,
+    known_flaky_jobs_json,
+    ...wireOverrides
+  } = overrides;
+  const laneInputs =
+    extension_test_exclude_patterns_json === undefined && known_flaky_jobs_json === undefined
+      ? undefined
+      : {
+          ...(extension_test_exclude_patterns_json !== undefined
+            ? { extension_test_exclude_patterns_json }
+            : {}),
+          ...(known_flaky_jobs_json !== undefined ? { known_flaky_jobs_json } : {}),
+        };
+  requireDispatch(
+    laneInputs === undefined || workflow.env.FULL_RELEASE_LANE_INPUTS_CONTRACT === "1",
+    `Tooling SHA ${workflowSha} does not support packed lane inputs; no remote refs or run were created. Keep the frozen Tooling SHA.`,
+  );
+  requireDispatch(
+    known_flaky_jobs_json === undefined || workflow.env.FULL_RELEASE_FLAKE_RETRY_CONTRACT === "1",
+    `Tooling SHA ${workflowSha} does not support declared flake retries; no remote refs or run were created. Keep the frozen Tooling SHA.`,
+  );
   const intent = normalizePublicationIntent(validation_purpose, publication_selection_json);
   requireDispatch(
     intent.validationPurpose !== "publish" ||
@@ -1005,6 +1031,7 @@ function resolveDispatchSelection(workflowSha: string, overrides: Record<string,
   wireOverrides.trusted_workflow_json = publicationDispatchEnvelope(
     JSON.parse(overrides.trusted_workflow_json || "null"),
     intent,
+    laneInputs,
   );
   requireDispatch(
     Object.keys(wireOverrides).every((key) => Object.hasOwn(definitions, key)),
@@ -1334,9 +1361,11 @@ async function reopenDispatch(path: string, args: ReturnType<typeof parseArgs>, 
   let retainedIntent: ReturnType<typeof publicationIntentInputs> | undefined;
   const rawIdentity = request.wireInputs.trusted_workflow_json;
   if (rawIdentity && Object.hasOwn(JSON.parse(rawIdentity), "trustedWorkflow")) {
-    retainedIntent = publicationIntentInputs(decodePublicationDispatchEnvelope(rawIdentity));
+    const envelope = decodePublicationDispatchEnvelope(rawIdentity);
+    retainedIntent = publicationIntentInputs(envelope);
     retainedInputs = {
       ...retainedInputs,
+      ...envelope.laneInputs,
       validation_purpose: retainedIntent.validationPurpose,
       publication_selection_json: retainedIntent.publicationSelectionJson,
     };
@@ -1352,7 +1381,10 @@ async function reopenDispatch(path: string, args: ReturnType<typeof parseArgs>, 
           ? publicationIntentInputs(
               normalizePublicationIntent(retainedIntent.validationPurpose, args.inputs[key]),
             ).publicationSelectionJson === retainedIntent.publicationSelectionJson
-          : args.inputs[key] === retainedInputs[key],
+          : key === "extension_test_exclude_patterns_json" || key === "known_flaky_jobs_json"
+            ? normalizePublicationLaneInputs({ [key]: args.inputs[key] })[key] ===
+              retainedInputs[key]
+            : args.inputs[key] === retainedInputs[key],
       ),
     "Reopen arguments conflict with the retained request",
   );

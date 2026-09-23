@@ -159,9 +159,12 @@ describe("CronService failure notification delivery", () => {
       });
 
       await cron.run(job.id, "force");
+      expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+      await expect(sendCronFailureAlert.mock.results[0]?.value).rejects.toThrow(
+        "failure alert channel unavailable",
+      );
       await vi.advanceTimersByTimeAsync(1);
 
-      expect(sendCronFailureAlert).toHaveBeenCalledOnce();
       expect(peekSystemEventEntries(testCase.sessionKey)).toHaveLength(1);
       expect(runOnce).toHaveBeenCalledTimes(testCase.wakesNow ? 1 : 0);
       if (testCase.wakesNow) {

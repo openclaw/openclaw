@@ -25,6 +25,7 @@ import {
   isCodexNotificationForTurn,
   readCodexNotificationThreadId,
 } from "./notification-correlation.js";
+import { CODEX_APP_SERVER_OPT_OUT_NOTIFICATION_METHODS } from "./notification-policy.js";
 import type { CodexApprovalKind } from "./plugin-approval-roundtrip.js";
 import { readCodexTurnCompletedNotification } from "./protocol-validators.js";
 import {
@@ -36,6 +37,8 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+
+const optedOutNotificationMethods = new Set<string>(CODEX_APP_SERVER_OPT_OUT_NOTIFICATION_METHODS);
 
 export class CodexAppServerEventProjector extends CodexTurnProjection {
   getCompletedTurnStatus(): CodexTurn["status"] | undefined {
@@ -244,25 +247,27 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
         this.terminalFailure.record({
           message: readCodexErrorNotificationMessage(params),
           codexErrorInfo,
+          misalignment: isJsonObject(params.error) ? params.error.misalignment : undefined,
+          nativeThreadId: this.threadId,
+          nativeTurnId: this.turnId,
           rateLimits: this.options.readRecentRateLimits?.(),
           fallbackMessage: "codex app-server error",
           promptErrorSource: compactionFailure ? "compaction" : "prompt",
         });
         break;
       }
-      case "thread/compacted":
       case "turn/started":
-      case "turn/diff/updated":
       case "item/reasoning/summaryPartAdded":
       case "item/commandExecution/terminalInteraction":
-      case "item/fileChange/outputDelta":
       case "item/fileChange/patchUpdated":
       case "item/mcpToolCall/progress":
       case "model/verification":
       case "turn/moderationMetadata":
         break;
       default:
-        this.diagnostics.warnUnknownEvent(notification, params);
+        if (!optedOutNotificationMethods.has(notification.method)) {
+          this.diagnostics.warnUnknownEvent(notification, params);
+        }
         break;
     }
     if (
@@ -527,6 +532,9 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       this.terminalFailure.record({
         message: turn.error?.message,
         codexErrorInfo,
+        misalignment: turn.error?.misalignment,
+        nativeThreadId: this.threadId,
+        nativeTurnId: this.turnId,
         rateLimits: this.options.readRecentRateLimits?.(),
         fallbackMessage: "codex app-server turn failed",
         promptErrorSource: compactionFailure ? "compaction" : "prompt",

@@ -1636,7 +1636,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
         expect(fixture.request.mock.calls.some(([method]) => method === "thread/start")).toBe(
           false,
         );
-        expect(fixture.notifications).toEqual(handlers);
+        expect([...fixture.notifications]).toEqual(handlers);
       } finally {
         fixture.close();
       }

@@ -11,7 +11,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
-import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import {
   createCodexRuntimePlanFixture,
   createParams,
@@ -42,10 +42,8 @@ describe("Codex workspace instruction snapshots", () => {
       const updatedGuidance = "Later workspace changes wait for a new session.";
       await fs.mkdir(agentWorkspaceDir, { recursive: true });
       await fs.writeFile(path.join(agentWorkspaceDir, "AGENTS.md"), initialGuidance);
-      dynamicToolBuildState.openClawCodingToolsFactory = () => [
-        createRuntimeDynamicTool("memory_get"),
-      ];
       const params = createParams(sessionFile, executionDir);
+      setCodexTestToolFactory(params, () => [createRuntimeDynamicTool("memory_get")]);
       params.disableTools = false;
       params.runtimePlan = createCodexRuntimePlanFixture();
       params.bootstrapWorkspaceDir = agentWorkspaceDir;

@@ -23,11 +23,11 @@ export { cloneEnvWithPlatformSemantics } from "../../../../src/config/config-env
 /** Keep worker launch machinery behind the memory host's existing lazy runtime bridge. */
 export async function prepareSessionEntryInWorker(
   ...args: Parameters<
-    typeof import("../../../../src/config/sessions/session-transcript-worker-runtime.js").prepareSessionEntryInWorker
+    typeof import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js").prepareSessionEntryInWorker
   >
 ) {
   const { prepareSessionEntryInWorker: prepare } =
-    await import("../../../../src/config/sessions/session-transcript-worker-runtime.js");
+    await import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js");
   return prepare(...args);
 }
 

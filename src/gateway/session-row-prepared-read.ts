@@ -6,6 +6,8 @@ import * as records from "./session-row-projection-record.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 
+export type SessionRowPreparationOptions = { includeAncestors?: boolean };
+
 export type SessionRowReadView = {
   describe(query: records.Lookup, captured?: records.Row): records.MaterializedRow | undefined;
   present(
@@ -13,7 +15,11 @@ export type SessionRowReadView = {
     options?: records.SnapshotOptions,
   ): ReturnType<typeof records.present>;
   selectEntries(query: { key: string }): records.EntryRow[];
-  readonly state: { cfg: OpenClawConfig; rowContext: SessionListRowContext };
+  readonly state: {
+    cfg: OpenClawConfig;
+    policyConfig: OpenClawConfig;
+    rowContext: SessionListRowContext;
+  };
 };
 
 export async function withPreparedSessionRows<T>(
@@ -29,6 +35,30 @@ export async function withPreparedSessionRows<T>(
     const state = owner.state;
     return consumePreparedSessionRows(owner, isActive, queries(state.cfg), consume, state);
   });
+}
+
+/** Reenter the same synchronous consumer after canonical readiness finishes. */
+export async function withReadySessionRows<T>(
+  owner: {
+    withPreparedExactRows<U>(
+      queries: (config: OpenClawConfig) => readonly records.Lookup[],
+      consume: (read: SessionRowReadView) => U,
+      options?: SessionRowPreparationOptions,
+    ): ReturnType<typeof withPreparedSessionRows<U>>;
+  },
+  queries: (config: OpenClawConfig) => readonly records.Lookup[],
+  consume: (read: SessionRowReadView) => T,
+  options?: SessionRowPreparationOptions,
+): Promise<T> {
+  while (true) {
+    const prepared = await owner.withPreparedExactRows(queries, consume, options);
+    if (prepared.kind === "complete") {
+      return prepared.value;
+    }
+    const { certifySessionCanonicalValidationPending } =
+      await import("../config/sessions/session-canonical-validation-readiness.js");
+    await certifySessionCanonicalValidationPending(prepared.database);
+  }
 }
 
 /** Private rows belong only to this synchronous consumer, never to the resident roster. */
@@ -71,7 +101,11 @@ function consumePreparedSessionRows<T>(
   }
   // Targeted materialization may refresh the owner's metadata context. Capture its final facts.
   const preparedState = owner.state;
-  state = { cfg: preparedState.cfg, rowContext: preparedState.rowContext };
+  state = {
+    cfg: preparedState.cfg,
+    policyConfig: preparedState.policyConfig,
+    rowContext: preparedState.rowContext,
+  };
   let active = true;
   const assertActive = () => {
     if (!active || !isActive()) {

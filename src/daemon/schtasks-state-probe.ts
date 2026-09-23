@@ -1,5 +1,6 @@
 /** Locale-independent Task Scheduler registration and runtime facts. */
 import { spawnSync } from "node:child_process";
+import { resolvePositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasErrnoCode } from "../infra/errno.js";
 import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
@@ -20,8 +21,7 @@ export function probeScheduledTaskState(
   taskName: string,
   timeoutMs?: number,
 ): ScheduledTaskStateProbe {
-  const probeTimeoutMs =
-    timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 5_000;
+  const probeTimeoutMs = resolvePositiveTimerTimeoutMs(timeoutMs, 5_000);
   const encodedTaskName = Buffer.from(taskName, "utf8").toString("base64");
   const script = [
     "$ErrorActionPreference='Stop'",

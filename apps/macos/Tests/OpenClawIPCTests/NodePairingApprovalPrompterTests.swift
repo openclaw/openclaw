@@ -166,6 +166,7 @@ struct PairingCardPresentationTests {
             "claude-sessions",
             "browser",
             "codex-cli-sessions",
+            "codex-cli-session-source",
             "opencode-sessions",
             "pi-sessions",
             "file",

@@ -27,6 +27,14 @@ import {
 import { readCodexPluginConfig } from "./app-server/config-parsing.js";
 import { assertCodexAppServerConnectionSecurity } from "./app-server/config-security.js";
 import { requestCodexAppServerJson } from "./app-server/request.js";
+import {
+  CodexSupervisionPolicyError,
+  requireOwnerAccess,
+  requireRawTranscriptAccess,
+  requireSupervisionEnabled,
+  requireWriteAccess,
+  resolveToolPolicy,
+} from "./supervision-tool-policy.js";
 
 /** Legacy endpoint env retained for the shipped Supervisor tool contract. */
 const LEGACY_CODEX_SUPERVISOR_ENDPOINTS_ENV = "OPENCLAW_CODEX_SUPERVISOR_ENDPOINTS";
@@ -100,8 +108,6 @@ const MAX_COMPAT_THREAD_ID_LENGTH = 4096;
 type CodexSupervisorTurnMode = "auto" | "start" | "steer";
 type CodexSupervisionRequestPolicy = "enabled" | "raw-transcripts" | "write-controls";
 
-class CodexSupervisionPolicyError extends Error {}
-
 type NormalizedSupervisionEndpoint = {
   id: string;
   label?: string;
@@ -153,6 +159,7 @@ type CodexSupervisionToolsOptions = {
   getRuntimeConfig?: () => OpenClawConfig | undefined;
   /** Trusted owner bit supplied by the plugin tool context. */
   senderIsOwner: boolean;
+  assertInvocationCurrent?: () => void;
   env?: NodeJS.ProcessEnv;
   /** Test seam; production omits this to use the canonical shared client. */
   request?: EndpointRequest;
@@ -915,49 +922,6 @@ function sanitizeSessionListResult(
       ? redactCodexSupervisionValue(result.errors)
       : result.errors.map(({ endpointId, ok }) => ({ endpointId, ok })),
   };
-}
-
-function requireSupervisionEnabled(pluginConfig: unknown): void {
-  if (readCodexPluginConfig(pluginConfig).supervision?.enabled !== true) {
-    throw new CodexSupervisionPolicyError(
-      "Codex supervision is disabled in the codex plugin config.",
-    );
-  }
-}
-
-function requireOwnerAccess(options: CodexSupervisionToolsOptions): void {
-  if (!options.senderIsOwner) {
-    throw new CodexSupervisionPolicyError(
-      "Codex supervision compatibility tools require an owner-authorized sender.",
-    );
-  }
-}
-
-function resolveToolPolicy(pluginConfig: unknown): {
-  allowRawTranscripts: boolean;
-  allowWriteControls: boolean;
-} {
-  const config = readCodexPluginConfig(pluginConfig).supervision;
-  return {
-    allowRawTranscripts: config?.allowRawTranscripts === true,
-    allowWriteControls: config?.allowWriteControls === true,
-  };
-}
-
-function requireRawTranscriptAccess(pluginConfig: unknown): void {
-  if (!resolveToolPolicy(pluginConfig).allowRawTranscripts) {
-    throw new CodexSupervisionPolicyError(
-      "Codex session reads are disabled for this codex plugin supervision config.",
-    );
-  }
-}
-
-function requireWriteAccess(pluginConfig: unknown): void {
-  if (!resolveToolPolicy(pluginConfig).allowWriteControls) {
-    throw new CodexSupervisionPolicyError(
-      "Codex write controls are disabled for this codex plugin supervision config.",
-    );
-  }
 }
 
 function requireLiveToolPolicy(

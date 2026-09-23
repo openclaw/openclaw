@@ -1,4 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createPluginRuntimeCapabilityLease } from "./capability-lease.js";
+import { createPluginServiceGatewayEvents } from "./gateway-events.js";
+import type { OpenClawPluginSessionsChangedEvent } from "./gateway-events.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import type { PluginServiceRegistration } from "./registry-types.js";
 import { createEmptyPluginRegistry } from "./registry.js";
@@ -35,3 +38,17 @@ export function createRegistry(
 }
 
 export const createServiceConfig = (): OpenClawConfig => ({});
+
+export function subscribePluginSessionsChanged(
+  handler: (event: OpenClawPluginSessionsChangedEvent) => void,
+): () => void {
+  const events = createPluginServiceGatewayEvents({
+    pluginId: "test",
+    broadcast: () => undefined,
+    lease: createPluginRuntimeCapabilityLease("test"),
+  });
+  if (!events) {
+    throw new Error("Expected Gateway events with a broadcaster");
+  }
+  return events.onSessionsChanged(handler);
+}

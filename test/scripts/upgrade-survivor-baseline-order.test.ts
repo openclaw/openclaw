@@ -1,13 +1,89 @@
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import http from "node:http";
 import path, { delimiter, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { readUpgradeSurvivorPaths } from "./upgrade-survivor-paths.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const runner = path.resolve("scripts/e2e/lib/upgrade-survivor/run.sh");
+
+it("owns the model endpoint before authoring legacy operator configuration", async () => {
+  const root = tempDirs.make("survivor-model-endpoint-");
+  const competitor = http.createServer((request, response) => {
+    response.writeHead(request.method === "GET" ? 200 : 405);
+    response.end(request.method === "GET" ? "registry metadata" : "method not allowed");
+  });
+  await new Promise<void>((done) => {
+    competitor.listen(0, "127.0.0.1", done);
+  });
+  const address = competitor.address();
+  if (!address || typeof address === "string") {
+    throw new Error("fixture did not bind a TCP listener");
+  }
+  const source = readFileSync(runner, "utf8");
+  const setup = source.slice(
+    source.indexOf("apply_baseline_config_recipe()"),
+    source.indexOf("\nprepare_schema_expectation()"),
+  );
+  const phases = source.slice(
+    source.indexOf('if [ "$SCENARIO" = "abandoned-update" ]'),
+    source.indexOf("\nrun_missing_load_path_fixture seed"),
+  );
+  try {
+    const result = await promisify(execFile)(
+      "bash",
+      [
+        "-c",
+        `set -euo pipefail
+source scripts/lib/openclaw-e2e-instance.sh
+mock_openai_pid=""
+trap 'openclaw_e2e_stop_process "$mock_openai_pid"' EXIT
+${setup}
+phase() { shift; "$@"; }
+node() {
+  if [ "$1" != scripts/e2e/lib/upgrade-survivor/assertions.mjs ]; then
+    command node "$@"
+    return
+  fi
+  test "$2" = seed-legacy-operator
+  command node --input-type=module -e '
+    import assert from "node:assert/strict";
+    const port = Number(process.env.OPENCLAW_UPGRADE_SURVIVOR_MOCK_PORT);
+    assert(port > 0 && port !== Number(process.env.COMPETITOR_PORT));
+    const response = await fetch("http://127.0.0.1:" + port + "/v1/chat/completions", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ messages: [{ role: "user", content: "ownership proof" }] }),
+    });
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /OPENCLAW_E2E_OK/);
+    console.log("owned endpoint configured");
+  '
+}
+${phases}
+`,
+      ],
+      {
+        env: {
+          PATH: process.env.PATH,
+          HOME: root,
+          ARTIFACT_ROOT: root,
+          SCENARIO: "legacy-operator-state",
+          COMPETITOR_PORT: String(address.port),
+          OPENCLAW_UPGRADE_SURVIVOR_MOCK_PORT: String(address.port),
+        },
+      },
+    );
+    expect(result.stdout.trim()).toBe("owned endpoint configured");
+  } finally {
+    await new Promise<void>((done, reject) => {
+      competitor.close((error) => (error ? reject(error) : done()));
+    });
+  }
+});
 
 it.each([
   { scenario: "legacy-operator-state", mode: "auto-auth" },
@@ -328,6 +404,7 @@ if (args[0] === "--help") {
         OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "legacy-operator-state",
         OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifacts,
         OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: "baseline",
+        OPENCLAW_UPGRADE_SURVIVOR_MOCK_PORT: "44081",
         OPENCLAW_CONFIG_PATH: configPath,
         OPENCLAW_TEST_WORKSPACE_DIR: workspace,
         OPENCLAW_STATE_DIR: state,

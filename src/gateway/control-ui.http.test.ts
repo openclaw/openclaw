@@ -21,7 +21,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-limits.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
@@ -43,7 +43,6 @@ import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
 } from "./control-ui.js";
-import { setControlUiPluginAuthCookieForRequest } from "./http-auth-utils.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
@@ -447,15 +446,19 @@ describe("handleControlUiHttpRequest", () => {
     const originalRead = fileHandlePrototype.read;
     await probe.close();
     let constrained = false;
-    return vi
-      .spyOn(fileHandlePrototype, "read")
-      .mockImplementation(async function (this: unknown, target, offset, length, position) {
-        if (!constrained && position === 0 && length > maxBytes) {
-          constrained = true;
-          return await originalRead.call(this, target, offset, maxBytes, position);
-        }
-        return await originalRead.call(this, target, offset, length, position);
-      });
+    return vi.spyOn(fileHandlePrototype, "read").mockImplementation(async function (
+      this: unknown,
+      target,
+      offset,
+      length,
+      position,
+    ) {
+      if (!constrained && position === 0 && length > maxBytes) {
+        constrained = true;
+        return await originalRead.call(this, target, offset, maxBytes, position);
+      }
+      return await originalRead.call(this, target, offset, length, position);
+    });
   }
 
   async function withBasePathRootFixture<T>(params: {
@@ -486,7 +489,7 @@ describe("handleControlUiHttpRequest", () => {
     } finally {
       // A failed database close must leave its files intact.
       if (databasePath) {
-        closeOpenClawStateDatabaseByPath(databasePath);
+        await closeOpenClawStateDatabaseByPathAsync(databasePath);
       }
       await fs.rm(tempHome, { recursive: true, force: true });
     }
@@ -2314,52 +2317,6 @@ describe("handleControlUiHttpRequest", () => {
         ]);
       },
     });
-  });
-
-  it("issues read-only plugin frame grants for Tailscale-authenticated bootstrap", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.controlUiDescriptors.push({
-      pluginId: "demo-plugin",
-      source: "demo-plugin",
-      descriptor: {
-        surface: "tab",
-        id: "demo",
-        label: "Demo",
-        path: "/secure-hook/panel",
-        requiredScopes: ["operator.admin"],
-      },
-    });
-    registry.httpRoutes.push({
-      pluginId: "demo-plugin",
-      source: "demo-plugin",
-      path: "/secure-hook",
-      auth: "gateway",
-      match: "prefix",
-      handler: async () => true,
-    });
-    setActivePluginRegistry(registry);
-    const { res, setHeader } = makeMockHttpResponse();
-
-    expect(
-      setControlUiPluginAuthCookieForRequest(
-        { headers: {} } as IncomingMessage,
-        res,
-        "tailscale",
-        true,
-        "test-generation",
-      ),
-    ).toEqual([
-      {
-        pluginId: "demo-plugin",
-        path: "/secure-hook",
-        match: "prefix",
-        scopes: ["operator.read"],
-      },
-    ]);
-    expect(setHeader).toHaveBeenCalledWith(
-      "Set-Cookie",
-      expect.arrayContaining([expect.stringContaining("Path=/secure-hook")]),
-    );
   });
 
   it("serves bootstrap config JSON when paired device-token auth is valid", async () => {

@@ -17,8 +17,11 @@ import { isRecord } from "../utils.js";
 import { configIncludeOwnsAgentRosterValues } from "./agent-roster-provenance.js";
 import { containsEnvVarReference } from "./env-substitution.js";
 import { coerceConfig } from "./io.read-helpers.js";
-import type { ConfigWriteInputBasis } from "./io.types.js";
 import { createConfigIncludeOwnershipError } from "./io.write-errors.js";
+import {
+  prepareProjectedConfigWriteValues,
+  type ConfigWriteSourceProjectionParams,
+} from "./io.write-values.js";
 import { parseLegacyAgentRoster, projectLegacyAgentRosterEntries } from "./legacy.roster.js";
 import { createMergePatch } from "./merge-patch.js";
 import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
@@ -30,6 +33,12 @@ import {
 } from "./resolution-facts.js";
 import { projectRuntimeChangesOntoSource } from "./source-value-projection.js";
 import type { OpenClawConfig } from "./types.js";
+
+export function prepareConfigWriteValues(
+  params: Parameters<typeof prepareProjectedConfigWriteValues>[0],
+) {
+  return prepareProjectedConfigWriteValues(params, projectAuthoredAgentRosterForWrite);
+}
 
 const AGENT_ROSTER_PATHS = [
   ["agents", "entries"],
@@ -1573,16 +1582,6 @@ export function projectAuthoredAgentRosterForWrite(params: {
   );
   return setPathValueCreatingParents(withoutLegacyRoster, ["agents", "entries"], entries);
 }
-
-type ConfigWriteSourceProjectionParams = {
-  inputBasis?: ConfigWriteInputBasis;
-  runtimeConfig: unknown;
-  sourceConfig: unknown;
-  nextConfig: unknown;
-  unsetPaths?: readonly string[][];
-  explicitSetPaths?: readonly (readonly string[])[];
-  explicitSetValueSource?: unknown;
-};
 
 export function projectConfigWriteSource(params: ConfigWriteSourceProjectionParams): unknown {
   const inputBasis = params.inputBasis ?? { kind: "runtime", config: params.runtimeConfig };

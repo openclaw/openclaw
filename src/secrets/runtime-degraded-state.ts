@@ -116,6 +116,7 @@ export function redactSecretDegradationReason(reason: string): SecretDegradation
     case "secret reference was not found":
     case "secret reference was not materialized by the active runtime":
     case "resolved secret value was invalid":
+    case "resolved secret value is a redaction placeholder":
     case "secret resolution failed":
       return reason;
     default:

@@ -5,14 +5,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import type { SourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.js";
 import type { CronDeliveryPlan } from "../delivery-plan.js";
-import type { CronJob, CronResolvedDeliveryState, CronRunTelemetry } from "../types.js";
+import type { CronJob, CronResolvedDeliveryState } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
-import type { RunCronAgentTurnResult } from "./run.types.js";
 
 export type SuccessfulCronDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
 
 export type DispatchCronDeliveryParams = {
-  cfg: OpenClawConfig;
   cfgWithAgentDefaults: OpenClawConfig;
   deps: CliDeps;
   job: CronJob;
@@ -26,7 +24,6 @@ export type DispatchCronDeliveryParams = {
   sessionUpdatedAt: number;
   beforeSessionDelete?: () => void;
   runStartedAt: number;
-  runEndedAt: number;
   timeoutMs: number;
   resolvedDelivery: DeliveryTargetResolution;
   /** Preserve prepared intent instead of rereading job configuration after inference. */
@@ -46,18 +43,18 @@ export type DispatchCronDeliveryParams = {
   ttsAuto?: TtsAutoMode;
   summary?: string;
   outputText?: string;
-  telemetry?: CronRunTelemetry;
   abortSignal?: AbortSignal;
   isAborted: () => boolean;
   abortReason: () => string;
-  withRunSession: (
-    result: Omit<RunCronAgentTurnResult, "sessionId" | "sessionKey">,
-  ) => RunCronAgentTurnResult;
 };
+
+export type CronDeliveryDisposition =
+  | { kind: "suppressed" | "pending" }
+  | { kind: "error"; error: string; errorKind?: "delivery-target"; delivered?: false };
 
 /** Mutable delivery-dispatch accumulator returned to the isolated cron runner. */
 export type DispatchCronDeliveryState = {
-  result?: RunCronAgentTurnResult;
+  disposition?: CronDeliveryDisposition;
   deliveryState: CronResolvedDeliveryState;
   delivered?: boolean;
   deliveryAttempted: boolean;

@@ -40,6 +40,55 @@ describe("MCP automation creator capture", () => {
     vi.unstubAllEnvs();
   });
 
+  it("keeps cached standalone plugin tools fenced by their original live grant", async () => {
+    const root = tempDirs.make("openclaw-plugin-grant-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    const cfg: OpenClawConfig = { tools: { allow: ["probe"] }, plugins: { enabled: false } };
+    setRuntimeConfigSnapshot(cfg);
+    let current = true;
+    const effect = vi.fn();
+    vi.spyOn(pluginTools, "resolveOpenClawPluginToolsForOptions").mockImplementation(
+      ({ options }) => {
+        const assertCurrent = expectDefined(
+          options?.assertInvocationCurrent,
+          "standalone grant guard",
+        );
+        return [
+          {
+            name: "probe",
+            label: "Probe",
+            description: "Grant probe",
+            parameters: { type: "object" },
+            async execute() {
+              assertCurrent();
+              effect();
+              return { content: [], details: {} };
+            },
+          },
+        ];
+      },
+    );
+    const cache = new McpLoopbackToolCache();
+    const input = {
+      cfg,
+      context: { sessionKey: SESSION, senderIsOwner: true, toolsAllow: ["probe"] },
+      grantToken: "fixture-grant",
+      isGrantCurrent: () => current,
+    };
+    const first = await cache.resolve(input);
+    const second = await cache.resolve(input);
+    const tool = expectDefined(
+      second.tools.find((entry) => entry.name === "probe"),
+      "cached plugin tool",
+    );
+    expect(second).toBe(first);
+    await tool.execute("allowed", {});
+    expect(effect).toHaveBeenCalledOnce();
+    current = false;
+    await expect(tool.execute("revoked", {})).rejects.toThrow("grant is no longer active");
+    expect(effect).toHaveBeenCalledOnce();
+  });
+
   const cases: Array<{
     label: string;
     toolsAllow?: string[];

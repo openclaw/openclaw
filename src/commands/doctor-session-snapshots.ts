@@ -1,4 +1,4 @@
-/** Doctor repair for stale runtime snapshot paths cached in session stores. */
+/** Advisory inspection of runtime snapshot paths retained in legacy session stores. */
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -8,11 +8,9 @@ import { hydrateSessionStoreSkillPromptRefs } from "../config/sessions/skill-pro
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
+import type { HealthFinding } from "../flows/health-checks.js";
 import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
-import { writeTextAtomic } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { updateLegacySessionStore } from "../infra/state-migrations.legacy-session-store.js";
 import { resolveBundledSkillsDir } from "../skills/loading/bundled-dir.js";
 import { resolveConfigDir, shortenHomePath } from "../utils.js";
 
@@ -389,128 +387,21 @@ export function sessionSnapshotIssueToHealthFinding(
   return {
     checkId: SESSION_SNAPSHOTS_CHECK_ID,
     severity: "info",
-    message: `${issue.sessionKey} cached session metadata references an inactive runtime root that can be cleaned up.`,
+    message: `${issue.sessionKey} historical session metadata references an inactive runtime root.`,
     path: issue.storePath,
     target: issue.cachedPath,
     requirement: `Current bundled skill path: ${issue.expectedPath}`,
     fixHint:
-      "To clean up the advisory artifact, run `openclaw doctor --fix` to rewrite stale cached session metadata paths, or start a fresh session after confirming history can be retired.",
+      "No repair is needed for this historical metadata. Doctor preserves migration originals; active sessions use canonical SQLite state and the current runtime skill catalog.",
   };
 }
 
-export function sessionSnapshotIssueToRepairEffect(
-  issue: SessionSnapshotHealthIssue,
-): HealthRepairEffect {
-  return {
-    kind: "file",
-    action: "would-rewrite-session-snapshot-path",
-    target: issue.storePath,
-    dryRunSafe: false,
-  };
-}
-
-/** Replaces stale paths in raw, JSON-escaped, and XML-escaped prompt text. */
-function replaceStalePathsInText(text: string, finding: StaleSessionSnapshotPathFinding): string {
-  const jsonEscaped = JSON.stringify(finding.cachedPath).slice(1, -1);
-  const jsonEscapedExpected = JSON.stringify(finding.expectedPath).slice(1, -1);
-  const xmlEscaped = finding.cachedPath
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-  const xmlEscapedExpected = finding.expectedPath
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-
-  let result = text;
-  if (result.includes(jsonEscaped)) {
-    result = result.replaceAll(jsonEscaped, jsonEscapedExpected);
-  }
-  if (result.includes(xmlEscaped)) {
-    result = result.replaceAll(xmlEscaped, xmlEscapedExpected);
-  }
-  if (result.includes(finding.cachedPath)) {
-    result = result.replaceAll(finding.cachedPath, finding.expectedPath);
-  }
-  return result;
-}
-
-function repairFreshSessionSnapshotPaths(params: {
-  store: Record<string, SessionEntry>;
-  rawStore: Record<string, unknown>;
-  findings: readonly StaleSessionSnapshotPathFinding[];
-}): number {
-  let replacements = 0;
-  for (const finding of params.findings) {
-    // Canonical loading intentionally strips resolvedSkills. Count the stale legacy cache once;
-    // saving through the writer removes that non-persistent cache from the durable entry.
-    if (finding.field === "skillsSnapshot.resolvedSkills") {
-      const rawSession = params.rawStore[finding.sessionKey];
-      const rawSnapshot = isRecord(rawSession) ? rawSession.skillsSnapshot : undefined;
-      if (isRecord(rawSnapshot) && Array.isArray(rawSnapshot.resolvedSkills)) {
-        replacements += 1;
-      }
-      continue;
-    }
-
-    const session = params.store[finding.sessionKey] as Record<string, unknown> | undefined;
-    if (!isRecord(session)) {
-      continue;
-    }
-    const jsonEscaped = JSON.stringify(finding.cachedPath).slice(1, -1);
-    const jsonEscapedExpected = JSON.stringify(finding.expectedPath).slice(1, -1);
-
-    if (finding.field === "skillsSnapshot.prompt") {
-      const snapshot = session.skillsSnapshot;
-      if (!isRecord(snapshot) || typeof snapshot.prompt !== "string") {
-        continue;
-      }
-      const prompt = replaceStalePathsInText(snapshot.prompt, finding);
-      if (prompt !== snapshot.prompt) {
-        snapshot.prompt = prompt;
-        replacements += 1;
-      }
-      continue;
-    }
-
-    const report = session.systemPromptReport;
-    if (!isRecord(report) || !Array.isArray(report.injectedWorkspaceFiles)) {
-      continue;
-    }
-    for (const entry of report.injectedWorkspaceFiles) {
-      if (!isRecord(entry) || typeof entry.path !== "string") {
-        continue;
-      }
-      let entryPath = entry.path;
-      const original = entryPath;
-      for (const { cached, expected } of [
-        { cached: jsonEscaped, expected: jsonEscapedExpected },
-        { cached: finding.cachedPath, expected: finding.expectedPath },
-      ]) {
-        if (entryPath.includes(cached)) {
-          entryPath = entryPath.replaceAll(cached, expected);
-        }
-      }
-      if (entryPath !== original) {
-        entry.path = entryPath;
-        replacements += 1;
-      }
-    }
-  }
-  return replacements;
-}
-
-/** Reports and optionally repairs stale bundled skill paths in session snapshot metadata. */
+/** Reports historical snapshot paths without rewriting migration source bytes. */
 export async function noteSessionSnapshotHealth(params?: {
   storePaths?: string[];
   bundledSkillsDir?: string;
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  shouldRepair?: boolean;
 }) {
   const bundledSkillsDir = resolveSessionSnapshotBundledSkillsDir({
     bundledSkillsDir: params?.bundledSkillsDir,
@@ -556,78 +447,10 @@ export async function noteSessionSnapshotHealth(params?: {
     ),
   );
 
-  if (params?.shouldRepair) {
-    let repairedStores = 0;
-    let totalReplacements = 0;
-    let leftoverFindings = 0;
-
-    for (const [storePath, findings] of findingsByStore) {
-      try {
-        const repairResult = await updateLegacySessionStore(
-          storePath,
-          async (store) => {
-            const raw = fs.readFileSync(storePath, "utf-8");
-            const parsed = JSON.parse(raw) as unknown;
-            const rawStore = isRecord(parsed) ? parsed : {};
-            const replacements = repairFreshSessionSnapshotPaths({
-              store,
-              rawStore,
-              findings,
-            });
-            if (replacements > 0) {
-              // The backup belongs inside the writer lane so it matches the store revision that
-              // the canonical writer is about to replace.
-              const backupPath = `${storePath}.bak.${Date.now()}`;
-              await writeTextAtomic(backupPath, raw, { mode: 0o600 });
-            }
-            return { replacements };
-          },
-          {
-            requireWriteSuccess: true,
-            skipMaintenance: true,
-            skipSaveWhenResult: (result) => result.replacements === 0,
-          },
-        );
-
-        if (repairResult.replacements > 0) {
-          totalReplacements += repairResult.replacements;
-          repairedStores++;
-
-          // Rescan to report leftover findings
-          const repairedStore = loadSessionStoreForSnapshotScan(storePath);
-          const leftovers = scanSessionStoreForStaleRuntimeSnapshotPaths({
-            store: repairedStore,
-            bundledSkillsDir,
-            env: params?.env,
-          });
-          leftoverFindings += leftovers.length;
-        }
-      } catch (err) {
-        note(
-          `- Failed to repair session snapshot paths in ${shortenHomePath(storePath)}: ${String(err)}`,
-          "Session snapshots",
-        );
-      }
-    }
-
-    if (repairedStores > 0) {
-      const msg = `- Repaired ${totalReplacements} stale path${totalReplacements === 1 ? "" : "s"} across ${repairedStores} store${repairedStores === 1 ? "" : "s"}.`;
-      if (leftoverFindings > 0) {
-        note(
-          `${msg}\n  ${leftoverFindings} stale path${leftoverFindings === 1 ? "" : "s"} still remain (possibly non-bundled or non-repairable).`,
-          "Session snapshots",
-        );
-      } else {
-        note(msg, "Session snapshots");
-      }
-      return;
-    }
-  }
-
   const lines = [
     `- Found ${affectedSessions.size} session${affectedSessions.size === 1 ? "" : "s"} with stale cached session metadata paths.`,
     `  Live bundled skills root is healthy: ${shortenHomePath(bundledSkillsDir)}`,
-    "  Cached session metadata still references an inactive runtime root; start a fresh session or reset the affected long-lived sessions after confirming history can be retired.",
+    "  Historical metadata references an inactive runtime root. Originals are preserved; active sessions use canonical SQLite state and the current runtime skill catalog. No cleanup or session reset is needed.",
   ];
   let shown = 0;
   for (const [storePath, findings] of findingsByStore) {

@@ -341,7 +341,10 @@ class RemoteShellSandboxBackendImpl {
     );
   }
 
-  private async refreshRemoteSkillsWorkspace(session: RemoteShellSandboxSession): Promise<void> {
+  private async refreshRemoteSkillsWorkspace(
+    session: RemoteShellSandboxSession,
+    signal?: AbortSignal,
+  ): Promise<void> {
     if (
       this.params.preprovisionedWorkdir ||
       this.params.createParams.cfg.workspaceAccess !== "rw" ||
@@ -349,8 +352,14 @@ class RemoteShellSandboxBackendImpl {
     ) {
       return;
     }
-    await this.clearRemoteDirectory(session, this.params.runtimePaths.remoteSkillsWorkspaceDir);
-    if (!(await isExistingDirectory(this.params.createParams.skillsWorkspaceDir))) {
+    await this.clearRemoteDirectory(
+      session,
+      this.params.runtimePaths.remoteSkillsWorkspaceDir,
+      signal,
+    );
+    const hasSkills = await isExistingDirectory(this.params.createParams.skillsWorkspaceDir);
+    signal?.throwIfAborted();
+    if (!hasSkills) {
       return;
     }
     this.params.createParams.assertRuntimeCurrent?.();
@@ -358,13 +367,16 @@ class RemoteShellSandboxBackendImpl {
       localDir: this.params.createParams.skillsWorkspaceDir,
       remoteDir: this.params.runtimePaths.remoteSkillsWorkspaceDir,
       remoteRootDir: this.params.runtimePaths.runtimeRootDir,
+      signal,
     });
   }
 
   private async clearRemoteDirectory(
     session: RemoteShellSandboxSession,
     remoteDir: string,
+    signal?: AbortSignal,
   ): Promise<void> {
+    signal?.throwIfAborted();
     this.params.createParams.assertRuntimeCurrent?.();
     await session.runCommand({
       remoteCommand: buildRemoteCommand([
@@ -375,16 +387,21 @@ class RemoteShellSandboxBackendImpl {
         remoteDir,
         this.params.runtimePaths.runtimeRootDir,
       ]),
+      signal,
     });
   }
 
   async runRemoteShellScript(
     params: SandboxBackendCommandParams,
   ): Promise<SandboxBackendCommandResult> {
+    params.signal?.throwIfAborted();
     await this.ensureRuntime();
+    params.signal?.throwIfAborted();
     const session = await this.createSession();
     try {
-      await this.refreshRemoteSkillsWorkspace(session);
+      params.signal?.throwIfAborted();
+      await this.refreshRemoteSkillsWorkspace(session, params.signal);
+      params.signal?.throwIfAborted();
       this.params.createParams.assertRuntimeCurrent?.();
       return await session.runCommand({
         remoteCommand: buildRemoteCommand([

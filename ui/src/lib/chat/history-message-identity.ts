@@ -47,20 +47,25 @@ export function findChatSubmissionMessage(
   return match;
 }
 
-export function nativeHistoryMessageIdentity(message: unknown): string | null {
+function nativeHistoryMessageSourceIdentity(message: unknown): string | null {
   const record = asNullableRecord(message);
   const metadata = asNullableRecord(record?.["__openclaw"]);
   const seq = metadata?.seq;
   const id = metadata?.id ?? record?.messageId;
-  const sourceIdentity =
-    typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0
-      ? `seq:${seq}`
-      : typeof id === "string" && id.trim()
-        ? `id:${id}`
-        : null;
+  return typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0
+    ? `seq:${seq}`
+    : typeof id === "string" && id.trim()
+      ? `id:${id}`
+      : null;
+}
+
+export function nativeHistoryMessageIdentity(message: unknown): string | null {
+  const sourceIdentity = nativeHistoryMessageSourceIdentity(message);
   if (!sourceIdentity) {
     return null;
   }
+  const record = asNullableRecord(message);
+  const metadata = asNullableRecord(record?.["__openclaw"]);
   const { recordTimestampMs: _recordTimestampMs, ...projectionMetadata } = metadata ?? {};
   const projection = metadata ? { ...record, __openclaw: projectionMetadata } : record;
   try {
@@ -70,4 +75,44 @@ export function nativeHistoryMessageIdentity(message: unknown): string | null {
   } catch {
     return sourceIdentity;
   }
+}
+
+/** Preserve projected siblings while removing only overlapping page occurrences. */
+export function prependUniqueNativeMessages(messages: unknown[], current: unknown[]): unknown[] {
+  const incomingSources = new Set<string>();
+  for (const message of messages) {
+    const source = nativeHistoryMessageSourceIdentity(message);
+    if (source) {
+      incomingSources.add(source);
+    }
+  }
+  const overlappingSources = new Set<string>();
+  const duplicateCounts = new Map<string, number>();
+  for (const message of current) {
+    const source = nativeHistoryMessageSourceIdentity(message);
+    if (!source || !incomingSources.has(source)) {
+      continue;
+    }
+    // Most older pages have disjoint sources. Only overlapping rows need
+    // content comparison; keep counts local so hydrated projections stay fresh.
+    const identity = nativeHistoryMessageIdentity(message);
+    if (identity) {
+      overlappingSources.add(source);
+      duplicateCounts.set(identity, (duplicateCounts.get(identity) ?? 0) + 1);
+    }
+  }
+  const uniqueMessages = messages.filter((message) => {
+    const source = nativeHistoryMessageSourceIdentity(message);
+    if (!source || !overlappingSources.has(source)) {
+      return true;
+    }
+    const identity = nativeHistoryMessageIdentity(message);
+    const remaining = identity ? (duplicateCounts.get(identity) ?? 0) : 0;
+    if (!identity || remaining === 0) {
+      return true;
+    }
+    duplicateCounts.set(identity, remaining - 1);
+    return false;
+  });
+  return [...uniqueMessages, ...current];
 }

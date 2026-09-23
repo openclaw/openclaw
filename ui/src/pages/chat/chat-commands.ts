@@ -111,6 +111,16 @@ export function requireChatSessionAction(
   const access = readChatSessionActionAccess(
     currentSessionAccessSnapshot(host),
     Boolean(host.chatRunId),
+    {
+      session: host.sessionsResult?.sessions.find((row) =>
+        visibleSessionMatches(
+          host,
+          row.key,
+          row.agentId ?? host.sessionsResultAgentId ?? undefined,
+        ),
+      ),
+      sessionAbortable: host.chatRunSessionAbortable === true,
+    },
   )[action];
   if (access.allowed) {
     return true;
@@ -408,6 +418,11 @@ export async function dispatchChatSlashCommand(
       }
       break;
     case "export-session":
+      if (args.trim()) {
+        setChatCommandError(host, t("chat.commandResults.exportPathUnsupported"));
+        return "failed";
+      }
+      setChatCommandError(host, null);
       if ((await host.exportCurrentChat?.()) === "empty") {
         injectCommandResult(host, t("chat.commandResults.emptyExport"));
         scheduleChatScroll(host, false, false, { contentChanged: true });

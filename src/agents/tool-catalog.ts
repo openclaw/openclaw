@@ -68,6 +68,13 @@ const CORE_TOOL_SECTION_ORDER: Array<{ id: string; label: string }> = [
 
 const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
+    id: "decision_evaluate",
+    description: "Evaluate explicit evidence with the agent's decision model",
+    sectionId: "agents",
+    profiles: ["coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "ls",
     description: "List directory entries",
     sectionId: "fs",
@@ -156,6 +163,13 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Read memory files",
     sectionId: "memory",
     profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "personal_instructions",
+    description: "Edit the requesting user’s personal instructions",
+    sectionId: "memory",
+    profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
   },
   {
@@ -289,6 +303,13 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Drive operator web UI",
     sectionId: "ui",
     profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "theme",
+    description: "List, select, and create appearance themes",
+    sectionId: "ui",
+    profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
   },
   {
@@ -563,6 +584,7 @@ export function resolveCoreToolProfilePolicy(profile?: string): ToolProfilePolic
 export function listCoreToolSections(params?: {
   swarmEnabled?: boolean;
   githubPublicationAvailable?: boolean;
+  personalInstructionsEnabled?: boolean;
 }): CoreToolSection[] {
   // Callers resolve the swarm gate and pass the fact in; resolving config here
   // would couple this ui-shared module to the server graph.
@@ -574,6 +596,7 @@ export function listCoreToolSections(params?: {
       .filter(
         (tool) =>
           (tool.id !== "agents_wait" || swarmEnabled) &&
+          (tool.id !== "personal_instructions" || params?.personalInstructionsEnabled === true) &&
           (tool.id !== "github_identity_status" ||
             params?.githubPublicationAvailable !== undefined) &&
           (tool.id !== "github_publish" || params?.githubPublicationAvailable === true),

@@ -4,11 +4,16 @@ import type { TriageUpdateFailure } from "../commands/triage-update.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { buildRestartSentinelRow, parseRestartSentinelEnvelope } from "./restart-sentinel-store.js";
 import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
+import type { UpdateRequester } from "./update-requester-authority.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
+
+export function isManagedServiceInspectionCommand(command: string): boolean {
+  return /^(?:--user )?(?:show|print) /.test(command);
+}
 
 type ManagedSystemdPostExitState = {
   activeState: string;
@@ -27,7 +32,6 @@ export type ManagedServiceManagerBoundaryOptions = {
   launchdFault?: "wrong-parent" | "missing-restored-pid" | "dead-restored-pid";
   launchdTeardown?: {
     bootoutDelayMs?: number;
-    waitForNativeTimeout?: boolean;
     clockEachCommandMs?: number;
     loadedPrints?: number;
     pendingBootstrapFailures?: number;
@@ -39,8 +43,10 @@ export type ManagedServiceManagerBoundaryOptions = {
   systemdHandoffFailure?: boolean;
   systemdPostExitStates?: ManagedSystemdPostExitState[];
   systemdStopDelayMs?: number;
+  expireParentWhileStopPending?: boolean;
+  originalRecovery?: UpdateRunResult["recovery"];
   revokeOwner?: boolean;
-  requester?: { channel?: string; accountId?: string; senderId?: string };
+  requester?: UpdateRequester;
   updaterExitCode?: number;
   recoveryExitCode?: number;
   recoveryTimeoutMs?: number;
@@ -68,15 +74,6 @@ export type ManagedServiceCommandTiming = {
 };
 
 export type ManagedServiceManagerBoundaryResult = {
-  helperExitCode?: number | null;
-  repairEffects?: {
-    packagedReadOnly: boolean;
-    firstSpawn: boolean;
-    secondSpawn: boolean;
-    firstExec: boolean;
-    secondExec: boolean;
-    secondWrite: boolean;
-  };
   run?: UpdateRunRecord;
   commands: string[];
   parentSignal: NodeJS.Signals | null;
@@ -87,6 +84,15 @@ export type ManagedServiceManagerBoundaryResult = {
   triageDeadline?: { requestedMs: number; descendantPid: number };
   savedFailure: { path: string; mode: number; contents: TriageUpdateFailure } | null;
   sensitiveFilesRemoved: boolean;
+  parkAdmitted?: boolean;
+  stopSettlement?: {
+    pid: number;
+    closed: boolean;
+    code: number | null;
+    signal: string | null;
+    parentKilledWhileStopPending: boolean;
+    failedWhileStopPending: boolean;
+  };
 };
 
 type ManagedSystemdFailureCase = readonly [string, ManagedSystemdPostExitState];
@@ -259,7 +265,7 @@ export function registerManagedSystemdHandoffConvergenceTests(
     expect(
       commands.filter((command) => command.includes("start openclaw-gateway.service")),
     ).toHaveLength(0);
-    expect(state).toEqual({ nativeRelease: {} });
+    expect(state).toEqual({});
     expect(sentinel).toMatchObject({
       payload: {
         status: "skipped",
@@ -412,10 +418,7 @@ if (${JSON.stringify(kind)} === "systemd") {
 }
   `,
   )};
-  if (action === "bootout" && ${Boolean(options?.launchdTeardown?.bootoutDelayMs || options?.launchdTeardown?.waitForNativeTimeout)}) {
-    if (${options?.launchdTeardown?.waitForNativeTimeout === true}) {
-      while (!fs.existsSync(${JSON.stringify(statePath + ".native-timeout")})) sleep(5);
-    }
+  if (action === "bootout" && ${options?.launchdTeardown?.bootoutDelayMs ?? 0}) {
     await new Promise((resolve) => setTimeout(resolve, ${options?.launchdTeardown?.bootoutDelayMs ?? 0}));
     ${managedServiceStateUpdateScript(statePath, "state.bootoutCompleted = true")};
   }

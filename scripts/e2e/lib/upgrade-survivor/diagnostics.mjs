@@ -40,42 +40,20 @@ const logNames = [
   "workshop-recovered-upgrade.json",
   "workshop-candidate-doctor.json",
   "legacy-operator-cron-history-proof.json",
+  "legacy-operator-baseline-turn.out",
+  "legacy-operator-baseline-turn.err",
+  "legacy-operator-candidate-turn.out",
+  "legacy-operator-candidate-turn.err",
   "gateway.log",
   "gateway.log.doctor",
+  "missing-load-path/baseline-gateway.log",
+  "missing-load-path/baseline-gateway-convergence-refusal.log",
   "baseline-service-install.err",
   "systemctl-shim.log",
   "systemctl-shim-gateway.log",
   "systemctl-shim-gateway.log.bootstrap.log",
   "gateway-restart.log",
 ];
-// Candidate observations select one declared RPC pair, never an arbitrary private path.
-const rpcLogNames = new Set([
-  "channels-status-before",
-  "wizard-start",
-  "wizard-status",
-  "wizard-next",
-  "wizard-duplicate-start",
-  "wizard-cancel",
-  "wizard-cancelled-status",
-  "wizard-replacement-start",
-  "wizard-replacement-cancel",
-  "wizard-replacement-status",
-  "update-rpc",
-  "update-status.candidate",
-  "target-wizard-status-start",
-  "target-wizard-status",
-  "target-wizard-status-retained",
-  "target-wizard-status-cancel",
-  "target-wizard-status-purged",
-  "target-wizard-active-start",
-  "target-wizard-next",
-  "target-wizard-duplicate-start",
-  "target-wizard-cancel",
-  "target-wizard-replacement-start",
-  "target-wizard-replacement-cancel",
-  "target-wizard-purged-status",
-  "channels-status",
-]);
 const reasons = [
   "missing or unsafe file",
   "input exceeds cap; omitted whole",
@@ -235,6 +213,53 @@ function postCoreResult(value, sanitize = (text) => text) {
       ),
     ),
   };
+}
+
+// Keep the assertion receipt independent of large Doctor output in update.json.
+export function recordSuccessfulUpdateCheck(artifactRoot, result) {
+  if (!artifactRoot) {
+    return;
+  }
+  try {
+    writeReport(
+      artifactRoot,
+      path.join(artifactRoot, "diagnostics"),
+      "successful-update-check.json",
+      { artifactRoot: fs.realpathSync(artifactRoot), ...successfulUpdateCheck(result) },
+      inputLimit,
+    );
+  } catch {
+    // Diagnostic failure must preserve the original assertion and exit status.
+  }
+}
+
+function successfulUpdateCheck(value, sanitize = (text) => text) {
+  const unavailable = { availability: "unavailable" };
+  if (!value || value.availability === "unavailable") {
+    return unavailable;
+  }
+  try {
+    if (!["passed", "failed"].includes(value.outcome)) {
+      throw new Error();
+    }
+    const result = {
+      availability: "captured",
+      outcome: value.outcome,
+      ...textFields(value, ["message"], sanitize),
+      plugins: null,
+    };
+    if (value.plugins !== null) {
+      try {
+        result.plugins = postCoreResult(value.plugins, sanitize);
+      } catch {
+        omissions["successful update plugins"] = reasons[3];
+      }
+    }
+    return result;
+  } catch {
+    omissions["successful update check"] = reasons[3];
+    return unavailable;
+  }
 }
 
 export function readPostCoreSnapshot(artifactRoot) {
@@ -1241,20 +1266,6 @@ async function capture(artifactRoot, phase, exitStatus, signal = "", observation
         ? readOwned(process.env.OPENCLAW_STATE_DIR, "logs/gateway-restart.log", name)
         : readOwned(artifactRoot, name, name);
   }
-  const rpcName = readOwned(artifactRoot, "diagnostics/last-rpc", "last RPC")?.trim();
-  if (rpcLogNames.has(rpcName)) {
-    report.lastRpc = {
-      name: rpcName,
-      stdout: readOwned(artifactRoot, `${rpcName}.json`, "RPC stdout"),
-      stderr: readOwned(
-        artifactRoot,
-        `${rpcName === "update-status.candidate" ? "update-status" : rpcName}.err`,
-        "RPC stderr",
-      ),
-    };
-  } else if (rpcName) {
-    omissions["last RPC"] = reasons[3];
-  }
   const stateRoot = process.env.OPENCLAW_STATE_DIR;
   report.pluginIdentity = await pluginIdentities(stateRoot, artifactRoot);
   report.migration = captureMigrationEvidence(stateRoot, artifactRoot, observationRoot);
@@ -1269,6 +1280,25 @@ async function capture(artifactRoot, phase, exitStatus, signal = "", observation
     }
   } catch {
     omissions["post-core"] = reasons[3];
+  }
+  report.successfulUpdateCheck = { availability: "unavailable" };
+  if (observationRoot) {
+    try {
+      const raw = readOwned(
+        observationRoot,
+        "diagnostics/successful-update-check.json",
+        "successful update check",
+      );
+      if (raw !== null) {
+        const receipt = JSON.parse(raw);
+        if (receipt.artifactRoot !== fs.realpathSync(observationRoot)) {
+          throw new Error();
+        }
+        report.successfulUpdateCheck = successfulUpdateCheck(receipt);
+      }
+    } catch {
+      omissions["successful update check"] = reasons[3];
+    }
   }
   report.doctorResults = [];
   try {
@@ -1669,14 +1699,13 @@ export function publishDiagnostics(
   // arbitrary omission text. Redact every permitted free-text field on the host.
   for (const label of [
     ...logNames,
-    "last RPC",
-    "RPC stdout",
-    "RPC stderr",
     "config",
     "service unit",
     "service environment",
     "child exit",
     "post-core",
+    "successful update check",
+    "successful update plugins",
     "plugin identity",
     ...["doctor", "sessions", "archives", "sibling"].map((section) => `migration-${section}`),
     "session migration",
@@ -1707,17 +1736,6 @@ export function publishDiagnostics(
   for (const name of logNames) {
     report.logs[name] = sanitize(snapshot.logs?.[name], name);
   }
-  if (snapshot.lastRpc !== undefined) {
-    if (rpcLogNames.has(snapshot.lastRpc?.name)) {
-      report.lastRpc = {
-        name: snapshot.lastRpc.name,
-        stdout: sanitize(snapshot.lastRpc.stdout, "RPC stdout"),
-        stderr: sanitize(snapshot.lastRpc.stderr, "RPC stderr"),
-      };
-    } else {
-      omissions["last RPC"] = reasons[3];
-    }
-  }
   for (const field of ["ExecStart", "WorkingDirectory", "supervisorWorkingDirectory"]) {
     report.service[field] = sanitize(snapshot.service?.[field], field);
   }
@@ -1740,6 +1758,7 @@ export function publishDiagnostics(
     report.config.sha256 = snapshot.config.sha256;
   }
   report.postCore = publishedPostCore(snapshot.postCore, sanitize);
+  report.successfulUpdateCheck = successfulUpdateCheck(snapshot.successfulUpdateCheck, sanitize);
   report.sessionMigration = publishedSessionMigration(snapshot.sessionMigration, sanitize);
   report.doctorResults = { availability: "unknown", observations: [] };
   try {

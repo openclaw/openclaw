@@ -3,11 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type {
-  GatewaySessionRow,
-  SessionCompactionCheckpoint,
-  SessionsListResult,
-} from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
@@ -322,84 +318,6 @@ describe("sessions page agent-scope retirement", () => {
     },
   );
 
-  it.each(["branchCheckpoint", "restoreCheckpoint"] as const)(
-    "retires %s authority across A-B-A without clearing newer work",
-    async (method) => {
-      const oldBranch =
-        createDeferred<Awaited<ReturnType<SessionCapability["branchCheckpoint"]>>>();
-      const oldRestore = createDeferred<never>();
-      const newMutation = createDeferred<never>();
-      const branchResult: Awaited<ReturnType<SessionCapability["branchCheckpoint"]>> = {
-        ok: true,
-        sourceKey: "agent:writer:old-1",
-        key: "agent:writer:stale-branch",
-        sessionId: "branched-session",
-        checkpoint: {
-          checkpointId: "checkpoint",
-          sessionKey: "agent:writer:old-1",
-          sessionId: "original-session",
-          createdAt: 1,
-          reason: "manual",
-          preCompaction: { sessionId: "original-session" },
-          postCompaction: { sessionId: "original-session" },
-        },
-        entry: { sessionId: "branched-session", updatedAt: 1 },
-      };
-      const mutate =
-        method === "branchCheckpoint"
-          ? vi
-              .fn<SessionCapability["branchCheckpoint"]>()
-              .mockReturnValueOnce(oldBranch.promise)
-              .mockReturnValueOnce(newMutation.promise)
-          : vi
-              .fn<SessionCapability["restoreCheckpoint"]>()
-              .mockReturnValueOnce(oldRestore.promise)
-              .mockReturnValueOnce(newMutation.promise);
-      const sessions = createSessions({ [method]: mutate });
-      const { page, context, changeScope } = await setupArchivedPageWithSelection(
-        "writer",
-        sessions,
-      );
-      vi.mocked(showConfirmDialog).mockResolvedValue(true);
-      const oldRequest = page[method]("agent:writer:old-1", "checkpoint");
-      let newRequest: Promise<void> | undefined;
-      try {
-        await vi.waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
-        expect(page.checkpointBusyKey).toBe("checkpoint");
-        changeScope("main");
-        expect(page.checkpointBusyKey).toBeNull();
-        changeScope("writer");
-
-        newRequest = page[method]("agent:writer:old-1", "checkpoint");
-        await vi.waitFor(() => expect(mutate).toHaveBeenCalledTimes(2));
-        if (method === "branchCheckpoint") {
-          oldBranch.resolve(branchResult);
-        } else {
-          oldRestore.reject(new Error("retired checkpoint error"));
-        }
-        await oldRequest;
-        expect(page.error).toBeNull();
-        expect(context.navigate).not.toHaveBeenCalled();
-        expect(page.checkpointBusyKey).toBe("checkpoint");
-
-        newMutation.reject(new Error("current checkpoint error"));
-        await newRequest;
-        expect(page.error).toContain("current checkpoint error");
-        expect(page.checkpointBusyKey).toBeNull();
-      } finally {
-        if (method === "branchCheckpoint") {
-          oldBranch.resolve(branchResult);
-        } else {
-          oldRestore.reject(new Error("cleanup old checkpoint"));
-        }
-        if (newRequest) {
-          newMutation.reject(new Error("cleanup new checkpoint"));
-        }
-        await Promise.all([oldRequest, newRequest]);
-      }
-    },
-  );
-
   it("preserves pending deletion when the selected scope does not change", async () => {
     const deletion = createDeferred<Awaited<ReturnType<SessionCapability["deleteMany"]>>>();
     const deleteMany = vi
@@ -430,31 +348,15 @@ describe("sessions page agent-scope retirement", () => {
     }
   });
 
-  it("keeps a deep-link query and its session-bound checkpoint load across scope changes", async () => {
-    const checkpoints = createDeferred<SessionCompactionCheckpoint[]>();
-    const listCheckpoints = vi.fn<SessionCapability["listCheckpoints"]>(() => checkpoints.promise);
-    const sessions = createSessions({ listCheckpoints });
+  it("keeps an explicit deep-link query across scope changes", async () => {
+    const sessions = createSessions();
     const key = "agent:writer:old-1";
     const { page, changeScope } = await setupArchivedPageWithSelection("writer", sessions, key);
-    const request = page.loadCheckpoint(key);
-    try {
-      await vi.waitFor(() => expect(page.checkpointLoadingKey).toBe(key));
-      const query = vi.mocked(sessions.subscribeList).mock.calls.at(-1)?.[0];
-      expect(query).toMatchObject({ search: key, agentId: "writer" });
-      const calls = listCheckpoints.mock.calls.length;
-      changeScope("main");
-      await page.updateComplete;
-      expect(page.checkpointLoadingKey).toBe(key);
-      expect(vi.mocked(sessions.subscribeList).mock.calls.at(-1)?.[0]).toEqual(query);
-      expect(listCheckpoints).toHaveBeenCalledTimes(calls);
-      checkpoints.resolve([]);
-      await request;
-      expect(page.checkpointItemsByKey[key]).toEqual([]);
-      expect(page.checkpointLoadingKey).toBeNull();
-    } finally {
-      checkpoints.resolve([]);
-      await request;
-    }
+    const query = vi.mocked(sessions.subscribeList).mock.calls.at(-1)?.[0];
+    expect(query).toMatchObject({ search: key, agentId: "writer" });
+    changeScope("main");
+    await page.updateComplete;
+    expect(vi.mocked(sessions.subscribeList).mock.calls.at(-1)?.[0]).toEqual(query);
   });
 
   it("preserves the same-scope all-agent deleteAllArchived path", async () => {

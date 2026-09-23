@@ -86,8 +86,24 @@ const optionalReferenceFields = {
   deliveryMode: Type.Optional(Type.Enum(DELIVERY_MODES, { type: "string" })),
 };
 
-function actionObject<const Properties extends object>(
-  actions: readonly string[],
+const optionalPointerFields = {
+  displayFrameId: Type.Optional(Type.String()),
+  x: Type.Optional(Type.Number({ minimum: 0 })),
+  y: Type.Optional(Type.Number({ minimum: 0 })),
+};
+
+const browserTargetFields = {
+  browserRef: Type.String({ minLength: 1 }),
+  pageRef: Type.String({ minLength: 1 }),
+};
+
+const observedBrowserTargetFields = {
+  ...browserTargetFields,
+  observationId: Type.String({ minLength: 1 }),
+};
+
+function actionObject<const Actions extends string[], const Properties extends object>(
+  actions: readonly [...Actions],
   properties: Properties,
 ) {
   return Type.Object(
@@ -104,18 +120,14 @@ const ComputerActV1ParamsSchema = Type.Union([
   actionObject(
     ["left_click", "right_click", "middle_click", "double_click", "triple_click", "mouse_move"],
     {
-      displayFrameId: Type.Optional(Type.String()),
-      x: Type.Optional(Type.Number({ minimum: 0 })),
-      y: Type.Optional(Type.Number({ minimum: 0 })),
+      ...optionalPointerFields,
       modifiers: Type.Optional(Type.String()),
       ...optionalScreenFields,
       ...optionalReferenceFields,
     },
   ),
   actionObject(["left_click_drag"], {
-    displayFrameId: Type.Optional(Type.String()),
-    x: Type.Optional(Type.Number({ minimum: 0 })),
-    y: Type.Optional(Type.Number({ minimum: 0 })),
+    ...optionalPointerFields,
     fromX: Type.Optional(Type.Number({ minimum: 0 })),
     fromY: Type.Optional(Type.Number({ minimum: 0 })),
     durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -123,17 +135,13 @@ const ComputerActV1ParamsSchema = Type.Union([
     ...optionalReferenceFields,
   }),
   actionObject(["left_mouse_down", "left_mouse_up"], {
-    displayFrameId: Type.Optional(Type.String()),
-    x: Type.Optional(Type.Number({ minimum: 0 })),
-    y: Type.Optional(Type.Number({ minimum: 0 })),
+    ...optionalPointerFields,
     modifiers: Type.Optional(Type.String()),
     ...optionalScreenFields,
     ...optionalReferenceFields,
   }),
   actionObject(["scroll"], {
-    displayFrameId: Type.Optional(Type.String()),
-    x: Type.Optional(Type.Number({ minimum: 0 })),
-    y: Type.Optional(Type.Number({ minimum: 0 })),
+    ...optionalPointerFields,
     modifiers: Type.Optional(Type.String()),
     scrollDirection: Type.Optional(Type.Enum(SCROLL_DIRECTIONS, { type: "string" })),
     scrollAmount: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -208,8 +216,7 @@ export const ComputerActParamsSchema = Type.Union([
     windowRef: Type.String({ minLength: 1 }),
   }),
   actionObject(["get_browser_state"], {
-    browserRef: Type.String({ minLength: 1 }),
-    pageRef: Type.String({ minLength: 1 }),
+    ...browserTargetFields,
     snapshotFormat: Type.Optional(
       Type.Enum(["dom_refs_v1", "semantic_v2"] as const, { type: "string" }),
     ),
@@ -229,52 +236,42 @@ export const ComputerActParamsSchema = Type.Union([
     ),
   }),
   actionObject(["browser_navigate"], {
-    browserRef: Type.String({ minLength: 1 }),
-    pageRef: Type.String({ minLength: 1 }),
+    ...browserTargetFields,
     url: Type.String({ minLength: 1 }),
   }),
   actionObject(["browser_click"], {
-    browserRef: Type.String({ minLength: 1 }),
-    pageRef: Type.String({ minLength: 1 }),
-    observationId: Type.String({ minLength: 1 }),
+    ...observedBrowserTargetFields,
     elementRef: Type.Optional(Type.String({ minLength: 1 })),
     x: Type.Optional(Type.Number({ minimum: 0 })),
     y: Type.Optional(Type.Number({ minimum: 0 })),
     inputRoute: Type.Optional(Type.Enum(["trusted", "dom_event"] as const, { type: "string" })),
   }),
   actionObject(["browser_type"], {
-    browserRef: Type.String({ minLength: 1 }),
-    pageRef: Type.String({ minLength: 1 }),
-    observationId: Type.String({ minLength: 1 }),
+    ...observedBrowserTargetFields,
     elementRef: Type.String({ minLength: 1 }),
     text: Type.String(),
     mode: Type.Optional(Type.Enum(["insert_text", "keystrokes"] as const, { type: "string" })),
     replace: Type.Optional(Type.Boolean()),
   }),
   actionObject(["browser_dialog"], {
-    browserRef: Type.String({ minLength: 1 }),
-    pageRef: Type.String({ minLength: 1 }),
+    ...browserTargetFields,
     dialogAction: Type.Literal("inspect"),
   }),
   actionObject(["browser_dialog"], {
-    browserRef: Type.String({ minLength: 1 }),
-    pageRef: Type.String({ minLength: 1 }),
+    ...browserTargetFields,
     dialogAction: Type.Literal("accept"),
     dialogRef: Type.String({ minLength: 1 }),
     promptText: Type.Optional(Type.String()),
     deliveryMode: Type.Optional(Type.Enum(DELIVERY_MODES, { type: "string" })),
   }),
   actionObject(["browser_dialog"], {
-    browserRef: Type.String({ minLength: 1 }),
-    pageRef: Type.String({ minLength: 1 }),
+    ...browserTargetFields,
     dialogAction: Type.Literal("dismiss"),
     dialogRef: Type.String({ minLength: 1 }),
     deliveryMode: Type.Optional(Type.Enum(DELIVERY_MODES, { type: "string" })),
   }),
   actionObject(["browser_set_input_files"], {
-    browserRef: Type.String({ minLength: 1 }),
-    pageRef: Type.String({ minLength: 1 }),
-    observationId: Type.String({ minLength: 1 }),
+    ...observedBrowserTargetFields,
     elementRef: Type.String({ minLength: 1 }),
     resourceHandles: Type.Array(Type.String({ pattern: COMPUTER_RESOURCE_HANDLE_PATTERN }), {
       minItems: 1,
@@ -282,15 +279,11 @@ export const ComputerActParamsSchema = Type.Union([
     }),
   }),
   actionObject(["browser_download"], {
-    browserRef: Type.String({ minLength: 1 }),
-    pageRef: Type.String({ minLength: 1 }),
-    observationId: Type.String({ minLength: 1 }),
+    ...observedBrowserTargetFields,
     elementRef: Type.String({ minLength: 1 }),
   }),
   actionObject(["browser_pointer"], {
-    browserRef: Type.String({ minLength: 1 }),
-    pageRef: Type.String({ minLength: 1 }),
-    observationId: Type.String({ minLength: 1 }),
+    ...observedBrowserTargetFields,
     pointerAction: Type.Enum(["hover", "right_click", "double_click", "scroll", "drag"] as const, {
       type: "string",
     }),

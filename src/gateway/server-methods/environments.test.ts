@@ -6,8 +6,10 @@ import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import { NODE_RUNNER_UPDATE_REQUIRED_ISSUE } from "../../infra/node-runner-inventory.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
+import * as rfbProbe from "../desktop/rfb-probe.js";
 import { collectNodeCatalogRuntimeState } from "../node-registry-private.js";
-import { environmentsHandlers, summarizeWorkerEnvironment } from "./environments.js";
+import { summarizeWorkerEnvironment } from "../worker-environments/environment-summary.js";
+import { environmentsHandlers } from "./environments.js";
 import {
   callEnvironmentMethod,
   FakeWorkerServiceError,
@@ -59,6 +61,60 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("environment gateway methods", () => {
+  it("probes disabled host setup only when requested without advertising or granting desktop access", async () => {
+    const probe = vi.spyOn(rfbProbe, "probeRfbServer").mockResolvedValue({
+      kind: "rfb",
+      securityTypes: [30],
+    });
+    const [defaultOk, defaultPayload] = await callEnvironmentMethod("environments.list", {});
+    expect(defaultOk).toBe(true);
+    expect(probe).not.toHaveBeenCalled();
+    expect(defaultPayload).not.toHaveProperty("environments.0.desktopSetup");
+
+    const [profilesOk, profilesPayload] = await callEnvironmentMethod("environments.list", {
+      projection: "profiles",
+      includeDesktopSetup: true,
+    });
+    expect(profilesOk).toBe(true);
+    expect(profilesPayload).toEqual({ environments: [] });
+    expect(probe).not.toHaveBeenCalled();
+
+    const [setupOk, setupPayload] = await callEnvironmentMethod("environments.list", {
+      includeDesktopSetup: true,
+    });
+    expect(setupOk).toBe(true);
+    expect(setupPayload).toHaveProperty("environments.0.desktopSetup", { state: "ready" });
+    expect(setupPayload).not.toHaveProperty("environments.0.desktop");
+    expect(setupPayload).not.toHaveProperty("environments.1.desktopSetup");
+
+    const observe = vi.fn();
+    const respond = vi.fn();
+    await environmentsHandlers["desktop.observe"]?.({
+      params: { source: { kind: "host" } },
+      respond,
+      context: { ...mockContext(), hostDesktopService: { observe } },
+    } as never);
+    expect(respond.mock.calls[0]?.[0]).toBe(false);
+    expect(observe).not.toHaveBeenCalled();
+  });
+
+  it("does not probe setup for an already enabled host desktop", async () => {
+    const probe = vi.spyOn(rfbProbe, "probeRfbServer");
+    const respond = vi.fn();
+    await environmentsHandlers["environments.list"]?.({
+      params: { includeDesktopSetup: true },
+      respond,
+      context: {
+        ...mockContext(),
+        getRuntimeConfig: () => ({ desktop: { host: { enabled: true } } }),
+      },
+    } as never);
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(respond.mock.calls[0]?.[1]).toHaveProperty("environments.0.desktop", true);
+    expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("environments.0.desktopSetup");
+    expect(probe).not.toHaveBeenCalled();
+  });
+
   it.each(["locked", "unlocked", "unknown"])(
     "projects %s desktop availability only from its matching live node",
     async (state) => {
@@ -358,6 +414,26 @@ describe("environment gateway methods", () => {
       expect(profile).not.toHaveProperty("executionMode");
       expect(profile).not.toHaveProperty("executionModes");
     }
+  });
+
+  it("projects display identity without exposing settings or changing routing", async () => {
+    const service = workerService({
+      readProviderDisplayId: vi.fn((id) => (id === "aws" ? "azure" : undefined)),
+    });
+    const [ok, payload] = await callEnvironmentMethod(
+      "environments.list",
+      { projection: "profiles" },
+      { service },
+    );
+    expect(ok).toBe(true);
+    expect(payload).toEqual({
+      environments: [],
+      profiles: [
+        { id: "aws", providerId: "crabbox", providerDisplayId: "azure" },
+        { id: "zeta", providerId: "static-ssh" },
+      ],
+    });
+    expect(service.create).not.toHaveBeenCalled();
   });
 
   it.each([undefined, []])(

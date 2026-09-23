@@ -521,6 +521,7 @@ describe("OpenClaw shell route session commits", () => {
         gateway: { setSessionKey: vi.fn(), snapshot },
         sessions: createRouteSessions(),
         chatSubmissions: createChatSubmissions(),
+        placementStartup: { get: vi.fn(() => null) },
         replace,
       } as unknown as ApplicationContext,
     };

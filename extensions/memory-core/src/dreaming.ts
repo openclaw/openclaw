@@ -71,9 +71,9 @@ function resolveDreamingTriggerSessionKeys(sessionKey?: string): string[] {
   return uniqueStrings(keys);
 }
 
-function hasPendingManagedDreamingCronEvent(sessionKey?: string): boolean {
+function hasPendingManagedDreamingCronEvent(sessionKey?: string, agentId?: string): boolean {
   return resolveDreamingTriggerSessionKeys(sessionKey).some((candidateSessionKey) =>
-    peekSystemEventEntries(candidateSessionKey).some(
+    peekSystemEventEntries(candidateSessionKey, agentId).some(
       (event) =>
         event.contextKey?.startsWith("cron:") === true &&
         normalizeOptionalString(event.text) === DREAMING_SYSTEM_EVENT_TEXT,
@@ -609,12 +609,9 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
           event.cleanedBody,
           DREAMING_SYSTEM_EVENT_TEXT,
         );
-        const isManagedHeartbeatTrigger =
-          ctx.trigger === "heartbeat" && hasPendingManagedDreamingCronEvent(ctx.sessionKey);
-        const isManagedCronTrigger = ctx.trigger === "cron";
-        const shouldHandleManagedDreaming =
-          hasManagedDreamingToken && (isManagedHeartbeatTrigger || isManagedCronTrigger);
-        if (!shouldHandleManagedDreaming) {
+        const isManagedTrigger =
+          ctx.trigger === "cron" || hasPendingManagedDreamingCronEvent(ctx.sessionKey, ctx.agentId);
+        if (!hasManagedDreamingToken || !isManagedTrigger) {
           return undefined;
         }
         const config = resolveMemoryDeepDreamingConfig({

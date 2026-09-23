@@ -284,20 +284,6 @@ function normalizeBase64Payload(params: { base64?: string; contentType?: string 
   };
 }
 
-function resolveSendBufferMaxBytes(params: {
-  cfg: OpenClawConfig;
-  channel: ChannelId;
-  accountId?: string | null;
-}): number {
-  return (
-    resolveAttachmentMaxBytes({
-      cfg: params.cfg,
-      channel: params.channel,
-      accountId: params.accountId,
-    }) ?? MEDIA_MAX_BYTES
-  );
-}
-
 function validateBoundedBase64Attachment(params: { base64: string; maxBytes: number }): string {
   const estimatedBytes = estimateBase64DecodedBytes(params.base64);
   if (estimatedBytes > params.maxBytes) {
@@ -341,38 +327,25 @@ async function hydrateSendBufferMediaParams(params: {
     inferAttachmentFilename({
       contentType: normalized.contentType,
     });
-  const maxBytes = resolveSendBufferMaxBytes(params);
+  const maxBytes = resolveAttachmentMaxBytes(params) ?? MEDIA_MAX_BYTES;
   const canonicalBase64 = validateBoundedBase64Attachment({
     base64: normalized.base64,
     maxBytes,
   });
-  if (params.dryRun || params.preserveBuffer) {
-    params.args.media = SEND_BUFFER_DRY_RUN_MEDIA_URL;
-    params.args.mediaUrl = SEND_BUFFER_DRY_RUN_MEDIA_URL;
-    params.args.mediaUrls = [SEND_BUFFER_DRY_RUN_MEDIA_URL];
-    if (!params.preserveBuffer) {
-      delete params.args.buffer;
-    }
-    if (normalized.contentType && !readToolStringParam(params.args, "contentType")) {
-      params.args.contentType = normalized.contentType;
-    }
-    if (filename && !readToolStringParam(params.args, "filename")) {
-      params.args.filename = filename;
-    }
-    return;
-  }
-  const staged = await resolveOutboundAttachmentFromBuffer(
-    Buffer.from(canonicalBase64, "base64"),
-    maxBytes,
-    {
-      contentType: normalized.contentType,
-      filename,
-    },
-  );
+  const staged =
+    params.dryRun || params.preserveBuffer
+      ? { path: SEND_BUFFER_DRY_RUN_MEDIA_URL, contentType: normalized.contentType }
+      : await resolveOutboundAttachmentFromBuffer(
+          Buffer.from(canonicalBase64, "base64"),
+          maxBytes,
+          { contentType: normalized.contentType, filename },
+        );
   params.args.media = staged.path;
   params.args.mediaUrl = staged.path;
   params.args.mediaUrls = [staged.path];
-  delete params.args.buffer;
+  if (!params.preserveBuffer) {
+    delete params.args.buffer;
+  }
   if (staged.contentType && !readToolStringParam(params.args, "contentType")) {
     params.args.contentType = staged.contentType;
   }
@@ -436,20 +409,7 @@ function buildAttachmentMediaLoadOptions(params: {
   policy: AttachmentMediaPolicy;
   maxBytes?: number;
   optimizeImages?: boolean;
-}):
-  | {
-      maxBytes?: number;
-      optimizeImages?: boolean;
-      sandboxValidated: true;
-      readFile: (filePath: string) => Promise<Buffer>;
-    }
-  | {
-      maxBytes?: number;
-      localRoots?: readonly string[] | "any";
-      readFile?: OutboundMediaReadFile;
-      hostReadCapability?: boolean;
-      optimizeImages?: boolean;
-    } {
+}) {
   if (params.policy.mode === "sandbox") {
     const sandboxRoot = params.policy.sandboxRoot.trim();
     let sandboxFsPromise: ReturnType<typeof root> | undefined;

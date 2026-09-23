@@ -2,6 +2,7 @@ import { vi } from "vitest";
 import type { AssistantMessage } from "../llm/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PreparedAgentRunAdmission } from "./admitted-run-context.js";
+import type { RunCliAgentParams } from "./cli-runner/types.js";
 import type {
   AgentHarnessSelectionDecision,
   AgentHarnessSelectionDecisionParams,
@@ -9,7 +10,7 @@ import type {
 import type { AgentHarness } from "./harness/types.js";
 import { createEmptyPluginMetadataSnapshot } from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
 
-export type IsolatedCliRunParams = {
+export type IsolatedCliRunParams = RunCliAgentParams & {
   preparedRunAdmission: PreparedAgentRunAdmission;
   prompt: string;
   runId: string;
@@ -40,10 +41,12 @@ const isolatedCompletionMocks = vi.hoisted(() => ({
 
 export { isolatedCompletionMocks };
 
-vi.mock("./agent-scope.js", () => ({
+vi.mock("./agent-scope.js", async () => ({
+  ...(await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js")),
   resolveAgentDir: () => "/tmp/agent",
   resolveAgentWorkspaceDir: () => "/tmp/workspace",
   resolveDefaultAgentId: () => "main",
+  resolveSessionAgentIds: () => ({ defaultAgentId: "main", sessionAgentId: "main" }),
 }));
 vi.mock("./cli-backends.js", () => ({
   resolveCliBackendConfig: isolatedCompletionMocks.resolveCliBackendConfig,

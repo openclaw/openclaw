@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readSourceConfigBestEffort, resetConfigRuntimeState } from "../config/config.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
@@ -14,6 +15,7 @@ import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { applyClawAddPlan } from "./add.js";
+import { workspaceContainsUntrackedEntries } from "./lifecycle-delete-support.js";
 import type { ClawRemoveApplyOptions, ClawRemoveResult } from "./lifecycle-remove-contract.js";
 import {
   buildClawRemovalFixture,
@@ -21,8 +23,9 @@ import {
 } from "./lifecycle-remove.test-support.js";
 import { applyClawRemovePlan, buildClawRemovePlan } from "./lifecycle-state.js";
 import { readClawInstallRecord, persistClawPackageRef, readClawPackageRefs } from "./provenance.js";
-import { readClawWorkspaceFiles } from "./workspace.js";
+import { readClawWorkspaceFiles, upsertClawWorkspaceFile } from "./workspace.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).toReversed()) {
@@ -84,6 +87,84 @@ function expireDeletionLease(): void {
 }
 
 describe("Claw removal operation ownership", () => {
+  it("preserves operator files when a tracked directory disappears during child enumeration", async () => {
+    const current = await fixture(true);
+    const trackedDirectory = path.join(current.workspace, "a");
+    await fs.mkdir(trackedDirectory);
+    await fs.writeFile(path.join(trackedDirectory, "tracked.md"), "managed\n");
+    const trackedFile = readClawWorkspaceFiles("worker")[0];
+    if (!trackedFile) {
+      throw new Error("expected managed workspace file");
+    }
+    upsertClawWorkspaceFile({ ...trackedFile, path: "a/tracked.md" });
+    const operatorDirectory = path.join(current.workspace, "z");
+    await fs.mkdir(operatorDirectory);
+    const operatorFile = path.join(operatorDirectory, "operator-note.txt");
+    await fs.writeFile(operatorFile, "keep me\n");
+    const readDirectory = fs.readdir.bind(fs);
+    let readdir: MockInstance<typeof fs.readdir> | undefined;
+    let raced = false;
+    const trashPath = vi.fn(current.trashPath);
+    try {
+      const result = await current.remove({
+        monitorGateway: {
+          ...quiescentClawMonitorGateway,
+          drain: async (...args) => {
+            await quiescentClawMonitorGateway.drain(...args);
+            readdir = vi.spyOn(fs, "readdir").mockImplementation(async (directory, options) => {
+              const entries = await readDirectory(directory, options);
+              if (directory === current.workspace && !raced) {
+                raced = true;
+                await fs.rm(trackedDirectory, { recursive: true });
+                return entries.toSorted((left, right) =>
+                  left.name.toString().localeCompare(right.name.toString()),
+                );
+              }
+              return entries;
+            });
+          },
+        },
+        purgeSessions: async () => undefined,
+        trashPath,
+      });
+      expect(raced).toBe(true);
+      expect(result).toMatchObject({ status: "complete", agentRemoved: true });
+      expect(result.workspaceFiles).toContainEqual({ path: "a/tracked.md", action: "deleted" });
+      await expect(fs.readFile(operatorFile, "utf8")).resolves.toBe("keep me\n");
+      expect(trashPath).not.toHaveBeenCalledWith(current.workspace, expect.anything());
+    } finally {
+      readdir?.mockRestore();
+    }
+  });
+
+  it("retains the workspace when root dirent resolution loses a child", async () => {
+    const workspace = tempDirs.make("claw-inventory-");
+    const child = path.join(workspace, "a");
+    await fs.mkdir(child);
+    const readDirectory = fs.readdir.bind(fs);
+    const readdir = vi.spyOn(fs, "readdir").mockImplementation(async (directory, options) => {
+      const entries = await readDirectory(directory, options);
+      if (directory === workspace) {
+        await fs.rm(child, { recursive: true });
+        // Node resolves unknown dirent types with lstat and forwards the child error.
+        await fs.lstat(child);
+      }
+      return entries;
+    });
+    try {
+      await expect(workspaceContainsUntrackedEntries(workspace, ["a/tracked.md"])).resolves.toBe(
+        true,
+      );
+    } finally {
+      readdir.mockRestore();
+    }
+  });
+
+  it("recognizes a missing workspace root as empty", async () => {
+    const root = path.join(tempDirs.make("claw-inventory-"), "missing");
+    await expect(workspaceContainsUntrackedEntries(root, [])).resolves.toBe(false);
+  });
+
   it.each(["transport", "runtime"])(
     "keeps partial state after package %s failure without local fallback",
     async (failure) => {

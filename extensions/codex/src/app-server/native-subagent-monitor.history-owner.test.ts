@@ -8,6 +8,7 @@ import {
 } from "./client-runtime.js";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
 import type { CodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
+import { defaultNativeSubagentMonitorRuntime } from "./native-subagent-monitor-runtime.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { threadRead } from "./native-subagent-monitor.test-support.js";
 
@@ -164,7 +165,10 @@ describe("automatic native task history ownership", () => {
         taskRuntimeScope: scope,
         agentId: "main",
         ...(owner ? { historyOwner: owner } : {}),
-        runtime: { createAgentHarnessTaskRuntime, deliverAgentHarnessTaskCompletion: deliver },
+        runtime: {
+          ...defaultNativeSubagentMonitorRuntime,
+          deliverAgentHarnessTaskCompletion: deliver,
+        },
       });
       try {
         await parent.unregister();
@@ -288,7 +292,10 @@ it.each([
       agentId: "main",
       taskRuntimeScope,
       historyOwner: { ...originalHistory, parentThreadId: currentParent },
-      runtime: { createAgentHarnessTaskRuntime, deliverAgentHarnessTaskCompletion: deliver },
+      runtime: {
+        ...defaultNativeSubagentMonitorRuntime,
+        deliverAgentHarnessTaskCompletion: deliver,
+      },
     };
     let replacement = codexNativeSubagentMonitorRuntime.register(registration);
     replacement.bindTurn("replacement-parent-turn");

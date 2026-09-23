@@ -178,6 +178,10 @@ describe("normalizeAttachments", () => {
       fact: { fileName: "diagram.svg", contentType: "application/octet-stream" },
     },
     {
+      name: "SVG source before a raster display filename",
+      fact: { path: "/tmp/diagram.svg", fileName: "photo.png" },
+    },
+    {
       name: "authoritative document kind",
       fact: { fileName: "photo.png", kind: "document" as const },
     },
@@ -225,6 +229,8 @@ describe("resolveAttachmentKind", () => {
     { source: "/tmp/photo.heif", expected: "image" },
     { source: "/tmp/scan.tif", expected: "image" },
     { source: "/tmp/scan.TIFF", expected: "image" },
+    { source: " /tmp/photo.png ", expected: "image" },
+    { source: " /tmp/scan.TIFF ", expected: "image" },
     { source: "/tmp/clip.flv", expected: "video" },
     { source: "/tmp/clip.m4v", expected: "video" },
     { source: "/tmp/clip.wmv", expected: "video" },

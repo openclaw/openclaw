@@ -46,7 +46,7 @@ empty:
 | `package-update-openai`                                         | OpenAI package and tool-call proof, Codex on-demand install and live progress, root-managed VPS upgrades, and authenticated update restart. |
 | `package-update-onboarding`                                     | Channel onboarding, install switching, and skill installation.                                                                              |
 | `package-update-migrations`                                     | Channel switching and published-package upgrade survival.                                                                                   |
-| `package-update-self-upgrade`                                   | Local upgrade survival and authenticated package self-upgrade.                                                                              |
+| `package-update-self-upgrade`                                   | Local upgrade survival and compatibility with published September update drivers.                                                           |
 | `plugins-runtime-plugins`                                       | Plugin runtime lanes that exercise plugin behavior.                                                                                         |
 | `plugins-runtime-services`                                      | Service-backed and live plugin runtime lanes.                                                                                               |
 | `plugins-runtime-install-a` through `plugins-runtime-install-h` | Plugin install/runtime batches split for parallel release validation.                                                                       |

@@ -49,7 +49,25 @@ it.each(["keep", "close", "replace"] as const)(
         Number(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count);
       const before = freePages();
       expect(before).toBeGreaterThan(512);
-      const exec = vi.spyOn(database.db, "exec");
+      const tickReclaimed = createDeferredCore();
+      let requestedPages = 0;
+      let foreground: Promise<void> | undefined;
+      let foregroundFreePages = 0;
+      const execute = database.db.exec.bind(database.db);
+      const exec = vi.spyOn(database.db, "exec").mockImplementation((sql) => {
+        execute(sql);
+        if (sql.startsWith("PRAGMA incremental_vacuum(")) {
+          requestedPages += Number(sql.match(/\((\d+)\)/)?.[1]);
+          if (requestedPages === 512) {
+            tickReclaimed.resolve();
+          }
+          if (!foreground) {
+            foreground = runOpenClawAgentWriteAdmission(options, () => {
+              foregroundFreePages = freePages();
+            });
+          }
+        }
+      });
       const prepare = vi.spyOn(database.db, "prepare");
       const vacuumCalls = () =>
         exec.mock.calls.filter(([sql]) => sql.startsWith("PRAGMA incremental_vacuum("));
@@ -81,19 +99,25 @@ it.each(["keep", "close", "replace"] as const)(
       } finally {
         release.resolve();
         await reservation;
+        if (retirement === "keep") {
+          await tickReclaimed.promise;
+        }
         await runOpenClawAgentWriteAdmission(options, () => undefined);
+        await foreground;
       }
-      expect(vacuumCalls()).toEqual(
-        retirement === "keep" ? [["PRAGMA incremental_vacuum(512);"]] : [],
-      );
       if (retirement === "keep") {
-        expect(checkpointCalls()).toEqual([["PRAGMA wal_checkpoint(PASSIVE);"]]);
+        expect(vacuumCalls()[0]).toEqual(["PRAGMA incremental_vacuum(8);"]);
+        expect(requestedPages).toBe(512);
+        expect(checkpointCalls()).toHaveLength(vacuumCalls().length * 2);
+        expect(checkpointCalls().every(([sql]) => sql === "PRAGMA wal_checkpoint(PASSIVE);")).toBe(
+          true,
+        );
         const reclaimed = before - freePages();
-        expect(reclaimed).toBeGreaterThan(0);
-        expect(reclaimed).toBeLessThanOrEqual(512);
-        periodic();
-        await runOpenClawAgentWriteAdmission(options, () => undefined);
-        expect(vacuumCalls()).toHaveLength(2);
+        expect(reclaimed).toBe(512);
+        expect(foregroundFreePages).toBeGreaterThan(before - 512);
+        expect(foregroundFreePages).toBeLessThan(before);
+      } else {
+        expect(vacuumCalls()).toEqual([]);
       }
     });
   },
@@ -196,6 +220,9 @@ it.each([
     const root = tempDirs.make("openclaw-worker-wal-admission-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
       const initialized = openOpenClawAgentDatabase({ agentId: "main" });
+      initialized.db.exec(`INSERT INTO cache_entries(scope, key, blob, updated_at)
+        VALUES ('wal-proof', 'pages', zeroblob(4194304), 1);
+        DELETE FROM cache_entries WHERE scope = 'wal-proof';`);
       const options = {
         agentId: "main",
         path: initialized.path,

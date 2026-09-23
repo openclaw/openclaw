@@ -38,7 +38,6 @@ import {
   readAgentRunTerminalOutcome,
 } from "../channels/turn/agent-run-terminal-outcome.js";
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   listSessionEntriesCore,
   loadSessionEntry,
@@ -75,11 +74,17 @@ import {
   createOutboundTestPlugin,
   createTestRegistry,
 } from "../test-utils/channel-plugins.js";
-import {
-  deliveryContextFromSession,
-  normalizeSessionDeliveryState,
-} from "../utils/delivery-context.shared.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { getAgentAttemptExecutionMocks } from "./agent-command-state.test-mocks.js";
+import {
+  createDefaultAgentResult,
+  expectOwnedCommandSession,
+  expectSqliteSessionFileMarker,
+  readSessionStore,
+  useRealCommandSessionPersistence,
+  writeSessionStoreSeed,
+} from "./agent-session.test-support.js";
 import { agentCommand, agentCommandFromIngress } from "./agent.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -122,18 +127,6 @@ vi.mock("../auto-reply/reply/session-stable-reply-mode.js", () => ({
   // Session-stable policy has owner coverage in the reply resolver suite. This
   // command suite only owns forwarding its result into CLI binding facts.
   resolveSessionStableReplyMode: vi.fn(() => "automatic"),
-}));
-
-vi.mock("../auto-reply/reply/source-reply-delivery-mode.js", () => ({
-  // Source-reply policy has focused owner coverage. Command preparation only
-  // needs to distinguish synthetic turns before forwarding stable facts.
-  isSyntheticSourceReplyTurn: (params: {
-    inputProvenance?: { kind?: string };
-    isHeartbeat?: boolean;
-  }) =>
-    params.isHeartbeat === true ||
-    params.inputProvenance?.kind === "inter_session" ||
-    params.inputProvenance?.kind === "internal_system",
 }));
 
 vi.mock("../agents/harness/selection.js", () => ({
@@ -382,34 +375,6 @@ function mockUserInvocableSkills(params: {
   vi.mocked(loadWorkspaceSkills).mockReturnValue(entries);
 }
 
-async function writeSessionStoreSeed(
-  storePath: string,
-  sessions: Record<string, Record<string, unknown>>,
-): Promise<void> {
-  fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  for (const [sessionKey, entry] of Object.entries(sessions)) {
-    const sessionId = typeof entry.sessionId === "string" ? entry.sessionId : sessionKey;
-    await replaceSessionEntry({ sessionKey, storePath }, {
-      ...entry,
-      sessionId,
-      updatedAt: typeof entry.updatedAt === "number" ? entry.updatedAt : Date.now(),
-    } as SessionEntry);
-  }
-}
-
-function createDefaultAgentResult(params?: {
-  payloads?: Array<Record<string, unknown>>;
-  durationMs?: number;
-}) {
-  return {
-    payloads: params?.payloads ?? [{ text: "ok" }],
-    meta: {
-      durationMs: params?.durationMs ?? 5,
-      agentMeta: { sessionId: "s", provider: "p", model: "m" },
-    },
-  };
-}
-
 function getLastEmbeddedCall() {
   return vi.mocked(runEmbeddedAgent).mock.calls.at(-1)?.[0];
 }
@@ -418,28 +383,6 @@ function expectLastRunProviderModel(provider: string, model: string): void {
   const callArgs = getLastEmbeddedCall();
   expect(callArgs?.provider).toBe(provider);
   expect(callArgs?.model).toBe(model);
-}
-
-function readSessionStore<T>(storePath: string): Record<string, T> {
-  return Object.fromEntries(
-    listSessionEntriesCore({ storePath }).map(({ entry, sessionKey }) => [sessionKey, entry as T]),
-  );
-}
-
-function expectSqliteSessionFileMarker(params: {
-  agentId: string;
-  sessionFile: string | undefined;
-  sessionId?: string;
-  storePath: string;
-}): void {
-  const marker = parseSqliteSessionFileMarker(params.sessionFile);
-  expect(marker?.agentId).toBe(params.agentId);
-  if (params.sessionId) {
-    expect(marker?.sessionId).toBe(params.sessionId);
-  } else {
-    expect(marker?.sessionId).toBeTruthy();
-  }
-  expect(marker?.storePath).toBe(path.resolve(params.storePath));
 }
 
 async function runAgentWithSessionKey(sessionKey: string): Promise<void> {
@@ -575,7 +518,7 @@ describe("agentCommand", () => {
         ];
         await replaceTranscriptEvents(priorScope, transcript);
         const priorEntry = loadSessionEntry(priorScope);
-        const { member } = addSessionMember(priorScope, {
+        const { member } = await addSessionMember(priorScope, {
           identityId: "boot-history-reader",
           addedBy: "operator",
         });
@@ -2699,6 +2642,10 @@ describe("agentCommand", () => {
   });
 
   it("uses explicit session keys for embedded runs", async () => {
+    await useRealCommandSessionPersistence();
+    vi.mocked(runEmbeddedAgent).mockImplementation(async ({ sessionId }) =>
+      createDefaultAgentResult({ sessionId }),
+    );
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       mockConfig(home, store, undefined, undefined, [{ id: "main" }, { id: "ops" }]);
@@ -2724,11 +2671,28 @@ describe("agentCommand", () => {
         await agentCommand({ message: "hi", agentId: "ops", sessionKey }, runtime);
 
         callArgs = getLastEmbeddedCall();
+        const sessionId = expectDefined(callArgs?.sessionId, "embedded session id");
         expect(callArgs?.agentId).toBe("ops");
         expect(callArgs?.sessionKey).toBe(sessionKey);
         expectSqliteSessionFileMarker({
           agentId: "ops",
           sessionFile: callArgs?.sessionFile,
+          storePath: store,
+        });
+        expectOwnedCommandSession({
+          agentId: "ops",
+          excludedAgentId: "main",
+          sessionKey,
+          sessionId,
+          storePath: store,
+        });
+        await agentCommand({ message: "again", sessionId }, runtime);
+        expect(getLastEmbeddedCall()).toMatchObject({ agentId: "ops", sessionKey, sessionId });
+        expectOwnedCommandSession({
+          agentId: "ops",
+          excludedAgentId: "main",
+          sessionKey,
+          sessionId,
           storePath: store,
         });
       }
@@ -2790,6 +2754,10 @@ describe("agentCommand", () => {
   });
 
   it("scopes bare explicit session keys to the default agent for embedded runs", async () => {
+    await useRealCommandSessionPersistence();
+    vi.mocked(runEmbeddedAgent).mockImplementation(async ({ sessionId }) =>
+      createDefaultAgentResult({ sessionId }),
+    );
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       mockConfig(home, store, undefined, undefined, [{ id: "ops", default: true }, { id: "main" }]);
@@ -2800,27 +2768,34 @@ describe("agentCommand", () => {
       expect(callArgs?.agentId).toBe("ops");
       expect(callArgs?.sessionKey).toBe("agent:ops:incident-42");
 
-      await agentCommand({ message: "hi", sessionKey: "global" }, runtime);
-
-      callArgs = getLastEmbeddedCall();
-      expect(callArgs?.agentId).toBe("ops");
-      expect(callArgs?.sessionKey).toBe("global");
-      expectSqliteSessionFileMarker({
-        agentId: "ops",
-        sessionFile: callArgs?.sessionFile,
-        storePath: store,
-      });
-
-      await agentCommand({ message: "hi", sessionKey: "unknown" }, runtime);
-
-      callArgs = getLastEmbeddedCall();
-      expect(callArgs?.agentId).toBe("ops");
-      expect(callArgs?.sessionKey).toBe("unknown");
-      expectSqliteSessionFileMarker({
-        agentId: "ops",
-        sessionFile: callArgs?.sessionFile,
-        storePath: store,
-      });
+      for (const sessionKey of ["global", "unknown"]) {
+        await agentCommand({ message: "hi", sessionKey }, runtime);
+        callArgs = getLastEmbeddedCall();
+        const sessionId = expectDefined(callArgs?.sessionId, "embedded session id");
+        expect(callArgs?.agentId).toBe("ops");
+        expect(callArgs?.sessionKey).toBe(sessionKey);
+        expectSqliteSessionFileMarker({
+          agentId: "ops",
+          sessionFile: callArgs?.sessionFile,
+          storePath: store,
+        });
+        expectOwnedCommandSession({
+          agentId: "ops",
+          excludedAgentId: "main",
+          sessionKey,
+          sessionId,
+          storePath: store,
+        });
+        await agentCommand({ message: "again", sessionKey }, runtime);
+        expect(getLastEmbeddedCall()?.sessionId).toBe(sessionId);
+        expectOwnedCommandSession({
+          agentId: "ops",
+          excludedAgentId: "main",
+          sessionKey,
+          sessionId,
+          storePath: store,
+        });
+      }
     });
   });
 });

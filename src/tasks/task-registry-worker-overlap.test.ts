@@ -10,6 +10,7 @@ import {
   deleteTaskFlowRecordById,
   ensureTaskFlowRegistryReadyAsync,
   getTaskFlowById,
+  readResidentTaskFlow,
   runTaskFlowRegistryWorkerMutation,
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-registry.js";
@@ -42,6 +43,7 @@ type OverlapOwner = {
     readStarted: () => void,
     committed: () => void,
     release: Promise<void>,
+    beforeObservers?: () => Promise<void>,
     beforeMutation?: Promise<void>,
   ) => Promise<number>;
   current: () => string | undefined;
@@ -85,12 +87,13 @@ async function prepareOwner(kind: "task" | "flow"): Promise<OverlapOwner> {
       events,
       writes,
       reads,
-      run(version, readStarted, committed, release, beforeMutation) {
+      run(version, readStarted, committed, release, beforeObservers, beforeMutation) {
         let receipt: TaskRecord | undefined;
         return runTaskRegistryWorkerMutation(
           {
             admission: context.admission,
             scope: { taskId: initial.taskId },
+            beforeObservers,
             publicationRecords: () => new Map(receipt ? [[receipt.taskId, receipt]] : []),
           },
           async () => {
@@ -141,20 +144,11 @@ async function prepareOwner(kind: "task" | "flow"): Promise<OverlapOwner> {
   });
   configureTaskFlowRegistryRuntime({ store });
   await ensureTaskFlowRegistryReadyAsync(context);
-  configureTaskFlowRegistryRuntime({
-    observers: {
-      onEvent(event) {
-        if (event.kind !== "restored") {
-          events.push(event.kind === "deleted" ? "deleted" : event.flow.goal);
-        }
-      },
-    },
-  });
   return {
     events,
     writes,
     reads,
-    run: (version, readStarted, committed, release, beforeMutation) =>
+    run: (version, readStarted, committed, release, _beforeObservers, beforeMutation) =>
       runTaskFlowRegistryWorkerMutation(
         { admission: context.admission, flowId: initial.flowId },
         async () => {
@@ -180,7 +174,7 @@ async function prepareOwner(kind: "task" | "flow"): Promise<OverlapOwner> {
           return record;
         },
       ),
-    current: () => getTaskFlowById(initial.flowId)?.goal,
+    current: () => readResidentTaskFlow(initial.flowId)?.goal,
     synchronous(value) {
       if (value === undefined) {
         expect(deleteTaskFlowRecordById(initial.flowId)).toBe(true);
@@ -202,6 +196,72 @@ async function prepareOwner(kind: "task" | "flow"): Promise<OverlapOwner> {
 }
 
 describe("overlapping worker publication", () => {
+  it("does not publish a newer row while its flow effects still wait after older effects finish", async () => {
+    const taskOwner = await prepareOwner("task");
+    const flowOwner = await prepareOwner("flow");
+    const firstEffectsStarted = createDeferred();
+    const secondEffectsStarted = createDeferred();
+    const firstEffectsRelease = createDeferred();
+    const secondEffectsRelease = createDeferred();
+    const effects: string[] = [];
+    const first = taskOwner.run(
+      1,
+      () => {},
+      () => {},
+      Promise.resolve(),
+      async () => {
+        await flowOwner.run(
+          1,
+          () => {},
+          () => {},
+          Promise.resolve(),
+        );
+        firstEffectsStarted.resolve();
+        await firstEffectsRelease.promise;
+        effects.push("A-finish");
+      },
+    );
+    await firstEffectsStarted.promise;
+    const second = taskOwner.run(
+      2,
+      () => {},
+      () => {},
+      Promise.resolve(),
+      async () => {
+        secondEffectsStarted.resolve();
+        await secondEffectsRelease.promise;
+        await flowOwner.run(
+          2,
+          () => {},
+          () => {},
+          Promise.resolve(),
+        );
+        effects.push("B-finish");
+      },
+    );
+    try {
+      await secondEffectsStarted.promise;
+      firstEffectsRelease.resolve();
+      expect(await Promise.race([first.then(() => true), setImmediate().then(() => false)])).toBe(
+        true,
+      );
+      expect(effects).toEqual(["A-finish"]);
+      expect(flowOwner.current()).toBe("v1");
+      expect(taskOwner.events).not.toContain("v2");
+      secondEffectsRelease.resolve();
+      await expect(Promise.all([first, second])).resolves.toEqual([1, 2]);
+      expect(taskOwner.events.at(-1)).toBe("v2");
+      expect(flowOwner.current()).toBe("v2");
+      expect(effects).toEqual(["A-finish", "B-finish"]);
+      expect(taskOwner.writes).toEqual([1, 2]);
+      expect(flowOwner.writes).toEqual([1, 2]);
+    } finally {
+      firstEffectsRelease.resolve();
+      secondEffectsRelease.resolve();
+      await Promise.allSettled([first, second]);
+    }
+  });
+
   it.each(["task", "flow"] as const)(
     "%s keeps a settled burst in phase order and releases a rejected mutation",
     async (kind) => {
@@ -218,6 +278,7 @@ describe("overlapping worker publication", () => {
           () => {},
           mutationSettled.resolve,
           Promise.resolve(),
+          undefined,
           mutationRelease.promise,
         );
         return { version, mutationRelease, mutationSettled, result };
@@ -249,7 +310,9 @@ describe("overlapping worker publication", () => {
         ]);
         expect(owner.reads).toEqual([1, 4, 2, 5, 3]);
         expect(owner.writes).toEqual([1, 4, 2, 3]);
-        expect(owner.events.at(-1)).toBe("v3");
+        if (kind === "task") {
+          expect(owner.events.at(-1)).toBe("v3");
+        }
         expect(owner.current()).toBe("v3");
         await expect(
           owner.run(
@@ -271,6 +334,68 @@ describe("overlapping worker publication", () => {
     },
   );
 
+  it("releases the read phase before effects while retaining each operation's flow effects", async () => {
+    const taskOwner = await prepareOwner("task");
+    const flowOwner = await prepareOwner("flow");
+    const firstEffectsStarted = createDeferred();
+    const firstEffectsRelease = createDeferred();
+    const effects: string[] = [];
+    const first = taskOwner.run(
+      1,
+      () => {},
+      () => {},
+      Promise.resolve(),
+      async () => {
+        effects.push("A-start");
+        await flowOwner.run(
+          1,
+          () => {},
+          () => {},
+          Promise.resolve(),
+        );
+        firstEffectsStarted.resolve();
+        await firstEffectsRelease.promise;
+        effects.push("A-finish");
+      },
+    );
+    await firstEffectsStarted.promise;
+    const second = taskOwner.run(
+      2,
+      () => {},
+      () => {},
+      Promise.resolve(),
+      async () => {
+        effects.push("B-start");
+        await flowOwner.run(
+          2,
+          () => {},
+          () => {},
+          Promise.resolve(),
+        );
+        effects.push("B-finish");
+      },
+    );
+    try {
+      const finishedBeforeFirstEffects = await Promise.race([
+        second.then(() => true),
+        setImmediate().then(() => false),
+      ]);
+      expect(finishedBeforeFirstEffects).toBe(true);
+      expect(effects).toEqual(["A-start", "B-start", "B-finish"]);
+      expect(flowOwner.current()).toBe("v2");
+      expect(taskOwner.events).toEqual(["v2"]);
+      firstEffectsRelease.resolve();
+      await expect(Promise.all([first, second])).resolves.toEqual([1, 2]);
+      expect(effects).toEqual(["A-start", "B-start", "B-finish", "A-finish"]);
+      expect(taskOwner.events).toEqual(["v2"]);
+      expect(taskOwner.writes).toEqual([1, 2]);
+      expect(flowOwner.writes).toEqual([1, 2]);
+    } finally {
+      firstEffectsRelease.resolve();
+      await Promise.allSettled([first, second]);
+    }
+  });
+
   it.each(["task", "flow"] as const)(
     "%s releases a failed read phase without replaying either committed mutation",
     async (kind) => {
@@ -290,7 +415,9 @@ describe("overlapping worker publication", () => {
         await expect(Promise.all([first, second])).resolves.toEqual([1, 2]);
         expect(owner.writes).toEqual([1, 2]);
         expect(owner.reads).toEqual([1, 2]);
-        expect(owner.events).toEqual(["v2"]);
+        if (kind === "task") {
+          expect(owner.events).toEqual(["v2"]);
+        }
         expect(owner.current()).toBe("v2");
       } finally {
         firstRelease.resolve();
@@ -332,16 +459,20 @@ describe("overlapping worker publication", () => {
             expect(owner.writes).toEqual([1, 2]);
             expect(owner.reads).toEqual([1, 2]);
             if (intervening === "none") {
-              expect([["v1", "v2"], ["v2"]]).toContainEqual(owner.events);
+              if (kind === "task") {
+                expect([["v1", "v2"], ["v2"]]).toContainEqual(owner.events);
+              }
               expect(owner.current()).toBe("v2");
             } else {
-              expect(owner.events).toEqual(
-                intervening === "synchronous delete"
-                  ? ["deleted"]
-                  : intervening === "synchronous ABA"
-                    ? ["v3", "v0"]
-                    : ["v3"],
-              );
+              if (kind === "task") {
+                expect(owner.events).toEqual(
+                  intervening === "synchronous delete"
+                    ? ["deleted"]
+                    : intervening === "synchronous ABA"
+                      ? ["v3", "v0"]
+                      : ["v3"],
+                );
+              }
               expect(owner.current()).toBe(
                 intervening === "synchronous delete"
                   ? undefined

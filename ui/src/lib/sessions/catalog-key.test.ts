@@ -13,15 +13,29 @@ describe("catalog session keys", () => {
     expect(parseCatalogSessionKey(buildCatalogSessionKey(key, agentId))).toEqual(key);
   });
 
-  it.each(["", "catalog:", "catalog:a:b", "catalog:a:b:c:d", "catalog:a:%:c"])(
-    "rejects %s",
-    (value) => expect(parseCatalogSessionKey(value)).toBeNull(),
-  );
+  it.each([
+    "",
+    "catalog:",
+    "catalog:a:b",
+    "catalog:a:b:c:d",
+    "catalog:a:%:c",
+    "catalog::b:c",
+    "catalog:a::c",
+    "catalog:a:b:",
+  ])("rejects %s", (value) => expect(parseCatalogSessionKey(value)).toBeNull());
 
-  it("round-trips a catalog thread URL target", () => {
-    const key = { catalogId: "claude", hostId: "node:abc", threadId: "thread:a/b" };
-    expect(catalogSessionKeyFromSearch(catalogSessionSearch(key))).toEqual(key);
-  });
+  it.each([undefined, "home:a/b"])(
+    "round-trips a catalog thread URL target for source %s",
+    (sourceHomeId) => {
+      const key = {
+        catalogId: "claude",
+        hostId: "node:abc",
+        threadId: "thread:a/b",
+        ...(sourceHomeId ? { sourceHomeId } : {}),
+      };
+      expect(catalogSessionKeyFromSearch(catalogSessionSearch(key))).toEqual(key);
+    },
+  );
 
   it("keeps the explicit agent owner across paginated lookup requests", async () => {
     const key = { catalogId: "codex", hostId: "gateway:local", threadId: "thread-2" };

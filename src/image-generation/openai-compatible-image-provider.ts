@@ -1,6 +1,5 @@
 /** Factory for image providers with OpenAI-compatible generation/edit endpoints. */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
 import { resolveApiKeyForProvider } from "../plugin-sdk/provider-auth-runtime.js";
@@ -14,6 +13,7 @@ import {
   resolveProviderOperationTimeoutMs,
   sanitizeConfiguredModelProviderRequest,
 } from "../plugin-sdk/provider-http.js";
+import { isProviderApiKeyConfigured } from "../plugins/provider-auth-availability.js";
 import {
   parseOpenAiCompatibleImageResponse,
   resolveInlineImageJsonResponseMaxBytes,

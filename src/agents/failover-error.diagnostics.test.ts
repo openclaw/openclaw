@@ -3,7 +3,10 @@ import { diagnosticErrorFailureKind } from "../infra/diagnostic-error-metadata.j
 import { attachErrorDiagnostic, formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
+  buildFailoverRemediationHint,
   coerceToFailoverError,
+  describeFailoverError,
+  FailoverError,
   hasProviderRequestSizeCeiling,
   isTimeoutError,
 } from "./failover-error.js";
@@ -20,6 +23,69 @@ vi.mock("../plugins/provider-hook-runtime.js", async (importOriginal) => {
 });
 
 describe("failover diagnostic isolation", () => {
+  it.each(["raw", "typed", "serialized"] as const)(
+    "normalizes published local-profile HTTP status from a %s error without changing its owner",
+    (shape) => {
+      const message =
+        'Codex app-server auth profile "openai:default" was not found. Select an existing OpenAI profile or sign in again with OpenClaw, then retry.';
+      const cause = new Error("profile store lookup missed");
+      const context = {
+        provider: "openai",
+        model: "gpt-5.5",
+        profileId: "openai:default",
+        authMode: "oauth",
+        sessionId: "session:local-profile",
+        lane: "main",
+      };
+      const facts = {
+        ...context,
+        reason: "auth" as const,
+        status: 401,
+        code: "selected_auth_profile_unavailable",
+        rawError: message,
+        cause,
+      };
+      const original = Object.freeze(
+        shape === "serialized"
+          ? { ...facts, name: "FailoverError", message }
+          : shape === "typed"
+            ? new FailoverError(message, facts)
+            : Object.assign(new Error(message, { cause }), facts),
+      );
+      if (original instanceof Error) {
+        attachErrorDiagnostic(original, "profile owner: OpenClaw credential store");
+      }
+
+      expect.soft(describeFailoverError(original)).toMatchObject({
+        message,
+        code: facts.code,
+        status: undefined,
+      });
+      const normalized = coerceToFailoverError(original, shape === "raw" ? context : undefined);
+      expect.soft(normalized).toMatchObject({
+        ...facts,
+        status: undefined,
+        cause: shape === "raw" ? original : cause,
+      });
+      expect(normalized?.message).toBe(message);
+      expect(buildFailoverRemediationHint(normalized)).toBeUndefined();
+      expect(original.status).toBe(401);
+      expect(original.message).toBe(message);
+      if (shape === "typed") {
+        expect(formatErrorMessageForDisplay(normalized)).toContain("profile owner: OpenClaw");
+      }
+    },
+  );
+
+  it("retains a genuine provider HTTP 401 and its recovery hint", () => {
+    const original = Object.freeze(Object.assign(new Error("invalid_api_key"), { status: 401 }));
+    const normalized = coerceToFailoverError(original, { provider: "openai" });
+
+    expect(describeFailoverError(original).status).toBe(401);
+    expect(normalized).toMatchObject({ reason: "auth", status: 401, cause: original });
+    expect(buildFailoverRemediationHint(normalized)).toContain("Re-authenticate with:");
+  });
+
   it.each([
     "Rate limit exceeded",
     "Authentication failed: invalid_api_key",

@@ -3,7 +3,11 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { ensureSessionTranscriptArchiveSchema } from "../../state/openclaw-agent-session-transcript-archive-schema.js";
+import {
+  ensureSessionTranscriptArchiveSchema,
+  SESSION_TRANSCRIPT_ARCHIVES_TABLE,
+} from "../../state/openclaw-agent-session-transcript-archive-schema.js";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { resolveRegisteredSqliteTranscriptArchiveName } from "./session-accessor.sqlite-archive-artifact.js";
 import type {
   TranscriptArchivePublishPlan,
@@ -32,6 +36,23 @@ export function uniqueTranscriptArchives<T extends { generation: string; session
   ];
 }
 
+/** The archive table is optional until the first committed archive. */
+export function hasPendingSessionTranscriptArchives(
+  database: Pick<OpenClawAgentDatabase, "db">,
+): boolean {
+  return (
+    tableExists(database.db, SESSION_TRANSCRIPT_ARCHIVES_TABLE) &&
+    executeSqliteQueryTakeFirstSync(
+      database.db,
+      getSessionKysely(database.db)
+        .selectFrom("session_transcript_archives")
+        .select("session_id")
+        .where("published_at", "is", null)
+        .limit(1),
+    ) !== undefined
+  );
+}
+
 export function prepareSessionTranscriptArchivePublishPlans(
   database: OpenClawAgentDatabase,
   params: {
@@ -42,18 +63,8 @@ export function prepareSessionTranscriptArchivePublishPlans(
   const db = getSessionKysely(database.db);
   if (params.requested.length > 0) {
     ensureSessionTranscriptArchiveSchema(database.db);
-  } else {
-    const exists = executeSqliteQueryTakeFirstSync(
-      database.db,
-      db
-        .selectFrom("sqlite_schema")
-        .select("name")
-        .where("type", "=", "table")
-        .where("name", "=", "session_transcript_archives"),
-    );
-    if (!exists) {
-      return [];
-    }
+  } else if (!tableExists(database.db, SESSION_TRANSCRIPT_ARCHIVES_TABLE)) {
+    return [];
   }
   const pendingArchives = executeSqliteQuerySync(
     database.db,

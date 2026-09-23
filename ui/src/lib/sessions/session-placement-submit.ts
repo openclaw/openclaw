@@ -24,7 +24,7 @@ import {
 
 export type SessionPlacementDraftAdvanceResult =
   | { status: "started"; messageId: string }
-  | { status: "accepted" }
+  | { status: "accepted"; consumedByEventId?: string }
   | { status: "paused"; recovery: SessionPlacementPausedRecovery }
   | { status: "cancelled"; cleanupError?: string; recoveryPersisted: boolean }
   | { status: "interrupted" }
@@ -83,8 +83,14 @@ export async function advanceSessionPlacementDraft(params: {
     const inputReceipt = readChatInputReceipt(history, input);
     if (inputReceipt || findChatSubmissionMessage(history.messages, recovery.messageId, true)) {
       params.clearRecovery("resolved");
+      const receipt = history.inputReceipts?.find((item) => item.runId === recovery.messageId);
       return inputReceipt
-        ? { status: "accepted" }
+        ? {
+            status: "accepted",
+            ...(receipt?.state === "consumed"
+              ? { consumedByEventId: receipt.consumedByEventId }
+              : {}),
+          }
         : { status: "started", messageId: recovery.messageId };
     }
     return pause(

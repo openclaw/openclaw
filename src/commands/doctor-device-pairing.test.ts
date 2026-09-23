@@ -319,9 +319,9 @@ describe("noteDevicePairingHealth", () => {
           }
           expect(readTokenRow()).toEqual({ token: expectedToken });
           // Existing rows do not release the legacy-file access guard.
-          expect(() =>
+          await expect(
             loadDeviceAuthToken({ deviceId: "synthetic-device", role: "operator", env: state.env }),
-          ).toThrow("Legacy device auth requires migration");
+          ).rejects.toThrow("Legacy device auth requires migration");
           const params = { cfg: { gateway: { mode: "remote" as const } }, healthOk: false };
           const findings = await collectDevicePairingHealthFindings(params);
           expect(findings).toEqual([

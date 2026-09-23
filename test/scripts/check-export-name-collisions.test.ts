@@ -92,6 +92,56 @@ describe("export name collision guard", () => {
     ).toEqual([{ name: "otherBehavior", files: paths }]);
   });
 
+  it.each([
+    {
+      name: "createSqliteWorkerBackend",
+      paths: ["src/state/openclaw-state.worker.ts", "src/state/openclaw-agent-execution.worker.ts"],
+    },
+    {
+      name: "openExistingSqliteWorkerBackend",
+      paths: ["src/state/openclaw-state.worker.ts", "src/state/openclaw-agent-execution.worker.ts"],
+    },
+    {
+      name: "bindSqliteWorkerBackend",
+      paths: [
+        "src/agents/auth-profiles/inline-usage.worker.ts",
+        "src/boards/sqlite-board-store.worker.ts",
+        "src/agents/sessions/session-manager-metadata.worker.ts",
+        "src/config/sessions/session-sharing-store.worker.ts",
+        "src/infra/heartbeat-outcome-store.worker.ts",
+      ],
+    },
+  ])("limits $name to its approved worker modules", ({ name, paths }) => {
+    const content = `export function ${name}() {}`;
+    const modules = paths.map((modulePath) => ({ path: modulePath, content }));
+    expect(findExportNameCollisions(modules)).toEqual([]);
+    for (const [index, module] of modules.entries()) {
+      for (const sibling of modules.slice(index + 1)) {
+        expect(findExportNameCollisions([module, sibling])).toEqual([]);
+      }
+    }
+
+    const extra = { path: "src/unrelated/extra.worker.ts", content };
+    expect(findExportNameCollisions([...modules, extra])).toEqual([
+      { name, files: [...paths, extra.path].toSorted() },
+    ]);
+    for (const module of modules) {
+      expect(findExportNameCollisions([module, extra])).toEqual([
+        { name, files: [module.path, extra.path].toSorted() },
+      ]);
+    }
+    const otherProtocol =
+      name === "bindSqliteWorkerBackend" ? "createSqliteWorkerBackend" : "bindSqliteWorkerBackend";
+    expect(
+      findExportNameCollisions(
+        paths.map((modulePath) => ({
+          path: modulePath,
+          content: `export function ${otherProtocol}() {}`,
+        })),
+      ),
+    ).toEqual([{ name: otherProtocol, files: paths.toSorted() }]);
+  });
+
   it("reports direct aliasing re-exports only outside the Plugin SDK", () => {
     expect(
       findAliasingReExports([

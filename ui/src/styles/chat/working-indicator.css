@@ -13,6 +13,7 @@
 
   position: relative;
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   color: var(--accent);
 }
@@ -21,17 +22,63 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
   min-height: 28px;
   animation: chatWorkingIndicatorEnter 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+.chat-reading-indicator--neutral {
+  gap: 3px;
+}
+
+.chat-reading-indicator--neutral > span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: chatWorkingDotPulse 1.2s ease-in-out infinite;
+}
+
+.chat-reading-indicator--neutral > span:nth-child(2) {
+  animation-delay: 150ms;
+}
+
+.chat-reading-indicator--neutral > span:nth-child(3) {
+  animation-delay: 300ms;
+}
+
+@keyframes chatWorkingDotPulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
 .chat-working-indicator__status {
   display: inline-flex;
+  flex-wrap: wrap;
+  min-width: 0;
   align-items: baseline;
   gap: 6px;
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
   font-variant-numeric: tabular-nums;
+}
+
+.chat-working-indicator__status:has(> .chat-working-indicator__preamble) {
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.chat-working-indicator__preamble {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chat-working-indicator__elapsed {
@@ -792,6 +839,7 @@
   /* Includes the bubble itself: the southpaw surprise animates the bubble,
      not the svg, and must stay still under reduced motion too. */
   .chat-reading-indicator,
+  .chat-reading-indicator--neutral > span,
   .chat-reading-indicator svg,
   .chat-reading-indicator svg .claw-icon__jaw {
     animation: none;

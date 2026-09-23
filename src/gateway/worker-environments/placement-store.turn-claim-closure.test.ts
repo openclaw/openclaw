@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
@@ -18,12 +19,13 @@ import {
 import { tryBeginGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { projectSessionMessagePayload } from "../session-transcript-message.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { readWorkerSessionPlacementProjectionInDatabase } from "./placement-read-projection.js";
 import { placementTurnOwner, type WorkerSessionPlacementIdentity } from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
@@ -57,7 +59,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -127,7 +129,7 @@ it.each([
   { executionMode: "remote-exec", visibleBeforeStaging: false },
 ] as const)(
   "projects $executionMode workspace reconciliation at its owned boundary",
-  (scenario) => {
+  async (scenario) => {
     const active = advanceToActive(scenario.executionMode);
     const claim = store.claimTurn({
       ...SESSION,
@@ -139,28 +141,129 @@ it.each([
 
     const readReconciling = () => store.getWorkspaceResultReconcilingSessionIds([active.sessionId]);
     expect(readReconciling().has(active.sessionId)).toBe(scenario.visibleBeforeStaging);
-    expect(store.getProjectionFacts(active.sessionId).workspaceResultReconciling).toBe(
-      scenario.visibleBeforeStaging,
-    );
+    expect(
+      (await store.readProjection([active.sessionId])).workspaceResultReconcilingSessionIds.has(
+        active.sessionId,
+      ),
+    ).toBe(scenario.visibleBeforeStaging);
     const stagedResultRef = `refs/openclaw/worker-results/${claim.claimId}`;
     store.recordStagedWorkspaceResult(claim, stagedResultRef);
     expect(readReconciling()).toEqual(new Set([active.sessionId]));
     store.recordWorkspaceResultConflict(claim, { paths: ["conflict.txt"], stagedResultRef });
-    expect(store.getProjectionFacts(active.sessionId)).toMatchObject({
-      placement: {
-        workspaceResultConflict: { paths: ["conflict.txt"], stagedResultRef, totalCount: 1 },
-      },
-      workspaceResultReconciling: true,
+    const conflicted = await store.readProjection([active.sessionId]);
+    expect(conflicted.placements.get(active.sessionId)).toMatchObject({
+      workspaceResultConflict: { paths: ["conflict.txt"], stagedResultRef, totalCount: 1 },
     });
+    expect(conflicted.workspaceResultReconcilingSessionIds.has(active.sessionId)).toBe(true);
     store.recordWorkspaceResultConflict(claim, undefined);
-    expect(store.getProjectionFacts(active.sessionId).placement).not.toHaveProperty(
-      "workspaceResultConflict",
-    );
+    expect(
+      (await store.readProjection([active.sessionId])).placements.get(active.sessionId),
+    ).not.toHaveProperty("workspaceResultConflict");
     store.acceptWorkspaceResult(claim);
     store.completeWorkspaceResultAndReleaseTurn(claim);
-    expect(store.getProjectionFacts(active.sessionId).workspaceResultReconciling).toBe(false);
+    expect(
+      (await store.readProjection([active.sessionId])).workspaceResultReconcilingSessionIds.has(
+        active.sessionId,
+      ),
+    ).toBe(false);
   },
 );
+
+it("keeps placement and result facts in one snapshot across a peer commit", async () => {
+  const active = advanceToActive();
+  const claim = store.claimTurn({
+    ...SESSION,
+    owner: placementTurnOwner(active),
+    claimId: "projection-peer-claim",
+    runId: "projection-peer-run",
+  });
+  store.markWorkspaceResultPending(claim);
+
+  database.db.exec("PRAGMA journal_mode = WAL");
+  const peer = new DatabaseSync(database.path);
+  const reader = new DatabaseSync(database.path, { readOnly: true });
+  const prepare = reader.prepare.bind(reader);
+  const recoveryError = "Peer placement failure";
+  let peerCommits = 0;
+  let changedRows: number | bigint = 0;
+  const statement = vi.spyOn(reader, "prepare").mockImplementation((sql) => {
+    // The fresh reader has consumed placements before preparing the result query on every Node version.
+    if (peerCommits === 0 && /\bfrom\s+"?worker_workspace_pending_results\b/i.test(sql)) {
+      peerCommits++;
+      const updatedAtMs = Date.now();
+      peer.exec("BEGIN IMMEDIATE");
+      changedRows = peer
+        .prepare(
+          `UPDATE worker_session_placements
+           SET state = 'failed', transition_generation = ?, recovery_error = ?,
+               terminal_reason = ?, terminal_at_ms = ?, turn_claim_owner = NULL,
+               turn_claim_id = NULL, turn_claim_run_id = NULL, turn_claim_generation = NULL,
+               turn_claim_owner_epoch = NULL, updated_at_ms = ?, state_changed_at_ms = ?
+           WHERE session_id = ? AND state = 'active' AND transition_generation = ?
+             AND turn_claim_owner = 'worker' AND turn_claim_id = ? AND turn_claim_run_id = ?`,
+        )
+        .run(
+          active.generation + 1,
+          recoveryError,
+          recoveryError,
+          updatedAtMs,
+          updatedAtMs,
+          updatedAtMs,
+          active.sessionId,
+          active.generation,
+          claim.claimId,
+          claim.runId,
+        ).changes;
+      peer
+        .prepare("DELETE FROM worker_workspace_pending_results WHERE session_id = ?")
+        .run(active.sessionId);
+      peer.exec("COMMIT");
+    }
+    return prepare(sql);
+  });
+  try {
+    expect(
+      (await store.readProjection([active.sessionId])).workspaceResultReconcilingSessionIds.has(
+        active.sessionId,
+      ),
+    ).toBe(true);
+    const facts = readWorkerSessionPlacementProjectionInDatabase(
+      reader,
+      [active.sessionId],
+      [],
+    ).projection;
+    expect(peerCommits).toBe(1);
+    expect(changedRows).toBe(1);
+    expect(facts.placements.get(active.sessionId)).toMatchObject({
+      state: "active",
+      generation: active.generation,
+    });
+    expect(facts.workspaceResultReconcilingSessionIds.has(active.sessionId)).toBe(true);
+    const current = await store.readProjection([active.sessionId]);
+    expect(current.placements.get(active.sessionId)).toMatchObject({
+      state: "failed",
+      generation: active.generation + 1,
+      recoveryError,
+      turnClaim: null,
+    });
+    expect(current.workspaceResultReconcilingSessionIds.has(active.sessionId)).toBe(false);
+  } finally {
+    statement.mockRestore();
+    reader.close();
+    peer.close();
+  }
+});
+
+it("rejects invalid placement fields when reading projection facts", async () => {
+  const active = advanceToActive();
+  database.db
+    .prepare("UPDATE worker_session_placements SET worker_bundle_hash = ' ' WHERE session_id = ?")
+    .run(active.sessionId);
+
+  await expect(store.readProjection([active.sessionId])).rejects.toThrow(
+    "Worker session placement worker bundle hash must be a non-empty string",
+  );
+});
 
 function bindFinishingOwner() {
   const active = advanceToActive();
@@ -174,8 +277,13 @@ function bindFinishingOwner() {
   const authority = claimAgentRunDelegatedAuthority(instance);
   const abort = new AbortController();
   const bind = () =>
-    bindWorkerTurnOwner(store, claim, undefined, instance, SESSION, () =>
-      abort.signal.throwIfAborted(),
+    bindWorkerTurnOwner(
+      store,
+      claim,
+      undefined,
+      instance,
+      { ...SESSION, storePath: path.join(root, "sessions.json") },
+      () => abort.signal.throwIfAborted(),
     );
   const take = bind();
   const identity: WorkerConnectionIdentity = {
@@ -446,7 +554,7 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
     placementClosedClaim,
     createExecutionIdentityAdmissionToken(placementClosedClaim.runId),
     placementClosedRun,
-    { agentId: SESSION.agentId, sessionKey: SESSION.sessionKey },
+    { ...SESSION, storePath: path.join(root, "sessions.json") },
     () => {},
   );
   const placementCapability = getWorkerTurnExecutionIdentityCapability(store, placementClosedClaim);
@@ -478,7 +586,7 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
     runClosedClaim,
     createExecutionIdentityAdmissionToken(runClosedClaim.runId),
     runClosedOperational,
-    { agentId: SESSION.agentId, sessionKey: SESSION.sessionKey },
+    { ...SESSION, storePath: path.join(root, "sessions.json") },
     () => {},
   );
   const runCapability = getWorkerTurnExecutionIdentityCapability(store, runClosedClaim);
@@ -515,7 +623,14 @@ it("lets an unaudited admitted worker complete the exact turn that closes its ow
   }
   try {
     await rootAdmission.run(async () =>
-      bindWorkerTurnOwner(store, claim, undefined, operationalRunInstance, SESSION, () => {}),
+      bindWorkerTurnOwner(
+        store,
+        claim,
+        undefined,
+        operationalRunInstance,
+        { ...SESSION, storePath: path.join(root, "sessions.json") },
+        () => {},
+      ),
     );
     await getWorkerTurnExecutionIdentityCapability(store, claim)?.run((owner) => {
       expect(owner.executionIdentityToken).toBeUndefined();
@@ -604,7 +719,7 @@ it.each([
     let replacement: typeof claim | undefined;
     try {
       const bind = () =>
-        bindWorkerTurnOwner(store, claim, undefined, instance, SESSION, () => {}, prepare);
+        bindWorkerTurnOwner(store, claim, undefined, instance, target, () => {}, prepare);
       if (scenario === "root admission") {
         if (!admission) {
           throw new Error("expected root admission");
@@ -640,6 +755,7 @@ it.each([
         // This suite isolates projection from the RPC-owned persistence authority.
         assertCurrent: () => {},
         identity,
+        sessionTarget: target,
         request: {
           runEpoch: identity.ownerEpoch,
           seq: 1,

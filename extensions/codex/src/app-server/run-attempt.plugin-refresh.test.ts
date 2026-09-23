@@ -7,9 +7,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { CodexAppServerClient } from "./client.js";
-import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { buildEmptyToolTelemetry } from "./event-projector.test-harness.js";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { isJsonObject } from "./protocol.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
@@ -118,11 +118,12 @@ describe("managed Codex plugin refresh", () => {
           details: {},
         };
       });
-      dynamicToolBuildState.openClawCodingToolsFactory = () => [slow, reload];
+
       const params = createParams(
         path.join(tempDir, "session.jsonl"),
         path.join(tempDir, "workspace"),
       );
+      setCodexTestToolFactory(params, () => [slow, reload]);
       const originalTask = "Reload the plugin and verify the changed behavior.";
       const receipt = "already-committed-effect-42";
       const prior = new CodexAppServerEventProjector(

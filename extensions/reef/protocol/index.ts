@@ -9,5 +9,4 @@ export * from "./guard-adapters.js";
 export * from "./identity.js";
 export * from "./pipeline.js";
 export * from "./receipts.js";
-export * from "./replay.js";
 export * from "./ulid.js";

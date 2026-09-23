@@ -85,8 +85,8 @@ describe("update target admission", () => {
           },
         );
         const result = await withUpdateCommandExecutor(runId, async (executor) => {
-          mocks.prepareMutableUpdate.mockImplementation(async () => {
-            params.opts.run!.executorFence = await executor.enter(dir);
+          mocks.prepareMutableUpdate.mockImplementation(async (_env, _timeout, admitExecutor) => {
+            admitExecutor(await executor.enter(dir));
           });
           return executeMutableUpdate(params);
         });

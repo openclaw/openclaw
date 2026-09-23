@@ -18,11 +18,6 @@ import { rethrowTelegramSendError, shouldRetryTelegramSendError } from "./networ
 import type { TelegramOutboundPromptContextMessage as TelegramMessageLike } from "./outbound-message-context.js";
 import { makeProxyFetch } from "./proxy.js";
 import {
-  getTelegramNativeQuoteReplyMessageId,
-  isTelegramQuoteParamError,
-  removeTelegramNativeQuoteParam,
-} from "./reply-parameters.js";
-import {
   bindTelegramRequestAuthority,
   findTelegramRequestAuthorityError,
 } from "./request-authority.js";
@@ -360,41 +355,6 @@ export function normalizeMessageId(raw: string | number): number {
 
 export function isTelegramMessageDeleteNoopError(err: unknown): boolean {
   return MESSAGE_DELETE_NOOP_RE.test(formatErrorMessage(err));
-}
-
-export async function withTelegramNativeQuoteFallback<T>(params: {
-  label: string;
-  requestParams: Record<string, unknown>;
-  request: (requestParams: Record<string, unknown>, label: string) => Promise<T>;
-  removeNativeQuoteParam?: (requestParams: Record<string, unknown>) => Record<string, unknown>;
-}): Promise<{ result: T; acceptedParams: Record<string, unknown> }> {
-  try {
-    return {
-      result: await params.request(params.requestParams, params.label),
-      acceptedParams: params.requestParams,
-    };
-  } catch (err) {
-    if (
-      getTelegramNativeQuoteReplyMessageId(params.requestParams) == null ||
-      !isTelegramQuoteParamError(err)
-    ) {
-      throw err;
-    }
-    // Model quotes can drift from the source text; rejecting the quote must not
-    // discard its message reply target or topic routing.
-    sendLogger.warn(
-      `telegram ${params.label} native quote rejected, retrying with legacy reply_to_message_id: ${formatErrorMessage(
-        err,
-      )}`,
-    );
-    const acceptedParams = (params.removeNativeQuoteParam ?? removeTelegramNativeQuoteParam)(
-      params.requestParams,
-    );
-    return {
-      result: await params.request(acceptedParams, `${params.label}-legacy-reply`),
-      acceptedParams,
-    };
-  }
 }
 
 export type TelegramApiContext = {

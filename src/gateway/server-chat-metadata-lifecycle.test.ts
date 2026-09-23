@@ -15,6 +15,7 @@ import {
   resetSkillsRefreshStateForTest,
 } from "../skills/runtime/refresh-state.js";
 import { writeSkill } from "../skills/test-support/e2e-test-helpers.js";
+import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import { createChatMetadataOwner } from "./server-methods/chat-metadata-runtime.test-support.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
@@ -64,6 +65,14 @@ const authSnapshots = await vi.importActual<
 const config = {} as OpenClawConfig;
 const context = {} as GatewayRequestContext;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sidecarOwners = new Set<ReturnType<typeof createGatewaySidecarStopOwner>>();
+
+afterEach(async () => {
+  for (const owner of sidecarOwners) {
+    await owner.stop();
+  }
+  sidecarOwners.clear();
+});
 
 beforeEach(() => {
   for (const mock of Object.values(mocks)) {
@@ -84,16 +93,50 @@ beforeEach(() => {
 });
 
 function createLifecycle(minimalTestGateway: boolean, warn = vi.fn()) {
+  const sidecarOwner = createGatewaySidecarStopOwner();
+  sidecarOwners.add(sidecarOwner);
   return {
     lifecycle: createGatewayChatMetadataLifecycle({
       getConfig: () => config,
       minimalTestGateway,
       log: { warn } as never,
     }),
-    sidecarOwner: createGatewaySidecarStopOwner(),
+    sidecarOwner,
     warn,
   };
 }
+
+it("retires model choices at its config commit before pending metadata settles", async () => {
+  const broadcast = vi.fn();
+  const ownedContext = { ...context, broadcast };
+  const entered = createDeferred();
+  const release = createDeferred();
+  mocks.refresh.mockImplementationOnce(() => {
+    entered.resolve();
+    return release.promise;
+  });
+  const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle(false);
+  const lifecycle = await pendingLifecycle;
+  const attaching = lifecycle.attachContext(ownedContext, sidecarOwner.publish);
+  try {
+    await entered.promise;
+    publishOperatorRoleConfigChange({});
+    expect(broadcast).not.toHaveBeenCalled();
+    publishOperatorRoleConfigChange(ownedContext);
+    expect(broadcast).toHaveBeenCalledExactlyOnceWith(
+      "chat.metadata.changed",
+      { modelSelectionChanged: true },
+      { dropIfSlow: true },
+    );
+  } finally {
+    release.resolve();
+    await attaching;
+    await sidecarOwner.stop();
+  }
+  broadcast.mockClear();
+  publishOperatorRoleConfigChange(ownedContext);
+  expect(broadcast).not.toHaveBeenCalled();
+});
 
 async function createRealMetadataLifecycle(
   options: {
@@ -906,6 +949,11 @@ describe("gateway chat metadata lifecycle", () => {
 
       expect(mocks.invalidate).not.toHaveBeenCalled();
       expect(mocks.refresh).toHaveBeenCalledTimes(refreshes ? 3 : 2);
+      if (refreshes) {
+        expect(mocks.refresh).toHaveBeenLastCalledWith({
+          notifyIfUnchanged: refreshStatusChanged,
+        });
+      }
     },
   );
 

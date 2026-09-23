@@ -3,6 +3,9 @@
 export const cliProcessTestFiles = [
   "src/cli/directory-cli.test.ts",
   "src/cli/update-cli/update-command-candidate-exit.test.ts",
+  "src/cli/update-cli/update-command-candidate-authority.process.test.ts",
+  "src/cli/update-cli/update-command-fresh-doctor-authority.test.ts",
+  "src/cli/update-cli/update-command-fresh-inspection.test.ts",
   "src/cli/update-cli/update-command-fresh-preview.test.ts",
   "src/cli/update-cli/update-command-runtime-preview.test.ts",
   "src/cli/update-cli/update-command-plugins.persistence.test.ts",
@@ -17,6 +20,7 @@ export const cliProcessTestFiles = [
   "src/cli/cron-output.process.test.ts",
   "src/cli/gateway-backed-exit-health.process.test.ts",
   "src/cli/gateway-backed-exit.process.test.ts",
+  "src/cli/gateway-service-capability.process.test.ts",
   "src/cli/gateway-cli/shutdown-hard-exit.process.test.ts",
   "src/cli/help-exit.process.test.ts",
   "src/cli/message-plugin-cleanup.process.test.ts",
@@ -33,6 +37,7 @@ export const cliProcessTestFiles = [
   "src/cli/update-cli/update-command-lease.test.ts",
   "src/cli/update-cli/update-command-migrated.test.ts",
   "src/cli/update-cli/update-command-rollback.test.ts",
+  "src/cli/update-cli/update-command-doctor-writer-order.test.ts",
   "src/cli/update-cli/update-command-post-update-recovery.test.ts",
   "src/cli/update-cli/update-command-post-update-repair.test.ts",
   "src/cli/update-cli/update-command-service.integration.test.ts",
@@ -49,6 +54,7 @@ export const cliProcessTestFiles = [
   "src/cli/state-dir-gateway-check.server.test.ts",
   "src/cli/cron-cli/cron-suppression.gateway.test.ts",
   "src/state/openclaw-database-verify.process.test.ts",
+  "src/infra/sqlite-readonly-worker.compile-cache.process.test.ts",
 ];
 
 const cliProcessTestFileSet = new Set(cliProcessTestFiles);

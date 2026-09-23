@@ -3,6 +3,7 @@ import { keyed } from "lit/directives/keyed.js";
 import "../../components/resizable-divider.ts";
 import { repeat } from "lit/directives/repeat.js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
@@ -91,6 +92,20 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
             resolvedKey,
             sessions.find((row) => areUiSessionKeysEquivalent(row.key, resolvedKey)),
           );
+          if (options.context && readDeletedSessionStartup(options.context, sessionKey)) {
+            return keyed(
+              sessionKey,
+              html`<openclaw-pending-session-create
+                class="chat-pane-cache__pane ${visible ? "chat-pane-cache__pane--visible" : ""}
+                ${active ? "chat-pane-cache__pane--active" : ""}
+                ${options.splitMode ? "chat-split-view__pane" : ""}"
+                aria-hidden=${String(!presented)}
+                ?inert=${!presented}
+                .context=${options.context}
+                .sessionKey=${sessionKey}
+              ></openclaw-pending-session-create>`,
+            );
+          }
           return keyed(
             sessionKey,
             html`<openclaw-chat-pane
