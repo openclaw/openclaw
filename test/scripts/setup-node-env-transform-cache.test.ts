@@ -64,7 +64,7 @@ it.skipIf(process.platform === "win32")(
         expect(readFileSync(entry, "utf8")).toBe("cached transform");
       }
       expect(readFileSync(githubEnv, "utf8")).toBe(
-        `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=${cache}\nOPENCLAW_VITEST_FS_MODULE_CACHE_WRITER=0\n`,
+        `OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT=${cache}\nOPENCLAW_VITEST_FS_MODULE_CACHE_WRITER=0\n`,
       );
     }
   },
