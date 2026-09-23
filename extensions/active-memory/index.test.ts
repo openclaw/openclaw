@@ -1314,7 +1314,7 @@ describe("active-memory plugin", () => {
     });
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
 
-    await requireHook("agent_end")({ runId: context.runId, messages: [], success: true }, context);
+    await requireHook("agent_end")({ runId: context.runId, messages: [], success: false }, context);
     await runPromptBuild({ prompt: "what wings should i order?" }, context);
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
   });

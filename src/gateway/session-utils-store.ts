@@ -34,7 +34,6 @@ import {
 } from "../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import type { SessionEntryListScope } from "../config/sessions/session-accessor.js";
-import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecPolicyForMode } from "../infra/exec-approvals-core.js";
 import { loadExecApprovals } from "../infra/exec-approvals-store.js";
@@ -51,6 +50,7 @@ import {
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
+import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 import type { GatewayAgentRow, SessionListModelCatalog } from "./session-utils.types.js";
 import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
 
@@ -166,7 +166,7 @@ function loadSessionEntryWithMode(
       }
     }
   }
-  const canonicalMatch = resolveCanonicalSessionStoreMatchFromStoreKeys(store, target.storeKeys);
+  const canonicalMatch = findCanonicalStoreMatch(store, target.storeKeys);
   const legacyKey = canonicalMatch?.key !== target.canonicalKey ? canonicalMatch?.key : undefined;
   const entry =
     readOnly && opts?.clone !== false && canonicalMatch?.entry
@@ -204,38 +204,11 @@ export function loadGatewaySessionEntryReadOnly(
   return loadSessionEntryWithMode(sessionKey, opts, true, cfg);
 }
 
-/** Returns the one canonical entry and the exact persisted key that owns it. */
-export function resolveCanonicalSessionStoreMatchFromStoreKeys<TEntry extends SessionEntry>(
-  store: Record<string, TEntry>,
-  storeKeys: string[],
-): { key: string; entry: TEntry } | undefined {
-  let selected: { key: string; entry: TEntry } | undefined;
-  for (const key of storeKeys) {
-    const entry = store[key];
-    if (!entry) {
-      continue;
-    }
-    const match = { key, entry };
-    if (selected) {
-      throw canonicalSessionKeyMigrationRequiredError(
-        `duplicate rows resolve to canonical session key ${storeKeys[0] ?? key}`,
-      );
-    }
-    selected = match;
-  }
-  if (selected && selected.key !== storeKeys[0]) {
-    throw canonicalSessionKeyMigrationRequiredError(
-      `non-canonical persisted row resolves to session key ${storeKeys[0] ?? selected.key}`,
-    );
-  }
-  return selected;
-}
-
 export function resolveCanonicalSessionEntryFromStoreKeys(
   store: Record<string, SessionEntry>,
   storeKeys: string[],
 ): SessionEntry | undefined {
-  return resolveCanonicalSessionStoreMatchFromStoreKeys(store, storeKeys)?.entry;
+  return findCanonicalStoreMatch(store, storeKeys)?.entry;
 }
 
 export function resolveCanonicalGatewaySessionStoreKey(params: {
@@ -251,7 +224,7 @@ export function resolveCanonicalGatewaySessionStoreKey(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   const primaryKey = target.canonicalKey;
-  resolveCanonicalSessionStoreMatchFromStoreKeys(params.store, target.storeKeys);
+  findCanonicalStoreMatch(params.store, target.storeKeys);
   return { target, primaryKey, entry: params.store[primaryKey] };
 }
 

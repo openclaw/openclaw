@@ -1,8 +1,10 @@
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import {
+  authorizeCurrentOperatorRoleScopes,
   operatorSessionCap,
   resolveGatewayOperatorRoleActor,
   resolveOperatorRolePolicyForAssignment,
@@ -48,6 +50,7 @@ function loadSharingSnapshot(params: Parameters<typeof resolveSessionSharingTarg
 
 export function canReceiveSessionEvent(params: {
   cfg: OpenClawConfig;
+  policyConfig?: OpenClawConfig;
   client: GatewayClient;
   sessionKeys: readonly string[];
   agentId?: string;
@@ -58,22 +61,31 @@ export function canReceiveSessionEvent(params: {
     target: (sessionKey: string, agentId?: string) => SessionSharingTarget | null;
   };
 }): boolean {
-  const { cfg, client, sessionKeys, event } = params;
+  const { cfg, policyConfig = cfg, client, sessionKeys, event } = params;
+  const operatorActor = resolveGatewayOperatorRoleActor(client);
+  if (
+    operatorActor?.kind === "operator" &&
+    authorizeCurrentOperatorRoleScopes(client, policyConfig)
+  ) {
+    return false;
+  }
   if (isGatewayAdmin(client)) {
     return true;
   }
-  const operatorActor = resolveGatewayOperatorRoleActor(client);
   const identity = sharingIdentity(client, operatorActor);
   if (!identity) {
     return (
-      (!cfg.gateway?.roles || operatorActor?.kind === "system") &&
+      (!operatorScopeSatisfied("operator.sessions.read", client.connect.scopes ?? []) ||
+        operatorActor?.kind === "system" ||
+        operatorScopeSatisfied("operator.read", client.connect.scopes ?? [])) &&
+      (!policyConfig.gateway?.roles || operatorActor?.kind === "system") &&
       event !== "session.suggestion" &&
       event !== "session.typing"
     );
   }
-  const sharing = params.prepared?.sharing ?? prepareSessionSharing({ cfg, client });
+  const sharing = params.prepared?.sharing ?? prepareSessionSharing({ cfg: policyConfig, client });
   const hidesForeignSessions =
-    (params.prepared ? sharing.sessionCap : operatorSessionCap(client, cfg)) === "none";
+    (params.prepared ? sharing.sessionCap : operatorSessionCap(client, policyConfig)) === "none";
   // Discovery remains lazy; these facts belong only to this recipient check, never a socket send.
   const lookup: Omit<Parameters<typeof resolveSessionSharingTarget>[0], "sessionKey"> = {
     cfg,

@@ -164,37 +164,25 @@ function normalizeGoogleTtsProviderConfig(
   rawConfig: Record<string, unknown>,
 ): GoogleTtsProviderConfig {
   const raw = resolveGoogleTtsConfigRecord(rawConfig);
-  const promptTemplate = normalizeGooglePromptTemplate(raw?.promptTemplate);
-  const personaPrompt = trimToUndefined(raw?.personaPrompt);
   return {
+    ...readGoogleTtsProviderConfig(raw ?? {}),
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
       path: "tts.providers.google.apiKey",
     }),
-    baseUrl: trimToUndefined(raw?.baseUrl),
-    model: normalizeGoogleTtsModel(raw?.model),
-    voiceName: normalizeGoogleTtsVoiceName(raw?.voiceName ?? raw?.voice),
-    audioProfile: trimToUndefined(raw?.audioProfile),
-    speakerName: trimToUndefined(raw?.speakerName),
-    ...(promptTemplate ? { promptTemplate } : {}),
-    ...(personaPrompt ? { personaPrompt } : {}),
   };
 }
 
 function readGoogleTtsProviderConfig(config: SpeechProviderConfig): GoogleTtsProviderConfig {
-  const normalized = normalizeGoogleTtsProviderConfig({});
-  const promptTemplate =
-    normalizeGooglePromptTemplate(config.promptTemplate) ?? normalized.promptTemplate;
-  const personaPrompt = trimToUndefined(config.personaPrompt) ?? normalized.personaPrompt;
+  const promptTemplate = normalizeGooglePromptTemplate(config.promptTemplate);
+  const personaPrompt = trimToUndefined(config.personaPrompt);
   return {
-    apiKey: trimToUndefined(config.apiKey) ?? normalized.apiKey,
-    baseUrl: trimToUndefined(config.baseUrl) ?? normalized.baseUrl,
-    model: normalizeGoogleTtsModel(config.model ?? normalized.model),
-    voiceName: normalizeGoogleTtsVoiceName(
-      config.voiceName ?? config.voice ?? normalized.voiceName,
-    ),
-    audioProfile: trimToUndefined(config.audioProfile) ?? normalized.audioProfile,
-    speakerName: trimToUndefined(config.speakerName) ?? normalized.speakerName,
+    apiKey: trimToUndefined(config.apiKey),
+    baseUrl: trimToUndefined(config.baseUrl),
+    model: normalizeGoogleTtsModel(config.model),
+    voiceName: normalizeGoogleTtsVoiceName(config.voiceName ?? config.voice),
+    audioProfile: trimToUndefined(config.audioProfile),
+    speakerName: trimToUndefined(config.speakerName),
     ...(promptTemplate ? { promptTemplate } : {}),
     ...(personaPrompt ? { personaPrompt } : {}),
   };
@@ -444,17 +432,9 @@ async function synthesizeGoogleTtsPcmOnce(params: {
   }
 }
 
-async function synthesizeGoogleTtsPcm(params: {
-  text: string;
-  apiKey: string;
-  baseUrl?: string;
-  request?: ReturnType<typeof sanitizeConfiguredModelProviderRequest>;
-  model: string;
-  voiceName: string;
-  audioProfile?: string;
-  speakerName?: string;
-  timeoutMs: number;
-}): Promise<Buffer> {
+async function synthesizeGoogleTtsPcm(
+  params: Parameters<typeof synthesizeGoogleTtsPcmOnce>[0],
+): Promise<Buffer> {
   return await retryAsync(() => synthesizeGoogleTtsPcmOnce(params), {
     attempts: 2,
     minDelayMs: 0,

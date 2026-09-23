@@ -67,6 +67,23 @@ afterEach(async () => {
 });
 
 describe("Node Code Mode worker custody", () => {
+  it("reuses its one idle worker within five minutes and expires it after inactivity", async () => {
+    vi.useFakeTimers();
+    try {
+      await run();
+      const count = fixture.pools.length;
+      const previous = fixture.pools.at(-1)!;
+      await vi.advanceTimersByTimeAsync(70_000);
+      expect(await run()).toMatchObject({ status: "completed" });
+      expect(fixture.pools).toHaveLength(count);
+      expect(previous.isClosed).toBe(false);
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(previous.isClosed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["abort", "timeout"] as const)(
     "ends acquisition on %s while native retirement still owns its worker",
     async (reason) => {

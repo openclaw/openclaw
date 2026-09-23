@@ -1,8 +1,7 @@
 // @vitest-environment node
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
@@ -11,18 +10,9 @@ import { readQueuedMessageById, updateVolatileQueuedMessage } from "./chat-queue
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { admitInitialTurnHandoff, prepareInitialTurnHandoff } from "./initial-turn-handoff.ts";
-import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
+import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
-beforeEach(() => {
-  installOutboxBrowserStorage();
-  vi.stubGlobal("sessionStorage", createStorageMock());
-  vi.stubGlobal("requestAnimationFrame", () => 1);
-  vi.stubGlobal("cancelAnimationFrame", () => undefined);
-});
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
+useChatSendBrowserFixture();
 
 it.each([false, true].flatMap((attachment) => [false, true].map((peer) => ({ attachment, peer }))))(
   "retains foreground leaf ownership during input handoff (attachment: $attachment, peer: $peer)",

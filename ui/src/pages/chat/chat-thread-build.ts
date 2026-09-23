@@ -3,6 +3,7 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
+import { readAssistantTextBlocksForPhase } from "../../../../src/shared/chat-message-content.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import {
   type ChatGuardianNotice,
@@ -60,6 +61,7 @@ import {
   transcriptPositionTimestamp,
   type TurnInsertionBounds,
 } from "./chat-thread-items.ts";
+import { latestWorkingPreamble } from "./chat-thread-preamble.ts";
 import {
   applyPersistedToolInvocationBounds,
   findCurrentTurnBounds,
@@ -703,10 +705,36 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   if (showWorkingIndicator) {
     const workingProgress = resolveProgress();
     const workingRunId = props.runId ?? workingProgress.runId;
+    const preamble = latestWorkingPreamble(props, workingRunId);
+    if (preamble) {
+      // Move only this live presentation into the status row. The canonical
+      // messages remain intact for history, reconnect, and terminal settlement.
+      items = items.flatMap((item): ChatItem[] => {
+        if (item.kind === "message" && item.message === preamble.message) {
+          const message = asRecord(item.message)!;
+          const commentary = new Set(readAssistantTextBlocksForPhase(message, "commentary"));
+          const content = Array.isArray(message.content)
+            ? message.content.filter((block) => !commentary.has(block))
+            : [];
+          // Mixed envelopes can carry answers or tool calls beside commentary.
+          // Project those blocks unchanged instead of hiding the whole message.
+          return commentary.size && content.length
+            ? [{ ...item, message: { ...message, content, phase: undefined } }]
+            : [];
+        }
+        return item.kind === "stream" &&
+          item.runId === workingRunId &&
+          preamble.itemId &&
+          item.key === `stream-seg:${props.sessionKey}:${preamble.itemId}`
+          ? []
+          : [item];
+      });
+    }
     appendActiveRunItem({
       kind: "reading-indicator",
       key: workingProgress.key,
       startedAt: workingProgress.startedAt,
+      ...(preamble ? { preamble: preamble.text } : {}),
       ...optionalRunIdentity(workingRunId),
       ...optionalBoundaryIdentity(latestBoundaryRunId ?? workingRunId),
     });

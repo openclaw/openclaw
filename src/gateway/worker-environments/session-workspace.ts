@@ -1,7 +1,5 @@
-import {
-  getSessionRepositoryWorkspaceStore,
-  type SessionRepositoryWorkspaceRecord,
-} from "../../state/session-repository-workspaces.js";
+import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
 import {
   recoverSessionRepositoryCheckpoint,
   stageSessionRepositoryCheckpoint,

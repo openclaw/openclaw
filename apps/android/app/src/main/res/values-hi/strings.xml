@@ -163,6 +163,7 @@
     <string name="native_1520b570498730a0" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s लंबित"</string>
     <string name="native_155106be1173d757" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"डिवाइस का नाम"</string>
     <string name="native_155f816c0407310c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"सबमिट करें"</string>
+    <string name="native_157dca92e4250458" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"save"</string>
     <string name="native_15b61974b2707a7b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"स्थान"</string>
     <string name="native_160db55194b1967c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"नेटिव Talk: इस कॉन्फ़िगरेशन के लिए Gateway रिले उपलब्ध नहीं है; डिवाइस की वाक् पहचान और कॉन्फ़िगर की गई Talk आवाज़ का उपयोग किया जा रहा है।"</string>
     <string name="native_16196f98cecd6839" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"उदा. America/New_York"</string>
@@ -1821,6 +1822,7 @@
     <string name="native_fc374cd61c135a9e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"लॉग प्रविष्टि"</string>
     <string name="native_fc4153c54951d609" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"विफल: इस होस्ट के सुरक्षित Gateway एंडपॉइंट तक नहीं पहुँच सके."</string>
     <string name="native_fc5af920bc4a256d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway ऑफ़लाइन है. नीचे कनेक्शन ठीक करें या निदान की जानकारी कॉपी करें."</string>
+    <string name="native_fc927c5a3d26ae2a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Personal Instructions"</string>
     <string name="native_fcdeb9947bc94101" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"जाँच जाँच 1 2 3"</string>
     <string name="native_fcea13c79c2f85a6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ClawHub के कौशल खोजे नहीं जा सके."</string>
     <string name="native_fd175ecd65f7353d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"कोई प्रॉम्प्ट नहीं है"</string>

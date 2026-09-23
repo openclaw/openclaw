@@ -25,8 +25,8 @@ extensions/anthropic-vertex/region.ts	1
 extensions/anthropic-vertex/stream-runtime.ts	4
 extensions/anthropic/cli-backend.ts	2
 extensions/anthropic/cli-migration.ts	1
-extensions/anthropic/config-defaults.ts	10
-extensions/anthropic/register.runtime.ts	2
+extensions/anthropic/config-defaults.ts	5
+extensions/anthropic/register.runtime.ts	1
 extensions/anthropic/session-catalog-continue.ts	1
 extensions/anthropic/session-catalog-discovery.ts	1
 extensions/anthropic/session-catalog-history.ts	2
@@ -34,7 +34,7 @@ extensions/anthropic/session-catalog-listing.ts	1
 extensions/anthropic/session-catalog-parsing.ts	7
 extensions/anthropic/session-catalog-registration.ts	3
 extensions/anthropic/session-catalog-runtime.ts	1
-extensions/anthropic/stream-wrappers.ts	5
+extensions/anthropic/stream-wrappers.ts	3
 extensions/baseten/models.ts	3
 extensions/beam/src/mirror.ts	3
 extensions/beam/src/types.ts	2
@@ -167,9 +167,8 @@ extensions/codex/src/app-server/dynamic-tools.ts	1
 extensions/codex/src/app-server/effective-mcp-catalog.ts	1
 extensions/codex/src/app-server/elicitation-bridge.ts	1
 extensions/codex/src/app-server/event-projector-reasoning.ts	1
-extensions/codex/src/app-server/event-projector-tool-items.ts	1
 extensions/codex/src/app-server/event-projector-tool-transcript.ts	2
-extensions/codex/src/app-server/event-projector-values.ts	2
+extensions/codex/src/app-server/event-projector-values.ts	1
 extensions/codex/src/app-server/event-projector.ts	1
 extensions/codex/src/app-server/explicit-skill-input.ts	1
 extensions/codex/src/app-server/image-payload-sanitizer.ts	3
@@ -223,7 +222,7 @@ extensions/codex/src/migration/session-binding-sidecars.ts	4
 extensions/codex/src/migration/source-files.ts	1
 extensions/codex/src/session-catalog-listing.ts	3
 extensions/codex/src/session-catalog-node-continue.ts	1
-extensions/codex/src/session-catalog-parsing.ts	7
+extensions/codex/src/session-catalog-parsing.ts	2
 extensions/codex/src/session-catalog-transcript-item.ts	1
 extensions/codex/src/session-catalog.ts	2
 extensions/codex/src/session-cli.ts	1
@@ -493,12 +492,11 @@ extensions/google/cli-backend-auth.runtime.ts	1
 extensions/google/cli-backend-isolated-auth.runtime.ts	5
 extensions/google/cli-backend.ts	1
 extensions/google/embedding-batch.ts	3
-extensions/google/index.ts	1
 extensions/google/music-generation-provider.ts	1
 extensions/google/oauth-token-shared.ts	1
 extensions/google/onboard.ts	3
 extensions/google/provider-registration.ts	2
-extensions/google/realtime-voice-provider.ts	6
+extensions/google/realtime-voice-provider.ts	5
 extensions/google/transport-stream.ts	13
 extensions/google/vertex-adc.ts	4
 extensions/google/video-generation-provider.ts	13
@@ -850,7 +848,6 @@ extensions/openai/native-web-search.ts	1
 extensions/openai/openai-chatgpt-device-code.ts	4
 extensions/openai/openai-chatgpt-oauth-preflight.runtime.ts	1
 extensions/openai/openai-chatgpt-oauth-token.runtime.ts	1
-extensions/openai/openai-chatgpt-provider.ts	2
 extensions/openai/openai-provider.ts	5
 extensions/openai/provider-policy-api.ts	2
 extensions/openai/realtime-provider-shared.ts	2
@@ -871,7 +868,7 @@ extensions/openrouter/usage.ts	2
 extensions/openrouter/video-generation-provider.ts	1
 extensions/openrouter/video-model-catalog.ts	1
 extensions/openshell/src/backend.ts	2
-extensions/openshell/src/fs-bridge.ts	2
+extensions/openshell/src/fs-bridge.ts	1
 extensions/parallel/src/parallel-free-web-search-provider.runtime.ts	1
 extensions/parallel/src/parallel-search-normalize.ts	1
 extensions/parallel/src/parallel-web-search-provider.runtime.ts	2
@@ -1360,7 +1357,7 @@ extensions/zalouser/src/text-styles-inline.ts	1
 extensions/zalouser/src/text-styles-ranges.ts	1
 extensions/zalouser/src/text-styles-source.ts	1
 extensions/zalouser/src/tool.ts	1
-extensions/zalouser/src/zalo-js.ts	17
+extensions/zalouser/src/zalo-js.ts	14
 extensions/zalouser/src/zca-client.ts	2
 packages/acp-core/src/runtime/errors.ts	6
 packages/acp-core/src/runtime/session-identity.ts	2
@@ -1980,7 +1977,6 @@ src/auto-reply/reply/agent-runner-execution.ts	1
 src/auto-reply/reply/agent-runner-fallback-candidate.ts	1
 src/auto-reply/reply/agent-runner-memory.ts	5
 src/auto-reply/reply/agent-runner-run.ts	1
-src/auto-reply/reply/agent-runner-session-reset.ts	1
 src/auto-reply/reply/agent-runner-trace.ts	1
 src/auto-reply/reply/agent-runner-utils.ts	1
 src/auto-reply/reply/block-streaming.ts	3
@@ -2013,16 +2009,13 @@ src/auto-reply/reply/dispatch-acp.ts	2
 src/auto-reply/reply/dispatch-from-config.events.ts	1
 src/auto-reply/reply/dispatch-from-config.prepare-execution.ts	1
 src/auto-reply/reply/elevated-allowlist-matcher.ts	2
-src/auto-reply/reply/exec/directive.ts	1
 src/auto-reply/reply/followup-delivery-payloads.ts	1
 src/auto-reply/reply/followup-turn-execution.ts	1
 src/auto-reply/reply/get-reply-directives.ts	8
 src/auto-reply/reply/get-reply-exec-overrides.ts	1
 src/auto-reply/reply/get-reply-fast-path.ts	1
-src/auto-reply/reply/get-reply-inline-actions.ts	5
-src/auto-reply/reply/get-reply-native-slash-fast-path.ts	1
+src/auto-reply/reply/get-reply-inline-actions.ts	4
 src/auto-reply/reply/get-reply-run-execute.ts	3
-src/auto-reply/reply/get-reply-run-helpers.ts	1
 src/auto-reply/reply/get-reply.ts	2
 src/auto-reply/reply/history.ts	2
 src/auto-reply/reply/inbound-context.ts	8
@@ -2066,7 +2059,7 @@ src/channels/inbound-event/context.ts	6
 src/channels/location.ts	1
 src/channels/message-access/admission-evidence.ts	1
 src/channels/message/adapter.ts	1
-src/channels/message/capabilities.ts	2
+src/channels/message/capabilities.ts	1
 src/channels/message/ingress-claim-owner.ts	1
 src/channels/message/ingress-drain.ts	1
 src/channels/message/ingress-monitor.ts	4
@@ -2098,7 +2091,6 @@ src/channels/plugins/package-state-probes.ts	2
 src/channels/plugins/read-only-command-defaults.ts	2
 src/channels/plugins/read-only.ts	4
 src/channels/plugins/registry.ts	1
-src/channels/plugins/session-thread-info-loaded.ts	1
 src/channels/plugins/setup-contract.ts	3
 src/channels/plugins/setup-helpers.ts	3
 src/channels/plugins/setup-promotion-helpers.ts	1
@@ -2810,8 +2802,6 @@ src/infra/exec-approval-policy-snapshot.ts	2
 src/infra/exec-approval-reply.ts	2
 src/infra/exec-approvals-allowlist.ts	7
 src/infra/exec-approvals-config.ts	4
-src/infra/exec-approvals-effective.ts	3
-src/infra/exec-approvals-resolver.ts	2
 src/infra/exec-approvals-socket.ts	1
 src/infra/exec-approvals-store.ts	1
 src/infra/exec-argv-analysis.ts	1
@@ -2948,7 +2938,7 @@ src/infra/update-global.ts	3
 src/infra/update-package-manager.ts	1
 src/infra/voicewake-routing.ts	4
 src/infra/warning-filter.ts	4
-src/infra/windows-gateway-firewall-diagnostics.ts	3
+src/infra/windows-gateway-firewall-diagnostics.ts	2
 src/infra/windows-port-pids.ts	2
 src/infra/windows-powershell-spawn.ts	1
 src/infra/windows-shell-command.ts	1
@@ -3117,7 +3107,7 @@ src/plugins/capability-provider-runtime.ts	13
 src/plugins/captured-registration.ts	2
 src/plugins/channel-presence-policy.ts	2
 src/plugins/channel-validation.ts	1
-src/plugins/clawhub.ts	7
+src/plugins/clawhub.ts	5
 src/plugins/cli-gateway-nodes-runtime.ts	2
 src/plugins/command-registration.ts	3
 src/plugins/computer-use-contract.ts	3
@@ -3709,7 +3699,7 @@ ui/src/pages/plugin/route.ts	1
 ui/src/pages/portals/portal-reachability.ts	1
 ui/src/pages/profile/identity-section.ts	2
 ui/src/pages/secrets/view.ts	5
-ui/src/pages/sessions/view.ts	8
+ui/src/pages/sessions/view.ts	7
 ui/src/pages/skill-workshop/route.ts	1
 ui/src/pages/skill-workshop/self-learning.ts	1
 ui/src/pages/skill-workshop/view.ts	1

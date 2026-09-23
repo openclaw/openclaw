@@ -6,7 +6,7 @@
   "type": "module",
   "dependencies": {
     "dotenv": "17.4.2",
-    "yaml": "2.9.0"
+    "yaml": "2.9.1"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

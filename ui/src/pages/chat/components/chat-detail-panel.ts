@@ -230,11 +230,8 @@ class ChatDetailPanel extends OpenClawLightDomElement {
   };
 
   private scrollToFileLine(content: FileSidebarContent) {
-    if (this.visibleContent !== content || this.showingRawText) {
-      return;
-    }
     const line = this.fileNavigation?.line ?? content.line;
-    if (line != null) {
+    if (this.visibleContent === content && !this.showingRawText && line != null) {
       this.fileEditor?.scrollToLine(line, true);
     }
   }
@@ -288,9 +285,10 @@ class ChatDetailPanel extends OpenClawLightDomElement {
         this.fileDraftContent = null;
         editor.onDocChanged((nextContent) => {
           const draft = captureFileEditorDraft(current, {
-            editing: this.fileEditing,
+            // Reload synchronization may normalize display text without a user edit.
+            editing: this.fileEditing && !this.fileReloading,
             content: nextContent,
-            savedContent: this.fileSavedContent,
+            dirty: !editor.contentEquals(this.fileSavedContent),
             expectedHash: this.fileHash,
           });
           if (!draft) {
@@ -493,7 +491,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     const draftContent = this.currentFileText();
     this.fileSavedContent = nextContent;
     this.fileHash = hash;
-    this.fileDirty = draftContent !== nextContent;
+    this.fileDirty = !(this.fileEditor?.contentEquals(nextContent) ?? draftContent === nextContent);
     this.fileDraftContent = !this.fileEditor && this.fileDirty ? draftContent : null;
     setFileDraft(content, this.fileDirty ? { content: draftContent, expectedHash: hash } : null);
     this.fileSaveNotice = null;
@@ -588,6 +586,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
         // mode (e.g. the agent rewrote the file with mixed line endings);
         // drop the edit capability instead of letting a save corrupt it.
         if (!latest.editable && this.visibleContent?.kind === "file") {
+          setFileDraft(this.visibleContent, null);
           this.fileEditing = false;
           this.fileDirty = false;
           const { edit: _removed, ...readOnly } = this.visibleContent;

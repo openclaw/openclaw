@@ -51,6 +51,7 @@ export function assertControlUiE2eOwnership(makeTempDirectory: (prefix: string) 
         if (
           inSuiteServer &&
           (node.expression.text === "createOpenClawTestInstance" ||
+            node.expression.text === "startBuiltControlUiE2eServer" ||
             node.expression.text === "startProductionControlUiE2eServer" ||
             node.expression.text === "startProviderBrowserLoginFixture" ||
             node.expression.text === "createServer")

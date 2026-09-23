@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { createStoredChatOutboxReader } from "../../lib/chat/outbox-store-projection.ts";
 import {
   captureChatOutboxAdmission,
   subscribeStoredChatOutboxChanges,
@@ -197,6 +198,8 @@ describe("Incognito composer persistence", () => {
   it("retires a draft when its write notification reveals Incognito metadata", () => {
     const state = createState();
     const persistence = startPersistence(state);
+    const reader = createStoredChatOutboxReader();
+    const stopReader = reader.subscribe(() => reader.read(state));
     const unsubscribe = subscribeStoredChatOutboxChanges(() => {
       state.selectedChatSessionIncognito = true;
       persistence.persistChangedState();
@@ -209,7 +212,9 @@ describe("Incognito composer persistence", () => {
         sessionStorage.getItem(storageKeyForGateway(state.settings?.gatewayUrl)),
       ).not.toContain("private notification draft");
       expect(state.chatMessage).toBe("private notification draft");
+      expect(reader.read(state).hasSessionDraft(state.sessionKey)).toBe(false);
     } finally {
+      stopReader();
       unsubscribe();
       persistence.stop();
     }

@@ -1,6 +1,11 @@
 import type { AgentMessage } from "@openclaw/agent-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect } from "vitest";
+import { isToolResultError } from "../../agents/tool-result-error.js";
+import {
+  prepareToolSearchDispatcherArguments,
+  readToolSearchCallArgs,
+} from "../../agents/tool-search-request.js";
 import type { readSkillCuratorReviewStatus } from "./collection-review-state.js";
 import { readExperienceReviewMessageText } from "./experience-review-message-text.test-support.js";
 import type { observeExperienceReview } from "./experience-review-observation.test-support.js";
@@ -22,6 +27,10 @@ export function assertExperienceReviewDecision(params: {
   expect(observation.requests[0]?.toolNames).toEqual(
     expect.arrayContaining(["exec", "read", "tool_search", "tool_describe", "tool_call"]),
   );
+  expect(observation.requests[0]?.toolNames).not.toContain("skill_workshop");
+  expect(observation.requests[0]?.systemPrompt).toMatch(
+    /^- skill_workshop(?: \([^\n)]+\))?(?::|$)/m,
+  );
   expect(observation.requests[0]?.outputs).toEqual(
     params.messages
       .filter((message) => message.role === "toolResult")
@@ -30,50 +39,64 @@ export function assertExperienceReviewDecision(params: {
   expect(outcome?.attemptedAtMs).toBeGreaterThanOrEqual(params.startedAt);
   expect(outcome?.usage?.outputTokens).toBeGreaterThan(0);
   expect(observation.toolResults.some((result) => result.isError)).toBe(false);
-  const workshopCalls: Array<{ action: unknown; receiptText: string }> = [];
-  for (const call of observation.toolCalls) {
-    expect(["tool_search", "tool_describe", "tool_call"]).toContain(call.name);
+  const workshopCalls = observation.toolCalls.flatMap((call) => {
     const receipt = observation.toolResults.find(
       (result) => result.toolName === call.name && result.toolCallId === call.id,
     );
     expect(receipt).toMatchObject({ isError: false });
-    if (call.name !== "tool_call") {
-      continue;
+    if (call.name === "tool_search" || call.name === "tool_describe") {
+      return [];
     }
-    if (!receipt || !isRecord(call.arguments) || !isRecord(call.arguments.args)) {
-      throw new Error("Workshop dispatch requires arguments and a matching receipt");
+    // Foreground coding schemas remain for replay, but draft-only reviews gate their execution.
+    expect(call.name).toBe("tool_call");
+    const envelope = receipt?.details;
+    if (
+      !isRecord(envelope) ||
+      !isRecord(envelope.tool) ||
+      !isRecord(envelope.result) ||
+      !isRecord(envelope.result.details) ||
+      !Array.isArray(envelope.result.content)
+    ) {
+      throw new Error("Workshop call is missing its result envelope.");
     }
-    const envelope: unknown = JSON.parse(readExperienceReviewMessageText(receipt.content));
-    if (!isRecord(envelope) || !isRecord(envelope.tool) || !isRecord(envelope.result)) {
-      throw new Error("Workshop dispatch did not return its canonical target receipt");
-    }
-    expect(envelope.tool).toMatchObject({ name: "skill_workshop", source: "openclaw" });
-    expect(typeof call.arguments.id).toBe("string");
-    expect(call.arguments.id === envelope.tool.id || call.arguments.id === envelope.tool.name).toBe(
-      true,
-    );
-    expect(envelope.result.isError).not.toBe(true);
-    if (!Array.isArray(envelope.result.content)) {
-      throw new Error("Workshop target receipt did not retain its result content");
-    }
-    workshopCalls.push({
-      action: call.arguments.args.action,
-      receiptText: envelope.result.content
-        .flatMap((part: unknown) =>
-          isRecord(part) && part.type === "text" && typeof part.text === "string"
-            ? [part.text]
-            : [],
-        )
-        .join("\n"),
+    expect(envelope.tool).toMatchObject({
+      id: expect.any(String),
+      name: "skill_workshop",
+      source: "openclaw",
     });
-  }
+    expect(envelope.result.isError).not.toBe(true);
+    expect(isToolResultError(envelope.result)).toBe(false);
+    const toolArguments = observation.toolArguments.find((entry) => entry.toolCallId === call.id);
+    if (!toolArguments) {
+      throw new Error("Workshop call is missing its validated arguments.");
+    }
+    expect(toolArguments.prepared).toEqual(prepareToolSearchDispatcherArguments(call.arguments));
+    const dispatched = readToolSearchCallArgs(toolArguments.validated);
+    if (!isRecord(dispatched.input)) {
+      throw new Error("Workshop call is missing its target arguments.");
+    }
+    expect([envelope.tool.id, envelope.tool.name]).toContain(dispatched.id);
+    return [
+      {
+        input: dispatched.input,
+        details: envelope.result.details,
+        text: envelope.result.content
+          .flatMap((part: unknown) =>
+            isRecord(part) && part.type === "text" && typeof part.text === "string"
+              ? [part.text]
+              : [],
+          )
+          .join("\n"),
+      },
+    ];
+  });
   const mutations = workshopCalls.filter((call) =>
-    ["create", "patch", "update", "revise"].includes(String(call.action)),
+    ["create", "patch", "update", "revise"].includes(String(call.input.action)),
   );
   if (progress.mutationCount === 0) {
     expect(mutations).toHaveLength(0);
     for (const call of workshopCalls) {
-      expect(call.action).toSatisfy(
+      expect(call.input.action).toSatisfy(
         (action: unknown) =>
           action === "list" ||
           action === "inspect" ||
@@ -91,7 +114,8 @@ export function assertExperienceReviewDecision(params: {
   expect(mutations).toHaveLength(1);
   const proposalId = progress.proposalIds[0]!;
   expect(proposals).toContainEqual(expect.objectContaining({ id: proposalId, status: "pending" }));
-  expect(mutations[0]!.receiptText).toContain(proposalId);
+  expect(mutations[0]!.details).toMatchObject({ id: proposalId, status: "pending" });
+  expect(mutations[0]!.text).toContain(proposalId);
   expect(outcome).toMatchObject({ outcome: "proposed", proposalId });
   return "proposed";
 }

@@ -166,6 +166,13 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "personal_instructions",
+    description: "Edit the requesting user’s personal instructions",
+    sectionId: "memory",
+    profiles: ["coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "sessions",
     description: "Session settings: label, pin, archive, groups",
     sectionId: "sessions",
@@ -577,6 +584,7 @@ export function resolveCoreToolProfilePolicy(profile?: string): ToolProfilePolic
 export function listCoreToolSections(params?: {
   swarmEnabled?: boolean;
   githubPublicationAvailable?: boolean;
+  personalInstructionsEnabled?: boolean;
 }): CoreToolSection[] {
   // Callers resolve the swarm gate and pass the fact in; resolving config here
   // would couple this ui-shared module to the server graph.
@@ -588,6 +596,7 @@ export function listCoreToolSections(params?: {
       .filter(
         (tool) =>
           (tool.id !== "agents_wait" || swarmEnabled) &&
+          (tool.id !== "personal_instructions" || params?.personalInstructionsEnabled === true) &&
           (tool.id !== "github_identity_status" ||
             params?.githubPublicationAvailable !== undefined) &&
           (tool.id !== "github_publish" || params?.githubPublicationAvailable === true),

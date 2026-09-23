@@ -565,6 +565,11 @@ agent IDs; tree and Gateway output retain full ordered enumeration and enum
 validation. Cold reads retain database creation and feature schema initialization.
 Synchronous incarnation checks, provenance writes, and connection-bound deletion
 remain with their lifecycle owners; collection and retention are unchanged.
+Incarnation checks read current committed rows without joining a worker's writer
+lock or inheriting a discovery snapshot. They do not create state or ensure
+schema: absent optional provenance remains empty, while a missing mandatory
+deletion journal or malformed state refuses authority. Writers retain schema
+initialization.
 
 Memory-host event appends and bounded journal reads execute on the shared state
 worker. The plugin-state owner allocates the sequence, rereads the cursor and
@@ -1283,9 +1288,15 @@ queries execute on the same worker. Canonical UTC dates parse there; other date
 formats request the caller's native parser through retained preparation, preserving
 temporary skill timezones. A timezone change during such a read rejects the result
 instead of mixing interpretations. The query retains its ordering, payload limits,
-and synchronous statement snapshot. Streamed chronological reads, export snapshots,
-and session and export-state writes retain their existing owners until their
-snapshot and write-drainage lifecycles move together.
+and synchronous statement snapshot. Session metadata, pending-export markers, and
+manifest updates also run in the existing worker. Preparation captures the physical
+database and serialized metadata before yielding; the write transaction rechecks
+the canonical selector and expected input revision while preserving admitted ID
+origin. Export bookkeeping retains the actual export lease through native
+settlement, including unknown outcomes, and validates that lease inside its write
+transaction. Pending markers commit before filesystem changes, and manifest updates
+settle before success returns. Streamed chronological reads, export snapshots, and
+host lease primitives retain their existing owners.
 
 Transcript artifact ownership recovery streams raw utterances in sequence order
 through the shared-state worker and returns their canonical JSONL SHA-256 digest.

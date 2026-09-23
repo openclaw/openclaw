@@ -155,12 +155,19 @@ describe("live terminal continuity with pending collaborators", () => {
       timestamp: 21,
       __openclaw: { id: "commentary", seq: 3, runId: "active" },
     };
-    const items = project(props({ messages: [...history, commentary] }));
+    const latestCommentary = {
+      ...commentary,
+      content: "Continuing work",
+      timestamp: 22,
+      __openclaw: { id: "latest-commentary", seq: 4, runId: "active" },
+    };
+    const items = project(props({ messages: [...history, commentary, latestCommentary] }));
     const frame = items.find((item) => item.kind === "agent-run-frame");
     if (frame?.kind !== "agent-run-frame") {
       throw new Error("Missing mixed frame");
     }
     const group = frame.parts.find((part) => part.kind === "group");
+    expect(group?.messages[0]?.message).toBe(commentary);
     const index = projectTranscriptMessageIndex(
       [frame],
       new Map(),

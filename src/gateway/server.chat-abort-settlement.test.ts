@@ -216,6 +216,8 @@ describe("gateway WebSocket chat abort settlement", () => {
           });
         }
 
+        // Hold the wait deadline while real abort and persistence work establishes ordering.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         const waitResponse = rpcReq(socket, "agent.wait", { runId, timeoutMs: 2_000 });
         frames.push(waitResponse);
         void waitResponse.catch(() => {});
@@ -253,6 +255,7 @@ describe("gateway WebSocket chat abort settlement", () => {
           ok: true,
           payload: { runId, status: "error", stopReason: "rpc", endedAt: expect.any(Number) },
         });
+        vi.useRealTimers();
 
         // Replay can itself record an aborted receipt, so it must follow the original wait.
         // It also orders any contradictory terminal frame before this cached response.
@@ -261,6 +264,7 @@ describe("gateway WebSocket chat abort settlement", () => {
         expect(replay.payload).toMatchObject({ runId, status: "timeout", summary: "aborted" });
         expect(terminalStates).toEqual(["aborted"]);
       } finally {
+        vi.useRealTimers();
         dispatchRelease.resolve();
         await runQaGatewayFixture(
           () => closeGatewayTestWebSocket(socket),
