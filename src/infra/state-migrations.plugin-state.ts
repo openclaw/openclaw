@@ -6,11 +6,16 @@ import {
   registerMigratedPluginStateEntry,
 } from "../plugin-state/plugin-state-store.js";
 import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-state.js";
-import { writePersistedInstalledPluginIndexSync } from "../plugins/installed-plugin-index-store-write.js";
+import {
+  writePersistedInstalledPluginIndexSync,
+  writePersistedInstalledPluginIndexWithLeaseSync,
+  type InstalledPluginIndexWriteLease,
+} from "../plugins/installed-plugin-index-store-write.js";
 import {
   readPersistedInstalledPluginIndexSync,
   resolveLegacyInstalledPluginIndexStorePath,
 } from "../plugins/installed-plugin-index-store.js";
+import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { ensureMigrationDir, migrationFileExists } from "./state-migrations.fs.js";
 import {
   archiveLegacyImportSource,
@@ -23,6 +28,7 @@ import type { MigrationMessages } from "./state-migrations.types.js";
 
 export async function migrateLegacyInstalledPluginIndex(params: {
   stateDir: string;
+  lease?: InstalledPluginIndexWriteLease;
 }): Promise<MigrationMessages> {
   const sourcePath = resolveLegacyInstalledPluginIndexStorePath({ stateDir: params.stateDir });
   if (!migrationFileExists(sourcePath)) {
@@ -51,12 +57,19 @@ export async function migrateLegacyInstalledPluginIndex(params: {
   }
 
   const storeOptions = { stateDir: params.stateDir };
+  const writeIndex = (index: InstalledPluginIndex) =>
+    params.lease
+      ? writePersistedInstalledPluginIndexWithLeaseSync(index, {
+          ...storeOptions,
+          lease: params.lease,
+        })
+      : writePersistedInstalledPluginIndexSync(index, storeOptions);
   const current = readPersistedInstalledPluginIndexSync(storeOptions);
   if (current && !legacyInstalledPluginIndexMatches(current, legacy)) {
     const merged = mergeLegacyInstalledPluginIndexRecords(current, legacy);
     if (merged.addedCount > 0) {
       try {
-        writePersistedInstalledPluginIndexSync(merged.merged, storeOptions);
+        writeIndex(merged.merged);
         changes.push(
           `Merged ${merged.addedCount} legacy plugin install ${merged.addedCount === 1 ? "record" : "records"} → shared SQLite state`,
         );
@@ -83,7 +96,7 @@ export async function migrateLegacyInstalledPluginIndex(params: {
 
   if (!current) {
     try {
-      writePersistedInstalledPluginIndexSync(legacy, storeOptions);
+      writeIndex(legacy);
       const recordCount = Object.keys(legacy.installRecords).length;
       changes.push(
         `Migrated plugin install index ${recordCount} ${recordCount === 1 ? "record" : "records"} → shared SQLite state`,

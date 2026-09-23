@@ -440,6 +440,68 @@ describe("registerPreActionHooks", () => {
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
+  function buildPluginRegistryProgram() {
+    const parser = new Command()
+      .name("openclaw")
+      .option("--profile <profile>")
+      .exitOverride()
+      .configureOutput({ writeErr: () => {} });
+    const invoke = vi.fn();
+    parser.command("plugins").command("registry").option("--refresh").action(invoke);
+    registerPreActionHooks(parser, "9.9.9-test");
+    return { parser, invoke };
+  }
+
+  it.each([
+    { name: "refresh", rootArgs: [], args: ["--refresh"], validateConfigOnly: true },
+    { name: "inspection", rootArgs: [], args: [], validateConfigOnly: false },
+    {
+      name: "inspection with a refresh-like option value",
+      rootArgs: ["--profile", "--refresh"],
+      args: [],
+      validateConfigOnly: false,
+    },
+  ])("uses the bounded plugin registry $name guard through Commander", async (testCase) => {
+    const { parser, invoke } = buildPluginRegistryProgram();
+    process.argv = [
+      "node",
+      "openclaw",
+      ...testCase.rootArgs,
+      "plugins",
+      "registry",
+      ...testCase.args,
+    ];
+
+    await parser.parseAsync(process.argv);
+
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(ensureConfigReadyMock).toHaveBeenCalledExactlyOnceWith({
+      runtime: runtimeMock,
+      measure: expect.any(Function),
+      commandPath: ["plugins", "registry"],
+      ...(testCase.validateConfigOnly ? { validateConfigOnly: true } : {}),
+    });
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { args: ["--", "--refresh"], code: "commander.excessArguments" },
+    { args: ["--refresh=false"], code: "commander.unknownOption" },
+    { args: ["--refreshes"], code: "commander.unknownOption" },
+  ])(
+    "rejects invalid plugin registry refresh arguments $args before bootstrap",
+    async ({ args, code }) => {
+      const { parser, invoke } = buildPluginRegistryProgram();
+      process.argv = ["node", "openclaw", "plugins", "registry", ...args];
+
+      await expect(parser.parseAsync(process.argv)).rejects.toMatchObject({ code });
+
+      expect(invoke).not.toHaveBeenCalled();
+      expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+      expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps private QA commands isolated from operator config bootstrap", async () => {
     await runPreAction({
       parseArgv: ["qa", "suite"],

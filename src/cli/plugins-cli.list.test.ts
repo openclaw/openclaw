@@ -943,10 +943,14 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "registry", "--refresh"]);
 
-    expect(refreshPluginRegistryMock).toHaveBeenCalledWith({
-      config: {},
-      reason: "manual",
-    });
+    expect(refreshPluginRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: {},
+        reason: "manual",
+        filePath: expect.any(String),
+        lease: expect.objectContaining({ assertOwnedInTransaction: expect.any(Function) }),
+      }),
+    );
     expect(inspectPluginRegistryMock).toHaveBeenCalledWith({ config: {} });
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("Plugin registry refreshed: 1/2 enabled");
   });

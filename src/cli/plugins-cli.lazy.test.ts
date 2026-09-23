@@ -9,6 +9,7 @@ describe("plugins cli lazy runtime boundary", () => {
 
   afterEach(() => {
     vi.doUnmock("./plugins-cli.runtime.js");
+    vi.doUnmock("./plugins-registry-command.js");
     vi.doUnmock("./plugins-marketplace-list-command.js");
     vi.doUnmock("./plugins-authoring-command.js");
     vi.resetModules();
@@ -25,7 +26,6 @@ describe("plugins cli lazy runtime boundary", () => {
         runPluginsDoctorCommand: vi.fn(),
         runPluginsEnableCommand: vi.fn(),
         runPluginsInstallAction: vi.fn(),
-        runPluginsRegistryCommand: vi.fn(),
       };
     });
 
@@ -132,21 +132,14 @@ describe("plugins cli lazy runtime boundary", () => {
     );
   });
 
-  it("loads the plugins runtime for runtime-backed actions", async () => {
+  it("loads only the registry command for metadata inspection", async () => {
     const runPluginsRegistryCommand = vi.fn().mockResolvedValue(undefined);
     const runtimeLoaded = vi.fn();
     vi.doMock("./plugins-cli.runtime.js", () => {
       runtimeLoaded();
-      return {
-        runPluginMarketplaceEntriesCommand: vi.fn(),
-        runPluginMarketplaceRefreshCommand: vi.fn(),
-        runPluginsDisableCommand: vi.fn(),
-        runPluginsDoctorCommand: vi.fn(),
-        runPluginsEnableCommand: vi.fn(),
-        runPluginsInstallAction: vi.fn(),
-        runPluginsRegistryCommand,
-      };
+      return {};
     });
+    vi.doMock("./plugins-registry-command.js", () => ({ runPluginsRegistryCommand }));
 
     const { registerPluginsCli } = await import("./plugins-cli.js");
     const program = new Command();
@@ -154,7 +147,7 @@ describe("plugins cli lazy runtime boundary", () => {
 
     await program.parseAsync(["plugins", "registry", "--json"], { from: "user" });
 
-    expect(runtimeLoaded).toHaveBeenCalledTimes(1);
+    expect(runtimeLoaded).not.toHaveBeenCalled();
     expect(runPluginsRegistryCommand).toHaveBeenCalledWith(expect.objectContaining({ json: true }));
   });
 
@@ -186,7 +179,6 @@ describe("plugins cli lazy runtime boundary", () => {
       runPluginsDoctorCommand: vi.fn(),
       runPluginsEnableCommand: vi.fn(),
       runPluginsInstallAction: vi.fn(),
-      runPluginsRegistryCommand: vi.fn(),
     }));
 
     const { registerPluginsCli } = await import("./plugins-cli.js");
@@ -212,7 +204,6 @@ describe("plugins cli lazy runtime boundary", () => {
       runPluginsDoctorCommand: vi.fn(),
       runPluginsEnableCommand: vi.fn(),
       runPluginsInstallAction: vi.fn(),
-      runPluginsRegistryCommand: vi.fn(),
     }));
 
     const { registerPluginsCli } = await import("./plugins-cli.js");

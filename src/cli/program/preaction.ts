@@ -251,11 +251,19 @@ export function registerPreActionHooks(program: Command, programVersion: string)
         return (await existingGuard?.(snapshot)) ?? true;
       };
     }
+    const pluginRegistryRefresh =
+      commandPath.length === 2 &&
+      commandPath[0] === "plugins" &&
+      commandPath[1] === "registry" &&
+      actionCommand.getOptionValueSource("refresh") === "cli" &&
+      actionCommand.getOptionValue("refresh") === true;
     await ensureCliExecutionBootstrap({
       runtime: defaultRuntime,
       commandPath,
       startupPolicy,
       allowInvalid,
+      // The refresh action validates current core config again under its lifecycle lease.
+      ...(pluginRegistryRefresh ? { validateConfigOnly: true } : {}),
       ...(beforeStateMigrations ? { beforeStateMigrations } : {}),
       ...(skipPristineStartupStateMigrations ? { skipPristineStartupStateMigrations: true } : {}),
       ...(skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),

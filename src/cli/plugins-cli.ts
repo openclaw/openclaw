@@ -4,6 +4,7 @@ import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { PluginInspectOptions } from "./plugins-inspect-command.js";
 import type { PluginsListOptions } from "./plugins-list-command.js";
+import type { PluginRegistryOptions } from "./plugins-registry-command.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
@@ -44,11 +45,6 @@ type PluginUninstallOptions = {
   keepConfig?: boolean;
   force?: boolean;
   dryRun?: boolean;
-};
-
-export type PluginRegistryOptions = {
-  json?: boolean;
-  refresh?: boolean;
 };
 
 type PluginAuthoringBuildOptions = {
@@ -253,7 +249,7 @@ export function registerPluginsCli(program: Command) {
     .option("--json", "Print JSON")
     .option("--refresh", "Rebuild the persisted registry from current plugin manifests", false)
     .action(async (opts: PluginRegistryOptions) => {
-      const { runPluginsRegistryCommand } = await loadPluginsRuntime();
+      const { runPluginsRegistryCommand } = await import("./plugins-registry-command.js");
       await runPluginsRegistryCommand(opts);
     });
 

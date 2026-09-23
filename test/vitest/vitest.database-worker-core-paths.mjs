@@ -149,6 +149,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/plugins-cli.list.test.ts",
   "src/cli/plugins-cli.policy.test.ts",
   "src/cli/plugins-cli.registry.test.ts",
+  "src/cli/plugins-cli.registry-recovery.test.ts",
   "src/cli/plugins-cli.uninstall-multi.test.ts",
   "src/cli/plugins-install-bundled-failures.test.ts",
   "src/cli/plugins-install-warning-output.test.ts",
