@@ -1497,7 +1497,12 @@ describe("ci workflow guards", () => {
                 env: { fixtureTier },
               },
             ]
-          : decodeNodeTestGroups(manifest.outputs.ui_e2e_test_groups_gzip_base64),
+          : decodeNodeTestGroups(
+              expectDefined(
+                manifest.outputs.ui_e2e_test_groups_gzip_base64,
+                "real-Gateway test groups",
+              ),
+            ),
       );
       expect(
         evaluateWorkflowExpression(step.env.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64, {
@@ -7081,7 +7086,9 @@ describe("ci workflow guards", () => {
         expect(manifest.outputs.compatibility_target).toBe("false");
         expect(manifest.outputs.ui_test_groups_gzip_base64).toBe("");
         expect(manifest.outputs.ui_e2e_test_groups_gzip_base64).toBe("");
-        expect(JSON.parse(manifest.outputs.ui_real_gateway_matrix)).toEqual({
+        expect(
+          JSON.parse(expectDefined(manifest.outputs.ui_real_gateway_matrix, "real-Gateway matrix")),
+        ).toEqual({
           include: [{ shard: 1, shard_count: 1, run_desktop: true, test_groups_gzip_base64: "" }],
         });
         expect(
