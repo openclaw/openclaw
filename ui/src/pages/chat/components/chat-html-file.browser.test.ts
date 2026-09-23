@@ -10,9 +10,10 @@ import "./chat-sidebar.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
 let userEvent: (typeof import("vitest/browser"))["userEvent"];
+let page: (typeof import("vitest/browser"))["page"];
 beforeAll(async () => {
   if (browserMode) {
-    ({ userEvent } = await import("vitest/browser"));
+    ({ userEvent, page } = await import("vitest/browser"));
   }
 });
 
@@ -103,6 +104,7 @@ describe.runIf(browserMode)("HTML file presentation", () => {
     expect(panel.querySelector("h1")).toBeNull();
     expect(panel.querySelector(".sidebar-file-view__wrap")).toBeNull();
     await userEvent.click(button(panel, "Edit file"));
+    await page.getByRole("textbox", { name: file.name, exact: true }).click();
     await expect
       .poll(() => panel.querySelector('.cm-content[contenteditable="true"]'))
       .not.toBeNull();
