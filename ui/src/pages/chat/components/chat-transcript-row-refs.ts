@@ -1,10 +1,12 @@
 import type { Virtualizer } from "@tanstack/virtual-core";
-import { measureTranscriptRowRef } from "./chat-transcript-geometry.ts";
+import { measureTranscriptRowRefs } from "./chat-transcript-geometry.ts";
 
 /** Stable row refs own connection fences and deferred observer pruning. */
 export class TranscriptRowRefs {
   private readonly refs = new Map<string, (element?: Element) => void>();
   private pruneQueued = false;
+  private pendingRows = new Map<HTMLElement, string>();
+  private measureQueued = false;
 
   constructor(
     private readonly virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
@@ -15,8 +17,33 @@ export class TranscriptRowRefs {
     },
   ) {}
 
-  private measureMountedRow(element: HTMLElement): void {
-    measureTranscriptRowRef(element, this.virtualizer, this.callbacks.canMeasureVisibleRows());
+  private queueMountedRow(element: HTMLElement, key: string): void {
+    this.pendingRows.set(element, key);
+    if (this.measureQueued) {
+      return;
+    }
+    this.measureQueued = true;
+    // Nested message refs finish their preview clamps in a microtask. Capture
+    // this batch at the first checkpoint so later mounts get their own wait.
+    queueMicrotask(() => {
+      const pendingRows = this.pendingRows;
+      this.pendingRows = new Map();
+      this.measureQueued = false;
+      queueMicrotask(() => {
+        const elements = [...pendingRows].flatMap(([row, rowKey]) =>
+          row.isConnected &&
+          row.dataset.virtualRowKey === rowKey &&
+          this.callbacks.isCurrentRow(row, rowKey)
+            ? [row]
+            : [],
+        );
+        measureTranscriptRowRefs(
+          elements,
+          this.virtualizer,
+          this.callbacks.canMeasureVisibleRows(),
+        );
+      });
+    });
   }
   forKey(key: string): (element?: Element) => void {
     let callback = this.refs.get(key);
@@ -24,19 +51,7 @@ export class TranscriptRowRefs {
       callback = (element?: Element) => {
         if (element instanceof HTMLElement) {
           this.callbacks.onMount(key);
-          // Nested message refs finish their preview clamps in a microtask.
-          // Measure in the same pre-paint checkpoint after those writes settle.
-          queueMicrotask(() => {
-            queueMicrotask(() => {
-              if (
-                element.isConnected &&
-                element.dataset.virtualRowKey === key &&
-                this.callbacks.isCurrentRow(element, key)
-              ) {
-                this.measureMountedRow(element);
-              }
-            });
-          });
+          this.queueMountedRow(element, key);
           return;
         }
         // Re-stamps (e.g. the chat<->dashboard face switch) re-invoke each
@@ -69,5 +84,6 @@ export class TranscriptRowRefs {
 
   clear(): void {
     this.refs.clear();
+    this.pendingRows.clear();
   }
 }
