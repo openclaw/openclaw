@@ -23,11 +23,6 @@ import {
   trackAsyncWork,
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { resetTaskFlowRegistryForTests } from "../../tasks/task-flow-registry.test-support.js";
-import {
-  configureInMemoryTaskStoresForTests,
-  resetTaskRegistryForTests,
-} from "../../tasks/task-registry.test-support.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { closePreparedModelRuntimeSnapshots } from "../prepared-model-runtime.lifecycle.js";
 import { SessionManager } from "../sessions/session-manager.js";
@@ -76,9 +71,6 @@ it.each([
       layout: "split",
     });
     try {
-      resetTaskRegistryForTests({ persist: false });
-      resetTaskFlowRegistryForTests({ persist: false });
-      configureInMemoryTaskStoresForTests();
       const pluginId = `foreground-${mode}-fixture`;
       const pluginRoot = state.path("plugin");
       fs.mkdirSync(pluginRoot, { recursive: true });
@@ -441,12 +433,7 @@ it.each([
         }
       }
     } finally {
-      try {
-        await state.cleanup();
-      } finally {
-        resetTaskRegistryForTests({ persist: false });
-        resetTaskFlowRegistryForTests({ persist: false });
-      }
+      await state.cleanup();
     }
   },
 );
