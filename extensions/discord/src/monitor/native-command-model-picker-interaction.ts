@@ -273,15 +273,13 @@ async function handleDiscordModelPickerInteraction(params: {
     return;
   }
 
-  let deferredUpdate = interaction.acknowledged;
-  if (!deferredUpdate) {
+  if (!interaction.acknowledged) {
     const deferred = await params.safeInteractionCall("model picker defer", () =>
       interaction.acknowledge(),
     );
     if (deferred === null) {
       return;
     }
-    deferredUpdate = true;
   }
 
   const cfg = getRuntimeConfigSnapshot() ?? ctx.cfg;
@@ -323,9 +321,7 @@ async function handleDiscordModelPickerInteraction(params: {
     limit: 5,
   });
   const updatePicker = async (payload: MessagePayload) =>
-    await params.safeInteractionCall("model picker update", () =>
-      deferredUpdate ? interaction.editReply(payload) : interaction.update(payload),
-    );
+    await params.safeInteractionCall("model picker update", () => interaction.editReply(payload));
   const showNotice = async (message: string) =>
     await updatePicker(buildDiscordModelPickerNoticePayload(message));
   const updateModelsView = async (
@@ -701,15 +697,6 @@ type DiscordModelPickerFallbackParams = {
   dispatchCommandInteraction: DispatchDiscordCommandInteraction;
 };
 
-async function runDiscordModelPickerFallback(
-  params: DiscordModelPickerFallbackParams & {
-    interaction: ButtonInteraction | StringSelectMenuInteraction;
-    data: ComponentData;
-  },
-) {
-  await handleDiscordModelPickerInteraction(params);
-}
-
 class DiscordModelPickerFallbackButton extends Button {
   label = "modelpick";
   customId = `${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:seed=btn`;
@@ -719,7 +706,7 @@ class DiscordModelPickerFallbackButton extends Button {
   }
 
   override async run(interaction: ButtonInteraction, data: ComponentData) {
-    await runDiscordModelPickerFallback({ ...this.params, interaction, data });
+    await handleDiscordModelPickerInteraction({ ...this.params, interaction, data });
   }
 }
 
@@ -732,7 +719,7 @@ class DiscordModelPickerFallbackSelect extends StringSelectMenu {
   }
 
   override async run(interaction: StringSelectMenuInteraction, data: ComponentData) {
-    await runDiscordModelPickerFallback({ ...this.params, interaction, data });
+    await handleDiscordModelPickerInteraction({ ...this.params, interaction, data });
   }
 }
 

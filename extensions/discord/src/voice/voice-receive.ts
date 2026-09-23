@@ -539,21 +539,12 @@ export class DiscordVoiceReceive {
       accountId: this.params.accountId,
       userId,
       message,
-      cfg: this.params.cfg,
       discordConfig: this.params.discordConfig,
       runtime: this.params.runtime,
       context: currentContext,
       toolsAllow,
       voiceSelection: params.voiceSelection,
       ...(params.signal ? { signal: params.signal } : {}),
-      admissionAllowFrom: this.params.admissionAllowFrom,
-      fetchGuildName: async (guildId) => {
-        const guild = await this.params.client.fetchGuild(guildId).catch(() => null);
-        return guild && typeof guild.name === "string" && guild.name.trim()
-          ? guild.name
-          : undefined;
-      },
-      speakerContext: this.params.speakerContext,
     });
     if (!turn) {
       logVoiceVerbose(
