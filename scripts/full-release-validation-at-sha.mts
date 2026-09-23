@@ -1435,6 +1435,8 @@ function setReleasePriority(parentRunId: string, dryRun: boolean, mode: "set" | 
       runGh([
         "api",
         `repos/${REPOSITORY}/actions/variables/${RELEASE_PRIORITY_VARIABLE}`,
+        "-H",
+        GH_NO_CACHE_HEADER,
         "--jq",
         ".value",
       ]) === parentRunId
