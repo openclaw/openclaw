@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { acquireWithWait } from "./acquire-with-wait.js";
 import { sleepWithAbort } from "./backoff.js";
@@ -15,6 +16,7 @@ export async function acquireStateDatabaseCoordinatorWithWait(params: {
   operation: "session-admission" | "mutation-worker-admission";
   databasePath: string;
   runtime: StateDatabaseCoordinatorRuntime;
+  /** Absolute deadline in the native node:perf_hooks monotonic clock domain. */
   deadlineMs: number;
   signal?: AbortSignal;
   assertCurrent?(): void | Promise<void>;
@@ -30,6 +32,7 @@ export async function acquireStateDatabaseCoordinatorWithWait(params: {
       get deadlineMs() {
         return params.deadlineMs;
       },
+      now: performance.now.bind(performance),
       pollIntervalMs: 25,
       maxPollIntervalMs: 250,
       shouldRetry: (error) =>

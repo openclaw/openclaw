@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { afterEach, expect, it, vi } from "vitest";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { SqliteIntegrityOperation } from "../infra/sqlite-integrity.js";

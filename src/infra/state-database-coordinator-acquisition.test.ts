@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { StateDatabaseCoordinatorContentionError } from "./state-database-coordinator-errors.js";
 

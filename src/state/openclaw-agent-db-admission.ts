@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
