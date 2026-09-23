@@ -2315,7 +2315,6 @@ jobs:
             // Qualification authenticates on hosted preflight before paid admission.
             hybridHostedBaseRows = Object.values({
               "preflight": count(ciQualification),
-              "ci-gate": 1,
               "control-ui-performance": count(manifest.run_control_ui_performance),
               "native-i18n": count(manifest.run_native_i18n),
               "control-ui-i18n": count(manifest.run_control_ui_i18n),
@@ -2325,7 +2324,6 @@ jobs:
               "checks-fast-channel-contracts-shard": count(manifest.run_channel_contracts_shards, manifest.channel_contracts_matrix.include.length),
               "checks-node-core-test-nondist-shard": count(manifest.run_checks_node_core_nondist, hostedNodeRows),
               "check-shard": count(manifest.run_check, 4),
-              "check-lint-hosted-core-shard": count(manifest.run_check && usesHostedRunnerProfile, runnerProfile === "hybrid" && !releaseGate ? 2 : 5),
               "check-lint-hosted-extension-shard": count(manifest.run_check && runnerProfile === "hybrid" && !releaseGate, 6),
               "check-additional-shard": count(manifest.run_check_additional, hostedAdditionalRows),
               "check-docs": count(manifest.run_check_docs),
@@ -4824,7 +4822,8 @@ jobs:
           key: ${{ steps.test-type-cache.outputs.cache-primary-key }}
 
   # Keep five core stripes; the runner isolates large targets into serial child processes.
-  # Ordinary hybrid runs serialize the stripes across two hosted jobs.
+  # Ordinary hybrid runs serialize the stripes across two jobs; use the 8-class
+  # on trusted first attempts because hosted assignment put these on the critical path.
   # GitHub, frozen and manual runs retain five jobs. All-Blacksmith keeps one lint job.
   check-lint-hosted-core-shard:
     permissions:
@@ -4832,7 +4831,7 @@ jobs:
     name: check-lint-core-${{ matrix.stripe }}
     needs: [preflight]
     if: ${{ needs.preflight.outputs.run_check == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true') }}
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON(contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (github.event_name != 'workflow_dispatch' || needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.node_runner_backend == 'runson') && needs.preflight.outputs.frozen_target != 'true' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04'))) || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (github.event_name != 'workflow_dispatch' || needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.node_runner_backend == 'runson') && needs.preflight.outputs.frozen_target != 'true' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -7029,8 +7028,8 @@ jobs:
     # Report failed prerequisites, but let superseded runs release their slot
     # without waiting for an aggregate runner after workflow cancellation.
     if: ${{ (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') && !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    # The gate only aggregates job results; keep it independent of Blacksmith capacity.
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    # Hosted assignment delayed this two-second final dependency by 130–172 seconds.
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON(contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (github.event_name != 'workflow_dispatch' || needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.node_runner_backend == 'runson') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04'))) || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (github.event_name != 'workflow_dispatch' || needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.node_runner_backend == 'runson') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 5
     steps:
       - name: Verify selected CI lanes

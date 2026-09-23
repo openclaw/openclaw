@@ -161,6 +161,10 @@ ClawSweeper, ClawHub, Clownfish, OpenClaw RTT, and Clawbench.
 
 The compact cap is 90 rows; the final Node matrix caps are 70 push and 130 PR rows. With the conservative 80 potentially eligible non-Node jobs, this bounds main at 150 registrations and PRs at 210. The retained four-main/21-PR arrival envelope is `4 × 150 + 21 × 210 = 5,010`, leaving 990 below the 6,000 reference target for adjacent repositories, releases and carryover. Relative to the former 64/120 Node caps, this reserves six additional registrations per push or ten per PR: `4 × 6 + 21 × 10 = 234` per envelope. Compact rows are part of the final Node matrix, so do not count their ten-row increase again. This is a conditional arrival bound, not live organization-wide capacity proof.
 
+The critical-path gate placement adds one registration per eligible run to the
+older counts below. With the three-row Windows reserve, use **5,110**, leaving
+890 below 6,000; earlier 5,010/5,085 examples predate these reserves.
+
 ## Safe Levers
 
 Prefer these in order:
@@ -208,9 +212,15 @@ These are intentionally guarded by the `ci-workflow-guards`,
   include short-publisher turnover in burst estimates. Preflight and downstream Node jobs are
   restore-only consumers on eligible self-hosted runners. Exact misses and
   hosted paths, including Mac Node jobs, use the ordinary pnpm-store cache.
-- `ci-gate` always uses `ubuntu-24.04` for its Bash-only result aggregation,
-  without checkout or dependency setup. This removes one Blacksmith registration
-  from previously eligible runs; hosted assignment can still delay completion.
+- Trusted canonical hybrid first attempts route `ci-gate` to the Blacksmith
+  4-class and the two packed core-lint rows to the 8-class after hosted assignment
+  added 416 seconds to main's critical chain. Admitted qualifications use the
+  same route. The gate has no checkout or dependency setup; retries, ordinary
+  manual dispatches, untrusted contexts, and the GitHub override stay hosted.
+  Core lint additionally retains hosted routing for frozen targets. The gate adds
+  one registration to the conservative potentially eligible inventory; the two
+  lint rows are already included. With the Windows reserve, the existing arrival
+  envelope becomes 5,110, leaving 890 below the 6,000 operating target.
   Trusted automatic hybrid first-attempt `preflight` requests the existing
   16-class after hosted assignment stalled across three nearby runs while
   Blacksmith security jobs succeeded. Its logical planner profile, cache trust,

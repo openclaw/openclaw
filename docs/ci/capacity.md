@@ -8,6 +8,12 @@ read_when:
 
 ## Runner registration budget
 
+The latest critical-path routing adds the formerly hosted gate to the potentially
+eligible Blacksmith inventory. Including the separate three-row Windows reserve,
+the existing four-main/21-PR envelope is now **5,110 registrations**, leaving 890
+below the 6,000 operating target. Earlier 5,010 and 5,085 calculations below
+predate that gate reserve. See [critical-path routing](/ci/routing-costs#hosted-assignment-on-the-critical-path).
+
 OpenClaw's current GitHub runner-registration bucket reports 10,000 self-hosted
 runner registrations per 5 minutes in `gh api rate_limit`. Re-check
 `actions_runner_registration` before each tuning pass because GitHub can change

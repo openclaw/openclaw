@@ -53,6 +53,60 @@ Independent hosted checks reached at most 664 seconds in this sample. Artifact b
 
 Numbered compact bins change when membership changes. A matching suffix does not establish a matching workload. Full manual native qualification, including iOS and Android, is not proven within fifteen minutes by these Linux measurements.
 
+## Hosted assignment on the critical path
+
+In main run `35810905247` (September 23, 2026), the gate completed 1,068 seconds
+after `run_started_at`; the run metadata finalized one second later. The jobs
+endpoint reports 105 rows, including skipped jobs, so the second page is required
+to observe the gate. Each creation interval below starts when the preceding
+required job completed, or at `run_started_at` for preflight.
+
+| Required hop                   |       Job ID | Creation/admission | Queue | Runtime |
+| ------------------------------ | -----------: | -----------------: | ----: | ------: |
+| Preflight, Blacksmith 16-class | 107022697718 |               189s |    2s |     60s |
+| Core lint 1, hosted            | 107022907577 |                 1s |  244s |    398s |
+| CI gate, hosted                | 107025083351 |                 0s |  172s |      2s |
+
+This is 416 seconds of hosted queueing, 190 seconds of creation/admission,
+460 seconds of execution, and two seconds of Blacksmith queueing. The initial
+189 seconds end exactly when run `35809764899` releases the same even main
+parity slot. They are workflow admission, not planner execution. The planner
+is inside preflight's 60 seconds; downstream creation costs one second.
+The six extension-lint rows finish before the slowest Node job and remain hosted.
+
+The newest green PR at the sampling cutoff, run `35811411598`, completes the
+gate in 780 seconds (metadata finalizes at 781 seconds):
+
+| Required hop                         |       Job ID | Creation/admission | Queue | Runtime |
+| ------------------------------------ | -----------: | -----------------: | ----: | ------: |
+| Preflight, Blacksmith 16-class       | 107023611849 |                 1s |    8s |     56s |
+| Compact small 40, Blacksmith 8-class | 107023832566 |                 1s |    8s |    573s |
+| CI gate, hosted                      | 107025790309 |                 0s |  130s |      3s |
+
+That chain spends 130 seconds in hosted queueing, two in creation, 632 executing,
+and 16 in Blacksmith queueing. No test depends on the artifact build in either
+chain. Changing matrix shape would not remove the gate's serial queue.
+
+Trusted hybrid first attempts therefore request the 8-class for the two packed
+core-lint rows and the 4-class for the gate. The logical lint partitions, single
+lint thread, type-check admission, extension-lint rows, main parity slots,
+workflow dependencies, and deadlines stay unchanged. Hosted remains the route
+for independent cheap work. RunsOn's cron evidence does not qualify lint or a
+Bash-only gate, so those workloads retain the measured Blacksmith route.
+At the historical list rates, two lint rows totaling 721 seconds would cost
+about $0.1923 on the 8-class, plus $0.0003 for a two-second gate at $0.008/minute;
+these unrounded estimates hold runtime constant and exclude minimum billing or ancillary charges. They are not a provider benchmark or invoice.
+
+The change adds three actual Blacksmith registrations to an eligible hybrid
+run. The two lint rows already occur in the conservative potentially eligible
+non-Node inventory; adding the previously always-hosted gate changes that
+upper bound from 80 to 81. With the existing 70/130 Node caps and four-main,
+21-PR arrival envelope, the bound becomes `4 × 151 + 21 × 211 = 5,035` before
+the separately documented three-row Windows reserve, or 5,110 with that reserve.
+The latter leaves 890 registrations below the 6,000 operating target from the
+observed 10,000-per-five-minute registration limit. This conditional bound does
+not establish organization-wide usage.
+
 ## RunsOn remains unqualified
 
 The [on-demand pilot](https://github.com/openclaw/openclaw/actions/runs/35549787290) measured the two critical compact jobs at 561/816 seconds on Blacksmith versus 755/1259 seconds on `c8i.4xlarge`: 35%/54% slower. Full Gateway-core failed on AWS at every tested worker count. Cron scaled from 156 to 138 seconds on `c8i.8xlarge` and 126 to 110 seconds on `c8a.8xlarge` at 8 versus 16 workers, but lacks a matching Blacksmith control. Checks, artifact builds, extensions, and UI have no pilot comparison.
