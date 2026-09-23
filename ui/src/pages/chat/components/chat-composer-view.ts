@@ -491,9 +491,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                         ? slashMenuListboxId
                         : undefined,
                     )}
-                    aria-expanded=${ifDefined(
+                    aria-haspopup=${ifDefined(
                       slashMenuVisible || skillMenuVisible || mentionMenuVisible || emojiMenuVisible
-                        ? "true"
+                        ? "listbox"
                         : undefined,
                     )}
                     aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}

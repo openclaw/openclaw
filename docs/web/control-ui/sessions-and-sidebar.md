@@ -43,6 +43,10 @@ updates the sidebar without renaming an existing branch.
 
 ## New-session preferences and recents
 
+In **Project → Browse**, keyboard focus moves to the folder path. Escape returns
+focus to **Browse**. Loading and folder errors are announced without moving focus
+away from the path field.
+
 For connections with a durable user profile, the Gateway stores each agent's latest folder, worktree, model, thinking, and fast-mode choices. New sessions restore the last fast-mode choice, including an explicit off choice, for supported providers. The new-session picker also shows recent projects and folders derived only from sessions created by that profile. These conveniences follow the person across browsers; they do not grant access to a project or path.
 
 A custom worktree **Name** applies to the submitted session. Once its start is
@@ -125,6 +129,13 @@ The order is saved in your sidebar preferences and survives reloads. A temporari
 unavailable plugin keeps its saved position for when it returns. **Home** stays
 at the top in chip mode. Plugin links shown by default can be reordered but not
 dragged out of Pages to unpin them; optional plugin destinations can still be unpinned.
+
+To reorder without dragging, focus or hover a page, pinned session, or stored
+session-section header and open its **Reorder** grip menu. Choose **Move up** or
+**Move down**; the same menu is available on touch screens. Keyboard focus stays
+with the moved item, and the order uses the same saved preferences or Gateway
+group order as dragging. Home and sections derived from people, projects, or
+agents keep their existing fixed order.
 
 To inspect Home’s subagents, open **Home**, choose **Show background tasks**, and use the right-hand **Tasks** panel. Expand **Finished** for recent completed runs; selecting a task opens its details and available transcript.
 

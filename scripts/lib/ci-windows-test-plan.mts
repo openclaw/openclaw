@@ -46,7 +46,6 @@ const fileSeconds: Readonly<Record<string, number>> = {
   "src/cli/daemon-cli/status.print.test.ts": 4.2,
   "src/cli/mcp-cli.path-case.windows.test.ts": 6.8,
   "src/cli/runtime-cleanup-scope.windows.process.test.ts": 4,
-  "src/cli/update-cli/restart-helper.windows.test.ts": 4.3,
   "src/commands/agents.commands.list.test.ts": 5.6,
   "src/commands/backup-verify.test.ts": 9.6,
   "src/commands/doctor-gateway-auth-token.windows.test.ts": 0.1,

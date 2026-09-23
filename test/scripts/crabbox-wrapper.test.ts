@@ -473,16 +473,6 @@ function runWrapper(helpText: string, args: string[], options: WrapperOptions = 
   });
 }
 
-function runSourceWrapper(helpText: string, args: string[], options: WrapperOptions = {}) {
-  return spawnSync(process.execPath, ["scripts/crabbox-wrapper.mjs", ...args], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    input: options.input,
-    env: wrapperEnv(helpText, options),
-    timeout: options.timeoutMs ?? 10_000,
-  });
-}
-
 function runDefaultWrapper(args: string[], options: WrapperOptions = {}) {
   return runWrapper(defaultProviderHelp, args, options);
 }
@@ -1452,7 +1442,6 @@ describe("scripts/crabbox-wrapper", () => {
       ],
       outfile: bundledWrapperPath,
     });
-    runSourceWrapper("provider: aws\n", ["--version"]);
   });
 
   it("prepares the supported executable for later workflow steps", () => {

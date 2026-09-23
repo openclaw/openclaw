@@ -82,7 +82,7 @@ class LobsterdexPage extends OpenClawLightDomElement {
   override render() {
     return html`
       <section class="content-header">
-        <div class="page-title">${titleForRoute("lobsterdex")}</div>
+        <h1 class="page-title">${titleForRoute("lobsterdex")}</h1>
       </section>
       ${renderSettingsWorkspace(
         renderLobsterdex(getLobsterdexEntries(), {

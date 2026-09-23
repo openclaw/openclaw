@@ -438,17 +438,22 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   }
 
   private handlePlayerKeydown(event: KeyboardEvent): void {
-    if (event.target !== event.currentTarget) {
+    const seekTarget = event.target instanceof HTMLInputElement && event.target.type === "range";
+    if (event.target !== event.currentTarget && !seekTarget) {
       return;
     }
-    if (event.key === " ") {
+    if (!seekTarget && event.key === " ") {
       event.preventDefault();
       this.togglePlayback();
       return;
     }
-    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+    if (
+      event.key === "ArrowLeft" ||
+      event.key === "ArrowRight" ||
+      (seekTarget && (event.key === "ArrowDown" || event.key === "ArrowUp"))
+    ) {
       event.preventDefault();
-      const direction = event.key === "ArrowLeft" ? -1 : 1;
+      const direction = event.key === "ArrowLeft" || event.key === "ArrowDown" ? -1 : 1;
       this.seekTo(this.currentTime + direction * SEEK_STEP_SECONDS);
     }
   }
@@ -476,6 +481,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
       step="0.01"
       .value=${String(Math.min(this.currentTime, this.duration || this.currentTime))}
       aria-label=${t("chat.mediaPlayer.seek")}
+      aria-valuetext=${`${formatChatMediaTime(this.currentTime)} / ${formatChatMediaTime(this.duration)}`}
       style=${styleMap({
         "--chat-audio-progress": `${progress * 100}%`,
         "--chat-audio-buffered": `${Math.max(progress, this.buffered) * 100}%`,
@@ -600,7 +606,6 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
                   type="button"
                   class="chat-audio-player__volume"
                   aria-label=${t(this.muted ? "chat.mediaPlayer.unmute" : "chat.mediaPlayer.mute")}
-                  aria-pressed=${this.muted ? "true" : "false"}
                   @click=${() => this.toggleMuted()}
                 >
                   ${this.muted ? icons.volumeX : icons.volume2}

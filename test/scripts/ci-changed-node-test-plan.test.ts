@@ -304,6 +304,7 @@ describe("CI changed Node test plan", () => {
     "retains only directly changed runtime proofs with their canonical execution policies (%s)",
     (runnerBackend) => {
       const targets = [
+        "src/commands/doctor-config-preflight.refusal.process.test.ts",
         "src/flows/doctor-health.test.ts",
         "src/infra/update-managed-service-handoff-foreground.test.ts",
         "src/node-host/node-worker-supervisor.recovery.test.ts",

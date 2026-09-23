@@ -257,6 +257,61 @@ afterEach(async () => {
   expect(edge.forbidden).not.toHaveBeenCalled();
 });
 
+it.each(["success", "report refused", "cleanup failed"] as const)(
+  "settles eager native factory creation synchronously (%s)",
+  async (outcome) => {
+    const { createSqliteWorkerBackend } = await import("./openclaw-agent-execution.worker.js");
+    const reportingError = new Error("Synthetic eager registration refusal");
+    const cleanupError = new Error("Synthetic eager cleanup failure");
+    edge.open.mockImplementation((_options, _lease, committed) => {
+      committed?.(receipt);
+      nativeOpened = true;
+      return edge.database;
+    });
+    if (outcome !== "success") {
+      edge.request.mockImplementation((request) => {
+        if (
+          request.stage === "prepare" &&
+          request.facts &&
+          typeof request.facts === "object" &&
+          "kind" in request.facts &&
+          request.facts.kind === "agent-registration-committed"
+        ) {
+          throw reportingError;
+        }
+      });
+    }
+    if (outcome === "cleanup failed") {
+      edge.releaseShared.mockImplementationOnce(() => {
+        throw cleanupError;
+      });
+    }
+    if (outcome === "success") {
+      const backend = createSqliteWorkerBackend(input, { databasePath: input.databasePath });
+      expect(backend).not.toBeInstanceOf(Promise);
+      expect(backend.close()).toBeUndefined();
+    } else {
+      let caught: unknown;
+      try {
+        createSqliteWorkerBackend(input, { databasePath: input.databasePath });
+      } catch (error) {
+        caught = error;
+      }
+      if (outcome === "report refused") {
+        expect(caught).toBe(reportingError);
+      } else {
+        expect(caught).toMatchObject({
+          errors: [reportingError, cleanupError],
+          cause: reportingError,
+        });
+      }
+    }
+    expect(edge.database.db.isOpen).toBe(false);
+    expect(edge.releaseAgent).toHaveBeenCalledOnce();
+    expect(edge.releaseShared).toHaveBeenCalledOnce();
+  },
+);
+
 describe("committed agent registration across failed native opening", () => {
   it.each(["coordinator", "quarantine-cleanup", "quarantined"] as const)(
     "retains a typed opening failure after native retirement without changing its outcome (%s)",

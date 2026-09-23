@@ -16,6 +16,11 @@ import { describe, expect, it, vi } from "vitest";
 import { detectChangedScope } from "../../scripts/ci-changed-scope.mjs";
 import { isDirectRunPath } from "../../scripts/lib/direct-run.mjs";
 import * as managedChild from "../../scripts/lib/managed-child-process.mts";
+import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { readWindowsProcessStartTimeSync } from "../../src/infra/windows-process-start.js";
 import { isProcessAlive, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
 import { createDeferred } from "../helpers/promise.js";
@@ -74,9 +79,15 @@ const EXECUTABLE_ENTRYPOINTS = [
 
 function runEntrypoint(entrypoint: (typeof EXECUTABLE_ENTRYPOINTS)[number]) {
   const script = path.resolve(entrypoint.script);
-  const args = script.endsWith(".mts")
-    ? ["--import", "tsx", script, ...entrypoint.args]
-    : [script, ...entrypoint.args];
+  const args =
+    entrypoint.script === "scripts/run-additional-boundary-checks.mts"
+      ? [
+          ...resolveRuntimeWorkerArgv(
+            resolveRuntimeWorkerUrl(scriptModuleEntrypoints.additionalBoundaryChecks),
+          ),
+          ...entrypoint.args,
+        ]
+      : [script, ...entrypoint.args];
   return spawnSync(process.execPath, args, {
     cwd: process.cwd(),
     encoding: "utf8",

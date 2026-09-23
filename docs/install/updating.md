@@ -44,6 +44,11 @@ the update keeps the active CLI's installation as its target and refreshes the
 service through `gateway install --force` before verifying the restarted Gateway.
 The old service command remains the recovery identity until that handoff succeeds.
 Reconciliation failures are recorded as warnings with a manual repair command.
+The code update can report success while service reconciliation remains pending;
+a stopped service stays stopped until repaired. On Linux, regeneration preserves
+the order of retained `PATH` entries and prepends newly added managed entries.
+Paths carried over solely from the old definition still pass the existing safety
+filters. If the definition cannot be preserved, reconciliation requires manual repair.
 Deployment-owned definitions retain their existing installation owner.
 Pending package-publication recovery in either the CLI or selected service
 installation blocks writable preparation. Follow the package recovery command

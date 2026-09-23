@@ -2,11 +2,14 @@ import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { Readable } from "node:stream";
-import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { NODE_WORKER_WORKSPACE_EXEC_COMMAND } from "../../infra/node-commands.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import { ensureStagedInputDirectory, stagedInputDirectory } from "../../media/staged-inputs.js";
 import { invokeNodeWorkerSupervisorCommand } from "../../node-host/node-worker-supervisor-commands.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
@@ -14,6 +17,7 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
+import { workspaceProcessTestEntrypoints } from "./workspace-process-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -151,6 +155,7 @@ describe("node workspace transfer service", () => {
           argv: ["node", "-e", ""],
         };
         const server = await startNodeWorkspaceTransferTestServer(service);
+        const workspaceUrl = resolveRuntimeWorkerUrl(workspaceProcessTestEntrypoints.nodeWorkspace);
         try {
           const created = await runCommandWithTimeout(
             [
@@ -159,8 +164,7 @@ describe("node workspace transfer service", () => {
               'umask 0002; exec "$@"',
               "workspace-transfer-umask",
               process.execPath,
-              "--import",
-              fileURLToPath(new URL("../../../scripts/tsx.mjs", import.meta.url)),
+              ...resolveRuntimeWorkerArgv(workspaceUrl).slice(0, -1),
               "--input-type=module",
               "--eval",
               `
@@ -176,7 +180,7 @@ describe("node workspace transfer service", () => {
                   await fs.chmod(dir, 0o775);
                 }
               `,
-              new URL("../../node-host/node-worker-workspace.ts", import.meta.url).href,
+              workspaceUrl.href,
               JSON.stringify({ root: nodeRoot, input }),
             ],
             { timeoutMs: 30_000 },

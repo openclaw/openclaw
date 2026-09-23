@@ -1044,8 +1044,8 @@ function applyCompactGroupWorkerPins(
     return {
       ...group,
       fallbackMaxWorkers: 2,
-      // Refit must not fold parallel spans back into the serial observations.
-      timing_key: `${group.shard_name}${COMMANDS_PARALLEL_TIMING_SUFFIX}`,
+      // Preserve the coverage tier while separating parallel and serial samples.
+      timing_key: `${compactGroupTimingKey(group)}${COMMANDS_PARALLEL_TIMING_SUFFIX}`,
     };
   }
   const timedGroup =
@@ -1436,6 +1436,12 @@ const KEEP_LARGE_NODE_TEST_RUNNER = new Set([
 const RELEASE_ONLY_PLUGIN_SHARDS = new Set(["agentic-plugins"]);
 const RELEASE_ONLY_TOOLING_SHARDS = new Set(["core-tooling"]);
 const RELEASE_ONLY_UI_TEST_FILES = new Set([
+  "ui/src/e2e/board-fixture.e2e.test.ts",
+  "ui/src/e2e/chat-attachment-menu.e2e.test.ts",
+  "ui/src/e2e/chat-mobile-bubble-margin.e2e.test.ts",
+  "ui/src/e2e/github-link-hovercard.e2e.test.ts",
+  "ui/src/e2e/settings-layout.e2e.test.ts",
+  "ui/src/e2e/theme-muted-contrast.e2e.test.ts",
   "ui/src/e2e/native-embed-settings.e2e.test.ts",
   "ui/src/e2e/chat-session-entry.e2e.test.ts",
   "ui/src/components/app-sidebar.stress.browser.test.ts",
@@ -4468,6 +4474,16 @@ function createCompactNodeTestShardBundles(
   }
 
   for (const job of compactJobs) {
+    // Memory-gated plans need the measured 8-CPU/30.95-GiB allocation, even alone.
+    // Normalize the previous two-worker allowance onto their unmeasured siblings below.
+    if (
+      usesBlacksmithCapacity(job.runner) &&
+      job.runner !== EXTRA_LARGE_NODE_TEST_RUNNER &&
+      job.groups.some((group) => group.minTotalMemoryBytes !== undefined)
+    ) {
+      job.runner = EXTRA_LARGE_NODE_TEST_RUNNER;
+      job.env = { ...job.env, ...PINNED_COMPACT_GROUP_ENV };
+    }
     if (
       job.env?.OPENCLAW_VITEST_MAX_WORKERS !== "2" ||
       !job.groups.some((group) => usesMeasuredCompactWorkers(group, options.runnerBackend))
