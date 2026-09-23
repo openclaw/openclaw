@@ -48,7 +48,8 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
     return await this.updateMetadata(
       id,
       (existing) => {
-        assertCanMutateClaimedCard(existing, scope);
+        // Proof is recovery-safe evidence (attach-then-release handoff).
+        assertCanMutateClaimedCard(existing, scope, true);
         const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
         return {
           ...metadata,
@@ -74,7 +75,8 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
     return await this.updateMetadata(
       id,
       (existing) => {
-        assertCanMutateClaimedCard(existing, scope);
+        // Proof is recovery-safe evidence (attach-then-release handoff).
+        assertCanMutateClaimedCard(existing, scope, true);
         const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
         return {
           ...metadata,
@@ -96,7 +98,8 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
       throw new Error("artifact url or path is required.");
     }
     return await this.updateMetadata(id, (existing) => {
-      assertCanMutateClaimedCard(existing, scope);
+      // Artifacts are recovery-safe evidence.
+      assertCanMutateClaimedCard(existing, scope, true);
       const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
       return {
         ...metadata,
@@ -115,7 +118,8 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
       if (!existing) {
         throw new Error(`card not found: ${id}`);
       }
-      assertCanMutateClaimedCard(existing, scope);
+      // Attachments are recovery-safe evidence.
+      assertCanMutateClaimedCard(existing, scope, true);
       const now = Date.now();
       const { attachment, contentBase64 } = normalizeAttachmentInput(id, input, now);
       await this.attachmentStore.register(attachment.id, {
@@ -211,7 +215,8 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
       ...(runId ? { runId } : {}),
     };
     return await this.updateMetadata(id, (existing) => {
-      assertCanMutateClaimedCard(existing, scope);
+      // Worker logs are recovery-safe evidence for stalled-build diagnosis.
+      assertCanMutateClaimedCard(existing, scope, true);
       return {
         ...existing.metadata,
         workerLogs: [...(existing.metadata?.workerLogs ?? []), log].slice(-MAX_CARD_WORKER_LOGS),

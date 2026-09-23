@@ -2,7 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { isToolResultError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { Value } from "typebox/value";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createWorkboardSqliteTestHarness,
   createWorkboardSqliteTestStore,
@@ -640,5 +640,80 @@ describe("workboard tools", () => {
       }),
     );
     expect(claimed.card).toMatchObject({ status: "review" });
+  });
+
+  it("admits recovery mutations but rejects tokenless completion on an expired claim", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const store = createWorkboardSqliteTestStore();
+      const tools = new Map(
+        createWorkboardTools({ store, context: { agentId: "agent-b" } }).map((tool) => [
+          tool.name,
+          tool,
+        ]),
+      );
+      const card = await store.create({ title: "Zombie claim card", status: "running" });
+      const claimed = await store.claim(card.id, { ownerId: "agent-a", ttlSeconds: 1 });
+      const expiresAt = claimed.card.metadata?.claim?.expiresAt;
+      if (expiresAt === undefined) {
+        throw new Error("expected a timed claim");
+      }
+
+      // Grace boundary: store-level takeover already works one ms past grace.
+      vi.setSystemTime(expiresAt + 5 * 60_000 + 1);
+
+      // Recovery mutations succeed for another agent on an expired claim.
+      const commented = readPayload(
+        await tools.get("workboard_comment")?.execute("comment-past-grace", {
+          id: card.id,
+          body: "claim long expired; taking over",
+        }),
+      );
+      expect(commented.card).toMatchObject({
+        metadata: {
+          comments: [expect.objectContaining({ body: "claim long expired; taking over" })],
+        },
+      });
+
+      const logged = readPayload(
+        await tools.get("workboard_worker_log")?.execute("worker-log-past-grace", {
+          id: card.id,
+          message: "prior owner stalled; logging handoff context",
+        }),
+      );
+      expect(logged.card).toMatchObject({
+        metadata: {
+          workerLogs: [
+            expect.objectContaining({ message: "prior owner stalled; logging handoff context" }),
+          ],
+        },
+      });
+
+      // Regression guard: tokenless completion by another agent stays rejected
+      // even when the claim is expired past the reclaim grace window.
+      await expect(
+        tools.get("workboard_complete")?.execute("complete-past-grace", { id: card.id }),
+      ).rejects.toThrow(/claimed by agent-a/);
+
+      await expect(
+        tools.get("workboard_move")?.execute("move-past-grace", {
+          id: card.id,
+          status: "review",
+        }),
+      ).rejects.toThrow(/claimed by agent-a/);
+
+      // Documented recovery path still clears the claim.
+      const reclaimed = readPayload(
+        await tools.get("workboard_reclaim")?.execute("reclaim-past-grace", {
+          id: card.id,
+          reason: "expired claim past grace",
+        }),
+      );
+      const reclaimedCard = reclaimed.card as { metadata?: { claim?: unknown } };
+      expect(reclaimedCard.metadata?.claim).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

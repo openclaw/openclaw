@@ -453,7 +453,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       if (!existing) {
         throw new Error(`card not found: ${id}`);
       }
-      assertCanMutateClaimedCard(existing, scope === null ? undefined : scope);
+      assertCanMutateClaimedCard(existing, scope === null ? undefined : scope, true);
       const now = Date.now();
       const reason =
         normalizeBoundedString(input.reason, undefined, 1000, "reclaim reason") ??

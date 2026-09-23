@@ -5,6 +5,7 @@ import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sd
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { Type } from "typebox";
 import { redactClaimToken } from "./card-redaction.js";
+import { isWorkboardClaimReclaimable } from "./store-constants.js";
 import type { WorkboardStore } from "./store.js";
 import {
   cardIdField,
@@ -24,9 +25,21 @@ function contextOwner(ctx: OpenClawPluginToolContext | undefined): string {
   );
 }
 
-function canMutateCard(card: WorkboardCard, ownerId: string, token?: string): boolean {
+function canMutateCard(
+  card: WorkboardCard,
+  ownerId: string,
+  token?: string,
+  recovery = false,
+): boolean {
   const claim = card.metadata?.claim;
-  return !claim || claim.ownerId === ownerId || safeEqualSecret(token, claim.token);
+  return (
+    !claim ||
+    claim.ownerId === ownerId ||
+    safeEqualSecret(token, claim.token) ||
+    // Expired claims only admit recovery mutations (comment/proof/worker log);
+    // completion and other governed mutations still require owner or token.
+    (recovery && isWorkboardClaimReclaimable(claim, Date.now()))
+  );
 }
 
 function readParentIds(value: unknown): string[] {
@@ -63,12 +76,13 @@ async function requireScopedCard(
   cardId: string,
   ownerId: string,
   token?: string,
+  recovery = false,
 ): Promise<WorkboardCard> {
   const card = await store.get(cardId);
   if (!card) {
     throw new Error(`card not found: ${cardId}`);
   }
-  if (!canMutateCard(card, ownerId, token)) {
+  if (!canMutateCard(card, ownerId, token, recovery)) {
     throw new Error(`card is claimed by ${card.metadata?.claim?.ownerId ?? "another agent"}.`);
   }
   return card;
@@ -175,6 +189,13 @@ export function createWorkboardTools(params: {
   const readScopedCardToolParams = async (rawParams: unknown): Promise<WorkboardToolCardParams> => {
     const input = readCardToolParams(rawParams, ownerId);
     await requireScopedCard(store, input.id, ownerId, input.token);
+    return input;
+  };
+  const readRecoveryCardToolParams = async (
+    rawParams: unknown,
+  ): Promise<WorkboardToolCardParams> => {
+    const input = readCardToolParams(rawParams, ownerId);
+    await requireScopedCard(store, input.id, ownerId, input.token, true);
     return input;
   };
   const readClaimedCardToolParams = async (
@@ -392,7 +413,7 @@ export function createWorkboardTools(params: {
         token: ScopedClaimTokenField,
       }),
       execute: async (_toolCallId, rawParams) => {
-        const { record, id, scope } = await readScopedCardToolParams(rawParams);
+        const { record, id, scope } = await readRecoveryCardToolParams(rawParams);
         return redactedCardResult(await store.addComment(id, { body: record.body }, scope));
       },
     },
@@ -412,7 +433,7 @@ export function createWorkboardTools(params: {
         token: ScopedClaimTokenField,
       }),
       execute: async (_toolCallId, rawParams) => {
-        const { record, id, scope } = await readScopedCardToolParams(rawParams);
+        const { record, id, scope } = await readRecoveryCardToolParams(rawParams);
         const hasArtifact =
           (typeof record.artifactPath === "string" && record.artifactPath.trim() !== "") ||
           (typeof record.url === "string" && record.url.trim() !== "");
@@ -558,6 +579,7 @@ export function createWorkboardTools(params: {
       ownerId,
       requireScopedCard,
       readScopedCardToolParams,
+      readRecoveryCardToolParams,
       readClaimedCardToolParams,
       runScopedCardMutation,
       redactedCardResult,

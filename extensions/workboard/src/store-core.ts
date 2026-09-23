@@ -955,7 +955,9 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
     }
     const comment = { id: randomUUID(), body, createdAt: now };
     return await this.updateMetadata(id, (existing) => {
-      assertCanMutateClaimedCard(existing, scope);
+      // Comments are recovery-safe evidence: allow them past an expired claim so
+      // reclaim-then-handoff flows can record context before re-claiming.
+      assertCanMutateClaimedCard(existing, scope, true);
       return {
         ...existing.metadata,
         comments: [...(existing.metadata?.comments ?? []), comment].slice(-MAX_CARD_COMMENTS),
