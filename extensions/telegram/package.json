@@ -21,6 +21,12 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "build": {
+      "openclawVersion": "2026.9.5",
+      "workerEntries": [
+        "./src/telegram-ingress-worker.runtime.ts"
+      ]
+    },
     "setupFeatures": {
       "configPromotion": true
     },

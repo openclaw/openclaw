@@ -360,6 +360,10 @@ const rootEntries = [
   "scripts/qa/render-maturity-docs.ts!",
   bundledPluginFile("telegram", "src/audit.ts", "!"),
   bundledPluginFile("telegram", "src/token.ts", "!"),
+  // tsdown builds this ingress worker as a package dist-root entry, and the
+  // Telegram plugin resolves it at runtime through resolveRuntimeWorkerUrl
+  // rather than a static import edge.
+  bundledPluginFile("telegram", "src/telegram-ingress-worker.runtime.ts", "!"),
   "src/hooks/bundled/*/handler.ts!",
   "src/hooks/llm-slug-generator.ts!",
   // Local-only test-state consumers are modeled by the full-tree test scan.
