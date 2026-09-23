@@ -743,9 +743,13 @@ function tagPendingCommentaryText(
     ) {
       continue;
     }
+    // A response-local index alone aliases each segment across responses (every
+    // response's first commentary becomes `commentary-0`) and collapses distinct
+    // stream-reconciliation rows in the UI. Add per-segment entropy so the
+    // generated identity stays unique, matching packages/ai/src/utils/assistant-text-phase.ts.
     block.textSignature = JSON.stringify({
       v: 1,
-      id: `commentary-${commentaryIndex}`,
+      id: `commentary-${commentaryIndex}-${randomUUID().replaceAll("-", "").slice(0, 24)}`,
       phase: "commentary",
     });
     commentaryIndex += 1;
