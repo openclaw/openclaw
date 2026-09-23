@@ -51,7 +51,7 @@ export class SystemsController {
   private telemetryRequest: AbortController | undefined;
   private generation = 0;
   private presented = false;
-  private refreshQueued = false;
+  private refreshQueued?: "automatic" | "manual";
 
   constructor(readonly context: ApplicationContext) {
     this.scope = gatewayPresentationScope(context.gateway);
@@ -64,6 +64,10 @@ export class SystemsController {
 
   get connected(): boolean {
     return this.current && this.context.gateway.snapshot.phase === "connected";
+  }
+
+  get needsInventoryRefresh(): boolean {
+    return this.inventory === null || this.refreshQueued !== undefined;
   }
 
   get desktopAvailable(): boolean {
@@ -316,7 +320,7 @@ export class SystemsController {
     this.request = undefined;
     this.telemetryRequest = undefined;
     this.loading = false;
-    this.refreshQueued = false;
+    this.refreshQueued = undefined;
   }
 
   private clear(): void {
@@ -331,7 +335,7 @@ export class SystemsController {
     this.query = "";
   }
 
-  async refresh(): Promise<void> {
+  async refresh(intent: "automatic" | "manual" = "automatic"): Promise<void> {
     const snapshot = this.context.gateway.snapshot;
     if (this.lifecycle.transition(snapshot)) {
       this.telemetry.clear();
@@ -345,9 +349,10 @@ export class SystemsController {
     ) {
       return;
     }
-    // Bursts of presence events must not continually cancel the only useful response.
-    if (this.loading) {
-      this.refreshQueued = true;
+    const refreshIntent = this.refreshQueued === "manual" ? "manual" : intent;
+    // Hidden pages and event bursts retain one refresh without cancelling useful work.
+    if (this.loading || document.visibilityState === "hidden") {
+      this.refreshQueued = refreshIntent;
       return;
     }
     this.cancelRefresh();
@@ -366,7 +371,11 @@ export class SystemsController {
       const inventory = await loadSystemsInventory(this.context.gateway, {
         signal: request.signal,
         isCurrent,
+        fresh: refreshIntent === "manual",
       });
+      if (!inventory && isCurrent()) {
+        this.refreshQueued = this.refreshQueued === "manual" ? "manual" : refreshIntent;
+      }
       if (!inventory || !isCurrent()) {
         return;
       }
@@ -394,10 +403,8 @@ export class SystemsController {
       if (isCurrent()) {
         this.loading = false;
         this.request = undefined;
-        const refreshQueued = this.refreshQueued;
-        this.refreshQueued = false;
         this.notify();
-        if (refreshQueued) {
+        if (this.refreshQueued) {
           void this.refresh();
         }
       }

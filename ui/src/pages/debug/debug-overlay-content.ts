@@ -37,6 +37,7 @@ class DebugOverlayContent extends OpenClawLightDomElement {
     SYSTEM_INFO_POLL_INTERVAL_MS,
     () => void this.refreshSections(),
     false,
+    "visible",
   );
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
@@ -128,6 +129,8 @@ class DebugOverlayContent extends OpenClawLightDomElement {
       return;
     }
     if (id === "status" && state.status === "ready") {
+      this.polling.stop();
+      this.polling.start();
       // SAFETY: The status descriptor owns this section id and always returns a status snapshot.
       const snapshot = state.value as DebugOverlayStatusSnapshot;
       if (this.statusHistory.at(-1)?.at !== snapshot.sampledAt) {

@@ -144,7 +144,7 @@ class SystemsPage extends OpenClawLightDomElement {
       if (!this.presented || !controller) {
         return;
       }
-      if (!controller.inventory) {
+      if (controller.needsInventoryRefresh) {
         void controller.refresh();
       } else if (controller.showStats || controller.showDetails) {
         void controller.refreshTelemetry();
@@ -326,7 +326,7 @@ class SystemsPage extends OpenClawLightDomElement {
             `
           : nothing
       }
-      ${!enabled && !ready ? html`<button class="systems-text-button" ?disabled=${controller.loading || !controller.connected} @click=${() => void controller.refresh()}>${t("systems.desktopSetupCheckAgain")}</button>` : nothing}
+      ${!enabled && !ready ? html`<button class="systems-text-button" ?disabled=${controller.loading || !controller.connected} @click=${() => void controller.refresh("manual")}>${t("systems.desktopSetupCheckAgain")}</button>` : nothing}
     </div>`;
   }
 
@@ -411,7 +411,7 @@ class SystemsPage extends OpenClawLightDomElement {
           ${icons.panelRightOpen}
         </button>
       </header>
-      ${controller.error ? html`<div class="systems-callout systems-callout--error" role="alert">${controller.error}<button @click=${() => void controller.refresh()} ?disabled=${controller.loading}>${t("common.retry")}</button></div>` : nothing}
+      ${controller.error ? html`<div class="systems-callout systems-callout--error" role="alert">${controller.error}<button @click=${() => void controller.refresh("manual")} ?disabled=${controller.loading}>${t("common.retry")}</button></div>` : nothing}
       ${!controller.connected ? html`<div class="systems-callout" role="status">${t("systems.offlineGateway")}</div>` : nothing}
       ${
         auxiliaryErrors.length

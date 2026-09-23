@@ -59,7 +59,7 @@ describe("shared system information reads", () => {
     },
   );
 
-  it("keeps another reader's request alive and preserves its sample time and ping", async () => {
+  it("shares pending manual reads, preserves sample metadata, and refreshes only settled results", async () => {
     vi.useFakeTimers();
     const pending = createDeferred<typeof deviceSystemInfo>();
     const request = vi.fn().mockReturnValue(pending.promise);
@@ -68,7 +68,7 @@ describe("shared system information reads", () => {
     const remaining = new AbortController();
     const first = readSystemInfo(gateway, leaving.signal);
     const firstRejected = expect(first).rejects.toMatchObject({ name: "AbortError" });
-    const second = readSystemInfo(gateway, remaining.signal);
+    const second = readSystemInfo(gateway, remaining.signal, { fresh: true });
     leaving.abort();
     await firstRejected;
     expect(request.mock.calls[0]?.[2].signal.aborted).toBe(false);
@@ -79,5 +79,12 @@ describe("shared system information reads", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     expect(await readSystemInfo(gateway, remaining.signal)).toEqual(sample);
     expect(request).toHaveBeenCalledOnce();
+    const refreshed = { ...deviceSystemInfo, machineName: "Refreshed host" };
+    request.mockResolvedValueOnce(refreshed);
+    expect((await readSystemInfo(gateway, remaining.signal, { fresh: true })).value).toEqual(
+      refreshed,
+    );
+    expect((await readSystemInfo(gateway, remaining.signal)).value).toEqual(refreshed);
+    expect(request).toHaveBeenCalledTimes(2);
   });
 });

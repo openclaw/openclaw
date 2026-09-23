@@ -33,7 +33,7 @@ export type SystemsInventoryRow = {
 /** The route owns connection epochs, refresh scheduling and publication of this snapshot. */
 export async function loadSystemsInventory(
   gateway: ApplicationGateway,
-  options: { isCurrent: () => boolean; signal?: AbortSignal },
+  options: { isCurrent: () => boolean; signal?: AbortSignal; fresh?: boolean },
 ): Promise<SystemsInventory | undefined> {
   const client = gateway.snapshot.client;
   if (!client || !options.isCurrent() || options.signal?.aborted) {
@@ -47,7 +47,7 @@ export async function loadSystemsInventory(
       requestOptions,
     ),
     client.request<{ nodes: NodeListNode[] }>("node.list", {}, requestOptions),
-    readSystemInfo(gateway, options.signal),
+    readSystemInfo(gateway, options.signal, { fresh: options.fresh }),
   ]);
   if (!options.isCurrent() || options.signal?.aborted) {
     return undefined;

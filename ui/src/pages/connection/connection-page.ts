@@ -248,6 +248,8 @@ export class ConnectionPage extends OpenClawLightDomElement {
         return;
       }
       this.systemInfo = sample.value;
+      this.diagnosticsPolling.stop();
+      this.diagnosticsPolling.start();
       if (this.statusHistory.at(-1)?.at !== sample.at) {
         this.statusHistory = [
           ...this.statusHistory.slice(-(CONNECTION_PING_SAMPLE_LIMIT - 1)),

@@ -27,6 +27,7 @@ const reads = new WeakMap<ApplicationGateway, SystemInfoRead>();
 export async function readSystemInfo(
   gateway: ApplicationGateway,
   signal?: AbortSignal,
+  { fresh = false }: { fresh?: boolean } = {},
 ): Promise<SystemInfoSample> {
   signal?.throwIfAborted();
   if (document.visibilityState === "hidden") {
@@ -43,7 +44,7 @@ export async function readSystemInfo(
     read.hello !== hello ||
     read.revision !== gateway.connectionRevision ||
     read.controller.signal.aborted ||
-    (read.settled && read.expiresAt <= Date.now())
+    (read.settled && (fresh || read.expiresAt <= Date.now()))
   ) {
     read?.controller.abort();
     const controller = new AbortController();

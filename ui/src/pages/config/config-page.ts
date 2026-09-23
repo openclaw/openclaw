@@ -313,6 +313,8 @@ export class ConfigPage extends OpenClawLightDomElement {
         : initialState,
     onComplete: (systemInfo) => {
       this.systemInfo = systemInfo;
+      this.systemInfoPolling.stop();
+      this.systemInfoPolling.start();
       // Status polling must not restart a slow catalog read. Changed owners
       // still replace pending work through the model task's reactive args.
       if (this.sessionObserverModelsTask.status !== TaskStatus.PENDING) {

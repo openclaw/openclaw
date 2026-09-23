@@ -139,7 +139,9 @@ describe("Systems workspace", () => {
     vi.useFakeTimers();
     let visibility: DocumentVisibilityState = "hidden";
     vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
-    const { controller, gateway, request } = harness();
+    const gatewayHost = { ...host, desktop: false };
+    let environments = [gatewayHost, worker, offline];
+    const { controller, gateway, request } = harness(async () => environments);
     const page = document.createElement("openclaw-systems-page");
     page.routeData = { controller };
     document.body.append(page);
@@ -155,14 +157,18 @@ describe("Systems workspace", () => {
     expect(statusReads()).toHaveLength(1);
     const inventory = controller.inventory;
     expect(inventory?.gatewaySystemInfo).toEqual(systemInfo);
+    controller.toggleStats();
+    expect(controller.showStats || controller.showDetails).toBe(false);
 
     visibility = "hidden";
     document.dispatchEvent(new Event("visibilitychange"));
+    environments = [gatewayHost, { ...worker, id: "worker-after-hidden", desktop: false }];
     gateway.publishEvent("presence", {});
     await vi.advanceTimersByTimeAsync(30_000);
     expect(statusReads()).toHaveLength(1);
     expect(controller.inventory).toBe(inventory);
     expect(controller.inventory?.errors).toEqual({});
+    expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(1);
 
     visibility = "visible";
     document.dispatchEvent(new Event("visibilitychange"));
@@ -170,6 +176,15 @@ describe("Systems workspace", () => {
     expect(statusReads()).toHaveLength(2);
     expect(controller.inventory?.errors).toEqual({});
     expect(controller.sampledAtMs).toBe(Date.now());
+    expect(controller.rows.map((row) => row.environment.id)).toEqual([
+      "gateway",
+      "worker-after-hidden",
+    ]);
+    expect(
+      controller.rows.find((row) => row.environment.id === "worker-after-hidden")?.environment
+        .desktop,
+    ).toBe(false);
+    expect(controller.needsInventoryRefresh).toBe(false);
   });
 
   it.each(["selection", "authority"])(
