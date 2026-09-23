@@ -26,6 +26,7 @@ operator steering. Do not preserve superseded scope.
 - publication inventory: `<exact surfaces>`
 - already-published plugin skips: `<none or package@version with metadata-only delta>`
 - approved backports: `<none or exact PRs/commits>`
+- cherry-picked blockers: `<none or commit / PR / reason per entry; re-cut only on Peter's request>`
 - approved main changes: `<none or exact blocker>`
 - admitted release blockers: `<confirmed product/package/provenance/security blockers only>`
 - frozen-target compatibility repairs: `<none or exact PRs/invariants>`
