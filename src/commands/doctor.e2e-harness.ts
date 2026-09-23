@@ -15,6 +15,7 @@ import {
   applyMockDoctorConfigSnapshot,
   arrangeLegacyStateMigrationFixture,
   createCommandWithTimeoutResult,
+  createDoctorConfigTransform,
   createDoctorServiceMocks,
   createDoctorRuntime as createDoctorRuntimeFixture,
   createLegacyConfigSnapshot,
@@ -27,11 +28,15 @@ let originalStateDir: string | undefined;
 let originalUpdateInProgress: string | undefined;
 let tempStateDir: string | undefined;
 
-export const readConfigFileSnapshot = defineMockFn(vi.fn());
+export const readConfigFileSnapshot = defineMockFn(
+  vi.fn<typeof import("../config/config.js").readConfigFileSnapshot>(),
+);
 export const confirm = defineMockFn(vi.fn().mockResolvedValue(true));
 const select = defineMockFn(vi.fn().mockResolvedValue("node"));
 const note = defineMockFn(vi.fn());
-export const writeConfigFile = defineMockFn(vi.fn().mockResolvedValue(undefined));
+export const transformConfigFile = defineMockFn(
+  vi.fn<typeof import("../config/config.js").transformConfigFile>(),
+);
 export const resolveOpenClawPackageRoot = defineMockFn(vi.fn().mockResolvedValue(null));
 export const updateCommand =
   vi.fn<typeof import("../cli/update-cli/update-command.js").updateCommand>();
@@ -363,7 +368,7 @@ vi.mock("../config/config.js", async () => {
     CONFIG_PATH: "/tmp/openclaw.json",
     createConfigIO,
     readConfigFileSnapshot,
-    writeConfigFile,
+    transformConfigFile,
     migrateLegacyConfig,
   };
 });
@@ -374,7 +379,6 @@ vi.mock("../config/io.js", async () => {
     ...actual,
     createConfigIO,
     readConfigFileSnapshot,
-    writeConfigFile,
   };
 });
 
@@ -642,7 +646,9 @@ beforeEach(() => {
   note.mockClear();
 
   readConfigFileSnapshot.mockReset();
-  writeConfigFile.mockReset().mockResolvedValue(undefined);
+  transformConfigFile
+    .mockReset()
+    .mockImplementation(createDoctorConfigTransform(readConfigFileSnapshot));
   resolveOpenClawPackageRoot.mockReset().mockResolvedValue(null);
   updateCommand.mockReset().mockResolvedValue(undefined);
   listPluginDoctorLegacyConfigRules.mockReset().mockReturnValue([]);

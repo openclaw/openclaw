@@ -473,6 +473,7 @@ export function gatherLegacyArchiveCoverage(
     }
   }
   return {
+    knownTargets,
     selectedStorePaths,
     referencedPaths,
     retainedPaths,

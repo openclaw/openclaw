@@ -2292,7 +2292,7 @@ src/commands/doctor-security.ts	3
 src/commands/doctor-session-canonical-keys.ts	1
 src/commands/doctor-session-incognito-key-repair-state.ts	8
 src/commands/doctor-session-incognito-key-repair.ts	4
-src/commands/doctor-session-snapshots.ts	5
+src/commands/doctor-session-snapshots.ts	4
 src/commands/doctor-session-sqlite-compact.ts	1
 src/commands/doctor-session-sqlite-migration-run.ts	4
 src/commands/doctor-session-sqlite-readers.ts	5

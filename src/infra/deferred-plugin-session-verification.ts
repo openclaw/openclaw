@@ -22,6 +22,8 @@ export function verifyDeferredSessionDatabase(params: {
   sqlitePath: string;
   env: NodeJS.ProcessEnv;
   sources: Array<{ path: string; originalPath: string }>;
+  requireCompleteTranscript?: boolean;
+  verifiedSourcePaths?: ReadonlySet<string>;
 }): void {
   const target = { ...params.target, sqlitePath: params.sqlitePath };
   const snapshot = readOnlySqliteValidationSnapshot(target);
@@ -32,29 +34,31 @@ export function verifyDeferredSessionDatabase(params: {
     );
   }
   const resolved = new Map(params.sources.map((source) => [source.originalPath, source.path]));
+  const verifiedSourcePaths = params.verifiedSourcePaths ?? new Set(resolved.keys());
   const indexPath = resolved.get(path.resolve(target.storePath));
   const issues: Array<{ code: string; message: string }> = [];
-  const records = indexPath
-    ? readLegacySessionStoreEntries(target, issues, { sourcePath: indexPath }).entries.map(
-        ({ entry, sessionKey }) => ({
-          entry,
-          sessionKey,
-          transcriptPath: resolveLegacyTranscriptPaths(target, entry).transcriptPath,
-        }),
-      )
-    : [];
+  const records = (
+    indexPath
+      ? readLegacySessionStoreEntries(target, issues, { sourcePath: indexPath }).entries.map(
+          ({ entry, sessionKey }) => ({
+            entry,
+            sessionKey,
+            transcriptPath: resolveLegacyTranscriptPaths(target, entry, verifiedSourcePaths)
+              .transcriptPath,
+          }),
+        )
+      : []
+  ).filter(
+    ({ sessionKey }) =>
+      !shouldFilterLegacySessionRecordsByTarget(target) ||
+      isLegacySessionRecordOwnedByTarget(params.cfg, target, sessionKey),
+  );
   if (issues.some((issue) => issue.code !== "entry_invalid")) {
     throw new Error(
-      `Cannot verify retained session index ${target.storePath}; preserve the source and inspect it with openclaw doctor --session-sqlite validate.`,
+      `Cannot verify retained session index ${target.storePath}: ${issues.map((issue) => issue.message).join("; ")}`,
     );
   }
   for (const record of records) {
-    if (
-      shouldFilterLegacySessionRecordsByTarget(target) &&
-      !isLegacySessionRecordOwnedByTarget(params.cfg, target, record.sessionKey)
-    ) {
-      continue;
-    }
     if (
       snapshot.snapshot.sessionKeysBySessionId.get(record.entry.sessionId) !== record.sessionKey
     ) {
@@ -68,19 +72,32 @@ export function verifyDeferredSessionDatabase(params: {
       continue;
     }
     const sourcePath = resolved.get(source.originalPath);
-    const record = records.find((candidate) => candidate.transcriptPath === source.originalPath);
-    const sessionId =
-      record?.entry.sessionId ??
-      (sourcePath &&
-        readLegacyPrimaryTranscriptIdentity(sourcePath, source.originalPath)?.sessionId);
+    const indexed = records.filter((candidate) => candidate.transcriptPath === source.originalPath);
+    if (params.requireCompleteTranscript && indexed.length === 0) {
+      throw new Error(`Changed retained transcript has no verified indexed owner: ${source.path}`);
+    }
+    const sessionIds = indexed.length
+      ? indexed.map((record) => record.entry.sessionId)
+      : [
+          sourcePath &&
+            readLegacyPrimaryTranscriptIdentity(sourcePath, source.originalPath)?.sessionId,
+        ];
     if (
       !sourcePath ||
-      !sessionId ||
-      !snapshot.snapshot.sessionKeysBySessionId.has(sessionId) ||
-      !verifyCanonicalSessionTranscriptSources({
-        target,
-        sources: [{ path: sourcePath, originalPath: source.originalPath, sessionId }],
-        env: params.env,
+      sessionIds.some((sessionId) => {
+        if (!sessionId || !snapshot.snapshot.sessionKeysBySessionId.has(sessionId)) {
+          return true;
+        }
+        const verified = verifyCanonicalSessionTranscriptSources({
+          target,
+          sources: [{ path: sourcePath, originalPath: source.originalPath, sessionId }],
+          env: params.env,
+        });
+        return (
+          !verified ||
+          (params.requireCompleteTranscript &&
+            verified.events !== snapshot.snapshot.transcriptEventCountsBySessionId.get(sessionId))
+        );
       })
     ) {
       throw new Error(

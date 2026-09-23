@@ -92,7 +92,7 @@ runtime fallbacks.
 When a plugin migration is deferred, the verified import receipt also captures
 unreferenced JSONL inputs. Completing the plugin migration archives those originals
 with the same identity and byte checks as indexed transcripts. Files created after
-capture remain in place, and changed originals prevent settlement until resolved.
+capture and changed originals are verified separately before settlement.
 Retries and read-only checks reuse the verified receipt, including transcripts
 discovered outside `sessions.json`. Doctor reports one pending-plugin warning
 for these retained inputs; they do not fail the completed core migration or
@@ -122,12 +122,17 @@ A restored copy with the recorded SHA-256 and size remains valid even when its
 inode or modification time differs. `--session-sqlite recover` records its current
 identity in the existing receipt, including when no failed migration manifest exists.
 If the database file was replaced, recovery first verifies retained transcript
-content against the current SQLite database before rebinding the receipt. It does
-not overwrite current session settings or resurrect deleted history. Incomplete
-matches stay protected with an actionable finding naming the remaining source.
+content against the current SQLite database before rebinding the receipt. Doctor
+also verifies formatting-only index changes against the recorded source hash and
+changed transcripts against complete canonical history. Verified content refreshes
+the receipt without overwriting current session settings or resurrecting deleted
+history. Changed index values and other unverifiable plugin inputs move to the protected
+migration archive with their validation error and recovery path in the report.
+Snapshot-path repair leaves these historical inputs unchanged.
 
-A receipt identity mismatch does not prevent Gateway readiness when retained
-content verifies. Doctor owns the repair and the Gateway keeps serving SQLite.
+A retained plugin source conflict does not prevent Gateway readiness after the
+core import completed. Doctor owns the repair and the Gateway keeps serving SQLite.
+`inspect` reports the actual SQLite row count even when retained input needs repair.
 Recovery reports include every remaining issue code and distinguish unresolved
 findings from completed validation.
 

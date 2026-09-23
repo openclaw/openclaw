@@ -11,8 +11,25 @@ import {
   type DeferredPluginSessionImport,
 } from "../infra/deferred-plugin-session-sources.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { planSessionJsonlArchiveMove } from "./doctor-session-sqlite-archive.js";
+import {
+  moveMigrationArtifact,
+  readMigrationArtifactIdentity,
+  sameMigrationArtifact,
+  type MigrationArtifactIdentity,
+} from "./doctor-session-sqlite-artifact.js";
 import { countLegacyTranscript } from "./doctor-session-sqlite-diagnostics.js";
 import type { LegacySessionRecord } from "./doctor-session-sqlite-discovery.js";
+import {
+  canonicalMigrationFilePath,
+  createSessionSqliteMigrationRun,
+  recordPlannedMigrationMoves,
+  recordCompletedMigrationMoves,
+  updateMigrationManifestTarget,
+  writeSessionSqliteMigrationManifest,
+  type ActiveSessionSqliteMigrationRun,
+  type SessionSqliteMigrationTargetInput,
+} from "./doctor-session-sqlite-migration-run.js";
 import {
   readTranscriptFingerprint,
   resolveTargetSqlitePath,
@@ -35,26 +52,30 @@ export function prepareRetainedSessionImport(
 ) {
   const isSqliteStore = params.target.storePath.endsWith(".sqlite");
   let retainedImport: DeferredPluginSessionImport | undefined;
-  const sourceConflicts = new Set<string>();
+  const sourceConflicts = new Map<string, string>();
   const sourceVerification = {
     ...prepareSessionSourceVerification({
       ...params,
       sqlitePath: resolveTargetSqlitePath(params.target, params.env),
     }),
     allowMissingIndex: true,
-    onSourceConflict: !fs.existsSync(params.target.storePath)
-      ? (sourcePath: string, artifactPath = sourcePath) => {
-          if (sourceConflicts.has(artifactPath)) {
-            return;
-          }
-          sourceConflicts.add(sourcePath);
-          sourceConflicts.add(artifactPath);
-          issues.push({
-            code: "historical_transcript_deferred",
-            message: `${artifactPath}: recorded source could not be hash-verified; protected without replaying or archiving it.`,
-          });
-        }
-      : undefined,
+    onSourceConflict: (sourcePath: string, artifactPath = sourcePath, error?: unknown) => {
+      if (sourceConflicts.has(artifactPath)) {
+        return;
+      }
+      const reason =
+        error === undefined
+          ? "Retained plugin input no longer matches its verified source."
+          : formatErrorMessage(error);
+      sourceConflicts.set(sourcePath, reason);
+      sourceConflicts.set(artifactPath, reason);
+      issues.push({
+        code: fs.existsSync(params.target.storePath)
+          ? "retained_plugin_source_conflict"
+          : "historical_transcript_deferred",
+        message: `${artifactPath}: ${reason} Canonical SQLite sessions remain authoritative. Run openclaw doctor --fix to preserve the conflicting input in the migration archive.`,
+      });
+    },
   };
   if (!isSqliteStore) {
     try {
@@ -85,6 +106,122 @@ export function prepareRetainedSessionImport(
       sourceVerification.verification,
     );
   return { retainedImport, sourceConflicts, sourceVerification, retainedIndexPath };
+}
+
+/** Preserve unverifiable plugin inputs through the existing reversible archive lifecycle. */
+export async function archiveConflictingRetainedSessionSources(
+  params: {
+    cfg: OpenClawConfig;
+    env: NodeJS.ProcessEnv;
+    target: SessionStoreTarget;
+    activeRun?: ActiveSessionSqliteMigrationRun;
+    protectedPaths?: ReadonlySet<string>;
+    expectedIndexIdentity?: MigrationArtifactIdentity;
+    targets?: readonly SessionSqliteMigrationTargetInput[];
+  },
+  sourceConflicts: Map<string, string>,
+  report: DoctorSessionSqliteTargetReport,
+): Promise<void> {
+  const target = {
+    ...params.target,
+    sqlitePath: resolveTargetSqlitePath(params.target, params.env),
+  };
+  const conflicts = [...sourceConflicts].filter(
+    ([source]) =>
+      !params.protectedPaths?.has(canonicalMigrationFilePath(source)) &&
+      fs.existsSync(source) &&
+      path.dirname(source) === path.dirname(target.storePath),
+  );
+  if (!conflicts.length) {
+    return;
+  }
+  const run = params.activeRun ?? createSessionSqliteMigrationRun(params.env, [target]);
+  const targets = params.targets ?? [target];
+  let indexPath = target.storePath;
+  const indexIdentity =
+    params.expectedIndexIdentity ??
+    (!params.activeRun && fs.existsSync(indexPath)
+      ? readMigrationArtifactIdentity(indexPath)
+      : undefined);
+  const assertIndexCurrent = () => {
+    if (
+      (indexPath !== target.storePath && fs.existsSync(target.storePath)) ||
+      (indexIdentity
+        ? !sameMigrationArtifact(readMigrationArtifactIdentity(indexPath), indexIdentity)
+        : fs.existsSync(indexPath))
+    ) {
+      throw new Error(
+        "Session index changed after owner discovery; original retained for a fresh Doctor pass.",
+      );
+    }
+  };
+  for (const [source, reason] of conflicts) {
+    try {
+      assertIndexCurrent();
+      const move = planSessionJsonlArchiveMove({
+        target,
+        sourcePathRaw: source,
+        baseNameRaw: path.basename(source),
+        archiveKey: "retained-plugin-conflict",
+        kind: source === target.storePath ? "legacy-store" : "transcript",
+      });
+      move.artifact = {
+        identity:
+          move.kind === "legacy-store" && indexIdentity
+            ? indexIdentity
+            : readMigrationArtifactIdentity(source),
+        classification: "protected",
+        reason,
+        dependencies: [],
+        disposal: { state: "retained" },
+      };
+      for (const owner of targets) {
+        recordPlannedMigrationMoves(run, owner, [move]);
+      }
+      await moveMigrationArtifact(
+        move.sourcePath,
+        move.archivePath,
+        move.artifact.identity,
+        undefined,
+        (remove, retain) => {
+          if (move.kind !== "legacy-store") {
+            try {
+              assertIndexCurrent();
+            } catch (error) {
+              retain();
+              throw error;
+            }
+          }
+          remove();
+        },
+      );
+      for (const owner of targets) {
+        recordCompletedMigrationMoves(run, owner, [move]);
+      }
+      if (move.kind === "legacy-store") {
+        indexPath = move.archivePath;
+      }
+      sourceConflicts.set(move.archivePath, reason);
+      (move.kind === "legacy-store"
+        ? (report.archivedLegacyStoreFiles ??= [])
+        : report.archivedTranscriptFiles
+      ).push(move.archivePath);
+      report.issues.push({
+        code: "retained_plugin_source_conflict",
+        message: `${source}: ${reason} Preserved at ${move.archivePath}; canonical SQLite sessions were not replayed.`,
+      });
+    } catch (error) {
+      report.issues.push({
+        code: "retained_plugin_source_conflict",
+        message: `${source}: could not archive retained input: ${formatErrorMessage(error)}. Original remains protected.`,
+      });
+    }
+  }
+  updateMigrationManifestTarget(run, target, report.issues);
+  if (!params.activeRun) {
+    run.manifest.completedAt = new Date().toISOString();
+    writeSessionSqliteMigrationManifest(run);
+  }
 }
 
 /** Historical discovery yields; verify the receipt again before counting or authorizing archival. */

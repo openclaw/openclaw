@@ -1,5 +1,21 @@
+import type { SessionStoreTarget } from "../config/sessions/targets.js";
 /** Shared type contracts for doctor-owned session SQLite migration reports. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { DeferredPluginSessionImport } from "../infra/deferred-plugin-session-sources.js";
+import type { LegacySessionRecord } from "./doctor-session-sqlite-discovery.js";
+import type { SessionSqliteMigrationTargetInput } from "./doctor-session-sqlite-migration-run.js";
+
+export type LegacyArchiveTarget = {
+  sourceTarget: SessionStoreTarget & { sqlitePath?: string };
+  target: SessionSqliteMigrationTargetInput;
+  report: DoctorSessionSqliteTargetReport;
+  validated: boolean;
+  records: Array<Omit<LegacySessionRecord, "entry"> & { sessionId: string }>;
+  deferredPluginIds: string[];
+  retainedImportVerified: boolean;
+  sourceConflicts?: Map<string, string>;
+  verifiedSources?: DeferredPluginSessionImport["sources"];
+};
 
 export type DoctorSessionSqliteIssue = {
   code: string;
@@ -15,6 +31,7 @@ const SESSION_SQLITE_WARNING_ISSUE_CODES = new Set([
   "legacy_index_informational",
   "plugin_migration_source_retained",
   "retained_plugin_source_index_rebuilt",
+  "retained_plugin_source_conflict",
   "transcript_archive_failed",
   "transcript_malformed",
   "transcript_missing",
