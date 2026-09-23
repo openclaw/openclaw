@@ -304,7 +304,7 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
           (id) => normalizeProviderId(id) === provider,
         ) ||
         Object.values(params.cfg.auth?.profiles ?? {}).some(
-          (profile) => normalizeProviderId(profile.provider) === provider,
+          (profile) => !observedNative && normalizeProviderId(profile.provider) === provider,
         ) ||
         createModelProviderRouteOverrideResolver({
           authoredConfig: params.cfg,
