@@ -7,6 +7,7 @@ import { getRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { disposeSessionReadContexts } from "../server-methods/sessions-read-cache.test-support.js";
 import { testState } from "../test-helpers.js";
 import {
   directSessionReq,
@@ -85,7 +86,7 @@ export function setupGatewaySessionsWorktreeTestHarness() {
           allowSnapshotLoss: true,
         });
       }
-      closeOpenClawStateDatabaseForTest();
+      await disposeSessionReadContexts();
       testState.agentConfig = undefined;
       await state.cleanup();
     });

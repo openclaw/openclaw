@@ -83,6 +83,7 @@ async function queryUsage(options: {
               agentId,
               entry,
               readSourceEntry,
+              resolveSourceKey: (sourceKey: string) => sourceKey,
               storeTarget: {
                 agentId,
                 storePath: path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite"),

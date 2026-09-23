@@ -256,6 +256,30 @@ export function makeSkillsWatchTarget(
   return { path: watchPath, watchRoot: toWatchRoot(watchRoot), depth };
 }
 
+export function resolveSkillsWatchAncestors(
+  target: { path: string; watchRoot: string },
+  previousAncestorRoot: string,
+): { ancestorRoot: string; ancestorRoots: string[] } {
+  // Descendant native watches do not report ancestor moves. Keep shallow
+  // observation along the original path even after its content watch promotes.
+  const ancestorRoot = isPathInside(previousAncestorRoot, target.watchRoot)
+    ? previousAncestorRoot
+    : target.watchRoot;
+  const ancestorRoots: string[] = [];
+  let currentRoot = target.watchRoot;
+  while (isPathInside(ancestorRoot, currentRoot)) {
+    if (currentRoot !== target.path) {
+      ancestorRoots.push(currentRoot);
+    }
+    const parent = toWatchRoot(path.dirname(currentRoot));
+    if (parent === currentRoot) {
+      break;
+    }
+    currentRoot = parent;
+  }
+  return { ancestorRoot, ancestorRoots };
+}
+
 export function readBudgetedDirEntries(
   dir: string,
   maxEntries: number,

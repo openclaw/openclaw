@@ -83,6 +83,7 @@ export interface SessionListHost {
     | "setSessionsStatusFilter"
     | "archiveSessionWithUndo"
     | "patchSession"
+    | "reorderSidebarSection"
   >;
   readonly sidebarMenus: Pick<
     SidebarMenusController,
@@ -477,7 +478,18 @@ export function renderRecentSession(params: {
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__title-row"> ${marqueeLabel} </span>
           <span class="sidebar-recent-session__details">
-            ${session.channelPresentation ? html`<span class="sidebar-recent-session__channel" aria-label=${t("sessionHovercard.linkedChannel", { channel: session.channelPresentation.channelLabel })}>${session.channelPresentation.channelLabel}</span>` : nothing}
+            ${
+              session.channelPresentation
+                ? html`<span class="sidebar-recent-session__channel">
+                    <span class="sr-only"
+                      >${t("sessionHovercard.linkedChannel", {
+                        channel: session.channelPresentation.channelLabel,
+                      })}</span
+                    >
+                    <span aria-hidden="true">${session.channelPresentation.channelLabel}</span>
+                  </span>`
+                : nothing
+            }
             ${team ? nothing : renderSidebarSessionSubtitle({ subtitle, narration })}
             ${indicators.content}
           </span>

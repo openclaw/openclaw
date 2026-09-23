@@ -4,7 +4,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import { serviceProcessEnvEntrypoints } from "./service-process-env-runtime.test-support.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
 import {
   buildSystemdManagerPropertyOutput,
@@ -13,17 +15,15 @@ import {
 import { systemdOperatorBusFixtures } from "./systemd-user-bus.test-support.js";
 
 const execFileAsync = promisify(execFile);
+const systemdExecUrl = resolveRuntimeWorkerUrl(serviceProcessEnvEntrypoints.systemdExec);
+const systemdLingerUrl = resolveRuntimeWorkerUrl(serviceProcessEnvEntrypoints.systemdLinger);
+const systemdFilesUrl = resolveRuntimeWorkerUrl(serviceProcessEnvEntrypoints.systemdServiceFiles);
+const serviceEnvMergeUrl = resolveRuntimeWorkerUrl(serviceProcessEnvEntrypoints.serviceEnvMerge);
 
 async function runDriver(driver: string, env: NodeJS.ProcessEnv) {
   return await execFileAsync(
     process.execPath,
-    [
-      "--import",
-      new URL("../../scripts/tsx.mjs", import.meta.url).href,
-      "--input-type=module",
-      "-e",
-      driver,
-    ],
+    [...resolveRuntimeWorkerArgv(systemdExecUrl).slice(0, -1), "--input-type=module", "-e", driver],
     {
       cwd: fileURLToPath(new URL("../../", import.meta.url)),
       env,
@@ -61,7 +61,7 @@ console.log(JSON.stringify({
         const driver = `
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { execSystemctlUser, execBusctlUser } from ${JSON.stringify(new URL("./systemd-exec.ts", import.meta.url).href)};
+import { execSystemctlUser, execBusctlUser } from ${JSON.stringify(systemdExecUrl.href)};
 Object.defineProperty(process, "platform", { value: "linux" });
 const callerDirectory = ${JSON.stringify(callerDirectory)};
 process.chdir(callerDirectory);
@@ -130,7 +130,7 @@ if (args.includes("Version")) {
         }
         const driver = `
 import assert from "node:assert/strict";
-import { execSystemctlUser, execBusctlUser } from ${JSON.stringify(new URL("./systemd-exec.ts", import.meta.url).href)};
+import { execSystemctlUser, execBusctlUser } from ${JSON.stringify(systemdExecUrl.href)};
 process.geteuid = () => 1000;
 Object.defineProperty(process, "platform", { value: "linux" });
 const source = { ...process.env, XDG_RUNTIME_DIR: ${JSON.stringify(source.XDG_RUNTIME_DIR)}, DBUS_SESSION_BUS_ADDRESS: ${JSON.stringify(source.DBUS_SESSION_BUS_ADDRESS)} };
@@ -197,7 +197,7 @@ console.log("Linger=yes");
       const driver = `
 import assert from "node:assert/strict";
 import { mock } from "node:test";
-import { readSystemdUserLingerStatus, enableSystemdUserLinger } from ${JSON.stringify(new URL("./systemd-linger.ts", import.meta.url).href)};
+import { readSystemdUserLingerStatus, enableSystemdUserLinger } from ${JSON.stringify(systemdLingerUrl.href)};
 const realGetuid = process.getuid;
 assert.deepEqual(await readSystemdUserLingerStatus({ env: { USER: "selected" } }), { user: "selected", linger: "yes" });
 // Only the synchronous sudo decision is synthetic; logging must see the real filesystem owner.
@@ -295,9 +295,9 @@ else process.exit(92);
       }
       const driver = `
 import assert from "node:assert/strict";
-import { readSystemdServiceExecStart } from ${JSON.stringify(new URL("./systemd-service-files.ts", import.meta.url).href)};
-import { mergeGatewayServiceEnv } from ${JSON.stringify(new URL("./service-env-merge.ts", import.meta.url).href)};
-import { execSystemctlUser } from ${JSON.stringify(new URL("./systemd-exec.ts", import.meta.url).href)};
+import { readSystemdServiceExecStart } from ${JSON.stringify(systemdFilesUrl.href)};
+import { mergeGatewayServiceEnv } from ${JSON.stringify(serviceEnvMergeUrl.href)};
+import { execSystemctlUser } from ${JSON.stringify(systemdExecUrl.href)};
 Object.defineProperty(process, "platform", { value: "linux" });
 const command = await readSystemdServiceExecStart(process.env, { requireEffective: true });
 assert.deepEqual(command.environment, {

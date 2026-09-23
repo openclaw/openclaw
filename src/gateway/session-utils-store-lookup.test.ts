@@ -253,6 +253,11 @@ describe("global session lookup ownership", () => {
               exactRead: true,
             }),
           ).toThrow(failure);
+          failingSingleRead.mockClear();
+          const readParent = createGatewaySessionEntryReader({ cfg, agentId: "main", store: {} });
+          expect(() => readParent("agent:research:main")).toThrow(failure);
+          // A failed exact read must not become absence followed by an alias lookup.
+          expect(failingSingleRead).toHaveBeenCalledOnce();
         } finally {
           failingSingleRead.mockRestore();
         }

@@ -1,6 +1,7 @@
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { waitForFast } from "../../../test-helpers/wait-for.ts";
 import { renderCompactAttachmentCard } from "./chat-attachment-card.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
 import { projectMessageMedia, releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
@@ -161,7 +162,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       expect(originalFrame.querySelector("svg")).toBeNull();
       expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
       response.resolve(svgResponse(scenario.width ?? 800, scenario.height ?? 1600));
-      await vi.waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+      await waitForFast(() => expect(container.querySelector("img")).not.toBeNull());
       const image = container.querySelector("img")!;
       expect(geometry(container)).toEqual(before);
       await image.decode();
@@ -203,7 +204,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       expect(frame(container).textContent?.trim()).toBe("");
       expect(container.querySelector(".chat-image-skeleton")).not.toBeNull();
       response.resolve(svgResponse(800, 1600));
-      await vi.waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+      await waitForFast(() => expect(container.querySelector("img")).not.toBeNull());
       await container.querySelector("img")!.decode();
       expect(geometry(container).width).toBe(180);
       expect(geometry(container).height).toBe(360);
@@ -262,7 +263,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
           mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
         }),
       );
-      await vi.waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+      await waitForFast(() => expect(container.querySelector("img")).not.toBeNull());
       const loadable = geometry(container);
       expect(loadable.height).toBeCloseTo(400 / 1.5, 1);
       const sourceUrl = container.querySelector("img")!.getAttribute("src");
@@ -320,7 +321,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       }
       const nextTop = container.querySelector("[data-next-message]")!.getBoundingClientRect().top;
       ready.resolve();
-      await vi.waitFor(() => expect(container.querySelectorAll("img")).toHaveLength(count));
+      await waitForFast(() => expect(container.querySelectorAll("img")).toHaveLength(count));
       await Promise.all([...container.querySelectorAll("img")].map((image) => image.decode()));
       expect(rectangles()).toEqual(before);
       expect(container.querySelector("[data-next-message]")!.getBoundingClientRect().top).toBe(
@@ -380,7 +381,9 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
         </div>`,
         container,
       );
-      await vi.waitFor(() => expect(container.querySelectorAll("img")).toHaveLength(images.length));
+      await waitForFast(() =>
+        expect(container.querySelectorAll("img")).toHaveLength(images.length),
+      );
       await Promise.all([...container.querySelectorAll("img")].map((image) => image.decode()));
       const frames = [...container.querySelectorAll<HTMLElement>(".chat-image-frame--managed")];
       expect(frames[1]!.getBoundingClientRect().top).toBeGreaterThan(
@@ -544,7 +547,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
         );
       subscribers.push(draw);
       draw();
-      await vi.waitFor(() =>
+      await waitForFast(() =>
         expect(
           container.querySelectorAll(".chat-assistant-attachment-card--blocked button"),
         ).toHaveLength(count),
@@ -646,7 +649,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
           .map(({ width, height }) => ({ width, height })),
       ).toEqual(before.slice(1).map(({ width, height }) => ({ width, height })));
       allowed.resolve(Response.json({ available: true }));
-      await vi.waitFor(() => expect(frame(container).querySelector("img")).not.toBeNull());
+      await waitForFast(() => expect(frame(container).querySelector("img")).not.toBeNull());
       for (const remaining of [...gallery.children].slice(1, count)) {
         expect(remaining.getBoundingClientRect().height).toBe(fileHeight);
       }
@@ -671,14 +674,14 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       );
       const before = geometry(container);
       response.resolve(new Response(null, { status: 404 }));
-      await vi.waitFor(() => expect(frame(container).getAttribute("aria-busy")).toBe("false"));
+      await waitForFast(() => expect(frame(container).getAttribute("aria-busy")).toBe("false"));
       expect(container.querySelector(".chat-assistant-attachment-card")?.textContent).toContain(
         "load",
       );
       expect(geometry(container).height).toBe(74);
       const { page } = await import("vitest/browser");
       await page.getByRole("button", { name: "Retry", exact: true }).click();
-      await vi.waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+      await waitForFast(() => expect(container.querySelector("img")).not.toBeNull());
       await container.querySelector("img")!.decode();
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(geometry(container).height).toBeCloseTo(400 / 1.5, 1);

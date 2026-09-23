@@ -112,7 +112,14 @@ function createPreparedRunningTask(...args: Parameters<typeof prepareRunningTask
 }
 
 function createFakeTaskReceipt(task: TaskRecord): CreatedDetachedTaskRun {
-  return { task, settleUnstarted: async () => false, finalizeActive: async () => undefined };
+  return {
+    task,
+    bindRunOwner: async () => {
+      throw new Error("This fixture does not bind task owners");
+    },
+    settleUnstarted: async () => false,
+    finalizeActive: async () => undefined,
+  };
 }
 
 function findWarningPayload(message: string): Record<string, unknown> | undefined {

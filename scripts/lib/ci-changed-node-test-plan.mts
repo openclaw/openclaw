@@ -54,9 +54,6 @@ import {
 } from "./vitest-build-prerequisites.mts";
 import { VITEST_PRETEST_BUILD_SECONDS } from "./vitest-shard-metadata.mts";
 
-// The trusted CI harness loads this export from the selected target revision.
-export { resolveChangedDockerSeedLanes } from "./ci-docker-seed-plan.mts";
-
 type ChangedNodeTestShard = {
   checkName: string;
   configs: string[];

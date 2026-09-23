@@ -1,5 +1,4 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
-import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -12,10 +11,8 @@ import type {
   ThinkingLevel,
 } from "../runtime/index.js";
 import { isToolResultError } from "../tool-result-error.js";
-import {
-  takeCodeModeResponseSource,
-  prepareCodeModeSourceAppend,
-} from "../transcript-code-mode-source.js";
+import { takeCodeModeResponseSource } from "../transcript-code-mode-source.js";
+import { persistAgentSessionMessage } from "./agent-session-transcript.js";
 import type {
   AgentSessionConfig,
   AgentSessionEvent,
@@ -426,20 +423,13 @@ export abstract class AgentSessionBase {
           event.message.role === "toolResult" &&
           this.extensionModifiedToolResultIds.delete(event.message.toolCallId);
         try {
-          // Normalize live delivery facts before persistence makes its redacted copy.
-          // Stored arguments must never replace the values used for tool execution.
-          applyAssistantDeliveryDirectives(event.message);
-          const appendOptions = {
+          const entryId = await persistAgentSessionMessage(this.sessionManager, event.message, {
             invalidateSerializedPrefixCache: messageChanged || toolResultChangedByExtension,
-          };
-          prepareCodeModeSourceAppend(appendOptions, event.message, sourceSlots);
-          const message = event.message;
-          await withSessionManagerWrite(this.sessionManager, () => {
-            const entryId = this.sessionManager.appendMessage(message, appendOptions);
-            if (message.role === "assistant") {
-              this.lastAssistantEntryId = entryId;
-            }
+            sourceAppend: sourceSlots,
           });
+          if (event.message.role === "assistant") {
+            this.lastAssistantEntryId = entryId;
+          }
         } catch (error) {
           if (event.message.role === "user") {
             reportSteeringMessagePersistenceFailure(event.message, error);

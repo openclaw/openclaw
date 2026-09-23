@@ -146,6 +146,7 @@ function renderReceiptDetail(receipt: DecisionReceiptDisplayV1) {
             class="run-inspector__receipt-badge run-inspector__receipt-badge--${
               receipt.decision.outcome
             }"
+            role="img"
             aria-label=${`${t("activity.runInspector.decisions.outcomeLabel")}: ${decisionOutcomeLabel(
               receipt.decision.outcome,
             )}`}
@@ -154,6 +155,7 @@ function renderReceiptDetail(receipt: DecisionReceiptDisplayV1) {
           </span>
           <span
             class="run-inspector__receipt-badge run-inspector__receipt-badge--${coverage}"
+            role="img"
             aria-label=${`${t("activity.runInspector.decisions.classificationLabel")}: ${runInspectorCoverageLabel(
               coverage,
             )}`}

@@ -76,6 +76,7 @@ export function createManagedHandoffProcessIdentityReader(options: {
   }
   function inspectProcessIdentity(
     value: HandoffProcessIdentity,
+    ownedCustody = false,
   ): "live" | "dead" | "unknown" | "mismatch" {
     if (!isPidAlive(value.pid)) {
       return "dead";
@@ -83,28 +84,28 @@ export function createManagedHandoffProcessIdentityReader(options: {
     if (process.platform === "win32" && WINDOWS_ARGV_IDENTITY_PATTERN.test(value.startIdentity)) {
       const argvIdentity = readWindowsArgvIdentity(value.pid);
       return argvIdentity === null
-        ? "unknown"
+        ? ownedCustody
+          ? "live"
+          : "unknown"
         : argvIdentity === value.startIdentity
           ? "live"
           : "mismatch";
     }
     const start = readProcessStartIdentity(value.pid);
-    return start === null ? "unknown" : start === value.startIdentity ? "live" : "dead";
+    return start === null ? "unknown" : start === value.startIdentity ? "live" : "mismatch";
   }
   function processState(value: HandoffProcessIdentity): "live" | "dead" | "unknown" {
     const state = inspectProcessIdentity(value);
     // Launcher disagreement revokes attribution; it cannot prove process death.
-    return state === "mismatch" ? "unknown" : state;
+    if (state === "mismatch") {
+      return process.platform === "win32" && WINDOWS_ARGV_IDENTITY_PATTERN.test(value.startIdentity)
+        ? "unknown"
+        : "dead";
+    }
+    return state;
   }
   function isProcessIdentityCurrent(value: HandoffProcessIdentity, ownedCustody = false): boolean {
-    const state = inspectProcessIdentity(value);
-    return (
-      state === "live" ||
-      (state === "unknown" &&
-        ownedCustody &&
-        process.platform === "win32" &&
-        WINDOWS_ARGV_IDENTITY_PATTERN.test(value.startIdentity))
-    );
+    return inspectProcessIdentity(value, ownedCustody) === "live";
   }
   function acceptSelfIdentity(value: HandoffProcessIdentity, parentBound = false): boolean {
     if (value.pid !== process.pid) {
@@ -170,6 +171,7 @@ export function createManagedHandoffProcessIdentityReader(options: {
     readProcessStartIdentity,
     processIdentity,
     processState,
+    inspectProcessIdentity,
     isProcessIdentityCurrent,
     acceptSelfIdentity,
   };

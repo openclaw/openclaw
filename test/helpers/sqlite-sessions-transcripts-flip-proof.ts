@@ -841,6 +841,11 @@ async function importProofSession(
 }
 
 async function requireLegacyStartupRefusal(inst: OpenClawTestInstance, context: ProofContext) {
+  const legacyStorePath = path.join(context.legacySessionsDir, "sessions.json");
+  const validStore = await fs.readFile(legacyStorePath);
+  // Valid stores can migrate during startup. A refused source must remain visible
+  // to the next startup instead of being moved outside migration discovery.
+  await fs.writeFile(legacyStorePath, `${validStore.toString("utf8")}\n<<<invalid legacy store>>>`);
   const sources = new Map<string, Buffer>();
   for (const directory of [context.activeSessionsDir, context.legacySessionsDir]) {
     await walkFiles(directory, async (filePath) => {
@@ -851,26 +856,29 @@ async function requireLegacyStartupRefusal(inst: OpenClawTestInstance, context: 
     }
   }
   let message = "";
-  try {
-    await inst.startGateway();
-  } catch (error) {
-    message = error instanceof Error ? error.message : String(error);
-  }
-  if (
-    !message.startsWith("gateway exited before readiness (code=78 signal=null)") ||
-    !message.includes("Gateway failed to start: Legacy session store requires migration:") ||
-    !message.includes(path.join(context.legacySessionsDir, "sessions.json")) ||
-    !message.includes('Run "openclaw doctor --fix"')
-  ) {
-    throw new Error(
-      `expected legacy session migration refusal, got: ${message || "ready Gateway"}`,
-    );
+  for (const attempt of [1, 2]) {
+    message = "";
+    try {
+      await inst.startGateway();
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    if (
+      !message.startsWith("gateway exited before readiness (code=78 signal=null)") ||
+      !message.includes(`Legacy sessions store unreadable; left in place at ${legacyStorePath}`) ||
+      !message.includes('Run "openclaw doctor --fix"')
+    ) {
+      throw new Error(
+        `expected legacy session migration refusal on startup ${attempt}, got: ${message || "ready Gateway"}`,
+      );
+    }
   }
   for (const [filePath, bytes] of sources) {
     if (!(await fs.readFile(filePath)).equals(bytes)) {
       throw new Error(`Gateway changed legacy source bytes before Doctor migration: ${filePath}`);
     }
   }
+  await fs.writeFile(legacyStorePath, validStore);
   return {
     message,
     preservedSourceFiles: [...sources.keys()]

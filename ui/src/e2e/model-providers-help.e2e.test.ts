@@ -206,51 +206,39 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
           {
             button: "About thinking defaults",
             text: "closest option supported by the selected model",
+            defaultText:
+              "Uses the selected model's thinking policy instead of saving a global thinking override.",
           },
           {
             button: "About fast mode defaults",
             text: "Auto starts in fast mode",
+            defaultText:
+              "Uses the selected model's fast-mode policy. Unlike Auto, Default does not enable fast mode by itself.",
           },
         ]) {
-          const behaviorButton = defaults.getByRole("button", { name: help.button });
-          const behaviorTooltip = behaviorButton.locator("..");
-          await behaviorButton.hover();
-          await expect
-            .poll(() =>
-              behaviorTooltip
-                .locator("wa-tooltip")
-                .evaluate((node) => Boolean(Reflect.get(node, "open"))),
-            )
-            .toBe(true);
-          await expect.poll(() => behaviorTooltip.textContent()).toContain(help.text);
-          await page.locator(".page-title", { hasText: "Models" }).first().click();
-        }
-
-        for (const behavior of ["Thinking", "Fast Mode"]) {
           const behaviorRow = defaults
             .locator(".settings-row")
-            .filter({ has: page.locator(".settings-row__title", { hasText: behavior }) });
+            .filter({ has: page.getByRole("button", { name: help.button, exact: true }) });
+          const behaviorButton = behaviorRow.getByRole("button", {
+            name: help.button,
+            exact: true,
+          });
+          const behaviorTooltip = behaviorButton.locator("..");
           const group = behaviorRow.locator("wa-radio-group");
-          const defaultHelpButton = group
-            .locator('wa-radio[value=""]')
-            .locator(".model-providers__segment-info");
-          const defaultTooltip = defaultHelpButton.locator("..");
-          await defaultHelpButton.hover();
-          expect(await defaultHelpButton.evaluate((node) => getComputedStyle(node).color)).toBe(
+          const behaviorTooltipIsOpen = () =>
+            behaviorTooltip
+              .locator("wa-tooltip")
+              .evaluate((node) => Boolean(Reflect.get(node, "open")));
+          await behaviorButton.hover();
+          expect(await behaviorButton.evaluate((node) => getComputedStyle(node).color)).toBe(
             helpHoverColor,
           );
-          await expect
-            .poll(() =>
-              defaultTooltip
-                .locator("wa-tooltip")
-                .evaluate((node) => Boolean(Reflect.get(node, "open"))),
-            )
-            .toBe(true);
-          await defaultHelpButton.click();
+          await expect.poll(behaviorTooltipIsOpen).toBe(true);
+          await expect.poll(() => behaviorTooltip.textContent()).toContain(help.text);
+          await behaviorButton.click();
+          await expect.poll(behaviorTooltipIsOpen).toBe(true);
           await expect.poll(() => group.evaluate((node) => Reflect.get(node, "value"))).toBe("");
-          await expect
-            .poll(() => defaultTooltip.locator("wa-tooltip").textContent())
-            .toContain("selected model's");
+          await expect.poll(() => behaviorTooltip.textContent()).toContain(help.defaultText);
           await page.locator(".page-title", { hasText: "Models" }).first().click();
         }
 

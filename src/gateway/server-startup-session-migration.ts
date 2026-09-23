@@ -151,7 +151,7 @@ async function reconcileStartupOrphans(
         runId: `startup-orphan:${entry.sessionId}:${entry.lifecycleRunId ?? entry.startedAt}`,
         error: outcome.error,
         assertCommitAllowed: assertOwnerless,
-        settleSession: () => {
+        settleStartupSession: () => {
           const current = readSessionEntryRow(connection, sessionKey)?.entry;
           if (!current || !matchesPredecessor(current)) {
             throw new Error("startup subagent session changed before interruption receipt");

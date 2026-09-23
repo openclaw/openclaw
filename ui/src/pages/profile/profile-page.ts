@@ -412,7 +412,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     return html`
       <section class="content-header">
         <div>
-          <div class="page-title">${titleForRoute("profile")}</div>
+          <h1 class="page-title">${titleForRoute("profile")}</h1>
           <div class="page-subtitle">
             ${subtitleForRoute("profile")} ${renderLearnMoreLink(PROFILE_DOCS_URL)}
           </div>

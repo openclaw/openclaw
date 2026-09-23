@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
 import {
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
@@ -14,6 +15,68 @@ import { identifiedClient } from "./server-methods/sessions-read-cache.test-supp
 import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { canReceiveSessionEvent } from "./session-sharing.js";
+import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store-lookup.js";
+
+it("reads a private parent once despite multiple durable store candidates", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg = { agents: { entries: { main: { default: true }, work: {} } } };
+    for (const storePath of [undefined, state.statePath("extra.sqlite")]) {
+      replaceSessionEntrySync(
+        {
+          agentId: "main",
+          storePath,
+          sessionKey: storePath ? "agent:main:extra" : "agent:main:main",
+        },
+        { sessionId: storePath ? "extra" : "durable-main", updatedAt: 1 },
+      );
+    }
+    const parent = "agent:main:dashboard:incognito-parent";
+    const key = "agent:work:dashboard:incognito-child";
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: parent },
+      {
+        sessionId: "private-parent",
+        updatedAt: 1,
+        incognito: true,
+        providerOverride: "ollama",
+        modelOverride: "qwen3:14b",
+        modelOverrideSource: "user",
+        modelOverrideRouteResolution: "resolved",
+      },
+    );
+    replaceSessionEntrySync(
+      { agentId: "work", sessionKey: key },
+      { sessionId: "private-child", updatedAt: 2, incognito: true, parentSessionKey: parent },
+    );
+    const selected = resolveGatewaySessionStoreTargetWithStore({
+      cfg,
+      key,
+      agentId: "work",
+      exactRead: true,
+      includeStoreChildEntries: true,
+    });
+    expect(selected.store[parent]).toBeUndefined();
+    const scoped = loadCombinedSessionStoreForGatewayCore(cfg, {
+      agentId: "work",
+      includeIncognito: true,
+    });
+    expect(scoped.targetsBySessionKey.get(key)?.readSourceEntry(parent)?.modelOverride).toBe(
+      "qwen3:14b",
+    );
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    try {
+      expect(projection.snapshot({ agentId: "work", key }).row).toMatchObject({
+        key,
+        parentSessionKey: parent,
+        model: "qwen3:14b",
+        modelOverrideSource: "inherited",
+      });
+      expect(projection.selectEntries().map((row) => row.key)).not.toContain(key);
+    } finally {
+      projection.dispose();
+    }
+  });
+});
 
 it.each([false, true])(
   "fences transient incognito rows across resets and physical database replacement (archived=%s)",
