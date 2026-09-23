@@ -30,6 +30,15 @@ export function createSessionManagementE2eSuite(source = false) {
   });
 }
 
+/** Drawer visibility precedes the transform settling, which affects measured target bounds. */
+export async function waitForMobileSidebarDrawerOpen(page: Page): Promise<void> {
+  const drawer = page.locator(".shell--mobile-nav.shell--nav-drawer-open > .shell-nav");
+  await drawer.waitFor({ state: "visible" });
+  await drawer.evaluate(async (element) => {
+    await Promise.all(element.getAnimations().map((animation) => animation.finished));
+  });
+}
+
 /** Foreground chat startup admits the canonical roster after document load. */
 export async function waitForSessionRosterHydration(page: Page): Promise<void> {
   await page.evaluate(async () => {

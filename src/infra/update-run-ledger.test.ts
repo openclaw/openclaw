@@ -7,6 +7,8 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { sqliteMaintenanceEntrypoints } from "./sqlite-maintenance-runtime.test-support.js";
 import {
   createUpdateRun,
   finishUpdateRun,
@@ -669,16 +671,13 @@ describe("update run ledger", () => {
     const run = createUpdateRun({ trigger: "cli" }, options);
     const database = openOpenClawStateDatabase(options);
     expect(database.db.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
+    const writerUrl = resolveRuntimeWorkerUrl(sqliteMaintenanceEntrypoints.updateLedger);
     const children = ["cli", "gateway"].map((role) => {
-      const child = fork(
-        new URL("./update-run-ledger.process.test-support.ts", import.meta.url),
-        [run.runId, role],
-        {
-          execArgv: ["--import", "tsx"],
-          env: { ...process.env, ...options.env },
-          stdio: ["ignore", "pipe", "pipe", "ipc"],
-        },
-      );
+      const child = fork(writerUrl, [run.runId, role], {
+        execArgv: resolveRuntimeWorkerArgv(writerUrl).slice(0, -1),
+        env: { ...process.env, ...options.env },
+        stdio: ["ignore", "pipe", "pipe", "ipc"],
+      });
       let output = "";
       child.stdout?.on("data", (chunk) => {
         output += chunk;

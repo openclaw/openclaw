@@ -10,7 +10,7 @@ import {
   clearMemoryPluginState,
   registerMemoryCapability,
 } from "openclaw/plugin-sdk/memory-host-core";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { useAutoCleanupTempDirTracker, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildCodexOpenClawPromptContext,
@@ -23,6 +23,8 @@ import {
 import { buildCodexWorkspaceBootstrapContext } from "./attempt-workspace-context.js";
 import type { CodexDynamicToolSpec } from "./protocol.js";
 import type { CodexAppServerContextEngineBinding } from "./session-binding.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -345,56 +347,116 @@ describe("Codex app-server attempt context", () => {
     },
   );
 
-  it("rebuilds turn-only personal instructions without capturing them in the thread snapshot", async () => {
-    const runtime = await import("openclaw/plugin-sdk/agent-harness-runtime");
-    vi.spyOn(runtime, "resolveBootstrapFilesForRun").mockImplementation(async (params) => [
-      {
-        name: "USER.md",
-        path: "/workspace/USER.md",
-        content: "Shared preferences",
-        missing: false,
-      },
-      ...(params.bootstrapUserProfileId
-        ? [
-            {
-              name: "USER.md" as const,
-              path: "/workspace/users/" + params.bootstrapUserProfileId + "/USER.md",
-              content:
-                params.bootstrapUserProfileId === "alice" ? "Alice preferences" : "Bob preferences",
-              missing: false,
-            },
-          ]
-        : []),
-    ]);
-    for (const profile of ["alice", "bob", undefined]) {
+  it.each(["direct", "inherited", "remapped"] as const)(
+    "keeps a root USER.md under users/arbitrary shared in a %s workspace",
+    async (workspaceMode) => {
+      const rootDir = tempDirs.make("codex-shared-user-");
+      const workspaceDir = path.join(rootDir, "users", "arbitrary");
+      const executionDir =
+        workspaceMode === "inherited" ? path.join(rootDir, "task") : workspaceDir;
+      const effectiveDir =
+        workspaceMode === "remapped"
+          ? path.join(rootDir, "sandbox", "users", "arbitrary")
+          : executionDir;
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "USER.md"), "Shared preferences");
+
       const context = await buildCodexWorkspaceBootstrapContext({
-        params: {
-          sessionId: "shared",
-          sessionKey: "agent:main:shared",
-          bootstrapUserProfileId: profile,
-        } as EmbeddedRunAttemptParams,
-        agentWorkspaceDeveloperInstructions: "Saved project instructions",
-        resolvedWorkspace: "/workspace",
-        executionWorkspace: "/task",
-        effectiveWorkspace: "/task",
-        sessionKey: "agent:main:shared",
+        params: { sessionId: "shared-user" } as EmbeddedRunAttemptParams,
+        resolvedWorkspace: workspaceDir,
+        executionWorkspace: executionDir,
+        effectiveWorkspace: effectiveDir,
+        sessionKey: "agent:main:shared-user",
         sessionAgentId: "main",
         memoryToolNames: [],
         ringZeroActive: false,
       });
-      const turn = context.turnScopedDeveloperInstructions ?? "";
-      expect(turn).toContain("Shared preferences");
-      expect(turn.includes("Alice preferences")).toBe(profile === "alice");
-      expect(turn.includes("Bob preferences")).toBe(profile === "bob");
-      if (profile) {
-        expect(turn.indexOf("Shared preferences")).toBeLessThan(
-          turn.indexOf(profile === "alice" ? "Alice preferences" : "Bob preferences"),
+
+      expect(context.turnScopedDeveloperInstructions).toContain("Shared preferences");
+      expect(context.turnScopedDeveloperInstructions).not.toContain("The personal");
+      expect(context.turnScopedDeveloperInstructionFiles).toEqual([
+        {
+          path: path.join(workspaceMode === "inherited" ? workspaceDir : effectiveDir, "USER.md"),
+          content: "Shared preferences",
+        },
+      ]);
+    },
+  );
+
+  it.each(["inherited", "remapped"] as const)(
+    "rebuilds turn-only personal instructions in a %s workspace without capturing them in the thread snapshot",
+    async (workspaceMode) => {
+      const runtime = await import("openclaw/plugin-sdk/agent-harness-runtime");
+      const workspaceDir = path.join(os.tmpdir(), "codex-personal-workspace");
+      const taskDir = path.join(os.tmpdir(), "codex-personal-task");
+      vi.spyOn(runtime, "resolveBootstrapFilesForRun").mockImplementation(async (params) => [
+        {
+          name: "USER.md",
+          path: path.join(workspaceDir, "USER.md"),
+          content: "Shared preferences",
+          missing: false,
+        },
+        ...(params.bootstrapUserProfileId
+          ? [
+              {
+                name: "USER.md" as const,
+                path: path.join(workspaceDir, "users", params.bootstrapUserProfileId, "USER.md"),
+                content:
+                  params.bootstrapUserProfileId === "alice"
+                    ? "Alice preferences"
+                    : "Bob preferences",
+                missing: false,
+                personalUser: true as const,
+              },
+            ]
+          : []),
+      ]);
+      for (const profile of ["alice", "bob", undefined]) {
+        const context = await buildCodexWorkspaceBootstrapContext({
+          params: {
+            sessionId: "shared",
+            sessionKey: "agent:main:shared",
+            bootstrapUserProfileId: profile,
+          } as EmbeddedRunAttemptParams,
+          agentWorkspaceDeveloperInstructions: "Saved project instructions",
+          resolvedWorkspace: workspaceDir,
+          executionWorkspace: workspaceMode === "inherited" ? taskDir : workspaceDir,
+          effectiveWorkspace: taskDir,
+          sessionKey: "agent:main:shared",
+          sessionAgentId: "main",
+          memoryToolNames: [],
+          ringZeroActive: false,
+        });
+        const turn = context.turnScopedDeveloperInstructions ?? "";
+        expect(turn).toContain("Shared preferences");
+        expect(turn.includes("Alice preferences")).toBe(profile === "alice");
+        expect(turn.includes("Bob preferences")).toBe(profile === "bob");
+        expect(turn.includes("belongs to this session")).toBe(Boolean(profile));
+        const promptWorkspace = workspaceMode === "inherited" ? workspaceDir : taskDir;
+        expect(context.turnScopedDeveloperInstructionFiles).toEqual([
+          { path: path.join(promptWorkspace, "USER.md"), content: "Shared preferences" },
+          ...(profile
+            ? [
+                {
+                  path: path.join(promptWorkspace, "users", profile, "USER.md"),
+                  content: profile === "alice" ? "Alice preferences" : "Bob preferences",
+                  personalUser: true,
+                },
+              ]
+            : []),
+        ]);
+        if (profile) {
+          expect(turn.indexOf("Shared preferences")).toBeLessThan(
+            turn.indexOf(profile === "alice" ? "Alice preferences" : "Bob preferences"),
+          );
+        }
+        expect(context.threadDeveloperInstructions).toBe(
+          workspaceMode === "inherited" ? "Saved project instructions" : undefined,
         );
-        expect(turn).toContain("applies only to the current requester");
+        expect(context.promptContext).toBeUndefined();
       }
-      expect(context.threadDeveloperInstructions).toBe("Saved project instructions");
-    }
-  });
+    },
+  );
 
   it("reads and compares thread-bootstrap context-engine projections", () => {
     const projection = readContextEngineThreadBootstrapProjection({

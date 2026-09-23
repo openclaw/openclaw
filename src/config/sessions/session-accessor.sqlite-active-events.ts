@@ -44,6 +44,7 @@ import {
   resolveSqliteSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
 } from "./session-transcript-read-fence.js";
+import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
 export { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 export {
   isSessionTranscriptProjectionUnavailableError,
@@ -156,14 +157,16 @@ export function everySessionTranscriptUserInputFrom(
     })
       .select(
         /* kysely-allow-raw: Stream only admission control facts, never message bodies, across the exact active input range. */
-        sql<string>`json_object('role', json_extract(event.event_json, '$.message.role'),
-          'idempotencyKey', json_extract(event.event_json, '$.message.idempotencyKey'),
-          '__openclaw', json_object('runId', json_extract(event.event_json, '$.message.__openclaw.runId')),
-          'provenance', json_extract(event.event_json, '$.message.provenance'))`.as("message_json"),
+        sql<string>`json_object('role', json_extract(${transcriptEventNavigationSql("event")}, '$.message.role'),
+          'idempotencyKey', json_extract(${transcriptEventNavigationSql("event")}, '$.message.idempotencyKey'),
+          '__openclaw', json_object('runId', json_extract(${transcriptEventNavigationSql("event")}, '$.message.__openclaw.runId')),
+          'provenance', json_extract(${transcriptEventNavigationSql("event")}, '$.message.provenance'))`.as(
+          "message_json",
+        ),
       )
       .where(
         /* kysely-allow-raw: User-role filtering excludes assistant/tool payloads without materializing them. */
-        sql<string>`json_extract(event.event_json, '$.message.role')`,
+        sql<string>`json_extract(${transcriptEventNavigationSql("event")}, '$.message.role')`,
         "=",
         "user",
       );
@@ -248,7 +251,7 @@ export function withRecentSessionTranscriptActiveEvents<T>(
           .onRef("event.session_id", "=", "active.session_id")
           .onRef("event.seq", "=", "active.event_seq"),
       )
-      .select("event.event_json")
+      .select(transcriptEventJsonSql(projection.database.db, "event").as("event_json"))
       .where("active.session_id", "=", projection.resolved.sessionId)
       .where("active.context_eligible", "=", 1)
       .orderBy("active.active_position", "desc")
@@ -407,6 +410,7 @@ export function readSessionTranscriptVisibleMessageDeltaCore(
         : executeSqliteQuerySync(
             projection.database.db,
             selectMessagePayload(
+              projection.database,
               selectMessageRows(projection.database, projection.resolved.sessionId, {
                 start: startPosition,
                 endExclusive: lastMessagePosition + 1,
@@ -600,6 +604,7 @@ export function readSessionTranscriptBoundedMessageTailPage(
           : executeSqliteQuerySync(
               projection.database.db,
               selectMessagePayload(
+                projection.database,
                 selectMessageRows(projection.database, projection.resolved.sessionId, {
                   positions: selectedPositions,
                 }),

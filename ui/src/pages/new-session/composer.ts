@@ -391,7 +391,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
               .value=${guard([visibleMessage], () => live(visibleMessage))}
               aria-autocomplete="list"
               aria-controls=${ifDefined(menuVisible ? menuListboxId : undefined)}
-              aria-expanded=${ifDefined(menuVisible ? "true" : undefined)}
+              aria-haspopup=${ifDefined(menuVisible ? "listbox" : undefined)}
               aria-activedescendant=${ifDefined(activeMenuOptionId ?? undefined)}
               aria-describedby=${menuAnnouncementId}
               @input=${(event: InputEvent) => {
@@ -479,6 +479,9 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
                 }
               }}
             ></textarea>
+            <span class="agent-chat__composer-placeholder" aria-hidden="true"
+              >${animatedPlaceholder}</span
+            >
             <span
               id=${menuAnnouncementId}
               class="sr-only"

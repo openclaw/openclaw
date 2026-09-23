@@ -19,6 +19,8 @@ import { ApprovalObserverClosedError } from "./exec-approval-lifecycle.js";
 import { installTestApprovalClock } from "./exec-approval-manager.test-support.js";
 import { getOperatorApprovalDetailed } from "./operator-approval-store.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
+import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
+import { createTestRuntimeSecretsActivator } from "./server-startup-config.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
 
@@ -39,10 +41,11 @@ function createAuthorityHarness(
   const aux = createGatewayAuxHandlers({
     log: {},
     getNativeApprovalRouteCoordinator: () => undefined,
-    activateRuntimeSecrets: async () => {
-      throw new Error("unexpected secrets reload");
-    },
-    sharedGatewaySessionGenerationState: { current: undefined, required: null },
+    activateRuntimeSecrets: createTestRuntimeSecretsActivator(),
+    sharedGatewaySessionGenerationState: new SharedGatewaySessionGenerationState({
+      current: undefined,
+      required: null,
+    }),
     resolveSharedGatewaySessionGenerationForConfig: () => undefined,
     clients: [],
     channelManager: {
@@ -271,10 +274,17 @@ describe("gateway auxiliary authority lifecycle", () => {
           rotateAgentRunRegistryLifecycleGeneration();
         }
         // get/list also check liveness, so assert push delivery before either read.
-        expect(onResolved).toHaveBeenCalledExactlyOnceWith({
-          id: question.id,
-          status: "cancelled",
-        });
+        expect(onResolved).toHaveBeenCalledExactlyOnceWith(
+          { id: question.id, status: "cancelled" },
+          {
+            record: { ...question, status: "cancelled", resolvedBy: "requester-inactive" },
+            ordinary: false,
+            sessionAccess: undefined,
+            isCurrent: expect.any(Function),
+            refreshRequester: expect.any(Function),
+          },
+        );
+        expect(onResolved.mock.calls[0]?.[1].isCurrent()).toBe(true);
         await expect(answer).resolves.toEqual({ status: "cancelled" });
         expect(onAgentRunAuthorityClosed).toHaveBeenCalledOnce();
         expect(onAgentRunAuthorityClosed).toHaveBeenCalledWith(
@@ -482,7 +492,7 @@ describe("gateway auxiliary authority lifecycle", () => {
     const pluginDecision = (await gatewayAux.pluginApprovalManager.register(pluginRecord, 60_000))
       .decision;
     const questionResolved = vi.fn();
-    gatewayAux.questionManager.request({
+    const question = gatewayAux.questionManager.request({
       questions: [
         {
           questionId: "key",
@@ -508,8 +518,16 @@ describe("gateway auxiliary authority lifecycle", () => {
     placements.releaseTurn(turnClaim);
 
     expect(questionResolved).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ status: "cancelled" }),
+      { id: question.id, status: "cancelled" },
+      {
+        record: { ...question, status: "cancelled", resolvedBy: "requester-inactive" },
+        ordinary: false,
+        sessionAccess: undefined,
+        isCurrent: expect.any(Function),
+        refreshRequester: expect.any(Function),
+      },
     );
+    expect(questionResolved.mock.calls[0]?.[1].isCurrent()).toBe(true);
     await expect(execDecision).resolves.toBeNull();
     await expect(pluginDecision).resolves.toBeNull();
     await vi.waitFor(() => expect(publishResolved).toHaveBeenCalledTimes(2));

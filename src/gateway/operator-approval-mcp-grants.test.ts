@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { buildCodexUserMcpServersThreadConfigPatchForRuntime } from "../agents/cli-runner/bundle-mcp-codex.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -24,6 +25,8 @@ import {
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
 import { createPluginApprovalHandlers } from "./server-methods/plugin-approval.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
+import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
+import { createTestRuntimeSecretsActivator } from "./server-startup-config.test-support.js";
 
 const auxiliaries: ReturnType<typeof createGatewayAuxHandlers>[] = [];
 let fixture: OpenClawTestState | undefined;
@@ -36,10 +39,11 @@ function gateway() {
   const aux = createGatewayAuxHandlers({
     log: {},
     getNativeApprovalRouteCoordinator: () => undefined,
-    activateRuntimeSecrets: async () => {
-      throw new Error("unexpected secrets reload");
-    },
-    sharedGatewaySessionGenerationState: { current: undefined, required: null },
+    activateRuntimeSecrets: createTestRuntimeSecretsActivator(),
+    sharedGatewaySessionGenerationState: new SharedGatewaySessionGenerationState({
+      current: undefined,
+      required: null,
+    }),
     resolveSharedGatewaySessionGenerationForConfig: () => undefined,
     clients: [],
     channelManager: {
@@ -110,6 +114,7 @@ async function requestGrant(
           ...request.mcpTool,
           isActive: options.isActive ?? (() => true),
         });
+  const acknowledged = createDeferred();
   const args = {
     req: { method: "plugin.approval.request", params: request, id: "request-1" },
     params: request,
@@ -130,7 +135,7 @@ async function requestGrant(
             },
           }),
     },
-    respond: vi.fn(),
+    respond: vi.fn(() => acknowledged.resolve()),
     isWebchatConnect: () => false,
     context: {
       broadcast: vi.fn(),
@@ -143,14 +148,18 @@ async function requestGrant(
   const pending = createPluginApprovalHandlers(aux.pluginApprovalManager)[
     "plugin.approval.request"
   ]!(args);
-  await vi.waitFor(() => expect(args.respond).toHaveBeenCalled());
-  releaseBinding?.();
-  const record = (await aux.pluginApprovalManager.listPendingRecords())[0];
-  if (!record) {
-    await pending;
-    throw new Error("MCP approval request did not register");
+  try {
+    await Promise.race([acknowledged.promise, pending]);
+    expect(args.respond).toHaveBeenCalled();
+    const record = (await aux.pluginApprovalManager.listPendingRecords())[0];
+    if (!record) {
+      await pending;
+      throw new Error("MCP approval request did not register");
+    }
+    return { aux, authority, pending, record };
+  } finally {
+    releaseBinding?.();
   }
-  return { aux, authority, pending, record };
 }
 
 describe("gateway MCP tool grants", () => {

@@ -8,16 +8,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import * as backoff from "../../infra/backoff.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import * as pidAlive from "../../shared/pid-alive.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import * as worktreeCapacity from "./capacity.js";
 import * as worktreeGit from "./git.js";
 import { requireGit } from "./git.js";
 import { findLiveRegistryWorktreeByPath, getRegistryWorktree } from "./registry.js";
+import { managedWorktreeGcEntrypoint } from "./service-gc-runtime.test-support.js";
 import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import {
   useManagedWorktreeTestRepository,
@@ -333,13 +339,11 @@ describe("ManagedWorktreeService garbage collection", () => {
     // Gateway cleanup runs on Node's main thread, whose stack limit differs from Vitest workers.
     const collected = await runNodeScript(
       [
-        "--import",
-        path.resolve("scripts/tsx.mjs"),
-        "--input-type=module",
-        "--eval",
-        `import { ManagedWorktreeService } from ${JSON.stringify(new URL("./service.ts", import.meta.url).href)};
-         const service = new ManagedWorktreeService({ now: () => ${now} });
-         console.log(JSON.stringify(await service.gc()));`,
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(managedWorktreeGcEntrypoint),
+          resolveTestNodeExecPath(),
+        ),
+        String(now),
       ],
       env,
       60_000,

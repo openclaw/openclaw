@@ -124,7 +124,9 @@ For the full key index and the other top-level config domains, see [Configuratio
   `snapshotDefaults`, and `tabCleanup` hot-reload.
   Changed launch settings replace affected managed browsers on their next use;
   externally attached browsers stay running. Enablement, evaluation, SSRF policy,
-  and extension relay require a Gateway restart.
+  and extension relay authentication changes replace the Browser control service
+  and its owned relay connections without restarting the Gateway. Independently
+  running relay daemons keep their own lifecycle and policy.
 
 ---
 
@@ -229,6 +231,10 @@ a Gateway connection keep TTL-only tokens.
   Without it, the Control UI prompts for a VNC password and keeps it in browser
   memory for that connection. Managed mode always creates its own ephemeral
   password.
+
+Changes to `managed`, `port`, or `passwordFile` retire the current host source,
+close its observers, and release its computer execution holds. The replacement
+starts on demand without restarting the Gateway. External VNC servers stay running.
 
 OpenClaw connects only through loopback. An explicit `port` always selects
 attach mode, and an existing RFB listener on port `5900` takes precedence over

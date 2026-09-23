@@ -3,6 +3,18 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import type { McpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
+
+export async function seedDoctorLintMcpToken(identity: McpOAuthIdentity): Promise<void> {
+  const { withMcpOAuthProviderForTest } = await import("../agents/mcp-oauth.test-support.js");
+  await withMcpOAuthProviderForTest({ identity }, async (provider) => {
+    await provider.saveTokens({
+      access_token: "stored-inspection-token-not-real",
+      token_type: "Bearer",
+      expires_in: 3600,
+    });
+  });
+}
 
 export function createDoctorLintSemanticIndex(stateDir: string): string {
   const databasePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");

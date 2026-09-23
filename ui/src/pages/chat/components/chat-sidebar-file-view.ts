@@ -7,6 +7,7 @@ import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerCodeBlocksEnglish } from "../../../i18n/locales/en-code-blocks.ts";
 import type { EditorId } from "../../../lib/editor-links.ts";
+import { getSafeLocalStorage } from "../../../local-storage.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
 import { detectLineSeparator } from "./file-line-separator.ts";
@@ -14,6 +15,24 @@ import { detectLineSeparator } from "./file-line-separator.ts";
 registerCodeBlocksEnglish();
 
 type FileSidebarContent = Extract<SidebarContent, { kind: "file" }>;
+
+const FILE_WRAP_PREFERENCE_KEY = "openclaw.control.fileView.wrap.v1";
+
+export function loadFileWrapPreference(): boolean {
+  try {
+    return getSafeLocalStorage()?.getItem(FILE_WRAP_PREFERENCE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function saveFileWrapPreference(wrap: boolean): void {
+  try {
+    getSafeLocalStorage()?.setItem(FILE_WRAP_PREFERENCE_KEY, String(wrap));
+  } catch {
+    // Preference persistence is best effort.
+  }
+}
 
 export function hasUniformLineEndings(content: string): boolean {
   const crlf = content.split("\r\n").length - 1;
@@ -245,7 +264,7 @@ export function renderSidebarFile(
                   @input=${(event: Event & { currentTarget: HTMLInputElement }) =>
                     controls.onSearchInput(event.currentTarget.value)}
                 />
-                <span class="file-view__search-counter"
+                <span class="file-view__search-counter" role="status"
                   >${matchNumber}/${controls.matches.length}</span
                 >
                 <button

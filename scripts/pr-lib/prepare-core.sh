@@ -15,15 +15,7 @@ checkout_prep_branch() {
 resolve_pr_author_access_at_prepare() {
   # This lookup is optional: ordinary access refusals retain unknown access;
   # an exhausted/throttled API budget must stop preparation with its diagnostics.
-  local author="$1" repo repo_nwo repo_host response permission exit_code
-  repo=$(pr_gh repo view --json nameWithOwner,url) || {
-    exit_code=$?
-    [ "$exit_code" -ne 75 ] || return 1
-    printf 'unknown\n'
-    return
-  }
-  repo_nwo=$(printf '%s\n' "$repo" | jq -er '.nameWithOwner') || return 1
-  repo_host=$(printf '%s\n' "$repo" | jq -er '.url | capture("^https://(?<host>[^/]+)/").host') || return 1
+  local author="$1" repo_nwo="$2" repo_host="$3" response permission exit_code
   if response=$(pr_gh author-permission "$repo_nwo" "$repo_host" "$author") &&
     permission=$(printf '%s\n' "$response" | jq -er '.permission | select(type == "string")' 2>/dev/null); then
     case "$permission" in
@@ -47,6 +39,10 @@ retire_prep_evidence() {
     .local/prepare-push-result.env \
     .local/prepare-sync-result.env \
     .local/prep.md \
+    .local/correction-review.json \
+    .local/correction-review.md \
+    .local/correction-incoming-review.json \
+    .local/correction-incoming-review.md \
     .local/gates-*.log; do
     if [ ! -e "$artifact" ] && [ ! -L "$artifact" ]; then
       continue
@@ -67,6 +63,10 @@ retire_prep_evidence() {
   rm -f \
     .local/gates.env \
     .local/prep.env \
+    .local/correction-review.json \
+    .local/correction-review.md \
+    .local/correction-incoming-review.json \
+    .local/correction-incoming-review.md \
     .local/prepare-push-result.env \
     .local/prepare-sync-result.env || return 1
   printf '%s\n' "- Prior preparation evidence retained at $archive." >> .local/prep.md || return 1
@@ -180,10 +180,18 @@ verify_prep_branch_matches_prepared_head() {
 }
 
 prepare_init() {
-  local pr="$1"
+  local pr="$1" observation="${2:-}" review_mode="${3:-ready}"
+  local incoming_json_oid=""
   # Validate the exact reviewed head before taking the lock past its reversible phase.
-  review_validate_artifacts "$pr" true || return 1
-  require_ready_review_recommendation || return 1
+  case "$review_mode" in
+    ready) review_validate_artifacts "$pr" true || return 1 ;;
+    correction)
+      review_validate_artifacts "$pr" correction || return 1
+      require_correction_review_recommendation || return 1
+      incoming_json_oid=$(pr_git hash-object --no-filters .local/review.json) || return 1
+      ;;
+    *) echo "Unknown preparation review mode: $review_mode" >&2; return 1 ;;
+  esac
   mark_pr_operation_side_effects_started
   enter_worktree "$pr" false || return 1
 
@@ -211,10 +219,16 @@ prepare_init() {
   # Fetch cannot update pr-$pr while that branch is checked out.
   checkout_pr_worktree_target "$pr" "$reviewed_head_sha" || return 1
 
-  local json
-  json=$(read_pr_view_json "$pr" "headRefName,headRefOid") || return 1
+  if [ -n "$observation" ]; then
+    use_pr_observation "$pr" "$observation" || return 1
+  else
+    pr_observe "$pr" || return 1
+  fi
+  local json="$PR_OBSERVATION"
   local author_access_at_prep
-  author_access_at_prep=$(resolve_pr_author_access_at_prepare "${PR_AUTHOR:-}") || return 1
+  author_access_at_prep=$(resolve_pr_author_access_at_prepare "${PR_AUTHOR:-}" \
+    "$(printf '%s\n' "$json" | jq -er .baseRepository.nameWithOwner)" \
+    "$(printf '%s\n' "$json" | jq -er '.baseRepository.url | capture("^https://(?<host>[^/]+)/").host')") || return 1
 
   local head
   head=$(printf '%s\n' "$json" | jq -r .headRefName)
@@ -230,7 +244,7 @@ prepare_init() {
     exit 1
   fi
 
-  fetch_pr_head "$pr" "$reviewed_head_sha" "refs/heads/pr-$pr" || return 1
+  fetch_pr_head "$pr" "$reviewed_head_sha" "refs/heads/pr-$pr" "$json" || return 1
   pr_git checkout -B "pr-$pr-prep" "$reviewed_head_sha" || return 1
   retire_prep_evidence || return 1
 
@@ -240,6 +254,8 @@ prepare_init() {
     PR_HEAD "$reviewed_head" \
     PR_HEAD_SHA_BEFORE "$reviewed_head_sha" \
     PREP_BRANCH "pr-$pr-prep" \
+    PREP_REVIEW_MODE "$review_mode" \
+    PREP_INCOMING_JSON_OID "$incoming_json_oid" \
     PR_AUTHOR_ACCESS_AT_PREP "$author_access_at_prep" \
     PREP_STARTED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     > .local/prep-context.env
@@ -261,6 +277,16 @@ EOF_PREP
   echo "worktree=$PWD"
   echo "branch=$(pr_git branch --show-current)"
   echo "wrote=.local/prep-context.env .local/prep.md"
+}
+
+prepare_correction_review_init() {
+  local pr="$1"
+  enter_worktree "$pr" false || return 1
+  mark_pr_operation_side_effects_started
+  checkout_prep_branch "$pr" || return 1
+  run_prepared_correction_review "$pr" init || return 1
+  echo "Complete independent review of this exact correction in .local/correction-review.json (the validated summary is rendered from JSON)."
+  echo "The incoming review is unchanged; gates and publication require the corrected-candidate READY review."
 }
 
 prepare_validate_commit() {
@@ -331,8 +357,17 @@ resolve_prep_publication_target() {
   fi
 }
 
+verify_correction_publication_authority() {
+  [ -n "${PREP_PUBLICATION_REVIEW_SNAPSHOT:-}" ] || return 0
+  require_correction_publication_gates "$PREP_PUBLICATION_PR" "$(pr_git rev-parse HEAD)" \
+    "$PREP_PUBLICATION_ALLOW_PENDING" || return 1
+  verify_correction_review_snapshot "$PREP_PUBLICATION_PR" "$PREP_PUBLICATION_REVIEW_SNAPSHOT"
+}
+
 prepare_push() {
   local pr="$1"
+  local observation="${2:-}"
+  local PREP_PUBLICATION_REVIEW_SNAPSHOT="" PREP_PUBLICATION_PR="$pr" PREP_PUBLICATION_ALLOW_PENDING=true
   PR_MAIN_SHA=""
   enter_worktree "$pr" false || return 1
 
@@ -371,8 +406,10 @@ prepare_push() {
     return 1
   fi
 
-  verify_pr_head_branch_matches_expected "$pr" "$PR_HEAD"
-  push_prep_head_to_pr_branch "$pr" "$PR_HEAD" "$prep_head_sha" "$lease_sha" "$push_result_env" || return $?
+  require_prepared_review "$pr" || return 1
+  PREP_PUBLICATION_REVIEW_SNAPSHOT=$(correction_review_snapshot "$pr") || return 1
+  verify_correction_publication_authority || return 1
+  push_prep_head_to_pr_branch "$pr" "$PR_HEAD" "$prep_head_sha" "$lease_sha" "$push_result_env" "$observation" || return $?
   # shellcheck disable=SC1090
   source "$push_result_env"
   prep_head_sha="$PUSH_PREP_HEAD_SHA"
@@ -397,7 +434,7 @@ prepare_push() {
 
   local contrib="${PR_AUTHOR:-}"
   if [ -z "$contrib" ]; then
-    contrib=$(pr_gh pr view "$pr" --json author --jq .author.login) || return 1
+    contrib=$(printf '%s\n' "$PR_HEAD_OBSERVATION" | jq -r .author.login) || return 1
   fi
   local coauthor_email=""
   if coauthor_email=$(resolve_contributor_coauthor_email "$contrib"); then
@@ -448,6 +485,7 @@ EOF_PREP
 
 prepare_sync_head() {
   local pr="$1"
+  local PREP_PUBLICATION_REVIEW_SNAPSHOT="" PREP_PUBLICATION_PR="$pr" PREP_PUBLICATION_ALLOW_PENDING=false
   enter_worktree "$pr" false || return 1
 
   require_artifact .local/pr-meta.env
@@ -472,7 +510,9 @@ prepare_sync_head() {
   prep_head_sha="$PREP_PUBLICATION_HEAD_SHA"
   local push_result_env=".local/prepare-sync-result.env"
 
-  verify_pr_head_branch_matches_expected "$pr" "$PR_HEAD"
+  require_prepared_review "$pr" || return 1
+  PREP_PUBLICATION_REVIEW_SNAPSHOT=$(correction_review_snapshot "$pr") || return 1
+  verify_correction_publication_authority || return 1
   push_prep_head_to_pr_branch "$pr" "$PR_HEAD" "$prep_head_sha" "$lease_sha" "$push_result_env" || return $?
   # shellcheck disable=SC1090
   source "$push_result_env"
@@ -488,7 +528,7 @@ prepare_sync_head() {
 
   local contrib="${PR_AUTHOR:-}"
   if [ -z "$contrib" ]; then
-    contrib=$(pr_gh pr view "$pr" --json author --jq .author.login) || return 1
+    contrib=$(printf '%s\n' "$PR_HEAD_OBSERVATION" | jq -r .author.login) || return 1
   fi
   local coauthor_email=""
   if coauthor_email=$(resolve_contributor_coauthor_email "$contrib"); then
@@ -530,9 +570,10 @@ EOF_PREP
 
 prepare_run() {
   local pr="$1"
-  prepare_init "$pr"
-  prepare_gates "$pr"
-  prepare_push "$pr"
+  prepare_init "$pr" "${2:-}" || return 1
+  local observation="$PR_HEAD_OBSERVATION"
+  prepare_gates "$pr" "$observation" || return 1
+  prepare_push "$pr" "$observation" || return 1
   echo "prepare-run complete for PR #$pr"
   echo "pr_url=${PR_URL:-}"
 }

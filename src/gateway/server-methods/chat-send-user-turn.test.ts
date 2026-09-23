@@ -19,15 +19,18 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { resolveStateDir } from "../../config/paths.js";
 import {
   listSessionParticipantsReadOnly,
+  loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
 import {
-  readSessionInputBootstrapProfileId,
+  isSessionPersonalBootstrapTurn,
   prepareChannelParticipantObservation,
 } from "../../sessions/session-participant-input.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as chatAttachments from "../chat-attachments.js";
@@ -100,6 +103,7 @@ describe("prepareChatSendUserTurn", () => {
     async (kind) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const profile = ensureProfileForEmail("accepted@example.test", { env: state.env });
+        const creator = ensureProfileForEmail("session-creator@example.test", { env: state.env });
         const { controller } = createUserTurnInputController();
         const clientInfo = createClientInfo(
           kind === "profileless-ui"
@@ -143,35 +147,52 @@ describe("prepareChatSendUserTurn", () => {
           userTurn: controller,
         });
         const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:retargeted" };
-        await upsertSessionEntryCore(scope, { sessionId: "retargeted", updatedAt: 2 });
+        await upsertSessionEntryCore(scope, {
+          sessionId: "retargeted",
+          updatedAt: 2,
+          createdActor: { type: "human", source: "profile", id: creator.id },
+        });
         const target = {
           agentId: "main",
           sessionKey: scope.sessionKey,
           storePath: state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
         };
-        // Exercise authenticated ingress -> trusted context spread -> real guarded bootstrap.
+        // Ingress decides turn eligibility; the persisted destination selects its personal file.
         const workspaceDir = state.statePath("bootstrap-workspace");
-        const personalDir = path.join(workspaceDir, "users", profile.id);
-        await fs.mkdir(personalDir, { recursive: true });
+        const creatorDir = path.join(workspaceDir, "users", creator.id);
+        const senderDir = path.join(workspaceDir, "users", profile.id);
+        await fs.mkdir(creatorDir, { recursive: true });
+        await fs.mkdir(senderDir, { recursive: true });
         await fs.writeFile(path.join(workspaceDir, "USER.md"), "Shared preferences");
-        await fs.writeFile(path.join(personalDir, "USER.md"), "Authenticated preferences");
-        // Human-authored labels and profile-looking text cannot select an overlay.
+        await fs.writeFile(path.join(creatorDir, "USER.md"), "Session creator preferences");
+        await fs.writeFile(path.join(senderDir, "USER.md"), "Current sender preferences");
+        // Neither authenticated participants nor profile-looking sender labels select an overlay.
         prepared.ctx.SenderId = profile.id;
         prepared.ctx.SenderName = profile.id;
+        const entry = loadSessionEntryReadOnly(scope);
         const bootstrap = await resolveBootstrapContextForRun({
           workspaceDir,
           sessionKey: scope.sessionKey,
-          bootstrapUserProfileId: readSessionInputBootstrapProfileId({ ...prepared.ctx }),
+          bootstrapUserProfileId: isSessionPersonalBootstrapTurn({ ...prepared.ctx })
+            ? sessionPersonalProfileId(entry)
+            : undefined,
         });
         const contents = bootstrap.contextFiles.map((file) => file.content).join("\n");
         expect(contents).toContain("Shared preferences");
-        expect(contents.includes("Authenticated preferences")).toBe(kind === "profile");
+        expect(contents).not.toContain("Current sender preferences");
+        expect(contents.includes("Session creator preferences")).toBe(
+          kind === "profile" || kind === "profileless",
+        );
         prepareChannelParticipantObservation(prepared.ctx);
         recordAcceptedSessionParticipantInput({ ...prepared.ctx }, target);
         recordAcceptedSessionParticipantInput(prepared.ctx, target);
         await new Promise<void>((resolve) => {
           queueMicrotask(resolve);
         });
+        await runOpenClawAgentWriteAdmission(
+          { agentId: target.agentId, path: target.storePath, env: state.env },
+          () => undefined,
+        );
         expect(listSessionParticipantsReadOnly(scope).get(scope.sessionKey)).toEqual(
           kind === "profile"
             ? [

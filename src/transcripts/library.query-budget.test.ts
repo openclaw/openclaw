@@ -176,7 +176,10 @@ describe("transcript library SQLite query budgets", () => {
         appends: createTranscriptCaptureAppends(() => {}),
         session: target,
         providerId: target.source.providerId,
-        provider: {},
+        stopProvider: async () => {
+          throw new Error("Reading transcript status must not stop capture");
+        },
+        releaseProvider: async () => {},
         phase: "active",
       });
     }

@@ -169,6 +169,9 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
         },
       });
       const failure = formatCliProcessFailure({ reason: `${command} ${scenario}`, ...result });
+      if (scenario === "human-recovery-plugin-error" || scenario === "borrowed-output") {
+        expect(result.stderr, failure).toContain("Fixture advanced watchdog clock.");
+      }
       expect(result.signal, failure).toBeNull();
       expect(result.code, failure).toBe(
         scenario === "repair-deadline" ||
@@ -407,6 +410,7 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
         expect(result.stdout, failure).not.toContain("triage-fixture-prompt.md");
       }
       if (scenario === "doctor-error") {
+        expect(result.stderr, failure).toContain("Fixture advanced recovery clock.");
         expect(output).toMatchObject({
           ok: false,
           error: { type: "cli_error", message: expect.stringContaining("Doctor repair failed") },
@@ -438,7 +442,8 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
             step: "gateway recovery verification",
             status: "failed",
             exitCode: 1,
-            detail: "Exit code: 1",
+            detail:
+              "Exit code: 1; Gateway did not settle; startup phase: waiting for managed service",
             failureFacts: [{ check: "settled", code: "timeout", message: expect.any(String) }],
           },
         ]);

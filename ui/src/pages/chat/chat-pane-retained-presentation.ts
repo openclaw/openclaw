@@ -159,11 +159,16 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         sessionId: ChatPageHost["currentSessionId"];
         agentId: string | undefined;
         card: ProgressCard;
+        lifetime: object | undefined;
         identity: string;
       }
     | undefined;
 
-  protected get progressCardPresentation(): { card: ProgressCard; identity: string } | null {
+  protected get progressCardPresentation(): {
+    card: ProgressCard;
+    lifetime: object | undefined;
+    identity: string;
+  } | null {
     const state = this.state;
     if (
       !state ||
@@ -199,6 +204,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         sessionId: state.currentSessionId,
         agentId,
         card,
+        lifetime: this.progressCard.lifetime,
         // Global and ordinary sessions can share the progress-card wire key.
         identity: JSON.stringify([target.agentId ?? null, target.sessionKey]),
       };

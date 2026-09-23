@@ -63,6 +63,7 @@ import {
   readWorkerWorkspaceReconciliationFacts,
 } from "./placement-workspace-result.js";
 import { consumePreparedEnvironment } from "./prepared-environment-store.js";
+import { publishWorkerEnvironmentNativeMutation } from "./store-native-publication.js";
 import type { PreparedEnvironmentSelection } from "./store.js";
 import { boundedWorkerError } from "./worker-error.js";
 import {
@@ -128,13 +129,17 @@ function updateTransition(
         .where("state", "=", "attached")
         .where("destroy_requested_at_ms", "is", null)
         .where("owner_epoch", "=", updated.activeOwnerEpoch)
-        .where("attached_session_ids_json", "=", JSON.stringify([updated.sessionId])),
+        .where("attached_session_ids_json", "=", JSON.stringify([updated.sessionId]))
+        .returning("last_activated_at_ms"),
     );
-    if (activated.numAffectedRows !== 1n) {
+    if (activated.rows.length !== 1) {
       throw new Error(
         `Worker session placement ${current.sessionId} lost its attached environment`,
       );
     }
+    publishWorkerEnvironmentNativeMutation(db, updated.environmentId!, {
+      lastActivatedAtMs: activated.rows[0]!.last_activated_at_ms,
+    });
   }
   return updated;
 }

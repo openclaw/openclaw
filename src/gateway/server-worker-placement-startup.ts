@@ -6,6 +6,7 @@ import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "../config/sessions/store-maintenance-preserve.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import {
@@ -32,6 +33,7 @@ import {
   createWorkerPlacementInitialRecovery,
   installWorkerPlacementReconcileGuard,
 } from "./server-worker-placement-reconcile-guard.js";
+import { createWorkerRuntimeRefreshWaiter } from "./server-worker-placement-runtime-refresh.js";
 import { createWorkerPlacementSessionEvidenceResolver } from "./server-worker-placement-session-evidence.js";
 import {
   createWorkerPlacementNodeWorkspaceBindingResolver,
@@ -76,6 +78,7 @@ type WorkerPlacementSidecar = { stop: () => Promise<void> };
 
 export type GatewayWorkerPlacementRuntimeParams = {
   placements: WorkerSessionPlacementStore;
+  getCommittedRuntimeConfig: () => OpenClawConfig;
   environments: WorkerEnvironmentService;
   gatewayNamespace: string;
   nodeWorkerBundleRetention?: NodeWorkerBundleRetention;
@@ -94,10 +97,12 @@ export type GatewayWorkerPlacementRuntimeParams = {
 
 export function createGatewayGitHubPublicationRuntime(params: {
   placements: WorkerSessionPlacementStore;
+  getCommittedRuntimeConfig: () => OpenClawConfig;
   warn: (message: string) => void;
 }) {
   return createGitHubPublicationRuntime({
     placements: params.placements,
+    getCommittedRuntimeConfig: params.getCommittedRuntimeConfig,
     loadSessionRuntime: loadWorkerPlacementSessionRuntimeModule,
     warn: params.warn,
   });
@@ -112,14 +117,17 @@ export function createGatewayWorkerPlacementRuntime(
 ) {
   let nodeWorkerSupervisorTransport: NodeWorkerSupervisorTransport | undefined;
   let stopped = false;
+  const runtimeRefresh = createWorkerRuntimeRefreshWaiter({
+    environments: params.environments,
+    isStopping: () => stopped,
+  });
   const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
   const {
     coordinator: githubPublication,
     prepareAcceptedWorkspacePublication,
     publishAcceptedWorkspace,
     reconcilePublications,
-  } = params.githubPublicationRuntime ??
-  createGatewayGitHubPublicationRuntime({ placements: params.placements, warn: params.warn });
+  } = params.githubPublicationRuntime ?? createGatewayGitHubPublicationRuntime(params);
   const diskSpace = createWorkerPlacementDiskSpaceMonitor({
     placements: params.placements,
     environments: params.environments,
@@ -448,6 +456,7 @@ export function createGatewayWorkerPlacementRuntime(
     placements: params.placements,
     resolveWorkspace,
     reconcileActivePlacement: async (id) => await dispatchService.reconcileActive(id),
+    waitForAdmissionNode: runtimeRefresh.wait,
     waitForInitialPlacement: dispatchService.waitForInitialPlacement,
     redispatchReclaimed: createReclaimedPlacementRedispatch({
       environments: params.environments,
@@ -687,6 +696,7 @@ export function createGatewayWorkerPlacementRuntime(
       nodeWorkerSupervisorTransport = transport;
       nodeWorkspaceRetention.bindTransport(transport);
     },
+    bindNodeWorkerAvailability: runtimeRefresh.bind,
     scheduleNodeWorkspaceRetention: (nodeId?: string) => nodeWorkspaceRetention.schedule(nodeId),
     startRuntime,
   };

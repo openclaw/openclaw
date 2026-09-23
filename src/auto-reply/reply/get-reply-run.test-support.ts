@@ -131,3 +131,26 @@ export function baseParams(
     },
   } as Parameters<typeof runPreparedReply>[0];
 }
+
+export function ownerParams(): Parameters<typeof runPreparedReply>[0] {
+  const params = baseParams();
+  params.command = {
+    ...params.command,
+    senderIsOwner: true,
+  };
+  return params;
+}
+
+type MockCallSource = {
+  mock: {
+    calls: ReadonlyArray<ReadonlyArray<unknown>>;
+  };
+};
+
+export function requireMockCallArg(mock: MockCallSource, label: string, index = 0): unknown {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`${label} call ${index} missing`);
+  }
+  return call[0];
+}

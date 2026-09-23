@@ -63,6 +63,7 @@ describe("authenticated request completion", { concurrent: false }, () => {
         signal.removeEventListener("abort", unblock);
       }
       expect(handleGatewayRequest).not.toHaveBeenCalled();
+      expect([...harness.clients.authorityClients]).toEqual([]);
     },
   );
 
@@ -168,6 +169,7 @@ describe("authenticated request completion", { concurrent: false }, () => {
         await entered.promise;
         await nextTurn();
         expect.soft(dispatched, `${stage} is still executing`).toBe(false);
+        expect([...harness.clients.authorityClients]).toEqual([client]);
       } finally {
         // Join the handler independently: the broken dispatcher returns before it finishes.
         unblock();
@@ -177,6 +179,7 @@ describe("authenticated request completion", { concurrent: false }, () => {
       }
       expect(selectedRoot).toBe(initialRoot);
       expect(dispatched).toBe(true);
+      expect([...harness.clients.authorityClients]).toEqual([]);
     },
   );
 });

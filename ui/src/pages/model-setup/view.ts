@@ -255,6 +255,7 @@ function renderManual(props: ModelSetupViewProps, detected: SystemAgentSetupDete
   }
   const provider = result.manualProviders.find((entry) => entry.id === props.manualProviderId);
   const targetId = `manual:${props.manualProviderId}`;
+  const manualId = props.embedded ? "model-discovery-manual" : "model-setup-manual";
   const testing = props.activation.phase === "testing" && props.activation.targetId === targetId;
   return html`
     <section class="settings-section">
@@ -278,6 +279,9 @@ function renderManual(props: ModelSetupViewProps, detected: SystemAgentSetupDete
             class="input"
             type="password"
             autocomplete="off"
+            required
+            aria-invalid=${props.manualError ? "true" : nothing}
+            aria-describedby=${`${manualId}-help${props.manualError ? ` ${manualId}-error` : ""}`}
             .value=${props.manualApiKey}
             ?disabled=${props.actionsDisabled}
             placeholder=${t("modelSetup.manual.accessValuePlaceholder")}
@@ -285,13 +289,15 @@ function renderManual(props: ModelSetupViewProps, detected: SystemAgentSetupDete
               props.onManualApiKeyChange((event.currentTarget as HTMLInputElement).value)}
           />
         </label>
-        <div class="model-setup__manual-help">
+        <div id=${`${manualId}-help`} class="model-setup__manual-help">
           ${icons.shieldCheck}
           <span>${t("modelSetup.manual.verifyHint")}</span>
         </div>
         ${
           props.manualError
-            ? html`<div class="callout danger" role="alert">${props.manualError}</div>`
+            ? html`<div id=${`${manualId}-error`} class="callout danger" role="alert">
+                ${props.manualError}
+              </div>`
             : nothing
         }
         <button

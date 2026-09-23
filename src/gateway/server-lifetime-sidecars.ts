@@ -53,21 +53,36 @@ function startSecretStoreExpiryMaintenance(
   logWarning: (message: string) => void,
 ): GatewayPostReadySidecarHandle {
   let warned = false;
+  let current: Promise<void> | undefined;
+  let stopped = false;
   const purge = () => {
-    try {
-      purgeExpiredSecretStoreEntries();
-      warned = false;
-    } catch {
-      if (!warned) {
-        logWarning("Secret store expiry cleanup failed; will retry.");
-        warned = true;
-      }
+    if (stopped || current) {
+      return;
     }
+    current = purgeExpiredSecretStoreEntries()
+      .then(() => {
+        warned = false;
+      })
+      .catch(() => {
+        if (!warned) {
+          logWarning("Secret store expiry cleanup failed; will retry.");
+          warned = true;
+        }
+      })
+      .finally(() => {
+        current = undefined;
+      });
   };
   purge();
   const interval = setInterval(purge, SECRET_STORE_EXPIRY_INTERVAL_MS);
   interval.unref?.();
-  return { stop: () => clearInterval(interval) };
+  return {
+    stop: async () => {
+      stopped = true;
+      clearInterval(interval);
+      await current;
+    },
+  };
 }
 
 export async function attachInitialGatewayLifetimeSidecars(params: {

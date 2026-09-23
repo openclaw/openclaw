@@ -86,6 +86,27 @@ function readPool(): ReadPool {
 }
 
 function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCommand {
+  if (command.type === "acpSessions.metadata") {
+    return structuredClone(command);
+  }
+  if (command.type === "userProfiles.channelIdentity.resolve") {
+    return { type: command.type, identity: { ...command.identity } };
+  }
+  if (command.type === "subagents.runs") {
+    return {
+      ...command,
+      scope:
+        command.scope.kind === "ids"
+          ? { kind: "ids", runIds: [...command.scope.runIds] }
+          : { ...command.scope },
+    };
+  }
+  if (command.type === "mcpOAuth.statuses") {
+    return { type: command.type, input: [...command.input] };
+  }
+  if (command.type === "sessionGroups.members") {
+    return { ...command, cfg: structuredClone(command.cfg) };
+  }
   if (command.type === "conversationBindings.inspect") {
     const { channel, accountId, conversationId, parentConversationId } = command.conversation;
     return {
@@ -114,6 +135,24 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
   }
   if (command.type === "operatorApprovals.history") {
     return { ...command, input: { ...command.input } };
+  }
+  if (command.type === "tasks.mutationSnapshot") {
+    const scope = command.input;
+    return {
+      type: command.type,
+      input:
+        scope === undefined
+          ? undefined
+          : "taskId" in scope
+            ? { ...scope }
+            : scope.map((entry) => Object.assign({}, entry)),
+    };
+  }
+  if (
+    command.type === "githubPublication.knownPullRequestUrls" ||
+    command.type === "githubRepository.knownPullRequestUrls"
+  ) {
+    return structuredClone(command);
   }
   if (command.type === "pluginBlob.lookup") {
     const { pluginId, namespace, key } = command.input;
@@ -158,11 +197,48 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
   if (command.type === "workers.placementProjection") {
     return structuredClone(command);
   }
+  if (command.type === "workerEnvironments.pruneCandidates") {
+    return {
+      type: command.type,
+      input: {
+        ...command.input,
+        cursor: command.input.cursor ? { ...command.input.cursor } : undefined,
+      },
+    };
+  }
+  if (command.type === "workerEnvironments.snapshot") {
+    return { type: command.type, ...(command.ids ? { ids: [...command.ids] } : {}) };
+  }
   return { ...command };
 }
 
 function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   let bytes = Buffer.byteLength(command.type, "utf8");
+  if (command.type === "subagents.runs") {
+    return (
+      bytes +
+      (command.scope.kind === "session"
+        ? Buffer.byteLength(command.scope.sessionKey, "utf8")
+        : command.scope.runIds.reduce(
+            (total, runId) => total + Buffer.byteLength(runId, "utf8"),
+            0,
+          ))
+    );
+  }
+  if (command.type === "mcpOAuth.statuses") {
+    return command.input.reduce((total, key) => total + Buffer.byteLength(key, "utf8"), bytes);
+  }
+  if (
+    command.type === "mcpOAuth.readOnly" ||
+    command.type === "mcpOAuth.keys" ||
+    command.type === "mcpOAuth.pending" ||
+    command.type === "mcpOAuth.countPrincipals"
+  ) {
+    return bytes + Buffer.byteLength(command.input, "utf8");
+  }
+  if (command.type === "sessionGroups.members") {
+    return bytes + Buffer.byteLength(JSON.stringify(command.cfg), "utf8");
+  }
   if (command.type === "conversationBindings.inspect") {
     return (
       bytes +
@@ -208,6 +284,35 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       16
     );
   }
+  if (command.type === "tasks.mutationSnapshot") {
+    const scope = command.input;
+    const scopes = scope === undefined ? [] : "taskId" in scope ? [scope] : scope;
+    return scopes.reduce(
+      (total, entry) =>
+        total +
+        Buffer.byteLength(entry.taskId, "utf8") +
+        Buffer.byteLength(entry.flowId ?? "", "utf8") +
+        Buffer.byteLength(entry.runId ?? "", "utf8") +
+        Buffer.byteLength(entry.childSessionKey ?? "", "utf8"),
+      bytes,
+    );
+  }
+  if (
+    command.type === "githubPublication.request" ||
+    command.type === "githubRepository.request" ||
+    command.type === "githubPublication.lifecycle"
+  ) {
+    return bytes + Buffer.byteLength(command.requestId, "utf8") + 8;
+  }
+  if (
+    command.type === "githubPublication.knownPullRequestUrls" ||
+    command.type === "githubRepository.knownPullRequestUrls"
+  ) {
+    return Object.values(command.input).reduce<number>(
+      (total, value) => total + (typeof value === "string" ? Buffer.byteLength(value, "utf8") : 8),
+      bytes,
+    );
+  }
   if (command.type === "pluginBlob.lookup" || command.type === "pluginBlob.entries") {
     return (
       bytes +
@@ -215,6 +320,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       Buffer.byteLength(command.input.namespace, "utf8") +
       (command.type === "pluginBlob.lookup" ? Buffer.byteLength(command.input.key, "utf8") : 0)
     );
+  }
+  if (command.type === "subagents.forChildSession") {
+    return bytes + Buffer.byteLength(command.childSessionKey, "utf8");
   }
   if (command.type === "sandboxRegistry.get") {
     return bytes + Buffer.byteLength(command.containerName, "utf8");
@@ -254,8 +362,24 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (command.type === "onboardingRecommendations.read") {
     return bytes + Buffer.byteLength(command.configKey, "utf8");
   }
-  if (command.type === "userProfiles.reconcile") {
+  if (
+    command.type === "userProfiles.reconcile" ||
+    command.type === "userProfiles.channelIdentity.list" ||
+    command.type === "userProfiles.authority.resolve"
+  ) {
     return bytes + Buffer.byteLength(command.profileId, "utf8");
+  }
+  if (command.type === "userProfiles.githubIdentity.cached") {
+    return bytes + Buffer.byteLength(command.email, "utf8") + 8;
+  }
+  if (command.type === "userProfiles.channelIdentity.resolve") {
+    return (
+      bytes +
+      Object.values(command.identity).reduce(
+        (total, value) => total + Buffer.byteLength(value, "utf8"),
+        0,
+      )
+    );
   }
   if (command.type === "userProfiles.email.resolve") {
     return bytes + Buffer.byteLength(command.email, "utf8");
@@ -282,6 +406,19 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   }
   if (command.type === "workers.placementProjection") {
     return Buffer.byteLength(JSON.stringify(command), "utf8");
+  }
+  if (command.type === "workerEnvironments.pruneCandidates") {
+    return (
+      bytes +
+      8 +
+      (command.input.limit === undefined ? 0 : 8) +
+      (command.input.cursor ? 8 + Buffer.byteLength(command.input.cursor.environmentId, "utf8") : 0)
+    );
+  }
+  if (command.type === "workerEnvironments.snapshot") {
+    return (
+      bytes + (command.ids?.reduce((total, id) => total + Buffer.byteLength(id, "utf8"), 0) ?? 0)
+    );
   }
   return bytes;
 }

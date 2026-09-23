@@ -7,6 +7,7 @@ import {
   cpSync,
   existsSync,
   mkdtempSync,
+  readFileSync,
   readdirSync,
   rmSync,
   statSync,
@@ -28,6 +29,7 @@ import type { VitestWorkerRun } from "./lib/vitest-worker-run.mts";
 // CI admits at most two plans only when the actual host has room. Each plan
 // keeps inner test-projects parallelism 1; runner labels cannot establish capacity.
 const PLAN_CONCURRENCY = 2;
+const FS_MODULE_CACHE_ROOT_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT";
 const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
 const FS_MODULE_CACHE_WRITER_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER";
 const NODE_COMPILE_CACHE_PATH_ENV_KEY = "NODE_COMPILE_CACHE";
@@ -39,10 +41,36 @@ const FS_MODULE_CACHE_PRUNE_TARGET_RATIO = 0.75;
 const FS_MODULE_CACHE_METADATA_FILE = "_metadata.json";
 const FS_MODULE_CACHE_GENERATION_FILE = ".openclaw-transform-generation";
 
+function reportCiResourceSnapshot(phase: "start" | "end") {
+  const pressure = (resource: "cpu" | "memory" | "io") => {
+    if (process.platform !== "linux") {
+      return null;
+    }
+    try {
+      return readFileSync(`/proc/pressure/${resource}`, "utf8").trim();
+    } catch {
+      return null;
+    }
+  };
+  console.log(
+    `[shard:resource-snapshot] ${JSON.stringify({
+      phase,
+      uptimeSeconds: os.uptime(),
+      cpuModel: os.cpus()[0]?.model ?? null,
+      loadAverage: os.loadavg(),
+      freeMemoryBytes: os.freemem(),
+      availableMemoryBytes: process.availableMemory?.() ?? null,
+      constrainedMemoryBytes: process.constrainedMemory?.() ?? null,
+      pressure: { cpu: pressure("cpu"), memory: pressure("memory"), io: pressure("io") },
+    })}`,
+  );
+}
+
 export type ShardTargetPlan = { kind: "target"; name: string; target: string };
 type ShardGroupConfig = {
   configs: string[];
   fallbackMaxWorkers?: number;
+  minTotalMemoryBytes?: number;
   env?: Record<string, unknown> | null;
   includePatterns?: string[] | null;
   shard_name?: string;
@@ -165,7 +193,8 @@ export function buildChildEnv(
   index: number,
   options: { serial?: boolean; cacheSlot?: number; runtime?: "node" | "bun" } = {},
 ) {
-  const persistentCacheRoot = baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
+  const configuredCacheRoot = baseEnv[FS_MODULE_CACHE_ROOT_ENV_KEY]?.trim();
+  const persistentCacheRoot = configuredCacheRoot || baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
   const cachePrefix = options.runtime === "bun" ? "vitest-cache-bun" : "vitest-cache";
   const cacheDirectory = persistentCacheRoot
     ? `${cachePrefix}-${options.cacheSlot ?? index}`
@@ -174,10 +203,16 @@ export function buildChildEnv(
       : `${cachePrefix}-${index}`;
   // Persistent worker slots let serial plans reuse transforms without concurrent
   // writers. Scratch caches stay per-plan; group overrides still apply last.
-  const childEnv = prepareChildEnv(entry, {
+  const cacheEnv: NodeJS.ProcessEnv = {
     ...baseEnv,
-    [FS_MODULE_CACHE_PATH_ENV_KEY]: join(persistentCacheRoot || scratchDir, cacheDirectory),
-  });
+    [FS_MODULE_CACHE_ROOT_ENV_KEY]: join(persistentCacheRoot || scratchDir, cacheDirectory),
+  };
+  // Legacy shard callers supplied the archive root through PATH. With ROOT,
+  // PATH instead belongs to a caller that explicitly selected a final leaf.
+  if (!configuredCacheRoot) {
+    delete cacheEnv[FS_MODULE_CACHE_PATH_ENV_KEY];
+  }
+  const childEnv = prepareChildEnv(entry, cacheEnv);
   if (options.runtime) {
     childEnv.OPENCLAW_VITEST_RUNTIME = options.runtime;
   }
@@ -246,22 +281,23 @@ export function clonePersistentCacheSlots(root: string | undefined, concurrency:
   if (!root || concurrency <= 1) {
     return 0;
   }
-  const seed = join(root, "vitest-cache-0");
-  if (!existsSync(seed)) {
-    return 0;
-  }
-
   let clonedSlots = 0;
-  for (let cacheSlot = 1; cacheSlot < concurrency; cacheSlot += 1) {
-    const destination = join(root, `vitest-cache-${cacheSlot}`);
-    rmSync(destination, { force: true, recursive: true });
-    // Clone before workers start. Reflinks make the common Linux path cheap;
-    // unsupported filesystems transparently fall back to a regular copy.
-    cpSync(seed, destination, {
-      mode: constants.COPYFILE_FICLONE,
-      recursive: true,
-    });
-    clonedSlots += 1;
+  for (const prefix of ["vitest-cache", "vitest-cache-bun"]) {
+    const seed = join(root, `${prefix}-0`);
+    if (!existsSync(seed)) {
+      continue;
+    }
+    for (let cacheSlot = 1; cacheSlot < concurrency; cacheSlot += 1) {
+      const destination = join(root, `${prefix}-${cacheSlot}`);
+      rmSync(destination, { force: true, recursive: true });
+      // Clone before workers start. Reflinks make the common Linux path cheap;
+      // unsupported filesystems transparently fall back to a regular copy.
+      cpSync(seed, destination, {
+        mode: constants.COPYFILE_FICLONE,
+        recursive: true,
+      });
+      clonedSlots += 1;
+    }
   }
   return clonedSlots;
 }
@@ -272,7 +308,10 @@ function relayChildStream(stream: Readable, label: string) {
   const decoder = new StringDecoder("utf8");
   let pending = "";
   const writeLine = (line: string) => {
-    if (!process.stdout.write(`[shard:${label}] ${line}\n`)) {
+    // Actions only parses workflow commands at the start of a line.
+    const workflowCommand = /^::(?:error|warning|notice|group|endgroup)(?: .*?)?::/u.test(line);
+    const output = workflowCommand ? line : `[shard:${label}] ${line}`;
+    if (!process.stdout.write(`${output}\n`)) {
       stream.pause();
       process.stdout.once("drain", () => stream.resume());
     }
@@ -486,19 +525,26 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
     console.log(
       `[shard:resources] logicalCpuCount=${hostResources.logicalCpuCount} totalMemoryBytes=${hostResources.totalMemoryBytes} requested plans=${requestedConcurrency} admitted plans=${concurrency}`,
     );
+    reportCiResourceSnapshot("start");
   }
-  const hasMeasuredHeadroom =
+  const measuredHost =
     hostResources !== null &&
     !isConstrainedCiCheckHost(hostResources) &&
     concurrency === 1 &&
     baseEnv.RUNNER_ENVIRONMENT === "self-hosted" &&
-    baseEnv.FROZEN_TARGET !== "true";
+    baseEnv.FROZEN_TARGET !== "true"
+      ? hostResources
+      : null;
   const admittedPlans = plans.map((entry): ShardPlan => {
     if (entry.kind !== "group" || entry.plan.fallbackMaxWorkers === undefined) {
       return entry;
     }
     const fallback = parsePositiveInt(entry.plan.fallbackMaxWorkers, "Fallback worker limit");
-    if (hasMeasuredHeadroom) {
+    const minTotalMemoryBytes =
+      entry.plan.minTotalMemoryBytes === undefined
+        ? 0
+        : parsePositiveInt(entry.plan.minTotalMemoryBytes, "Worker memory floor");
+    if (measuredHost && measuredHost.totalMemoryBytes >= minTotalMemoryBytes) {
       return entry;
     }
     return {
@@ -512,7 +558,8 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
     };
   });
   const scratchDir = options.scratchDir ?? mkdtempSync(join(tmpdir(), "openclaw-node-shard-"));
-  const persistentCacheRoot = baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
+  const persistentCacheRoot =
+    baseEnv[FS_MODULE_CACHE_ROOT_ENV_KEY]?.trim() || baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
   const nodeCompileCacheRoot = baseEnv[NODE_COMPILE_CACHE_PATH_ENV_KEY]?.trim();
   const clonedCacheSlots = clonePersistentCacheSlots(persistentCacheRoot, concurrency);
   if (clonedCacheSlots > 0) {
@@ -590,6 +637,20 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
               cacheSlot,
               runtime,
             });
+            if (selection.includeAfterShard) {
+              childEnv.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE =
+                childEnv.OPENCLAW_VITEST_INCLUDE_FILE;
+              const includePatterns = entry.kind === "group" ? entry.plan.includePatterns : null;
+              if (includePatterns?.length) {
+                // Tier selection precedes native sharding; runtime membership follows it.
+                const includeFile = join(scratchDir, `node-test-pre-shard-include-${index}.json`);
+                writeFileSync(includeFile, JSON.stringify(includePatterns), "utf8");
+                childEnv.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
+              } else {
+                delete childEnv.OPENCLAW_VITEST_INCLUDE_FILE;
+              }
+            }
+            Object.assign(childEnv, selection.env);
             const timingKey = entry.kind === "group" ? (entry.timingKey ?? entry.name) : entry.name;
             const timingPrefix =
               runtime === "bun" ? "bun:" : selection.includePatterns ? "node-subset:" : "";
@@ -649,6 +710,9 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
     try {
       await context?.workerRun.dispose();
     } finally {
+      if (hostResources) {
+        reportCiResourceSnapshot("end");
+      }
       process.off("SIGINT", onSignal);
       process.off("SIGTERM", onSignal);
       if (interrupted && context) {

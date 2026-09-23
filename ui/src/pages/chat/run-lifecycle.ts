@@ -3,6 +3,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { redactToolDetail } from "../../lib/browser-redact.ts";
+import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   reconcileSessionRunTerminal,
@@ -17,9 +18,11 @@ import {
   isUiGlobalSessionKey,
   resolveUiGlobalAliasAgentId,
   resolveUiSelectedSessionAgentId,
+  resolveUiConversationIdentity,
   uiSessionRowMatchesSelectedChat,
   type UiSessionDefaultsHost,
 } from "../../lib/sessions/session-key.ts";
+import { requestChatAbort, type ChatAbortRequestResult } from "./chat-abort-request.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { formatConnectError } from "./connect-error.ts";
@@ -39,6 +42,12 @@ import type {
 import { resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
 
 export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
+
+export type ChatHistoryRunObservation = {
+  runId: string;
+  sessionId: string;
+  isCurrent: () => boolean;
+};
 
 export type ChatRunError = {
   kind?: "auth_refresh";
@@ -122,6 +131,10 @@ type ChatAbortRunState = SessionScopeHost & {
   chatRunSessionAbortable?: boolean;
   lastError?: string | null;
   chatError?: string | null;
+  chatRunError?: ChatRunError | null;
+  chatQueue?: readonly ChatQueueItem[];
+  lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
+  requestUpdate?: () => void;
   /** Reloads history and the authoritative session row. */
   refreshCurrentChat?: () => Promise<void>;
 };
@@ -130,6 +143,7 @@ type ChatAbortIntentBase = {
   sourceClient: GatewayBrowserClient;
   sessionKey: string;
   agentId?: string;
+  readonly conversation: Readonly<ReturnType<typeof resolveUiConversationIdentity>>;
 };
 
 export type PendingChatAbort = ChatAbortIntentBase & {
@@ -268,74 +282,55 @@ function queuedSessionAbortParams(
 
 type ChatAbortOptions = { preserveDraft?: boolean };
 
-type ChatAbortRequestResult = { ok: true; noActiveRun: boolean } | { ok: false; error: unknown };
-
-/**
- * Only an explicit Gateway "nothing to abort" answer counts: chat.abort
- * reports `aborted: false`, sessions.abort reports `status: "no-active-run"`.
- * Any other shape keeps the run owned so live events settle it as before.
- */
-function readNoActiveRunResponse(response: unknown): boolean {
-  if (!response || typeof response !== "object") {
-    return false;
-  }
+function ownsChatAbortIntent(state: ChatAbortRunState, intent: ChatAbortIntent): boolean {
+  const conversation = resolveUiConversationIdentity(state, state.sessionKey);
+  const pendingRunId = state.chatQueue?.find(
+    (item) => item.sendState === "sending" && item.sendRunId,
+  )?.sendRunId;
+  const runId = state.chatRunId ?? pendingRunId ?? null;
+  const terminal = state.lastLocalTerminalReconcile;
+  const terminalConversation = terminal
+    ? resolveUiConversationIdentity(state, terminal.sessionKey, terminal.agentId)
+    : undefined;
+  const ownsTerminal =
+    intent.runId !== null &&
+    runId === null &&
+    terminal?.runId === intent.runId &&
+    terminalConversation?.sessionKey === intent.conversation.sessionKey &&
+    terminalConversation.agentId === intent.conversation.agentId;
   return (
-    ("aborted" in response && response.aborted === false) ||
-    ("status" in response && response.status === "no-active-run")
+    state.client === intent.sourceClient &&
+    conversation.sessionKey === intent.conversation.sessionKey &&
+    conversation.agentId === intent.conversation.agentId &&
+    (runId === intent.runId || ownsTerminal) &&
+    scopedAgentParamsForSession(state, state.sessionKey).agentId === intent.agentId
   );
 }
 
-async function requestChatAbort(
-  client: GatewayBrowserClient,
+// Error publication and follow-up reads remain with the captured Stop intent.
+async function settleChatAbortResponse(
+  state: ChatAbortRunState,
   intent: ChatAbortIntent,
-): Promise<ChatAbortRequestResult> {
-  try {
-    let response: unknown;
-    if (intent.runId !== null) {
-      if (intent.sessionAbortable) {
-        // Recovered embedded runs keep their exact run identity on the
-        // session-owned abort path; sessions.abort resolves the embedded owner
-        // by run id so a delayed Stop cannot abort replacement work.
-        response = await client.request("sessions.abort", {
-          key: intent.sessionKey,
-          ...(intent.agentId ? { agentId: intent.agentId } : {}),
-          runId: intent.runId,
-        });
+  result: ChatAbortRequestResult,
+): Promise<boolean> {
+  if (ownsChatAbortIntent(state, intent)) {
+    if (!result.ok) {
+      const message = formatConnectError(result.error);
+      if (state.chatRunId) {
+        setChatError(state, message);
       } else {
-        response = await client.request("chat.abort", {
-          sessionKey: intent.sessionKey,
-          ...(intent.agentId ? { agentId: intent.agentId } : {}),
-          runId: intent.runId,
-        });
+        setChatRunError(state, message, intent.runId ?? undefined);
       }
-    } else {
-      // A channel reply can be active without a browser-local chat run ID.
-      // Session abort resolves the selected persisted session's exact run.
-      response = await client.request("sessions.abort", {
-        key: intent.sessionKey,
-        ...(intent.agentId ? { agentId: intent.agentId } : {}),
-        ...(intent.clearQueued ? { clearQueued: true } : {}),
-      });
+      state.requestUpdate?.();
+    } else if (result.warning) {
+      setChatRunError(state, result.warning, intent.runId ?? undefined);
+      state.requestUpdate?.();
+    } else if (result.noActiveRun && state.connected) {
+      // Only the refreshed owner may retire a run that is still finalizing.
+      await state.refreshCurrentChat?.();
     }
-    return { ok: true, noActiveRun: readNoActiveRunResponse(response) };
-  } catch (err) {
-    return { ok: false, error: err };
   }
-}
-
-// Non-abortable runs can still be finalizing; only the refreshed session owner
-// may retire them. Check the captured UI scope before starting that refresh.
-async function settleNoopAbort(state: ChatAbortRunState, intent: ChatAbortIntent): Promise<void> {
-  if (
-    !state.connected ||
-    state.client !== intent.sourceClient ||
-    state.sessionKey !== intent.sessionKey ||
-    (state.chatRunId ?? null) !== intent.runId ||
-    scopedAgentParamsForSession(state, state.sessionKey).agentId !== intent.agentId
-  ) {
-    return;
-  }
-  await state.refreshCurrentChat?.();
+  return result.ok;
 }
 
 function currentChatAbortIntent(
@@ -347,6 +342,7 @@ function currentChatAbortIntent(
   const base = {
     sourceClient,
     sessionKey: state.sessionKey,
+    conversation: resolveUiConversationIdentity(state, state.sessionKey),
     ...scopedAgentParamsForSession(state, state.sessionKey),
   };
   return runId
@@ -365,13 +361,7 @@ async function abortChatRun(state: ChatAbortRunState): Promise<void> {
   }
   const intent = currentChatAbortIntent(state, client);
   const result = await requestChatAbort(client, intent);
-  if (!result.ok) {
-    setChatError(state, formatConnectError(result.error));
-    return;
-  }
-  if (result.noActiveRun) {
-    await settleNoopAbort(state, intent);
-  }
+  await settleChatAbortResponse(state, intent, result);
 }
 
 export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boolean> {
@@ -393,18 +383,13 @@ export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boole
     true,
   ).abort;
   if (!access.allowed) {
-    setChatError(host, access.reason);
+    if (ownsChatAbortIntent(host, intent)) {
+      setChatError(host, access.reason);
+    }
     return false;
   }
   const result = await requestChatAbort(client, intent);
-  if (result.ok) {
-    if (result.noActiveRun) {
-      await settleNoopAbort(host, intent);
-    }
-    return true;
-  }
-  setChatError(host, formatConnectError(result.error));
-  return false;
+  return settleChatAbortResponse(host, intent, result);
 }
 
 export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptions): Promise<void> {
@@ -506,11 +491,8 @@ function clearRunIndicators(host: RunLifecycleHost, runId?: string | null) {
 }
 
 function sessionKeysFor(host: RunLifecycleHost, options: ReconcileOptions): Set<string> {
-  const keys = new Set<string>();
   const primary = toSessionKey(options.sessionKey) ?? host.sessionKey;
-  if (primary) {
-    keys.add(primary);
-  }
+  const keys = new Set(primary ? [primary] : []);
   if (uiSessionRowMatchesSelectedChat(host, "global", primary)) {
     keys.add("global");
   }
@@ -711,7 +693,11 @@ export function reconcileChatRunAfterSessionStatePublication(host: RunLifecycleH
 export function reconcileChatRunFromSessionRow(
   host: RunLifecycleHost,
   row: GatewaySessionRow,
-  options: { publishRunStatus?: boolean } = {},
+  options: {
+    publishRunStatus?: boolean;
+    // Null marks history with no usable run observation.
+    historyRun?: ChatHistoryRunObservation | null;
+  } = {},
 ): boolean {
   if (!uiSessionRowMatchesSelectedChat(host, row.key, host.sessionKey, row.agentId)) {
     return false;
@@ -736,6 +722,28 @@ export function reconcileChatRunFromSessionRow(
     return false;
   }
   const runId = host.chatRunId;
+  if (runId && row.lastRunId !== runId && (row.lastRunId || options.historyRun !== undefined)) {
+    const historyRun = options.historyRun;
+    if (
+      row.hasActiveRun !== false ||
+      !historyRun ||
+      historyRun.runId !== runId ||
+      historyRun.sessionId !== row.sessionId ||
+      !historyRun.isCurrent()
+    ) {
+      return false;
+    }
+    // A fresh idle read can retire custody without identifying this run's outcome.
+    // An identity-less response still cannot retire a run that began after issuance.
+    reconcileChatRunLifecycle(host, {
+      runId,
+      clearLocalRun: true,
+      clearChatStream: true,
+      clearToolStreamForRun: true,
+      clearRunStatus: true,
+    });
+    return true;
+  }
   let errorMessage: string | undefined;
   if (runId && row.lastRunId === runId && (row.status === "failed" || row.status === "timeout")) {
     // Session publication can beat (or replace) chat.error. Show its diagnostic

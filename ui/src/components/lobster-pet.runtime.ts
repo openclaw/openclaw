@@ -6,7 +6,7 @@
 // every new session hatches a slightly different lobster.
 import { LitElement, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
-import type { ThemeCritterId } from "../../../packages/gateway-protocol/src/theme.ts";
+import type { ThemeArtwork } from "../../../packages/gateway-protocol/src/theme.ts";
 import { isLobsterDay } from "../../../src/shared/lobster-day.js";
 import { patchSettings } from "../app/settings.ts";
 import * as dex from "./lobster-dex.ts";
@@ -37,7 +37,8 @@ class LobsterPet extends LitElement {
 
   @property({ attribute: false }) visitsEnabled = true;
   @property({ attribute: false }) residentEnabled = true;
-  @property({ attribute: false }) critters: readonly ThemeCritterId[] | undefined;
+  @property({ attribute: false }) critters: readonly string[] | undefined;
+  @property({ attribute: false }) critterArtwork: ThemeArtwork["critters"];
   @property({ attribute: false }) floorEnabled = false;
   @property({ attribute: false }) runOutcome: contract.LobsterRunOutcome = "ok";
   @property({ attribute: false }) soundsEnabled = false;
@@ -78,7 +79,11 @@ class LobsterPet extends LitElement {
   // Passers and the bottle run on their own clocks beside the resident.
   private readonly traffic = new LobsterLedgeTraffic(this, {
     visitsEnabled: () => this.visitsEnabled && !this.dismissed,
-    passerOptions: () => ({ critters: this.critters, strangers: this.residentEnabled }),
+    passerOptions: () => ({
+      critters: this.critters,
+      strangers: this.residentEnabled,
+      critterArtwork: this.critterArtwork,
+    }),
     onPasserStart: (plan) => {
       this.passerAnchor =
         plan.floor && this.floorEnabled && this.geometry.scene.floor ? "floor" : "top";
@@ -702,6 +707,7 @@ class LobsterPet extends LitElement {
       floorEnabled: this.floorEnabled,
       visitsEnabled: this.visitsEnabled,
       residentEnabled: this.residentEnabled,
+      critterArtwork: this.critterArtwork,
       dismissed: this.dismissed,
       passer: this.traffic.passer
         ? {

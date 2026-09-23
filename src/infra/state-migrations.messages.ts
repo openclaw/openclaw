@@ -108,12 +108,17 @@ export class DoctorStateMigrationRefusalError extends Error {
 
   constructor(stepReceipts: readonly LegacyStateMigrationStepReceipt[]) {
     const refused = stepReceipts.filter((receipt) => receipt.outcome === "refused");
+    const isBlocked = (receipt: LegacyStateMigrationStepReceipt) =>
+      receipt.refusal?.code === "blocked-by-prior-refusal" ||
+      receipt.refusal?.code === "blocked-by-agent-database-refusal";
     const failureFacts = normalizeUpdateFailureFacts(
-      refused.flatMap((receipt) =>
-        receipt.refusal
-          ? [{ check: receipt.id, code: receipt.refusal.code, message: receipt.refusal.message }]
-          : [],
-      ),
+      refused
+        .toSorted((left, right) => Number(isBlocked(left)) - Number(isBlocked(right)))
+        .flatMap((receipt) =>
+          receipt.refusal
+            ? [{ check: receipt.id, code: receipt.refusal.code, message: receipt.refusal.message }]
+            : [],
+        ),
     );
     const onlyAgentOwnershipRefusals =
       refused.length > 0 &&

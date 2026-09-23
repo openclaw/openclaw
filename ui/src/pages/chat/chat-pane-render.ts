@@ -12,10 +12,6 @@ import { personActivityRouting } from "../../components/person-activity-link.ts"
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
 import { isModelIndependentChatCommand } from "../../lib/chat/commands.ts";
-import {
-  resolveControlUiFollowUpMode,
-  resolveControlUiServerQueueMode,
-} from "../../lib/chat/follow-up-mode.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   pickFreshestObserverDigest,
@@ -49,7 +45,9 @@ import {
   initialHistorySubmitState,
   resolveAssistantAttachmentAuthToken,
   resolveChatArtifactDownload,
+  resolveChatPaneFollowUpMode,
 } from "./chat-pane-state.ts";
+import { ChatProviderReviewController } from "./chat-provider-review-controller.ts";
 import { createChatQuestionActions } from "./chat-question-actions.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
 import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
@@ -73,6 +71,10 @@ import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
 export class ChatPane extends ChatPaneLayoutRender {
+  private readonly providerReview = new ChatProviderReviewController(
+    this,
+    () => this.state ?? undefined,
+  );
   private presentationUserId: string | null = null;
   // Stable absent inputs let catalog renders reuse the transcript cache.
   private readonly emptyTranscriptItems: [] = [];
@@ -83,6 +85,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
     }
     const selectedSession = selectedChatSessionRow(state);
+    const providerPaused = Boolean(selectedSession?.providerReview);
     const readTarget = this.resolveChatReadTarget();
     const progressPresentation = this.progressCardPresentation;
     const selectedSessionArchived = this.isCurrentSessionArchived(state);
@@ -116,18 +119,10 @@ export class ChatPane extends ChatPaneLayoutRender {
       layout: state.sidebarLayout,
       paneWidth: this.paneWidth,
     });
-    state.chatFollowUpMode = resolveControlUiFollowUpMode(
-      state.settings.chatFollowUpMode,
-      resolveControlUiServerQueueMode(
-        this.context.runtimeConfig.state.configSnapshot?.runtimeConfig,
-        {
-          configNeedsApply: this.context.runtimeConfig.state.configNeedsApply,
-          effectiveMode: state.chatEffectiveQueueMode,
-          sessionMetadataLoaded:
-            selectedSession !== undefined || state.chatEffectiveQueueMode !== undefined,
-          sessionMode: state.chatQueueModeOverride,
-        },
-      ),
+    state.chatFollowUpMode = resolveChatPaneFollowUpMode(
+      state,
+      selectedSession,
+      this.context.runtimeConfig.state,
     );
     const currentAgentId = resolveChatAgentId(state);
     const { catalogKey, chatProps } = resolveChatMessageAccess(state);
@@ -167,6 +162,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       state.connected &&
       !sessionParticipationBlocked &&
       hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null);
+    this.providerReview.sync(canDismissProgressCard && !selectedSessionArchived);
     const onDismissProgressCard = canDismissProgressCard
       ? (card: ProgressCard) =>
           void this.progressCard
@@ -334,6 +330,7 @@ export class ChatPane extends ChatPaneLayoutRender {
     const initialHistoryUnavailable = !catalogKey && isInitialChatHistoryUnavailable(state);
     const composerAvailability = {
       canSend:
+        !providerPaused &&
         sessionDisabledBanner?.kind !== "composer-replacement" &&
         (catalogKey
           ? this.catalogSession?.canContinue === true
@@ -413,8 +410,10 @@ export class ChatPane extends ChatPaneLayoutRender {
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
       providerPolicyNotice: catalogKey ? null : state.providerPolicyNotice,
+      providerReviewNotice: this.providerReview.notice(),
       progressCard: progressPresentation?.card ?? null,
       progressCardIdentity: progressPresentation?.identity,
+      progressCardLifetime: progressPresentation?.lifetime,
       gatewayScope: gatewayPresentationScope(this.context.gateway),
       progressCardInitialLoading: this.progressCardInitialLoading,
       progressCardRefresh,
@@ -501,9 +500,10 @@ export class ChatPane extends ChatPaneLayoutRender {
       modelSetupRequired:
         modelSetupRequired && !selectedSessionArchived && !restartRecoveryTombstoned,
       onModelSetup: () => this.context.navigate("model-setup"),
-      error: state.lastError,
+      error: providerPaused ? null : state.lastError,
       diskSpace: placementComposer.diskSpace,
-      runError: catalogKey ? null : (state.chatRunError ?? placementComposer.runError),
+      runError:
+        catalogKey || providerPaused ? null : (state.chatRunError ?? placementComposer.runError),
       inlineApproval,
       approvalBusy: overlays?.snapshot?.approvalBusy,
       approvalCanGrant: overlays?.snapshot?.approvalCanGrant ?? false,
@@ -601,7 +601,11 @@ export class ChatPane extends ChatPaneLayoutRender {
                   submissionAction,
                 ),
       onUseSystemDefaultMicrophone: state.realtimeTalkUseSystemDefault ?? undefined,
-      onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
+      onToggleRealtimeTalk: () => {
+        if (!providerPaused) {
+          void state.toggleRealtimeTalk();
+        }
+      },
       onSelectRealtimeVoice: (voice) => void state.selectRealtimeTalkVoice(voice),
       onToggleRealtimeCamera: () => void state.toggleRealtimeTalkCamera(),
       onSwitchRealtimeCamera: () => void state.switchRealtimeTalkCamera(),
@@ -615,10 +619,11 @@ export class ChatPane extends ChatPaneLayoutRender {
       },
       onAbort: sessionActionCallbacks.onAbort,
       onQueueRemove: state.removeQueuedMessage,
-      onQueueRetry: (id) => void state.retryQueuedChatMessage(id),
-      onQueueSteer: sessionParticipationBlocked
-        ? undefined
-        : (id) => void state.steerQueuedChatMessage(id),
+      onQueueRetry: providerPaused ? undefined : (id) => void state.retryQueuedChatMessage(id),
+      onQueueSteer:
+        sessionParticipationBlocked || providerPaused
+          ? undefined
+          : (id) => void state.steerQueuedChatMessage(id),
       onQueueMove: sessionParticipationBlocked ? undefined : state.moveQueuedChatMessage,
       queuedEdit: createChatPaneQueuedEditProps(state, sessionParticipationBlocked),
       goalRecovery: chatGoalRecovery(state),
@@ -674,12 +679,13 @@ export class ChatPane extends ChatPaneLayoutRender {
       chatMessageMaxWidth: state.settings.chatMessageMaxWidth,
       branding: this.context?.theme.branding,
       assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state as never),
-      resolveArtifactDownload: (params) => resolveChatArtifactDownload(state, params),
+      resolveArtifactDownload: (params, signal) =>
+        resolveChatArtifactDownload(state, params, signal),
       basePath: state.basePath,
       sessionPublicOrigin: markdownSessionPublicOrigin(this.context),
       resourceBasePath: state.resourceBasePath,
     };
-    return this.renderChatPaneLayout({
+    return html`${this.renderChatPaneLayout({
       state,
       selectedSession,
       currentAgentId,
@@ -695,6 +701,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       workspaceGit: selectedAgent?.workspaceGit === true,
       openPanelSlot,
       closePanelSlot,
-    });
+    })}${this.providerReview.dialog()}`;
   }
 }

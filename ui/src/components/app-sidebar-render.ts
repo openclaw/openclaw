@@ -3,11 +3,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { html as staticHtml, literal } from "lit/static-html.js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
-import {
-  serializeSidebarEntry,
-  type NavigationRouteId,
-  type SidebarZoneEntry,
-} from "../app-navigation.ts";
+import { serializeSidebarEntry, titleForRoute, type SidebarZoneEntry } from "../app-navigation.ts";
 import { isRouteId, isSessionRouteId } from "../app-route-paths.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { NativeGateway, NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
@@ -57,6 +53,7 @@ import {
 import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
+import { renderSidebarReorderMenu } from "./sidebar-reorder.ts";
 
 export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   activePluginTabId: string;
@@ -583,6 +580,14 @@ export function renderAppSidebarZoneEntry(
             ? host.renderPinnedSidebarSession(sessionRows.get(entry.key)!)
             : nothing;
   const draggable = entry.type === "route" || entry.type === "plugin";
+  const label =
+    entry.type === "route"
+      ? titleForRoute(entry.route)
+      : entry.type === "session"
+        ? (sessionRows.get(entry.key)?.label ?? entry.key)
+        : (pluginTab?.label ??
+          host.pluginNavigation().find((item) => item.key === entry.key)?.value.label ??
+          entry.key);
   return html`
     <div
       class="sidebar-zone-entry ${dropPosition ? `sidebar-zone-entry--drop-${dropPosition}` : ""} ${
@@ -605,6 +610,15 @@ export function renderAppSidebarZoneEntry(
       @drop=${(event: DragEvent) => host.sessionOrganizer.handleSidebarZoneDrop(event, serialized)}
     >
       ${content}
+      ${renderSidebarReorderMenu({
+        label,
+        kind: "entry",
+        onMove: async (target, position) => {
+          host.sessionOrganizer.writeSidebarEntryAt(serialized, target, position);
+          host.requestUpdate();
+          await host.updateComplete;
+        },
+      })}
     </div>
   `;
 }
@@ -629,7 +643,7 @@ function renderAppSidebarPluginTab(host: AppSidebarRenderHost, tab: GatewayContr
 function renderAppSidebarAttention(host: AppSidebarRenderHost) {
   return html`<openclaw-sidebar-attention
     .activeRouteId=${host.activeRouteId}
-    .onNavigate=${(routeId: NavigationRouteId) => host.onNavigate?.(routeId)}
+    .onNavigate=${host.onNavigate}
     .watchUpdateProgress=${host.watchUpdateProgress}
   ></openclaw-sidebar-attention>`;
 }

@@ -192,7 +192,11 @@ export function renderSkills(props: SkillsProps) {
                         ? t("skillsPage.disconnected")
                         : t("skillsPage.empty"),
                     )
-                  : groups.map((group) => renderSkillGroup(group, props))
+                  : repeat(
+                      groups,
+                      (group) => group.id,
+                      (group) => renderSkillGroup(group, props),
+                    )
             }
           `,
       { wide: true, carapace: props.surface === "discovery" },
@@ -307,7 +311,7 @@ function renderClawHubDetailDialog(props: SkillsProps) {
         <div class="skill-reader-dialog__body clawhub-skill-detail__body">
           ${
             props.clawhubDetailLoading
-              ? html`<div class="muted">${t("common.loading")}</div>`
+              ? html`<div class="muted" role="status">${t("common.loading")}</div>`
               : props.clawhubDetailError
                 ? html`<div class="callout danger skill-reader-dialog__error" role="alert">
                     <span aria-hidden="true">${icons.alertTriangle}</span>
@@ -382,7 +386,7 @@ function renderClawHubDetailDialog(props: SkillsProps) {
                         </button>
                       </div>
                     `
-                  : html`<div class="muted">${t("skillsPage.notFound")}</div>`
+                  : html`<div class="muted" role="status">${t("skillsPage.notFound")}</div>`
           }
         </div>
       </div>
@@ -553,7 +557,10 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
 
           ${
             message
-              ? html`<div class="callout ${message.kind === "error" ? "danger" : "success"}">
+              ? html`<div
+                  class="callout ${message.kind === "error" ? "danger" : "success"}"
+                  role=${message.kind === "error" ? "alert" : "status"}
+                >
                   ${formatUiExternalText(message.message)}
                 </div>`
               : nothing
@@ -562,7 +569,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
             skill.primaryEnv
               ? html`
                   <div style="display: grid; gap: 8px;">
-                    <div class="field">
+                    <label class="field">
                       <span
                         >${t("skillsPage.apiKey")}
                         <span class="muted" style="font-weight: normal; font-size: 0.88em;"
@@ -577,7 +584,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
                         @input=${(e: Event) =>
                           props.onEdit(skill.skillKey, (e.target as HTMLInputElement).value)}
                       />
-                    </div>
+                    </label>
                     ${(() => {
                       const href = safeExternalHref(skill.homepage);
                       return href
@@ -689,9 +696,9 @@ function renderInstalledSkillCard(skill: SkillStatusEntry, props: SkillsProps) {
   if (content === undefined) {
     const error = props.skillCardErrors[skill.skillKey];
     if (error) {
-      return html`<div class="callout danger">${error}</div>`;
+      return html`<div class="callout danger" role="alert">${error}</div>`;
     }
-    return html`<div class="muted" style="font-size: 13px;">
+    return html`<div class="muted" role="status" style="font-size: 13px;">
       ${
         props.skillCardLoadingKey === skill.skillKey
           ? t("skillsPage.loadingSkillCard")

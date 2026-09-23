@@ -1,6 +1,6 @@
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
-/** Owns subagent registration and queued collector launch transitions. */
+import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
@@ -27,14 +27,13 @@ import { bindSwarmRunReservation } from "../swarm/swarm-scheduler.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { registerRequiredQueuedSubagent } from "./subagent-registry-queued-registration.js";
-import { createSubagentRegistrationRecord } from "./subagent-registry-run-launch-record.js";
+import {
+  createSubagentRegistrationRecord,
+  type RegisterSubagentRunParams,
+} from "./subagent-registry-run-launch-record.js";
 import { SubagentRecoveryManager } from "./subagent-registry-run-recovery.js";
 import { captureQueuedSubagentTaskOwner } from "./subagent-registry-task-owner.js";
-import type {
-  RegisterSubagentRunOptions,
-  RegisterSubagentRunParams,
-  SubagentRunRecord,
-} from "./subagent-registry.types.js";
+import type { RegisterSubagentRunOptions, SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   compareSubagentRunGeneration,
   nextSubagentRunGeneration,
@@ -64,8 +63,7 @@ function resolveSwarmWaitOwnerSessionKeys(
   return ownerSessionKeys;
 }
 
-export type { RegisterSubagentRunParams } from "./subagent-registry.types.js";
-
+/** Owns subagent registration and queued collector launch transitions. */
 export class SubagentLaunchManager extends SubagentRecoveryManager {
   private findRunByIdentity(runId: string): SubagentRunRecord | undefined {
     return (
@@ -131,6 +129,14 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
           },
           cfg,
         );
+    const completionAuthority = entry.collect
+      ? undefined
+      : captureOperatorToolGatewayContinuationContext();
+    if (completionAuthority?.operatorAuthority) {
+      subagentRuns.bindCompletionAuthority(entry, completionAuthority);
+    } else {
+      completionAuthority?.release();
+    }
     this.options.runs.set(runId, entry);
     bindGatewayContextResolver(entry, registerParams.gatewayContextResolver);
     const killReconciliationSnapshots = this.markOlderKillReconciliationsSuperseded(entry);
@@ -155,7 +161,11 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     const bindRegistrationReservation = () => {
       bindSwarmRunReservation(entry.schedulerSlotId ?? runId, entry, () => {
         if (this.options.runs.get(entry.runId) === entry) {
-          emitSessionLifecycleEvent({ sessionKey: entry.childSessionKey, reason: "run-capacity" });
+          emitSessionLifecycleEvent({
+            sessionKey: entry.childSessionKey,
+            reason: "run-capacity",
+            scope: "runtime",
+          });
         }
       });
     };
@@ -204,6 +214,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       this.options.persistOrThrow(...registeredRunIds);
     } catch (error) {
       rollbackRegistration();
+      subagentRuns.releaseCompletionAuthority(entry);
       throw error;
     }
     if (registerParams.taskRowOwnership !== "gateway_best_effort") {
@@ -237,6 +248,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
             activateRegistrationLifecycle();
             throw rollbackError;
           }
+          subagentRuns.releaseCompletionAuthority(entry);
           throw error;
         }
       }

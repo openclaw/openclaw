@@ -222,19 +222,30 @@ describe("selected-target state initialization", () => {
     expect(fs.readFileSync(filename)).toEqual(before);
   });
 
-  it("refuses failed target Doctor after package staging created a compatible database", async () => {
-    const env = freshEnvironment();
-    const filename = publishTargetDatabase(createTargetDatabase(), env);
-    const before = fs.readFileSync(filename);
-    mocks.doctor.mockResolvedValue({ ...doctorSuccess, exitCode: 1, stderrTail: "Invalid config" });
+  it.each([
+    { label: "nonzero exit", completion: { exitCode: 1 } },
+    { label: "zero-exit timeout", completion: { exitCode: 0, termination: "timeout" } },
+    { label: "zero-exit output limit", completion: { exitCode: 0, outputLimitExceeded: true } },
+  ])(
+    "refuses target Doctor $label after staging created a compatible database",
+    async ({ completion }) => {
+      const env = freshEnvironment();
+      const filename = publishTargetDatabase(createTargetDatabase(), env);
+      const before = fs.readFileSync(filename);
+      mocks.doctor.mockResolvedValue({
+        ...doctorSuccess,
+        ...completion,
+        stderrTail: "Invalid config",
+      });
 
-    await expect(initializeUpdateStateFromTarget(initializationOptions(env))).rejects.toThrow(
-      "Invalid config",
-    );
+      await expect(initializeUpdateStateFromTarget(initializationOptions(env))).rejects.toThrow(
+        "Invalid config",
+      );
 
-    expect(mocks.doctor).toHaveBeenCalledOnce();
-    expect(fs.readFileSync(filename)).toEqual(before);
-  });
+      expect(mocks.doctor).toHaveBeenCalledOnce();
+      expect(fs.readFileSync(filename)).toEqual(before);
+    },
+  );
 
   it("refuses a newer database created during staging without changing it", async () => {
     const env = freshEnvironment();

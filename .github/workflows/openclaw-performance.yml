@@ -99,7 +99,7 @@ env:
 jobs:
   resolve_target:
     name: Resolve target ref
-    if: ${{ github.event_name == 'schedule' || inputs.mode != 'vitest-pair' }}
+    if: ${{ (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name == 'schedule' || inputs.mode != 'vitest-pair') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:

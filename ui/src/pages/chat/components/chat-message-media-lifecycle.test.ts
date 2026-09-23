@@ -131,9 +131,13 @@ function createAvailabilityPane(source: string, authToken: string, policyKey?: s
 }
 
 describe("chat media resource lifecycle", () => {
-  it.each([false, true])(
-    "discards late transcript images and reauthorizes changed sessions or connections with managed URL=%s",
-    async (withManagedUrl) => {
+  it.each([
+    { withManagedUrl: false, http: false },
+    { withManagedUrl: true, http: false },
+    { withManagedUrl: false, http: true },
+  ])(
+    "discards late transcript images and reauthorizes changed sessions or connections: $withManagedUrl/$http",
+    async ({ withManagedUrl, http }) => {
       const artifactId = `transcript-image-${crypto.randomUUID()}`;
       const mediaId = crypto.randomUUID();
       const imageSource = "data:image/png;base64,cG5n";
@@ -142,7 +146,14 @@ describe("chat media resource lifecycle", () => {
       const resolveArtifactDownload = vi
         .fn()
         .mockReturnValueOnce(oldImage.promise)
-        .mockResolvedValue({ url: imageSource });
+        .mockResolvedValue(
+          http
+            ? {
+                url: "/api/artifacts/download/connection/ticket",
+                blob: new Blob(["png"], { type: "image/png" }),
+              }
+            : { url: imageSource },
+        );
       const fetchMock = vi.fn(async (_url: string) => imageResponse());
       vi.stubGlobal("fetch", fetchMock);
       const container = document.createElement("div");
@@ -170,8 +181,10 @@ describe("chat media resource lifecycle", () => {
       expect(container.querySelector("img")?.getAttribute("src")).toBe(blobUrl);
       oldImage.resolve({ url: "data:image/png;base64,b2xk" });
       await vi.advanceTimersByTimeAsync(0);
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(fetchMock.mock.calls[0]?.[0]).toBe(imageSource);
+      expect(fetchMock).toHaveBeenCalledTimes(http ? 0 : 1);
+      if (!http) {
+        expect(fetchMock.mock.calls[0]?.[0]).toBe(imageSource);
+      }
       expect(container.querySelector("img")?.getAttribute("src")).toBe(blobUrl);
 
       options.connectionEpoch = 2;
@@ -182,8 +195,10 @@ describe("chat media resource lifecycle", () => {
         { sessionKey: "second-session", artifactId },
         { sessionKey: "second-session", artifactId },
       ]);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      expect(fetchMock.mock.calls[1]?.[0]).toBe(imageSource);
+      expect(fetchMock).toHaveBeenCalledTimes(http ? 0 : 2);
+      if (!http) {
+        expect(fetchMock.mock.calls[1]?.[0]).toBe(imageSource);
+      }
       render(null, container);
     },
   );

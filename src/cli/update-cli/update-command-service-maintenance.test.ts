@@ -13,6 +13,7 @@ import { readScheduledTaskRuntime } from "../../daemon/schtasks-runtime.js";
 import {
   GatewayServiceStopUnsafeError,
   ServiceInspectionError,
+  formatServiceInspectionReason,
 } from "../../daemon/service-inspection-error.js";
 import { readGatewayServiceState, type GatewayService } from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
@@ -24,10 +25,19 @@ import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js"
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
+  collectServiceInspectionFailureFacts,
+  createUpdateCommandFailureResult,
+} from "./update-command-result.js";
+import {
   maybeStopManagedServiceBeforeMutableUpdate,
   revalidateManagedGatewayServiceAfterUpdate,
   type PreManagedServiceStop,
 } from "./update-command-service-maintenance.js";
+import {
+  assertGatewayServiceAdmissionUnchanged,
+  GatewayServiceUpdateOwnershipError,
+  inspectManagedGatewayServiceBeforeUpdate,
+} from "./update-command-service-plan.js";
 
 const { mocks, withServiceHome } =
   await import("./update-command-service-maintenance.test-support.js");
@@ -266,6 +276,87 @@ it.each([
     );
     expect(service.stop).not.toHaveBeenCalled();
   }),
+);
+
+it.each(["systemd-user-bus-unavailable", "service-manager-access-denied", undefined] as const)(
+  "explains lost inspection after admission without claiming identity drift: %s",
+  (reason) =>
+    withServiceHome(async (home) => {
+      mockProcessPlatform("linux");
+      let available = true;
+      const service = createMockGatewayService({
+        readCommand: async () => ({
+          programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
+          environment: { HOME: home },
+        }),
+        readRuntime: async () => {
+          if (!available) {
+            throw reason ? new ServiceInspectionError(reason) : new Error("private-runtime-detail");
+          }
+          return { status: "running", systemd: { managerUid: 2001 } };
+        },
+        isLoaded: async () => true,
+      });
+      mocks.service.mockReturnValue(service);
+      const params = {
+        root: process.cwd(),
+        updateInstallKind: "package" as const,
+        shouldRestart: true,
+        jsonMode: true,
+      };
+      const before = await maybeStopManagedServiceBeforeMutableUpdate({
+        ...params,
+        phase: "inspect",
+      });
+      expect(before.serviceUpdateVerdict?.kind).toBe("owned");
+      available = false;
+      const failure = await maybeStopManagedServiceBeforeMutableUpdate({
+        ...params,
+        phase: "prepare",
+        expectedService: before,
+      }).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(GatewayServiceUpdateOwnershipError);
+      if (!(failure instanceof GatewayServiceUpdateOwnershipError)) {
+        throw new Error("Expected service inspection refusal");
+      }
+      const detail = reason
+        ? formatServiceInspectionReason(reason)
+        : "Gateway service ownership could not be verified because inspection is unavailable.";
+      expect(failure.message).toContain(detail);
+      expect(failure.message).not.toContain("identity changed");
+      expect(failure.message).not.toContain("private-runtime-detail");
+      expect(failure.failureFacts).toEqual([
+        expect.objectContaining({
+          check: "managed-service",
+          code: reason ?? "service-ownership-unverified",
+          message: expect.stringContaining(detail.slice(0, 80)),
+        }),
+      ]);
+      const result = createUpdateCommandFailureResult({
+        mode: "npm",
+        durationMs: 0,
+        admission: true,
+        failure: { cause: failure },
+      });
+      expect(result.reason).toBe("managed-service-preflight");
+      expect(result.failedStep.failureFacts).toEqual(failure.failureFacts);
+
+      const verdict = await inspectManagedGatewayServiceBeforeUpdate({
+        root: params.root,
+        state: await readGatewayServiceState(service),
+      });
+      expect(() => assertGatewayServiceAdmissionUnchanged(before, verdict)).toThrow(detail);
+      if (reason) {
+        expect(collectServiceInspectionFailureFacts(verdict)?.[0]).toMatchObject({
+          code: reason,
+          message: expect.stringContaining(detail.slice(0, 80)),
+        });
+      }
+      expect(service.stop).not.toHaveBeenCalled();
+      expect(service.start).not.toHaveBeenCalled();
+      expect(service.restart).not.toHaveBeenCalled();
+      expect(service.install).not.toHaveBeenCalled();
+    }),
 );
 
 type NativeOfflineCase = {
@@ -732,7 +823,11 @@ it.each([
         refreshDefinition: !protectedCommand,
       });
     } else {
-      await expect(revalidated).rejects.toThrow(/ownership or manager identity changed/);
+      await expect(revalidated).rejects.toThrow(
+        scenario === "unavailable manager"
+          ? /inspection is unavailable/
+          : /ownership or manager identity changed/,
+      );
     }
   }),
 );

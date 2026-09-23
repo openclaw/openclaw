@@ -68,7 +68,7 @@ describe("CommandPalette search", () => {
       }
       throw new Error(`Unexpected method: ${method}`);
     });
-    const { gateway } = createGateway(true, {
+    const { gateway, emit, setConnected } = createGateway(true, {
       methods: ["cron.list"],
       request,
     });
@@ -81,16 +81,25 @@ describe("CommandPalette search", () => {
     );
 
     await enterQuery(palette, "nightly");
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await vi.waitFor(() => expect(palette.textContent).toContain("Nightly invoices"));
     const item = findPaletteOption(palette, "Nightly invoices");
     item?.click();
     expect(palette.onNavigate).toHaveBeenCalledWith("cron");
 
+    await vi.advanceTimersByTimeAsync(60_000);
     await enterQuery(palette, "invoices");
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await vi.waitFor(() => expect(palette.textContent).toContain("Nightly invoices"));
     expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(1);
+
+    emit("cron");
+    await vi.advanceTimersByTimeAsync(200);
+    expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(2);
+    setConnected(false);
+    setConnected(true);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(3);
   });
 
   it.each([false, true])(
@@ -113,12 +122,12 @@ describe("CommandPalette search", () => {
       });
       const { palette } = await mountPalette(createContext(harness.gateway, async () => null));
       await enterQuery(palette, "needle");
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
       await palette.updateComplete;
       expect(findPaletteOption(palette, "Needle obsolete")).toBeDefined();
 
       harness.emit("chat.metadata.changed");
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
       await palette.updateComplete;
       expect(findPaletteOption(palette, "Needle obsolete")).toBeUndefined();
       expect(palette.querySelectorAll('[role="option"]')).toHaveLength(hasRows ? 1 : 0);
@@ -129,7 +138,7 @@ describe("CommandPalette search", () => {
       );
 
       harness.emit("chat.metadata.changed");
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
       await palette.updateComplete;
       expect(findPaletteOption(palette, "Needle current")).toBeUndefined();
       expect(palette.querySelector(".cmd-palette__source-error")).toBeNull();
@@ -161,12 +170,12 @@ describe("CommandPalette search", () => {
     });
     const { palette } = await mountPalette(createContext(harness.gateway, async () => null));
     await enterQuery(palette, "needle");
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
     expect(findPaletteOption(palette, "Needle obsolete")).toBeDefined();
 
     harness.emit("chat.metadata.changed");
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
     expect(findPaletteOption(palette, "Needle obsolete")).toBeUndefined();
     expect(palette.querySelectorAll('[role="option"]')).toHaveLength(1);
@@ -175,7 +184,7 @@ describe("CommandPalette search", () => {
     );
 
     harness.emit("chat.metadata.changed");
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
     expect(findPaletteOption(palette, "Needle retained")).toBeUndefined();
     expect(palette.querySelector(".cmd-palette__source-error")).toBeNull();
@@ -194,12 +203,12 @@ describe("CommandPalette search", () => {
     });
     const { palette } = await mountPalette(createContext(harness.gateway, async () => null));
     await enterQuery(palette, "needle");
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
     expect(findPaletteOption(palette, "Needle old")).toBeDefined();
 
     harness.emit("chat.metadata.changed");
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
     expect(palette.querySelector('.cmd-palette__search [role="status"]')?.textContent).toContain(
       "Model search unavailable",
@@ -207,7 +216,7 @@ describe("CommandPalette search", () => {
     expect(findPaletteOption(palette, "Needle old")).toBeDefined();
 
     await enterQuery(palette, "needle");
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
     expect(findPaletteOption(palette, "Needle new")).toBeDefined();
     expect(findPaletteOption(palette, "Needle old")).toBeUndefined();
@@ -231,11 +240,11 @@ describe("CommandPalette search", () => {
       const context = createContext(harness.gateway, async () => null);
       const { palette, provider } = await mountPalette(context);
       await enterQuery(palette, "needle");
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
       await palette.updateComplete;
       expect(findPaletteOption(palette, "Needle old")).toBeDefined();
       harness.emit("config.changed");
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
       if (replacement === "agent") {
         context.agentSelection.set("reviewer");
       } else if (replacement === "source") {
@@ -274,9 +283,9 @@ describe("CommandPalette search", () => {
       } else if (replacement === "closed") {
         await enterQuery(palette, "needle");
       }
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
       stale.resolve({ models: [{ provider: "fixture", id: "stale", name: "Needle stale" }] });
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
       await palette.updateComplete;
       expect(findPaletteOption(palette, "Needle new")).toBeDefined();
       expect(findPaletteOption(palette, "Needle stale")).toBeUndefined();
@@ -306,7 +315,7 @@ describe("CommandPalette search", () => {
     const { palette } = await mountPalette(createContext(gateway, list));
 
     await enterQuery(palette, prompt);
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
 
     const input = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
@@ -314,6 +323,11 @@ describe("CommandPalette search", () => {
     expect(list).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
     expectPalettePromptMode(palette);
+    for (const key of ["ArrowUp", "ArrowDown"]) {
+      const arrow = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      input.dispatchEvent(arrow);
+      expect(arrow.defaultPrevented).toBe(false);
+    }
     const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
     input.dispatchEvent(enter);
     expect(enter.defaultPrevented).toBe(true);
@@ -323,7 +337,7 @@ describe("CommandPalette search", () => {
 
     input.value = "plugins";
     input.dispatchEvent(new Event("input", { bubbles: true }));
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
     expect(list).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ search: "plugins" }));
     expect(palette.querySelector('[inert][aria-hidden="true"]')).toBeNull();
@@ -342,7 +356,7 @@ describe("CommandPalette search", () => {
     const list = vi.fn(async () => null);
     const { palette } = await mountPalette(createContext(gateway, list));
     await enterQuery(palette, query);
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
 
     expect(list).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ search: query.trim() }));
@@ -364,20 +378,20 @@ describe("CommandPalette search", () => {
       const list = vi.fn(async () => null);
       const { palette } = await mountPalette(createContext(gateway, list));
       await enterQuery(palette, character.repeat(59));
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
       expect(list).toHaveBeenCalledOnce();
       const input = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
       for (const length of [60, 59, 51, 55, 60]) {
         input.value = " " + character.repeat(length) + " ";
         input.dispatchEvent(new Event("input", { bubbles: true }));
-        await vi.advanceTimersByTimeAsync(50);
+        await vi.advanceTimersByTimeAsync(200);
         await palette.updateComplete;
         expectPalettePromptMode(palette);
         expect(list).toHaveBeenCalledOnce();
       }
       input.value = " " + character.repeat(50) + " ";
       input.dispatchEvent(new Event("input", { bubbles: true }));
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
       await palette.updateComplete;
       expect(input.getAttribute("aria-controls")).toBe("cmd-palette-listbox");
       expect(list).toHaveBeenLastCalledWith(
@@ -385,7 +399,7 @@ describe("CommandPalette search", () => {
       );
       input.value = character.repeat(59);
       input.dispatchEvent(new Event("input", { bubbles: true }));
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
       await palette.updateComplete;
       expect(input.getAttribute("aria-controls")).toBe("cmd-palette-listbox");
       expect(list).toHaveBeenCalledTimes(3);
@@ -400,7 +414,7 @@ describe("CommandPalette search", () => {
       palette.togglePalette();
       await palette.updateComplete;
       await enterQuery(palette, character.repeat(55));
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
       await palette.updateComplete;
       expect(input.isConnected).toBe(false);
       expect(palette.querySelector(".cmd-palette__input")?.getAttribute("aria-controls")).toBe(
@@ -416,10 +430,13 @@ describe("CommandPalette search", () => {
     const { palette } = await mountPalette(createContext(gateway, list));
 
     await enterQuery(palette, "n");
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
 
     expect(list).not.toHaveBeenCalled();
     expect(palette.querySelector('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
+    expect(palette.querySelector('[role="listbox"]')?.getAttribute("aria-label")).toBe(
+      palette.querySelector("textarea")?.getAttribute("aria-label"),
+    );
     expect(palette.textContent).not.toContain("Searching sessions");
   });
 
@@ -445,7 +462,7 @@ describe("CommandPalette search", () => {
         },
       });
       await enterQuery(palette, "Reviewer");
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
       await palette.updateComplete;
       const item = palette.querySelector<HTMLElement>('[role="option"]');
       expect(item?.textContent).toContain("Reviewer");
@@ -490,7 +507,7 @@ describe("CommandPalette search", () => {
       },
     });
     await enterQuery(palette, "Needle");
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
     const items = [...palette.querySelectorAll<HTMLElement>('[role="option"]')];
     expect(items.map((item) => item.textContent?.replace(/\s+/g, " ").trim())).toEqual([
@@ -526,7 +543,7 @@ describe("CommandPalette search", () => {
         ),
       );
       await enterQuery(palette, "agent");
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
       await palette.updateComplete;
       const session = findPaletteOption(palette, "Agent QA 9")!;
       const sessionText = session.textContent;
@@ -548,7 +565,7 @@ describe("CommandPalette search", () => {
 
       setConnected(true);
       await palette.updateComplete;
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
       await palette.updateComplete;
       const active = palette.querySelector('[aria-selected="true"]');
       expect(active?.textContent).toEqual(
@@ -590,13 +607,13 @@ describe("CommandPalette search", () => {
         agents: { ...context.agents, ensureList },
       });
       await enterQuery(palette, "review");
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
       await palette.updateComplete;
       vi.setSystemTime(Date.now() + 30_001);
       const input = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
       input.value = "review ";
       input.dispatchEvent(new Event("input", { bubbles: true }));
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
       await palette.updateComplete;
       for (let i = 0; i < 2; i++) {
         input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
@@ -639,7 +656,7 @@ describe("CommandPalette search", () => {
       ),
     );
     await enterQuery(palette, "needle");
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
     palette
       .querySelector<HTMLTextAreaElement>(".cmd-palette__input")!
@@ -665,7 +682,7 @@ describe("CommandPalette search", () => {
         ),
       );
       await enterQuery(palette, "Needle");
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
       await palette.updateComplete;
       palette
         .querySelector<HTMLTextAreaElement>(".cmd-palette__input")
@@ -687,7 +704,7 @@ describe("CommandPalette search", () => {
     const { gateway } = createGateway(true);
     const { palette } = await mountPalette(createContext(gateway, list));
     await enterQuery(palette, "planning");
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
     expect(list).toHaveBeenCalledExactlyOnceWith({
       search: "planning",
@@ -720,7 +737,7 @@ describe("CommandPalette search", () => {
     const { palette } = await mountPalette(createContext(gateway, list));
 
     await enterQuery(palette, "tak");
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await vi.waitFor(() =>
       expect(request.mock.calls.filter(([method]) => method === "sessions.search")).toHaveLength(1),
     );
@@ -737,7 +754,7 @@ describe("CommandPalette search", () => {
       .mockResolvedValueOnce(createSessionResult("agent:main:zz", "Recovered chat"));
     const { palette } = await mountPalette(createContext(gateway, list));
     await enterQuery(palette, query);
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
 
     expect(list).toHaveBeenCalledOnce();
@@ -750,7 +767,7 @@ describe("CommandPalette search", () => {
     const input = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
     input.value = `${query}\nExplain what needs to be repaired in a new session.`;
     input.dispatchEvent(new Event("input", { bubbles: true }));
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
     expectPalettePromptMode(palette);
     expect(list).toHaveBeenCalledOnce();
@@ -760,7 +777,7 @@ describe("CommandPalette search", () => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
     await palette.updateComplete;
     expect(palette.textContent).not.toContain("Chat search failed");
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
     expect(palette.textContent).toContain("Recovered chat");
   });
@@ -775,6 +792,8 @@ describe("CommandPalette search", () => {
       ),
     );
     await enterQuery(palette, "meeting capture");
+    await vi.advanceTimersByTimeAsync(200);
+    await palette.updateComplete;
     const item = findPaletteOption(palette, "Meeting capture");
     expect(item).toBeDefined();
     item!.click();
@@ -784,7 +803,7 @@ describe("CommandPalette search", () => {
     });
   });
 
-  it("navigates to the plugin manager from search", async () => {
+  it("flushes a new query on Enter without selecting the retained command", async () => {
     const { gateway } = createGateway(true);
     const { palette } = await mountPalette(
       createContext(
@@ -793,12 +812,22 @@ describe("CommandPalette search", () => {
       ),
     );
     await enterQuery(palette, "plugins");
+    await vi.advanceTimersByTimeAsync(200);
+    await palette.updateComplete;
 
-    const item = findPaletteOption(palette, "Plugins");
-    expect(item?.textContent).toContain("Plugins");
-    item?.click();
+    const input = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
+    input.value = "settings";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await palette.updateComplete;
+    const stale = findPaletteOption(palette, "Plugins")!;
+    expect(stale.getAttribute("aria-disabled")).toBe("true");
+    stale.click();
+    expect(palette.onNavigate).not.toHaveBeenCalled();
 
-    expect(palette.onNavigate).toHaveBeenCalledWith("plugins");
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await palette.updateComplete;
+    expect(palette.onNavigate).toHaveBeenCalledExactlyOnceWith("config");
+    expect(palette.isOpen).toBe(false);
   });
 
   it.each([
@@ -816,6 +845,8 @@ describe("CommandPalette search", () => {
       );
       palette.desktopAvailable = available;
       await enterQuery(palette, "desktop");
+      await vi.advanceTimersByTimeAsync(200);
+      await palette.updateComplete;
 
       expect(findPaletteOption(palette, "Desktop", true) ? 1 : 0).toBe(expectedCount);
     },
@@ -831,6 +862,8 @@ describe("CommandPalette search", () => {
     );
     palette.desktopAvailable = true;
     await enterQuery(palette, "desktop");
+    await vi.advanceTimersByTimeAsync(200);
+    await palette.updateComplete;
     const events: CustomEvent<DesktopPanelToggleDetail>[] = [];
     const listener = (event: Event) => events.push(event as CustomEvent<DesktopPanelToggleDetail>);
     window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, listener);
@@ -859,6 +892,8 @@ describe("CommandPalette search", () => {
       );
       palette.custodianAvailable = available;
       await enterQuery(palette, "openclaw");
+      await vi.advanceTimersByTimeAsync(200);
+      await palette.updateComplete;
 
       expect(findPaletteOption(palette, "Ask OpenClaw", true) ? 1 : 0).toBe(expectedCount);
     },
@@ -874,6 +909,8 @@ describe("CommandPalette search", () => {
     );
     palette.custodianAvailable = true;
     await enterQuery(palette, "openclaw");
+    await vi.advanceTimersByTimeAsync(200);
+    await palette.updateComplete;
     const events: CustomEvent<CustodianPanelToggleDetail>[] = [];
     const listener = (event: Event) =>
       events.push(event as CustomEvent<CustodianPanelToggleDetail>);

@@ -67,10 +67,12 @@ compatible backup or upgrade OpenClaw for a newer schema.
 ## Session SQLite migration
 
 Runtime session rows and transcripts live in SQLite, by default at
-`~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`. Gateway and local
-CLI startup do not import, restore, or rewrite legacy session JSON/JSONL files.
-When startup finds a legacy session store, it refuses readiness and prints a
-`doctor --fix` command for the active profile instead of serving empty history.
+`~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`. Gateway startup uses
+Doctor's exclusive maintenance owner to migrate legacy session JSON/JSONL files
+before checking readiness. Runtime reads use only canonical SQLite state.
+An unreadable legacy session index stays at its original path with its transcripts,
+so repeated startups refuse readiness and print the active profile's
+`doctor --fix` command until the source is repaired.
 
 To upgrade history from an older file-backed installation, stop the Gateway
 (`openclaw gateway stop`), back up its state (`openclaw backup create --verify`),
@@ -152,6 +154,41 @@ protected, and completed recovery is recorded so later runs do not resurrect
 history explicitly deleted by the user. Diagnostic trajectory envelopes, deleted
 artifacts, unsupported files, conflicting identities, and ambiguous ownership are
 not converted into conversations. Deferred files remain available for recovery.
+
+Repeated imports can leave multiple archived copies of one primary transcript.
+Doctor treats copies of the same original path with the same verified size and
+SHA-256 as one historical claim. It keeps one verified original and retires identical duplicates through
+the existing recovery receipts, updating every retained
+manifest. `--session-sqlite recover` also settles these archives even when the
+latest failed run moved no files. Copies with different bytes stay protected and
+are named in the warning; retained historical conflicts do not block update's
+post-session plugin repair. Preserve the originals and migration manifests while
+resolving those conflicts, then rerun `openclaw doctor --fix`.
+
+### Changed archived registry
+
+`historical_transcript_deferred` can report that an archived session registry no
+longer matches its migration receipt. The receipt identifies the original file by
+device, inode, modification time, size, and SHA-256; it is not an agent or install
+ID. Copying, replacing, touching, or editing an archive can invalidate that receipt.
+The identity format is the same in 2026.9.4 and 2026.9.5; 2026.9.5 added historical
+archive discovery that checks these older receipts.
+
+Doctor skips historical transcript import for that store and retains the originals.
+This warning alone does not indicate SQLite corruption or require a rollback.
+If all expected conversations are visible, no action is needed. You can inspect
+current SQLite state with
+`openclaw doctor --session-sqlite inspect --session-sqlite-all-agents`.
+
+If history is missing, preserve the named archive and
+`<state-dir>/session-sqlite-migration-runs/`, make a verified backup, and seek
+recovery help with the warning and inspection output. Keep transcript contents
+and raw manifests private. `doctor --fix` does not reset an unverified fingerprint;
+do not delete or edit receipts to silence the warning. Import attempts record the
+skipped outcome in their migration manifest and leave existing SQLite sessions
+intact.
+
+### Import staging and validation
 
 The public Doctor migration path stages transcript payloads and performs branch
 and provider repairs in a private, temporary SQLite database instead of retaining
@@ -266,7 +303,12 @@ record why issue creation was skipped.
 
 Recovery selects the latest failed migration manifest, restores only the
 manifest's archived artifacts, validates the affected targets, and prepares
-sanitized `.failure.md` and `.failure.json` reports. The GitHub issue body avoids
+sanitized `.failure.md` and `.failure.json` reports. Reports separate current
+recovery findings from recorded migration and recovery evidence. A successful
+recovery can have zero current issues while preserving earlier failures for
+diagnosis; a target not inspected by this recovery is labeled accordingly.
+The JSON report keeps the combined `issues` evidence and adds `recoveryIssues`
+for inspected targets. The GitHub issue body avoids
 transcript contents, raw environment, secrets, and unbounded config. Once an
 issue or browser handoff may have published a report, doctor preserves that
 private report artifact and its marker receipt. When no failed migration

@@ -133,7 +133,11 @@ it.each([
       .click();
     await vi.waitFor(() => {
       if (action === "submit") {
-        expect(submit).toHaveBeenCalledExactlyOnceWith("> Which audience?\n\nNew contributors");
+        expect(submit).toHaveBeenCalledExactlyOnceWith(
+          "> Which audience?\n\nNew contributors",
+          "audience",
+          undefined,
+        );
       } else {
         expect(submit).not.toHaveBeenCalled();
       }

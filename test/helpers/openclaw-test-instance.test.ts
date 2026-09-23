@@ -1345,12 +1345,70 @@ describe("openclaw test instance", () => {
     },
   );
 
-  it("preserves both refusals and never spawns a third gateway", async () => {
-    const { instance, readAttempts } = await createFakeGateway("refuse,refuse,ready");
-    await expect(instance.startGateway()).rejects.toThrow("gateway exited before readiness");
-    expect(await readAttempts()).toHaveLength(2);
+  it("preserves both refusals and never spawns a third gateway", async ({ signal }) => {
+    const control = await createGatewayControl();
+    const { instance, readAttempts } = await createFakeGateway(
+      "refuse,refuse,ready",
+      1_000,
+      1_500,
+      control,
+    );
+    const children: NonNullable<typeof instance.child>[] = [];
+    const previousOutputClosed: boolean[] = [];
+    control.observers.onLaunch = () => {
+      const previous = children.at(-1);
+      if (previous) {
+        previousOutputClosed.push(previous.stdout.closed && previous.stderr.closed);
+      }
+      if (instance.child) {
+        children.push(instance.child);
+      }
+    };
+    // Retry admission is the contract here; native process startup/exit must not
+    // spend the policy budget before both refusal facts reach the parent.
+    signal.throwIfAborted();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    const restoreClock = () => clock.mockRestore();
+    signal.addEventListener("abort", restoreClock, { once: true });
+    const servers = vi.spyOn(net, "createServer");
+    let reservation: net.Server | undefined;
+    const startup = trackOperation(instance.startGateway());
+    try {
+      await expect(startup).rejects.toThrow("gateway exited before readiness (code=1 signal=null)");
+      reservation = servers.mock.results.find(
+        (result) => result.type === "return" && result.value.listening,
+      )?.value;
+      expect(reservation).toBeDefined();
+    } finally {
+      restoreClock();
+      signal.removeEventListener("abort", restoreClock);
+      await Promise.allSettled([startup]);
+      servers.mockRestore();
+    }
+    const attempts = await readAttempts();
+    expect(attempts).toHaveLength(2);
+    expect(children).toHaveLength(2);
+    expect(previousOutputClosed).toEqual([true]);
+    expect(instance.readiness.map(({ outcome, child }) => ({ outcome, child }))).toEqual(
+      children.map(({ pid }) => ({
+        outcome: "child-exit",
+        child: { pid, exitCode: 1, signalCode: null },
+      })),
+    );
+    for (const child of children) {
+      expect(child.exitCode).toBe(1);
+      expect(child.signalCode).toBeNull();
+      expect(child.stdout.closed && child.stderr.closed).toBe(true);
+    }
+    expect(attempts.every(({ pid }) => !isProcessAlive(pid))).toBe(true);
+    expect(instance.child).toBeUndefined();
     expect(instance.logs().split(MIGRATION_CONVERGENCE_REFUSAL)).toHaveLength(3);
     expect(instance.logs().split(RESTART_MARKER)).toHaveLength(2);
+    await expect(isPortReserved(instance.port)).resolves.toBe(true);
+    await instance.cleanup();
+    // Once its claim is released, another worker may bind the numeric port.
+    expect(reservation?.listening).toBe(false);
+    expect(reservation?.address()).toBeNull();
   });
 
   it.runIf(process.platform !== "win32")(

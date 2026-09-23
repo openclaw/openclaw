@@ -156,6 +156,18 @@ Plugins/extensions are part of OpenClaw's trusted computing base for a gateway.
 - Plugin behavior such as reading env/files or running host commands is expected inside this trust boundary.
 - Security reports must show a boundary bypass (for example unauthenticated plugin load, allowlist/policy bypass, or sandbox/path-safety bypass), not only malicious behavior from a trusted-installed plugin.
 
+### Code Mode Executors
+
+When global `tools.codeMode` is absent, OpenClaw uses automatic per-model activation. Explicit `false` disables it, and an authored object without `enabled` remains off. When engaged, its default `node` executor runs JavaScript with Node.js `node:vm` in a worker thread. **`node:vm` is not a security boundary.** The worker keeps guest computation off the Gateway event loop, but it runs with the Gateway process's OS privileges. Node Code Mode is a trusted-host execution choice.
+
+The intended guest API omits filesystem, network, subprocess, environment, and module-loading APIs. Its limited globals and module guards are programming constraints, not containment against hostile JavaScript. Tool policy, approvals, hooks, and session ownership still apply to calls made through the shared tool bridge; they cannot contain code that escapes the Node VM context. Agent sandbox settings for nested tools do not turn this Gateway worker into an OS sandbox.
+
+Select `tools.codeMode.executor: "quickjs"` for the bundled hardened executor. It runs QuickJS-WASI in a separate WASM guest, exposes only the controlled bridge, and applies guest memory and execution limits. Its tool capabilities still come from the effective OpenClaw tool policy. For stronger host isolation, use a separate OS user, container, or host with appropriate credentials and tool grants.
+
+Executor selection stays fixed throughout a cell's `exec`/`wait` lifecycle. If the selected executor is unavailable, execution fails rather than falling back to Node. Node's live worker context and QuickJS's serialized snapshots are transient state and are released on completion, cancellation, expiry, or Gateway shutdown.
+
+Reports must identify the selected executor and the boundary crossed. Node VM escape alone is not a sandbox bypass under this documented trusted-execution mode; authentication, tool-bridge authorization, QuickJS isolation, and separately configured OS sandbox boundaries remain in scope. See [Code Mode executors](https://docs.openclaw.ai/tools/code-mode/executors).
+
 ### Out of Scope
 
 - Public Internet Exposure

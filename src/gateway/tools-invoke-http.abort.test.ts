@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   prepareSystemAgentRunAdmission,
   readAdmittedRunOperatorAuthority,
@@ -17,16 +18,13 @@ import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
 
 const lifecycle = vi.hoisted(() => ({
-  authorize: vi.fn(
-    async (_params: {
-      req: IncomingMessage;
-      res: ServerResponse;
-    }): ReturnType<typeof authorizeScopedGatewayHttpRequestOrReply> => ({
-      cfg: {},
-      requestAuth: { trustDeclaredOperatorScopes: false },
-      operatorScopes: [],
-    }),
-  ),
+  authorize:
+    vi.fn<
+      (params: {
+        req: IncomingMessage;
+        res: ServerResponse;
+      }) => ReturnType<typeof authorizeScopedGatewayHttpRequestOrReply>
+    >(),
   beforeHook: vi.fn(async (args: { params: unknown; signal?: AbortSignal }) => ({
     blocked: false as const,
     params: args.params,
@@ -60,6 +58,20 @@ vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
 }));
 
 const { handleToolsInvokeHttpRequest } = await import("./tools-invoke-http.js");
+
+type RequestAuth = NonNullable<
+  Awaited<ReturnType<typeof authorizeScopedGatewayHttpRequestOrReply>>
+>["requestAuth"];
+
+function authorizedRequest(overrides: Partial<RequestAuth> = {}): RequestAuth {
+  return {
+    trustDeclaredOperatorScopes: false,
+    hasCurrentClientAuthority: () => true,
+    assertCurrent: () => {},
+    revalidate: async () => {},
+    ...overrides,
+  };
+}
 
 let server: ReturnType<typeof createServer> | undefined;
 let serverPort = 0;
@@ -109,7 +121,7 @@ beforeEach(() => {
   lifecycle.authorize.mockReset();
   lifecycle.authorize.mockResolvedValue({
     cfg: {},
-    requestAuth: { trustDeclaredOperatorScopes: false },
+    requestAuth: authorizedRequest(),
     operatorScopes: [],
   });
   lifecycle.beforeHook.mockClear();
@@ -128,6 +140,38 @@ function invokeAbortProbe(signal?: AbortSignal): Promise<Response> {
 }
 
 describe("POST /tools/invoke request cancellation", () => {
+  it("rejects a tool when policy authority changes during its awaited hook", async () => {
+    const hookStarted = createDeferred();
+    const releaseHook = createDeferred();
+    let current = true;
+    lifecycle.authorize.mockResolvedValueOnce({
+      cfg: {},
+      requestAuth: authorizedRequest({ hasCurrentClientAuthority: () => current }),
+      operatorScopes: [],
+    });
+    lifecycle.beforeHook.mockImplementationOnce(async ({ params }) => {
+      hookStarted.resolve();
+      await releaseHook.promise;
+      return { blocked: false, params };
+    });
+    const pending = invokeAbortProbe();
+    try {
+      await hookStarted.promise;
+      current = false;
+      releaseHook.resolve();
+      const response = await pending;
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({
+        ok: false,
+        error: { message: "Gateway requester authority changed" },
+      });
+      expect(lifecycle.execute).not.toHaveBeenCalled();
+    } finally {
+      releaseHook.resolve();
+      await pending;
+    }
+  });
+
   it("never attaches a disconnect watcher to an unauthorized request", async () => {
     lifecycle.authorize.mockImplementationOnce(async ({ res }) => {
       res.statusCode = 401;
@@ -156,7 +200,7 @@ describe("POST /tools/invoke request cancellation", () => {
       await authorizationReleased;
       return {
         cfg: {},
-        requestAuth: { trustDeclaredOperatorScopes: false },
+        requestAuth: authorizedRequest(),
         operatorScopes: [],
       };
     });
@@ -260,7 +304,7 @@ describe("POST /tools/invoke request cancellation", () => {
           lifecycle.authorize.mockResolvedValueOnce({
             cfg,
             operatorScopes: ["operator.write"],
-            requestAuth: {
+            requestAuth: authorizedRequest({
               authMethod: "trusted-proxy",
               trustDeclaredOperatorScopes: true,
               authenticatedUserProfile: {
@@ -273,7 +317,7 @@ describe("POST /tools/invoke request cancellation", () => {
                 signal: grant.signal,
                 assertCurrent: () => grant.signal.throwIfAborted(),
               },
-            },
+            }),
           });
           const response = await invokeAbortProbe();
           expect(response.status).toBe(200);

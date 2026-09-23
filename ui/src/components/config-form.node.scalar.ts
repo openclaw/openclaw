@@ -206,6 +206,7 @@ export function renderTextInput(
   const { label, help } = resolveFieldMeta(path, schema, hints);
   const helpId =
     params.descriptionId ?? (showLabel && help ? configFieldId(path, "description") : undefined);
+  const errorId = configFieldId(path, "scalar-error");
   const sensitiveState = getSensitiveRenderState(params);
   const isStructuredValue =
     value !== null && value !== undefined && typeof value === "object" && !Array.isArray(value);
@@ -221,7 +222,9 @@ export function renderTextInput(
       ? rawAvailable
         ? t("configForm.structuredSecretRaw")
         : t("configForm.structuredSecretFile")
-      : redactedPlaceholder()
+      : masked
+        ? "••••••••"
+        : redactedPlaceholder()
     : (hint?.placeholder ??
       (!masked && schema.default !== undefined
         ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
@@ -358,7 +361,7 @@ export function renderTextInput(
       type=${effectiveInputType}
       class="settings-input${effectiveRedacted ? " cfg-redacted" : ""}"
       aria-label=${label}
-      aria-describedby=${helpId ?? nothing}
+      aria-describedby=${[helpId, errorId].filter(Boolean).join(" ")}
       aria-invalid="false"
       placeholder=${placeholder}
       .value=${renderedValue}
@@ -452,6 +455,7 @@ export function renderTextInput(
       effectiveRedacted || masked ? nothing : renderSchemaDefaultDescription(schema, value),
     showLabel,
     control: presentedInput,
+    errorId,
   });
 }
 
@@ -461,6 +465,7 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
   const { label, help } = resolveFieldMeta(path, schema, hints);
   const helpId =
     params.descriptionId ?? (showLabel && help ? configFieldId(path, "description") : undefined);
+  const errorId = configFieldId(path, "scalar-error");
   const displayValue = value ?? (params.compact ? schema.default : undefined) ?? "";
   const effectiveValue = value !== undefined ? value : schema.default;
   const constraints = numericInputConstraints(schema);
@@ -529,12 +534,13 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
       type="number"
       class="settings-input"
       aria-label=${label}
-      aria-describedby=${helpId ?? nothing}
+      aria-describedby=${[helpId, errorId].filter(Boolean).join(" ")}
       aria-invalid="false"
       placeholder=${
-        schema.default !== undefined
+        hintForPath(path, hints)?.placeholder ??
+        (schema.default !== undefined
           ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
-          : nothing
+          : nothing)
       }
       min=${constraints.min ?? nothing}
       max=${constraints.max ?? nothing}
@@ -622,6 +628,7 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
     defaultDescription: renderSchemaDefaultDescription(schema, value),
     showLabel,
     control,
+    errorId,
   });
 }
 

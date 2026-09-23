@@ -16,6 +16,11 @@ import * as activeThinkingPolicy from "../../plugins/provider-thinking-active.js
 import { prepareModelCatalogThinkingPolicies } from "../../plugins/provider-thinking.js";
 import { isThinkingLevelSupported } from "../thinking.js";
 import { prepareModelSelectionRuntime } from "./model-runtime-normalization.js";
+import {
+  createInitialState,
+  makeConfiguredModel,
+  makeEntry,
+} from "./model-selection.inputs.test-support.js";
 import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 
 type PersistReplySessionEntry =
@@ -138,36 +143,7 @@ afterEach(() => {
   vi.mocked(loadProviderScopedThinkingCatalog).mockReset().mockResolvedValue([]);
 });
 
-const makeConfiguredModel = (overrides: Record<string, unknown> = {}) => ({
-  id: "gpt-5.4",
-  name: "GPT-5.4",
-  reasoning: true,
-  input: ["text"] as Array<"text">,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
-  maxTokens: 16_384,
-  ...overrides,
-});
-
 describe("createModelSelectionState catalog loading", () => {
-  function createInitialState(
-    cfg: OpenClawConfig,
-    provider: string,
-    model: string,
-    options: Partial<Parameters<typeof createModelSelectionState>[0]> = {},
-  ) {
-    return createModelSelectionState({
-      cfg,
-      agentCfg: cfg.agents?.defaults,
-      defaultProvider: provider,
-      defaultModel: model,
-      provider,
-      model,
-      hasModelDirective: false,
-      ...options,
-    });
-  }
-
   it.each([false, true])(
     "retains automatic-primary reasoning from prepared=%s metadata outside manual policy",
     async (prepared) => {
@@ -298,7 +274,7 @@ describe("createModelSelectionState catalog loading", () => {
       expect(loadModelCatalogLocal).not.toHaveBeenCalled();
       expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledWith({
         config: cfg,
-        agentId: undefined,
+        agentId: "main",
         provider: "openai",
         model: "gpt-5.4",
         agentRuntime: agentRuntime ?? "openclaw",
@@ -645,6 +621,7 @@ describe("createModelSelectionState catalog loading", () => {
     ]);
 
     const state = await createModelSelectionState({
+      agentId: "main",
       cfg: {} as OpenClawConfig,
       agentCfg: {},
       defaultProvider: "openai",
@@ -773,6 +750,7 @@ describe("createModelSelectionState catalog loading", () => {
     const sessionStore = { main: sessionEntry };
 
     await createModelSelectionState({
+      agentId: "main",
       cfg: {
         models: {
           providers: {
@@ -818,13 +796,6 @@ describe("resolveContextTokens", () => {
   });
 });
 
-const makeEntry = (overrides: Partial<SessionEntry> = {}): SessionEntry => ({
-  sessionId: "session-id",
-  updatedAt: Date.now(),
-  delivery: { kind: "none" },
-  ...overrides,
-});
-
 describe("createModelSelectionState parent inheritance", () => {
   const defaultProvider = "openai";
   const defaultModel = "gpt-4o-mini";
@@ -837,6 +808,7 @@ describe("createModelSelectionState parent inheritance", () => {
     parentSessionKey?: string;
   }) {
     return createModelSelectionState({
+      agentId: "main",
       cfg: params.cfg,
       agentCfg: params.cfg.agents?.defaults,
       sessionEntry: params.sessionEntry,
@@ -983,6 +955,7 @@ describe("createModelSelectionState respects session model override", () => {
     const sessionStore = { [sessionKey]: sessionEntry };
 
     return createModelSelectionState({
+      agentId: "main",
       cfg,
       agentCfg: undefined,
       sessionEntry,
@@ -1045,6 +1018,7 @@ describe("createModelSelectionState respects session model override", () => {
     const sessionStore = { [sessionKey]: sessionEntry };
 
     const state = await createModelSelectionState({
+      agentId: "main",
       cfg,
       agentCfg: cfg.agents?.defaults,
       sessionEntry,
@@ -1083,6 +1057,7 @@ describe("createModelSelectionState respects session model override", () => {
     const sessionStore = { [sessionKey]: sessionEntry };
 
     const state = await createModelSelectionState({
+      agentId: "main",
       cfg,
       agentCfg: cfg.agents?.defaults,
       sessionEntry,
@@ -1125,6 +1100,7 @@ describe("createModelSelectionState respects session model override", () => {
     const sessionStore = { [sessionKey]: sessionEntry, [parentSessionKey]: parentEntry };
 
     const state = await createModelSelectionState({
+      agentId: "main",
       cfg,
       agentCfg: cfg.agents?.defaults,
       sessionEntry,
@@ -1168,6 +1144,7 @@ describe("createModelSelectionState respects session model override", () => {
     const sessionStore = { [sessionKey]: sessionEntry };
 
     const state = await createModelSelectionState({
+      agentId: "main",
       cfg,
       agentCfg: cfg.agents?.defaults,
       sessionEntry,
@@ -1207,6 +1184,7 @@ describe("createModelSelectionState respects session model override", () => {
     const sessionStore = { [sessionKey]: sessionEntry };
 
     const state = await createModelSelectionState({
+      agentId: "main",
       cfg,
       agentCfg: cfg.agents?.defaults,
       sessionEntry,
@@ -1257,6 +1235,7 @@ describe("createModelSelectionState respects session model override", () => {
     const sessionStore = { [sessionKey]: sessionEntry };
 
     const state = await createModelSelectionState({
+      agentId: "main",
       cfg,
       agentCfg: cfg.agents?.defaults,
       sessionEntry,
@@ -1329,6 +1308,7 @@ describe("createModelSelectionState respects session model override", () => {
       const sessionStore = { [sessionKey]: sessionEntry };
 
       const state = await createModelSelectionState({
+        agentId: "main",
         cfg,
         agentCfg: cfg.agents?.defaults,
         sessionEntry,
@@ -1405,6 +1385,7 @@ describe("createModelSelectionState respects session model override", () => {
 
     await expect(
       createModelSelectionState({
+        agentId: "main",
         cfg,
         agentCfg: cfg.agents?.defaults,
         sessionEntry,
@@ -1460,6 +1441,7 @@ describe("createModelSelectionState respects session model override", () => {
     const sessionStore = { [sessionKey]: sessionEntry };
 
     const state = await createModelSelectionState({
+      agentId: "main",
       cfg,
       agentCfg: cfg.agents?.defaults,
       sessionEntry,
@@ -1499,6 +1481,7 @@ describe("createModelSelectionState respects session model override", () => {
     const sessionStore = { [sessionKey]: sessionEntry };
 
     const state = await createModelSelectionState({
+      agentId: "main",
       cfg,
       agentCfg: cfg.agents?.defaults,
       sessionEntry,
@@ -1561,6 +1544,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
     });
     const sessionStore = { [sessionKey]: sessionEntry };
     const state = await createModelSelectionState({
+      agentId: "main",
       cfg,
       agentCfg: cfg.agents?.defaults,
       sessionEntry,
@@ -1645,6 +1629,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
     const sessionStore = { [sessionKey]: sessionEntry };
 
     const state = await createModelSelectionState({
+      agentId: "main",
       cfg: {} as OpenClawConfig,
       agentCfg: undefined,
       sessionEntry,
@@ -1694,6 +1679,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
     const sessionStore = { [sessionKey]: sessionEntry };
 
     const state = await createModelSelectionState({
+      agentId: "main",
       cfg: {} as OpenClawConfig,
       agentCfg: undefined,
       sessionEntry,
@@ -1736,6 +1722,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
     const sessionStore = { [sessionKey]: sessionEntry };
 
     const state = await createModelSelectionState({
+      agentId: "main",
       cfg,
       agentCfg: undefined,
       sessionEntry,
@@ -1768,6 +1755,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
     const sessionStore = { [sessionKey]: sessionEntry };
 
     const state = await createModelSelectionState({
+      agentId: "main",
       cfg: {} as OpenClawConfig,
       agentCfg: undefined,
       sessionEntry,
@@ -1809,6 +1797,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
     const sessionStore = { [sessionKey]: sessionEntry };
 
     const state = await createModelSelectionState({
+      agentId: "main",
       cfg,
       agentCfg: cfg.agents?.defaults,
       sessionEntry,
@@ -2056,6 +2045,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
       modelOverrideSource: "user",
     });
     const state = await createModelSelectionState({
+      agentId: "main",
       cfg,
       agentCfg: cfg.agents?.defaults,
       sessionEntry,
@@ -2093,6 +2083,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
       modelOverrideSource: "user",
     });
     const state = await createModelSelectionState({
+      agentId: "main",
       cfg,
       agentCfg: cfg.agents?.defaults,
       sessionEntry,
@@ -2127,6 +2118,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
     const sessionStore = { [parentKey]: parentEntry, [childKey]: childEntry };
 
     const state = await createModelSelectionState({
+      agentId: "main",
       cfg,
       agentCfg: cfg.agents?.defaults,
       sessionEntry: childEntry,
@@ -2174,6 +2166,7 @@ describe("createModelSelectionState auth-profile override flapping regression", 
     const sessionStore = { [sessionKey]: sessionEntry };
 
     await createModelSelectionState({
+      agentId: "main",
       cfg: {} as OpenClawConfig,
       agentCfg: undefined,
       sessionEntry,
@@ -2200,6 +2193,7 @@ describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
       { provider: "local", id: "fast-reasoner", name: "Fast Reasoner", reasoning: true },
     ]);
     const state = await createModelSelectionState({
+      agentId: "main",
       cfg: {} as OpenClawConfig,
       agentCfg: undefined,
       defaultProvider: "local",
@@ -2216,6 +2210,7 @@ describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
 
   it("returns off when catalog model has no reasoning", async () => {
     const state = await createModelSelectionState({
+      agentId: "main",
       cfg: {} as OpenClawConfig,
       agentCfg: undefined,
       defaultProvider: "openai",
@@ -2276,6 +2271,7 @@ describe("createModelSelectionState degraded-catalog override preservation", () 
     };
     const sessionStore = { [sessionKey]: sessionEntry };
     const state = await createModelSelectionState({
+      agentId: "main",
       cfg: params.cfg,
       agentCfg: params.cfg.agents?.defaults,
       sessionEntry,

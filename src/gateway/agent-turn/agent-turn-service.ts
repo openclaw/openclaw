@@ -25,7 +25,7 @@ import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js"
 import { createAgentAdmissionController } from "./agent-admission-controller.js";
 import { prepareAgentContentPhase } from "./agent-content-phase.js";
 import { createAgentDedupeLifecycle } from "./agent-dedupe-lifecycle.js";
-import { replayAgentTurnIfCached } from "./agent-dedupe.js";
+import { isAcceptedAgentDedupePayload, replayAgentTurnIfCached } from "./agent-dedupe.js";
 import { resolveAgentDeliveryPhase } from "./agent-delivery-phase.js";
 import type { RestoredCronContinuation } from "./agent-handler-helpers.js";
 import { captureAgentJobSession, getAgentJobSession, waitForAgentJob } from "./agent-job.js";
@@ -127,6 +127,7 @@ export function createAgentTurnService(
       context,
       respond,
       reserveDedupe: dedupeLifecycle.reserve,
+      bindDedupeSessionTarget: dedupeLifecycle.bindSessionTarget,
       clearDedupe: dedupeLifecycle.clearUnaccepted,
     });
     if (!routing) {
@@ -393,6 +394,12 @@ export function createAgentTurnService(
           return;
         }
         const persistedSession = await persistAgentSessionPhase({
+          onSessionCommitted: (committedEntry) =>
+            dedupeLifecycle.bindSessionTarget({
+              sessionKey: canonicalSessionKey,
+              agentId: sessionAgentId,
+              sessionId: committedEntry.sessionId,
+            }),
           assertAdmissionCurrent,
           request,
           cfg: cfgLocal,
@@ -641,7 +648,14 @@ export function createAgentTurnService(
         ? Math.max(0, Math.floor(params.timeoutMs))
         : 30_000;
     const activeChatEntry = context.chatAbortControllers.get(runId);
-    const hasActiveChatRun = activeChatEntry !== undefined && activeChatEntry.kind !== "agent";
+    // Cancellation can retire the controller before dispatch publishes its result;
+    // sessionless admissions also retain their RPC owner in the accepted dedupe.
+    let source: "agent" | "chat" | undefined;
+    if (activeChatEntry) {
+      source = activeChatEntry.kind === "agent" ? "agent" : "chat";
+    } else if (isAcceptedAgentDedupePayload(context.dedupe.get(`agent:${runId}`)?.payload)) {
+      source = "agent";
+    }
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const queuedResult = () => {
       const queued = context.chatQueuedTurns.get(runId);
@@ -662,17 +676,13 @@ export function createAgentTurnService(
     const runContext = getAgentRunContext(runId);
     const initialSession =
       queuedBeforeWait?.session ??
-      getAgentJobSession(runId, hasActiveChatRun ? "chat" : undefined) ??
+      getAgentJobSession(runId, source === "chat" ? "chat" : undefined) ??
       captureAgentJobSession(runContext);
     const wait = async () => {
       if (queuedBeforeWait) {
         return queuedBeforeWait;
       }
-      const snapshot = await waitForAgentJob({
-        runId,
-        timeoutMs,
-        ...(hasActiveChatRun ? { source: "chat" } : {}),
-      });
+      const snapshot = await waitForAgentJob({ runId, timeoutMs, source });
       const queuedAfterWait = queuedResult();
       if (queuedAfterWait) {
         return queuedAfterWait;

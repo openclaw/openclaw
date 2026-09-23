@@ -1,9 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { nothing, render } from "lit";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
+import { setCurrentThemeBranding } from "../app/theme-branding.ts";
 import { renderChatAvatar, renderForwardedAvatar } from "../pages/chat/chat-avatar.ts";
+import * as artworkLoader from "../pages/plugins/icon-loader.ts";
 import { resolveAvatarHat } from "./agent-avatar-hat.ts";
 import { renderAgentIdentityAvatar } from "./identity-avatar-view.ts";
 
@@ -12,8 +14,7 @@ const pageLoadRandom = vi.hoisted(() => vi.spyOn(Math, "random").mockReturnValue
 beforeAll(() => pageLoadRandom.mockRestore());
 
 afterEach(() => {
-  delete document.documentElement.dataset.themeAvatarHat;
-  delete document.documentElement.dataset.themeMascot;
+  setCurrentThemeBranding({ mascot: "claw", critters: [] });
 });
 
 describe.each(["fedora", "crown", "santa", "party", "pumpkin"] as const)(
@@ -49,7 +50,7 @@ describe.each(["fedora", "crown", "santa", "party", "pumpkin"] as const)(
     it.each(["agent-5", "agent-0"])(
       "applies the theme hat to loaded transcript and forwarded photos for %s",
       (agentId) => {
-        document.documentElement.dataset.themeAvatarHat = avatarHat;
+        setCurrentThemeBranding(branding);
         const container = document.createElement("div");
         const avatar = "data:image/png;base64,YQ==";
         for (const view of [
@@ -83,8 +84,7 @@ describe.each(["fedora", "crown", "santa", "party", "pumpkin"] as const)(
     ])(
       "renders the shared avatar for $id ($mascot, pending=$pending)",
       ({ id, pending, mascot, hat }) => {
-        document.documentElement.dataset.themeAvatarHat = avatarHat;
-        document.documentElement.dataset.themeMascot = mascot;
+        setCurrentThemeBranding({ ...branding, mascot: mascot === "none" ? "none" : "claw" });
         const container = document.createElement("div");
         const agent = { id, pending, textAvatar: "🦀" };
         render(renderAgentIdentityAvatar(agent), container);
@@ -97,11 +97,46 @@ describe.each(["fedora", "crown", "santa", "party", "pumpkin"] as const)(
             "http://www.w3.org/2000/svg",
           );
         }
-        delete document.documentElement.dataset.themeAvatarHat;
+        setCurrentThemeBranding({ mascot: "claw", critters: [] });
         render(renderAgentIdentityAvatar(agent), container);
         expect(container.querySelector(".identity-avatar__hat")).toBeNull();
         render(nothing, container);
       },
     );
+  },
+);
+
+it.each([false, true])(
+  "renders a plugin hat on the shared and chat photo avatar (missing=%s)",
+  async (missing) => {
+    const fetchArtwork = vi
+      .spyOn(artworkLoader, "fetchPluginThemeArtworkBlobUrl")
+      .mockImplementation(async ({ url }) => (url.includes("missing") ? null : "blob:beret"));
+    onTestFinished(() => fetchArtwork.mockRestore());
+    setCurrentThemeBranding({
+      mascot: "claw",
+      critters: [],
+      avatarHat: "beret",
+      artwork: { hats: { beret: { url: missing ? "/missing" : "/beret" } } },
+    });
+    const container = document.createElement("div");
+    render(renderAgentIdentityAvatar({ id: "agent-5", textAvatar: "🦀" }), container);
+    expect(container.querySelector(".identity-avatar__hat-img")).toBeNull();
+    await vi.dynamicImportSettled();
+    expect(container.querySelector(".identity-avatar__hat-img")?.getAttribute("src") ?? null).toBe(
+      missing ? null : "blob:beret",
+    );
+    expect(container.querySelector(".identity-avatar__hat svg")).toBeNull();
+    render(
+      renderChatAvatar("assistant", { agentId: "agent-5", name: "Scout", avatar: "blob:photo" }),
+      container,
+    );
+    await vi.dynamicImportSettled();
+    expect(
+      container
+        .querySelector(".chat-avatar-slot > .identity-avatar__hat img")
+        ?.getAttribute("src") ?? null,
+    ).toBe(missing ? null : "blob:beret");
+    render(nothing, container);
   },
 );

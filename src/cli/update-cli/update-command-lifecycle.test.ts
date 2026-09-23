@@ -24,6 +24,7 @@ import {
   registerRepairCustodyTests,
 } from "./update-command-lifecycle-repair.test-support.js";
 import {
+  registerPrivateHandoffBindingTests,
   validConfigSnapshot,
   expectLifecycleBoundary,
   finalizationCleanupCases,
@@ -263,6 +264,7 @@ describe("update plugin lifecycle lease boundaries", () => {
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
   });
 
+  registerPrivateHandoffBindingTests();
   registerAbandonedRepairHistoryTests();
 
   it.each([false, true])(
@@ -601,15 +603,15 @@ describe("update plugin lifecycle lease boundaries", () => {
       });
 
       if (needsTargetRuntime) {
-        expect(mocks.events).toEqual([
-          "lease-enter:false",
-          "runtime-completion:true",
-          "lease-exit:false",
-          "target-convergence:false",
-        ]);
+        expect(mocks.events).toEqual(["target-convergence:false"]);
         expect(updatePluginsAfterCoreUpdate).not.toHaveBeenCalled();
       } else {
         expect(continuePostCoreUpdateInFreshProcess).not.toHaveBeenCalled();
+        expect(mocks.events.slice(0, 3)).toEqual([
+          "lease-enter:false",
+          "runtime-completion:true",
+          "lease-exit:false",
+        ]);
         expect(mocks.events).toContain("plugin-update:true");
       }
       expect(completePostCorePluginUpdate).not.toHaveBeenCalled();

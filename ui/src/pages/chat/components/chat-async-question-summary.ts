@@ -85,32 +85,80 @@ export function renderAsyncQuestionSummary(
   questions: AsyncQuestions,
   presentation: AsyncQuestionPresentation,
 ) {
-  const draft =
-    presentation.resolved.get(questions.itemId) ?? presentation.drafts.get(questions.itemId);
+  const confirmed = presentation.resolved.get(questions.itemId);
+  const queued = confirmed ? undefined : presentation.delivery.get(questions.itemId);
+  const draft = confirmed ?? presentation.drafts.get(questions.itemId);
+  const answers = queued
+    ? parseGeneratedAsyncAnswer(questions, queued.text)
+    : draft?.status === "submitted"
+      ? draft.answers
+      : undefined;
+  const unparsedText = queued && !answers ? queued.text : confirmed?.unparsedText;
   const archived = presentation.archived.has(questions.itemId);
   const reopening = draft?.status === "reopening";
   const dismissed = draft?.status === "skipped" || reopening;
-  return html`<div class="chat-question-summary" role="status">
-    ${questions.questions.map(
-      (question, index) => html`<div>
-        <strong>${question.title}</strong>
-        <div>
-          ${
-            draft?.status === "submitted"
-              ? questionDraftValues(draft.answers.get(String(index))).join(", ")
-              : t(
-                  reopening
-                    ? "chat.asyncQuestions.reopening"
-                    : dismissed
-                      ? "chat.asyncQuestions.dismissed"
-                      : archived
-                        ? "chat.asyncQuestions.archived"
-                        : "chat.asyncQuestions.inComposer",
-                )
-          }
-        </div>
-      </div>`,
-    )}
+  const deliveryLabel = confirmed
+    ? t("chat.asyncQuestions.sent")
+    : queued
+      ? t(
+          queued.sendState === "failed"
+            ? "chat.asyncQuestions.failed"
+            : queued.sendState === "unconfirmed"
+              ? "chat.queue.deliveryUnconfirmed"
+              : queued.sendState === "waiting-reconnect"
+                ? "chat.queue.states.waitingForReconnect"
+                : queued.sendState === "sending"
+                  ? "chat.asyncQuestions.sending"
+                  : "chat.asyncQuestions.queued",
+        )
+      : draft?.status === "submitted"
+        ? t("chat.asyncQuestions.awaitingConfirmation")
+        : undefined;
+  const retryable = queued?.sendState === "failed" || queued?.sendState === "unconfirmed";
+  return html`<div class="chat-question-summary" role="status" aria-live="polite">
+    ${
+      unparsedText
+        ? html`<div class="chat-question-summary__prompt">${unparsedText}</div>`
+        : questions.questions.map(
+            (question, index) => html`<div>
+              <strong>${question.title}</strong>
+              <div>
+                ${
+                  answers
+                    ? questionDraftValues(answers.get(String(index))).join(", ")
+                    : t(
+                        reopening
+                          ? "chat.asyncQuestions.reopening"
+                          : dismissed
+                            ? "chat.asyncQuestions.dismissed"
+                            : archived
+                              ? "chat.asyncQuestions.archived"
+                              : "chat.asyncQuestions.inComposer",
+                      )
+                }
+              </div>
+            </div>`,
+          )
+    }
+    ${
+      deliveryLabel
+        ? html`<div class="chat-question-summary__delivery">
+            <span>${deliveryLabel}</span>
+            ${
+              retryable && presentation.retry
+                ? html`<button
+                    type="button"
+                    class="btn btn--sm"
+                    @click=${() => presentation.retry?.(queued.id)}
+                  >
+                    ${t("chat.asyncQuestions.retry")}
+                  </button>`
+                : nothing
+            }
+            ${queued?.sendError ? html`<div>${queued.sendError}</div>` : nothing}
+          </div>`
+        : nothing
+    }
     ${
       archived || dismissed
         ? html`<div>

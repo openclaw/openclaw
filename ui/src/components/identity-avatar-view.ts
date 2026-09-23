@@ -2,6 +2,10 @@ import { html, noChange, nothing, type AttributePart } from "lit";
 import { Directive, directive } from "lit/directive.js";
 import { guard } from "lit/directives/guard.js";
 import { until, UntilDirective } from "lit/directives/until.js";
+import {
+  isThemeAvatarHatId,
+  type ThemeBranding,
+} from "../../../packages/gateway-protocol/src/theme.ts";
 import { isReservedSystemAgentId } from "../../../src/system-agent/agent-id.js";
 import { inferControlUiPublicAssetPath } from "../app/public-assets.ts";
 import { readAvatarGatewayContext } from "../lib/identity-avatar-context.ts";
@@ -17,6 +21,7 @@ import "../styles/identity-avatar.css";
 import { resolveAvatarHat } from "./agent-avatar-hat.ts";
 import { icons } from "./icons.ts";
 import { currentThemeBranding } from "./neutral-mark.ts";
+import { renderPluginThemeArtwork } from "./plugin-theme-artwork.ts";
 import { AVATAR_HAT_SPRITES } from "./theme-flair-sprites.ts";
 
 type IdentityAvatarFallback = Extract<ResolvedIdentityAvatar, { kind: "initials" }>;
@@ -221,15 +226,6 @@ export function renderIdentityAvatarImage({
   />`;
 }
 
-export function renderAgentAvatarHat(agentId: string, branding = currentThemeBranding()) {
-  const hat = resolveAvatarHat(agentId, branding);
-  return hat
-    ? html`<span class=${`identity-avatar__hat identity-avatar__hat--${hat}`} aria-hidden="true"
-        >${AVATAR_HAT_SPRITES[hat]}</span
-      >`
-    : nothing;
-}
-
 /** Agent images and emoji share one fallback across every surface. */
 export function renderAgentIdentityAvatar(
   agent: {
@@ -288,4 +284,23 @@ export function renderAgentIdentityAvatar(
     </span>
     ${agent.pending ? nothing : renderAgentAvatarHat(agent.id, branding)}
   </span>`;
+}
+
+export function renderAgentAvatarHat(
+  agentId: string,
+  branding: ThemeBranding = currentThemeBranding(),
+) {
+  const hat = resolveAvatarHat(agentId, branding);
+  if (!hat) {
+    return nothing;
+  }
+  const artwork = branding.artwork?.hats?.[hat];
+  const sprite = isThemeAvatarHatId(hat)
+    ? AVATAR_HAT_SPRITES[hat]
+    : artwork
+      ? renderPluginThemeArtwork(artwork.url, "identity-avatar__hat-img")
+      : nothing;
+  return html`<span class=${`identity-avatar__hat identity-avatar__hat--${hat}`} aria-hidden="true"
+    >${sprite}</span
+  >`;
 }

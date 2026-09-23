@@ -422,7 +422,8 @@ try {
 const entrySet = new Set(normalized);
 const errors: string[] = [];
 const warnings: string[] = [];
-const CODE_MODE_WORKER_PATH = "dist/agents/code-mode.worker.js";
+const LEGACY_CODE_MODE_WORKER_PATH = "dist/agents/code-mode.worker.js";
+const CODE_MODE_WORKER_PATH = "dist/agents/code-mode-node.worker.js";
 const FIRST_CODE_MODE_WORKER_VERSION = "2026.5.14-beta.2";
 const REQUIRED_TARBALL_ENTRIES = ["dist/control-ui/index.html", ...WORKSPACE_TEMPLATE_PACK_PATHS];
 const REQUIRED_TARBALL_ENTRY_PREFIXES = ["dist/control-ui/assets/"];
@@ -579,8 +580,14 @@ errors.push(
 const validPackageVersion = validSemver(packageVersion);
 const requiresCodeModeWorker =
   validPackageVersion !== null && semverGte(validPackageVersion, FIRST_CODE_MODE_WORKER_VERSION);
-if (requiresCodeModeWorker && !entrySet.has(CODE_MODE_WORKER_PATH)) {
-  errors.push(`missing required tar entry ${CODE_MODE_WORKER_PATH}`);
+// Published packages before executor plugins retain the original QuickJS worker.
+const codeModeWorkerPath =
+  isRecord(packageJson?.exports) &&
+  Object.hasOwn(packageJson.exports, "./plugin-sdk/code-mode-executor-runtime")
+    ? CODE_MODE_WORKER_PATH
+    : LEGACY_CODE_MODE_WORKER_PATH;
+if (requiresCodeModeWorker && !entrySet.has(codeModeWorkerPath)) {
+  errors.push(`missing required tar entry ${codeModeWorkerPath}`);
 }
 const hasShrinkwrap = entrySet.has("npm-shrinkwrap.json");
 const declaresShrinkwrap =

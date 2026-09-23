@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { addSessionMember } from "../config/sessions/session-sharing-store.js";
+import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import {
   allowedSessionVisibilities,
@@ -16,6 +18,7 @@ import {
   resolveSessionSharingRole,
   resolveSessionSharingTarget,
   resolveSessionVisibility,
+  SessionMutationAuthorizationChangedError,
 } from "./session-sharing.js";
 import {
   sharingPolicyClient as client,
@@ -57,6 +60,94 @@ function target(createdActor?: { type: "human"; id: string; label?: string }): S
 }
 
 describe("session sharing policy", () => {
+  it("keeps shared VIEW while limiting narrow writes to the caller's own rows", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = rolePolicyConfig();
+      const owner = roleClient("view", "narrow-owner");
+      const member = roleClient("view", "narrow-member");
+      const ownerId = owner.authenticatedUserProfile?.profileId;
+      const memberId = member.authenticatedUserProfile?.profileId;
+      if (!ownerId || !memberId) {
+        throw new Error("expected verified fixture profiles");
+      }
+      const scope = { agentId: "main", sessionKey: "agent:main:narrow-owned" };
+      await upsertSessionEntryCore(scope, {
+        sessionId: "narrow-owned",
+        updatedAt: 1,
+        visibility: "shared",
+        createdActor: { type: "human", source: "profile", id: ownerId },
+      });
+      const row = resolveSessionSharingTarget({ cfg, ...scope });
+      if (!row) {
+        throw new Error("expected persisted fixture session");
+      }
+      addSessionMember(
+        { ...scope, storePath: row.storePath },
+        { identityId: memberId, addedBy: ownerId, expectedSessionId: "narrow-owned" },
+      );
+      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+      const mutation = (requestClient: GatewayClient) => {
+        const admission = authorizeOperatorScopesForMethod(
+          "sessions.patch",
+          requestClient.connect.scopes ?? [],
+        );
+        expect(admission.allowed).toBe(true);
+        return resolveSessionMutationAuthorization({
+          client: requestClient,
+          method: "sessions.patch",
+          requestParams: { key: scope.sessionKey, label: "updated" },
+          context,
+          sessionScope: admission.allowed ? admission.sessionScope : undefined,
+        });
+      };
+      expect(mutation(member).error).toBeNull();
+      member.connect.scopes = ["operator.sessions.write"];
+      expect(
+        createSessionListEntryFilter({ client: member, cfg })?.(scope.sessionKey, row.entry),
+      ).toBe(true);
+      expect(mutation(member).error).toMatchObject({ code: "FORBIDDEN" });
+      // The generic owner must not subtract an independently admitted capability.
+      expect(authorizeResolvedSessionMutation({ cfg, client: member, ...scope })).toBeNull();
+      owner.connect.scopes = ["operator.sessions.write"];
+      const owned = mutation(owner);
+      expect(owned.error).toBeNull();
+      expect(owned.authorization).toBeDefined();
+      expect(() => owned.authorization?.assertCurrent()).not.toThrow();
+
+      // A later scope upgrade or account switch must not release the captured own-row boundary.
+      owner.connect.scopes = ["operator.write"];
+      owner.authenticatedUserProfile = member.authenticatedUserProfile;
+      expect(() => owned.authorization?.assertCurrent()).toThrow(
+        SessionMutationAuthorizationChangedError,
+      );
+      expect(() => owned.authorization?.assertTargetCurrent(scope)).toThrow(
+        SessionMutationAuthorizationChangedError,
+      );
+    });
+  });
+
+  it("retains the original person when narrow session creation has no row yet", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const owner = roleClient("view", "narrow-create-owner");
+      owner.connect.scopes = ["operator.sessions.write"];
+      const cfg = rolePolicyConfig();
+      const captured = resolveSessionMutationAuthorization({
+        client: owner,
+        method: "sessions.create",
+        requestParams: {},
+        sessionScope: "operator.sessions.write",
+        context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+      });
+      expect(captured.error).toBeNull();
+      expect(captured.authorization).toBeDefined();
+      expect(() => captured.authorization?.assertCurrent()).not.toThrow();
+      owner.connect.scopes = ["operator.sessions.read"];
+      expect(() => captured.authorization?.assertCurrent()).toThrow(
+        SessionMutationAuthorizationChangedError,
+      );
+    });
+  });
+
   it("denies starting a run on an existing foreign-agent session despite foreign-session write access", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = rolePolicyConfig(["guest-agent"]);
@@ -86,6 +177,7 @@ describe("session sharing policy", () => {
         ["agent", { sessionKey }],
         ["chat.send", { sessionKey }],
         ["sessions.goal.update", { sessionKey, action: "resume" }],
+        ["sessions.providerReview.continue", { sessionKey }],
         ["message.action", { sessionKey }],
         ["send", { sessionKey }],
         ["sessions.dispatch", { key: sessionKey }],
@@ -495,6 +587,45 @@ describe("session sharing policy", () => {
       });
     });
   });
+
+  it.each(["read-only", "suggest"] as const)(
+    "preserves visibility-authorized owner assignment for %s sessions at commit",
+    async (visibility) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const sessionKey = `agent:main:assignment-${visibility}`;
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: `session-assignment-${visibility}`,
+            updatedAt: 1,
+            visibility,
+            createdActor: { type: "human", source: "profile", id: "owner@example.com" },
+          },
+        );
+        const authorization = resolveSessionMutationAuthorization({
+          client: client({ user: "viewer@example.com" }),
+          method: "sessions.assignOwner",
+          requestParams: { key: sessionKey, owner: { type: "agent", id: "main" } },
+          context: { getRuntimeConfig: () => ({}) } as GatewayRequestContext,
+        });
+
+        expect(authorization.error).toBeNull();
+        expect(() => authorization.authorization?.assertCurrent()).not.toThrow();
+
+        const capped = resolveSessionMutationAuthorization({
+          client: roleClient("view", `assignment-${visibility}`),
+          method: "sessions.assignOwner",
+          requestParams: { key: sessionKey, owner: { type: "agent", id: "main" } },
+          context: {
+            getRuntimeConfig: () => rolePolicyConfig(),
+          } as GatewayRequestContext,
+        });
+        expect(capped.error).toMatchObject({
+          details: { code: "SESSION_PARTICIPATION_REQUIRED" },
+        });
+      });
+    },
+  );
 
   it("extracts every message-cut lifecycle target from sessionKey", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {

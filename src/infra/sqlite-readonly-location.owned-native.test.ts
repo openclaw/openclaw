@@ -11,6 +11,7 @@ import {
   registerSnapshotTempDirectory,
 } from "./sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocationFromOwnedDatabase } from "./sqlite-readonly-location.js";
+import type { SqliteStagingToken } from "./sqlite-staging-token.js";
 
 const mocks = vi.hoisted(() => ({
   allocate:
@@ -19,6 +20,9 @@ const mocks = vi.hoisted(() => ({
   retire: vi.fn<() => Promise<void>>(),
   retireSync: vi.fn<() => void>(),
 }));
+const synchronousToken: SqliteStagingToken = Object.assign(mocks.retireSync, {
+  beginRetirement: () => synchronousToken,
+});
 vi.mock("./sqlite-backup.js", () => ({ backupNodeSqliteDatabase: mocks.backup }));
 vi.mock("./sqlite-snapshot-staging.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./sqlite-snapshot-staging.js")>()),
@@ -49,7 +53,7 @@ beforeEach(() => {
     if (asynchronous) {
       registerAsyncSnapshotTempDirectory(directory, mocks.retire);
     } else {
-      registerSnapshotTempDirectory(directory, mocks.retireSync);
+      registerSnapshotTempDirectory(directory, synchronousToken);
     }
     return directory;
   });

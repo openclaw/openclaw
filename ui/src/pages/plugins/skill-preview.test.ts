@@ -86,3 +86,102 @@ describe("plugin skill preview requests", () => {
     },
   );
 });
+
+const lazyResult: PluginsSkillsReadResult = {
+  ...result,
+  version: "1.0.0",
+  files: [
+    ...result.files,
+    { path: "a.md", sizeBytes: 1, status: "deferred" },
+    { path: "b.md", sizeBytes: 1, status: "deferred" },
+  ],
+};
+const selectedResult = (path: string): PluginsSkillsReadResult => ({
+  ...lazyResult,
+  files: lazyResult.files.map((file) =>
+    file.path === path
+      ? { ...file, status: "ready", content: path }
+      : { ...file, status: "deferred", content: undefined },
+  ),
+});
+
+it("fetches only selected bodies, deduplicates pending reads and retains late sibling bodies without changing selection", async () => {
+  const { controller, request } = setup();
+  const a = createDeferred<PluginsSkillsReadResult>();
+  const b = createDeferred<PluginsSkillsReadResult>();
+  request
+    .mockResolvedValueOnce(lazyResult)
+    .mockReturnValueOnce(a.promise)
+    .mockReturnValueOnce(b.promise);
+  await controller.open(params);
+  expect(request).toHaveBeenCalledTimes(1);
+  const pendingA = controller.select("a.md");
+  await controller.select("a.md");
+  const pendingB = controller.select("b.md");
+  expect(request).toHaveBeenCalledTimes(3);
+  expect(request).toHaveBeenLastCalledWith("plugins.skills.read", {
+    ...params,
+    version: "1.0.0",
+    path: "b.md",
+  });
+  b.resolve(selectedResult("b.md"));
+  await pendingB;
+  a.resolve(selectedResult("a.md"));
+  await pendingA;
+  expect(controller.state?.activePath).toBe("b.md");
+  expect(controller.state?.result?.files.map((file) => file.content)).toEqual([
+    "Full instructions.",
+    "a.md",
+    "b.md",
+  ]);
+  await controller.select("SKILL.md");
+  await controller.select("a.md");
+  expect(request).toHaveBeenCalledTimes(3);
+});
+
+it("keeps selected-file failures retryable without refetching the entry or losing the inventory", async () => {
+  const { controller, request } = setup();
+  request
+    .mockResolvedValueOnce(lazyResult)
+    .mockRejectedValueOnce(new Error("Read failed"))
+    .mockResolvedValueOnce(selectedResult("a.md"));
+  await controller.open(params);
+  await controller.select("a.md");
+  expect(controller.state?.fileErrors.get("a.md")).toBe("Read failed");
+  expect(controller.state?.result?.files[0]?.content).toBe("Full instructions.");
+  await controller.select("a.md");
+  expect(controller.state?.fileErrors.size).toBe(0);
+  expect(controller.state?.pendingPaths.size).toBe(0);
+  expect(request).toHaveBeenLastCalledWith("plugins.skills.read", {
+    ...params,
+    version: "1.0.0",
+    path: "a.md",
+  });
+});
+
+it.each(["close", "reopen", "reconnect"])(
+  "discards selected-file results after %s",
+  async (change) => {
+    const { controller, request, gateway, client } = setup();
+    const response = createDeferred<PluginsSkillsReadResult>();
+    request
+      .mockResolvedValueOnce(lazyResult)
+      .mockReturnValueOnce(response.promise)
+      .mockResolvedValueOnce({ ...lazyResult, version: "2.0.0" });
+    await controller.open(params);
+    const pending = controller.select("a.md");
+    if (change === "close") {
+      controller.close();
+    } else if (change === "reopen") {
+      await controller.open(params);
+    } else {
+      gateway.transition({ client, phase: "reconnecting" });
+      gateway.transition({ client, phase: "connected" });
+    }
+    response.resolve(selectedResult("a.md"));
+    await pending;
+    expect(
+      controller.state?.result?.files.find((file) => file.path === "a.md")?.content,
+    ).toBeUndefined();
+  },
+);

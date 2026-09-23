@@ -357,9 +357,7 @@ async function finalizeLineInboundContext(params: {
       label: conversationLabel,
     },
     route: {
-      agentId: params.route.agentId,
-      dmScope: params.route.dmScope,
-      accountId: params.route.accountId,
+      ...params.route,
       routeSessionKey: params.route.sessionKey,
     },
     reply: { to: address, originatingTo: address },

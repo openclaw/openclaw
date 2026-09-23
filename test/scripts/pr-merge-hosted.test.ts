@@ -33,7 +33,7 @@ describePosix("native hosted merge handoff", () => {
     f.git(f.worktree, "add", "CHANGELOG.md");
     f.git(f.worktree, "commit", "-qm", "docs: unrelated changelog-only checkout");
     writeFileSync(
-      join(f.worktree, "scripts/verify-pr-hosted-gates.mjs"),
+      join(f.worktree, "scripts/verify-pr-hosted-gates.mts"),
       "throw new Error('PR helper executed');\n",
     );
   });
@@ -142,7 +142,9 @@ describePosix("native hosted merge handoff", () => {
         preparedGates.replace("hosted_exact_or_recent_parent", mode),
       );
       const before = f.events().length;
-      const result = f.shell("merge_verify 42 || exit 1");
+      const result = f.shell(
+        `merge_verify 42 '{"replacementHead":"","autoMergeRequested":false,"observation":null,"qualifiedRefusal":false}' || exit 1`,
+      );
       expect(result.status, result.stdout + result.stderr).toBe(0);
       const events = f.events().slice(before);
       const watched = events.findIndex((event) => event.kind === "ci-watched");
@@ -161,7 +163,11 @@ describePosix("native hosted merge handoff", () => {
     const mergeCalls = f
       .events()
       .filter(
-        (event) => event.kind === "gh" && event.args?.[0] === "pr" && event.args[1] === "merge",
+        (event) =>
+          event.kind === "gh" &&
+          event.args?.[0] === "api" &&
+          event.args.includes("graphql") &&
+          event.args.includes("--input"),
       );
     expect(mergeCalls).toHaveLength(1);
     const events = f.events().slice(before);
@@ -171,21 +177,18 @@ describePosix("native hosted merge handoff", () => {
     expect(reviewReads).toHaveLength(2);
     expect(reviewReads[1]?.index).toBeLessThan(
       events.findIndex(
-        (event) => event.kind === "gh" && event.args?.[0] === "pr" && event.args[1] === "merge",
+        (event) =>
+          event.kind === "gh" &&
+          event.args?.[0] === "api" &&
+          event.args.includes("graphql") &&
+          event.args.includes("--input"),
       ),
     );
-    expect(mergeCalls[0]?.args).toEqual([
-      "pr",
-      "merge",
-      "42",
-      "--repo",
-      "https://github.com/fixture/repo",
-      "--squash",
-      "--match-head-commit",
-      f.head,
-      "--body-file",
-      expect.any(String),
-    ]);
+    expect(
+      events.some(
+        (event) => event.kind === "gh" && event.args?.[0] === "pr" && event.args[1] === "merge",
+      ),
+    ).toBe(false);
     expect(f.git(f.origin, "log", "-1", "--format=%B", "main")).toBe(
       "Fixture squash\n\nReviewed fixture body",
     );
@@ -194,7 +197,7 @@ describePosix("native hosted merge handoff", () => {
     ).toMatchObject({ head: f.head, route: "immediate", phase: "commented" });
     // The deliberately modified PR helper is unfinished local work, not disposable proof.
     expect(existsSync(f.worktree)).toBe(true);
-    expect(readFileSync(join(f.worktree, "scripts/verify-pr-hosted-gates.mjs"), "utf8")).toBe(
+    expect(readFileSync(join(f.worktree, "scripts/verify-pr-hosted-gates.mts"), "utf8")).toBe(
       "throw new Error('PR helper executed');\n",
     );
     expect(result.stdout + result.stderr).toContain("worktree has local changes or is locked");
@@ -244,19 +247,21 @@ describePosix("native pending GitHub merge handoff", () => {
     "missing required gate",
     "failed required check",
   ] as const)("rejects %s before pending admission", (fault) => {
-    let command = "merge_verify 42 '' true";
-    if (fault === "missing auto request") {
-      command = "merge_verify 42";
-    } else if (fault === "different gate head") {
+    const verification = {
+      replacementHead: fault === "replacement recovery" ? f.head : "",
+      autoMergeRequested: fault !== "missing auto request",
+      observation: null,
+      qualifiedRefusal: false,
+    };
+    let command = `merge_verify 42 '${JSON.stringify(verification)}'`;
+    if (fault === "different gate head") {
       writeFileSync(
         join(f.local, "gates.env"),
         `${pendingGates}\nHOSTED_GATES_TARGET_HEAD_SHA=${f.sameTreeHead}\n`,
       );
-    } else if (fault === "replacement recovery") {
-      command = `merge_verify 42 ${f.head} true`;
     } else if (fault === "REST transport") {
-      command = "MERGE_TRANSPORT=rest merge_verify 42 '' true";
-    } else {
+      command = `MERGE_TRANSPORT=rest ${command}`;
+    } else if (fault === "missing required gate" || fault === "failed required check") {
       f.configure({
         requiredChecks: fault === "missing required gate" ? "missing-gate" : "fail",
       });
@@ -302,7 +307,9 @@ describePosix("native pending GitHub merge handoff", () => {
           { name: "openclaw/ci-gate", bucket, state: bucket === "pass" ? "SUCCESS" : "PENDING" },
         ],
       });
-      const result = f.shell("merge_verify 42 '' true || exit 1");
+      const result = f.shell(
+        `merge_verify 42 '{"replacementHead":"","autoMergeRequested":true,"observation":null,"qualifiedRefusal":false}' || exit 1`,
+      );
       expect(result.status, result.stdout + result.stderr).toBe(0);
     },
   );
@@ -343,6 +350,18 @@ describePosix("native pending GitHub merge handoff", () => {
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("AUTO/QUEUE PENDING for PR #42; not merged");
     const events = f.events().slice(before);
+    const pullReads = events.filter(
+      (event) => event.kind === "gh" && event.args?.includes("repos/fixture/repo/pulls/42"),
+    );
+    const expectedRead = [
+      "api",
+      "--hostname",
+      "github.com",
+      "repos/fixture/repo/pulls/42",
+      "-H",
+      "Cache-Control: max-age=0",
+    ];
+    expect(pullReads.map((event) => event.args)).toEqual([expectedRead, expectedRead]);
     const mergeCalls = events.filter(
       (event) => event.kind === "gh" && event.args?.[0] === "pr" && event.args[1] === "merge",
     );
@@ -359,6 +378,8 @@ describePosix("native pending GitHub merge handoff", () => {
       f.head,
       "--body-file",
       expect.any(String),
+      "--subject",
+      "Fixture merge headline",
     ]);
     expect(events.filter((event) => event.kind === "required-checks")).toHaveLength(1);
     expect(

@@ -298,7 +298,7 @@ export function createDoctorPluginMigrationPreparation(params: {
             ? plugin
             : Object.assign(plugin, {
                 reason:
-                  "The installed plugin has not reported completion of its retained state migration. If Doctor cannot complete it, report this to the plugin maintainer.",
+                  "The installed plugin has not confirmed that its saved data and settings are ready for this version. If Doctor cannot finish the upgrade, report this warning to the plugin maintainer.",
                 command: "openclaw doctor --fix",
               }),
         );

@@ -3,15 +3,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
+import "./subagent-registry.persistence.mocks.test-support.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { callGateway } from "../../../gateway/call.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import { flushLogger, setLoggerOverride } from "../../../logging/logger.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../../../state/openclaw-agent-write-admission.js";
-import { resetTaskRegistryMaintenanceRuntimeForTests } from "../../../tasks/task-registry.maintenance.js";
+import { configureTaskRegistryMaintenance } from "../../../tasks/task-registry.maintenance.js";
 import { getTaskRegistryStore } from "../../../tasks/task-registry.store.js";
 import {
   resetTaskFlowRegistryForTests,
@@ -20,22 +22,30 @@ import {
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import {
   cleanupSubagentRegistryPersistenceTest,
-  createSubagentRegistryTestDeps,
   readSubagentSessionStore,
   settleSubagentRegistryPersistenceWork,
 } from "./subagent-registry.persistence.test-support.js";
-import {
-  loadSubagentRegistryFromSqlite,
-  saveSubagentRegistryToSqlite,
-} from "./subagent-registry.store.sqlite.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   registerSubagentRun,
   resetSubagentRegistryForTests,
-  testing,
 } from "./subagent-registry.test-helpers.js";
 
 const { announce } = vi.hoisted(() => ({ announce: vi.fn(async () => "delivered" as const) }));
-vi.mock("../announce/subagent-announce.js", () => ({ runSubagentAnnounceFlow: announce }));
+vi.mock("../announce/subagent-announce.js", async (importOriginal) => {
+  const { hasUsableSessionEntry } =
+    await importOriginal<typeof import("../announce/subagent-announce.js")>();
+  return {
+    hasUsableSessionEntry,
+    runSubagentAnnounceFlow: announce,
+    captureSubagentCompletionReply: vi.fn(async () => undefined),
+  };
+});
+vi.mock("./subagent-registry-state.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./subagent-registry-state.js")>();
+  const { saveSubagentRegistryToSqlite } = await import("./subagent-registry.store.sqlite.js");
+  return { ...actual, persistSubagentRunsToDisk: saveSubagentRegistryToSqlite };
+});
 
 describe("subagent timing completion", () => {
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
@@ -44,37 +54,32 @@ describe("subagent timing completion", () => {
   let logFile: string;
 
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     stateDir = tempDirs.make("openclaw-subagent-timing-reproduction-");
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     logFile = path.join(stateDir, "reproduction.log");
     setLoggerOverride({ level: "warn", file: logFile, consoleLevel: "silent" });
-    resetTaskRegistryMaintenanceRuntimeForTests();
+    configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
     announce.mockClear();
     vi.mocked(callGateway).mockReset();
     vi.mocked(onAgentEvent).mockReset();
     vi.mocked(onAgentEvent).mockReturnValue(() => undefined);
-    testing.setDepsForTest({
-      ...createSubagentRegistryTestDeps(),
-      callGateway,
-      persistSubagentRunsToDisk: saveSubagentRegistryToSqlite,
-      runSubagentAnnounceFlow: announce,
-    });
   });
 
   afterEach(async () => {
     await cleanupSubagentRegistryPersistenceTest({
       stateDir,
       resetRegistry: () => resetSubagentRegistryForTests({ persist: false }),
-      resetDeps: () => testing.setDepsForTest(),
       closeDatabases: () => {
         resetTaskRegistryForTests({ persist: false });
         resetTaskFlowRegistryForTests({ persist: false });
       },
     });
-    resetTaskRegistryMaintenanceRuntimeForTests();
+    configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
     setLoggerOverride(null);
+    clearRuntimeConfigSnapshot();
     envSnapshot.restore();
   });
 

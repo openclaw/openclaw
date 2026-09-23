@@ -6,6 +6,7 @@ import {
   reconnectMockGateway,
   defaultControlUiFeatureMethods,
 } from "../test-helpers/control-ui-e2e.ts";
+import { readStoredQuestionDrafts } from "./chat-async-questions.test-support.ts";
 import {
   captureUiProof,
   controlUiSessionUrl,
@@ -30,6 +31,54 @@ const questionMessage = {
 };
 
 suite.define(() => {
+  it("keeps an admitted optional answer with its original outbox owner after reconnect", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page, { historyMessages: [questionMessage] });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const card = page.locator(".agent-chat__question-dock openclaw-chat-question-panel");
+      const answer = "The customer support team";
+      await card.getByRole("textbox", { name: `Your own answer for ${title}` }).fill(answer);
+      await gateway.deferNext("chat.send");
+      await card.getByRole("button", { name: "Submit", exact: true }).click();
+      const firstRequest = await gateway.waitForRequest("chat.send");
+      const admitted = await readOutboxQueue(page);
+      expect(admitted).toHaveLength(1);
+      expect(requireRecord(firstRequest.params).message).toBe(`> ${title}\n\n${answer}`);
+      await reconnectMockGateway(page, gateway);
+      await expect
+        .poll(async () => (await readOutboxQueue(page))[0]?.sendState)
+        .toBe("unconfirmed");
+      await expectBrowser(card).toHaveCount(0);
+      const summary = page.locator(".chat-question-summary").filter({ hasText: title });
+      await expectBrowser(summary).toContainText(answer);
+      const unconfirmed = page.locator('.chat-send-status[data-send-state="unconfirmed"]');
+      const retry = unconfirmed.getByRole("button", { name: "Retry queued message" });
+      await expectBrowser(retry).toBeVisible();
+      expect((await readOutboxQueue(page)).map((item) => item.id)).toEqual(
+        admitted.map((item) => item.id),
+      );
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      await captureUiProof(suite, page, "async-question-reconnect", "after-reconnect.png");
+      await gateway.deferNext("chat.send");
+      await retry.click();
+      const retried = await gateway.waitForRequest("chat.send", { after: 1 });
+      expect(requireRecord(retried.params).message).toBe(
+        requireRecord(firstRequest.params).message,
+      );
+      expect(requireRecord(retried.params).idempotencyKey).toBe(
+        requireRecord(firstRequest.params).idempotencyKey,
+      );
+      expect((await readOutboxQueue(page)).map((item) => item.id)).toEqual(
+        admitted.map((item) => item.id),
+      );
+      await gateway.resolveDeferred("chat.send");
+      await expectBrowser(unconfirmed).toHaveCount(0);
+      await expectBrowser(card).toHaveCount(0);
+      expect(await page.locator(".chat-group.user .chat-bubble").count()).toBe(1);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(2);
+    });
+  });
+
   it.each([false, true])(
     "archives an old reminder after a later completed run and can reopen it (recovery=%s)",
     async (recovery) => {
@@ -203,50 +252,18 @@ suite.define(() => {
           message,
         });
       }
-      await expectBrowser(page.getByText("Other work finished.", { exact: true })).toBeVisible();
+      await expectBrowser(
+        page.locator(".chat-thread-inner").getByText("Other work finished.", { exact: true }),
+      ).toBeVisible();
       await expectBrowser(draft).toHaveValue("New contributors and maintainers");
       // Observe the owning IndexedDB transaction, not a timeout, before simulating a reload.
       await expect
-        .poll(() =>
-          page.evaluate(async () => {
-            if (!(await indexedDB.databases()).some((db) => db.name === "openclaw-control-ui")) {
-              return false;
-            }
-            const db = await new Promise<IDBDatabase>((resolve, reject) => {
-              const request = indexedDB.open("openclaw-control-ui");
-              request.addEventListener("success", () => resolve(request.result), { once: true });
-              request.addEventListener(
-                "error",
-                () => reject(request.error ?? new Error("Could not open question draft database")),
-                { once: true },
-              );
-            });
-            try {
-              const records = await new Promise<
-                Array<{ questionDrafts?: Array<{ answers: Array<{ freeText: string }> }> }>
-              >((resolve, reject) => {
-                const request = db
-                  .transaction("composerDrafts", "readonly")
-                  .objectStore("composerDrafts")
-                  .getAll();
-                request.addEventListener("success", () => resolve(request.result), { once: true });
-                request.addEventListener(
-                  "error",
-                  () => reject(request.error ?? new Error("Could not read question drafts")),
-                  { once: true },
-                );
-              });
-              return records.some((record) =>
-                record.questionDrafts?.some((question) =>
-                  question.answers.some(
-                    (answer) => answer.freeText === "New contributors and maintainers",
-                  ),
-                ),
-              );
-            } finally {
-              db.close();
-            }
-          }),
+        .poll(async () =>
+          (await readStoredQuestionDrafts(page)).some((question) =>
+            question.answers.some(
+              (answer) => answer.freeText === "New contributors and maintainers",
+            ),
+          ),
         )
         .toBe(true);
       await page.reload();
@@ -505,7 +522,7 @@ suite.define(() => {
           `> ${title}\n\n/stop is an example for the whole team\n\n> ${followUpTitle}\n\nInclude one practical example.\nKeep the next steps separate.`,
         );
         expect(params.queueMode).toBe(active ? "steer" : undefined);
-        expect(params).not.toHaveProperty("replyToId");
+        expect(params.replyToId).toBe("audience-prompt");
         expect(await composer.inputValue()).toBe("Keep this separate composer draft.");
         expect(await composerReply.textContent()).toContain(replyMessage.content);
         expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
@@ -662,53 +679,230 @@ suite.define(() => {
     }
   });
 
-  it("transfers rejected answers to the existing outbox retry without a second form submission", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, { historyMessages: [questionMessage] });
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const card = page.locator(".agent-chat__question-dock openclaw-chat-question-panel");
-      const custom = card.getByRole("textbox", { name: `Your own answer for ${title}` });
-      await custom.fill("The customer support team");
-      await gateway.deferNext("chat.send");
-      await card.getByRole("button", { name: "Submit", exact: true }).click();
-      await gateway.waitForRequest("chat.send");
-      await gateway.resolveDeferred("chat.send", {
-        __mockError: { code: "UNAVAILABLE", message: "Synthetic send rejection" },
+  it.each(["receipt", "reload", "discard", "legacy"] as const)(
+    "recovers rejected answers for retry or explicit discard without another submission (%s)",
+    async (confirmation) => {
+      const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+      const page = await context.newPage();
+      const deliveryQuestion = {
+        ...questionMessage,
+        __openclaw: { id: "delivery-question", seq: 1 },
+      };
+      const gateway = await installMockGateway(page, {
+        historyMessages: [deliveryQuestion],
       });
-      await card.waitFor({ state: "detached" });
-      expect(await card.getByRole("button", { name: "Submit", exact: true }).count()).toBe(0);
-      const summary = page
-        .locator(".chat-thread .chat-question-summary")
-        .filter({ hasText: title });
-      await summary.waitFor();
-      expect(await summary.textContent()).toContain("The customer support team");
-      const failedSend = page.locator('.chat-send-status[data-send-state="failed"]');
-      const retry = failedSend.getByRole("button", { name: "Retry queued message" });
-      await retry.waitFor();
-      expect(await failedSend.getAttribute("title")).toBe("Synthetic send rejection");
-      const queued = await readOutboxQueue(page);
-      expect(queued).toHaveLength(1);
-      const queueId = queued[0]?.id;
-      expect(queueId).toBeTruthy();
-      await expectRequestCountStable(gateway, "chat.send", 1);
-      await gateway.deferNext("chat.send");
-      await retry.click();
-      const retried = await gateway.waitForRequest("chat.send", { after: 1 });
-      expect(requireRecord(retried.params).message).toBe(`> ${title}\n\nThe customer support team`);
-      const userMessages = page.locator(".chat-group.user .chat-bubble");
-      expect(await userMessages.count()).toBe(1);
-      expect((await readOutboxQueue(page)).map((item) => item.id)).toEqual([queueId]);
-      await gateway.resolveDeferred("chat.send");
-      await failedSend.waitFor({ state: "detached" });
-      expect(await userMessages.count()).toBe(1);
-      expect(await card.getByRole("button", { name: "Submit", exact: true }).count()).toBe(0);
-      await expectRequestCountStable(gateway, "chat.send", 2);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
+      const artifactDir = createControlUiE2eArtifactDir(`async-question-delivery-${confirmation}`);
+      const answer = confirmation === "discard" ? "Engineers" : "The customer support team";
+      try {
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const card = page.locator(".agent-chat__question-dock openclaw-chat-question-panel");
+        const custom = card.getByRole("textbox", { name: `Your own answer for ${title}` });
+        if (confirmation !== "discard") {
+          await custom.fill(answer);
+        }
+        await gateway.deferNext("chat.send");
+        await card.getByRole("button", { name: "Submit", exact: true }).click();
+        const original = await gateway.waitForRequest("chat.send");
+        expect(requireRecord(original.params)).toMatchObject({
+          message: `> ${title}\n\n${answer}`,
+          replyToId: "delivery-question",
+        });
+        const summary = page
+          .locator(".chat-thread .chat-question-summary")
+          .filter({ hasText: title });
+        await expectBrowser(summary).toContainText("Sending answer");
+        await page.screenshot({
+          path: path.join(artifactDir, "sending.png"),
+          animations: "disabled",
+        });
+        await gateway.resolveDeferred("chat.send", {
+          __mockError: { code: "UNAVAILABLE", message: "Synthetic send rejection" },
+        });
+        await card.waitFor({ state: "detached" });
+        expect(await card.getByRole("button", { name: "Submit", exact: true }).count()).toBe(0);
+        await summary.waitFor();
+        expect(await summary.textContent()).toContain(answer);
+        const failedSend = page.locator('.chat-send-status[data-send-state="failed"]');
+        const retry = summary.getByRole("button", { name: "Retry answer", exact: true });
+        await retry.waitFor();
+        await expectBrowser(summary).toContainText("Answer not sent");
+        await expectBrowser(summary).toContainText("Synthetic send rejection");
+        await page.screenshot({
+          path: path.join(artifactDir, "failed.png"),
+          animations: "disabled",
+        });
+        expect(await failedSend.getAttribute("title")).toBe("Synthetic send rejection");
+        const queued = await readOutboxQueue(page);
+        expect(queued).toHaveLength(1);
+        expect(queued[0]?.asyncQuestionItemId).toBe("audience-question");
+        expect(queued[0]?.replyToId).toBe("delivery-question");
+        const queueId = queued[0]?.id;
+        expect(queueId).toBeTruthy();
+        await expectRequestCountStable(gateway, "chat.send", 1);
+        if (confirmation === "legacy") {
+          // Seed the pre-change row after leaving the app, so no live writer
+          // races the old producer. Every other payload/target field is retained.
+          await page.route("**/delivery-legacy-seed", (route) =>
+            route.fulfill({ contentType: "text/html", body: "Synthetic legacy delivery seed" }),
+          );
+          await page.goto(`${suite.server.baseUrl}delivery-legacy-seed`);
+          await page.evaluate(() => {
+            for (const key of Object.keys(sessionStorage)) {
+              if (!key.startsWith("openclaw.control.chatComposer.v4:")) {
+                continue;
+              }
+              const stored = JSON.parse(sessionStorage.getItem(key)!) as {
+                sessions: Record<string, { queue?: Array<{ asyncQuestionItemId?: string }> }>;
+              };
+              for (const session of Object.values(stored.sessions)) {
+                for (const item of session.queue ?? []) {
+                  delete item.asyncQuestionItemId;
+                }
+              }
+              sessionStorage.setItem(key, JSON.stringify(stored));
+            }
+          });
+          await page.goto(`${suite.server.baseUrl}chat`);
+          await failedSend.waitFor();
+          expect((await readOutboxQueue(page))[0]?.asyncQuestionItemId).toBeUndefined();
+        } else {
+          await page.reload();
+          await expectBrowser(summary).toContainText("Answer not sent");
+          await expectBrowser(card).toHaveCount(0);
+        }
+        expect((await readOutboxQueue(page)).map((item) => item.id)).toEqual([queueId]);
+        await expectRequestCountStable(gateway, "chat.send", 0);
+        if (confirmation === "discard") {
+          const laterRequest = {
+            role: "user",
+            content: "Use your best judgment and finish the summary.",
+            __openclaw: { id: "delivery-follow-up", seq: 2, runId: "delivery-finishing-run" },
+          };
+          const laterFinal = {
+            role: "assistant",
+            content: "The summary is finished.",
+            stopReason: "stop",
+            __openclaw: {
+              id: "delivery-completed",
+              seq: 3,
+              runId: "delivery-finishing-run",
+              runTerminal: true,
+              mirrorOrigin: "codex-app-server",
+            },
+          };
+          await gateway.setHistoryMessages([deliveryQuestion, laterRequest, laterFinal]);
+          for (const message of [laterRequest, laterFinal]) {
+            await gateway.emitGatewayEvent("session.message", {
+              sessionKey: "agent:main:main",
+              messageId: message["__openclaw"].id,
+              messageSeq: message["__openclaw"].seq,
+              message,
+            });
+          }
+          await expectBrowser(page.getByText(laterFinal.content, { exact: true })).toBeVisible();
+          await expectBrowser(summary).toContainText("Answer not sent");
+          await failedSend.getByRole("button", { name: "Discard", exact: true }).click();
+          await page.screenshot({
+            path: path.join(artifactDir, "discard-after-completion.png"),
+            animations: "disabled",
+          });
+          await expectBrowser(card).toBeVisible();
+          await expectBrowser(card.getByRole("radio", { name: /Engineers/ })).toHaveAttribute(
+            "aria-checked",
+            "true",
+          );
+          await expectBrowser(custom).toHaveValue("");
+          expect(await readOutboxQueue(page)).toEqual([]);
+          await expectBrowser(summary).not.toContainText("Awaiting delivery confirmation");
+          await page.reload();
+          await expectBrowser(card).toBeVisible();
+          await expectBrowser(card.getByRole("radio", { name: /Engineers/ })).toHaveAttribute(
+            "aria-checked",
+            "true",
+          );
+          await expectBrowser(custom).toHaveValue("");
+          expect(await readOutboxQueue(page)).toEqual([]);
+          await expectRequestCountStable(gateway, "chat.send", 0);
+          return;
+        }
+        await gateway.deferNext("chat.send");
+        await (
+          confirmation === "legacy"
+            ? failedSend.getByRole("button", { name: "Retry queued message", exact: true })
+            : retry
+        ).click();
+        const retried = await gateway.waitForRequest("chat.send");
+        expect(requireRecord(retried.params)).toMatchObject({
+          message: requireRecord(original.params).message,
+          replyToId: requireRecord(original.params).replyToId,
+        });
+        const userMessages = page.locator(".chat-group.user .chat-bubble");
+        expect(await userMessages.count()).toBe(1);
+        expect((await readOutboxQueue(page)).map((item) => item.id)).toEqual([queueId]);
+        if (confirmation === "legacy") {
+          // Old persisted rows have no question association. Their existing
+          // outbox status owns retry until canonical saved history resolves it.
+          await expectBrowser(failedSend).toHaveCount(0);
+          await expectBrowser(summary).toContainText("Answer above the message box");
+          expect((await readOutboxQueue(page))[0]?.asyncQuestionItemId).toBeUndefined();
+        } else {
+          await expectBrowser(summary).toContainText("Sending answer");
+        }
+        await page.screenshot({
+          path: path.join(artifactDir, "retrying.png"),
+          animations: "disabled",
+        });
+        await gateway.resolveDeferred("chat.send");
+        if (confirmation !== "legacy") {
+          await expectBrowser(summary).toContainText("Awaiting delivery confirmation");
+          await expectBrowser(card).toHaveCount(0);
+        }
+        if (confirmation === "reload") {
+          // A durable row retires on messageSeq only after the Gateway commits
+          // canonical source. A missed live receipt must be recovered by startup,
+          // with no pane-local submitted marker and no new answer submission.
+          expect(await readOutboxQueue(page)).toEqual([]);
+          await page.reload();
+          await expectBrowser(summary).toContainText("Answer sent");
+          await expectBrowser(summary).toContainText("The customer support team");
+          await expectBrowser(card).toHaveCount(0);
+          expect(await userMessages.count()).toBe(1);
+          expect(await readOutboxQueue(page)).toEqual([]);
+          await expectRequestCountStable(gateway, "chat.send", 0);
+          await page.screenshot({
+            path: path.join(artifactDir, "sent-after-reload.png"),
+            animations: "disabled",
+          });
+          return;
+        }
+        const runId = String(requireRecord(retried.params).idempotencyKey);
+        // The plain-text mock ACK commits canonical source but does not emit its
+        // receipt. Deliver that separate Gateway event after proving the ACK gap.
+        const savedAnswer = {
+          role: "user",
+          content: requireRecord(retried.params).message,
+          idempotencyKey: `${runId}:user`,
+          __openclaw: { id: `mock-user:${runId}`, seq: 2, replyToId: "delivery-question" },
+        };
+        const { __openclaw: savedAnswerIdentity } = savedAnswer;
+        await gateway.emitGatewayEvent("session.message", {
+          sessionKey: "agent:main:main",
+          clientRunId: runId,
+          messageId: savedAnswerIdentity.id,
+          messageSeq: savedAnswerIdentity.seq,
+          message: savedAnswer,
+        });
+        await expectBrowser(summary).toContainText("Answer sent");
+        await page.screenshot({ path: path.join(artifactDir, "sent.png"), animations: "disabled" });
+        await failedSend.waitFor({ state: "detached" });
+        expect(await userMessages.count()).toBe(1);
+        expect(await card.getByRole("button", { name: "Submit", exact: true }).count()).toBe(0);
+        await expectRequestCountStable(gateway, "chat.send", 1);
+      } finally {
+        await suite.closeBrowserContext(context);
+      }
+    },
+  );
 
   it("does not resurrect a saved async answer after reload or remount", async () => {
     const context = await suite.newBrowserContext(createControlUiE2eContextOptions());

@@ -535,6 +535,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         session = {
           engine,
           welcome,
+          optionalWelcome: params.welcomeVariant === undefined && !persistWelcome,
           ...(params.welcomeVariant === "new-agent" ? { newAgentWelcome: welcome } : {}),
           ...(welcomeQuestion ? { welcomeQuestion } : {}),
           ...(greetingAuditSequence !== undefined
@@ -550,6 +551,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             {
               sessionId,
               reply: session.welcome,
+              optionalWelcome: session.optionalWelcome,
               action: "none",
               ...(session.welcomeQuestion ? { question: session.welcomeQuestion } : {}),
             },
@@ -577,7 +579,11 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             !session.engine.getPendingOperatorProposal()
           ) {
             session.newAgentWelcome ??= await buildNewAgentWelcome({ engine: session.engine });
-            respond(true, { sessionId, reply: session.newAgentWelcome, action: "none" }, undefined);
+            respond(
+              true,
+              { sessionId, reply: session.newAgentWelcome, optionalWelcome: false, action: "none" },
+              undefined,
+            );
             // The caretaker warning was not displayed; its delivery cursor stays pending.
             return undefined;
           }
@@ -587,6 +593,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           buildSystemAgentRejoinResult({
             sessionId,
             welcome: session.welcome,
+            optionalWelcome: session.optionalWelcome,
             ...(session.welcomeQuestion ? { welcomeQuestion: session.welcomeQuestion } : {}),
             engine: session.engine,
           }),

@@ -28,7 +28,7 @@ import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import type { AcceptedCompactionSuccessor } from "../embedded-agent-runner/compaction-successor.js";
 import { buildMainSessionRecoveryClearPatch } from "../main-session-recovery/main-session-recovery-clear.js";
 import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
-import type { AgentRunSessionTarget } from "../run-session-target.js";
+import type { AgentRunSessionTarget } from "../run-session-target.types.js";
 import { throwAgentRunRestartAbortReason } from "../run-termination.js";
 import type { SessionMaintenanceRequest } from "../session-maintenance/run.js";
 import { persistAssistantTranscriptRepairRecord } from "./assistant-transcript-repair.js";
@@ -72,6 +72,7 @@ export async function clearCommandRecoveryClaim(params: {
     const entry = sessionStore[sessionKey] ?? params.sessionEntry;
     if (entry?.restartRecoveryDeliveryRunId === runId) {
       await persistAgentSession({
+        agentId: params.prepared.sessionAgentId,
         sessionStore,
         sessionKey,
         storePath,
@@ -258,6 +259,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
     if (sessionStore && sessionKey && !params.suppressVisibleSessionEffects) {
       const { updateSessionStoreAfterAgentRun } = await loadSessionStoreRuntime();
       await updateSessionStoreAfterAgentRun({
+        agentId: sessionAgentId,
         cfg,
         agentDir,
         sessionId: effectiveSessionId,
@@ -356,6 +358,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
 
     const payloads = result.payloads ?? [];
     const pendingFinalDeliveryMarker = await persistPendingFinalDeliveryMarker({
+      agentId: sessionAgentId,
       deliver: params.opts.deliver === true,
       sessionStore,
       sessionKey,
@@ -374,6 +377,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
         ? async (): Promise<SessionEntry | undefined> => {
             const { loadSessionEntryReadOnly } = await loadSessionStoreRuntime();
             const freshEntry = loadSessionEntryReadOnly({
+              agentId: sessionAgentId,
               storePath,
               sessionKey,
               readConsistency: "latest",
@@ -607,6 +611,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
       if (clearOwnedPendingFinal || clearStaleTransportOnly || recoveryClaimEntry) {
         const now = Date.now();
         sessionEntry = await persistAgentSession({
+          agentId: sessionAgentId,
           sessionStore,
           sessionKey,
           storePath,

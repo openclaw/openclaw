@@ -1,3 +1,5 @@
+import { ChildProcess } from "node:child_process";
+import { subscribe, unsubscribe } from "node:diagnostics_channel";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
@@ -271,6 +273,18 @@ describe("provider local service shutdown", () => {
     const port = await fixture.claimPort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const pids = new Set<number>();
+    const children = new Set<ChildProcess>();
+    const observeSpawn = (message: unknown) => {
+      if (
+        message &&
+        typeof message === "object" &&
+        "process" in message &&
+        message.process instanceof ChildProcess
+      ) {
+        children.add(message.process);
+      }
+    };
+    subscribe("child_process", observeSpawn);
     const target = {
       providerId: "local-stop-observation-recovery",
       baseUrl: `http://127.0.0.1:${port}/v1`,
@@ -293,23 +307,46 @@ describe("provider local service shutdown", () => {
           throw new Error("Expected initial provider local service lease");
         }
         const originalPid = captureServicePid(healthUrl, pids);
+        const child = [...children].find((spawned) => spawned.pid === originalPid);
+        if (!child) {
+          throw new Error("Expected the owned child process");
+        }
         lease.release();
-        // The child really exits; only its owner's liveness observation stays stale.
-        const probeTarget = process.platform === "win32" ? originalPid : -originalPid;
-        const realKill = process.kill.bind(process);
-        const kill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
-          if (pid === probeTarget && signal === 0) {
-            return true;
-          }
-          return realKill(pid, signal);
-        });
+        // Hold the platform's authoritative completion fact while the child really exits.
+        let restoreObservation: () => void;
+        if (process.platform === "win32") {
+          const realEmit = child.emit.bind(child);
+          let closeArgs: unknown[] | undefined;
+          const emit = vi.spyOn(child, "emit").mockImplementation((event, ...args) => {
+            if (event === "close") {
+              closeArgs = args;
+              return false;
+            }
+            return realEmit(event, ...args);
+          });
+          restoreObservation = () => {
+            emit.mockRestore();
+            if (closeArgs) {
+              child.emit("close", ...closeArgs);
+            }
+          };
+        } else {
+          const realKill = process.kill.bind(process);
+          const kill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+            if (pid === -originalPid && signal === 0) {
+              return true;
+            }
+            return realKill(pid, signal);
+          });
+          restoreObservation = () => kill.mockRestore();
+        }
         try {
           await expect(stopManagedProviderLocalServices()).rejects.toThrow(
             `Local model service process tree ${originalPid} did not stop`,
           );
           expect(hasManagedProviderLocalServices()).toBe(true);
         } finally {
-          kill.mockRestore();
+          restoreObservation();
         }
 
         expect(isPidAlive(originalPid)).toBe(false);
@@ -328,6 +365,7 @@ describe("provider local service shutdown", () => {
       },
       stopManagedProviderLocalServices,
       () => killOwnedServices(pids),
+      () => unsubscribe("child_process", observeSpawn),
     );
   });
 });

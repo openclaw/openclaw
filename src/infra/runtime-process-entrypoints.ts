@@ -4,6 +4,11 @@ const currentModuleUrl = import.meta.url;
 export const SQLITE_READONLY_CHILD_ARG = "--openclaw-sqlite-readonly-child";
 
 export const runtimeProcessEntrypoints = {
+  codeModeNode: {
+    currentModuleUrl,
+    sourceWorkerName: "../agents/code-mode-node.worker",
+    distWorkerPath: "agents/code-mode-node.worker.js",
+  },
   cronReadOnly: {
     currentModuleUrl,
     sourceWorkerName: "../cron/store/read-only.worker",
@@ -78,6 +83,11 @@ export const runtimeProcessEntrypoints = {
     currentModuleUrl,
     sourceWorkerName: "../boards/sqlite-board-store.worker",
     distWorkerPath: "boards/sqlite-board-store.worker.js",
+  },
+  sessionSharingStore: {
+    currentModuleUrl,
+    sourceWorkerName: "../config/sessions/session-sharing-store.worker",
+    distWorkerPath: "config/sessions/session-sharing-store.worker.js",
   },
   heartbeatOutcomeStore: {
     currentModuleUrl,
@@ -163,6 +173,11 @@ export const runtimeProcessEntrypoints = {
     currentModuleUrl,
     sourceWorkerName: "../agents/sessions/session-manager-metadata.worker",
     distWorkerPath: "agents/sessions/session-manager-metadata.worker.js",
+  },
+  sessionTranscriptReports: {
+    currentModuleUrl,
+    sourceWorkerName: "../config/sessions/session-accessor.sqlite-transcript-reports.worker",
+    distWorkerPath: "config/sessions/session-accessor.sqlite-transcript-reports.worker.js",
   },
   sessionTranscriptReconcile: {
     currentModuleUrl,

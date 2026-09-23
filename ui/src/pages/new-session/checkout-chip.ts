@@ -1,5 +1,7 @@
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { icons } from "../../components/icons.ts";
+import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { renderSessionMenuItem } from "./cloud-target.ts";
@@ -186,7 +188,7 @@ function renderWorktreeFields(params: {
     aria-label=${t("newSession.worktreeBaseRef")}
     aria-autocomplete=${suggestions.length ? "list" : nothing}
     aria-controls=${suggestions.length ? (params.idPrefix ?? "new-session") + "-worktree-branch-suggestions" : nothing}
-    aria-expanded="false"
+    aria-expanded=${suggestions.length ? "false" : nothing}
     ?disabled=${params.submitting || params.pendingPlacement}
     placeholder=${
       params.branchesLoading
@@ -235,6 +237,7 @@ function renderWorktreeFields(params: {
                   id=${(params.idPrefix ?? "new-session") + "-worktree-branch-suggestions"}
                   class="new-session-page__branch-suggestions"
                   role="listbox"
+                  aria-label=${t("newSession.worktreeBaseRef")}
                 >
                   ${suggestions.map(
                     (branch, index) => html`<button
@@ -357,6 +360,7 @@ export function renderCheckoutChip(params: {
       </button>
     </span>
     <wa-popover
+      ${ref(syncPopoverLabel)}
       class="new-session-page__select new-session-page__checkout-popover new-session-page__picker-popover"
       for=${(params.idPrefix ?? "new-session") + "-checkout-trigger"}
       placement="bottom-start"

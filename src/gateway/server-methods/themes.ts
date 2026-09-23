@@ -183,6 +183,7 @@ async function readThemes(
     current,
     theme: descriptor(theme),
     ...(theme.definition ? { definition: theme.definition } : {}),
+    ...(theme.artwork ? { artwork: theme.artwork } : {}),
   };
   return { owner, entries, catalog, result };
 }

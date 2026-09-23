@@ -246,6 +246,7 @@ export function registerGatewayCronHandoffTests({
       const releaseSecond = createDeferred();
       const { spawn } = mockCronSupervisor(...watched);
       requestHeartbeatAndWaitMock
+        .mockReset()
         .mockImplementationOnce(async () => {
           firstStarted.resolve();
           await releaseFirst.promise;
@@ -350,10 +351,16 @@ export function registerGatewayCronHandoffTests({
         for (const exit of exits) {
           exit.resolve(runExit());
         }
-        await adoption;
-        await next.cron.stopAndDrain?.();
-        await previous.cron.stopAndDrain?.();
-        start?.mockRestore();
+        try {
+          await adoption;
+          await next.cron.stopAndDrain?.();
+          await previous.cron.stopAndDrain?.();
+        } finally {
+          nextRun.mockRestore();
+          start?.mockRestore();
+          // The stop case deliberately leaves its second heartbeat unconsumed.
+          requestHeartbeatAndWaitMock.mockReset();
+        }
       }
     },
   );

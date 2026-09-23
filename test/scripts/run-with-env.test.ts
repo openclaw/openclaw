@@ -14,6 +14,11 @@ import {
   resolveForceKillDelayMs,
   resolveSpawnCommand,
 } from "../../scripts/run-with-env.mts";
+import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { waitForPidFile } from "../helpers/process-wait.js";
 import { withTestTimeout } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
@@ -48,9 +53,7 @@ function spawnWrapperFixture(
   const wrapper = spawn(
     process.execPath,
     [
-      "--import",
-      "tsx",
-      "scripts/run-with-env.mts",
+      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv)),
       ...assignments,
       "--",
       "node",
@@ -192,7 +195,10 @@ describe("run-with-env", () => {
   it("prints wrapper help without spawning a command", () => {
     const result = spawnSync(
       process.execPath,
-      ["--import", "tsx", "scripts/run-with-env.mts", "--help"],
+      [
+        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv)),
+        "--help",
+      ],
       {
         cwd: process.cwd(),
         encoding: "utf8",
@@ -214,9 +220,7 @@ describe("run-with-env", () => {
     const result = spawnSync(
       process.execPath,
       [
-        "--import",
-        "tsx",
-        "scripts/run-with-env.mts",
+        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv)),
         "1INVALID=value",
         "--",
         "node",
@@ -282,9 +286,7 @@ describe("run-with-env", () => {
     const result = spawnSync(
       process.execPath,
       [
-        "--import",
-        "tsx",
-        "scripts/run-with-env.mts",
+        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv)),
         "OPENCLAW_RUN_WITH_ENV_SIGNAL_TEST=1",
         "--",
         "node",
@@ -456,9 +458,7 @@ describe("run-with-env", () => {
     const result = spawnSync(
       process.execPath,
       [
-        "--import",
-        "tsx",
-        "scripts/run-with-env.mts",
+        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv)),
         "OPENCLAW_RUN_WITH_ENV_SIGNAL_TEST=1",
         "--",
         "node",
@@ -476,9 +476,7 @@ describe("run-with-env", () => {
     const result = spawnSync(
       process.execPath,
       [
-        "--import",
-        "tsx",
-        "scripts/run-with-env.mts",
+        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv)),
         "OPENCLAW_RUN_WITH_ENV_SIGNAL_TEST=1",
         "--",
         "node",

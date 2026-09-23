@@ -928,6 +928,7 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("keeps catalog-adopted sessions on Codex for memory flush turns", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
     const sessionEntry: SessionEntry = createFlushSessionEntry({
       sessionId: "catalog-adopted-session",
       agentHarnessId: "codex",
@@ -942,8 +943,9 @@ describe("runMemoryFlushIfNeeded", () => {
         },
       },
     });
+    await writeTestSessionStore(storePath, "main", sessionEntry);
 
-    const result = await runMemoryFlushIfNeeded({
+    const result = await runDefaultMemoryFlush(sessionEntry, {
       cfg: {
         agents: {
           defaults: {
@@ -961,13 +963,7 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionKey: "main",
       }),
       defaultModel: "anthropic/claude-opus-4-6",
-      modelContextTokens: 100_000,
-      resolvedVerboseLevel: "off",
-      sessionEntry,
-      sessionStore: { main: sessionEntry },
-      sessionKey: "main",
-      isHeartbeat: false,
-      replyOperation: createReplyOperation(),
+      storePath,
     });
 
     expect(result.outcome).toBe("completed");
@@ -1347,10 +1343,12 @@ describe("runMemoryFlushIfNeeded", () => {
     registerMemoryFlushPlanResolverForTest(() =>
       createModifiedMemoryFlushPlan({ model: "ollama/qwen3:8b" }),
     );
+    const storePath = path.join(rootDir, "sessions.json");
     const sessionEntry = createFlushSessionEntry();
+    await writeTestSessionStore(storePath, "main", sessionEntry);
 
     const replyOperation = createReplyOperation();
-    await runMemoryFlushIfNeeded({
+    await runDefaultMemoryFlush(sessionEntry, {
       cfg: {
         agents: {
           defaults: {
@@ -1379,12 +1377,7 @@ describe("runMemoryFlushIfNeeded", () => {
         ],
       }),
       defaultModel: "anthropic/claude",
-      modelContextTokens: 100_000,
-      resolvedVerboseLevel: "off",
-      sessionEntry,
-      sessionStore: { main: sessionEntry },
-      sessionKey: "main",
-      isHeartbeat: false,
+      storePath,
       replyOperation,
     });
 
@@ -1417,6 +1410,7 @@ describe("runMemoryFlushIfNeeded", () => {
   it.each([undefined, "model-owner"])(
     "prepares the requested memory runtime without pinning observations (owner %s)",
     async (pluginOwnerId) => {
+      const storePath = path.join(rootDir, "sessions.json");
       const cfg = {
         agents: {
           defaults: {
@@ -1432,6 +1426,7 @@ describe("runMemoryFlushIfNeeded", () => {
         pluginOwnerId,
         agentHarnessId: "openclaw",
       });
+      await writeTestSessionStore(storePath, "main", sessionEntry);
       const runtimePolicySessionKey = "agent:main:telegram:default:direct:12345";
       runWithModelFallbackMock.mockImplementationOnce(
         async (params: { provider: string; model: string; run: ModelFallbackParams["run"] }) => ({
@@ -1445,7 +1440,7 @@ describe("runMemoryFlushIfNeeded", () => {
         }),
       );
 
-      await runMemoryFlushIfNeeded({
+      await runDefaultMemoryFlush(sessionEntry, {
         cfg,
         followupRun: createTestFollowupRun({
           agentId: "main",
@@ -1457,14 +1452,8 @@ describe("runMemoryFlushIfNeeded", () => {
           modelSelectionLocked: sessionEntry.modelSelectionLocked,
         }),
         defaultModel: "openai/gpt-5.4",
-        modelContextTokens: 100_000,
-        resolvedVerboseLevel: "off",
-        sessionEntry,
-        sessionStore: { main: sessionEntry },
-        sessionKey: "main",
+        storePath,
         runtimePolicySessionKey,
-        isHeartbeat: false,
-        replyOperation: createReplyOperation(),
       });
 
       const fallbackCall = requireModelFallbackCall();
@@ -1504,24 +1493,20 @@ describe("runMemoryFlushIfNeeded", () => {
   );
 
   it("ignores stale runtime pins before memory-flush fallback preflight", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
     const sessionEntry: SessionEntry = createFlushSessionEntry({
       agentRuntimeOverride: "unsupported-runtime",
     });
+    await writeTestSessionStore(storePath, "main", sessionEntry);
 
-    await runMemoryFlushIfNeeded({
+    await runDefaultMemoryFlush(sessionEntry, {
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({
         provider: "openai",
         model: "gpt-5.4",
       }),
       defaultModel: "openai/gpt-5.4",
-      modelContextTokens: 100_000,
-      resolvedVerboseLevel: "off",
-      sessionEntry,
-      sessionStore: { main: sessionEntry },
-      sessionKey: "main",
-      isHeartbeat: false,
-      replyOperation: createReplyOperation(),
+      storePath,
     });
 
     expect(
@@ -4659,6 +4644,7 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("uses configured prompts and stored bootstrap warning signatures", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -4684,6 +4670,7 @@ describe("runMemoryFlushIfNeeded", () => {
         },
       },
     };
+    await writeTestSessionStore(storePath, "main", sessionEntry);
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,
       forceFlushTranscriptBytes: 1_000_000_000,
@@ -4693,17 +4680,11 @@ describe("runMemoryFlushIfNeeded", () => {
       relativePath: "memory/2023-11-14.md",
     }));
 
-    await runMemoryFlushIfNeeded({
+    await runDefaultMemoryFlush(sessionEntry, {
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({ extraSystemPrompt: "extra system" }),
       defaultModel: "anthropic/claude-opus-4-6",
-      modelContextTokens: 100_000,
-      resolvedVerboseLevel: "off",
-      sessionEntry,
-      sessionStore: { main: sessionEntry },
-      sessionKey: "main",
-      isHeartbeat: false,
-      replyOperation: createReplyOperation(),
+      storePath,
     });
 
     const flushCall = requireEmbeddedAgentCall();

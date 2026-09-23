@@ -6,8 +6,8 @@ import {
   summarizeMapping,
 } from "openclaw/plugin-sdk/allow-from";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
-import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { warn, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -70,11 +70,10 @@ export function resolveSlackMonitorPolicy(
     log: (message) => runtime?.log?.(warn(message)),
   });
   return {
-    historyLimit: Math.max(
-      0,
-      slack.historyLimit ?? cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+    historyLimit: resolvePromptHistoryLimit(
+      slack.historyLimit ?? cfg.messages?.groupChat?.historyLimit,
     ),
-    dmHistoryLimit: Math.max(0, slack.dmHistoryLimit ?? 0),
+    dmHistoryLimit: resolvePromptHistoryLimit(slack.dmHistoryLimit, 0),
     sessionScope: cfg.session?.scope ?? ("per-sender" as const),
     mainKey: normalizeMainKey(cfg.session?.mainKey),
     dmEnabled: slack.dm?.enabled ?? true,

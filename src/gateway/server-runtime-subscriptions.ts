@@ -11,11 +11,9 @@ import { configureExecutionIdentityAdmissionSink } from "../audit/execution-iden
 import { configureMessageActionDecisionSink } from "../audit/message-action-decision.js";
 import { onTrustedMessageAuditEvent } from "../audit/message-audit-events.js";
 import { configureRuntimeActionDecisionSink } from "../audit/runtime-action-decision.js";
-import {
-  configureChannelAdmissionDecisionSink,
-  configureChannelAdmissionEvidenceCollection,
-} from "../channels/message-access/admission-evidence.js";
+import { createChannelAdmissionAudit } from "../channels/message-access/admission-evidence.js";
 import { getRuntimeConfig } from "../config/io.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   type AgentEventRuntimePayload,
   onAgentAuditEvent,
@@ -30,7 +28,10 @@ import {
   onGatewaySuspendAdmissionChange,
   runWithRetainedGatewayRootWork,
 } from "../process/gateway-work-admission.js";
-import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import {
+  onSessionIdentityMutation,
+  onSessionLifecycleEvent,
+} from "../sessions/session-lifecycle-events.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createLazyPromise, createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
@@ -44,6 +45,7 @@ import {
   removeChatAbortControllerEntry,
   type RestartRecoveryCandidate,
 } from "./chat-abort.js";
+import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 import type {
   ChatRunState,
@@ -111,32 +113,33 @@ export function startGatewayEventSubscriptions(params: {
   refreshConnectedUserProfiles: () => void;
   getSessionRowProjection?: () => SessionRowProjection | undefined;
 }) {
-  // The worker always runs retention maintenance. audit.enabled only controls
-  // producer subscriptions, so disabling collection cannot strand expired rows.
-  const runtimeConfig = getRuntimeConfig();
-  const auditEnabled = isAuditLedgerEnabled(runtimeConfig);
-  const auditMessageMode = resolveAuditMessageMode(runtimeConfig);
-  const auditRecorder = createAuditEventRecorder({
-    messageMode: auditEnabled ? auditMessageMode : "off",
+  // Collection changes gate new work; the writer retains accepted work and maintenance.
+  const auditRecorder = createAuditEventRecorder({ getConfig: getRuntimeConfig });
+  const clearAuditSinks = [
+    configureExecutionIdentityAdmissionSink(auditRecorder.recordExecutionIdentity),
+    configureExecutionDecisionWorkSink(auditRecorder.recordExecutionDecisionWork),
+    configureMessageActionDecisionSink(auditRecorder.recordExecutionDecision),
+    configureRuntimeActionDecisionSink(auditRecorder.recordExecutionDecision),
+  ];
+  const channelAdmissionAudit = createChannelAdmissionAudit({
+    enabled: isExecutionIdentityCollectionEnabled(getRuntimeConfig()),
+    decisionSink: auditRecorder.recordExecutionDecision,
   });
-  const clearExecutionIdentityAdmissionSink = configureExecutionIdentityAdmissionSink(
-    auditRecorder.recordExecutionIdentity,
-  );
-  const clearExecutionDecisionWorkSink = configureExecutionDecisionWorkSink(
-    auditRecorder.recordExecutionDecisionWork,
-  );
-  const clearChannelAdmissionEvidenceCollection = configureChannelAdmissionEvidenceCollection(
-    isExecutionIdentityCollectionEnabled(runtimeConfig),
-  );
-  const clearChannelAdmissionDecisionSink = configureChannelAdmissionDecisionSink(
-    auditRecorder.recordExecutionDecision,
-  );
-  const clearMessageActionDecisionSink = configureMessageActionDecisionSink(
-    auditRecorder.recordExecutionDecision,
-  );
-  const clearRuntimeActionDecisionSink = configureRuntimeActionDecisionSink(
-    auditRecorder.recordExecutionDecision,
-  );
+  let auditPolicyClosed = false;
+  let unsubscribeMessageAuditEvents: (() => void) | undefined;
+  const reconcileAuditPolicy = (config: OpenClawConfig) => {
+    if (auditPolicyClosed) {
+      return;
+    }
+    channelAdmissionAudit.configure(isExecutionIdentityCollectionEnabled(config));
+    if (isAuditLedgerEnabled(config) && resolveAuditMessageMode(config) !== "off") {
+      unsubscribeMessageAuditEvents ??= onTrustedMessageAuditEvent(auditRecorder.recordMessage);
+    } else {
+      unsubscribeMessageAuditEvents?.();
+      unsubscribeMessageAuditEvents = undefined;
+    }
+  };
+  reconcileAuditPolicy(getRuntimeConfig());
   const sessionActivitySummaries = createSessionActivitySummaries({
     getConfig: getRuntimeConfig,
     onChanged: (target) => {
@@ -200,16 +203,8 @@ export function startGatewayEventSubscriptions(params: {
   if (params.signal.aborted) {
     stopSessionBackgroundWork();
   }
-  const unsubscribePrivateAuditEvents = auditEnabled
-    ? onAgentAuditEvent(auditRecorder.record)
-    : undefined;
-  const unsubscribeToolAuditEvents = auditEnabled
-    ? onTrustedToolExecutionEvent(auditRecorder.recordTool)
-    : undefined;
-  const unsubscribeMessageAuditEvents =
-    auditEnabled && auditMessageMode !== "off"
-      ? onTrustedMessageAuditEvent(auditRecorder.recordMessage)
-      : undefined;
+  const unsubscribePrivateAuditEvents = onAgentAuditEvent(auditRecorder.record);
+  const unsubscribeToolAuditEvents = onTrustedToolExecutionEvent(auditRecorder.recordTool);
   const sessionLifecyclePersistence = createSessionLifecyclePersistenceOwner();
   const agentEventDispatches = new Set<Promise<void>>();
   const eventRowOwners = new WeakMap<
@@ -472,9 +467,7 @@ export function startGatewayEventSubscriptions(params: {
     let terminalEntries: ChatAbortControllerEntry[] | undefined;
     sessionObserver.handleEvent(evt);
     sessionActivitySummaries.handleEvent(evt);
-    if (auditEnabled) {
-      auditRecorder.record(evt);
-    }
+    auditRecorder.record(evt);
     const lifecyclePhase =
       evt.stream === "lifecycle" && typeof evt.data?.phase === "string"
         ? evt.data.phase
@@ -640,19 +633,16 @@ export function startGatewayEventSubscriptions(params: {
     void dispatch.then(() => agentEventDispatches.delete(dispatch));
   });
   const agentUnsub = async () => {
+    auditPolicyClosed = true;
     unsubscribeAgentEvents();
     params.signal.removeEventListener("abort", stopSessionBackgroundWork);
     stopSessionBackgroundWork();
     await sessionBackgroundStop;
-    unsubscribePrivateAuditEvents?.();
-    unsubscribeToolAuditEvents?.();
+    unsubscribePrivateAuditEvents();
+    unsubscribeToolAuditEvents();
     unsubscribeMessageAuditEvents?.();
-    clearExecutionDecisionWorkSink();
-    clearExecutionIdentityAdmissionSink();
-    clearChannelAdmissionEvidenceCollection();
-    clearChannelAdmissionDecisionSink();
-    clearMessageActionDecisionSink();
-    clearRuntimeActionDecisionSink();
+    clearAuditSinks.forEach((clear) => clear());
+    channelAdmissionAudit.close();
     // A missing-key terminal can still be resolving its persisted run mapping.
     // Join dispatch first so handler consumption precedes persistence drain.
     await Promise.allSettled(agentEventDispatches);
@@ -679,6 +669,10 @@ export function startGatewayEventSubscriptions(params: {
     });
   });
 
+  // Committed resets/rotations can change access after the originating run is gone.
+  // Invalidate synchronously before any yielded reader can accept its old access snapshot.
+  // Each runtime owns its callback so late disposal cannot remove a replacement's listener.
+  const unsubscribeSessionIdentity = onSessionIdentityMutation(() => bumpGatewayAccessRevision());
   const unsubscribeProfileChanges = onUserProfilesChanged(() => {
     params.refreshConnectedUserProfiles();
     params.broadcastToConnIds(
@@ -711,6 +705,7 @@ export function startGatewayEventSubscriptions(params: {
     params.broadcast("gateway.suspension", { phase });
   });
   const lifecycleUnsub = () => {
+    unsubscribeSessionIdentity();
     unsubscribeSuspension();
     unsubscribeProfileChanges();
     unsubscribeLifecycle();
@@ -719,6 +714,8 @@ export function startGatewayEventSubscriptions(params: {
   const taskUnsub = startGatewayTaskSubscriptions(params);
 
   return {
+    channelAdmissionAudit,
+    reconcileAuditPolicy,
     sessionActivitySummaries,
     sessionCompanion,
     sessionObserver,

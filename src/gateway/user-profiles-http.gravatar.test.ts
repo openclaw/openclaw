@@ -4,6 +4,7 @@ import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { bindHttpResponseAuthority } from "./http-request-authority.js";
 import { handleUserProfileAvatarHttpRequest } from "./user-profiles-http.js";
 
 const getUserProfileListItem = vi.hoisted(() => vi.fn());
@@ -58,7 +59,11 @@ describe("Gravatar HTTP waiter lifetimes", () => {
   beforeEach(() => {
     fetchImpl.mockReset();
     getUserProfileListItem.mockReset();
-    authorizeControlUiReadRequestOrReply.mockReset().mockResolvedValue({});
+    authorizeControlUiReadRequestOrReply
+      .mockReset()
+      .mockImplementation(({ res }: { res: ServerResponse }) =>
+        bindHttpResponseAuthority({}, res, () => true),
+      );
   });
 
   afterEach(async () => {
@@ -182,7 +187,7 @@ describe("Gravatar HTTP waiter lifetimes", () => {
   });
 
   it("does not start a Gravatar fetch for a client already disconnected during authorization", async () => {
-    const authorized = createDeferred<object>();
+    const authorized = createDeferred<ReturnType<typeof bindHttpResponseAuthority> | null>();
     authorizeControlUiReadRequestOrReply.mockReturnValue(authorized.promise);
     getUserProfileListItem.mockReturnValue({
       id: "disconnected-before-lookup",
@@ -200,14 +205,14 @@ describe("Gravatar HTTP waiter lifetimes", () => {
       const closed = once(first.response, "close");
       disconnected.client.destroy();
       await closed;
-      authorized.resolve({});
-      await first.promise;
+      authorized.resolve(bindHttpResponseAuthority({}, first.response, () => true));
+      await expect(first.promise).rejects.toThrow("HTTP request authority expired");
 
       expect(fetchImpl).not.toHaveBeenCalled();
       expect(writeHead).not.toHaveBeenCalled();
       expect(end).not.toHaveBeenCalled();
     } finally {
-      authorized.resolve({});
+      authorized.resolve(null);
     }
   });
 });

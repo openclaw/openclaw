@@ -40,6 +40,7 @@ export type StoredComposerSession = {
 export function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueItem): boolean {
   return (
     left.id === right.id &&
+    left.asyncQuestionItemId === right.asyncQuestionItemId &&
     left.text === right.text &&
     left.workContextUnavailable === right.workContextUnavailable &&
     JSON.stringify(left.workContext) === JSON.stringify(right.workContext) &&
@@ -116,6 +117,10 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
         .filter((item): item is ChatAttachment => item !== null)
     : [];
   const item: ChatQueueItem = { id, text, createdAt };
+  const asyncQuestionItemId = normalizeOptionalString(entry.asyncQuestionItemId);
+  if (asyncQuestionItemId && asyncQuestionItemId.length <= 256) {
+    item.asyncQuestionItemId = asyncQuestionItemId;
+  }
   if (entry.workContext !== undefined) {
     item.workContext = readChatWorkContext(entry.workContext);
     if (!item.workContext) {
@@ -217,6 +222,7 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   } else if (
     entry.sendState === "failed" ||
     entry.sendState === "unconfirmed" ||
+    entry.sendState === "held" ||
     entry.sendState === "waiting-idle" ||
     entry.sendState === "waiting-reconnect"
   ) {
@@ -257,12 +263,12 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
     (!Array.isArray(entry.mentions) || entry.mentions.length !== (mentions?.length ?? 0))
   ) {
     // A reconnect must not send a different recipient selection after losing its binding.
-    item.sendState = "failed";
+    item.sendState = item.sendState === "held" ? "held" : "failed";
     item.sendError = t("chat.mentions.restoreFailed");
   }
   if (entry.workContextUnavailable === true || item.workContextUnavailable) {
     item.workContextUnavailable = true;
-    item.sendState = "failed";
+    item.sendState = item.sendState === "held" ? "held" : "failed";
     item.sendError = t("chat.messages.attachedContext.restoreFailed");
   }
   return item;

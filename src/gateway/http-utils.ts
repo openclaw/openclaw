@@ -46,7 +46,6 @@ export {
   checkGatewayHttpRequestAuth,
   getBearerToken,
   getHeader,
-  resolveOpenAiCompatibleHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
   resolveSharedSecretHttpOperatorScopes,
   resolveTrustedHttpOperatorScopes,

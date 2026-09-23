@@ -1,17 +1,24 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
+import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromGatewayIngress } from "../commands/agent.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../runtime.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
+import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+
+export type OpenAiCompatibleHttpOptions<TConfig> = GatewayHttpRequestAuthOptions & {
+  config?: TConfig;
+  maxBodyBytes?: number;
+  resolveGatewayContext?: GatewayContextResolver;
+};
 
 export type OpenAiCompatiblePendingToolCall = {
   id: string;
@@ -79,9 +86,17 @@ export async function runOpenAiCompatibleAgentCommand(params: {
   requestAuth: AuthorizedGatewayHttpRequest;
   operatorScopes: readonly string[];
   abortSignal?: AbortSignal;
+  hasCurrentClientAuthority?: () => boolean;
   resolveGatewayContext?: GatewayContextResolver;
 }) {
   params.abortSignal?.throwIfAborted();
+  let admitted = false;
+  const assertSourceCurrent = () => {
+    if (!admitted && params.hasCurrentClientAuthority?.() === false) {
+      throw new ToolAuthorizationError("Gateway requester authority changed");
+    }
+  };
+  assertSourceCurrent();
   const client = createSyntheticPluginRuntimeClient({
     authenticatedUserProfile: params.requestAuth.authenticatedUserProfile,
     operatorRoleActor: params.requestAuth.operatorRoleActor,
@@ -127,12 +142,13 @@ export async function runOpenAiCompatibleAgentCommand(params: {
         allowModelOverride: params.modelOverride !== undefined,
         abortSignal,
         operatorAuthority: captured?.authority,
-        ...(params.resolveGatewayContext
-          ? {
-              onAdmittedRunContext: (context: AdmittedRunContext) =>
-                bindGatewayContextResolver(context, params.resolveGatewayContext),
-            }
-          : {}),
+        assertSourceCurrent,
+        onAdmittedRunContext: (context) => {
+          assertSourceCurrent();
+          bindGatewayContextResolver(context, params.resolveGatewayContext);
+          // Admission takes request custody; the retained run keeps its original access grant.
+          admitted = true;
+        },
       },
       defaultRuntime,
       createDefaultDeps(),

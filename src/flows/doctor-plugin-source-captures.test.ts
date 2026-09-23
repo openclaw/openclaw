@@ -149,7 +149,11 @@ it.each([
     reason: "fixture census unavailable",
   },
 ])("preserves legacy captures with $mode", async ({ mode, repair, maintenance, peers, reason }) => {
-  const file = write(systemTmp, "openclaw-plugin-build-legacy/source.cjs", "captured source");
+  const file = write(
+    systemTmp,
+    "openclaw-model-catalog-legacy/openclaw-plugin-build-one/source.cjs",
+    "captured source",
+  );
   inspectAsLaterProcess();
   census.mockReturnValue(mode === "unavailable census" ? { error: reason } : { pids: peers });
 
@@ -165,7 +169,9 @@ it("reclaims only tokenless capture roots and prints a receipt after successful 
   const tmp = path.join(stateDir, "tmp");
   const plugin = write(tmp, "openclaw-plugin-build-old/source.cjs", "abc");
   write(tmp, "openclaw-plugin-build-old/nested/module.cjs", "defg");
-  const catalog = write(systemTmp, "openclaw-model-catalog-old/catalog.cjs", "12345");
+  const catalogRoot = path.join(systemTmp, "openclaw-model-catalog-old");
+  const catalog = write(catalogRoot, "openclaw-plugin-build-one/package-0/source.cjs", "12345");
+  const second = write(catalogRoot, "openclaw-plugin-build-two/package-0/source.cjs", "678");
   const managed = write(tmp, "plugin-captures/owner/captures/source.cjs", "managed");
   const token = write(systemTmp, "openclaw-plugin-build-modern/owner.sqlite", "custody");
   const nested = write(tmp, "unrelated/openclaw-plugin-build-nested/source.cjs", "nested");
@@ -177,10 +183,12 @@ it("reclaims only tokenless capture roots and prints a receipt after successful 
   inspectAsLaterProcess();
 
   const output = await duringMaintenance(() => runCaptureReport(true));
-  expect(output).toContain("2 legacy plugin capture root(s), 12 B");
-  expect(output).toContain("Removed 2 legacy plugin capture root(s), 12 B.");
-  for (const file of [plugin, catalog]) {
-    expect(output).toContain(`Removed ${path.dirname(file)} (`);
+  expect(output).toContain("2 legacy plugin capture root(s), 15 B");
+  expect(output).toContain("Removed 2 legacy plugin capture root(s), 15 B.");
+  for (const root of [path.dirname(plugin), catalogRoot]) {
+    expect(output).toContain(`Removed ${root} (`);
+  }
+  for (const file of [plugin, catalog, second]) {
     expect(fs.existsSync(file)).toBe(false);
   }
   for (const preserved of [managed, token, nested, ordinaryFile, outside]) {

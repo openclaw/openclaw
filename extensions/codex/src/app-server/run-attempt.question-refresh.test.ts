@@ -3,7 +3,7 @@ import { claimPendingAgentQuestionAnswer } from "openclaw/plugin-sdk/agent-harne
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { loadUserTurnTranscriptRecorderFactoryForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import type { CodexServerNotification } from "./protocol.js";
@@ -37,6 +37,11 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt question refresh", () => {
+  beforeEach(() => {
+    // Keep cold fixture setup from expiring the turn before its question can be published.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  });
+
   it.each([
     { name: "gateway-backed", isSecret: false, refresh: false, stagedSource: false },
     { name: "secret", isSecret: true, refresh: false, stagedSource: false },

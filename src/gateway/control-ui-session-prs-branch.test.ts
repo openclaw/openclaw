@@ -8,14 +8,15 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as worktreeGit from "../agents/worktrees/git.js";
 import { runGitReadOperation } from "../infra/git-read-cache.js";
 import { loadSessionPullRequestReferences } from "./control-ui-session-pr-references.js";
-import { loadControlUiSessionPullRequests } from "./control-ui-session-prs.js";
 import {
-  evictPullRequestCache,
+  createSessionPullRequestsFixture,
   githubJson,
   pullListItem,
   routedFetch,
   testGitContext as context,
 } from "./control-ui-session-prs.test-support.js";
+
+const { load: loadControlUiSessionPullRequests } = createSessionPullRequestsFixture();
 
 vi.mock("./control-ui-session-pr-references.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./control-ui-session-pr-references.js")>()),
@@ -158,7 +159,6 @@ describe("session branch diff stats", () => {
   });
 
   afterEach(async () => {
-    await evictPullRequestCache();
     await fs.rm(root, { recursive: true, force: true });
   });
 

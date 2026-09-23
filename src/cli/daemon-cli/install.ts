@@ -171,17 +171,8 @@ export function mergeInstallInvocationEnv(params: {
 /** Install or refresh the managed Gateway service. */
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
   let definitionBackup: GatewayServiceDefinitionBackupReceipt | undefined;
-  const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(
-    opts.json,
-    () => definitionBackup,
-  );
-  const warn = (message: string) => {
-    if (json) {
-      warnings.push(message);
-    } else {
-      defaultRuntime.log(message);
-    }
-  };
+  const { json, stdout, warnings, warn, emit, emitMessage, fail } =
+    createDaemonInstallActionContext(opts.json, () => definitionBackup);
   const installBlock = resolveDaemonInstallBlockMessage("gateway");
   if (installBlock) {
     fail(installBlock);
@@ -369,6 +360,8 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         `${recordedRuntime.error.message} Reinstall with: ${formatCliCommand("openclaw gateway install --force")}.`,
       );
       return;
+    } else if (recordedRuntime.status === "supported" && opts.runtime === undefined) {
+      runtimePath = recordedNode;
     }
   }
   if (loaded && !opts.force) {
@@ -424,14 +417,13 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
 
   if (loaded && !opts.force && !autoRefreshMessage) {
-    emit({
+    emitMessage({
       ok: true,
       result: "already-installed",
       message: `Gateway service already ${service.loadedText}.`,
       service: buildDaemonServiceSnapshot(service, loaded),
     });
     if (!json) {
-      defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
       defaultRuntime.log(`Reinstall with: ${formatCliCommand("openclaw gateway install --force")}`);
     }
     return;

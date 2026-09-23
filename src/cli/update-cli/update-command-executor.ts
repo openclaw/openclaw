@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
+import { readControlPlaneUpdateSentinelMeta } from "../../infra/update-control-plane-sentinel.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import {
   captureManagedUpdateLeaseDatabaseIdentity,
@@ -43,7 +44,14 @@ export type UpdateCommandExecutor = {
 
 type ManagedUpdateLeaseAuthority = ManagedUpdateLeaseDatabaseIdentity &
   Readonly<{ installKey: string; owner: string }>;
-const admittedAuthorities = new WeakMap<UpdateRecoveryFence, ManagedUpdateLeaseAuthority>();
+const admittedAuthorities = new WeakMap<
+  UpdateRecoveryFence,
+  {
+    authority: ManagedUpdateLeaseAuthority;
+    assertCurrent: () => void;
+    managedHandoff: boolean;
+  }
+>();
 const admittedRunIds = new WeakMap<UpdateRecoveryFence, string>();
 const retainedOwners = new WeakMap<UpdateRecoveryFence, string>();
 
@@ -52,11 +60,25 @@ export function captureUpdateCommandExecutorAuthority(
   runId?: string,
 ): ManagedUpdateLeaseAuthority {
   fence.assertCurrent();
-  const authority = admittedAuthorities.get(fence);
-  if (!authority || (runId !== undefined && admittedRunIds.get(fence) !== runId)) {
+  const admitted = admittedAuthorities.get(fence);
+  if (!admitted || (runId !== undefined && admittedRunIds.get(fence) !== runId)) {
     throw new UpdateCommandRecoveryPendingError("Package recovery requires its admitted executor.");
   }
-  return authority;
+  return admitted.authority;
+}
+
+/** Requester checks also run while a bound child suspends its parent's mutation fence. */
+export function assertUpdateRequesterContinuationOwner(
+  fence: UpdateRecoveryFence,
+  runId: string,
+): void {
+  const admitted = admittedAuthorities.get(fence);
+  if (!admitted?.managedHandoff || admittedRunIds.get(fence) !== runId) {
+    throw new UpdateCommandRecoveryPendingError(
+      "Requester continuation requires its admitted Gateway update owner.",
+    );
+  }
+  admitted.assertCurrent();
 }
 
 /** Compatibility requirement from a live admission, never a serialized claim. */
@@ -205,6 +227,15 @@ export async function withDelegatedUpdateCommandExecutor<T>(
           owner.assertIdle();
         },
       };
+      const meta = await readControlPlaneUpdateSentinelMeta();
+      assertBase();
+      const managedHandoff =
+        original.version !== 1 &&
+        original.helper.pid !== original.executor.pid &&
+        meta?.runId === runId &&
+        meta.handoffId === original.owner &&
+        meta.root !== undefined &&
+        resolveUpdateInstallRoot(meta.root) === original.key;
       childOwners.set(fence, (childRoot, childOperation, purpose) =>
         owner.run(childRoot, childOperation, purpose),
       );
@@ -215,14 +246,15 @@ export async function withDelegatedUpdateCommandExecutor<T>(
             fence.assertCurrent();
             if (databaseIdentity) {
               admittedRunIds.set(fence, runId);
-              admittedAuthorities.set(
-                fence,
-                Object.freeze({
+              admittedAuthorities.set(fence, {
+                authority: Object.freeze({
                   ...databaseIdentity,
                   installKey: original.key,
                   owner: original.owner,
                 }),
-              );
+                assertCurrent: assertBase,
+                managedHandoff,
+              });
             }
             if (retained) {
               retainedOwners.set(fence, retained.key);
@@ -307,6 +339,7 @@ export async function withUpdateCommandExecutor<T>(
       let store: ReturnType<typeof createManagedHandoffLeaseStore> | undefined;
       let lease: ManagedHandoffParent | undefined;
       let borrowed = false;
+      let managedHandoff = false;
       let serviceLease: ManagedHandoffLease | undefined;
       let serviceKey: string | undefined;
       let admissionComplete = false;
@@ -370,7 +403,7 @@ export async function withUpdateCommandExecutor<T>(
             spawner,
             ...(serviceLease ? { retainedParent: serviceLease } : {}),
             databasePath,
-            databaseIdentity: admittedAuthorities.get(fence),
+            databaseIdentity: admittedAuthorities.get(fence)?.authority,
           };
         },
       });
@@ -496,6 +529,7 @@ export async function withUpdateCommandExecutor<T>(
               }
               lease = found.lease;
               borrowed = true;
+              managedHandoff = true;
             } else {
               const acquired = store.acquire(key, randomUUID(), { kind: "update" });
               if (acquired.kind !== "acquired") {
@@ -542,7 +576,11 @@ export async function withUpdateCommandExecutor<T>(
               );
             }
             assertCurrent();
-            admittedAuthorities.set(fence, authority);
+            admittedAuthorities.set(fence, {
+              authority,
+              assertCurrent: assertBase,
+              managedHandoff,
+            });
             admittedRunIds.set(fence, runId);
             if (serviceLease) {
               retainedOwners.set(fence, serviceLease.key);

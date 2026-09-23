@@ -611,6 +611,7 @@ export function projectChatTranscript(
     locale,
     props.branding?.mascot,
     props.branding?.avatarHat,
+    props.branding?.artwork,
     props.branding?.workingPhrases,
     appliedBranding.mascot,
     appliedBranding.avatarHat,

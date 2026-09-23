@@ -22,9 +22,7 @@ import { cloneConfigWithResolutionFacts } from "../../config/resolution-facts.js
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
-import { readSessionInputBootstrapProfileId } from "../../sessions/session-participant-input.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { readUserProfileIdentity } from "../../state/user-profile-list.js";
 import type { RuntimeMsgContext } from "../templating.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { FollowupRun } from "./queue/types.js";
@@ -80,7 +78,6 @@ export type ReplyToolAuthorityInput = {
       | "approvalReviewerDeviceId"
       | "authProfileId"
       | "clientCaps"
-      | "bootstrapUserProfileId"
       | "gatewayUiCommandTarget"
       | "toolBindings"
     >
@@ -135,7 +132,6 @@ export function resolveInboundReplyToolAuthorityOverlay(params: {
       params.senderIsOwner || (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
     approvalReviewerDeviceId: normalizeOptionalString(ctx.ApprovalReviewerDeviceId),
     clientCaps: ctx.GatewayClientCaps,
-    bootstrapUserProfileId: readSessionInputBootstrapProfileId(ctx),
     gatewayUiCommandTarget: ctx.GatewayUiCommandTarget,
     toolBindings: ctx.GatewayRunToolBindings,
   };
@@ -208,7 +204,6 @@ function applyReplyToolAuthorityOverlay(
       traceAuthorized: overlay.traceAuthorized,
       approvalReviewerDeviceId: overlay.approvalReviewerDeviceId,
       clientCaps: overlay.clientCaps,
-      bootstrapUserProfileId: overlay.bootstrapUserProfileId,
       gatewayUiCommandTarget: overlay.gatewayUiCommandTarget,
       toolBindings: overlay.toolBindings,
     },
@@ -364,10 +359,6 @@ function resolveReplyToolAuthorityInputFingerprint(
         clientCaps: [...new Set(execution.clientCaps ?? [])].toSorted(),
         gatewayUiCommandTarget: resolveReplyScreenToolTarget(snapshot, capabilityProfile),
         themeProfileId: resolveReplyThemeProfileId(snapshot, capabilityProfile),
-        // Steering cannot reuse a frozen prompt prepared for another person.
-        bootstrapUserProfileId: execution.bootstrapUserProfileId
-          ? readUserProfileIdentity(execution.bootstrapUserProfileId)?.profileId
-          : undefined,
         toolBindings: execution.toolBindings,
       }),
     )

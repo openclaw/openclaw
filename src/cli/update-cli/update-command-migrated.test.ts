@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
+import { fileURLToPath } from "node:url";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../../config/io.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
@@ -14,6 +16,11 @@ import {
 } from "../../infra/package-update-integrity.js";
 import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-support.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
@@ -35,7 +42,12 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { createUpdateProgress } from "./progress.js";
+import { prepareCandidateAuthorityRuntime } from "./update-command-candidate-authority.test-support.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import {
+  MIGRATED_FIXTURE_NO_SERVICE,
+  migratedFinalizeFixtureEntrypoint,
+} from "./update-command-migrated-fixture-entrypoint.test-support.js";
 import type { MigratedUpdateFinalizationInput } from "./update-command-migrated-types.js";
 import {
   continueMigratedUpdateInFreshProcess,
@@ -50,6 +62,16 @@ vi.mock("../../state/openclaw-state-db-contract.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../state/openclaw-state-db-contract.js")>();
   return { ...actual, OPENCLAW_STATE_SCHEMA_VERSION: actual.OPENCLAW_STATE_SCHEMA_VERSION - 1 };
 });
+
+const runtimeFixture = createFixtureLifetime();
+let candidateRoot: string;
+beforeAll(async () => {
+  const runtime = await runtimeFixture.run(() =>
+    prepareCandidateAuthorityRuntime(runtimeFixture.createTempDir("migrated-candidate-runtime-")),
+  );
+  candidateRoot = fileURLToPath(new URL("../../", runtime.worker));
+});
+afterAll(() => runtimeFixture.cleanup());
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 let presentation: ReturnType<typeof createUpdateProgress> | undefined;
@@ -125,22 +147,24 @@ it.each([
     const result = {
       status: "ok" as const,
       mode: "npm" as const,
-      root: process.cwd(),
+      root: candidateRoot,
       steps: [],
       durationMs: 0,
     };
     await expect(
-      inspectActivatedUpdateState({
-        result,
-        root: process.cwd(),
-        schemaVersions,
-        candidateSchemaVersions: {
-          state: OPENCLAW_STATE_SCHEMA_VERSION + Number(changed === "shared"),
-          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-        },
-        config: {},
-        env,
-      }),
+      runtimeFixture.track(
+        inspectActivatedUpdateState({
+          result,
+          root: candidateRoot,
+          schemaVersions,
+          candidateSchemaVersions: {
+            state: OPENCLAW_STATE_SCHEMA_VERSION + Number(changed === "shared"),
+            agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+          },
+          config: {},
+          env,
+        }),
+      ),
     ).resolves.toBe(blocked);
   },
 );
@@ -277,13 +301,15 @@ it.each([
 it("refuses state inspection when activation leaves no known runtime root", async () => {
   const result = { status: "error" as const, mode: "npm" as const, steps: [], durationMs: 0 };
   await expect(
-    inspectActivatedUpdateState({
-      result,
-      root: process.cwd(),
-      schemaVersions: [],
-      config: {},
-      env: { OPENCLAW_STATE_DIR: dirs.make("unknown-update-runtime-") },
-    }),
+    runtimeFixture.track(
+      inspectActivatedUpdateState({
+        result,
+        root: candidateRoot,
+        schemaVersions: [],
+        config: {},
+        env: { OPENCLAW_STATE_DIR: dirs.make("unknown-update-runtime-") },
+      }),
+    ),
   ).resolves.toBe("rollback-state-unverified");
   expect(result).toMatchObject({
     reason: "rollback-state-unverified",
@@ -319,19 +345,21 @@ it.each([
     const result = {
       status: "ok" as const,
       mode: "npm" as const,
-      root: process.cwd(),
+      root: candidateRoot,
       steps: [],
       durationMs: 0,
     };
     await expect(
-      inspectActivatedUpdateState({
-        result,
-        root: process.cwd(),
-        schemaVersions,
-        candidateSchemaVersions: { state: contentVersion, agent: OPENCLAW_AGENT_SCHEMA_VERSION },
-        config: {},
-        env,
-      }),
+      runtimeFixture.track(
+        inspectActivatedUpdateState({
+          result,
+          root: candidateRoot,
+          schemaVersions,
+          candidateSchemaVersions: { state: contentVersion, agent: OPENCLAW_AGENT_SCHEMA_VERSION },
+          config: {},
+          env,
+        }),
+      ),
     ).resolves.toBe(blocked);
     expect(result).toMatchObject({ status: "ok", steps: [] });
     expect(shared.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
@@ -369,7 +397,7 @@ it.each([
       OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
       OPENCLAW_TEST_RUNTIME_LOG: "1",
     };
-    const root = legacy ? path.join(stateDir, "legacy-runtime") : process.cwd();
+    const root = legacy ? path.join(stateDir, "legacy-runtime") : candidateRoot;
     const legacyEffect = path.join(stateDir, "legacy-worker-effect");
     if (legacy) {
       const worker = path.join(root, "dist", "infra", "update-migrated-finalize.worker.js");
@@ -432,6 +460,11 @@ it.each([
     expect(() =>
       recordUpdateRunStep(created.runId, { step: "old writer", status: "completed" }, { env }),
     ).toThrow(/newer schema version/);
+    const rollbackOutcome = {
+      status: "not-attempted" as const,
+      reason: "state-migrated-no-rollback",
+    };
+    expect(() => progress.onRollbackOutcome?.(rollbackOutcome)).not.toThrow();
     expect(() =>
       progress.onStepComplete?.({ ...migrationStep, durationMs: 100, exitCode: 1 }),
     ).not.toThrow();
@@ -462,19 +495,31 @@ it.each([
         ),
       );
     const before = legacy ? await family() : undefined;
-    if (checkWorkMs !== undefined) {
-      const nativeCommand = childCommands.runUtf8CommandWithTimeout;
-      vi.spyOn(childCommands, "runUtf8CommandWithTimeout").mockImplementation(
-        async (argv, options): ReturnType<typeof nativeCommand> => {
-          const child = await nativeCommand(argv, options);
-          const allowance = typeof options === "number" ? options : options.timeoutMs;
-          // Keep the native admission/cleanup flow; model cold-start work in this phase only.
-          return argv.at(-1) === "--check" && (allowance ?? Infinity) < checkWorkMs
-            ? { ...child, code: 124, stdout: "", killed: true, termination: "timeout" }
-            : child;
-        },
-      );
-    }
+    const nativeCommand = childCommands.runUtf8CommandWithTimeout;
+    vi.spyOn(childCommands, "runUtf8CommandWithTimeout").mockImplementation(
+      async (argv, options): ReturnType<typeof nativeCommand> => {
+        const child = await nativeCommand(
+          legacy
+            ? argv
+            : [
+                process.execPath,
+                ...resolveRuntimeWorkerArgv(
+                  resolveRuntimeWorkerUrl(migratedFinalizeFixtureEntrypoint),
+                ),
+                JSON.stringify(runtimeProcessEntrypoints.sqliteReadOnly),
+                ...argv.slice(2),
+              ],
+          options,
+        );
+        const allowance = typeof options === "number" ? options : options.timeoutMs;
+        // Keep the native admission/cleanup flow; model cold-start work in this phase only.
+        return checkWorkMs !== undefined &&
+          argv.at(-1) === "--check" &&
+          (allowance ?? Infinity) < checkWorkMs
+          ? { ...child, code: 124, stdout: "", killed: true, termination: "timeout" }
+          : child;
+      },
+    );
     const work = withUpdateCommandExecutor(run.runId, async (executor) => {
       const serviceRoot = retained ? path.join(stateDir, "service-A") : undefined;
       if (serviceRoot) {
@@ -534,6 +579,7 @@ it.each([
           result: {
             status: "error",
             reason: "doctor-failed",
+            rollbackOutcome,
             mode: "npm",
             root,
             steps: [],
@@ -585,6 +631,7 @@ it.each([
         progress.pendingSteps,
       );
     });
+    void runtimeFixture.track(work);
     if (checkWorkMs !== undefined && stepBudgetMs !== undefined && stepBudgetMs < checkWorkMs) {
       await expect(work).rejects.toThrow(/delegation capability could not be inspected/);
       expect(terminalAtCleanup).toBeUndefined();
@@ -622,6 +669,13 @@ it.each([
         }),
       );
       expect(result.result.recovery?.serviceRestartSafe).toBe(false);
+    } else {
+      expect(result.result.steps).toContainEqual(
+        expect.objectContaining({
+          name: "gateway recovery verification",
+          failureFacts: [expect.objectContaining({ message: MIGRATED_FIXTURE_NO_SERVICE })],
+        }),
+      );
     }
     expect(rollback).not.toHaveBeenCalled();
     expect(terminalAtCleanup).toEqual({ status: "failed", reason: "state-migrated-no-rollback" });
@@ -637,9 +691,12 @@ it.each([
     const inspected = new DatabaseSync(database.path, { readOnly: true });
     try {
       const row = inspected
-        .prepare("SELECT status, reason, origin_json, steps_json FROM update_runs WHERE run_id = ?")
+        .prepare(
+          "SELECT status, reason, origin_json, steps_json, verification_json FROM update_runs WHERE run_id = ?",
+        )
         .get(created.runId);
       expect(row).toMatchObject({ status: "failed", reason: "state-migrated-no-rollback" });
+      expect(JSON.parse(String(row?.verification_json)).rollbackOutcome).toEqual(rollbackOutcome);
       expect(JSON.parse(String(row?.steps_json))).toEqual(
         expect.arrayContaining([progress.pendingSteps.at(-1)]),
       );

@@ -134,29 +134,6 @@ function renderHelpTitle(params: {
   `;
 }
 
-function renderDefaultOption(params: { label: string; help: string }): TemplateResult {
-  return html`
-    <span class="model-providers__segment-label">
-      <span>${params.label}</span>
-      <openclaw-tooltip open-on-click .content=${params.help}>
-        <button
-          type="button"
-          class="model-providers__segment-info"
-          aria-label=${params.help}
-          @click=${(event: Event) => event.stopPropagation()}
-          @keydown=${(event: KeyboardEvent) => {
-            if (event.key === "Escape") {
-              event.stopPropagation();
-            }
-          }}
-        >
-          ${icons.info}
-        </button>
-      </openclaw-tooltip>
-    </span>
-  `;
-}
-
 function fastModeOptionValue(value: "auto" | "on" | "off"): FastMode {
   return value === "auto" ? "auto" : value === "on";
 }
@@ -318,18 +295,19 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
           title: t("quickSettings.model.thinking"),
           label: t("modelProviders.defaults.thinkingHelpLabel"),
           triggerId: THINKING_HELP_ID,
-          body: html`<p>${t("modelProviders.defaults.thinkingHelp")}</p>`,
+          body: html`
+            <p>${t("modelProviders.defaults.thinkingHelp")}</p>
+            <p>${t("modelProviders.defaults.thinkingDefaultHelp")}</p>
+          `,
         }),
         control: html`
           ${renderSettingsSegmented({
             value: props.thinkingLevel ?? "",
+            ariaLabel: t("quickSettings.model.thinking"),
             options: [
               {
                 value: "",
-                label: renderDefaultOption({
-                  label: t("quickSettings.model.default"),
-                  help: t("modelProviders.defaults.thinkingDefaultHelp"),
-                }),
+                label: t("quickSettings.model.default"),
               },
               ...thinkingLevels.map((level) => ({
                 value: level,
@@ -354,18 +332,19 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
           title: t("quickSettings.model.fastMode"),
           label: t("modelProviders.defaults.fastModeHelpLabel"),
           triggerId: FAST_MODE_HELP_ID,
-          body: html`<p>${t("modelProviders.defaults.fastModeHelp")}</p>`,
+          body: html`
+            <p>${t("modelProviders.defaults.fastModeHelp")}</p>
+            <p>${t("modelProviders.defaults.fastModeDefaultHelp")}</p>
+          `,
         }),
         control: html`
           ${renderSettingsSegmented<"" | "auto" | "on" | "off">({
             value: fastMode,
+            ariaLabel: t("quickSettings.model.fastMode"),
             options: [
               {
                 value: "",
-                label: renderDefaultOption({
-                  label: t("quickSettings.model.default"),
-                  help: t("modelProviders.defaults.fastModeDefaultHelp"),
-                }),
+                label: t("quickSettings.model.default"),
               },
               { value: "auto", label: t("quickSettings.model.fastModes.auto") },
               { value: "on", label: t("quickSettings.model.fastModes.on") },

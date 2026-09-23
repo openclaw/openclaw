@@ -180,11 +180,14 @@ describe("post-core plugin payload degradation", () => {
             : undefined;
         const spy = vi
           .spyOn(convergence, "runPostCorePluginConvergence")
-          .mockImplementationOnce(async () => {
+          .mockImplementationOnce(async ({ cfg }) => {
             if (failure === "authority") {
               throw refusal;
             }
             return {
+              config: cfg,
+              configChanges: [],
+              installedPluginIdRecovery: new Map(),
               changes: [],
               warnings:
                 failure === "unclassified"

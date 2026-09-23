@@ -34,6 +34,7 @@ import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lif
 import {
   markSqliteReclamationSettled,
   waitForSqliteReclamationCommit,
+  waitForSqliteReclamationParentRelease,
 } from "./session-accessor.sqlite-reclamation-commit.js";
 import type {
   SqliteCanonicalValidationWorkerRequest,
@@ -103,7 +104,6 @@ export async function runColdMutationWorkerPort(
 async function runColdMutationWorker(port: MessagePort, data: SessionColdWorkerData) {
   const { mutateSessionColdTranscriptInWorker, prepareSessionColdRestoreInWorker } =
     await import("./session-cold-storage-worker.js");
-  const { reclaimSqliteFreePages } = await import("./session-history-archive-pruning.js");
   // Restore materialization must finish before requesting any write admission.
   const coldRecords =
     data.plan.kind === "cold-restore"
@@ -130,11 +130,7 @@ async function runColdMutationWorker(port: MessagePort, data: SessionColdWorkerD
               );
             },
           );
-          // The parent joins the cold transaction, not the subsequent bounded page drain.
-          markSqliteReclamationSettled(commitGate);
-          if (data.plan.kind !== "cold-restore") {
-            await reclaimSqliteFreePages(data.plan.databaseOptions, undefined, { maxPasses: 64 });
-          }
+          waitForSqliteReclamationParentRelease(commitGate);
           return changed;
         } finally {
           validation = getOpenClawAgentDatabaseValidation(openedDatabase);
@@ -189,12 +185,12 @@ export async function runReclamationWorkerPort(
   let failureCleanup: Awaited<ReturnType<typeof settleReclamationDatabase>> | undefined;
   let checkpointResultOwnedByRequest = false;
   const checkpointPath = sqliteReaderDatabasePathKey(databaseOptions.path);
-  const stopCheckpointRelay = onSqliteWalCheckpoint(({ databasePath, health }) => {
+  const stopCheckpointRelay = onSqliteWalCheckpoint(({ databasePath, ...snapshot }) => {
     if (!checkpointResultOwnedByRequest && databasePath === checkpointPath && claim?.isCurrent()) {
       port.postMessage({
         type: "checkpoint",
         operationId,
-        health,
+        snapshot,
       } satisfies SqliteReclamationWorkerMessage);
     }
   });
@@ -378,6 +374,8 @@ export async function runReclamationWorkerPort(
                           {
                             beforeMutation: currentClaim.assertCurrent,
                             onCommit: authorizeCommit,
+                            afterCommit: () =>
+                              waitForSqliteReclamationParentRelease(request.commitGate),
                           },
                         );
                   // Warm results must not revive proof invalidated by the parent between requests.

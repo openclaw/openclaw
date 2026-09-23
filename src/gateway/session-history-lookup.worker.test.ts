@@ -76,7 +76,11 @@ it("restores cold lookup bytes in a worker and keeps repeated validation off the
     // An unchanged projection revision is not proof that every stored payload is valid.
     fixture
       .database()
-      .prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = 1")
+      .prepare(
+        `UPDATE transcript_events
+         SET event_json = ?, event_zstd = NULL, event_utf8_bytes = NULL, navigation_json = NULL
+         WHERE session_id = ? AND seq = 1`,
+      )
       .run("{malformed", fixture.scope.sessionId);
     await expect(read()).rejects.toThrow();
   });

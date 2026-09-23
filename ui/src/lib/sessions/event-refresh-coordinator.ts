@@ -1,5 +1,4 @@
-const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 200;
-const SESSION_EVENT_REFRESH_MAX_WAIT_MS = 1_000;
+const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 5_000;
 
 type SessionEventRefreshCoordinatorOptions = {
   active: boolean;
@@ -13,7 +12,6 @@ export function createSessionEventRefreshCoordinator({
 }: SessionEventRefreshCoordinatorOptions) {
   let active = initialActive;
   let timer: ReturnType<typeof setTimeout> | 0 = 0;
-  let deadline = 0;
   let nextAllowed = 0;
   let pending: object | null = null;
   let revision = 0;
@@ -23,17 +21,14 @@ export function createSessionEventRefreshCoordinator({
   const clearTimer = () => {
     clearTimeout(timer);
     timer = 0;
-    deadline = 0;
   };
 
   const arm = (debounce = true) => {
-    if (!active || pending || !queued) {
+    if (!active || pending || !queued || timer) {
       return;
     }
     const now = Date.now();
-    deadline ||= now + SESSION_EVENT_REFRESH_MAX_WAIT_MS;
-    clearTimeout(timer);
-    const delay = debounce ? Math.min(SESSION_EVENT_REFRESH_DEBOUNCE_MS, deadline - now) : 0;
+    const delay = debounce ? SESSION_EVENT_REFRESH_DEBOUNCE_MS : 0;
     timer = setTimeout(start, Math.max(delay, nextAllowed - now));
   };
 
@@ -55,7 +50,7 @@ export function createSessionEventRefreshCoordinator({
         }
         pending = null;
         const completed = Date.now();
-        nextAllowed = completed + Math.min(15_000, Math.max(1_000, 3 * (completed - started)));
+        nextAllowed = completed + Math.min(15_000, Math.max(5_000, 3 * (completed - started)));
         arm();
       });
   };

@@ -225,8 +225,8 @@ describe("conversation-owned temporary environments", () => {
     );
     const reserveSpy = vi
       .spyOn(support.testState.store, "createSessionAttachmentIntent")
-      .mockImplementation((...args) => {
-        const reserved = reserve(...args);
+      .mockImplementation(async (...args) => {
+        const reserved = await reserve(...args);
         support.testState.config.tools = { deny: ["screen"] };
         return reserved;
       });
@@ -316,6 +316,64 @@ describe("conversation-owned temporary environments", () => {
     await expect(creation).rejects.toThrow("was stopped");
     expect(provision).not.toHaveBeenCalled();
     expect(support.testState.store.list()).toEqual([]);
+  });
+
+  it("cancels creations registered while Stop is awaiting the inventory", async () => {
+    const provision = vi.fn(async () => ({ leaseId: "lease-one", ssh: support.SSH_ENDPOINT }));
+    const service = support.createService(support.createProvider({ provision }));
+    const closeEntered = createDeferredCore();
+    const releaseClose = createDeferredCore();
+    const creationEntered = createDeferredCore();
+    const releaseCreation = createDeferredCore();
+    const ready = support.testState.store.ready.bind(support.testState.store);
+    vi.spyOn(support.testState.store, "ready")
+      .mockImplementationOnce(async () => {
+        await ready();
+        closeEntered.resolve();
+        await releaseClose.promise;
+      })
+      .mockImplementationOnce(async () => {
+        await ready();
+        creationEntered.resolve();
+        await releaseCreation.promise;
+      });
+    const closing = service
+      .destroySessionAttachment({ sessionId: identity.sessionId }, authorize)
+      .then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+    let creation: Promise<unknown> | undefined;
+    try {
+      await Promise.race([
+        closeEntered.promise,
+        closing.then((result) => {
+          throw new Error("Stop ended before inventory readiness", { cause: result });
+        }),
+      ]);
+      creation = service.createSessionAttachment(request, authorize).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      await Promise.race([
+        creationEntered.promise,
+        creation.then((result) => {
+          throw new Error("Creation ended before inventory readiness", { cause: result });
+        }),
+      ]);
+      releaseClose.resolve();
+      expect(await closing).toEqual({ value: undefined });
+      releaseCreation.resolve();
+      expect(await creation).toMatchObject({
+        error: { message: "Conversation environment was stopped" },
+      });
+      expect(provision).not.toHaveBeenCalled();
+      expect(support.testState.store.list()).toEqual([]);
+    } finally {
+      releaseClose.resolve();
+      releaseCreation.resolve();
+      await Promise.all([closing, creation]);
+    }
   });
 
   it.each([
@@ -645,7 +703,7 @@ describe("conversation-owned temporary environments", () => {
     support.getDevelopmentProfile().suspendAfter = "1m";
     const created = await service.createSessionAttachment(request, authorize);
     support.testState.nowMs += 59_000;
-    service.touchSessionAttachment(created.attachment);
+    await service.touchSessionAttachment(created.attachment);
     support.testState.nowMs += 59_000;
     await service.reconcileSessionAttachments();
     expect(service.findSessionAttachment(identity)).toBeDefined();

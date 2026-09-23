@@ -1,13 +1,16 @@
 // Xai plugin module implements model id behavior.
-export function isXaiGrok46ModelId(id: string): boolean {
+export function isXaiXhighModelId(id: string): boolean {
   const normalized = normalizeXaiModelId(id.trim().toLowerCase());
-  return normalized === "grok-4.6";
+  return normalized === "grok-4.7" || normalized === "grok-4.6";
 }
 
 export function isXaiFrontierModelId(id: string): boolean {
   const normalized = normalizeXaiModelId(id.trim().toLowerCase());
   return (
-    normalized === "grok-4.6" || normalized === "grok-4.5" || normalized.startsWith("grok-4.5-")
+    normalized === "grok-4.7" ||
+    normalized === "grok-4.6" ||
+    normalized === "grok-4.5" ||
+    normalized.startsWith("grok-4.5-")
   );
 }
 
@@ -17,6 +20,9 @@ export function normalizeXaiModelId(id: string): string {
   }
   if (id === "grok-4.5-latest") {
     return "grok-4.5";
+  }
+  if (id === "grok-4.7-latest") {
+    return "grok-4.7";
   }
   if (id === "grok-build-latest") {
     return "grok-4.5";

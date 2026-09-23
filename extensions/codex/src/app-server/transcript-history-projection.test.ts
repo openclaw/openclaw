@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
-import type { CodexThread } from "./protocol.js";
+import type { CodexThread, CodexThreadItem } from "./protocol.js";
 import {
   projectBoundedCodexThreadHistory,
   projectBoundedCodexVisibleSessionHistory,
@@ -278,6 +278,95 @@ describe("projectBoundedCodexThreadHistory", () => {
         expect(assistant).not.toHaveProperty("errorMessage");
       }
     }
+  });
+
+  it.each([false, true])("retains refused history with an assistant item: %s", (withAssistant) => {
+    const explanation = "The proposed action differed from the requested task.";
+    const continuation = { message: "  Continue only the requested task.\n" };
+    const assistantItem: CodexThreadItem = {
+      id: "assistant-refused",
+      type: "agentMessage",
+      text: "The request was paused.",
+      title: null,
+      status: null,
+      name: null,
+      tool: null,
+      server: null,
+      command: null,
+      cwd: null,
+      query: null,
+      aggregatedOutput: null,
+      changes: [],
+    };
+    const importedThread: CodexThread = {
+      ...thread,
+      turns: [
+        {
+          id: "turn-refused",
+          status: "failed",
+          error: {
+            message: "The provider paused this request.",
+            codexErrorInfo: "misalignmentPolicyViolation",
+            misalignment: {
+              errorType: "future_category",
+              detailedExplanation: explanation,
+              steer: continuation,
+            },
+          },
+          items: withAssistant ? [assistantItem] : [],
+        },
+      ],
+    };
+    const projection = projectBoundedCodexThreadHistory({
+      thread: importedThread,
+      throughTurnId: "turn-refused",
+      importedAt: 1_800_000_000_000,
+    });
+    expect(projection.transcriptMessages).toHaveLength(1);
+    expect(projection.transcriptMessages[0]).toMatchObject({
+      role: "assistant",
+      stopReason: "error",
+      diagnostics: [
+        {
+          type: "provider_refusal",
+          details: {
+            provider: "openai",
+            category: "misalignment",
+            nativeThreadId: importedThread.id,
+            nativeTurnId: "turn-refused",
+            review: { explanation, continuation, errorType: "future_category" },
+          },
+        },
+      ],
+    });
+    expect(projection.responseItems).toEqual([]);
+  });
+
+  it("includes review findings in the bounded history byte budget", () => {
+    const explanation = "x".repeat(64 * 1024);
+    const turns = Array.from({ length: 10 }, (_, index) => ({
+      id: `turn-review-${index}`,
+      status: "failed",
+      items: [],
+      error: {
+        message: "The provider paused this request.",
+        codexErrorInfo: "misalignmentPolicyViolation",
+        misalignment: { detailedExplanation: explanation },
+      },
+    }));
+    const projection = projectBoundedCodexThreadHistory({
+      thread: { ...thread, turns },
+      throughTurnId: "turn-review-9",
+      importedAt: 1_800_000_000_000,
+    });
+    expect(projection.importedMessages).toBeGreaterThan(0);
+    expect(projection.omittedMessages).toBeGreaterThan(0);
+    expect(Buffer.byteLength(JSON.stringify(projection.transcriptMessages), "utf8")).toBeLessThan(
+      512 * 1024,
+    );
+    expect(projection.transcriptMessages.at(-1)).toMatchObject({
+      diagnostics: [{ details: { review: { explanation } } }],
+    });
   });
 
   it("enforces UTF-8 byte limits without splitting multibyte text", () => {

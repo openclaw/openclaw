@@ -13,12 +13,7 @@ import { toErrorObject } from "../infra/errors.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  forceKillChildProcessTree,
-  isChildProcessTreeAlive,
-  signalChildProcessTree,
-  shouldDetachChildForProcessTree,
-} from "../process/child-process-tree.js";
+import { shouldDetachChildForProcessTree } from "../process/child-process-tree.js";
 import { prepareOomScoreAdjustedSpawnPreservingExecEnv as prepareLocalServiceSpawn } from "../process/linux-oom-score.js";
 import {
   appendLocalServiceOutputTail,
@@ -27,6 +22,14 @@ import {
   type LocalServiceDiagnostics,
   type LocalServiceExit,
 } from "./provider-local-service-diagnostics.js";
+import {
+  drainLocalServiceOutput,
+  forceStopLocalServiceProcess,
+  hasLocalServiceProcessExited,
+  stopLocalServiceProcess,
+  trackLocalServiceProcess,
+  type ManagedLocalServiceProcess,
+} from "./provider-local-service-process.js";
 import { getModelProviderLocalServiceReconciler } from "./provider-local-service-reconcile.js";
 import type {
   AcquireConfiguredProviderLocalService,
@@ -41,7 +44,6 @@ const log = createSubsystemLogger("provider-local-service");
 const DEFAULT_READY_TIMEOUT_MS = 120_000;
 const DEFAULT_PROBE_TIMEOUT_MS = 2_000;
 const PROBE_INTERVAL_MS = 250;
-const PROCESS_TREE_EXIT_POLL_MS = 25;
 
 const MODEL_PROVIDER_LOCAL_SERVICE_SYMBOL = Symbol.for("openclaw.modelProviderLocalService");
 
@@ -50,8 +52,8 @@ type ModelWithProviderLocalService = {
 };
 
 type ManagedLocalService = {
-  process?: ChildProcess;
-  processStop?: { child: ChildProcess; promise?: Promise<void> };
+  process?: ManagedLocalServiceProcess;
+  processStop?: { process: ManagedLocalServiceProcess; promise?: Promise<void> };
   stopping?: { promise?: Promise<void> };
   starting?: Promise<void>;
   startupAbort?: AbortController;
@@ -174,7 +176,9 @@ async function acquireProviderLocalService(
     try {
       const currentProcess = managed.process;
       const healthy =
-        currentProcess && !managed.processStop && !hasLocalServiceProcessExited(currentProcess)
+        currentProcess &&
+        !managed.processStop &&
+        !hasLocalServiceProcessExited(currentProcess.child)
           ? await probeHealth(healthUrl, healthHeaders, signal)
           : false;
       assertCurrentServiceAcquisition(key, managed, signal);
@@ -183,7 +187,7 @@ async function acquireProviderLocalService(
         currentProcess &&
         managed.process === currentProcess &&
         !managed.processStop &&
-        !hasLocalServiceProcessExited(currentProcess)
+        !hasLocalServiceProcessExited(currentProcess.child)
       ) {
         return { release };
       }
@@ -210,7 +214,7 @@ async function acquireProviderLocalService(
       assertCurrentServiceAcquisition(key, managed, signal);
       const ready =
         !managed.processStop &&
-        ((managed.process && !hasLocalServiceProcessExited(managed.process)) ||
+        ((managed.process && !hasLocalServiceProcessExited(managed.process.child)) ||
           (await probeHealth(healthUrl, healthHeaders, signal)));
       assertCurrentServiceAcquisition(key, managed, signal);
       if (ready && !managed.processStop) {
@@ -362,7 +366,7 @@ async function startAndWaitForLocalService(params: {
   if (healthy) {
     return;
   }
-  if (managed.process && !hasLocalServiceProcessExited(managed.process)) {
+  if (managed.process) {
     log.info(`restarting unhealthy ${provider} local service`);
     await stopManagedProcess(managed, signal);
   }
@@ -383,13 +387,14 @@ async function startAndWaitForLocalService(params: {
   const preparedSpawn = prepareLocalServiceSpawn(service.command, service.args ?? [], {
     env: serviceEnv,
   });
-  managed.process = spawn(preparedSpawn.command, preparedSpawn.args, {
+  const child = spawn(preparedSpawn.command, preparedSpawn.args, {
     cwd: service.cwd,
     env: preparedSpawn.env,
     stdio: ["ignore", "pipe", "pipe"],
     detached: shouldDetachChildForProcessTree(),
   });
-  const child = managed.process;
+  const owned = trackLocalServiceProcess(child);
+  managed.process = owned;
   diagnostics.pid = child.pid;
   managed.lastExit = undefined;
   child.stdout?.setEncoding("utf8");
@@ -423,11 +428,8 @@ async function startAndWaitForLocalService(params: {
     log.info(
       `${provider} local service exited: ${signalLocal ? `signal=${signalLocal}` : `code=${code ?? 0}`}`,
     );
-    if (managed.process === child) {
+    if (managed.process === owned) {
       managed.lastExit = exit;
-      if (managed.processStop?.child !== child) {
-        managed.process = undefined;
-      }
     }
   });
   const spawnError = await waitForSpawnResult(child, signal);
@@ -468,19 +470,6 @@ async function startAndWaitForLocalService(params: {
     }
     await sleepWithAbort(PROBE_INTERVAL_MS, signal, { ref: false });
   }
-}
-
-function unrefLocalServiceOutput(stream: ChildProcess["stdout"]): void {
-  (stream as { unref?: () => void } | null)?.unref?.();
-}
-
-function drainLocalServiceOutput(child: ChildProcess): void {
-  child.stdout?.removeAllListeners("data");
-  child.stderr?.removeAllListeners("data");
-  child.stdout?.resume();
-  child.stderr?.resume();
-  unrefLocalServiceOutput(child.stdout);
-  unrefLocalServiceOutput(child.stderr);
 }
 
 function scheduleIdleStop(
@@ -541,7 +530,7 @@ function stopManagedService(
   const pending = Promise.resolve()
     .then(async () => {
       startupAbort?.abort(new Error(`local service stopped: ${reason}`));
-      if (managed.process && !hasLocalServiceProcessExited(managed.process)) {
+      if (managed.process && !hasLocalServiceProcessExited(managed.process.child)) {
         log.info(`stopping local model service: reason=${reason}`);
       }
       // Startup reports its error to its caller; shutdown must still join its tail.
@@ -564,21 +553,21 @@ function stopManagedService(
 async function stopManagedProcess(managed: ManagedLocalService, signal: AbortSignal) {
   throwIfAborted(signal);
   if (!managed.processStop) {
-    const child = managed.process;
+    const owned = managed.process;
     managed.lastExit = undefined;
-    if (!child) {
+    if (!owned) {
       return;
     }
-    managed.processStop = { child };
+    managed.processStop = { process: owned };
   }
   const stopping = managed.processStop;
   let pending = stopping.promise;
   if (!pending) {
     // Restart cancellation stops its waiter, not the process-tree cleanup owner.
     pending = Promise.resolve()
-      .then(() => stopLocalServiceProcess(stopping.child))
+      .then(() => stopLocalServiceProcess(stopping.process))
       .then(() => {
-        if (managed.process === stopping.child) {
+        if (managed.process === stopping.process) {
           managed.process = undefined;
         }
         if (managed.processStop === stopping) {
@@ -594,35 +583,16 @@ async function stopManagedProcess(managed: ManagedLocalService, signal: AbortSig
   await waitForAbort(pending, signal);
 }
 
-async function stopLocalServiceProcess(child: ChildProcess): Promise<void> {
-  if (!isChildProcessTreeAlive(child)) {
-    return;
-  }
-  const signal = new AbortController().signal;
-  drainLocalServiceOutput(child);
-  signalChildProcessTree(child, "SIGTERM");
-  await waitForChildProcessTreeExit(child, signal, DEFAULT_PROBE_TIMEOUT_MS);
-  if (process.platform === "win32" || isChildProcessTreeAlive(child)) {
-    forceKillChildProcessTree(child);
-    await waitForChildProcessTreeExit(child, signal, DEFAULT_PROBE_TIMEOUT_MS);
-  }
-  if (isChildProcessTreeAlive(child)) {
-    throw new Error(`Local model service process tree ${child.pid} did not stop`);
-  }
-}
-
 function forceStopManagedService(key: string, managed: ManagedLocalService) {
   clearIdleTimer(managed);
-  const child = managed.processStop?.child ?? managed.process;
+  const owned = managed.processStop?.process ?? managed.process;
   managed.process = undefined;
   if (services.get(key) === managed) {
     services.delete(key);
   }
-  if (!child || !isChildProcessTreeAlive(child)) {
-    return;
+  if (owned) {
+    forceStopLocalServiceProcess(owned);
   }
-  drainLocalServiceOutput(child);
-  forceKillChildProcessTree(child);
 }
 
 function installExitHandler() {
@@ -714,27 +684,4 @@ function waitForSpawnResult(
       }
     });
   });
-}
-
-async function waitForChildProcessTreeExit(
-  child: ChildProcess,
-  signal: AbortSignal,
-  timeoutMs: number,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (isChildProcessTreeAlive(child)) {
-    throwIfAborted(signal);
-    const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) {
-      return;
-    }
-    await sleepWithAbort(Math.min(PROCESS_TREE_EXIT_POLL_MS, remainingMs), signal);
-  }
-}
-
-/** Return whether a child process has already reported an exit code or signal. */
-export function hasLocalServiceProcessExited(
-  child: Pick<ChildProcess, "exitCode" | "signalCode">,
-): boolean {
-  return child.exitCode !== null || child.signalCode !== null;
 }

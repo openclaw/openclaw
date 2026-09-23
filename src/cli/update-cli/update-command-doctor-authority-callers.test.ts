@@ -1,8 +1,19 @@
 import fs from "node:fs/promises";
 import os from "node:os";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as doctorMaintenance from "../../commands/doctor-maintenance.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
+import { recordDeferredPluginMigrations } from "../../infra/deferred-plugin-migrations.js";
+import * as packageRoot from "../../infra/openclaw-root.js";
+import { tryAcquireGatewayLifecycleCleanupCoordinator } from "../../infra/state-database-coordinator.js";
+import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
+import {
+  DoctorMaintenanceRefusalError,
+  UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
+  writeUpdatePostInstallDoctorResult,
+} from "../../infra/update-doctor-result.js";
+import * as requesterAuthority from "../../infra/update-requester-authority.js";
 import {
   adoptUpdateRun,
   createUpdateRun,
@@ -10,6 +21,11 @@ import {
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import { removePreparedWorkerOwnershipColumns } from "../../state/openclaw-state-schema-v17.test-support.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -76,6 +92,7 @@ vi.mock("./update-command-runtime.js", () => ({
 }));
 
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
+import * as executorOwner from "./update-command-executor.js";
 import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
 import * as postCore from "./update-command-post-core.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
@@ -153,6 +170,256 @@ function firstRefusal() {
 }
 
 describe("unproved Doctor authority callers", () => {
+  it.each([false, true])(
+    "rechecks legacy requester authority after executor settlement (revoked=%s)",
+    async (revoked) => {
+      const requester = { channel: "test", senderId: "owner" };
+      const run = createUpdateRun({
+        trigger: "cli",
+        before: { version: "2026.9.2" },
+        origin: { requester },
+      });
+      recordUpdateRunStep(run.runId, { step: "openclaw doctor", status: "completed" });
+      recordUpdateRunStep(run.runId, { step: "post-update verification", status: "in_progress" });
+      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", "1");
+      const resultPath = state.statePath("post-core-result.json");
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", resultPath);
+      vi.spyOn(packageRoot, "resolveOpenClawPackageRootSync").mockReturnValue(state.root);
+      const scratch = state.path("executor");
+      await fs.mkdir(scratch, { mode: 0o700 });
+      vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(scratch);
+      let current = true;
+      let settled = false;
+      vi.spyOn(requesterAuthority, "createManagedUpdateRequesterAuthority").mockResolvedValue({
+        requester,
+        isCurrent: () => current,
+      });
+      const withExecutor = executorOwner.withUpdateCommandExecutor;
+      vi.spyOn(executorOwner, "withUpdateCommandExecutor").mockImplementation(
+        async (runId, operation, options) => {
+          const result = await withExecutor(runId, operation, options);
+          settled = true;
+          current = !revoked;
+          return result;
+        },
+      );
+      const publication = vi.spyOn(postCore, "writePostCorePluginUpdateResultFile");
+      const result = resumePostCoreUpdate({
+        root: state.root,
+        channel: "stable",
+        opts: { json: true, yes: true },
+        timeoutMs: 5_000,
+      });
+      if (revoked) {
+        await expect(result).rejects.toMatchObject({ code: "requester-revoked" });
+        expect(publication).not.toHaveBeenCalled();
+        expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toMatchObject({
+          status: "failed",
+          error: "requester-revoked",
+        });
+        expect(defaultRuntime.exit).not.toHaveBeenCalled();
+      } else {
+        await result;
+        expect(publication).toHaveBeenCalledOnce();
+        expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toMatchObject({ status: "ok" });
+        expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(0);
+      }
+      expect(settled).toBe(true);
+      expect(getUpdateRun(run.runId)?.status).toBe("running");
+    },
+  );
+
+  it("defers the published parent-owned continuation before preparing an older schema", async () => {
+    const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.5" } });
+    expect(adoptUpdateRun(run.runId).origin.driver?.pid).toBe(process.pid);
+    recordUpdateRunStep(run.runId, { step: "openclaw doctor", status: "completed" });
+    recordUpdateRunStep(run.runId, { step: "post-update verification", status: "in_progress" });
+    recordDeferredPluginMigrations({
+      pending: [
+        {
+          pluginId: "pending-fixture",
+          reason: "state upgrade deferred",
+          command: "openclaw doctor --fix",
+          requiresStateMigration: true,
+        },
+      ],
+    });
+    const resultPath = state.statePath("parent-owned-result.json");
+    await state.writeJson("handoff.json", { completionOwner: "parent" });
+    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
+    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", "1");
+    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", resultPath);
+    const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
+    closeOpenClawStateDatabaseForTest();
+    const prior = new DatabaseSync(databasePath);
+    try {
+      removePreparedWorkerOwnershipColumns(prior);
+      prior.exec(
+        "PRAGMA user_version=16; UPDATE schema_meta SET schema_version=16, app_version='2026.9.2'",
+      );
+    } finally {
+      prior.close();
+    }
+    const inspect = () => {
+      const db = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        return {
+          version: db.prepare("PRAGMA user_version").get(),
+          schema: db.prepare("SELECT * FROM sqlite_schema ORDER BY name").all(),
+          pending: db
+            .prepare(
+              "SELECT * FROM migration_runs WHERE id LIKE 'deferred-plugin-migration:%' ORDER BY id",
+            )
+            .all(),
+          steps: JSON.parse(
+            String(
+              db.prepare("SELECT steps_json FROM update_runs WHERE run_id=?").get(run.runId)
+                ?.steps_json,
+            ),
+          ),
+        };
+      } finally {
+        db.close();
+      }
+    };
+    const before = inspect();
+    const holder = tryAcquireGatewayLifecycleCleanupCoordinator({ databasePath });
+    expect(holder).not.toBeNull();
+    const maintenance = vi.spyOn(doctorMaintenance, "beginDoctorMaintenance");
+    try {
+      const work = resumePostCoreUpdate({
+        root: state.root,
+        channel: "stable",
+        opts: { json: true, yes: true },
+        timeoutMs: 5_000,
+      }).catch((error: unknown) => error);
+      expect(await work).toBeUndefined();
+      expect(maintenance).toHaveBeenCalledWith(expect.objectContaining({ root: null }));
+      expect(maintenance.mock.calls[0]?.[0].assertCurrent).toBeUndefined();
+      expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toMatchObject({
+        status: "warning",
+        changed: false,
+        warnings: [expect.objectContaining({ reason: "doctor-advisory" })],
+      });
+      const after = inspect();
+      expect(after.version).toEqual(before.version);
+      expect(after.schema).toEqual(before.schema);
+      expect(after.pending).toEqual(before.pending);
+      expect(after.steps).toContainEqual(
+        expect.objectContaining({ step: "warning:finalize:plugins:0", status: "completed" }),
+      );
+      expect(mocks.plugins).not.toHaveBeenCalled();
+      expect(dispatched).toEqual([]);
+      expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(0);
+    } finally {
+      holder?.release();
+    }
+  });
+
+  it.each([
+    "parent-admission",
+    "fresh-doctor",
+    "post-plugin-doctor",
+    "incomplete-migration",
+  ] as const)(
+    "settles the published parent's %s maintenance outcome before publication",
+    async (boundary) => {
+      const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.5" } });
+      expect(adoptUpdateRun(run.runId).origin.driver?.pid).toBe(process.pid);
+      recordUpdateRunStep(run.runId, { step: "openclaw doctor", status: "completed" });
+      recordUpdateRunStep(run.runId, { step: "post-update verification", status: "in_progress" });
+      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", "1");
+      const resultPath = state.statePath("maintenance-result.json");
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", resultPath);
+      const unsafe = boundary === "incomplete-migration";
+      const refusal = new DoctorMaintenanceRefusalError(
+        "Doctor maintenance remains pending; stop other OpenClaw processes and run openclaw doctor --fix.",
+        unsafe
+          ? { kind: "data-at-risk", reason: "incomplete-migration" }
+          : { kind: "deferred", reason: "coordinator-contention" },
+      );
+      const maintenance = {
+        run: <T>(operation: () => T) => operation(),
+        releaseState: vi.fn(async () => {}),
+        finish: vi.fn(async () => {}),
+        release: vi.fn(async () => {}),
+      };
+      vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockImplementation(async () => {
+        if (boundary === "parent-admission" || unsafe) {
+          throw refusal;
+        }
+        return maintenance;
+      });
+      if (boundary === "post-plugin-doctor") {
+        mocks.plugins.mockResolvedValue({ ...pluginUpdate, changed: true });
+      }
+      const dispatch = mocks.runExec.getMockImplementation()!;
+      let doctorPass = 0;
+      mocks.runExec.mockImplementation(async (command, args, options) => {
+        const result = await dispatch(command, args, options);
+        if (
+          args.includes("--repair") &&
+          ++doctorPass === (boundary === "post-plugin-doctor" ? 2 : 1)
+        ) {
+          await writeUpdatePostInstallDoctorResult({
+            resultPath: options.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV],
+            result: {
+              status: "ok",
+              warnings: [refusal.message],
+              maintenanceRefusal: refusal.refusal,
+            },
+          });
+        }
+        return result;
+      });
+      const pending = resumePostCoreUpdate({
+        root: state.root,
+        channel: "stable",
+        opts: { json: true, yes: true },
+        timeoutMs: 5_000,
+      });
+      if (unsafe) {
+        await expect(pending).rejects.toBe(refusal);
+        expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toMatchObject({
+          status: "failed",
+        });
+        expect(defaultRuntime.exit).not.toHaveBeenCalled();
+      } else {
+        await pending;
+        expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toMatchObject({
+          status: "warning",
+          changed: boundary === "post-plugin-doctor",
+          warnings: [{ reason: "doctor-advisory", message: refusal.message }],
+        });
+        expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(0);
+        expect(defaultRuntime.error).not.toHaveBeenCalledWith(
+          expect.stringContaining("Post-core update evidence could not be saved"),
+        );
+        expect(getUpdateRun(run.runId)?.steps).toContainEqual(
+          expect.objectContaining({
+            step: "warning:finalize:plugins:0",
+            status: "completed",
+            detail: refusal.message,
+          }),
+        );
+      }
+      expect(dispatched).toEqual(
+        boundary === "fresh-doctor"
+          ? ["repair"]
+          : boundary === "post-plugin-doctor"
+            ? ["repair", "repair"]
+            : [],
+      );
+      expect(mocks.plugins).toHaveBeenCalledTimes(boundary === "post-plugin-doctor" ? 1 : 0);
+      expect(maintenance.finish).toHaveBeenCalledTimes(
+        boundary === "fresh-doctor" || boundary === "post-plugin-doctor" ? 1 : 0,
+      );
+    },
+  );
+
   it.each(["2026.9.3", "2026.9.4"])(
     "keeps the shipped %s child-owned completion route outside the 9.2 bridge",
     async (version) => {
@@ -236,7 +503,7 @@ describe("unproved Doctor authority callers", () => {
           await expect(fs.stat(canonicalPath)).rejects.toMatchObject({ code: "ENOENT" });
           if (parentOwnsCompletion) {
             expect(phasePath).toBeUndefined();
-            expect(maintenance).not.toHaveBeenCalled();
+            expect(maintenance).toHaveBeenCalledWith(expect.objectContaining({ root: null }));
           } else {
             expect(phasePath).toBeDefined();
             expect(phasePath).not.toBe(canonicalPath);

@@ -37,10 +37,10 @@ function renderCard(entry: SkillDiscoveryEntry, props: SkillsProps) {
     <div class="plugin-catalog-card__head">
       <div class="installed-plugins-card__head">
         <span class="installed-plugins-card__art plugin-catalog-card__art" aria-hidden="true">
-          ${icon ? html`<img src=${icon} alt="" loading="lazy" />` : (entry.skill?.emoji ?? icons.zap)}
+          ${icon ? html`<img src=${icon} alt="" loading="lazy" />` : (entry.skill?.emoji ?? icons.bookOpenText)}
         </span>
         <div class="installed-plugins-card__identity">
-          <div class="plugin-card-title-row"><h3>${entry.name}</h3></div>
+          <div class="plugin-card-title-row"><h2>${entry.name}</h2></div>
           <span class="plugin-card-author">${entry.attribution}</span>
         </div>
       </div>

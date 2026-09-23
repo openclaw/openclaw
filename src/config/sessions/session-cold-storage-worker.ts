@@ -37,17 +37,10 @@ import {
 } from "./session-cold-storage-state.js";
 import {
   createSessionTranscriptFtsInserter,
-  deleteSessionTranscriptFtsRows,
-  deleteLegacySessionTranscriptFtsRows,
-  hasCompleteSessionTranscriptFtsRows,
+  deleteSessionTranscriptFtsRowsInTransaction,
+  selectSessionTranscriptFtsRows,
 } from "./session-transcript-fts.js";
-
-// FTS5 has no type affinity: deployed writers persist timestamps as numbers or text.
-type ColdArchiveDatabase = Omit<DB, "session_transcript_fts"> & {
-  session_transcript_fts: Omit<DB["session_transcript_fts"], "timestamp"> & {
-    timestamp: string | number | null;
-  };
-};
+import { prepareTranscriptPayload, transcriptEventJsonSql } from "./transcript-payload.js";
 
 const MAX_COLD_ARCHIVE_BYTES = 64 * 1024 * 1024;
 
@@ -150,7 +143,7 @@ async function prepareSessionColdArchiveInWorker(
               ) {
                 throw new Error("Transcript changed before cold archive preparation");
               }
-              const db = getNodeSqliteKysely<ColdArchiveDatabase>(database.db);
+              const db = getNodeSqliteKysely<DB>(database.db);
               write({
                 kind: "header",
                 version: 1,
@@ -161,7 +154,9 @@ async function prepareSessionColdArchiveInWorker(
                 database.db,
                 db
                   .selectFrom("transcript_events")
-                  .select(["seq", "event_json", "created_at"])
+                  .select("seq")
+                  .select(transcriptEventJsonSql(database.db).as("event_json"))
+                  .select("created_at")
                   .where("session_id", "=", plan.sessionId)
                   .orderBy("seq"),
               )) {
@@ -215,10 +210,7 @@ async function prepareSessionColdArchiveInWorker(
               }
               for (const row of iterateSqliteQuerySync(
                 database.db,
-                db
-                  .selectFrom("session_transcript_fts")
-                  .select(["text", "message_id", "role", "timestamp"])
-                  .where("session_id", "=", plan.sessionId),
+                selectSessionTranscriptFtsRows(database.db, plan.sessionId),
               )) {
                 write(sessionColdRecordSchema.parse({ kind: "fts", row }));
               }
@@ -285,7 +277,7 @@ async function prepareExternalization(
     (database) =>
       executeSqliteQuerySync(
         database.db,
-        getNodeSqliteKysely<ColdArchiveDatabase>(database.db)
+        getNodeSqliteKysely<DB>(database.db)
           .selectFrom("session_transcript_cold_archives")
           .selectAll()
           .where("session_id", "=", expected.session_id),
@@ -412,7 +404,7 @@ export async function prepareSessionColdRestoreInWorker(
     (database) =>
       executeSqliteQuerySync(
         database.db,
-        getNodeSqliteKysely<ColdArchiveDatabase>(database.db)
+        getNodeSqliteKysely<DB>(database.db)
           .selectFrom("session_transcript_cold_archives")
           .selectAll()
           .where("session_id", "=", plan.sessionId),
@@ -453,7 +445,7 @@ export function mutateSessionColdTranscriptInWorker(
 ): SessionColdMutationResult {
   return runOpenClawAgentWriteTransaction(
     (database) => {
-      const db = getNodeSqliteKysely<ColdArchiveDatabase>(database.db);
+      const db = getNodeSqliteKysely<DB>(database.db);
       const result: SessionColdMutationResult = {
         archivedTranscripts: 0,
         externalizedTranscripts: 0,
@@ -464,8 +456,8 @@ export function mutateSessionColdTranscriptInWorker(
         return result;
       }
       if (plan.kind === "cold-batch") {
-        const legacyIds: string[] = [];
         const protectedIds = readSessionColdStorageProtection(database, plan.beforeMs);
+        const archivedIds: string[] = [];
         for (const prepared of plan.prepared) {
           const { sessionId, snapshot } = prepared.plan;
           const fresh = readSessionStateDeleteSnapshot(database.db, sessionId);
@@ -487,19 +479,15 @@ export function mutateSessionColdTranscriptInWorker(
             database.db,
             db.deleteFrom("transcript_events").where("session_id", "=", sessionId),
           );
-          if (hasCompleteSessionTranscriptFtsRows(database.db, sessionId)) {
-            deleteSessionTranscriptFtsRows(database.db, sessionId, { mappingComplete: true });
-          } else {
-            legacyIds.push(sessionId);
-          }
+          archivedIds.push(sessionId);
           executeSqliteQuerySync(
             database.db,
             db.deleteFrom("session_transcript_index_state").where("session_id", "=", sessionId),
           );
           result.archivedTranscripts++;
         }
-        if (legacyIds.length > 0) {
-          deleteLegacySessionTranscriptFtsRows(database.db, legacyIds);
+        if (archivedIds.length > 0) {
+          deleteSessionTranscriptFtsRowsInTransaction(database.db, archivedIds);
         }
         for (const { archive } of plan.externalizations) {
           const current = readSessionColdTranscript(database.db, archive.session_id);
@@ -543,7 +531,12 @@ export function mutateSessionColdTranscriptInWorker(
             case "event":
               executeSqliteQuerySync(
                 database.db,
-                db.insertInto("transcript_events").values({ session_id, ...record.row }),
+                db.insertInto("transcript_events").values({
+                  session_id,
+                  seq: record.row.seq,
+                  created_at: record.row.created_at,
+                  ...prepareTranscriptPayload(database.db, record.row.event_json),
+                }),
               );
               break;
             case "identity":
@@ -565,11 +558,16 @@ export function mutateSessionColdTranscriptInWorker(
                 database.db,
                 db
                   .insertInto("session_transcript_index_state")
-                  .values({ session_id, ...record.row, fts_row_count: 0 }),
+                  .values({ session_id, ...record.row }),
               );
               break;
             case "fts":
-              insertFts(record.row);
+              insertFts({
+                messageId: record.row.message_id,
+                text: record.row.text,
+                role: record.row.role,
+                timestamp: record.row.timestamp,
+              });
               break;
           }
         }

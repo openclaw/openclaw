@@ -120,6 +120,12 @@ Follow-up tools still require the current turn's host permissions. Commands star
 in the background do not hold the turn open. If the turn fails or is cancelled while one of these
 commands still needs a follow-up, OpenClaw closes that subprocess and starts a fresh one for the next turn.
 
+While native background agents or workflows continue, a completed Claude answer can reach the
+channel through the normal reply pipeline without waiting for the continuation to finish.
+This also works with raw previews and block streaming disabled. Already delivered answer segments
+are not sent again at final settlement; failed deliveries remain eligible for retry. Delivering
+an answer does not end the admitted turn or grant its background work another turn's permissions.
+
 The `openclaw agent` command also has its own request deadline. Its 600-second fallback default applies to that command invocation, not to ordinary Gateway turns. See [`openclaw agent`](/cli/agent).
 
 ### Claude CLI specifics

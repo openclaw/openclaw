@@ -227,6 +227,36 @@ Older image blocks without `artifactId` remain displayable by existing Control
 UI clients, but native clients should show a readable attachment fallback rather
 than forward a shared owner credential.
 
+## Download inline artifacts over HTTPS
+
+For artifacts embedded in transcripts, `artifacts.download` normally returns
+`encoding: "base64"` and `data` over the existing connection. Clients that can
+reach the Gateway's HTTPS routes can pass `transport: "http"` to receive a
+Gateway-relative `url` and `expiresAt` instead, then fetch the original bytes
+with `GET`. The route also supports `HEAD` and single byte ranges. Managed media
+keeps its existing URL download path.
+
+Use the active Gateway's HTTPS origin and configured Control UI base path. TLS
+can terminate at the Gateway or its reverse proxy; the proxy must forward
+`/api/artifacts/download/` as well as WebSocket upgrades. A `wss://` endpoint
+alone does not establish HTTP reachability. WebSocket-only clients should omit
+`transport`; a client whose HTTP route is unavailable can repeat the same RPC
+without `transport`, preserving every session, run, task, and role filter.
+
+Inline download links expire after five minutes and belong to the issuing live
+connection and exact artifact. Reads recheck access, transcript membership,
+session generation, and content identity. Expiry, disconnection, revocation, or
+replacement makes the link unavailable. Reconnect and request a fresh download
+instead of retaining links across connections. The links contain no reusable
+Gateway credential, and responses disable caching and active document execution.
+
+The Control UI opts in for image and text previews when served from the active
+Gateway's HTTPS origin. If the HTTP fetch fails, it retries through the inline
+RPC on that same connection. Other connections retain their existing transfer
+behavior. Binary artifact previews keep a Download action rather than an
+expiring link. Each click requests fresh download authority; changing the
+connection or closing the preview cancels an in-flight download.
+
 ## Use history metadata and stable anchors
 
 Rows returned by `chat.history` can carry an `__openclaw` metadata envelope:

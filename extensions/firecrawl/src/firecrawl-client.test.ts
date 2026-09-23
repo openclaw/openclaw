@@ -102,6 +102,29 @@ describe("Firecrawl search payloads", () => {
     expect(result[0]?.url).not.toContain(hostileControlToken);
     expect(result[0]?.published).toBeUndefined();
   });
+
+  it.each([
+    ["2026-02-30", undefined],
+    ["2026-13-01", undefined],
+    ["1900-02-29", undefined],
+    ["2000-02-29", "2000-02-29"],
+    ["0099-12-31", "0099-12-31"],
+    ["0000-02-29", "0000-02-29"],
+    ["2024-02-29T00:30:00+14:00", "2024-02-29T00:30:00+14:00"],
+    ["2026-09-21T", "2026-09-21T"],
+  ])(
+    "validates the calendar prefix of %s without dropping the result",
+    (publishedDate, published) => {
+      const result = firecrawlClient.resolveSearchItems(
+        { data: [{ url: "https://example.com/article", publishedDate }] },
+        1,
+      );
+
+      expect(result).toEqual([
+        expect.objectContaining({ url: "https://example.com/article", published }),
+      ]);
+    },
+  );
 });
 
 describe("Firecrawl scrape payloads", () => {

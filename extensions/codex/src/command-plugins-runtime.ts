@@ -11,6 +11,7 @@ import { resolveCodexAppServerAuthProfileStore } from "./app-server/auth-profile
 import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
 import { buildCodexPluginAppCacheKey } from "./app-server/plugin-app-cache-key.js";
 import { withCodexAppServerJsonClient } from "./app-server/request.js";
+import { assertCodexHostOwnerCurrent } from "./command-authorization.js";
 import type { CodexCommandDeps } from "./command-handler-deps.js";
 import { resolveCommandAppServerContext, resolveControlTarget } from "./command-handler-scope.js";
 import type { CodexPluginsConfigBlock } from "./command-plugin-config.js";
@@ -36,7 +37,8 @@ export async function withCodexPluginCommandContext<T>(
   params: { deps: CodexCommandDeps; ctx: PluginCommandContext; pluginConfig: unknown },
   run: (context: CodexPluginCommandContext) => Promise<T>,
 ): Promise<T> {
-  const { deps, ctx, pluginConfig } = params;
+  const { deps, pluginConfig } = params;
+  const ctx = { ...params.ctx, gatewayClientScopes: params.ctx.gatewayClientScopes?.slice() };
   const current = (await deps.codexPluginsManagementIo?.readConfig()) ?? {};
   const initialPolicy = JSON.stringify(current);
   const { scope, target, binding } = await resolveCommandAppServerContext(deps, ctx, pluginConfig);
@@ -158,7 +160,14 @@ export async function withCodexPluginCommandContext<T>(
             requestParams?: unknown,
           ): Promise<TResponse> => {
             await validateCurrent();
-            const response = await request<TResponse>({ method, requestParams, assertCurrent });
+            const response = await request<TResponse>({
+              method,
+              requestParams,
+              assertCurrent: () => {
+                assertCurrent();
+                assertCodexHostOwnerCurrent(ctx);
+              },
+            });
             await validateCurrent();
             return response;
           },
