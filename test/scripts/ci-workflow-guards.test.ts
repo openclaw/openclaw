@@ -6119,7 +6119,7 @@ server.listen(0, "127.0.0.1", () => {
     }
     expect(warmer.on).not.toHaveProperty("workflow_run");
     expect(checkoutStep.with).toBeUndefined();
-    expect(warmerSource).toContain('cron: "17 8 * * *"');
+    expect(warmer.on.schedule).toEqual([{ cron: "17 * * * *" }]);
     expect(warmerSource).not.toContain("OPENCLAW_NODE_TEST_CONFIGS_JSON");
     expect(warmStep.id).toBe("warm-caches");
     expect(warmStep["continue-on-error"]).toBe(true);

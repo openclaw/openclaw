@@ -2,6 +2,8 @@ name: Plugin NPM Release
 run-name: ${{ github.event_name == 'workflow_dispatch' && (inputs.preflight_only && inputs.trusted_publisher_preflight && format('Plugin NPM Trusted Publisher Preflight [{0}] {1}', inputs.npm_dist_tag, inputs.ref) || inputs.preflight_only && format('Plugin NPM Artifact Preflight [{0}] {1}', inputs.npm_dist_tag, inputs.ref) || format('Plugin NPM Release [{0}] {1}', inputs.npm_dist_tag, inputs.ref)) || format('Plugin NPM Release [default] {0}', github.sha) }}
 
 on:
+  schedule:
+    - cron: "23 * * * *"
   push:
     branches:
       - main
@@ -113,7 +115,7 @@ on:
           - extended-stable
 
 concurrency:
-  group: plugin-npm-release-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+  group: plugin-npm-release-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
 env:
@@ -122,6 +124,8 @@ env:
 
 jobs:
   preview_plugins_npm:
+    # Scheduled preview is nonpublishing and considers all unpublished packages.
+    if: (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true')
     runs-on: ubuntu-latest
     permissions:
       actions: read
