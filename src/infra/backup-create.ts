@@ -640,6 +640,11 @@ export async function createBackupArchive(
                 // Per-entry reports must not overflow the bounded restore manifest.
                 const manifest = buildManifest({ ...result, skipped: plan.skipped }, plan);
                 manifest.externalSymbolicLinks = externalSymbolicLinks;
+                manifest.sqliteSnapshots = snapshotFacts.map((snapshot) =>
+                  snapshot.role === "agent"
+                    ? { sourcePath: snapshot.sourcePath, role: "agent", agentId: snapshot.agentId }
+                    : { sourcePath: snapshot.sourcePath, role: "global" },
+                );
                 const contents = Buffer.from(JSON.stringify(manifest, null, 2) + "\n");
                 const sizeError = backupManifestSizeError(contents.length);
                 if (sizeError) {
