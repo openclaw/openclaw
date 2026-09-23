@@ -77,7 +77,16 @@ export function createFullModelCatalogAccess(
   const project = (
     catalog: ModelCatalogSnapshot,
     configuredRuntimeModels = params.catalogFacts.configuredRuntimeModels,
-  ) => attempt.withRefreshStatus(projectInventory(catalog, configuredRuntimeModels));
+    discoveryOrigins: PreparedModelCatalogInventory["discoveryOrigins"] = [],
+  ) =>
+    attempt.withRefreshStatus(
+      projectInventory(
+        catalog,
+        configuredRuntimeModels,
+        // Only providers whose accepted discovery owns this inventory may supersede synthetic sizing.
+        new Set(discoveryOrigins.map(({ provider }) => normalizeProvider(provider))),
+      ),
+    );
   const inventoryKey = preparedModelInventoryKey(params.agentFacts.input);
   const nativeSource = fingerprintPreparedRuntimeFacts({
     runtimePluginSelections: params.agentFacts.input.runtimePluginSelections,
@@ -224,7 +233,11 @@ export function createFullModelCatalogAccess(
     configuredRuntimeModels: Publication["configuredRuntimeModels"],
     acquiredNative: boolean,
   ): Publication => {
-    const catalog = project(nextInventory.catalog, configuredRuntimeModels);
+    const catalog = project(
+      nextInventory.catalog,
+      configuredRuntimeModels,
+      nextInventory.discoveryOrigins,
+    );
     setCatalogAuth(catalog, getPreparedModelFullCatalogAuth(nextInventory.catalog) ?? currentAuth);
     catalog.authoritative =
       acquiredNative && !catalog.refreshFailed ? catalog.authoritative : false;

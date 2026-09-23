@@ -167,18 +167,26 @@ export async function prewarmContextWindowCacheAfterReady(params: {
     if (shouldStop()) {
       return;
     }
-    // Gateway publication intentionally exposes configured/static turn facts. Full catalog
-    // inventory is a separate control-plane load and must not run in post-ready warmup.
+    // Consume only accepted inventory; this passive read does not acquire or renew it.
+    // A retired owner cannot lend another account's limits during projection yields.
+    const modelCatalog = owner.readFullModelCatalog?.() ?? owner.modelCatalog;
+    const isCurrent = () =>
+      !shouldStop() &&
+      owner.isCurrent() &&
+      (owner.readFullModelCatalog?.() ?? owner.modelCatalog) === modelCatalog;
+    if (!isCurrent()) {
+      return;
+    }
     const caches = await prepareContextWindowCaches({
       config: owner.config,
-      modelCatalog: owner.modelCatalog,
+      modelCatalog,
       assertCurrent: () => {
-        if (shouldStop()) {
+        if (!isCurrent()) {
           throw new Error("context window cache prewarm cancelled");
         }
       },
     });
-    if (shouldStop()) {
+    if (!isCurrent()) {
       return;
     }
     replaceContextWindowCaches(caches);

@@ -92,7 +92,12 @@ vi.mock("../plugins/public-surface-loader.js", () => ({
   loadBundledPluginPublicArtifactModuleSync: mocks.loadBundledPluginPublicArtifactModuleSync,
 }));
 
-const { scheduleGatewayHandlerPrewarm } = await import("./server-startup-handler-prewarm.js");
+const { scheduleContextCachePublicationRefresh, scheduleGatewayHandlerPrewarm } =
+  await import("./server-startup-handler-prewarm.js");
+const { lookupCachedContextTokens, replaceDiscoveredContextTokenCache } =
+  await import("../agents/context-cache.js");
+const { notifyPreparedModelRuntimePublication } =
+  await import("../agents/prepared-model-runtime.publication-events.js");
 const workspaces = {
   main: path.resolve("prewarm-main"),
   research: path.resolve("prewarm-research"),
@@ -444,4 +449,66 @@ it("skips optional discovery when foreground work arrives after idle admission",
   } finally {
     await handle.stop();
   }
+});
+
+describe("scheduleContextCachePublicationRefresh", () => {
+  it("refreshes the context projection on committed catalog changes and unregisters on stop", async () => {
+    vi.useFakeTimers();
+    const sidecar = scheduleContextCachePublicationRefresh({
+      scheduler: createTestGatewayScheduler("fake-timers"),
+      getConfig: () => ({}),
+      log: { warn: vi.fn() },
+    });
+    try {
+      replaceDiscoveredContextTokenCache(new Map([["account-model", 872_000]]));
+      notifyPreparedModelRuntimePublication({ phase: "invalidated" });
+      expect(lookupCachedContextTokens("account-model")).toBeUndefined();
+      notifyPreparedModelRuntimePublication({ phase: "failed", error: new Error("failed") });
+      notifyPreparedModelRuntimePublication({
+        phase: "catalog-published",
+        modelFactsChanged: false,
+      });
+      await vi.runAllTimersAsync();
+      await vi.dynamicImportSettled();
+      expect(mocks.prewarmContextWindowCacheAfterReady).not.toHaveBeenCalled();
+      notifyPreparedModelRuntimePublication({
+        phase: "catalog-published",
+        modelFactsChanged: true,
+      });
+      notifyPreparedModelRuntimePublication({
+        phase: "catalog-published",
+        modelFactsChanged: true,
+      });
+      await vi.runAllTimersAsync();
+      await vi.dynamicImportSettled();
+      await vi.runAllTimersAsync();
+      // A burst coalesces into one task that re-reads the newest publication.
+      expect(mocks.prewarmContextWindowCacheAfterReady.mock.calls.length).toBeGreaterThanOrEqual(1);
+      expect(mocks.prewarmContextWindowCacheAfterReady.mock.calls.length).toBeLessThanOrEqual(2);
+      const calls = mocks.prewarmContextWindowCacheAfterReady.mock.calls.length;
+      await sidecar.stop();
+      notifyPreparedModelRuntimePublication({
+        phase: "catalog-published",
+        modelFactsChanged: true,
+      });
+      await vi.runAllTimersAsync();
+      await vi.dynamicImportSettled();
+      expect(mocks.prewarmContextWindowCacheAfterReady).toHaveBeenCalledTimes(calls);
+    } finally {
+      await sidecar.stop();
+    }
+  });
+
+  it("does not refresh when stopped before any publication", async () => {
+    vi.useFakeTimers();
+    const sidecar = scheduleContextCachePublicationRefresh({
+      scheduler: createTestGatewayScheduler("fake-timers"),
+      getConfig: () => ({}),
+      log: { warn: vi.fn() },
+    });
+    await sidecar.stop();
+    notifyPreparedModelRuntimePublication({ phase: "published" });
+    await vi.runAllTimersAsync();
+    expect(mocks.prewarmContextWindowCacheAfterReady).not.toHaveBeenCalled();
+  });
 });

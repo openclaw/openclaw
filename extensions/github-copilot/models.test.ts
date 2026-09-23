@@ -102,6 +102,8 @@ describe("resolveCopilotForwardCompatModel", () => {
     const result = requireResolvedModel(ctx);
     expect(result.id).toBe("future-model");
     expect(result.name).toBe("future-model");
+    expect(result.contextWindow).toBe(128_000);
+    expect(result.contextWindowSource).toBe("synthetic");
     expect((result as unknown as Record<string, unknown>).api).toBe("openai-responses");
     expect((result as unknown as Record<string, unknown>).input).toEqual(["text", "image"]);
   });

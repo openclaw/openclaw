@@ -33,6 +33,7 @@ function clearRouteBoundCatalogMetadata(
 ): ModelCatalogEntry {
   const {
     contextWindow: _contextWindow,
+    contextWindowSource: _contextWindowSource,
     contextWindows: _contextWindows,
     contextWindowDefault: _contextWindowDefault,
     contextTokens: _contextTokens,
@@ -107,6 +108,9 @@ export function overlayCatalogMetadata(
     ...(applyRoute && overlay.api !== undefined ? { api: overlay.api } : {}),
     ...(applyRoute && overlay.baseUrl !== undefined ? { baseUrl: overlay.baseUrl } : {}),
     ...(overlay.contextWindow !== undefined ? { contextWindow: overlay.contextWindow } : {}),
+    ...(overlay.contextWindow !== undefined || overlay.contextTokens !== undefined
+      ? { contextWindowSource: overlay.contextWindowSource }
+      : {}),
     ...(overlay.contextTokens !== undefined ? { contextTokens: overlay.contextTokens } : {}),
     ...(overlay.reasoning !== undefined ? { reasoning: overlay.reasoning } : {}),
     ...(overlay.configuredReasoning !== undefined

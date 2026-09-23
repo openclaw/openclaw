@@ -20,6 +20,7 @@ export function createPreparedModelCatalogProjection(params: {
   return (
     catalog: ModelCatalogSnapshot,
     configuredRuntimeModels: PreparedModelRuntimeCatalogFacts["configuredRuntimeModels"],
+    acceptedDiscoveryProviders: ReadonlySet<string>,
   ) => {
     const configured = prepareConfiguredRuntimeFacts({
       agentFacts: params.agentFacts,
@@ -35,6 +36,7 @@ export function createPreparedModelCatalogProjection(params: {
       catalog,
       params.agentFacts.runtimeCapabilityModels,
       current.staticEntries,
+      acceptedDiscoveryProviders,
     );
     // Native discovery cannot replace the authentication facts of an API provider.
     const apiProviders = new Set(
