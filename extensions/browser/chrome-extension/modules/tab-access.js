@@ -280,19 +280,25 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     if (!created.handedOff && typeof change.groupId === "number") {
       if (
         created.grouping &&
-        Number.isInteger(created.groupOperationGroupId) &&
         change.groupId >= 0 &&
-        created.groupOperationGroupId === change.groupId &&
         epochIsCurrent(tabId, created.epoch) &&
         tab?.id === tabId
       ) {
-        created.groupId = change.groupId;
-        if (created.initialGroup) {
-          created.namingGroup = change.groupId;
+        if (created.groupOperationGroupId === undefined) {
+          // Chrome can emit membership before tabs.group() resolves. Defer
+          // ownership until the operation result is available; do not revoke
+          // the in-flight creation on an event that may be its own result.
+          return false;
         }
-        created.expectedGroupId = change.groupId;
-        created.grouping = false;
-        return false;
+        if (created.groupOperationGroupId === change.groupId) {
+          created.groupId = change.groupId;
+          if (created.initialGroup) {
+            created.namingGroup = change.groupId;
+          }
+          created.expectedGroupId = change.groupId;
+          created.grouping = false;
+          return false;
+        }
       }
       invalidateTab(tabId);
     }

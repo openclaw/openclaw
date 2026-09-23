@@ -34,6 +34,7 @@ export async function addTabToOpenClawGroup(tabId, { chromeApi, getGroupColor, c
       Number.isInteger(created.groupOperationGroupId) && created.groupOperationGroupId >= 0
         ? created.groupOperationGroupId
         : undefined;
+    const fallbackGroupWasOperationBacked = expectedGroupId !== undefined;
     // Existing groups remain subject to current title authorization. Only a
     // newly created group with observed membership gets the private naming
     // exception during handoff. An attempted group operation is not proof of
@@ -73,6 +74,9 @@ export async function addTabToOpenClawGroup(tabId, { chromeApi, getGroupColor, c
     // resulting group identity. Keep this exception scoped to creation.
     created.groupFallback = true;
     created.groupFallbackRequiresOpenClawTitle = requiresOpenClawTitle;
+    if (fallbackGroupWasOperationBacked) {
+      created.groupOperationGroupId = expectedGroupId;
+    }
     // Keep the intended membership event admissible until handoff. A different
     // group still fails the expectedGroupId check above.
     created.grouping = expectedGroupId !== undefined;
