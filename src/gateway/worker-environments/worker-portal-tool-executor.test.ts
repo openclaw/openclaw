@@ -19,11 +19,38 @@ import { createWorkerPortalToolExecutor } from "./worker-portal-tool-executor.js
 
 const sessionEntries = vi.hoisted(() => new Map<string, SessionEntry>());
 
-vi.mock("../session-utils.js", () => ({
-  loadGatewaySessionEntryReadOnly: (sessionKey: string) => ({
-    canonicalKey: sessionKey,
-    entry: structuredClone(sessionEntries.get(sessionKey)),
-  }),
+vi.mock("../session-sharing-preparation.js", () => ({
+  prepareSessionMutationFacts: async (params: { agentId: string; sessionKey: string }) => {
+    let active = true;
+    const location = {
+      agentId: params.agentId,
+      canonicalKey: params.sessionKey,
+      storePath: "fixture.sqlite",
+    };
+    return {
+      readCurrent: () => {
+        if (!active) {
+          throw new Error("Session fixture read is no longer active");
+        }
+        const entry = sessionEntries.get(params.sessionKey);
+        return {
+          location,
+          target: entry
+            ? {
+                ...location,
+                storeKey: params.sessionKey,
+                storeKeys: [params.sessionKey],
+                entry: structuredClone(entry),
+              }
+            : null,
+          membership: new Set<string>(),
+        };
+      },
+      release: () => {
+        active = false;
+      },
+    };
+  },
 }));
 
 const SOURCE = {

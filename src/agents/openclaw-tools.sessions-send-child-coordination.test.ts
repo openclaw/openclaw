@@ -40,6 +40,13 @@ vi.mock("../acp/runtime/session-meta-readonly.js", async () => {
   return {
     rowToAcpSessionMeta,
     readAcpSessionMetaForEntry: (params: unknown) => readAcpSessionMetaForEntryMock(params),
+    readAcpSessionMetaForEntries: async ({
+      entries,
+      ...options
+    }: Parameters<
+      typeof import("../acp/runtime/session-meta-readonly.js").readAcpSessionMetaForEntries
+    >[0]) =>
+      entries.map((entry) => readAcpSessionMetaForEntryMock({ ...options, ...entry }) ?? null),
   };
 });
 vi.mock("../gateway/call.js", () => ({ callGateway: (opts: unknown) => callGatewayMock(opts) }));

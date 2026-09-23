@@ -7,6 +7,7 @@ import { resolveStateDir } from "../config/state-dir.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -27,12 +28,17 @@ import {
 } from "./openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+type AgentDatabaseRegistrationSettlement = {
+  promise: Promise<void>;
+  assertCurrent(this: void): void;
+};
 // Registry metadata is process-stable: registry writes invalidate after each commit;
 // other-process changes take effect on restart. Polling here puts schema probes back on hot reads.
 type AgentDatabaseRegistryMemo = {
   pathname: string;
   token: symbol;
   entries?: readonly OpenClawRegisteredAgentDatabase[];
+  registrationSettlement?: AgentDatabaseRegistrationSettlement;
 };
 // A plugin may first open a hot-created agent; its registration must invalidate
 // native discovery even when subsequent callers reuse the shared connection.
@@ -40,6 +46,16 @@ const registry = resolveGlobalSingleton<{ memo?: AgentDatabaseRegistryMemo }>(
   Symbol.for("openclaw.agentDatabaseRegistryMemo"),
   () => ({}),
 );
+
+export class AgentDatabaseRegistryChangedError extends Error {
+  readonly registrationSettlement?: AgentDatabaseRegistrationSettlement;
+
+  constructor(registrationSettlement?: AgentDatabaseRegistrationSettlement) {
+    super("Agent database registry changed during discovery; retry the read.");
+    this.name = "AgentDatabaseRegistryChangedError";
+    this.registrationSettlement = registrationSettlement;
+  }
+}
 
 function resolveAgentDatabaseRegistryPath(options: OpenClawStateDatabaseOptions): string {
   return path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
@@ -66,9 +82,11 @@ export function readOpenClawAgentDatabaseRegistryToken(
 
 export function invalidateRegisteredAgentDatabasesMemo(
   options: OpenClawStateDatabaseOptions,
+  registrationSettlement?: AgentDatabaseRegistrationSettlement,
 ): void {
   const pathname = resolveAgentDatabaseRegistryPath(options);
   if (registry.memo?.pathname === pathname) {
+    registry.memo.registrationSettlement = registrationSettlement;
     registry.memo = { pathname, token: Symbol(pathname) };
   }
 }
@@ -80,6 +98,27 @@ export function captureOpenClawAgentDatabaseRegistration(params: {
   admission: OpenClawStateDatabaseReadAdmission;
 }) {
   const options = { path: params.admission.databasePath };
+  const completion = createDeferredCore();
+  const pathname = resolveAgentDatabaseRegistryPath(options);
+  let generation: symbol | undefined;
+  let invalidated = false;
+  const settlement: AgentDatabaseRegistrationSettlement = {
+    promise: completion.promise,
+    assertCurrent() {
+      params.admission.assertCurrent();
+      if (invalidated || !generation || registry.memo?.token !== generation) {
+        throw new AgentDatabaseRegistryChangedError();
+      }
+    },
+  };
+  const invalidate = () => {
+    // This registration may advance only its own uninterrupted memo succession.
+    invalidated ||= !generation || registry.memo?.token !== generation;
+    invalidateRegisteredAgentDatabasesMemo(options, settlement);
+    if (!invalidated) {
+      generation = registry.memo?.token;
+    }
+  };
   let active = false;
   let committed = false;
   let finished = false;
@@ -90,7 +129,8 @@ export function captureOpenClawAgentDatabaseRegistration(params: {
       }
       if (!active) {
         active = true;
-        invalidateRegisteredAgentDatabasesMemo(options);
+        generation = registry.memo?.pathname === pathname ? registry.memo.token : undefined;
+        invalidate();
       }
     },
     recordCommitted(receipt: OpenClawAgentDatabaseRegistrationCommit) {
@@ -112,18 +152,23 @@ export function captureOpenClawAgentDatabaseRegistration(params: {
       }
       finished = true;
       try {
-        params.admission.assertCurrent();
-      } catch (error) {
-        if (isStateDatabaseReadAdmissionInvalidatedError(error)) {
-          return;
+        try {
+          params.admission.assertCurrent();
+        } catch (error) {
+          invalidated = true;
+          if (isStateDatabaseReadAdmissionInvalidatedError(error)) {
+            return;
+          }
+          throw error;
         }
-        throw error;
-      }
-      if (active) {
-        invalidateRegisteredAgentDatabasesMemo(options);
-      }
-      if (committed) {
-        sessionChanges.emit({ all: true, scope: "stores" });
+        if (active) {
+          invalidate();
+        }
+        if (committed) {
+          sessionChanges.emit({ all: true, scope: "stores" });
+        }
+      } finally {
+        completion.resolve();
       }
     },
   };
@@ -261,7 +306,9 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
         const assertCurrent = () => {
           context.admission.assertCurrent();
           if (registry.memo !== memo) {
-            throw new Error("Agent database registry changed during discovery; retry the read.");
+            throw new AgentDatabaseRegistryChangedError(
+              registry.memo?.pathname === memo.pathname ? memo.registrationSettlement : undefined,
+            );
           }
         };
         if (!memo.entries) {

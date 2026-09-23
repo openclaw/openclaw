@@ -15,6 +15,7 @@ import {
   type EmbeddedAgentQueueMessageOutcome,
   formatEmbeddedAgentQueueFailureSummary,
   queueEmbeddedAgentMessageWithOutcomeAsync,
+  queueGuardedEmbeddedAgentMessageWithOutcomeAsync,
 } from "../embedded-agent-runner/runs.js";
 import { jsonResult } from "./common.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
@@ -73,6 +74,7 @@ export async function startSessionsSendAgentRun(params: {
   allowActiveRunQueueDelivery?: boolean;
   allowActiveRunQueueFallback?: boolean;
   expectedSessionId?: string;
+  assertCurrent?: () => void;
   mode?: "steer" | "followup";
 }): Promise<
   | {
@@ -84,6 +86,7 @@ export async function startSessionsSendAgentRun(params: {
   | { ok: false; result: ReturnType<typeof jsonResult> }
 > {
   try {
+    const assertCurrent = params.assertCurrent;
     let fallbackSessionKey: string | undefined;
     const activeRunSessionId =
       params.mode === "steer" ||
@@ -115,6 +118,7 @@ export async function startSessionsSendAgentRun(params: {
         // Carry the same input facts as a new run; transcript ownership stays
         // with the receiving runtime and its exact session incarnation.
         userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
+          assertOriginalInputCommit: assertCurrent,
           input: {
             text: messageText,
             provenance: inputProvenance,
@@ -132,12 +136,28 @@ export async function startSessionsSendAgentRun(params: {
           },
         }),
       };
-      let queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
-        activeRunSessionId,
-        messageText,
-        queueOptions,
-      );
-      if (!queueOutcome.queued && queueOutcome.reason === "transcript_commit_wait_unsupported") {
+      let queueOutcome = assertCurrent
+        ? await queueGuardedEmbeddedAgentMessageWithOutcomeAsync(
+            activeRunSessionId,
+            messageText,
+            queueOptions,
+            () => {
+              assertCurrent();
+              return true;
+            },
+          )
+        : await queueEmbeddedAgentMessageWithOutcomeAsync(
+            activeRunSessionId,
+            messageText,
+            queueOptions,
+          );
+      // A source-bound send retains its facts through commit; an unsupported wait
+      // cannot turn that live constraint into an unowned delayed delivery.
+      if (
+        !assertCurrent &&
+        !queueOutcome.queued &&
+        queueOutcome.reason === "transcript_commit_wait_unsupported"
+      ) {
         const bestEffortQueueOptions = { ...queueOptions };
         delete bestEffortQueueOptions.waitForTranscriptCommit;
         queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
@@ -163,6 +183,7 @@ export async function startSessionsSendAgentRun(params: {
     }
     const response = await params.callGateway<{ runId: string; admissionPending?: boolean }>({
       method: "agent",
+      ...(assertCurrent ? { assertDispatchCurrent: assertCurrent } : {}),
       params: fallbackSessionKey
         ? {
             ...params.sendParams,

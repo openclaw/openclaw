@@ -14,4 +14,12 @@ export type SessionSharingEntry = Pick<
   | "incognito"
   | "createdActor"
   | "sandbox"
+  | "archivedAt"
+  | "parentSessionKey"
+  | "parentSessionId"
+  | "spawnedBy"
+  | "spawnDepth"
+  | "permissionMode"
+  | "sessionStartedAt"
+  | "delivery"
 >;

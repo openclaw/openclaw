@@ -3,16 +3,22 @@ import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import * as entryCache from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
+import * as sessionEntryReads from "../config/sessions/session-entry-read-runtime.js";
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import * as registryListing from "../state/openclaw-agent-db-registry-listing.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
+import { captureOpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   authorizePreparedSessionMutation,
@@ -109,7 +115,30 @@ it.each(["durable", "incognito"] as const)(
           }
         };
         assertWithoutSql(true);
-        replaceSessionEntrySync(scope, { ...entry, label: "cosmetic change", updatedAt: 2 });
+        const missingKey = `${sessionKey}-missing`;
+        const negative = await prepareSessionMutationFacts({
+          cfg,
+          sessionKey: missingKey,
+          agentId: "main",
+          allowMissing: true,
+        });
+        try {
+          expect(negative.readCurrent(cfg).target).toBeNull();
+          replaceSessionEntrySync(scope, { ...entry, label: "cosmetic change", updatedAt: 2 });
+          expect(negative.readCurrent(cfg).target).toBeNull();
+          replaceSessionEntrySync(
+            { ...scope, sessionKey: missingKey },
+            {
+              ...entry,
+              sessionId: "appeared-session",
+              lifecycleRevision: "appeared-generation",
+              updatedAt: 2,
+            },
+          );
+          expect(() => negative.readCurrent(cfg)).toThrow(unavailableMessage);
+        } finally {
+          negative.release();
+        }
         assertWithoutSql(true);
         expect(observed.at(-1)).toEqual({ visibility: "read-only", member: true });
         await removeSessionMember(scope, "requester");
@@ -193,77 +222,352 @@ it("rejects unavailable durable metadata", async () => {
   });
 });
 
-it("requires an existing session before preparing sharing facts", async () => {
+it.each([
+  "registry-only",
+  "identity-before-catch",
+  "identity-during-wait",
+  "negative-during-wait",
+  "memo-switch",
+  "registration-memo-switch",
+  "second-registration-during-wait",
+  "second-registration-before-registry-read",
+  "second-registration",
+] as const)(
+  "keeps initial registration recovery bound to its original identity (%s)",
+  async (overlap) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const storePath = state.statePath("registry-recovery.sqlite");
+      const cfg = { agents: { entries: { main: {} } }, session: { store: storePath } };
+      await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
+      const scope = { agentId: "main", sessionKey: "agent:main:registry-recovery", storePath };
+      const initial = {
+        sessionId: "original-session",
+        lifecycleRevision: "original-generation",
+        updatedAt: 1,
+      };
+      if (overlap === "negative-during-wait") {
+        replaceSessionEntrySync(
+          { ...scope, sessionKey: "agent:main:other" },
+          { sessionId: "other-session", updatedAt: 1 },
+        );
+      } else {
+        replaceSessionEntrySync(scope, initial);
+      }
+      const shared = openOpenClawStateDatabase({ env: state.env });
+      const admission = captureOpenClawStateDatabaseReadAdmission(shared.path);
+      const captureRegistration = () =>
+        registryListing.captureOpenClawAgentDatabaseRegistration({
+          agentId: scope.agentId,
+          agentPath: storePath,
+          admission,
+        });
+      const enteredRead = createDeferredCore();
+      const releaseRead = createDeferredCore();
+      const enteredWait = createDeferredCore();
+      const read = sessionEntryReads.readSessionEntriesFromStoreInWorker;
+      const retain = entryCache.retainPreparedSessionSharingFacts;
+      const prepareRegistry = registryListing.prepareOpenClawAgentDatabaseRegistrySnapshotRead;
+      let registration: ReturnType<typeof captureRegistration> | undefined;
+      let registrationFinished = false;
+      let reads = 0;
+      let interruptedBeforeRegistryRead = false;
+      const registrySpy = vi
+        .spyOn(registryListing, "prepareOpenClawAgentDatabaseRegistrySnapshotRead")
+        .mockImplementation((options) => {
+          const prepared = prepareRegistry(options);
+          let snapshotReads = 0;
+          return {
+            read: async () => {
+              snapshotReads += 1;
+              if (overlap === "second-registration-before-registry-read" && snapshotReads === 2) {
+                expect(registrationFinished).toBe(true);
+                const second = captureRegistration();
+                second.begin();
+                second.finish();
+                interruptedBeforeRegistryRead = true;
+              }
+              return await prepared.read();
+            },
+          };
+        });
+      const readSpy = vi
+        .spyOn(sessionEntryReads, "readSessionEntriesFromStoreInWorker")
+        .mockImplementation(async (params) => {
+          const result = await read(params);
+          reads += 1;
+          if (reads === 1) {
+            enteredRead.resolve();
+            await releaseRead.promise;
+          } else if (overlap === "second-registration" && reads === 2) {
+            const second = captureRegistration();
+            second.begin();
+            second.finish();
+          }
+          return result;
+        });
+      const retainSpy = vi
+        .spyOn(entryCache, "retainPreparedSessionSharingFacts")
+        .mockImplementation((params) => {
+          const retained = retain(params);
+          const readCurrent = retained.readCurrent;
+          vi.spyOn(retained, "readCurrent").mockImplementation(() => {
+            const current = readCurrent();
+            if (registration && !registrationFinished) {
+              if (overlap === "negative-during-wait" && params.sessionKey === scope.sessionKey) {
+                expect(current).toBeDefined();
+                expect(current?.entry).toBeUndefined();
+              }
+              // The synchronous recovery guard is immediately before the receipt await.
+              // This continuation runs only after the helper yields to that settlement.
+              enteredWait.resolve();
+            }
+            return current;
+          });
+          return retained;
+        });
+      let settled = false;
+      const outcome = prepareSessionMutationFacts({ cfg, ...scope, allowMissing: true }).then(
+        (value) => {
+          settled = true;
+          return { kind: "ready" as const, prepared: value };
+        },
+        (error: unknown) => {
+          settled = true;
+          return { kind: "error" as const, error };
+        },
+      );
+      const replaceIdentity = () =>
+        replaceSessionEntrySync(scope, {
+          ...initial,
+          sessionId: "replacement-session",
+          lifecycleRevision: "replacement-generation",
+        });
+      try {
+        await Promise.race([
+          enteredRead.promise,
+          outcome.then((result) => {
+            throw new Error(`Preparation finished before the read boundary: ${result.kind}`);
+          }),
+        ]);
+        if (overlap === "memo-switch") {
+          registryListing.readOpenClawAgentDatabaseRegistryToken({
+            path: state.statePath("unrelated-registry.sqlite"),
+          });
+        } else {
+          registration = captureRegistration();
+          registration.begin();
+          if (overlap === "registration-memo-switch") {
+            registryListing.readOpenClawAgentDatabaseRegistryToken({
+              path: state.statePath("unrelated-registry.sqlite"),
+            });
+          }
+        }
+        if (overlap === "identity-before-catch") {
+          replaceIdentity();
+        }
+        releaseRead.resolve();
+        if (
+          overlap === "registry-only" ||
+          overlap === "identity-during-wait" ||
+          overlap === "negative-during-wait" ||
+          overlap === "second-registration-during-wait" ||
+          overlap === "second-registration-before-registry-read" ||
+          overlap === "second-registration"
+        ) {
+          await Promise.race([
+            enteredWait.promise,
+            outcome.then((result) => {
+              throw new Error(
+                `Preparation finished before registration settlement wait: ${result.kind}`,
+              );
+            }),
+          ]);
+          expect(settled).toBe(false);
+          if (overlap === "identity-during-wait") {
+            replaceIdentity();
+          } else if (overlap === "negative-during-wait") {
+            replaceSessionEntrySync(scope, initial);
+          } else if (overlap === "second-registration-during-wait") {
+            const second = captureRegistration();
+            second.begin();
+            second.finish();
+          }
+        }
+        registration?.finish();
+        registrationFinished = true;
+        const result = await outcome;
+        if (overlap === "registry-only") {
+          if (result.kind !== "ready") {
+            throw result.error;
+          }
+          expect(result.prepared.readCurrent(cfg).target?.entry.sessionId).toBe(initial.sessionId);
+          const readsBeforeRevocation = readSpy.mock.calls.length;
+          const later = captureRegistration();
+          later.begin();
+          try {
+            expect(() => result.prepared.readCurrent(cfg)).toThrow(unavailableMessage);
+            expect(readSpy).toHaveBeenCalledTimes(readsBeforeRevocation);
+          } finally {
+            later.finish();
+          }
+        } else {
+          expect(result).toMatchObject({ kind: "error", error: { message: unavailableMessage } });
+          if (overlap === "memo-switch" || overlap === "registration-memo-switch") {
+            expect(result).toMatchObject({
+              error: { cause: expect.any(registryListing.AgentDatabaseRegistryChangedError) },
+            });
+            if (result.kind === "error") {
+              expect(result.error).toHaveProperty("cause.registrationSettlement", undefined);
+            }
+            expect(reads).toBe(1);
+          } else if (overlap === "second-registration") {
+            expect(reads).toBe(2);
+          } else if (overlap === "second-registration-during-wait") {
+            expect(reads).toBe(1);
+          } else if (overlap === "second-registration-before-registry-read") {
+            expect(interruptedBeforeRegistryRead).toBe(true);
+          }
+        }
+      } finally {
+        releaseRead.resolve();
+        registration?.finish();
+        const result = await outcome;
+        if (result.kind === "ready") {
+          result.prepared.release();
+        }
+        readSpy.mockRestore();
+        retainSpy.mockRestore();
+        registrySpy.mockRestore();
+      }
+    });
+  },
+);
+
+it.each(["negative-sharing.sqlite", "sessions.json"])(
+  "requires an existing session before preparing sharing facts through %s",
+  async (locator) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const storePath = state.statePath(locator);
+      const cfg = {
+        ...rolePolicyConfig(),
+        agents: { entries: { main: {} } },
+        session: { store: storePath },
+      };
+      await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
+      const sessionKey = "agent:main:absent";
+      await expect(
+        prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" }),
+      ).rejects.toThrow(unavailableMessage);
+      const absent = await prepareSessionMutationFacts({
+        cfg,
+        sessionKey,
+        agentId: "main",
+        allowMissing: true,
+      });
+      try {
+        const sql = observeHostDataSql(state.env);
+        try {
+          expect(absent.readCurrent(cfg).target).toBeNull();
+          sessionChanges.emit({ all: true, scope: "catalog" });
+          expect(absent.readCurrent(cfg).target).toBeNull();
+          for (const call of sql.calls) {
+            expect(call).not.toHaveBeenCalled();
+          }
+        } finally {
+          sql.restore();
+        }
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey: "agent:main:existing", storePath },
+          { sessionId: "existing", updatedAt: 1 },
+        );
+        expect(() => absent.readCurrent(cfg)).toThrow(unavailableMessage);
+      } finally {
+        absent.release();
+      }
+      await expect(
+        prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" }),
+      ).rejects.toThrow(unavailableMessage);
+      const missingEntry = await prepareSessionMutationFacts({
+        cfg,
+        sessionKey,
+        agentId: "main",
+        allowMissing: true,
+      });
+      try {
+        sessionChanges.emit({ all: true, scope: "catalog" });
+        expect(missingEntry.readCurrent(cfg).target).toBeNull();
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey, storePath },
+          {
+            sessionId: "new-restricted-session",
+            lifecycleRevision: "new-restricted-generation",
+            updatedAt: 1,
+            visibility: "draft",
+            sandbox: "required",
+            createdActor: { type: "human", source: "profile", id: "other" },
+          },
+        );
+        expect(() => missingEntry.readCurrent(cfg)).toThrow(unavailableMessage);
+      } finally {
+        missingEntry.release();
+      }
+      const prepared = await prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" });
+      try {
+        const client = sharingPolicyClient({ user: "requester" });
+        const policy = { ...cfg.gateway!.roles!.definitions.view!, sandbox: "required" as const };
+        const facts = prepared.readCurrent(cfg);
+        expect(facts.target.entry.sessionId).toBe("new-restricted-session");
+        expect(
+          authorizePreparedSessionMutation({ cfg, client, sessionKey, agentId: "main" }, facts, {
+            policy,
+            aliases: new Set(["requester"]),
+          })?.message,
+        ).toContain("session is draft");
+      } finally {
+        prepared.release();
+      }
+    });
+  },
+);
+
+it("invalidates a raw global read when its fixed-store owner changes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const storePath = state.statePath("negative-sharing.sqlite");
     const cfg = {
-      ...rolePolicyConfig(),
-      agents: { entries: { main: {} } },
-      session: { store: storePath },
+      agents: {
+        entries: { main: {}, ops: {} },
+        defaults: { sessionStore: { agentId: "main" } },
+      },
+      session: { store: state.statePath("fixed-owner.sqlite") },
     };
     await state.writeConfig(cfg);
     setRuntimeConfigSnapshot(cfg);
-    const sessionKey = "agent:main:absent";
-    await expect(prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" })).rejects.toThrow(
-      unavailableMessage,
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: "global", storePath: cfg.session.store },
+      { sessionId: "original-global", updatedAt: 1 },
     );
-    const missingDatabase = await prepareSessionMutationFacts({
+    const prepared = await prepareSessionMutationFacts({
       cfg,
-      sessionKey,
+      sessionKey: "global",
       agentId: "main",
-      allowMissing: true,
     });
     try {
-      expect(missingDatabase.readCurrent(cfg).target).toBeNull();
-      sessionChanges.emit({ all: true, scope: "catalog" });
-      expect(missingDatabase.readCurrent(cfg).target).toBeNull();
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: "agent:main:existing", storePath },
-        { sessionId: "existing", updatedAt: 1 },
-      );
-      expect(() => missingDatabase.readCurrent(cfg)).toThrow(unavailableMessage);
-    } finally {
-      missingDatabase.release();
-    }
-    await expect(prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" })).rejects.toThrow(
-      unavailableMessage,
-    );
-    const missingEntry = await prepareSessionMutationFacts({
-      cfg,
-      sessionKey,
-      agentId: "main",
-      allowMissing: true,
-    });
-    try {
-      sessionChanges.emit({ all: true, scope: "catalog" });
-      expect(missingEntry.readCurrent(cfg).target).toBeNull();
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey, storePath },
-        {
-          sessionId: "new-restricted-session",
-          lifecycleRevision: "new-restricted-generation",
-          updatedAt: 1,
-          visibility: "draft",
-          sandbox: "required",
-          createdActor: { type: "human", source: "profile", id: "other" },
-        },
-      );
-      expect(() => missingEntry.readCurrent(cfg)).toThrow(unavailableMessage);
-    } finally {
-      missingEntry.release();
-    }
-    const prepared = await prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" });
-    try {
-      const client = sharingPolicyClient({ user: "requester" });
-      const policy = { ...cfg.gateway!.roles!.definitions.view!, sandbox: "required" as const };
-      const facts = prepared.readCurrent(cfg);
-      expect(facts.target.entry.sessionId).toBe("new-restricted-session");
-      expect(
-        authorizePreparedSessionMutation({ cfg, client, sessionKey, agentId: "main" }, facts, {
-          policy,
-          aliases: new Set(["requester"]),
-        })?.message,
-      ).toContain("session is draft");
+      const sql = observeHostDataSql(state.env);
+      try {
+        expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("original-global");
+        expect(() =>
+          prepared.readCurrent({
+            ...cfg,
+            agents: { ...cfg.agents, defaults: { sessionStore: { agentId: "ops" } } },
+          }),
+        ).toThrow(unavailableMessage);
+        for (const call of sql.calls) {
+          expect(call).not.toHaveBeenCalled();
+        }
+      } finally {
+        sql.restore();
+      }
     } finally {
       prepared.release();
     }

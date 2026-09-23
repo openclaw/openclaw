@@ -19,11 +19,11 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import * as configEnv from "../config-env-vars.js";
+import { projectSessionSharingEntry } from "./session-accessor.sqlite-entry-cache-projection.js";
 import {
   readCommittedSessionEntryCache,
   readSessionEntryCache,
   retainPreparedSessionSharingFacts,
-  projectSessionSharingEntry,
 } from "./session-accessor.sqlite-entry-cache.js";
 import {
   readExactSessionEntryRow,

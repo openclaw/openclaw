@@ -54,6 +54,41 @@ vi.mock("../session-utils.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../session-sharing-preparation.js", () => ({
+  prepareSessionMutationFacts: async (params: { agentId: string; sessionKey: string }) => {
+    let active = true;
+    return {
+      readCurrent: () => {
+        if (!active) {
+          throw new Error("Session fixture read is no longer active");
+        }
+        const entry = sharedMocks.sessionEntries.get(params.sessionKey);
+        return {
+          location: {
+            agentId: params.agentId,
+            canonicalKey: params.sessionKey,
+            storePath: "fixture.sqlite",
+          },
+          target: entry
+            ? {
+                agentId: params.agentId,
+                canonicalKey: params.sessionKey,
+                storeKey: params.sessionKey,
+                storeKeys: [params.sessionKey],
+                storePath: "fixture.sqlite",
+                entry: structuredClone(entry),
+              }
+            : null,
+          membership: new Set(),
+        };
+      },
+      release: () => {
+        active = false;
+      },
+    };
+  },
+}));
+
 vi.mock("../../agents/tools/sessions-send-tool.js", () => ({
   createSessionsSendTool: (options: unknown) => ({
     execute: async (toolCallId: string, args: unknown) => {
@@ -96,6 +131,7 @@ vi.mock("../../agents/tools/scoped-session-access.js", () => ({
 }));
 
 vi.mock("../../agents/tools/in-process-gateway.js", () => ({
+  bindAgentToolGatewayRequest: () => (request: unknown) => sharedMocks.gatewayRequest(request),
   callAgentToolGatewayRequest: (request: unknown) => sharedMocks.gatewayRequest(request),
   callInProcessGatewayTool: (method: string, params: Record<string, unknown>) =>
     sharedMocks.gatewayRequest({ method, params }),

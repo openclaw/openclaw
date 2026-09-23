@@ -83,6 +83,27 @@ That migration must prepare authority through those owners and retain live commi
 checks; it must not treat internal agent identity as WebSocket authority or drop
 the external SDK guard contract.
 
+Managed worker session tools prepare source, target, and shared-parent session
+facts through the existing session mutation-facts owner. That owner retains
+negative lookups, lineage, archival state, and source metadata through committed
+entry publications; configuration or physical-store changes invalidate the read.
+Initial registry discovery may reacquire once after an uninterrupted registration
+settles without publishing a topology change. Its receipt rejects any intervening
+registry generation through reacquisition; committed topology changes invalidate
+the original preparation. Original row and physical-identity witnesses
+remain active throughout; facts already returned to a caller never refresh.
+Scoped incarnation checks consume those current facts, and sender classification
+reads ACP metadata in the shared-state worker. Prepared facts do not grant access:
+placement, run, claim, visibility, and incarnation checks remain authoritative.
+New-turn dispatch carries those guards through Gateway admission; acceptance
+transfers input to the receiving run's owner.
+The existing placement, delegated-claim, and tool-operation settlement owners
+still perform their own synchronous SQL, including placement schema revalidation.
+Gateway request authorization separately retains synchronous target-session reads,
+and agent-request preflight retains source-session and ACP classification reads.
+Participant publication can also synchronously materialize resident session rows.
+These owners remain outside this migration.
+
 Worker environment inventory is a committed, revisioned projection owned by its
 store. Startup hydrates through the read-only worker scope; runtime mutations use
 the shared-state SQLite worker broker and re-read environment, credential, and

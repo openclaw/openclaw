@@ -17,10 +17,8 @@ import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-sta
 import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createSessionEntryWithTranscript } from "./session-accessor.entry-mutation.js";
-import {
-  projectSessionSharingEntry,
-  retainPreparedSessionSharingFacts,
-} from "./session-accessor.sqlite-entry-cache.js";
+import { projectSessionSharingEntry } from "./session-accessor.sqlite-entry-cache-projection.js";
+import { retainPreparedSessionSharingFacts } from "./session-accessor.sqlite-entry-cache.js";
 import {
   readExactSessionEntryRow,
   writeSessionEntry,

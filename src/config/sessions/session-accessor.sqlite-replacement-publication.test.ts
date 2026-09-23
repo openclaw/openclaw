@@ -11,12 +11,12 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { projectSessionSharingEntry } from "./session-accessor.sqlite-entry-cache-projection.js";
 import {
   readCommittedSessionEntryCache,
   readSessionEntryCache,
   retainPreparedSessionSharingFacts,
   retainSessionEntryWorkerPublication,
-  projectSessionSharingEntry,
 } from "./session-accessor.sqlite-entry-cache.js";
 import {
   readExactSessionEntryRow,

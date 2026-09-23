@@ -148,6 +148,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server/ws-connection/connect-hello.setup-completion.test.ts",
   "src/gateway/server/ws-connection/message-handler.control-ui-build-admission.test.ts",
   "src/gateway/server/ws-connection/message-handler.post-connect-health.test.ts",
+  "src/gateway/server/ws-connection/message-handler.worker-session-owner.test.ts",
   "src/gateway/session-activity-summaries.test.ts",
   "src/gateway/session-companion-runtime.test.ts",
   "src/gateway/session-create-atomic-initialization.test.ts",

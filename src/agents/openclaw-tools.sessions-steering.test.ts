@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -8,6 +9,7 @@ import {
   listSessionParticipantsReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { resolveSessionTranscriptDatabasePath } from "../config/sessions/session-accessor.transcript-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 
@@ -225,6 +227,64 @@ it.each([
           contributionCount: 1,
         }),
       ]);
+      if (alternateStore) {
+        // The original runtime has settled; this sink proves the recorder's own
+        // selected location without racing another transcript writer.
+        const persistQueuedMessage = vi.fn(
+          async (_text: string, options?: EmbeddedAgentQueueMessageOptions) => {
+            const recorder = expectDefined(
+              options?.userTurnTranscriptRecorder,
+              "queued steering recorder",
+            );
+            const persisted = expectDefined(
+              await recorder.persistApproved(),
+              "queued user turn commit",
+            );
+            expect(persisted.admission).toMatchObject({
+              agentId: scope.agentId,
+              sessionId: scope.sessionId,
+              sessionKey: scope.sessionKey,
+              storePath: resolveSessionTranscriptDatabasePath(scope),
+            });
+            expect(SessionManager.open(scope, dir).getEntries()).toContainEqual(
+              expect.objectContaining({
+                id: persisted.messageId,
+                type: "message",
+                message: expect.objectContaining({
+                  role: "user",
+                  content: expect.stringContaining("Verify the selected recorder store"),
+                }),
+              }),
+            );
+          },
+        );
+        setActiveEmbeddedRun(
+          scope.sessionId,
+          {
+            queueMessage: persistQueuedMessage,
+            isStreaming: () => true,
+            isCompacting: () => false,
+            supportsTranscriptCommitWait: true,
+            sourceReplyDeliveryMode: "automatic",
+            abort: () => {},
+          },
+          runScopedCallerKey,
+        );
+        const recorderSend = tool.execute("verify-recorder-location", {
+          mode: "steer",
+          sessionKey: runScopedCallerKey,
+          message: "Verify the selected recorder store",
+          timeoutSeconds: 0,
+        });
+        pending.push(recorderSend);
+        const recorderResult = await recorderSend;
+        expect(recorderResult.details, JSON.stringify(recorderResult.details)).toMatchObject({
+          status: "accepted",
+          targetDisposition: "steered",
+        });
+        expect(persistQueuedMessage).toHaveBeenCalledOnce();
+        expect(calls.some((call) => call.method === "agent")).toBe(false);
+      }
     } finally {
       // Release even a late provider callback, then join work before fixture teardown.
       closing = true;

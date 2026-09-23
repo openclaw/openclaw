@@ -5,15 +5,15 @@ import { createSessionsSendTool } from "../../agents/tools/sessions-send-tool.js
 import { getRuntimeConfig } from "../../config/config.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { WorkerSessionToolOutcomeUnknownError } from "./worker-session-tool-result.js";
-import {
-  resolveWorkerSessionToolTarget as exactAuthorizedTarget,
-  type WorkerSessionToolSource as ExactSource,
-  type WorkerSessionToolTarget as ExactTarget,
+import type {
+  WorkerSessionToolSource as ExactSource,
+  WorkerSessionToolTarget as ExactTarget,
 } from "./worker-session-tool-topology.js";
 
 export async function executeWorkerSessionSend(operation: {
   source: ExactSource;
   target: ExactTarget;
+  readCurrentTarget: () => ExactTarget;
   request: WorkerSessionsSendParams;
   idempotencyKey: string;
   assertSource: () => void;
@@ -23,23 +23,30 @@ export async function executeWorkerSessionSend(operation: {
   const config = getRuntimeConfig();
   const executeFencedSend = async () => {
     const assertCurrentTarget = () => {
-      const target = exactAuthorizedTarget({
-        source: operation.source,
-        requestedSessionKey: operation.request.sessionKey,
-      });
+      const target = operation.readCurrentTarget();
       if (
+        target.agentId !== operation.target.agentId ||
+        target.sessionKey !== operation.target.sessionKey ||
         target.sessionId !== operation.target.sessionId ||
+        target.topologyParent?.agentId !== operation.target.topologyParent?.agentId ||
         target.topologyParent?.sessionKey !== operation.target.topologyParent?.sessionKey ||
         target.topologyParent?.sessionId !== operation.target.topologyParent?.sessionId
       ) {
         throw new Error("Worker sessions_send target incarnation changed");
       }
     };
+    const assertCurrent = () => {
+      operation.assertSource();
+      assertCurrentTarget();
+    };
     assertCurrentTarget();
     const tool = createSessionsSendTool({
       agentSessionKey: operation.source.sessionKey,
+      agentId: operation.source.agentId,
       agentChannel: sessionDeliveryChannel(operation.source.entry),
+      targetAgentId: operation.target.agentId,
       expectedTargetSessionId: operation.target.sessionId,
+      assertCurrent,
       idempotencyKey: operation.idempotencyKey,
       config,
       ...(operation.signal ? { signal: operation.signal } : {}),
@@ -77,6 +84,7 @@ export async function executeWorkerSessionSend(operation: {
   // that third incarnation through target admission and the message effect.
   return await runWithScopedSessionAccess({
     cfg: config,
+    agentId: topologyParent.agentId,
     expectedSessionId: topologyParent.sessionId,
     targetSessionKey: topologyParent.sessionKey,
     ...(operation.signal ? { signal: operation.signal } : {}),

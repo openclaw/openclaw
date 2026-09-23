@@ -8,7 +8,6 @@ import { isRequesterParentOfBackgroundAcpSession } from "@openclaw/acp-core/sess
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
-import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta-readonly.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
@@ -16,7 +15,6 @@ import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/tr
 import type { AgentRouteBinding } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { shouldResumeParentSubagent } from "../../gateway/session-subagent-resume.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "../../gateway/session-utils-store-lookup.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEventEntry } from "../../infra/system-events.js";
@@ -90,6 +88,7 @@ import { buildAgentToAgentMessageContext } from "./sessions-send-helpers.js";
 import { captureSessionsSendResumeCaller, resumeSessionsSendTask } from "./sessions-send-resume.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 import { startSessionsSendAgentRun } from "./sessions-send-tool.delivery.js";
+import { readSessionSendTarget } from "./sessions-send-tool.target.js";
 
 const SessionsSendToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
@@ -314,8 +313,12 @@ export function createSessionsSendTool(opts?: {
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
+  /** Backend-selected owner for the target key; never sourced from model arguments. */
+  targetAgentId?: string;
   /** Backend-derived target incarnation; never sourced from model arguments. */
   expectedTargetSessionId?: string;
+  /** Live source and target constraints retained by a backend-owned send. */
+  assertCurrent?: () => void;
   /** Backend-owned downstream operation id; never sourced from model arguments. */
   idempotencyKey?: string;
   signal?: AbortSignal;
@@ -528,7 +531,8 @@ export function createSessionsSendTool(opts?: {
         : await resolveSessionReference({
             action: "send",
             sessionKey,
-            keyAgentId: requesterAgentId,
+            keyAgentId: opts?.targetAgentId ?? requesterAgentId,
+            agentId: opts?.targetAgentId,
             alias,
             mainKey,
             requesterInternalKey: effectiveRequesterKey,
@@ -573,9 +577,9 @@ export function createSessionsSendTool(opts?: {
           sessionKey: unresolvedDisplayKey,
         });
       }
-      // Normalize sessionKey/sessionId input into a canonical session key.
+      // Exact-incarnation callers need the canonical key for follow-up sends.
       const resolvedKey = visibleSession.key;
-      const displayKey = visibleSession.displayKey;
+      const displayKey = opts?.expectedTargetSessionId ? resolvedKey : visibleSession.displayKey;
       const resolvedKeyAgentId = parseAgentSessionKey(resolvedKey)?.agentId;
       const isLiteralLegacyKeyInput =
         !labelParam && sessionKeyParam !== undefined && !resolvedSession.resolvedViaSessionId;
@@ -634,25 +638,15 @@ export function createSessionsSendTool(opts?: {
       const mayUseRequesterForLiteralSentinel =
         isLiteralUnscopedMainTarget && normalizeAgentId(targetAgentId) === requesterAgentId;
       const rawRequesterSessionKey = opts?.agentSessionKey ? effectiveRequesterKey : undefined;
-      const requesterSession = resolveGatewaySessionStoreTargetWithStore({
+      const requesterSession = await readSessionSendTarget(
         cfg,
-        key: effectiveRequesterKey,
-        agentId: requesterAgentId,
-        readOnly: true,
-        exactRead: true,
-        clone: false,
-        projection: "full",
-      });
-      const requesterSessionEntry = requesterSession.store[requesterSession.canonicalKey];
+        effectiveRequesterKey,
+        requesterAgentId,
+      );
       const requesterIsSubagent = isSubagentSessionFromEntry(
         requesterSession.canonicalKey,
-        requesterSessionEntry,
-        readAcpSessionMetaForEntry({
-          sessionKey: requesterSession.canonicalKey,
-          agentId: requesterSession.agentId,
-          cfg,
-          entry: requesterSessionEntry,
-        }),
+        requesterSession.entry,
+        requesterSession.acp,
       );
       const parsedRequesterSessionKey = parseAgentSessionKey(rawRequesterSessionKey);
       const requesterSessionKey = rawRequesterSessionKey;
@@ -862,22 +856,9 @@ export function createSessionsSendTool(opts?: {
 
           const requesterChannel = opts?.agentChannel;
           const isIsolatedCronRequester = isCronRunSessionKey(requesterSessionKey);
-          const targetSession = resolveGatewaySessionStoreTargetWithStore({
-            cfg,
-            key: resolvedKey,
-            agentId: targetAgentId,
-            readOnly: true,
-            exactRead: true,
-            clone: false,
-            projection: "full",
-          });
-          const targetSessionEntry = targetSession.store[targetSession.canonicalKey];
-          const targetAcpMeta = readAcpSessionMetaForEntry({
-            sessionKey: targetSession.canonicalKey,
-            agentId: targetSession.agentId,
-            cfg,
-            entry: targetSessionEntry,
-          });
+          const targetSession = await readSessionSendTarget(cfg, resolvedKey, targetAgentId);
+          const targetSessionEntry = targetSession.entry;
+          const targetAcpMeta = targetSession.acp;
           const targetIsSubagent = isSubagentSessionFromEntry(
             targetSession.canonicalKey,
             targetSessionEntry,
@@ -1002,6 +983,7 @@ export function createSessionsSendTool(opts?: {
             sendParams,
             sessionKey: mode ? resolvedKey : displayKey,
             sessionStoreTarget: targetSession,
+            assertCurrent: opts?.assertCurrent,
             deliveryTimeoutMs: announceTimeoutMs,
             ...(timeoutSeconds === 0
               ? {
@@ -1038,17 +1020,9 @@ export function createSessionsSendTool(opts?: {
           });
           try {
             const acceptedTarget = start.a2aSessionKey
-              ? resolveGatewaySessionStoreTargetWithStore({
-                  cfg,
-                  key: acceptedTargetSessionKey,
-                  agentId: targetAgentId,
-                  readOnly: true,
-                  exactRead: true,
-                  clone: false,
-                  projection: "full",
-                })
+              ? await readSessionSendTarget(cfg, acceptedTargetSessionKey, targetAgentId)
               : targetSession;
-            if (start.a2aSessionKey && !acceptedTarget.store[acceptedTarget.canonicalKey]) {
+            if (start.a2aSessionKey && !acceptedTarget.entry) {
               throw new Error("Accepted Cron parent has no stored session entry.");
             }
             recordSessionParticipantBestEffort({

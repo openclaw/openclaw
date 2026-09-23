@@ -1,8 +1,6 @@
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import {
-  projectSessionSharingEntry,
-  type SessionEntryReplacementPublication,
-} from "./session-accessor.sqlite-entry-cache.js";
+import { projectSessionSharingEntry } from "./session-accessor.sqlite-entry-cache-projection.js";
+import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.js";
 import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
 import {
   deleteLegacySessionEntryRows,

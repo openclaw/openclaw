@@ -23,6 +23,7 @@ import type { ExactSessionEntry } from "./session-accessor.sqlite-contract.js";
 import {
   loadSessionEntrySnapshot,
   projectSessionEntryCacheUpdate,
+  projectSessionSharingEntry,
   readSessionEntrySideMetadata,
   type SessionEntryCacheDatabase,
   type SessionEntrySideMetadata,
@@ -138,18 +139,6 @@ function emitPreparedSessionSharingChange(
   };
   preparedSharingChanges.add(change);
   sessionChanges.emit(change, database.db);
-}
-
-export function projectSessionSharingEntry(entry: SessionEntry): SessionSharingEntry {
-  return {
-    sessionId: entry.sessionId,
-    updatedAt: entry.updatedAt,
-    lifecycleRevision: entry.lifecycleRevision,
-    visibility: entry.visibility,
-    incognito: entry.incognito,
-    createdActor: entry.createdActor ? { ...entry.createdActor } : undefined,
-    sandbox: entry.sandbox,
-  };
 }
 
 /** The existing entry writer advances retained facts before any commit observer can reenter. */
