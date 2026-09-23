@@ -432,8 +432,11 @@ cancel native clipboard writes that the browser has already accepted.
 
 ### Markdown tables
 
-Markdown tables scroll horizontally within the conversation. **Copy table** copies
-tab-separated cells, and **Expand table** opens a larger view. If copying fails, the button clears any earlier success checkmark. In Chat, workspace
+Markdown tables wrap headings and cell text to fit the conversation. On wide panes,
+top-level assistant tables can use extra space without widening the surrounding prose.
+Dense tables still scroll horizontally; ordinary inline tables grow with the conversation
+instead of adding a vertical scrollbar. **Copy table** copies tab-separated cells, and
+**Expand table** above the table opens a larger view with a sticky header. If copying fails, the button clears any earlier success checkmark. In Chat, workspace
 file and session links work in either view, including Enter and Space keyboard
 activation. Following a link closes the expanded view so you can use its destination.
 
