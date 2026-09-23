@@ -1395,6 +1395,7 @@
               "type": "array"
             },
             "timeoutSeconds": {
+              "description": "Wait duration in integer seconds, 0–60 (default: 30). Use 0 for a snapshot.",
               "maximum": 60,
               "minimum": 0,
               "type": "integer"

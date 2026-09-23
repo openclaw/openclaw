@@ -116,6 +116,9 @@ function createSharedStateWorkerBackend(
         return runtime.prepareSharedStateCommand(commandType);
       });
     },
+    prepare() {
+      return openClawStateDatabaseCache.waitForCachedOpenClawStateSchemaProbe(context.databasePath);
+    },
     execute(command) {
       if (closed) {
         throw new Error("Shared-state worker is closed");

@@ -1,4 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
+import { execFileSync } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listSessionEntriesCore } from "../config/sessions/session-accessor.entry.js";
@@ -6,10 +7,13 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -114,9 +118,7 @@ beforeAll(async () => {
   console.info("Admitted database checks for 100 reads per entry point:", counts);
 });
 
-// Remove .fails when the schema-assert-per-handle cutover lands (companion PR pending).
-// Setup and read-result checks stay outside this expected failure so only the budget is exempt.
-it.fails("keeps admitted reads within the schema-query budget (pending schema-assert-per-handle)", () => {
+it("keeps admitted reads within the schema-query budget", () => {
   expect(counts).toEqual(
     ["agent", "state"].map((owner) => ({
       owner,
@@ -125,4 +127,53 @@ it.fails("keeps admitted reads within the schema-query budget (pending schema-as
       dataVersion: expect.toBeOneOf([0, 1]),
     })),
   );
+});
+
+it("refuses schemas migrated by another process on the next turn", () => {
+  vi.useFakeTimers({ toFake: ["setImmediate"] });
+  const scope = {
+    agentId: "main",
+    env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("openclaw-schema-migration-") },
+  };
+  const databases: Array<[string, number]> = [];
+  try {
+    const agent = openOpenClawAgentDatabase(scope);
+    const state = openOpenClawStateDatabase(scope);
+    databases.push(
+      [agent.path, OPENCLAW_AGENT_SCHEMA_VERSION + 1],
+      [state.path, OPENCLAW_STATE_SCHEMA_VERSION + 1],
+    );
+    execFileSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `import { DatabaseSync } from 'node:sqlite';
+         for (const [pathname, version] of JSON.parse(process.argv[1])) {
+           const db = new DatabaseSync(pathname);
+           db.exec('PRAGMA user_version = ' + version);
+           db.close();
+         }`,
+        JSON.stringify(databases),
+      ],
+      { stdio: "pipe" },
+    );
+    vi.runOnlyPendingTimers();
+    expect(() => withOpenClawAgentDatabaseReadOnly(() => undefined, scope)).toThrow(
+      /uses newer schema version/,
+    );
+    expect(() => openOpenClawStateDatabase(scope)).toThrow(/uses newer schema version/);
+  } finally {
+    // Lease cleanup still needs the synthetic shared state after exercising its refusal.
+    for (const [pathname, version] of databases) {
+      const database = new DatabaseSync(pathname);
+      try {
+        database.exec(`PRAGMA user_version = ${version - 1}`);
+      } finally {
+        database.close();
+      }
+    }
+    closeOpenClawStateDatabaseForTest();
+    vi.useRealTimers();
+  }
 });
