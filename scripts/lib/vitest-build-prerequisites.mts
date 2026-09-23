@@ -27,6 +27,12 @@ export type VitestRuntimeTestSelection = {
 // while unrelated workers may still be importing its public plugin facades.
 const runtimeConsumers = [
   {
+    file: "ui/src/e2e/chat-flow.catalog-bootstrap.e2e.test.ts",
+    configs: ["test/vitest/vitest.ui-e2e.config.ts"],
+    mode: "runtime",
+    dir: "",
+  },
+  {
     file: "src/gateway/server-methods/agent.visitor-access.test.ts",
     configs: [
       "test/vitest/vitest.gateway-methods-isolated.config.ts",

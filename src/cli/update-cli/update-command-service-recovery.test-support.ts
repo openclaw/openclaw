@@ -5,6 +5,9 @@ import { pathToFileURL } from "node:url";
 import { expect, it, vi, type Mock } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { stampConfigWriteMetadata } from "../../config/io.meta.js";
+import { buildLaunchAgentPlist } from "../../daemon/launchd-plist.js";
+import { resolveLaunchAgentPlistPath } from "../../daemon/launchd-service-files.js";
+import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import { acquireGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
@@ -20,12 +23,14 @@ import { captureEnv } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as runtimeUtils from "../../utils.js";
 import { VERSION } from "../../version.js";
+import { waitForGatewayUpdateRecovery } from "../daemon-cli/lifecycle-context.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
 import {
   maybeRestartService,
   maybeStopManagedServiceBeforeMutableUpdate,
   maybeRestartServiceAfterFailedMutableUpdate,
+  revalidateManagedGatewayServiceAfterUpdate,
 } from "./update-command-service.js";
 
 const hostPlatform = process.platform;
@@ -79,7 +84,10 @@ export async function createServiceActivationFixture() {
   const root = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-activation-")),
   );
-  vi.spyOn(openClawTmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
+  // Simulated manager identities must never address the host's shared handoff store.
+  const runtimeTemp = path.join(root, ".runtime-temp");
+  await fs.mkdir(runtimeTemp, { mode: 0o700 });
+  vi.spyOn(openClawTmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(runtimeTemp);
   const readProcessStartTime = processIdentity.getFileLockProcessStartTime;
   // The service platform is simulated; only this live test process gets a fixed start identity.
   vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockImplementation((pid, ...args) =>
@@ -164,6 +172,7 @@ export function registerRecoveryTests(params: {
   configPath: () => string;
   run: () => NonNullable<UpdateCommandOptions["run"]>;
   mocks: {
+    launchctl: Mock<typeof import("../../daemon/launchd-exec.js").execLaunchctl>;
     health: Mock<typeof import("../daemon-cli/restart-health.js").waitForGatewayHealthyRestart>;
     capability: Mock<
       typeof import("../../daemon/systemd-definition-mutation.js").readSystemdDefinitionMutationCapability
@@ -179,6 +188,118 @@ export function registerRecoveryTests(params: {
     events: string[];
   };
 }): void {
+  it.each(["detached recovery", "failed-update recovery"] as const)(
+    "%s waits through loaded launchd throttling using the real health owner",
+    async (caller) => {
+      const root = params.root();
+      const mocks = params.mocks;
+      mockProcessPlatform("darwin");
+      let nowMs = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => nowMs);
+      vi.spyOn(runtimeUtils, "sleep").mockImplementation(async (ms) => {
+        nowMs += ms;
+      });
+      const plistPath = resolveLaunchAgentPlistPath(process.env);
+      await fs.mkdir(path.dirname(plistPath), { recursive: true });
+      await fs.writeFile(
+        plistPath,
+        buildLaunchAgentPlist({
+          label: "ai.openclaw.gateway",
+          programArguments: [
+            process.execPath,
+            path.join(root, "dist/index.js"),
+            "gateway",
+            "--port",
+            "19305",
+          ],
+          stdoutPath: path.join(root, "gateway.log"),
+          stderrPath: path.join(root, "gateway.err"),
+          environment: { HOME: root },
+        }),
+      );
+      let activated = false;
+      mocks.launchctl.mockImplementation(async (args) => {
+        expect(args[0]).toBe("print");
+        const state = !activated || nowMs < 4000 || nowMs >= 14_000 ? "running" : "stopped";
+        return {
+          code: 0,
+          stdout: `state = ${state}\n${activated && state === "running" ? `pid = ${nowMs < 4000 ? 4200 : 4300}\n` : ""}`,
+          stderr: "",
+          termination: "exit",
+        };
+      });
+      mocks.ports.mockImplementation(async (port) => ({
+        port,
+        status: nowMs < 14_000 ? "free" : "busy",
+        listeners: nowMs < 14_000 ? [] : [{ pid: 4300, command: "openclaw-gateway" }],
+        hints: [],
+      }));
+      mocks.call.mockImplementation(
+        gatewayHealthResponse({
+          server: { version: VERSION, buildId: "recovered-build", bootId: "recovered-boot" },
+        }),
+      );
+      const { waitForGatewayHealthyRestart } = await vi.importActual<
+        typeof import("../daemon-cli/restart-health.js")
+      >("../daemon-cli/restart-health.js");
+      mocks.health.mockImplementation(waitForGatewayHealthyRestart);
+      if (caller === "detached recovery") {
+        activated = true;
+        await expect(
+          waitForGatewayUpdateRecovery(VERSION, "recovered-build"),
+        ).resolves.toMatchObject({
+          healthy: true,
+          waitOutcome: "healthy",
+          elapsedMs: 19_500,
+          runtime: { status: "running", pid: 4300 },
+        });
+      } else {
+        const state = await readGatewayServiceState(resolveGatewayService(), {
+          requireEffective: true,
+        });
+        const verdict = await revalidateManagedGatewayServiceAfterUpdate({ state, root });
+        expect(verdict.kind).toBe("owned");
+        mocks.child.mockImplementation(async (args) => {
+          expect(args).toContain("restart");
+          activated = true;
+          return {
+            code: 0,
+            stdout: JSON.stringify({ action: "restart", ok: true, result: "restarted" }),
+            stderr: "",
+            signal: null,
+            killed: false,
+            termination: "exit",
+          };
+        });
+        await expect(
+          maybeRestartServiceAfterFailedMutableUpdate({
+            preManagedServiceStop: {
+              stopped: true,
+              inspected: true,
+              runtimeInspected: true,
+              running: state.running,
+              serviceEnv: state.env,
+              serviceUpdateVerdict: verdict,
+            },
+            recovery: { serviceRestartSafe: true, version: VERSION, buildId: "recovered-build" },
+            jsonMode: true,
+          }),
+        ).resolves.toBe("healthy");
+        expect(mocks.child).toHaveBeenCalledOnce();
+      }
+      expect(mocks.health).toHaveBeenCalledOnce();
+      expect(mocks.health.mock.calls[0]?.[0].supervisorKeepsAlive).toBeUndefined();
+      await expect(mocks.health.mock.results[0]?.value).resolves.toMatchObject({
+        healthy: true,
+        waitOutcome: "healthy",
+        elapsedMs: 19_500,
+        gatewayBootId: "recovered-boot",
+      });
+      expect(nowMs).toBe(19_500);
+      expect(mocks.restart).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     { startup: "fast", readyAfterMs: 0, needsRecovery: false },
     { startup: "slow", readyAfterMs: 20_000, needsRecovery: false },

@@ -1364,7 +1364,10 @@ function replaceRunPayload(invocation: CommandInvocation, payload: string[]) {
 }
 
 function renderRunShellCommand(invocation: CommandInvocation, join = shellJoin) {
-  return invocation.options.has("shell") && invocation.commandArgs.length === 1
+  // Native Crabbox also treats a single argument containing shell syntax as shell text.
+  return invocation.commandArgs.length === 1 &&
+    (invocation.options.has("shell") ||
+      /[ \t\r\n&|;<>*$`()]/u.test(invocation.commandArgs[0] ?? ""))
     ? invocation.commandArgs[0]
     : join(invocation.commandArgs);
 }

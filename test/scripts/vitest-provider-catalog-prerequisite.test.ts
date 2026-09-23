@@ -5,6 +5,7 @@ import { buildVitestRunPlans } from "../../scripts/test-projects.test-support.mt
 
 const integrationFile = "src/agents/tool-surface-plan.provider-catalog.integration.test.ts";
 const unitFile = "src/agents/tool-surface-plan.test.ts";
+const catalogBootstrapFile = "ui/src/e2e/chat-flow.catalog-bootstrap.e2e.test.ts";
 
 it.each([
   {
@@ -23,19 +24,30 @@ it.each([
   ).toBe(build);
 });
 
-it.each(["test/vitest/vitest.agents-core.config.ts", "test/vitest/vitest.agents.config.ts"])(
-  "honors direct provider-runtime selection and exclusion in %s",
-  (config) => {
-    const selected = resolveVitestRuntimeCliSelections(config, ["run", integrationFile], {});
+it.each([
+  {
+    config: "test/vitest/vitest.agents-core.config.ts",
+    file: integrationFile,
+    exclude: "tool-surface-plan.provider-catalog.integration.test.ts",
+  },
+  {
+    config: "test/vitest/vitest.agents.config.ts",
+    file: integrationFile,
+    exclude: "tool-surface-plan.provider-catalog.integration.test.ts",
+  },
+  {
+    config: "test/vitest/vitest.ui-e2e.config.ts",
+    file: catalogBootstrapFile,
+    exclude: catalogBootstrapFile,
+  },
+])(
+  "honors direct provider-runtime selection and exclusion in $config",
+  ({ config, file, exclude }) => {
+    const selected = resolveVitestRuntimeCliSelections(config, ["run", file], {});
     expect(resolveVitestPretestBuildMode(selected)).toBe("runtime");
     const excluded = resolveVitestRuntimeCliSelections(
       config,
-      [
-        "run",
-        integrationFile,
-        "--exclude",
-        "tool-surface-plan.provider-catalog.integration.test.ts",
-      ],
+      ["run", file, "--exclude", exclude],
       {},
     );
     expect(resolveVitestPretestBuildMode(excluded)).toBeUndefined();

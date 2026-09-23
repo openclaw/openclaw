@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
+import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import {
   createGatewayRestartDeadline,
   GatewayRestartDeadlineError,
@@ -42,6 +43,7 @@ describe("shared restart observation deadline", () => {
   it.each([
     "probe-context",
     "service-command",
+    "supervision",
     "probe-hosts",
     "service-runtime",
     "port-inspection",
@@ -61,6 +63,13 @@ describe("shared restart observation deadline", () => {
         readBestEffortConfig.mockImplementation(async () => {
           await stall();
           return { gateway: { auth: { mode: "none" } } };
+        });
+        break;
+      case "supervision":
+        mockProcessPlatform("darwin");
+        vi.mocked(service.isLoaded).mockImplementation(async () => {
+          await stall();
+          return true;
         });
         break;
       case "service-command":
@@ -115,6 +124,7 @@ describe("shared restart observation deadline", () => {
     }
     const deadline = createGatewayRestartDeadline({ timeoutMs: 1_000 });
     try {
+      let observationSettled = false;
       const observed = waitForGatewayHealthyRestart({
         service,
         port: 18789,
@@ -122,10 +132,15 @@ describe("shared restart observation deadline", () => {
         requirePluginHealth: false,
         waitForMissingService: phase === "legacy-owner" ? false : undefined,
         settle: { probes: 3 },
-      }).catch((error: unknown) => error);
+      })
+        .catch((error: unknown) => error)
+        .finally(() => {
+          observationSettled = true;
+        });
       await entered.promise;
       monotonicClock.nowMs = 1_000;
       await vi.advanceTimersByTimeAsync(1_000);
+      expect(observationSettled).toBe(true);
       expect(await observed).toBeInstanceOf(GatewayRestartDeadlineError);
       expect(deadline.expiredPhase).toBe(`health-wait:${phase}`);
       expect(deadline.elapsedMs()).toBe(1_000);

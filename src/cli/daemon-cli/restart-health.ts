@@ -22,6 +22,7 @@ import {
   resolveGatewayRestartProbeContext,
   type GatewayRestartProbeContext,
 } from "./restart-health-probe.js";
+import { resolveGatewayRestartSupervision } from "./restart-health-supervision.js";
 import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
   DEFAULT_RESTART_HEALTH_DELAY_MS,
@@ -111,13 +112,19 @@ type GatewayRestartWaitOptions = {
   probeHosts?: readonly string[];
   probeContext?: GatewayRestartProbeContext;
   onProgress?: (phase: string) => void;
+  /** Revalidate caller-owned authority after the native supervision probe. */
+  assertCurrent?: () => void;
   signal?: AbortSignal;
 };
 
 export async function waitForGatewayHealthyRestart(
   params: GatewayRestartWaitOptions &
     (
-      | { service: Pick<GatewayService, "readCommand" | "readRuntime">; child?: never }
+      | {
+          service: Pick<GatewayService, "readCommand" | "readRuntime"> &
+            Partial<Pick<GatewayService, "isLoaded">>;
+          child?: never;
+        }
       | { child: Pick<ChildProcess, "pid" | "exitCode" | "signalCode">; service?: never }
     ),
 ): Promise<GatewayRestartSnapshot> {
@@ -231,7 +238,7 @@ export async function waitForGatewayHealthyRestart(
     signal?.throwIfAborted();
     if (remainingDeadlineMs === 0) {
       await read("setup", async () => undefined);
-      return withWaitContext(snapshot, "timeout", 0);
+      return withWaitContext(snapshot, "timeout", Math.max(0, performance.now() - startedAtMs));
     }
     const probeContext =
       params.probeContext ??
@@ -255,6 +262,24 @@ export async function waitForGatewayHealthyRestart(
         );
         return resolveGatewayServiceProbeHosts({ env: params.env, command });
       }));
+    const supervisorKeepsAlive = await read("supervision", () =>
+      resolveGatewayRestartSupervision({
+        service: params.service,
+        env: params.env,
+        supervisorKeepsAlive: params.supervisorKeepsAlive,
+        timeoutMs: standardDeadlineMs - (performance.now() - startedAtMs),
+        signal,
+      }),
+    );
+    signal?.throwIfAborted();
+    params.assertCurrent?.();
+    // Without an explicit time budget, zero retries still performs the initial inspection.
+    if (
+      (timeoutMs !== undefined || progressWindowMs > 0) &&
+      performance.now() - startedAtMs >= standardDeadlineMs
+    ) {
+      return withWaitContext(snapshot, "timeout", Math.max(0, performance.now() - startedAtMs));
+    }
     snapshot = await inspectGatewayRestart({
       service,
       port: params.port,
@@ -413,7 +438,7 @@ export async function waitForGatewayHealthyRestart(
       if (
         !missingServiceFree &&
         (!owner || owner.state === "dead") &&
-        !params.supervisorKeepsAlive &&
+        !supervisorKeepsAlive &&
         shouldEarlyExitStoppedFree(snapshot, attempt, minAttemptForEarlyExit)
       ) {
         consecutiveStoppedFreeCount += 1;

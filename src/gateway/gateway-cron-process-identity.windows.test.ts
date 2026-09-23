@@ -32,13 +32,21 @@ describe.skipIf(process.platform !== "win32")("Windows cron process identity", (
           signal.throwIfAborted();
           await instance.startGateway();
           signal.throwIfAborted();
-          client = await connectGatewayClient({
-            url: instance.url,
-            token: instance.gatewayToken,
-            requestTimeoutMs: 30_000,
-            signal,
-            verifyCleanup,
-          });
+          try {
+            client = await connectGatewayClient({
+              url: instance.url,
+              token: instance.gatewayToken,
+              requestTimeoutMs: 30_000,
+              signal,
+              verifyCleanup,
+            });
+          } catch (cause) {
+            // Capture before fixture cleanup discards the post-ready child output.
+            throw new Error(
+              `Gateway acquisition failed after readiness: ${JSON.stringify(instance.readiness)}\n${instance.logs().slice(-16_384)}`,
+              { cause },
+            );
+          }
           signal.throwIfAborted();
           const job = await client.request<{ id: string }>(
             "cron.add",

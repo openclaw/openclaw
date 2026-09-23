@@ -557,6 +557,8 @@ describe("full-suite timing metadata", () => {
 
 describe("cache lease completion", () => {
   beforeEach(() => {
+    // UI runtime preparation must succeed before these fixtures exercise cache ownership.
+    commands.prepare.mockResolvedValue(0);
     // The enclosing CI test worker owns its PATH; these fixtures exercise a new scheduler.
     vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT", "");
     vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH", "");

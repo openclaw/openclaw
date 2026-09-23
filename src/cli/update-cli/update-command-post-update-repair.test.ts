@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-support.js";
+import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
   getUpdateRun,
@@ -94,10 +95,6 @@ vi.mock("../daemon-cli/restart-health.js", async (importOriginal) => {
     waitForGatewayHttpReadiness: mocks.readyz,
   };
 });
-vi.mock("./update-command-supervisor.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./update-command-supervisor.js")>()),
-  hasLoadedLaunchdKeepAliveSupervisor: async () => false,
-}));
 vi.mock("./update-command-service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service.js")>()),
   maybeRestartService: mocks.restart,
@@ -130,6 +127,9 @@ const fixture = () => createPostUpdateRepairFixture(dirs.make("post-update-repai
 describe("post-activation failure settlement without inference", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
+    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(
+      dirs.make("post-update-handoff-"),
+    );
     const verification = await vi.importActual<typeof import("./update-command-verification.js")>(
       "./update-command-verification.js",
     );

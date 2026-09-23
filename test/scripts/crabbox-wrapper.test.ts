@@ -2501,7 +2501,7 @@ describe("scripts/crabbox-wrapper", () => {
       "--reclaim",
       "--shell",
       "--",
-      expect.stringContaining("'echo ok'"),
+      expect.stringMatching(/; echo ok$/u),
     ]);
   });
 
@@ -3877,6 +3877,7 @@ esac
         "run",
         "--provider",
         "aws",
+        "--no-sync",
         "--shell",
         "--",
         remoteCommand,
@@ -3887,6 +3888,7 @@ esac
         "run",
         "--provider",
         "aws",
+        "--no-sync",
         "--shell",
         "--",
         remoteCommand,
@@ -4701,6 +4703,14 @@ process.on("uncaughtExceptionMonitor", (error) => {
         const dependencyEnv = {
           ...env,
           CI: "true",
+          // Reuse the prepared package manager, not the fixture's empty home cache.
+          COREPACK_HOME:
+            process.env.COREPACK_HOME ||
+            path.join(
+              process.env.XDG_CACHE_HOME || path.join(homedir(), ".cache"),
+              "node",
+              "corepack",
+            ),
           PATH: [path.dirname(process.execPath), env.PATH].join(path.delimiter),
           PNPM_CONFIG_STORE_DIR: path.join(dependencyRoot, "store"),
           PNPM_CONFIG_CACHE_DIR: path.join(dependencyRoot, "cache"),
@@ -4944,6 +4954,7 @@ process.on("uncaughtExceptionMonitor", (error) => {
         for (const [name, args] of [
           ["node", ["node", sourceCommand, special]],
           ["bash", ["bash", "-c", 'exec node "$1" "$2"', "fixture", sourceCommand, special]],
+          ["implicit-shell", [`true; ${shellCommand}`]],
         ] as const) {
           const sent = runSender("direct", ["run", "--provider", provider, "--", ...args]);
           const argvPath = path.join(root, `${name}-argv.json`);

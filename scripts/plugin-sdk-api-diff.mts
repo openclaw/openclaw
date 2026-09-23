@@ -308,12 +308,12 @@ async function main(): Promise<void> {
   try {
     const surfaces = new Map<string, PluginSdkApiDiffSurface>();
     // The shared 8-CPU/24-GiB floor leaves headroom for two 6-GiB render heaps.
-    const limit = isConstrainedCiCheckHost({
+    const resources = {
       logicalCpuCount: os.availableParallelism(),
       totalMemoryBytes: Math.min(os.totalmem(), process.constrainedMemory() || Infinity),
-    })
-      ? 1
-      : 2;
+    };
+    const limit = isConstrainedCiCheckHost(resources) ? 1 : 2;
+    console.error(`[plugin-sdk-api-diff] resources ${JSON.stringify({ ...resources, limit })}`);
     const rendered = await runTasksWithConcurrency({
       limit,
       errorMode: "stop",
@@ -321,15 +321,26 @@ async function main(): Promise<void> {
       throwOnError: false,
       onTaskError: () => abortController.abort(),
       tasks: commits.map((commit) => async () => {
+        const startedAt = performance.now();
+        const stage = (name: string) =>
+          console.error(
+            `[plugin-sdk-api-diff] ${commit} ${name} elapsedMs=${Math.round(performance.now() - startedAt)}`,
+          );
+        // Emit before each operation: a killed job cannot flush buffered child output.
+        stage("worktree");
         const worktree = path.join(temporaryRoot, commit);
         git(repoRoot, ["worktree", "add", "--detach", "--no-checkout", worktree, commit]);
         addedWorktrees.push(worktree);
         git(worktree, ["sparse-checkout", "set", "src", "packages", "patches", "scripts"]);
         git(worktree, ["checkout", "--detach", commit]);
+        stage("install");
         await installRevisionDependencies(worktree, abortController.signal);
         const renderPath = path.join(temporaryRoot, `${commit}.json`);
+        stage("render");
         await renderRevision(repoRoot, worktree, renderPath, abortController.signal);
+        stage("read-surface");
         surfaces.set(commit, parsePluginSdkApiDiffSurface(await fs.readFile(renderPath, "utf8")));
+        stage("complete");
       }),
     });
     if (rendered.hasError) {

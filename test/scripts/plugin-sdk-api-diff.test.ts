@@ -11,6 +11,10 @@ import {
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  terminateManagedChild,
+  waitForManagedProcessGroupExit,
+} from "../../scripts/lib/managed-child-process.mts";
+import {
   expandPluginSdkApiDiffSet,
   selectPluginSdkApiReleaseEvidence,
   validatePluginSdkApiReleaseEvidence,
@@ -225,6 +229,8 @@ describe("Plugin SDK API diff CLI", () => {
           // The fixture owns Git state; the source CLI still needs its workspace aliases.
           TSX_TSCONFIG_PATH: resolve("tsconfig.json"),
         },
+        // Own the CLI and its pnpm/sleep descendants even if an assertion fails.
+        detached: process.platform !== "win32",
         stdio: ["ignore", "ignore", "pipe"],
       },
     );
@@ -257,6 +263,11 @@ describe("Plugin SDK API diff CLI", () => {
       const exitCode = await withTestTimeout(close, 5_000, "Plugin SDK API diff ignored SIGTERM");
 
       expect(exitCode).toBe(143);
+      // The interrupted stage must survive even though no report was produced.
+      expect(stderr).toContain("[plugin-sdk-api-diff] resources ");
+      expect(stderr).toContain(`[plugin-sdk-api-diff] ${baseSha} worktree elapsedMs=`);
+      expect(stderr).toContain(`[plugin-sdk-api-diff] ${baseSha} install elapsedMs=`);
+      expect(stderr).not.toContain(" render elapsedMs=");
       expect(Date.now() - interruptedAt).toBeLessThan(5_000);
       expect(git(repo, ["worktree", "list"])).not.toContain(runnerTemp);
       // Cleanup owns its temporary root, not runner instrumentation beside it.
@@ -264,9 +275,17 @@ describe("Plugin SDK API diff CLI", () => {
       expect(existsSync(invocationCounts)).toBe(true);
       expect(readFileSync(runnerSentinel, "utf8")).toBe("preserve\n");
     } finally {
-      if (!closed) {
-        child.kill("SIGKILL");
-        await close;
+      // A failed assertion can bypass the CLI's cooperative SIGTERM handler.
+      // Reap its owned group even if the leader has already closed.
+      terminateManagedChild(child, "SIGKILL", { processGroupFallback: "never" });
+      await withTestTimeout(close, 5_000, "Plugin SDK API diff cleanup did not close");
+      if (process.platform !== "win32") {
+        expect(
+          await waitForManagedProcessGroupExit(child, 5_000, {
+            errorPolicy: "alive-on-eperm",
+          }),
+          "Plugin SDK API diff descendants survived cleanup",
+        ).toBe(true);
       }
     }
   }, 15_000);

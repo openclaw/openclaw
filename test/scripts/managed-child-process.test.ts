@@ -1115,62 +1115,92 @@ if (mode === "waiter") {
       process.on("warning", onWarning);
       const stdout = vi.spyOn(process.stdout, "write");
       const stderr = vi.spyOn(process.stderr, "write");
+      const outputStreams = [process.stdout, process.stderr];
+      const ttyDescriptors = outputStreams.map((stream) =>
+        Object.getOwnPropertyDescriptor(stream, "isTTY"),
+      );
       const children: Array<Parameters<typeof terminateManagedChild>[0]> = [];
       let readyCount = 0;
-      const commands = Array.from({ length: 12 }, (_, index) =>
-        runManagedCommand({
-          args: [
-            "-e",
-            `process.stdout.write('managed-parallel-out-${index}-π\\n'); process.stderr.write('managed-parallel-err-${index}-π\\n'); setTimeout(() => {}, 10_000);`,
-          ],
-          bin: process.execPath,
-          shell: false,
-          stdio,
-          onReady: (child) => {
-            children.push(child);
-            readyCount += 1;
-          },
-        }),
-      );
-
-      try {
-        await waitFor(() => readyCount === commands.length);
-        await expect(runManagedCommand({ bin: "invalid\0command" })).rejects.toMatchObject({
-          code: "ERR_INVALID_ARG_VALUE",
-        });
-        for (const signal of signals) {
-          expect(process.listenerCount(signal)).toBe((baseline.get(signal) ?? 0) + 1);
-        }
-        if (stdio === "inherit" && process.platform !== "win32") {
-          for (const [output, kind] of [
-            [stdout, "out"],
-            [stderr, "err"],
-          ] as const) {
-            const lines = () =>
-              output.mock.calls
-                .map(([chunk]) => String(chunk))
-                .join("")
-                .split("\n")
-                .filter((line) => line.startsWith(`managed-parallel-${kind}-`))
-                .toSorted();
-            await waitFor(() => lines().length === commands.length);
-            expect(lines()).toEqual(
-              Array.from(
-                { length: 12 },
-                (_, index) => `managed-parallel-${kind}-${index}-π`,
-              ).toSorted(),
-            );
+      let commands: Array<ReturnType<typeof runManagedCommand>> = [];
+      let commandOutcomes: Promise<PromiseSettledResult<number>[]> = Promise.resolve([]);
+      await runQaGatewayFixture(
+        async () => {
+          // This assertion observes non-TTY forwarding; terminal descriptors bypass JS writes.
+          for (const stream of outputStreams) {
+            Object.defineProperty(stream, "isTTY", { configurable: true, value: false });
           }
-        }
-      } finally {
-        for (const child of children) {
-          terminateManagedChild(child, "SIGTERM");
-        }
-        await Promise.all(commands);
-        process.off("warning", onWarning);
-        stdout.mockRestore();
-        stderr.mockRestore();
-      }
+          commands = Array.from({ length: 12 }, (_, index) =>
+            runManagedCommand({
+              args: [
+                "-e",
+                `process.stdout.write('managed-parallel-out-${index}-π\\n'); process.stderr.write('managed-parallel-err-${index}-π\\n'); setTimeout(() => {}, 10_000);`,
+              ],
+              bin: process.execPath,
+              shell: false,
+              stdio,
+              onReady: (child) => {
+                children.push(child);
+                readyCount += 1;
+              },
+            }),
+          );
+          commandOutcomes = Promise.allSettled(commands);
+
+          await waitFor(() => readyCount === commands.length);
+          await expect(runManagedCommand({ bin: "invalid\0command" })).rejects.toMatchObject({
+            code: "ERR_INVALID_ARG_VALUE",
+          });
+          for (const signal of signals) {
+            expect(process.listenerCount(signal)).toBe((baseline.get(signal) ?? 0) + 1);
+          }
+          if (stdio === "inherit" && process.platform !== "win32") {
+            for (const [output, kind] of [
+              [stdout, "out"],
+              [stderr, "err"],
+            ] as const) {
+              const lines = () =>
+                output.mock.calls
+                  .map(([chunk]) => String(chunk))
+                  .join("")
+                  .split("\n")
+                  .filter((line) => line.startsWith(`managed-parallel-${kind}-`))
+                  .toSorted();
+              await waitFor(() => lines().length === commands.length);
+              expect(lines()).toEqual(
+                Array.from(
+                  { length: 12 },
+                  (_, index) => `managed-parallel-${kind}-${index}-π`,
+                ).toSorted(),
+              );
+            }
+          }
+        },
+        async () => {
+          for (const child of children) {
+            terminateManagedChild(child, "SIGTERM");
+          }
+          const outcomes = await commandOutcomes;
+          const errors = outcomes.flatMap((outcome) =>
+            outcome.status === "rejected" ? [outcome.reason] : [],
+          );
+          if (errors.length > 0) {
+            throw new AggregateError(errors, "Managed command cleanup failed");
+          }
+        },
+        () => process.off("warning", onWarning),
+        () => stdout.mockRestore(),
+        () => stderr.mockRestore(),
+        () => {
+          for (const [index, stream] of outputStreams.entries()) {
+            const descriptor = ttyDescriptors[index];
+            if (descriptor) {
+              Object.defineProperty(stream, "isTTY", descriptor);
+            } else {
+              Reflect.deleteProperty(stream, "isTTY");
+            }
+          }
+        },
+      );
 
       expect(warnings).toEqual([]);
       expect(children.every((child) => !child.pid || !isProcessAlive(child.pid))).toBe(true);

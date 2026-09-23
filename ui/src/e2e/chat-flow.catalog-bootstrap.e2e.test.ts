@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../../src/config/sessions/session-accessor.js";
 import {
   disconnectGatewayClient,
@@ -67,48 +67,69 @@ const suite = createControlUiE2eSuite({
       );
       const port = await getGatewayE2ePortBlock();
       signal.throwIfAborted();
-      gatewayStartup = startGatewayWithClient({
-        port,
-        configPath: state.configPath,
-        token,
-        scopes: ["operator.admin"],
-        cfg: {
-          gateway: {
-            mode: "local",
-            auth: { mode: "token", token },
-            controlUi: { allowedOrigins: [new URL(suite.server.baseUrl).origin] },
-          },
-          plugins: { enabled: false },
-          agents: {
-            ownership: "explicit",
-            entries: {
-              alpha: {
-                workspace: state.workspaceDir,
-                model: "fixture/first",
-                modelPolicy: { allow: ["fixture/first", "fixture/second"] },
+      const cronReady = createDeferred();
+      const cronRuntime = await import("../../../src/gateway/server-runtime-services.js");
+      const scheduleMaintenance = cronRuntime.scheduleGatewayPostReadyMaintenance;
+      let restoreCronStart = () => {};
+      const cronObserver = vi
+        .spyOn(cronRuntime, "scheduleGatewayPostReadyMaintenance")
+        .mockImplementation((params) => {
+          const start = params.cronState.cron.start.bind(params.cronState.cron);
+          const observer = vi.spyOn(params.cronState.cron, "start").mockImplementation(async () => {
+            await start();
+            cronReady.resolve();
+          });
+          restoreCronStart = () => observer.mockRestore();
+          return scheduleMaintenance(params);
+        });
+      try {
+        gatewayStartup = startGatewayWithClient({
+          port,
+          configPath: state.configPath,
+          token,
+          scopes: ["operator.admin"],
+          cfg: {
+            gateway: {
+              mode: "local",
+              auth: { mode: "token", token },
+              controlUi: { allowedOrigins: [new URL(suite.server.baseUrl).origin] },
+            },
+            plugins: { enabled: false },
+            agents: {
+              ownership: "explicit",
+              entries: {
+                alpha: {
+                  workspace: state.workspaceDir,
+                  model: "fixture/first",
+                  modelPolicy: { allow: ["fixture/first", "fixture/second"] },
+                },
+              },
+            },
+            models: {
+              catalogRefresh: { enabled: false },
+              providers: {
+                fixture: {
+                  api: "openai-completions",
+                  baseUrl: "http://127.0.0.1:9/v1",
+                  apiKey: "synthetic-provider-key",
+                  models: [
+                    { id: "first", name: "First model" },
+                    { id: "second", name: "Second model" },
+                  ],
+                },
               },
             },
           },
-          models: {
-            catalogRefresh: { enabled: false },
-            providers: {
-              fixture: {
-                api: "openai-completions",
-                baseUrl: "http://127.0.0.1:9/v1",
-                apiKey: "synthetic-provider-key",
-                models: [
-                  { id: "first", name: "First model" },
-                  { id: "second", name: "Second model" },
-                ],
-              },
-            },
-          },
-        },
-      });
-      realGateway = await gatewayStartup;
-      // Startup cron hydration publishes a separate sessions.changed invalidation.
-      await realGateway.server.startupSettled;
-      signal.throwIfAborted();
+        });
+        realGateway = await gatewayStartup;
+        await realGateway.server.startupSettled;
+        // Join real cron hydration before any browser can observe its independent invalidation.
+        await withTestTimeout(cronReady.promise, 10_000, "Initial cron hydration did not finish");
+        signal.throwIfAborted();
+      } finally {
+        cronObserver.mockRestore();
+        restoreCronStart();
+      }
     },
     async close() {
       const owner = await gatewayStartup;
@@ -222,7 +243,7 @@ suite.define(() => {
         expect(await gateway.getRequests("models.list", scope)).toHaveLength(1);
         await gateway.emitGatewayEvent("models.snapshot", {
           target,
-          scope: "shortId" in target ? scope : target,
+          scope,
           catalog: {
             models: [current],
             pendingProviders: ["fixture"],
@@ -290,6 +311,9 @@ suite.define(() => {
             authProfileOverrideSource: "user",
           },
         );
+        // Initial metadata preparation broadcasts chat.metadata.changed independently of
+        // the snapshot-ordering scenario. Join its real read before connecting the browser.
+        await admin.request("chat.metadata", { sessionKey, agentId: "alpha" });
         await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
           let initialSnapshot = createDeferred<{ deliver: () => void; payload: unknown }>();
           const disconnect = createDeferred<() => Promise<void>>();
@@ -366,9 +390,10 @@ suite.define(() => {
             10_000,
             "Initial account A snapshot did not arrive",
           );
-          expect(
-            requireRecord(requireRecord(initial.payload).catalog).accountSelection,
-          ).toMatchObject({
+          const initialCatalog = requireRecord(requireRecord(initial.payload).catalog);
+          // Failed discovery stays stale and legitimately reloads when the picker opens.
+          expect(initialCatalog.refreshFailed).not.toBe(true);
+          expect(initialCatalog.accountSelection).toMatchObject({
             authProfileId: "fixture:account-a",
           });
           const picker = page.locator(

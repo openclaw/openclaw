@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import type { UsersListResult } from "../../../packages/gateway-protocol/src/schema/users.js";
+import { createDeferredCore } from "../../../src/shared/deferred.js";
 import { createControlUiMockSameOriginGatewayScript } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProof,
@@ -48,7 +49,7 @@ suite.define(() => {
     await suite.withPage(
       { viewport: { width: viewport.width, height: 900 }, colorScheme: viewport.colorScheme },
       async ({ page }) => {
-        const response = Promise.withResolvers<void>();
+        const response = createDeferredCore();
         await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
         await page.route("**/api/users/**/avatar*", async (route) => {
           await response.promise;

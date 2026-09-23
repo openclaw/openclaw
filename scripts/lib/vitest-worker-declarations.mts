@@ -107,8 +107,6 @@ export const vitestWorkerDeclarationEntries = {
     "src/state/openclaw-agent-worker-store.runtime.test-support.ts",
   "cli/update-cli/update-command-legacy-finalize-entrypoint.test-support":
     "src/cli/update-cli/update-command-legacy-finalize-entrypoint.test-support.ts",
-  "cli/update-cli/update-command-migrated-fixture-entrypoint.test-support":
-    "src/cli/update-cli/update-command-migrated-fixture-entrypoint.test-support.ts",
   "extensions/logbook/sqlite-backend-entrypoint.test-support":
     "extensions/logbook/src/sqlite-backend-entrypoint.test-support.ts",
   "extensions/team-reports/sqlite-backend-entrypoint.test-support":
