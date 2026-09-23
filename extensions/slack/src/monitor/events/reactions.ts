@@ -5,6 +5,7 @@ import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runti
 import { allowListMatches, normalizeAllowListLower } from "../allow-list.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackEventScope } from "../event-scope.js";
+import { getSlackThreadTsResolver } from "../thread-resolution.js";
 import type { SlackReactionEvent } from "../types.js";
 import {
   authorizeAndResolveSlackSystemEventContext,
@@ -71,12 +72,24 @@ export function registerSlackReactionEvents(params: {
       }
       trackEvent?.();
 
+      const reactionClient = eventScope?.client ?? runtimeContext.app.client;
       const ingressContext = await authorizeAndResolveSlackSystemEventContext({
         ctx: runtimeContext,
         senderId: event.user,
         channelId: item.channel,
         eventKind: "reaction",
         eventScope,
+        // A reaction payload names the reacted message but not its thread, so the
+        // route would otherwise fall back to the parent channel session.
+        ...(reactionClient
+          ? {
+              resolveThreadTs: async () =>
+                await getSlackThreadTsResolver(reactionClient).resolveThreadTs({
+                  channelId: item.channel,
+                  messageTs: item.ts,
+                }),
+            }
+          : {}),
       });
       if (!ingressContext) {
         return;

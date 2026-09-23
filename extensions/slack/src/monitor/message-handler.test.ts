@@ -70,6 +70,9 @@ vi.mock("./thread-resolution.js", () => ({
   createSlackThreadTsResolver: () => ({
     resolve: (entry: { message: Record<string, unknown> }) => resolveThreadTsMock(entry),
   }),
+  getSlackThreadTsResolver: () => ({
+    resolve: (entry: { message: Record<string, unknown> }) => resolveThreadTsMock(entry),
+  }),
 }));
 
 function runOnFlush(entries: Array<Record<string, unknown>>): Promise<void> {

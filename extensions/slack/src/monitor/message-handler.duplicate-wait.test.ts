@@ -44,6 +44,9 @@ vi.mock("./thread-resolution.js", () => ({
   createSlackThreadTsResolver: () => ({
     resolve: async ({ message }: { message: Record<string, unknown> }) => message,
   }),
+  getSlackThreadTsResolver: () => ({
+    resolve: async ({ message }: { message: Record<string, unknown> }) => message,
+  }),
 }));
 vi.mock("./message-handler/pipeline.runtime.js", () => ({
   prepareSlackMessage: prepareSlackMessageMock,

@@ -20,6 +20,7 @@ import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-run
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString as normalizeThreadTs } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatSlackError } from "../errors.js";
+import { resolveSlackThreadContext } from "../threading.js";
 import type { SlackMessageEvent } from "../types.js";
 import type { SlackIngressTurnLifecycle } from "./ingress.types.js";
 
@@ -69,21 +70,36 @@ export function isTransientSlackThreadLookupError(error: unknown): boolean {
   );
 }
 
-async function resolveThreadTsFromHistory(params: {
+async function resolveThreadTsFromSlack(params: {
   client: SlackWebClient;
   channelId: string;
   messageTs: string;
 }) {
-  const response = await params.client.conversations.history({
+  const history = await params.client.conversations.history({
     channel: params.channelId,
     latest: params.messageTs,
     oldest: params.messageTs,
     inclusive: true,
     limit: 1,
   });
-  const message =
-    response.messages?.find((entry) => entry.ts === params.messageTs) ?? response.messages?.[0];
-  return normalizeThreadTs(message?.thread_ts);
+  const fromHistory =
+    history.messages?.find((entry) => entry.ts === params.messageTs) ?? history.messages?.[0];
+  if (fromHistory) {
+    return normalizeThreadTs(fromHistory.thread_ts);
+  }
+  // conversations.history never returns thread replies, so a missed target is read
+  // through the thread API; conversations.replies accepts the ts of any message in
+  // the thread, including the reply itself.
+  const replies = await params.client.conversations.replies({
+    channel: params.channelId,
+    ts: params.messageTs,
+    latest: params.messageTs,
+    oldest: params.messageTs,
+    inclusive: true,
+    limit: 1,
+  });
+  const fromReplies = replies.messages?.find((entry) => entry.ts === params.messageTs);
+  return normalizeThreadTs(fromReplies?.thread_ts);
 }
 
 export function createSlackThreadTsResolver(params: {
@@ -131,7 +147,77 @@ export function createSlackThreadTsResolver(params: {
     pruneMapToMaxSize(cache, maxSize);
   };
 
+  // One bounded lookup owns (channel, message) -> thread_ts. Every caller shares it so
+  // a repeated question lands in the same cache and in-flight dedupe; only an answer
+  // the provider stands behind is cached.
+  const lookupThreadTs = async (request: {
+    channelId: string;
+    messageTs: string;
+  }): Promise<{ threadTs: string | undefined; fromCache: boolean; error?: unknown }> => {
+    const cacheKey = `${request.channelId}:${request.messageTs}`;
+    const cached = getCached(cacheKey, Date.now());
+    if (cached !== undefined) {
+      return { threadTs: cached ?? undefined, fromCache: true };
+    }
+
+    let pending = inflight.get(cacheKey);
+    if (!pending) {
+      pending = resolveThreadTsFromSlack({
+        client: params.client,
+        channelId: request.channelId,
+        messageTs: request.messageTs,
+      });
+      inflight.set(cacheKey, pending);
+    }
+
+    try {
+      const resolved = await pending;
+      setCached(cacheKey, resolved ?? null, Date.now());
+      return { threadTs: resolved, fromCache: false };
+    } catch (error) {
+      // A definitive failure (unknown message, denied read, malformed response) is
+      // cached like an unresolved lookup; a transient one stays uncached so the next
+      // caller may retry instead of inheriting a poisoned answer.
+      if (!isTransientSlackThreadLookupError(error)) {
+        setCached(cacheKey, null, Date.now());
+      }
+      return { threadTs: undefined, fromCache: false, error };
+    } finally {
+      inflight.delete(cacheKey);
+    }
+  };
+
   return {
+    /**
+     * Resolves one message's thread root for a caller that owns no durable inbound
+     * retry. A failed lookup leaves the question open instead of inventing a lane.
+     */
+    resolveThreadTs: async (request: {
+      channelId: string;
+      messageTs: string;
+    }): Promise<string | undefined> => {
+      const { threadTs, error } = await lookupThreadTs(request);
+      if (error !== undefined && shouldLogVerbose()) {
+        logVerbose(
+          `slack: failed to resolve thread_ts for system event channel=${request.channelId} ts=${request.messageTs}: ${formatSlackError(error)}`,
+        );
+      }
+      if (!threadTs) {
+        return undefined;
+      }
+      // Slack reports thread_ts on messages that are not replies (an assistant DM root
+      // carries thread_ts === ts). The inbound path decides reply identity through the
+      // threading owner, so a system event must not key a lane no inbound turn writes.
+      return resolveSlackThreadContext({
+        message: {
+          type: "message",
+          channel: request.channelId,
+          ts: request.messageTs,
+          thread_ts: threadTs,
+        },
+        replyToMode: "off",
+      }).replyToId;
+    },
     resolve: async (request: {
       message: SlackMessageEvent;
       source: "message" | "app_mention";
@@ -142,50 +228,33 @@ export function createSlackThreadTsResolver(params: {
         return message;
       }
 
-      const cacheKey = `${message.channel}:${message.ts}`;
-      const now = Date.now();
-      const cached = getCached(cacheKey, now);
-      if (cached !== undefined) {
-        return cached ? { ...message, thread_ts: cached } : markAmbiguousThreadReply(message);
-      }
-
-      if (shouldLogVerbose()) {
+      const {
+        threadTs: resolved,
+        fromCache,
+        error,
+      } = await lookupThreadTs({
+        channelId: message.channel,
+        messageTs: message.ts,
+      });
+      if (!fromCache && shouldLogVerbose()) {
         logVerbose(
           `slack inbound: missing thread_ts for thread reply channel=${message.channel} ts=${message.ts} source=${request.source}`,
         );
       }
-
-      let pending = inflight.get(cacheKey);
-      if (!pending) {
-        pending = resolveThreadTsFromHistory({
-          client: params.client,
-          channelId: message.channel,
-          messageTs: message.ts,
-        });
-        inflight.set(cacheKey, pending);
-      }
-
-      let resolved: string | undefined;
-      try {
-        resolved = await pending;
-      } catch (err) {
+      if (error !== undefined) {
         if (shouldLogVerbose()) {
           logVerbose(
-            `slack inbound: failed to resolve thread_ts via conversations.history for channel=${message.channel} ts=${message.ts}: ${formatSlackError(err)}`,
+            `slack inbound: failed to resolve thread_ts for channel=${message.channel} ts=${message.ts}: ${formatSlackError(error)}`,
           );
         }
-        if (isTransientSlackThreadLookupError(err)) {
+        if (isTransientSlackThreadLookupError(error)) {
           if (request.turnAdoptionLifecycle) {
             // The already-acknowledged durable ingress owner retries without dropping the turn.
-            throw err;
+            throw error;
           }
           return markAmbiguousThreadReply(message);
         }
-      } finally {
-        inflight.delete(cacheKey);
       }
-
-      setCached(cacheKey, resolved ?? null, Date.now());
 
       if (resolved) {
         if (shouldLogVerbose()) {
@@ -204,4 +273,20 @@ export function createSlackThreadTsResolver(params: {
       return markAmbiguousThreadReply(message);
     },
   };
+}
+
+// Keep cache and in-flight lookups with Bolt's client; replaced clients start fresh.
+const threadTsResolvers = new WeakMap<
+  SlackWebClient,
+  ReturnType<typeof createSlackThreadTsResolver>
+>();
+
+/** Returns the per-client resolver shared by inbound messages and system events. */
+export function getSlackThreadTsResolver(client: SlackWebClient) {
+  let resolver = threadTsResolvers.get(client);
+  if (!resolver) {
+    resolver = createSlackThreadTsResolver({ client });
+    threadTsResolvers.set(client, resolver);
+  }
+  return resolver;
 }

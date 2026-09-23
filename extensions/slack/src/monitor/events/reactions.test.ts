@@ -1,6 +1,7 @@
 // Slack tests cover reactions plugin behavior.
 import type { AllMiddlewareArgs } from "@slack/bolt";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSlackSystemEventRouteResolver } from "../system-event-session.js";
 
 const reactionQueueMock = vi.hoisted(() => vi.fn());
 let registerSlackReactionEvents: typeof import("./reactions.js").registerSlackReactionEvents;
@@ -425,5 +426,223 @@ describe("registerSlackReactionEvents", () => {
 
     expect(trackEvent).not.toHaveBeenCalled();
     expect(reactionQueueMock).not.toHaveBeenCalled();
+  });
+
+  // A reaction payload names the reacted message but no thread, so the routed
+  // session is only correct when the handler resolves the message's thread root.
+  describe("channel thread identity", () => {
+    function createThreadRoutingHarness(params: {
+      history: (args: unknown) => Promise<unknown>;
+      replies?: (args: unknown) => Promise<unknown>;
+      channelType?: "channel" | "im";
+    }) {
+      const harness = createSlackSystemEventTestHarness({
+        dmPolicy: "open",
+        channelType: params.channelType ?? "channel",
+      });
+      harness.ctx.cfg = { channels: { slack: { enabled: true } } };
+      harness.ctx.accountId = "default";
+      harness.ctx.channelsConfigKeys = [];
+      harness.ctx.resolveSlackSystemEventRoute = createSlackSystemEventRouteResolver({
+        cfg: harness.ctx.cfg,
+        accountId: harness.ctx.accountId,
+        getTeamId: () => harness.ctx.teamId,
+        mainKey: "agent:main:main",
+        threadInheritParent: false,
+        recallSlackChannelType: () => params.channelType ?? "channel",
+      });
+      const replies = vi.fn(params.replies ?? (async () => ({ messages: [] })));
+      (harness.ctx.app as unknown as { client?: unknown }).client = {
+        conversations: { history: params.history, replies },
+      };
+      registerSlackReactionEvents({ ctx: harness.ctx });
+      return {
+        harness,
+        replies,
+        handler: requireReactionHandler(
+          harness.getHandler("reaction_added") as ReactionHandler | null,
+          "added",
+        ),
+      };
+    }
+
+    // Slack's conversations.history never returns thread replies, so a reaction on
+    // a reply only resolves when the handler reads it through conversations.replies.
+    it("routes a channel reaction to the reacted reply's thread session", async () => {
+      const history = vi.fn().mockResolvedValue({ messages: [] });
+      const replies = vi.fn().mockResolvedValue({
+        messages: [{ ts: "123.456", thread_ts: "111.222" }],
+      });
+      const { harness, handler } = createThreadRoutingHarness({ history, replies });
+
+      await handler({
+        event: buildReactionEvent({ channel: "C1" }),
+        body: { event_id: "Ev-thread-reaction" },
+      });
+
+      const threadSessionKey = harness.ctx.resolveSlackSystemEventRoute({
+        channelId: "C1",
+        channelType: "channel",
+        senderId: "U1",
+        threadTs: "111.222",
+      }).sessionKey;
+      const parentSessionKey = harness.ctx.resolveSlackSystemEventRoute({
+        channelId: "C1",
+        channelType: "channel",
+        senderId: "U1",
+      }).sessionKey;
+      expect(threadSessionKey).not.toBe(parentSessionKey);
+      expect(history).toHaveBeenCalledWith({
+        channel: "C1",
+        latest: "123.456",
+        oldest: "123.456",
+        inclusive: true,
+        limit: 1,
+      });
+      expect(replies).toHaveBeenCalledWith({
+        channel: "C1",
+        ts: "123.456",
+        latest: "123.456",
+        oldest: "123.456",
+        inclusive: true,
+        limit: 1,
+      });
+      expect(reactionQueueMock).toHaveBeenCalledWith(expect.any(String), {
+        sessionKey: threadSessionKey,
+        contextKey: "slack:reaction:added:C1:123.456:U1:thumbsup:Ev-thread-reaction",
+      });
+    });
+
+    it("keeps the parent channel session when the reacted reply has no thread", async () => {
+      const history = vi.fn().mockResolvedValue({ messages: [] });
+      const replies = vi.fn().mockResolvedValue({ messages: [{ ts: "123.456" }] });
+      const { harness, handler } = createThreadRoutingHarness({ history, replies });
+
+      await handler({
+        event: buildReactionEvent({ channel: "C1" }),
+        body: { event_id: "Ev-unthreaded-reaction" },
+      });
+
+      const parentSessionKey = harness.ctx.resolveSlackSystemEventRoute({
+        channelId: "C1",
+        channelType: "channel",
+        senderId: "U1",
+      }).sessionKey;
+      expect(replies).toHaveBeenCalledTimes(1);
+      expect(reactionQueueMock).toHaveBeenCalledWith(expect.any(String), {
+        sessionKey: parentSessionKey,
+        contextKey: "slack:reaction:added:C1:123.456:U1:thumbsup:Ev-unthreaded-reaction",
+      });
+    });
+
+    it("keeps the parent channel session when the reacted message has no thread", async () => {
+      const history = vi.fn().mockResolvedValue({ messages: [{ ts: "123.456" }] });
+      const { harness, replies, handler } = createThreadRoutingHarness({ history });
+
+      await handler({
+        event: buildReactionEvent({ channel: "C1" }),
+        body: { event_id: "Ev-parent-reaction" },
+      });
+
+      const parentSessionKey = harness.ctx.resolveSlackSystemEventRoute({
+        channelId: "C1",
+        channelType: "channel",
+        senderId: "U1",
+      }).sessionKey;
+      expect(history).toHaveBeenCalledTimes(1);
+      expect(replies).not.toHaveBeenCalled();
+      expect(reactionQueueMock).toHaveBeenCalledWith(expect.any(String), {
+        sessionKey: parentSessionKey,
+        contextKey: "slack:reaction:added:C1:123.456:U1:thumbsup:Ev-parent-reaction",
+      });
+    });
+
+    it("keeps a failed thread lookup on the parent channel session", async () => {
+      const history = vi.fn().mockRejectedValue(new Error("missing_scope"));
+      const { harness, handler } = createThreadRoutingHarness({ history });
+
+      await handler({
+        event: buildReactionEvent({ channel: "C1" }),
+        body: { event_id: "Ev-failed-lookup" },
+      });
+
+      const parentSessionKey = harness.ctx.resolveSlackSystemEventRoute({
+        channelId: "C1",
+        channelType: "channel",
+        senderId: "U1",
+      }).sessionKey;
+      expect(reactionQueueMock).toHaveBeenCalledWith(expect.any(String), {
+        sessionKey: parentSessionKey,
+        contextKey: "slack:reaction:added:C1:123.456:U1:thumbsup:Ev-failed-lookup",
+      });
+    });
+
+    it("keeps the parent channel session when the reacted message is gone from both reads", async () => {
+      const history = vi.fn().mockResolvedValue({ messages: [] });
+      const replies = vi.fn().mockRejectedValue(new Error("thread_not_found"));
+      const { harness, handler } = createThreadRoutingHarness({ history, replies });
+
+      await handler({
+        event: buildReactionEvent({ channel: "C1" }),
+        body: { event_id: "Ev-missing-message" },
+      });
+
+      const parentSessionKey = harness.ctx.resolveSlackSystemEventRoute({
+        channelId: "C1",
+        channelType: "channel",
+        senderId: "U1",
+      }).sessionKey;
+      expect(reactionQueueMock).toHaveBeenCalledWith(expect.any(String), {
+        sessionKey: parentSessionKey,
+        contextKey: "slack:reaction:added:C1:123.456:U1:thumbsup:Ev-missing-message",
+      });
+    });
+
+    it("keeps a self-threaded message on the parent channel session", async () => {
+      const history = vi.fn().mockResolvedValue({
+        messages: [{ ts: "123.456", thread_ts: "123.456" }],
+      });
+      const { harness, replies, handler } = createThreadRoutingHarness({ history });
+
+      await handler({
+        event: buildReactionEvent({ channel: "C1" }),
+        body: { event_id: "Ev-self-thread" },
+      });
+
+      const parentSessionKey = harness.ctx.resolveSlackSystemEventRoute({
+        channelId: "C1",
+        channelType: "channel",
+        senderId: "U1",
+      }).sessionKey;
+      expect(history).toHaveBeenCalledTimes(1);
+      expect(replies).not.toHaveBeenCalled();
+      expect(reactionQueueMock).toHaveBeenCalledWith(expect.any(String), {
+        sessionKey: parentSessionKey,
+        contextKey: "slack:reaction:added:C1:123.456:U1:thumbsup:Ev-self-thread",
+      });
+    });
+
+    it("does not look up a thread for direct-message reactions", async () => {
+      const history = vi.fn().mockResolvedValue({
+        messages: [{ ts: "123.456", thread_ts: "111.222" }],
+      });
+      const { harness, handler } = createThreadRoutingHarness({ history, channelType: "im" });
+
+      await handler({
+        event: buildReactionEvent(),
+        body: { event_id: "Ev-dm-reaction" },
+      });
+
+      const dmSessionKey = harness.ctx.resolveSlackSystemEventRoute({
+        channelId: "D1",
+        channelType: "im",
+        senderId: "U1",
+      }).sessionKey;
+      expect(history).not.toHaveBeenCalled();
+      expect(reactionQueueMock).toHaveBeenCalledWith(expect.any(String), {
+        sessionKey: dmSessionKey,
+        contextKey: "slack:reaction:added:D1:123.456:U1:thumbsup:Ev-dm-reaction",
+      });
+    });
   });
 });

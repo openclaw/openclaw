@@ -29,7 +29,7 @@ import {
   buildTopLevelSlackConversationKey,
 } from "./message-handler/debounce-key.js";
 import type { PreparedSlackMessage } from "./message-handler/types.js";
-import { createSlackThreadTsResolver } from "./thread-resolution.js";
+import { getSlackThreadTsResolver } from "./thread-resolution.js";
 
 const loadSlackMessagePipeline = createLazyRuntimeModule(
   () => import("./message-handler/pipeline.runtime.js"),
@@ -401,10 +401,6 @@ export function createSlackMessageHandler(params: {
     },
   });
   // Keep cache and in-flight lookups with Bolt's client; replaced clients start fresh.
-  const threadTsResolvers = new WeakMap<
-    SlackEventScope["client"],
-    ReturnType<typeof createSlackThreadTsResolver>
-  >();
   const pendingTopLevelDebounceKeys = new Map<string, Set<string>>();
 
   async function enqueueSlackMessage(
@@ -428,11 +424,7 @@ export function createSlackMessageHandler(params: {
     ctx.rememberSlackChannelType(message.channel, message.channel_type, opts.eventScope);
     trackEvent?.();
     const client = opts.eventScope?.client ?? ctx.app.client;
-    let threadTsResolver = threadTsResolvers.get(client);
-    if (!threadTsResolver) {
-      threadTsResolver = createSlackThreadTsResolver({ client });
-      threadTsResolvers.set(client, threadTsResolver);
-    }
+    const threadTsResolver = getSlackThreadTsResolver(client);
     const resolvedMessage = await threadTsResolver.resolve({
       message,
       source: opts.source,

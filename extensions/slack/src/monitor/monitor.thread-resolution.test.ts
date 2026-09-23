@@ -16,8 +16,13 @@ import {
 
 type SlackThreadClient = Parameters<typeof createSlackThreadTsResolver>[0]["client"];
 
-function createThreadClient(history: ReturnType<typeof vi.fn>): SlackThreadClient {
-  return { conversations: { history } } as unknown as SlackThreadClient;
+function createThreadClient(
+  history: ReturnType<typeof vi.fn>,
+  replies?: ReturnType<typeof vi.fn>,
+): SlackThreadClient {
+  return {
+    conversations: { history, replies: replies ?? vi.fn() },
+  } as unknown as SlackThreadClient;
 }
 
 function createDurableTurnLifecycle(): SlackIngressTurnLifecycle {
@@ -82,6 +87,60 @@ describe("createSlackThreadTsResolver", () => {
     expect(first["_ambiguousThreadReply"]).toBe(true);
     expect(second["_ambiguousThreadReply"]).toBe(true);
     expect(historyMock).toHaveBeenCalledTimes(1);
+  });
+
+  // conversations.history never returns thread replies, so a reply target is read
+  // through conversations.replies once history misses it.
+  it("reads a history-missed thread reply through conversations.replies", async () => {
+    const historyMock = vi.fn().mockResolvedValue({ messages: [] });
+    const repliesMock = vi.fn().mockResolvedValue({
+      messages: [{ ts: "1", thread_ts: "9" }],
+    });
+    const resolver = createSlackThreadTsResolver({
+      client: createThreadClient(historyMock, repliesMock),
+      cacheTtlMs: 60_000,
+      maxSize: 5,
+    });
+
+    const message = makeThreadReplyMessage("1");
+
+    const first = await resolver.resolve({ message, source: "message" });
+    const second = await resolver.resolve({ message, source: "message" });
+
+    expect(first.thread_ts).toBe("9");
+    expect(second.thread_ts).toBe("9");
+    expect(historyMock).toHaveBeenCalledTimes(1);
+    expect(repliesMock).toHaveBeenCalledTimes(1);
+    expect(repliesMock).toHaveBeenCalledWith({
+      channel: "C1",
+      ts: "1",
+      latest: "1",
+      oldest: "1",
+      inclusive: true,
+      limit: 1,
+    });
+  });
+
+  it("caches a definitive thread_not_found from the replies fallback", async () => {
+    const historyMock = vi.fn().mockResolvedValue({ messages: [] });
+    const repliesMock = vi
+      .fn()
+      .mockRejectedValue(new WebAPIPlatformError({ ok: false, error: "thread_not_found" }));
+    const resolver = createSlackThreadTsResolver({
+      client: createThreadClient(historyMock, repliesMock),
+      cacheTtlMs: 60_000,
+      maxSize: 5,
+    });
+
+    const message = makeThreadReplyMessage("1");
+
+    const first = await resolver.resolve({ message, source: "message" });
+    const second = await resolver.resolve({ message, source: "message" });
+
+    expect(first["_ambiguousThreadReply"]).toBe(true);
+    expect(second["_ambiguousThreadReply"]).toBe(true);
+    expect(historyMock).toHaveBeenCalledTimes(1);
+    expect(repliesMock).toHaveBeenCalledTimes(1);
   });
 
   it("classifies an exhausted real WebClient 429 as transient", async () => {
