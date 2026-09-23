@@ -29,7 +29,9 @@ import {
   renderSettingsLoadingSkeleton,
   renderSettingsNavRow,
   renderSettingsPage,
+  renderSettingsRow,
   renderSettingsSection,
+  renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
@@ -75,6 +77,7 @@ export class ProfilePage extends OpenClawLightDomElement {
   private client: GatewayBrowserClient | null = null;
   private connected = false;
   private canWrite = false;
+  private connectionScopes: readonly string[] | null = null;
   private readonly heroAvatarLoader = new IdentityAvatarController(this);
   private identityRequestId = 0;
   private subscriptions: Array<() => void> = [];
@@ -98,6 +101,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     this.client = null;
     this.connected = false;
     this.canWrite = false;
+    this.connectionScopes = null;
     super.disconnectedCallback();
   }
 
@@ -116,6 +120,8 @@ export class ProfilePage extends OpenClawLightDomElement {
     this.client = snapshot.client;
     this.connected = nextConnected;
     this.canWrite = nextCanWrite;
+    // Hello records this connection's negotiated grants, not the profile's role ceiling.
+    this.connectionScopes = nextConnected ? (snapshot.hello?.auth?.scopes ?? null) : null;
     this.selfUser = nextSelfUser;
     // connected/client are plain fields; an unidentified connect or
     // disconnect changes no @state, so the render branch must be invalidated
@@ -353,6 +359,33 @@ export class ProfilePage extends OpenClawLightDomElement {
     });
   }
 
+  private renderConnectionAccess() {
+    const scopes = this.connectionScopes;
+    return html`<div id="settings-profile-access">
+      ${renderSettingsSection(
+        {
+          title: t("profilePage.access.title"),
+          description: t("profilePage.access.description"),
+        },
+        html`
+          ${renderSettingsRow({
+            title: t("profilePage.access.scopes"),
+            description: t("profilePage.access.browserRequirement"),
+            stacked: true,
+            control: renderSettingsValue(
+              scopes === null
+                ? t("profilePage.access.unknown")
+                : scopes.length === 0
+                  ? t("profilePage.access.none")
+                  : scopes.join(", "),
+              { mono: scopes !== null && scopes.length > 0 },
+            ),
+          })}
+        `,
+      )}
+    </div>`;
+  }
+
   private renderModelAccounts() {
     return html`<openclaw-model-accounts
       .identityId=${this.selfUser?.id ?? null}
@@ -397,7 +430,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     return renderSettingsPage(html`
       ${
         connected
-          ? html`${this.renderHero()} ${this.renderIdentity()}`
+          ? html`${this.renderHero()} ${this.renderConnectionAccess()} ${this.renderIdentity()}`
           : renderSettingsGroup(renderSettingsEmpty(t("profilePage.offline")))
       }
       <openclaw-personal-instructions
