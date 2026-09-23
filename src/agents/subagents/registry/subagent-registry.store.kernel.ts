@@ -14,7 +14,25 @@ export type SubagentRegistryWrite = {
   writeId: string;
   values: readonly BoundSubagentRunRecord[];
   deleteRunIds: readonly string[];
+  expectedPayloads?: readonly { runId: string; payloadJson: string }[];
 };
+
+/** A queued conditional write must still own every durable row at commit time. */
+export function assertSubagentRunExpectedPayloadsInDatabase(
+  database: OpenClawStateDatabase,
+  expectedPayloads: readonly { runId: string; payloadJson: string }[],
+): void {
+  const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(database.db);
+  for (const { runId, payloadJson } of expectedPayloads) {
+    const stored = executeSqliteQuerySync(
+      database.db,
+      stateDb.selectFrom("subagent_runs").select("payload_json").where("run_id", "=", runId),
+    ).rows[0];
+    if (stored?.payload_json !== payloadJson) {
+      throw new Error("Queued subagent registry write lost its durable row owner");
+    }
+  }
+}
 
 const parentStoreSchemas = new WeakSet<DatabaseSync>();
 

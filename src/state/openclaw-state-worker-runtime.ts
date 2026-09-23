@@ -15,7 +15,7 @@ import {
 } from "../agents/mcp-oauth-store.worker.js";
 import { importSandboxRegistryRow } from "../agents/sandbox/registry-import.worker.js";
 import { writeSandboxRegistry } from "../agents/sandbox/registry-write.worker.js";
-import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
+import { executeSubagentRegistryWrite } from "../agents/subagents/registry/subagent-registry-write.worker.js";
 import {
   isWorktreeRegistryReadCommand,
   executeWorktreeRegistryReadCommand,
@@ -70,7 +70,6 @@ import {
   readStableSqliteFileGeneration,
   sameSqliteFileGeneration,
 } from "../infra/sqlite-file-generation.js";
-import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import {
@@ -79,7 +78,6 @@ import {
   readTelemetryStateInWorker,
 } from "../infra/telemetry-store.kernel.js";
 import { persistInterruptedUpdateObservation } from "../infra/update-run-interruption-store.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { readRemoteModelCatalog } from "../model-catalog/remote-store.js";
 import { isNodeWorkerJournalCommand } from "../node-host/node-worker-journal.worker-contract.js";
 import { executeNodeWorkerJournalCommand } from "../node-host/node-worker-journal.worker.js";
@@ -152,8 +150,6 @@ import { executeUserProfileCommand, isUserProfileCommand } from "./user-profiles
 type Operations = OpenClawStateWorkerOperations &
   OpenClawStateWorkerInspectionOperations &
   OpenClawStateWorkerCleanupOperations;
-
-const log = createSubsystemLogger("state/worker");
 
 export { prepareCronStateWorkerCommand as prepareSharedStateCommand } from "../cron/store/dispatch.worker.js";
 
@@ -599,24 +595,7 @@ export function executeSharedStateCommand(
     }
   }
   if (command.type === "subagents.persistChanges") {
-    const { writeId, values, deleteRunIds } = command.input;
-    let committed = false;
-    try {
-      runOpenClawStateWriteTransaction((writer) => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: writeId });
-        writeSubagentRunValuesInDatabase(writer, values, deleteRunIds);
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: writeId });
-        deferSqlitePostCommitPublication(writer.db, () => {
-          committed = true;
-        });
-      }, writeOptions);
-    } catch (error) {
-      if (!committed) {
-        throw error;
-      }
-      log.warn("Subagent registry write committed before cleanup failed", { error });
-    }
-    return { writeId };
+    return executeSubagentRegistryWrite(command.input, writeOptions);
   }
   if (command.type === "backup.recordOutcome") {
     return runOpenClawStateWriteTransaction(

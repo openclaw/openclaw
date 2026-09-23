@@ -29,6 +29,7 @@ import {
 } from "./subagent-registry-lifecycle-delivery.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
+import { deferFailedRequesterSettleWake } from "./subagent-registry-requester-wake-backoff.js";
 import {
   commitRequesterWake,
   getPendingWakeCommit,
@@ -121,12 +122,13 @@ const completeRequesterSettleWakeBatch = (
     settleRequesterCompletionBatch({
       entries: entries.map((subagent) => {
         const resolution = params.resolveSubagentTask(subagent);
-        if (resolution.lookup !== "available") {
-          throw new Error(
-            "subagent completion owner unavailable before settlement: " + subagent.runId,
-          );
-        }
-        return { subagent, taskId: resolution.task?.taskId };
+        // The store can prove that an old task was pruned only while holding the
+        // same transaction that consumes its wake. An unavailable lookup alone
+        // does not grant permission to discard the completion.
+        return {
+          subagent,
+          taskId: resolution.lookup === "available" ? resolution.task?.taskId : undefined,
+        };
       }),
       outcome,
       isCurrent: () =>
@@ -482,7 +484,7 @@ export function scheduleRequesterSettleWake(
             ),
         });
       })
-      .catch((error: unknown) => {
+      .catch(async (error: unknown) => {
         // Restart admission defers the durable wake to startup; it is not a delivery failure.
         if (isGatewayRestartDrainError(error)) {
           return;
@@ -516,11 +518,30 @@ export function scheduleRequesterSettleWake(
             true,
           );
         } catch (settleError) {
+          const safeSettleError = buildSafeLifecycleErrorMeta(settleError);
           params.warn("failed to persist requester settle wake rejection", {
-            error: buildSafeLifecycleErrorMeta(settleError),
+            error: safeSettleError,
             runId: maskLifecycleIdentifier(runId, "run"),
             requesterSessionKey: maskLifecycleIdentifier(requesterSessionKey, "session"),
           });
+          try {
+            await deferFailedRequesterSettleWake({
+              context,
+              entries: admittedBatch,
+              isCurrent: () =>
+                isCurrentRequesterSettleWakeBatch(
+                  context,
+                  admittedBatch,
+                  admittedWake.rearmGeneration,
+                ),
+              reason: safeSettleError.message ?? "requester settle wake settlement failed",
+            });
+          } catch (retryError) {
+            params.warn("failed to persist requester settle wake retry deadline", {
+              error: buildSafeLifecycleErrorMeta(retryError),
+              runId: maskLifecycleIdentifier(runId, "run"),
+            });
+          }
         }
       })
       .finally(() => {

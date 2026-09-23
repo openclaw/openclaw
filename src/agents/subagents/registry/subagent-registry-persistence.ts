@@ -35,6 +35,7 @@ export type SubagentRegistryWriteOptions = {
   context: OpenClawStateWorkerContext;
   assertCurrent?: () => void;
   onCommitted?: () => void;
+  expectedPayloads?: readonly { runId: string; payloadJson: string }[];
 };
 
 /** Retains captured rows, original database admission, and publication through actor settlement. */
@@ -61,6 +62,7 @@ export async function persistSubagentRegistryChangesAsync(
       writeId: randomUUID(),
       values: [...snapshot.values()].map(bindCapturedSubagentRunRecord),
       deleteRunIds: runIds.filter((runId) => !snapshot.has(runId)),
+      expectedPayloads: options.expectedPayloads,
     };
     const { context } = options;
     const assertDatabase = () => {

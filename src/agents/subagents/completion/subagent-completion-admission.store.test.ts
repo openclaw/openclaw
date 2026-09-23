@@ -275,37 +275,6 @@ describe("atomic subagent completion admission store", () => {
     },
   );
 
-  it("rolls a non-success wake settlement back when its task write fails", async () => {
-    await useDefaultDatabase();
-    const input = persistOwner(failedRecords("cancelled", { status: "error" }));
-    const before = structuredClone(input);
-    database.db.exec(
-      "CREATE TEMP TRIGGER reject_nonsuccess_task AFTER UPDATE ON task_runs " +
-        "BEGIN SELECT RAISE(ABORT, 'cut:nonsuccess-task'); END",
-    );
-    const driver = requesterWakeDriver([input]);
-    try {
-      await driver.run();
-      expect(driver.warn).toHaveBeenCalledWith(
-        "failed to persist requester settle wake rejection",
-        expect.objectContaining({
-          error: expect.objectContaining({
-            message: expect.stringContaining("cut:nonsuccess-task"),
-          }),
-        }),
-      );
-      expect(input.subagent).toEqual(before.subagent);
-      expect(getTaskById(input.task.taskId)).toMatchObject(before.task);
-      expect(systemEvents()).toEqual([]);
-      database.db.exec("DROP TRIGGER reject_nonsuccess_task");
-      await reopenOwners();
-      expect(subagentRuns.get(input.subagent.runId)).toEqual(before.subagent);
-      expect(getTaskById(input.task.taskId)).toMatchObject(before.task);
-    } finally {
-      driver.controller.clearScheduledResumeTimers();
-    }
-  });
-
   it("does not suspend a cancelled completion as a blocked success", async () => {
     await useDefaultDatabase();
     const input = persistOwner(failedRecords("cancelled", { status: "error" }));

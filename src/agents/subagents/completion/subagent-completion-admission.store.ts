@@ -246,7 +246,7 @@ function retiredCancellationEndedAt(subagent: SubagentRunRecord, now: number): n
   return endedAt;
 }
 
-function ownsRetiredCancellation(
+function ownsRetiredCompletion(
   database: OpenClawStateDatabase,
   subagent: SubagentRunRecord,
   expected: SubagentRunRecord,
@@ -289,7 +289,7 @@ export function reconcileRetiredSubagentCancellation(
     if (findTaskRecordByRunIdForViewInDatabase(database.db, subagent.taskRunId ?? subagent.runId)) {
       return undefined;
     }
-    if (!ownsRetiredCancellation(database, subagent, expected)) {
+    if (!ownsRetiredCompletion(database, subagent, expected)) {
       return false;
     }
     subagent.killReconciliation = undefined;
@@ -336,7 +336,7 @@ function prepareBlockedSubagentCompletion(
     if (
       endedAt === undefined ||
       subagent.killReconciliation ||
-      !ownsRetiredCancellation(database, subagent, params.subagent)
+      !ownsRetiredCompletion(database, subagent, params.subagent)
     ) {
       return undefined;
     }
@@ -449,6 +449,40 @@ function prepareBlockedSubagentCompletion(
       )
     : undefined;
   return { subagent, task, queued };
+}
+
+function isExpiredRequesterWakeOrphan(subagent: SubagentRunRecord, now: number): boolean {
+  const finalized = resolveFinalizedSubagentTaskState(subagent);
+  const endedAt = subagent.execution.endedAt;
+  const cleanupCompletedAt = subagent.cleanupCompletedAt;
+  return Boolean(
+    finalized &&
+    subagent.execution.status === "terminal" &&
+    typeof endedAt === "number" &&
+    Number.isFinite(endedAt) &&
+    typeof cleanupCompletedAt === "number" &&
+    Number.isFinite(cleanupCompletedAt) &&
+    cleanupCompletedAt >= endedAt &&
+    !subagent.pauseReason &&
+    !subagent.killIntent &&
+    !subagent.killReconciliation &&
+    !subagent.terminalOwner &&
+    !subagent.execution.restartRecovery &&
+    subagent.suppressAnnounceReason !== "steer-restart" &&
+    subagent.completion?.required === true &&
+    subagent.delivery?.status === "pending" &&
+    !subagent.delivery.queueId &&
+    subagent.delivery.deliveredAt === undefined &&
+    subagent.delivery.announcedAt === undefined &&
+    !subagent.delivery.requesterVisibleFinal &&
+    subagent.delivery.disposition !== "delivered" &&
+    !subagent.delivery.steeringLeaseId &&
+    subagent.delivery.steeringLeasedAt === undefined &&
+    subagent.delivery.steeringInjectedAt === undefined &&
+    subagent.suppressCompletionDelivery !== true &&
+    resolveTaskCleanupAfter({ status: finalized.status, endedAt, createdAt: subagent.createdAt }) <=
+      now,
+  );
 }
 
 function commitCompletionMutations(
@@ -599,7 +633,36 @@ export function settleRequesterCompletionBatch(params: {
           (["pending", "in_progress"].includes(subagent.delivery?.status ?? "pending") ||
             acknowledgeExpiredDelivery)
         ) {
-          if (params.outcome.delivered) {
+          // An old terminal child may outlive its task's retention window. The
+          // missing task is established here, under the same transaction that
+          // consumes the exact wake and records its delivery outcome.
+          const expiredOrphan =
+            taskId === undefined &&
+            isExpiredRequesterWakeOrphan(subagent, now) &&
+            ownsRetiredCompletion(database, subagent, expected);
+          if (expiredOrphan) {
+            const delivery = ensureDeliveryState(subagent);
+            if (params.outcome.delivered) {
+              const deliveredAt = params.outcome.deliveredAt ?? now;
+              Object.assign(delivery, {
+                status: "delivered" as const,
+                disposition: "delivered" as const,
+                deliveredAt,
+                announcedAt: deliveredAt,
+                lastDropReason: undefined,
+              });
+              clearSubagentPendingDelivery(subagent);
+            } else {
+              Object.assign(delivery, {
+                status: "failed" as const,
+                disposition: params.outcome.disposition ?? delivery.disposition,
+                lastError:
+                  params.outcome.error ?? params.outcome.reason ?? "requester settle wake failed",
+                nextAttemptAt: undefined,
+              });
+              subagent.suppressCompletionDelivery = true;
+            }
+          } else if (params.outcome.delivered) {
             const task = readTaskRecord(database.db, taskId ?? "");
             if (
               !task ||

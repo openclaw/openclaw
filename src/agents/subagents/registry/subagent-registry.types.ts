@@ -122,6 +122,13 @@ export type RequesterSettleWakeState = {
   progressOperationId?: string;
   /** Number of times this batch has been deferred due to unsettled descendants. */
   deferralCount?: number;
+  /**
+   * Times settlement threw before any durable state could advance. A wake whose
+   * completion owner no longer exists (for example a task row dropped by
+   * retention) can never settle, so the sweeper otherwise re-ran it every cycle
+   * forever without persisting anything.
+   */
+  settleFailureCount?: number;
   lastError?: string | null;
   /** Cleanup wanted to retire this row; defer deletion until the outbox resolves. */
   retireAfterSettle?: boolean;
