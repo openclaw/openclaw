@@ -293,6 +293,7 @@ export async function prepareOpenClawStateRecoveryCopy(params: {
   const target = openNodeSqliteDatabase(params.targetPath);
   const expectedPath = `${params.targetPath}.migration-after-image`;
   let expected: DatabaseSync | undefined;
+  let expectedCreated = false;
   try {
     const older = readStateSchemaContentVersion(baseline);
     const newer = readStateSchemaContentVersion(target);
@@ -325,6 +326,7 @@ export async function prepareOpenClawStateRecoveryCopy(params: {
       }
     }
     await fs.copyFile(params.baselinePath, expectedPath, fs.constants.COPYFILE_EXCL);
+    expectedCreated = true;
     params.assertOwned();
     expected = openNodeSqliteDatabase(expectedPath);
     expected.exec("PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE");
@@ -378,7 +380,7 @@ export async function prepareOpenClawStateRecoveryCopy(params: {
     target.close();
     baseline.close();
     expected?.close();
-    if (expected) {
+    if (expectedCreated) {
       await fs.rm(expectedPath);
     }
   }

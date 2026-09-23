@@ -250,6 +250,9 @@ describe("shared-state recovery preparation", () => {
                 : /recovery refused/,
             );
           }
+          await expect(fs.stat(`${targetPath}.migration-after-image`)).rejects.toMatchObject({
+            code: "ENOENT",
+          });
           expect(await fs.readFile(baselinePath)).toEqual(baselineBytes);
           expect(await fs.readFile(candidatePath)).toEqual(candidateBytes);
         }),
