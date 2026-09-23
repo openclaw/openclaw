@@ -2227,7 +2227,17 @@ describe("scripts/changed-lanes", () => {
     },
   );
 
-  it.each([
+  it.each<{
+    name: string;
+    path: string;
+    extraPaths?: string[];
+    expected: {
+      lanes: Partial<ReturnType<typeof createEmptyChangedLanes>>;
+      includes: string[];
+      excludes: string[];
+      coreTestChecks?: string[];
+    };
+  }>([
     ...[
       "src/agents/embedded-agent-runner/run/attempt-system-prompt.test.ts",
       "src/plugin-sdk/config-runtime.test.ts",
@@ -2245,13 +2255,14 @@ describe("scripts/changed-lanes", () => {
     })),
     ...["ui/src/app.ts", "tsconfig.ui.json", "ui/src/e2e/chat-flow.test-support.ts"].map(
       (companion) => ({
-        name: `retains full test graphs with ${companion}`,
+        name: `selects consuming test graphs unless the companion is global: ${companion}`,
         path: "ui/src/e2e/chat-composer-picker-layout.e2e.test.ts",
         extraPaths: ["ui/src/styles/chat/composer.css", companion],
         expected: {
           lanes: { ui: true, coreTests: true },
           includes: ["tsgo:ui", "tsgo:core:test"],
           excludes: ["tsgo:core"],
+          coreTestChecks: companion === "tsconfig.ui.json" ? [] : ["checkBoundary", "checkTypes"],
         },
       }),
     ),
@@ -2262,6 +2273,7 @@ describe("scripts/changed-lanes", () => {
         lanes: { coreTests: true },
         includes: ["tsgo:core:test"],
         excludes: ["tsgo:core"],
+        coreTestChecks: ["checkBoundary", "checkTypes"],
       },
     },
     {
@@ -2302,17 +2314,14 @@ describe("scripts/changed-lanes", () => {
     },
   ])("$name: $path", (testCase) => {
     const { path: changedPath, expected } = testCase;
-    const result = detectChangedLanes([
-      changedPath,
-      ...("extraPaths" in testCase ? (testCase.extraPaths ?? []) : []),
-    ]);
+    const result = detectChangedLanes([changedPath, ...(testCase.extraPaths ?? [])]);
     const plan = createChangedCheckPlan(result);
     const commands = plan.commands.map((command) => command.args[0]);
 
     expectLanes(result.lanes, expected.lanes);
     expect(result.extensionImpactFromCore).toBe(false);
     expect(plan.commands.flatMap((command) => command.coreTestCheck ?? [])).toEqual(
-      "coreTestChecks" in expected ? expected.coreTestChecks : [],
+      expected.coreTestChecks ?? [],
     );
     for (const command of expected.includes) {
       expect(commands).toContain(command);
