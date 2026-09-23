@@ -149,6 +149,10 @@ export function registerNativeSubagentParent(
   let interruptedTurnId: string | undefined;
   const cancelUnqualifiedRoot = () => {
     owner.modelExecutionCancelled = true;
+    // Disposal releases guards without turning client closure into explicit cancellation.
+    if (dependencies.isClosed()) {
+      return;
+    }
     if (!cancellationReported) {
       cancellationReported = true;
       params.onUnqualifiedModelCancelled?.(

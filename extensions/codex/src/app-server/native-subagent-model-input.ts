@@ -50,7 +50,7 @@ export function assertNativeModelInputCompatible(sender: ParentOwner, receiver: 
   }
 }
 
-export function admitNativeModelInput(
+function admitNativeModelInput(
   request: NativeModelInputRequest,
   parents: ReadonlyMap<string, ParentState>,
   knownChildren: ReadonlyMap<string, KnownChild>,

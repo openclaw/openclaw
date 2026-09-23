@@ -284,7 +284,7 @@ export function hasSubmissionCallCustody(
   );
 }
 
-export function captureSubmissionPredecessor(params: {
+function captureSubmissionPredecessor(params: {
   state: ParentState;
   known: KnownChild | undefined;
   child: ChildState | undefined;

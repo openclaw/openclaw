@@ -1,5 +1,5 @@
 import type { IncomingHttpHeaders } from "node:http";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asBoolean, isRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { JsonObject } from "./protocol-json.js";
 
 const MAX_NATIVE_METADATA_BYTES = 1024 * 1024;
@@ -51,7 +51,11 @@ export function readCodexInferenceMetadata(
   if (!nested && !compatibility) {
     throw new Error("Codex inference request is missing bounded native metadata");
   }
-  const requestKind = readString("request kind", nested?.request_kind, compatibility?.request_kind);
+  const requestKind = reconcileMetadataStrings(
+    "request kind",
+    nested?.request_kind,
+    compatibility?.request_kind,
+  );
   const generation = readId(
     "parent generation",
     nested?.[CODEX_INFERENCE_GENERATION_KEY],
@@ -95,21 +99,33 @@ export function readCodexInferenceMetadata(
       compatibility?.root_turn_id,
     ),
     requestKind,
-    threadSource: readString("thread source", nested?.thread_source, compatibility?.thread_source),
+    threadSource: reconcileMetadataStrings(
+      "thread source",
+      nested?.thread_source,
+      compatibility?.thread_source,
+    ),
     // SessionSource is fixed for this native model client, including across reused WS turns.
-    subagent: readString("subagent", flat?.["x-openai-subagent"], headers?.["x-openai-subagent"]),
-    subagentKind: readString("subagent kind", nested?.subagent_kind, compatibility?.subagent_kind),
+    subagent: reconcileMetadataStrings(
+      "subagent",
+      flat?.["x-openai-subagent"],
+      headers?.["x-openai-subagent"],
+    ),
+    subagentKind: reconcileMetadataStrings(
+      "subagent kind",
+      nested?.subagent_kind,
+      compatibility?.subagent_kind,
+    ),
     guardianClassifierSourceThreadId: readId(
       "Guardian classifier source thread",
       nested?.guardian_classifier_source_thread_id,
       compatibility?.guardian_classifier_source_thread_id,
     ),
-    autoReviewEnabled: readBoolean(
+    autoReviewEnabled: reconcileMetadataBooleans(
       "automatic review",
       nested?.auto_review_enabled,
       compatibility?.auto_review_enabled,
     ),
-    nodeReplAutoReviewRequired: readBoolean(
+    nodeReplAutoReviewRequired: reconcileMetadataBooleans(
       "model-required review",
       nested?.node_repl_auto_review_required,
       compatibility?.node_repl_auto_review_required,
@@ -122,12 +138,13 @@ function readNativeMetadata(raw: unknown): Record<string, unknown> | undefined {
   if (raw === undefined) {
     return undefined;
   }
-  if (typeof raw !== "string" || Buffer.byteLength(raw) > MAX_NATIVE_METADATA_BYTES) {
+  const encoded = readStringValue(raw);
+  if (encoded === undefined || Buffer.byteLength(encoded) > MAX_NATIVE_METADATA_BYTES) {
     throw new Error("Codex inference request is missing bounded native metadata");
   }
   let value: unknown;
   try {
-    value = JSON.parse(raw);
+    value = JSON.parse(encoded);
   } catch {
     throw new Error("Codex inference request has invalid native metadata");
   }
@@ -137,44 +154,46 @@ function readNativeMetadata(raw: unknown): Record<string, unknown> | undefined {
   return value;
 }
 
-function readString(field: string, ...values: unknown[]): string | undefined {
+function reconcileMetadataStrings(field: string, ...values: unknown[]): string | undefined {
   let result: string | undefined;
   for (const value of values) {
     if (value == null) {
       continue;
     }
-    if (typeof value !== "string" || Buffer.byteLength(value) > MAX_METADATA_FIELD_BYTES) {
+    const candidate = readStringValue(value);
+    if (candidate === undefined || Buffer.byteLength(candidate) > MAX_METADATA_FIELD_BYTES) {
       throw new Error(`Codex inference ${field} metadata is invalid or exceeds its limit`);
     }
-    if (result !== undefined && value !== result) {
+    if (result !== undefined && candidate !== result) {
       throw new Error(`Codex inference ${field} metadata disagrees`);
     }
-    result = value;
+    result = candidate;
   }
   return result;
 }
 
 function readId(field: string, ...values: unknown[]): string | undefined {
-  const value = readString(field, ...values);
+  const value = reconcileMetadataStrings(field, ...values);
   if (value !== undefined && (!value || value.trim() !== value)) {
     throw new Error(`Codex inference ${field} metadata has an invalid identity`);
   }
   return value;
 }
 
-function readBoolean(field: string, ...values: unknown[]): boolean | undefined {
+function reconcileMetadataBooleans(field: string, ...values: unknown[]): boolean | undefined {
   let result: boolean | undefined;
   for (const value of values) {
     if (value == null) {
       continue;
     }
-    if (typeof value !== "boolean") {
+    const candidate = asBoolean(value);
+    if (candidate === undefined) {
       throw new Error(`Codex inference ${field} metadata is invalid`);
     }
-    if (result !== undefined && value !== result) {
+    if (result !== undefined && candidate !== result) {
       throw new Error(`Codex inference ${field} metadata disagrees`);
     }
-    result = value;
+    result = candidate;
   }
   return result;
 }
