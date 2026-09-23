@@ -12,10 +12,8 @@ import type { StatusSummary } from "../status/summary.js";
 import { VERSION } from "../version.js";
 import { buildBackupStatusValue } from "./backup-health.js";
 import type { HealthSummary } from "./health.js";
-import {
-  buildStatusOverviewRowsFromSurface,
-  type StatusOverviewSurface,
-} from "./status-overview-surface.ts";
+import { buildStatusOverviewSurfaceRows } from "./status-all/format.js";
+import type { StatusOverviewSurface } from "./status-overview-surface.ts";
 import {
   buildStatusAllAgentsValue,
   buildStatusEventsValue,
@@ -181,8 +179,8 @@ export function buildStatusCommandOverviewRows(
         ? params.ok("enabled · anonymous feature stats")
         : params.muted("disabled · update checks only");
   const hostDesktopValue = formatHostDesktopStatus(params.summary.hostDesktop);
-  return buildStatusOverviewRowsFromSurface({
-    surface: params.surface,
+  return buildStatusOverviewSurfaceRows({
+    ...params.surface,
     decorateOk: params.ok,
     decorateWarn: params.warn,
     decorateTailscaleOff: params.muted,
@@ -246,8 +244,8 @@ export function buildStatusAllOverviewRows(params: {
     }>;
   };
 }) {
-  return buildStatusOverviewRowsFromSurface({
-    surface: params.surface,
+  return buildStatusOverviewSurfaceRows({
+    ...params.surface,
     includeBackendStateWhenOn: true,
     includeDnsNameWhenOff: true,
     prefixRows: [
