@@ -34,8 +34,10 @@ import { getHeader, type AuthorizedGatewayHttpRequest } from "./http-auth-utils.
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import { authorizeSessionAgentRun } from "./session-sharing-policy.js";
 import { authorizeResolvedSessionMutation, isResolvedIncognitoSession } from "./session-sharing.js";
 import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
+import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 export {
   authorizeControlUiReadRequestOrReply,
@@ -318,17 +320,32 @@ export function authorizeOpenAiCompatibleHttpSession(params: {
 }): { allowed: true } | { allowed: false; message: string } {
   const cfg = getRuntimeConfig();
   const authenticatedUserProfile = params.requestAuth.authenticatedUserProfile;
-  const authorizationError = authorizeResolvedSessionMutation({
-    cfg,
-    client: createSyntheticPluginRuntimeClient({
-      ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
-      operatorRoleActor: params.requestAuth.operatorRoleActor,
-      operatorAccessAuthority: params.requestAuth.operatorAccessAuthority,
-      scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [],
-    }),
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
+  const client = createSyntheticPluginRuntimeClient({
+    ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
+    operatorRoleActor: params.requestAuth.operatorRoleActor,
+    operatorAccessAuthority: params.requestAuth.operatorAccessAuthority,
+    scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [],
   });
+  const sessionEntry = loadGatewaySessionEntryReadOnly(
+    params.sessionKey,
+    { agentId: params.agentId },
+    cfg,
+  ).entry;
+  const authorizationError =
+    authorizeResolvedSessionMutation({
+      cfg,
+      client,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+    }) ??
+    // Standalone HTTP calls cannot create the sandbox provenance a normal session run records.
+    (!sessionEntry
+      ? authorizeSessionAgentRun({
+          cfg,
+          client,
+          target: { agentId: params.agentId, canonicalKey: params.sessionKey },
+        })
+      : null);
   if (authorizationError) {
     return { allowed: false, message: authorizationError.message };
   }
