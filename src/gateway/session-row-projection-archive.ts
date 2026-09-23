@@ -78,7 +78,12 @@ export function createSessionRowProjectionArchive(params: {
           continue;
         }
         // Cold children retain metadata/indices; both parents must drop stale child links.
-        const next = { ...current, ...lineage, pendingDatabaseFacts: undefined };
+        const next = {
+          ...current,
+          ...lineage,
+          pendingDatabaseFacts: undefined,
+          databaseFactsRevision: current.databaseFactsRevision + 1,
+        };
         params.put(next);
         markRelated(current, indexes, false);
         markRelated(next, indexes, false);
