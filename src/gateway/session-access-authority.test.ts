@@ -23,6 +23,7 @@ import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayClient, GatewayRequestHandler } from "./server-methods/types.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
+import * as sessionAccess from "./session-access-authority.js";
 import { prepareGatewaySessionAccessAuthority } from "./session-access-authority.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
@@ -147,6 +148,105 @@ afterEach(() => {
 });
 
 describe("session resource admission", () => {
+  it.each(["identity", "scope"])(
+    "hydrates the profile before capture and fences a later operator %s change",
+    async (kind) => {
+      const test = fixture();
+      const profile = test.client.authenticatedUserProfile;
+      delete test.client.authenticatedUserProfile;
+      test.client.authenticatedUserId = "original-operator";
+      test.client.authenticatedGitHubIdentitySync = vi.fn(async () => {
+        await Promise.resolve();
+        test.client.authenticatedUserProfile = profile;
+        return { profileId: "alice", updatedAt: 1 };
+      });
+      const effect = vi.fn();
+      const handler = vi.fn<GatewayRequestHandler>(async ({ sessionAccessAuthority, respond }) => {
+        const authority = sessionAccessAuthority!;
+        const resource = hold(authority.retainSession());
+        authority.assertCurrent();
+        await Promise.resolve();
+        if (kind === "identity") {
+          test.client.authenticatedUserId = "changed-operator";
+        } else {
+          test.client.connect.scopes = [];
+        }
+        expect(() => {
+          authority.assertCurrent();
+          effect();
+        }).toThrow("Gateway requester authority changed");
+        expect(() => resource.assertCurrent()).not.toThrow();
+        respond(true, {});
+      });
+      const method = "fixture.session.open";
+      await handleGatewayRequest({
+        req: { type: "req", id: "hydration", method, params: { sessionKey: key } },
+        respond: vi.fn(),
+        client: test.client,
+        context: test.context,
+        methodRegistry: createGatewayMethodRegistry([
+          createPluginGatewayMethodDescriptor({
+            pluginId: "fixture",
+            name: method,
+            handler,
+            scope: "operator.write",
+            sessionAccess: { mode: "write", requiredTool: "browser" },
+          }),
+        ]),
+        isWebchatConnect: () => false,
+      });
+      expect(test.client.authenticatedGitHubIdentitySync).toHaveBeenCalledOnce();
+      expect(handler).toHaveBeenCalledOnce();
+      expect(effect).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { scopes: ["operator.read"], reason: "removed scope" },
+    { scopes: ["operator.sessions.write"], reason: "changed admission alternative" },
+  ])("releases prepared authority after final $reason denial", async ({ scopes }) => {
+    const test = fixture(["operator.write", "operator.sessions.write"], "alice");
+    const prepare = sessionAccess.prepareGatewaySessionAccessAuthority;
+    const release = vi.fn();
+    using capture = vi
+      .spyOn(sessionAccess, "prepareGatewaySessionAccessAuthority")
+      .mockImplementation(async (params) => {
+        const authority = await prepare(params);
+        release.mockImplementation(authority.release);
+        return {
+          ...authority,
+          assertCurrent: () => {
+            authority.assertCurrent();
+            test.client.connect.scopes = scopes;
+          },
+          release,
+        };
+      });
+    const handler = vi.fn<GatewayRequestHandler>();
+    const method = "fixture.session.open";
+    const respond = vi.fn();
+    await handleGatewayRequest({
+      req: { type: "req", id: "final-denial", method, params: { sessionKey: key } },
+      respond,
+      client: test.client,
+      context: test.context,
+      methodRegistry: createGatewayMethodRegistry([
+        createPluginGatewayMethodDescriptor({
+          pluginId: "fixture",
+          name: method,
+          handler,
+          scope: "operator.write",
+          sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "browser" },
+        }),
+      ]),
+      isWebchatConnect: () => false,
+    });
+    expect(capture).toHaveBeenCalledOnce();
+    expect(handler).not.toHaveBeenCalled();
+    expect(respond.mock.calls[0]?.[0]).toBe(false);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("projects the original own-session grant through a model call to the registered route", async () => {
     const test = fixture(["operator.sessions.write"], "alice");
     const method = "fixture.session.open";

@@ -2,7 +2,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
   errorShape,
-  missingScopeErrorShape,
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
 import {
@@ -29,10 +28,7 @@ import {
   tryBeginGatewayPreparedRestartRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import {
-  resolveSessionMethodScope,
-  type SessionOperatorScope,
-} from "../shared/session-method-scopes-base.js";
+import type { SessionOperatorScope } from "../shared/session-method-scopes-base.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import {
   consumeControlPlaneWriteBudget,
@@ -40,12 +36,7 @@ import {
   CONTROL_PLANE_RATE_LIMIT_WINDOW_MS,
 } from "./control-plane-rate-limit.js";
 import { createExpectedProfileBinding, type ExpectedProfileBinding } from "./expected-profile.js";
-import {
-  ADMIN_SCOPE,
-  authorizeOperatorScopesForMethod,
-  authorizeOperatorScopesForRequiredScope,
-  resolveLeastPrivilegeOperatorScopesForMethod,
-} from "./method-scopes.js";
+import { ADMIN_SCOPE } from "./method-scopes.js";
 import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodDescriptorsFromHandlers,
@@ -54,16 +45,11 @@ import {
   isCoreGatewayMethodClassified,
   type GatewayMethodRegistry,
 } from "./methods/registry.js";
-import {
-  authorizeCurrentOperatorRoleScopes,
-  resolveGatewayOperatorRoleActor,
-} from "./operator-role-policy.js";
-import { isOperatorScope } from "./operator-scopes.js";
 import { canSelectQuestion } from "./question-access.js";
-import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
 import { coreGatewayHandlers } from "./server-methods/core-handlers.js";
 import { authorizeAuthenticatedProfileForMethod } from "./server-methods/gateway-client-identity.js";
 import { prepareGatewayRequestHandler } from "./server-methods/lazy-core-handlers.js";
+import { authorizeGatewayMethod } from "./server-methods/method-authorization.js";
 import { isTargetedNonSafeGatewayRestartRequest } from "./server-methods/restart-request.js";
 import {
   bindGatewayRequestHandlerMutationAuthority,
@@ -101,76 +87,6 @@ import {
 import { classifyGatewayStaleInstall } from "./stale-install.js";
 
 export { coreGatewayHandlers };
-
-function authorizeGatewayMethod(
-  method: string,
-  client: GatewayRequestOptions["client"],
-  params: unknown,
-  methodRegistry: GatewayMethodRegistry,
-  context: GatewayRequestContext,
-): { error: ErrorShape | null; sessionScope?: SessionOperatorScope } {
-  // Pre-connect and health requests are allowed through; role/scope checks require the
-  // authenticated connect metadata established by the gateway handshake.
-  if (!client?.connect || method === "health") {
-    return { error: null };
-  }
-  const roleRaw = client.connect.role ?? "operator";
-  const role = parseGatewayRole(roleRaw);
-  if (!role) {
-    return { error: errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${roleRaw}`) };
-  }
-  const scopes = client.connect.scopes ?? [];
-  if (!isRoleAuthorizedForMethod(role, method)) {
-    return { error: errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${role}`) };
-  }
-  if (role === "node") {
-    return { error: null };
-  }
-  if (client.invalidated) {
-    return { error: errorShape(ErrorCodes.FORBIDDEN, "Gateway requester authority changed") };
-  }
-  if (resolveGatewayOperatorRoleActor(client)?.kind === "operator") {
-    const roleError = authorizeCurrentOperatorRoleScopes(
-      client,
-      (context.getCommittedRuntimeConfig ?? context.getRuntimeConfig)(),
-    );
-    if (roleError) {
-      return { error: roleError };
-    }
-  }
-  if (method === "device.scopes.requestUpgrade" || method === "device.scopes.waitUpgrade") {
-    // Scope recovery must remain reachable from a paired operator whose grant is empty;
-    // the handlers bind both calls to the connection's exact device identity.
-    return { error: null };
-  }
-  if (scopes.includes(ADMIN_SCOPE)) {
-    return { error: null };
-  }
-  const registeredScope = methodRegistry.getScope(method);
-  const scopeAuth = isOperatorScope(registeredScope)
-    ? authorizeOperatorScopesForRequiredScope(
-        registeredScope,
-        scopes,
-        methodRegistry.getSessionAccess?.(method)?.allowOwnSessionScope
-          ? "operator.sessions.write"
-          : resolveSessionMethodScope(method, params),
-        method,
-      )
-    : authorizeOperatorScopesForMethod(method, scopes, params);
-  if (!scopeAuth.allowed) {
-    const resolvedRequiredScopes = isOperatorScope(registeredScope)
-      ? [registeredScope]
-      : resolveLeastPrivilegeOperatorScopesForMethod(method, params);
-    return {
-      error: missingScopeErrorShape({
-        missingScope: scopeAuth.missingScope,
-        requiredScopes:
-          resolvedRequiredScopes.length > 0 ? resolvedRequiredScopes : [scopeAuth.missingScope],
-      }),
-    };
-  }
-  return { error: null, sessionScope: scopeAuth.sessionScope };
-}
 
 const SUSPEND_CONTROL_METHODS = new Set([
   "gateway.suspend.prepare",
@@ -443,9 +359,11 @@ export async function authorizeGatewayRequestPreDispatch(params: {
     }
     const currentAuthorization = authorizeMethod();
     if (currentAuthorization.error) {
+      sessionAccessAuthority?.release();
       return { error: currentAuthorization.error };
     }
     if (currentAuthorization.sessionScope !== scopeAuthorization.sessionScope) {
+      sessionAccessAuthority?.release();
       return { error: errorShape(ErrorCodes.FORBIDDEN, "Gateway requester authority changed") };
     }
     return {
@@ -678,6 +596,8 @@ export async function handleGatewayRequest(
       hasCurrentClientAuthority,
       assertInvocationCurrent: () => {
         profileBinding?.assertCurrent();
+        // Profile hydration binds the operator guard later; retain the original request lifetime.
+        readGatewayRequestMutationAuthority(opts).assertOperatorCurrent?.();
         requestMutationAuthority.assertCurrent();
       },
     });
