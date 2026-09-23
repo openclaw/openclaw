@@ -105,6 +105,7 @@ const messageDispatchDedupe = await import("./message-dispatch-dedupe.js");
 const processingOutcome = await import("./bot-processing-outcome.js");
 
 const cfg = {
+  messages: { inbound: { debounceMs: 0 } },
   channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
 } as OpenClawConfig;
 

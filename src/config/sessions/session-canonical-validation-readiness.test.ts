@@ -3,6 +3,10 @@ import { renameSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
+import {
   hasOpenClawAgentCanonicalValidation,
   invalidateOpenClawAgentDatabaseValidation,
 } from "../../state/openclaw-agent-db-validation-cache.js";
@@ -12,6 +16,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { sessionNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import { withSqliteCanonicalValidationWorker } from "./session-accessor.sqlite-reclamation-worker.js";
 import { certifySessionCanonicalValidationPending } from "./session-canonical-validation-readiness.js";
@@ -67,20 +72,21 @@ it.each(["unchanged", "pending edit", "replacement", "revoked", "unregistered"] 
       if (change === "replacement") {
         renameSync(copiedPath, database.path);
       }
-      const readiness = new URL("./session-canonical-validation-readiness.ts", import.meta.url)
-        .href;
-      const reader = new URL("../../state/openclaw-agent-db-readonly-open.ts", import.meta.url)
-        .href;
-      const validation = new URL(
-        "../../state/openclaw-agent-db-validation-cache.ts",
-        import.meta.url,
+      const readinessUrl = resolveRuntimeWorkerUrl(
+        sessionNativeProcessEntrypoints.canonicalReadiness,
+      );
+      const readiness = readinessUrl.href;
+      const reader = resolveRuntimeWorkerUrl(sessionNativeProcessEntrypoints.databaseReadOnly).href;
+      const validation = resolveRuntimeWorkerUrl(
+        sessionNativeProcessEntrypoints.databaseValidation,
       ).href;
-      const registry = new URL("../../state/openclaw-agent-db-registry.ts", import.meta.url).href;
+      const registry = resolveRuntimeWorkerUrl(
+        sessionNativeProcessEntrypoints.databaseRegistry,
+      ).href;
       const result = spawnSync(
         process.execPath,
         [
-          "--import",
-          "tsx",
+          ...resolveRuntimeWorkerArgv(readinessUrl).slice(0, -1),
           "--input-type=module",
           "--eval",
           `import { certifySessionCanonicalValidationPending } from ${JSON.stringify(readiness)};

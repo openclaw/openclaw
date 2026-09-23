@@ -39,6 +39,7 @@ export function resolveTelegramQaRunOptions(
     scenarioIds: opts.scenarioIds,
     listScenarios: opts.listScenarios,
     sutAccountId: opts.sutAccountId,
+    credentialFile: opts.credentialFile,
     credentialSource,
     credentialRole: opts.credentialRole?.trim(),
   };

@@ -162,6 +162,7 @@ describe("method scope resolution", () => {
     ["talk.session.steer", ["operator.talk"]],
     ["talk.session.close", ["operator.talk"]],
     ["update.status", ["operator.admin"]],
+    ["update.report", ["operator.admin"]],
     ["update.runs.get", ["operator.admin"]],
     ["update.runs.list", ["operator.admin"]],
     ["update.hold", ["operator.admin"]],
@@ -916,10 +917,10 @@ describe("operator scope authorization", () => {
     "question.resolve",
     "question.get",
     "question.list",
-  ])("requires questions scope for %s", (method) => {
+  ])("keeps broad question authority distinct from own-run admission for %s", (method) => {
     expect(authorizeOperatorScopesForMethod(method, ["operator.write"])).toEqual({
-      allowed: false,
-      missingScope: "operator.questions",
+      allowed: true,
+      sessionScope: "operator.sessions.write",
     });
     expect(authorizeOperatorScopesForMethod(method, ["operator.questions"])).toEqual({
       allowed: true,

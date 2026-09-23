@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -26,7 +27,7 @@ const routeReplyMock = vi.hoisted(() =>
 );
 const resetMocks = vi.hoisted(() => ({
   resetConfiguredBindingTargetInPlace: vi.fn().mockResolvedValue({ ok: true as const }),
-  resolveBoundAcpThreadSessionKey: vi.fn(() => undefined as string | undefined),
+  resolveBoundAcpThreadSessionKey: vi.fn(async (): Promise<string | undefined> => undefined),
 }));
 
 vi.mock("../../hooks/internal-hooks.js", () => ({
@@ -153,7 +154,7 @@ describe("handleCommands reset hooks", () => {
     vi.clearAllMocks();
     clearBootstrapSnapshotSpy = vi.spyOn(bootstrapCache, "clearBootstrapSnapshot");
     resetMocks.resetConfiguredBindingTargetInPlace.mockResolvedValue({ ok: true });
-    resetMocks.resolveBoundAcpThreadSessionKey.mockReturnValue(undefined);
+    resetMocks.resolveBoundAcpThreadSessionKey.mockResolvedValue(undefined);
     triggerInternalHookMock.mockResolvedValue(undefined);
     routeReplyMock.mockResolvedValue({
       ok: true,
@@ -222,6 +223,34 @@ describe("handleCommands reset hooks", () => {
     }
   });
 
+  it.each(["/reset", "/reset soft"])(
+    "stops %s before reset effects when canceled during binding lookup",
+    async (command) => {
+      const lookup = createDeferred<string | undefined>();
+      const started = createDeferred();
+      const controller = new AbortController();
+      const reason = new Error("reset canceled during binding lookup");
+      resetMocks.resolveBoundAcpThreadSessionKey.mockImplementationOnce(() => {
+        started.resolve();
+        return lookup.promise;
+      });
+      const params = buildResetParams(command, {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      });
+      params.opts = { abortSignal: controller.signal };
+      const result = maybeHandleResetCommand(params);
+      const failure = expect(result).rejects.toBe(reason);
+      await started.promise;
+      controller.abort(reason);
+      lookup.resolve(command === "/reset" ? "agent:main:acp:bound" : undefined);
+      await failure;
+      expect(resetMocks.resetConfiguredBindingTargetInPlace).not.toHaveBeenCalled();
+      expect(triggerInternalHookMock).not.toHaveBeenCalled();
+      expect(params.command.softResetTriggered).toBeUndefined();
+    },
+  );
+
   it("uses gateway session reset for bound ACP sessions", async () => {
     resetMocks.resetConfiguredBindingTargetInPlace.mockResolvedValue({
       ok: true,
@@ -229,7 +258,7 @@ describe("handleCommands reset hooks", () => {
       sessionId: "session-after-acp-reset",
       storePath: "/tmp/claude-sessions.json",
     });
-    resetMocks.resolveBoundAcpThreadSessionKey.mockReturnValue(
+    resetMocks.resolveBoundAcpThreadSessionKey.mockResolvedValue(
       "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
     );
     const onSessionPrepared = vi.fn();
@@ -279,7 +308,7 @@ describe("handleCommands reset hooks", () => {
       ok: false,
       error: "reset rejected",
     });
-    resetMocks.resolveBoundAcpThreadSessionKey.mockReturnValue("agent:main:acp:bound");
+    resetMocks.resolveBoundAcpThreadSessionKey.mockResolvedValue("agent:main:acp:bound");
     const params = buildResetParams("/reset", {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -297,7 +326,7 @@ describe("handleCommands reset hooks", () => {
   });
 
   it("keeps tail dispatch after a bound ACP reset", async () => {
-    resetMocks.resolveBoundAcpThreadSessionKey.mockReturnValue(
+    resetMocks.resolveBoundAcpThreadSessionKey.mockResolvedValue(
       "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
     );
     const params = buildResetParams(
@@ -702,7 +731,7 @@ describe("handleCommands reset hooks", () => {
   });
 
   it("rejects soft reset for bound ACP sessions", async () => {
-    resetMocks.resolveBoundAcpThreadSessionKey.mockReturnValue(
+    resetMocks.resolveBoundAcpThreadSessionKey.mockResolvedValue(
       "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
     );
     const params = buildResetParams(

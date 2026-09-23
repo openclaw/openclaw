@@ -195,8 +195,8 @@ type GatewaySessionStorePlan<T> = {
 
 function prepareGatewaySessionStoreLookup(
   params: GatewaySessionStoreLookupParams & { canonicalKey: string; agentId: string },
+  scanTargets: string[],
 ): GatewaySessionStorePlan<GatewaySessionStoreLookup> {
-  const scanTargets = buildGatewaySessionStoreScanTargets(params);
   const { configured, fallback, candidates } = resolveGatewaySessionStoreLookupCandidates(params);
   if (candidates.length === 0) {
     // Retired/manual agents require an existing discovered store; lookup never creates one.
@@ -231,10 +231,6 @@ function prepareGatewaySessionStoreLookup(
         scanTargets,
       }),
   };
-}
-
-function isAgentScopedSentinelSessionKey(canonicalKey: string): boolean {
-  return canonicalKey === "global" || canonicalKey === "unknown";
 }
 
 function prepareExplicitDeletedLegacyMainStoreTarget(
@@ -382,25 +378,17 @@ function prepareGatewaySessionStoreTarget(
       }),
     };
   }
-  const lookup = prepareGatewaySessionStoreLookup({ ...params, canonicalKey, agentId });
+  const storeKeys = buildGatewaySessionStoreScanTargets({ ...params, canonicalKey, agentId });
+  const lookup = prepareGatewaySessionStoreLookup({ ...params, canonicalKey, agentId }, storeKeys);
   return {
     reads: lookup.reads,
     resolve: () => {
       const { canonicalValidationError, storePath, store, readSource } = lookup.resolve();
-      const storeKeys = isAgentScopedSentinelSessionKey(canonicalKey)
-        ? key && key !== canonicalKey
-          ? [canonicalKey, key]
-          : [key]
-        : Array.from(
-            new Set(
-              buildGatewaySessionStoreScanTargets({ cfg: params.cfg, key, canonicalKey, agentId }),
-            ),
-          );
       return {
         agentId,
         storePath,
         canonicalKey,
-        storeKeys,
+        storeKeys: [...storeKeys],
         store,
         ...(readSource ? { readSource } : {}),
         ...(canonicalValidationError ? { canonicalValidationError } : {}),

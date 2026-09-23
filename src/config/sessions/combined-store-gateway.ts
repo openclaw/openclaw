@@ -30,10 +30,15 @@ import { resolveStateDir } from "../state-dir.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   createSessionModelSources,
-  storeTargetKey,
   type GatewayStoredSessionTarget,
   type GatewayStoredSessionTargets,
 } from "./combined-store-model-sources.js";
+import {
+  isStorePathTemplate,
+  resolveCombinedDatabasePath,
+  resolveCombinedStorePath,
+  storeTargetKey,
+} from "./combined-store-paths.js";
 import { canonicalizeMainSessionAlias } from "./main-session.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import { listSessionEntriesCore, listSessionEntriesReadOnly } from "./session-accessor.js";
@@ -81,10 +86,15 @@ type GatewaySessionStoreOptions = {
     target: SessionStoreTarget,
     projection: GatewaySessionEntryProjection,
   ) => ReturnType<typeof loadGatewayStoreEntries>;
-  onStoreLoaded?: (target: SessionStoreTarget, rowAgentId: string) => void;
+  onStoreLoaded?: (
+    target: SessionStoreTarget,
+    rowAgentId: string,
+    discovery: { agentId: string; order: number } | null,
+  ) => void;
 };
 
 type ResolvedGatewaySessionStoreTargets = {
+  groupDiscovery?: ReadonlyMap<string, { agentId: string; order: number }>;
   configuredAgentIds?: ReadonlySet<string>;
   defaultAgentId: string;
   diagnostics: readonly string[];
@@ -109,34 +119,6 @@ type PreparedConfiguredSessionStoreTargets = {
 // Gateway aliases, config, registry, and incognito topology are process-stable until
 // an explicit generation change or restart; generic CLI/Doctor dedupe stays fresh.
 let preparedConfiguredSessionStoreTargets: PreparedConfiguredSessionStoreTargets | undefined;
-
-// Template-backed stores need per-agent scans before they can be merged for Gateway views.
-function isStorePathTemplate(store?: string): boolean {
-  return typeof store === "string" && store.includes("{agentId}");
-}
-
-function resolveCombinedStorePath(paths: string[], storeConfig?: string): string {
-  return paths.length === 1
-    ? expectDefined(paths[0], "store path at 0")
-    : typeof storeConfig === "string" && storeConfig.trim()
-      ? storeConfig.trim()
-      : "(multiple)";
-}
-
-function resolveCombinedDatabasePath(
-  targets: readonly SessionStoreTarget[],
-  physicalTargets: ReadonlyMap<string, SessionStoreTarget>,
-): string {
-  const paths = [
-    ...new Set(
-      targets.map(
-        (target) =>
-          expectDefined(physicalTargets.get(storeTargetKey(target)), "physical store").storePath,
-      ),
-    ),
-  ];
-  return paths.length === 1 ? expectDefined(paths[0], "database path at 0") : "(multiple)";
-}
 
 function resolveSharedStoreRowOwner(
   cfg: OpenClawConfig,
@@ -475,10 +457,19 @@ export function resolveGatewaySessionStoreTargets(
   let resolved = resolveGatewaySessionStoreTopology(cfg, opts);
   if (opts.preserveSentinelOwners === "physical") {
     const { physicalTargets, onResolvedTarget } = capturePhysicalStoreTargets();
+    // Group discovery keeps its claimant/order before the full roster adds registered stores.
+    const groupDiscovery = new Map<string, { agentId: string; order: number }>();
+    const discoveredTargets = resolveAllAgentSessionStoreTargetsSync(cfg, {
+      onResolvedTarget: ({ agentId }, physical) =>
+        groupDiscovery.set(physical.storePath, {
+          agentId,
+          order: groupDiscovery.size,
+        }),
+    });
     const durableTargets = dedupeSessionStoreTargetsBySqliteTarget(
       [
         ...resolved.durableTargets,
-        ...resolveAllAgentSessionStoreTargetsSync(cfg),
+        ...discoveredTargets,
         ...listOpenClawRegisteredAgentDatabases()
           .filter(
             ({ path }) =>
@@ -488,7 +479,7 @@ export function resolveGatewaySessionStoreTargets(
       ],
       { defaultAgentId: resolved.defaultAgentId, onResolvedTarget },
     );
-    resolved = { ...resolved, durableTargets, physicalTargets };
+    resolved = { ...resolved, durableTargets, physicalTargets, groupDiscovery };
   }
   const diagnostics = [...resolved.diagnostics];
   const isRetained = createRetainedAgentDatabaseMatcher(process.env, () =>
@@ -598,7 +589,11 @@ function mergeCombinedSessionStore(
       sharedStoreRowOwner.target.agentId === agentId
         ? sharedStoreRowOwner.agentId
         : agentId;
-    opts.onStoreLoaded?.(storeTarget, rowAgentId);
+    opts.onStoreLoaded?.(
+      storeTarget,
+      rowAgentId,
+      prepared.targets.groupDiscovery?.get(storeTarget.storePath) ?? null,
+    );
     // Completeness comes from loaded targets, even when their rows are empty or filtered.
     preparedAgentIds?.add(agentId);
     preparedAgentIds?.add(storeTarget.agentId);

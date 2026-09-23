@@ -131,6 +131,10 @@ public enum DeviceSettingsLocationMode: String, CaseIterable, Encodable, Sendabl
     }
 }
 
+public enum ChromeExtensionSetupAction: String, Codable, CaseIterable, Sendable {
+    case inspect, install, verify
+}
+
 public enum DeviceSettingsRequest: Equatable, Sendable {
     case status
     case set(DeviceSettingKey, DeviceSettingValue)
@@ -138,7 +142,9 @@ public enum DeviceSettingsRequest: Equatable, Sendable {
     case openSystemSettings(DeviceSettingsPermission)
     case open(DeviceSettingsPanel)
     case checkForUpdates
+    case chromeExtensionSetup(ChromeExtensionSetupAction)
     case chromeExtensionStatus
+    /// Shipped contract-1 request; projects through the same canonical setup owner.
     case installChromeExtension
 
     public init?(body: Any) {
@@ -165,6 +171,10 @@ public enum DeviceSettingsRequest: Equatable, Sendable {
         case "install-chrome-extension":
             guard payload.count == 1 else { return nil }
             self = .installChromeExtension
+        case "chrome-extension-setup":
+            guard payload.count == 2, let rawAction = payload["action"] as? String,
+                  let action = ChromeExtensionSetupAction(rawValue: rawAction) else { return nil }
+            self = .chromeExtensionSetup(action)
         default: return nil
         }
     }
@@ -365,11 +375,14 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
     public struct Browser: Encodable, Sendable {
         public let importAvailable: Bool
         public let cookieSync: CookieSync
+        public let chromeSetupActions: [ChromeExtensionSetupAction]?
 
         public init(
             importAvailable: Bool,
-            cookieSync: CookieSync)
+            cookieSync: CookieSync,
+            chromeSetupActions: [ChromeExtensionSetupAction]? = nil)
         {
+            self.chromeSetupActions = chromeSetupActions
             self.importAvailable = importAvailable
             self.cookieSync = cookieSync
         }

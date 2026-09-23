@@ -1,3 +1,7 @@
+import "../agents/subagents/spawn/subagent-spawn-model.mocks.shared.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useQueuedCollectorFixture } from "./session-utils.queued-collector.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { isSubagentRunQueued } from "../agents/subagents/registry/subagent-registry-read.js";
@@ -7,7 +11,6 @@ import { createActiveRun } from "./server-methods/chat.abort.test-helpers.js";
 import { sessionAbortHandlers } from "./server-methods/sessions-abort.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
-import { useQueuedCollectorFixture } from "./session-utils.queued-collector.test-support.js";
 
 const { createQueuedReservation, requestContext, launchedRunIds } = useQueuedCollectorFixture();
 
@@ -94,4 +97,3 @@ it.each(["active", "queued", "pending-chat", "agent"] as const)(
     expect(launchedRunIds).toEqual([]);
   },
 );
-import "../agents/subagents/spawn/subagent-spawn-model.mocks.shared.js";

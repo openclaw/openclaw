@@ -72,7 +72,9 @@ type DispatchRepositoryOptions = {
   targetAlreadyRemote?: boolean;
 };
 const repositoryTemplateDirs = useAutoCleanupTempDirTracker(afterAll);
-let dispatchRepositoryTemplate: ReturnType<typeof createDispatchRepository> | undefined;
+const dispatchRepositoryTemplates = new Map<string, ReturnType<typeof createDispatchRepository>>();
+type DispatchWorkflow = { on?: { workflow_dispatch?: { inputs?: Record<string, unknown> } } };
+const dispatchWorkflows = new Map<string, DispatchWorkflow>();
 
 function createDispatchRepository(root: string, options: DispatchRepositoryOptions = {}) {
   const origin = join(root, "origin.git");
@@ -146,17 +148,23 @@ console.log(JSON.stringify({ valid: true, current: { runId: "123" }, root: { run
 }
 
 function prepareDispatchRepository(root: string, options: DispatchRepositoryOptions) {
-  if (
-    options.releaseRef !== undefined ||
-    options.workflowSource !== undefined ||
-    options.targetSource !== undefined ||
-    options.targetAlreadyRemote === false
-  ) {
-    return createDispatchRepository(root, options);
+  const key = JSON.stringify([
+    options.releaseRef ?? "release/2026.8.1",
+    options.workflowSource ?? CURRENT_WORKFLOW_SOURCE,
+    options.targetSource ?? {},
+    options.targetAlreadyRemote !== false,
+  ]);
+  let template = dispatchRepositoryTemplates.get(key);
+  if (!template) {
+    template = createDispatchRepository(
+      repositoryTemplateDirs.make("openclaw-release-dispatch-template-"),
+      options,
+    );
+    // Copy packed immutable history, while every case retains its own object store.
+    runGit(template.origin, ["repack", "-ad"]);
+    runGit(template.checkout, ["repack", "-ad"]);
+    dispatchRepositoryTemplates.set(key, template);
   }
-  const template = (dispatchRepositoryTemplate ??= createDispatchRepository(
-    repositoryTemplateDirs.make("openclaw-release-dispatch-template-"),
-  ));
   const origin = join(root, "origin.git");
   const checkout = join(root, "checkout");
   // Each case can change refs, config and objects without touching the prepared history.
@@ -333,11 +341,15 @@ Atomics.wait = (array, index, value, timeout) => {
     root,
     options,
   );
-  const workflow = parseYaml(
-    readFileSync(join(checkout, ".github", "workflows", "full-release-validation.yml"), "utf8"),
-  ) as {
-    on?: { workflow_dispatch?: { inputs?: Record<string, unknown> } };
-  };
+  const workflowSource = readFileSync(
+    join(checkout, ".github", "workflows", "full-release-validation.yml"),
+    "utf8",
+  );
+  let workflow = dispatchWorkflows.get(workflowSource);
+  if (!workflow) {
+    workflow = parseYaml(workflowSource) as DispatchWorkflow;
+    dispatchWorkflows.set(workflowSource, workflow);
+  }
   const declaredWorkflowInputs = Object.keys(workflow.on?.workflow_dispatch?.inputs ?? {});
   writeFileSync(
     artifactFixturePath,

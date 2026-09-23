@@ -21,6 +21,7 @@ import {
   type ModelCompatConfig,
   modelCostsEqual,
   type ProviderPlugin,
+  requiresClaudeMandatoryAdaptiveThinking,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
@@ -371,7 +372,7 @@ function buildAnthropicForwardCompatModel(
     ...(supportsClaudeNativeXhighEffort({ id: trimmedModelId })
       ? {
           thinkingLevelMap: {
-            ...(isAnthropicMandatoryClaude5Model(trimmedModelId)
+            ...(requiresClaudeMandatoryAdaptiveThinking({ id: trimmedModelId })
               ? { minimal: "low" as const }
               : {}),
             xhigh: "xhigh",
@@ -429,16 +430,11 @@ function isAnthropicGa1MModel(modelId: string): boolean {
   return supportsClaude1MContext({ id: modelId });
 }
 
-function isAnthropicFable5Model(modelId: string): boolean {
-  return resolveClaudeFable5ModelIdentity({ id: modelId }) !== undefined;
-}
-
-function isAnthropicMythos5Model(modelId: string): boolean {
-  return resolveClaudeMythos5ModelIdentity({ id: modelId }) !== undefined;
-}
-
 function isAnthropicMandatoryClaude5Model(modelId: string): boolean {
-  return isAnthropicFable5Model(modelId) || isAnthropicMythos5Model(modelId);
+  return (
+    resolveClaudeFable5ModelIdentity({ id: modelId }) !== undefined ||
+    resolveClaudeMythos5ModelIdentity({ id: modelId }) !== undefined
+  );
 }
 
 function isAnthropicSonnet5Model(modelId: string): boolean {
@@ -587,7 +583,7 @@ function applyAnthropicThinkingLevelMap(params: {
   modelId: string;
   model: ProviderRuntimeModel;
 }): ProviderRuntimeModel | undefined {
-  const mandatoryClaude5 = isAnthropicMandatoryClaude5Model(params.modelId);
+  const mandatoryClaude5 = requiresClaudeMandatoryAdaptiveThinking({ id: params.modelId });
   const nativeXhigh = mandatoryClaude5 || supportsClaudeNativeXhighEffort({ id: params.modelId });
   if (!supportsAnthropicNativeMaxEffort(params.modelId)) {
     return undefined;

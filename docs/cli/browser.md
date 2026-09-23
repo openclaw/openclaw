@@ -142,6 +142,9 @@ The macOS app exposes the same capability under **Dashboard → Settings → Thi
 
 ```bash
 openclaw browser extension path
+openclaw browser extension setup --action inspect --json
+openclaw browser extension setup --action install --json
+openclaw browser extension setup --action verify --browser-profile chrome --json
 openclaw browser extension install
 openclaw browser extension install --no-store
 openclaw browser extension install --json --wait-ms 60000
@@ -155,14 +158,30 @@ openclaw browser extension cdp
 openclaw browser extension cdp --json
 ```
 
-- `extension install` pre-registers the origin-locked native bootstrap host in
-  existing Chrome-family user-data roots. On macOS, it then requests the official
-  Store installation in Google Chrome for all profiles in its user-data directory.
+- `extension setup` is the shared host-local controller for CLI, TUI, and native
+  desktop adapters. `inspect` is read-only installation discovery, `install`
+  prepares native bootstrap, and `verify` authenticates the selected local relay.
+  Its redacted JSON separates preparation, Chrome approval, and connection.
+  Valid pending/blocked states exit 0; execution failures exit nonzero. It never
+  treats a remote dashboard or SSH loopback URL as proof of a local browser host.
+- `extension install` pre-registers the origin-locked native bootstrap host.
+  Google Chrome on macOS can be prepared before its first launch; other supported
+  browsers need an existing user-data directory. On macOS, setup then requests
+  the official Store installation in Google Chrome for all profiles in that directory.
   Chrome discovers this at startup. Fully quit and reopen Chrome when convenient,
   then approve or enable OpenClaw. The command never restarts Chrome or bypasses
   approval. For other browsers and platforms,
   [add OpenClaw from the Chrome Web Store](https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig).
-  Linux supports automatic native pairing. Windows retains manual pairing.
+  Linux supports automatic native pairing. Windows uses the self-contained
+  `OpenClaw.BrowserBootstrap.exe` from the packaged CLI or Windows companion.
+  A portable/local installer can pass `--native-host-executable <absolute-path>`
+  to `extension setup --action install` or `extension install`. Setup checks owned
+  context/ACLs and actual framed subprocess responses before user-level registry
+  registration through the shared C# registration service. The CLI explicitly
+  selects native Windows context; the Companion owns its managed-WSL mode.
+  Conflicting contexts and unknown transport outcomes never trigger another
+  writer or mode fallback. No executable or no proof means no automatic bootstrap; it never
+  falls back to a script host or bypasses Chrome approval.
 - `extension install --no-store` copies the stable development extension and
   registers the native host without creating a Store request. Existing requests
   are unchanged. Use the printed path for **Load unpacked**.
@@ -172,14 +191,22 @@ openclaw browser extension cdp --json
   native-host registration health. Local installation status does not prove a
   live relay connection. JSON output never includes a pairing string or relay key.
 - `extension uninstall-host` removes only verified OpenClaw-owned native-host
-  manifests and launchers. It does not remove the extension from Chrome.
+  manifests and launchers. It does not remove the extension from Chrome. On
+  Windows it delegates to the same registration service; `--remove-store` removes
+  verified owned Store requests first. `--native-host-executable` and
+  `--browser-profile` select the same explicit local context for status/removal.
 - `extension uninstall-store` removes only OpenClaw-owned macOS Chrome Store
-  requests. Chrome may remove an externally installed extension at its next
+  requests (macOS only). Windows uses `uninstall-host --remove-store` rather than
+  a separate Store writer. Chrome may remove an externally installed extension at its next
   startup. Native-host registration and the development copy remain intact.
 - `extension path` is read-only. It prints the stable installed copy when
   present and the bundled source directory otherwise.
 - `extension pair` remains the advanced manual flow. `--gateway-url` creates a
   direct remote-Gateway pairing URL. Non-loopback URLs must use `wss://`.
+- `extension pair --local-gateway --json` lets desktop native helpers obtain
+  the canonical local pairing through the Gateway’s `/browser/extension` wake-up
+  route. It requires a local Gateway configuration and cannot be combined with
+  `--gateway-url`. The JSON contains a credential: consume it privately, never log it.
 - `extension cdp` prints non-secret Browser Relay Authentication v2 metadata:
   the loopback browser/CDP endpoints, protocol version, key ID, and fixed
   challenge/complete binding. It never prints the relay key or an authorization
@@ -194,7 +221,8 @@ reported by `extension pair` or `extension cdp` after that wakeup. Browser-node
 pairings continue to use the relay on the browser-node host, while explicit
 `--gateway-url` pairings remain direct-remote and manual-only.
 
-The advanced manual `extension pair` command without `--gateway-url` retains
+The advanced manual `extension pair` command without `--gateway-url` or
+`--local-gateway` retains
 the host-local `/extension` relay URL. With the native host installed,
 **Automatic local setup** enabled, and an extension build that supports relay
 wake-up, reconnecting can start a standalone relay on the saved pairing's

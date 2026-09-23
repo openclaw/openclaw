@@ -26,13 +26,23 @@ it("publishes row changes after the complete entry transaction and discards roll
     replaceSessionEntrySync(scope, entry);
     const database = openOpenClawAgentDatabase({ agentId: "main" });
     const snapshot = readSessionEntryCache(database, { cache: true });
-    const seen: Array<{ change: SessionRowChange; label?: string; transaction: boolean }> = [];
+    const prepared: Array<string | undefined> = [];
+    const seen: Array<{
+      change: SessionRowChange;
+      label?: string;
+      transaction: boolean;
+      prepared: Array<string | undefined>;
+    }> = [];
     const unsubscribe = sessionChanges.subscribe((change) => {
       seen.push({
         change,
         label: snapshot.entries.get(scope.sessionKey)?.label,
         transaction: database.db.isTransaction,
+        prepared: [...prepared],
       });
+    });
+    const stopProjection = sessionChanges.subscribeProjection(() => {
+      prepared.push(snapshot.entries.get(scope.sessionKey)?.label);
     });
     try {
       expect(() =>
@@ -46,6 +56,7 @@ it("publishes row changes after the complete entry transaction and discards roll
         ),
       ).toThrow("rollback");
       expect(seen).toEqual([]);
+      expect(prepared).toEqual([]);
       runOpenClawAgentWriteTransaction(
         () => {
           replaceSessionEntrySync(scope, { ...entry, label: "intermediate" });
@@ -59,6 +70,7 @@ it("publishes row changes after the complete entry transaction and discards roll
           change: { ...scope, storePath: database.path },
           label: "committed",
           transaction: false,
+          prepared: ["committed", "committed"],
         })),
       );
       seen.length = 0;
@@ -69,6 +81,7 @@ it("publishes row changes after the complete entry transaction and discards roll
       expect(seen).toHaveLength(1);
     } finally {
       unsubscribe();
+      stopProjection();
     }
   });
 });

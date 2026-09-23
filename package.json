@@ -437,7 +437,9 @@
     "!dist/plugin-sdk/worker-task-server.d.ts",
     "!dist/plugin-sdk/media-ffmpeg.d.ts",
     "!dist/plugin-sdk/realtime-voice-playback.d.ts",
-    "!dist/plugin-sdk/text-grapheme.d.ts"
+    "!dist/plugin-sdk/text-grapheme.d.ts",
+    "!dist/plugin-sdk/agent-harness-session-runtime.d.ts",
+    "!dist/plugin-sdk/agent-harness-attempt-runtime.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -900,6 +902,9 @@
       "types": "./dist/plugin-sdk/agent-harness.d.ts",
       "default": "./dist/plugin-sdk/agent-harness.js"
     },
+    "./plugin-sdk/agent-harness-attempt-runtime": {
+      "default": "./dist/plugin-sdk/agent-harness-attempt-runtime.js"
+    },
     "./plugin-sdk/agent-harness-exec-review-runtime": {
       "default": "./dist/plugin-sdk/agent-harness-exec-review-runtime.js"
     },
@@ -913,6 +918,9 @@
     "./plugin-sdk/agent-workspace-runtime": {
       "types": "./dist/plugin-sdk/agent-workspace-runtime.d.ts",
       "default": "./dist/plugin-sdk/agent-workspace-runtime.js"
+    },
+    "./plugin-sdk/agent-harness-session-runtime": {
+      "default": "./dist/plugin-sdk/agent-harness-session-runtime.js"
     },
     "./plugin-sdk/agent-harness-tool-runtime": {
       "default": "./dist/plugin-sdk/agent-harness-tool-runtime.js"
@@ -1907,6 +1915,7 @@
     "plugins:assets:copy": "node --import ./scripts/tsx.mjs scripts/bundled-plugin-assets.mts --phase copy",
     "plugins:inventory:check": "node --import ./scripts/tsx.mjs scripts/generate-plugin-inventory-doc.mts --check",
     "plugins:inventory:gen": "node --import ./scripts/tsx.mjs scripts/generate-plugin-inventory-doc.mts --write",
+    "plugins:inventory:json": "node scripts/generate-plugin-inventory-doc.mts --json",
     "plugins:sync": "node --import ./scripts/tsx.mjs scripts/sync-plugin-versions.ts",
     "plugins:sync:check": "node --import ./scripts/tsx.mjs scripts/sync-plugin-versions.ts --check",
     "postinstall": "node scripts/postinstall-bundled-plugins.mjs",
@@ -2247,7 +2256,7 @@
     "@modelcontextprotocol/sdk": "1.30.0",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.18.0",
+    "@openclaw/fs-safe": "0.18.1",
     "@openclaw/proxyline": "0.3.12",
     "@silvia-odwyer/photon-node": "0.3.4",
     "@trycua/cua-driver": "0.28.2",
@@ -2326,7 +2335,7 @@
     "@types/web-push": "3.6.4",
     "@types/ws": "8.18.1",
     "@vitest/coverage-v8": "5.0.0",
-    "acpx": "0.19.0",
+    "acpx": "0.19.1",
     "apache-arrow": "21.2.0",
     "baileys": "7.0.0-rc14",
     "esbuild": "0.28.2",

@@ -103,10 +103,6 @@ vi.mock("@clack/prompts", () => ({
   outro: mocks.outro,
 }));
 
-vi.mock("../commands/doctor-prompter.js", () => ({
-  createDoctorPrompter: () => ({ confirm: async () => true }),
-}));
-
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
   resolveOpenClawPackageRoot: async () => mocks.packageRoot(),

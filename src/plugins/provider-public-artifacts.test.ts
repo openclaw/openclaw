@@ -35,6 +35,9 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function writeExternalPolicyFixture(): string {
   const pluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-provider-policy-external-"));
+  // Shipped policy artifacts are ESM in a "type": "module" package; an ambiguous
+  // .js file would depend on the host loader's syntax detection instead.
+  fs.writeFileSync(path.join(pluginRoot, "package.json"), '{ "type": "module" }\n', "utf8");
   fs.writeFileSync(
     path.join(pluginRoot, "provider-policy-api.js"),
     [
@@ -164,7 +167,7 @@ describe("provider public artifacts", () => {
           baseUrl: "https://api.openai.com/v1",
           authRequirement: "api-key",
           requestTransportOverrides: "none",
-          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+          runtimePolicy: { compatibleIds: ["openclaw", "codex", "agentsapi"] },
         },
         {
           api: "openai-chatgpt-responses",

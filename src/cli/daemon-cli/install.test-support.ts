@@ -120,6 +120,17 @@ vi.mock("./shared.js", async (importOriginal) => ({
       emit: (payload: DaemonActionResponse) => {
         actionState.emitted.push(payload);
       },
+      // This fixture records plan decisions; output behavior uses the real-owner integration suite.
+      emitMessage: (payload: DaemonActionResponse) => {
+        actionState.emitted.push(payload);
+      },
+      warn: (message: string) => {
+        if (json) {
+          actionState.warnings.push(message);
+        } else {
+          defaultRuntime.log(message);
+        }
+      },
       fail: (message: string, hints?: string[]) => {
         actionState.failed.push({ message, hints });
       },

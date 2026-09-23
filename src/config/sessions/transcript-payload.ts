@@ -68,7 +68,7 @@ export function createTranscriptEventInserter(database: DatabaseSync, sessionId:
     const prepared = row.preparedPayload;
     const payload =
       prepared?.eventJson === row.eventJson &&
-      prepared.storageEncoding === readStorageEncoding(database)
+      prepared.storageEncoding === readTranscriptStorageEncoding(database)
         ? prepared.payload
         : prepareTranscriptPayload(database, row.eventJson, row.parsedEvent);
     return insert({ ...row, ...payload });
@@ -94,7 +94,7 @@ export function createTranscriptPayloadUpdater(database: DatabaseSync, sessionId
   );
 }
 
-function readStorageEncoding(database: DatabaseSync): string {
+export function readTranscriptStorageEncoding(database: DatabaseSync): string {
   let encoding = storageEncodings.get(database);
   if (encoding === undefined) {
     const db = getNodeSqliteKysely<{ pragma_encoding: { encoding: string } }>(database);
@@ -118,7 +118,7 @@ export function prepareTranscriptPayloadForReuse(
 ): PreparedTranscriptPayload {
   return {
     eventJson,
-    storageEncoding: readStorageEncoding(database),
+    storageEncoding: readTranscriptStorageEncoding(database),
     payload: prepareTranscriptPayload(database, eventJson, parsedEvent),
   };
 }
@@ -221,7 +221,7 @@ export function prepareTranscriptPayload(
   parsedEvent?: unknown,
 ): TranscriptPayloadRecord {
   const rawBytes = Buffer.byteLength(eventJson, "utf8");
-  const utf8 = readStorageEncoding(database) === "UTF-8";
+  const utf8 = readTranscriptStorageEncoding(database) === "UTF-8";
   const identity: TranscriptPayloadRecord = {
     event_json: eventJson,
     event_zstd: null,

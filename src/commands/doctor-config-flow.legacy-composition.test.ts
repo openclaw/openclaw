@@ -70,9 +70,12 @@ describe("Doctor legacy config composition", () => {
         }
         raw.gateway.port = await getFreePort();
         const configPath = await writeOpenClawConfig(home, raw);
-        const cliRuntime = (runtimeRoot ??= createBuiltRuntime(
-          runtimeDirs.make("openclaw-doctor-legacy-runtime-"),
-        ));
+        if (!runtimeRoot) {
+          runtimeRoot = createBuiltRuntime(runtimeDirs.make("openclaw-doctor-legacy-runtime-"));
+          // The source marker disables installed-package compile caching in every CLI child.
+          await fs.unlink(path.join(runtimeRoot, "src"));
+        }
+        const cliRuntime = runtimeRoot;
         const env: NodeJS.ProcessEnv = {
           PATH: process.env.PATH,
           SystemRoot: process.env.SystemRoot,
@@ -83,6 +86,7 @@ describe("Doctor legacy config composition", () => {
           TMPDIR: home,
           OPENCLAW_STATE_DIR: path.dirname(configPath),
           OPENCLAW_CONFIG_PATH: configPath,
+          NODE_COMPILE_CACHE: path.join(cliRuntime, "node-compile-cache"),
           NO_COLOR: "1",
         };
         const run = async (args: string[], expected = 0) => {
