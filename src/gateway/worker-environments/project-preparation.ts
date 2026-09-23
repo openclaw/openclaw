@@ -7,7 +7,10 @@ import { sha256File } from "../../infra/directory-durability.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { WorkerProvider } from "../../plugins/types.js";
 import { createProjectSeedScript } from "./project-seed-script.js";
-import { createProjectSetupScript } from "./project-setup-script.js";
+import {
+  createProjectSetupScript,
+  type PreparedProjectVerification,
+} from "./project-setup-script.js";
 import { readRepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
 import {
   prepareWorkerWorkspaceGitPack,
@@ -117,6 +120,9 @@ export function createWorkerProjectPreparation(params: {
       : params.project.label;
   let active: Promise<PreparationResult> | undefined;
   let preparedWorkspace: PreparationResult["preparedWorkspace"];
+  // The serialized pre-enrollment producer invalidates completion before mutation.
+  // Reuse verification only within this operation; replay starts with a fresh scan.
+  let verifiedRetained: PreparedProjectVerification | null | undefined;
   const requireCurrent = () => {
     signal.throwIfAborted();
     try {
@@ -179,6 +185,27 @@ export function createWorkerProjectPreparation(params: {
     if (!isRecord(inspection) || typeof inspection.ready !== "boolean") {
       throw new Error("Project preparation returned invalid seed status");
     }
+    if (preparation) {
+      const retained = inspection.retainedWorkspace;
+      if (retained === null) {
+        verifiedRetained = null;
+      } else {
+        if (
+          !isRecord(retained) ||
+          typeof retained.baseCommit !== "string" ||
+          !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(retained.baseCommit) ||
+          retained.baseCommit.length !== params.project.baseCommit.length
+        ) {
+          throw new Error("Project preparation returned an invalid retained Git base");
+        }
+        const workspace = readPreparedWorkspace(retained);
+        verifiedRetained = {
+          baseCommit: retained.baseCommit,
+          sourceManifestRef: workspace.sourceManifestRef,
+          preparedManifestRef: workspace.preparedManifestRef,
+        };
+      }
+    }
     if (inspection.ready) {
       return {
         seedKey,
@@ -189,16 +216,7 @@ export function createWorkerProjectPreparation(params: {
       };
     }
     const directory = inspection.directory;
-    const retainedCommit = inspection.retainedCommit;
-    if (
-      retainedCommit !== undefined &&
-      (!preparation ||
-        typeof retainedCommit !== "string" ||
-        !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(retainedCommit) ||
-        retainedCommit.length !== params.project.baseCommit.length)
-    ) {
-      throw new Error("Project preparation returned an invalid retained Git base");
-    }
+    const retainedCommit = verifiedRetained?.baseCommit;
     if (
       typeof directory !== "string" ||
       directory.length > 4096 ||
@@ -262,6 +280,7 @@ export function createWorkerProjectPreparation(params: {
           createProjectSeedScript({
             ...scriptInput,
             ...transfer,
+            verifiedRetained,
           }),
           signal,
         ),
@@ -313,6 +332,7 @@ export function createWorkerProjectPreparation(params: {
             setupRecipe: preparation.setupRecipe,
             runSetupScript: preparation.runSetupScript,
             timeoutMs,
+            verifiedRetained,
           }),
         signal,
       ),
