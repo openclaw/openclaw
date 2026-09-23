@@ -813,6 +813,21 @@ internal class GatewayIngressController(
       val (intent, task) =
         browserMutex.withLock {
           checkRegistration(registration, isCurrent)
+          val reusable =
+            synchronized(lock) {
+              checkRegistrationLocked(registration, isCurrent)
+              browserIntent?.takeIf { isLiveIntentLocked(it) && it.application == application }?.let { intent ->
+                intent.task?.takeUnless { it.isCompleted }?.let { task ->
+                  intent.participants.add(participant)
+                  intent.registrationOwners.add(registration)
+                  joinedIntent = intent
+                  intent to task
+                }
+              }
+            }
+          // Capture one attempt and its task. Reacquiring from Store after this check
+          // could attach a fresh task to an intent whose old waiters have not resumed.
+          if (reusable != null) return@withLock reusable
           synchronized(lock) { browserIntent }?.let { cancelExisting(it) }
           checkRegistration(registration, isCurrent)
           val intent =
