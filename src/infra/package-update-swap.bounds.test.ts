@@ -19,6 +19,7 @@ afterEach(() => {
   loggingState.rawConsole = null;
   resetLogger();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 function captureReaderLogs() {
@@ -53,12 +54,12 @@ describe("package verification bounds", () => {
 
   it.each([
     { timeoutMs: 55_000, elapsedMs: 31_000, incomplete: false },
-    { timeoutMs: 55_000, elapsedMs: 55_001, incomplete: true },
-    { timeoutMs: 1_800_000, elapsedMs: 300_001, incomplete: false },
+    { timeoutMs: 55_000, elapsedMs: 55_001, incomplete: false },
+    { timeoutMs: 1_800_000, elapsedMs: 300_001, incomplete: true },
     { timeoutMs: 1_800_000, elapsedMs: 1_800_001, incomplete: true },
-    { timeoutMs: 200, elapsedMs: 201, incomplete: true },
+    { timeoutMs: 200, elapsedMs: 120_001, incomplete: true },
   ])(
-    "bounds a $elapsedMs ms baseline scan by a $timeoutMs ms caller budget",
+    "uses a generous floor for a $elapsedMs ms baseline scan with a $timeoutMs ms caller budget",
     async ({ timeoutMs, elapsedMs, incomplete }) => {
       await withTestDir({ prefix: "openclaw-baseline-budget-" }, async (base) => {
         const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
@@ -96,9 +97,9 @@ describe("package verification bounds", () => {
     { phase: "retained", corrupt: false, timeoutMs: 120_000, restored: true },
     { phase: "restored", corrupt: false, timeoutMs: 120_000, restored: true },
     { phase: "retained", corrupt: true, timeoutMs: 120_000, restored: false },
-    { phase: "retained", corrupt: false, timeoutMs: 20_000, restored: false },
+    { phase: "retained", corrupt: false, timeoutMs: 20_000, restored: true },
   ])(
-    "uses the caller budget for $phase verification (corrupt=$corrupt, budget=$timeoutMs)",
+    "allows slow $phase verification (corrupt=$corrupt, budget=$timeoutMs)",
     async ({ phase, corrupt, timeoutMs, restored }) => {
       await withTestDir({ prefix: "openclaw-recovery-budget-" }, async (base) => {
         const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
@@ -134,7 +135,7 @@ describe("package verification bounds", () => {
           return open(...args);
         });
         const result = await transaction.rollback(() => {});
-        expect(elapsed).toBe(31_000);
+        expect(elapsed).toBe(corrupt ? 0 : 31_000);
         expect(result.exitCode, result.stderrTail ?? "").toBe(restored ? 0 : 1);
         if (restored) {
           expect(await fs.readFile(runtime, "utf8")).toBe(original);
@@ -155,11 +156,13 @@ describe("package verification bounds", () => {
         const original = await fs.stat(packageRoot);
         const open = fs.open.bind(fs);
         const blocked = createDeferredCore();
+        let now = Date.now();
+        vi.spyOn(Date, "now").mockImplementation(() => now);
         let entered = false;
         vi.spyOn(fs, "open").mockImplementation(async (...args) => {
           if (!entered && String(args[0]) === path.join(packageRoot, "dist", "index.js")) {
             entered = true;
-            await blocked.promise;
+            now += 120_001;
           }
           return open(...args);
         });
@@ -210,7 +213,7 @@ describe("package verification bounds", () => {
           if (outcome === "rollback") {
             const restored = await transaction.rollback(() => {});
             expect(restored).toMatchObject({ exitCode: 0, activePackageRoot: packageRoot });
-            expect(restored.advisory?.message).toContain("fingerprint verification unavailable");
+            expect(restored.advisory?.message).toContain("remaining contents unverified");
             expect(restored.stderrTail ?? "").not.toMatch(/unverified|verification failed/);
             expect(await fs.readFile(launcher, "utf8")).toBe("old launcher\n");
             expect(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).toContain(
@@ -244,14 +247,14 @@ describe("package verification bounds", () => {
           if (String(args[0]) !== manifest) {
             return handle;
           }
-          if (++manifestOpens === 1) {
+          if (++manifestOpens === 2) {
             const close = handle.close.bind(handle);
             vi.spyOn(handle, "close").mockImplementation(async () => {
               await close();
               await fs.truncate(manifest, size);
               grew = true;
             });
-          } else {
+          } else if (manifestOpens > 2) {
             // Intercept either read path before buffering an oversized sparse file.
             const rejectOversizedRead = async () => {
               oversizedRead = true;
@@ -305,7 +308,10 @@ describe("package verification bounds", () => {
       for (const record of finished) {
         expect(record).toMatchObject({
           outcome: "completed",
-          budgetMs: UPDATE_RUNNER_TIMEOUT_MS,
+          budgetMs:
+            record.phase === "baseline" && record.readerId === finished[1]?.readerId
+              ? UPDATE_RUNNER_TIMEOUT_MS
+              : 120_000,
           pendingIo: 0,
         });
         expect(record.timeoutObservedAtMonotonicMs).toBeUndefined();
@@ -382,6 +388,7 @@ describe("package verification bounds", () => {
     async (operation) => {
       await withTestDir({ prefix: "openclaw-rollback-deadline-" }, async (base) => {
         const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         const realOpen = fs.open.bind(fs);
         const late = createDeferredCore<Awaited<ReturnType<typeof fs.open>>>();
         const handle = await realOpen(path.join(packageRoot, "dist", "index.js"), "r");
@@ -396,12 +403,14 @@ describe("package verification bounds", () => {
             return realOpen(...args);
           }
           if (operation === "open") {
-            now += 41;
+            now += 120_001;
+            await vi.advanceTimersByTimeAsync(120_001);
             return late.promise;
           }
           const actual = await realOpen(...args);
-          vi.spyOn(actual, "read").mockImplementation(() => {
-            now += 41;
+          vi.spyOn(actual, "read").mockImplementation(async () => {
+            now += 120_001;
+            await vi.advanceTimersByTimeAsync(120_001);
             return new Promise(() => {});
           });
           return actual;
@@ -439,12 +448,14 @@ describe("package verification bounds", () => {
             event: "reader-settled",
             readerId: begin!.readerId,
             outcome: "timed-out",
-            budgetMs: 40,
+            budgetMs: 120_000,
             deadlineClock: "wall",
           });
           // A pending close may accompany the stalled read. Neither is a joined OS operation.
           expect(Number(settled!.pendingIo)).toBeGreaterThan(0);
-          expect(settled!.deadlineAtUnixMs).toBe(begin!.deadlineAtUnixMs);
+          expect(Number(settled!.deadlineAtUnixMs) - Number(begin!.deadlineAtUnixMs)).toBe(
+            120_000 - 40,
+          );
           expect(settled!.elapsedMs).toBe(
             Number(settled!.settledAtMonotonicMs) - Number(begin!.startedAtMonotonicMs),
           );
@@ -453,7 +464,8 @@ describe("package verification bounds", () => {
           );
           if (operation === "open") {
             late.resolve(handle);
-            await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1));
+            await vi.advanceTimersByTimeAsync(0);
+            expect(close).toHaveBeenCalledTimes(1);
             expect(read).not.toHaveBeenCalled();
           }
           await expect(
@@ -476,7 +488,13 @@ describe("package verification bounds", () => {
         throw new Error("diagnostics sink failed");
       });
       loggingState.rawConsole = { log: sink, info: sink, warn: sink, error: sink };
-      vi.spyOn(fs, "open").mockRejectedValue(new Error("reader unavailable"));
+      const open = fs.open.bind(fs);
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        if (String(args[0]) === path.join(packageRoot, "dist", "index.js")) {
+          throw new Error("reader unavailable");
+        }
+        return open(...args);
+      });
       const beforeActivate = vi.fn();
       const onLiveMutation = vi.fn();
       const result = await swapStagedPackageInstall({ ...params, beforeActivate, onLiveMutation });
@@ -561,7 +579,13 @@ describe("package verification bounds", () => {
         });
         return directory;
       });
-      const open = vi.spyOn(fs, "open").mockRejectedValue(new Error("unexpected file read"));
+      const originalOpen = fs.open.bind(fs);
+      const open = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        if (String(args[0]) !== path.join(packageRoot, "package.json")) {
+          throw new Error("unexpected file read");
+        }
+        return originalOpen(...args);
+      });
       const beforeActivate = vi.fn();
       const onLiveMutation = vi.fn();
       const result = await swapStagedPackageInstall({
@@ -580,7 +604,9 @@ describe("package verification bounds", () => {
       // Includes one overflow entry; the root itself consumes the other slot.
       expect(discovered).toBeLessThanOrEqual(50_000);
       expect(result.step.stderrTail).toContain("entry limit exceeded");
-      expect(open).not.toHaveBeenCalled();
+      expect(
+        open.mock.calls.every(([file]) => String(file) === path.join(packageRoot, "package.json")),
+      ).toBe(true);
     });
   });
 });

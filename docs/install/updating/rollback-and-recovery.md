@@ -31,6 +31,25 @@ backups, and retained migration originals are not a full pre-update backup.
 Preserve every recovery location named in the update report until you have
 verified the installation.
 
+For npm package swaps, the updater inventories the retained tree and hashes the
+manifest and package runtime before documentation, source maps, and nested
+dependencies. Dependencies remain part of recovery because rollback restores the
+exact old directory. The scan has a two-minute minimum budget, extended from the
+inventoried bytes and files using four times the host's first second of measured
+hashing cost, up to 45 minutes. This budget is independent of the command-step timeout.
+
+A scan that exceeds its budget records a warning and continues the update.
+Completed fingerprints remain available for rollback; the warning identifies
+the unverified remainder. Before replacing the live package, the updater retains
+the old directory and affected launchers. Recovery checks the retained directory
+identity, package version, launchers, and recorded fingerprints before restoring
+it, then verifies the restored installation. Recorded directory listings are
+checked too; unrecorded contents are not reopened during recovery. If recovery exceeds the scan budget,
+it warns and finishes the recorded checks before replacing the candidate; it
+does not discard existing fingerprints. An observed content, metadata, or
+identity mismatch still refuses recovery with its path and retains the evidence.
+These checks observe files; they do not exclude another process writing them.
+
 Launcher backups compare the link type and target, plus ownership when it can
 be preserved. Symlink permission bits do not block an update; macOS link modes
 are copied when supported. Regular-file launchers still require matching modes
@@ -38,7 +57,9 @@ and contents. If backup verification fails, the report names the differing
 fields and the retained failed copy for inspection before retrying.
 
 This behavior belongs to the installed updater. An older updater, including
-2026.9.4, can refuse a macOS launcher backup before the target version runs.
+2026.9.4, can refuse a macOS launcher backup or exhaust its fixed 30-second
+old-package scan before the target version runs. Installing a newer target does
+not patch that already-running driver.
 Use the installation's [manual package-manager update procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
 if that first update is blocked.
 

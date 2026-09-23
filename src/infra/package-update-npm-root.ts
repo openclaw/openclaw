@@ -4,7 +4,6 @@ import { isDeepStrictEqual } from "node:util";
 import { formatErrorMessage } from "./errors.js";
 import {
   createPackageIntegrityReader,
-  type PackageDirectoryIdentity,
   type PackageRootIntegrityFingerprint,
   type PackageLauncherFingerprint,
   packageLauncherDifferences,
@@ -112,7 +111,7 @@ export async function verifyNpmRootRecovery(
     fromBackup: boolean;
     hadPackage: boolean;
     previousRoot: PackageRootIntegrityFingerprint | undefined;
-    previousIdentity?: PackageDirectoryIdentity;
+    warn: (message: string) => void;
     targetSwapRoot: string;
     shims: readonly {
       destination: string;
@@ -124,19 +123,29 @@ export async function verifyNpmRootRecovery(
   verifyGitRuntime?: () => Promise<void>,
 ): Promise<boolean> {
   const { root, fromBackup, hadPackage, previousRoot, targetSwapRoot, shims } = params;
-  const reader = createPackageIntegrityReader(timeoutMs);
+  const reader = createPackageIntegrityReader(timeoutMs, { mode: "recovery", warn: params.warn });
   return await reader.observe(fromBackup ? "retained" : "restored", async () => {
-    if (
-      hadPackage
-        ? previousRoot
-          ? !isDeepStrictEqual(
-              await reader.rootEntry(root, targetSwapRoot, previousRoot.kind),
-              previousRoot,
-            )
-          : !params.previousIdentity ||
-            !isDeepStrictEqual(await reader.directoryIdentity(root), params.previousIdentity)
-        : !fromBackup && (await reader.exists(root))
-    ) {
+    let rootMatches = false;
+    if (previousRoot) {
+      try {
+        const actual = await reader.rootEntry(
+          root,
+          targetSwapRoot,
+          previousRoot.kind,
+          previousRoot.kind === "directory" ? previousRoot.tree : undefined,
+        );
+        rootMatches = actual.kind === "directory" || isDeepStrictEqual(actual, previousRoot);
+        if (actual.kind === "directory" && actual.tree.warning) {
+          params.warn(`${fromBackup ? "retained" : "restored"} ${actual.tree.warning}`);
+        }
+      } catch (error) {
+        throw new Error(
+          `Package rollback verification failed: ${fromBackup ? "retained" : "restored"} package ${previousRoot.kind === "link" ? "link" : "tree"} changed at ${root}. ${formatErrorMessage(error)}. Inspect this ${fromBackup ? "backup" : "installation"} and resolve the changes before retrying recovery.`,
+          { cause: error },
+        );
+      }
+    }
+    if (hadPackage ? !rootMatches : !fromBackup && (await reader.exists(root))) {
       throw new Error(
         `Package rollback verification failed: ${fromBackup ? "retained" : "restored"} package ${previousRoot?.kind === "link" ? "link" : "tree"} changed at ${root}. Inspect this ${fromBackup ? "backup" : "installation"} and resolve the changes before retrying recovery.`,
       );
@@ -157,11 +166,6 @@ export async function verifyNpmRootRecovery(
     }
     await verifyGitRuntime?.();
     // Restoring absence or an unverified external link does not establish a runnable runtime.
-    return (
-      hadPackage &&
-      (previousRoot?.kind === "directory" ||
-        verifyGitRuntime !== undefined ||
-        (!previousRoot && params.previousIdentity !== undefined))
-    );
+    return hadPackage && (previousRoot?.kind === "directory" || verifyGitRuntime !== undefined);
   });
 }
