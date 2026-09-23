@@ -18,6 +18,7 @@ const continuations = new Set<CodeModeExecutorContinuation>();
 afterEach(async () => {
   await Promise.all([...continuations].map((continuation) => continuation.dispose()));
   continuations.clear();
+  channel("openclaw.memory.critical").publish({});
 });
 
 function execute(source: string, overrides: Partial<CodeModeExecutorStartInput> = {}) {
