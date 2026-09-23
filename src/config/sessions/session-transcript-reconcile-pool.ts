@@ -2,6 +2,7 @@ import { MessageChannel } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -218,12 +219,21 @@ function startReconcileWorkerTask(input: SessionTranscriptReconcileWorkerInput) 
   let poolCompletion: Promise<void> | undefined;
   const execute = async (coordination?: SqliteMutationWorkerCoordination) => {
     poolCompletion = pool.run(
-      { input, port: port2, coordination },
+      {
+        input,
+        port: port2,
+        coordination,
+        sourceIdentity:
+          input.mode === "disk" ? readDatabasePathIdentitySync(input.path).key : undefined,
+      },
       {
         inputBytes,
         transferList: (task) => [
           task.port,
           ...(task.coordination?.stateLifecycle ? [task.coordination.stateLifecycle] : []),
+          ...(task.coordination?.reconciliation
+            ? [task.coordination.reconciliation.open, task.coordination.reconciliation.close]
+            : []),
         ],
         signal: controller.signal,
       },
@@ -238,12 +248,18 @@ function startReconcileWorkerTask(input: SessionTranscriptReconcileWorkerInput) 
   const completion = (
     !owner
       ? execute()
-      : withSqliteWorkerLifecycleCoordination(owner.context, owner.actorId, execute, async () => {
-          controller.abort();
-          await poolCompletion?.catch(() => {});
-          port2.close();
-          await closed;
-        })
+      : withSqliteWorkerLifecycleCoordination(
+          owner.context,
+          owner.actorId,
+          execute,
+          async () => {
+            controller.abort();
+            await poolCompletion?.catch(() => {});
+            port2.close();
+            await closed;
+          },
+          "reconciliation",
+        )
   ).finally(() => port2.close());
   const leaseRelease = Promise.allSettled([completion, closed]).then(([result]) => {
     if (result.status === "rejected") {
