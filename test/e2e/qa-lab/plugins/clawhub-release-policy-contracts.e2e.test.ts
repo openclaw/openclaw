@@ -1,7 +1,8 @@
 // ClawHub release policy tests execute the real npm and ClawHub release checks.
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { delimiter, join, resolve } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../../../helpers/temp-dir.js";
 import { writeJsonFile } from "../../../helpers/temp-repo.js";
@@ -125,30 +126,37 @@ function commitFixture(repoDir: string, message: string) {
   return git(repoDir, ["rev-parse", "HEAD"]);
 }
 
-function runCheck(
-  scriptPath: string,
-  cwd: string,
-  args: string[] = [],
-  env: NodeJS.ProcessEnv = process.env,
-) {
-  return spawnSync(process.execPath, ["--import", tsxImport, scriptPath, ...args], {
+function runCheck(scriptPath: string, cwd: string, args: string[] = [], nodeArgs: string[] = []) {
+  return spawnSync(process.execPath, ["--import", tsxImport, ...nodeArgs, scriptPath, ...args], {
     cwd,
     encoding: "utf8",
     env: {
-      ...env,
+      ...process.env,
       NO_COLOR: "1",
     },
   });
 }
 
-function writeNpmLatestFixture(repoDir: string, latestVersion: string): NodeJS.ProcessEnv {
-  const binDir = join(repoDir, "bin");
-  mkdirSync(binDir);
-  const npmPath = join(binDir, "npm");
-  writeFileSync(npmPath, `#!/bin/sh\nprintf '%s\\n' '"${latestVersion}"'\n`, "utf8");
-  chmodSync(npmPath, 0o755);
-  writeFileSync(join(binDir, "npm.cmd"), `@echo off\r\necho "${latestVersion}"\r\n`, "utf8");
-  return { ...process.env, PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}` };
+function writeNpmLatestFixture(repoDir: string, latestVersion: string): string[] {
+  const preloadPath = join(repoDir, "npm-latest-fixture.mjs");
+  // execFileSync cannot launch .cmd shims on Windows. Stub only the npm lookup
+  // inside each child so both real release entrypoints keep their policy checks.
+  writeFileSync(
+    preloadPath,
+    `import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+const originalExecFileSync = childProcess.execFileSync;
+childProcess.execFileSync = function (command, ...args) {
+  if (command === "npm") {
+    return ${JSON.stringify(JSON.stringify(latestVersion))};
+  }
+  return Reflect.apply(originalExecFileSync, this, [command, ...args]);
+};
+syncBuiltinESMExports();
+`,
+    "utf8",
+  );
+  return ["--import", pathToFileURL(preloadPath).href];
 }
 
 function expectValidPackage(result: ReturnType<typeof runCheck>, command: string, version: string) {
@@ -173,9 +181,9 @@ describe("ClawHub release policy contracts", () => {
   it("keeps npm dependency freshness advisory while ClawHub remains strict", () => {
     const dependency = { packageName: "demo-runtime", version: "1.2.3" };
     const repoDir = createPluginRepo({ requiredLatestDependency: dependency });
-    const env = writeNpmLatestFixture(repoDir, "1.2.4");
+    const nodeArgs = writeNpmLatestFixture(repoDir, "1.2.4");
 
-    const npmResult = runCheck(NPM_CHECK, repoDir, [], env);
+    const npmResult = runCheck(NPM_CHECK, repoDir, [], nodeArgs);
     expect(npmResult.status, npmResult.stderr).toBe(0);
     expect(npmResult.stdout).toContain(
       "plugin-npm-release-check: publishable plugin metadata looks OK.",
@@ -184,7 +192,7 @@ describe("ClawHub release policy contracts", () => {
       `${dependency.packageName} pinned "${dependency.version}", npm latest is "1.2.4". Freshness is advisory; retain the release-validated pin.`,
     );
 
-    const clawHubResult = runCheck(CLAWHUB_CHECK, repoDir, [], env);
+    const clawHubResult = runCheck(CLAWHUB_CHECK, repoDir, [], nodeArgs);
     expect(clawHubResult.status).toBe(1);
     expect(clawHubResult.stdout).toBe("");
     expect(clawHubResult.stderr).toContain(
