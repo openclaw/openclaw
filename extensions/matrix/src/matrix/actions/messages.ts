@@ -148,6 +148,11 @@ export async function readMatrixMessages(
   prevBatch?: string | null;
 }> {
   return await withResolvedRoomAction(roomId, opts, async (client, resolvedRoom) => {
+    // Resolve the reading agent's own MXID so each returned summary can carry
+    // an `isSelf` marker. Mirrors the push-path pattern in
+    // matrix/monitor/handler-ingress-prefix.ts (client.getUserId()); tolerate
+    // clients/mocks that don't implement getUserId rather than failing the read.
+    const selfUserId = await client.getUserId?.().catch(() => undefined);
     const limit = resolveMatrixActionLimit(opts.limit, 20);
     const rawBefore = normalizeOptionalString(opts.before);
     const rawAfter = normalizeOptionalString(opts.after);
@@ -160,7 +165,7 @@ export async function readMatrixMessages(
     const includeThreadRoot = threadId !== undefined && !token && !isThreadRelationsStartCursor;
     const threadRootSummary =
       includeThreadRoot && threadId
-        ? await fetchDisplayableThreadRootSummary(client, resolvedRoom, threadId)
+        ? await fetchDisplayableThreadRootSummary(client, resolvedRoom, threadId, selfUserId)
         : undefined;
     const rootCountsTowardLimit = threadRootSummary !== undefined;
     const rootFillsThreadPage = rootCountsTowardLimit && limit === 1;
@@ -226,7 +231,7 @@ export async function readMatrixMessages(
           }
           // Incremental pages can contain an edit without its original; keep
           // the valid update instead of silently dropping the visible change.
-          messages.push(summarizeMatrixRawEvent(event));
+          messages.push(summarizeMatrixRawEvent(event, { selfUserId }));
           continue;
         }
         const replacement = replacements.get(event.event_id);
@@ -242,6 +247,7 @@ export async function readMatrixMessages(
                   },
                 }
               : event,
+            { selfUserId },
           ),
         );
         continue;
@@ -265,7 +271,9 @@ export async function readMatrixMessages(
         continue;
       }
       seenPollRoots.add(pollRootId);
-      const pollSummary = await fetchMatrixPollMessageSummary(client, resolvedRoom, event);
+      const pollSummary = await fetchMatrixPollMessageSummary(client, resolvedRoom, event, {
+        selfUserId,
+      });
       if (pollSummary) {
         messages.push(pollSummary);
       }
@@ -315,6 +323,7 @@ async function fetchDisplayableThreadRootSummary(
   client: MatrixActionClientOpts["client"] & NonNullable<MatrixActionClientOpts["client"]>,
   resolvedRoom: string,
   threadId: string,
+  selfUserId?: string,
 ): Promise<MatrixMessageSummary | undefined> {
   const rawRootEvent = (await client
     .getEvent(resolvedRoom, threadId)
@@ -327,10 +336,13 @@ async function fetchDisplayableThreadRootSummary(
     return undefined;
   }
   if (rootEvent.type === EventType.RoomMessage) {
-    return summarizeMatrixRawEvent(rootEvent);
+    return summarizeMatrixRawEvent(rootEvent, { selfUserId });
   }
   if (isPollStartType(rootEvent.type)) {
-    return (await fetchMatrixPollMessageSummary(client, resolvedRoom, rootEvent)) ?? undefined;
+    const pollSummary = await fetchMatrixPollMessageSummary(client, resolvedRoom, rootEvent, {
+      selfUserId,
+    });
+    return pollSummary ?? undefined;
   }
   return undefined;
 }
