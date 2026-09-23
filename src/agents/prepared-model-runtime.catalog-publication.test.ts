@@ -480,7 +480,7 @@ describe("catalog publication session rows", () => {
         changed.sessions.every((row) =>
           currentModel.reasoning
             ? row.thinkingLevels!.some((level) => level.id === "high")
-            : row.thinkingLevels!.every((level) => level.id === "off"),
+            : row.thinkingLevels!.every((level) => level.id === "off" || level.id === "ultra"),
         ),
       ).toBe(true);
       expect(rows.materializedCount - previousCount).toBe(rowCount);
@@ -495,7 +495,9 @@ describe("catalog publication session rows", () => {
     const rerouted = await list();
     expect(rerouted.sessions.every((row) => row.contextTokens === 48_000)).toBe(true);
     expect(
-      rerouted.sessions.every((row) => row.thinkingLevels!.every((level) => level.id === "off")),
+      rerouted.sessions.every((row) =>
+        row.thinkingLevels!.every((level) => level.id === "off" || level.id === "ultra"),
+      ),
     ).toBe(true);
     expect(rows.materializedCount - previousCount).toBe(rowCount);
 

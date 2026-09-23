@@ -46,6 +46,9 @@ export async function createCodexSessionInitializationFixtureForTest(params: {
 export const loadCodexSettledFinalizerTestFixture = () =>
   import("./src/app-server/settled-turn-finalizer.test-support.js");
 
+export const loadCodexNativeSubagentMonitorTestFixture = () =>
+  import("./src/app-server/native-subagent-monitor.test-support.js");
+
 type CodexHarnessPromptSnapshot = {
   developerInstructions: string;
   parentLocalInstructions: string | null;

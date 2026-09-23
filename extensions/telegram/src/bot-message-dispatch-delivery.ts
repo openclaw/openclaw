@@ -25,6 +25,7 @@ import {
   applyQuoteReplyTarget,
   applyTextToPayload,
   projectPayloadForDelivery,
+  usesNativeTelegramQuote,
 } from "./bot-message-dispatch-payload.js";
 import {
   createCurrentTurnTranscriptFinalResolver,
@@ -193,10 +194,6 @@ function createDeliveryBaseOptions(turn: Turn) {
     transcriptMirror: createTranscriptMirror(turn),
   };
 }
-
-const usesNativeTelegramQuote = (turn: Turn, payload: ReplyPayload): boolean =>
-  turn.replyQuoteText != null ||
-  (payload.replyToId != null && turn.replyQuoteByMessageId[payload.replyToId] != null);
 
 export async function sendPayload(
   sourceTurn: Turn,

@@ -136,6 +136,7 @@ import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { finalizeCliContextEngineTurn } from "./cli-run-transcript.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
+import { registerCliThinkingPreparationTests } from "./prepare-thinking.test-support.js";
 import { prepareCliRunContext } from "./prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
@@ -492,19 +493,10 @@ describe("prepareCliRunContext", () => {
     });
   });
 
-  it.each(["high", "off"] as const)(
-    "passes %s thinking through the CLI backend execution seam",
-    async (thinkLevel) => {
-      const prepareExecution = vi.fn(async () => undefined);
-      setCliBackendForPrepareTest({ prepareExecution });
-
-      await fixture.prepare({ provider: "claude-cli", thinkLevel });
-
-      expect(prepareExecution).toHaveBeenCalledWith(
-        expect.objectContaining({ thinkingLevel: thinkLevel }),
-      );
-    },
-  );
+  registerCliThinkingPreparationTests({
+    getFixture: () => fixture,
+    setBackend: setCliBackendForPrepareTest,
+  });
 
   it("uses the prepared model context budget before discovery cache settlement", async () => {
     const prepareExecution = vi.fn(async () => undefined);

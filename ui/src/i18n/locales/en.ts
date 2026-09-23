@@ -12,6 +12,7 @@ export const en: TranslationMap & {
   chat: TranslationMap & {
     codeBlock: TranslationMap;
     commands: TranslationMap;
+    detailPanel: TranslationMap;
     welcome: TranslationMap & { suggestions: TranslationMap & { whatCanYouDo: string } };
     backgroundTasks: TranslationMap;
     goals: TranslationMap;
@@ -4056,39 +4057,7 @@ export const en: TranslationMap & {
         failed: "Failed",
       },
     },
-    detailPanel: {
-      close: "Close sidebar",
-      copyPath: "Copy path",
-      discard: "Discard",
-      editFile: "Edit file",
-      searchInFile: "Search in file",
-      showInFiles: "Show in Files",
-      unavailable: "Unable to open",
-      previousMatch: "Previous match",
-      nextMatch: "Next match",
-      overwrite: "Overwrite",
-      viewRawText: "View Raw Text",
-      viewSource: "Source",
-      renderedMarkdown: "Rendered Markdown",
-      renderedMarkdownHint: "Sanitized rich-text preview for quick reading.",
-      noPreviewableMarkdown: "No previewable markdown content.",
-      noContent: "No content available",
-      fullContentOversized:
-        "Full content is unavailable because the stored transcript entry is too large to return safely.",
-      fullContentNotVisible:
-        "Full content is unavailable because this transcript entry does not have a visible WebChat projection.",
-      fullContentUnavailable: "Full content is no longer available for this transcript entry.",
-      copyContents: "Copy file contents",
-      fileChanged: "File changed on disk since it was loaded.",
-      renderPreview: "Render preview",
-      imagePreview: "Image preview",
-      file: "File",
-      markdownPreview: "Markdown preview",
-      toolDetails: "Tool details",
-      reloadFailed: "Failed to reload the latest file.",
-      overwriteLoadFailed: "Failed to load the latest file before overwriting.",
-      fullContentLoadFailed: "Failed to load full content: {error}",
-    },
+    detailPanel: {},
     sidebarColumns: {
       close: "Close {panel}",
     },

@@ -5,7 +5,7 @@ import {
   prepareHeadersForSimpleCompletion,
   prepareModelForSimpleCompletion,
 } from "@openclaw/ai/transports";
-import type { ThinkLevel } from "../auto-reply/thinking.js";
+import { resolveProviderThinkingLevel, type ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   bindModelLlmRuntime,
@@ -74,8 +74,14 @@ async function completePreparedModel(params: PreparedCompletionParams): Promise<
     completionModel = bindModelLlmRuntime(completionModel, runtime);
   }
   const { reasoning: rawReasoning, strictReasoningTags, ...options } = params.options ?? {};
-  const reasoning =
-    rawReasoning === "adaptive" ? "medium" : rawReasoning === "ultra" ? "max" : rawReasoning;
+  const providerReasoning = resolveProviderThinkingLevel({
+    provider: completionModel.provider,
+    model: completionModel.id,
+    catalog: [completionModel],
+    agentRuntime: "openclaw",
+    level: rawReasoning,
+  });
+  const reasoning = providerReasoning === "adaptive" ? "medium" : providerReasoning;
   const headers = prepareHeadersForSimpleCompletion(completionModel, options);
   const completionOptions: SimpleStreamOptions = {
     ...options,

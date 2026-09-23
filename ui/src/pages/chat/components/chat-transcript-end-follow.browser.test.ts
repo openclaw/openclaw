@@ -9,7 +9,7 @@ import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 
 class EndFollowFixture extends LitElement {
   followEnabled = true;
-  readonly transcript = new ChatTranscriptController(this, {
+  readonly transcript = new ChatTranscriptController(this, () => "end-follow-browser", {
     canFollowEnd: () => this.followEnabled,
   });
   earlierRowHeight = 400;
@@ -37,19 +37,15 @@ class EndFollowFixture extends LitElement {
         class="chat-thread"
         style="height: 400px; flex: none; padding: 0 0 60px; overflow-anchor: none"
       >
-        ${this.transcript.renderSession(
-          "end-follow-browser",
-          "agent:main:end-follow",
-          (session) => {
-            session.setContentReady(true);
-            return session.render(
-              rows,
-              (row) => (row.kind === "content" ? row.content : null),
-              null,
-              false,
-            );
-          },
-        )}
+        ${this.transcript.renderSession("agent:main:end-follow", (session) => {
+          session.setContentReady(true);
+          return session.render(
+            rows,
+            (row) => (row.kind === "content" ? row.content : null),
+            null,
+            false,
+          );
+        })}
       </div>
       <div class="chat-prs" style="position: relative; height: 38px; margin-top: -38px">
         Pull request

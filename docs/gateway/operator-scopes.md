@@ -177,8 +177,9 @@ and other sessions without a role-required sandbox keep their configured scope
 and workspace access.
 
 The Gateway records the authenticated creator and their sandbox requirement
-together before a new session first runs, including chat, Talk, recovery,
-forks, checkpoint branches, cron, outbound messages, and spawned children.
+together before a new session first runs, including chat, the OpenAI-compatible
+HTTP endpoints, Talk, recovery, forks, checkpoint branches, cron, outbound
+messages, and spawned children.
 Delegated child work inherits a required parent's original creator and sandbox
 policy, even after role changes. Recovery and branching requested by another
 person use that person's own role rather than the source session's policy.
