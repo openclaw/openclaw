@@ -673,7 +673,7 @@ export type DiagnosticHarnessRunStartedEvent = DiagnosticHarnessRunBaseEvent & {
   type: "harness.run.started";
 };
 
-export type DiagnosticAgentCommentaryEvent = DiagnosticRunBaseEvent & {
+type DiagnosticAgentCommentaryEvent = DiagnosticRunBaseEvent & {
   type: "agent.commentary";
   harnessId: string;
   pluginId?: string;
