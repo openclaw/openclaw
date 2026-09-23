@@ -234,6 +234,7 @@ export async function compactEmbeddedAgentSession(
       sessionKey: runtimeTarget.sessionKey,
       sessionTarget: runtimeTarget,
       sessionFile: runtimeTarget.sessionKey,
+      spawnedBy: normalizeOptionalString(params.spawnedBy) ?? entry?.spawnedBy,
       contextEngineAgentId,
     };
     if (resolvedParams.trigger !== "manual") {

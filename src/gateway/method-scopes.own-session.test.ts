@@ -7,29 +7,47 @@ import {
 } from "./method-scopes.js";
 
 describe("session-scoped method admission", () => {
-  it.each([
-    ["agents.list", {}],
-    ["models.list", {}],
-    ["models.list", { agentId: "main" }],
-    ["models.list", { sessionKey: "agent:main:own" }],
-    ["models.list", { sessionKey: "agent:main:own", view: "provider-config" }],
-    ["models.list", { agentId: "main", authProfileId: "personal-account" }],
-  ] as const)("keeps %s catalogs behind broad read authority (%j)", (method, params) => {
-    expect(resolveSessionMethodScope(method, params)).toBeUndefined();
+  it("keeps agent catalogs behind broad read authority", () => {
+    expect(resolveSessionMethodScope("agents.list", {})).toBeUndefined();
     for (const scopes of [
       ["operator.sessions.read"],
       ["operator.sessions.write"],
       ["operator.sessions.read", "operator.sessions.write"],
     ]) {
-      expect(authorizeOperatorScopesForMethod(method, scopes, params)).toEqual({
+      expect(authorizeOperatorScopesForMethod("agents.list", scopes, {})).toEqual({
         allowed: false,
         missingScope: "operator.read",
       });
     }
     for (const scope of ["operator.read", "operator.write", "operator.admin"]) {
       expect(
-        authorizeOperatorScopesForMethod(method, [scope, "operator.sessions.read"], params),
+        authorizeOperatorScopesForMethod("agents.list", [scope, "operator.sessions.read"], {}),
       ).toEqual({ allowed: true });
+    }
+  });
+
+  it.each([
+    {},
+    { agentId: "main" },
+    { sessionKey: "agent:main:own" },
+    { sessionKey: "agent:main:own", view: "provider-config" },
+    { agentId: "main", authProfileId: "personal-account" },
+  ])("admits projected model catalogs with the registered session-read floor (%j)", (params) => {
+    expect(resolveSessionMethodScope("models.list", params)).toBeUndefined();
+    expect(authorizeOperatorScopesForMethod("models.list", [], params)).toEqual({
+      allowed: false,
+      missingScope: "operator.sessions.read",
+    });
+    for (const scope of [
+      "operator.sessions.read",
+      "operator.sessions.write",
+      "operator.read",
+      "operator.write",
+      "operator.admin",
+    ]) {
+      expect(authorizeOperatorScopesForMethod("models.list", [scope], params)).toEqual({
+        allowed: true,
+      });
     }
   });
 

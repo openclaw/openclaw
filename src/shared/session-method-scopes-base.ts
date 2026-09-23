@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { SESSION_READ_SCOPE } from "../gateway/operator-scopes.js";
 import { isIncognitoSessionKey } from "./incognito-session-key.js";
 
 export type SessionMutationOperatorScope = "operator.write" | "operator.admin";
@@ -63,6 +64,17 @@ export function resolveSessionMethodScope(
     return "operator.sessions.write";
   }
   return undefined;
+}
+
+/** Shared static read floors consumed by Gateway descriptors and browser admission. */
+export const SESSION_READ_METHOD_SCOPES = {
+  "models.list": SESSION_READ_SCOPE,
+  "chat.startup": SESSION_READ_SCOPE,
+  "chat.metadata": SESSION_READ_SCOPE,
+} as const satisfies Record<string, typeof SESSION_READ_SCOPE>;
+
+export function resolveBaseSessionReadRequiredScope(method: string) {
+  return Object.hasOwn(SESSION_READ_METHOD_SCOPES, method) ? SESSION_READ_SCOPE : undefined;
 }
 
 const SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS: ReadonlySet<string> = new Set([

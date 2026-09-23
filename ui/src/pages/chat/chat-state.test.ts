@@ -68,6 +68,29 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+function createPageContext() {
+  const { gateway, publish } = createGatewayHarness(createTestGatewayClient(vi.fn()));
+  publish(false, null);
+  return {
+    agents: {
+      state: { agentsList: null },
+      ensureList: vi.fn(async () => null),
+    },
+    agentSelection: { state: { selectedId: "main" } },
+    basePath: "",
+    config: {
+      current: {
+        allowExternalEmbedUrls: false,
+        assistantIdentity: { name: "Assistant" },
+        embedSandboxMode: "scripts",
+      },
+    },
+    gateway,
+    chatSubmissions: createChatSubmissions(),
+    sessions: {},
+  } as unknown as ApplicationContext;
+}
+
 describe("canonical session message recovery", () => {
   function createSessionEventState(overrides: Partial<ChatPageHost> = {}) {
     const request = vi.fn().mockResolvedValue({
@@ -3179,26 +3202,6 @@ describe("ChatStateController render lifecycle", () => {
     } as unknown as ChatPageHost;
   }
 
-  function createPageContext() {
-    return {
-      agents: {
-        state: { agentsList: null },
-        ensureList: vi.fn(async () => null),
-      },
-      agentSelection: { state: { selectedId: "main" } },
-      basePath: "",
-      config: {
-        current: {
-          allowExternalEmbedUrls: false,
-          assistantIdentity: { name: "Assistant" },
-          embedSandboxMode: "scripts",
-        },
-      },
-      chatSubmissions: createChatSubmissions(),
-      sessions: {},
-    } as unknown as ApplicationContext;
-  }
-
   it("owns attachment views in Files without replacing Detail content", () => {
     const state = createPageState(
       createPageContext(),
@@ -4116,22 +4119,8 @@ describe("session pull request refresh", () => {
 
 describe("image lightbox lifecycle", () => {
   it("accepts only matching base64 video at the page boundary", () => {
-    const context = {
-      agents: { state: { agentsList: null }, ensureList: vi.fn(async () => null) },
-      agentSelection: { state: { selectedId: "main" } },
-      basePath: "",
-      config: {
-        current: {
-          allowExternalEmbedUrls: false,
-          assistantIdentity: { name: "Assistant" },
-          embedSandboxMode: "scripts",
-        },
-      },
-      chatSubmissions: createChatSubmissions(),
-      sessions: {},
-    } as unknown as ApplicationContext;
     const state = createPageState(
-      context,
+      createPageContext(),
       { invalidate: vi.fn(), afterCommit: () => () => {} },
       { dispatchEvent: () => true, querySelector: () => null },
     );
@@ -4163,25 +4152,8 @@ describe("image lightbox lifecycle", () => {
 
   it("invalidates immediately when beginning a deferred image open", () => {
     const invalidate = vi.fn();
-    const context = {
-      agents: {
-        state: { agentsList: null },
-        ensureList: vi.fn(async () => null),
-      },
-      agentSelection: { state: { selectedId: "main" } },
-      basePath: "",
-      config: {
-        current: {
-          allowExternalEmbedUrls: false,
-          assistantIdentity: { name: "Assistant" },
-          embedSandboxMode: "scripts",
-        },
-      },
-      chatSubmissions: createChatSubmissions(),
-      sessions: {},
-    } as unknown as ApplicationContext;
     const state = createPageState(
-      context,
+      createPageContext(),
       {
         invalidate,
         afterCommit: () => () => {},

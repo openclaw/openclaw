@@ -15,7 +15,7 @@ import { queuePluginSessionsChanged } from "../plugins/gateway-events.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { isBrowserCopilotClient } from "../utils/message-channel.js";
 import { ADMIN_SCOPE, QUESTIONS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
-import { hasEventScope } from "./server-broadcast-scopes.js";
+import { hasEventScope, modelMetadataInvalidationFragment } from "./server-broadcast-scopes.js";
 import type {
   GatewayBroadcastFn,
   GatewayBroadcastOpts,
@@ -283,6 +283,9 @@ export function createGatewayBroadcaster(params: {
     const presencePayload =
       // SAFETY: Internal presence producers emit { presence: SystemPresence[] }; wire input cannot publish events.
       event === "presence" ? (payload as { presence: SystemPresence[] }) : undefined;
+    // The bounded signal has no caller-provided serialization or model/config data.
+    const metadataInvalidation =
+      event === "chat.metadata.changed" ? modelMetadataInvalidationFragment(payload) : undefined;
     let projectPresence: ((client: GatewayWsClient) => SystemPresence[]) | undefined;
     let projectSession: ((client: GatewayWsClient) => unknown) | undefined;
     let skipSourcePayload = false;
@@ -305,7 +308,12 @@ export function createGatewayBroadcaster(params: {
       });
     const frameBaseFor = (value: unknown): FrameBase => ({
       ...getFrameFields(),
-      payloadFragment: presencePayload ? "" : serializeFrameField("payload", value),
+      payloadFragment:
+        value === payload && metadataInvalidation !== undefined
+          ? metadataInvalidation
+          : presencePayload
+            ? ""
+            : serializeFrameField("payload", value),
     });
     // Lazy so filtered-out broadcasts (zero eligible clients) never pay
     // JSON.stringify for the payload.
@@ -348,6 +356,13 @@ export function createGatewayBroadcaster(params: {
         questionRecipient !== undefined &&
         !operatorScopeSatisfied(QUESTIONS_SCOPE, c.connect.scopes ?? []);
       if (!hasEventScope(c, event, explicitPluginScope, ownRunQuestion)) {
+        continue;
+      }
+      if (
+        event === "chat.metadata.changed" &&
+        !operatorScopeSatisfied(READ_SCOPE, c.connect.scopes ?? []) &&
+        metadataInvalidation === undefined
+      ) {
         continue;
       }
       if (questionRecipient && !isCurrent(() => questionRecipient(c))) {

@@ -179,22 +179,26 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             }
             <div class="agent-chat__disabled-banner-detail">${props.disabledBanner.text}</div>
           </div>
-          <button
-            type="button"
-            class="btn btn--sm ${props.disabledBanner.actionStyle ?? ""}"
-            ?disabled=${Boolean(props.disabledBanner.disabledReason) || props.disabledBanner.busy}
-            aria-busy=${props.disabledBanner.busy ? "true" : "false"}
-            title=${props.disabledBanner.disabledReason ?? nothing}
-            @click=${props.disabledBanner.onAction}
-          >
-            ${
-              props.disabledBanner.busy
-                ? html`<span class="btn__spinner" aria-hidden="true"></span>${
-                      props.disabledBanner.busyLabel ?? props.disabledBanner.actionLabel
-                    }`
-                : props.disabledBanner.actionLabel
-            }
-          </button>
+          ${
+            props.disabledBanner.onAction
+              ? html`<button
+                  type="button"
+                  class="btn btn--sm ${props.disabledBanner.actionStyle ?? ""}"
+                  ?disabled=${Boolean(props.disabledBanner.disabledReason) || props.disabledBanner.busy}
+                  aria-busy=${props.disabledBanner.busy ? "true" : "false"}
+                  title=${props.disabledBanner.disabledReason ?? nothing}
+                  @click=${props.disabledBanner.onAction}
+                >
+                  ${
+                    props.disabledBanner.busy
+                      ? html`<span class="btn__spinner" aria-hidden="true"></span>${
+                            props.disabledBanner.busyLabel ?? props.disabledBanner.actionLabel
+                          }`
+                      : props.disabledBanner.actionLabel
+                  }
+                </button>`
+              : nothing
+          }
           ${
             props.disabledBanner.kind === "composer-replacement" && showAbortableUi
               ? renderChatAbortAction(runControlsProps)

@@ -2049,12 +2049,13 @@ describe("CI changed Node test plan", () => {
       const workerCount = targets.filter((file) =>
         databaseWorkerExtensionTestFiles.includes(file),
       ).length;
-      const runtimeFiles = listVitestRuntimeConsumerFiles([
-        "test/vitest/vitest.extension-telegram.config.ts",
-      ]).filter((file) => targets.includes(file));
+      const telegramConfig = "test/vitest/vitest.extension-telegram.config.ts";
+      const runtimeFiles = listVitestRuntimeConsumerFiles([telegramConfig]).filter((file) =>
+        targets.includes(file),
+      );
       expect(
         shards
-          .filter((shard) => shard.pretestBuildMode)
+          .filter((shard) => shard.pretestBuildMode && shard.configs.includes(telegramConfig))
           .flatMap((shard) => shard.includePatterns ?? [])
           .toSorted(),
       ).toEqual(runtimeFiles.toSorted());

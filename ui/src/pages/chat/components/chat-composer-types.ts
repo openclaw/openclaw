@@ -63,13 +63,11 @@ type ChatComposerDisabledBannerContent = {
   text: string;
   tone?: "info" | "neutral";
   icon?: "warning" | "archive";
-  actionLabel: string;
   actionStyle?: "primary";
   busy?: boolean;
   busyLabel?: string;
   disabledReason?: string;
-  onAction: () => void;
-};
+} & ({ actionLabel: string; onAction: () => void } | { actionLabel?: never; onAction?: never });
 
 export type ChatComposerDisabledBanner = ChatComposerDisabledBannerContent &
   ({ kind: "above-composer" } | { kind: "composer-replacement" });

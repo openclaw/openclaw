@@ -10,7 +10,6 @@ import {
 } from "../../lib/session-method-access.ts";
 import type { SessionPlacementTarget } from "../../lib/sessions/session-placement-recovery.ts";
 import { sessionPlacementDispatchParams } from "../../lib/sessions/session-placement-startup.ts";
-import { requiresChatModelSetup } from "../chat/chat-model-setup.ts";
 import * as catalog from "./catalog-target.ts";
 import { isWorktreeNameValid, type NewSessionVisibility } from "./create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
@@ -113,7 +112,7 @@ export function requiresNewSessionModelSetup(options: {
   const { snapshot, gateway, place, pendingPlacement } = options;
   const selectedAgent = place.selectedAgent();
   const agents = snapshot.context?.agents.state;
-  return requiresChatModelSetup({
+  return place.modelControl.requiresModelSetup({
     catalog:
       catalog.isTarget(snapshot.data) ||
       place.remotePlacement ||

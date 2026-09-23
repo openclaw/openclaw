@@ -6,14 +6,7 @@ import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { invalidateModelAuthStatusRequests } from "../../lib/model-auth-request-state.ts";
-import type { DefaultModelSelection } from "./data.ts";
-
-export type ModelBehaviorConfig = {
-  thinkingLevel: string | undefined;
-  thinkingOverridden: boolean;
-  fastMode: FastMode | undefined;
-  fastModeOverridden: boolean;
-};
+import type { DefaultModelSelection, ModelBehaviorConfig } from "./data.ts";
 
 export function modelDefaultsActions(
   getDefaults: () => DefaultModelSelection,

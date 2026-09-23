@@ -65,9 +65,12 @@ async function dispatchPendingProfileMethod(params: {
 }
 
 describe("Gateway pending-profile authorization", () => {
-  it.each(["agents.list", "models.list"])(
-    "rejects narrow %s catalog requests before dispatch for a verified person",
-    async (method) => {
+  it.each([
+    { method: "agents.list", narrowAllowed: false },
+    { method: "models.list", narrowAllowed: true },
+  ])(
+    "uses $method's registered catalog scope for a verified person",
+    async ({ method, narrowAllowed }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const profile = ensureProfileForEmail("catalog-reader@example.test");
         const client = createPendingProfileClient();
@@ -81,18 +84,22 @@ describe("Gateway pending-profile authorization", () => {
         const handler = vi.fn<GatewayRequestHandler>(({ respond }) =>
           respond(true, { catalog: [] }),
         );
-        const denied = await dispatchPendingProfileMethod({ client, method, handler });
-        expect(denied).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ message: "missing scope: operator.read" }),
-        );
-        expect(handler).not.toHaveBeenCalled();
+        const narrow = await dispatchPendingProfileMethod({ client, method, handler });
+        if (narrowAllowed) {
+          expect(narrow).toHaveBeenCalledExactlyOnceWith(true, { catalog: [] });
+        } else {
+          expect(narrow).toHaveBeenCalledExactlyOnceWith(
+            false,
+            undefined,
+            expect.objectContaining({ message: "missing scope: operator.read" }),
+          );
+        }
+        expect(handler).toHaveBeenCalledTimes(narrowAllowed ? 1 : 0);
 
         client.connect.scopes.push("operator.read");
         const broad = await dispatchPendingProfileMethod({ client, method, handler });
         expect(broad).toHaveBeenCalledWith(true, { catalog: [] });
-        expect(handler).toHaveBeenCalledOnce();
+        expect(handler).toHaveBeenCalledTimes(narrowAllowed ? 2 : 1);
       });
     },
   );

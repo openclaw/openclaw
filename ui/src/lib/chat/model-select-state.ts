@@ -3,6 +3,7 @@ import type {
   FastMode,
   GatewaySessionRow,
   ModelCatalogEntry,
+  ModelCatalogResult,
   SessionsListResult,
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
@@ -27,6 +28,9 @@ type ChatModelSelectStateInput = {
   modelOverrides: Readonly<Record<string, string | null | undefined>>;
   sessionKey: string;
   sessionsResult: SessionsListResult | null;
+  modelSelectionPolicy?: ModelCatalogResult["modelSelectionPolicy"];
+  catalogRetired?: boolean;
+  catalogInitialized?: boolean;
 };
 
 type ChatModelSelectOption = {
@@ -106,6 +110,12 @@ export function resolveChatModelOverrideValue(state: ChatModelSelectStateInput):
 }
 
 function resolveDefaultModelValue(state: ChatModelSelectStateInput): string {
+  if (state.catalogRetired || state.catalogInitialized === false) {
+    return "";
+  }
+  if (state.modelSelectionPolicy?.restricted) {
+    return state.modelSelectionPolicy.defaultModel ?? "";
+  }
   const agentDefault = resolvePreferredServerChatModelValue(
     state.agentDefaultModel,
     undefined,
@@ -213,6 +223,22 @@ export function resolveChatModelUnavailableReason(
   return matches.some((entry) => entry.unavailableReason === "auth-failed")
     ? "auth-failed"
     : "missing-auth";
+}
+
+export function hasChatModelCatalogSelection(
+  model: string | null | undefined,
+  provider: string | null | undefined,
+  catalog: ModelCatalogEntry[],
+): boolean {
+  const key = normalizeChatModelAvailabilityKey(
+    resolvePreferredServerChatModelValue(model, provider, catalog),
+  );
+  return catalog.some(
+    (entry) =>
+      entry.manualSelectionAllowed !== false &&
+      normalizeChatModelAvailabilityKey(buildQualifiedChatModelValue(entry.id, entry.provider)) ===
+        key,
+  );
 }
 
 export function chatModelUnavailableMessage(

@@ -278,6 +278,39 @@ Restore recreates `openclaw/<name>` at the original pre-snapshot commit, reusing
 
 A branch at a shallow history boundary can still be snapshotted and restored. If a later depth-limited fetch makes the snapshot commit itself shallow, Git may no longer resolve its parent. Restore then preserves the snapshot and reports the repository and snapshot commit with `git fetch --unshallow` guidance. OpenClaw does not deepen automatically: origin may not contain the local snapshot, so even a successful fetch cannot guarantee recovery. If the snapshot remains shallow after fetching, recover its parent from the original repository before retrying.
 
+## Retire an already removed snapshot early
+
+Use `openclaw worktrees retire-snapshot` only when the removed snapshot is redundant
+with a retained local branch or remote-tracking commit. This local CLI operation
+requires the exact worktree ID, snapshot ref and commit, recorded `removedAt`
+milliseconds, and retained source ref and commit. Read those identities from the
+removed record and repository before invoking it:
+
+```bash
+openclaw worktrees retire-snapshot <id> \
+  --expected-ref refs/openclaw/snapshots/<id> --expected-oid <snapshot-commit> \
+  --removed-at <milliseconds> \
+  --retained-ref refs/heads/<retained-branch> --retained-oid <source-commit> --json
+```
+
+Retirement applies only to ordinary snapshots, not exact-state recovery snapshots or
+their retained checkouts. It requires identical source trees and retained snapshot-parent history.
+It refuses a live or reappeared checkout, Git registration, changed identity,
+pending removal, run/removal consumer, unknown or nonempty provisioned-file
+inventory, or any retained local workspace projection. Git equality does not prove
+that accepted ignored projection data is redundant. It uses the existing allocation
+lease and projection owner, then atomically verifies the retained ref and deletes
+only the expected snapshot ref. It does not create a backup, delete the retained
+source or PR outcome refs, run global garbage collection, or report reclaimed disk
+bytes. Git object storage can remain shared after ref retirement.
+
+A successful JSON result is `{ "retired": true, "id": "<id>" }`; the removed
+registry entry is then absent and cannot be restored. A refusal is not cleanup
+success. If an interruption occurs after the ref is retired, inspect the remaining
+record and projection custody before further cleanup; this command does not infer
+safe retirement from a missing ref. This operation is CLI-only, not a Gateway or
+Control UI action.
+
 ## Exact-state detached retirement
 
 Ordinary removal, forced removal, and `--if-lossless` still refuse a detached

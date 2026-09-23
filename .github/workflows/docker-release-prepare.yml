@@ -207,13 +207,19 @@ jobs:
           push: false
       - name: Relay default image limit warnings
         if: ${{ always() && steps.build.outputs.metadata != '' }}
+        continue-on-error: true
         env:
           BUILD_METADATA: ${{ steps.build.outputs.metadata }}
         run: |
           set -euo pipefail
           build_ref="$(node -e 'const ref = JSON.parse(process.env.BUILD_METADATA)["buildx.build.ref"]; if (typeof ref !== "string" || !ref) throw new Error("Build metadata is missing its build reference"); process.stdout.write(ref)')"
-          docker buildx history logs --progress plain "$build_ref" 2>&1 |
-            node workflow-source/scripts/relay-build-limit-warnings.mts
+          history_status=0
+          history_log="$(docker buildx history logs --progress plain "$build_ref" 2>&1)" || history_status=$?
+          if [ "$history_status" -ne 0 ]; then
+            echo "::notice title=Build limit warning relay skipped::docker buildx history logs exited ${history_status}: $(printf '%s' "$history_log" | head -c 400 | tr '\n' ' ')"
+            exit 0
+          fi
+          printf '%s\n' "$history_log" | node workflow-source/scripts/relay-build-limit-warnings.mts
       - name: Build browser OCI image
         if: ${{ needs.resolve.outputs.include_browser == 'true' }}
         id: build-browser
@@ -238,13 +244,19 @@ jobs:
           push: false
       - name: Relay browser image limit warnings
         if: ${{ always() && steps.build-browser.outputs.metadata != '' }}
+        continue-on-error: true
         env:
           BUILD_METADATA: ${{ steps.build-browser.outputs.metadata }}
         run: |
           set -euo pipefail
           build_ref="$(node -e 'const ref = JSON.parse(process.env.BUILD_METADATA)["buildx.build.ref"]; if (typeof ref !== "string" || !ref) throw new Error("Build metadata is missing its build reference"); process.stdout.write(ref)')"
-          docker buildx history logs --progress plain "$build_ref" 2>&1 |
-            node workflow-source/scripts/relay-build-limit-warnings.mts
+          history_status=0
+          history_log="$(docker buildx history logs --progress plain "$build_ref" 2>&1)" || history_status=$?
+          if [ "$history_status" -ne 0 ]; then
+            echo "::notice title=Build limit warning relay skipped::docker buildx history logs exited ${history_status}: $(printf '%s' "$history_log" | head -c 400 | tr '\n' ' ')"
+            exit 0
+          fi
+          printf '%s\n' "$history_log" | node workflow-source/scripts/relay-build-limit-warnings.mts
 
       - name: Verify OCI bytes, attestations, and image smoke
         env:
