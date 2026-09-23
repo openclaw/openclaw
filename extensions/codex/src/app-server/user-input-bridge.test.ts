@@ -83,15 +83,24 @@ function secretRequestParams(overrides: Record<string, unknown> = {}) {
   });
 }
 
+function createBridge(
+  paramsForRun: Parameters<typeof createCodexUserInputBridge>[0]["paramsForRun"],
+  options: Pick<Parameters<typeof createCodexUserInputBridge>[0], "signal" | "gatewayCall"> = {},
+) {
+  return createCodexUserInputBridge({
+    paramsForRun,
+    threadId: "thread-1",
+    turnId: "turn-1",
+    ...options,
+  });
+}
+
 describe("Codex app-server user input bridge", () => {
   it("registers, presents, claims, and returns gateway answers", async () => {
     const params = createParams();
     const gateway = createGatewayStub();
     const onOrdinaryResponse = vi.fn();
-    const bridge = createCodexUserInputBridge({
-      paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+    const bridge = createBridge(params, {
       gatewayCall: gateway.call,
       onOrdinaryResponse,
     });
@@ -143,10 +152,7 @@ describe("Codex app-server user input bridge", () => {
     const params = createParams(controller.signal);
     const gateway = createGatewayStub();
     const onOrdinaryResponse = vi.fn();
-    const bridge = createCodexUserInputBridge({
-      paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+    const bridge = createBridge(params, {
       signal: controller.signal,
       gatewayCall: gateway.call,
       onOrdinaryResponse,
@@ -244,10 +250,7 @@ describe("Codex app-server user input bridge", () => {
     controller.abort();
     const params = createParams(controller.signal);
     const gateway = createGatewayStub();
-    const bridge = createCodexUserInputBridge({
-      paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+    const bridge = createBridge(params, {
       signal: controller.signal,
       gatewayCall: gateway.call,
     });
@@ -263,10 +266,7 @@ describe("Codex app-server user input bridge", () => {
     const params = createParams();
     const gateway = createGatewayStub();
     const onOrdinaryResponse = vi.fn();
-    const bridge = createCodexUserInputBridge({
-      paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+    const bridge = createBridge(params, {
       gatewayCall: gateway.call,
       onOrdinaryResponse,
     });
@@ -290,10 +290,7 @@ describe("Codex app-server user input bridge", () => {
   it("requires isSecret to be an own input property", async () => {
     const params = createParams();
     const gateway = createGatewayStub();
-    const bridge = createCodexUserInputBridge({
-      paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+    const bridge = createBridge(params, {
       gatewayCall: gateway.call,
     });
     const question = Object.assign(Object.create({ isSecret: true }), {
@@ -321,11 +318,7 @@ describe("Codex app-server user input bridge", () => {
   it("clears an unanswered secret request when prompt delivery fails", async () => {
     const params = createParams();
     params.onBlockReply = vi.fn().mockRejectedValue(new Error("channel unavailable"));
-    const bridge = createCodexUserInputBridge({
-      paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
-    });
+    const bridge = createBridge(params);
 
     await expect(
       bridge.handleRequest({ id: "input-secret-undelivered", params: secretRequestParams() }),
@@ -342,11 +335,7 @@ describe("Codex app-server user input bridge", () => {
     });
     const params = createParams();
     params.onBlockReply = vi.fn().mockReturnValueOnce(firstDelivery).mockResolvedValue(undefined);
-    const bridge = createCodexUserInputBridge({
-      paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
-    });
+    const bridge = createBridge(params);
 
     const first = bridge.handleRequest({
       id: "input-secret-replaced",
@@ -384,10 +373,7 @@ describe("Codex app-server user input bridge", () => {
     const params = createParams();
     const gateway = createGatewayStub();
     const onOrdinaryResponse = vi.fn();
-    const bridge = createCodexUserInputBridge({
-      paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+    const bridge = createBridge(params, {
       gatewayCall: gateway.call,
       onOrdinaryResponse,
     });
@@ -408,10 +394,7 @@ describe("Codex app-server user input bridge", () => {
   it("keeps legacy requests blocking and ignores deprecated autoResolutionMs", async () => {
     const params = createParams();
     const gateway = createGatewayStub();
-    const bridge = createCodexUserInputBridge({
-      paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+    const bridge = createBridge(params, {
       gatewayCall: gateway.call,
     });
     const response = bridge.handleRequest({
@@ -460,10 +443,7 @@ describe("Codex app-server user input bridge", () => {
       }
       throw new Error(`unexpected gateway method: ${method}`);
     };
-    const bridge = createCodexUserInputBridge({
-      paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+    const bridge = createBridge(params, {
       gatewayCall,
     });
 
@@ -491,11 +471,7 @@ describe("Codex app-server user input bridge", () => {
   it("auto-resolves nonblocking secret prompts after exactly 120 seconds", async () => {
     vi.useFakeTimers();
     const params = createParams();
-    const bridge = createCodexUserInputBridge({
-      paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
-    });
+    const bridge = createBridge(params);
     const response = bridge.handleRequest({
       id: "input-secret-nonblocking",
       params: secretRequestParams({
