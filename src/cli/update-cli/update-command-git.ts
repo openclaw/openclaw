@@ -25,6 +25,7 @@ import {
   verifyPackageUpdateRecovery,
   resolveGlobalInstallTarget,
   resolveNpmLifecyclePolicyGate,
+  type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import {
@@ -432,7 +433,10 @@ export async function updateGitInstall(params: {
   jsonMode?: boolean;
   invocationCwd?: string;
   nodeRunner?: string;
-  inspectGitTarget: UpdateRunnerOptions["inspectGitTarget"];
+  inspectGitTarget: (
+    target: Parameters<UpdateRunnerOptions["inspectGitTarget"]>[0],
+    installTarget?: ResolvedGlobalInstallTarget,
+  ) => Promise<void>;
 }): Promise<UpdateRunResult> {
   let updateRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
   const effectiveTimeout = params.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
@@ -544,7 +548,7 @@ export async function updateGitInstall(params: {
                 params.assertCurrent?.();
               }
             : params.beforeGitMutation,
-        inspectGitTarget: params.inspectGitTarget,
+        inspectGitTarget: (target) => params.inspectGitTarget(target, installTarget ?? undefined),
         beforeGitStaging: params.switchToGit
           ? undefined
           : async () => ({

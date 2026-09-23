@@ -28,6 +28,7 @@ import {
   writeSessionPlacementRecovery,
 } from "../lib/sessions/session-placement-recovery.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
+import { expectSignedPayloadFields } from "./gateway-signature.test-support.ts";
 
 const realLoadOrCreateDeviceIdentity = nodes.loadOrCreateDeviceIdentity;
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
@@ -285,23 +286,6 @@ function requireFirstSignCall(): [privateKey: string, payload: string] {
     throw new Error("expected device payload signing args");
   }
   return [privateKey, payload];
-}
-
-function expectSignedPayloadFields(
-  payload: string | undefined,
-  params: { scopes: string[]; token: string; nonce: string; signedAtMs?: number },
-) {
-  expect(payload?.split("|")).toEqual([
-    "v2",
-    "device-1",
-    "openclaw-control-ui",
-    "webchat",
-    "operator",
-    params.scopes.join(","),
-    params.signedAtMs === undefined ? expect.stringMatching(/^\d+$/) : String(params.signedAtMs),
-    params.token,
-    params.nonce,
-  ]);
 }
 
 function expectLatestRequestTiming(
@@ -1942,7 +1926,17 @@ describe("GatewayBrowserClient", () => {
     },
   );
 
-  it("uses cached device tokens only when no explicit shared auth is provided", async () => {
+  it.each([
+    { name: "operator", scopes: [...CONTROL_UI_OPERATOR_SCOPES] },
+    { name: "session reader", scopes: ["operator.sessions.read"] },
+    { name: "session writer", scopes: ["operator.sessions.write"] },
+  ])("reuses cached $name credentials without requesting broader scopes", async ({ scopes }) => {
+    const stored = storeDeviceAuthToken({
+      deviceId: "device-1",
+      role: "operator",
+      token: STORED_CRED,
+      scopes,
+    });
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
     });
@@ -1954,17 +1948,11 @@ describe("GatewayBrowserClient", () => {
     expect(connectFrame.params?.auth?.token).toBeUndefined();
     expect(connectFrame.params?.auth?.password).toBeUndefined();
     expect(connectFrame.params?.auth?.deviceToken).toBe("stored-device-token");
+    expect(connectFrame.params?.scopes).toEqual(stored.scopes);
     const [privateKey, signedPayload] = requireFirstSignCall();
     expect(privateKey).toBe("private-key");
     expectSignedPayloadFields(signedPayload, {
-      scopes: [
-        "operator.admin",
-        "operator.approvals",
-        "operator.pairing",
-        "operator.questions",
-        "operator.read",
-        "operator.write",
-      ],
+      scopes: stored.scopes,
       token: "stored-device-token",
       nonce: "nonce-1",
     });

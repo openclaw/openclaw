@@ -218,6 +218,7 @@ export function buildSidebarSessionNavigationState(input: {
       pinnable: isPinnableUiSessionRow(row),
       archived: row.archived === true,
       visibility: row.visibility,
+      sharingRole: row.sharingRole,
       draftOwnedBySelf: isSidebarDraftOwnedBySelf(row, context?.gateway.snapshot.selfUser?.id),
       category: normalizeOptionalString(row.category),
       icon: normalizeOptionalString(row.icon),

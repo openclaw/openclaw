@@ -8,6 +8,7 @@ import { root as openRoot } from "./fs-safe.js";
 import { tryReadJson } from "./json-files.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
+import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import {
   assertUpdateCandidatePluginEntryStat,
   isUpdateCandidateHostLauncher,
@@ -503,6 +504,7 @@ export async function copyUpdateCandidatePluginTrees(
     targetStateDir: string;
     candidateRoot: string;
     onProgress?: () => void | Promise<void>;
+    onCodeLink?: (fact: UpdateCandidatePluginCodeLink) => void;
   },
 ): Promise<void> {
   const targets = resolveUpdateCandidatePluginTreeTargets(plan, params);
@@ -570,7 +572,7 @@ export async function copyUpdateCandidatePluginTrees(
     hostLinks,
     aliases: targets.aliases,
   });
-  const verification = { privateRoot, candidateRoot, hostLinks };
+  const verification = { privateRoot, candidateRoot, hostLinks, onCodeLink: params.onCodeLink };
   for (const alias of privateAliases) {
     await verifyUpdateCandidatePluginTree(alias, verification);
   }

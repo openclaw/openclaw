@@ -188,6 +188,7 @@ describe.runIf(browserMode)("chat file editor", () => {
     await userEvent.click(button(panel, "Previous match"));
     await expect.poll(() => lineIndexes(".file-view__line--current")).toEqual([matchLines[0]]);
     expect(readFileDraft(panel.content)).toBeUndefined();
+    expect(canReloadControlUiDocument()).toBe(true);
     panel.remove();
     expect(canReloadControlUiDocument()).toBe(true);
   });
@@ -495,6 +496,7 @@ describe.runIf(browserMode)("chat file editor", () => {
         ),
       ).toBe(false);
       expect(readFileDraft(panel.content)).toBeUndefined();
+      expect(canReloadControlUiDocument()).toBe(true);
       panel.remove();
       expect(canReloadControlUiDocument()).toBe(true);
     },

@@ -284,6 +284,8 @@ export function renderApplicationShell(host: ShellViewHost) {
             value: runtimeConfig.configForm ?? runtimeConfig.configSnapshot?.config ?? null,
             uiHints: runtimeConfig.configUiHints,
             identityAvailable: Boolean(gatewaySnapshot.selfUser),
+            multipleProfiles:
+              gatewaySnapshot.hello?.policy?.hasMultipleSessionSharingIdentities === true,
             basePath: context.basePath,
             canAdmin: operatorAccess.canAdmin,
             nativeDeviceSettings: context.nativeDeviceSettings,

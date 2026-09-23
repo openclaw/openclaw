@@ -1980,7 +1980,6 @@ src/auto-reply/reply/agent-runner-execution.ts	1
 src/auto-reply/reply/agent-runner-fallback-candidate.ts	1
 src/auto-reply/reply/agent-runner-memory.ts	5
 src/auto-reply/reply/agent-runner-run.ts	1
-src/auto-reply/reply/agent-runner-session-reset.ts	1
 src/auto-reply/reply/agent-runner-trace.ts	1
 src/auto-reply/reply/agent-runner-utils.ts	1
 src/auto-reply/reply/block-streaming.ts	3
@@ -2013,16 +2012,13 @@ src/auto-reply/reply/dispatch-acp.ts	2
 src/auto-reply/reply/dispatch-from-config.events.ts	1
 src/auto-reply/reply/dispatch-from-config.prepare-execution.ts	1
 src/auto-reply/reply/elevated-allowlist-matcher.ts	2
-src/auto-reply/reply/exec/directive.ts	1
 src/auto-reply/reply/followup-delivery-payloads.ts	1
 src/auto-reply/reply/followup-turn-execution.ts	1
 src/auto-reply/reply/get-reply-directives.ts	8
 src/auto-reply/reply/get-reply-exec-overrides.ts	1
 src/auto-reply/reply/get-reply-fast-path.ts	1
-src/auto-reply/reply/get-reply-inline-actions.ts	5
-src/auto-reply/reply/get-reply-native-slash-fast-path.ts	1
+src/auto-reply/reply/get-reply-inline-actions.ts	4
 src/auto-reply/reply/get-reply-run-execute.ts	3
-src/auto-reply/reply/get-reply-run-helpers.ts	1
 src/auto-reply/reply/get-reply.ts	2
 src/auto-reply/reply/history.ts	2
 src/auto-reply/reply/inbound-context.ts	8
@@ -2066,7 +2062,7 @@ src/channels/inbound-event/context.ts	6
 src/channels/location.ts	1
 src/channels/message-access/admission-evidence.ts	1
 src/channels/message/adapter.ts	1
-src/channels/message/capabilities.ts	2
+src/channels/message/capabilities.ts	1
 src/channels/message/ingress-claim-owner.ts	1
 src/channels/message/ingress-drain.ts	1
 src/channels/message/ingress-monitor.ts	4
@@ -2098,7 +2094,6 @@ src/channels/plugins/package-state-probes.ts	2
 src/channels/plugins/read-only-command-defaults.ts	2
 src/channels/plugins/read-only.ts	4
 src/channels/plugins/registry.ts	1
-src/channels/plugins/session-thread-info-loaded.ts	1
 src/channels/plugins/setup-contract.ts	3
 src/channels/plugins/setup-helpers.ts	3
 src/channels/plugins/setup-promotion-helpers.ts	1
@@ -3709,7 +3704,7 @@ ui/src/pages/plugin/route.ts	1
 ui/src/pages/portals/portal-reachability.ts	1
 ui/src/pages/profile/identity-section.ts	2
 ui/src/pages/secrets/view.ts	5
-ui/src/pages/sessions/view.ts	8
+ui/src/pages/sessions/view.ts	7
 ui/src/pages/skill-workshop/route.ts	1
 ui/src/pages/skill-workshop/self-learning.ts	1
 ui/src/pages/skill-workshop/view.ts	1

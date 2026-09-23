@@ -450,7 +450,7 @@ async function activeModelSupportsNativeVision(params: {
 }
 
 async function* resolveAutoAudioEntries(
-  params: Parameters<typeof resolveAutoEntries>[0],
+  params: Parameters<typeof resolveAutoEntries>[0] & { providerRegistry: ProviderRegistry },
 ): AsyncGenerator<ResolvedMediaModelEntry> {
   const activeProvider = normalizeMediaExecutionProviderId(
     params.activeModel?.provider?.trim() ?? "",
@@ -481,26 +481,27 @@ async function resolveAutoEntries(params: {
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
-  providerRegistry: ProviderRegistry;
+  providerRegistry?: ProviderRegistry;
   capability: MediaUnderstandingCapability;
   activeModel?: ActiveMediaModel;
   nativeVisionActive: boolean;
   config?: MediaUnderstandingConfig;
 }): Promise<ResolvedMediaModelEntry[]> {
   if (params.capability === "image" && !params.nativeVisionActive) {
-    const imageModelEntries = resolveImageModelFromAgentDefaults({
-      cfg: params.cfg,
-      agentId: params.agentId,
-    });
+    const imageModelEntries = resolveImageModelFromAgentDefaults(params);
     if (imageModelEntries.length > 0) {
       return imageModelEntries.map((entry) => ({ entry }));
     }
   }
-  const activeEntry = await resolveActiveModelEntry(params);
+  const prepared = {
+    ...params,
+    providerRegistry: params.providerRegistry ?? buildProviderRegistry(undefined, params.cfg),
+  };
+  const activeEntry = await resolveActiveModelEntry(prepared);
   if (activeEntry) {
     return [{ entry: activeEntry }];
   }
-  const keys = await resolveKeyEntry(params);
+  const keys = await resolveKeyEntry(prepared);
   if (keys) {
     return [{ entry: keys }];
   }
@@ -514,10 +515,8 @@ export async function resolveAutoImageModel(params: {
   workspaceDir?: string;
   activeModel?: ActiveMediaModel;
 }): Promise<ActiveMediaModel | null> {
-  const providerRegistry = buildProviderRegistry(undefined, params.cfg);
   const entries = await resolveAutoEntries({
     ...params,
-    providerRegistry,
     capability: "image",
     nativeVisionActive: false,
   });

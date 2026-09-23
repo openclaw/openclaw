@@ -2,7 +2,10 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { isMainThread, threadId } from "node:worker_threads";
-import { disposeNodeSqliteDependents } from "../infra/kysely-sync-cache-state.js";
+import {
+  disposeNodeSqliteDependents,
+  registerNodeSqliteDisposeCallback,
+} from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
@@ -46,7 +49,12 @@ import {
   getOpenClawDatabaseMaintenanceScope,
   observeOpenClawDatabaseMaintenanceResource,
 } from "./openclaw-state-db-async-lifecycle.js";
+import {
+  registerOpenClawStateDatabaseLifecycleListener,
+  retainOpenClawStateDatabaseForIdle,
+} from "./openclaw-state-db-cache.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 const agentDbLog = createSubsystemLogger("state/agent-db");
 const OPENCLAW_AGENT_DB_SLOW_OPEN_MS = 1_000;
@@ -182,6 +190,23 @@ export function retainAgentDatabase(db: DatabaseSync): () => void {
       cache.idleTimers.get(db)?.refresh();
     }
   };
+}
+
+/** Keep live deletion-fence reads warm without creating shared state or preventing explicit close. */
+export function retainIncognitoSharedState(db: DatabaseSync, env?: NodeJS.ProcessEnv): void {
+  const statePath = path.resolve(resolveOpenClawStateSqlitePath(env));
+  let releaseIdle: (() => void) | undefined;
+  const unsubscribe = registerOpenClawStateDatabaseLifecycleListener((event) => {
+    if (event.kind === "opened" && event.database.path === statePath) {
+      releaseIdle?.();
+      releaseIdle = retainOpenClawStateDatabaseForIdle(event.database);
+    }
+  });
+  registerNodeSqliteDisposeCallback(db, () => {
+    unsubscribe();
+    releaseIdle?.();
+    releaseIdle = undefined;
+  });
 }
 
 /** Activity and final borrower release start the same idle window. */

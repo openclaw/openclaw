@@ -1,12 +1,14 @@
 import { html } from "lit";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { hasOperatorReadAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { resolveModelCatalogState } from "../../lib/model-catalog-store.ts";
 import {
   readSessionMethodAccess,
+  readSessionMethodScopeAccess,
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
 import {
@@ -68,9 +70,28 @@ export function createChatPaneQueuedEditProps(
   };
 }
 
+export function readChatPaneComposerAccess(
+  snapshot: Pick<ApplicationGatewaySnapshot, "hello">,
+  session: GatewaySessionRow | undefined,
+  catalog: boolean,
+) {
+  const auth = snapshot.hello?.auth ?? null;
+  const canSend =
+    hasOperatorWriteAccess(auth) ||
+    (!catalog &&
+      readSessionMethodScopeAccess(auth, {
+        method: "chat.send",
+        requiredScope: "operator.write",
+        sessionScope: true,
+        session,
+      }).allowed);
+  return { canCompose: hasOperatorReadAccess(auth) || canSend, canSend };
+}
+
 export function readChatPaneMutationAccess(
   snapshot: ApplicationGatewaySnapshot,
   sessionKey: string,
+  session?: GatewaySessionRow,
 ) {
   return {
     model: readSessionMethodAccess(snapshot, {
@@ -92,6 +113,8 @@ export function readChatPaneMutationAccess(
     unarchive: readSessionMethodAccess(snapshot, {
       method: "sessions.patch",
       params: { key: sessionKey, archived: false },
+      sessionScope: true,
+      session,
     }),
   };
 }
@@ -168,11 +191,14 @@ export function renderChatPaneComposerControls(params: {
       models: state.chatModelCatalog,
       refreshFailed: state.chatModelCatalogRefreshFailed,
       pendingProviders: state.chatModelCatalogPendingProviders,
+      modelSelectionPolicy: state.chatModelSelectionPolicy,
     },
     {
       connected: state.connected,
       loading: state.chatModelsLoading,
       error: state.chatModelCatalogError,
+      retired: state.chatModelCatalogRetired,
+      initialized: state.chatModelCatalogInitialized,
     },
   );
   const thinkingLevelOverride = state.sessions.think(sessionKey, agentScope.agentId);

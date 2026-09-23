@@ -96,6 +96,16 @@ Other selection rules:
 - The Control UI starts from the Gateway's prepared configured model view, so opening chat does not start provider discovery. Opening the chat model picker reads published rows, including rows matched by a trailing `provider/*` policy entry. Use its explicit Refresh action to discover provider models. Default and configured picker views hide catalog rows marked `deprecated` or `disabled`. There is one exception: a row stays visible when that exact model is configured as a primary, fallback, utility or tool model, alias or settings key, or exact policy entry. Hidden rows remain selectable by exact `provider/model` ref. The full built-in catalog, including hidden rows, is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
 - Provider inventory UIs use `models.list` with `view: "provider-config"` to show source-authored `models.providers.*.models` rows without applying picker allowlists.
 
+On shared Gateways, an administrator can also configure a [named role's model
+policy](/gateway/operator-scopes#named-operator-roles). Model discovery and the
+Control UI, macOS, and iOS chat pickers show only the models permitted by that policy.
+This also applies to New Session in the Control UI. The Default choice uses a permitted automatic default; it does not grant additional
+manual choices. Configuration changes discard old choices before refreshing the
+catalog. Saved conversations retain their historical model information.
+Filtering alone does not overwrite saved New Session model preferences. A saved
+choice can return when the policy permits it again; explicitly choosing another
+model still updates the preference.
+
 The Gateway prepares one model catalog for the CLI, `/models`, the Control UI,
 and native apps. Ordinary browsing and opening or reopening a model picker read
 the published catalog without starting provider discovery.

@@ -42,6 +42,7 @@ import "../../styles/profile.css";
 import "../../features/github-connections/github-connections.ts";
 import { processProfileAvatar, ProfileAvatarError } from "./avatar-processing.ts";
 import "./model-accounts.ts";
+import "./personal-instructions.ts";
 import { renderIdentitySection } from "./identity-section.ts";
 import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
 import { renderProfileHero } from "./profile-hero.ts";
@@ -388,19 +389,35 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
 
   private renderBody() {
-    if (!this.connected || !this.client) {
-      return renderSettingsPage(renderSettingsGroup(renderSettingsEmpty(t("profilePage.offline"))));
-    }
+    const connected = this.connected && this.client !== null;
+    const multipleProfiles =
+      this.context.gateway.snapshot.hello?.policy?.hasMultipleSessionSharingIdentities === true;
+    // Keep the personal editor mounted through transport interruptions so its
+    // draft survives, but hide the host on single-user Gateways so it adds no layout gap.
     return renderSettingsPage(html`
-      ${this.renderHero()} ${this.renderIdentity()} ${this.renderModelAccounts()}
-      <openclaw-github-connections></openclaw-github-connections>
-      ${renderSettingsGroup(
-        renderSettingsNavRow({
-          title: t("profilePage.usageStatistics"),
-          description: t("profilePage.usageStatisticsDescription"),
-          onClick: () => this.context.navigate("usage"),
-        }),
-      )}
+      ${
+        connected
+          ? html`${this.renderHero()} ${this.renderIdentity()}`
+          : renderSettingsGroup(renderSettingsEmpty(t("profilePage.offline")))
+      }
+      <openclaw-personal-instructions
+        ?hidden=${!connected || !multipleProfiles}
+      ></openclaw-personal-instructions>
+      ${
+        connected
+          ? html`
+              ${this.renderModelAccounts()}
+              <openclaw-github-connections></openclaw-github-connections>
+              ${renderSettingsGroup(
+                renderSettingsNavRow({
+                  title: t("profilePage.usageStatistics"),
+                  description: t("profilePage.usageStatisticsDescription"),
+                  onClick: () => this.context.navigate("usage"),
+                }),
+              )}
+            `
+          : nothing
+      }
     `);
   }
 

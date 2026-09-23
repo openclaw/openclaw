@@ -70,6 +70,8 @@ export type GatewayClient = {
   internal?: {
     /** Handshake-attested direct-local transport; never accepted from wire params. */
     isLocalClient?: true;
+    /** Authenticated operator transport ingress; never accepted from wire params. */
+    authenticatedOperator?: true;
     /** Authenticated Control UI operator ingress; never accepted from wire params. */
     authenticatedControlUi?: true;
     /** Authenticated Control UI admin admission; never accepted from wire params. */

@@ -224,11 +224,13 @@ export function createSessionRowProjectionFixture(params: {
     },
     dirtyRowCount: 0,
     needsMaterialization: false,
+    getPolicyConfig: () => cfg,
     state: {
       get revision() {
         return revisionToken;
       },
       cfg,
+      policyConfig: cfg,
       modelCatalog,
       rowContext,
       scope: (options) => ({

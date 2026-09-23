@@ -31,6 +31,7 @@ import {
 } from "./update-freebsd-pkg-ownership.js";
 import { collectGitRuntimeErrors, type GitRuntimeIdentity } from "./update-git-runtime.js";
 import type { CommandRunner } from "./update-global-command-runner.js";
+import { resolvePnpmGlobalDirFromGlobalRoot } from "./update-native-package-owner.js";
 import {
   inspectNpmLauncher,
   probeNpmGlobalPrefix,
@@ -924,27 +925,6 @@ async function isPnpmIsolatedGlobalPackageRoot(pkgRoot?: string | null): Promise
     return false;
   }
   return Boolean(await resolvePnpmIsolatedGlobalPackage({ globalRoot, pkgRoot }));
-}
-
-/**
- * Resolves pnpm's global-dir from its active global package root.
- * pnpm 10 used `<globalDir>/<version>/node_modules`; pnpm 11 uses
- * `<globalDir>/v<version>` with isolated package projects below it.
- */
-export function resolvePnpmGlobalDirFromGlobalRoot(globalRoot?: string | null): string | null {
-  const trimmed = globalRoot?.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const normalized = path.resolve(trimmed);
-  if (/^v\d+$/u.test(path.basename(normalized))) {
-    return path.dirname(normalized);
-  }
-  if (path.basename(normalized) !== "node_modules") {
-    return null;
-  }
-  const layoutDir = path.dirname(normalized);
-  return /^\d+$/u.test(path.basename(layoutDir)) ? path.dirname(layoutDir) : null;
 }
 
 async function isPnpmGlobalPackageRoot(pkgRoot?: string | null): Promise<boolean> {

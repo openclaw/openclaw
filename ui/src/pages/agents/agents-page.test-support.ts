@@ -3,7 +3,6 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsFilesListResult,
   AgentsListResult,
-  ModelCatalogEntry,
   ToolsEffectiveResult,
 } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
@@ -13,6 +12,7 @@ import type { PanelRefreshStatus } from "../../components/panel-refresh-status.t
 import type { AgentsPanel } from "../../lib/agents/panels.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import type { CronState } from "../../lib/cron/types.ts";
+import type { ModelCatalogPresentation } from "../../lib/model-catalog-store.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import type { AgentsRouteData } from "./route.ts";
 
@@ -40,7 +40,7 @@ export type TestAgentsPage = HTMLElement & {
   toolsEffectiveError: string | null;
   toolsEffectiveLoading: boolean;
   toolsEffectiveResult: ToolsEffectiveResult | null;
-  chatModelCatalog: ModelCatalogEntry[];
+  readonly modelCatalog: ModelCatalogPresentation;
   chatModelCatalogStatus: PanelRefreshStatus;
   cron: CronState;
   requestGeneration: number;

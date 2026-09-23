@@ -41,6 +41,7 @@ import {
   BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
   CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES,
 } from "../../../src/shared/device-bootstrap-profile.js";
+import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import { formatUiError } from "../lib/format-error.ts";
 import { isLoopbackHostname } from "../lib/gateway-locality.ts";
 import {
@@ -644,9 +645,11 @@ export class GatewayBrowserClient {
     const storedScopes = storedEntry?.scopes ?? [];
     const storedTokenCanRead =
       params.role !== CONTROL_UI_OPERATOR_ROLE ||
-      storedScopes.includes("operator.read") ||
-      storedScopes.includes("operator.write") ||
-      storedScopes.includes("operator.admin");
+      roleScopesAllow({
+        role: params.role,
+        requestedScopes: ["operator.sessions.read"],
+        allowedScopes: storedScopes,
+      });
     return selectGatewayConnectAuth({
       token: this.opts.token,
       bootstrapToken: this.opts.bootstrapToken,

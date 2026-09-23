@@ -715,6 +715,7 @@ describe("chat transcript rendering", () => {
             runId,
             ...(kind === "keyed" ? { itemId: "settled-segment" } : {}),
           },
+          { text: "Continuing work", ts: 4_000, runId, itemId: "latest-commentary" },
         ],
         toolMessages: [
           {
@@ -748,6 +749,12 @@ describe("chat transcript rendering", () => {
         const group = requireClosest(bubble, ".chat-group");
         const tool = requireElement(container, ".chat-group.tool");
         expect(bubble.textContent).toContain(text);
+        expect(
+          Array.from(
+            container.querySelectorAll(".chat-working-indicator__preamble"),
+            (preamble) => preamble.textContent,
+          ),
+        ).toEqual(["Continuing work"]);
         expect(bubble.classList.contains("streaming")).toBe(false);
         expect(group.querySelector(".chat-group-footer-actions")).toBeNull();
         expect(group.querySelector(".chat-reading-indicator")).toBeNull();

@@ -12,6 +12,7 @@ import {
 } from "./update-doctor-config-schema.js";
 import { updateRecoveryCaptureStateSchema } from "./update-recovery-receipt-schema.js";
 import { updateRecoverySchema } from "./update-recovery.js";
+import { UpdateRunDriverSchema as driver } from "./update-run-driver-schema.js";
 import { UPDATE_RUN_TEXT_LIMIT, UPDATE_RUN_DIAGNOSTIC_LIMIT } from "./update-run-limits.js";
 import { UpdateSnapshotCapacitySchema } from "./update-snapshot-capacity-schema.js";
 
@@ -93,12 +94,6 @@ const UpdateRunStepSchema = z.object({
       .extend({ directory: text })
       .nullable(),
   }).optional(),
-});
-
-const driver = z.object({
-  host: z.string().min(1).max(255),
-  pid: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-  startIdentity: z.string().max(128).regex(/^\d+$/),
 });
 
 export const UpdateRunRecordSchema = z.object({

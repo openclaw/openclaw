@@ -79,12 +79,12 @@ function writeToolCall(
   response: ServerResponse,
   name: "tool_search" | "tool_call",
   args: Record<string, unknown>,
-  callId: string,
+  sequence: number,
 ): void {
   const item = {
     type: "function_call",
-    id: `fc_${callId}`,
-    call_id: callId,
+    id: `fc_workshop_contract_${name}_${sequence}`,
+    call_id: `call_workshop_contract_${name}_${sequence}`,
     name,
     arguments: JSON.stringify(args),
     status: "completed",
@@ -105,7 +105,7 @@ function writeToolCall(
     {
       type: "response.completed",
       response: {
-        id: `resp_${callId}`,
+        id: `resp_workshop_contract_${name}_${sequence}`,
         status: "completed",
         output: [item],
         usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 },
@@ -275,25 +275,21 @@ describe("Workshop draft-only review through the real provider and tool owners",
               return;
             }
             requests.push(JSON.parse(await readText(request)) as Request);
-            if (scenario === "failed" || requests.length > 3) {
+            if (scenario === "failed" || requests.length > 4) {
               response.writeHead(400, { "content-type": "application/json" });
               response.end(JSON.stringify({ error: { message: "Controlled provider rejection" } }));
               return;
             }
             if (scenario === "proposed" || scenario === "rejected") {
               if (requests.length === 1) {
-                writeToolCall(
-                  response,
-                  "tool_search",
-                  { query: "skill_workshop", limit: 1 },
-                  "call_workshop_search",
-                );
+                writeToolCall(response, "tool_search", { query: "skill_workshop", limit: 1 }, 1);
                 return;
               }
-              if (requests.length === 2) {
+              if (requests.length === 2 || (scenario === "proposed" && requests.length === 3)) {
                 const searchOutput = requests[1]?.input?.find(
                   (item) =>
-                    item.type === "function_call_output" && item.call_id === "call_workshop_search",
+                    item.type === "function_call_output" &&
+                    item.call_id === "call_workshop_contract_tool_search_1",
                 )?.output;
                 if (typeof searchOutput !== "string") {
                   throw new Error("Workshop discovery did not return a provider-visible result");
@@ -304,22 +300,23 @@ describe("Workshop draft-only review through the real provider and tool owners",
                     expect.objectContaining({ name: "skill_workshop", source: "openclaw" }),
                   ]),
                 );
-                const workshop: unknown = Array.isArray(candidates)
+                const workshop = Array.isArray(candidates)
                   ? candidates.find(
-                      (item: unknown) => isRecord(item) && item.name === "skill_workshop",
+                      (entry: unknown) => isRecord(entry) && entry.name === "skill_workshop",
                     )
                   : undefined;
                 if (!isRecord(workshop) || typeof workshop.id !== "string") {
-                  throw new Error("Workshop discovery did not return an exact callable ID");
+                  throw new Error("Tool Search did not return the Workshop capability.");
                 }
                 writeToolCall(
                   response,
                   "tool_call",
-                  {
-                    id: workshop.id,
-                    args: scenario === "proposed" ? createArgs : { action: "create" },
-                  },
-                  "call_workshop_contract",
+                  scenario === "proposed"
+                    ? requests.length === 2
+                      ? { id: workshop.id, args: JSON.stringify({ action: "list" }) }
+                      : { id: workshop.id, ...createArgs }
+                    : { id: workshop.id, args: { action: "create" } },
+                  requests.length,
                 );
                 return;
               }
@@ -398,11 +395,14 @@ describe("Workshop draft-only review through the real provider and tool owners",
           expect(foregroundFingerprint()).toBe(storedBefore);
 
           expect(handlerErrors).toEqual([]);
-          expect(requests).toHaveLength(scenario === "proposed" || scenario === "rejected" ? 3 : 1);
+          expect(requests).toHaveLength(
+            scenario === "proposed" ? 4 : scenario === "rejected" ? 3 : 1,
+          );
           expect(requests[0]?.model).toBe(modelId);
           expect(requests[0]?.tools?.map((tool) => tool.name)).toEqual(
             expect.arrayContaining(["exec", "read", "tool_search", "tool_describe", "tool_call"]),
           );
+          expect(requests[0]?.tools?.map((tool) => tool.name)).not.toContain("skill_workshop");
           // Request IDs are rewritten for provider replay. Compare the actual output bodies.
           expect(
             requests[0]?.input
@@ -445,9 +445,10 @@ describe("Workshop draft-only review through the real provider and tool owners",
               code: "ENOENT",
             });
             expect(outcome).toMatchObject({ outcome: "proposed", proposalId: proposal.id });
-            const toolOutput = requests[2]?.input?.find(
+            const toolOutput = requests[3]?.input?.find(
               (item) =>
-                item.type === "function_call_output" && item.call_id === "call_workshop_contract",
+                item.type === "function_call_output" &&
+                item.call_id === "call_workshop_contract_tool_call_3",
             );
             expect(toolOutput?.output).toContain(proposal.id);
           } else {
@@ -459,7 +460,8 @@ describe("Workshop draft-only review through the real provider and tool owners",
             if (scenario === "rejected") {
               const toolOutput = requests[2]?.input?.find(
                 (item) =>
-                  item.type === "function_call_output" && item.call_id === "call_workshop_contract",
+                  item.type === "function_call_output" &&
+                  item.call_id === "call_workshop_contract_tool_call_2",
               );
               expect(toolOutput?.output).toContain("required");
             }

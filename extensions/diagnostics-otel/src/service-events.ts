@@ -60,6 +60,7 @@ export function createDiagnosticsEventHandler(params: {
     recordRunStarted,
     recordRunCompleted,
     recordHarnessRunStarted,
+    recordAgentCommentary,
     recordHarnessRunCompleted,
     recordHarnessRunError,
     recordContextAssembled,
@@ -184,6 +185,9 @@ export function createDiagnosticsEventHandler(params: {
           return;
         case "harness.run.started":
           recordHarnessRunStarted(evt, metadata);
+          return;
+        case "agent.commentary":
+          recordAgentCommentary(evt, metadata, privateData);
           return;
         case "harness.run.completed":
           recordHarnessRunCompleted(evt, metadata, privateData);
