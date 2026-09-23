@@ -297,7 +297,7 @@ export async function deliverCompletionDirect(params: {
   internalEvents?: readonly AgentInternalEvent[];
   contentKind: "completed_result" | "failed_notice";
   signal?: AbortSignal;
-  onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
+  onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
   isSourceSessionEffectsAllowed?: () => boolean;
 }): Promise<SubagentAnnounceDeliveryResult | undefined> {
   const content = resolveTextCompletionDirectFallback(params.internalEvents, params.contentKind);
@@ -346,14 +346,14 @@ export async function deliverCompletionDirect(params: {
           throw new SourceOwnerChangedError();
         }
       },
-      onDeliveryResult: () => {
+      onDeliveryResult: async () => {
         if (committedDelivery) {
           return;
         }
         // Platform identity is committed before transcript mirroring, which
         // may wait behind the requester's still-active SQLite writer.
         committedDelivery = { delivered: true, path: "direct", deliveredAt: Date.now() };
-        params.onDeliveryResult?.(committedDelivery);
+        await params.onDeliveryResult?.(committedDelivery);
       },
       mirror: {
         sessionKey: params.requesterSessionKey,

@@ -8,6 +8,7 @@ import {
   isCountedSourcePath,
   main as checkEnvVarCount,
 } from "./check-env-var-count.mts";
+import { reportLimitViolations } from "./lib/check-limits.mts";
 import {
   compareRatchetSets,
   listRatchetRenames,
@@ -218,15 +219,27 @@ export function main(
 
     if (
       reportRatchetFailures([
-        { entries: added, title: "New max-lines suppressions are forbidden; split these files:" },
-        {
-          entries: expanded,
-          title: "The max-lines baseline may only shrink; remove these entries:",
-        },
         {
           entries: allRules,
           title: "All-rule lint disables are forbidden; name only the required rules:",
         },
+      ])
+    ) {
+      return 1;
+    }
+
+    if (
+      reportLimitViolations([
+        ...added.map((file) => ({
+          file,
+          title: "New max-lines suppressions are forbidden; split these files:",
+          message: "Remove the new max-lines suppression and split the file.",
+        })),
+        ...expanded.map((file) => ({
+          file: BASELINE_PATH,
+          title: "The max-lines baseline may only shrink; remove these entries:",
+          message: file,
+        })),
       ])
     ) {
       return 1;
@@ -243,19 +256,22 @@ export function main(
       return 0;
     }
     if (
-      reportRatchetFailures([
-        {
-          entries: stale,
+      reportLimitViolations(
+        stale.map((file) => ({
+          file: BASELINE_PATH,
           title: "Remove stale max-lines baseline entries (or run with --prune):",
-        },
-      ])
+          message: file,
+        })),
+      )
     ) {
       return 1;
     }
 
-    reportRatchetSuccess(
-      "max-lines ratchet OK: " + current.length + " grandfathered suppressions.",
-    );
+    if (added.length + expanded.length + stale.length === 0) {
+      reportRatchetSuccess(
+        "max-lines ratchet OK: " + current.length + " grandfathered suppressions.",
+      );
+    }
     return 0;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -33,28 +34,23 @@ describe("worker environment service", () => {
       now: () => support.testState.nowMs,
     });
     const liveEvents = support.createLiveEvents();
-    const placementStore = {
-      assertWorkerRuntimeRefresh: vi.fn(() => {
-        throw new Error("Runtime refresh is outside this credential fixture");
-      }),
-      readWorkerTurnClaim: vi.fn(),
-      readWorkerTurnLiveAckCursor: vi.fn(() => 0),
-      validateWorkerTurn: vi.fn(() => true),
-      isWorkerTurnToolAuthorized: vi.fn(() => true),
-      updateAckCursors: vi.fn(),
-      prepareWorkspaceResultOwnerRevocation: vi.fn(),
-      registerTurnClaimClosedHandler: vi.fn(() => () => {}),
-    };
-    const workerService = support.createService(support.createProvider(), {
-      liveEvents,
-      placementStore,
-    });
+    const { identity, workerService } = support.bindPlacementHarness(
+      {
+        ...newer,
+        sessionId,
+        turnClaim: {
+          ...expectDefined(newer.turnClaim, "surviving worker fixture turn claim"),
+          sessionId,
+        },
+      },
+      { liveEvents },
+    );
     const event = { ...support.LIVE_EVENT, runEpoch: newer.ownerEpoch };
     await expect(workerService.pushLiveEvent(older, event)).resolves.toEqual({
       ok: false,
       closeReason: "credential-replaced",
     });
-    await workerService.pushLiveEvent({ ...newer, sessionId }, event);
+    await expect(workerService.pushLiveEvent(identity, event)).resolves.toMatchObject({ ok: true });
     expect(liveEvents.apply).toHaveBeenCalledOnce();
   });
 

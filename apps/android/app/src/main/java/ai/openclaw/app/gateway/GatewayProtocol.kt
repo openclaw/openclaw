@@ -973,6 +973,8 @@ enum class GatewayMethod(
   UsersLinkChannelIdentity("users.linkChannelIdentity"),
   UsersUnlinkChannelIdentity("users.unlinkChannelIdentity"),
   UsersListChannelIdentities("users.listChannelIdentities"),
+  UsersPersonalFileGet("users.personalFile.get"),
+  UsersPersonalFileSet("users.personalFile.set"),
 }
 
 enum class GatewayEvent(

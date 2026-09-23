@@ -71,18 +71,25 @@ it("retains files by hard link so the inodes outlive package replacement", async
   expect((await fs.stat(retainedWorker)).mode & 0o777).toBe(0o444);
 });
 
-it("copies bytes when the filesystem refuses hard links", async () => {
+it.each([0, 1])("copies shared inode occurrence %i when hard links are refused", async (index) => {
   const f = await fixture();
+  const before = await fs.stat(f.worker, { bigint: true });
+  const sharedEntries = f.plan.entries.filter(
+    (entry) => entry.kind === "file" && entry.ino === before.ino.toString(),
+  );
+  // Exercise copy-before-link and link-before-copy without relying on directory order.
+  const fallback = sharedEntries[index]!.path;
   const link = fs.link;
   vi.spyOn(fs, "link").mockImplementation(async (existing, target) => {
-    if (String(existing).endsWith("worker.js")) {
-      throw Object.assign(new Error("cross-device link"), { code: "EXDEV" });
+    if (String(existing) === fallback) {
+      throw Object.assign(new Error("hard link unavailable"), {
+        code: index === 0 ? "EXDEV" : "EMLINK",
+      });
     }
     return await link(existing, target);
   });
-  const before = await fs.stat(f.worker, { bigint: true });
   expect(await f.link()).toEqual({ linked: 1, copied: 2 });
-  const retainedWorker = path.join(f.destination, "dist", "state", "worker.js");
+  const retainedWorker = path.join(f.destination, path.relative(f.source, fallback));
   const copied = await fs.stat(retainedWorker, { bigint: true });
   expect(copied.ino).not.toBe(before.ino);
   expect(Number(copied.mode & 0o777n)).toBe(0o444);
@@ -103,3 +110,43 @@ it("refuses entries that changed after the inventory and never links a replaceme
   await expect(f.link()).rejects.toThrow("changed after snapshot inventory");
   expect(fsSync.existsSync(path.join(f.destination, "dist", "state", "worker.js"))).toBe(false);
 });
+
+it.each(["next-entry", "copy-publication"] as const)(
+  "refuses unexpected ctime changes after a prior hard link (%s)",
+  async (stage) => {
+    const f = await fixture();
+    const before = await fs.stat(f.worker, { bigint: true });
+    const sharedEntries = f.plan.entries.filter(
+      (entry) => entry.kind === "file" && entry.ino === before.ino.toString(),
+    );
+    const later = sharedEntries[1]!.path;
+    if (stage === "next-entry") {
+      const lstat = fs.lstat;
+      vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+        const stat = await lstat(...args);
+        if (args[0] === later && "ctimeNs" in stat && typeof stat.ctimeNs === "bigint") {
+          stat.ctimeNs += 1n;
+        }
+        return stat;
+      });
+    } else {
+      const link = fs.link;
+      vi.spyOn(fs, "link").mockImplementation(async (existing, target) => {
+        if (existing === later) {
+          throw Object.assign(new Error("hard link unavailable"), { code: "EMLINK" });
+        }
+        return await link(existing, target);
+      });
+      const lstatSync = fsSync.lstatSync;
+      vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+        const stat = lstatSync(...args);
+        if (args[0] === later && stat && "ctimeNs" in stat && typeof stat.ctimeNs === "bigint") {
+          stat.ctimeNs += 1n;
+        }
+        return stat;
+      });
+    }
+    await expect(f.link()).rejects.toThrow("changed after snapshot inventory");
+    expect(fsSync.existsSync(path.join(f.destination, path.relative(f.source, later)))).toBe(false);
+  },
+);

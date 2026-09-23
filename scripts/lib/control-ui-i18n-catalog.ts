@@ -30,9 +30,11 @@ import { registerModelAccountsEnglish } from "../../ui/src/i18n/locales/en-model
 import { registerModelControlsEnglish } from "../../ui/src/i18n/locales/en-model-controls.ts";
 import { registerModelSetupEnglish } from "../../ui/src/i18n/locales/en-model-setup.ts";
 import { registerNewSessionSetupEnglish } from "../../ui/src/i18n/locales/en-new-session-setup.ts";
+import { registerPersonalInstructionsEnglish } from "../../ui/src/i18n/locales/en-personal-instructions.ts";
 import { registerPluginConsentEnglish } from "../../ui/src/i18n/locales/en-plugin-consent.ts";
 import { registerPluginManagementEnglish } from "../../ui/src/i18n/locales/en-plugin-management.ts";
 import { registerPortalsEnglish } from "../../ui/src/i18n/locales/en-portals.ts";
+import { registerProfileEnglish } from "../../ui/src/i18n/locales/en-profile.ts";
 import { registerSessionPeopleEnglish } from "../../ui/src/i18n/locales/en-session-people.ts";
 import { registerSessionPlacementEnglish } from "../../ui/src/i18n/locales/en-session-placement.ts";
 import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
@@ -86,12 +88,14 @@ const sourceFiles = [
   "en-model-accounts.ts",
   "en-model-controls.ts",
   "en-model-setup.ts",
+  "en-personal-instructions.ts",
   "en-session-people.ts",
   "en-session-placement.ts",
   "en-new-session-setup.ts",
   "en-plugin-consent.ts",
   "en-plugin-management.ts",
   "en-portals.ts",
+  "en-profile.ts",
   "en-settings.ts",
   "en-sidebar-attention.ts",
   "en-skill-library.ts",
@@ -158,6 +162,10 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       debug: registerDebugEnglish.catalog.debug,
       desktop: registerDesktopEnglish.catalog.desktop,
       attention: registerSidebarAttentionEnglish.catalog.attention,
+      profilePage: {
+        ...en.profilePage,
+        identity: registerProfileEnglish.catalog.profilePage.identity,
+      },
     },
     registerActivityEnglish.catalog,
     registerAgentsHomeEnglish.catalog,
@@ -179,11 +187,13 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerModelAccountsEnglish.catalog,
     registerModelControlsEnglish.catalog,
     registerModelSetupEnglish.catalog,
+    registerPersonalInstructionsEnglish.catalog,
     registerSessionPlacementEnglish.catalog,
     registerNewSessionSetupEnglish.catalog,
     registerPluginConsentEnglish.catalog,
     registerPluginManagementEnglish.catalog,
     registerPortalsEnglish.catalog,
+    registerProfileEnglish.catalog,
     registerSettingsEnglish.catalog,
     registerSidebarAttentionEnglish.catalog,
     registerSkillWorkshopEnglish.catalog,

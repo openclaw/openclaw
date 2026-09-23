@@ -7,13 +7,13 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { Usage } from "openclaw/plugin-sdk/llm";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   isMutatingNativeToolItem,
   isNonSuccessItemStatus,
+  isProjectedNativeToolItem,
   itemName,
   itemStatus,
-  shouldRecordNativeToolTranscript,
-  shouldSynthesizeToolProgressForItem,
 } from "./event-projector-items.js";
 import {
   isNativePostToolUseRelayItem,
@@ -28,7 +28,6 @@ import {
 } from "./event-projector-tool-items.js";
 import {
   collectDynamicToolContentText,
-  normalizeToolTranscriptArguments,
   readCodexResponseOutput,
 } from "./event-projector-tool-output.js";
 import {
@@ -187,7 +186,7 @@ export class CodexToolTranscriptProjection {
   }
 
   recordNativeToolCall(item: CodexThreadItem | undefined): void {
-    if (!item || !shouldRecordNativeToolTranscript(item)) {
+    if (!item || !isProjectedNativeToolItem(item)) {
       return;
     }
     const name = itemName(item);
@@ -197,7 +196,7 @@ export class CodexToolTranscriptProjection {
   }
 
   recordNativeToolResult(item: CodexThreadItem | undefined, details?: unknown): void {
-    if (!item || !shouldRecordNativeToolTranscript(item) || this.resultIds.has(item.id)) {
+    if (!item || !isProjectedNativeToolItem(item) || this.resultIds.has(item.id)) {
       return;
     }
     const name = itemName(item);
@@ -647,17 +646,14 @@ export class CodexToolTranscriptProjection {
   }
 
   private shouldEmitAfterToolCallObservation(item: CodexThreadItem): boolean {
-    if (
-      !shouldSynthesizeToolProgressForItem(item) ||
-      this.afterToolCallObservedItemIds.has(item.id)
-    ) {
+    if (!isProjectedNativeToolItem(item) || this.afterToolCallObservedItemIds.has(item.id)) {
       return false;
     }
     return !(this.options.nativePostToolUseRelayEnabled && isNativePostToolUseRelayItem(item));
   }
 
   private createToolCallMessage(params: ToolTranscriptCallInput): AgentMessage {
-    const args = normalizeToolTranscriptArguments(params.arguments);
+    const args = asNonArrayRecord(params.arguments);
     const attribution = resolveCodexLocalRuntimeAttribution(this.params);
     return {
       role: "assistant",

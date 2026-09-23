@@ -398,6 +398,8 @@ type AgentHarnessRunCapability<
   executionEnvironment?: "host-only";
   /** Certifies exact runAttempt enforcement; direct-policy-restricted channel side questions fail in core. */
   conversationToolPolicySupport?: "exact";
+  /** Certifies binding the actual native model through the host before every inference dispatch. */
+  nativeModelPolicySupport?: "exact";
   /**
    * Canonical OpenClaw tool names whose exact denies the harness can also enforce
    * against native equivalents. Every other deny remains fail-closed.

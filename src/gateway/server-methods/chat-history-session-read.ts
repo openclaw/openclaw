@@ -25,12 +25,16 @@ export async function prepareChatHistorySessionRead({
   client,
   respond,
   signal,
+  sessionMutationAuthorization,
   method,
   sessionKey,
   agentIdOverride,
   requestedSessionId,
   retainedSessionId,
-}: Pick<GatewayRequestHandlerOptions, "context" | "client" | "respond" | "signal"> & {
+}: Pick<
+  GatewayRequestHandlerOptions,
+  "context" | "client" | "respond" | "signal" | "sessionMutationAuthorization"
+> & {
   method: ChatHistoryMethod;
   sessionKey: string;
   agentIdOverride?: string;
@@ -93,6 +97,7 @@ export async function prepareChatHistorySessionRead({
     current: NonNullable<ReturnType<typeof selectSession>>,
     read: SessionRowReadView,
   ) => {
+    sessionMutationAuthorization?.assertCurrent();
     const sharing = prepareProjectedSessionPresentation(read, client).sharing;
     if (
       current.entry

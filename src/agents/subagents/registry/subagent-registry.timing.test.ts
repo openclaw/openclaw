@@ -147,8 +147,8 @@ describe("subagent timing completion", () => {
       }
     };
     const waitForCleanup = async () => {
-      await vi.waitFor(() => expect(readRun()?.cleanupCompletedAt).toEqual(expect.any(Number)));
       await settleSubagentRegistryPersistenceWork();
+      expect(readRun()?.cleanupCompletedAt).toEqual(expect.any(Number));
     };
     if (mode === "overlap") {
       const entered = createDeferred();

@@ -109,7 +109,7 @@ type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions &
     applyTranscriptCommit?: WorkerTranscriptCommitApplication;
     liveEvents?: Pick<
       WorkerLiveEventReceiver,
-      "apply" | "bindSession" | "clear" | "clearEnvironment" | "rotateCredential" | "start"
+      "apply" | "bindSession" | "clear" | "clearEnvironment" | "rotateCredential"
     >;
     executeInference: WorkerInferenceExecutor;
     inferenceStore?: WorkerInferenceStore;
@@ -506,7 +506,6 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     for (const profileId of new Set(store.listForReconcile().map((record) => record.profileId))) {
       providerLifecycle.warmMachineShape(profileId);
     }
-    options.liveEvents?.start();
     interval = setInterval(
       () => void reconcileOnce().catch(() => warn("Worker environment reconcile sweep failed")),
       options.reconcileIntervalMs ?? 60_000,
@@ -718,7 +717,6 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     cancelInference: turnRpc.cancelInference,
     cancelInferenceForSession: turnRpc.cancelInferenceForSession,
     hasInferenceForSession: turnRpc.hasInferenceForSession,
-    resolveInferenceSessionForRunId: turnRpc.resolveInferenceSessionForRunId,
     resolveSshIdentity: environmentAccess.resolveSshIdentity,
     attachSession: credentialBroker.attachSession,
     takeMintedCredential: credentialBroker.takeMintedCredential,
@@ -742,6 +740,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   registerWorkerInferenceSessionControl(service, {
     beginDrain: inference.beginSessionDrain,
     captureCancel: inference.captureSessionCancellation,
+    resolveTarget: inference.resolveSessionTargetForRunId,
   });
   return service;
 }

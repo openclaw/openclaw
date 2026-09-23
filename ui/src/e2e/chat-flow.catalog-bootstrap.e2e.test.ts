@@ -268,7 +268,7 @@ suite.define(() => {
         expect(await gateway.getRequests("models.list")).toHaveLength(requestsBeforeOpen);
         expect(await gateway.getRequests("sessions.list")).toHaveLength(sessionRequestsBeforeOpen);
       } finally {
-        await context.close();
+        await suite.closeBrowserContext(context);
       }
     },
   );
