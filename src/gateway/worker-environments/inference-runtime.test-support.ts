@@ -7,6 +7,7 @@ import * as streamResolutionRuntime from "../../agents/embedded-agent-runner/str
 import * as modelSelectionRuntime from "../../agents/model-selection.js";
 import * as preparedRuntime from "../../agents/prepared-model-runtime.js";
 import * as providerStreamRuntime from "../../agents/provider-stream.js";
+import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import * as simpleCompletionRuntime from "../../agents/simple-completion-runtime.js";
 import { createEmptyPluginMetadataSnapshot } from "../../agents/test-helpers/embedded-agent-runner-e2e-mocks.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -25,7 +26,6 @@ import {
   executeWorkerInference,
   type WorkerInferenceExecutionParams,
 } from "./inference-runtime.js";
-import type { WorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 
 type Deps = {
   applyStreamPolicy: typeof extraParamsRuntime.applyExtraParamsToAgent;
@@ -51,7 +51,7 @@ export const PROFILE = ["gateway", "profile"].join("-");
 export const AUTH_MARKER = ["gateway", "profile", "value"].join("-");
 export const SESSION_ID = "session-runtime-test";
 export const SESSION_KEY = "agent:runtime-agent:main";
-const sessionTarget: WorkerTurnTranscriptTarget = {
+const sessionTarget: BoundAgentRunSessionTarget = {
   agentId: "runtime-agent",
   sessionId: SESSION_ID,
   sessionKey: SESSION_KEY,

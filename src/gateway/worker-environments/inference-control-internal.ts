@@ -1,4 +1,4 @@
-import type { WorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
+import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 
 export type WorkerInferenceSessionDrain = {
   drained: Promise<void>;
@@ -20,7 +20,7 @@ export type WorkerInferenceCancellation = {
 type WorkerInferenceSessionControl = {
   beginDrain: (sessionId: string) => WorkerInferenceSessionDrain;
   captureCancel: (sessionId: string, runId?: string) => WorkerInferenceCancellation;
-  resolveTarget: (runId: string) => WorkerTurnTranscriptTarget | undefined;
+  resolveTarget: (runId: string) => BoundAgentRunSessionTarget | undefined;
 };
 
 // Session lifecycle needs a stronger control without widening the inferred public service shape.
@@ -58,7 +58,7 @@ export function captureWorkerInferenceCancellation(
 export function resolveWorkerInferenceTarget(
   service: unknown,
   runId: string,
-): WorkerTurnTranscriptTarget | undefined {
+): BoundAgentRunSessionTarget | undefined {
   if (typeof service !== "object" || service === null) {
     return undefined;
   }

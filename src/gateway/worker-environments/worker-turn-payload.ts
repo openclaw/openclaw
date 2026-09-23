@@ -25,6 +25,7 @@ import {
   mergeUsageIntoAccumulator,
 } from "../../agents/embedded-agent-runner/usage-accumulator.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
+import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
@@ -52,7 +53,6 @@ import {
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
-import type { WorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 
 type WorkerInitialMessagePlan =
   | { kind: "complete"; messages: WorkerTranscriptMessage[] }
@@ -101,7 +101,7 @@ type PrepareWorkerAgentRuntimeIdentityParams = Omit<
   runtimeInstanceId: string;
   turn: SessionPlacementTurnParams;
   placements: WorkerSessionPlacementStore;
-  sessionTarget: WorkerTurnTranscriptTarget;
+  sessionTarget: BoundAgentRunSessionTarget;
   assertSourceCurrent: () => void;
 };
 

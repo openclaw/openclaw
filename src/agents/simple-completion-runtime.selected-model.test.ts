@@ -6,12 +6,12 @@ import {
   executeWorkerInference,
   type WorkerInferenceExecutionParams,
 } from "../gateway/worker-environments/inference-runtime.js";
-import type { WorkerTurnTranscriptTarget } from "../gateway/worker-environments/worker-turn-transcript-target.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as sessionAuthRuntime from "./auth-profiles/session-override.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
+import type { BoundAgentRunSessionTarget } from "./run-session-target.types.js";
 import {
   acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel,
@@ -139,7 +139,7 @@ module.exports = {
               },
             };
             await state.writeConfig(cfg);
-            const sessionTarget: WorkerTurnTranscriptTarget = {
+            const sessionTarget: BoundAgentRunSessionTarget = {
               agentId: "main",
               sessionId: "selected-test",
               sessionKey: "agent:main:main",
@@ -218,7 +218,7 @@ function workerRequest(
   config: OpenClawConfig,
   provider: string,
   model: string,
-  sessionTarget: WorkerTurnTranscriptTarget,
+  sessionTarget: BoundAgentRunSessionTarget,
 ): WorkerInferenceExecutionParams {
   return {
     config,

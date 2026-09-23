@@ -1,17 +1,11 @@
+import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
-import {
-  loadSessionEntry,
-  type SessionTranscriptRuntimeTarget,
-  type SessionTranscriptWriteScope,
-} from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-
-export type WorkerTurnTranscriptTarget = SessionTranscriptRuntimeTarget &
-  Pick<SessionTranscriptWriteScope, "expectedLifecycleRevision" | "expectedWriterRunId">;
 
 export function resolveWorkerTurnTranscriptTarget(
   turn: Pick<SessionPlacementTurnParams, "agentId" | "sessionId" | "sessionKey" | "sessionTarget">,
-): WorkerTurnTranscriptTarget {
+): BoundAgentRunSessionTarget {
   if (
     !turn.sessionTarget?.agentId ||
     !turn.sessionTarget.sessionId ||

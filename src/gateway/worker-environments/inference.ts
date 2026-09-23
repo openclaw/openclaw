@@ -13,6 +13,7 @@ import {
   type WorkerInferenceTerminalOutcome,
   validateWorkerInferenceEventFrame,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
@@ -39,7 +40,6 @@ import {
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
 import { formatWorkerInferenceError } from "./worker-error.js";
-import type { WorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 
 const DEFAULT_REQUEST_MAX_BYTES = WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES;
 // One active turn plus one provider that ignored abort. This prevents repeated
@@ -62,7 +62,7 @@ export type WorkerInferenceExecutor = (params: {
   signal: AbortSignal;
   emit: (event: WorkerInferenceEventParams["event"]) => void;
   isCurrent(): boolean;
-  sessionTarget: WorkerTurnTranscriptTarget;
+  sessionTarget: BoundAgentRunSessionTarget;
   config?: OpenClawConfig;
 }) => Promise<WorkerInferenceTerminalOutcome>;
 
@@ -92,7 +92,7 @@ type ActiveInference = {
   claimKey: string;
   identity: WorkerConnectionIdentity;
   request: WorkerInferenceStartParams;
-  sessionTarget: WorkerTurnTranscriptTarget;
+  sessionTarget: BoundAgentRunSessionTarget;
   requestHash: string;
   storeInput: WorkerInferenceTurnInput;
   sink: WorkerInferenceSink;
@@ -331,7 +331,7 @@ export function createWorkerInferenceManager(options: {
     identity: WorkerConnectionIdentity;
     request: WorkerInferenceStartParams;
     sink: WorkerInferenceSink;
-    sessionTarget: WorkerTurnTranscriptTarget;
+    sessionTarget: BoundAgentRunSessionTarget;
     revalidate?: RevalidateInference;
   }): WorkerInferenceStartApplicationResult => {
     if (stopping || drainingSessionIds.has(params.request.sessionId)) {
@@ -659,8 +659,8 @@ export function createWorkerInferenceManager(options: {
     };
   };
 
-  const resolveSessionTargetForRunId = (runId: string): WorkerTurnTranscriptTarget | undefined => {
-    let target: WorkerTurnTranscriptTarget | undefined;
+  const resolveSessionTargetForRunId = (runId: string): BoundAgentRunSessionTarget | undefined => {
+    let target: BoundAgentRunSessionTarget | undefined;
     for (const entry of active.values()) {
       if (entry.request.runId === runId) {
         const source = entry.sessionTarget;

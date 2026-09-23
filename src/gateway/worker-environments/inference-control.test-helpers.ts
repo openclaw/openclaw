@@ -1,5 +1,5 @@
+import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import { registerWorkerInferenceSessionControl } from "./inference-control-internal.js";
-import type { WorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 
 export function createWorkerInferenceDrainService(
   beginDrain: Parameters<typeof registerWorkerInferenceSessionControl>[1]["beginDrain"],
@@ -24,7 +24,7 @@ export function createWorkerInferenceCancellationService(
   sessionId: string,
   runIds: string[],
   cancel: (params: { sessionId: string; runId?: string }) => string[],
-  target?: WorkerTurnTranscriptTarget,
+  target?: BoundAgentRunSessionTarget,
 ) {
   const service = {
     cancelInferenceForSession: cancel,

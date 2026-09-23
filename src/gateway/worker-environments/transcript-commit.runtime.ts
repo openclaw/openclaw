@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WorkerTranscriptCommitParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
@@ -27,7 +28,6 @@ import type {
   WorkerTranscriptCommitApplication,
   WorkerTranscriptCommitterOptions,
 } from "./transcript-commit.js";
-import type { WorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 
 type SemanticAgentMessage = Extract<AgentMessage, { role: "assistant" | "toolResult" | "user" }>;
 type CommittedAgentMessage = SemanticAgentMessage & { idempotencyKey: string };
@@ -206,7 +206,7 @@ async function applyWorkerTranscriptCommit(params: {
   requestedBaseLeafId: string | null;
   runId: string | null;
   sessionId: string;
-  target: WorkerTurnTranscriptTarget;
+  target: BoundAgentRunSessionTarget;
   lifecycleRevision: string | undefined;
 }): Promise<ApplyTranscriptCommitResult> {
   const redactedMessages = params.messages.map((message) =>

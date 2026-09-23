@@ -31,6 +31,7 @@ import {
 } from "../../agents/prepared-model-runtime.js";
 import { projectProviderModelRouteConfig } from "../../agents/provider-model-route.js";
 import { registerProviderStreamForModel } from "../../agents/provider-stream.js";
+import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import { prepareSimpleCompletionModel } from "../../agents/simple-completion-runtime.js";
 import { normalizeUsage, hasObservedModelUsage } from "../../agents/usage.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -68,10 +69,9 @@ import {
 } from "./inference-terminal-message.js";
 import { createWorkerToolCallStream } from "./inference-tool-call-stream.js";
 import { boundedWorkerError, formatWorkerInferenceError } from "./worker-error.js";
-import type { WorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 
 type WorkerInferenceStreamEvent = WorkerInferenceEventParams["event"];
-type WorkerInferenceSessionTarget = WorkerTurnTranscriptTarget & { sessionEntry: SessionEntry };
+type WorkerInferenceSessionTarget = BoundAgentRunSessionTarget & { sessionEntry: SessionEntry };
 export type WorkerInferenceExecutor = import("./inference.js").WorkerInferenceExecutor;
 export type WorkerInferenceExecutionParams = Parameters<WorkerInferenceExecutor>[0];
 

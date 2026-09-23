@@ -3,6 +3,7 @@ import type {
   AdmittedRunOperatorAuthority,
   OperationalRunInstanceRef,
 } from "../../agents/admitted-run-context.js";
+import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import {
@@ -20,7 +21,6 @@ import { extractAssistantTranscriptSourceText } from "../../shared/chat-message-
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
-import type { WorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 
 type TurnClaimReleaseWaiter = (error?: Error) => void;
 
@@ -54,7 +54,7 @@ export type WorkerTurnExecutionIdentity = Readonly<{
   operatorAuthority?: AdmittedRunOperatorAuthority;
   receiptAuthority: () => void;
   sessionKey: string;
-  sessionTarget: Readonly<WorkerTurnTranscriptTarget>;
+  sessionTarget: Readonly<BoundAgentRunSessionTarget>;
   turnClaim: WorkerSessionTurnClaim;
 }>;
 
@@ -125,7 +125,7 @@ export function bindWorkerTurnOwner(
   claim: WorkerSessionTurnClaim,
   token: ExecutionIdentityAdmissionToken | undefined,
   operationalRunInstance: OperationalRunInstanceRef,
-  source: WorkerTurnTranscriptTarget,
+  source: BoundAgentRunSessionTarget,
   assertRunActive: () => void,
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage,
   operatorAuthority?: AdmittedRunOperatorAuthority,

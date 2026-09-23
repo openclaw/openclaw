@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -40,7 +41,6 @@ import {
   type WorkerEnvironmentStore,
   type WorkerEnvironmentTransitionPatch,
 } from "./store.js";
-import type { WorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 
 export function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -571,12 +571,7 @@ export async function placementHarness(
   environmentId: string,
   sessionId: string,
   serviceOptions: Parameters<typeof createService>[1] = {},
-  sessionTarget: WorkerTurnTranscriptTarget = {
-    agentId: "main",
-    sessionId,
-    sessionKey: `agent:main:${sessionId}`,
-    storePath: path.join(testState.root, "sessions.json"),
-  },
+  sessionTarget?: BoundAgentRunSessionTarget,
 ) {
   const identity = await seedAttachedIdentity(environmentId, sessionId);
   const claim = identity.turnClaim!;
@@ -593,6 +588,22 @@ export async function placementHarness(
     expiresAtMs: identity.credentialExpiresAtMs,
   });
   identity.credentialHash = credentialHash;
+  return bindPlacementHarness(identity, serviceOptions, sessionTarget);
+}
+
+export function bindPlacementHarness(
+  identity: WorkerConnectionIdentity,
+  serviceOptions: Parameters<typeof createService>[1] = {},
+  target?: BoundAgentRunSessionTarget,
+) {
+  const sessionId = expectDefined(identity.sessionId, "worker fixture session identity");
+  const claim = expectDefined(identity.turnClaim, "worker fixture turn claim");
+  const sessionTarget = target ?? {
+    agentId: "main",
+    sessionId,
+    sessionKey: `agent:main:${sessionId}`,
+    storePath: path.join(testState.root, "sessions.json"),
+  };
   const validateWorkerTurn = vi.fn<(claim: WorkerSessionTurnClaim) => boolean>(() => true);
   const executionStore = { validateTurnClaim: validateWorkerTurn };
   const databasePath = testState.stateDb.path;

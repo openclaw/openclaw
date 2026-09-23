@@ -1,4 +1,5 @@
 import type { WorkerTranscriptCommitParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
@@ -8,7 +9,6 @@ import {
   type WorkerTranscriptCommitOutcome,
   type WorkerTranscriptCommitStore,
 } from "./transcript-commit-store.js";
-import type { WorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 
 const loadTranscriptCommitRuntime = createLazyRuntimeModule(
   () => import("./transcript-commit.runtime.js"),
@@ -17,7 +17,7 @@ const loadTranscriptCommitRuntime = createLazyRuntimeModule(
 export type WorkerTranscriptCommitApplication = (params: {
   identity: WorkerConnectionIdentity;
   request: WorkerTranscriptCommitParams;
-  sessionTarget: WorkerTurnTranscriptTarget;
+  sessionTarget: BoundAgentRunSessionTarget;
   assertCurrent: () => undefined;
 }) => Promise<WorkerTranscriptCommitOutcome>;
 
