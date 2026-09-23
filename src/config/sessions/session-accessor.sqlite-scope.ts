@@ -215,7 +215,7 @@ export async function runExclusiveSqliteSessionWrite<T>(
 }
 
 /** Observe multi-unit maintenance without retaining foreground admission between units. */
-export async function observeSqliteSessionWrite<T>(
+async function observeSqliteSessionWrite<T>(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
   fn: () => Promise<T>,
   operation: SqliteSessionWriteOperation,

@@ -234,9 +234,9 @@ test.each([
         const delayReceipt = staleReceipt
           ? vi
               .spyOn(executionCleanup, "cleanupRetiredAgentDatabaseLease")
-              .mockImplementation(async (params) => {
-                await cleanup(params);
-                if (sqliteReaderDatabasePathKey(params.lease.path) === databasePathKey) {
+              .mockImplementation(async (cleanupParams) => {
+                await cleanup(cleanupParams);
+                if (sqliteReaderDatabasePathKey(cleanupParams.lease.path) === databasePathKey) {
                   cleanupFinished.resolve();
                   await releaseReceipt.promise;
                 }

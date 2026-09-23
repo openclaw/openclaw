@@ -76,10 +76,10 @@ export async function reclaimSqliteFreePages(
   if (!reclaimPages) {
     return withSqliteSessionPageReclamation(
       databaseOptions,
-      (reclaimPages, assertCurrent, preparedOptions) =>
+      (reclaim, assertCurrent, preparedOptions) =>
         reclaimSqliteFreePages(preparedOptions, diagnostics, {
           ...limits,
-          reclaimPages,
+          reclaimPages: reclaim,
           assertCurrent: () => {
             limits?.assertCurrent?.();
             assertCurrent();

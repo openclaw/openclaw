@@ -112,7 +112,7 @@ it("admits a session patch between worker page-reclamation passes", async () => 
         expect(pageResults.length).toBeGreaterThan(1);
         expect(pageResults[0]).toMatchObject({
           checkpointCompleted: true,
-          vacuumPagesRequested: 512,
+          vacuumPagesRequested: 8,
         });
         expect(pageResults[0]?.remainingFreePages).toBeGreaterThan(0);
         expect(pageResults.at(-1)?.remainingFreePages).toBe(0);
