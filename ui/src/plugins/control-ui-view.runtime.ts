@@ -315,6 +315,10 @@ class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
         this.kind === "header" || this.kind === "composer" ? this.context?.sessions : undefined,
       (sessions, notify) => sessions.subscribe(notify),
       () => this.retireHiddenActions(),
+    )
+    .watch(
+      () => (this.kind === "navigation" ? this.context?.router : undefined),
+      (router, notify) => router.subscribe(notify),
     );
 
   override connectedCallback() {
