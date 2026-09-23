@@ -220,6 +220,8 @@ root and its build assets.
 Each captured generation links the selected host `openclaw` package so Workers
 and child processes started from its modules can resolve the host SDK. This link
 does not depend on the main thread's module hooks and is recreated during recovery.
+Imports of resolved SDK file URLs and absolute paths keep the same host identity;
+they do not create a selective copy of the host package or its runtime chunks.
 Snapshot cleanup and update source inspection do not descend through these links
 into the host package.
 
@@ -420,7 +422,8 @@ path settings.
 Registry retirement revokes managed execution separately from physical resource
 release. An acquired inspection can release its execution authority while a
 borrower still holds the underlying registration resources; the last physical
-claim owns their disposal. Bare SDK provider results retain their own instance
+claim owns their disposal, including a cleanup work scope that remains usable
+after the releasing request has ended. Bare SDK provider results retain their own instance
 consumer, so their callbacks remain usable until the owning SDK host closes.
 That host joins admitted callback work before releasing consumers and resources;
 releasing the inspection still prevents new borrows. Gateway shutdown keeps shared dependencies

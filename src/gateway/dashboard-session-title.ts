@@ -1,7 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isValidBase64 } from "@openclaw/media-core/base64";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { resolveNativeModelPrimary } from "../agents/agent-scope.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
@@ -106,6 +107,7 @@ type SessionTitleParams = {
   commitGuard?: () => void;
   withSource?: WorktreeSourceStage;
   retryFailedJoin?: boolean;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
 };
 
 function isAutoTitleSessionKey(sessionKey: string): boolean {
@@ -134,7 +136,7 @@ function resolveDashboardTitleAuthProfile(params: {
   if (sessionProfile) {
     return sessionProfile;
   }
-  const configuredRef = resolveAgentEffectiveModelPrimary(params.cfg, params.agentId)?.trim();
+  const configuredRef = resolveNativeModelPrimary(params.cfg, params.agentId)?.trim();
   const configuredProfile = configuredRef
     ? splitTrailingAuthProfile(configuredRef).profile
     : undefined;
@@ -167,6 +169,7 @@ async function generateDashboardSessionTitle(params: {
   utilityOnly?: boolean;
   abortSignal?: AbortSignal;
   assertCurrent?: () => void;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
 }): Promise<string | null> {
   const sourceText = buildDashboardSessionTitleSource({
     message: params.userMessage,
@@ -213,6 +216,7 @@ async function generateDashboardSessionTitle(params: {
       maxLength: DASHBOARD_SESSION_TITLE_MAX_CHARS,
       abortSignal: params.abortSignal,
       assertCurrent: params.assertCurrent,
+      operatorAuthority: params.operatorAuthority,
       ...(params.utilityOnly ? { utilityOnly: true } : {}),
     });
     if (generated) {
@@ -239,6 +243,7 @@ export async function prepareDashboardSessionTitle(params: {
   userMessage: string;
   abortSignal?: AbortSignal;
   assertCurrent?: () => void;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
 }): Promise<string | null> {
   try {
     return await generateDashboardSessionTitle({ ...params, utilityOnly: true });
@@ -341,6 +346,7 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
       agentId: params.agentId,
       entry: params.entry ?? entry,
       userMessage: sourceText,
+      operatorAuthority: params.operatorAuthority,
       ...(abortSignal ? { abortSignal } : {}),
     });
   const finish = async (generation: Promise<string | null>) => {

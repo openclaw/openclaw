@@ -33,6 +33,7 @@ describe("AppSidebar gateway session pagination", () => {
       harness.list.mockClear();
       harness.list.mockResolvedValue(changedResult);
 
+      vi.useFakeTimers();
       gateway.publishEvent("sessions.changed", {
         sessionKey: "agent:main:after-remote-change",
         reason: "archive",
@@ -42,6 +43,7 @@ describe("AppSidebar gateway session pagination", () => {
         reason: "archive",
       });
 
+      await vi.advanceTimersByTimeAsync(5_000);
       await waitForFast(() => {
         expect(harness.list).toHaveBeenCalledTimes(1);
         expect(sidebar.sessionData.sessionsResult?.sessions.map((row) => row.key)).toEqual([
@@ -96,7 +98,7 @@ describe("AppSidebar gateway session pagination", () => {
         reason: "archive",
       });
 
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(harness.list).toHaveBeenCalledOnce();
       expect(sidebar.sessionData.sessionsResult?.sessions).toHaveLength(pageSize * 2);
       expect(harness.list).toHaveBeenCalledWith(

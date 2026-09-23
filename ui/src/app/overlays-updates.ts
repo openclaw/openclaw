@@ -25,6 +25,7 @@ import {
   createUpdateStatusRefresher,
   projectUpdateSentinel,
   projectUpdateStatusResponse,
+  projectUpdateCheckoutResponse,
   projectUpdateRunFailure,
   resolveUnknownUpdateOutcomeBanner,
   resolveUpdateStatusBanner,
@@ -220,6 +221,8 @@ export function createApplicationUpdateOverlays(
   const applyRun = (run: UpdateRunRecord) => {
     const current = snapshot.updateRun;
     if (current?.runId === run.runId && current.updatedAtMs > run.updatedAtMs) {
+      // A status read can still carry independently newer schedule fields.
+      publish();
       return;
     }
     // Ledger writes monotonically advance this revision. Keep identical
@@ -288,9 +291,12 @@ export function createApplicationUpdateOverlays(
     }
   };
 
-  const applyUpdateStatusResponse = (response: UpdateRestartStatusResponse) => {
+  const applyUpdateStatusResponse = (
+    response: UpdateRestartStatusResponse,
+    preserveInstall = false,
+  ) => {
     const { failure, updateStatusBanner, recordedUpdateAttempt, ...status } =
-      projectUpdateStatusResponse(response, snapshot);
+      projectUpdateStatusResponse(response, snapshot, preserveInstall);
     const run = response.activeRun ?? response.lastRun;
     const history = updateAttempt?.history;
     // A failed history read is not an empty baseline. Until a current identity
@@ -307,7 +313,6 @@ export function createApplicationUpdateOverlays(
       ...snapshot,
       ...status,
       updateCampaignStatusHydrated: true,
-      updateStatusCheckBanner: null,
     };
     if (
       run &&
@@ -324,6 +329,7 @@ export function createApplicationUpdateOverlays(
       }
       publish();
     }
+    updateCampaignPoller.sync();
   };
   const refreshUpdateStatus = createUpdateStatusRefresher({
     getClient: () => activeClient,
@@ -336,8 +342,31 @@ export function createApplicationUpdateOverlays(
       publish();
     },
     onStatus: applyUpdateStatusResponse,
-    onError: (error) => {
-      snapshot = { ...snapshot, updateStatusCheckBanner: resolveUpdateStatusCheckBanner(error) };
+    onCheckout: (response, preserveSchedule) => {
+      snapshot = {
+        ...snapshot,
+        ...projectUpdateCheckoutResponse(
+          response,
+          snapshot,
+          preserveSchedule ? "schedule" : undefined,
+        ),
+        updateStatusCheckBanner: null,
+      };
+      publish();
+      updateCampaignPoller.sync();
+    },
+    onError: (error, mode) => {
+      if (mode === "completion" && snapshot.updateStatusCheckBanner?.mode === "manual") {
+        return;
+      }
+      if (error === null && snapshot.updateStatusCheckBanner === null) {
+        return;
+      }
+      snapshot = {
+        ...snapshot,
+        updateStatusCheckBanner:
+          error === null ? null : { ...resolveUpdateStatusCheckBanner(error), mode },
+      };
       publish();
     },
   });

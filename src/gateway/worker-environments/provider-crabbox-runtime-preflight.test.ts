@@ -1,13 +1,13 @@
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawPluginService, WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
-import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../plugin-sdk/test-helpers/import-fresh.js";
+import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
+import { createPluginStateKeyedStore } from "../../plugin-state/plugin-state-store.js";
 import { resolvePluginModuleExport } from "../../plugins/module-export.js";
 import * as support from "./service.test-support.js";
 
@@ -35,7 +35,7 @@ function commandResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
 }
 
 describe("Crabbox runtime preflight cleanup", () => {
-  support.setupWorkerEnvironmentServiceSuite();
+  support.setupWorkerEnvironmentServiceSuite({ reuseReadWorkers: true });
   const pluginServices: OpenClawPluginService[] = [];
   async function registerProvider(): Promise<WorkerProvider> {
     let registered: WorkerProvider | undefined;
@@ -50,7 +50,7 @@ describe("Crabbox runtime preflight cleanup", () => {
         id: "crabbox",
         runtime: createPluginRuntimeMock({
           state: {
-            openKeyedStore: (options) => createPluginStateKeyedStoreForTests("crabbox", options),
+            openKeyedStore: (options) => createPluginStateKeyedStore("crabbox", options),
           },
         }),
         rootDir: fileURLToPath(new URL("../../../extensions/crabbox/", import.meta.url)),

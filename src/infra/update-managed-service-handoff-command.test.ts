@@ -381,20 +381,36 @@ describe("managed service update handoff command", () => {
     }
   });
 
-  it("serializes extended-stable into the detached CLI command", async () => {
-    const result = await startHandoffAndReadCommand({ channel: "extended-stable" });
+  it.each(["canonical", "ancestor alias"] as const)(
+    "serializes extended-stable into the detached CLI command with a %s lease path",
+    async (leasePath) => {
+      if (leasePath === "ancestor alias") {
+        const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "handoff-alias-")));
+        tempDirs.add(root);
+        const realParent = path.join(root, "real");
+        const aliasParent = path.join(root, "alias");
+        await fs.mkdir(path.join(realParent, "leases"), { recursive: true, mode: 0o700 });
+        await fs.symlink(
+          realParent,
+          aliasParent,
+          process.platform === "win32" ? "junction" : "dir",
+        );
+        resolvePreferredOpenClawTmpDirMock.mockReturnValue(path.join(aliasParent, "leases"));
+      }
+      const result = await startHandoffAndReadCommand({ channel: "extended-stable" });
 
-    expect(result.commandArgv).toEqual([
-      "/usr/local/bin/node",
-      "/opt/openclaw/openclaw.mjs",
-      "update",
-      "--yes",
-      "--json",
-      "--channel",
-      "extended-stable",
-    ]);
-    expect(result.command).toContain("--channel extended-stable");
-  });
+      expect(result.commandArgv).toEqual([
+        "/usr/local/bin/node",
+        "/opt/openclaw/openclaw.mjs",
+        "update",
+        "--yes",
+        "--json",
+        "--channel",
+        "extended-stable",
+      ]);
+      expect(result.command).toContain("--channel extended-stable");
+    },
+  );
 
   it.each([true, false])(
     "preserves replay consent=%s across the detached handoff",

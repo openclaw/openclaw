@@ -40,6 +40,7 @@ vi.mock("./server-worker-placement-session-evidence.js", () => ({
   createWorkerPlacementSessionEvidenceResolver: runtimeMocks.createSessionEvidenceResolver,
 }));
 
+import { getRuntimeConfig } from "../config/config.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 
@@ -155,6 +156,7 @@ async function withRecoveryRuntime(
     const warn = vi.fn();
     const readChangeSnapshot = vi.fn(async () => structuredClone([...placements.values()]));
     const runtime = createGatewayWorkerPlacementRuntime({
+      getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
         workspaceResultInstanceId: () => "gateway-test",

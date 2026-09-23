@@ -39,6 +39,33 @@ export type UserChannelIdentityWorkerOperations = {
   };
 };
 
+export type UserProfileEmailBinding = {
+  email: string;
+  profileId: string;
+  bindingId: string | null;
+};
+
+export type UserProfileAccessFacts = Readonly<{
+  profileId: string;
+  emails: readonly string[];
+  assignedRole: string | null;
+}>;
+
+export type PreparedUserProfileIdentity = {
+  readonly emailBindingIds: readonly string[];
+  readCurrentFacts(
+    this: void,
+    requiredEmailBindingIds?: readonly string[],
+  ): { profile: UserProfileAccessFacts; aliases: ReadonlySet<string> };
+  release(this: void): void;
+};
+
+export type UserProfileEmailBindingIndex = {
+  byEmail: Map<string, UserProfileEmailBinding>;
+  byId: Map<string, string>;
+  emailsByProfile: Map<string, Set<string>>;
+};
+
 export type UserProfilesDatabase = {
   user_profiles: {
     id: string;
@@ -52,7 +79,12 @@ export type UserProfilesDatabase = {
     created_at: number;
     updated_at: number;
   };
-  user_profile_emails: { email: string; profile_id: string; created_at: number };
+  user_profile_emails: {
+    email: string;
+    profile_id: string;
+    binding_id: string | null;
+    created_at: number;
+  };
   user_profile_identities: {
     provider: string;
     subject: string;

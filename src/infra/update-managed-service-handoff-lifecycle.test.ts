@@ -16,7 +16,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "./update-control-plane-sentinel.js";
-import { pathExists } from "./update-managed-service-handoff-boundary.test-support.js";
 import { registerManagedCampaignFailureTests } from "./update-managed-service-handoff-campaign.test-support.js";
 import {
   cleanupStaleManagedServiceUpdateHandoffs,
@@ -26,6 +25,7 @@ import {
   isManagedServiceInspectionCommand,
   registerManagedHandoffOwnerTests,
 } from "./update-managed-service-handoff-lifecycle.test-support.js";
+import { pathExists } from "./update-managed-service-native.test-support.js";
 import { recordUpdateRunStep } from "./update-run-ledger.js";
 
 const MOCK_INSTALL_ROOT = path.join(os.tmpdir(), `openclaw-handoff-lifecycle-${process.pid}`);
@@ -211,6 +211,30 @@ describe("managed service update handoff", () => {
       expect(run?.steps).toContainEqual(
         expect.objectContaining({ step: "service-stop", status: "completed" }),
       );
+    },
+  );
+
+  itUnix(
+    "retains terminal parent exit when a later liveness probe would be inconclusive",
+    async () => {
+      const { log, state, sensitiveFilesRemoved } = await runManagedServiceManagerBoundary(
+        "launchd",
+        {
+          controlDisconnect: "transferred",
+          terminalParentExitProbe: true,
+          updaterExitCode: 7,
+          helperExitCode: 7,
+          updaterResult: {
+            status: "error",
+            mode: "npm",
+            recovery: { serviceRestartSafe: true, version: "1.0.0" },
+          },
+        },
+      );
+      expect(log).toContain("terminal parent exit observed");
+      expect(log).not.toContain("parent probed after terminal exit");
+      expect(state).toMatchObject({ parked: true, restored: true, healthProbeCount: 1 });
+      expect(sensitiveFilesRemoved).toBe(true);
     },
   );
 

@@ -719,6 +719,7 @@ describe("ConfigPage Updates integration", () => {
     expect(container.querySelector("wa-radio-group")?.hasAttribute("disabled")).toBe(true);
     state.context.overlays.snapshot.updateStatusRefreshing = false;
     state.context.overlays.snapshot.updateStatusCheckBanner = {
+      mode: "manual",
       tone: "warn",
       text: "Could not check for updates: timeout",
     };

@@ -26,6 +26,9 @@ export function createEmbeddedRunContextRecoveryState() {
       if (event.kind === "compaction") {
         state.autoCompactionCount += 1;
         state.lastCompactionTokensAfter = tokens;
+      } else if (event.successful) {
+        state.overflowCompactionAttempts = 0;
+        state.toolResultTruncationAttempted = false;
       }
     },
     retainTimeoutRecoveryMarker(marker: EmbeddedRunTimeoutRecoveryMarker) {

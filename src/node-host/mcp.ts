@@ -17,7 +17,7 @@ import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/s
 import {
   connectMcpClient,
   disposeMcpClient,
-  isStatefulMcpHttpSessionExpired,
+  isMcpHttpSessionExpired,
 } from "../agents/mcp-client-lifecycle.js";
 import { redactMcpDiagnosticError } from "../agents/mcp-error.js";
 import { createMcpJsonSchemaValidator } from "../agents/mcp-json-schema-validator.js";
@@ -589,7 +589,7 @@ export async function startNodeHostMcpManager(
         validateResult?.(result);
         return result;
       } catch (error) {
-        const sessionExpired = isStatefulMcpHttpSessionExpired(session, error);
+        const sessionExpired = isMcpHttpSessionExpired(session, error);
         if (sessionExpired && invalidateCurrent(state, session)) {
           enqueueWork(state, async () => {
             await disposeNodeHostMcpSession(session);

@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
+import type { AcpSessionReadInput, AcpSessionRow } from "../acp/runtime/session-meta-keys.js";
 import type { McpOAuthReadOnlyOperations } from "../agents/mcp-oauth-store.kernel.js";
 import type {
   SandboxBrowserRegistryEntry,
@@ -12,6 +13,7 @@ import type {
   ExecutionIdentityInspectionQuery,
   ExecutionIdentityInspectionOutcome,
 } from "../audit/execution-identity-inspection.types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   CronRunRecoveryReadCommand,
   CronRunRecoveryObservation,
@@ -21,6 +23,10 @@ import type {
   ListTerminalOperatorApprovalsInput,
   ListTerminalOperatorApprovalsResult,
 } from "../gateway/operator-approval-store.types.js";
+import type {
+  SessionGroupCatalogSnapshot,
+  SessionGroupMembershipSnapshot,
+} from "../gateway/session-group-catalog.types.js";
 import type {
   WorkerPlacementConflictBinding,
   WorkerSessionPlacementReadResult,
@@ -53,6 +59,17 @@ import type {
 } from "../plugin-state/plugin-blob-worker-contract.js";
 import type { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { SkillLibraryReadOnlyOperations } from "../skills/library/selection-read.kernel.js";
+import type {
+  TaskRegistryMutationScope,
+  TaskRegistryStoreSnapshot,
+} from "../tasks/task-registry.store.types.js";
+import type {
+  GitHubPublicationReceiptTarget,
+  GitHubPublicationRow,
+  RepositoryGitHubPublicationReceiptTarget,
+  RepositoryGitHubPublicationRow,
+  GitHubPublicationSessionLifecycle,
+} from "./github-publication-read.types.js";
 import type { OnboardingRecommendationsRecord } from "./onboarding-recommendations.contract.js";
 import type { OpenClawAgentDatabaseRegistryReadResult } from "./openclaw-agent-db-contract.js";
 import type { ConfigMachineState } from "./openclaw-state-db.generated.js";
@@ -66,6 +83,7 @@ import type {
   CachedGitHubIdentity,
   UserProfileDisplay,
   ProfileDisplayRow,
+  UserProfileEmailBinding,
 } from "./user-profiles.types.js";
 
 export type OpenClawStateReadLocation = {
@@ -82,6 +100,7 @@ export type OpenClawStateReadAuthority = {
 };
 
 export type OpenClawStateReadCommand =
+  | { type: "acpSessions.metadata"; entries: readonly AcpSessionReadInput[] }
   | {
       [Kind in keyof McpOAuthReadOnlyOperations]: {
         type: Kind;
@@ -101,6 +120,7 @@ export type OpenClawStateReadCommand =
       scope: { kind: "session"; sessionKey: string } | { kind: "ids"; runIds: readonly string[] };
     }
   | CronRunRecoveryReadCommand
+  | { type: "subagents.forChildSession"; childSessionKey: string }
   | { type: "exec-approvals.read" }
   | {
       [Kind in keyof SkillLibraryReadOnlyOperations]: {
@@ -111,6 +131,12 @@ export type OpenClawStateReadCommand =
   | { type: "agentDatabaseRegistry.read" }
   | { type: "workerEnvironments.snapshot"; ids?: readonly string[] }
   | { type: "workerEnvironments.pruneCandidates"; input: WorkerEnvironmentPruneReadInput }
+  | {
+      type: "tasks.mutationSnapshot";
+      input: TaskRegistryMutationScope | readonly TaskRegistryMutationScope[] | undefined;
+    }
+  | { type: "sessionGroups.snapshot" }
+  | { type: "sessionGroups.members"; cfg: OpenClawConfig }
   | { type: "onboardingRecommendations.read"; configKey: string }
   | { type: "userProfiles.reconcile"; profileId: string }
   | { type: "userProfiles.channelIdentity.list"; profileId: string }
@@ -118,6 +144,19 @@ export type OpenClawStateReadCommand =
   | { type: "userProfiles.authority.resolve"; profileId: string }
   | { type: "userProfiles.githubIdentity.cached"; accountId: number; email: string }
   | { type: "userProfiles.email.resolve"; email: string }
+  | { type: "userProfiles.catalog" }
+  | {
+      type: "githubPublication.lifecycle";
+      publicationKind: "shared" | "personal";
+      requestId: string;
+    }
+  | { type: "githubPublication.request"; requestId: string }
+  | { type: "githubRepository.request"; requestId: string }
+  | { type: "githubPublication.knownPullRequestUrls"; input: GitHubPublicationReceiptTarget }
+  | {
+      type: "githubRepository.knownPullRequestUrls";
+      input: RepositoryGitHubPublicationReceiptTarget;
+    }
   | { type: "audit.run.inspect"; input: ExecutionIdentityInspectionQuery }
   | { type: "updateRuns.get"; runId: string }
   | { type: "updateRuns.list"; input: UpdateRunListInput }
@@ -147,6 +186,12 @@ export type OpenClawStateReadRequest = {
 };
 export type OpenClawStateReadReply = (
   | {
+      ok: true;
+      type: "acpSessions.metadata";
+      sourceAdmitted: true;
+      rows: Array<AcpSessionRow | null>;
+    }
+  | {
       [Kind in keyof McpOAuthReadOnlyOperations]: {
         ok: true;
         type: Kind;
@@ -168,6 +213,13 @@ export type OpenClawStateReadReply = (
       history: ListTerminalOperatorApprovalsResult;
     }
   | PluginBlobReadReply
+  | { ok: true; type: "subagents.forChildSession"; sourceAdmitted: true; runs: SubagentRunRecord[] }
+  | {
+      ok: true;
+      type: "tasks.mutationSnapshot";
+      sourceAdmitted: true;
+      snapshot: TaskRegistryStoreSnapshot;
+    }
   | {
       [Kind in keyof SkillLibraryReadOnlyOperations]: {
         ok: true;
@@ -178,9 +230,51 @@ export type OpenClawStateReadReply = (
     }[keyof SkillLibraryReadOnlyOperations]
   | {
       ok: true;
+      type: "sessionGroups.members";
+      sourceAdmitted: true;
+      snapshot: SessionGroupMembershipSnapshot;
+    }
+  | {
+      ok: true;
+      type: "sessionGroups.snapshot";
+      sourceAdmitted: true;
+      snapshot: SessionGroupCatalogSnapshot;
+    }
+  | {
+      ok: true;
       type: "userProfiles.email.resolve";
       sourceAdmitted: true;
       profileId: string | undefined;
+    }
+  | {
+      ok: true;
+      type: "githubPublication.lifecycle";
+      sourceAdmitted: true;
+      lifecycle: GitHubPublicationSessionLifecycle | undefined;
+    }
+  | {
+      ok: true;
+      type: "githubPublication.request";
+      sourceAdmitted: true;
+      row: GitHubPublicationRow | undefined;
+    }
+  | {
+      ok: true;
+      type: "githubRepository.request";
+      sourceAdmitted: true;
+      row: RepositoryGitHubPublicationRow | undefined;
+    }
+  | {
+      ok: true;
+      type: "githubPublication.knownPullRequestUrls";
+      sourceAdmitted: true;
+      urls: string[];
+    }
+  | {
+      ok: true;
+      type: "githubRepository.knownPullRequestUrls";
+      sourceAdmitted: true;
+      urls: string[];
     }
   | {
       ok: true;
@@ -227,9 +321,17 @@ export type OpenClawStateReadReply = (
     }
   | {
       ok: true;
+      type: "userProfiles.catalog";
+      sourceAdmitted: true;
+      profiles: Array<[string, ProfileDisplayRow]>;
+      emailBindings: UserProfileEmailBinding[];
+    }
+  | {
+      ok: true;
       type: "userProfiles.reconcile";
       sourceAdmitted: true;
       profile: ProfileDisplayRow | undefined;
+      emailBindings: UserProfileEmailBinding[];
     }
   | {
       ok: true;

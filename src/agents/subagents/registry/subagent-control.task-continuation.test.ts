@@ -1,5 +1,11 @@
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  persistSubagentRunsToDiskOrThrow,
+  useSubagentControlFixture,
+} from "./subagent-control.test-support.js";
 /** Stable task cancellation must target its current, still-owned execution generation. */
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { runTaskInFlowForOwner } from "../../../tasks/task-executor.js";
 import {
@@ -7,11 +13,8 @@ import {
   getTaskFlowById,
 } from "../../../tasks/task-flow-runtime-internal.js";
 import { cancelTaskById, findTaskByRunId, getTaskById } from "../../../tasks/task-registry.js";
-import { useSubagentControlFixture } from "./subagent-control.test-support.js";
-import { subagentRegistryDeps } from "./subagent-registry-deps.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
-import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
@@ -21,7 +24,7 @@ const fixture = useSubagentControlFixture();
 it.each(["canonical", "managed"] as const)(
   "cancels a resumed yielded subagent through its %s task without changing task identity",
   async (selectedKind) => {
-    vi.spyOn(subagentRegistryDeps, "runSubagentAnnounceFlow").mockResolvedValue("delivered");
+    fixture.announce.mockResolvedValue("delivered");
     const childSessionKey = "agent:main:subagent:task-continuation";
     const requesterSessionKey = "agent:main:main";
     await writeSubagentSessionEntry({
@@ -79,6 +82,7 @@ it.each(["canonical", "managed"] as const)(
     const selected = selectedKind === "canonical" ? canonical : managed;
 
     const result = await cancelTaskById({ cfg: getRuntimeConfig(), taskId: selected.taskId });
+    await fixture.settle();
 
     expect(result, result.reason).toMatchObject({ found: true, cancelled: true });
     for (const task of [canonical, managed]) {

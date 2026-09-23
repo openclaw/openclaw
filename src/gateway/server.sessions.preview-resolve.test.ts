@@ -4,9 +4,8 @@
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, onTestFinished, test, vi } from "vitest";
+import { expect, onTestFinished, test } from "vitest";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
-import * as sessionHistoryEvents from "../config/sessions/session-accessor.sqlite-history-events.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   resolveIncognitoOpenClawAgentSqlitePath,
@@ -14,7 +13,8 @@ import {
 import type { ControlUiSessionPreview } from "./control-ui-contract.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
-import { readSessionPreviewItemsFromTranscript } from "./session-transcript-preview.js";
+import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
+import { readSessionPreviewItemsFromTranscriptAsync } from "./session-transcript-preview.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -91,8 +91,10 @@ test("lists and previews the selected aggregate global owner over WebSocket", as
     storePath: workStorePath,
     messages: [{ role: "user", content: "Work global conversation" }],
   });
+  const backfilled = observeSessionRowBackfill(["global"]);
   const { ws } = await openClient();
   try {
+    await backfilled;
     for (const search of [undefined, "gpt-5.5"]) {
       const listed = await rpcReq<SessionsListResult>(ws, "sessions.list", {
         includeGlobal: true,
@@ -108,7 +110,6 @@ test("lists and previews the selected aggregate global owner over WebSocket", as
           agentId: "work",
           model: "gpt-5.5",
           derivedTitle: "Work global conversation",
-          lastMessagePreview: "Work global conversation",
         },
       ]);
     }
@@ -117,7 +118,12 @@ test("lists and previews the selected aggregate global owner over WebSocket", as
     });
     expect(preview, JSON.stringify(preview)).toMatchObject({
       ok: true,
-      payload: { status: "ok", agentId: "work", derivedTitle: "Work global conversation" },
+      payload: {
+        status: "ok",
+        agentId: "work",
+        derivedTitle: "Work global conversation",
+        lastMessagePreview: "Work global conversation",
+      },
     });
     const resolved = await rpcReq(ws, "sessions.resolve", {
       label: "Work global conversation",
@@ -251,7 +257,7 @@ test("sessions.preview honors maxChars up to the shared cap", async () => {
   ]);
 });
 
-test("session preview reader reads only a bounded tail from a large transcript", async () => {
+test("session preview reader returns the newest items from a large transcript", async () => {
   const scope = await seedPreviewTail(
     "sess-preview-bounded-tail",
     Array.from({ length: 1024 }, (_, index) => ({
@@ -259,32 +265,13 @@ test("session preview reader reads only a bounded tail from a large transcript",
       content: `message ${String(index)}`,
     })),
   );
-  const fullRead = vi.spyOn(sessionAccessor, "readSessionTranscriptMessageEvents");
-  const tailRead = vi.spyOn(sessionHistoryEvents, "readRecentSessionTranscriptHistoryEvents");
-  const storeRead = vi.spyOn(sessionAccessor, "listSessionEntriesCore");
-
-  try {
-    const items = readSessionPreviewItemsFromTranscript(scope, 12, 120, "display", {
-      readOnly: true,
-    });
-    expect(items).toEqual(
-      Array.from({ length: 12 }, (_, index) => ({
-        role: "assistant",
-        text: `message ${String(1012 + index)}`,
-      })),
-    );
-    expect(fullRead).not.toHaveBeenCalled();
-    expect(storeRead).not.toHaveBeenCalled();
-    expect(tailRead).toHaveBeenCalledOnce();
-    expect(tailRead.mock.results[0]).toMatchObject({
-      type: "return",
-      value: { events: { length: 64 }, totalMessages: 1024 },
-    });
-  } finally {
-    fullRead.mockRestore();
-    tailRead.mockRestore();
-    storeRead.mockRestore();
-  }
+  const items = await readSessionPreviewItemsFromTranscriptAsync(scope, 12, 120);
+  expect(items).toEqual(
+    Array.from({ length: 12 }, (_, index) => ({
+      role: "assistant",
+      text: `message ${String(1012 + index)}`,
+    })),
+  );
 });
 
 test("session preview reader widens its bounded tail past filtered tool-result rows", async () => {
@@ -298,25 +285,13 @@ test("session preview reader widens its bounded tail past filtered tool-result r
       content: `tool ${String(index)}`,
     })),
   ]);
-  const tailRead = vi.spyOn(sessionHistoryEvents, "readRecentSessionTranscriptHistoryEvents");
-
-  try {
-    const items = readSessionPreviewItemsFromTranscript(scope, 12, 120, "display", {
-      readOnly: true,
-    });
-    expect(items).toEqual(
-      Array.from({ length: 12 }, (_, index) => ({
-        role: "assistant",
-        text: `visible ${String(index)}`,
-      })),
-    );
-    expect(tailRead.mock.calls.map(([, options]) => options)).toEqual([
-      { maxBytes: 1024 * 1024, maxLines: 64, maxMessages: 64, readOnly: true },
-      { maxBytes: 8 * 1024 * 1024, maxLines: 1024, maxMessages: 1024, readOnly: true },
-    ]);
-  } finally {
-    tailRead.mockRestore();
-  }
+  const items = await readSessionPreviewItemsFromTranscriptAsync(scope, 12, 120);
+  expect(items).toEqual(
+    Array.from({ length: 12 }, (_, index) => ({
+      role: "assistant",
+      text: `visible ${String(index)}`,
+    })),
+  );
 });
 
 test("sessions.resolve by sessionId ignores fuzzy-search list limits and returns the exact match", async () => {

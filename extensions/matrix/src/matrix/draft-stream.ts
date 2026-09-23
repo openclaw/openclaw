@@ -1,4 +1,4 @@
-import { createFinalizableDraftStreamControlsForState } from "openclaw/plugin-sdk/channel-outbound";
+import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 import type { CoreConfig } from "../types.js";
 import type { MatrixClient } from "./sdk.js";
 import { editMessageMatrix, prepareMatrixSingleText, sendSingleTextMessageMatrix } from "./send.js";
@@ -130,10 +130,26 @@ export function createMatrixDraftStream(params: {
     update,
     stop: stopDraft,
     discardPending,
-  } = createFinalizableDraftStreamControlsForState({
+    seal,
+    clear,
+    retire,
+    cleanupPending,
+  } = createFinalizableDraftLifecycle({
     throttleMs: DEFAULT_THROTTLE_MS,
     state: streamState,
     sendOrEditStreamMessage: sendOrEdit,
+    readMessageId: () => currentEventId,
+    clearMessageId: () => {
+      currentEventId = undefined;
+      lastSentText = "";
+      lastSentContent = "";
+    },
+    isValidMessageId: (id): id is string => typeof id === "string" && id.length > 0,
+    deleteMessage: async (id) => {
+      await client.redactEvent(roomId, id);
+    },
+    warn: log,
+    warnPrefix: "matrix draft preview cleanup failed",
   });
 
   log?.(`draft-stream: ready (throttleMs=${DEFAULT_THROTTLE_MS})`);
@@ -194,10 +210,11 @@ export function createMatrixDraftStream(params: {
   const deleteCurrentMessage = async () => {
     loop.resetPending();
     await loop.waitForInFlight();
-    if (currentEventId) {
-      await client.redactEvent(roomId, currentEventId);
-    }
+    const retiredEventId = currentEventId;
     resetCurrentMessage();
+    if (retiredEventId) {
+      await retire(retiredEventId);
+    }
   };
 
   return {
@@ -205,6 +222,9 @@ export function createMatrixDraftStream(params: {
     flush: loop.flush,
     stop,
     discardPending,
+    seal,
+    clear,
+    cleanupPending,
     deleteCurrentMessage,
     finalizeLive,
     reset,

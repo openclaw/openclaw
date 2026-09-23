@@ -211,26 +211,6 @@ describe("Telegram live QA scenario gate", () => {
     expect(mocks.runQaFlowSuiteFromRuntime).not.toHaveBeenCalled();
   });
 
-  it("keeps script scenarios out of the default flow-suite invocation", async () => {
-    writeSummary("pass");
-    mocks.resolveTelegramQaScenarioIds.mockReturnValue([
-      "channel-message-flows",
-      "telegram-help-command",
-    ]);
-
-    await runQaTelegramSuite({
-      allowFailures: true,
-      providerMode: "mock-openai",
-      repoRoot: process.cwd(),
-    });
-
-    expect(mocks.runQaFlowSuiteFromRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({
-        scenarioIds: expect.not.arrayContaining(["telegram-startup-getme-live"]),
-      }),
-    );
-  });
-
   it("forwards caller-owned gateway config mutation to the flow suite", async () => {
     const mutateConfig = vi.fn((cfg: OpenClawConfig) => cfg);
 

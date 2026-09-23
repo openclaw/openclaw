@@ -66,6 +66,7 @@ export type CreateGatewaySessionResult =
 
 export type CreateGatewaySessionParams = {
   cfg: OpenClawConfig;
+  operatorAuthority?: import("../agents/admitted-run-context.js").AdmittedRunOperatorAuthority;
   key?: string;
   agentId?: string;
   label?: string;
@@ -149,6 +150,8 @@ export type CreateGatewaySessionParams = {
   creation?: {
     via: SessionCreatedVia;
     actor?: SessionCreatedActor;
+    /** Host-verified human requester for matching spawn-owner inheritance. */
+    requesterProfileId?: string;
     sandbox?: "required";
     skillLibrarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
     /** Trusted config-resolved spawn model provenance for the `model` field. */

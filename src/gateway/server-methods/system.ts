@@ -48,9 +48,11 @@ import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 let advertisedLanHostPromise: Promise<string | null> | null = null;
-let cpuInfoSnapshot:
-  | (Pick<SystemInfoResult, "cpuCount" | "cpuModel"> & { sampledAtMs: number })
-  | undefined;
+// CPU identity belongs to this process; os.cpus() also reads every core's live timings.
+const cpuInfoSnapshot = (() => {
+  const cpus = os.cpus();
+  return { cpuCount: cpus.length, cpuModel: cpus[0]?.model.trim() || undefined };
+})();
 
 function resolveCachedAdvertisedLanHost(): Promise<string | null> {
   // Route discovery may spawn a platform command. Keep the result process-stable
@@ -60,21 +62,6 @@ function resolveCachedAdvertisedLanHost(): Promise<string | null> {
 }
 
 async function collectSystemInfo(context: GatewayRequestContext): Promise<SystemInfoResult> {
-  const now = Date.now();
-  // os.cpus() also gathers per-core timings; only retain identity here. A short
-  // snapshot bounds CPU-topology staleness without delaying live process vitals.
-  if (
-    !cpuInfoSnapshot ||
-    now < cpuInfoSnapshot.sampledAtMs ||
-    now - cpuInfoSnapshot.sampledAtMs >= 2_000
-  ) {
-    const cpus = os.cpus();
-    cpuInfoSnapshot = {
-      sampledAtMs: now,
-      cpuCount: cpus.length,
-      cpuModel: cpus[0]?.model.trim() || undefined,
-    };
-  }
   const { cpuCount, cpuModel } = cpuInfoSnapshot;
   const [oneMinute = 0, fiveMinutes = 0, fifteenMinutes = 0] = os.loadavg();
   const loadAverage: [number, number, number] = [oneMinute, fiveMinutes, fifteenMinutes];

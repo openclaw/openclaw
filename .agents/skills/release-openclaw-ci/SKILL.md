@@ -89,8 +89,12 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   workflow path, ref, Tooling SHA, dispatch title, event, target, candidate, and
   validation inputs remain exact. Newer child attempts replace matching jobs;
   jobs absent from a newer attempt carry forward. A duplicate job identity,
-  missing attempt, regressed attempt, or changed tuple fails closed.
-- Use `pnpm frv status|continue --failed|verify` for attempt-aware recovery.
+  missing attempt, regressed attempt, or changed tuple fails closed. `frv status`
+  and `continue` allow up to 60 seconds of read-only reconciliation when GitHub
+  temporarily returns duplicate jobs in the newest retry attempt. The run tuple
+  and attempt stay pinned; persistent duplicates and older-attempt conflicts
+  remain errors.
+- Use `pnpm frv status|rerun --job|continue --failed|verify` for attempt-aware recovery.
   The controller is stateless: the immutable execution plan, exact GitHub run
   attempts, Diagnostic Drain, and final manifest are the only authorities. It
   never writes a tag, package, registry entry, release candidate, or
@@ -106,7 +110,7 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   attempt-one failure to an attempt-two pass. The broker must emit its receipt
   without creating a release candidate, release artifact, publication,
   repository ref, replacement parent, or other workflow mutation. This is the
-  hosted GitHub failed-job rerun proof; focused controller tests own immutable
+  hosted GitHub targeted-job rerun proof; focused controller tests own immutable
   plan eligibility, green-attempt preservation, same-parent collection, and
   strict-verifier invocation. Never use a real Full Release Validation run for
   this proof. See
@@ -189,14 +193,24 @@ until their dependent enforcement changes land.
 - Recover one failed surface with one diagnosis, one fix when needed, and one
   narrow retry. Then reassess the release decision. Do not automatically
   dispatch `rerun_group=all`.
-- For a supported parent, `pnpm frv continue --failed --run <parent-run-id>`
-  adopts any active newer child attempt, reruns failed child jobs in parallel,
-  leaves green children untouched, then reruns the parent once to restore the
-  immutable plan and seal a trusted all-group manifest. It does not start a
-  second child retry while an attempt is active. Each child or parent rerun
-  mutation is sent exactly once; ambiguous transport failures trigger only
-  bounded read reconciliation. The controller never repeats the mutation, and
-  provenance drift fails closed.
+- For a supported parent, `pnpm frv rerun --run <parent-run-id> --job
+"<child-key>:<exact job name>"` reruns one executed terminal job using its accepted
+  Actions job ID. Get the child key and exact name from `frv status --json`.
+  GitHub also reruns dependent jobs. The controller waits only for that child
+  before sending the request; it does not retry unrelated failures.
+- `pnpm frv continue --failed --run <parent-run-id>` reruns each failed child
+  as soon as it is terminal, even while the parent or siblings remain active.
+  It adopts active attempts and preserves green children. Once every required
+  child is green and the original parent finishes, it reruns the parent once
+  to restore the same immutable plan and seal the updated all-group manifest.
+  An early retry can invalidate the original Decision/Drain pairing; the final
+  reseal and strict verification own completion.
+- Each child or parent rerun mutation is sent exactly once per invocation;
+  ambiguous transport failures trigger bounded read-only reconciliation. Do
+  not blindly repeat an interrupted or timed-out command: inspect exact
+  attempts first. Targeted JSON results record the job ID, accepted source
+  attempt and observed retry attempt. Keep the command in a long-running shell
+  for its default 12-hour operation budget.
 - Inspect without mutation:
 
   ```bash
@@ -229,9 +243,14 @@ until their dependent enforcement changes land.
 
 Before full matrix dispatch, run both `pnpm ui:i18n:check` and
 `pnpm native:i18n:check` against the frozen trusted target in approved isolation.
-Bind both results to that exact SHA; either generated-locale drift blocks
-dispatch. Keep target execution outside the trusted dispatch helper—do not
-execute an arbitrary target checkout as helper code.
+Bind both results to that exact SHA. Report generated-locale drift as a warning
+and continue dispatch; source changes and the serialized locale-refresh workflows
+can temporarily leave generated output behind. Do not require regeneration before
+starting validation. FRV's normal-CI child retains the strict `control-ui-i18n`
+and `native-i18n` jobs and reports their actual results in the run summary;
+a failed locale job still fails validation. PR-side checks and release-prep and
+publication gates stay unchanged. Keep target execution outside the trusted
+dispatch helper—do not execute an arbitrary target checkout as helper code.
 
 Before expensive full validation, also run `pnpm ui:build` on the same frozen
 trusted target with its frozen dependencies in approved isolation, outside the
@@ -516,6 +535,25 @@ races keep the candidate unchanged. Record repairs and superseded runs; any
 branch change requires a new complete parent. Omit only an explicitly
 unsupported frozen-target scenario, never a required behavior or package.
 
+### Frozen-target test omissions
+
+Use `plugin_prerelease_node_exclude_patterns_json` only for exact `src/plugins/`
+test paths in the Plugin Prerelease Node lane. Use
+`extension_test_exclude_patterns_json` for exact `extensions/` test paths in
+Plugin Prerelease extension shards. Normal CI does not own that sweep. Both
+default to `[]`; there is no implicit
+Codex omission. Pass JSON arrays at initial dispatch, retain the justification
+and owning fix, and report omitted coverage as not run.
+
+Preflight must discover every requested path in the selected frozen-target
+lane; nonexistent, out-of-lane, duplicate, basename, or glob inputs fail loudly.
+Trusted tooling applies exact exclusions to inline Vitest leaves while
+preserving candidate runtime preparation and restores original config bytes
+after the shard command. Do not substitute CLI `--exclude` or a new target-side
+environment variable: frozen inline projects may ignore them. Inputs remain in
+the immutable request, coverage/reuse identity, and final manifest; changing
+them requires a new request, never continuation.
+
 ## Watch
 
 Use the transition-only summary watcher instead of repeated raw polling:
@@ -545,8 +583,9 @@ Interpret state precisely:
 
 - `qualifying`: no decisive blocker yet; selected children are still active.
 - `blocked_diagnostics_running`: publication is blocked; Diagnostic Drain is
-  still collecting independent failures. Diagnose now, but do not retry until
-  the drain is terminal.
+  still collecting independent failures. Diagnose now and use `frv rerun` or
+  `continue --failed` when the failed child is terminal; final parent resealing
+  still waits for complete evidence.
 - `passed`: all required policy and exact-child evidence passed.
 - `blocked_complete`: publication is blocked and all selected diagnostics are
   terminal.

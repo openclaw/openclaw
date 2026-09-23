@@ -1,6 +1,8 @@
 // Sync Plugin Versions script supports OpenClaw repository automation.
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { parse as parseSemver } from "semver";
+import { compareOpenClawSemver } from "../src/infra/semver.js";
 
 type PackageJson = {
   name?: string;
@@ -53,11 +55,12 @@ function syncPluginApiVersion(pkg: PackageJson, targetVersion: string): boolean 
   if (!current || !OPENCLAW_VERSION_RANGE_RE.test(current)) {
     return false;
   }
-  const next = `>=${targetVersion}`;
-  if (current === next) {
+  const currentVersion = parseSemver(current.slice(2));
+  const nextVersion = parseSemver(targetVersion);
+  if (!currentVersion || !nextVersion || compareOpenClawSemver(nextVersion, currentVersion) <= 0) {
     return false;
   }
-  compat.pluginApi = next;
+  compat.pluginApi = `>=${targetVersion}`;
   return true;
 }
 

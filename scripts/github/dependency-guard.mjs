@@ -15,6 +15,7 @@ import {
   GITHUB_API_REQUEST_TIMEOUT_MS,
   GITHUB_ERROR_BODY_MAX_BYTES,
   GITHUB_RESPONSE_BODY_MAX_BYTES,
+  GitHubDiffDataError,
   GitHubRateLimitError,
   createGitHubApi,
   createIssueMutationHelpers,
@@ -436,14 +437,31 @@ async function readBase64FileAtRef(api, { owner, repo, path, ref }) {
 async function collectDependencyManifestChanges(api, { owner, repo, pullRequest, files }) {
   const { isDependencyManifest } = loadSecurityReviewPolicy();
   const changes = [];
+  let mergeBaseSha;
   for (const file of files) {
     const basePath = file.previous_filename ?? file.filename;
     const headPath = file.filename;
     if (!isDependencyManifest(basePath) && !isDependencyManifest(headPath)) {
       continue;
     }
+    if (!mergeBaseSha) {
+      // Match the PR diff: unrelated dependency updates on the target branch
+      // must neither invent nor hide manifest changes introduced by this PR.
+      // Page two omits file patches; only the comparison metadata is needed.
+      const baseSha = pullRequest.base?.sha;
+      const comparison = await api.request(
+        `/repos/${owner}/${repo}/compare/${baseSha}...${pullRequest.head?.sha}?per_page=1&page=2`,
+      );
+      if (
+        comparison?.base_commit?.sha !== baseSha ||
+        !/^[a-f0-9]{40}$/u.test(comparison?.merge_base_commit?.sha ?? "")
+      ) {
+        throw new GitHubDiffDataError("GitHub returned an invalid dependency manifest merge base.");
+      }
+      mergeBaseSha = comparison.merge_base_commit.sha;
+    }
     const baseManifest = isDependencyManifest(basePath)
-      ? await readJsonFileAtRef(api, { owner, repo, path: basePath, ref: pullRequest.base?.sha })
+      ? await readJsonFileAtRef(api, { owner, repo, path: basePath, ref: mergeBaseSha })
       : null;
     const headManifest = isDependencyManifest(headPath)
       ? await readJsonFileAtRef(api, { owner, repo, path: headPath, ref: pullRequest.head?.sha })
@@ -678,7 +696,11 @@ export async function reviewDependencyChanges(
         await writeSummary(body);
         return true;
       } catch (error) {
-        if (error instanceof GitHubRateLimitError || error instanceof SupersededReviewError) {
+        if (
+          error instanceof GitHubRateLimitError ||
+          error instanceof GitHubDiffDataError ||
+          error instanceof SupersededReviewError
+        ) {
           throw error;
         }
         autoscrubStatus = {

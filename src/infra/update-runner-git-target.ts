@@ -14,6 +14,7 @@ import { DEV_BRANCH, isBetaTag, isStableTag, type UpdateChannel } from "./update
 import { compareSemverStrings } from "./update-check.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
+import { isFailedUpdateStep } from "./update-run-step.js";
 import { runStep } from "./update-runner-command.js";
 import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
 import type {
@@ -280,13 +281,13 @@ export async function prepareGitMutation(params: {
   root: string;
   revision: string;
   timeoutMs: number;
-  beforeGitMutation?: UpdateRunnerOptions["beforeGitMutation"];
+  beforeGitMutation: UpdateRunnerOptions["beforeGitMutation"];
 }): Promise<void> {
   const target = await readGitTargetSchemaVersions(params);
   const sha = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(params.revision)
     ? params.revision.toLowerCase()
     : undefined;
-  await params.beforeGitMutation?.({
+  await params.beforeGitMutation({
     ...(sha ? { sha } : {}),
     ...(target.status === "ok"
       ? {
@@ -441,7 +442,8 @@ export async function fetchGitUpdateTarget(params: {
     });
     const interrupted =
       fetch.termination === "signal" || fetch.exitCode === 130 || fetch.exitCode === 143;
-    if (fetch.exitCode === 0 && !interrupted) {
+    const fetchedSuccessfully = fetch.exitCode === 0 && !isFailedUpdateStep(fetch);
+    if (fetchedSuccessfully && !interrupted) {
       refreshedRemotes.push(fetchRemote);
       if (authority && remotes.some((candidate) => candidate !== authority)) {
         fetch.warnings = [
@@ -459,7 +461,7 @@ export async function fetchGitUpdateTarget(params: {
       index: options.stepIndex,
       total: options.totalSteps,
     });
-    if (interrupted || (fetch.exitCode !== 0 && authority)) {
+    if (interrupted || (!fetchedSuccessfully && authority)) {
       return result(false);
     }
   }
@@ -497,7 +499,7 @@ export async function fetchGitUpdateTarget(params: {
       root,
     ),
   );
-  return result(tags.exitCode === 0);
+  return result(tags.exitCode === 0 && !isFailedUpdateStep(tags));
 }
 
 async function resolveChannelTag(

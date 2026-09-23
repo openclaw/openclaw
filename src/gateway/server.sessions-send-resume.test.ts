@@ -7,7 +7,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { buildAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
-import { subagentRegistryDeps } from "../agents/subagents/registry/subagent-registry-deps.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { markSubagentRunPausedAfterYield } from "../agents/subagents/registry/subagent-registry-run-pause.js";
 import { persistSubagentRunsToDiskOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
@@ -24,13 +23,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { publishSystemEventStoreConfig } from "../config/sessions/session-store-path.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import { isPathInside } from "../infra/path-guards.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  listOpenClawRegisteredAgentDatabases,
-} from "../state/openclaw-agent-db.js";
 import { findTaskByRunId } from "../tasks/task-registry.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
@@ -42,17 +35,13 @@ import {
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
+import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     for (const root of tempDirs.dirs) {
-      await closeOpenClawAgentDatabasesAsync(root);
-    }
-    for (const database of listOpenClawRegisteredAgentDatabases()) {
-      if ([...tempDirs.dirs].some((root) => isPathInside(root, database.path))) {
-        unregisterOpenClawAgentDatabase(database);
-      }
+      await releaseGatewaySessionStoreFixture(root);
     }
     cleanup();
   }),
@@ -182,7 +171,10 @@ async function arrangeAuthorityProof(name: string) {
 
 it("rejects an unrelated visible controller without consuming input or producing a child result", async () => {
   const announce = vi
-    .spyOn(subagentRegistryDeps, "runSubagentAnnounceFlow")
+    .spyOn(
+      await import("../agents/subagents/announce/subagent-announce.js"),
+      "runSubagentAnnounceFlow",
+    )
     .mockResolvedValue("delivered");
   try {
     const proof = await arrangeAuthorityProof("unrelated-controller");
@@ -199,13 +191,15 @@ it("rejects an unrelated visible controller without consuming input or producing
     expect(announce).not.toHaveBeenCalled();
   } finally {
     announce.mockRestore();
-    testState.sessionStorePath = undefined;
   }
 });
 
 it("rejects a child without task-owned completion before input or execution", async () => {
   const announce = vi
-    .spyOn(subagentRegistryDeps, "runSubagentAnnounceFlow")
+    .spyOn(
+      await import("../agents/subagents/announce/subagent-announce.js"),
+      "runSubagentAnnounceFlow",
+    )
     .mockResolvedValue("delivered");
   try {
     const proof = await arrangeAuthorityProof("completion-disabled");
@@ -225,7 +219,6 @@ it("rejects a child without task-owned completion before input or execution", as
     expect(announce).not.toHaveBeenCalled();
   } finally {
     announce.mockRestore();
-    testState.sessionStorePath = undefined;
   }
 });
 
@@ -248,7 +241,10 @@ it("rejects parent authority revoked while durable input preparation awaits", as
       return input;
     });
   const announce = vi
-    .spyOn(subagentRegistryDeps, "runSubagentAnnounceFlow")
+    .spyOn(
+      await import("../agents/subagents/announce/subagent-announce.js"),
+      "runSubagentAnnounceFlow",
+    )
     .mockResolvedValue("delivered");
   let sending: ReturnType<Awaited<ReturnType<typeof arrangeAuthorityProof>>["send"]> | undefined;
   try {
@@ -285,7 +281,6 @@ it("rejects parent authority revoked while durable input preparation awaits", as
     preparation.mockRestore();
     announce.mockRestore();
     signal.removeEventListener("abort", releasePreparation);
-    testState.sessionStorePath = undefined;
   }
 });
 
@@ -320,7 +315,10 @@ it("fences a cancelled successor after adoption before queued input consumption"
       return executionCompletion;
     });
   const announce = vi
-    .spyOn(subagentRegistryDeps, "runSubagentAnnounceFlow")
+    .spyOn(
+      await import("../agents/subagents/announce/subagent-announce.js"),
+      "runSubagentAnnounceFlow",
+    )
     .mockResolvedValue("delivered");
   try {
     const proof = await arrangeAuthorityProof("cancelled-successor");
@@ -385,7 +383,6 @@ it("fences a cancelled successor after adoption before queued input consumption"
     execution.mockRestore();
     announce.mockRestore();
     signal.removeEventListener("abort", releaseExecution);
-    testState.sessionStorePath = undefined;
   }
 });
 
@@ -399,7 +396,10 @@ it.each(["explicit", "automatic"] as const)(
     const release = createDeferred();
     const started = createDeferred();
     const announce = vi
-      .spyOn(subagentRegistryDeps, "runSubagentAnnounceFlow")
+      .spyOn(
+        await import("../agents/subagents/announce/subagent-announce.js"),
+        "runSubagentAnnounceFlow",
+      )
       .mockResolvedValue("delivered");
     testState.sessionStorePath = path.join(root, "sessions.json");
     try {
@@ -511,7 +511,6 @@ it.each(["explicit", "automatic"] as const)(
     } finally {
       release.resolve();
       announce.mockRestore();
-      testState.sessionStorePath = undefined;
     }
   },
 );

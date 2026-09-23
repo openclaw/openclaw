@@ -94,6 +94,10 @@ describe("export name collision guard", () => {
 
   it.each([
     {
+      name: "createSqliteWorkerBackend",
+      paths: ["src/state/openclaw-state.worker.ts", "src/state/openclaw-agent-execution.worker.ts"],
+    },
+    {
       name: "openExistingSqliteWorkerBackend",
       paths: ["src/state/openclaw-state.worker.ts", "src/state/openclaw-agent-execution.worker.ts"],
     },
@@ -126,14 +130,16 @@ describe("export name collision guard", () => {
         { name, files: [module.path, extra.path].toSorted() },
       ]);
     }
+    const otherProtocol =
+      name === "bindSqliteWorkerBackend" ? "createSqliteWorkerBackend" : "bindSqliteWorkerBackend";
     expect(
       findExportNameCollisions(
         paths.map((modulePath) => ({
           path: modulePath,
-          content: "export function createSqliteWorkerBackend() {}",
+          content: `export function ${otherProtocol}() {}`,
         })),
       ),
-    ).toEqual([{ name: "createSqliteWorkerBackend", files: paths.toSorted() }]);
+    ).toEqual([{ name: otherProtocol, files: paths.toSorted() }]);
   });
 
   it("reports direct aliasing re-exports only outside the Plugin SDK", () => {

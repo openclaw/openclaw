@@ -854,6 +854,7 @@ describe("retained publication admission", () => {
               github: { run_attempt: 1 },
               needs: {
                 resolve_target: { result: "success" },
+                plugin_compatibility_readiness: { result: "success" },
                 evidence_reuse: { result: "failure" },
               },
             }),
@@ -1247,6 +1248,7 @@ describe("full release artifact contract", () => {
         encoding: "utf8",
         env: {
           ...Object.fromEntries(Object.keys(writer.env).map((key) => [key, ""])),
+          EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: "[]",
           PATH: process.env.PATH,
           RUNNER_TEMP: dir,
           GITHUB_RUN_ID: "124",

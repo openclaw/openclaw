@@ -12,7 +12,10 @@ import {
 } from "./slack-live.contracts.js";
 
 // SDK errors can contain headers/tokens. Keep only Slack's error code and required scopes.
-export function describeSlackFailure(error: unknown): string {
+export function sanitizeSlackFailure(
+  error: unknown,
+  context?: { operation: string; detail?: string },
+): Error {
   const result = z
     .object({
       data: z.object({ error: z.string(), needed: z.string().optional() }).optional(),
@@ -20,9 +23,13 @@ export function describeSlackFailure(error: unknown): string {
     .safeParse(error);
   const code = result.success ? result.data.data?.error : undefined;
   const needed = result.success ? result.data.data?.needed : undefined;
-  return code && /^[a-zA-Z0-9_]+$/u.test(code)
-    ? `${code}${needed && /^[a-zA-Z0-9_:, .-]+$/u.test(needed) ? `; needed=${needed}` : ""}`
-    : "request failed without a definitive Slack receipt; inspect private Gateway evidence";
+  const cause =
+    code && /^[a-zA-Z0-9_]+$/u.test(code)
+      ? `${code}${needed && /^[a-zA-Z0-9_:, .-]+$/u.test(needed) ? `; needed=${needed}` : ""}`
+      : "request failed without a definitive Slack receipt; inspect private Gateway evidence";
+  return new Error(context ? `Slack ${context.operation}: ${context.detail ?? cause}` : cause, {
+    cause,
+  });
 }
 
 export function createSlackE2eObservations(params: {
@@ -44,8 +51,7 @@ export function createSlackE2eObservations(params: {
       result = await action();
     } catch (error) {
       params.assertActive();
-      // oxlint-disable-next-line preserve-caught-error -- Slack SDK causes can contain credentials; only sanitized diagnostics may escape.
-      throw new Error(`Slack ${operation}: ${describeSlackFailure(error)}`);
+      throw sanitizeSlackFailure(error, { operation });
     }
     params.assertActive();
     return result;

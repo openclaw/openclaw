@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
+import { configureSqliteMaintenanceCache } from "../infra/sqlite-maintenance-cache.js";
 import { tryInspectSqliteReadOnlyInProcess } from "../infra/sqlite-readonly-inspection.js";
 import { withSqliteSourceReadDatabase } from "../infra/sqlite-source-handle.js";
 import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
@@ -49,8 +50,7 @@ process.on(
       const inspect = (database: DatabaseSync, verification = readVerification()) => {
         setSqliteBusyTimeout(database, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
         if (input.requireStartupMigrationReadiness) {
-          // sqlite-allow-raw -- Match the disposable integrity child's connection-local cache budget.
-          database.exec("PRAGMA cache_size = -65536;");
+          configureSqliteMaintenanceCache(database);
         }
         return inspectAgentDatabaseSchema(database, {
           ...input,

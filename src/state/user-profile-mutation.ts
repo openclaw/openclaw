@@ -4,12 +4,17 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
-import type { ProfileDisplayRow } from "./user-profiles.types.js";
+import type { ProfileDisplayRow, UserProfileEmailBinding } from "./user-profiles.types.js";
 
 export type UserProfileMutationChanges = {
   profiles: string[];
   identities: string[];
   channels: string[];
+};
+export type UserProfileEmailBindingChange = {
+  email: string;
+  before: UserProfileEmailBinding | null;
+  after: UserProfileEmailBinding | null;
 };
 export type UserProfileMutationPublication = {
   kind: "user-profile-mutation";
@@ -17,6 +22,7 @@ export type UserProfileMutationPublication = {
   changes: UserProfileMutationChanges;
   before: Array<[string, ProfileDisplayRow | undefined]>;
   after: Array<[string, ProfileDisplayRow | undefined]>;
+  emailBindings: UserProfileEmailBindingChange[];
 };
 export type UserProfileMutationContext = {
   runTransaction<T>(db: DatabaseSync, operation: () => T): T;
@@ -69,6 +75,15 @@ function isDisplayEntries(value: unknown): value is Array<[string, ProfileDispla
     )
   );
 }
+function isEmailBinding(value: unknown, email: string): value is UserProfileEmailBinding | null {
+  return (
+    value === null ||
+    (isRecord(value) &&
+      value.email === email &&
+      typeof value.profileId === "string" &&
+      (value.bindingId === null || typeof value.bindingId === "string"))
+  );
+}
 export function isUserProfileMutationPublication(
   value: unknown,
 ): value is UserProfileMutationPublication {
@@ -81,6 +96,14 @@ export function isUserProfileMutationPublication(
       (keys) => Array.isArray(keys) && keys.every((key) => typeof key === "string"),
     ) &&
     isDisplayEntries(value.before) &&
-    isDisplayEntries(value.after)
+    isDisplayEntries(value.after) &&
+    Array.isArray(value.emailBindings) &&
+    value.emailBindings.every(
+      (change) =>
+        isRecord(change) &&
+        typeof change.email === "string" &&
+        isEmailBinding(change.before, change.email) &&
+        isEmailBinding(change.after, change.email),
+    )
   );
 }

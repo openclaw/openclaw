@@ -7,6 +7,24 @@ import { notifyListeners, registerListener } from "../shared/listeners.js";
 import type { OpenClawStateDatabaseReadAdmission } from "./openclaw-state-db-async-lifecycle.js";
 import { registerOpenClawStateDatabaseLifecycleListener } from "./openclaw-state-db-cache.js";
 import type { UserProfileMutationChanges } from "./user-profile-mutation.js";
+import type { UserProfileEmailBinding } from "./user-profiles.types.js";
+
+type EmailBindingChange = {
+  db: DatabaseSync;
+  email: string;
+  binding: UserProfileEmailBinding | null;
+};
+
+export class UserProfileMutationUnsettledError extends Error {
+  constructor(kind: "pending" | "uncertain") {
+    super(
+      kind === "pending"
+        ? "Profile authority mutation has not settled"
+        : "Profile authority mutation requires canonical recovery",
+    );
+    this.name = "UserProfileMutationUnsettledError";
+  }
+}
 
 type ProfileAuthorityStore = {
   revision: object;
@@ -22,6 +40,8 @@ type ProfileAuthorityStore = {
 const changes = {
   version: 0,
   aliasRevision: 0,
+  bindingRevision: 0,
+  bindingListeners: new Set<(change: EmailBindingChange) => void>(),
   listeners: new Set<() => void>(),
   authorityStores: new Map<string, ProfileAuthorityStore>(),
   authorityHandles: new WeakMap<DatabaseSync, ProfileAuthorityStore>(),
@@ -189,13 +209,32 @@ export async function captureUserProfileAuthorityRead(
     subjectKey === undefined ||
     (!store.uncertain.has(subjectKey) && !store.pending.get(subjectKey)?.size);
   if (!subjectIsSettled()) {
-    throw new Error("Profile authority mutation has not settled");
+    throw new UserProfileMutationUnsettledError("pending");
   }
   const currentRevision = () =>
     dependency === "identity" ? store.identityRevision : store.revision;
   const profileRevisions = dependency === "identity" ? store.profileIdentities : store.profiles;
   const revision = currentRevision();
   return {
+    /** Current-fact readers tolerate settled changes, but never borrow an unknown mutation. */
+    assertSettled(this: void, profileIds: string | readonly string[]): void {
+      admission.assertCurrent();
+      if (changes.authorityStores.get(admission.identity.key) !== store) {
+        throw new Error("Profile authority store changed");
+      }
+      for (const id of typeof profileIds === "string" ? [profileIds] : profileIds) {
+        const key = mutationKey(profileKind, id);
+        if (store.uncertain.has(key)) {
+          throw new UserProfileMutationUnsettledError("uncertain");
+        }
+        if (store.pending.get(key)?.size) {
+          throw new UserProfileMutationUnsettledError("pending");
+        }
+      }
+      if (!subjectIsSettled()) {
+        throw new UserProfileMutationUnsettledError("pending");
+      }
+    },
     bind(profileIds: string | readonly string[]): (() => boolean) | undefined {
       admission.assertCurrent();
       if (
@@ -211,7 +250,7 @@ export async function captureUserProfileAuthorityRead(
         revision: profileRevisions.get(id),
       }));
       if (profiles.some(({ key }) => store.uncertain.has(key))) {
-        throw new Error("Profile authority mutation requires canonical recovery");
+        throw new UserProfileMutationUnsettledError("uncertain");
       }
       if (profiles.some(({ key }) => store.pending.get(key)?.size)) {
         return undefined;
@@ -237,6 +276,34 @@ export async function captureUserProfileAuthorityRead(
       };
     },
   };
+}
+
+export function onUserProfileEmailBindingChanged(
+  listener: (change: EmailBindingChange) => void,
+): () => void {
+  return registerListener(changes.bindingListeners, listener);
+}
+
+/** Native writer facts become visible with the commit, before profile observers. */
+export function stageUserProfileEmailBindingChange(
+  db: DatabaseSync,
+  email: string,
+  binding: UserProfileEmailBinding | null,
+): void {
+  stageSqliteTransactionState(db, {
+    stage: () => {},
+    rollback: () => {},
+    commit: () => {
+      changes.bindingRevision += 1;
+      for (const listener of changes.bindingListeners) {
+        listener({ db, email, binding });
+      }
+    },
+  });
+}
+
+export function readUserProfileEmailBindingRevision(): number {
+  return changes.bindingRevision;
 }
 
 export function readUserProfileVersion(): number {

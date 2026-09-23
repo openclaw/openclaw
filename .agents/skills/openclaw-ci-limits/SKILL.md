@@ -357,7 +357,7 @@ These are intentionally guarded by the `ci-workflow-guards`,
   plugin row, including the five added QA/provider rows, in the burst envelope.
 - Precise and fallback plugin groups retain separate child processes, including process-bounded
   configs. Compatible envelopes, including repeated configs, run one at a time
-  within 240 predicted seconds without a pair-count limit; expanded serial compact
+  within 300 predicted seconds without a pair-count limit; expanded serial compact
   jobs use 210. The rebased 124-envelope inventory emits 50 extension rows and
   125/119/130 PR Node rows on Blacksmith/hybrid/GitHub; push Node rows are
   57/46/55 and compact PR rows are 77/71/82. These fit the landed 130/70/90

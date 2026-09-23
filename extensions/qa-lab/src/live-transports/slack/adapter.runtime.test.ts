@@ -47,11 +47,11 @@ vi.mock("./slack-live.message-observations.js", () => ({
   waitForSlackChannelStable: vi.fn(),
 }));
 
-vi.mock("./slack-live.observations.js", () => ({
+vi.mock("./slack-live.observations.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./slack-live.observations.js")>()),
   getSlackIdentity: mocks.getSlackIdentity,
   listSlackMessages: vi.fn(),
   listSlackThreadMessages: vi.fn(),
-  sendSlackChannelMessage: vi.fn(),
 }));
 
 vi.mock("./slack-plugin.runtime.js", async () => {

@@ -39,6 +39,7 @@ import {
   insertUserProfile,
   requireResolvedUserProfileMetadataById,
   selectResolvedUserProfileMetadataById,
+  setUserProfileEmailBinding,
   toUserProfile,
   type UserProfile,
   userProfileAvatarPresence,
@@ -435,14 +436,7 @@ export function linkEmail(
       }
       if (!existingAlias) {
         options.mutation?.before(db, target.id);
-        executeSqliteQuerySync(
-          db,
-          kysely.insertInto("user_profile_emails").values({
-            email: normalizedEmail,
-            profile_id: target.id,
-            created_at: now,
-          }),
-        );
+        setUserProfileEmailBinding(db, normalizedEmail, target.id, now);
         executeSqliteQuerySync(
           db,
           kysely.updateTable("user_profiles").set({ updated_at: now }).where("id", "=", target.id),
@@ -457,13 +451,7 @@ export function linkEmail(
         return selectUserProfileListItemById(db, target.id);
       }
       options.mutation?.before(db, target.id, existingAlias.profile_id);
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .updateTable("user_profile_emails")
-          .set({ profile_id: target.id })
-          .where("email", "=", normalizedEmail),
-      );
+      setUserProfileEmailBinding(db, normalizedEmail, target.id, now);
       const remainingAliases = executeSqliteQuerySync(
         db,
         kysely

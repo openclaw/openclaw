@@ -9,7 +9,7 @@ import { isVerbose } from "../globals.js";
 import { stringifyNonErrorCause } from "../infra/errors.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
+import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { DEFAULT_WS_SLOW_MS, getGatewayWsLogStyle } from "./ws-logging.js";
 
 /**
@@ -234,7 +234,7 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
     extra.aseq = seq;
   }
 
-  if (!data) {
+  if (!data || isIncognitoSessionKey(sessionKey)) {
     return extra;
   }
 

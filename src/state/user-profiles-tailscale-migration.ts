@@ -10,7 +10,10 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
-import { publishUserProfileAuthorityChange } from "./user-profile-events.js";
+import {
+  publishUserProfileAuthorityChange,
+  stageUserProfileEmailBindingChange,
+} from "./user-profile-events.js";
 import { githubAuthenticationSubject } from "./user-profile-github-identity.js";
 import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 import { classifyTailscaleLogin } from "./user-profiles-tailscale-login.js";
@@ -88,6 +91,9 @@ export function migrateLegacyTailscaleProfileIdentities(
             .where("email", "=", row.email)
             .where("profile_id", "=", row.profile_id),
         );
+        if ((deleted.numAffectedRows ?? 0n) > 0n) {
+          stageUserProfileEmailBindingChange(db, row.email, null);
+        }
         if ((inserted.numAffectedRows ?? 0n) > 0n || (deleted.numAffectedRows ?? 0n) > 0n) {
           publishUserProfileAuthorityChange(db, row.profile_id);
         }

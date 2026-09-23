@@ -12,6 +12,7 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { OpenClawStateLeaseAcquisitionError } from "../../state/openclaw-state-lease-error.js";
 import { prepareCurrentGitHubPublicationOptionsIdentity } from "../github-publication-availability.js";
 import { GitHubPublicationKnownFailure } from "../github-publication-failure.js";
+import { captureGitHubPublicationRequester } from "../github-publication-requester.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
@@ -141,19 +142,25 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         return;
       }
       sessionMutationAuthorization?.assertCurrent();
-      const result = await coordinator.requestForSession({
-        ...params,
+      const session = {
         sessionKey: loaded.canonicalKey,
         agentId: caller?.agentId ?? loaded.agentId,
-        ...(caller?.operationalRunInstance?.runId
-          ? { expectedRunId: caller.operationalRunInstance.runId }
-          : {}),
-        ...(sessionMutationAuthorization
-          ? { assertCurrent: sessionMutationAuthorization.assertCurrent }
-          : {}),
-      });
-      sessionMutationAuthorization?.assertCurrent();
-      respond(true, result);
+      };
+      const admitted = await captureGitHubPublicationRequester(options, session);
+      try {
+        const result = await coordinator.requestForSession({
+          ...params,
+          ...session,
+          requester: admitted.requester,
+          ...(caller?.operationalRunInstance?.runId
+            ? { expectedRunId: caller.operationalRunInstance.runId }
+            : {}),
+        });
+        sessionMutationAuthorization?.assertCurrent();
+        respond(true, result);
+      } finally {
+        admitted.release();
+      }
     },
   ),
   "sessions.github.options": defineSessionGitHubMethod(

@@ -71,6 +71,13 @@ failures, repair their owner, retry the affected surface, then reassess rather
 than repeating the full release.
 
 Required checks and enforced environment approvals remain required. A passing
-sibling lane cannot waive a failure. Native platforms have independent gates;
-pending app assets do not hold npm/GitHub finalization or main closeout. Report
-proof gaps and pending platforms accurately.
+sibling lane cannot waive a failure. npm + ClawHub publication is the priority
+path. macOS/Windows/Linux/Android native publication runs in parallel and never
+gates npm/ClawHub publication, GitHub release finalization, or main closeout.
+A failing native-only lane (macos-swift app lanes, advisory cross-OS
+Windows/macOS, platform publishers) is classified and repaired in parallel; it
+is never a reason to re-cut or re-run the full npm validation. Windows should
+not hold the release either: Windows node-test shards are still a required
+`ci.yml` check for npm qualification, so repair and rerun that lane in
+parallel rather than re-cutting; relaxing the enforced gate is workflow work,
+not a doc waiver. Report proof gaps and pending platforms accurately.

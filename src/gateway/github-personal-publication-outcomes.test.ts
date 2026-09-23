@@ -17,6 +17,7 @@ import {
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
 } from "./github-publication.test-support.js";
+import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
 
 const mocks = githubPublicationTestMocks();
 vi.mock("../agents/worktrees/git-lock.js", async (importOriginal) => ({
@@ -117,6 +118,10 @@ describe("personal publication definitive outcomes", () => {
   );
 
   it("does not resume shared GitHub writes after the RPC request loses write permission", async () => {
+    fixture.client.internal = {
+      ...fixture.client.internal,
+      operatorAccessAuthority: resolveGatewayOperatorAccessAuthority(fixture.owner, fixture.config),
+    };
     const workspace = await createRealPublicationWorkspace();
     const transport = mocks.runCommand.getMockImplementation()!;
     mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {

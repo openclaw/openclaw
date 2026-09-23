@@ -22,7 +22,7 @@ export function prepareGatewayConnectOperatorAccess(client: GatewayWsClient): vo
   const operatorAccessAuthority = profile
     ? resolveGatewayOperatorAccessAuthority(profile.profileId, config)
     : undefined;
-  if (operatorAccessAuthority) {
+  if (operatorAccessAuthority !== undefined) {
     client.internal = { ...client.internal, operatorAccessAuthority };
   }
 }

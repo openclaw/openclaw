@@ -70,6 +70,12 @@ Outcomes are retained past the credential's own expiry.
 - `exec.approvals.node.get` and `exec.approvals.node.set` manage node-local exec approval policy via node relay commands.
 - `plugin.approval.request`, `plugin.approval.list`, `plugin.approval.waitDecision`, and `plugin.approval.resolve` cover plugin-defined approval flows.
 
+Approval lookup, history, waits, and resolution retain their original device and
+account authority while storage work is pending. Disconnecting the socket alone does not cancel an admitted request.
+Revoking that authority before commit admission prevents the verdict and withholds
+approval details; the pending approval remains available to another authorized reviewer.
+A verdict that already committed remains recorded and settles its waiting action.
+
 ## Control UI commands
 
 - `ui.command` lets an `operator.write` caller send typed layout and navigation commands to the requesting Control UI connection, which must advertise the `ui-commands` capability.

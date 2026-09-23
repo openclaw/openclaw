@@ -107,11 +107,28 @@ describe("gateway startup-migration refusal", () => {
 describe("CLI pristine startup after early config observation", () => {
   let runtimeRoot: string;
   let runtimeTempDir: string;
+  let processEntrypointsUrl: string | null = null;
 
   beforeAll(() => {
-    // Stable source URLs and a shared temp root let fresh children reuse tsx transforms.
+    // Source CLI hooks and prepared child workers share this fixture's private package assets.
     const root = fs.realpathSync(tempDirs.make("openclaw-cli-pristine-runtime-"));
-    runtimeRoot = createSourceRuntime(root);
+    const preparedPreflightUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.preflight);
+    const compiled = preparedPreflightUrl.pathname.endsWith(".js");
+    runtimeRoot = compiled
+      ? createBuiltRuntime(root, fileURLToPath(new URL("../", preparedPreflightUrl)))
+      : createSourceRuntime(root);
+    processEntrypointsUrl = compiled
+      ? pathToFileURL(
+          path.join(
+            runtimeRoot,
+            "dist",
+            "legacy-finalizer",
+            "src",
+            "infra",
+            "runtime-process-entrypoints.js",
+          ),
+        ).href
+      : null;
     runtimeTempDir = path.join(root, "tmp");
     fs.mkdirSync(runtimeTempDir);
   });
@@ -207,7 +224,12 @@ describe("CLI pristine startup after early config observation", () => {
             return { shortCircuit: true,
               url: "data:text/javascript," + encodeURIComponent(${JSON.stringify(rpcSource)}) };
           }
-          return nextResolve(specifier, context);
+          const resolved = nextResolve(specifier, context);
+          if (${JSON.stringify(processEntrypointsUrl)} &&
+              resolved.url === ${JSON.stringify(sourceUrl("infra/runtime-process-entrypoints.ts"))}) {
+            return { ...resolved, url: ${JSON.stringify(processEntrypointsUrl)} };
+          }
+          return resolved;
         },
       });
       if (${existingState}) {

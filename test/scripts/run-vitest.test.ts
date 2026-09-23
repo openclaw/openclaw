@@ -41,6 +41,8 @@ import {
 } from "../../scripts/run-vitest.mts";
 import { parseTestProjectsArgs } from "../../scripts/test-projects.test-support.mts";
 import { forceKillVitestProcessGroup } from "../../scripts/vitest-process-group.mts";
+import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
+import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.mjs";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 // These bounds only guard broken fixtures; readiness and exit are asserted via process signals.
@@ -336,6 +338,19 @@ registerHooks({resolve(specifier, context, nextResolve) {
         "-x",
       ],
     ]);
+  });
+
+  it("keeps every Gateway server file in one bounded native invocation", () => {
+    const argv = ["run", "--config", "test/vitest/vitest.gateway-server.config.ts"];
+    const invocations = resolveBoundedVitestInvocations(argv, { env: {} });
+    const targets = invocations.map((args) => args.slice(argv.length));
+
+    expect(targets.every((files) => files.length > 0 && files.length <= 50)).toBe(true);
+    expect(targets.flat()).toEqual(
+      listGitTrackedFiles({ pathspecs: "src/gateway" })
+        ?.filter(isGatewayServerTestFile)
+        .toSorted((a, b) => a.localeCompare(b)),
+    );
   });
 
   it("bounds implicit CI runs for absolute Gateway server config paths", () => {

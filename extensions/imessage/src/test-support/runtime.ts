@@ -35,6 +35,7 @@ function createIMessageTestEnv(): NodeJS.ProcessEnv & { OPENCLAW_STATE_DIR: stri
 }
 
 let imessageTestEnv = createIMessageTestEnv();
+const reusedStoreCleanups = new Map<string, () => Promise<void>>();
 
 export function createIMessagePluginStateSyncStoreForTest<T>(
   options: OpenKeyedStoreOptions,
@@ -84,8 +85,14 @@ export function installIMessageStateRuntimeForTest(): void {
 
 export async function loadFreshIMessageReplyCacheForTest(options?: {
   preservePersistentState?: boolean;
+  reuseDatabase?: boolean;
 }): Promise<typeof import("../monitor-reply-cache.js")> {
-  if (!options?.preservePersistentState) {
+  if (options?.reuseDatabase && !options.preservePersistentState) {
+    // Clear through the real worker boundary while retaining its prepared database.
+    for (const clear of reusedStoreCleanups.values()) {
+      await clear();
+    }
+  } else if (!options?.preservePersistentState) {
     const { closeOpenClawStateDatabaseAsync } =
       await import("openclaw/plugin-sdk/sqlite-runtime-testing");
     // Drain worker-only stores before rotating the fixture state directory.
@@ -93,7 +100,10 @@ export async function loadFreshIMessageReplyCacheForTest(options?: {
     closeOpenClawStateDatabaseForTest();
     imessageTestEnv = createIMessageTestEnv();
   }
-  resetPluginStateStoreForTests();
+  if (!options?.preservePersistentState) {
+    reusedStoreCleanups.clear();
+  }
+  resetPluginStateStoreForTests({ closeDatabase: !options?.reuseDatabase });
   vi.resetModules();
   const { setIMessageRuntime: setFreshIMessageRuntime } = await import("../runtime.js");
   setFreshIMessageRuntime({
@@ -107,11 +117,16 @@ export async function loadFreshIMessageReplyCacheForTest(options?: {
           channelId: "imessage",
           stateDir: queueOptions?.stateDir ?? imessageTestEnv.OPENCLAW_STATE_DIR,
         }),
-      openKeyedStore: ((storeOptions) =>
-        createPluginStateKeyedStoreForTests("imessage", {
+      openKeyedStore: ((storeOptions) => {
+        const store = createPluginStateKeyedStoreForTests("imessage", {
           ...storeOptions,
           env: imessageTestEnv,
-        })) as PluginRuntime["state"]["openKeyedStore"],
+        });
+        if (options?.reuseDatabase) {
+          reusedStoreCleanups.set(storeOptions.namespace, store.clear);
+        }
+        return store;
+      }) as PluginRuntime["state"]["openKeyedStore"],
       openSyncKeyedStore: ((storeOptions) =>
         createIMessagePluginStateSyncStoreForTest(
           storeOptions,

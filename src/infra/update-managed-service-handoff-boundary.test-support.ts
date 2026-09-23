@@ -25,10 +25,10 @@ import {
   type ManagedServiceCommandTiming,
   type ManagedServiceManagerBoundaryResult,
 } from "./update-managed-service-handoff-lifecycle.test-support.js";
+import { prepareManagedServiceParentPreloads } from "./update-managed-service-handoff-parent.test-support.js";
 import {
   createManagedServiceBoundaryCleanup,
   createManagedServiceBoundaryParent,
-  pathExists,
 } from "./update-managed-service-handoff-process.test-support.js";
 import {
   prepareManagedServiceProfileRequester,
@@ -46,11 +46,10 @@ import {
 } from "./update-managed-service-handoff-state.test-support.js";
 import {
   createManagedServiceActivationScript,
+  pathExists,
   readSavedFailure,
 } from "./update-managed-service-native.test-support.js";
 import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
-
-export { pathExists };
 
 export function createManagedServiceManagerBoundary({
   spawnMock,
@@ -361,55 +360,18 @@ export function createManagedServiceManagerBoundary({
         );
         helperEnv = { ...helperEnv, NODE_OPTIONS: `--require ${preloadPath}` };
       }
-      if (options?.expireParentWhileStopPending) {
-        // Advance only the helper after native dispatch; the stop subprocess keeps real time.
-        // Observe close before failure handling as well as terminal cleanup, which may be slower.
-        const preloadPath = path.join(root, "parent-expiry-preload.cjs");
-        await fs.writeFile(
-          preloadPath,
-          `if (process.argv[1] === ${JSON.stringify(scriptPath)}) {
-            const fs = require("node:fs");
-            const children = require("node:child_process");
-            const spawn = children.spawn;
-            const now = Date.now;
-            const append = fs.appendFileSync;
-            const kill = process.kill.bind(process);
-            let stop;
-            let parentKilledWhileStopPending;
-            let failedWhileStopPending;
-            children.spawn = (command, args, options) => {
-              const child = spawn(command, args, options);
-              if ((command === "systemctl" && args.includes("stop")) ||
-                  (command === "launchctl" && args[0] === "bootout")) {
-                stop = { pid: child.pid, closed: false, code: null, signal: null };
-                child.once("close", (code, signal) => { stop.closed = true; stop.code = code; stop.signal = signal; });
-              }
-              return child;
-            };
-            process.kill = (pid, signal) => {
-              if (pid === ${parentPid} && signal === "SIGKILL") parentKilledWhileStopPending = stop && !stop.closed;
-              return kill(pid, signal);
-            };
-            Date.now = () => {
-              let parked = false;
-              try { parked = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8")).parked === true; } catch {}
-              return now() + (parked ? ${Number(generated.parentExitTimeoutMs) + 1} : 0);
-            };
-            fs.appendFileSync = (pathname, data, ...args) => {
-              if (pathname === ${JSON.stringify(generated.logPath)}) {
-                if (String(data).includes("managed update activation failed:")) failedWhileStopPending = stop && !stop.closed;
-                if (String(data).includes("managed update helper completed code="))
-                  fs.writeFileSync(${JSON.stringify(stopSettlementPath)}, JSON.stringify({ ...stop, parentKilledWhileStopPending, failedWhileStopPending }));
-              }
-              return append(pathname, data, ...args);
-            };
-          }`,
-        );
-        helperEnv = {
-          ...helperEnv,
-          NODE_OPTIONS: `${helperEnv.NODE_OPTIONS ?? ""} --require ${preloadPath}`.trim(),
-        };
-      }
+      helperEnv = await prepareManagedServiceParentPreloads({
+        root,
+        scriptPath,
+        statePath,
+        parentPid,
+        parentStartIdentity,
+        logPath: String(generated.logPath),
+        parentExitTimeoutMs: Number(generated.parentExitTimeoutMs),
+        stopSettlementPath,
+        env: helperEnv,
+        options,
+      });
       const runningHelper = spawn(resolveTestNodeExecPath(), [scriptPath, paramsPath], {
         env: helperEnv,
         stdio: ["pipe", "pipe", "pipe"],

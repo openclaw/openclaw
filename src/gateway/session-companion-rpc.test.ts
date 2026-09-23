@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayErrorDetailCodes } from "../../packages/gateway-protocol/src/index.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { SessionCompanionAskError } from "./session-companion-ask.js";
 import { sessionCompanionHandlers } from "./session-companion-rpc.js";
+import type { SessionCompanionService } from "./session-companion.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 
 afterEach(() => closeOpenClawAgentDatabasesForTest());
@@ -34,6 +36,57 @@ async function invoke(
 }
 
 describe("session companion RPC", () => {
+  it("carries the authenticated model policy and releases it after answering", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const client = { ...roleClient("view", "companion-policy"), connId: "policy-connection" };
+      const cfg = rolePolicyConfig();
+      cfg.agents = {
+        entries: { main: {} },
+        defaults: { model: "test-provider/allowed" },
+      };
+      const role = cfg.gateway?.roles?.definitions.view;
+      if (!role) {
+        throw new Error("The role fixture is missing its reader policy");
+      }
+      role.modelPolicy = { sourceAgent: "main" };
+      const sessionKey = "agent:main:policy";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "policy-session",
+          updatedAt: 1,
+          visibility: "draft",
+          createdActor: {
+            type: "human",
+            source: "profile",
+            id: client.authenticatedUserProfile?.profileId,
+          },
+        },
+      );
+      let captured: AdmittedRunOperatorAuthority | undefined;
+      const ask = vi.fn(async (request: Parameters<SessionCompanionService["ask"]>[0]) => {
+        captured = request.operatorAuthority;
+        expect(captured?.profileId).toBe(client.authenticatedUserProfile?.profileId);
+        expect(captured?.modelPolicy?.models).toEqual([
+          { provider: "test-provider", model: "allowed" },
+        ]);
+        captured?.assertCurrent();
+        return { answer: "Allowed answer.", ts: 125 };
+      });
+      const respond = await invoke(
+        "sessions.companion.ask",
+        { sessionKey, question: "What happened?" },
+        { ask },
+        client,
+        undefined,
+        cfg,
+      );
+      expect(respond).toHaveBeenCalledWith(true, { answer: "Allowed answer.", ts: 125 });
+      expect(captured).toBeDefined();
+      expect(() => captured?.assertCurrent()).toThrow("no longer active");
+    });
+  });
+
   it("dispatches a valid ask and returns its timestamp", async () => {
     const ask = vi.fn(async () => ({ answer: "It is checking the fix.", ts: 123 }));
     const respond = await invoke(

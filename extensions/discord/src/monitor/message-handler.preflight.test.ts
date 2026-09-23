@@ -54,6 +54,7 @@ import {
   createDiscordPreflightArgs,
   createGuildEvent,
   createGuildTextClient,
+  createThreadClient,
   DEFAULT_PREFLIGHT_CFG,
   type DiscordClient,
   type DiscordConfig,
@@ -64,6 +65,8 @@ vi.mock("openclaw/plugin-sdk/media-runtime", { spy: true });
 let preflightDiscordMessage: typeof import("./message-handler.preflight.js").preflightDiscordMessage;
 let resolvePreflightMentionRequirement: typeof import("./message-handler.preflight.js").resolvePreflightMentionRequirement;
 let shouldIgnoreBoundThreadWebhookMessage: typeof import("./message-handler.preflight.js").shouldIgnoreBoundThreadWebhookMessage;
+let defaultThreadBindings: import("./thread-bindings.js").ThreadBindingManager;
+let createNoopThreadBindingManager: typeof import("./thread-bindings.js").createNoopThreadBindingManager;
 let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
 let createDiscordMessageDispatcher: typeof import("./message-dispatcher.js").createDiscordMessageDispatcher;
 
@@ -73,11 +76,14 @@ beforeAll(async () => {
     resolvePreflightMentionRequirement,
     shouldIgnoreBoundThreadWebhookMessage,
   } = await import("./message-handler.preflight.js"));
-  ({ createThreadBindingManager } = await import("./thread-bindings.js"));
+  ({ createThreadBindingManager, createNoopThreadBindingManager } =
+    await import("./thread-bindings.js"));
   ({ createDiscordMessageDispatcher } = await import("./message-dispatcher.js"));
 });
 
 beforeEach(() => {
+  sessionBindingTesting.resetSessionBindingAdaptersForTests();
+  defaultThreadBindings = createNoopThreadBindingManager("default");
   fetchPluralKitMessageInfoMock.mockReset();
   saveRemoteMediaMock.mockReset();
   saveRemoteMediaMock.mockImplementation(
@@ -91,13 +97,19 @@ beforeEach(() => {
   vi.mocked(saveRemoteMedia).mockImplementation((...args) => saveRemoteMediaMock(...args));
 });
 
+afterEach(() => {
+  defaultThreadBindings.stop();
+  sessionBindingTesting.resetSessionBindingAdaptersForTests();
+});
+
 function createPreflightArgs(params: {
   cfg: import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
   discordConfig: DiscordConfig;
   data: DiscordMessageEvent;
   client: DiscordClient;
+  threadBindings?: import("./thread-bindings.js").ThreadBindingManager;
 }): Parameters<typeof preflightDiscordMessage>[0] {
-  return createDiscordPreflightArgs(params);
+  return createDiscordPreflightArgs({ threadBindings: defaultThreadBindings, ...params });
 }
 
 type DiscordPreflightResult = NonNullable<Awaited<ReturnType<typeof preflightDiscordMessage>>>;
@@ -119,30 +131,6 @@ function firstMockArg(mock: MockWithCalls, label: string) {
     throw new Error(`expected ${label} call`);
   }
   return call[0];
-}
-
-function createThreadClient(params: { threadId: string; parentId: string }): DiscordClient {
-  return {
-    fetchChannel: async (channelId: string) => {
-      if (channelId === params.threadId) {
-        return {
-          id: params.threadId,
-          type: ChannelType.PublicThread,
-          name: "focus",
-          parentId: params.parentId,
-          ownerId: "owner-1",
-        };
-      }
-      if (channelId === params.parentId) {
-        return {
-          id: params.parentId,
-          type: ChannelType.GuildText,
-          name: "general",
-        };
-      }
-      return null;
-    },
-  } as unknown as DiscordClient;
 }
 
 function createDmClient(channelId: string): DiscordClient {
@@ -344,7 +332,6 @@ describe("resolvePreflightMentionRequirement", () => {
 
 describe("preflightDiscordMessage", () => {
   beforeEach(() => {
-    sessionBindingTesting.resetSessionBindingAdaptersForTests();
     transcribeFirstAudioMock.mockReset();
     resolveDiscordDmCommandAccessMock.mockReset();
     resolveDiscordDmCommandAccessMock.mockResolvedValue({
@@ -975,8 +962,8 @@ describe("preflightDiscordMessage", () => {
           message,
         }),
         client: createGuildTextClient(channelId),
+        threadBindings: manager,
       }),
-      threadBindings: manager,
     });
 
     expect(expectPreflightResult(result).message.id).toBe(message.id);
@@ -3163,10 +3150,6 @@ describe("preflightDiscordMessage", () => {
 });
 
 describe("shouldIgnoreBoundThreadWebhookMessage", () => {
-  beforeEach(() => {
-    sessionBindingTesting.resetSessionBindingAdaptersForTests();
-  });
-
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -3281,10 +3264,10 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
           message,
         }),
         client: createThreadClient({ threadId: "thread-1", parentId: "parent-1" }),
+        threadBindings: manager,
       }),
       guildHistories,
       historyLimit: 4,
-      threadBindings: manager,
       guildEntries: {
         "guild-1": {
           channels: {

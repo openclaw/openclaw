@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { drainStoreWriterQueuesForTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -53,16 +53,32 @@ const lastModel = { ...startModel, id: "admission-last", reasoning: true };
 const models = [startModel, nextModel, lastModel];
 type ModelSelectEvent = Extract<ExtensionEvent, { type: "model_select" }>;
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+async function closeDatabaseRoots(roots: Iterable<string>) {
+  for (const root of roots) {
+    await closeOpenClawAgentDatabasesAsync(root);
+    closeOpenClawAgentDatabasesForTest(root);
+  }
+}
+
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeDatabaseRoots(tempDirs.dirs);
+    cleanup();
+  }),
+);
+const suiteTempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterAll(async () => {
+    await closeDatabaseRoots(suiteTempDirs.dirs);
+    cleanup();
+  }),
+);
+let suiteRoot: string | undefined;
+let nextFixtureId = 0;
 
 describe("model transitions after SQLite write admission", () => {
   const releases: Array<() => void> = [];
   const pending: Promise<unknown>[] = [];
 
-  afterEach(async () => {
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-  });
   registerAgentSessionLoopTestLifecycle();
   afterEach(async () => {
     for (const release of releases.splice(0)) {
@@ -81,13 +97,21 @@ describe("model transitions after SQLite write admission", () => {
   async function createModelSession(
     onSelect?: (event: ModelSelectEvent) => Promise<void>,
     onThinkingSelect?: (event: ThinkingLevelSelectEvent) => Promise<void>,
+    rootOverride?: string,
+    env?: NodeJS.ProcessEnv,
   ) {
-    const root = fs.realpathSync(tempDirs.make("openclaw-model-admission-"));
+    const root =
+      rootOverride ??
+      (env
+        ? fs.realpathSync(tempDirs.make("openclaw-model-admission-"))
+        : (suiteRoot ??= suiteTempDirs.make("openclaw-model-admission-")));
+    const sessionId = `model-admission-${++nextFixtureId}`;
     const target = {
       agentId: "main",
-      sessionKey: "agent:main:model-admission",
-      sessionId: "model-admission",
+      sessionKey: `agent:main:${sessionId}`,
+      sessionId,
       storePath: path.join(root, "agents", "main", "sessions", "sessions.json"),
+      ...(env ? { env } : {}),
     };
     await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
     const transitions: Array<{ previous: string | undefined; next: string }> = [];
@@ -153,10 +177,58 @@ describe("model transitions after SQLite write admission", () => {
     return { release: release.resolve, done };
   }
 
+  it("keeps captured storage environment out of metadata command payloads", async () => {
+    const stateDir = fs.realpathSync(tempDirs.make("metadata-context-environment-"));
+    const original = metadataRuntime.withSessionMetadataWorker;
+    const commands = new Set<string>();
+    const observeCommands: typeof original = async (
+      options,
+      database,
+      assertCurrent,
+      operation,
+    ) => {
+      expect(options.env?.OPENCLAW_STATE_DIR).toBe(stateDir);
+      return await original(options, database, assertCurrent, (scope) =>
+        operation({
+          execute: async (command, commandOptions) => {
+            expect(command.input.scope).not.toHaveProperty("env");
+            commands.add(command.type);
+            return await scope.execute(command, commandOptions);
+          },
+        }),
+      );
+    };
+    const observer = vi
+      .spyOn(metadataRuntime, "withSessionMetadataWorker")
+      .mockImplementation(observeCommands);
+    try {
+      const { session, sessionManager, target } = await createModelSession(
+        undefined,
+        undefined,
+        undefined,
+        { OPENCLAW_STATE_DIR: stateDir },
+      );
+      const before = await loadTranscriptEvents(target);
+      await session.setModel(nextModel);
+      expect(commands).toEqual(new Set(["session.metadata.initialize", "session.metadata.append"]));
+      expect(sessionManager.getSessionTarget()?.env?.OPENCLAW_STATE_DIR).toBe(stateDir);
+      const after = await loadTranscriptEvents(target);
+      expect(after.slice(0, before.length)).toEqual(before);
+      expect(after.slice(before.length)).toMatchObject([
+        { type: "model_change", modelId: nextModel.id },
+        { type: "thinking_level_change", thinkingLevel: "medium" },
+      ]);
+      expect(session.model?.id).toBe(nextModel.id);
+    } finally {
+      observer.mockRestore();
+    }
+  });
+
   it.runIf(process.platform !== "win32").each(["model", "thinking"] as const)(
     "preserves private database-family modes through a warm %s metadata action",
     async (kind) => {
-      const { session, options, target } = await createModelSession();
+      const root = tempDirs.make("openclaw-model-admission-permissions-");
+      const { session, options, target } = await createModelSession(undefined, undefined, root);
       await session.setModel(nextModel);
       const databasePath = openOpenClawAgentDatabase(options).path;
       const before = await loadTranscriptEvents(target);
@@ -374,8 +446,8 @@ describe("model transitions after SQLite write admission", () => {
       await session.setModel(nextModel);
       const replacement = {
         ...target,
-        sessionId: "replacement-after-settlement",
-        sessionKey: "agent:main:replacement-after-settlement",
+        sessionId: `${target.sessionId}-replacement-after-settlement`,
+        sessionKey: `${target.sessionKey}-replacement-after-settlement`,
       };
       await replaceSessionEntry(replacement, { sessionId: replacement.sessionId, updatedAt: 2 });
       const replacementManager = SessionManager.open(replacement);
@@ -468,8 +540,8 @@ describe("model transitions after SQLite write admission", () => {
       await session.setModel(nextModel);
       const replacement = {
         ...target,
-        sessionId: "replacement-after-commit",
-        sessionKey: "agent:main:replacement-after-commit",
+        sessionId: `${target.sessionId}-replacement-after-commit`,
+        sessionKey: `${target.sessionKey}-replacement-after-commit`,
       };
       if (changedOwner !== "extension") {
         await replaceSessionEntry(replacement, { sessionId: replacement.sessionId, updatedAt: 2 });
@@ -545,8 +617,9 @@ describe("model transitions after SQLite write admission", () => {
   it.each(["model", "thinking"] as const)(
     "retains committed %s metadata when the stale transcript view cannot be decoded",
     async (kind) => {
+      const root = tempDirs.make("openclaw-model-admission-corruption-");
       const { session, sessionManager, settingsManager, options, target } =
-        await createModelSession();
+        await createModelSession(undefined, undefined, root);
       await session.setModel(nextModel);
       const firstModel = sessionManager.getEntries().find((entry) => entry.type === "model_change");
       if (!firstModel) {
@@ -757,12 +830,116 @@ describe("model transitions after SQLite write admission", () => {
     expect(readModelChanges()).toEqual(models.map((model) => model.id));
   });
 
+  it.each(["model", "thinking"] as const)(
+    "rejects queued %s metadata after the same locator changes storage root",
+    async (kind) => {
+      const firstRoot = fs.realpathSync(tempDirs.make("metadata-root-first-"));
+      const secondRoot = fs.realpathSync(tempDirs.make("metadata-root-second-"));
+      const { session, sessionManager, target, options } = await createModelSession(
+        undefined,
+        undefined,
+        undefined,
+        { OPENCLAW_STATE_DIR: firstRoot },
+      );
+      await session.setModel(nextModel);
+      const before = await loadTranscriptEvents(target);
+      const replacement = { ...target, env: { OPENCLAW_STATE_DIR: secondRoot } };
+      const reservation = await holdAdmission(options);
+      const change = track(
+        (kind === "model"
+          ? sessionManager.appendModelChange(lastModel.provider, lastModel.id)
+          : sessionManager.appendThinkingLevelChange("low")
+        ).then(
+          () => ({ status: "fulfilled" as const }),
+          (error: unknown) => ({ status: "rejected" as const, error }),
+        ),
+      );
+      try {
+        sessionManager.setSessionTarget(replacement);
+        expect(sessionManager.getSessionTarget()).toMatchObject(replacement);
+      } finally {
+        reservation.release();
+        await Promise.all([reservation.done, change]);
+      }
+      const outcome = await change;
+      expect.soft(await loadTranscriptEvents(target)).toEqual(before);
+      expect(outcome.status).toBe("rejected");
+      if (outcome.status === "rejected") {
+        expect(outcome.error).not.toBeInstanceOf(SessionMetadataCommittedError);
+      }
+    },
+  );
+
+  it.each(["model", "thinking"] as const)(
+    "retains committed %s metadata without adopting into the same locator under another storage root",
+    async (kind) => {
+      const firstRoot = fs.realpathSync(tempDirs.make("metadata-commit-root-first-"));
+      const secondRoot = fs.realpathSync(tempDirs.make("metadata-commit-root-second-"));
+      const { session, sessionManager, settingsManager, target } = await createModelSession(
+        undefined,
+        undefined,
+        undefined,
+        { OPENCLAW_STATE_DIR: firstRoot },
+      );
+      await session.setModel(nextModel);
+      const before = await loadTranscriptEvents(target);
+      const replacement = { ...target, env: { OPENCLAW_STATE_DIR: secondRoot } };
+      const original = metadataRuntime.withSessionMetadataWorker;
+      const observeCommittedResult: typeof original = async (
+        options,
+        database,
+        assertCurrent,
+        operation,
+      ) => {
+        const result = await original(options, database, assertCurrent, operation);
+        sessionManager.setSessionTarget(replacement);
+        return result;
+      };
+      const observer = vi
+        .spyOn(metadataRuntime, "withSessionMetadataWorker")
+        .mockImplementation(observeCommittedResult);
+      try {
+        const outcome = await (
+          kind === "model" ? session.setModel(lastModel) : session.setThinkingLevel("low")
+        ).then(
+          () => ({ status: "fulfilled" as const }),
+          (error: unknown) => ({ status: "rejected" as const, error }),
+        );
+        expect(observer).toHaveBeenCalledOnce();
+        expect(sessionManager.getSessionTarget()).toMatchObject(replacement);
+        const after = await loadTranscriptEvents(target);
+        const expectedEntry =
+          kind === "model"
+            ? { type: "model_change", provider: lastModel.provider, modelId: lastModel.id }
+            : { type: "thinking_level_change", thinkingLevel: "low" };
+        expect(after.slice(0, before.length)).toEqual(before);
+        expect(after.slice(before.length)).toMatchObject([expectedEntry]);
+        expect.soft(session.model?.id).toBe(nextModel.id);
+        expect.soft(session.thinkingLevel).toBe("medium");
+        expect.soft(settingsManager.getDefaultModel()).toBe(nextModel.id);
+        expect.soft(settingsManager.getDefaultThinkingLevel()).toBe("medium");
+        expect(outcome.status).toBe("rejected");
+        if (outcome.status === "rejected") {
+          expect(outcome.error).toBeInstanceOf(SessionMetadataCommittedError);
+          expect(outcome.error).toMatchObject({
+            committedEntry: expectedEntry,
+            committedTarget: { ...target, env: { OPENCLAW_STATE_DIR: firstRoot } },
+          });
+          expect(hasModelFallbackStop(outcome.error)).toBe(true);
+          expect(() => sessionManager.getEntries()).toThrow(outcome.error);
+        }
+      } finally {
+        observer.mockRestore();
+      }
+    },
+  );
+
   it("rejects a queued switch after its manager is rebound to another session", async () => {
     const { session, sessionManager, target, options, transitions } = await createModelSession();
     const replacementTarget = {
       ...target,
-      sessionId: "replacement",
-      sessionKey: "agent:main:replacement",
+      sessionId: `${target.sessionId}-replacement`,
+      sessionKey: `${target.sessionKey}-replacement`,
     };
     await replaceSessionEntry(replacementTarget, {
       sessionId: replacementTarget.sessionId,

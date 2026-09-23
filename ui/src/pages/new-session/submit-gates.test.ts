@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ProjectsListResult } from "../../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import { renderControl } from "./model-control.test-support.ts";
@@ -17,6 +19,77 @@ afterEach(() => {
 });
 
 describe("DraftSubmissionFlow submit gates", () => {
+  it.each(["retry", "missing", "choose-workspace"] as const)(
+    "retains a saved project after failed discovery until %s resolves the choice",
+    async (recovery) => {
+      replaceBrowserPreference("ws://gateway.example", "main", {
+        workspace: "/workspace",
+        folder: "/workspace",
+        projectId: "registered",
+      });
+      const discovery = createDeferred<ProjectsListResult>();
+      let projects = discovery.promise;
+      const { place, flow, context } = createDraftFixture({
+        methods: ["sessions.create", "projects.list", "worktrees.branches"],
+        request: (method) =>
+          method === "projects.list"
+            ? projects
+            : Promise.resolve({ repositoryStatus: "not_git", branches: [] }),
+      });
+      const read = place.browser.refreshProjects();
+      flow.setMessage("work in the saved project");
+      await flow.submit();
+      expect(context.sessions.createResult).not.toHaveBeenCalled();
+      discovery.reject(new Error("Project discovery unavailable"));
+      await read;
+      place.restorePreferenceSelections();
+
+      expect(place.preferenceSelection().projectId).toBe("registered");
+      expect(flow.canSubmit()).toBe(false);
+      await flow.submit();
+      await flow.submit(undefined, true);
+      expect(context.sessions.createResult).not.toHaveBeenCalled();
+
+      if (recovery === "choose-workspace") {
+        place.applyFolder("/workspace");
+      } else {
+        projects = Promise.resolve({
+          projects:
+            recovery === "retry"
+              ? [{ id: "registered", displayName: "Registered", source: "registered" }]
+              : [],
+        });
+        await place.browser.refreshProjects();
+        place.restorePreferenceSelections();
+      }
+      expect(flow.canSubmit()).toBe(true);
+      await flow.submit();
+      expect(context.sessions.createResult).toHaveBeenCalledOnce();
+      const params = vi.mocked(context.sessions.createResult).mock.calls[0]?.[0];
+      if (recovery === "retry") {
+        expect(params).toHaveProperty("projectId", "registered");
+      } else {
+        expect(params).not.toHaveProperty("projectId");
+      }
+    },
+  );
+
+  it("does not block ordinary local submission when optional project discovery fails", async () => {
+    const { place, flow, context } = createDraftFixture({
+      methods: ["sessions.create", "projects.list"],
+      request: () => Promise.reject(new Error("Project discovery unavailable")),
+    });
+    await place.browser.refreshProjects();
+    place.restorePreferenceSelections();
+    flow.setMessage("start locally");
+    expect(flow.canSubmit()).toBe(true);
+    await flow.submit();
+    expect(context.sessions.createResult).toHaveBeenCalledOnce();
+    expect(vi.mocked(context.sessions.createResult).mock.calls[0]?.[0]).not.toHaveProperty(
+      "projectId",
+    );
+  });
+
   it.each([
     {
       reason: "missing-auth",
@@ -212,50 +285,81 @@ describe("DraftSubmissionFlow submit gates", () => {
     expect(ready.flow.submitDisabledReason()).toBeUndefined();
   });
 
-  it("surfaces a reason for Enter during worktree preference restore, then clears it", async () => {
-    replaceBrowserPreference("ws://gateway.example", "main", {
-      folder: "/workspace",
-      worktree: true,
-    });
-    let resolveBranches!: (value: unknown) => void;
-    const fixture = createDraftFixture({
-      scopes: ["operator.admin", "operator.read", "operator.write"],
-      agents: [
-        {
-          id: "main",
-          workspace: "/workspace",
-          workspaceGit: true,
-          model: { primary: "openai/gpt-5.6-luna" },
+  it.each(["git", "unavailable", "rejected"] as const)(
+    "keeps saved worktree submission gated until discovery succeeds (%s)",
+    async (result) => {
+      replaceBrowserPreference("ws://gateway.example", "main", {
+        folder: "/workspace",
+        worktree: true,
+      });
+      const discovery = createDeferred<unknown>();
+      let branches = discovery.promise;
+      const fixture = createDraftFixture({
+        scopes: ["operator.admin", "operator.read", "operator.write"],
+        agents: [
+          {
+            id: "main",
+            workspace: "/workspace",
+            workspaceGit: true,
+            model: { primary: "openai/gpt-5.6-luna" },
+          },
+        ],
+        request: (method) => {
+          if (method === "worktrees.branches") {
+            return branches;
+          }
+          return Promise.resolve({});
         },
-      ],
-      request: (method) => {
-        if (method === "worktrees.branches") {
-          return new Promise((resolve) => {
-            resolveBranches = resolve;
-          });
-        }
-        return Promise.resolve({});
-      },
-    });
-    const { context, flow } = fixture;
-    flow.setMessage("start something");
+      });
+      const { context, flow, place } = fixture;
+      flow.setMessage("start something");
 
-    // The async preference restore is still in flight: submission is gated,
-    // but the gate must be visible, not a silent no-op.
-    expect(flow.canSubmit()).toBe(false);
-    expect(flow.submitDisabledReason()).toBeTruthy();
-    expect(flow.blockedSubmitNotice()).toBeUndefined();
+      // The async preference restore is still in flight: submission is gated,
+      // but the gate must be visible, not a silent no-op.
+      expect(flow.canSubmit()).toBe(false);
+      expect(flow.submitDisabledReason()).toBeTruthy();
+      expect(flow.blockedSubmitNotice()).toBeUndefined();
 
-    await flow.submit();
-    expect(context.sessions.createResult).not.toHaveBeenCalled();
-    expect(flow.blockedSubmitNotice()).toBe(flow.submitDisabledReason());
+      await flow.submit();
+      expect(context.sessions.createResult).not.toHaveBeenCalled();
+      expect(flow.blockedSubmitNotice()).toBe(flow.submitDisabledReason());
 
-    resolveBranches({ repositoryStatus: "git", branches: ["main"], defaultBranch: "main" });
-    await vi.waitFor(() => expect(flow.canSubmit()).toBe(true));
-    // The transient gate lifted; the notice retires itself.
-    expect(flow.blockedSubmitNotice()).toBeUndefined();
-    expect(flow.submitDisabledReason()).toBeUndefined();
-  });
+      const git = { repositoryStatus: "git", branches: ["main"], defaultBranch: "main" };
+      if (result === "rejected") {
+        discovery.reject(new Error("branch lookup unavailable"));
+      } else {
+        discovery.resolve({ ...git, repositoryStatus: result });
+      }
+      await discovery.promise.catch(() => undefined);
+      if (result !== "git") {
+        expect(place.repository.kind).toBe("unavailable");
+        expect(place.preferenceSelection().worktree).toBe(true);
+        expect(flow.submitBlock()?.gate).toBe("worktree-unavailable");
+        await flow.submit();
+        await flow.submit(undefined, true);
+        flow.setMessage("");
+        flow.attachmentDraft.replace([
+          { id: "notes", mimeType: "text/plain", fileName: "notes.txt" },
+        ]);
+        await flow.submit();
+        expect(context.sessions.createResult).not.toHaveBeenCalled();
+        flow.attachmentDraft.replace([]);
+        flow.setMessage("start something");
+        branches = Promise.resolve(git);
+        place.clearProjectSelection();
+        await branches;
+      }
+      await vi.waitFor(() => expect(flow.canSubmit()).toBe(true));
+      // The transient gate lifted; the notice retires itself.
+      expect(flow.blockedSubmitNotice()).toBeUndefined();
+      expect(flow.submitDisabledReason()).toBeUndefined();
+      await flow.submit();
+      expect(context.sessions.createResult).toHaveBeenCalledWith(
+        expect.objectContaining({ worktree: true }),
+        expect.anything(),
+      );
+    },
+  );
 
   it("does not raise a notice for the silent empty-draft gate", async () => {
     const fixture = createDraftFixture();

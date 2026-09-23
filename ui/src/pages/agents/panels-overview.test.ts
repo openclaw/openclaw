@@ -118,7 +118,9 @@ it.each([
     container,
   );
 
-  const save = container.querySelector<HTMLButtonElement>(".agent-identity-editor__actions button");
+  const save = container.querySelector<HTMLButtonElement>(
+    ".agent-identity-editor__actions button.primary",
+  );
   expect(save?.textContent?.trim()).toBe(text);
   expect(save?.disabled).toBe(true);
 });

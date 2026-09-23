@@ -39,7 +39,6 @@ const composerPopoverAnchorObservers = new WeakMap<
   ComposerPopoverAnchorObserverState
 >();
 
-const COMPOSER_POPOVER_GAP_PX = 6;
 // max-height constrains the menu's scrollable box before its border/padding;
 // include that chrome so the outer panel retains a viewport gutter.
 const COMPOSER_POPOVER_VIEWPORT_INSET_PX = 28;
@@ -47,11 +46,8 @@ const COMPOSER_POPOVER_VIEWPORT_INSET_PX = 28;
 function updateComposerPopoverAnchor(el: HTMLElement) {
   const viewport = window.visualViewport;
   const viewportTop = viewport?.offsetTop ?? 0;
-  const layoutViewportHeight = document.documentElement.clientHeight || window.innerHeight;
   const composerTop = el.getBoundingClientRect().top;
-  const bottom = layoutViewportHeight - composerTop + COMPOSER_POPOVER_GAP_PX;
   const maxHeight = composerTop - viewportTop - COMPOSER_POPOVER_VIEWPORT_INSET_PX;
-  el.style.setProperty("--chat-composer-popover-bottom", `${Math.max(0, bottom)}px`);
   el.style.setProperty("--chat-composer-popover-max-height", `${Math.max(0, maxHeight)}px`);
 }
 

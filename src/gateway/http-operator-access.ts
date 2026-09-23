@@ -23,7 +23,7 @@ export function sendGatewayHttpAuthFailure(
 /** The listener belongs to this response, never to a reusable keep-alive socket. */
 export function bindHttpOperatorAccessAuthority(
   res: ServerResponse,
-  authority: PluginGatewayAccessAuthority | undefined,
+  authority: PluginGatewayAccessAuthority | null | undefined,
 ): boolean {
   if (!authority) {
     return true;

@@ -10,6 +10,7 @@ import {
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { SQLITE_WORKER_MAX_RESULT_BYTES } from "../infra/sqlite-worker-contract.js";
+import { holdForeignLifecycle } from "../infra/sqlite-worker-shared-state-admission.test-support.js";
 import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
 import {
   appendMemoryHostEvent,
@@ -18,6 +19,7 @@ import {
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createPluginStateKeyedStore,
@@ -113,9 +115,13 @@ describe("worker plugin state", () => {
     });
   });
 
-  it.each(["observe", "compareDelete"] as const)(
-    "waits for an overlapping host owner before worker lifecycle acquisition during %s",
-    async (operation) => {
+  it.each(
+    (["observe", "compareDelete"] as const).flatMap((operation) =>
+      (["parent", "foreign"] as const).map((owner) => ({ operation, owner })),
+    ),
+  )(
+    "preserves $owner lifecycle custody during $operation and releases it after settlement",
+    async ({ operation, owner }) => {
       await withOpenClawTestState({ label: "plugin-state-lock-custody" }, async (state) => {
         const assertActive = vi.fn();
         const store = createPluginStateKeyedStore<string>(
@@ -135,6 +141,8 @@ describe("worker plugin state", () => {
           throw new Error("Expected the shared-state worker");
         }
         const observation = await store.observe("workspace");
+        const captured = captureOpenClawStateWorkerContext({ env: state.env });
+        const foreign = owner === "foreign" ? await holdForeignLifecycle(captured) : undefined;
         let held: ReturnType<typeof acquireStateDatabaseCoordinator> | undefined;
         const nativePost = worker.postMessage.bind(worker);
         const dispatch = vi
@@ -146,12 +154,13 @@ describe("worker plugin state", () => {
               request.input instanceof Uint8Array &&
               asOptionalRecord(deserialize(request.input))?.type === "pluginState." + operation
             ) {
-              // This owner arrives too late to be delegated. Fresh worker acquisition
-              // must wait for its release while the host keeps servicing authority checks.
-              held = acquireStateDatabaseCoordinator({
-                databasePath: resolveOpenClawStateSqlitePath(state.env),
-                busyTimeoutMs: 0,
-              });
+              if (owner === "parent") {
+                // Preparation must borrow this same-process owner even after dispatch.
+                held = acquireStateDatabaseCoordinator({
+                  databasePath: resolveOpenClawStateSqlitePath(state.env),
+                  busyTimeoutMs: 0,
+                });
+              }
               assertActive.mockClear();
             }
             return nativePost(message, transferList);
@@ -175,22 +184,30 @@ describe("worker plugin state", () => {
           },
         );
         try {
-          await vi.waitFor(() => expect(held).toBeDefined());
-          await vi.waitFor(() => expect(assertActive.mock.calls.length).toBeGreaterThan(4));
-          expect(completed).toBe(false);
-          held?.release();
-          held = undefined;
+          if (foreign) {
+            await vi.waitFor(() => expect(assertActive.mock.calls.length).toBeGreaterThan(4));
+            expect(completed).toBe(false);
+            foreign.release();
+          } else {
+            await vi.waitFor(() => expect(held).toBeDefined());
+          }
           if (operation === "observe") {
             await expect(pending).resolves.toMatchObject({ ok: true, value: { value: "owner" } });
           } else {
             await expect(pending).resolves.toEqual({ ok: true, value: { status: "applied" } });
           }
+          expect(assertActive).toHaveBeenCalled();
         } finally {
           dispatch.mockRestore();
           held?.release();
+          await foreign?.close();
           await pending;
         }
         expect(await store.lookup("workspace")).toBe(operation === "observe" ? "owner" : undefined);
+        await closeOpenClawStateDatabaseAsync();
+        // A new independent claimant proves no delegate or native borrow survived drain.
+        const nextOwner = await holdForeignLifecycle(captured);
+        await nextOwner.close();
       });
     },
   );

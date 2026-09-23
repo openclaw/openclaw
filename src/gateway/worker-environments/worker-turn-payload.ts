@@ -4,6 +4,7 @@ import {
   WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import {
+  readAdmittedRunOperatorAuthority,
   resolvePreparedRunAdmission,
   resolveAdmittedRunActiveAssertion,
   type AdmittedRunContext,
@@ -130,6 +131,7 @@ export async function prepareWorkerAgentRuntimeIdentity(
     { agentId: params.agentId, sessionKey: params.sessionKey },
     assertActive,
     params.turn.prepareAssistantTranscriptMessage,
+    readAdmittedRunOperatorAuthority(admittedRunContext),
   );
   return {
     operationalRunInstance: admittedRunContext.operationalRunInstance,

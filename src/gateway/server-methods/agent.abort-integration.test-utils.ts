@@ -21,7 +21,6 @@ import { createAgentTurnIo } from "../agent-turn/io.js";
 import { resolveAgentRunExpiresAtMs } from "../chat-abort.js";
 import type { GatewaySessionRow } from "../session-utils.js";
 import {
-  applyGatewaySubagentRegistryTestDeps,
   getAgentTestMocks,
   operatorWriteCliClient,
   makeContext,
@@ -1956,11 +1955,9 @@ describe("gateway agent handler chat.abort integration", () => {
     "chat.abort by runId kills only registered children of its non-admin owner: $name",
     async ({ expectsCompletionMessage, collect, releaseOnParent, partialFailure, cascade }) => {
       prime();
-      applyGatewaySubagentRegistryTestDeps({
-        persistSubagentRunsToDisk: () => {},
-        persistSubagentRunsToDiskOrThrow: () => {},
-        callGateway: async () => await new Promise(() => {}),
-      });
+      mocks.registryPersist.mockImplementation(() => {});
+      mocks.registryPersistOrThrow.mockImplementation(() => {});
+      mocks.registryCallGateway.mockImplementation(async () => await new Promise(() => {}));
       const pending = new Promise(() => {});
       let capturedSignal: AbortSignal | undefined;
       mocks.agentCommand.mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {

@@ -17,7 +17,7 @@ export type CompactionAccountingTarget = Readonly<
 /** Ordered producer observations; unknown context never borrows an older request's usage. */
 export type EmbeddedContextAccountingEvent = Readonly<
   | { kind: "compaction"; tokensAfter: number | undefined }
-  | { kind: "model"; contextTokens: number | undefined }
+  | { kind: "model"; contextTokens: number | undefined; successful: boolean }
 >;
 
 /** Writer custody is independent of telemetry; an absent snapshot is not observed unknown context. */

@@ -1,21 +1,52 @@
 ---
 name: slack-e2e
-description: Prove OpenClaw Slack ingress, Gateway replies, native message actions, files, or runtime/config changes using Convex-leased QA bots; route human interactions and visual proof to the manual client lane.
+description: Test Slack with Convex-leased user OAuth or QA bots; check credentials, exercise owned messages, prove Gateway behavior, and distinguish API evidence from real Slack client interactions.
 ---
 
 # Slack agent E2E
 
-Use the source-checkout QA Lab owner, not a separate bot runner. A run owns a
-leased driver/SUT pair, a temporary Gateway, native fixture receipts, and private
-artifacts. The driver has no Socket Mode connection: the SUT Gateway exclusively
-owns the app token and event delivery.
+## Choose the proof
 
-## Run
+| Goal                                                      | Entry point                 | Boundary                                                           |
+| --------------------------------------------------------- | --------------------------- | ------------------------------------------------------------------ |
+| Check shared user OAuth                                   | Read-only command below     | User/workspace identity and channel history; no Gateway            |
+| Exercise user-authored text                               | Same command with `--smoke` | Create, read, edit, delete, verify absence; no Gateway reply claim |
+| Prove OpenClaw ingress, replies, tools, files, or restart | Existing QA Lab lane below  | Leased driver/SUT bots and an isolated Gateway                     |
+| Prove real clicks, slash commands, or rendering           | Authorized Slack client     | Actual client observation, not reconstructed API data              |
 
-1. Start from the OpenClaw checkout with its normal dependencies installed. Use
-   the existing Convex login; if absent, ask the operator to run
-   `convex login` or the already cached `bunx --no-install convex login`. QA discovers the
-   authorized broker from that login. No Slack tokens, broker secrets, model
+Start from a source checkout with normal dependencies and an existing Convex
+login. If needed, ask the operator to run `convex login` or the cached
+`bunx --no-install convex login`. The broker provides the authorized pool;
+agents do not need to copy Slack tokens. Login alone cannot supply a missing
+pool credential or grant Slack permissions.
+
+## User OAuth: no QA Lab run
+
+```bash
+node .agents/skills/slack-e2e/scripts/user-oauth-smoke.mjs
+node .agents/skills/slack-e2e/scripts/user-oauth-smoke.mjs --smoke
+```
+
+The default is read-only **in Slack**; both modes acquire, heartbeat, and release
+a Convex lease. `--smoke` creates one synthetic, unmentioned top-level message,
+checks stored authorship, edits it, and deletes that exact message. Existing
+workspace listeners can still observe it. Each command uses a new private
+artifact directory and prints a safe result plus its path.
+
+Read [user OAuth setup and recovery](user-oauth.md) for the pool payload,
+permissions, result interpretation, and failure handling. This skill-owned
+command reuses the existing lease helper; it changes no QA Lab code or release
+lane and starts no Gateway or model. It does not add a user-driver option to
+`qa slack`.
+
+## Existing Gateway lane
+
+Use the source-checkout QA Lab owner for Gateway proof, not a separate bot
+runner. A run owns a leased driver/SUT pair, a temporary Gateway, native fixture
+receipts, and private artifacts. The driver has no Socket Mode connection:
+the SUT Gateway exclusively owns the app token and event delivery.
+
+1. Use the existing Convex login above. No Slack tokens, broker secrets, model
    credentials, app creation, or scope grants belong in the command line.
 2. Inspect the available scenarios and run readiness:
 
@@ -63,11 +94,15 @@ owns the app token and event delivery.
 | Block Kit, file IDs, reaction state                                                     | Stored structure/identity only                                                       |
 | Human slash invocation, real button clicks, Agent View, visible rendering, human typing | Manual/Mantis client lane; bot/API evidence is insufficient                          |
 
-For visual or human-interaction requests, use the maintained Mantis Slack client
-workflow in `docs/concepts/qa-e2e-automation/operator-flow.md`. Preserve inspected
-screenshots/checkpoints alongside native evidence. Do not post slash-command text
-as a bot and call it a human invocation, synthesize a click, infer typing from
-assistant status, or start another Socket Mode recorder with the SUT app token.
+For visual or human-interaction requests, use an authorized, logged-in Slack
+client; the maintained Mantis workflow is in
+`docs/concepts/qa-e2e-automation/operator-flow.md`. Check which surface it actually
+captured: `--approval-checkpoints` renders API message data, not the Slack client.
+A Slack sign-in screenshot is not proof of a workspace action.
+Preserve inspected client screenshots alongside native evidence. Posting slash
+text through the API is not a slash invocation; Gateway approval RPCs are not
+button clicks. Do not infer typing from assistant status or start another Socket
+Mode recorder with the SUT app token.
 
 ## Completion
 

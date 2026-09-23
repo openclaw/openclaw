@@ -20,15 +20,19 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { hasUnjoinedWork, runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import {
   createFixtureDiagnostics,
   type FixtureDiagnostics,
 } from "../helpers/fixture-diagnostics.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
+import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
 const repository = fileURLToPath(new URL("../../", import.meta.url));
-const scriptUrl = (name: string) => new URL("../../scripts/" + name, import.meta.url).href;
 const artifactBytes = Buffer.from([0, 255, 128, 10, 65]);
 type Receipt = {
   version: number;
@@ -229,8 +233,10 @@ if (plan.gate) {
       nodeExecutable,
       [
         ...nodeArgs,
-        "--import",
-        resolve(repository, "scripts/tsx.mjs"),
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(toolingMtsEntrypoints.crabboxSourceCapsule),
+          nodeExecutable,
+        ).slice(0, -1),
         "--input-type=module",
         "-e",
         `import fs from 'node:fs';
@@ -241,10 +247,10 @@ import {syncBuiltinESMExports} from 'node:module';
 const ctx = ${JSON.stringify({ root, repository: source, staging, cli, calls })};
 ${prelude}
 syncBuiltinESMExports();
-const {prepareCrabboxSourceCapsule} = await import(${JSON.stringify(scriptUrl("crabbox-source-capsule.mts"))});
-const {createStaging,discoverStaging,recoverDiscoveredStaging,runStagingCommand} = await import(${JSON.stringify(scriptUrl("crabbox-staging.mts"))});
-const {captureClaimNamespace} = await import(${JSON.stringify(scriptUrl("crabbox-staging-claims.mts"))});
-const {preserveCrabboxArtifacts} = await import(${JSON.stringify(scriptUrl("crabbox-staging-artifacts.mts"))});
+const {prepareCrabboxSourceCapsule} = await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.crabboxSourceCapsule).href)});
+const {createStaging,discoverStaging,recoverDiscoveredStaging,runStagingCommand} = await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.crabboxStaging).href)});
+const {captureClaimNamespace} = await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.crabboxStagingClaims).href)});
+const {preserveCrabboxArtifacts} = await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.crabboxStagingArtifacts).href)});
 ${body}`,
       ],
       {},

@@ -217,9 +217,7 @@ export class SqliteBoardStore implements BoardStore {
                   throw error;
                 }
                 // Committed invalidation belongs to the original store, even after caller revocation.
-                for (const change of committed.changes) {
-                  sessionChanges.emit(change);
-                }
+                sessionChanges.emitBatch(committed.changes);
                 return committed.value;
               }, assertCurrent);
               outcome = { ok: true, value };

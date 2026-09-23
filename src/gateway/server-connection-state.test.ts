@@ -1,10 +1,21 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { WebSocket } from "ws";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  replaceSessionEntrySync,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { createSessionRowProjection } from "./session-row-projection.js";
 
 type ConnectionIdReads = { count: number };
 
@@ -98,6 +109,140 @@ describe("gateway connection state", () => {
       recipient.client.connect.role = "operator";
       recipient.client.invalidated = true;
       expect(await recipientOnline()).toBe(false);
+    });
+  });
+
+  it("broadcasts to 50 members from committed facts while rows are dirty and revokes immediately without SQL", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const scope = { agentId: "main", sessionKey: "agent:main:broadcast-members" };
+      await upsertSessionEntryCore(scope, {
+        sessionId: "broadcast-members",
+        updatedAt: 1,
+        visibility: "suggest",
+        createdActor: { type: "human", source: "profile", id: "owner" },
+      });
+      addSessionMember(scope, { identityId: "member", addedBy: "owner", addedAt: 1 });
+      let broadcastDuringPublication: (() => void) | undefined;
+      const stopPublication = sessionChanges.subscribe((change) => {
+        if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+          broadcastDuringPublication?.();
+        }
+      });
+      const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
+      const state = createGatewayConnectionState({ bootId: "members", cfg: {} });
+      state.attachSessionRowProjection(projection);
+      const peers = Array.from({ length: 50 }, (_, index) => {
+        const peer = makeClient(`viewer-${index}`, { count: 0 });
+        peer.client.authenticatedUserProfile = {
+          profileId: "member",
+          displayName: null,
+          avatarRevision: "test",
+          hasAvatar: false,
+          updatedAt: 1,
+        };
+        peer.client.preparedSessionProfile = {
+          profileId: "member",
+          aliases: new Set(["member"]),
+          role: null,
+        };
+        state.clients.add(peer.client);
+        return peer;
+      });
+      const targets = new Set(peers.map((peer) => peer.client.connId));
+      const broadcast = () =>
+        state.broadcastToConnIds(
+          "session.suggestion",
+          {
+            sessionKey: scope.sessionKey,
+            agentId: "main",
+            suggestion: { author: { id: "author" } },
+          },
+          targets,
+        );
+      try {
+        await projection.ensureMaterialized();
+        sessionChanges.emit(scope);
+        expect(projection.dirtyRowCount).toBeGreaterThan(0);
+        const sql = observeHostDataSql();
+        try {
+          broadcast();
+          expect(peers.every((peer) => peer.send.mock.calls.length === 1)).toBe(true);
+          expect(sql.calls.every((call) => call.mock.calls.length === 0)).toBe(true);
+        } finally {
+          sql.restore();
+        }
+        removeSessionMember(scope, "member");
+        const revokedSql = observeHostDataSql();
+        try {
+          broadcast();
+          expect(peers.every((peer) => peer.send.mock.calls.length === 1)).toBe(true);
+          expect(revokedSql.calls.every((call) => call.mock.calls.length === 0)).toBe(true);
+        } finally {
+          revokedSql.restore();
+        }
+        addSessionMember(scope, { identityId: "member", addedBy: "owner", addedAt: 2 });
+        broadcast();
+        expect(peers.every((peer) => peer.send.mock.calls.length === 2)).toBe(true);
+        replaceSessionEntrySync(scope, {
+          sessionId: "broadcast-replacement",
+          updatedAt: 2,
+          visibility: "suggest",
+          createdActor: { type: "human", source: "profile", id: "owner" },
+        });
+        const replacementSql = observeHostDataSql();
+        try {
+          broadcast();
+          expect(peers.every((peer) => peer.send.mock.calls.length === 2)).toBe(true);
+          expect(replacementSql.calls.every((call) => call.mock.calls.length === 0)).toBe(true);
+        } finally {
+          replacementSql.restore();
+        }
+        await projection.ensureMaterialized();
+        expect(
+          projection.describe({ agentId: scope.agentId, key: scope.sessionKey })?.membership.size,
+        ).toBe(0);
+        const publicationReads: number[] = [];
+        const publicationDirtyRows: number[] = [];
+        broadcastDuringPublication = () => {
+          const publicationSql = observeHostDataSql();
+          try {
+            publicationDirtyRows.push(projection.dirtyRowCount);
+            state.broadcastToConnIds(
+              "task",
+              { action: "upserted", task: { id: "task" } },
+              targets,
+              {
+                sessionKeys: [scope.sessionKey],
+                agentId: scope.agentId,
+              },
+            );
+            publicationReads.push(
+              publicationSql.calls.reduce((count, call) => count + call.mock.calls.length, 0),
+            );
+          } finally {
+            publicationSql.restore();
+          }
+        };
+        for (const [visibility, deliveries] of [
+          ["draft", 2],
+          ["shared", 3],
+          ["draft", 3],
+        ] as const) {
+          replaceSessionEntrySync(scope, {
+            sessionId: "broadcast-replacement",
+            updatedAt: 3,
+            visibility,
+            createdActor: { type: "human", source: "profile", id: "owner" },
+          });
+          expect(peers.every((peer) => peer.send.mock.calls.length === deliveries)).toBe(true);
+        }
+        expect(publicationReads).toEqual([0, 0, 0]);
+        expect(publicationDirtyRows.every((count) => count > 0)).toBe(true);
+      } finally {
+        stopPublication();
+        projection.dispose();
+        state.mentionInbox.dispose();
+      }
     });
   });
 

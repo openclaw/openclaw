@@ -70,6 +70,12 @@ export type WorkspaceManifestValueInputs = {
     paths: string[];
     hashes?: WorkspaceComputationHashes;
   };
+  "workspace.manifest.tree-input": {
+    inputPath: string;
+    ref: string;
+    entries: readonly WorkerWorkspaceManifestEntry[];
+    source: { root: string; tree?: never } | { root: string; tree: string };
+  };
   "workspace.manifest.serialize": { manifest: WorkerWorkspaceManifest };
   "workspace.manifest.overlay": {
     source: WorkerWorkspaceManifest;
@@ -87,6 +93,10 @@ export type WorkspaceManifestValueInputs = {
 type WorkspaceManifestValueInput = { payload: Uint8Array<ArrayBuffer> };
 
 export type WorkspaceManifestComputationOperations = {
+  "workspace.manifest.tree-input": {
+    input: WorkspaceManifestValueInput;
+    output: null;
+  };
   "workspace.manifest.nodes": {
     input: WorkspaceManifestValueInput;
     output: WorkspaceComputationHashResult<Array<[string, WorkspaceNode]>>;

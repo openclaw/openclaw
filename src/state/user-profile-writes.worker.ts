@@ -5,6 +5,7 @@ import {
   requestSqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
+import { readUserProfileEmailBindings } from "./user-profile-identity.read.js";
 import { projectUserProfileDisplay } from "./user-profile-list.js";
 import type {
   UserProfileMutationContext,
@@ -23,7 +24,7 @@ import {
   setUserProfileRole,
   syncGitHubIdentity,
 } from "./user-profiles.js";
-import type { ProfileDisplayRow } from "./user-profiles.types.js";
+import type { ProfileDisplayRow, UserProfileEmailBinding } from "./user-profiles.types.js";
 
 export type UserProfileWriteResult<T> =
   | { ok: true; value: T }
@@ -73,6 +74,7 @@ export function isUserProfileWriteCommand(command: {
 
 type PendingPublication = {
   before: Map<string, ProfileDisplayRow | undefined>;
+  emailBindings: Map<string, UserProfileEmailBinding>;
   display: Set<string>;
   profiles: Set<string>;
   identities: Set<string>;
@@ -93,6 +95,7 @@ export function executeUserProfileWrite(
       }
       const current: PendingPublication = {
         before: new Map(),
+        emailBindings: new Map(),
         display: new Set(),
         profiles: new Set(),
         identities: new Set(),
@@ -112,6 +115,28 @@ export function executeUserProfileWrite(
           }
           linkedDisplay = projectUserProfileDisplay(row);
         }
+        const afterBindings = new Map(
+          readUserProfileEmailBindings(db, [...current.before.keys()]).map((binding) => [
+            binding.email,
+            binding,
+          ]),
+        );
+        const emailBindings = [
+          ...new Set([...current.emailBindings.keys(), ...afterBindings.keys()]),
+        ].flatMap((email) => {
+          const before = current.emailBindings.get(email) ?? null;
+          const after = afterBindings.get(email) ?? null;
+          if (before?.profileId === after?.profileId && before?.bindingId === after?.bindingId) {
+            return [];
+          }
+          for (const binding of [before, after]) {
+            if (binding) {
+              current.display.add(binding.profileId);
+              current.profiles.add(binding.profileId);
+            }
+          }
+          return [{ email, before, after }];
+        });
         const ids = [...current.display];
         const after = new Map(ids.length ? selectProfileDisplayEntries(db, ids) : []);
         const publication: UserProfileMutationPublication = {
@@ -129,6 +154,7 @@ export function executeUserProfileWrite(
             return [id, current.before.get(id)];
           }),
           after: ids.map((id) => [id, after.get(id)]),
+          emailBindings,
         };
         requestSqliteWorkerOperationAdmission({ stage: "commit", facts: publication });
         deferSqlitePostCommitPublication(db, () => committed.push(publication));
@@ -150,6 +176,11 @@ export function executeUserProfileWrite(
       const rows = new Map(missing.length ? selectProfileDisplayEntries(db, missing) : []);
       for (const id of missing) {
         current.before.set(id, rows.get(id));
+      }
+      for (const binding of readUserProfileEmailBindings(db, missing)) {
+        if (!current.emailBindings.has(binding.email)) {
+          current.emailBindings.set(binding.email, binding);
+        }
       }
     },
     authority: (...ids) => ids.forEach((id) => pending?.profiles.add(id)),
