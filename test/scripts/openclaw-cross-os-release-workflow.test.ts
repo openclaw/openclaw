@@ -203,8 +203,8 @@ describe("cross-OS release checks workflow", () => {
 
   it.each([
     ["ubuntu", false],
-    ["windows", true],
-    ["macos", true],
+    ["windows", false],
+    ["macos", false],
   ])("makes %s cross-OS coverage advisory=%s without masking failed steps", (osId, advisory) => {
     const workflow = readWorkflow(WORKFLOW_PATH);
     const prepare = job(workflow, "prepare");

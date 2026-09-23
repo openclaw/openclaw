@@ -21,11 +21,11 @@ runs strict `control-ui-i18n` and `native-i18n` jobs; their failures remain visi
 in the run summary and fail validation. PR-side locale checks, release preparation,
 and publication requirements are unchanged.
 
-Linux (`ubuntu`) cross-OS fresh-install and upgrade lanes gate publication in
-the beta, stable, and full profiles. Windows and macOS cross-OS lanes run in
-parallel as **advisory** coverage: their pass/fail conclusions remain in the
-manifest and summary, but failures do not block Release Decision, npm publish,
-or `pnpm release:candidate`. Selected lanes still need terminal evidence.
+Linux (`ubuntu`), Windows, and macOS Gateway cross-OS fresh-install and upgrade
+lanes gate publication in the beta, stable, and full profiles. A failure blocks
+Release Decision, npm publish, and `pnpm release:candidate`. Retain each lane's
+actual conclusion in the manifest and summary; selected lanes need terminal
+evidence.
 Normal CI, npm qualification, Docker, Package Acceptance, and the profile's
 performance and soak requirements keep their existing gates.
 

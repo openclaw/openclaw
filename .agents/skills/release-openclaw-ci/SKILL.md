@@ -39,9 +39,9 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   main failures, report that blocker and keep independent release work moving
   instead of healing broader main.
 - Validate provider secrets before dispatching expensive full release matrices.
-- Linux (`ubuntu`) cross-OS lanes gate publication for beta, stable, and full.
-  Windows/macOS cross-OS lanes run in parallel as advisory coverage. Record
-  their actual pass/fail conclusions. Selected normal CI lanes, including
+- Linux (`ubuntu`), Windows, and macOS Gateway cross-OS install and upgrade
+  lanes gate publication for beta, stable, and full. Record their actual
+  pass/fail conclusions. Selected normal CI lanes, including
   Windows Node, macOS Swift, and Control UI, remain blocking.
 - Release priority: release runs always beat PR-side hosted-runner work. The
   repo variable `OPENCLAW_RELEASE_PRIORITY_RUN` names the active FRV parent;
@@ -189,7 +189,7 @@ until their dependent enforcement changes land.
 - An `all` run without soak for an actual beta package on its matching canonical
   release branch or beta tag records `coveragePolicy=npm-beta-v1`. It keeps
   Linux/macOS/Windows Node, Control UI, plugin, package, install/update,
-  Linux cross-OS, QA parity, runtime-pair/restart, and tool-coverage gates. Native app
+  Linux/Windows/macOS cross-OS, QA parity, runtime-pair/restart, and tool-coverage gates. Native app
   CI, performance, and published-package Telegram are deferred to confidence.
   Beta `all` without soak also defers Package Acceptance Telegram, including
   beta-profile checks of `main` or alpha. Record deferred checks as not run,
@@ -260,10 +260,10 @@ until their dependent enforcement changes land.
   or `performance`. Never use the removed `release-checks` handle. `qa` is
   only a direct-child manual aggregate, not a controller retry API.
 - Filtered retries fail closed unless the filter belongs to the selected group.
-  All-group runs also accept `cross_os_suite_filter`: for example,
-  `-f cross_os_suite_filter=ubuntu,macos` excludes Windows. `npm-stable-v1` and
-  `npm-beta-v1` still qualify when advisory OS lanes are omitted, provided all
-  Linux suites remain selected and the other policy requirements hold.
+  All-group `cross_os_suite_filter` selections must retain `packaged-fresh`,
+  `installer-fresh`, and `packaged-upgrade` on Linux (`ubuntu`), Windows, and
+  macOS: all nine OS/suite pairs are required for qualification. Focused
+  `cross-os` reruns may select individual lanes.
   Never turn an empty derived filter into an unfiltered broad run.
 - A new all-group parent is justified only when shared orchestration changed,
   earlier evidence is invalid for the selected tuple, or the operator explicitly
@@ -706,7 +706,7 @@ Record:
 - active full parent run URL, attempt, workflow SHA, and any superseded parent
   with the exact replacement reason
 - selected child run IDs and conclusions: CI, Release Checks, Plugin Prerelease, NPM Telegram, Product Performance; record deferred confidence as not run
-- Windows/macOS cross-OS advisory lane classifications and actual conclusions
+- Linux, Windows, and macOS Gateway cross-OS install/upgrade conclusions
 - performance comparison result versus earlier releases when available
 - targeted local proof commands
 - provider-secret preflight result

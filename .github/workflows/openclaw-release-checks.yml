@@ -110,7 +110,7 @@ on:
         default: ""
         type: string
       cross_os_suite_filter:
-        description: Optional cross-OS selection for all or cross-os runs, e.g. ubuntu,macos or windows/packaged-upgrade
+        description: Optional cross-OS selection; all runs require every OS/install/upgrade suite, focused cross-os runs allow windows/packaged-upgrade
         required: false
         default: ""
         type: string

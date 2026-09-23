@@ -10940,15 +10940,15 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
   it.each([
     { label: "canonical beta", scope: "npm-beta" },
-    { label: "Linux-only beta", crossOsSuiteFilter: "ubuntu", scope: "npm-beta" },
+    { label: "all-OS beta", crossOsSuiteFilter: "ubuntu,windows,macos", scope: "npm-beta" },
     { label: "beta soak", runReleaseSoak: "true", scope: "full" },
     { label: "focused beta CI", rerunGroup: "ci", scope: "full" },
     { label: "stable profile", releaseProfile: "stable", scope: "full" },
     { label: "stable version", version: "2026.8.1", scope: "full" },
     { label: "main beta profile", targetRef: "main", scope: "full" },
     {
-      label: "canonical stable with Windows omitted",
-      crossOsSuiteFilter: "ubuntu,macos",
+      label: "canonical stable with all OSes",
+      crossOsSuiteFilter: "ubuntu,windows,macos",
       releaseProfile: "stable",
       version: "2026.8.1",
       runReleaseSoak: "true",
@@ -11006,18 +11006,24 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     ["beta", "2026.8.1-beta.3", "false"],
     ["stable", "2026.8.1", "true"],
   ])(
-    "rejects %s qualification when the cross-OS selection omits Linux coverage",
+    "rejects %s qualification when the cross-OS selection omits required OS coverage",
     (releaseProfile, version, runReleaseSoak) => {
-      const result = runFullReleaseTargetIdentityValidation({
-        targetRef: "release/2026.8.1",
-        releaseProfile,
-        version,
-        runReleaseSoak,
-        crossOsSuiteFilter: "windows,macos,ubuntu/packaged-fresh",
-      });
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("Linux");
-      expect(result.output).not.toContain("coverage_policy=");
+      for (const crossOsSuiteFilter of [
+        "windows,macos,ubuntu/packaged-fresh",
+        "ubuntu,macos",
+        "ubuntu,windows",
+      ]) {
+        const result = runFullReleaseTargetIdentityValidation({
+          targetRef: "release/2026.8.1",
+          releaseProfile,
+          version,
+          runReleaseSoak,
+          crossOsSuiteFilter,
+        });
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("all Linux, Windows, and macOS cross-OS suites");
+        expect(result.output).not.toContain("coverage_policy=");
+      }
     },
   );
 

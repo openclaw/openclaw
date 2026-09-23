@@ -480,29 +480,28 @@ describe("full release execution plan", () => {
     betaCoverage,
     stableCoverage,
     { ...stableCoverage, coveragePolicy: undefined, releaseProfile: "full" },
-  ])(
-    "allows advisory OS filtering while retaining every Linux gate: $releaseProfile",
-    (coverage) => {
-      const unfiltered = plan(coverage);
-      for (const crossOsSuiteFilter of [
-        "ubuntu",
-        "ubuntu,macos",
-        "ubuntu/packaged-fresh,ubuntu/installer-fresh,ubuntu/packaged-upgrade",
-        "packaged-fresh,installer-fresh,packaged-upgrade",
-      ]) {
-        expect(plan({ ...coverage, crossOsSuiteFilter })).toEqual(unfiltered);
-      }
-      for (const crossOsSuiteFilter of [
-        "windows,macos",
-        "packaged-fresh",
-        "ubuntu/packaged-upgrade",
-      ]) {
-        expect(() => plan({ ...coverage, crossOsSuiteFilter })).toThrow(
-          /all Linux cross-OS suites/u,
-        );
-      }
-    },
-  );
+  ])("requires install and upgrade coverage on every OS: $releaseProfile", (coverage) => {
+    const unfiltered = plan(coverage);
+    for (const crossOsSuiteFilter of [
+      "ubuntu,windows,macos",
+      "packaged-fresh,installer-fresh,packaged-upgrade",
+    ]) {
+      expect(plan({ ...coverage, crossOsSuiteFilter })).toEqual(unfiltered);
+    }
+    for (const crossOsSuiteFilter of [
+      "ubuntu",
+      "ubuntu,macos",
+      "ubuntu,windows",
+      "windows,macos",
+      "ubuntu/packaged-fresh,ubuntu/installer-fresh,ubuntu/packaged-upgrade",
+      "packaged-fresh",
+      "ubuntu/packaged-upgrade",
+    ]) {
+      expect(() => plan({ ...coverage, crossOsSuiteFilter })).toThrow(
+        /all Linux, Windows, and macOS cross-OS suites/u,
+      );
+    }
+  });
 
   function coveragePlan(coverage = betaCoverage) {
     const request = {
@@ -1348,7 +1347,7 @@ describe("release decision policy", () => {
   );
 
   it.each(["checks-node-core-test-nondist-shard", "checks-fast-core"])(
-    "keeps CI %s blocking alongside advisory native failures",
+    "keeps CI %s blocking alongside native failures",
     (name) => {
       const result = classifyReleaseSnapshot({
         children: [
@@ -1375,7 +1374,7 @@ describe("release decision policy", () => {
   );
 
   it.each(["beta", "stable", "full"])(
-    "records Windows/macOS failures without blocking %s publication",
+    "blocks %s publication on Windows/macOS Gateway install and upgrade failures",
     (releaseProfile) => {
       const jobs = ["Windows", "macOS"].flatMap((os) =>
         ["packaged fresh", "installer fresh", "packaged upgrade"].map((suite) => ({
@@ -1397,7 +1396,8 @@ describe("release decision policy", () => {
         releaseProfile,
         workflowRef: "main",
       });
-      expect(result).toMatchObject({ blockers: [], blockerCount: 0, errors: [], state: "passed" });
+      expect(result.state).toBe("blocked_complete");
+      expect(result.blockers.map((blocker) => blocker.job)).toEqual(jobs.map((job) => job.name));
     },
   );
 
@@ -1416,7 +1416,7 @@ describe("release decision policy", () => {
           jobs: [
             { name, conclusion: "failure", status: "completed" },
             {
-              name: "cross_os_release_checks / macOS / packaged fresh",
+              name: "Run QA Lab live Telegram lane",
               conclusion: "failure",
               status: "completed",
             },
@@ -3968,7 +3968,7 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
         env,
         timeout: 10_000,
       });
-      if (childKey === "normalCi" && conclusion === "failure") {
+      if (conclusion === "failure") {
         expect(valid.status).toBe(2);
         expect(valid.stderr).toContain("blocked_complete");
         expect(valid.stderr).toContain(jobName);
@@ -4618,7 +4618,7 @@ describe("release verifier completion", () => {
         [
           "releaseChecksCandidate",
           "Verify release checks",
-          "cross_os_release_checks / macOS / packaged fresh",
+          "Run QA Lab live Telegram lane",
           releaseState,
         ],
         ["normalCi", "openclaw/ci-gate", "checks-windows-node-test-5", ciState],

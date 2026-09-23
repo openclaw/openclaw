@@ -84,7 +84,7 @@ The conceptual phases map to current inputs:
 For an actual beta package on its matching canonical release branch or beta
 tag, `all` with `release_profile=beta` and no soak records
 `coveragePolicy=npm-beta-v1`. It retains Linux, macOS, and Windows Node checks,
-Control UI, plugins, package integrity, install/update acceptance, Linux cross-OS
+Control UI, plugins, package integrity, install/update acceptance, Linux/Windows/macOS cross-OS
 package checks, QA parity, core runtime-pair/restart proof, and runtime tool
 coverage. Native app qualification, product performance, and published-package
 Telegram confidence are deferred. Broad live/E2E and QA-live also remain outside

@@ -1063,12 +1063,12 @@ describe("GitHub API commands", () => {
         {
           jobs: [
             {
-              name: "cross_os_release_checks / Windows / packaged fresh",
+              name: "Run QA Lab live Telegram lane",
               status: "completed",
               conclusion: "failure",
             },
             {
-              name: "cross_os_release_checks / macOS / packaged fresh",
+              name: "Run QA Lab parity lane (core)",
               status: "completed",
               conclusion: "success",
             },
@@ -1253,10 +1253,10 @@ process.stdout.write(readFileSync(process.env.ARCHIVE));
         `child: ${childRunId} OpenClaw Release Checks completed/failure`,
       );
       expect(result.stdout).toContain(
-        "::warning title=Advisory lane failed::releaseChecksCandidate completed/failure cross_os_release_checks / Windows / packaged fresh",
+        "::warning title=Advisory lane failed::releaseChecksCandidate completed/failure Run QA Lab live Telegram lane",
       );
       expect(result.stdout).toContain(
-        "advisory: releaseChecksCandidate completed/success cross_os_release_checks / macOS / packaged fresh",
+        "advisory: releaseChecksCandidate completed/success Run QA Lab parity lane (core)",
       );
       expect(result.stdout).not.toContain(
         "advisory: releaseChecksCandidate completed/success cross_os_release_checks / Linux",
@@ -3523,63 +3523,65 @@ describe("release CI summary child correlation", () => {
       [profile, "cross_os_release_checks / Windows / packaged fresh"],
       [profile, "cross_os_release_checks / macOS / packaged upgrade"],
     ]),
-  ])(
-    "accepts %s advisory %s failures through canonical policy",
-    async (releaseProfile, jobName) => {
-      const fixture = trustedMainPackageFixture();
-      fixture.manifest.releaseProfile = releaseProfile;
-      fixture.childRun.conclusion = "failure";
-      const originalClient = { ...fixture.client };
-      fixture.client.getParentJobs = (requestedRunId: string) =>
-        requestedRunId === String(fixture.childRun.id)
-          ? [
-              {
-                completed_at: "2026-07-10T01:10:00Z",
-                conclusion: "failure",
-                id: 86293408711,
-                name: jobName,
-                run_attempt: 1,
-                started_at: "2026-07-10T01:00:00Z",
-                status: "completed",
-                steps: [],
-              },
-              {
-                completed_at: "2026-07-10T01:10:00Z",
-                conclusion: "success",
-                id: 86293408712,
-                name: "Verify release checks",
-                run_attempt: 1,
-                started_at: "2026-07-10T01:00:00Z",
-                status: "completed",
-                steps: [],
-              },
-            ]
-          : originalClient.getParentJobs(requestedRunId);
+  ])("classifies %s %s failures through canonical policy", async (releaseProfile, jobName) => {
+    const fixture = trustedMainPackageFixture();
+    fixture.manifest.releaseProfile = releaseProfile;
+    fixture.childRun.conclusion = "failure";
+    const originalClient = { ...fixture.client };
+    fixture.client.getParentJobs = (requestedRunId: string) =>
+      requestedRunId === String(fixture.childRun.id)
+        ? [
+            {
+              completed_at: "2026-07-10T01:10:00Z",
+              conclusion: "failure",
+              id: 86293408711,
+              name: jobName,
+              run_attempt: 1,
+              started_at: "2026-07-10T01:00:00Z",
+              status: "completed",
+              steps: [],
+            },
+            {
+              completed_at: "2026-07-10T01:10:00Z",
+              conclusion: "success",
+              id: 86293408712,
+              name: "Verify release checks",
+              run_attempt: 1,
+              started_at: "2026-07-10T01:00:00Z",
+              status: "completed",
+              steps: [],
+            },
+          ]
+        : originalClient.getParentJobs(requestedRunId);
 
-      const evidence = await validateReleaseRunEvidence(
-        {
-          repository: "openclaw/openclaw",
-          runId: fixture.runId,
-          verifierSourceContent: readFileSync(SCRIPT),
-          verifierSourceSha: "c".repeat(40),
-        },
-        fixture.client,
-      );
-      expect(evidence.conclusions).toMatchObject({
-        allRequiredSucceeded: true,
-        children: { releaseChecks: "failure" },
-      });
-      expect(evidence.children[0]?.advisoryJobs).toEqual([
-        {
-          child: "releaseChecks",
-          job: jobName,
-          status: "completed",
-          conclusion: "failure",
-          policy: "advisory",
-        },
-      ]);
-    },
-  );
+    const validation = validateReleaseRunEvidence(
+      {
+        repository: "openclaw/openclaw",
+        runId: fixture.runId,
+        verifierSourceContent: readFileSync(SCRIPT),
+        verifierSourceSha: "c".repeat(40),
+      },
+      fixture.client,
+    );
+    if (jobName.startsWith("cross_os_release_checks / ")) {
+      await expect(validation).rejects.toThrow("manifest child run does not pass release policy");
+      return;
+    }
+    const evidence = await validation;
+    expect(evidence.conclusions).toMatchObject({
+      allRequiredSucceeded: true,
+      children: { releaseChecks: "failure" },
+    });
+    expect(evidence.children[0]?.advisoryJobs).toEqual([
+      {
+        child: "releaseChecks",
+        job: jobName,
+        status: "completed",
+        conclusion: "failure",
+        policy: "advisory",
+      },
+    ]);
+  });
 
   it("accepts a trusted-main producer when the candidate is the same main commit", async () => {
     const sharedSha = "a".repeat(40);
