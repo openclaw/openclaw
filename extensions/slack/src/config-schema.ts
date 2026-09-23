@@ -1,4 +1,5 @@
 // Slack helper module supports config schema behavior.
+import { normalizeLegacyDmAliases } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   buildChannelAllowBotsSchema,
   buildChannelConfigSchema,
@@ -11,10 +12,13 @@ import {
   ChannelImplicitMentionsSchema,
   ChannelPreviewStreamingConfigSchema,
   ChannelStreamingProgressSchema,
+  DmPolicySchema,
+  AllowFromListSchema,
   ProviderCommandsSchema,
   ReplyToModeSchema,
   refineChannelDmPolicy,
 } from "openclaw/plugin-sdk/channel-config-schema";
+import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
 import { slackChannelConfigUiHints } from "./config-ui-hints.js";
@@ -37,6 +41,10 @@ const SlackDmSchema = z
     enabled: z.boolean().optional(),
     groupEnabled: z.boolean().optional(),
     groupChannels: z.array(z.union([z.string(), z.number()])).optional(),
+    // Legacy nested aliases still accepted so generated JSON schema does not
+    // reject shipped configs before normalizeShippedSlackDmAliases runs.
+    policy: DmPolicySchema.optional(),
+    allowFrom: AllowFromListSchema,
   })
   .strict();
 
@@ -90,7 +98,7 @@ const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
   streaming: SlackStreamingConfigSchema.optional(),
 });
 
-const SlackAccountSchema = z
+const SlackAccountSchemaBase = z
   .object({
     ...accountShape,
     joinIntro: z.boolean().optional(),
@@ -148,6 +156,31 @@ const SlackAccountSchema = z
   })
   .strict();
 
+function normalizeShippedSlackDmAliases(value: unknown): unknown {
+  const entry = asObjectRecord(value);
+  if (!entry) {
+    return value;
+  }
+
+  const updated = normalizeLegacyDmAliases({
+    entry,
+    pathPrefix: "channels.slack",
+    changes: [],
+  }).entry;
+  const dm = asObjectRecord(updated.dm);
+  if (!dm || (dm.policy === undefined && dm.allowFrom === undefined)) {
+    return updated;
+  }
+  const { policy: _policy, allowFrom: _allowFrom, ...retainedDm } = dm;
+  const { dm: _dm, ...rest } = updated;
+  return Object.keys(retainedDm).length > 0 ? { ...rest, dm: retainedDm } : rest;
+}
+
+const SlackAccountSchema = z.preprocess(
+  normalizeShippedSlackDmAliases,
+  SlackAccountSchemaBase,
+);
+
 type SlackAccountLike = {
   enabled?: unknown;
   mode?: unknown;
@@ -199,7 +232,7 @@ function validateSlackSigningSecretRequirements(
   }
 }
 
-export const SlackConfigSchema = SlackAccountSchema.safeExtend({
+const SlackConfigSchemaBase = SlackAccountSchemaBase.safeExtend({
   ...rootPolicyShape,
   postAs: SlackIdentitySchema.default("bot"),
   userTokenReadOnly: z.boolean().optional().default(true),
@@ -271,6 +304,11 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   }
   validateSlackSigningSecretRequirements(value, ctx);
 });
+
+export const SlackConfigSchema = z.preprocess(
+  normalizeShippedSlackDmAliases,
+  SlackConfigSchemaBase,
+);
 
 export const SlackChannelConfigSchema = buildChannelConfigSchema(SlackConfigSchema, {
   uiHints: slackChannelConfigUiHints,

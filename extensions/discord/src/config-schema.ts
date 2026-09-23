@@ -11,6 +11,8 @@ import {
   ChannelDangerouslyAllowNameMatchingSchema,
   ChannelPreviewStreamingConfigSchema,
   ChannelStreamingProgressSchema,
+  DmPolicySchema,
+  AllowFromListSchema,
   ProviderCommandsSchema,
   requireAllowlistAllowFrom,
   requireOpenAllowFrom,
@@ -96,6 +98,10 @@ const DiscordDmSchema = z
     enabled: z.boolean().optional(),
     groupEnabled: z.boolean().optional(),
     groupChannels: DiscordIdListSchema.optional(),
+    // Legacy nested aliases still accepted so generated JSON schema does not
+    // reject shipped configs before normalizeShippedDiscordDmAliases runs.
+    policy: DmPolicySchema.optional(),
+    allowFrom: AllowFromListSchema,
   })
   .strict();
 

@@ -314,8 +314,44 @@ describe("slack config schema", () => {
     });
   });
 
-  it("rejects legacy nested DM access keys", () => {
-    expectSlackConfigIssue({ dm: { policy: "open", allowFrom: ["U123"] } }, "dm");
+  it("normalizes shipped nested DM access keys at root and account scope", () => {
+    const res = SlackConfigSchema.safeParse({
+      dmPolicy: "pairing",
+      allowFrom: ["canonical-root"],
+      dm: { enabled: false, policy: "open", allowFrom: ["legacy-root"] },
+      accounts: {
+        work: {
+          dmPolicy: "allowlist",
+          allowFrom: ["canonical-account"],
+          dm: { groupEnabled: true, policy: "disabled", allowFrom: ["legacy-account"] },
+        },
+        personal: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+        },
+      },
+    });
+    expect(res.success).toBe(true);
+    if (!res.success) {
+      throw new Error("expected Slack config to be valid");
+    }
+    expect(res.data).toMatchObject({
+      dmPolicy: "pairing",
+      allowFrom: ["canonical-root"],
+      dm: { enabled: false },
+      accounts: {
+        work: {
+          dmPolicy: "allowlist",
+          allowFrom: ["canonical-account"],
+          dm: { groupEnabled: true },
+        },
+        personal: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          dm: { enabled: true },
+        },
+      },
+    });
+    expectSlackConfigIssue({ dm: { enabled: false, unexpected: true } }, "dm");
   });
 
   it("accepts user token config fields", () => {
