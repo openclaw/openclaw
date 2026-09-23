@@ -34,7 +34,7 @@
   --chat-group-content-column: 2;
   display: grid;
   grid-template-columns: var(--chat-avatar-column) minmax(0, var(--chat-message-column-max));
-  grid-template-rows: auto minmax(calc(var(--chat-turn-gap) - 2px), auto);
+  grid-template-rows: auto auto;
   gap: 2px var(--chat-avatar-gap);
   justify-content: start;
   padding-bottom: 0;
@@ -775,10 +775,21 @@ img.chat-avatar {
     --chat-persistent-footer-opacity: 1;
   }
 
-  /* Reserve the compact row on reveal; turn spacing belongs below the footer,
-     not between the sender and their controls. */
-  .chat-group.user.chat-group--peer {
+  /* Reserve hidden controls for every user footer so revealing them never
+     changes the natural row height or moves the next turn. */
+  .chat-group.user {
     --chat-footer-detail-position: static;
+  }
+
+  /* The 44px hit areas already extend below the 24px visual row. Do not stack
+     a second gap under that space; footers without touch controls keep it. */
+  .chat-thread
+    .chat-group:has(
+      > .chat-group-footer
+        .chat-group-footer-actions
+        :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind)
+    ) {
+    --chat-turn-gap: 0px;
   }
 
   .chat-group.user.chat-group--peer .chat-group-footer {

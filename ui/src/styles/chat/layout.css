@@ -664,8 +664,10 @@ openclaw-pending-session-create {
 }
 
 /* Message jumps need real mounted-row sizes before their target settles.
-   Native reader takeover restores ordinary overscan layout skipping. */
-.chat-thread-inner[data-measuring-rows] .chat-virtual-row {
+   Focused rows must also paint outlines beyond compact footer hit areas.
+   Other rows retain ordinary overscan layout skipping. */
+.chat-thread-inner[data-measuring-rows] .chat-virtual-row,
+.chat-virtual-row:focus-within {
   content-visibility: visible;
 }
 

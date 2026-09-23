@@ -161,18 +161,15 @@
   -moz-osx-font-smoothing: var(--chat-font-smoothing, inherit);
 }
 
-/* Chat Group Layout - default (assistant/other on left). Groups without a
-   footer keep the shared turn gap directly. Footer-bearing groups reserve that
-   gap in the footer row, which grows for wrapped metadata and touch controls
-   without subtracting an assumed footer height. */
+/* Separate complete turns; footer rows size to their actual content instead
+   of using turn spacing as a minimum metadata height. */
 .chat-group {
   --chat-avatar-column: 36px;
   --chat-avatar-gap: 10px;
   --chat-avatar-gutter: calc(var(--chat-avatar-column) + var(--chat-avatar-gap));
   --chat-message-column-max: var(--chat-message-max-width, min(900px, 68%));
   --chat-run-block-gap: 8px;
-  --chat-turn-gap: 28px;
-  --chat-turn-margin: 16px;
+  --chat-turn-gap: 16px;
   display: flex;
   gap: var(--chat-avatar-gap);
   align-items: flex-start;
@@ -180,11 +177,10 @@
   margin-inline: 4px 16px;
 }
 
-/* Keep desktop turns separate after their sender/action footer. Virtual rows
-   include this margin in their measured height; tool-only groups stay attached
-   to the following reply. */
-.chat-thread .chat-group:not(.tool) {
-  margin-block-end: var(--chat-turn-margin);
+/* Virtual rows include the complete footer and its following gap. Tool-only
+   groups keep their tighter connection to the following reply. */
+.chat-thread .chat-group.chat-group--with-footer:not(.tool) {
+  margin-block-end: var(--chat-turn-gap);
 }
 
 /* Both sides share the content edge inside the trailing avatar gutter. */
@@ -282,9 +278,6 @@
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .chat-group {
-    /* Separate turns beyond the space reserved for inline touch actions. */
-    --chat-turn-gap: calc(var(--space-7) * 2);
-    --chat-turn-margin: 0px;
     --chat-avatar-column: 0px;
     --chat-avatar-gap: 0px;
     --chat-message-column-max: 82%;

@@ -515,6 +515,7 @@ suite.define(() => {
     for (const width of [320, 390, 430]) {
       await page.setViewportSize({ height: 760, width });
       for (const group of [ownGroup, peerGroup, page.locator(".chat-group.assistant").last()]) {
+        const restingHeight = (await group.boundingBox())?.height;
         await group.locator(".chat-bubble").dispatchEvent("pointerup", { pointerType: "touch" });
         await expect(group).toHaveClass(/\bchat-group--meta-revealed\b/u);
         const alignment = await group.locator(".chat-group-footer").evaluate((footer) => {
@@ -535,6 +536,7 @@ suite.define(() => {
             ),
           };
         });
+        expect((await group.boundingBox())?.height).toBe(restingHeight);
         expect(alignment.icons.length).toBeGreaterThan(0);
         for (const center of alignment.icons) {
           expect(Math.abs(center - alignment.time)).toBeLessThanOrEqual(1);
@@ -546,6 +548,16 @@ suite.define(() => {
         await group.locator(".chat-bubble").dispatchEvent("pointerup", { pointerType: "touch" });
       }
     }
+
+    // Tight touch rows still expose the complete keyboard focus ring.
+    await ownGroup.getByRole("button", { name: "Rewind", exact: true }).focus();
+    await page.keyboard.press("Shift+Tab");
+    await expect(ownGroup.getByRole("button", { name: "Reply to message" })).toBeFocused();
+    expect(
+      await ownGroup.evaluate(
+        (group) => getComputedStyle(group.closest(".chat-virtual-row")!).contentVisibility,
+      ),
+    ).toBe("visible");
 
     const footerOrder = await peerGroup
       .locator(".chat-group-footer")
