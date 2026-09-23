@@ -1236,6 +1236,7 @@ describe("reply turn admission", () => {
       storePath,
     });
     active.setPhase("preflight_compacting");
+    const activeWait = vi.spyOn(replyRunRegistry, "waitForIdle");
 
     const admitted = admitTestReplyTurn({
       sessionKey,
@@ -1244,9 +1245,7 @@ describe("reply turn admission", () => {
       storePath,
     });
 
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await vi.waitFor(() => expect(activeWait).toHaveBeenCalledTimes(1));
     await replaceSessionEntry({ sessionKey, storePath }, {
       sessionId: nextSessionId,
       updatedAt: Date.now(),
