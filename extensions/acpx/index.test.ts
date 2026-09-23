@@ -35,8 +35,8 @@ vi.mock("acpx/agent-registry", async (importActual) => {
 });
 
 vi.mock("acpx/runtime", async (importActual) => {
-  const { inspectAgentModels } = await importActual<typeof import("acpx/runtime")>();
-  return { inspectAgentModels: vi.fn(inspectAgentModels) };
+  const { inspectAgentModels: inspect } = await importActual<typeof import("acpx/runtime")>();
+  return { inspectAgentModels: vi.fn(inspect) };
 });
 
 vi.mock("./register.runtime.js", () => ({
@@ -227,7 +227,9 @@ describe("acpx plugin", () => {
     } as const;
     expect(opencode.supports(selection).supported).toBe(true);
     const missing = harnesses.get("acp-kilocode");
-    if (!missing?.loadModelCatalog) throw new Error("Missing native catalog operation");
+    if (!missing?.loadModelCatalog) {
+      throw new Error("Missing native catalog operation");
+    }
     await expect(
       missing.loadModelCatalog({
         config,
@@ -485,10 +487,12 @@ describe("acpx plugin", () => {
           },
         }),
       );
-      const load = harnesses.get("acp-copilot")?.loadModelCatalog;
-      if (!load) throw new Error("Native catalog operation missing");
+      const harness = harnesses.get("acp-copilot");
+      if (!harness?.loadModelCatalog) {
+        throw new Error("Native catalog operation missing");
+      }
       await expect(
-        load({
+        harness.loadModelCatalog({
           config: {},
           agentId: "main",
           agentDir: "/fixture/agent",

@@ -293,10 +293,10 @@ export async function augmentModelCatalogWithAgentHarness(params: {
         listedRows = loaded;
       } else {
         listedRows = loaded.entries;
-        outcomes = copyProviderCatalogOutcomes(loaded).map((outcome) => ({
-          ...outcome,
-          provider: normalizeProvider(outcome.provider),
-        }));
+        outcomes = copyProviderCatalogOutcomes(loaded);
+        for (const outcome of outcomes) {
+          outcome.provider = normalizeProvider(outcome.provider);
+        }
       }
     } catch (error) {
       if (!isCurrent()) {
@@ -312,7 +312,10 @@ export async function augmentModelCatalogWithAgentHarness(params: {
     const scopedRows = includesProvider
       ? listedRows.filter((entry) => includesProvider(entry.provider))
       : listedRows;
-    const previousOutcomes = result.nativeProviderOutcomes?.[runtime] ?? [];
+    const previousOutcomes =
+      result.nativeProviderOutcomes && Object.hasOwn(result.nativeProviderOutcomes, runtime)
+        ? (result.nativeProviderOutcomes[runtime] ?? [])
+        : [];
     const scopedOutcomes = includesProvider
       ? [
           ...previousOutcomes.filter((outcome) => !includesProvider(outcome.provider)),
@@ -320,13 +323,17 @@ export async function augmentModelCatalogWithAgentHarness(params: {
         ]
       : outcomes;
     if (!isDeepStrictEqual(previousOutcomes, scopedOutcomes)) {
-      const nativeProviderOutcomes = { ...result.nativeProviderOutcomes };
-      if (scopedOutcomes.length) {
-        nativeProviderOutcomes[runtime] = scopedOutcomes;
-      } else {
+      const nativeProviderOutcomes = {
+        ...result.nativeProviderOutcomes,
+        [runtime]: scopedOutcomes,
+      };
+      if (!scopedOutcomes.length) {
         delete nativeProviderOutcomes[runtime];
       }
-      result = { ...result, nativeProviderOutcomes };
+      if (result === params.snapshot) {
+        result = { ...params.snapshot };
+      }
+      result.nativeProviderOutcomes = nativeProviderOutcomes;
     }
     const failedProviders = new Set(
       scopedOutcomes
