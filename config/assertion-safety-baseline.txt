@@ -3120,7 +3120,7 @@ src/plugins/capability-provider-runtime.ts	13
 src/plugins/captured-registration.ts	2
 src/plugins/channel-presence-policy.ts	2
 src/plugins/channel-validation.ts	1
-src/plugins/clawhub.ts	10
+src/plugins/clawhub.ts	7
 src/plugins/cli-gateway-nodes-runtime.ts	2
 src/plugins/command-registration.ts	3
 src/plugins/computer-use-contract.ts	3
