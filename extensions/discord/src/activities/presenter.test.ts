@@ -91,13 +91,9 @@ describe("Discord Activity widget presenter", () => {
   });
 
   it.each([
-    ["emoji", "🦞".repeat(80)],
-    ["emoji mixed with ASCII", "🦞".repeat(40) + "a".repeat(40)],
-    ["CJK characters", "界".repeat(80)],
-  ])("accepts an 80-character title made of %s", async (_label, title) => {
-    // Each of these is 80 characters. The first two exceed 80 UTF-16 code units, which is
-    // what `String.length` counts, so a raw length check rejects a title the message
-    // promises to accept.
+    [80, true],
+    [81, false],
+  ])("enforces the title limit for %i emoji", async (count, ok) => {
     const presenter = createDiscordWidgetPresenter(createActivityTestRuntime(), {
       sendComponentMessage: (async (..._args: Parameters<typeof sendDiscordComponentMessage>) =>
         sendResult()) as unknown as typeof sendDiscordComponentMessage,
@@ -107,9 +103,9 @@ describe("Discord Activity widget presenter", () => {
       presenter.present({
         context: discordContext(),
         document: { kind: "html", html: "<p>ok</p>" },
-        title,
+        title: "🦞".repeat(count),
       }),
-    ).resolves.toMatchObject({ ok: true });
+    ).resolves.toMatchObject({ ok });
   });
 
   it("stores the canonical document before posting a fixed launch button", async () => {
