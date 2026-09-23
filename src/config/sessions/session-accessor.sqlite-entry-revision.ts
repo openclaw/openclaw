@@ -6,7 +6,6 @@ import {
   getAdmittedSqliteSchemaFacts,
   readSqliteCacheDataVersion,
 } from "../../infra/sqlite-schema-facts.js";
-import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 
 /** Connection revision shared by entry snapshots and maintenance age facts. */
 export type SqliteSessionEntryRevision = {
@@ -17,27 +16,20 @@ export type SqliteSessionEntryRevision = {
 const sessionNodesGenerationTrackerSchemaVersions = new WeakMap<DatabaseSync, number>();
 
 type SessionEntryRevisionDatabase = {
-  pragma_schema_version: { schema_version: unknown };
   openclaw_session_nodes_cache_generation: { id: number; generation: unknown };
 };
 
 function ensureSessionNodesGenerationTracker(database: DatabaseSync): void {
-  const schemaVersion =
-    getAdmittedSqliteSchemaFacts(database)?.schemaVersion ??
-    executeSqliteQueryTakeFirstSync(
-      database,
-      getNodeSqliteKysely<SessionEntryRevisionDatabase>(database)
-        .selectFrom("pragma_schema_version")
-        .select("schema_version"),
-    )?.schema_version;
-  if (typeof schemaVersion !== "number") {
-    throw new Error("SQLite did not return a numeric PRAGMA schema_version");
+  const schema = getAdmittedSqliteSchemaFacts(database);
+  if (!schema) {
+    throw new Error("SQLite session entry caching requires admitted schema facts");
   }
+  const { schemaVersion } = schema;
   const trackedSchemaVersion = sessionNodesGenerationTrackerSchemaVersions.get(database);
   if (trackedSchemaVersion === schemaVersion) {
     return;
   }
-  const hasParticipants = tableExists(database, "session_participants");
+  const hasParticipants = schema.tables.has("session_participants");
   // sqlite-allow-raw -- TEMP triggers are the connection-local ownership boundary: they
   // observe unpublished raw DML. A main-schema change bumps the generation before reinstalling
   // them, so dropping/recreating session_nodes cannot make an old snapshot look current.
