@@ -181,7 +181,7 @@ class ProgressDisclosureController {
   }
 
   private readonly handleTranscriptScroll = (observation: TranscriptScrollObservation) => {
-    if (observation.type === "resize") {
+    if (observation.type !== "input" && observation.type !== "offset") {
       return;
     }
     this.touching = observation.touching;

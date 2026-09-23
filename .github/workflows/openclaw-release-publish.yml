@@ -1679,6 +1679,8 @@ jobs:
             )
           fi
 
+          # Recorded for a fresh child dispatch when the first one flakes before publishing.
+          printf '%s\0' "${npm_args[@]}" > "${RUNNER_TEMP}/plugin-npm-dispatch-args"
           plugin_npm_run_id="$(dispatch_workflow plugin-npm-release.yml "${npm_args[@]}")"
           plugin_clawhub_run_id=""
           if [[ "$(jq -r '.normal.shouldDispatch' "${clawhub_plan_path}")" == "true" ]]; then
@@ -1748,6 +1750,7 @@ jobs:
         id: core_start
         env:
           STABLE_SOAK_WAIVER: ${{ inputs.stable_soak_waiver }}
+          LANE_WAIVER: ${{ inputs.lane_waiver }}
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ steps.clawhub_plan.outputs.child_workflow_ref }}
@@ -1773,12 +1776,13 @@ jobs:
           source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"
           plugin_npm_run_id="${CHILD_PLUGIN_NPM_RUN_ID}"
           verify_release_tag_target
-          if ! wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}"; then
+          if ! wait_for_plugin_npm_release; then
             echo "Plugin npm publish failed; cancelling dispatched ClawHub child workflows." >&2
             cleanup_clawhub_children || true
             exit 1
           fi
           echo "plugin_npm_completed=true" >> "$GITHUB_OUTPUT"
+          echo "plugin_npm_run_id=${plugin_npm_run_id}" >> "$GITHUB_OUTPUT"
 
           if [[ "${PUBLISH_OPENCLAW_NPM}" != "true" ]]; then
             echo "- OpenClaw npm publish: skipped by input" >> "$GITHUB_STEP_SUMMARY"
@@ -1812,6 +1816,7 @@ jobs:
             -f tag="${RELEASE_TAG}" \
             -f preflight_only=false \
             -f stable_soak_waiver="${STABLE_SOAK_WAIVER:-}" \
+            -f lane_waiver="${LANE_WAIVER:-}" \
             -f preflight_run_id="${PREFLIGHT_RUN_ID}" \
             -f release_publish_run_id="${GITHUB_RUN_ID}" \
             -f release_publish_run_attempt="${GITHUB_RUN_ATTEMPT}" \
@@ -1883,7 +1888,7 @@ jobs:
           FULL_RELEASE_VALIDATION_MANIFEST_DIR: ${{ runner.temp }}/full-release-validation-manifest
           FOCUSED_RELEASE_EVIDENCE_DIR: ${{ runner.temp }}/authorized-beta-focused-evidence
           CLAWHUB_PLAN_PATH: ${{ runner.temp }}/openclaw-release-clawhub-plan.json
-          CHILD_PLUGIN_NPM_RUN_ID: ${{ steps.children.outputs.plugin_npm_run_id }}
+          CHILD_PLUGIN_NPM_RUN_ID: ${{ steps.core_start.outputs.plugin_npm_run_id || steps.children.outputs.plugin_npm_run_id }}
           CHILD_PLUGIN_CLAWHUB_RUN_ID: ${{ steps.children.outputs.plugin_clawhub_run_id }}
           CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID: ${{ steps.children.outputs.plugin_clawhub_bootstrap_run_id }}
           CHILD_BOOTSTRAP_WORKFLOW_SHA: ${{ steps.children.outputs.bootstrap_workflow_sha }}
@@ -2022,7 +2027,7 @@ jobs:
         if: ${{ always() }}
         env:
           POSTPUBLISH_EVIDENCE_DIR: ${{ runner.temp }}/openclaw-release-postpublish-evidence
-          CHILD_PLUGIN_NPM_RUN_ID: ${{ steps.children.outputs.plugin_npm_run_id }}
+          CHILD_PLUGIN_NPM_RUN_ID: ${{ steps.core_start.outputs.plugin_npm_run_id || steps.children.outputs.plugin_npm_run_id }}
           CHILD_PLUGIN_CLAWHUB_RUN_ID: ${{ steps.children.outputs.plugin_clawhub_run_id }}
           CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID: ${{ steps.children.outputs.plugin_clawhub_bootstrap_run_id }}
           CHILD_OPENCLAW_NPM_RUN_ID: ${{ steps.core_start.outputs.openclaw_npm_run_id || steps.children.outputs.openclaw_npm_resume_run_id }}

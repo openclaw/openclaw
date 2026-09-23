@@ -301,7 +301,7 @@ export function renderChatComposer(props: ChatComposerProps) {
   });
 
   const syncComposerValue = (target: HTMLTextAreaElement, typedAtSign = false) => {
-    adjustTextareaHeight(target);
+    adjustTextareaHeight(target, { nativeInput: true });
     target.dir = detectTextDirection(target.value);
     const mentions = getMentions();
     commitComposerDraft(

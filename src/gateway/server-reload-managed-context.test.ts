@@ -37,6 +37,15 @@ import type { startManagedGatewayConfigReloader as StartManagedGatewayConfigRelo
 import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import { createTestRuntimeSecretsActivator } from "./server-startup-config.test-support.js";
 
+// Model preparation has its own lifecycle coverage; this regression needs the
+// real reload transaction and async owners, not a cold model/plugin runtime.
+vi.mock("../agents/prepared-model-runtime.js", () => ({
+  advancePreparedModelRuntimeConfig: vi.fn(),
+  markPreparedModelRuntimeSnapshotsStale: vi.fn(),
+  rejectPendingPreparedModelRuntimeReplacement: vi.fn(),
+  refreshPreparedModelRuntimeSnapshots: vi.fn(async () => {}),
+}));
+
 type ManagedReloaderParams = Parameters<typeof StartManagedGatewayConfigReloader>[0];
 type ConfigWriteListener = (event: ConfigWriteNotification) => void;
 type ConfigWriteListenerRef = { current: ConfigWriteListener | null };

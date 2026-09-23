@@ -362,7 +362,10 @@ describe("Gateway admitted Discord transcript capture", () => {
           return target!;
         },
       );
-      const runtimeModule = resolvePluginRuntimeModulePathWithDiagnostics({ devSourceRoot });
+      const runtimeModule = resolvePluginRuntimeModulePathWithDiagnostics({
+        devSourceRoot,
+        pluginSdkResolution: "dist",
+      });
       expect(runtimeModule.resolvedPath, JSON.stringify(runtimeModule)).toBeDefined();
       expect(isBuiltPath(runtimeModule.resolvedPath!)).toBe(true);
       await Promise.all(

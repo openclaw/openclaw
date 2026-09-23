@@ -6,15 +6,12 @@ import {
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import {
-  createOpenClawAgentDatabaseClaim,
   isOpenClawAgentDatabasePathCurrent,
   readOpenClawAgentDatabaseIdentity,
-  type OpenClawAgentDatabaseClaim,
 } from "../../state/openclaw-agent-db-identity.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
-  borrowOpenClawAgentDatabase,
   getOpenClawAgentDatabaseIfOpen,
   isIncognitoOpenClawAgentSqlitePath,
   openOpenClawAgentDatabase,
@@ -91,6 +88,7 @@ import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js";
 
+export { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-admission.js";
 export { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 export { listSessionEntriesReadOnly } from "./session-accessor.sqlite-entry-list.read.js";
 export {
@@ -121,24 +119,6 @@ function assertCanonicalSessionWriteScope(
 /** Loads one session entry from the additive SQLite session store. */
 export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | undefined {
   return resolveSessionEntry(scope).existing;
-}
-
-/** Admission retains the exact owner that supplied its row across asynchronous policy work. */
-export function loadSessionEntryForAdmission(scope: SessionAccessScope): {
-  entry: SessionEntry | undefined;
-  databaseClaim: OpenClawAgentDatabaseClaim;
-} {
-  const resolved = resolveSqliteScope(scope);
-  const options = toDatabaseOptions(resolved);
-  const database = openOpenClawAgentDatabase(options);
-  const borrowed = borrowOpenClawAgentDatabase(options);
-  const databaseClaim = createOpenClawAgentDatabaseClaim(database, borrowed.release);
-  try {
-    return { entry: readSessionEntryRow(database, resolved.sessionKey)?.entry, databaseClaim };
-  } catch (error) {
-    databaseClaim.release();
-    throw error;
-  }
 }
 
 /** Loads one session entry without opening its agent database writable. */
