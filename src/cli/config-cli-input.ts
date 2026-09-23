@@ -1,10 +1,9 @@
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import JSON5 from "json5";
-import { rejectConfigNonFiniteNumbers } from "../config/io.read-helpers.js";
 import {
   coerceSecretRef,
   isValidEnvSecretRefId,
@@ -12,6 +11,7 @@ import {
   type SecretRef,
   type SecretRefSource,
 } from "../config/types.secrets.js";
+import { rejectConfigNonFiniteNumbers, visitConfigValueTree } from "../config/value-tree.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import {
   formatExecSecretRefIdValidationMessage,
@@ -239,7 +239,7 @@ function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig 
     provider = {
       source: "exec",
       command,
-      ...(opts.providerArg?.length ? { args: opts.providerArg.map((entry) => entry.trim()) } : {}),
+      ...(opts.providerArg?.length ? { args: opts.providerArg } : {}),
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       ...(noOutputTimeoutMs !== undefined ? { noOutputTimeoutMs } : {}),
       ...(maxOutputBytes !== undefined ? { maxOutputBytes } : {}),
@@ -478,7 +478,7 @@ async function readStdinText(): Promise<string> {
 }
 
 async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> {
-  const file = normalizeOptionalString(opts.file);
+  const file = readNonBlankString(opts.file);
   const stdin = Boolean(opts.stdin);
   if (Boolean(file) === stdin) {
     throw configPatchModeError("provide exactly one of --file <path> or --stdin.");
@@ -544,47 +544,65 @@ function buildConfigPatchOperations(params: {
   }
   const operations: ConfigSetOperation[] = [];
   const pathKey = (path: PathSegment[]) => JSON.stringify(path);
-  const replacePathKeys = new Set(params.replacePaths.map(pathKey));
+  const replacePathsByLength = new Map<number, Array<{ path: PathSegment[]; key: string }>>();
+  for (const replacePath of params.replacePaths) {
+    const sameLength = replacePathsByLength.get(replacePath.length);
+    const candidate = { path: replacePath, key: pathKey(replacePath) };
+    if (sameLength) {
+      sameLength.push(candidate);
+    } else {
+      replacePathsByLength.set(replacePath.length, [candidate]);
+    }
+  }
   const matchedReplacePathKeys = new Set<string>();
-  const visit = (value: unknown, path: PathSegment[]) => {
-    validatePathSegments(path);
-    const replacementKey = pathKey(path);
-    if (path.length > 0 && replacePathKeys.has(replacementKey)) {
-      matchedReplacePathKeys.add(replacementKey);
+  visitConfigValueTree(params.patch, (value, path) => {
+    const segment = path.at(-1);
+    if (segment !== undefined) {
+      validatePathSegments([segment]);
+    }
+    const replacementPath = replacePathsByLength
+      .get(path.length)
+      ?.find((candidate) =>
+        candidate.path.every((candidateSegment, index) => candidateSegment === path[index]),
+      );
+    if (path.length > 0 && replacementPath) {
+      matchedReplacePathKeys.add(replacementPath.key);
+      const operationPath = [...path];
       operations.push(
         value === null
-          ? buildDeleteOperation(path)
-          : buildApplyValueOperation({ path, value, mutation: "replace" }),
+          ? buildDeleteOperation(operationPath)
+          : buildApplyValueOperation({
+              path: operationPath,
+              value,
+              mutation: "replace",
+            }),
       );
-      return;
+      return false;
     }
     if (path.length > 0 && value === null) {
-      operations.push(buildDeleteOperation(path));
-      return;
+      operations.push(buildDeleteOperation([...path]));
+      return false;
     }
     if (path.length > 0 && isPlainRecord(value) && coerceSecretRef(value)) {
-      operations.push(buildApplyValueOperation({ path, value }));
-      return;
+      operations.push(buildApplyValueOperation({ path: [...path], value }));
+      return false;
     }
     if (isPlainRecord(value)) {
       if (path.length > 0 && Object.keys(value).length === 0) {
-        operations.push(buildApplyValueOperation({ path, value, mutation: "merge" }));
-        return;
+        operations.push(buildApplyValueOperation({ path: [...path], value, mutation: "merge" }));
+        return false;
       }
-      for (const [key, child] of Object.entries(value)) {
-        visit(child, [...path, key]);
-      }
-      return;
+      return true;
     }
     if (path.length === 0) {
       throw configPatchModeError("input must contain at least one config key.");
     }
-    operations.push(buildApplyValueOperation({ path, value }));
-  };
+    operations.push(buildApplyValueOperation({ path: [...path], value }));
+    return false;
+  });
 
-  visit(params.patch, []);
   const unusedReplacePath = params.replacePaths.find(
-    (path) => !matchedReplacePathKeys.has(pathKey(path)),
+    (replacePath) => !matchedReplacePathKeys.has(pathKey(replacePath)),
   );
   if (unusedReplacePath) {
     throw configPatchModeError(

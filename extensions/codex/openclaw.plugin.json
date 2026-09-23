@@ -1,5 +1,9 @@
 {
   "id": "codex",
+  "categories": ["agent-runtimes"],
+  "providers": ["codex"],
+  "syntheticAuthRefs": ["codex"],
+  "providerCatalogEntry": "./provider-discovery.ts",
   "backupResources": [
     {
       "disposition": "regenerable",
@@ -19,7 +23,14 @@
   ],
   "doctorContract": {
     "configRepair": true,
-    "stateMigrations": true
+    "stateMigrations": [
+      { "id": "codex-app-server-sidecars-to-plugin-state" },
+      {
+        "id": "codex-app-server-orphaned-session-bindings",
+        "doctorOnly": true,
+        "phase": "after-session-repair"
+      }
+    ]
   },
   "doctorHealthChecks": true,
   "sessionRouteStateOwners": [
@@ -59,7 +70,7 @@
     "codex": {
       "capabilities": ["image"],
       "defaultModels": {
-        "image": "gpt-5.6-sol"
+        "image": "gpt-6-astra"
       }
     }
   },
@@ -79,6 +90,58 @@
       "name": "codex",
       "kind": "runtime-slash",
       "cliCommand": "plugins"
+    }
+  ],
+  "setup": {
+    "nativeSessionCatalog": {
+      "label": "Codex",
+      "legacyDefaultEnabled": true,
+      "description": "Existing native Codex conversations on this Gateway and eligible paired nodes.",
+      "nodeCommands": [
+        "codex.appServer.threads.list.v1",
+        "codex.appServer.thread.turns.list.v1",
+        "codex.sessionCatalog.transcript.read.v1",
+        "codex.terminal.resume.v1",
+        "codex.cli.sessions.list"
+      ]
+    }
+  },
+  "configGroups": [
+    {
+      "id": "dynamic-tools",
+      "title": "Dynamic tools",
+      "order": 10,
+      "properties": ["codexDynamicToolsLoading", "codexDynamicToolsExclude"]
+    },
+    {
+      "id": "native-sessions",
+      "title": "Native sessions",
+      "order": 20,
+      "properties": ["sessionCatalog", "supervision"]
+    },
+    {
+      "id": "model-discovery",
+      "title": "Model discovery",
+      "order": 30,
+      "properties": ["discovery"]
+    },
+    {
+      "id": "computer-use",
+      "title": "Computer use",
+      "order": 40,
+      "properties": ["computerUse"]
+    },
+    {
+      "id": "native-plugins",
+      "title": "Native plugins",
+      "order": 50,
+      "properties": ["codexPlugins"]
+    },
+    {
+      "id": "app-server-connection",
+      "title": "App Server connection",
+      "order": 60,
+      "properties": ["appServer"]
     }
   ],
   "configSchema": {
@@ -345,6 +408,19 @@
             "enum": ["user", "auto_review", "guardian_subagent"]
           },
           "serviceTier": { "type": ["string", "null"] },
+          "cyberFailover": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mode": { "type": "string", "enum": ["auto", "off"], "default": "auto" },
+              "model": {
+                "type": "string",
+                "minLength": 1,
+                "default": "gpt-daybreak-blue-latest"
+              },
+              "cooloffMs": { "type": "number", "minimum": 1, "default": 600000 }
+            }
+          },
           "networkProxy": {
             "type": "object",
             "additionalProperties": false,

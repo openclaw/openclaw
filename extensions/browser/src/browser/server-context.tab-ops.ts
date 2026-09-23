@@ -48,6 +48,7 @@ import type {
   BrowserTab,
   ProfileRuntimeState,
 } from "./server-context.types.js";
+import { findRetainedBrowserDashboardTab, readBrowserDashboardTabs } from "./session-tab-store.js";
 import {
   assignTabAlias,
   assignTabAliases,
@@ -65,7 +66,12 @@ type ProfileTabOps = {
   listTabs: (options?: BrowserOperationOptions) => Promise<BrowserTab[]>;
   openTab: (
     url: string,
-    opts?: { label?: string; signal?: AbortSignal; timeoutMs?: number },
+    opts?: {
+      label?: string;
+      signal?: AbortSignal;
+      timeoutMs?: number;
+      requireDurableOwnership?: boolean;
+    },
   ) => Promise<BrowserOpenResult>;
   labelTab: (
     targetId: string,
@@ -80,6 +86,10 @@ type CdpTarget = {
   url?: string;
   webSocketDebuggerUrl?: string;
   type?: string;
+};
+
+type ExtensionCdpTarget = CdpTarget & {
+  tabId?: unknown;
 };
 
 /** Normalize a reported CDP WebSocket URL against the configured endpoint. */
@@ -130,10 +140,15 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
       if (typeof listPagesViaPlaywright === "function") {
         const ssrfPolicy = getCdpControlPolicy();
         const resolved = state().resolved;
-        const timeoutMs = Math.max(
-          resolved.remoteCdpTimeoutMs,
-          resolved.remoteCdpHandshakeTimeoutMs,
-        );
+        // Enumeration budget must reflect the work of listing all tabs, not the
+        // CDP handshake. Prefer a caller-supplied deadline, fall back to the
+        // action-level timeout, and keep it no smaller than the handshake so a
+        // healthy but slow enumeration is not mistaken for a dead connection.
+        const enumerationBudgetMs =
+          typeof options?.timeoutMs === "number" && Number.isFinite(options.timeoutMs)
+            ? options.timeoutMs
+            : resolved.actionTimeoutMs;
+        const timeoutMs = Math.max(enumerationBudgetMs, resolved.remoteCdpHandshakeTimeoutMs);
         await assertCdpEndpointAllowed(profile.cdpUrl, ssrfPolicy);
         const pages = await listPagesViaPlaywright({
           cdpUrl: profile.cdpUrl,
@@ -142,13 +157,49 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
           ...(capabilities.requiresCompleteTargetEnumeration
             ? { requireCompleteTargetList: true }
             : {}),
+          ...(options?.signal ? { signal: options.signal } : {}),
         });
-        return pages.filter(isSelectableCdpBrowserTarget).map((p) => ({
-          targetId: p.targetId,
-          title: p.title,
-          url: p.url,
-          type: p.type,
-        }));
+        const webExtensionTabIds =
+          profile.driver === "extension"
+            ? await fetchJson<ExtensionCdpTarget[]>(
+                appendCdpPath(cdpHttpBase, "/json/list"),
+                Math.min(timeoutMs, resolved.remoteCdpTimeoutMs),
+                options?.signal ? { signal: options.signal } : undefined,
+                ssrfPolicy,
+              )
+                .then(
+                  (targets) =>
+                    new Map(
+                      targets.flatMap((target) =>
+                        typeof target.id === "string" &&
+                        typeof target.tabId === "number" &&
+                        Number.isSafeInteger(target.tabId) &&
+                        target.tabId >= 0
+                          ? [[target.id, target.tabId] as const]
+                          : [],
+                      ),
+                    ),
+                )
+                .catch(() => {
+                  options?.signal?.throwIfAborted();
+                  return new Map<string, number>();
+                })
+            : undefined;
+        return pages.filter(isSelectableCdpBrowserTarget).map((p) => {
+          // Correlate only by the relay's exact CDP target id. The native Chrome
+          // tab id is runtime-scoped and must not replace OpenClaw's stable tN alias.
+          const webExtensionTabId = webExtensionTabIds?.get(p.targetId);
+          const tab: BrowserTab = {
+            targetId: p.targetId,
+            title: p.title,
+            url: p.url,
+            type: p.type,
+          };
+          if (webExtensionTabId !== undefined) {
+            tab.webExtensionTabId = webExtensionTabId;
+          }
+          return tab;
+        });
       }
     }
 
@@ -160,7 +211,12 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         webSocketDebuggerUrl?: string;
         type?: string;
       }>
-    >(appendCdpPath(cdpHttpBase, "/json/list"), undefined, undefined, getCdpControlPolicy());
+    >(
+      appendCdpPath(cdpHttpBase, "/json/list"),
+      options?.timeoutMs,
+      options?.signal ? { signal: options.signal } : undefined,
+      getCdpControlPolicy(),
+    );
     const cdpControlPolicy = getCdpControlPolicy();
     const tabs: BrowserTab[] = [];
     for (const t of raw) {
@@ -190,6 +246,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
 
   const listTabs = async (options?: BrowserOperationOptions): Promise<BrowserTab[]> => {
     const tabs = await readTabs(options);
+    options?.signal?.throwIfAborted();
     // Chrome MCP target identity is authoritative. A replacement tab cannot
     // inherit an alias safely, even when its URL matches the closed tab.
     return assignTabAliases(runtime, tabs, !capabilities.usesChromeMcp);
@@ -210,10 +267,18 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
       return;
     }
 
-    const candidates = pageTabs.filter((tab) => tab.targetId !== keepTargetId);
+    const retained = readBrowserDashboardTabs();
+    const candidates = pageTabs.filter(
+      (tab) =>
+        tab.targetId !== keepTargetId &&
+        !findRetainedBrowserDashboardTab(tab.targetId, profile.name, retained),
+    );
     const excessCount = pageTabs.length - MANAGED_BROWSER_PAGE_TAB_LIMIT;
     for (const tab of candidates.slice(0, excessCount)) {
       options?.signal?.throwIfAborted();
+      if (findRetainedBrowserDashboardTab(tab.targetId, profile.name)) {
+        continue;
+      }
       await fetchOk(
         appendCdpPath(cdpHttpBase, `/json/close/${tab.targetId}`),
         undefined,
@@ -249,25 +314,31 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
 
   const withTabOwnership = async (
     tab: BrowserTab,
-    options?: BrowserOperationOptions,
+    options?: BrowserOperationOptions & { requireDurableOwnership?: boolean },
   ): Promise<BrowserOpenResult> => {
     const cdpTimeouts = getRemoteCdpActionTimeouts();
-    return {
-      ...tab,
-      ownership: await resolveCdpTabOwnership({
-        profileName: profile.name,
-        cdpUrl: profile.cdpUrl,
-        nativeTargetId: tab.targetId,
-        signal: options?.signal,
-        timeoutMs: cdpTimeouts?.httpTimeoutMs,
-        ssrfPolicy: getCdpControlPolicy(),
-      }),
-    };
+    const ownership = await resolveCdpTabOwnership({
+      profileName: profile.name,
+      cdpUrl: profile.cdpUrl,
+      nativeTargetId: tab.targetId,
+      signal: options?.signal,
+      timeoutMs: cdpTimeouts?.httpTimeoutMs,
+      ssrfPolicy: getCdpControlPolicy(),
+    });
+    if (options?.requireDurableOwnership && ownership.status !== "durable") {
+      throw new Error("Browser could not verify durable ownership for the new dashboard tab");
+    }
+    return { ...tab, ownership };
   };
 
   const openTab = async (
     url: string,
-    opts?: { label?: string; signal?: AbortSignal; timeoutMs?: number },
+    opts?: {
+      label?: string;
+      signal?: AbortSignal;
+      timeoutMs?: number;
+      requireDurableOwnership?: boolean;
+    },
   ): Promise<BrowserOpenResult> => {
     opts?.signal?.throwIfAborted();
     const normalizedLabel = opts?.label === undefined ? undefined : normalizeTabLabel(opts.label);
@@ -292,6 +363,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     }
 
     let createdTargetId: string | undefined;
+    let closeCreatedPage: (() => Promise<void>) | undefined;
     try {
       if (capabilities.usesPersistentPlaywright) {
         const mod = await getPwAiModule({ mode: "strict" });
@@ -302,8 +374,10 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
             cdpUrl: profile.cdpUrl,
             url,
             cdpPolicy,
+            ...(opts?.signal ? { signal: opts.signal } : {}),
             ...ssrfPolicyOpts,
           });
+          closeCreatedPage = page.close;
           createdTargetId = page.targetId;
           return adoptValidatedTab(
             await withTabOwnership(
@@ -477,7 +551,9 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         { ...opts, label: normalizedLabel },
       );
     } catch (openError) {
-      if (createdTargetId) {
+      if (closeCreatedPage) {
+        await closeCreatedPage().catch(() => {});
+      } else if (createdTargetId) {
         // Creation owns the target until a successful handoff. Cleanup must not
         // inherit the caller's abort or replace the original open failure.
         await fetchOk(

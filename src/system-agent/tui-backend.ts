@@ -5,7 +5,10 @@ import type {
   SessionsPatchResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { ChannelsAddOptions } from "../commands/channels/add.js";
-import { buildAgentMainSessionKey } from "../routing/session-key.js";
+import {
+  agentSessionKeysMatchByRequestKey,
+  buildAgentMainSessionKey,
+} from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { notifyListeners } from "../shared/listeners.js";
 import type {
@@ -40,7 +43,7 @@ async function loadHostedSetupForTui() {
 
 export type SystemAgentTuiOptions = Pick<
   SystemAgentChatEngineOptions,
-  "yes" | "deps" | "planWithAssistant" | "verifiedInference"
+  "yes" | "deps" | "verifiedInference"
 > & {
   runTui?: RunTui;
   /** "onboarding" swaps the greeting for the first-run setup proposal. */
@@ -83,7 +86,6 @@ function createChatEngine(opts: SystemAgentTuiOptions): SystemAgentChatEngine {
   return new SystemAgentChatEngine({
     yes: opts.yes,
     deps: opts.deps,
-    planWithAssistant: opts.planWithAssistant,
     surface: "cli",
     verifiedInference: opts.verifiedInference,
   });
@@ -221,6 +223,15 @@ class SystemAgentTuiBackend implements TuiBackend {
           modelProvider: this.route.modelProvider,
         },
       ],
+    };
+  }
+
+  async describeSession(opts: Parameters<TuiBackend["describeSession"]>[0]) {
+    const { sessions, defaults } = await this.listSessions();
+    return {
+      session:
+        sessions.find((row) => agentSessionKeysMatchByRequestKey(row.key, opts.sessionKey)) ?? null,
+      defaults,
     };
   }
 
@@ -567,6 +578,7 @@ async function requireTuiVerifiedInference(
         modelProvider: model.provider,
         thinkingLevel: resolveThinkingDefault({
           cfg: route.runConfig,
+          agentId: route.agentId,
           provider: route.provider,
           model: route.model,
           catalog,

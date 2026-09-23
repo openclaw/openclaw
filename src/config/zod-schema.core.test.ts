@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GroupChatSchema, MentionPatternsPolicySchema } from "./zod-schema.core.js";
+import { GroupChatSchema, MentionPatternsPolicySchema } from "./zod-schema.messages.js";
 
 describe("GroupChatSchema", () => {
   it("accepts historyLimit: 0", () => {

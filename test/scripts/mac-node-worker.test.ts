@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it as baseIt } from "vitest";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { registerMacWorkerMaterializationTests } from "./mac-node-worker-materialization.test-support.js";
 import { createMacScriptTest } from "./mac-script-fixture.test-support.js";
@@ -17,9 +18,67 @@ import { createMacScriptTest } from "./mac-script-fixture.test-support.js";
 registerMacWorkerMaterializationTests();
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
+const testNodeExecPath = resolveTestNodeExecPath();
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
 describe("Mac app worker publication", () => {
+  baseIt.each([undefined, "", "26.8.2"])(
+    "preserves the requested installer Node version in the isolated worker (%s)",
+    (version) => {
+      const root = temps.make("openclaw-worker-version-");
+      const scripts = path.join(root, "scripts");
+      const bin = path.join(root, "bin");
+      mkdirSync(scripts);
+      mkdirSync(bin);
+      symlinkSync(process.execPath, path.join(bin, "node"));
+      writeFileSync(
+        path.join(scripts, "stage-mac-node-worker.sh"),
+        readFileSync("scripts/stage-mac-node-worker.sh"),
+      );
+      writeFileSync(
+        path.join(scripts, "package-openclaw-for-docker.mjs"),
+        `import fs from "node:fs";
+const file = process.argv[process.argv.indexOf("--output-dir") + 1] + "/openclaw.tgz";
+fs.writeFileSync(file, "fixture");
+console.log(file);
+`,
+      );
+      // Stop at the download boundary after the real installer resolves its
+      // version. No downloads, app signing, service control, or native build.
+      writeFileSync(
+        path.join(scripts, "install-cli.sh"),
+        `${readFileSync("scripts/install-cli.sh", "utf8")}
+install_node() {
+  printf '%s\\n' "$NODE_VERSION" "$DEFAULT_NODE_VERSION" "$NODE_VERSION_REQUESTED" "\${OPENCLAW_CONFIG_PATH:-}" "\${OPENCLAW_GATEWAY_TOKEN:-}"
+  exit 77
+}
+`,
+      );
+      const result = spawnSync(
+        "/bin/bash",
+        [path.join(scripts, "stage-mac-node-worker.sh"), path.join(root, "worker"), "arm64"],
+        {
+          encoding: "utf8",
+          env: {
+            HOME: root,
+            TMPDIR: root,
+            PATH: `${bin}:/usr/bin:/bin`,
+            ...(version === undefined ? {} : { OPENCLAW_NODE_VERSION: version }),
+            OPENCLAW_CONFIG_PATH: "/fixture/operator-config",
+            OPENCLAW_GATEWAY_TOKEN: "synthetic-isolation-sentinel",
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(77);
+      const [selected, defaultVersion, requested, config, token] = result.stdout.split("\n");
+      expect(selected).toBe(version || defaultVersion);
+      expect(requested).toBe(version ? "1" : "0");
+      expect(config).toBe("");
+      expect(token).toBe("");
+      expect(existsSync(path.join(root, "worker"))).toBe(false);
+    },
+  );
+
   baseIt.each(["sign", "worker", "seal", "stage", "success"])(
     "publishes only a verified replacement (%s)",
     (failure) => {
@@ -96,7 +155,7 @@ describe("Mac app worker publication", () => {
       mkdirSync(path.join(nodeDir, "bin"), { recursive: true });
       // Only npm/network is replaced. The real install_openclaw implementation
       // must remain a provision-only seam even when a loaded Gateway is reported.
-      symlinkSync(process.execPath, path.join(nodeDir, "bin", "node"));
+      symlinkSync(testNodeExecPath, path.join(nodeDir, "bin", "node"));
       const npm = path.join(nodeDir, "bin", "npm");
       writeFileSync(
         npm,

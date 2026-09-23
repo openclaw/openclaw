@@ -358,6 +358,7 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
       "PluginRuntime.channel.session.resolveStorePath",
       "PluginRuntime.channel.session.recordInboundSession",
       "PluginRuntime.channel.inbound.runPreparedReply",
+      "PluginRuntime.channel.turn",
       "PluginRuntime.system.requestHeartbeatNow",
     ],
     diagnostics: [

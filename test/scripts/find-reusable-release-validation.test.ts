@@ -158,7 +158,10 @@ function plistFor(shortVersion: string, buildVersion: string): string {
   ].join("\n");
 }
 
-function createRepo(options: { plistBuildVersion?: string } = {}, dirs = tempDirs) {
+function createRepo(
+  options: { plistBuildVersion?: string; version?: string } = {},
+  dirs = tempDirs,
+) {
   const origin = dirs.make("evidence-reuse-origin-");
   git(origin, ["init", "-q", "-b", "main"]);
   git(origin, ["config", "user.email", "test-user@example.invalid"]);
@@ -166,7 +169,7 @@ function createRepo(options: { plistBuildVersion?: string } = {}, dirs = tempDir
   git(origin, ["config", "uploadpack.allowReachableSHA1InWant", "true"]);
   writeFileSync(
     join(origin, "package.json"),
-    `${JSON.stringify({ name: "x", version: "2026.7.1" }, null, 2)}\n`,
+    `${JSON.stringify({ name: "x", version: options.version ?? "2026.7.1" }, null, 2)}\n`,
   );
   mkdirSync(join(origin, "apps/macos/Sources/OpenClaw/Resources"), { recursive: true });
   writeFileSync(
@@ -672,9 +675,9 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     });
   });
 
-  it.each(["", "2026.8.1-owner-approved"])(
+  it.each(["", "2026.8.1", "2026.9.1"])(
     "reuses strict protected-tag evidence with Telegram waiver %j",
-    (telegramWaiver) => {
+    (version) => {
       const { clone, priorSha } = getSharedRepo();
       const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
       const producerRef = `release-ci/${VERIFIER_SHA.slice(0, 12)}-122`;
@@ -683,12 +686,12 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
         targetSha: priorSha,
         trustedWorkflowRef,
         workflowRef: producerRef,
-        validationInputs: telegramWaiver
+        validationInputs: version
           ? {
               ...DEFAULT_INPUTS,
-              telegramWaiver,
-              targetVersion: "2026.8.1",
-              releasePackageSpec: "openclaw@2026.8.1",
+              telegramWaiver: `${version}-owner-approved`,
+              targetVersion: version,
+              releasePackageSpec: `openclaw@${version}`,
             }
           : DEFAULT_INPUTS,
       });
@@ -1289,29 +1292,48 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     },
   );
 
-  it.each(["matching", "legacy-request", "legacy-receipt"])(
-    "requires identical npm beta coverage for reuse: %s",
-    (coverage) => {
+  it.each(
+    ["beta", "stable"].flatMap((profile) =>
+      ["matching", "legacy-request", "legacy-receipt", "other-npm-policy", "different-context"].map(
+        (coverage) => ({ profile, coverage }),
+      ),
+    ),
+  )(
+    "requires identical npm $profile coverage and context for reuse: $coverage",
+    ({ profile, coverage }) => {
       const { clone, priorSha } = getSharedRepo();
       const inputs = {
         ...DEFAULT_INPUTS,
-        coveragePolicy: "npm-beta-v1",
-        skipPackageTelegramE2e: "true",
-        targetVersion: "2026.8.28-beta.1",
+        coveragePolicy: `npm-${profile}-v1`,
+        skipPackageTelegramE2e: String(profile === "beta"),
+        targetVersion: profile === "beta" ? "2026.8.28-beta.1" : "2026.8.28",
+        targetContextRef: "release/2026.8.28",
       };
       const record = normalizedEvidence({
-        releaseProfile: "beta",
-        soak: false,
+        releaseProfile: profile,
+        soak: profile === "stable",
         targetSha: priorSha,
         validationInputs: coverage === "legacy-receipt" ? DEFAULT_INPUTS : inputs,
       });
       const fixtures = setUpFixtures([{ record, runId: "111" }]);
+      const requestedInputs =
+        coverage === "legacy-request"
+          ? DEFAULT_INPUTS
+          : {
+              ...inputs,
+              ...(coverage === "other-npm-policy"
+                ? { coveragePolicy: profile === "beta" ? "npm-stable-v1" : "npm-beta-v1" }
+                : {}),
+              ...(coverage === "different-context"
+                ? { targetContextRef: "release/2026.8.28-1" }
+                : {}),
+            };
       const result = runResolver({
         ...fixtures,
-        inputs: coverage === "legacy-request" ? DEFAULT_INPUTS : inputs,
-        releaseProfile: "beta",
+        inputs: requestedInputs,
+        releaseProfile: profile,
         repoDir: clone,
-        runReleaseSoak: "false",
+        runReleaseSoak: String(profile === "stable"),
         targetSha: priorSha,
       });
       expect(result.status).toBe(0);
@@ -1341,7 +1363,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     });
 
     expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({
+    expect(parseOutput(result.stdout), result.stderr).toMatchObject({
       changed_path_count: "1",
       changed_paths: '["CHANGELOG.md"]',
       evidence_policy: "changelog-only-release-v1",
@@ -1370,6 +1392,48 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     expect(result.status).toBe(0);
     expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
     expect(result.stderr).toContain("is not a CHANGELOG.md-only descendant");
+  });
+
+  it.each([
+    { version: "2026.7.1", delta: "selected" },
+    { version: "2026.7.1", delta: "unrelated" },
+    { version: "2026.7.1-beta.1", delta: "selected" },
+    { version: "2026.7.1-beta.1", delta: "unrelated" },
+    { version: "2026.7.1-beta.1", delta: "dedicated-beta" },
+  ])("checks $version split release files in the shell resolver ($delta)", ({ version, delta }) => {
+    const { origin, priorSha } = createRepo({ version });
+    const entryVersion = delta === "dedicated-beta" ? version : "2026.7.1";
+    const entryPath = `CHANGELOG/${entryVersion}.md`;
+    const recordPath = `CHANGELOG/records/${entryVersion}.md`;
+    mkdirSync(join(origin, "CHANGELOG/records"), { recursive: true });
+    commitFile(origin, entryPath, `## ${entryVersion}\n\nReleased.\n`, "docs: release entry");
+    const targetSha = commitFile(origin, recordPath, "Contributors.\n", "docs: release record");
+    const inputs = { ...DEFAULT_INPUTS, targetVersion: version };
+    const record = normalizedEvidence({ targetSha: priorSha, validationInputs: inputs });
+    const fixtures = setUpFixtures([{ record, runId: "111" }]);
+    const changedPaths = [
+      entryPath,
+      recordPath,
+      ...(delta === "unrelated" ? ["CHANGELOG/2026.6.8.md"] : []),
+    ];
+    const result = runResolver({
+      ...fixtures,
+      compareBaseSha: priorSha,
+      compareFiles: changedPaths,
+      inputs,
+      repoDir: cloneHead(origin),
+      targetSha,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(parseOutput(result.stdout).reuse, result.stderr).toBe(
+      delta === "selected" ? "true" : "false",
+    );
+    if (delta === "selected") {
+      expect(parseOutput(result.stdout)).toMatchObject({
+        changed_paths: JSON.stringify(changedPaths),
+        evidence_policy: "split-changelog-release-v1",
+      });
+    }
   });
 
   it("rejects a source-file rename to CHANGELOG.md", () => {

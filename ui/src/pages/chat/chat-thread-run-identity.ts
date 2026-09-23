@@ -5,13 +5,12 @@ import {
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChatItem } from "../../lib/chat/chat-types.ts";
-import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import {
   userTurnRunId,
   type ChatProjection,
   type TurnInsertionBounds,
 } from "./chat-thread-items.ts";
-import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
+import { chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
 import { readLiveTerminalRunId } from "./terminal-message-identity.ts";
 import { buildToolStreamIdentity, extractToolMessageRefs } from "./tool-stream-identity.ts";
 
@@ -68,11 +67,7 @@ export function createToolCallLookup<Value>() {
 }
 
 function isUserChatItem(item: ChatItem): item is Extract<ChatItem, { kind: "message" }> {
-  if (item.kind !== "message") {
-    return false;
-  }
-  const normalized = safeNormalizeMessage(item.message);
-  return normalized ? normalizeRoleForGrouping(normalized.role).toLowerCase() === "user" : false;
+  return item.kind === "message" && chatItemStartsUserTurn(item);
 }
 
 export function findCurrentTurnBounds(items: ChatItem[]): TurnInsertionBounds | null {
@@ -86,14 +81,15 @@ export function createRunTurnLookup(items: ChatItem[]) {
     if (!bounds) {
       bounds = new Map();
       let nextUserKey: string | undefined;
-      // Keys survive canvas splices. Rebuild after user rows are filtered or
-      // inserted; the earliest user for a run owns its next-user ceiling.
+      // Keys survive canvas splices; rebuild after turn boundaries change.
+      // The earliest user for a run owns its next-turn ceiling. Projected
+      // notices contribute ceilings, not identities inferred from their keys.
       for (let index = items.length - 1; index >= 0; index--) {
         const item = items[index]!;
-        if (!isUserChatItem(item)) {
+        if (!chatItemStartsUserTurn(item)) {
           continue;
         }
-        const owner = userTurnRunId(item.message);
+        const owner = item.kind === "message" ? userTurnRunId(item.message) : null;
         if (owner !== null) {
           bounds.set(owner, {
             afterKey: item.key,

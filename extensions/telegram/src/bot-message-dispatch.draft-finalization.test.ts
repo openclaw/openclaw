@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import {
   describeTelegramDispatch,
+  emitToolStart,
   createContext,
   createDraftStream,
   createSequencedDraftStream,
@@ -23,11 +24,11 @@ import {
 import type { TelegramMessageContext } from "./bot-message-dispatch.test-harness.js";
 
 describeTelegramDispatch("dispatchTelegramMessage draft-finalization", () => {
-  it("does not drop any long-final text after a generic lane rotation", async () => {
-    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+  it("does not drop any long-final text after tool progress", async () => {
+    setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
         await dispatcherOptions.deliver(
           { text: "A".repeat(4000) + "B".repeat(4000) },
           { kind: "final" },
@@ -41,10 +42,10 @@ describeTelegramDispatch("dispatchTelegramMessage draft-finalization", () => {
       textLimit: 4000,
     });
 
-    expect(answerDraftStream.update).toHaveBeenCalledWith(
-      "A".repeat(4000) + "B".repeat(4000),
-      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
-    );
+    expectDeliverRepliesParams({
+      replies: [expect.objectContaining({ text: "A".repeat(4000) + "B".repeat(4000) })],
+    });
+    expect(deliverReplies).toHaveBeenCalledOnce();
   });
 
   it("does not suppress text-only blocks as delivered when answer draft is inactive", async () => {
@@ -75,7 +76,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-finalization", () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
         await dispatcherOptions.deliver({ text: "block after progress" }, { kind: "block" });
         return { queuedFinal: true };
       },
@@ -311,7 +312,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-finalization", () => {
         } as TelegramMessageContext["ctxPayload"],
       }),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress" } },
+      telegramCfg: { streaming: { mode: "progress", progress: { toolProgress: true } } },
     });
 
     expect(createTelegramDraftStream).not.toHaveBeenCalled();

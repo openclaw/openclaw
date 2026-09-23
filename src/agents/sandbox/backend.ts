@@ -4,7 +4,10 @@
  * Stores process-wide backend factories so core and plugins can register local container, SSH, or custom sandbox providers.
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import type { SandboxBackendHandle } from "./backend-handle.types.js";
 import type {
+  CreateSandboxBackendParams,
   RegisteredSandboxBackend,
   SandboxBackendFactory,
   SandboxBackendId,
@@ -18,6 +21,15 @@ import {
   dockerSandboxBackendManager,
   podmanSandboxBackendManager,
 } from "./docker-backend.js";
+import { SandboxRuntimeRetiredError } from "./provisioning-error.js";
+import {
+  assertSandboxRegistryEntryCurrent,
+  completeSandboxRegistryReservation,
+  reserveSandboxRegistryEntry,
+  updateRegistry,
+  withSandboxRegistryEntryLock,
+  type SandboxRegistryEntry,
+} from "./registry.js";
 import {
   createSshSandboxBackend,
   resolveSshRuntimePaths,
@@ -26,6 +38,8 @@ import {
 
 export type {
   CreateSandboxBackendParams,
+  CreateReservedSandboxBackendParamsV1,
+  ReservedSandboxBackendFactoryV1,
   SandboxBackendFactory,
   SandboxBackendId,
   SandboxBackendManager,
@@ -110,7 +124,24 @@ export function registerSandboxBackend(
 
 /** Look up a sandbox backend factory by normalized backend id. */
 export function getSandboxBackendFactory(id: string): SandboxBackendFactory | null {
-  return resolveSandboxBackendRegistration(id)?.factory ?? null;
+  const registration = resolveSandboxBackendRegistration(id);
+  if (!registration) {
+    return null;
+  }
+  if (!registration.reserveRuntimeId) {
+    return registration.factory;
+  }
+  const factory = registration.factory;
+  return async (params) => {
+    const { runtimeId, assertRuntimeCurrent } = params;
+    if (!runtimeId || !assertRuntimeCurrent) {
+      throw new Error(
+        `Sandbox backend "${id}" requires a registry-reserved runtime and its current owner.`,
+      );
+    }
+    assertRuntimeCurrent();
+    return factory({ ...params, runtimeId, assertRuntimeCurrent });
+  };
 }
 
 /** Look up optional lifecycle management hooks for a registered backend. */
@@ -118,9 +149,21 @@ export function getSandboxBackendManager(id: string): SandboxBackendManager | nu
   return resolveSandboxBackendRegistration(id)?.manager ?? null;
 }
 
+/** Include legacy rows in the lifecycle selected by the currently registered backend. */
+export function usesSandboxRuntimeReservations(id: string): boolean {
+  return resolveSandboxBackendRegistration(id)?.reserveRuntimeId !== undefined;
+}
+
 /** Look up optional backend workdir resolution that does not start the runtime. */
 export function getSandboxBackendWorkdirResolver(id: string): SandboxBackendWorkdirResolver | null {
   return resolveSandboxBackendRegistration(id)?.resolveWorkdir ?? null;
+}
+
+/** Read static backend capabilities without provisioning a sandbox runtime. */
+export function getSandboxBackendCapabilities(
+  id: string,
+): RegisteredSandboxBackend["capabilities"] | undefined {
+  return resolveSandboxBackendRegistration(id)?.capabilities;
 }
 
 /** Resolve a backend factory or throw the user-facing configuration error. */
@@ -137,16 +180,97 @@ export function requireSandboxBackendFactory(id: string): SandboxBackendFactory 
   );
 }
 
+/** Create and publish a backend, reserving provider IDs only for opted-in factories. */
+export async function createSandboxBackend(
+  params: CreateSandboxBackendParams,
+  operatorAuthority?: AdmittedRunOperatorAuthority,
+): Promise<SandboxBackendHandle> {
+  const factory = requireSandboxBackendFactory(params.cfg.backend);
+  const reserveRuntimeId = resolveSandboxBackendRegistration(params.cfg.backend)?.reserveRuntimeId;
+  const toEntry = (backend: SandboxBackendHandle): SandboxRegistryEntry => ({
+    containerName: backend.runtimeId,
+    backendId: backend.id,
+    runtimeLabel: backend.runtimeLabel,
+    sessionKey: params.scopeKey,
+    createdAtMs: Date.now(),
+    lastUsedAtMs: Date.now(),
+    image: backend.configLabel ?? params.cfg.docker.image,
+    configLabelKind: backend.configLabelKind ?? "Image",
+  });
+  if (!reserveRuntimeId) {
+    // Only the built-in container owner can establish custody of its allocation.
+    // A plugin overriding the same backend ID retains its own lifecycle contract.
+    const backend =
+      factory === createDockerSandboxBackend
+        ? await createDockerSandboxBackend(params, operatorAuthority)
+        : factory === createPodmanSandboxBackend
+          ? await createPodmanSandboxBackend(params, operatorAuthority)
+          : await factory(params);
+    await updateRegistry(toEntry(backend));
+    return backend;
+  }
+  for (let attempt = 0; ; attempt++) {
+    const reservation = reserveSandboxRegistryEntry({
+      containerName: reserveRuntimeId(params),
+      backendId: params.cfg.backend,
+      sessionKey: params.scopeKey,
+      createdAtMs: Date.now(),
+      lastUsedAtMs: Date.now(),
+      image: params.cfg.docker.image,
+      workspaceDir: params.workspaceDir,
+    });
+    try {
+      return await withSandboxRegistryEntryLock(reservation, async () => {
+        assertSandboxRegistryEntryCurrent(reservation);
+        try {
+          const backend = await factory({
+            ...params,
+            workspaceDir: reservation.workspaceDir ?? params.workspaceDir,
+            runtimeId: reservation.containerName,
+            assertRuntimeCurrent: () => assertSandboxRegistryEntryCurrent(reservation),
+          });
+          if (
+            backend.runtimeId !== reservation.containerName ||
+            backend.id !== reservation.backendId
+          ) {
+            throw new Error("Sandbox backend returned a runtime outside its reserved generation.");
+          }
+          await completeSandboxRegistryReservation(toEntry(backend));
+          return backend;
+        } catch (error) {
+          if (
+            error instanceof SandboxRuntimeRetiredError &&
+            error.runtimeId === reservation.containerName
+          ) {
+            await completeSandboxRegistryReservation(reservation, true);
+          }
+          throw error;
+        }
+      });
+    } catch (error) {
+      if (
+        !(error instanceof SandboxRuntimeRetiredError) ||
+        error.runtimeId !== reservation.containerName ||
+        attempt > 0
+      ) {
+        throw error;
+      }
+    }
+  }
+}
+
 const builtinSandboxBackends = new Map<SandboxBackendId, RegisteredSandboxBackend>();
 builtinSandboxBackends.set("docker", {
   factory: createDockerSandboxBackend,
   manager: dockerSandboxBackendManager,
   resolveWorkdir: ({ cfg }) => cfg.docker.workdir,
+  capabilities: { readOnlyResourceMounts: true },
 });
 builtinSandboxBackends.set("podman", {
   factory: createPodmanSandboxBackend,
   manager: podmanSandboxBackendManager,
   resolveWorkdir: ({ cfg }) => cfg.docker.workdir,
+  capabilities: { readOnlyResourceMounts: true },
 });
 builtinSandboxBackends.set("ssh", {
   factory: createSshSandboxBackend,

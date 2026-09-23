@@ -1,10 +1,13 @@
 import {
   inferToolMetaFromArgs,
+  projectAgentToolActivity,
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   itemName,
   itemStatus,
+  auditNativeToolName,
+  unknownItemStatus,
   shouldSynthesizeToolProgressForItem,
 } from "./event-projector-items.js";
 import {
@@ -21,6 +24,89 @@ import {
   sanitizeCodexAgentEventRecord,
   sanitizeCodexToolArguments,
 } from "./tool-progress-normalization.js";
+
+const CODE_MODE_NATIVE_PATCH_SOURCE_RE =
+  /^\s*(?:\/\/[^\r\n]*\r?\n\s*)?(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+tools\.apply_patch\(\s*("(?:\\[\s\S]|[^"\\])*")\s*\)\s*;?\s*text\(\s*\1\s*\)\s*;?\s*$/u;
+
+export function readCodeModeNativePatchInput(source: unknown): string | undefined {
+  if (typeof source !== "string") {
+    return undefined;
+  }
+  const match = CODE_MODE_NATIVE_PATCH_SOURCE_RE.exec(source);
+  if (!match?.[2]) {
+    return undefined;
+  }
+  try {
+    const patch: unknown = JSON.parse(match[2]);
+    return typeof patch === "string" &&
+      /^\*\*\* Begin Patch\r?\n[\s\S]*\r?\n\*\*\* End Patch(?:\r?\n)?$/u.test(patch)
+      ? patch
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function readInterceptedNativePatchInput(
+  command: unknown,
+): { input: string; cwd?: string } | undefined {
+  if (typeof command !== "string") {
+    return undefined;
+  }
+  const lines = command.replace(/\r\n?/gu, "\n").split("\n");
+  const patchStart = lines.indexOf("*** Begin Patch");
+  // Nested heredocs and shell expansion can hide extra commands. Trust only
+  // a top-level patch, an inert cd, and a single-quoted matching delimiter.
+  const invocation =
+    /^[\t ]*(?:cd[\t ]+(?:'([^'\n]+)'|([A-Za-z0-9_./-]+))[\t ]+&&[\t ]+)?apply_patch[\t ]*<<-?[\t ]*'([^'\n]+)'[\t ]*$/u.exec(
+      lines[0] ?? "",
+    );
+  if (!invocation || patchStart !== 1) {
+    return undefined;
+  }
+  const patchEnd = lines.indexOf("*** End Patch", patchStart + 1);
+  const cwd = invocation[1] ?? invocation[2];
+  const delimiter = invocation[3];
+  if (
+    patchEnd < 0 ||
+    lines[patchEnd + 1] !== delimiter ||
+    lines.slice(patchEnd + 2).some((line) => line.trim().length > 0)
+  ) {
+    return undefined;
+  }
+  return {
+    input: `${lines.slice(patchStart, patchEnd + 1).join("\n")}\n`,
+    ...(cwd ? { cwd } : {}),
+  };
+}
+
+export function projectCodexToolActivity(
+  item: CodexThreadItem,
+  phase: "start" | "result",
+  meta?: string,
+) {
+  const name = itemName(item) ?? auditNativeToolName(item);
+  return name
+    ? projectAgentToolActivity({
+        toolCallId: item.id,
+        name,
+        phase,
+        // Native dynamic items retain requested args, not host-hook execution facts.
+        args: item.type === "dynamicToolCall" ? undefined : itemToolArgs(item),
+        meta,
+        status:
+          item.type === "collabAgentToolCall" && item.status === "interrupted"
+            ? "failed"
+            : unknownItemStatus(item)
+              ? "unknown"
+              : itemStatus(item),
+        result: { details: itemToolResult(item).result },
+        ...(item.type === "collabAgentToolCall" && item.tool === "wait"
+          ? { nativeOperation: "wait" }
+          : {}),
+      })
+    : undefined;
+}
 
 export function isNativePostToolUseRelayItem(item: CodexThreadItem): boolean {
   switch (item.type) {
@@ -302,13 +388,19 @@ export function itemOutputText(
   item: CodexThreadItem,
   outputTextByItem?: ReadonlyMap<string, string>,
 ): string | undefined {
+  const output = itemObservedOutputText(item, outputTextByItem)?.trim();
+  return output ? truncateToolTranscriptText(output) : undefined;
+}
+
+function itemObservedOutputText(
+  item: CodexThreadItem,
+  outputTextByItem?: ReadonlyMap<string, string>,
+): string | undefined {
   if (item.type === "commandExecution") {
-    const output = item.aggregatedOutput?.trim() || outputTextByItem?.get(item.id)?.trim();
-    return output ? truncateToolTranscriptText(output) : undefined;
+    return item.aggregatedOutput ?? outputTextByItem?.get(item.id);
   }
   if (item.type === "dynamicToolCall") {
-    const output = collectDynamicToolContentText(item.contentItems).trim();
-    return output ? truncateToolTranscriptText(output) : undefined;
+    return collectDynamicToolContentText(item.contentItems);
   }
   if (item.type === "mcpToolCall") {
     const output = item.error
@@ -316,7 +408,7 @@ export function itemOutputText(
       : item.result
         ? stringifyJsonValue(item.result)
         : undefined;
-    return output ? truncateToolTranscriptText(output) : undefined;
+    return output;
   }
   return undefined;
 }
@@ -325,13 +417,13 @@ export function itemTranscriptResultText(
   item: CodexThreadItem,
   outputTextByItem?: ReadonlyMap<string, string>,
 ): string | undefined {
-  const output = itemOutputText(item, outputTextByItem);
-  if (output) {
+  const output = itemObservedOutputText(item, outputTextByItem);
+  if (output !== undefined) {
     return output;
   }
   const result = itemToolResult(item).result;
   const resultText = result ? stringifyJsonValue(result) : undefined;
-  return resultText ? truncateToolTranscriptText(resultText) : itemStatus(item);
+  return resultText ?? itemStatus(item);
 }
 
 function stringifyJsonValue(value: unknown): string | undefined {

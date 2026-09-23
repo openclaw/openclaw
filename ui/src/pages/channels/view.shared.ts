@@ -31,7 +31,7 @@ function resolveChannelStatus(
   key: ChannelKey,
   props: ChannelsProps,
 ): Record<string, unknown> | undefined {
-  const channels = props.snapshot?.channels;
+  const channels = props.channels.channelsSnapshot?.channels;
   return channels && Object.hasOwn(channels, key)
     ? (asNullableRecord(channels[key]) ?? undefined)
     : undefined;
@@ -41,8 +41,8 @@ function resolveDefaultChannelAccount(
   key: ChannelKey,
   props: ChannelsProps,
 ): ChannelAccountSnapshot | null {
-  const accounts = resolveChannelAccounts(props.snapshot?.channelAccounts, key);
-  const defaultAccountIds = props.snapshot?.channelDefaultAccountId;
+  const accounts = resolveChannelAccounts(props.channels.channelsSnapshot?.channelAccounts, key);
+  const defaultAccountIds = props.channels.channelsSnapshot?.channelDefaultAccountId;
   const defaultAccountId =
     defaultAccountIds && Object.hasOwn(defaultAccountIds, key) ? defaultAccountIds[key] : undefined;
   return (
@@ -79,7 +79,7 @@ export function resolveChannelDisplayState(
 }
 
 export function channelEnabled(key: ChannelKey, props: ChannelsProps) {
-  return channelSnapshotEntryIsActive(props.snapshot, key);
+  return channelSnapshotEntryIsActive(props.channels.channelsSnapshot, key);
 }
 
 export function resolveChannelConfigured(key: ChannelKey, props: ChannelsProps): boolean | null {
@@ -106,9 +106,11 @@ export function renderChannelFacts(rows: readonly ChannelStatusRow[]) {
         (row) => html`
           <dt>${row.label}</dt>
           <dd>
-            ${row.kind !== undefined
-              ? renderSettingsStatus({ kind: row.kind, label: row.value })
-              : row.value}
+            ${
+              row.kind !== undefined
+                ? renderSettingsStatus({ kind: row.kind, label: row.value })
+                : row.value
+            }
           </dd>
         `,
       )}
@@ -199,16 +201,20 @@ export function renderChannelAccountRow(params: {
       <div class="settings-row__text">
         <span class="settings-row__title">${params.title}</span>
         <span class="settings-row__desc">${factLine}</span>
-        ${params.lastError
-          ? html`<span class="settings-row__desc">${formatUiExternalText(params.lastError)}</span>`
-          : nothing}
+        ${
+          params.lastError
+            ? html`<span class="settings-row__desc"
+                >${formatUiExternalText(params.lastError)}</span
+              >`
+            : nothing
+        }
       </div>
       <div class="settings-row__control">
         ${renderSettingsStatus(params.status)}
         <span class="settings-row__value"
-          >${params.lastInboundAt
-            ? formatRelativeTimestamp(params.lastInboundAt)
-            : t("common.na")}</span
+          >${
+            params.lastInboundAt ? formatRelativeTimestamp(params.lastInboundAt) : t("common.na")
+          }</span
         >
       </div>
     </div>

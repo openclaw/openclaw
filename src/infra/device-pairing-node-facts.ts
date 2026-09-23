@@ -1,63 +1,38 @@
-import { updatePairedDeviceNodeSurfaceInTransaction } from "./device-pairing-store.js";
+import type { NodePairingGeneration } from "./device-pairing-identity.js";
 import {
-  resolveNodePairingGeneration,
-  withPairedDeviceRecords,
-  type NodePairingGeneration,
-  type PairedDevice,
-} from "./device-pairing.js";
+  DevicePairingAuthorityRefusedError,
+  executeDevicePairingMutation,
+} from "./device-pairing-worker.js";
 
-type NodeSurface = NonNullable<PairedDevice["nodeSurface"]>;
-
-async function updatePairedNodeGenerationSurface(params: {
-  nodeId: string;
-  expectedPairingGeneration: NodePairingGeneration;
-  isCurrent?: () => boolean;
-  update: (surface: NodeSurface) => NodeSurface;
-  baseDir?: string;
-}): Promise<boolean> {
-  return await withPairedDeviceRecords<boolean>(params.baseDir, () => {
-    const value = updatePairedDeviceNodeSurfaceInTransaction<boolean>(
-      params.nodeId,
-      params.baseDir,
-      (device) => {
-        const generation = resolveNodePairingGeneration(device);
-        if (
-          !device?.nodeSurface ||
-          params.isCurrent?.() === false ||
-          params.expectedPairingGeneration.nodeId !== device.deviceId ||
-          generation?.key !== params.expectedPairingGeneration.key
-        ) {
-          return { value: false, persist: false };
-        }
-        return {
-          value: true,
-          persist: true,
-          nodeSurface: params.update(device.nodeSurface),
-        };
-      },
-    );
-    // The row transaction validates durable generation ownership; the shared
-    // lock also prevents a local full-snapshot writer from replaying old facts.
-    return { value, persist: false };
-  });
-}
-
-/** Update the remote skill bins advertised by a paired node. */
+/** Update remote skill bins while the probe still owns the durable node generation. */
 export async function updatePairedNodeBins(
   nodeId: string,
   bins: string[],
   expectedPairingGeneration: NodePairingGeneration,
   baseDir?: string,
+  isProbeCurrent?: () => boolean,
 ): Promise<boolean> {
-  return await updatePairedNodeGenerationSurface({
-    nodeId,
-    expectedPairingGeneration,
-    update: (surface) => ({ ...surface, bins }),
-    baseDir,
-  });
+  try {
+    return await executeDevicePairingMutation(
+      { type: "node.updateBins", input: { nodeId, bins, expectedPairingGeneration } },
+      {
+        baseDir,
+        assertCurrent: () => {
+          if (isProbeCurrent?.() === false) {
+            throw new DevicePairingAuthorityRefusedError("node bin probe ownership changed");
+          }
+        },
+      },
+    );
+  } catch (error) {
+    if (error instanceof DevicePairingAuthorityRefusedError) {
+      return false;
+    }
+    throw error;
+  }
 }
 
-/** Persist current runner-host consent for one exact node connection generation. */
+/** Persist runner-host consent only while its connection still owns the durable generation. */
 export async function updatePairedNodeSessionHost(params: {
   nodeId: string;
   sessionHost: boolean;
@@ -65,9 +40,23 @@ export async function updatePairedNodeSessionHost(params: {
   isConnectionCurrent: () => boolean;
   baseDir?: string;
 }): Promise<boolean> {
-  return await updatePairedNodeGenerationSurface({
-    ...params,
-    isCurrent: params.isConnectionCurrent,
-    update: (surface) => ({ ...surface, sessionHost: params.sessionHost }),
-  });
+  const { baseDir, isConnectionCurrent, ...input } = params;
+  try {
+    return await executeDevicePairingMutation(
+      { type: "node.updateSessionHost", input },
+      {
+        baseDir,
+        assertCurrent: () => {
+          if (!isConnectionCurrent()) {
+            throw new DevicePairingAuthorityRefusedError("node session connection changed");
+          }
+        },
+      },
+    );
+  } catch (error) {
+    if (error instanceof DevicePairingAuthorityRefusedError) {
+      return false;
+    }
+    throw error;
+  }
 }

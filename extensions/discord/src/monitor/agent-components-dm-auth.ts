@@ -1,4 +1,3 @@
-// Discord plugin module implements agent components dm auth behavior.
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -10,6 +9,7 @@ import {
   readChannelIngressStoreAllowFromForDmPolicy,
   upsertChannelPairingRequest,
 } from "./agent-components-helpers.runtime.js";
+import { resolveAgentComponentPolicyContext } from "./agent-components-live-policy.js";
 import { replySilently } from "./agent-components-reply.js";
 import type {
   AgentComponentContext,
@@ -29,7 +29,7 @@ async function ensureDmComponentAuthorized(params: {
 }) {
   const { ctx, interaction, user, componentLabel, replyOpts } = params;
   const dmPolicy = ctx.dmPolicy ?? "pairing";
-  if (dmPolicy === "disabled") {
+  if (ctx.discordConfig?.dm?.enabled === false || dmPolicy === "disabled") {
     logVerbose(`agent ${componentLabel}: blocked (DM policy disabled)`);
     await replySilently(interaction, { content: "DM interactions are disabled.", ...replyOpts });
     return false;
@@ -54,6 +54,13 @@ async function ensureDmComponentAuthorized(params: {
       }),
     eventKind: "button",
   });
+  if (ctx.isPolicyCurrent?.() === false) {
+    await replySilently(interaction, {
+      content: "Access policy changed. Try this interaction again.",
+      ...replyOpts,
+    });
+    return false;
+  }
   if (access.senderAccess.decision === "allow") {
     return true;
   }
@@ -143,6 +150,10 @@ export async function resolveInteractionContextWithDmAuth(params: {
   componentLabel: string;
   defer?: boolean;
 }) {
+  const ctx = await resolveAgentComponentPolicyContext(params);
+  if (!ctx) {
+    return null;
+  }
   const interactionCtx = await resolveComponentInteractionContext({
     interaction: params.interaction,
     label: params.label,
@@ -151,9 +162,16 @@ export async function resolveInteractionContextWithDmAuth(params: {
   if (!interactionCtx) {
     return null;
   }
+  if (ctx.isPolicyCurrent?.() === false) {
+    await replySilently(params.interaction, {
+      content: "Access policy changed. Try this interaction again.",
+      ...interactionCtx.replyOpts,
+    });
+    return null;
+  }
   if (interactionCtx.isDirectMessage) {
     const authorized = await ensureDmComponentAuthorized({
-      ctx: params.ctx,
+      ctx,
       interaction: params.interaction,
       user: interactionCtx.user,
       componentLabel: params.componentLabel,
@@ -165,7 +183,7 @@ export async function resolveInteractionContextWithDmAuth(params: {
   }
   if (interactionCtx.isGroupDm) {
     const authorized = await ensureGroupDmComponentAuthorized({
-      ctx: params.ctx,
+      ctx,
       interaction: params.interaction,
       channelId: interactionCtx.channelId,
       componentLabel: params.componentLabel,

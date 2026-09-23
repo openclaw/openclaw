@@ -2,9 +2,15 @@ import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
 import type { ChatWorkspaceDock, UiSettings } from "../../../app/settings.ts";
 import type { SessionCapability, SessionScopeHost } from "../../../lib/sessions/index.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import type { FileSidebarNavigation } from "./chat-sidebar-content-types.ts";
+import type { SidebarContent, SidebarSelection } from "./chat-sidebar.ts";
+
+export type SessionWorkspaceFilter = "all" | "changed" | "read" | "artifacts";
 
 export type SessionWorkspaceProps = {
+  filter: SessionWorkspaceFilter;
+  browserPath: string;
+  browserSearch: string;
   collapsed: boolean;
   sessionKey: string;
   list: SessionWorkspaceListResult | null;
@@ -21,6 +27,7 @@ export type SessionWorkspaceProps = {
   onBrowsePath: (path: string) => void;
   onOpenFile: (path: string, origin: "session" | "workspace") => void;
   onSearch: (search: string) => void;
+  onSetFilter: (filter: SessionWorkspaceFilter) => void;
   onOpenArtifact: (artifactId: string) => void;
   onToggleTerminal?: () => void;
   onToggleBrowser?: () => void;
@@ -30,7 +37,21 @@ export type SessionWorkspaceProps = {
   onOpenDiff?: () => void;
 };
 
+export type SessionWorkspacePreview = {
+  id: string;
+  label: string;
+  content: SidebarSelection;
+  canonicalKey?: string;
+  requestIds?: string[];
+  navigation?: FileSidebarNavigation;
+  navigationOrder?: number;
+};
+
 export type SessionWorkspaceState = {
+  navigationOrder?: number;
+  previews: SessionWorkspacePreview[];
+  activePreviewId: string | null;
+  filter: SessionWorkspaceFilter;
   activeId: string | null;
   agentId: string;
   browserPath: string;
@@ -41,9 +62,9 @@ export type SessionWorkspaceState = {
   dock: ChatWorkspaceDock;
   diffContent?: SidebarContent;
   error: string | null;
+  errorOwner?: object;
   list: SessionWorkspaceListResult | null;
   loading: boolean;
-  openRequest?: object;
   pendingReload: boolean;
   sessionKey: string;
 };
@@ -57,6 +78,7 @@ export type SessionWorkspaceHost = {
   connected: boolean;
   connectionEpoch: number;
   hello: GatewayHelloOk | null;
+  resourceBasePath?: string;
   terminalAvailable?: boolean;
   browserPanelAvailable?: boolean;
   assistantAgentId?: string | null;
@@ -64,9 +86,9 @@ export type SessionWorkspaceHost = {
   settings?: UiSettings;
   sessionWorkspaceState?: SessionWorkspaceState;
   sessionWorkspaceDraftScope?: string;
-  sidebarContent: SidebarContent | null;
+  sidebarContent: SidebarSelection | null;
   requestUpdate?: () => void;
-  handleOpenSidebar: (content: SidebarContent | null) => void;
+  handleOpenSidebar: (content: SidebarSelection | null) => void;
 };
 
 /** Agent owning the pane's current session: explicit key scope first, then the

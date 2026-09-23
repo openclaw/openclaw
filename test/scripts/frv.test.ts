@@ -1,8 +1,3 @@
-import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
   continueFailed,
@@ -11,220 +6,32 @@ import {
   loadPlan,
   preflightContinuation,
 } from "../../scripts/frv.mjs";
-import { buildFullReleaseCandidateRequest } from "../../scripts/full-release-candidate-contract.mjs";
 import {
-  buildReleaseExecutionPlan,
-  buildReleaseExecutionPlanArtifact,
   releaseChildSpec,
   releaseCompositeJobsSha256,
   releaseExecutionPlanSha256,
   validateReleaseExecutionPlanArtifact,
 } from "../../scripts/full-release-validation-policy.mjs";
-
-const SHA = "a".repeat(40);
-const TARGET_SHA = "b".repeat(40);
-const SOURCE_REF = `release-ci/${SHA.slice(0, 12)}-77`;
-const REPOSITORY = "openclaw/openclaw";
-
-function job(name: string, conclusion = "success") {
-  return {
-    completed_at: "2026-08-22T00:01:00Z",
-    conclusion,
-    html_url: `https://example.invalid/jobs/${name}`,
-    name,
-    started_at: "2026-08-22T00:00:00Z",
-    status: "completed",
-  };
-}
-
-function child(key: string, runId: string) {
-  const spec = releaseChildSpec(key);
-  return {
-    displayTitle: `${spec.displayName} full-release-validation-77-1${spec.suffix}`,
-    key,
-    required: true,
-    runAttempt: 1,
-    runId,
-    selected: true,
-    sourceParentAttempt: 1,
-    url: `https://github.com/${REPOSITORY}/actions/runs/${runId}`,
-    workflow: spec.workflow,
-    workflowRef: SOURCE_REF,
-    workflowSha: SHA,
-  };
-}
-
-function withoutChildRunIdentity(entry: ReturnType<typeof child>) {
-  const missing = structuredClone(entry);
-  Reflect.set(missing, "runAttempt", null);
-  Reflect.set(missing, "runId", "");
-  Reflect.set(missing, "url", "");
-  return missing;
-}
-
-function requiredChildren() {
-  return [
-    child("normalCi", "101"),
-    child("pluginPrerelease", "202"),
-    child("releaseChecks", "303"),
-    child("productPerformance", "404"),
-  ];
-}
-
-function plan(children = requiredChildren()) {
-  return {
-    attemptEvidenceVersion: 2,
-    children,
-    parentRunAttempt: 1,
-    parentRunId: "77",
-    releaseProfile: "beta",
-    rerunGroup: "all",
-    targetSha: TARGET_SHA,
-    trustedWorkflow: { fullRef: "refs/heads/main", ref: "main", sha: SHA },
-    workflowRef: SOURCE_REF,
-    workflowSha: SHA,
-  };
-}
-
-function executionPlanArtifact({
-  children = requiredChildren(),
-  evidenceReuse = { requested: false },
-}: {
-  children?: ReturnType<typeof requiredChildren>;
-  evidenceReuse?: Record<string, unknown>;
-} = {}) {
-  const built = buildReleaseExecutionPlan({
-    children: Object.fromEntries(
-      children.map((entry) => [
-        entry.key,
-        {
-          result: "success",
-          runAttempt: entry.runAttempt,
-          runId: entry.runId,
-          url: entry.url,
-        },
-      ]),
-    ),
-    dockerPreflightResult: "success",
-    evidenceReuse: evidenceReuse.requested === true,
-    parentRunAttempt: 1,
-    parentRunId: "77",
-    candidateBindingResult: "success",
-    rerunGroup: "all",
-    resolveTargetResult: "success",
-    workflowRef: SOURCE_REF,
-    workflowSha: SHA,
-  });
-  const candidateRequest = buildFullReleaseCandidateRequest({
-    repository: REPOSITORY,
-    targetSha: TARGET_SHA,
-    toolingSha: SHA,
-    releaseProfile: "beta",
-    releaseSoak: false,
-    upgradeSurvivorBaseline: "openclaw@latest",
-    upgradeSurvivorBaselines: "",
-    upgradeSurvivorScenarios: "",
-    allowFrozenTargetScenarioOmissions: false,
-    allowUnreleasedChangelog: false,
-    sharedImagePolicy: "no-push-artifact",
-  });
-  const selectedKeys = new Set(children.map((entry) => entry.key));
-  return buildReleaseExecutionPlanArtifact({
-    attemptEvidenceVersion: 2,
-    candidate: null,
-    children: built.children.map((entry) =>
-      selectedKeys.has(entry.key)
-        ? entry
-        : {
-            ...entry,
-            required: false,
-            result: "skipped",
-            runAttempt: null,
-            runId: "",
-            selected: false,
-            url: "",
-          },
-    ),
-    evidenceReuse,
-    expected: {
-      candidateRequest,
-      parentRunAttempt: 1,
-      parentRunId: "77",
-      repository: REPOSITORY,
-      targetSha: TARGET_SHA,
-      workflowRef: SOURCE_REF,
-      workflowSha: SHA,
-    },
-    gates: built.gates,
-    releaseProfile: "beta",
-    rerunGroup: "all",
-    trustedWorkflow: { fullRef: "refs/heads/main", ref: "main", sha: SHA },
-  });
-}
-
-function historicalExecutionPlanArtifact() {
-  const artifact = structuredClone(executionPlanArtifact());
-  delete artifact.attemptEvidenceVersion;
-  delete artifact.candidate;
-  delete artifact.candidateRequest;
-  delete artifact.repository;
-  for (const entry of artifact.children) {
-    delete entry.sourceParentAttempt;
-  }
-  artifact.sha256 = releaseExecutionPlanSha256(artifact);
-  return artifact;
-}
-
-function runFor(
-  entry: ReturnType<typeof child>,
-  attempt: number,
-  conclusion: string | null,
-  status = conclusion === null ? "in_progress" : "completed",
-) {
-  return {
-    actor: { login: "github-actions[bot]" },
-    conclusion,
-    display_title: entry.displayTitle,
-    event: "workflow_dispatch",
-    head_branch: entry.workflowRef,
-    head_sha: entry.workflowSha,
-    html_url: entry.url,
-    id: Number(entry.runId),
-    path: `.github/workflows/${entry.workflow}`,
-    repository: { full_name: REPOSITORY },
-    run_attempt: attempt,
-    status,
-    triggering_actor: {
-      login: attempt === entry.runAttempt ? "github-actions[bot]" : "release-operator",
-    },
-  };
-}
-
-function rootRun(
-  attempt = 1,
-  conclusion: string | null = "failure",
-  status = conclusion === null ? "in_progress" : "completed",
-) {
-  return {
-    actor: { login: "github-actions[bot]" },
-    conclusion,
-    display_title: "Full Release Validation",
-    event: "workflow_dispatch",
-    head_branch: SOURCE_REF,
-    head_sha: SHA,
-    id: 77,
-    path: ".github/workflows/full-release-validation.yml",
-    repository: { full_name: REPOSITORY },
-    run_attempt: attempt,
-    status,
-    triggering_actor: { login: attempt === 1 ? "github-actions[bot]" : "release-operator" },
-  };
-}
+import { createReleaseEvidenceClient } from "../../scripts/release-ci-summary.mjs";
+import {
+  SHA,
+  TARGET_SHA,
+  SOURCE_REF,
+  REPOSITORY,
+  job,
+  child,
+  withoutChildRunIdentity,
+  plan,
+  executionPlanArtifact,
+  historicalExecutionPlanArtifact,
+  runFor,
+  rootRun,
+} from "./frv.test-support.js";
 
 function preflightMethods(
   children: ReturnType<typeof child>[],
   childRun: (entry: ReturnType<typeof child>) => Record<string, unknown>,
-  options: { failFast?: boolean; childRunIdOverride?: string } = {},
+  options: { failFast?: boolean; childRunIdOverride?: string; ciReleaseScope?: string } = {},
 ) {
   const byRunId = new Map(children.map((entry) => [entry.runId, entry]));
   const parentJobs = [
@@ -244,6 +51,10 @@ function preflightMethods(
     })),
   ];
   return {
+    getReleaseEvidenceClient: () => ({
+      ...createReleaseEvidenceClient(REPOSITORY),
+      getWorkflowSource: () => "name: Full Release Validation\n",
+    }),
     getJobLog: async (jobId: number) => {
       if (jobId === 1) {
         return [
@@ -257,10 +68,14 @@ function preflightMethods(
       return [
         `TARGET_SHA: ${TARGET_SHA}`,
         ...(entry.key === "productPerformance" ? ["-f publish_reports=false"] : []),
+        ...(entry.key === "normalCi" && options.ciReleaseScope
+          ? [`CI_RELEASE_SCOPE: ${options.ciReleaseScope}`]
+          : []),
         `Dispatched ${entry.workflow}: https://github.com/${REPOSITORY}/actions/runs/${runId} (attempt 1)`,
       ].join("\n");
     },
     getParentJobs: async () => parentJobs,
+    getRun: async (runId: string) => (runId === "77" ? rootRun() : childRun(byRunId.get(runId)!)),
     getRunAttempt: async (runId: string) =>
       runId === "77" ? rootRun() : childRun(byRunId.get(runId)!),
   };
@@ -431,6 +246,262 @@ describe("FRV immutable plan eligibility", () => {
 });
 
 describe("FRV continuation preflight", () => {
+  function artifactFixture(stage = "npm") {
+    const selected = child("normalCi", "101");
+    const methods = preflightMethods([selected], (entry) => runFor(entry, 1, "success"));
+    const producer = {
+      id: 81,
+      run_attempt: 1,
+      event: "workflow_dispatch",
+      path: ".github/workflows/full-release-artifacts.yml",
+      repository: { full_name: REPOSITORY },
+      head_repository: { full_name: REPOSITORY },
+      head_sha: SHA,
+      head_branch: SOURCE_REF,
+      display_title: `Full Release Artifacts full-release-validation-77-1-artifacts-${stage}`,
+      status: "completed",
+      conclusion: "success" as string | null,
+      html_url: `https://github.com/${REPOSITORY}/actions/runs/81`,
+    };
+    const logs = {
+      dispatch: `TARGET_SHA: ${TARGET_SHA}\nDispatched full-release-artifacts.yml: https://github.com/${REPOSITORY}/actions/runs/81 (attempt 1)`,
+    };
+    const client = {
+      ...methods,
+      getReleaseEvidenceClient: () => ({
+        ...methods.getReleaseEvidenceClient(),
+        getWorkflowSource: () =>
+          "name: Full Release Validation\njobs:\n  prepare:\n    steps:\n      - run: node scripts/full-release-artifacts.mjs resolve\n",
+      }),
+      getParentJobs: async () => [
+        ...(await methods.getParentJobs()),
+        ...[
+          ["Prepare release npm artifacts", "npm"],
+          ["Prepare release Docker artifacts", "docker"],
+          ["Acquire full release candidate", "candidate"],
+        ].map(([name, kind]) => ({
+          id: 90,
+          name,
+          run_attempt: 1,
+          status: "completed",
+          conclusion: kind === stage ? "success" : "skipped",
+        })),
+      ],
+      getJobLog: async (id: number) => (id === 90 ? logs.dispatch : methods.getJobLog(id)),
+      getRun: vi.fn(async (id: string) => (id === "81" ? producer : methods.getRun(id))),
+      getAttemptJobs: async () => [job("test")],
+      rerunFailed: vi.fn(),
+      rerunParent: vi.fn(),
+    };
+    return { client, producer, logs, plan: plan([selected]) };
+  }
+
+  it("retries only failed npm producer jobs, preserves green diagnostics, and verifies the parent", async () => {
+    const fixture = artifactFixture();
+    fixture.producer.conclusion = "failure";
+    let parentAttempt = 1;
+    const read = fixture.client.getRun.getMockImplementation()!;
+    fixture.client.getRun.mockImplementation(async (id) =>
+      id === "77"
+        ? rootRun(parentAttempt, parentAttempt === 1 ? "failure" : "success")
+        : structuredClone(await read(id)),
+    );
+    fixture.client.rerunFailed.mockImplementation(async (id: string) => {
+      expect(id).toBe("81");
+      fixture.producer.run_attempt = 2;
+      fixture.producer.conclusion = "success";
+    });
+    fixture.client.rerunParent.mockImplementation(async () => {
+      parentAttempt = 2;
+    });
+    const verify = vi.fn();
+    await expect(
+      continueFailed(fixture.plan, "77", { ...fixture.client, verify }),
+    ).resolves.toMatchObject({ action: "reran-parent" });
+    expect(fixture.client.rerunFailed).toHaveBeenCalledExactlyOnceWith("81");
+    expect(fixture.client.rerunParent).toHaveBeenCalledExactlyOnceWith("77");
+    expect(verify).toHaveBeenCalledWith("77", fixture.plan, expect.any(Number), {
+      "77": 2,
+      "101": 1,
+    });
+  });
+
+  it.each(["failure", "cancelled", "timed_out"])(
+    "offers failed-job producer recovery for %s without mutating during dry run",
+    async (conclusion) => {
+      const fixture = artifactFixture();
+      fixture.producer.conclusion = conclusion;
+      await expect(
+        continueFailed(fixture.plan, "77", fixture.client, { dryRun: true }),
+      ).resolves.toMatchObject({
+        action: "would-rerun",
+        status: { failed: [expect.objectContaining({ key: "artifact:npm", runId: "81" })] },
+      });
+      expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
+      expect(fixture.client.rerunParent).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["before-verify", "after-verify", "after-seal"])(
+    "does not accept changed npm producer evidence %s",
+    async (boundary) => {
+      for (const update of [
+        { run_attempt: 3 },
+        { conclusion: "failure" },
+        { head_sha: "c".repeat(40) },
+      ]) {
+        const fixture = artifactFixture();
+        fixture.producer.run_attempt = 2;
+        let parentAttempt = boundary === "after-seal" ? 2 : 1;
+        const read = fixture.client.getRun.getMockImplementation()!;
+        fixture.client.getRun.mockImplementation(async (id) =>
+          id === "77"
+            ? rootRun(parentAttempt, parentAttempt === 1 ? "failure" : "success")
+            : structuredClone(await read(id)),
+        );
+        const changeProducer = () => Object.assign(fixture.producer, update);
+        fixture.client.rerunParent.mockImplementation(async () => {
+          parentAttempt = 2;
+          if (boundary === "before-verify") {
+            changeProducer();
+          }
+        });
+        const verify = vi.fn(async () => {
+          changeProducer();
+        });
+        const verifySeal = vi.fn(async () => {
+          changeProducer();
+          return true;
+        });
+        await expect(
+          continueFailed(fixture.plan, "77", {
+            ...fixture.client,
+            verify,
+            ...(boundary === "after-seal" ? { verifySeal } : {}),
+          }),
+        ).rejects.toThrow(/Artifact producer (?:run identity changed|changed during recovery)/u);
+        expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
+        if (boundary === "before-verify") {
+          expect(verify).not.toHaveBeenCalled();
+        } else if (boundary === "after-verify") {
+          expect(verify).toHaveBeenCalledOnce();
+        } else {
+          expect(verifySeal).toHaveBeenCalledOnce();
+          expect(fixture.client.rerunParent).not.toHaveBeenCalled();
+        }
+      }
+    },
+  );
+
+  it("adopts an already successful newer producer attempt without rerunning it", async () => {
+    const fixture = artifactFixture();
+    fixture.producer.run_attempt = 2;
+    await expect(
+      continueFailed(fixture.plan, "77", fixture.client, { dryRun: true }),
+    ).resolves.toMatchObject({ action: "would-rerun-parent" });
+    expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["different tooling", { head_sha: "c".repeat(40) }],
+    ["different dispatch", { display_title: "Full Release Artifacts unrelated" }],
+    ["regressed attempt", { run_attempt: 0 }],
+  ])("rejects %s producer evidence without mutations", async (_label, update) => {
+    const fixture = artifactFixture();
+    Object.assign(fixture.producer, update);
+    await expect(
+      continueFailed(fixture.plan, "77", fixture.client, { dryRun: true }),
+    ).rejects.toThrow();
+    expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
+    expect(fixture.client.rerunParent).not.toHaveBeenCalled();
+  });
+
+  it.each(["success", "failure"])(
+    "keeps successful producers eligible after a collector %s",
+    async (conclusion) => {
+      const fixture = artifactFixture();
+      const jobs = fixture.client.getParentJobs;
+      fixture.client.getParentJobs = async () => {
+        const entries = await jobs();
+        for (const entry of entries) {
+          if (entry.name === "Prepare release npm artifacts") {
+            entry.conclusion = conclusion;
+          }
+        }
+        return entries;
+      };
+      await expect(
+        continueFailed(fixture.plan, "77", fixture.client, { dryRun: true }),
+      ).resolves.toMatchObject({ action: "would-rerun-parent" });
+    },
+  );
+
+  it("rejects ambiguous producer dispatch logs", async () => {
+    const fixture = artifactFixture();
+    fixture.logs.dispatch += `\n${fixture.logs.dispatch}`;
+    await expect(continueFailed(fixture.plan, "77", fixture.client)).rejects.toThrow(
+      "dispatch identity is unavailable or ambiguous",
+    );
+    expect(fixture.client.rerunParent).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the producer after child inspection and before parent mutation", async () => {
+    const fixture = artifactFixture();
+    const read = fixture.client.getRun.getMockImplementation()!;
+    fixture.client.getRun.mockImplementation(async (id) => {
+      if (id === "77") {
+        fixture.producer.head_sha = "c".repeat(40);
+      }
+      return read(id);
+    });
+    await expect(continueFailed(fixture.plan, "77", fixture.client)).rejects.toThrow(
+      "identity changed",
+    );
+    expect(fixture.client.rerunParent).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the producer before retrying a failed diagnostic child", async () => {
+    const fixture = artifactFixture();
+    const read = fixture.client.getRun.getMockImplementation()!;
+    let childReads = 0;
+    fixture.client.getRun.mockImplementation(async (id) => {
+      if (id === "101") {
+        if (++childReads === 2) {
+          fixture.producer.head_sha = "c".repeat(40);
+        }
+        return runFor(child("normalCi", "101"), 1, "failure");
+      }
+      return read(id);
+    });
+    fixture.client.getAttemptJobs = async () => [job("test", "failure")];
+    await expect(continueFailed(fixture.plan, "77", fixture.client)).rejects.toThrow(
+      "identity changed",
+    );
+    expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
+    expect(fixture.client.rerunParent).not.toHaveBeenCalled();
+  });
+  it("rejects deleted B admission before continuation can select rerun effects", async () => {
+    const selected = child("normalCi", "101");
+    const client = {
+      ...preflightMethods([selected], (entry) => runFor(entry, 1, "failure")),
+      getReleaseEvidenceClient: () => ({
+        ...createReleaseEvidenceClient(REPOSITORY),
+        getWorkflowSource: () =>
+          'env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"\n  FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"\n',
+      }),
+      getAttemptJobs: vi.fn(async () => [job("test", "failure")]),
+      getRun: vi.fn(async () => runFor(selected, 1, "failure")),
+      rerunFailed: vi.fn(),
+      rerunParent: vi.fn(),
+    };
+    await expect(continueFailed(plan([selected]), "77", client, { dryRun: true })).rejects.toThrow(
+      "continuation admission differs from its immutable source workflow contract",
+    );
+    expect(client.getRun).not.toHaveBeenCalled();
+    expect(client.rerunFailed).not.toHaveBeenCalled();
+    expect(client.rerunParent).not.toHaveBeenCalled();
+  });
+
   it.each([
     "Prepare release npm artifacts / Prepare publishable npm package",
     "Prepare release Docker artifacts / Seal prepared Docker images",
@@ -464,6 +535,10 @@ describe("FRV continuation preflight", () => {
 
     await expect(
       continueFailed(parentOwnedPlan, "77", {
+        getReleaseEvidenceClient: () => {
+          reads += 1;
+          throw new Error("unexpected evidence client");
+        },
         getAttemptJobs: read,
         getJobLog: read,
         getParentJobs: read,
@@ -556,6 +631,10 @@ describe("FRV continuation preflight", () => {
 
     await expect(
       continueFailed(plan([first, second]), "77", {
+        getReleaseEvidenceClient: () => {
+          downstreamReads += 1;
+          throw new Error("unexpected evidence client");
+        },
         getAttemptJobs: downstreamRead,
         getJobLog: downstreamRead,
         getParentJobs: async () => [
@@ -590,6 +669,21 @@ describe("FRV continuation preflight", () => {
         }),
       }),
     ).rejects.toThrow("release child is not uniquely emitted by its parent job");
+  });
+
+  it("binds the normal CI dispatch scope to the plan's coverage policy", async () => {
+    const selected = child("normalCi", "101");
+    const stablePlan = { ...plan([selected]), coveragePolicy: "npm-stable-v1" };
+    const methods = (scope: string) =>
+      preflightMethods([selected], (entry) => runFor(entry, 1, "failure"), {
+        ciReleaseScope: scope,
+      });
+    await expect(
+      preflightContinuation(stablePlan, "77", methods("npm-stable")),
+    ).resolves.toBeDefined();
+    await expect(preflightContinuation(stablePlan, "77", methods("full"))).rejects.toThrow(
+      "release normal CI dispatch scope differs from its coverage policy",
+    );
   });
 });
 
@@ -683,7 +777,11 @@ describe("FRV same-parent recovery", () => {
     const second = child("pluginPrerelease", "202");
     const green = child("releaseChecks", "303");
     const telegram = child("npmTelegram", "505");
-    const selectedPlan = { ...plan([first, second, green, telegram]), releaseProfile: "full" };
+    const selectedPlan = {
+      ...plan([first, second, green, telegram]),
+      candidate: { producer: { runId: "606" } },
+      releaseProfile: "full",
+    };
     const childRuns = new Map([
       ["101", { attempt: 1, conclusion: "failure" }],
       ["202", { attempt: 1, conclusion: "failure" }],
@@ -693,8 +791,22 @@ describe("FRV same-parent recovery", () => {
     const parent = { attempt: 1, conclusion: "failure" as string | null };
     const events: string[] = [];
     let parentReruns = 0;
+    const controller = controllerClient(selectedPlan.children, childRuns, parent);
     const client = {
-      ...controllerClient(selectedPlan.children, childRuns, parent),
+      ...controller,
+      getParentJobs: async () => [
+        ...(await controller.getParentJobs()),
+        ...[
+          "Prepare release npm artifacts",
+          "Prepare release Docker artifacts",
+          "Acquire full release candidate",
+        ].map((name) => ({
+          name,
+          run_attempt: 1,
+          status: "completed",
+          conclusion: "success",
+        })),
+      ],
       rerunFailed: async (runId: string) => {
         events.push(`child:${runId}`);
         childRuns.set(runId, { attempt: 2, conclusion: "success" });
@@ -834,6 +946,7 @@ describe("FRV same-parent recovery", () => {
     const scenario = rerunScenario({
       childSource: [1, "success"],
       parentBefore: [
+        [1, "failure"],
         [1, "failure"],
         [2, null],
       ],
@@ -1126,86 +1239,3 @@ describe("FRV strict verifier", () => {
     ).rejects.toThrow("verification failed");
   });
 });
-
-describe("FRV protected gh evidence reads", () => {
-  it.each([
-    ["getRun", ["101"], "actions/runs/101", { run_attempt: 2 }],
-    ["getRunAttempt", ["101", 2], "actions/runs/101/attempts/2", { run_attempt: 2 }],
-    [
-      "getAttemptJobs",
-      ["101", 2],
-      "actions/runs/101/attempts/2/jobs?per_page=100",
-      [{ id: 1 }, { id: 2 }],
-    ],
-    [
-      "getParentJobs",
-      ["77"],
-      "actions/runs/77/jobs?filter=all&per_page=100",
-      [{ id: 1 }, { id: 2 }],
-    ],
-    ["getJobLog", [1], "actions/jobs/1/logs", "job evidence"],
-  ])("revalidates %s through the default protected route", (method, args, endpoint, expected) => {
-    const result = runProtectedFrv(method, args as Array<string | number>, endpoint);
-    expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual(expected);
-    expect(result.calls).toHaveLength(1);
-  });
-
-  it("preserves protected refusal status without retry or alternate execution", () => {
-    const result = runProtectedFrv("getRun", ["101"], "actions/runs/101", true);
-    expect(result.status).toBe(19);
-    expect(result.stderr).toContain("protected refusal");
-    expect(result.calls).toHaveLength(1);
-  });
-});
-
-function runProtectedFrv(
-  method: string,
-  args: Array<string | number>,
-  endpoint: string,
-  denied = false,
-) {
-  const root = mkdtempSync(join(tmpdir(), "frv-protected-"));
-  const gh = join(root, "gh");
-  writeFileSync(
-    gh,
-    `#!${process.execPath}
-const fs = require("node:fs");
-const args = process.argv.slice(2);
-fs.appendFileSync("calls.jsonl", JSON.stringify(args) + "\\n");
-const fail = (message, code) => { console.error(message); process.exit(code); };
-if (${denied}) fail("protected refusal", 19);
-if (args[0] !== "api" || !args.includes(${JSON.stringify(`repos/${REPOSITORY}/${endpoint}`)})) fail("unexpected request", 17);
-if (!args.some((arg, i) => ["-H", "--header"].includes(arg) && args[i+1] === "Cache-Control: max-age=0")) fail("missing live header", 18);
-if (${endpoint.includes("/jobs?")}) {
-  if (!args.includes("--paginate") || !args.includes(".jobs[] | @json")) fail("missing pagination", 17);
-  console.log('{"id":1}\\n{"id":2}');
-} else console.log(${endpoint.endsWith("/logs") ? JSON.stringify("job evidence") : JSON.stringify('{"run_attempt":2}')});
-`,
-  );
-  chmodSync(gh, 0o755);
-  try {
-    const moduleUrl = pathToFileURL(join(process.cwd(), "scripts/frv.mjs")).href;
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--input-type=module",
-        "-e",
-        `
-      import {createClient} from ${JSON.stringify(moduleUrl)};
-      try {
-        console.log(JSON.stringify(await createClient(${JSON.stringify(REPOSITORY)})[${JSON.stringify(method)}](...${JSON.stringify(args)})));
-      } catch (error) { console.error(error.message); process.exitCode = error.code; }
-    `,
-      ],
-      {
-        cwd: root,
-        encoding: "utf8",
-        env: { HOME: root, PATH: `${root}${delimiter}${process.env.PATH ?? ""}` },
-      },
-    );
-    return { ...result, calls: readFileSync(join(root, "calls.jsonl"), "utf8").trim().split("\n") };
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-}

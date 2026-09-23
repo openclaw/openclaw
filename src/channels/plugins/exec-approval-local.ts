@@ -6,7 +6,7 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getGatewayNativeApprovalRuntime } from "../../infra/approval-gateway-runtime-context.js";
-import { hasActiveApprovalNativeRouteRuntime } from "../../infra/approval-native-route-coordinator.js";
+import { hasActiveNativeApprovalRoute } from "../../infra/approval-native-route-coordinator.js";
 import { getChannelPlugin, normalizeChannelId } from "./registry.js";
 
 export function shouldSuppressLocalExecApprovalPrompt(params: {
@@ -29,17 +29,10 @@ export function shouldSuppressLocalExecApprovalPrompt(params: {
       hint: {
         kind: "approval-pending",
         approvalKind: "exec",
-        nativeRouteActive:
-          getGatewayNativeApprovalRuntime()?.routeCoordinator.hasActiveRuntime({
-            channel,
-            accountId: params.accountId,
-            approvalKind: "exec",
-          }) ??
-          hasActiveApprovalNativeRouteRuntime({
-            channel,
-            accountId: params.accountId,
-            approvalKind: "exec",
-          }),
+        nativeRouteActive: hasActiveNativeApprovalRoute(
+          getGatewayNativeApprovalRuntime()?.routeCoordinator,
+          { channel, accountId: params.accountId, approvalKind: "exec" },
+        ),
       },
     }) ?? false
   );

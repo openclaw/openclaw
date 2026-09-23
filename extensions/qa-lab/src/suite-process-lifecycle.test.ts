@@ -5,6 +5,7 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { resolveTestNodeExecPath } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import type { QaSuiteSummaryJson } from "./suite-summary.js";
 import { runQaWindowsTaskkill } from "./windows-system-tools.js";
@@ -16,6 +17,7 @@ const fixturePath = fileURLToPath(
 const artifactsRoot = path.join(repoRoot, ".artifacts", "qa-e2e");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const activeChildren = new Set<ChildProcess>();
+const nodeExecPath = resolveTestNodeExecPath();
 
 const PROCESS_LIFECYCLE_SCENARIO = "channel-chat-baseline";
 // Suite execution contends with the surrounding extension shard; only the bounded
@@ -109,15 +111,11 @@ afterEach(async () => {
 });
 
 function startSuiteProcess(outputDir: string, scenarioIds: readonly string[]) {
-  const child = spawn(
-    process.execPath,
-    ["--import", "tsx", fixturePath, outputDir, ...scenarioIds],
-    {
-      cwd: repoRoot,
-      env: buildSuiteProcessEnv(outputDir),
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
+  const child = spawn(nodeExecPath, ["--import", "tsx", fixturePath, outputDir, ...scenarioIds], {
+    cwd: repoRoot,
+    env: buildSuiteProcessEnv(outputDir),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   activeChildren.add(child);
   let stdout = "";
   let stderr = "";

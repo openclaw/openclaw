@@ -1,44 +1,44 @@
 // Codex supervision MCP tests cover the retired Supervisor command bridge.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import {
   createCodexSupervisionToolsMcpServer,
   serveCodexSupervisionToolsMcp,
 } from "./codex-supervision-tools-serve.js";
 
-type EnsureStandalonePluginToolRegistryLoaded =
-  typeof import("../plugins/tools.js").ensureStandalonePluginToolRegistryLoaded;
-type ConnectToolsMcpServerToStdio =
-  typeof import("./tools-stdio-server.js").connectToolsMcpServerToStdio;
-
-const ensureStandalonePluginToolRegistryLoadedMock = vi.hoisted(() =>
-  vi.fn<EnsureStandalonePluginToolRegistryLoaded>(() => undefined),
+const acquireStandalonePluginToolRegistryMock = vi.hoisted(() =>
+  vi.fn<typeof import("../plugins/tools.js").acquireStandalonePluginToolRegistry>(),
 );
 const resolvePluginToolsMock = vi.hoisted(() => vi.fn<() => AnyAgentTool[]>(() => []));
-const connectToolsMcpServerToStdioMock = vi.hoisted(() =>
-  vi.fn<ConnectToolsMcpServerToStdio>(async () => {}),
+const getRuntimeConfigMock = vi.hoisted(() =>
+  vi.fn<() => import("../config/config.js").OpenClawConfig>(() => ({})),
 );
-const disposeRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn(async () => {}));
 
-vi.mock("../agents/harness/registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/harness/registry.js")>();
-  return { ...actual, disposeRegisteredAgentHarnesses: disposeRegisteredAgentHarnessesMock };
-});
-
+vi.mock("../config/config.js", () => ({ getRuntimeConfig: getRuntimeConfigMock }));
 vi.mock("../plugins/tools.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/tools.js")>();
   return {
     ...actual,
-    ensureStandalonePluginToolRegistryLoaded: ensureStandalonePluginToolRegistryLoadedMock,
-    resolvePluginTools: resolvePluginToolsMock,
+    acquireStandalonePluginToolRegistry: acquireStandalonePluginToolRegistryMock,
   };
 });
-
 vi.mock("./tools-stdio-server.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./tools-stdio-server.js")>();
-  return { ...actual, connectToolsMcpServerToStdio: connectToolsMcpServerToStdioMock };
+  const serve: typeof actual.serveRegisteredToolsMcpServer = async (params) => {
+    const { LegacyPluginSdkResourceHost } = await import("../plugins/legacy-sdk-resource-host.js");
+    const host = new LegacyPluginSdkResourceHost();
+    const acquisition = await host.run(params.acquireRegistry);
+    try {
+      const server = params.createServer(acquisition.resolveTools(), host);
+      await server.close();
+    } finally {
+      await acquisition.release();
+      await host.close();
+    }
+  };
+  return { ...actual, serveRegisteredToolsMcpServer: serve };
 });
 
 const TOOL_NAMES = [
@@ -63,18 +63,23 @@ function createTools(): AnyAgentTool[] {
 }
 
 describe("createCodexSupervisionToolsMcpServer", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   beforeEach(() => {
-    ensureStandalonePluginToolRegistryLoadedMock.mockClear();
+    acquireStandalonePluginToolRegistryMock.mockReset().mockImplementation(async () => ({
+      resolveTools: resolvePluginToolsMock,
+      release: async () => {},
+    }));
+    getRuntimeConfigMock.mockReset().mockReturnValue({});
     resolvePluginToolsMock.mockReset();
     resolvePluginToolsMock.mockReturnValue([]);
-    connectToolsMcpServerToStdioMock.mockClear();
-    disposeRegisteredAgentHarnessesMock.mockClear();
   });
 
   it("fails closed when the external Codex plugin tools are unavailable", () => {
     expect(() =>
       createCodexSupervisionToolsMcpServer({
-        config: {},
         tools: [],
       }),
     ).toThrow("Install or update @openclaw/codex");
@@ -82,7 +87,8 @@ describe("createCodexSupervisionToolsMcpServer", () => {
 
   it("lists official tools through the trusted standalone owner context", async () => {
     resolvePluginToolsMock.mockReturnValue(createTools());
-    const server = createCodexSupervisionToolsMcpServer({ config: {} });
+    await serveCodexSupervisionToolsMcp();
+    const server = createCodexSupervisionToolsMcpServer({ tools: createTools() });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client(
       { name: "codex-supervision-owner-test", version: "0.0.0" },
@@ -93,12 +99,7 @@ describe("createCodexSupervisionToolsMcpServer", () => {
     try {
       const listed = await client.listTools();
       expect(listed.tools.map((tool) => tool.name)).toEqual(TOOL_NAMES);
-      expect(ensureStandalonePluginToolRegistryLoadedMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          context: expect.objectContaining({ senderIsOwner: true }),
-        }),
-      );
-      expect(resolvePluginToolsMock).toHaveBeenCalledWith(
+      expect(acquireStandalonePluginToolRegistryMock).toHaveBeenCalledWith(
         expect.objectContaining({
           context: expect.objectContaining({ senderIsOwner: true }),
         }),
@@ -109,27 +110,28 @@ describe("createCodexSupervisionToolsMcpServer", () => {
     }
   });
 
-  it("preserves normalized Codex endpoint config while forcing bridge activation", () => {
+  it("preserves endpoint config and translates legacy env policy at the standalone boundary", async () => {
     resolvePluginToolsMock.mockReturnValue(createTools());
+    vi.stubEnv("OPENCLAW_CODEX_SUPERVISOR_ALLOW_RAW_TRANSCRIPTS", "1");
+    vi.stubEnv("OPENCLAW_CODEX_SUPERVISOR_ALLOW_WRITE_CONTROLS", "1");
 
-    createCodexSupervisionToolsMcpServer({
-      config: {
-        plugins: {
-          allow: [" CODEX "],
-          deny: ["CoDeX"],
-          entries: {
-            " CODEX ": {
-              config: {
-                appServer: { transport: "websocket", url: "ws://127.0.0.1:4500" },
-                supervision: { enabled: false },
-              },
+    getRuntimeConfigMock.mockReturnValue({
+      plugins: {
+        allow: [" CODEX "],
+        deny: ["CoDeX"],
+        entries: {
+          " CODEX ": {
+            config: {
+              appServer: { transport: "websocket", url: "ws://127.0.0.1:4500" },
+              supervision: { enabled: false },
             },
           },
         },
       },
     });
+    await serveCodexSupervisionToolsMcp();
 
-    const context = ensureStandalonePluginToolRegistryLoadedMock.mock.calls[0]?.[0]?.context;
+    const context = acquireStandalonePluginToolRegistryMock.mock.calls[0]?.[0]?.context;
     expect(context?.config?.plugins).toMatchObject({
       allow: ["codex"],
       deny: [],
@@ -138,22 +140,11 @@ describe("createCodexSupervisionToolsMcpServer", () => {
           enabled: true,
           config: {
             appServer: { transport: "websocket", url: "ws://127.0.0.1:4500" },
-            supervision: { enabled: true },
+            supervision: { enabled: true, allowRawTranscripts: true, allowWriteControls: true },
           },
         },
       },
     });
     expect(context?.config?.plugins?.entries).not.toHaveProperty(" CODEX ");
-  });
-
-  it("disposes the Codex harness when the stdio bridge shuts down", async () => {
-    resolvePluginToolsMock.mockReturnValue(createTools());
-
-    await serveCodexSupervisionToolsMcp();
-
-    const shutdown = connectToolsMcpServerToStdioMock.mock.calls[0]?.[1]?.onShutdown;
-    expect(shutdown).toBe(disposeRegisteredAgentHarnessesMock);
-    await shutdown?.();
-    expect(disposeRegisteredAgentHarnessesMock).toHaveBeenCalledOnce();
   });
 });

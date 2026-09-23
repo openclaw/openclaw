@@ -7,6 +7,8 @@
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { assertBrowserDashboardTargetCurrent } from "./browser-dashboard.js";
+import type { BrowserDashboardResponse } from "./browser-dashboard.types.js";
 import {
   createBrowserNodeProxyRequest,
   createBrowserNodeSessionTabRoute,
@@ -39,8 +41,11 @@ import {
   touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
+  jsonResult,
+  callGatewayTool,
 } from "./browser-tool.runtime.js";
 import type { BrowserScreenshotOptions } from "./browser-tool.screenshot.js";
+import { withBrowserRequestScope } from "./browser/request-scope.js";
 
 type BrowserTabIdentity = { targetId: string; profile: string } & (
   | { target: "host" }
@@ -98,6 +103,7 @@ function withBrowserTabDetails(
     return result;
   }
   const url = readStringValue(details.url);
+  const protocol = url ? URL.parse(url)?.protocol : undefined;
   const title = readStringValue(details.title);
   return {
     ...result,
@@ -105,7 +111,9 @@ function withBrowserTabDetails(
       ...details,
       browserTab: {
         ...identity,
-        ...(url ? { url: truncateUtf16Safe(url, 2048) } : {}),
+        ...(url && (protocol === "http:" || protocol === "https:")
+          ? { url: truncateUtf16Safe(url, 2048) }
+          : {}),
         ...(title ? { title: truncateUtf16Safe(title, 512) } : {}),
       },
     },
@@ -197,6 +205,7 @@ export function createBrowserTool(
     sandboxBridgeUrl?: string;
     allowHostControl?: boolean;
     agentSessionKey?: string;
+    agentId?: string;
     runToolBinding?: unknown;
     toolCapabilities?: BrowserToolCapabilities;
   },
@@ -238,7 +247,7 @@ export function createBrowserTool(
     parameters: createBrowserToolSchema(capabilities),
     outputSchema: BrowserToolOutputSchema,
     execute: async (_toolCallId, args, signal) => {
-      const params = bindingResult?.ok
+      let params = bindingResult?.ok
         ? applyBrowserTabToolBinding(args as Record<string, unknown>, bindingResult.binding)
         : (args as Record<string, unknown>);
       const action = readStringParam(params, "action", { required: true });
@@ -246,6 +255,78 @@ export function createBrowserTool(
         throw new Error(
           `browser action ${JSON.stringify(action)} is unavailable for this run; use an available action such as snapshot, or select a managed browser profile in an unbound run.`,
         );
+      }
+      const dashboardName = readStringParam(params, "dashboard");
+      let browserDashboard: BrowserDashboardResponse | undefined;
+      if (dashboardName) {
+        if (
+          bindingResult ||
+          !opts?.agentSessionKey ||
+          opts.allowHostControl === false ||
+          (params.target && params.target !== "host") ||
+          params.node
+        ) {
+          throw new Error(
+            "Browser dashboard requires this session's unbound host-browser capability",
+          );
+        }
+        const request = {
+          sessionKey: opts.agentSessionKey,
+          agentId: opts.agentId,
+          name: dashboardName,
+        };
+        if (params.profile !== undefined || params.targetId !== undefined) {
+          throw new Error(
+            "A dashboard selector owns its browser profile and tab. Omit profile and targetId.",
+          );
+        }
+        const callDashboard = async (method: "POST" | "DELETE", resume = false) => {
+          signal?.throwIfAborted();
+          // UI and model tools must enter the same Gateway-owned materialization lifetime.
+          const dashboard = await callGatewayTool<BrowserDashboardResponse>(
+            "browser.request",
+            { timeoutMs: readToolTimeoutMs(params) },
+            {
+              target: "host",
+              method,
+              path: "/dashboard",
+              body: { ...request, ...(resume ? { resume: true } : {}) },
+            },
+            { scopes: ["operator.admin"], signal },
+          );
+          signal?.throwIfAborted();
+          return dashboard;
+        };
+        if (action === "close") {
+          return jsonResult({ browserDashboard: await callDashboard("DELETE") });
+        }
+        if (action === "open") {
+          if (params.targetUrl !== undefined || params.url !== undefined) {
+            throw new Error(
+              "Update the dashboard widget URL with dashboard widget_put before opening it",
+            );
+          }
+          return jsonResult({
+            browserDashboard: await callDashboard("POST", true),
+          });
+        }
+        if (["doctor", "status", "start", "stop", "profiles", "importprofile"].includes(action)) {
+          throw new Error(
+            "Use browser tab actions with a dashboard selector; open resumes it and close pauses it",
+          );
+        }
+        const dashboard = await callDashboard("POST");
+        browserDashboard = dashboard;
+        if (!dashboard.browserTab) {
+          throw new Error(
+            `Dashboard ${dashboardName} is paused. Use action=open with dashboard=${dashboardName} to resume it.`,
+          );
+        }
+        params = applyBrowserTabToolBinding(params, {
+          kind: "tab",
+          tabId: 0,
+          ...dashboard.browserTab,
+        });
       }
       const requestedProfile = readStringParam(params, "profile");
       const requestedNode = readStringParam(params, "node");
@@ -291,6 +372,7 @@ export function createBrowserTool(
       try {
         nodeTarget = await resolveBrowserToolNodeTarget({
           requestedNode: requestedNode ?? undefined,
+          profile: requestedProfile,
           target,
           sandboxBridgeUrl: opts?.sandboxBridgeUrl,
           allowHostControl: opts?.allowHostControl,
@@ -346,6 +428,8 @@ export function createBrowserTool(
         requestedTimeoutMs,
         action,
         isUserBrowserProfile,
+        usesPersistentPlaywright: profileCapabilities?.usesPersistentPlaywright === true,
+        isNodeProxy: proxyRequest !== null,
         resolvedBrowser,
       });
       const sessionTabs = createBrowserToolSessionTabs({
@@ -383,40 +467,68 @@ export function createBrowserTool(
           break;
       }
       let tabIdentity: BrowserTabIdentity | undefined;
-      const result = await executeBrowserTabAction({
-        action,
-        actRequest: action === "act" ? readActRequestParam(params) : undefined,
-        params,
-        baseUrl,
-        profile,
-        proxyRequest,
-        nodeRoute,
-        sessionTabs,
-        capabilities,
-        isUserBrowserProfile,
-        toolTimeoutMs,
-        requestedTimeoutMs,
-        signal,
-        opts,
-        boundTargetId: bindingResult?.ok ? bindingResult.binding.targetId : undefined,
-        onTabActivity: (targetId, openedProfile) => {
-          // Record the executed tab before follow-up observation adds page state.
-          const route = proxyRequest?.route();
-          const onNode = proxyRequest && !proxyRequest.isHostFallbackActive();
-          const routeProfile = onNode
-            ? route?.status === "resolved"
-              ? route.profile
-              : undefined
-            : (profile ?? resolvedBrowser.defaultProfile);
-          tabIdentity = resolveBrowserTabIdentity({
-            targetId,
-            baseUrl,
-            profile: openedProfile ?? routeProfile,
-            target: onNode ? "node" : "host",
-            node: onNode && route?.status === "resolved" ? nodeTarget?.nodeId : undefined,
-          });
-        },
-      });
+      if (browserDashboard) {
+        await assertBrowserDashboardTargetCurrent(browserDashboard, opts?.agentId, { signal });
+      }
+      const dispatchTabAction = () =>
+        executeBrowserTabAction({
+          action,
+          actRequest: action === "act" ? readActRequestParam(params) : undefined,
+          params,
+          baseUrl,
+          profile,
+          proxyRequest,
+          nodeRoute,
+          sessionTabs,
+          capabilities,
+          isUserBrowserProfile,
+          toolTimeoutMs,
+          requestedTimeoutMs,
+          signal,
+          opts,
+          boundTargetId: bindingResult?.ok
+            ? bindingResult.binding.targetId
+            : dashboardName
+              ? readStringParam(params, "targetId")
+              : undefined,
+          onTabActivity: (targetId, openedProfile) => {
+            // Record the executed tab before follow-up observation adds page state.
+            const route = proxyRequest?.route();
+            const onNode = proxyRequest && !proxyRequest.isHostFallbackActive();
+            const routeProfile = onNode
+              ? route?.status === "resolved"
+                ? route.profile
+                : undefined
+              : (profile ?? resolvedBrowser.defaultProfile);
+            tabIdentity = resolveBrowserTabIdentity({
+              targetId,
+              baseUrl,
+              profile: openedProfile ?? routeProfile,
+              target: onNode ? "node" : "host",
+              node: onNode && route?.status === "resolved" ? nodeTarget?.nodeId : undefined,
+            });
+          },
+        });
+      const dashboardTarget = browserDashboard;
+      const result = dashboardTarget
+        ? await withBrowserRequestScope(
+            {
+              managedOnly: true,
+              assertCurrent: (admittedProfile) =>
+                assertBrowserDashboardTargetCurrent(
+                  dashboardTarget,
+                  opts?.agentId,
+                  { signal },
+                  admittedProfile,
+                ),
+            },
+            dispatchTabAction,
+          )
+        : await dispatchTabAction();
+      if (browserDashboard) {
+        // Dashboard presentation owns this tab; ordinary preview metadata would steal its panel.
+        return { ...result, details: { ...asNullableRecord(result.details), browserDashboard } };
+      }
       return [
         "open",
         "focus",

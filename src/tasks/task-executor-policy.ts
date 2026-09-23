@@ -1,18 +1,11 @@
 // Decides task executor delivery, terminal update, and follow-up message policy.
-import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
-import type { TaskEventRecord, TaskRecord, TaskStatus } from "./task-registry.types.js";
-import { formatTaskStatusTitleText, sanitizeTaskStatusText } from "./task-status.js";
-
-/** Returns whether a task status is terminal for delivery and retention policy. */
-export function isTerminalTaskStatus(status: TaskStatus): boolean {
-  return (
-    status === "succeeded" ||
-    status === "failed" ||
-    status === "timed_out" ||
-    status === "cancelled" ||
-    status === "lost"
-  );
-}
+import type { TaskEventRecord, TaskRecord } from "./task-registry.types.js";
+import {
+  formatTaskStatusDetail,
+  formatTaskStatusTitleText,
+  sanitizeTaskStatusText,
+  TASK_STATUS_DETAIL_MAX_CHARS,
+} from "./task-status.js";
 
 function resolveTaskDisplayTitle(task: TaskRecord): string {
   return formatTaskStatusTitleText(
@@ -35,11 +28,13 @@ export function formatTaskTerminalMessage(
 ): string {
   const title = resolveTaskDisplayTitle(task);
   const runLabel = resolveTaskRunLabel(task);
-  const summary = sanitizeTaskStatusText(task.terminalSummary, {
-    errorContext: task.status !== "succeeded" || task.terminalOutcome === "blocked",
-  });
   if (task.status === "succeeded") {
-    if (task.terminalOutcome === "blocked") {
+    const isBlocked = task.terminalOutcome === "blocked";
+    const summary = sanitizeTaskStatusText(task.terminalSummary, {
+      errorContext: isBlocked,
+      maxChars: isBlocked ? TASK_STATUS_DETAIL_MAX_CHARS : undefined,
+    });
+    if (isBlocked) {
       return summary
         ? `Background task blocked: ${title}${runLabel}. ${summary}`
         : `Background task blocked: ${title}${runLabel}.`;
@@ -57,11 +52,6 @@ export function formatTaskTerminalMessage(
   if (task.status === "timed_out") {
     return `Background task timed out: ${title}${runLabel}.`;
   }
-  if (task.status === "lost") {
-    const error = sanitizeTaskStatusText(task.error, { errorContext: true });
-    const fallbackSummary = sanitizeTaskStatusText(task.terminalSummary, { errorContext: true });
-    return `Background task lost: ${title}${runLabel}. ${error || fallbackSummary || "Backing session disappeared."}`;
-  }
   if (task.status === "cancelled") {
     if (task.runtime === "subagent") {
       // A final reply can win the kill race and reconcile this row to success.
@@ -70,13 +60,13 @@ export function formatTaskTerminalMessage(
     }
     return `Background task cancelled: ${title}${runLabel}.`;
   }
-  const error = sanitizeTaskStatusText(task.error, { errorContext: true });
-  const fallbackSummary = sanitizeTaskStatusText(task.terminalSummary, { errorContext: true });
-  return error
-    ? `Background task failed: ${title}${runLabel}. ${error}`
-    : fallbackSummary
-      ? `Background task failed: ${title}${runLabel}. ${fallbackSummary}`
-      : `Background task failed: ${title}${runLabel}.`;
+  const detail = formatTaskStatusDetail(task);
+  if (task.status === "lost") {
+    return `Background task lost: ${title}${runLabel}. ${detail || "Backing session disappeared."}`;
+  }
+  return detail
+    ? `Background task failed: ${title}${runLabel}. ${detail}`
+    : `Background task failed: ${title}${runLabel}.`;
 }
 
 export function shouldUseParentReviewTaskTerminalMessage(task: TaskRecord): boolean {
@@ -95,8 +85,10 @@ export function formatTaskBlockedFollowupMessage(task: TaskRecord): string | nul
   const title = resolveTaskDisplayTitle(task);
   const runLabel = resolveTaskRunLabel(task);
   const summary =
-    sanitizeTaskStatusText(task.terminalSummary, { errorContext: true }) ||
-    "Task is blocked and needs follow-up.";
+    sanitizeTaskStatusText(task.terminalSummary, {
+      errorContext: true,
+      maxChars: TASK_STATUS_DETAIL_MAX_CHARS,
+    }) || "Task is blocked and needs follow-up.";
   return `Task needs follow-up: ${title}${runLabel}. ${summary}`;
 }
 
@@ -113,54 +105,4 @@ export function formatTaskStateChangeMessage(
     return summary ? `Background task update: ${title}. ${summary}` : null;
   }
   return null;
-}
-
-export function shouldAutoDeliverTaskTerminalUpdate(task: TaskRecord): boolean {
-  if (task.notifyPolicy === "silent") {
-    return false;
-  }
-  if (task.runtime === "subagent" && task.status !== "cancelled") {
-    // Subagent lifecycle owns provider-result publication.
-    return false;
-  }
-  if (
-    task.runtime === "subagent" &&
-    task.status === "cancelled" &&
-    task.error === SUBAGENT_KILL_TASK_ERROR
-  ) {
-    // A direct kill is provisional until lifecycle reconciliation settles.
-    return false;
-  }
-  if (!isTerminalTaskStatus(task.status)) {
-    return false;
-  }
-  return task.deliveryStatus === "pending";
-}
-
-export function shouldAutoDeliverTaskStateChange(task: TaskRecord): boolean {
-  return (
-    task.notifyPolicy === "state_changes" &&
-    task.deliveryStatus === "pending" &&
-    !isTerminalTaskStatus(task.status)
-  );
-}
-
-export function shouldSuppressDuplicateTerminalDelivery(params: {
-  task: TaskRecord;
-  preferredTaskId?: string;
-  peerDeliveryCovered?: boolean;
-}): boolean {
-  if (!params.task.runId?.trim()) {
-    return false;
-  }
-  const sharesRunDelivery =
-    params.task.runtime === "acp" ||
-    (params.task.runtime === "subagent" && params.task.status === "cancelled");
-  if (!sharesRunDelivery) {
-    return false;
-  }
-  if (params.task.runtime === "subagent" && params.peerDeliveryCovered) {
-    return true;
-  }
-  return Boolean(params.preferredTaskId && params.preferredTaskId !== params.task.taskId);
 }

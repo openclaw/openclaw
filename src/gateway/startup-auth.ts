@@ -16,7 +16,10 @@ import { assertExplicitGatewayAuthModeWhenBothConfigured } from "./auth-mode-pol
 import { resolveGatewayAuthForConfig, type ResolvedGatewayAuth } from "./auth-resolve.js";
 import { createGatewayCredentialPlan } from "./credential-planner.js";
 import { trimToUndefined } from "./credentials.js";
-import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
+import {
+  assertGatewayAuthNotKnownWeak,
+  getTrustedProxyPasswordRedactionWarning,
+} from "./known-weak-gateway-secrets.js";
 
 const HOOKS_GATEWAY_AUTH_REUSE_WARNING =
   "Security warning: hooks.token matches active Gateway shared-secret auth. Startup continues for compatibility; rotate hooks.token or Gateway auth. Run openclaw security audit for a full report, and run openclaw doctor --fix when the reused hooks.token is persisted in config.";
@@ -247,8 +250,16 @@ export async function ensureGatewayStartupAuth(params: {
     authOverride,
     tailscaleOverride: params.tailscaleOverride,
   });
+  assertGatewayAuthNotKnownWeak(
+    resolved,
+    authOverride?.token ?? params.cfg.gateway?.auth?.token,
+    authOverride?.password ?? params.cfg.gateway?.auth?.password,
+  );
+  const optionalPasswordWarning = getTrustedProxyPasswordRedactionWarning(resolved);
+  if (optionalPasswordWarning) {
+    params.warn?.(optionalPasswordWarning);
+  }
   if (resolved.mode !== "token" || (resolved.token?.trim().length ?? 0) > 0) {
-    assertGatewayAuthNotKnownWeak(resolved);
     warnHooksTokenReuseGatewayAuth({ cfg: params.cfg, auth: resolved, warn: params.warn });
     return { cfg: params.cfg, auth: resolved, persistedGeneratedToken: false };
   }

@@ -3,6 +3,7 @@ import OpenClawProtocol
 import Testing
 import UserNotifications
 @testable import OpenClaw
+@testable import OpenClawKit
 
 private final class MockNotificationCenter: NotificationCentering, @unchecked Sendable {
     var authorization: NotificationAuthorizationStatus = .authorized
@@ -34,7 +35,7 @@ private final class MockNotificationCenter: NotificationCentering, @unchecked Se
 
 @Suite(.serialized) struct ExecApprovalNotificationBridgeTests {
     @Test func `parse prompt maps default notification tap`() {
-        let prompt = ExecApprovalNotificationBridge.parsePrompt(
+        let prompt = ApprovalNotificationBridge.parsePrompt(
             actionIdentifier: UNNotificationDefaultActionIdentifier,
             userInfo: [
                 "openclaw": [
@@ -50,7 +51,7 @@ private final class MockNotificationCenter: NotificationCentering, @unchecked Se
     }
 
     @Test func `parse prompt maps review action`() {
-        let prompt = ExecApprovalNotificationBridge.parsePrompt(
+        let prompt = ApprovalNotificationBridge.parsePrompt(
             actionIdentifier: ExecApprovalNotificationBridge.reviewActionIdentifier,
             userInfo: [
                 "openclaw": [
@@ -66,7 +67,7 @@ private final class MockNotificationCenter: NotificationCentering, @unchecked Se
     }
 
     @Test func `parse prompt ignores unexpected action identifiers`() {
-        let prompt = ExecApprovalNotificationBridge.parsePrompt(
+        let prompt = ApprovalNotificationBridge.parsePrompt(
             actionIdentifier: "openclaw.exec-approval.allow-once",
             userInfo: [
                 "openclaw": [
@@ -104,7 +105,7 @@ private final class MockNotificationCenter: NotificationCentering, @unchecked Se
         let push = ExecApprovalNotificationPrompt(
             approvalId: "approval-123",
             gatewayDeviceId: "gateway-a")
-        await ExecApprovalNotificationBridge.removeNotifications(
+        await ApprovalNotificationBridge.removeNotifications(
             for: push,
             notificationCenter: center)
 
@@ -200,7 +201,7 @@ private final class MockNotificationCenter: NotificationCentering, @unchecked Se
                 ]),
         ]
 
-        await ExecApprovalNotificationBridge.removeNotifications(
+        await ApprovalNotificationBridge.removeNotifications(
             for: composed,
             notificationCenter: center)
 
@@ -218,10 +219,10 @@ private final class MockNotificationCenter: NotificationCentering, @unchecked Se
         let slashCenter = MockNotificationCenter()
         let escapedCenter = MockNotificationCenter()
 
-        await ExecApprovalNotificationBridge.removeNotifications(
+        await ApprovalNotificationBridge.removeNotifications(
             for: ExecApprovalNotificationPrompt(approvalId: "/", gatewayDeviceId: "gateway-a"),
             notificationCenter: slashCenter)
-        await ExecApprovalNotificationBridge.removeNotifications(
+        await ApprovalNotificationBridge.removeNotifications(
             for: ExecApprovalNotificationPrompt(approvalId: "%2F", gatewayDeviceId: "gateway-a"),
             notificationCenter: escapedCenter)
 
@@ -278,7 +279,7 @@ private final class MockNotificationCenter: NotificationCentering, @unchecked Se
             approvalId: "approval-shared",
             gatewayDeviceId: "gateway-a")
 
-        await ExecApprovalNotificationBridge.removeNotifications(
+        await ApprovalNotificationBridge.removeNotifications(
             for: push,
             notificationCenter: center,
             includingLegacyOwnerless: true)
@@ -325,11 +326,8 @@ private final class MockNotificationCenter: NotificationCentering, @unchecked Se
             ],
         ]
 
-        #expect(PluginApprovalNotificationBridge.parsePrompt(
+        #expect(ApprovalNotificationBridge.parsePrompt(
             actionIdentifier: UNNotificationDefaultActionIdentifier,
-            userInfo: userInfo)?.kind == .plugin)
-        #expect(PluginApprovalNotificationBridge.parsePrompt(
-            actionIdentifier: PluginApprovalNotificationBridge.reviewActionIdentifier,
             userInfo: userInfo)?.kind == .plugin)
         #expect(ApprovalNotificationBridge.parsePrompt(
             actionIdentifier: PluginApprovalNotificationBridge.reviewActionIdentifier,
@@ -352,10 +350,10 @@ private final class MockNotificationCenter: NotificationCentering, @unchecked Se
 
         #expect(PluginApprovalNotificationBridge.parseRequestedPush(userInfo: execUserInfo) == nil)
         #expect(ExecApprovalNotificationBridge.parseRequestedPush(userInfo: pluginUserInfo) == nil)
-        #expect(PluginApprovalNotificationBridge.parsePrompt(
+        #expect(ApprovalNotificationBridge.parsePrompt(
             actionIdentifier: ExecApprovalNotificationBridge.reviewActionIdentifier,
             userInfo: pluginUserInfo) == nil)
-        #expect(ExecApprovalNotificationBridge.parsePrompt(
+        #expect(ApprovalNotificationBridge.parsePrompt(
             actionIdentifier: PluginApprovalNotificationBridge.reviewActionIdentifier,
             userInfo: execUserInfo) == nil)
     }
@@ -383,7 +381,7 @@ private final class MockNotificationCenter: NotificationCentering, @unchecked Se
                 ]),
         ]
 
-        await PluginApprovalNotificationBridge.removeNotifications(
+        await ApprovalNotificationBridge.removeNotifications(
             for: ApprovalNotificationPrompt(
                 approvalId: "shared-approval-id",
                 gatewayDeviceId: "gateway-a",

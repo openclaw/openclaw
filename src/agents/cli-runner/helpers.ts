@@ -15,7 +15,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
-import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasErrnoCode } from "../../infra/errno.js";
@@ -104,7 +103,9 @@ export function buildCliAgentSystemPrompt(params: {
   workspaceDir: string;
   cwd?: string;
   config?: OpenClawConfig;
-  defaultThinkLevel?: ThinkLevel;
+  preparedModelRuntime?: Parameters<
+    typeof buildConfiguredAgentSystemPrompt
+  >[0]["preparedModelRuntime"];
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   requireExplicitMessageTarget?: boolean;
@@ -153,10 +154,10 @@ export function buildCliAgentSystemPrompt(params: {
   });
   return buildConfiguredAgentSystemPrompt({
     config: params.config,
+    preparedModelRuntime: params.preparedModelRuntime,
     agentId: params.agentId,
     workspaceDir: params.workspaceDir,
     runtimeCwd,
-    defaultThinkLevel: params.defaultThinkLevel,
     extraSystemPrompt: params.extraSystemPrompt,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
@@ -172,6 +173,7 @@ export function buildCliAgentSystemPrompt(params: {
     }),
     runtimeInfo,
     toolNames: params.tools.map((tool) => tool.name),
+    messageTool: params.tools.find((tool) => tool.name.trim().toLowerCase() === "message"),
     skillsPrompt: params.skillsPrompt,
     userTimezone,
     userDate,

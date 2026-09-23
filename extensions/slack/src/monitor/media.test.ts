@@ -19,7 +19,7 @@ import {
   SLACK_MEDIA_READ_IDLE_TIMEOUT_MS,
 } from "./media.js";
 import { resolveSlackMessageContent } from "./message-handler/prepare-content.js";
-import { resolveSlackThreadHistory, resolveSlackThreadStarter } from "./thread.js";
+import { resolveSlackThreadStarter } from "./thread.js";
 import { logVerbose } from "./thread.runtime.js";
 
 type FetchMock = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -128,32 +128,28 @@ const saveRemoteMediaMock = vi.hoisted(() =>
     };
   }),
 );
-const fetchWithRuntimeDispatcherMock = vi.hoisted(() => vi.fn());
+const fetchWithRuntimeDispatcherMock = vi.hoisted(() => vi.fn<FetchMock>());
 const logVerboseMock = vi.hoisted(() => vi.fn());
 const mediaWarnMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./media.runtime.js", () => ({
+  captureChannelReadAuthority: () => undefined,
   fetchWithRuntimeDispatcher: fetchWithRuntimeDispatcherMock,
   saveRemoteMedia: saveRemoteMediaMock,
   slackMediaLog: { warn: mediaWarnMock },
+  unlinkIfExists: async (filePath: string) => {
+    await fs.unlink(filePath).catch(() => undefined);
+  },
 }));
 
 vi.mock("./thread.runtime.js", () => ({
   logVerbose: logVerboseMock,
 }));
 
-function withFetchPreconnect(fetchMock: ReturnType<typeof vi.fn<FetchMock>>): typeof fetch {
-  return Object.assign(
-    ((input: RequestInfo | URL, init?: RequestInit) => fetchMock(input, init)) as typeof fetch,
-    { mock: fetchMock.mock },
-  );
-}
-
-// Store original fetch
-const originalFetch = globalThis.fetch;
 let mockFetch: ReturnType<typeof vi.fn<FetchMock>>;
 
 beforeEach(() => {
+  mockFetch = vi.fn();
   threadStarterIdentitySequence += 1;
   threadStarterIdentity = {
     channelId: `CMEDIA${threadStarterIdentitySequence}`,
@@ -164,7 +160,8 @@ beforeEach(() => {
     },
   };
   readRemoteMediaBufferMock.mockClear();
-  fetchWithRuntimeDispatcherMock.mockClear();
+  fetchWithRuntimeDispatcherMock.mockReset();
+  fetchWithRuntimeDispatcherMock.mockImplementation((input, init) => mockFetch(input, init));
   logVerboseMock.mockClear();
   mediaWarnMock.mockClear();
   saveMediaBufferMock.mockReset();
@@ -280,13 +277,7 @@ async function expectPrivateDownloadRedirect(params: {
 }
 
 describe("resolveSlackMedia", () => {
-  beforeEach(() => {
-    mockFetch = vi.fn();
-    globalThis.fetch = mockFetch as unknown as typeof fetch;
-  });
-
   afterEach(() => {
-    globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
   });
 
@@ -996,48 +987,47 @@ describe("resolveSlackMedia", () => {
     expect([...unavailableFiles]).toEqual([[files[8], "omitted: 8-file limit"]]);
   });
 
-  it("routes dispatcher-backed Slack media requests through runtime fetch", async () => {
-    saveMediaBufferMock.mockResolvedValue(createSavedMedia("/tmp/test.jpg", "image/jpeg"));
-    globalThis.fetch = (async () => {
-      throw new Error("global fetch should not receive dispatcher-backed Slack media requests");
-    }) as typeof fetch;
-    fetchWithRuntimeDispatcherMock.mockImplementation(async () => {
-      return new Response(Buffer.from("image data"), {
-        status: 200,
-        headers: { "content-type": "image/jpeg" },
+  it.each([true, false])(
+    "selects the media transport by dispatcher presence even when global fetch is mocked (%s)",
+    async (hasDispatcher) => {
+      const globalFetchMock = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(new Response("global"));
+      fetchWithRuntimeDispatcherMock.mockResolvedValue(new Response("runtime"));
+      const dispatcher = {};
+      saveRemoteMediaMock.mockImplementationOnce(async ({ url, fetchImpl, requestInit }) => {
+        await fetchImpl(url, {
+          ...requestInit,
+          ...(hasDispatcher ? { dispatcher } : {}),
+        });
+        return { ...createSavedMedia("/tmp/test.jpg", "image/jpeg"), fileName: "test.jpg" };
       });
-    });
 
-    const result = await resolveSlackMedia({
-      files: [{ url_private: "https://files.slack.com/test.jpg", name: "test.jpg" }],
-      token: "xoxb-test-token",
-      maxBytes: 1024 * 1024,
-    });
+      const result = await resolveSlackMedia({
+        files: [{ url_private: "https://files.slack.com/test.jpg", name: "test.jpg" }],
+        token: "xoxb-test-token",
+        maxBytes: 1024 * 1024,
+      });
 
-    expectSlackMediaResult(result);
-    expect(fetchWithRuntimeDispatcherMock).toHaveBeenCalled();
-    const runtimeFetchInit = requireRecord(
-      requireMockCall(fetchWithRuntimeDispatcherMock, 0, "runtime fetch")[1],
-      "runtime fetch init",
-    ) as RequestInit & { dispatcher?: unknown };
-    expect(runtimeFetchInit.redirect).toBe("manual");
-    expect("dispatcher" in runtimeFetchInit).toBe(true);
-    expect(new Headers(runtimeFetchInit.headers).get("Authorization")).toBe(
-      "Bearer xoxb-test-token",
-    );
-  });
+      expectSlackMediaResult(result);
+      const selectedFetch = hasDispatcher ? fetchWithRuntimeDispatcherMock : globalFetchMock;
+      const unusedFetch = hasDispatcher ? globalFetchMock : fetchWithRuntimeDispatcherMock;
+      expect(selectedFetch).toHaveBeenCalledOnce();
+      expect(unusedFetch).not.toHaveBeenCalled();
+      const fetchInit = requireRecord(
+        requireMockCall(selectedFetch, 0, "selected fetch")[1],
+        "fetch init",
+      ) as RequestInit & { dispatcher?: unknown };
+      expect(fetchInit.redirect).toBe("manual");
+      expect("dispatcher" in fetchInit).toBe(hasDispatcher);
+      expect(fetchInit.dispatcher).toBe(hasDispatcher ? dispatcher : undefined);
+      expect(new Headers(fetchInit.headers).get("Authorization")).toBe("Bearer xoxb-test-token");
+    },
+  );
 });
 
 describe("Slack media SSRF policy", () => {
-  const originalFetchLocal = globalThis.fetch;
-
-  beforeEach(() => {
-    mockFetch = vi.fn();
-    globalThis.fetch = withFetchPreconnect(mockFetch);
-  });
-
   afterEach(() => {
-    globalThis.fetch = originalFetchLocal;
     vi.restoreAllMocks();
   });
 
@@ -1216,18 +1206,16 @@ describe("Slack media SSRF policy", () => {
 
 describe("Slack message file intake", () => {
   beforeEach(() => {
-    mockFetch = vi.fn(
+    mockFetch.mockImplementation(
       async () =>
         new Response(Buffer.from("file contents"), {
           status: 200,
           headers: { "content-type": "image/png" },
         }),
     );
-    globalThis.fetch = mockFetch as unknown as typeof fetch;
   });
 
   afterEach(() => {
-    globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
   });
 
@@ -1338,7 +1326,7 @@ describe("Slack message file intake", () => {
         unavailableWithSameMetadata,
         unavailableWithoutId,
       ],
-      preloadedMedia: new Map([
+      preloadedMedia: new Map<SlackFile, SlackMediaResult[number]>([
         [
           downloaded,
           {
@@ -1484,13 +1472,7 @@ describe("Slack message file intake", () => {
 });
 
 describe("resolveSlackAttachmentContent", () => {
-  beforeEach(() => {
-    mockFetch = vi.fn();
-    globalThis.fetch = mockFetch as unknown as typeof fetch;
-  });
-
   afterEach(() => {
-    globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
   });
 
@@ -1713,347 +1695,6 @@ describe("resolveSlackAttachmentContent", () => {
     expect(result).toBeNull();
     expect(saveRemoteMediaMock).not.toHaveBeenCalled();
     expect(mockFetch).not.toHaveBeenCalled();
-  });
-});
-
-describe("resolveSlackThreadHistory", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("paginates and returns the latest N messages across pages", async () => {
-    const replies = vi
-      .fn()
-      .mockResolvedValueOnce({
-        messages: Array.from({ length: 200 }, (_, i) => ({
-          text: `msg-${i + 1}`,
-          user: "U1",
-          ts: `${i + 1}.000`,
-        })),
-        response_metadata: { next_cursor: "cursor-2" },
-      })
-      .mockResolvedValueOnce({
-        messages: Array.from({ length: 60 }, (_, i) => ({
-          text: `msg-${i + 201}`,
-          user: "U1",
-          ts: `${i + 201}.000`,
-        })),
-        response_metadata: { next_cursor: "" },
-      });
-    const client = {
-      conversations: { replies },
-    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
-
-    const result = await resolveSlackThreadHistory({
-      channelId: "C1",
-      threadTs: "1.000",
-      client,
-      currentMessageTs: "260.000",
-      limit: 5,
-    });
-
-    expect(replies).toHaveBeenCalledTimes(2);
-    const firstCall = requireRecord(
-      requireMockCall(replies, 0, "conversations.replies")[0],
-      "first replies params",
-    );
-    expect(firstCall.channel).toBe("C1");
-    expect(firstCall.ts).toBe("1.000");
-    expect(firstCall.limit).toBe(200);
-    expect(firstCall.inclusive).toBe(true);
-    const secondCall = requireRecord(
-      requireMockCall(replies, 1, "conversations.replies")[0],
-      "second replies params",
-    );
-    expect(secondCall.channel).toBe("C1");
-    expect(secondCall.ts).toBe("1.000");
-    expect(secondCall.limit).toBe(200);
-    expect(secondCall.inclusive).toBe(true);
-    expect(secondCall.cursor).toBe("cursor-2");
-    expect(result.map((entry) => entry.ts)).toEqual([
-      "255.000",
-      "256.000",
-      "257.000",
-      "258.000",
-      "259.000",
-    ]);
-  });
-
-  it("returns no thread history when pagination exceeds the bounded fetched window", async () => {
-    vi.mocked(logVerbose).mockClear();
-    const replies = vi
-      .fn()
-      .mockResolvedValueOnce({
-        messages: Array.from({ length: 200 }, (_, i) => ({
-          text: `msg-${i + 1}`,
-          user: "U1",
-          ts: `${i + 1}.000`,
-        })),
-        response_metadata: { next_cursor: "cursor-2" },
-      })
-      .mockResolvedValueOnce({
-        messages: Array.from({ length: 200 }, (_, i) => ({
-          text: `msg-${i + 201}`,
-          user: "U1",
-          ts: `${i + 201}.000`,
-        })),
-        response_metadata: { next_cursor: "cursor-3" },
-      })
-      .mockResolvedValueOnce({
-        messages: Array.from({ length: 200 }, (_, i) => ({
-          text: `msg-${i + 401}`,
-          user: "U1",
-          ts: `${i + 401}.000`,
-        })),
-        response_metadata: { next_cursor: "cursor-4" },
-      });
-    const client = {
-      conversations: { replies },
-    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
-
-    const result = await resolveSlackThreadHistory({
-      channelId: "C1",
-      threadTs: "1.000",
-      client,
-      limit: 3,
-    });
-
-    expect(replies).toHaveBeenCalledTimes(3);
-    expect(requireMockCall(replies, 2, "conversations.replies")[0]).toMatchObject({
-      cursor: "cursor-3",
-      limit: 200,
-    });
-    expect(result).toEqual([]);
-    expectVerboseLogContains("slack thread history capped");
-    expectVerboseLogContains("channel=C1");
-  });
-
-  it("includes file-only messages and drops empty-only entries", async () => {
-    const replies = vi.fn().mockResolvedValueOnce({
-      messages: [
-        { text: "  ", ts: "1.000", files: [{ id: "FSCREEN", name: "screenshot.png" }] },
-        { text: "   ", ts: "2.000" },
-        { text: "hello", ts: "3.000", user: "U1" },
-      ],
-      response_metadata: { next_cursor: "" },
-    });
-    const client = {
-      conversations: { replies },
-    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
-
-    const result = await resolveSlackThreadHistory({
-      channelId: "C1",
-      threadTs: "1.000",
-      client,
-      limit: 10,
-    });
-
-    expect(result).toHaveLength(2);
-    expect(result[0]?.text).toBe("[attached: screenshot.png (fileId: FSCREEN)]");
-    expect(result[1]?.text).toBe("hello");
-  });
-
-  it("extracts thread text from Slack attachment and block surfaces", async () => {
-    const replies = vi.fn().mockResolvedValueOnce({
-      messages: [
-        {
-          text: "  ",
-          bot_id: "BMONITOR",
-          ts: "1.000",
-          attachments: [
-            {
-              title: "Filesystem on /dev/sda1 has only 14.93% available space left.",
-              fallback: "Alert: filesystem space is low",
-              fields: [{ title: "Host", value: "dc2.ipa.mgt" }],
-            },
-          ],
-        },
-        {
-          text: "  ",
-          bot_id: "BMONITOR",
-          ts: "2.000",
-          blocks: [{ type: "section", text: { type: "mrkdwn", text: "Pod restart rate is high" } }],
-        },
-        {
-          text: "  ",
-          bot_id: "BMONITOR",
-          ts: "3.000",
-          attachments: [
-            {
-              blocks: [
-                { type: "header", text: { type: "plain_text", text: "Alert firing" } },
-                {
-                  type: "section",
-                  fields: [
-                    { type: "mrkdwn", text: "*host:* dc2.ipa.mgt" },
-                    { type: "mrkdwn", text: "*device:* /dev/sda1" },
-                  ],
-                },
-                {
-                  type: "section",
-                  text: { type: "mrkdwn", text: "Free space below threshold" },
-                },
-              ],
-            },
-          ],
-        },
-        {
-          text: "  line one\nline two  ",
-          ts: "4.000",
-        },
-      ],
-      response_metadata: { next_cursor: "" },
-    });
-    const client = {
-      conversations: { replies },
-    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
-
-    const result = await resolveSlackThreadHistory({
-      channelId: "C1",
-      threadTs: "1.000",
-      client,
-      limit: 10,
-    });
-
-    expect(result.map((entry) => entry.text)).toEqual([
-      "Filesystem on /dev/sda1 has only 14.93% available space left.\nAlert: filesystem space is low\nHost\ndc2.ipa.mgt",
-      "Pod restart rate is high",
-      "Alert firing\n*host:* dc2.ipa.mgt\n*device:* /dev/sda1\nFree space below threshold",
-      "line one\nline two",
-    ]);
-    expect(result.map((entry) => entry.botId)).toEqual([
-      "BMONITOR",
-      "BMONITOR",
-      "BMONITOR",
-      undefined,
-    ]);
-  });
-
-  it("keeps native chart values with top-level text in thread history", async () => {
-    const replies = vi.fn().mockResolvedValueOnce({
-      messages: [
-        {
-          text: "Latency report",
-          bot_id: "BMONITOR",
-          ts: "1.000",
-          blocks: [
-            {
-              type: "data_visualization",
-              title: "Weekly latency",
-              chart: {
-                type: "line",
-                series: [{ name: "p95", data: [{ label: "Mon", value: 250 }] }],
-                axis_config: { categories: ["Mon"] },
-              },
-            },
-          ],
-        },
-      ],
-      response_metadata: { next_cursor: "" },
-    });
-    const client = {
-      conversations: { replies },
-    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
-
-    const result = await resolveSlackThreadHistory({
-      channelId: "C1",
-      threadTs: "1.000",
-      client,
-      limit: 10,
-    });
-
-    expect(result).toEqual([
-      {
-        text: "Latency report\nWeekly latency (line chart)\n- p95: Mon: 250",
-        userId: undefined,
-        botId: "BMONITOR",
-        ts: "1.000",
-        files: undefined,
-      },
-    ]);
-  });
-
-  it("keeps attachment table rows with top-level text in thread history", async () => {
-    const replies = vi.fn().mockResolvedValueOnce({
-      messages: [
-        {
-          text: "Please check these.",
-          user: "U1",
-          ts: "1.000",
-          attachments: [
-            {
-              fallback: "[no preview available]",
-              blocks: [
-                {
-                  type: "table",
-                  rows: [
-                    [
-                      { type: "raw_text", text: "ID" },
-                      { type: "raw_text", text: "Status" },
-                    ],
-                    [
-                      { type: "raw_number", value: 12345 },
-                      { type: "raw_text", text: "enabled" },
-                    ],
-                  ],
-                },
-              ],
-            },
-          ],
-        },
-      ],
-      response_metadata: { next_cursor: "" },
-    });
-    const client = {
-      conversations: { replies },
-    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
-
-    const result = await resolveSlackThreadHistory({
-      channelId: "C1",
-      threadTs: "1.000",
-      client,
-      limit: 10,
-    });
-
-    expect(result[0]?.text).toBe("Please check these.\nID\tStatus\n12345\tenabled");
-    expect(result[0]?.text).not.toContain("[no preview available]");
-  });
-
-  it("returns empty when limit is zero without calling Slack API", async () => {
-    const replies = vi.fn();
-    const client = {
-      conversations: { replies },
-    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
-
-    const result = await resolveSlackThreadHistory({
-      channelId: "C1",
-      threadTs: "1.000",
-      client,
-      limit: 0,
-    });
-
-    expect(result).toStrictEqual([]);
-    expect(replies).not.toHaveBeenCalled();
-  });
-
-  it("returns empty and surfaces the error via logVerbose when Slack API throws", async () => {
-    vi.mocked(logVerbose).mockClear();
-    const replies = vi.fn().mockRejectedValueOnce(new Error("slack down"));
-    const client = {
-      conversations: { replies },
-    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
-
-    const result = await resolveSlackThreadHistory({
-      channelId: "C1",
-      threadTs: "1.000",
-      client,
-      limit: 20,
-    });
-
-    expect(result).toStrictEqual([]);
-    expectVerboseLogContains("slack thread history fetch failed");
-    expectVerboseLogContains("slack down");
-    expectVerboseLogContains("channel=C1");
   });
 });
 

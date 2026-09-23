@@ -129,23 +129,19 @@ describe("system-cli", () => {
   it.each([
     { mode: "human", args: ["system", "event", "--text", "hello"] },
     { mode: "JSON", args: ["system", "event", "--text", "hello", "--json"] },
-  ])("renders named errors without class names in $mode mode", async ({ mode, args }) => {
+  ])("hands agent selection refusals to the CLI failure owner in $mode mode", async ({ args }) => {
     const error = new Error("Multiple agents are configured, but this operation has no owner.");
     error.name = "AgentSelectionRequiredError";
     callGatewayFromCli.mockRejectedValueOnce(error);
 
-    await runCli(args);
+    // The root failure owner renders expected conditions without crash framing;
+    // the command must rethrow instead of printing its own copy.
+    await expect(runCli(args)).rejects.toBe(error);
 
-    if (mode === "JSON") {
-      const payload = JSON.parse(runtimeLogs.at(-1) ?? "");
-      expect(payload).toEqual(jsonFailure(error.message));
-      expect(runtimeErrors).toEqual([]);
-    } else {
-      expect(runtimeErrors).toEqual([error.message]);
-      expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-    }
-    expect([...runtimeLogs, ...runtimeErrors].join("\n")).not.toContain(error.name);
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(runtimeLogs).toEqual([]);
+    expect(runtimeErrors).toEqual([]);
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
   it("forwards --session-key on system event", async () => {

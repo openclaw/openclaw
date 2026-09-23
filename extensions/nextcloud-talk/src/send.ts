@@ -6,10 +6,7 @@ import {
   renderMarkdownWithMarkers,
 } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import {
-  readNextcloudTalkErrorBody,
-  releaseNextcloudTalkGuardedResponse,
-} from "./guarded-response.js";
+import { readNextcloudTalkErrorBody } from "./guarded-response.js";
 import { stripNextcloudTalkTargetPrefix } from "./normalize.js";
 import {
   convertMarkdownTables,
@@ -60,7 +57,10 @@ type NextcloudTalkSendOpts = {
 
 function resolveCredentials(
   explicit: { baseUrl?: string; secret?: string },
-  account: { baseUrl: string; secret: string; accountId: string },
+  account: Pick<
+    ReturnType<typeof resolveNextcloudTalkAccount>,
+    "accountId" | "baseUrl" | "secret" | "tokenStatus"
+  >,
 ): { baseUrl: string; secret: string } {
   const baseUrl = explicit.baseUrl?.trim() ?? account.baseUrl;
   const secret = explicit.secret?.trim() ?? account.secret;
@@ -72,7 +72,9 @@ function resolveCredentials(
   }
   if (!secret) {
     throw new Error(
-      `Nextcloud Talk bot secret missing for account "${account.accountId}" (set channels.nextcloud-talk.botSecret/botSecretFile or NEXTCLOUD_TALK_BOT_SECRET for default).`,
+      account.tokenStatus === "configured_unavailable"
+        ? `Nextcloud Talk bot secret is configured but unavailable for account "${account.accountId}" (check the configured channels.nextcloud-talk.botSecret/botSecretFile).`
+        : `Nextcloud Talk bot secret missing for account "${account.accountId}" (set channels.nextcloud-talk.botSecret/botSecretFile or NEXTCLOUD_TALK_BOT_SECRET for default).`,
     );
   }
 
@@ -144,7 +146,10 @@ function createNextcloudTalkSendReceipt(params: {
 export async function sendMessageNextcloudTalk(
   to: string,
   text: string,
-  opts: NextcloudTalkSendOpts,
+  opts: NextcloudTalkSendOpts & {
+    onPlatformSendDispatch?: () => Promise<void>;
+    assertDirectAdapterHandoff?: () => void;
+  },
 ): Promise<NextcloudTalkSendResult> {
   const { cfg, account, baseUrl, secret } = resolveNextcloudTalkSendContext(opts);
   const roomToken = normalizeRoomToken(to);
@@ -179,8 +184,10 @@ export async function sendMessageNextcloudTalk(
 
   const url = `${baseUrl}/ocs/v2.php/apps/spreed/api/v1/bot/${roomToken}/message`;
 
+  await opts.onPlatformSendDispatch?.();
   const { response, release } = await fetchWithSsrFGuard({
     url,
+    beforeRequest: opts.assertDirectAdapterHandoff,
     init: {
       method: "POST",
       headers: {
@@ -257,7 +264,7 @@ export async function sendMessageNextcloudTalk(
       timestamp,
     };
   } finally {
-    await releaseNextcloudTalkGuardedResponse({ response, release });
+    await release();
   }
 }
 
@@ -304,6 +311,6 @@ export async function sendReactionNextcloudTalk(
 
     return { ok: true };
   } finally {
-    await releaseNextcloudTalkGuardedResponse({ response, release });
+    await release();
   }
 }

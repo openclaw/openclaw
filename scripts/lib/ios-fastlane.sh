@@ -1,7 +1,56 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
 # BASH_SOURCE may be relative, so resolve it before callers change directories.
 _OPENCLAW_IOS_FASTLANE_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+
+parse_ios_release_args() {
+  local mode="$1"
+  shift
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --build-number|--revision|--version|--team-id)
+        if [[ "$1" == --team-id && "$mode" != prepare ]]; then
+          break
+        fi
+        if [[ -z "${2-}" || "${2-}" == --* ]]; then
+          echo "Missing value for $1." >&2
+          usage >&2
+          exit 1
+        fi
+        case "$1" in
+          --build-number) BUILD_NUMBER="$2" ;;
+          --revision) APP_STORE_REVISION="$2" ;;
+          --version) RELEASE_VERSION="$2" ;;
+          --team-id) TEAM_ID="$2" ;;
+        esac
+        shift 2
+        ;;
+      --|--json)
+        if [[ "$1" == --json && "$mode" != plan ]]; then
+          break
+        fi
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+  if [[ $# -gt 0 ]]; then
+    echo "Unknown argument: $1" >&2
+    if [[ "$mode" == plan ]]; then
+      usage >&2
+    else
+      usage
+    fi
+    exit 1
+  fi
+}
 
 run_ios_fastlane() {
   local gemfile=""

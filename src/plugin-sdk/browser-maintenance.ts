@@ -1,14 +1,13 @@
 /**
  * Public SDK facade for browser cleanup and trash operations.
  */
-import {
-  canLoadActivatedBundledPluginPublicSurface,
-  tryLoadActivatedBundledPluginPublicSurfaceModuleSync,
-} from "./facade-runtime.js";
+import { tryLoadActivatedBundledPluginPublicSurfaceModule } from "./facade-runtime.js";
 export { movePathToTrash, type MovePathToTrashOptions } from "./browser-trash.js";
 
 type CloseTrackedBrowserTabsParams = {
   sessionKeys: Array<string | undefined>;
+  /** Gates new cleanup claims; already claimed tabs retain their cleanup owner. */
+  isCurrent?: () => boolean;
   closeTab?: (tab: { targetId: string; baseUrl?: string; profile?: string }) => Promise<void>;
   onWarn?: (message: string) => void;
 };
@@ -21,33 +20,26 @@ function hasRequestedSessionKeys(sessionKeys: Array<string | undefined>): boolea
   return sessionKeys.some((key) => Boolean(key?.trim()));
 }
 
-function loadBrowserMaintenanceSurface(): BrowserMaintenanceSurface | null {
-  const request = {
-    dirName: "browser",
-    artifactBasename: "browser-maintenance.js",
-  };
-  if (!canLoadActivatedBundledPluginPublicSurface(request)) {
-    return null;
-  }
-  return tryLoadActivatedBundledPluginPublicSurfaceModuleSync<BrowserMaintenanceSurface>(request);
-}
-
 /** Closes tracked browser tabs for requested session keys when the browser plugin is active. */
 export async function closeTrackedBrowserTabsForSessions(
   params: CloseTrackedBrowserTabsParams,
 ): Promise<number> {
-  if (!hasRequestedSessionKeys(params.sessionKeys)) {
+  if (params.isCurrent?.() === false || !hasRequestedSessionKeys(params.sessionKeys)) {
     return 0;
   }
 
   let surface: BrowserMaintenanceSurface | null;
   try {
-    surface = loadBrowserMaintenanceSurface();
+    // Cleanup is already async; keep cold activation off the synchronous source loader.
+    surface = await tryLoadActivatedBundledPluginPublicSurfaceModule<BrowserMaintenanceSurface>({
+      dirName: "browser",
+      artifactBasename: "browser-maintenance.js",
+    });
   } catch (error) {
     params.onWarn?.(`browser cleanup unavailable: ${String(error)}`);
     return 0;
   }
-  if (!surface) {
+  if (!surface || params.isCurrent?.() === false) {
     return 0;
   }
   return await surface.closeTrackedBrowserTabsForSessions(params);

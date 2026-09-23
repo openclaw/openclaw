@@ -1,14 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import {
-  buildLatestSubagentRunReadIndexFromRuns,
-  buildSubagentRunReadIndexFromRuns,
   countActiveDescendantRunsFromRuns,
   countPendingDescendantRunsFromRuns,
   getLatestSubagentRunByChildSessionKeyFromRuns,
   getSubagentRunByChildSessionKeyFromRuns,
   hasDescendantRunAwaitingSettleFromRuns,
-  isSubagentSessionRunActiveFromRuns,
   listDescendantRunsForRequesterFromRuns,
   listRunsForControllerFromRuns,
   listRunsForRequesterFromRuns,
@@ -44,6 +41,12 @@ const mocks = vi.hoisted(() => {
     >(() => {
       throw new Error("unexpected full registry hydration");
     }),
+    getSubagentRunsSnapshotForSessions: vi.fn<
+      (
+        runs: Map<string, SubagentRunRecord>,
+        keys: readonly string[],
+      ) => Map<string, SubagentRunRecord>
+    >(() => new Map()),
   };
 });
 
@@ -57,6 +60,7 @@ vi.mock("./subagent-registry-state.js", () => ({
   getSubagentRunsSnapshotForChildSession: mocks.getSubagentRunsSnapshotForChildSession,
   getSubagentRunsSnapshotForController: mocks.getSubagentRunsSnapshotForController,
   getSubagentRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
+  getSubagentRunsSnapshotForSessions: mocks.getSubagentRunsSnapshotForSessions,
 }));
 
 function createRun(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
@@ -84,11 +88,14 @@ describe("subagent registry scoped reads", () => {
     mocks.getSubagentSessionListRunsSnapshotForRead.mockReset().mockReturnValue(new Map());
     mocks.getSubagentRunsSnapshotForChildSession.mockReset().mockReturnValue(new Map());
     mocks.getSubagentRunsSnapshotForController.mockReset().mockReturnValue(new Map());
-    mocks.getSubagentRunsSnapshotForRead.mockClear();
+    mocks.getSubagentRunsSnapshotForSessions.mockReset().mockReturnValue(new Map());
+    mocks.getSubagentRunsSnapshotForRead.mockReset().mockImplementation(() => {
+      throw new Error("unexpected full registry hydration");
+    });
     mod = await import("./subagent-registry-read.js");
   });
 
-  it("uses the child snapshot for latest and display lookups without full hydration", () => {
+  it("uses scoped snapshots for latest lookup and compact display without full hydration", () => {
     const childSessionKey = "agent:main:subagent:child";
     const older = createRun({ runId: "older", childSessionKey, generation: 1, createdAt: 200 });
     const latest = createRun({ runId: "latest", childSessionKey, generation: 2, createdAt: 100 });
@@ -98,23 +105,136 @@ describe("subagent registry scoped reads", () => {
         [latest.runId, latest],
       ]),
     );
+    mocks.getSubagentSessionListRunsSnapshotForRead.mockReturnValue(
+      new Map([
+        [older.runId, older],
+        [latest.runId, latest],
+      ]),
+    );
 
     expect(mod.getLatestSubagentRunByChildSessionKey(childSessionKey)).toEqual(latest);
-    expect(mod.getSessionDisplaySubagentRunByChildSessionKey(childSessionKey)).toEqual(latest);
-    expect(mocks.getSubagentRunsSnapshotForChildSession).toHaveBeenCalledTimes(2);
+    expect(mod.buildSubagentSessionListReadIndex().getDisplaySubagentRun(childSessionKey)).toEqual(
+      latest,
+    );
+    expect(mocks.getSubagentRunsSnapshotForChildSession).toHaveBeenCalledOnce();
     expect(mocks.getSubagentRunsSnapshotForRead).not.toHaveBeenCalled();
   });
 
-  it("prefers the latest indexed live generation without loading persisted rows", () => {
+  it.each([
+    {
+      storePath: undefined,
+      ids: ["a", "b", "unknown"],
+      active: 3,
+      excluded: "grandchild",
+      waiting: true,
+    },
+    { storePath: null, ids: ["unknown"], active: 1, excluded: "unknown", waiting: false },
+    { storePath: "store-a", ids: ["a"], active: 1, excluded: "grandchild", waiting: false },
+    { storePath: "store-b", ids: ["b"], active: 1, excluded: "b", waiting: false },
+  ])(
+    "scopes requester root edges to $storePath while retaining child-agent descendants",
+    ({ storePath, ids, active, excluded, waiting }) => {
+      const root = "agent:main:root";
+      const parent = createRun({
+        runId: "a",
+        childSessionKey: "agent:research:subagent:a",
+        requesterSessionKey: root,
+        requesterAgentId: "main",
+        requesterStorePath: "store-a",
+        execution: { status: "terminal", endedAt: 100 },
+        cleanupCompletedAt: 200,
+      });
+      const runs = [
+        parent,
+        createRun({
+          runId: "b",
+          requesterSessionKey: root,
+          requesterAgentId: "main",
+          requesterStorePath: "store-b",
+        }),
+        createRun({ runId: "unknown", requesterSessionKey: root, requesterAgentId: "main" }),
+        createRun({
+          runId: "grandchild",
+          requesterSessionKey: parent.childSessionKey,
+          requesterAgentId: "research",
+          requesterStorePath: "research-store",
+        }),
+        createRun({
+          runId: "other-agent",
+          requesterSessionKey: root,
+          requesterAgentId: "other",
+          requesterStorePath: "store-a",
+        }),
+      ];
+      for (const run of runs) {
+        mocks.liveRuns.set(run.runId, run);
+      }
+      mocks.getSubagentRunsSnapshotForSessions.mockReturnValue(new Map(mocks.liveRuns));
+      expect(
+        mod
+          .listSubagentRunsForRequester(root, {
+            requesterAgentId: "main",
+            requesterStorePath: storePath,
+          })
+          .map((run) => run.runId),
+      ).toEqual(ids);
+      expect(mod.countActiveDescendantRuns(root, "main", storePath)).toBe(active);
+      expect(mod.hasDescendantRunAwaitingSettle(root, excluded, "main", storePath)).toBe(waiting);
+    },
+  );
+
+  it("keeps the latest raw live generation authoritative in compact display", () => {
     const childSessionKey = "agent:main:subagent:child";
     const older = createRun({ runId: "older", childSessionKey, generation: 1, createdAt: 200 });
     const latest = createRun({ runId: "latest", childSessionKey, generation: 2, createdAt: 100 });
-    mocks.getSubagentRunsForChildSession.mockReturnValue([older, latest]);
+    mocks.liveRuns.set(older.runId, older);
+    mocks.liveRuns.set(latest.runId, latest);
 
-    expect(mod.getSessionDisplaySubagentRunByChildSessionKey(childSessionKey)).toBe(latest);
-    expect(mocks.getSubagentRunsForChildSession).toHaveBeenCalledWith(childSessionKey);
+    expect(mod.buildSubagentSessionListReadIndex().getDisplaySubagentRun(childSessionKey)).toBe(
+      latest,
+    );
     expect(mocks.getSubagentRunsSnapshotForChildSession).not.toHaveBeenCalled();
   });
+
+  it.each(["requester", "completion"] as const)(
+    "reads %s announcement facts from the child snapshot without full hydration",
+    (kind) => {
+      const childSessionKey = "agent:main:subagent:child";
+      const older = createRun({ runId: "older", childSessionKey, generation: 1, createdAt: 200 });
+      const latest = createRun({
+        runId: "latest",
+        childSessionKey,
+        generation: 2,
+        createdAt: 100,
+        requesterSessionKey: "agent:main:requester",
+        requesterAgentId: "main",
+        requesterOrigin: { channel: "discord", to: " room " },
+        execution: { status: "terminal", endedAt: 300 },
+        cleanupCompletedAt: 400,
+      });
+      mocks.getSubagentRunsSnapshotForChildSession.mockReturnValue(
+        new Map([
+          [older.runId, older],
+          [latest.runId, latest],
+        ]),
+      );
+
+      if (kind === "requester") {
+        expect(mod.resolveRequesterForChildSession(childSessionKey)).toEqual({
+          requesterSessionKey: "agent:main:requester",
+          requesterAgentId: "main",
+          requesterOrigin: { channel: "discord", to: "room" },
+        });
+      } else {
+        expect(mod.shouldIgnorePostCompletionAnnounceForSession(childSessionKey)).toBe(true);
+      }
+      expect(mocks.getSubagentRunsSnapshotForChildSession).toHaveBeenCalledWith(
+        mocks.liveRuns,
+        childSessionKey,
+      );
+      expect(mocks.getSubagentRunsSnapshotForRead).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses the controller snapshot while retaining legacy requester-owned runs", () => {
     const controllerSessionKey = "agent:main:controller";
@@ -140,6 +260,27 @@ describe("subagent registry scoped reads", () => {
     expect(mod.listSubagentRunsForController(controllerSessionKey)).toEqual([explicit, legacy]);
     expect(mocks.getSubagentRunsSnapshotForRead).not.toHaveBeenCalled();
   });
+
+  it.each(["delivered", "intentional_non_delivery", "permanent_failure", "ambiguous"] as const)(
+    "reads %s settlement and descendant counts without hydrating unrelated payloads",
+    (disposition) => {
+      const root = "agent:main:root";
+      const run = createRun({
+        requesterSessionKey: root,
+        requesterAgentId: "main",
+        execution: { status: "terminal", endedAt: 100 },
+        delivery: { status: "pending", disposition },
+      });
+      mocks.getSubagentRunsSnapshotForSessions.mockReturnValue(new Map([[run.runId, run]]));
+      expect(mod.countActiveDescendantRuns(root, "main")).toBe(0);
+      expect(mod.countPendingDescendantRuns(root)).toBe(1);
+      expect(mod.hasDescendantRunAwaitingSettle(root, undefined, "main")).toBe(
+        disposition === "ambiguous",
+      );
+      expect(mod.hasDescendantRunAwaitingSettle(root, run.runId, "main")).toBe(false);
+      expect(mocks.getSubagentRunsSnapshotForRead).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps every bound read equivalent to its documented snapshot scope", () => {
     const now = Date.now();
@@ -175,9 +316,18 @@ describe("subagent registry scoped reads", () => {
       runId: "run-parent",
       childSessionKey: parent,
       requesterSessionKey: root,
+      requesterAgentId: "main",
       controllerSessionKey: controller,
       createdAt: now - 3_000,
       execution: { status: "running", startedAt: now - 2_900 },
+    });
+    const foreignActive = createRun({
+      runId: "run-foreign-active",
+      childSessionKey: "agent:research:subagent:foreign",
+      requesterSessionKey: root,
+      requesterAgentId: "research",
+      createdAt: now - 2_500,
+      execution: { status: "running", startedAt: now - 2_400 },
     });
     const pendingRun = createRun({
       runId: "run-pending",
@@ -203,9 +353,15 @@ describe("subagent registry scoped reads", () => {
       execution: { status: "terminal", startedAt: now - 1_500, endedAt: now - 1_100 },
     });
     const snapshot = new Map(
-      [oldActive, freshTerminal, parentRun, pendingRun, settledRun, suspendedRun].map(
-        (run) => [run.runId, run] as const,
-      ),
+      [
+        oldActive,
+        freshTerminal,
+        parentRun,
+        foreignActive,
+        pendingRun,
+        settledRun,
+        suspendedRun,
+      ].map((run) => [run.runId, run] as const),
     );
     const childSnapshot = new Map(
       [oldActive, freshTerminal].map((run) => [run.runId, run] as const),
@@ -219,23 +375,13 @@ describe("subagent registry scoped reads", () => {
       [...mocks.liveRuns.values()].filter((run) => run.childSessionKey === childSessionKey),
     );
     mocks.getSubagentRunsSnapshotForRead.mockReturnValue(snapshot);
+    mocks.getSubagentRunsSnapshotForSessions.mockReturnValue(snapshot);
     mocks.getSubagentRunsSnapshotForChildSession.mockReturnValue(childSnapshot);
     mocks.getSubagentRunsSnapshotForController.mockReturnValue(controllerSnapshot);
+    mocks.getSubagentSessionListRunsSnapshotForRead.mockReturnValue(snapshot);
 
-    const requester = resolveRequesterForChildSessionFromRuns(snapshot, reusedChild);
+    const requester = resolveRequesterForChildSessionFromRuns(childSnapshot, reusedChild);
     const cases = [
-      {
-        name: "full snapshot index",
-        actual: mod.buildSubagentRunReadIndex(now).latestRunsByChildSessionKey,
-        expected: buildSubagentRunReadIndexFromRuns({ runs: snapshot, now })
-          .latestRunsByChildSessionKey,
-      },
-      {
-        name: "latest full snapshot index",
-        actual: mod.buildLatestSubagentRunReadIndex().getLatestSubagentRun(reusedChild),
-        expected:
-          buildLatestSubagentRunReadIndexFromRuns(snapshot).getLatestSubagentRun(reusedChild),
-      },
       {
         name: "controller snapshot",
         actual: mod.listSubagentRunsForController(controller),
@@ -245,6 +391,11 @@ describe("subagent registry scoped reads", () => {
         name: "active descendants from full snapshot",
         actual: mod.countActiveDescendantRuns(root),
         expected: countActiveDescendantRunsFromRuns(snapshot, root),
+      },
+      {
+        name: "active descendants from requester agent scope",
+        actual: mod.countActiveDescendantRuns(root, "main"),
+        expected: countActiveDescendantRunsFromRuns(snapshot, root, "main"),
       },
       {
         name: "pending descendants from full snapshot",
@@ -273,7 +424,7 @@ describe("subagent registry scoped reads", () => {
       },
       {
         name: "display run with live-memory precedence",
-        actual: mod.getSessionDisplaySubagentRunByChildSessionKey(reusedChild),
+        actual: mod.buildSubagentSessionListReadIndex(now).getDisplaySubagentRun(reusedChild),
         expected:
           getLatestSubagentRunByChildSessionKeyFromRuns([freshTerminal], reusedChild) ??
           getSubagentRunByChildSessionKeyFromRuns(childSnapshot, reusedChild),
@@ -285,9 +436,9 @@ describe("subagent registry scoped reads", () => {
           getLatestSubagentRunByChildSessionKeyFromRuns([freshTerminal], reusedChild) ?? null,
       },
       {
-        name: "active child ownership from raw live map",
+        name: "raw registration without an execution owner is not executor-live",
         actual: mod.isSubagentSessionRunActive(parent),
-        expected: isSubagentSessionRunActiveFromRuns(mocks.liveRuns, parent),
+        expected: false,
       },
       {
         name: "requester runs from raw live map",
@@ -295,7 +446,7 @@ describe("subagent registry scoped reads", () => {
         expected: listRunsForRequesterFromRuns(mocks.liveRuns, root),
       },
       {
-        name: "requester resolution from full snapshot",
+        name: "requester resolution from child snapshot",
         actual: mod.resolveRequesterForChildSession(reusedChild),
         expected: requester
           ? {
@@ -305,14 +456,16 @@ describe("subagent registry scoped reads", () => {
           : null,
       },
       {
-        name: "post-completion ignore from full snapshot",
+        name: "post-completion ignore from child snapshot",
         actual: mod.shouldIgnorePostCompletionAnnounceForSession(reusedChild),
-        expected: shouldIgnorePostCompletionAnnounceForSessionFromRuns(snapshot, reusedChild),
+        expected: shouldIgnorePostCompletionAnnounceForSessionFromRuns(childSnapshot, reusedChild),
       },
     ];
 
     for (const testCase of cases) {
       expect(testCase.actual, testCase.name).toEqual(testCase.expected);
     }
+    expect(mod.countActiveDescendantRuns(root)).toBe(2);
+    expect(mod.countActiveDescendantRuns(root, "main")).toBe(1);
   });
 });

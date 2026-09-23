@@ -150,46 +150,6 @@ function getSynologyWebhookInFlightKey(account: ResolvedSynologyChatAccount): st
   return account.accountId;
 }
 
-/** Read the full request body as a string. */
-async function readBody(
-  req: IncomingMessage,
-  timeoutMs: number = PREAUTH_BODY_TIMEOUT_MS,
-): Promise<
-  | { ok: true; body: string }
-  | {
-      ok: false;
-      statusCode: number;
-      error: string;
-      /** Limit rejections own the connection, so their answer goes through the transport. */
-      closeAfterResponse: boolean;
-    }
-> {
-  try {
-    const body = await readRequestBodyWithLimit(req, {
-      maxBytes: PREAUTH_MAX_BODY_BYTES,
-      timeoutMs,
-      // Defer destruction so the caller can answer before the connection closes.
-      destroyOnLimit: false,
-    });
-    return { ok: true, body };
-  } catch (err) {
-    if (isRequestBodyLimitError(err)) {
-      return {
-        ok: false,
-        statusCode: err.statusCode,
-        error: requestBodyErrorToText(err.code),
-        closeAfterResponse: true,
-      };
-    }
-    return {
-      ok: false,
-      statusCode: 400,
-      error: "Invalid request body",
-      closeAfterResponse: false,
-    };
-  }
-}
-
 function firstNonEmptyString(value: unknown): string | undefined {
   if (Array.isArray(value)) {
     for (const item of value) {
@@ -414,26 +374,36 @@ async function parseWebhookPayloadRequest(params: {
 }): Promise<
   { ok: false } | { ok: true; payload: SynologyWebhookPayload; rawEvent: SynologyWebhookRawEvent }
 > {
-  const bodyResult = await readBody(params.req, params.bodyTimeoutMs);
-  if (!bodyResult.ok) {
-    params.log?.error("Failed to read request body", bodyResult.error);
-    if (bodyResult.closeAfterResponse) {
+  let body: string;
+  try {
+    body = await readRequestBodyWithLimit(params.req, {
+      maxBytes: PREAUTH_MAX_BODY_BYTES,
+      timeoutMs:
+        params.bodyTimeoutMs === undefined ? PREAUTH_BODY_TIMEOUT_MS : params.bodyTimeoutMs,
+      // Defer destruction so the rejection owner can flush its response before closing.
+      destroyOnLimit: false,
+    });
+  } catch (err) {
+    const limited = isRequestBodyLimitError(err);
+    const error = limited ? requestBodyErrorToText(err.code) : "Invalid request body";
+    params.log?.error("Failed to read request body", error);
+    if (limited) {
       await sendHttpRequestRejection(
         params.req,
         params.res,
-        bodyResult.statusCode,
-        JSON.stringify({ error: bodyResult.error }),
+        err.statusCode,
+        JSON.stringify({ error }),
         "application/json",
       );
       return { ok: false };
     }
-    respondJson(params.res, bodyResult.statusCode, { error: bodyResult.error });
+    respondJson(params.res, 400, { error });
     return { ok: false };
   }
 
   let raw: ReturnType<typeof parseRawEvent>;
   try {
-    raw = parseRawEvent(params.req, bodyResult.body);
+    raw = parseRawEvent(params.req, body);
   } catch (err) {
     params.log?.warn("Failed to parse webhook payload", err);
     respondJson(params.res, 400, { error: "Invalid request body" });

@@ -20,7 +20,6 @@ export async function prepareWorkerDesktopLaunchPlan(params: {
   prepareComputer(): Promise<PreparedWorkerComputer | undefined> | undefined;
   modelRef: { provider: string; model: string };
   turn: SessionPlacementTurnParams;
-  githubPublicationAvailable?: boolean;
   portalAvailable?: boolean;
 }): Promise<{
   browser?: WorkerBrowserLaunchDescriptor;
@@ -52,7 +51,6 @@ export async function prepareWorkerDesktopLaunchPlan(params: {
   const toolAuthority = resolveWorkerToolAuthority({
     modelRef: params.modelRef,
     turn: params.turn,
-    githubPublicationAvailable: params.githubPublicationAvailable,
     portalAvailable: params.portalAvailable,
     availableOptionalToolNames,
   });
@@ -66,6 +64,7 @@ export async function prepareWorkerDesktopLaunchPlan(params: {
           browser: {
             cdpUrl: `http://127.0.0.1:${browserApp.cdpPort}`,
             launcherPath: browserApp.executablePath,
+            ...(browserApp.args ? { launcherArgs: [...browserApp.args] } : {}),
           },
         }
       : {}),

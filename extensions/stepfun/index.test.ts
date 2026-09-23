@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../test-support/runtime-spies.js";
 import stepfunPlugin from "./index.js";
 import {
   STEPFUN_DEFAULT_MODEL_REF,
@@ -175,29 +176,31 @@ describe("stepfun provider registration", () => {
       });
       const provider = requireRegisteredProvider(providers, providerId);
       const method = provider.auth.find((entry) => entry.id === methodId);
-      if (!method?.runNonInteractive) {
+      if (!method?.runNonInteractive || !method.wizard?.choiceId) {
         throw new Error(`expected StepFun non-interactive auth method ${methodId}`);
       }
 
-      const result = await method.runNonInteractive({
-        authChoice: method.wizard?.choiceId,
-        config: {
-          agents: {
-            defaults: {
-              model: {
-                primary: "anthropic/claude-sonnet-4-6",
-                fallbacks: ["openai/gpt-5.6-luna"],
-              },
-              models: { "anthropic/claude-sonnet-4-6": { alias: "Existing" } },
+      const config = {
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-sonnet-4-6",
+              fallbacks: ["openai/gpt-5.6-luna"],
             },
+            models: { "anthropic/claude-sonnet-4-6": { alias: "Existing" } },
           },
         },
+      };
+
+      const result = await method.runNonInteractive({
+        authChoice: method.wizard.choiceId,
+        config,
+        baseConfig: config,
         opts: {},
-        env: {},
-        runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
-        resolveApiKey: vi.fn(async () => ({ key: "fixture-value", source: "profile" })),
+        runtime: createRuntimeSpies(),
+        resolveApiKey: vi.fn(async () => ({ key: "fixture-value", source: "profile" as const })),
         toApiKeyCredential: vi.fn(() => null),
-      } as never);
+      });
 
       expect(result?.agents?.defaults?.model).toEqual({
         primary: "anthropic/claude-sonnet-4-6",

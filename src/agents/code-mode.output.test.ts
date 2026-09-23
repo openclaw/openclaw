@@ -23,6 +23,98 @@ import { jsonResult } from "./tools/common.js";
 const fakeTool = pluginToolWithExecute;
 afterEach(resetCodeModeTestState);
 describe("Code Mode output provenance", () => {
+  it.each(["interactive", "headless"])(
+    "settles final getter work exactly once across %s suspension",
+    async (mode) => {
+      const writes: string[] = [];
+      const writer = fakeTool("getter_write", "Record a synthetic write", async () => {
+        writes.push("saved");
+        return jsonResult({ ok: true });
+      });
+      const code = `let reads = 0;
+        return { get value() {
+          reads += 1;
+          text("computed:" + reads);
+          void getter_write({ value: "saved" });
+          void yield_control();
+          return reads;
+        } };`;
+      let result;
+      if (mode === "headless") {
+        result = await runCodeModeScriptHeadless({
+          ctx: createHeadlessCodeModeHarness([writer]),
+          code,
+        });
+      } else {
+        const h = createCodeModeHarness();
+        applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, writer] });
+        const first = resultDetails(await h.tools[0]!.execute("getter-output", { code }));
+        expect(first.status).toBe("waiting");
+        const final = await waitUntilCompleted({ details: first, waitTool: h.tools[1]! });
+        result = {
+          ...final,
+          output: [...(first.output as unknown[]), ...(final.output as unknown[])],
+        };
+      }
+      expect(result).toEqual(
+        expect.objectContaining({
+          status: "completed",
+          value: { value: 1 },
+          output: [{ type: "text", text: "computed:1" }],
+        }),
+      );
+      expect(writes).toEqual(["saved"]);
+    },
+  );
+
+  it("identifies unawaited catalog descriptions in output and final values", async () => {
+    const fixture = pluginTool("promise_fixture", "Describe a synthetic tool");
+    const result = await runCodeModeScriptHeadless({
+      ctx: createHeadlessCodeModeHarness([fixture]),
+      code: `const handles = await catalog.search("promise_fixture");
+        const descriptions = handles.map((tool) => tool.describe());
+        text({ descriptions }); json({ descriptions });
+        const awaited = await Promise.all(descriptions);
+        return { descriptions, awaited, handles };`,
+    });
+    const diagnostic = expect.stringMatching(/Promise.*await.*Promise\.all/u);
+    expect(result).toMatchObject({
+      status: "completed",
+      value: {
+        descriptions: [diagnostic],
+        awaited: [expect.objectContaining({ description: "Describe a synthetic tool" })],
+        handles: [expect.objectContaining({ callableName: "promise_fixture" })],
+      },
+      output: [
+        { type: "text", text: expect.stringMatching(/Promise.*await.*Promise\.all/u) },
+        { type: "json", value: { descriptions: [diagnostic] } },
+      ],
+    });
+    expect(fixture.execute).not.toHaveBeenCalled();
+  });
+
+  it("diagnoses pending Promises without awaiting them or invoking plain thenables", async () => {
+    const result = await runCodeModeScriptHeadless({
+      ctx: createHeadlessCodeModeHarness(),
+      code: `const pending = new Promise(() => {});
+        const plain = { label: "ordinary", then() { throw new Error("must not invoke"); } };
+        text(pending); json(pending); json(plain); text(plain);
+        return { nested: [{ pending }], plain };`,
+      overrides: { timeoutMs: 500 },
+    });
+    const diagnostic = expect.stringMatching(/Promise.*await.*Promise\.all/u);
+    expect(result).toMatchObject({
+      status: "completed",
+      value: { nested: [{ pending: diagnostic }], plain: { label: "ordinary" } },
+      output: [
+        { type: "text", text: diagnostic },
+        { type: "json", value: diagnostic },
+        { type: "json", value: { label: "ordinary" } },
+        { type: "text", text: '{"label":"ordinary"}' },
+      ],
+    });
+  });
+
   it.each([
     { name: "return escaped", surface: "return", character: String.fromCharCode(92) },
     { name: "return ASCII", surface: "return", character: "x" },
@@ -178,7 +270,57 @@ describe("Code Mode output provenance", () => {
   );
 
   it.each(["interactive", "headless"])(
-    "counts actual bridge markers as guest data through %s",
+    "preserves JSON keys and typed-array numbers across %s suspension",
+    async (mode) => {
+      const expected: unknown = JSON.parse(`{
+        "keys": {"__proto__": {"kept": true}, "normal": 1},
+        "signed8": {"0": -1},
+        "signed16": {"0": -2},
+        "signed32": {"0": -3},
+        "float32": {"0": 1.5},
+        "float64": {"0": -2.5}
+      }`);
+      const code = `const value = {
+        keys: JSON.parse('{"__proto__":{"kept":true},"normal":1}'),
+        signed8: new Int8Array([-1]),
+        signed16: new Int16Array([-2]),
+        signed32: new Int32Array([-3]),
+        float32: new Float32Array([1.5]),
+        float64: new Float64Array([-2.5]),
+      };
+      json(value);
+      await yield_control();
+      json(value);
+      return value;`;
+      let result;
+      if (mode === "headless") {
+        result = await runCodeModeScriptHeadless({ ctx: createHeadlessCodeModeHarness(), code });
+      } else {
+        const h = createCodeModeHarness();
+        applyCodeModeCatalog({ ...h.ctx, tools: h.tools });
+        const first = resultDetails(await h.tools[0]!.execute("json-values", { code }));
+        expect(first.status).toBe("waiting");
+        const final = await waitUntilCompleted({ details: first, waitTool: h.tools[1]! });
+        result = {
+          ...final,
+          output: [...(first.output as unknown[]), ...(final.output as unknown[])],
+        };
+      }
+      expect(result).toEqual(
+        expect.objectContaining({
+          status: "completed",
+          value: expected,
+          output: [
+            { type: "json", value: expected },
+            { type: "json", value: expected },
+          ],
+        }),
+      );
+    },
+  );
+
+  it.each(["interactive", "headless"])(
+    "projects intact bridge data only when emitted through %s",
     async (mode) => {
       const payload = { text: "🦞".repeat(1000) };
       const fixture = fakeTool("marker_fixture", "Large nested result", async () =>
@@ -217,12 +359,19 @@ describe("Code Mode output provenance", () => {
           waitTool: tools[1]!,
         });
       }
-      expectOriginalCodeModeMarker(marker, payload);
+      if (mode === "interactive") {
+        expect(marker).toMatchObject({
+          truncated: true,
+          reference: { id: expect.any(String), bytes: Buffer.byteLength(JSON.stringify(payload)) },
+        });
+      } else {
+        expectOriginalCodeModeMarker(marker, payload);
+      }
       expect(result).toMatchObject({ status: "completed", value: true });
       expectCodeModeSharedBudget(result, 1024);
       expectOriginalCodeModeMarker((result.output as unknown[])[0], [
-        { type: "text", text: JSON.stringify(marker) },
-        { type: "json", value: marker },
+        { type: "text", text: JSON.stringify(payload) },
+        { type: "json", value: payload },
       ]);
       expect(fixture.execute).toHaveBeenCalledTimes(2);
     },

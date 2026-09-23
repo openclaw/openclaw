@@ -3,6 +3,7 @@ import {
   projectComputerActResult,
   projectScreenshotResult,
 } from "../agents/tools/computer-tool-result.js";
+import type { ComputerTarget } from "../agents/tools/computer-tool-shared.js";
 import { createNoisyPngBuffer } from "../plugin-sdk/test-helpers/image-fixtures.js";
 import type { ComputerActResult } from "../plugins/computer-use-contract.js";
 import { createWorkerTranscriptRuntime } from "./embedded-agent-transcript.runtime.js";
@@ -25,25 +26,23 @@ describe("worker computer observation persistence", () => {
         },
       } satisfies ComputerActResult;
       const original = structuredClone(providerResult);
-      const target = { nodeId: "desktop-node", screenIndex: 0 };
-      const result =
+      const target: ComputerTarget = { host: "node", nodeId: "desktop-node", screenIndex: 0 };
+      const { result } =
         kind === "screen"
-          ? (
-              await projectScreenshotResult({
-                capture: {
-                  base64,
-                  displayFrameId: "display-frame",
-                  mimeType: "image/png",
-                  width: 512,
-                  height: 512,
-                },
-                noteLines: [],
-                target,
-                action: "screenshot",
-                referenceWidth: 1280,
-                modelHasVision: true,
-              })
-            ).result
+          ? await projectScreenshotResult({
+              capture: {
+                base64,
+                displayFrameId: "display-frame",
+                mimeType: "image/png",
+                width: 512,
+                height: 512,
+              },
+              noteLines: [],
+              target,
+              action: "screenshot",
+              referenceWidth: 1280,
+              modelHasVision: true,
+            })
           : await projectComputerActResult({
               result: providerResult,
               target,

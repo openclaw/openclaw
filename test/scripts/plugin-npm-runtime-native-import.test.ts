@@ -29,12 +29,41 @@ function fixture(format = "esm", declaration = "peerDependencies") {
     "package.json",
     JSON.stringify({
       name: "openclaw",
-      version: "1.0.0",
+      version: "2026.9.5",
       type: "module",
-      exports: { "./plugin-sdk/fixture": "./dist/plugin-sdk/fixture.js" },
+      exports: {
+        "./plugin-sdk/media-runtime": "./dist/plugin-sdk/media-runtime.js",
+        "./plugin-sdk/text-utility-runtime": "./dist/plugin-sdk/text-utility-runtime.js",
+        "./plugin-sdk/realtime-voice": "./dist/plugin-sdk/realtime-voice.js",
+        "./plugin-sdk/realtime-voice-provider": "./dist/plugin-sdk/realtime-voice-provider.js",
+      },
     }),
   );
-  writeFile(root, "dist/plugin-sdk/fixture.js", 'export const host = "host";\n');
+  writeFile(root, "dist/plugin-sdk/text-utility-runtime.js", "export {};\n");
+  for (const module of ["grapheme", "utf16-slice"]) {
+    const relative = `packages/normalization-core/src/${module}.ts`;
+    writeFile(
+      root,
+      relative,
+      fs.readFileSync(path.resolve(import.meta.dirname, "../..", relative), "utf8"),
+    );
+  }
+  // The supported host predates the private FFmpeg and playback facades.
+  writeFile(
+    root,
+    "dist/plugin-sdk/media-runtime.js",
+    'export function resolveFfmpegBin() { return "host"; }\n',
+  );
+  writeFile(
+    root,
+    "dist/plugin-sdk/realtime-voice-provider.js",
+    'export const canonicalizeBase64 = () => "provider";\n',
+  );
+  writeFile(
+    root,
+    "dist/plugin-sdk/realtime-voice.js",
+    'export const createRealtimeVoiceOutputActivityTracker = () => "voice"; export const isRealtimeVoiceAudioAudible = () => "audible";\n',
+  );
   writeFile(
     root,
     "node_modules/fixture-dep/package.json",
@@ -50,7 +79,10 @@ function fixture(format = "esm", declaration = "peerDependencies") {
       version: "1.0.0",
       type: "module",
       optionalDependencies: { "fixture-dep": "1.0.0" },
-      [declaration]: { openclaw: "*" },
+      [declaration]: {
+        ...(declaration === "optionalDependencies" ? { "fixture-dep": "1.0.0" } : {}),
+        openclaw: "*",
+      },
       openclaw: {
         extensions: ["./index.ts"],
         build: { runtimeFormat: format },
@@ -62,11 +94,14 @@ function fixture(format = "esm", declaration = "peerDependencies") {
     packageDir,
     "index.ts",
     [
-      'import { host } from "openclaw/plugin-sdk/fixture";',
+      'import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-ffmpeg";',
+      'import { createRealtimeVoiceOutputActivityTracker, isRealtimeVoiceAudioAudible } from "openclaw/plugin-sdk/realtime-voice-playback";',
+      'import { canonicalizeBase64 } from "openclaw/plugin-sdk/realtime-voice-provider";',
+      'import { findGraphemeChunkEnd } from "openclaw/plugin-sdk/text-grapheme";',
       'import { thirdParty } from "fixture-dep";',
       'import { writeFileSync } from "node:fs";',
       'writeFileSync("executed", "yes");',
-      "export const answer = `${host} ${thirdParty}`;",
+      "export const answer = `${resolveFfmpegBin()} ${thirdParty} ${createRealtimeVoiceOutputActivityTracker()} ${isRealtimeVoiceAudioAudible()} ${canonicalizeBase64()} ${findGraphemeChunkEnd('xa\\u0301z', 0, 2)}`;",
     ].join("\n"),
   );
   const entry = `./extensions/demo/dist/index.${format === "cjs" ? "cjs" : "js"}`;
@@ -125,10 +160,59 @@ function snapshot(root: string, directories: string[]) {
 
 describe("explicit source native-import preparation", () => {
   it.each([
+    { argv: ["--prepare-native-import", "extensions/demo", ""] },
+    { argv: ["extensions/demo", "", "--prepare-native-import"] },
+    { argv: ["extensions/demo", "", "--prepare-native-import", "--unexpected"] },
+  ])("rejects excess preparation argv $argv before changing the host link", ({ argv }) => {
+    const { root, packageDir } = fixture();
+    const before = snapshot(root, ["."]);
+    const result = runCli(root, argv);
+
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("unexpected plugin npm runtime build argument");
+    expect(fs.existsSync(path.join(packageDir, "node_modules"))).toBe(false);
+    expect(fs.existsSync(path.join(root, "executed"))).toBe(false);
+    expect(snapshot(root, ["."])).toEqual(before);
+  });
+
+  it("rejects excess build argv through the public shim without compiling", () => {
+    const { root } = fixture();
+    const packageDir = path.join(root, "javascript-only");
+    writeFile(
+      packageDir,
+      "package.json",
+      JSON.stringify({
+        name: "@openclaw/arity-js-fixture",
+        version: "1.0.0",
+        type: "module",
+        openclaw: { extensions: ["./index.js"] },
+      }),
+    );
+    writeFile(packageDir, "index.js", 'throw new Error("JS-only argv proof must not execute");\n');
+    writeFile(packageDir, "dist/sentinel.js", "keep\n");
+    const before = snapshot(root, ["."]);
+    const valid = runCli(root, [packageDir]);
+
+    expect(valid.error, valid.stderr).toBeUndefined();
+    expect(valid.status, valid.stderr).toBe(0);
+    expect(snapshot(root, ["."])).toEqual(before);
+
+    const result = runCli(root, [packageDir, "", "--unexpected"]);
+
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("unexpected plugin npm runtime build argument");
+    expect(snapshot(root, ["."])).toEqual(before);
+  });
+
+  it.each([
     ["esm", "peerDependencies"],
     ["cjs", "peerDependencies"],
     ["esm", "dependencies"],
     ["cjs", "dependencies"],
+    ["esm", "optionalDependencies"],
+    ["cjs", "optionalDependencies"],
   ])("prepares %s output with a missing %s host link without rebuilding", (format, declaration) => {
     const { root, packageDir, entry } = fixture(format, declaration);
     const compiled = runCli(root, ["extensions/demo"]);
@@ -159,21 +243,18 @@ describe("explicit source native-import preparation", () => {
 
     const loaded = nativeImport(root, entry, format);
     expect(loaded.status, loaded.stderr).toBe(0);
-    expect(loaded.stdout.trim()).toBe("host third-party");
+    expect(loaded.stdout.trim()).toBe("host third-party voice audible provider 1");
     expect(fs.readFileSync(path.join(root, "executed"), "utf8")).toBe("yes");
     expect(snapshot(root, directories)).toEqual(before);
   });
 
-  it.each(["devDependencies", "optionalDependencies"])(
-    "does not infer a host declaration from %s or publication metadata",
-    (declaration) => {
-      const { root, packageDir } = fixture("esm", declaration);
-      const result = runCli(root, ["--prepare-native-import", "extensions/demo"]);
-      expect(result.status).toBe(1);
-      expect(result.stderr).toMatch(/does not declare openclaw/u);
-      expect(fs.existsSync(path.join(packageDir, "node_modules"))).toBe(false);
-    },
-  );
+  it("does not infer a host declaration from devDependencies or publication metadata", () => {
+    const { root, packageDir } = fixture("esm", "devDependencies");
+    const result = runCli(root, ["--prepare-native-import", "extensions/demo"]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/does not declare openclaw/u);
+    expect(fs.existsSync(path.join(packageDir, "node_modules"))).toBe(false);
+  });
 
   it.each([
     "outside package",

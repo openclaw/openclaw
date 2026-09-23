@@ -3,11 +3,8 @@ import type { AgentsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
-import {
-  getCronJobPayload,
-  resolveConfiguredCronModelSuggestions,
-  type CronState,
-} from "../../lib/cron/index.ts";
+import { getCronJobPayload, resolveConfiguredCronModelSuggestions } from "../../lib/cron/index.ts";
+import type { CronState } from "../../lib/cron/types.ts";
 import { resolveCronTimezoneSuggestions } from "./timezone-suggestions.ts";
 
 export const THINKING_SUGGESTIONS = ["off", "minimal", "low", "medium", "high"];
@@ -44,9 +41,9 @@ export function buildCronSuggestions(params: {
         : "";
     }),
   ]);
-  const jobTargets = params.cron.cronJobs
-    .map((job) => (typeof job.delivery?.to === "string" ? job.delivery.to.trim() : ""))
-    .filter(Boolean);
+  const deliveryTargets = normalizeSortedUniqueTrimmedStringList(
+    params.cron.cronJobs.map((job) => job.delivery?.to),
+  );
   const accountTargets = (
     channel === "last"
       ? Object.values(params.channels.channelsSnapshot?.channelAccounts ?? {}).flat()
@@ -56,10 +53,6 @@ export function buildCronSuggestions(params: {
     .filter((value): value is string => typeof value === "string")
     .map((value) => value.trim())
     .filter(Boolean);
-  const deliveryTargets = normalizeSortedUniqueTrimmedStringList([
-    ...jobTargets,
-    ...accountTargets,
-  ]);
   return {
     agentSuggestions,
     modelSuggestions,

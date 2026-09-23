@@ -46,7 +46,6 @@ type NodeBridgeSession = {
   lastClearAt?: string;
   lastInputBytes: number;
   lastOutputBytes: number;
-  closedAt?: string;
   clearCount: number;
   outputGeneration: number;
   outputWriteWaiters: Set<NodeOutputWriteWaiter>;
@@ -142,9 +141,17 @@ function waitForInputDrain(
 }
 
 export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
-  handleCommand(paramsJSON?: string | null): Promise<string>;
+  handleCommand: (paramsJSON?: string | null) => Promise<string>;
+  hasActiveWork: () => boolean;
 } {
   const sessions = new Map<string, NodeBridgeSession>();
+  const activeProcesses = new Set<ChildProcess>();
+
+  const trackProcess = (child: ChildProcess): ChildProcess => {
+    activeProcesses.add(child);
+    child.once("close", () => activeProcesses.delete(child));
+    return child;
+  };
 
   const wake = (session: NodeBridgeSession) => {
     session.waiters.wake();
@@ -205,7 +212,6 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
       session.queuedInputBytes = 0;
       if (!session.closed) {
         session.closed = true;
-        session.closedAt = new Date().toISOString();
       }
       wake(session);
     }
@@ -222,7 +228,6 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
             return;
           }
           session.closed = true;
-          session.closedAt = new Date().toISOString();
           wake(session);
         });
     session.stopPromise = Promise.all([
@@ -259,7 +264,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
   };
 
   const startOutputProcess = (command: { command: string; args: string[] }) =>
-    spawn(command.command, command.args, { stdio: ["pipe", "ignore", "pipe"] });
+    trackProcess(spawn(command.command, command.args, { stdio: ["pipe", "ignore", "pipe"] }));
 
   const startCommandPair = (params: {
     inputCommand: string[];
@@ -291,9 +296,9 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     const outputProcess = startOutputProcess(output);
     let inputProcess: ChildProcess;
     try {
-      inputProcess = spawn(input.command, input.args, {
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+      inputProcess = trackProcess(
+        spawn(input.command, input.args, { stdio: ["ignore", "pipe", "pipe"] }),
+      );
     } catch (error) {
       void terminateMeetingBridgeProcess(outputProcess, {
         graceMs: NODE_BRIDGE_TERMINATION_GRACE_MS,
@@ -605,7 +610,6 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     mode: session.mode,
     closed: session.closed,
     createdAt: session.createdAt,
-    closedAt: session.closedAt,
     lastInputAt: session.lastInputAt,
     lastOutputAt: session.lastOutputAt,
     lastInputBytes: session.lastInputBytes,
@@ -667,6 +671,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
   };
 
   return {
+    hasActiveWork: () => sessions.size > 0 || activeProcesses.size > 0,
     async handleCommand(paramsJSON?: string | null): Promise<string> {
       let raw: unknown = {};
       if (paramsJSON) {

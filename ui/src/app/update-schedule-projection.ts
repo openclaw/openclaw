@@ -108,20 +108,69 @@ export function formatUpdateCampaignLabel(
   });
 }
 
+function resolveComparedGitCommitsBehind(
+  schedule: UpdateScheduleState | null | undefined,
+  fallback?: number,
+): number | false | undefined {
+  const git = schedule?.install?.git;
+  if (!git || git.status === "unavailable") {
+    return fallback;
+  }
+  return "commitsBehind" in git && git.commitsBehind;
+}
+
+/** Formats update availability using the refreshed checkout distance when present. */
 export function formatUpdateTargetLabel(
   schedule: UpdateScheduleState | null | undefined,
   updateAvailable: UpdateAvailable | null | undefined,
 ): string | null {
   const target = schedule?.target;
-  const commitsBehind =
-    target?.kind === "git" ? target.commitsBehind : updateAvailable?.commitsBehind;
+  const commitsBehind = resolveComparedGitCommitsBehind(
+    schedule,
+    target?.kind === "git" ? target.commitsBehind : updateAvailable?.commitsBehind,
+  );
+  // Checkout refreshes update install status without replacing the announced target.
+  // A completed comparison must therefore suppress the stale announcement entirely.
   if (commitsBehind !== undefined) {
-    return t(commitsBehind === 1 ? "updates.target.commitBehind" : "updates.target.commitsBehind", {
-      count: String(commitsBehind),
-    });
+    return commitsBehind === false
+      ? null
+      : t(commitsBehind === 1 ? "updates.target.commitBehind" : "updates.target.commitsBehind", {
+          count: String(commitsBehind),
+        });
   }
   const version = target?.kind === "package" ? target.version : updateAvailable?.latestVersion;
   return version ? t("updates.target.version", { version }) : null;
+}
+
+export function getUpdateGitRevisions(
+  schedule: UpdateScheduleState | null | undefined,
+  updateAvailable: UpdateAvailable | null | undefined,
+): { currentSha?: string; targetSha: string; compareUrl?: string } | null {
+  const target = schedule?.target;
+  if (
+    target?.kind === "package" ||
+    schedule?.install?.kind === "package" ||
+    resolveComparedGitCommitsBehind(schedule) === false
+  ) {
+    return null;
+  }
+  const targetSha = target?.kind === "git" ? target.upstreamSha : updateAvailable?.upstreamSha;
+  if (!targetSha) {
+    return null;
+  }
+  const currentSha = schedule?.install?.git?.currentSha ?? updateAvailable?.currentSha;
+  const repositoryUrl = updateAvailable?.repositoryUrl;
+  // Repository identity belongs to the announcement, not an unrelated cached target.
+  const compareUrl =
+    repositoryUrl &&
+    /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+$/u.test(repositoryUrl) &&
+    targetSha === updateAvailable?.upstreamSha &&
+    currentSha &&
+    /^[a-f\d]{7,40}$/iu.test(currentSha) &&
+    /^[a-f\d]{7,40}$/iu.test(targetSha)
+      ? `${repositoryUrl}/compare/${currentSha}...${targetSha}`
+      : undefined;
+  return { currentSha, targetSha, compareUrl };
 }
 
 export function isUpdateActionable(
@@ -130,11 +179,14 @@ export function isUpdateActionable(
   updateBusy: boolean,
 ): boolean {
   const target = updateSchedule?.target;
+  const commitsBehind = resolveComparedGitCommitsBehind(
+    updateSchedule,
+    updateAvailable?.commitsBehind || (target?.kind === "git" ? target.commitsBehind : 0),
+  );
   return Boolean(
     updateBusy ||
     updateSchedule?.campaign ||
-    (updateAvailable && updateAvailable.latestVersion !== updateAvailable.currentVersion) ||
-    (updateAvailable?.commitsBehind !== undefined && updateAvailable.commitsBehind > 0) ||
-    (target?.kind === "git" && target.commitsBehind > 0),
+    (commitsBehind !== false &&
+      (updateAvailable?.latestVersion !== updateAvailable?.currentVersion || commitsBehind)),
   );
 }

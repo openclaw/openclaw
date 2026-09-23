@@ -1,11 +1,12 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { expectObjectFields } from "../../../../src/test-utils/mock-call-assertions.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import { createRequireRecord } from "../../../../test/helpers/record.js";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
-import {
-  invalidateChatMetadataStore,
-  beginChatMetadataPublication,
-} from "../../lib/chat/chat-metadata-store.ts";
+import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
+import { beginChatMetadataPublication } from "../../lib/chat/chat-metadata-store.ts";
 import {
   SLASH_COMMANDS,
   getSlashCommandCategoryLabel,
@@ -28,14 +29,10 @@ function requireCommandByName(name: string): Record<string, unknown> {
   return command as unknown as Record<string, unknown>;
 }
 
+const requireRecord = createRequireRecord("record", "expected-label-object");
+
 function expectRecordFields(value: unknown, label: string, expected: Record<string, unknown>) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  const record = value as Record<string, unknown>;
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key]).toEqual(expectedValue);
-  }
+  expectObjectFields(requireRecord(value, label), expected);
 }
 
 function connectedSessionAccess() {
@@ -105,10 +102,9 @@ describe("refreshSlashCommands", () => {
   it("retires in-flight commands after an explicit selection invalidation", async () => {
     const client = new GatewayBrowserClient({ url: "ws://127.0.0.1:12345" });
     const scope = { agentId: "main", sessionKey: "agent:main:shared" };
-    let settle!: (value: { commands: ReturnType<typeof remoteCommand>[] }) => void;
-    const pending = new Promise<{ commands: ReturnType<typeof remoteCommand>[] }>((resolve) => {
-      settle = resolve;
-    });
+    const { promise: pending, resolve: settle } = createDeferred<{
+      commands: ReturnType<typeof remoteCommand>[];
+    }>();
     const request = vi
       .spyOn(client, "request")
       .mockImplementationOnce(async () => pending)
@@ -234,10 +230,7 @@ describe("refreshSlashCommands", () => {
   });
 
   it("coalesces duplicate refreshes for the same agent", async () => {
-    let resolveFirst: ((value: unknown) => void) | undefined;
-    const first = new Promise((resolve) => {
-      resolveFirst = resolve;
-    });
+    const { promise: first, resolve: resolveFirst } = createDeferred<unknown>();
     const request = vi.fn().mockImplementationOnce(async () => await first);
     const client = { request } as never;
 
@@ -274,10 +267,7 @@ describe("refreshSlashCommands", () => {
   });
 
   it("ignores stale refresh responses after switching agents", async () => {
-    let resolveFirst: ((value: unknown) => void) | undefined;
-    const first = new Promise((resolve) => {
-      resolveFirst = resolve;
-    });
+    const { promise: first, resolve: resolveFirst } = createDeferred<unknown>();
     const request = vi.fn((_: string, params: { agentId?: string }) => {
       if (params.agentId === "main") {
         return first;
@@ -472,10 +462,7 @@ describe("conversation reset confirmation", () => {
   });
 
   it("cancels /reset when the selected session changes during confirmation", async () => {
-    let settleConfirmation: ((confirmed: boolean) => void) | undefined;
-    const confirmation = new Promise<boolean>((resolve) => {
-      settleConfirmation = resolve;
-    });
+    const { promise: confirmation, resolve: settleConfirmation } = createDeferred<boolean>();
     const sendResetMessage = vi.fn(async () => {});
     const host = {
       ...connectedSessionAccess(),
@@ -495,10 +482,7 @@ describe("conversation reset confirmation", () => {
   });
 
   it("does not send /reset through a replacement Gateway after confirmation", async () => {
-    let settleConfirmation: ((confirmed: boolean) => void) | undefined;
-    const confirmation = new Promise<boolean>((resolve) => {
-      settleConfirmation = resolve;
-    });
+    const { promise: confirmation, resolve: settleConfirmation } = createDeferred<boolean>();
     const sendResetMessage = vi.fn(async () => {});
     const host = {
       client: { request: vi.fn() } as unknown as GatewayBrowserClient,
@@ -527,10 +511,7 @@ describe("conversation reset confirmation", () => {
   });
 
   it("rechecks /reset admin scope after confirmation", async () => {
-    let settleConfirmation: ((confirmed: boolean) => void) | undefined;
-    const confirmation = new Promise<boolean>((resolve) => {
-      settleConfirmation = resolve;
-    });
+    const { promise: confirmation, resolve: settleConfirmation } = createDeferred<boolean>();
     const sendResetMessage = vi.fn(async () => {});
     const host = {
       ...connectedSessionAccess(),
@@ -561,10 +542,7 @@ describe("conversation reset confirmation", () => {
   });
 
   it("continues /reset when the session key changes to an equivalent alias", async () => {
-    let settleConfirmation: ((confirmed: boolean) => void) | undefined;
-    const confirmation = new Promise<boolean>((resolve) => {
-      settleConfirmation = resolve;
-    });
+    const { promise: confirmation, resolve: settleConfirmation } = createDeferred<boolean>();
     const sendResetMessage = vi.fn(async () => {});
     const host = {
       ...connectedSessionAccess(),
@@ -597,10 +575,7 @@ describe("conversation reset confirmation", () => {
   it.each(["reset", "clear"])(
     "defers /%s when a run starts during confirmation",
     async (command) => {
-      let settleConfirmation: ((confirmed: boolean) => void) | undefined;
-      const confirmation = new Promise<boolean>((resolve) => {
-        settleConfirmation = resolve;
-      });
+      const { promise: confirmation, resolve: settleConfirmation } = createDeferred<boolean>();
       const sendResetMessage = vi.fn(async () => {});
       const reset = vi.fn();
       const host = {
@@ -666,10 +641,7 @@ describe("conversation reset confirmation", () => {
   });
 
   it("does not clear through a replacement Gateway after confirmation", async () => {
-    let settleConfirmation: ((confirmed: boolean) => void) | undefined;
-    const confirmation = new Promise<boolean>((resolve) => {
-      settleConfirmation = resolve;
-    });
+    const { promise: confirmation, resolve: settleConfirmation } = createDeferred<boolean>();
     const reset = vi.fn();
     const originalClient = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const replacementClient = { request: vi.fn() } as unknown as GatewayBrowserClient;
@@ -706,10 +678,7 @@ describe("conversation reset confirmation", () => {
   });
 
   it("rechecks /clear scope after confirmation", async () => {
-    let settleConfirmation: ((confirmed: boolean) => void) | undefined;
-    const confirmation = new Promise<boolean>((resolve) => {
-      settleConfirmation = resolve;
-    });
+    const { promise: confirmation, resolve: settleConfirmation } = createDeferred<boolean>();
     const reset = vi.fn();
     const host = {
       ...connectedSessionAccess(),

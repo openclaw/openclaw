@@ -1,4 +1,3 @@
-// ClickClack tests cover post-write connection verification and gateway guidance.
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -42,14 +41,10 @@ const configuredAccount = {
   },
 } satisfies CoreConfig;
 
-function createRuntime() {
-  return createNonExitingRuntimeEnv();
-}
-
 async function verify(
   cfg: CoreConfig = configuredAccount,
-  runtime = createRuntime(),
-): Promise<ReturnType<typeof createRuntime>> {
+  runtime = createNonExitingRuntimeEnv(),
+): Promise<ReturnType<typeof createNonExitingRuntimeEnv>> {
   await verifyClickClackAccountAfterSetup({
     cfg,
     accountId: "default",
@@ -114,7 +109,7 @@ describe("ClickClack post-write setup verification", () => {
     },
   ])("logs a warning for $name and continues", async ({ arrange, expected }) => {
     arrange();
-    const runtime = createRuntime();
+    const runtime = createNonExitingRuntimeEnv();
 
     await expect(verify(configuredAccount, runtime)).resolves.toBe(runtime);
     expect(runtime.log).toHaveBeenNthCalledWith(1, expected);

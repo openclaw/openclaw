@@ -1,5 +1,7 @@
+import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e.ts";
 import {
   createChatFlowE2eSuite,
@@ -9,6 +11,7 @@ import {
   requireString,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -16,11 +19,7 @@ const QUEUED = ["review the migration", "then update the docs", "finally run the
 
 suite.define(() => {
   it("edits a queued message in its row and returns it to its place", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
 
@@ -75,11 +74,7 @@ suite.define(() => {
   });
 
   it("puts the row back untouched when the edit is cancelled", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
 
@@ -116,11 +111,7 @@ suite.define(() => {
   });
 
   it("keeps a normal composer send separate from an open row edit", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
 
@@ -225,16 +216,14 @@ suite.define(() => {
         await page.getByRole("button", { name: "Queue message" }).click();
         await page.locator(".chat-queue__item", { hasText: message }).waitFor({ timeout: 10_000 });
       }
+      const editRow = page.locator(".chat-queue__item", { hasText: "edit before send" });
+      await editRow.dblclick();
       await gateway.setOnline(false);
       await gateway.closeLatest();
       await page
-        .locator(
-          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
-        )
+        .locator('.agent-chat__composer-status[data-tone="info"] .agent-chat__composer-status-band')
         .waitFor({ timeout: 10_000 });
 
-      const editRow = page.locator(".chat-queue__item", { hasText: "edit before send" });
-      await editRow.dblclick();
       // `hasText` stops matching once the row text becomes a textarea value.
       const inlineEditor = page.locator(".chat-queue__edit-input");
       await inlineEditor.waitFor({ timeout: 10_000 });
@@ -242,6 +231,7 @@ suite.define(() => {
       await page.keyboard.insertText("edited before send");
       await inlineEditor.press("Control+Enter");
       await page.locator(".chat-queue__item", { hasText: "edited before send" }).waitFor();
+      expect(await page.getByRole("alert").count()).toBe(0);
 
       const lastGrip = page
         .locator(".chat-queue__item", { hasText: "send last" })
@@ -295,7 +285,10 @@ suite.define(() => {
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       if (artifactDir) {
         await page.waitForTimeout(100);
-        await page.screenshot({ path: `${artifactDir}/01-remove-rejected.png`, fullPage: true });
+        await writeFile(
+          `${artifactDir}/01-remove-rejected.png`,
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [row]),
+        );
       }
 
       await page.evaluate(() => {
@@ -394,7 +387,12 @@ suite.define(() => {
       await page.getByRole("alert").waitFor({ state: "detached", timeout: 10_000 });
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       if (artifactDir) {
-        await page.screenshot({ path: `${artifactDir}/02-duplicate-noop.png`, fullPage: true });
+        await writeFile(
+          `${artifactDir}/02-duplicate-noop.png`,
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator(".chat-queue"),
+          ]),
+        );
       }
 
       const terminalSession = {
@@ -418,9 +416,7 @@ suite.define(() => {
       await gateway.deferNext("chat.send");
       await gateway.setOnline(true);
       await page
-        .locator(
-          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
-        )
+        .locator('.agent-chat__composer-status[data-tone="info"] .agent-chat__composer-status-band')
         .waitFor({ state: "detached", timeout: 10_000 });
       await gateway.emitChatFinal({ runId: activeRunId, text: "Initial run completed." });
       await gateway.emitGatewayEvent("sessions.changed", terminalSession);
@@ -428,7 +424,7 @@ suite.define(() => {
       const first = requireRecord((await waitForRequests(gateway, "chat.send", 2))[1]?.params);
       expect(first.message).toBe("send last");
       const firstRunId = requireString(first.idempotencyKey, "first queued send idempotency key");
-      await gateway.resolveDeferred("chat.send", { runId: firstRunId, status: "started" });
+      await gateway.resolveDeferred("chat.send");
       await gateway.emitChatFinal({ runId: firstRunId, text: "First queued turn completed." });
 
       const second = requireRecord((await waitForRequests(gateway, "chat.send", 3))[2]?.params);
@@ -453,7 +449,10 @@ suite.define(() => {
       await expectRequestCountStable(gateway, "chat.send", 4);
       await page.locator(".chat-queue").waitFor({ state: "detached", timeout: 10_000 });
       if (artifactDir) {
-        await page.screenshot({ path: `${artifactDir}/03-exact-drain.png`, fullPage: true });
+        await writeFile(
+          `${artifactDir}/03-exact-drain.png`,
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [composer]),
+        );
       }
     } catch (error) {
       await captureControlUiE2eFailureDiagnostics(page, {

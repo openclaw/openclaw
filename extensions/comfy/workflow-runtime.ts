@@ -14,11 +14,11 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import {
   assertOkOrThrowHttpError,
   normalizeBaseUrl,
+  readProviderBinaryResponse,
   readProviderJsonResponse,
   redactProviderResponseErrorText,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   normalizeSecretInputString,
   resolveConfiguredSecretInputString,
@@ -123,13 +123,13 @@ function readConfigInteger(config: ComfyProviderConfig, key: string): number | u
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
-function getComfyConfig(cfg?: OpenClawConfig): ComfyProviderConfig {
+function getComfyConfig(cfg?: OpenClawConfig): { config: ComfyProviderConfig; path: string } {
   const pluginConfig = cfg?.plugins?.entries?.comfy?.config;
   if (isRecord(pluginConfig)) {
-    return pluginConfig;
+    return { config: pluginConfig, path: "plugins.entries.comfy.config" };
   }
   const legacyConfig = cfg?.models?.providers?.comfy;
-  return isRecord(legacyConfig) ? legacyConfig : {};
+  return { config: isRecord(legacyConfig) ? legacyConfig : {}, path: "models.providers.comfy" };
 }
 
 function stripNestedCapabilityConfig(config: ComfyProviderConfig): ComfyProviderConfig {
@@ -259,26 +259,17 @@ function setWorkflowInput(params: {
   inputs[params.inputName] = params.value;
 }
 
-async function resolveComfyHeadersConfig(value: unknown, cfg: OpenClawConfig): Promise<Headers> {
+async function resolveComfyHeadersConfig(
+  value: unknown,
+  cfg: OpenClawConfig,
+  configPath: string,
+): Promise<Headers> {
   const headers = new Headers();
   if (!isRecord(value)) {
     return headers;
   }
   for (const [name, headerValue] of Object.entries(value)) {
-    const path = `plugins.entries.comfy.config.headers.${name}`;
-    const inspected = resolveSecretInputString({
-      value: headerValue,
-      path,
-      defaults: cfg.secrets?.defaults,
-      mode: "inspect",
-    });
-    if (inspected.status === "available") {
-      headers.set(name, inspected.value);
-      continue;
-    }
-    if (inspected.status === "missing") {
-      continue;
-    }
+    const path = `${configPath}.headers[${JSON.stringify(name)}]`;
     const resolved = await resolveConfiguredSecretInputString({
       config: cfg,
       env: process.env,
@@ -451,7 +442,7 @@ function extractHistoryEntry(history: unknown, promptId: string): ComfyHistoryEn
   return null;
 }
 
-async function waitForLocalHistory(params: {
+async function waitForComfyHistory(params: {
   baseUrl: string;
   promptId: string;
   headers: Headers;
@@ -459,71 +450,57 @@ async function waitForLocalHistory(params: {
   pollIntervalMs: number;
   policy?: SsrFPolicy;
   dispatcherPolicy?: ComfyDispatcherPolicy;
-}): Promise<ComfyHistoryEntry> {
+  mode: ComfyMode;
+}): Promise<unknown> {
   const deadline = Date.now() + params.timeoutMs;
-  for (;;) {
-    const requestTimeoutMs = resolveComfyRemainingMs(deadline, params.timeoutMs);
-    const history = await readJsonResponse<unknown>({
-      url: `${params.baseUrl}/history/${params.promptId}`,
+  const read = <T>(path: string, kind: "history" | "status", timeoutMs: number) =>
+    readJsonResponse<T>({
+      url: `${params.baseUrl}${path}`,
       init: {
         method: "GET",
         headers: params.headers,
       },
-      timeoutMs: requestTimeoutMs,
+      timeoutMs,
       policy: params.policy,
       dispatcherPolicy: params.dispatcherPolicy,
-      auditContext: "comfy-history",
-      errorPrefix: "Comfy history lookup failed",
+      auditContext: `comfy-${kind}`,
+      errorPrefix: `Comfy ${kind} lookup failed`,
     });
 
-    const entry = extractHistoryEntry(history, params.promptId);
-    if (entry?.outputs && Object.keys(entry.outputs).length > 0) {
-      return entry;
-    }
-
-    const pollDelayMs = resolveComfyRemainingMs(deadline, params.timeoutMs, params.pollIntervalMs);
-    await new Promise((resolve) => {
-      setTimeout(resolve, pollDelayMs);
-    });
-  }
-}
-
-async function waitForCloudCompletion(params: {
-  baseUrl: string;
-  promptId: string;
-  headers: Headers;
-  timeoutMs: number;
-  pollIntervalMs: number;
-  policy?: SsrFPolicy;
-  dispatcherPolicy?: ComfyDispatcherPolicy;
-}): Promise<void> {
-  const deadline = Date.now() + params.timeoutMs;
   for (;;) {
     const requestTimeoutMs = resolveComfyRemainingMs(deadline, params.timeoutMs);
-    const status = await readJsonResponse<ComfyStatusResponse>({
-      url: `${params.baseUrl}/api/job/${params.promptId}/status`,
-      init: {
-        method: "GET",
-        headers: params.headers,
-      },
-      timeoutMs: requestTimeoutMs,
-      policy: params.policy,
-      dispatcherPolicy: params.dispatcherPolicy,
-      auditContext: "comfy-status",
-      errorPrefix: "Comfy status lookup failed",
-    });
-
-    if (status.status === "completed") {
-      return;
-    }
-    if (status.status === "failed" || status.status === "cancelled") {
-      const detail = redactProviderResponseErrorText(
-        status.error ?? status.message ?? params.promptId,
-        params.headers,
+    if (params.mode === "cloud") {
+      const status = await read<ComfyStatusResponse>(
+        `/api/job/${params.promptId}/status`,
+        "status",
+        requestTimeoutMs,
       );
-      throw new Error(`Comfy workflow ${status.status}: ${detail}`);
+      if (status.status === "completed") {
+        // Cloud history gets a fresh request budget after the job completes.
+        return await read<unknown>(
+          `/api/history_v2/${params.promptId}`,
+          "history",
+          params.timeoutMs,
+        );
+      }
+      if (status.status === "failed" || status.status === "cancelled") {
+        const detail = redactProviderResponseErrorText(
+          status.error ?? status.message ?? params.promptId,
+          params.headers,
+        );
+        throw new Error(`Comfy workflow ${status.status}: ${detail}`);
+      }
+    } else {
+      const history = await read<unknown>(
+        `/history/${params.promptId}`,
+        "history",
+        requestTimeoutMs,
+      );
+      const entry = extractHistoryEntry(history, params.promptId);
+      if (entry?.outputs && Object.keys(entry.outputs).length > 0) {
+        return entry;
+      }
     }
-
     const pollDelayMs = resolveComfyRemainingMs(deadline, params.timeoutMs, params.pollIntervalMs);
     await new Promise((resolve) => {
       setTimeout(resolve, pollDelayMs);
@@ -628,16 +605,20 @@ async function downloadOutputFile(params: {
     const mimeType =
       normalizeOptionalString(firstResponse.response.headers.get("content-type")) ||
       "application/octet-stream";
-    return {
-      buffer: await readResponseWithLimit(firstResponse.response, params.maxBytes, {
+    const downloadLabel = `Comfy ${params.capability} output download`;
+    const buffer = await readProviderBinaryResponse(
+      firstResponse.response,
+      downloadLabel,
+      params.capability,
+      {
+        maxBytes: params.maxBytes,
         chunkTimeoutMs: params.timeoutMs,
-        onOverflow: ({ maxBytes }) =>
-          new Error(`Comfy ${params.capability} output download exceeds ${maxBytes} bytes`),
+        onOverflow: ({ maxBytes }) => new Error(`${downloadLabel} exceeds ${maxBytes} bytes`),
         onIdleTimeout: ({ chunkTimeoutMs }) =>
-          new Error(`Comfy ${params.capability} output download stalled after ${chunkTimeoutMs}ms`),
-      }),
-      mimeType,
-    };
+          new Error(`${downloadLabel} stalled after ${chunkTimeoutMs}ms`),
+      },
+    );
+    return { buffer, mimeType };
   } finally {
     await firstResponse.release();
   }
@@ -675,7 +656,7 @@ export function isComfyCapabilityConfigured(params: {
   agentDir?: string;
   capability: ComfyCapability;
 }): boolean {
-  const config = getComfyConfig(params.cfg);
+  const { config } = getComfyConfig(params.cfg);
   const capabilityConfig = getComfyCapabilityConfig(config, params.capability);
   const hasWorkflow = Boolean(
     resolveComfyWorkflowSource(capabilityConfig).workflow ||
@@ -716,7 +697,7 @@ export async function runComfyWorkflow(params: {
   outputKinds: readonly ComfyOutputKind[];
   inputImage?: ComfySourceImage;
 }): Promise<ComfyWorkflowResult> {
-  const config = getComfyConfig(params.cfg);
+  const { config, path: configPath } = getComfyConfig(params.cfg);
   const capabilityConfig = getComfyCapabilityConfig(config, params.capability);
   const mode = resolveComfyMode(capabilityConfig);
   const workflow = await loadComfyWorkflow(capabilityConfig);
@@ -785,7 +766,7 @@ export async function runComfyWorkflow(params: {
       defaultBaseUrl:
         mode === "cloud" ? DEFAULT_COMFY_CLOUD_BASE_URL : DEFAULT_COMFY_LOCAL_BASE_URL,
       allowPrivateNetwork: mode === "local" || explicitAllowPrivateNetwork,
-      headers: await resolveComfyHeadersConfig(capabilityConfig.headers, params.cfg),
+      headers: await resolveComfyHeadersConfig(capabilityConfig.headers, params.cfg, configPath),
       defaultHeaders:
         mode === "cloud"
           ? {
@@ -859,40 +840,16 @@ export async function runComfyWorkflow(params: {
     throw new Error("Comfy workflow submit response missing prompt_id");
   }
 
-  const history =
-    mode === "cloud"
-      ? await (async () => {
-          await waitForCloudCompletion({
-            baseUrl: normalizedBaseUrl,
-            promptId,
-            headers: new Headers(headers),
-            timeoutMs,
-            pollIntervalMs,
-            policy: networkPolicy.apiPolicy,
-            dispatcherPolicy,
-          });
-          return await readJsonResponse<unknown>({
-            url: `${normalizedBaseUrl}/api/history_v2/${promptId}`,
-            init: {
-              method: "GET",
-              headers: new Headers(headers),
-            },
-            timeoutMs,
-            policy: networkPolicy.apiPolicy,
-            dispatcherPolicy,
-            auditContext: "comfy-history",
-            errorPrefix: "Comfy history lookup failed",
-          });
-        })()
-      : await waitForLocalHistory({
-          baseUrl: normalizedBaseUrl,
-          promptId,
-          headers: new Headers(headers),
-          timeoutMs,
-          pollIntervalMs,
-          policy: networkPolicy.apiPolicy,
-          dispatcherPolicy,
-        });
+  const history = await waitForComfyHistory({
+    baseUrl: normalizedBaseUrl,
+    promptId,
+    headers: new Headers(headers),
+    timeoutMs,
+    pollIntervalMs,
+    policy: networkPolicy.apiPolicy,
+    dispatcherPolicy,
+    mode,
+  });
 
   const historyEntry = extractHistoryEntry(history, promptId);
   if (!historyEntry) {

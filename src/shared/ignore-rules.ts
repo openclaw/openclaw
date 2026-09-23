@@ -16,17 +16,11 @@ const IGNORE_MATCHER_MAX_PATTERN_CHARS = IGNORE_FILE_MAX_BYTES;
 const OVERSIZED_IGNORE_FILE = Symbol("oversizedIgnoreFile");
 const COMPLEX_IGNORE_FILE = Symbol("complexIgnoreFile");
 
-export type IgnoreMatcher = ReturnType<typeof ignore>;
-type IgnoreMatcherOptions = {
-  /** Match node-ignore's ignorecase option for a supplied matcher. */
-  ignoreCase: boolean;
-};
+export type IgnoreMatcher = Pick<ReturnType<typeof ignore>, "ignores">;
 
 type IgnoreMatcherState = {
+  matcher: ReturnType<typeof ignore>;
   excludedSubtrees: Set<string>;
-  caseFoldedExcludedSubtrees: Set<string>;
-  caseFoldNewSubtrees: boolean;
-  caseModeKnown: boolean;
   patternCount: number;
   patternChars: number;
 };
@@ -47,123 +41,38 @@ function setContainsLiteralSubtree(pathname: string, subtrees: Set<string>): boo
 }
 
 function isInLiteralSubtree(pathname: string, state: IgnoreMatcherState): boolean {
-  const normalized = normalizeLiteralSubtreePath(pathname);
-  return (
-    setContainsLiteralSubtree(normalized, state.excludedSubtrees) ||
-    setContainsLiteralSubtree(normalized.toLowerCase(), state.caseFoldedExcludedSubtrees)
-  );
+  const normalized = normalizeLiteralSubtreePath(pathname).toLowerCase();
+  return setContainsLiteralSubtree(normalized, state.excludedSubtrees);
 }
 
-function getIgnoreMatcherState(
-  matcher: IgnoreMatcher,
-  caseFoldNewSubtrees?: boolean,
-): IgnoreMatcherState {
-  const existing = ignoreMatcherStates.get(matcher);
-  if (existing) {
-    if (!existing.caseModeKnown && caseFoldNewSubtrees !== undefined) {
-      existing.caseFoldNewSubtrees = caseFoldNewSubtrees;
-      existing.caseModeKnown = true;
+function getIgnoreMatcherState(matcher?: IgnoreMatcher): IgnoreMatcherState {
+  if (matcher) {
+    const existing = ignoreMatcherStates.get(matcher);
+    if (!existing) {
+      throw new Error("addIgnoreRules requires a matcher returned by addIgnoreRules");
     }
     return existing;
   }
+  const ownedMatcher = ignore();
   const state: IgnoreMatcherState = {
+    matcher: ownedMatcher,
     excludedSubtrees: new Set<string>(),
-    caseFoldedExcludedSubtrees: new Set<string>(),
-    caseFoldNewSubtrees: caseFoldNewSubtrees ?? false,
-    caseModeKnown: caseFoldNewSubtrees !== undefined,
     patternCount: 0,
     patternChars: 0,
   };
-  ignoreMatcherStates.set(matcher, state);
+  ignoreMatcherStates.set(ownedMatcher, state);
 
-  const originalIgnores = matcher.ignores.bind(matcher);
-  const originalTest = matcher.test.bind(matcher);
-  const originalCheckIgnore = matcher.checkIgnore.bind(matcher);
-  matcher.ignores = ((pathname: string) => {
+  const originalIgnores = ownedMatcher.ignores.bind(ownedMatcher);
+  ownedMatcher.ignores = (pathname: string) => {
     const ignored = originalIgnores(pathname);
     return isInLiteralSubtree(pathname, state) || ignored;
-  }) as IgnoreMatcher["ignores"];
-  matcher.test = ((pathname: string) => {
-    const result = originalTest(pathname);
-    return isInLiteralSubtree(pathname, state) ? { ignored: true, unignored: false } : result;
-  }) as IgnoreMatcher["test"];
-  matcher.checkIgnore = ((pathname: string) => {
-    const result = originalCheckIgnore(pathname);
-    return isInLiteralSubtree(pathname, state) ? { ignored: true, unignored: false } : result;
-  }) as IgnoreMatcher["checkIgnore"];
-  matcher.createFilter = (() => (pathname: string) =>
-    !matcher.ignores(pathname)) as IgnoreMatcher["createFilter"];
-  matcher.filter = ((pathnames: readonly string[]) =>
-    pathnames.filter(matcher.createFilter())) as IgnoreMatcher["filter"];
-
+  };
   return state;
 }
 
-function inheritIgnoreMatcherState(
-  receiver: IgnoreMatcher,
-  pattern: Parameters<IgnoreMatcher["add"]>[0],
-): void {
-  const candidates = Array.isArray(pattern) ? pattern : [pattern];
-  for (const candidate of candidates) {
-    if (typeof candidate !== "object" || candidate === null || candidate === receiver) {
-      continue;
-    }
-    const inherited = ignoreMatcherStates.get(candidate as IgnoreMatcher);
-    if (!inherited) {
-      continue;
-    }
-    const state = getIgnoreMatcherState(receiver);
-    for (const subtree of inherited.excludedSubtrees) {
-      state.excludedSubtrees.add(subtree);
-    }
-    for (const subtree of inherited.caseFoldedExcludedSubtrees) {
-      state.caseFoldedExcludedSubtrees.add(subtree);
-    }
-    state.patternCount = Math.min(
-      IGNORE_MATCHER_MAX_PATTERNS,
-      state.patternCount + inherited.patternCount,
-    );
-    state.patternChars = Math.min(
-      IGNORE_MATCHER_MAX_PATTERN_CHARS,
-      state.patternChars + inherited.patternChars,
-    );
-  }
-}
-
-const IGNORE_ADD_STATE_PATCHED = Symbol("ignoreAddStatePatched");
-
-function installIgnoreAddStatePropagation(): void {
-  const prototype = Object.getPrototypeOf(ignore()) as IgnoreMatcher & {
-    [IGNORE_ADD_STATE_PATCHED]?: boolean;
-  };
-  if (prototype[IGNORE_ADD_STATE_PATCHED]) {
-    return;
-  }
-  const originalAdd = Reflect.get(prototype, "add") as IgnoreMatcher["add"];
-  // node-ignore implements supported matcher composition in Ignore.add().
-  // Preserve terminal deny metadata there so plain ignore().add(source)
-  // cannot silently reopen a subtree that OpenClaw failed closed.
-  prototype.add = function (
-    this: IgnoreMatcher,
-    pattern: Parameters<IgnoreMatcher["add"]>[0],
-  ): IgnoreMatcher {
-    const result = Reflect.apply(originalAdd, this, [pattern]) as IgnoreMatcher;
-    inheritIgnoreMatcherState(this, pattern);
-    return result;
-  } as IgnoreMatcher["add"];
-  Object.defineProperty(prototype, IGNORE_ADD_STATE_PATCHED, { value: true });
-}
-
-installIgnoreAddStatePropagation();
-
-function addFailClosedSubtree(matcher: IgnoreMatcher, prefix: string): void {
-  const state = getIgnoreMatcherState(matcher);
-  const normalized = normalizeLiteralSubtreePath(prefix);
-  if (state.caseFoldNewSubtrees) {
-    state.caseFoldedExcludedSubtrees.add(normalized.toLowerCase());
-  } else {
-    state.excludedSubtrees.add(normalized);
-  }
+function addFailClosedSubtree(state: IgnoreMatcherState, prefix: string): void {
+  const normalized = normalizeLiteralSubtreePath(prefix).toLowerCase();
+  state.excludedSubtrees.add(normalized);
 }
 
 function parseIgnorePatterns(
@@ -200,27 +109,10 @@ function parseIgnorePatterns(
 
 export const normalizeNativePathSeparators = (pathValue: string) => pathValue.split(sep).join("/");
 
-/** Adds nested ignore-file rules to a matcher using paths relative to the scan root. */
-export function addIgnoreRules(dir: string, rootDir: string): IgnoreMatcher;
-export function addIgnoreRules(
-  dir: string,
-  rootDir: string,
-  ig: IgnoreMatcher,
-  options: IgnoreMatcherOptions,
-): IgnoreMatcher;
-export function addIgnoreRules(
-  dir: string,
-  rootDir: string,
-  ig?: IgnoreMatcher,
-  options?: IgnoreMatcherOptions,
-): IgnoreMatcher {
-  if (ig && !options) {
-    throw new Error("addIgnoreRules requires ignoreCase when a matcher is supplied");
-  }
-  const matcher = ig ?? ignore();
-  // node-ignore does not expose its configured case mode. Keep its default;
-  // callers supplying ignorecase:false must carry that fact alongside it.
-  const state = getIgnoreMatcherState(matcher, options?.ignoreCase ?? true);
+/** Adds nested rules, optionally continuing a matcher previously returned for this scan. */
+export function addIgnoreRules(dir: string, rootDir: string, ig?: IgnoreMatcher): IgnoreMatcher {
+  const state = getIgnoreMatcherState(ig);
+  const matcher = state.matcher;
   const relativeDir = relative(rootDir, dir);
   const prefix = relativeDir ? `${normalizeNativePathSeparators(relativeDir)}/` : "";
 
@@ -236,7 +128,7 @@ export function addIgnoreRules(
       // the scan surface files the user asked to hide. Stop here so a later
       // ignore file in this directory cannot negate the exclusion and reopen a
       // subtree whose policy could not be parsed.
-      addFailClosedSubtree(matcher, prefix);
+      addFailClosedSubtree(state, prefix);
       break;
     }
     if (content === null) {
@@ -247,7 +139,7 @@ export function addIgnoreRules(
       chars: IGNORE_MATCHER_MAX_PATTERN_CHARS - state.patternChars,
     });
     if (parsed === COMPLEX_IGNORE_FILE) {
-      addFailClosedSubtree(matcher, prefix);
+      addFailClosedSubtree(state, prefix);
       break;
     }
     if (parsed.patterns.length > 0) {

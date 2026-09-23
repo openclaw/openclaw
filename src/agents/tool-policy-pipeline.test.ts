@@ -208,6 +208,16 @@ describe("tool-policy-pipeline", () => {
     ]);
   });
 
+  test("classifies pdf as an unavailable gated core tool, not a missing plugin", () => {
+    const warnings = runAllowlistWarningStep({
+      allow: ["pdf"],
+      label: "tools.allow",
+    });
+    expect(warnings).toEqual([
+      "tools: tools.allow allowlist contains unknown entries (pdf). These entries are shipped core tools but unavailable in the current runtime/provider/model/config.",
+    ]);
+  });
+
   test("still warns for explicit allowlists that mention unavailable gated core tools", () => {
     const warnings = runAllowlistWarningStep({
       allow: ["apply_patch"],
@@ -668,6 +678,51 @@ describe("tool-policy-pipeline", () => {
     expect(second).toEqual([tools[1]]);
     expect(second[0]).toBe(tools[1]);
     expect(tools.map((tool) => tool.name)).toEqual(["read", "write", "exec"]);
+  });
+
+  test("reads declared tool changes after each layer's filter callback", () => {
+    const tools = [{ name: "read" }];
+    const declared = {
+      pluginIds: new Set([" First-Owner ", ""]),
+      pluginToolNames: ["old-tool", " OLD-TOOL ", ""],
+      mcpServerNames: ["Old Server"],
+    };
+    const events: string[] = [];
+    const filtered = applyToolPolicyPipeline({
+      tools,
+      toolMeta: () => undefined,
+      warn: (message) => events.push(message),
+      declaredToolAllowlist: declared,
+      steps: [
+        {
+          policy: { allow: ["*", "first-owner", "old-tool", "old-server__*"] },
+          label: "declared first",
+          stripPluginOnlyAllowlist: true,
+        },
+        {
+          policy: { allow: ["*", "second-owner", "new-tool", "new-server__*", "old-tool"] },
+          label: "declared second",
+          stripPluginOnlyAllowlist: true,
+        },
+      ],
+      onFilter: ({ step }) => {
+        events.push(`filtered: ${step.label}`);
+        if (step.label === "declared first") {
+          declared.pluginIds.clear();
+          declared.pluginIds.add(" Second-Owner ");
+          declared.pluginToolNames.splice(0, declared.pluginToolNames.length, " NEW-TOOL ");
+          declared.mcpServerNames.splice(0, declared.mcpServerNames.length, "New Server");
+        }
+      },
+    });
+
+    expect(filtered).toEqual(tools);
+    expect(filtered[0]).toBe(tools[0]);
+    expect(events).toEqual([
+      "filtered: declared first",
+      "tools: declared second allowlist contains unknown entries (old-tool). These entries won't match any tool unless the plugin is enabled.",
+      "filtered: declared second",
+    ]);
   });
 
   test("applies deny filtering after allow filtering", () => {

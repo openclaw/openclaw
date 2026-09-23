@@ -4,6 +4,7 @@
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
 import { beforeEach, afterEach, expect, it } from "vitest";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   installMockGateway,
@@ -12,6 +13,7 @@ import {
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import {
   failNextDeviceIdentityMint,
+  focusChatSidePanel,
   openChatSidePanelType,
 } from "./chat-side-panel.test-support.ts";
 import {
@@ -80,7 +82,9 @@ let context: BrowserContext | undefined;
 
 suite.define(() => {
   afterEach(async () => {
-    await context?.close();
+    if (context) {
+      await suite.closeBrowserContext(context);
+    }
     context = undefined;
   });
 
@@ -97,7 +101,7 @@ suite.define(() => {
     webChrome?: boolean;
     width?: number;
   }) {
-    context = await suite.browser.newContext({
+    context = await suite.newBrowserContext({
       colorScheme: options.colorScheme,
       hasTouch: options.hasTouch,
       locale: "en-US",
@@ -192,22 +196,13 @@ suite.define(() => {
     await page.keyboard.press("Escape");
   });
 
-  it.each([
-    {
-      name: "sidebar",
+  it("closes navigation while the sidebar element is still unregistered", async () => {
+    const testCase = {
       module: /\/assets\/app-sidebar-[A-Za-z0-9_-]{8}\.js(?:\?.*)?$/u,
       pathname: "new",
       readySelector: ".new-session-page__message",
       tag: "openclaw-app-sidebar",
-    },
-    {
-      name: "floating attention",
-      module: /\/assets\/sidebar-attention-[A-Za-z0-9_-]{8}\.js(?:\?.*)?$/u,
-      pathname: "settings/appearance",
-      readySelector: ".shell--settings",
-      tag: "openclaw-sidebar-attention",
-    },
-  ])("closes navigation while the $name element is still unregistered", async (testCase) => {
+    };
     let held!: Awaited<ReturnType<typeof holdModuleResponse>>;
     const errors: string[] = [];
     try {
@@ -256,11 +251,16 @@ suite.define(() => {
   it.each(["navigation", "replacement open", "reconnection", "outside pointer", "Escape"] as const)(
     "keeps pending Inbox intent current across %s",
     async (action) => {
-      const page = await openPage({ pathname: "new" });
-      const held = await holdModuleResponse(
-        page,
-        /\/assets\/sidebar-attention-panel\.runtime-[^/?]+\.js(?:\?.*)?$/u,
-      );
+      let held!: Awaited<ReturnType<typeof holdModuleResponse>>;
+      const page = await openPage({
+        pathname: "new",
+        beforeNavigate: async (targetPage) => {
+          held = await holdModuleResponse(
+            targetPage,
+            /\/assets\/sidebar-attention-panel\.runtime-[^/?]+\.js(?:\?.*)?$/u,
+          );
+        },
+      });
       const attention = await page
         .locator("openclaw-app-sidebar openclaw-sidebar-attention")
         .elementHandle();
@@ -439,6 +439,7 @@ suite.define(() => {
 
   it("hosts navigation, search, sessions, and history in web titlebar chrome", async () => {
     const page = await openPage({
+      colorScheme: "dark",
       scenario: {
         featureMethods: ["chat.metadata", "chat.startup", "sessions.create", "update.run"],
         operatorScopes: ["operator.admin", "operator.read"],
@@ -461,10 +462,10 @@ suite.define(() => {
       .poll(() =>
         sidebarNewThread.evaluate((element) => {
           const style = getComputedStyle(element);
-          return { borderColor: style.borderTopColor, boxShadow: style.boxShadow };
+          return { borderStyle: style.borderTopStyle, boxShadow: style.boxShadow };
         }),
       )
-      .toEqual({ borderColor: "rgba(0, 0, 0, 0)", boxShadow: "none" });
+      .toEqual({ borderStyle: "none", boxShadow: "none" });
     await page.keyboard.press("Tab");
     await sidebarNewThread.focus();
     await expect
@@ -507,6 +508,12 @@ suite.define(() => {
       .toContain("shell--nav-collapsed");
     await expect.poll(() => newThread.isVisible()).toBe(true);
     await page.locator(".sidebar-attention--floating .sidebar-issues-button").waitFor();
+    await page.locator(".sidebar-attention--floating .sidebar-issues-button__count").waitFor();
+    await page.evaluate(() => document.fonts.ready);
+    await waitForLayoutSettled(
+      page,
+      ".macos-titlebar-controls, .sidebar-attention--floating, .chat-pane-cache__pane--visible .chat-pane__crumbs",
+    );
     const toolbarBox = await toolbar.boundingBox();
     const attention = page.locator(".sidebar-attention--floating");
     const attentionBox = await attention.boundingBox();
@@ -538,12 +545,49 @@ suite.define(() => {
     for (const centerline of centerlines.slice(1)) {
       expect(centerline).toBeCloseTo(centerlines[0]!, 1);
     }
+    await page.mouse.move(600, 400);
     if (railProofDir) {
       await page.screenshot({
         animations: "disabled",
         path: path.join(railProofDir, "native-web-top-left-controls.png"),
       });
     }
+    await expect
+      .poll(() =>
+        topLeftControls.evaluateAll((buttons) =>
+          buttons.map((button) => {
+            const style = getComputedStyle(button);
+            return {
+              border: style.borderTopWidth,
+              background: style.backgroundColor,
+              shadow: style.boxShadow,
+            };
+          }),
+        ),
+      )
+      .toEqual(
+        Array.from({ length: 6 }, () => ({
+          border: "0px",
+          background: "rgba(0, 0, 0, 0)",
+          shadow: "none",
+        })),
+      );
+    const inbox = attention.locator(".sidebar-issues-button");
+    await inbox.hover();
+    expect(await inbox.evaluate((button) => getComputedStyle(button).backgroundColor)).not.toBe(
+      "rgba(0, 0, 0, 0)",
+    );
+    await newThread.focus();
+    await page.keyboard.press("Tab");
+    await expect
+      .poll(() => inbox.evaluate((button) => button.matches(":focus-visible")))
+      .toBe(true);
+    expect(await inbox.evaluate((button) => getComputedStyle(button).boxShadow)).not.toBe("none");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => page.locator("#sidebar-issues-panel").isVisible()).toBe(true);
+    await page.keyboard.press("Escape");
+    await expect.poll(() => inbox.getAttribute("aria-expanded")).toBe("false");
+
     await search.click();
     await expect.poll(() => page.locator(".cmd-palette-overlay").isVisible()).toBe(true);
     await page.keyboard.press("Escape");
@@ -590,7 +634,7 @@ suite.define(() => {
       operatorScopes: limitedScopes,
       width: 1280,
     },
-  ])("keeps expanded side-panel tabs clear of $label web titlebar chrome", async (testCase) => {
+  ])("keeps focused main controls clear of $label web titlebar chrome", async (testCase) => {
     const page = await openPage({
       deviceLess: testCase.deviceLess,
       scenario: testCase.operatorScopes
@@ -614,14 +658,12 @@ suite.define(() => {
       await toolbar.getByRole("button", { name: "Collapse sidebar" }).click();
     }
     await openChatSidePanelType(page, "Side chat");
-    const panel = page.getByRole("region", { name: "Side panel" });
-    await panel.getByRole("button", { name: "Expand side panel" }).click();
-    await panel.getByRole("button", { name: "Restore side panel" }).waitFor();
+    await focusChatSidePanel(page);
 
     const shellControls = page.locator(
       ".macos-titlebar-controls button:visible, .sidebar-attention--floating button:visible",
     );
-    const panelControls = panel.locator(":scope > .side-panel__header :is(button, wa-tab):visible");
+    const panelControls = page.locator(".chat-pane__actions button:visible");
     const shellBoxes = await Promise.all(
       Array.from({ length: await shellControls.count() }, (_, index) =>
         shellControls.nth(index).boundingBox(),
@@ -632,10 +674,20 @@ suite.define(() => {
         panelControls.nth(index).boundingBox(),
       ),
     );
-    const shellRight = Math.max(...shellBoxes.flatMap((box) => (box ? [box.x + box.width] : [])));
-    const panelLeft = Math.min(...panelBoxes.flatMap((box) => (box ? [box.x] : [])));
-    expect(panelLeft - shellRight).toBeGreaterThanOrEqual(4);
-    expect(panelLeft - shellRight).toBeLessThanOrEqual(16);
+    expect(shellBoxes.length).toBeGreaterThan(0);
+    expect(panelBoxes.length).toBeGreaterThan(0);
+    for (const panelBox of panelBoxes) {
+      expect(panelBox).not.toBeNull();
+      for (const shellBox of shellBoxes) {
+        expect(shellBox).not.toBeNull();
+        expect(
+          panelBox!.x >= shellBox!.x + shellBox!.width + 4 ||
+            panelBox!.x + panelBox!.width <= shellBox!.x - 4 ||
+            panelBox!.y >= shellBox!.y + shellBox!.height + 4 ||
+            panelBox!.y + panelBox!.height <= shellBox!.y - 4,
+        ).toBe(true);
+      }
+    }
     if (testCase.deviceLess) {
       await page.locator(".sidebar-attention--floating .sidebar-issues-button__count").waitFor();
       expect(await page.locator(".scope-upgrade-shell-status").count()).toBe(0);
@@ -657,10 +709,11 @@ suite.define(() => {
   it("keeps overlay motion anchored to its owning interaction", async () => {
     const page = await openPage({ nativeNav: false });
 
-    await page.keyboard.press("Meta+K");
-    const palette = page.locator(".cmd-palette");
-    const paletteDialog = page.locator("openclaw-modal-dialog.palette");
-    await page.locator(".cmd-palette__input:not([disabled])").waitFor({ state: "visible" });
+    await page.keyboard.press("ControlOrMeta+K");
+    // The loading dialog is replaced during handoff; measure the full palette.
+    const palette = page.locator("openclaw-command-palette .cmd-palette");
+    const paletteDialog = page.locator("openclaw-command-palette openclaw-modal-dialog.palette");
+    await palette.locator(".cmd-palette__input:not([disabled])").waitFor({ state: "visible" });
     const paletteAnimationName = await palette.evaluate(
       (element) => getComputedStyle(element).animationName,
     );
@@ -673,7 +726,7 @@ suite.define(() => {
 
     const sidebar = page.locator("openclaw-app-sidebar");
     await sidebar.locator(".sidebar-identity-card").click();
-    const buildLink = sidebar.getByRole("link", {
+    const buildLink = sidebar.getByRole("menuitem", {
       name: "Control UI build details",
       exact: true,
     });
@@ -783,7 +836,7 @@ suite.define(() => {
 
     const row = navigation.locator(".sidebar-recent-session").first();
     await row.hover();
-    await row.getByRole("button", { name: "Open session menu" }).click();
+    await row.click({ button: "right" });
     const sessionMenu = page.getByRole("menu", { name: /Actions for/ });
     await expect.poll(() => sessionMenu.isVisible()).toBe(true);
     await page.keyboard.press("Escape");
@@ -921,23 +974,17 @@ suite.define(() => {
       await expect.poll(() => retainedHost.getAttribute("data-toast-placement")).toBe("shell");
       const retainedToast = retainedHost.locator(".app-toast");
       await expect.poll(() => retainedToast.textContent()).toContain("Codex hidden");
-      if (finalLayout === "compact") {
-        await expect
-          .poll(async () => {
-            const [toastBounds, headerBounds] = await Promise.all([
-              retainedToast.boundingBox(),
-              page.locator(".chat-pane__header:visible").first().boundingBox(),
-            ]);
-            return Boolean(
-              toastBounds && headerBounds && toastBounds.y >= headerBounds.y + headerBounds.height,
-            );
-          })
-          .toBe(true);
-      } else {
-        await expect
-          .poll(async () => Math.round((await retainedToast.boundingBox())?.y ?? -1))
-          .toBe(20);
-      }
+      await expect
+        .poll(async () => {
+          const [toastBounds, headerBounds] = await Promise.all([
+            retainedToast.boundingBox(),
+            page.locator(".chat-pane__header:visible").first().boundingBox(),
+          ]);
+          return Boolean(
+            toastBounds && headerBounds && toastBounds.y >= headerBounds.y + headerBounds.height,
+          );
+        })
+        .toBe(true);
       await expect
         .poll(async () => {
           const [toastBounds, composerBounds] = await Promise.all([

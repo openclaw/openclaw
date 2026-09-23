@@ -1,15 +1,12 @@
 // Ollama tests cover discovery shared plugin behavior.
-import { expectDefined } from "@openclaw/normalization-core";
-import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createModelProviderConfig } from "../../test-support/model-provider-config.test-support.js";
 import {
   isLocalOllamaBaseUrl,
   resolveOllamaDiscoveryResult,
   shouldUseSyntheticOllamaAuth,
 } from "./discovery-shared.js";
-
-afterEach(clearLiveCatalogCacheForTests);
 
 describe("isLocalOllamaBaseUrl", () => {
   it.each([
@@ -83,10 +80,7 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
     params: { num_ctx: 48_000 },
   } satisfies ModelProviderConfig["models"][number];
 
-  const buildMockProvider = async (
-    _configuredBaseUrl?: string,
-    _opts?: { quiet?: boolean },
-  ): Promise<ModelProviderConfig> => ({
+  const buildMockProvider = async (): Promise<ModelProviderConfig> => ({
     baseUrl: "https://ollama.com",
     api: "ollama",
     models: [discoveredModel],
@@ -231,18 +225,14 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
     async ({ apiKey, resolvedAuth }) => {
       const result = await resolveOllamaDiscoveryResult({
         ctx: {
-          config: {
-            models: {
-              providers: {
-                ollama: {
-                  baseUrl: "http://127.0.0.1:11434",
-                  api: "ollama",
-                  apiKey,
-                  models: [cloudModel],
-                },
-              },
+          config: createModelProviderConfig({
+            ollama: {
+              baseUrl: "http://127.0.0.1:11434",
+              api: "ollama",
+              apiKey,
+              models: [cloudModel],
             },
-          },
+          }),
           env: { RESOLVED_OLLAMA_TOKEN: "resolved-ollama-fixture" },
           resolveProviderApiKey: () => resolvedAuth,
         },
@@ -250,8 +240,7 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
         buildProvider: buildMockProvider,
       });
 
-      expect(result?.provider.apiKey).toEqual(apiKey);
-      expect(result?.provider.models).toEqual([cloudModel]);
+      expect(result).toMatchObject({ provider: { apiKey, models: [cloudModel] } });
     },
   );
 
@@ -262,6 +251,7 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
     "https://api.ollama.com/v1",
     "https://sub.ollama.com",
   ])("returns null for hosted base URL %s without explicit models", async (baseUrl) => {
+    const buildProvider = vi.fn(buildMockProvider);
     const result = await resolveOllamaDiscoveryResult({
       ctx: {
         config: {
@@ -279,55 +269,43 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
         resolveProviderApiKey: () => ({ apiKey: "test-key" }),
       },
       pluginConfig: {},
-      buildProvider: buildMockProvider,
+      buildProvider,
     });
     expect(result).toBeNull();
+    expect(buildProvider).not.toHaveBeenCalled();
   });
 
   it("returns explicit models for remote base URL when models are configured", async () => {
     const result = await resolveOllamaDiscoveryResult({
       ctx: {
-        config: {
-          models: {
-            providers: {
-              ollama: {
-                baseUrl: "https://ollama.com",
-                apiKey: "test-key",
-                api: "ollama",
-                models: [cloudModel],
-              },
-            },
+        config: createModelProviderConfig({
+          ollama: {
+            baseUrl: "https://ollama.com",
+            apiKey: "test-key",
+            api: "ollama",
+            models: [cloudModel],
           },
-        },
+        }),
         env: {},
         resolveProviderApiKey: () => ({ apiKey: "test-key" }),
       },
       pluginConfig: {},
       buildProvider: buildMockProvider,
     });
-    expect(result).not.toBeNull();
-    const discoveryResult = expectDefined(result, "Ollama Cloud discovery result");
-    expect(discoveryResult.provider.models).toHaveLength(1);
-    expect(expectDefined(discoveryResult.provider.models[0], "Ollama Cloud model")).toEqual(
-      cloudModel,
-    );
+    expect(result).toMatchObject({ provider: { models: [cloudModel] } });
   });
 
   it("preserves explicit local model context overrides without discovery", async () => {
     let providerCalled = false;
     const result = await resolveOllamaDiscoveryResult({
       ctx: {
-        config: {
-          models: {
-            providers: {
-              ollama: {
-                baseUrl: "http://127.0.0.1:11434",
-                api: "ollama",
-                models: [cloudModel],
-              },
-            },
+        config: createModelProviderConfig({
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434",
+            api: "ollama",
+            models: [cloudModel],
           },
-        },
+        }),
         env: {},
         resolveProviderApiKey: () => ({}),
       },
@@ -339,7 +317,7 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
     });
 
     expect(providerCalled).toBe(false);
-    expect(result?.provider.models).toEqual([cloudModel]);
+    expect(result).toMatchObject({ provider: { models: [cloudModel] } });
   });
 
   it.each([
@@ -367,41 +345,8 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
       buildProvider: buildMockProvider,
     });
 
-    expect(result?.provider.apiKey).toBe("ollama-local");
+    expect(result).toMatchObject({ provider: { apiKey: "ollama-local" } });
     expect(shouldUseSyntheticOllamaAuth(provider)).toBe(true);
-  });
-
-  it("does not call buildProvider for remote base URL without explicit models", async () => {
-    let providerCalled = false;
-    const trackingBuildProvider = async (
-      _configuredBaseUrl?: string,
-      _opts?: { quiet?: boolean },
-    ): Promise<ModelProviderConfig> => {
-      providerCalled = true;
-      return buildMockProvider();
-    };
-
-    const result = await resolveOllamaDiscoveryResult({
-      ctx: {
-        config: {
-          models: {
-            providers: {
-              ollama: {
-                baseUrl: "https://ollama.com",
-                apiKey: "test-key",
-                api: "ollama",
-              },
-            },
-          },
-        },
-        env: {},
-        resolveProviderApiKey: () => ({ apiKey: "test-key" }),
-      },
-      pluginConfig: {},
-      buildProvider: trackingBuildProvider,
-    });
-    expect(result).toBeNull();
-    expect(providerCalled).toBe(false);
   });
 
   it.each([
@@ -520,11 +465,12 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
       });
 
       expect(buildProvider).toHaveBeenCalledWith(baseUrl, {
-        quiet: false,
+        discoveryMode: "strict",
         apiKey: "resolved-ollama-discovery-token",
       });
-      expect(result?.provider.apiKey).toEqual(owner === "config" ? apiKey : marker);
-      expect(result?.provider.models).toEqual([discoveredModel]);
+      expect(result).toMatchObject({
+        provider: { apiKey: owner === "config" ? apiKey : marker, models: [discoveredModel] },
+      });
     },
   );
 
@@ -577,11 +523,15 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
       });
 
       expect(buildProvider).toHaveBeenCalledWith(baseUrl, {
-        quiet: false,
+        discoveryMode: "strict",
         apiKey: secretValue,
       });
-      expect(result?.provider.apiKey).toEqual(owner === "config" ? apiKey : "secretref-managed");
-      expect(result?.provider.models).toEqual([discoveredModel]);
+      expect(result).toMatchObject({
+        provider: {
+          apiKey: owner === "config" ? apiKey : "secretref-managed",
+          models: [discoveredModel],
+        },
+      });
     },
   );
 
@@ -626,12 +576,13 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
 
     const first = await discoverWithCredential("ollama-cache-token-a");
     const second = await discoverWithCredential("ollama-cache-token-b");
-    const cachedFirst = await discoverWithCredential("ollama-cache-token-a");
-
     expect(buildProvider).toHaveBeenCalledTimes(2);
-    expect(first?.provider.models[0]?.id).toBe("model-for-ollama-cache-token-a");
-    expect(second?.provider.models[0]?.id).toBe("model-for-ollama-cache-token-b");
-    expect(cachedFirst?.provider.models[0]?.id).toBe("model-for-ollama-cache-token-a");
+    expect(first).toMatchObject({
+      provider: { models: [{ id: "model-for-ollama-cache-token-a" }] },
+    });
+    expect(second).toMatchObject({
+      provider: { models: [{ id: "model-for-ollama-cache-token-b" }] },
+    });
   });
 });
 

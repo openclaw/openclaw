@@ -8,6 +8,8 @@ import {
   updateAmbientTranscriptWatermark,
   type AmbientTranscriptWatermarkScope,
 } from "../config/sessions/ambient-transcript-watermark.js";
+import { buildConversationIdentity } from "../config/sessions/conversation-identity.js";
+import { resolveCurrentConversationSession } from "../config/sessions/conversation-registry.js";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -56,11 +58,13 @@ export { SessionStoreAgentIdRequiredError } from "../config/sessions/paths.js";
 
 export {
   deliveryContextFromSession,
-  normalizeSessionDeliveryState,
-  projectSessionDeliveryFields,
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
   sessionDeliveryRoute,
+} from "../utils/delivery-context.read.js";
+export {
+  normalizeSessionDeliveryState,
+  projectSessionDeliveryFields,
 } from "../utils/delivery-context.shared.js";
 
 const SQLITE_SESSION_STORE_BACKUP_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
@@ -100,6 +104,8 @@ type SessionStoreEntryPatch = (
 ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
 
 type PatchSessionEntryParams = SessionStoreReadParams & {
+  /** Synchronous final ownership check executed inside the commit transaction. */
+  assertCommitAllowed?: () => void;
   fallbackEntry?: SessionEntry;
   maintenanceConfig?: ResolvedSessionMaintenanceConfigInput;
   preserveActivity?: boolean;
@@ -388,6 +394,21 @@ export function getSessionEntry(params: SessionStoreReadParams): SessionEntry | 
   return entry ? projectPluginSessionEntry(entry) : undefined;
 }
 
+/** Reads the current session binding of one canonical transport address. */
+export function getConversationSession(params: {
+  agentId: string;
+  env?: NodeJS.ProcessEnv;
+  storePath?: string;
+  channel: string;
+  accountId: string;
+  kind: "channel" | "direct" | "group";
+  peerId: string;
+  threadId?: string;
+}): { sessionKey: string; sessionId: string } | undefined {
+  const identity = buildConversationIdentity({ ...params, deliveryTarget: params.peerId });
+  return identity ? resolveCurrentConversationSession(params, identity.conversationRef) : undefined;
+}
+
 /**
  * Lists session entries for one agent. `readOnly` reads without joining the
  * agent database writable lifecycle (no create/register/migrate) — required
@@ -462,6 +483,7 @@ export async function patchSessionEntry(
       return preserveGenerationPrivateFields(persistedEntry, projectPluginSessionEntryPatch(patch));
     },
     {
+      assertCommitAllowed: params.assertCommitAllowed,
       fallbackEntry: params.fallbackEntry
         ? projectPluginSessionEntry(params.fallbackEntry)
         : undefined,

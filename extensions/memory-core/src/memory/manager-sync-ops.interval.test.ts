@@ -20,6 +20,12 @@ type MemoryIndexEntry = {
 };
 
 class IntervalSyncHarness extends MemoryManagerSyncOps {
+  protected readonly createProvider = (): never => {
+    throw new Error("Interval harness does not acquire embedding providers");
+  };
+  protected releaseProvider(): never {
+    throw new Error("Interval harness does not own embedding providers");
+  }
   protected readonly cfg = {} as OpenClawConfig;
   protected readonly agentId = "main";
   protected readonly workspaceDir = "/tmp/openclaw-memory-interval-test";
@@ -82,7 +88,7 @@ class IntervalSyncHarness extends MemoryManagerSyncOps {
     return 1;
   }
 
-  protected pruneEmbeddingCacheIfNeeded(): void {}
+  protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {}
 
   protected resetProviderInitializationForRetry(): void {}
 

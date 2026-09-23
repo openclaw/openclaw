@@ -7,15 +7,28 @@ import {
   createStaticProviderModelIdNormalizer,
   normalizeProviderId,
 } from "../agents/model-ref-shared.js";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
+  getPluginCache,
+  getPluginCacheRetirementSignal,
+  isPluginCacheFactInvalidatedError,
+  retainPluginCache,
+  withPluginCache,
+} from "../plugins/plugin-cache.js";
+import {
   resolvePluginMetadataSnapshot,
+  resolvePluginMetadataSnapshotAsync,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
 import { planEffectiveModelCatalogRows } from "./index.js";
-import { getRemoteModelCatalogPricing } from "./remote-overlay.js";
+import { isRemoteModelCatalogRefreshEnabled } from "./remote-config.js";
+import {
+  getRemoteModelCatalogPricing,
+  prepareRemoteModelCatalogStartupSnapshot,
+} from "./remote-overlay.js";
 
 type PricingValue = RemoteModelCatalogPricing | ModelCatalogCost;
 type ExternalPricingPolicy = {
@@ -61,17 +74,10 @@ function normalizedHostedKey(
   return normalizeKey(key.slice(0, slash), key.slice(slash + 1));
 }
 
-function buildPricingContext(config: OpenClawConfig): PricingContext {
-  let snapshot: PluginMetadataSnapshot | undefined;
-  try {
-    snapshot = resolvePluginMetadataSnapshot({
-      config,
-      env: process.env,
-      allowWorkspaceScopedCurrent: true,
-    });
-  } catch {
-    snapshot = undefined;
-  }
+function buildPricingContext(
+  config: OpenClawConfig,
+  snapshot: PluginMetadataSnapshot | undefined,
+): PricingContext {
   const registry = snapshot
     ? activeManifestRegistry(snapshot, config)
     : ({ plugins: [], diagnostics: [] } satisfies PluginManifestRegistry);
@@ -128,9 +134,69 @@ export function resolveModelPricingContext(config: OpenClawConfig = EMPTY_CONFIG
   if (existing) {
     return existing;
   }
-  const context = buildPricingContext(config);
+  let snapshot: PluginMetadataSnapshot | undefined;
+  try {
+    snapshot = resolvePluginMetadataSnapshot({
+      config,
+      env: process.env,
+      allowWorkspaceScopedCurrent: true,
+    });
+  } catch {
+    snapshot = undefined;
+  }
+  const context = buildPricingContext(config, snapshot);
   pricingContextByConfig.set(config, context);
   return context;
+}
+
+/** Prepare the existing config-owned context before synchronous per-record pricing. */
+export async function prepareModelPricingContext(
+  config: OpenClawConfig = EMPTY_CONFIG,
+): Promise<void> {
+  if (pricingContextByConfig.has(config)) {
+    return;
+  }
+  const env = cloneEnvWithPlatformSemantics(process.env);
+  const cache = getPluginCache();
+  const release = retainPluginCache(cache);
+  const metadata = cache.metadata;
+  const signal = getPluginCacheRetirementSignal(cache);
+  const assertCurrent = () => {
+    signal.throwIfAborted();
+    if (cache.metadata !== metadata) {
+      throw new Error("Pricing metadata changed during preparation; retry the operation.");
+    }
+  };
+  try {
+    await withPluginCache(cache, async () => {
+      let snapshot: PluginMetadataSnapshot | undefined;
+      try {
+        snapshot = await resolvePluginMetadataSnapshotAsync({
+          config,
+          env,
+          allowWorkspaceScopedCurrent: true,
+        });
+      } catch (error) {
+        if (isPluginCacheFactInvalidatedError(error)) {
+          throw error;
+        }
+        snapshot = undefined;
+      }
+      assertCurrent();
+      if (snapshot && isRemoteModelCatalogRefreshEnabled(config)) {
+        await prepareRemoteModelCatalogStartupSnapshot({ env });
+      }
+      assertCurrent();
+      // A synchronous reader may have captured this config while preparation awaited I/O.
+      if (!pricingContextByConfig.has(config)) {
+        const context = buildPricingContext(config, snapshot);
+        assertCurrent();
+        pricingContextByConfig.set(config, context);
+      }
+    });
+  } finally {
+    release();
+  }
 }
 
 function hasKnownPricing(pricing: PricingValue): boolean {
@@ -209,18 +275,27 @@ export function resolveModelPricing(
   ) {
     return undefined;
   }
-  const catalog = context.catalog.get(key);
-  if (catalog && hasKnownPricing(catalog)) {
-    return catalog;
-  }
+  // Routing shortcuts inherit an estimate, never the price of a distinct variant.
+  const baseModel = /^openrouter\/([^:]+):(?:nitro|floor)$/u.exec(key)?.[1];
+  const pricingKeys = baseModel ? [key, `openrouter/${baseModel}`] : [key];
   const policy = context.policies.get(provider);
-  if (policy?.external === false) {
-    return undefined;
+  for (const pricingKey of pricingKeys) {
+    const catalog = context.catalog.get(pricingKey);
+    if (catalog && hasKnownPricing(catalog)) {
+      return catalog;
+    }
+    if (policy?.external === false) {
+      return undefined;
+    }
+    const hosted =
+      context.hosted[pricingKey] ?? (policy ? undefined : context.normalizedHosted.get(pricingKey));
+    // The publisher retains validated native zeros under exact owner keys. Catalog
+    // placeholders and normalized aliases cannot establish an authoritative free rate.
+    if (hosted && (hasKnownPricing(hosted) || policy?.authoritative)) {
+      return hosted;
+    }
   }
-  const hosted = context.hosted[key] ?? (policy ? undefined : context.normalizedHosted.get(key));
-  // The publisher retains validated native zeros under exact owner keys. Catalog
-  // placeholders and normalized aliases cannot establish an authoritative free rate.
-  return hosted && (hasKnownPricing(hosted) || policy?.authoritative) ? hosted : undefined;
+  return undefined;
 }
 
 export function modelCatalogPricingFingerprint(context: PricingContext): string {
@@ -234,5 +309,6 @@ export function modelCatalogPricingFingerprint(context: PricingContext): string 
         .map((model) => ({ id: model.id, baseUrl: model.baseUrl }))
         .toSorted((a, b) => a.id.localeCompare(b.id)),
     }));
-  return JSON.stringify({ pricing: context.fingerprint, configuredEndpoints });
+  // Lookup-policy changes must invalidate persisted estimates even when rates are unchanged.
+  return JSON.stringify({ policyVersion: 2, pricing: context.fingerprint, configuredEndpoints });
 }

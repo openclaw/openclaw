@@ -287,6 +287,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
         terminal: "deleted",
         advanceConfigRevision: true,
         closeRelay: resolved.driver === "extension",
+        managedChrome: "release-profile-data",
         afterCleanup: persistDelete,
         rollbackTerminalOnFailure: true,
       });

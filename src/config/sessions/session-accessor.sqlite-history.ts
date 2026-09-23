@@ -2,11 +2,16 @@ import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
+import { listTranscriptArchivesFromDatabase } from "./session-accessor.sqlite-archive-read.js";
+import { withSqliteTranscriptArchiveSession } from "./session-accessor.sqlite-archive-session.js";
+import { runSqliteTranscriptArchiveReadWorker } from "./session-accessor.sqlite-archive.js";
 import type {
   SessionAccessScope,
   SessionTranscriptInstance,
   SessionTranscriptInstanceListOptions,
+  TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import {
   getSessionKysely,
@@ -106,37 +111,69 @@ export function listTranscriptInstancesFromDatabase(params: {
 /** Read retained archive identities through the same physical and logical session owner. */
 export function listSessionTranscriptArchivesReadOnly(
   scope: Pick<SessionAccessScope, "agentId" | "env" | "storePath"> & {
-    sessionIds: readonly string[];
+    archiveNames?: readonly string[];
+    sessionIds?: readonly string[];
+    includeAllAgents?: boolean;
   },
 ) {
-  const selectors = [...new Set(scope.sessionIds)];
-  if (selectors.length === 0) {
+  const selectors = [...new Set(scope.sessionIds ?? [])];
+  const archiveNames = [...new Set(scope.archiveNames ?? [])];
+  if (selectors.length === 0 && archiveNames.length === 0) {
     return [];
   }
   const resolved = resolveSqliteReadScope(scope);
-  const result = withOpenClawAgentDatabaseReadOnly(({ db, agentId }) => {
-    const rows = executeSqliteQuerySync(
-      db,
-      getSessionKysely(db)
-        .selectFrom("session_transcript_archives")
-        .select([
-          "archive_name as archiveName",
-          "session_id as sessionId",
-          "session_key as sessionKey",
-          "created_at as createdAt",
-        ])
-        .where((expression) =>
-          expression.or([
-            expression("session_id", "in", selectors),
-            expression("session_key", "in", selectors),
-          ]),
-        )
-        .orderBy("created_at")
-        .orderBy("session_id"),
-    ).rows;
-    return rows.filter(
-      (row) => resolveAgentIdFromSessionKey(row.sessionKey, agentId) === resolved.agentId,
-    );
-  }, toDatabaseOptions(resolved));
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) =>
+      listTranscriptArchivesFromDatabase(
+        database,
+        scope.includeAllAgents ? undefined : resolved.agentId,
+        selectors,
+        archiveNames,
+      ),
+    toDatabaseOptions(resolved),
+  );
   return result.found ? result.value : [];
+}
+
+/** Reads committed archive content before its optional filesystem export is published. */
+export async function findSessionTranscriptArchiveEventReadOnly(
+  scope: Pick<SessionAccessScope, "agentId" | "env" | "storePath"> & {
+    sessionId?: string;
+    sessionKey: string;
+  },
+  runId: string,
+): Promise<{ event: TranscriptEvent } | undefined> {
+  const resolved = resolveSqliteReadScope(scope);
+  const options = toDatabaseOptions(resolved);
+  return withSqliteTranscriptArchiveSession(options, async () => {
+    // Empty lookups must not hold completion roots through archive Worker startup.
+    const registered = withOpenClawAgentDatabaseReadOnly(
+      (database) =>
+        listTranscriptArchivesFromDatabase(
+          database,
+          resolved.agentId,
+          [scope.sessionId ?? scope.sessionKey],
+          [],
+        ).some((archive) =>
+          scope.sessionId
+            ? archive.sessionId === scope.sessionId
+            : archive.sessionKey === scope.sessionKey,
+        ),
+      options,
+    );
+    if (!registered.found || !registered.value) {
+      return undefined;
+    }
+    const [result] = await runSqliteTranscriptArchiveReadWorker([
+      {
+        agentId: options.agentId,
+        databasePath: resolveOpenClawAgentSqlitePath(options),
+        logicalAgentId: resolved.agentId,
+        sessionId: scope.sessionId,
+        sessionKey: scope.sessionKey,
+        runId,
+      },
+    ]);
+    return result?.event === undefined ? undefined : { event: result.event };
+  });
 }

@@ -1,43 +1,32 @@
 import { randomUUID } from "node:crypto";
+import type { Static } from "typebox";
 import { Value } from "typebox/value";
 import { WebSocket } from "ws";
 import {
-  type WorkerGitHubPublishParams,
-  type WorkerGitHubPublishResponseFrame,
-  WorkerGitHubPublishResponseFrameSchema,
   type WorkerConnectParams,
   type WorkerHeartbeatParams,
-  type WorkerHeartbeatResponseFrame,
   WorkerHeartbeatResponseFrameSchema,
   type WorkerLiveEventParams,
-  type WorkerLiveEventResponseFrame,
   WorkerLiveEventResponseFrameSchema,
   type WorkerPortalParams,
-  type WorkerPortalResponseFrame,
   WorkerPortalResponseFrameSchema,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
   type WorkerSessionsSendParams,
-  type WorkerSessionsSendResponseFrame,
   WorkerSessionsSendResponseFrameSchema,
   type WorkerSessionsSpawnParams,
-  type WorkerSessionsSpawnResponseFrame,
   WorkerSessionsSpawnResponseFrameSchema,
   type WorkerTranscriptCommitParams,
-  type WorkerTranscriptCommitResponseFrame,
   WorkerTranscriptCommitResponseFrameSchema,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   type WorkerComputerParams,
-  type WorkerComputerResponseFrame,
   WorkerComputerResponseFrameSchema,
 } from "../../packages/gateway-protocol/src/schema/worker-computer.js";
 import {
   type WorkerInferenceCancelParams,
-  type WorkerInferenceCancelResponseFrame,
   WorkerInferenceCancelResponseFrameSchema,
   type WorkerInferenceEventFrame,
   type WorkerInferenceStartParams,
-  type WorkerInferenceStartResponseFrame,
   WorkerInferenceStartResponseFrameSchema,
   type WorkerInferenceTerminalFrame,
   WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
@@ -47,7 +36,6 @@ import {
 import {
   WorkerSkillWorkshopResponseFrameSchema,
   type WorkerSkillWorkshopParams,
-  type WorkerSkillWorkshopResponseFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { isWorkerTranscriptFrameWithinBudget } from "../../packages/gateway-protocol/src/worker-transcript-budget.js";
 import { notifyListeners } from "../shared/listeners.js";
@@ -85,10 +73,6 @@ const WORKER_REQUEST_SPECS = {
     method: "worker.sessions.send",
     responseSchema: WorkerSessionsSendResponseFrameSchema,
   },
-  "github-publish": {
-    method: "worker.github.publish",
-    responseSchema: WorkerGitHubPublishResponseFrameSchema,
-  },
   portal: {
     method: "worker.portal",
     responseSchema: WorkerPortalResponseFrameSchema,
@@ -115,24 +99,13 @@ type WorkerRequestParams = {
   "live-event": WorkerLiveEventParams;
   "sessions-spawn": WorkerSessionsSpawnParams;
   "sessions-send": WorkerSessionsSendParams;
-  "github-publish": WorkerGitHubPublishParams;
   portal: WorkerPortalParams;
   computer: WorkerComputerParams;
   "inference-start": WorkerInferenceStartParams;
   "inference-cancel": WorkerInferenceCancelParams;
 };
 type WorkerResponseFrames = {
-  "skill-workshop": WorkerSkillWorkshopResponseFrame;
-  heartbeat: WorkerHeartbeatResponseFrame;
-  transcript: WorkerTranscriptCommitResponseFrame;
-  "live-event": WorkerLiveEventResponseFrame;
-  "sessions-spawn": WorkerSessionsSpawnResponseFrame;
-  "sessions-send": WorkerSessionsSendResponseFrame;
-  "github-publish": WorkerGitHubPublishResponseFrame;
-  portal: WorkerPortalResponseFrame;
-  computer: WorkerComputerResponseFrame;
-  "inference-start": WorkerInferenceStartResponseFrame;
-  "inference-cancel": WorkerInferenceCancelResponseFrame;
+  [K in WorkerRequestKind]: Static<(typeof WORKER_REQUEST_SPECS)[K]["responseSchema"]>;
 };
 type WorkerResponseFrame = WorkerResponseFrames[WorkerRequestKind];
 type PendingRequestValue = {

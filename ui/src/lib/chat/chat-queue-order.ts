@@ -22,13 +22,14 @@ export function compareChatQueueOrder(left: ChatQueuePosition, right: ChatQueueP
 
 /**
  * A row may move while it is still waiting for its turn. Rows already attached
- * to a run — sending, running a command, or awaiting settings — keep
+ * to a run — attempted, sending, running a command, or awaiting settings — keep
  * their place, so a move can never jump ahead of work already handed over.
  */
 export function isMovableChatQueueItem(item: ChatQueueItem): boolean {
   return (
     !item.pendingRunId &&
     !item.intent &&
+    (item.sendAttempts ?? 0) === 0 &&
     (item.sendState === undefined ||
       item.sendState === "waiting-idle" ||
       item.sendState === "waiting-reconnect" ||

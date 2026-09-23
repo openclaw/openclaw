@@ -1,7 +1,13 @@
 import path from "node:path";
 import type { Browser, Page } from "playwright";
 import { expect } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import type { CronJob } from "../api/types.ts";
+import {
+  captureControlUiE2eFailureDiagnostics,
+  installMockGateway,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
+import { compactCronJobFixture } from "../test-helpers/cron.ts";
 
 type SidebarAttentionScopeFlowOptions = {
   artifactDir: string;
@@ -59,7 +65,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
   });
   const page = await context.newPage();
   const proofVideo = page.video();
-  const failedJob = (id: string, name: string, agentId: string) => ({
+  const failedJob = (id: string, name: string, agentId: string): CronJob => ({
     id,
     agentId,
     name,
@@ -84,6 +90,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     nextOffset: null,
   });
   const gateway = await installMockGateway(page, {
+    presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
     methodResponses: {
       "agents.list": {
         defaultId: "main",
@@ -96,6 +103,21 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
       },
       "cron.list": {
         cases: [
+          {
+            match: { compact: true, agentId: "main" },
+            response: { ...cronResponse([mainJob]), jobs: [compactCronJobFixture(mainJob)] },
+          },
+          {
+            match: { compact: true, agentId: "writer" },
+            response: { ...cronResponse([writerJob]), jobs: [compactCronJobFixture(writerJob)] },
+          },
+          {
+            match: { compact: true },
+            response: {
+              ...cronResponse([mainJob, writerJob]),
+              jobs: [mainJob, writerJob].map(compactCronJobFixture),
+            },
+          },
           { match: { agentId: "main" }, response: cronResponse([mainJob]) },
           { match: { agentId: "writer" }, response: cronResponse([writerJob]) },
           { response: cronResponse([mainJob, writerJob]) },
@@ -126,6 +148,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
 
   try {
     await page.goto(`${params.baseUrl}new`);
+    await waitForControlUiRoute(page, { pathname: "/new", routeId: "new-session" });
     await setDarkTheme(page);
     await waitForCronScope("main");
     await gateway.emitGatewayEvent("exec.approval.requested", {
@@ -161,13 +184,31 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
       .toBe("auto");
     await holdProof(page, params.captureProof);
     await captureProof(params, page, "08-desktop-inbox-main-agent.png");
-    await sidebar.locator(".sidebar-issues-button").click();
+    const mainAutomationChevron = automationRows
+      .filter({ hasText: "Main release digest" })
+      .locator(".sidebar-issues-panel__chevron");
+    const mainAutomationChevronBox = await mainAutomationChevron.boundingBox();
+    expect(mainAutomationChevronBox).not.toBeNull();
+    if (!mainAutomationChevronBox) {
+      throw new Error("Main release digest chevron has no bounding box");
+    }
+    await page.mouse.click(
+      mainAutomationChevronBox.x + mainAutomationChevronBox.width / 2,
+      mainAutomationChevronBox.y + mainAutomationChevronBox.height / 2,
+    );
+    await captureProof(params, page, "08a-desktop-inbox-chevron-click-result.png");
+    await waitForControlUiRoute(page, { pathname: "/automations", routeId: "cron" });
+    await captureProof(params, page, "08b-desktop-inbox-chevron-navigation.png");
+    await page.goBack();
+    await waitForControlUiRoute(page, { pathname: "/new", routeId: "new-session" });
 
     await sidebar.getByRole("button", { name: /Switch agent/ }).click();
     await sidebar
       .locator('wa-dropdown.sidebar-agent-menu wa-dropdown-item[value="agent:writer"]')
       .click();
     await waitForCronScope("writer");
+    // The agent's cron refresh can precede the Chat route commit that closes Inbox.
+    await waitForControlUiRoute(page, { pathname: "/chat/writer", routeId: "chat" });
     await openAutomations();
     await expect.poll(() => automationRows.getByText("Writer release digest").count()).toBe(1);
     await expect.poll(() => automationRows.getByText("Main release digest").count()).toBe(0);
@@ -176,7 +217,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await sidebar.locator(".sidebar-issues-button").click();
 
     await sidebar.getByRole("link", { name: "Automations", exact: true }).click();
-    await expect.poll(() => new URL(page.url()).pathname).toBe("/automations");
+    await waitForControlUiRoute(page, { pathname: "/automations", routeId: "cron" });
     const pageScope = page.locator(".agent-scope-control openclaw-agent-select");
     await pageScope.locator(".agent-select__trigger").click();
     await pageScope
@@ -236,6 +277,24 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     );
     await gateway.setMethodResponse("cron.list", {
       cases: [
+        {
+          match: { compact: true, agentId: "main" },
+          response: { ...cronResponse([mainJob]), jobs: [compactCronJobFixture(mainJob)] },
+        },
+        {
+          match: { compact: true, agentId: "writer" },
+          response: {
+            ...cronResponse([writerJobNext]),
+            jobs: [compactCronJobFixture(writerJobNext)],
+          },
+        },
+        {
+          match: { compact: true },
+          response: {
+            ...cronResponse([mainJob, writerJobNext]),
+            jobs: [mainJob, writerJobNext].map(compactCronJobFixture),
+          },
+        },
         { match: { agentId: "main" }, response: cronResponse([mainJob]) },
         { match: { agentId: "writer" }, response: cronResponse([writerJobNext]) },
         { response: cronResponse([mainJob, writerJobNext]) },
@@ -315,6 +374,12 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await captureProof(params, page, "12-mobile-inbox-dismissed-alerts.png");
 
     expect(floatingKinds).toEqual([]);
+  } catch (error) {
+    await captureControlUiE2eFailureDiagnostics(page, {
+      error: error instanceof Error ? error : new Error(String(error)),
+      label: "Control UI Inbox automation scope",
+    });
+    throw error;
   } finally {
     await context.close();
     if (proofVideo) {

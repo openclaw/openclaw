@@ -10,32 +10,37 @@ import {
 import { SessionManager } from "../../agents/sessions/index.js";
 import { onAgentRuntimeEvent } from "../../infra/agent-events.js";
 import type { Message } from "../../llm/types.js";
-import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import {
-  readSkillReviewOutcomes,
+  readSkillCuratorReviewStatus,
   recordSkillExperienceReviewOutcome,
 } from "./collection-review-state.js";
 import { assertExperienceReviewDecision } from "./experience-review-decision.test-support.js";
 import { observeExperienceReview } from "./experience-review-observation.test-support.js";
-import { runSkillExperienceReview, type ExperienceReviewCandidate } from "./experience-review.js";
+import type { ExperienceReviewCandidate } from "./experience-review-scheduler.js";
+import { runSkillExperienceReview } from "./experience-review.js";
 import {
   createExperienceReviewCandidate,
   createExperienceReviewMessages,
 } from "./experience-review.test-support.js";
-import { getSkillProposalRunProgress, listSkillProposals } from "./service.js";
+import { getSkillProposalRunProgress } from "./proposal-run-progress.test-support.js";
+import { listSkillProposals } from "./service.js";
 
 const LIVE =
   isLiveTestEnabled(["OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW"]) &&
   Boolean(process.env.OPENAI_API_KEY?.trim());
 const describeLive = LIVE ? describe : describe.skip;
 const modelId = process.env.OPENCLAW_LIVE_SKILL_EXPERIENCE_MODEL ?? "gpt-5.6-luna";
-const { positiveMessages, negativeMessages, interruptedMessages } =
-  createExperienceReviewMessages(modelId);
+const {
+  learnableMessages: positiveMessages,
+  negativeMessages,
+  interruptedMessages,
+} = createExperienceReviewMessages(modelId);
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
 let workspaceDir = "";
@@ -73,7 +78,7 @@ beforeAll(async () => {
 });
 
 function logReviewOutcomes(
-  reviews: ReturnType<typeof readSkillReviewOutcomes>["experienceReviews"],
+  reviews: ReturnType<typeof readSkillCuratorReviewStatus>["experienceReviews"],
 ) {
   // Persisted failures contain raw provider errors; keep only structured
   // outcome metadata in CI logs, regardless of secret spelling or format.
@@ -95,7 +100,7 @@ afterAll(async () => {
   unsubscribeDiagnostics();
   if (LIVE) {
     console.log("WORKSHOP_RUNTIME_DIAGNOSTICS", JSON.stringify([...reviewDiagnostics.values()]));
-    logReviewOutcomes(readSkillReviewOutcomes().experienceReviews);
+    logReviewOutcomes(readSkillCuratorReviewStatus().experienceReviews);
   }
   await testState.cleanup();
   await tempDirs.cleanup();
@@ -111,7 +116,7 @@ async function candidate(
 
 describe("skill experience review diagnostics", () => {
   it("logs persisted failure outcomes without raw provider error text", async () => {
-    const liveOutcomesBefore = readSkillReviewOutcomes();
+    const liveOutcomesBefore = readSkillCuratorReviewStatus();
     const diagnosticWorkspace = await tempDirs.make("openclaw-live-skill-review-diagnostic-");
     // Workspace keys share one database. Isolate synthetic failures so the
     // live afterAll output contains only outcomes from actual review runs.
@@ -119,6 +124,7 @@ describe("skill experience review diagnostics", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     try {
       recordSkillExperienceReviewOutcome(
+        "main",
         diagnosticWorkspace,
         {
           attemptedAtMs: 1,
@@ -128,7 +134,7 @@ describe("skill experience review diagnostics", () => {
         },
         diagnosticStore,
       );
-      logReviewOutcomes(readSkillReviewOutcomes(diagnosticStore).experienceReviews);
+      logReviewOutcomes(readSkillCuratorReviewStatus(diagnosticStore).experienceReviews);
       expect(log).toHaveBeenCalledOnce();
       const [label, json] = log.mock.calls[0]!;
       expect(label).toBe("WORKSHOP_REVIEW_OUTCOMES");
@@ -138,7 +144,7 @@ describe("skill experience review diagnostics", () => {
         usage: { inputTokens: 3, cachedInputTokens: 1, outputTokens: 2 },
       });
       expect(json).not.toContain("synthetic-workshop-credential");
-      expect(readSkillReviewOutcomes()).toEqual(liveOutcomesBefore);
+      expect(readSkillCuratorReviewStatus()).toEqual(liveOutcomesBefore);
     } finally {
       log.mockRestore();
       closeOpenClawStateDatabaseByPath(diagnosticStore.path);
@@ -179,39 +185,45 @@ describe("skill experience review transcript fixture", () => {
   });
 });
 
-describeLive("skill experience review live OpenAI eval", () => {
+describeLive("skill experience draft-only review live OpenAI eval", () => {
   beforeAll(async () => {
     // Warm the plugin runtime outside the review lane: the first load compiles
     // extensions synchronously and can exceed the lane's no-progress watchdog
     // on a loaded machine.
     const { loadAgentRuntimePluginRegistryHandle } =
       await import("../../agents/runtime-plugins.js");
-    const warmupCandidate = await candidate("warmup", []);
+    const warmupCandidate = await candidate("warmup", positiveMessages());
     loadAgentRuntimePluginRegistryHandle({
       config: warmupCandidate.config ?? {},
       workspaceDir,
     });
   }, 600_000);
 
-  it("completes real reviews with proposal receipts or explicit abstention", async () => {
-    for (const [name, build, turnAborted] of [
-      ["positive", positiveMessages, false],
-      ["negative", negativeMessages, false],
-      ["interrupted", interruptedMessages, true],
-    ] as const) {
+  it.each([
+    ["positive", positiveMessages, false],
+    ["negative", negativeMessages, false],
+    ["interrupted", interruptedMessages, true],
+  ] as const)(
+    "completes %s reviews with proposal receipts or explicit abstention",
+    async (name, build, turnAborted) => {
       const runId = `live-${name}`;
       const messages = build();
       const reviewCandidate = await candidate(runId, messages, { turnAborted });
-      const before = await listSkillProposals({ workspaceDir });
+      const before = await listSkillProposals({ config: reviewCandidate.config, agentId: "main" });
       const startedAt = Date.now();
       const observation = await observeExperienceReview(() =>
-        runSkillExperienceReview(reviewCandidate, {
-          getCurrentConfig: () => reviewCandidate.config ?? {},
-        }),
+        runSkillExperienceReview(reviewCandidate),
       );
-      const { proposals } = await listSkillProposals({ workspaceDir });
-      const progress = await getSkillProposalRunProgress({ workspaceDir, runId });
-      const outcomes = Object.values(readSkillReviewOutcomes().experienceReviews);
+      const { proposals } = await listSkillProposals({
+        config: reviewCandidate.config,
+        agentId: "main",
+      });
+      const progress = await getSkillProposalRunProgress({
+        config: reviewCandidate.config,
+        agentId: "main",
+        runId,
+      });
+      const outcomes = Object.values(readSkillCuratorReviewStatus().experienceReviews);
       expect(outcomes).toHaveLength(1);
       const decision = assertExperienceReviewDecision({
         observation,
@@ -229,10 +241,14 @@ describeLive("skill experience review live OpenAI eval", () => {
       if (name === "negative") {
         expect(decision).toBe("abstained");
       }
+      if (name === "positive") {
+        expect(decision).toBe("proposed");
+      }
       console.log(
         "WORKSHOP_LIVE_DECISION",
         JSON.stringify({ case: name, decision, mutationCount: progress.mutationCount }),
       );
-    }
-  }, 300_000);
+    },
+    300_000,
+  );
 });

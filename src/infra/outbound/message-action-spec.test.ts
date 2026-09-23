@@ -26,116 +26,56 @@ describe("actionRequiresTarget", () => {
 });
 
 describe("actionHasTarget", () => {
-  it.each([
-    { action: "send", params: { to: "  channel:C1  " }, expected: true },
-    { action: "channel-info", params: { channelId: "  C123  " }, expected: true },
-    { action: "send", params: { to: "   ", channelId: "" }, expected: false },
-    {
-      action: "read",
-      params: { messageId: "msg_123" },
-      ctx: { channel: "pinboard" },
-      expected: true,
-    },
-    { action: "edit", params: { messageId: "  msg_123  " }, expected: true },
-    {
-      action: "pin",
-      params: { messageId: "msg_123" },
-      ctx: { channel: "pinboard" },
-      expected: true,
-    },
-    {
-      action: "unpin",
-      params: { messageId: "msg_123" },
-      ctx: { channel: "pinboard" },
-      expected: true,
-    },
-    {
-      action: "list-pins",
-      params: { chatId: "oc_123" },
-      ctx: { channel: "pinboard" },
-      expected: true,
-    },
-    {
-      action: "channel-info",
-      params: { chatId: "oc_123" },
-      ctx: { channel: "pinboard" },
-      expected: true,
-    },
-    { action: "react", params: { chatGuid: "chat-guid" }, expected: true },
-    { action: "react", params: { chatIdentifier: "chat-id" }, expected: true },
-    { action: "react", params: { chatId: 42 }, expected: true },
-    {
-      action: "react",
-      params: { messageId: "msg_123" },
-      ctx: { channel: "imessage" },
-      expected: true,
-    },
-    {
-      action: "upload-file",
-      params: { chatIdentifier: "chat-id" },
-      ctx: { channel: "imessage" },
-      expected: true,
-    },
-    { action: "read", params: { messageId: "msg_123" }, expected: false },
-    {
-      action: "pin",
-      params: { messageId: "msg_123" },
-      ctx: { channel: "workspace" },
-      expected: false,
-    },
-    {
-      action: "channel-info",
-      params: { chatId: "oc_123" },
-      ctx: { channel: "richchat" },
-      expected: false,
-    },
-    { action: "edit", params: { messageId: "   " }, expected: false },
-    { action: "react", params: { chatGuid: "" }, expected: false },
-    { action: "react", params: { chatId: Number.NaN }, expected: false },
-    { action: "react", params: { chatId: Number.POSITIVE_INFINITY }, expected: false },
-    {
-      action: "send",
-      params: { messageId: "msg_123", chatId: 42 },
-      expected: false,
-    },
-  ])("resolves target presence for %j", ({ action, params, ctx, expected }) => {
+  it.each<
+    [
+      action: string,
+      params: Record<string, unknown>,
+      ctx: { channel: string } | undefined,
+      expected: boolean,
+    ]
+  >([
+    ["send", { to: "  channel:C1  " }, undefined, true],
+    ["channel-info", { channelId: "  C123  " }, undefined, true],
+    ["send", { to: "   ", channelId: "" }, undefined, false],
+    ["read", { messageId: "msg_123" }, { channel: "pinboard" }, true],
+    ["edit", { messageId: "  msg_123  " }, undefined, true],
+    ["pin", { messageId: "msg_123" }, { channel: "pinboard" }, true],
+    ["unpin", { messageId: "msg_123" }, { channel: "pinboard" }, true],
+    ["list-pins", { chatId: "oc_123" }, { channel: "pinboard" }, true],
+    ["channel-info", { chatId: "oc_123" }, { channel: "pinboard" }, true],
+    ["react", { chatGuid: "chat-guid" }, undefined, true],
+    ["react", { chatIdentifier: "chat-id" }, undefined, true],
+    ["react", { chatId: 42 }, undefined, true],
+    ["react", { messageId: "msg_123" }, { channel: "imessage" }, true],
+    ["upload-file", { chatIdentifier: "chat-id" }, { channel: "imessage" }, true],
+    ["read", { messageId: "msg_123" }, undefined, false],
+    ["pin", { messageId: "msg_123" }, { channel: "workspace" }, false],
+    ["channel-info", { chatId: "oc_123" }, { channel: "richchat" }, false],
+    ["edit", { messageId: "   " }, undefined, false],
+    ["react", { chatGuid: "" }, undefined, false],
+    ["react", { chatId: Number.NaN }, undefined, false],
+    ["react", { chatId: Number.POSITIVE_INFINITY }, undefined, false],
+    ["send", { messageId: "msg_123", chatId: 42 }, undefined, false],
+  ])("resolves target presence case %# for %s %j (%j) as %s", (action, params, ctx, expected) => {
     expect(actionHasTarget(action as never, params, ctx)).toBe(expected);
   });
 });
 
 describe("actionHasResourceReference", () => {
-  it.each([
-    {
-      action: "react" as const,
-      params: { messageId: "msg_123" },
-      channel: "imessage",
-      expected: true,
-    },
-    {
-      action: "poll-vote" as const,
-      params: { pollId: "poll_123" },
-      channel: "imessage",
-      expected: true,
-    },
-    {
-      action: "react" as const,
-      params: { chatGuid: "iMessage;+;chat0000" },
-      channel: "imessage",
-      expected: false,
-    },
-    {
-      action: "react" as const,
-      params: { messageId: "msg_123" },
-      channel: undefined,
-      expected: false,
-    },
-    {
-      action: "pin" as const,
-      params: { messageId: "msg_123" },
-      channel: "pinboard",
-      expected: false,
-    },
-  ])("$action resource classification is $expected", ({ action, params, channel, expected }) => {
+  it.each<
+    [
+      action: "react" | "poll-vote" | "pin",
+      params: Record<string, unknown>,
+      channel: string | undefined,
+      expected: boolean,
+    ]
+  >([
+    ["react" as const, { messageId: "msg_123" }, "imessage", true],
+    ["poll-vote" as const, { pollId: "poll_123" }, "imessage", true],
+    ["react" as const, { chatGuid: "iMessage;+;chat0000" }, "imessage", false],
+    ["react" as const, { messageId: "msg_123" }, undefined, false],
+    ["pin" as const, { messageId: "msg_123" }, "pinboard", false],
+  ])("classifies %s resource %j on %s as %s", (action, params, channel, expected) => {
     expect(actionHasResourceReference(action, params, { channel })).toBe(expected);
   });
 });

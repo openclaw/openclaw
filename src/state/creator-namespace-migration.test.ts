@@ -8,9 +8,12 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   ensureOpenClawAgentDatabaseSchema,
+  OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
   withAgentDatabaseMaintenanceLease,
 } from "./openclaw-agent-db.js";
+import { removeCanonicalValidationFromHistoricalAgentFixture } from "./openclaw-agent-db.test-support.js";
+import { restoreEmptyV21StorageForHistoricalFixture } from "./openclaw-agent-schema-v21.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -52,25 +55,26 @@ describe("creator namespace upgrades", () => {
           createdVia: "operator",
         },
       );
-      const initial = openOpenClawAgentDatabase(options);
-      initial.db.exec(
-        `UPDATE session_nodes SET entry_json = json_set(entry_json, '$.createdBy', json('{"id":"old-id","label":"Legacy label"}')) WHERE session_key = 'agent:main:legacy'`,
-      );
-      initial.db
-        .exec(`UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.createdActor.source');
-        PRAGMA user_version = 18; UPDATE schema_meta SET schema_version = 18;`);
-      const backupPath = state.path("before.sqlite");
-      await backup(initial.db, backupPath);
-      const databasePath = initial.path;
+      const databasePath = openOpenClawAgentDatabase(options).path;
+      // Retire automatic maintenance before constructing the historical snapshot.
       closeOpenClawAgentDatabasesForTest();
       const db = openNodeSqliteDatabase(databasePath);
+      const backupPath = state.path("before.sqlite");
       const migrate = () =>
         ensureOpenClawAgentDatabaseSchema(db, { ...options, path: databasePath });
       try {
+        restoreEmptyV21StorageForHistoricalFixture(db);
+        removeCanonicalValidationFromHistoricalAgentFixture(db);
+        db.exec(
+          `UPDATE session_nodes SET entry_json = json_set(entry_json, '$.createdBy', json('{"id":"old-id","label":"Legacy label"}')) WHERE session_key = 'agent:main:legacy'`,
+        );
+        db.exec(`UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.createdActor.source');
+        PRAGMA user_version = 18; UPDATE schema_meta SET schema_version = 18;`);
+        await backup(db, backupPath);
         expect(migrate).toThrow(/maintenance/);
         const execute = db.exec.bind(db);
         const fault = vi.spyOn(db, "exec").mockImplementation((sql) => {
-          if (sql === "PRAGMA user_version = 19;") {
+          if (sql === `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`) {
             throw new Error("injected commit failure");
           }
           return execute(sql);
@@ -92,11 +96,13 @@ describe("creator namespace upgrades", () => {
             .every((row) => row.source === null),
         ).toBe(true);
         await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => migrate());
-        expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(19);
+        expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_AGENT_SCHEMA_VERSION,
+        );
         expect(
           db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get()
             ?.schema_version,
-        ).toBe(19);
+        ).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
         expect(db.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
         expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       } finally {

@@ -2,8 +2,11 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentRouteBinding } from "../config/types.agents.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import {
+  getOrCreateSessionMcpRuntime,
+  unopenedMcpConfig,
+} from "./agent-bundle-mcp-manager.test-support.js";
 import { testing as bundleMcpRuntimeTesting } from "./agent-bundle-mcp-runtime.js";
-import { getOrCreateSessionMcpRuntime } from "./agent-bundle-mcp-tools.js";
 import {
   getCallGatewayMock,
   getSessionsSpawnTool,
@@ -351,7 +354,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       sessionId: "session:subagent:mcp-retire",
       sessionKey: child.sessionKey,
       workspaceDir: "/tmp/openclaw-subagent-mcp-retire",
-      cfg: { mcp: { servers: {} } } as Parameters<typeof getOrCreateSessionMcpRuntime>[0]["cfg"],
+      cfg: unopenedMcpConfig,
     });
     expect(bundleMcpRuntimeTesting.getCachedSessionIds()).toContain("session:subagent:mcp-retire");
 

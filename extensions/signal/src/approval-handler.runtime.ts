@@ -213,11 +213,11 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
     },
   },
   interactions: {
-    bindPending: ({ entry, request, view, pendingPayload }) => {
+    bindPending: async ({ entry, request, view, pendingPayload }) => {
       if (!entry.reactionsActive) {
         return null;
       }
-      return registerSignalApprovalReactionTarget({
+      return (await registerSignalApprovalReactionTarget({
         accountId: entry.accountId,
         conversationKey: entry.conversationKey,
         messageId: entry.messageId,
@@ -236,19 +236,19 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
         },
         routeAllowed: true,
         ttlMs: Math.max(1, view.expiresAtMs - Date.now()),
-      })
+      }))
         ? true
         : null;
     },
-    unbindPending: ({ entry }) => {
-      unregisterSignalApprovalReactionTarget({
+    unbindPending: async ({ entry }) => {
+      await unregisterSignalApprovalReactionTarget({
         accountId: entry.accountId,
         conversationKey: entry.conversationKey,
         messageId: entry.messageId,
       });
     },
-    cancelDelivered: ({ entry }) => {
-      unregisterSignalApprovalReactionTarget({
+    cancelDelivered: async ({ entry }) => {
+      await unregisterSignalApprovalReactionTarget({
         accountId: entry.accountId,
         conversationKey: entry.conversationKey,
         messageId: entry.messageId,

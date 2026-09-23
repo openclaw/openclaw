@@ -1,7 +1,7 @@
 /** Tests ACP session manager resolution, turn execution, state transitions, and cleanup. */
 import { setTimeout as scheduleNativeTimeout } from "node:timers";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { AcpRuntimeTurnInput } from "@openclaw/acp-core/runtime/types";
+import type { AcpRuntimeEvent, AcpRuntimeTurnInput } from "@openclaw/acp-core/runtime/types";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
@@ -11,9 +11,9 @@ import {
 } from "../../../test/helpers/acp-manager-task-state.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { isAcpTurnActive } from "./active-turns.js";
 import {
+  installMutableAcpSessionMetaUpsert,
   AcpRuntimeError,
   AcpSessionManager,
   baseCfg,
@@ -162,7 +162,6 @@ describe("AcpSessionManager", () => {
           payload: { outcome: "cancelled" },
         },
       ]);
-      closeOpenClawStateDatabaseForTest();
     });
   });
 
@@ -388,6 +387,7 @@ describe("AcpSessionManager", () => {
       },
       { interval: 1 },
     );
+    expect(manager.getObservabilitySnapshot().turns.queueDepth).toBe(1);
     const second = manager.runTurn({
       provenance: "system",
       cfg: baseCfg,
@@ -398,9 +398,11 @@ describe("AcpSessionManager", () => {
     });
     await flushMicrotasks();
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
+    expect(manager.getObservabilitySnapshot().turns.queueDepth).toBe(2);
     releaseFirstTurn.resolve();
     await Promise.all([first, second]);
 
+    expect(manager.getObservabilitySnapshot().turns.queueDepth).toBe(0);
     expect(maxInFlight).toBe(1);
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
   });
@@ -613,7 +615,7 @@ describe("AcpSessionManager", () => {
     });
   }, 300_000);
 
-  it("rejects a queued turn promptly when its caller aborts before the actor is free", async () => {
+  it("cancels a queued turn promptly when its caller aborts before the actor is free", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
       id: "acpx",
@@ -654,6 +656,7 @@ describe("AcpSessionManager", () => {
     );
 
     const abortController = new AbortController();
+    const events: AcpRuntimeEvent[] = [];
     const second = manager.runTurn({
       provenance: "system",
       cfg: baseCfg,
@@ -662,6 +665,9 @@ describe("AcpSessionManager", () => {
       mode: "prompt",
       requestId: "r2",
       signal: abortController.signal,
+      onEvent: (event) => {
+        events.push(event);
+      },
     });
     abortController.abort();
 
@@ -675,6 +681,7 @@ describe("AcpSessionManager", () => {
       }),
     ]);
 
+    expect(manager.getObservabilitySnapshot().turns.queueDepth).toBe(2);
     releaseFirstTurn?.();
     await first;
     await vi.waitFor(
@@ -684,15 +691,8 @@ describe("AcpSessionManager", () => {
       { interval: 1 },
     );
 
-    expect(secondOutcome.status).toBe("rejected");
-    if (secondOutcome.status !== "rejected") {
-      return;
-    }
-    expect(secondOutcome.error).toBeInstanceOf(AcpRuntimeError);
-    expectRecordFields(secondOutcome.error, {
-      code: "ACP_TURN_FAILED",
-      message: "ACP operation aborted.",
-    });
+    expect(secondOutcome).toEqual({ status: "resolved" });
+    expect(events).toEqual([{ type: "done", status: "cancelled", stopReason: "cancel" }]);
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
   });
 
@@ -1204,40 +1204,26 @@ describe("AcpSessionManager", () => {
       runtime: runtimeState.runtime,
     });
 
-    let currentMeta: SessionAcpMeta = readySessionMeta({
-      agent: "claude",
-      identity: {
-        state: "pending",
-        acpxRecordId: sessionKey,
-        source: "status",
-        lastUpdatedAt: Date.now(),
-      },
-    });
+    const metaState: { currentMeta: SessionAcpMeta } = {
+      currentMeta: readySessionMeta({
+        agent: "claude",
+        identity: {
+          state: "pending",
+          acpxRecordId: sessionKey,
+          source: "status",
+          lastUpdatedAt: Date.now(),
+        },
+      }),
+    };
     hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
       const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
       return {
         sessionKey: key,
         storeSessionKey: key,
-        acp: currentMeta,
+        acp: metaState.currentMeta,
       };
     });
-    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
-      const params = paramsUnknown as {
-        mutate: (
-          current: SessionAcpMeta | undefined,
-          entry: { acp?: SessionAcpMeta } | undefined,
-        ) => SessionAcpMeta | null | undefined;
-      };
-      const next = params.mutate(currentMeta, { acp: currentMeta });
-      if (next) {
-        currentMeta = next;
-      }
-      return {
-        sessionId: "session-1",
-        updatedAt: Date.now(),
-        acp: currentMeta,
-      };
-    });
+    installMutableAcpSessionMetaUpsert(metaState);
 
     const manager = new AcpSessionManager();
     await expect(

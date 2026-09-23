@@ -1,3 +1,4 @@
+import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import type { DiscordComponentEntry, DiscordModalEntry } from "./components.js";
 
@@ -20,17 +21,19 @@ export type DiscordRegistryStore<T extends { id: string }> = DiscordPersistentSt
 export const discordComponentRegistryState = resolveGlobalSingleton(
   Symbol.for("openclaw.discord.componentRegistryState"),
   () => ({
+    withRegistryLock: createAsyncLock(),
     componentEntries: new Map<string, DiscordComponentEntry>(),
     modalEntries: new Map<string, DiscordModalEntry>(),
     persistentComponentStore: undefined as DiscordRegistryStore<DiscordComponentEntry> | undefined,
     persistentModalStore: undefined as DiscordRegistryStore<DiscordModalEntry> | undefined,
     persistentRegistryDisabled: false,
   }),
-  (state) => {
-    state.componentEntries.clear();
-    state.modalEntries.clear();
-    state.persistentComponentStore = undefined;
-    state.persistentModalStore = undefined;
-    state.persistentRegistryDisabled = false;
-  },
+  (state) =>
+    state.withRegistryLock(async () => {
+      state.componentEntries.clear();
+      state.modalEntries.clear();
+      state.persistentComponentStore = undefined;
+      state.persistentModalStore = undefined;
+      state.persistentRegistryDisabled = false;
+    }),
 );

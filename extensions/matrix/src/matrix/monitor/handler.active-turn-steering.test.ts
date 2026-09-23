@@ -4,6 +4,7 @@ import {
   type ChannelInboundEventRunnerParams,
 } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { FinalizedMsgContext, GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -20,14 +21,6 @@ type MatrixInboundRunParams = Parameters<MatrixInboundRun>[0];
 type TurnAdoptionLifecycle = NonNullable<GetReplyOptions["turnAdoptionLifecycle"]>;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function createDeferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((settle) => {
-    resolve = settle;
-  });
-  return { promise, resolve };
-}
 
 function createClaimSpies() {
   return {
@@ -81,9 +74,9 @@ describe("Matrix active-turn steering admission", () => {
       const storePath = path.join(tempDir, "sessions.json");
       const activeEventId = explicitSteer ? "$active-explicit-steer" : "$active-configured-steer";
       const followupEventId = explicitSteer ? "$explicit-steer" : "$configured-steer";
-      const activeResolverStarted = createDeferred();
-      const releaseActiveResolver = createDeferred();
-      const followupTurnResolved = createDeferred();
+      const activeResolverStarted = createDeferred<void>();
+      const releaseActiveResolver = createDeferred<void>();
+      const followupTurnResolved = createDeferred<void>();
       const claimsByEvent = new Map<string, ReturnType<typeof createClaimSpies>>();
       const inboundLifecycles = new Map<string, TurnAdoptionLifecycle | undefined>();
       let followupResolverLifecycle: TurnAdoptionLifecycle | undefined;
@@ -173,14 +166,12 @@ describe("Matrix active-turn steering admission", () => {
             body: "keep this run active",
           }),
         );
-        await vi.waitFor(() => expect(queuePolicyResolver).toHaveBeenCalledTimes(1), {
-          // This suite imports the full Matrix extension graph. Keep the
-          // active-turn admission assertion deterministic on saturated CI
-          // workers without weakening the behavior being asserted.
-          timeout: 10_000,
-          interval: 10,
-        });
+        // The first turn in a worker also pays the cold reply-dispatch path (module
+        // graph, session store, plugin discovery); on a starved 2-vCPU runner that
+        // alone exceeded a 10 s budget. The resolver signals its own admission, so
+        // wait on that signal instead of a wall-clock poll.
         await activeResolverStarted.promise;
+        expect(queuePolicyResolver).toHaveBeenCalledTimes(1);
 
         followupTurn = handler(
           "!room:example.org",

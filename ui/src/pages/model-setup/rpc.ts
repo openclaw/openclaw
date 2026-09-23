@@ -1,11 +1,52 @@
+import { initialState, Task } from "@lit/task";
+import type { ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   SystemAgentSetupDetectResult,
   SystemAgentSetupVerifyResult,
 } from "../../api/types.ts";
+import type { ModelSetupConnection } from "./first-run-setup.ts";
+import { captureModelSetupResult, type ModelSetupTaskResult } from "./model-setup-task-result.ts";
 import { MODEL_SETUP_DETECT_TIMEOUT_MS, MODEL_SETUP_VERIFY_TIMEOUT_MS } from "./state.ts";
 
-export function detectModelSetup(
+type ModelSetupDetectTaskResult = ModelSetupTaskResult<SystemAgentSetupDetectResult> & {
+  agentId: string | null;
+  hello: ModelSetupConnection["hello"];
+  token: object;
+};
+
+export function createModelSetupDetectTask(
+  host: ReactiveControllerHost,
+  options: {
+    getHello: () => ModelSetupConnection["hello"];
+    onComplete: (outcome: ModelSetupDetectTaskResult) => void;
+  },
+) {
+  return new Task<
+    readonly [GatewayBrowserClient | null, string | null, object | null],
+    ModelSetupDetectTaskResult
+  >(host, {
+    autoRun: false,
+    args: () => [null, null, null],
+    task: async ([client, agentId, token], { signal }) => {
+      if (!client || !token) {
+        return initialState;
+      }
+      const hello = options.getHello();
+      return {
+        ...(await captureModelSetupResult(client, () =>
+          detectModelSetup(client, agentId ?? undefined, signal),
+        )),
+        agentId,
+        hello,
+        token,
+      };
+    },
+    onComplete: options.onComplete,
+  });
+}
+
+function detectModelSetup(
   client: GatewayBrowserClient,
   agentId?: string,
   signal?: AbortSignal,
@@ -17,14 +58,31 @@ export function detectModelSetup(
   );
 }
 
-export function verifyModelSetup(
+function verifyModelSetup(
   client: GatewayBrowserClient,
   agentId?: string,
   signal?: AbortSignal,
+  modelTarget?: "utility",
 ): Promise<SystemAgentSetupVerifyResult> {
   return client.request<SystemAgentSetupVerifyResult>(
     "openclaw.setup.verify",
-    agentId ? { agentId } : {},
+    { ...(agentId ? { agentId } : {}), ...(modelTarget ? { modelTarget } : {}) },
     { timeoutMs: MODEL_SETUP_VERIFY_TIMEOUT_MS, ...(signal ? { signal } : {}) },
   );
+}
+
+export function createModelSetupVerifyTask(host: ReactiveControllerHost) {
+  return new Task<
+    readonly [GatewayBrowserClient | null, string | null, "utility" | undefined],
+    ModelSetupTaskResult<SystemAgentSetupVerifyResult>
+  >(host, {
+    autoRun: false,
+    args: () => [null, null, undefined],
+    task: async ([client, agentId, modelTarget], { signal }) =>
+      client
+        ? captureModelSetupResult(client, () =>
+            verifyModelSetup(client, agentId ?? undefined, signal, modelTarget),
+          )
+        : initialState,
+  });
 }

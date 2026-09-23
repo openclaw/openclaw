@@ -1,13 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { Value } from "typebox/value";
 import {
-  WorkerGitHubPublishParamsSchema,
   WorkerPortalParamsSchema,
   WorkerSessionsSendParamsSchema,
   WorkerSessionsSpawnParamsSchema,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
-  WorkerGitHubPublishParams,
   WorkerConnectParams,
   WorkerLiveEventParams,
   WorkerPortalParams,
@@ -15,9 +13,7 @@ import type {
   WorkerSessionsSendParams,
   WorkerSessionsSpawnParams,
   WorkerSessionToolResult,
-  WorkerTranscriptCommitErrorReason,
   WorkerTranscriptCommitParams,
-  WorkerTranscriptCommitResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
   WorkerInferenceCancelParams,
@@ -43,12 +39,18 @@ import type { WorkerInstallationArtifact } from "./bundle.js";
 import { createWorkerInferenceManager, type WorkerInferenceSink } from "./inference.js";
 import type { WorkerLiveEventApplicationResult, WorkerLiveEventReceiver } from "./live-events.js";
 import { sameWorkerSessionTurnClaim, type WorkerSessionTurnClaim } from "./placement-record.js";
-import type { WorkerTurnExecutionIdentityCapability } from "./placement-turn-claim-events.js";
+import {
+  acknowledgeWorkerTurnFinishing,
+  type WorkerTurnExecutionIdentityCapability,
+} from "./placement-turn-claim-events.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerEnvironmentStore } from "./store.js";
+import type { WorkerTranscriptCommitOutcome } from "./transcript-commit-store.js";
+import type { WorkerTranscriptCommitApplication } from "./transcript-commit.js";
 import {
   serializeWorkerSessionToolResult,
   workerSessionToolErrorResult,
+  type WorkerSessionToolExecutor,
 } from "./worker-session-tool-result.js";
 import {
   createWorkerComputerRpc,
@@ -77,13 +79,15 @@ type WorkerTurnRequest =
 
 type WorkerPlacementValidation = "sessionless" | "durable" | "invalid";
 
-type WorkerTranscriptCommitApplicationResult =
-  | { ok: true; result: WorkerTranscriptCommitResult }
-  | { ok: false; reason: WorkerTranscriptCommitErrorReason };
-
 type WorkerTranscriptCommitServiceResult =
-  | WorkerTranscriptCommitApplicationResult
+  | WorkerTranscriptCommitOutcome
   | { ok: false; closeReason: WorkerProtocolCloseReason };
+
+class WorkerTranscriptAuthorityError extends Error {
+  constructor(readonly outcome: Exclude<WorkerTranscriptCommitServiceResult, { ok: true }>) {
+    super("Worker transcript authority closed");
+  }
+}
 
 type WorkerLiveEventServiceResult =
   | WorkerLiveEventApplicationResult
@@ -113,46 +117,11 @@ type WorkerTurnRpcOptions = {
   prepareInstallation: (
     install: WorkerInstallationArtifact["install"],
   ) => Promise<WorkerInstallationArtifact>;
-  applyTranscriptCommit?: (params: {
-    identity: WorkerConnectionIdentity;
-    request: WorkerTranscriptCommitParams;
-  }) => Promise<WorkerTranscriptCommitApplicationResult>;
+  applyTranscriptCommit?: WorkerTranscriptCommitApplication;
   liveEvents?: Pick<WorkerLiveEventReceiver, "apply">;
   placementStore?: WorkerSessionPlacementGate;
   executeComputer?: WorkerComputerExecutor;
-  executeSessionTool?: (
-    params:
-      | {
-          identity: WorkerConnectionIdentity;
-          toolName: "skill_workshop";
-          request: WorkerSkillWorkshopParams;
-          signal?: AbortSignal;
-        }
-      | {
-          identity: WorkerConnectionIdentity;
-          toolName: "sessions_spawn";
-          request: WorkerSessionsSpawnParams;
-          signal?: AbortSignal;
-        }
-      | {
-          identity: WorkerConnectionIdentity;
-          toolName: "sessions_send";
-          request: WorkerSessionsSendParams;
-          signal?: AbortSignal;
-        }
-      | {
-          identity: WorkerConnectionIdentity;
-          toolName: "github_publish";
-          request: WorkerGitHubPublishParams;
-          signal?: AbortSignal;
-        }
-      | {
-          identity: WorkerConnectionIdentity;
-          toolName: "portal";
-          request: WorkerPortalParams;
-          signal?: AbortSignal;
-        },
-  ) => Promise<WorkerSessionToolResult>;
+  executeSessionTool?: WorkerSessionToolExecutor;
   inference: ReturnType<typeof createWorkerInferenceManager>;
   isStopping: () => boolean;
   now: () => number;
@@ -382,38 +351,44 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     request: WorkerTranscriptCommitParams,
   ): Promise<WorkerTranscriptCommitServiceResult> =>
     withLock(identity.environmentId, async () => {
-      const binding = validateAttachedWorkerRequest(identity, request.runEpoch, {
-        kind: "transcript",
-        seq: request.seq,
-      });
-      if (!binding.ok) {
-        return binding;
-      }
-      if (!options.applyTranscriptCommit) {
-        return { ok: false, closeReason: "gateway-unavailable" };
-      }
-      const result = await options.applyTranscriptCommit({ identity, request });
-      // Transcript persistence awaits outside the placement transaction. Revalidate the durable
-      // claim before exposing an ACK so reclamation cannot admit both owners for one session.
-      const currentBinding = validateAttachedWorkerRequest(identity, request.runEpoch, {
-        kind: "transcript",
-        seq: request.seq,
-      });
-      if (!currentBinding.ok) {
-        return currentBinding;
-      }
-      // Stale base is a terminal sequenced outcome. Advance its durable cursor
-      // so the next worker commit cannot reuse the consumed sequence number.
-      if (result.ok || result.reason === "stale-base-leaf") {
-        const placement = placementClaim(identity);
-        const processTurn = processTurnBinding(identity);
-        if (!placement || !processTurn) {
-          return { ok: false, closeReason: "placement-mismatch" };
+      const assertCurrent: () => undefined = () => {
+        const binding = validateAttachedWorkerRequest(identity, request.runEpoch, {
+          kind: "transcript",
+          seq: request.seq,
+        });
+        if (!binding.ok) {
+          throw new WorkerTranscriptAuthorityError(binding);
         }
-        options.placementStore?.updateAckCursors({ claim: placement, transcriptSeq: request.seq });
-        recordAckCursor(processTurn, { transcriptSeq: request.seq });
+      };
+      try {
+        assertCurrent();
+        if (!options.applyTranscriptCommit) {
+          return { ok: false, closeReason: "gateway-unavailable" };
+        }
+        const result = await options.applyTranscriptCommit({ identity, request, assertCurrent });
+        // Persistence checks this owner after its queues and before commit; ACKs
+        // also require the claim to remain live after post-commit publication.
+        assertCurrent();
+        // Stale base consumes a sequence just like success, including on replay.
+        if (result.ok || result.reason === "stale-base-leaf") {
+          const placement = placementClaim(identity);
+          const processTurn = processTurnBinding(identity);
+          if (!placement || !processTurn) {
+            return { ok: false, closeReason: "placement-mismatch" };
+          }
+          options.placementStore?.updateAckCursors({
+            claim: placement,
+            transcriptSeq: request.seq,
+          });
+          recordAckCursor(processTurn, { transcriptSeq: request.seq });
+        }
+        return result;
+      } catch (error) {
+        if (error instanceof WorkerTranscriptAuthorityError) {
+          return error.outcome;
+        }
+        throw error;
       }
-      return result;
     });
 
   const validateTool = (
@@ -447,7 +422,6 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       | WorkerSkillWorkshopParams
       | WorkerSessionsSpawnParams
       | WorkerSessionsSendParams
-      | WorkerGitHubPublishParams
       | WorkerPortalParams,
     signal?: AbortSignal,
   ): Promise<WorkerSessionToolServiceResult> => {
@@ -468,10 +442,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
             ? { toolName, request }
             : toolName === "portal" && Value.Check(WorkerPortalParamsSchema, request)
               ? { toolName, request }
-              : toolName === "github_publish" &&
-                  Value.Check(WorkerGitHubPublishParamsSchema, request)
-                ? { toolName, request }
-                : undefined;
+              : undefined;
     if (!operation) {
       return { ok: false, closeReason: "invalid-frame" };
     }
@@ -493,10 +464,10 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     return current.ok ? { ok: true, result } : current;
   };
 
-  const applyLiveEvent = (
+  const validateLiveEvent = (
     identity: WorkerConnectionIdentity,
     request: WorkerLiveEventParams,
-  ): WorkerLiveEventServiceResult => {
+  ): Exclude<WorkerLiveEventServiceResult, { ok: true }> | undefined => {
     const binding = validateAttachedWorkerRequest(identity, request.runEpoch, {
       kind: "live",
       seq: request.seq,
@@ -510,20 +481,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     if (request.runId !== identity.runId) {
       return { ok: false, closeReason: "placement-mismatch" };
     }
-    if (!options.liveEvents) {
-      return { ok: false, closeReason: "gateway-unavailable" };
-    }
-    // The caller holds the environment lock, preserving order with transcript
-    // commits and the terminal mutation fence while this synchronous receiver runs.
-    const result = options.liveEvents.apply({ identity, request });
-    if (result.ok) {
-      const processTurn = processTurnBinding(identity);
-      if (!processTurn) {
-        return { ok: false, closeReason: "placement-mismatch" };
-      }
-      recordAckCursor(processTurn, { liveSeq: result.result.ackedSeq });
-    }
-    return result;
+    return undefined;
   };
 
   const pushLiveEvent = async (
@@ -531,14 +489,31 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     request: WorkerLiveEventParams,
   ): Promise<WorkerLiveEventServiceResult> => {
     return await withLock(identity.environmentId, async () => {
+      const invalid = validateLiveEvent(identity, request);
+      if (invalid) {
+        return invalid;
+      }
+      if (!options.liveEvents) {
+        return { ok: false, closeReason: "gateway-unavailable" };
+      }
       const placement = placementClaim(identity);
       const processTurn = processTurnBinding(identity);
-      const observed = processTurn ? observedAckCursorFor(processTurn) : undefined;
+      if (!placement || !processTurn) {
+        return { ok: false, closeReason: "placement-mismatch" };
+      }
+      const observed = observedAckCursorFor(processTurn);
       const wasNewSequence = request.seq > (observed?.liveSeq ?? 0);
-      const result = applyLiveEvent(identity, request);
-      if (!result.ok || !placement || !processTurn) {
+      // The environment lock owns trajectory settlement along with transcript
+      // commits and terminal fences. Revocation remains immediate during this wait.
+      const result = await options.liveEvents.apply({ identity, request });
+      const stale = validateLiveEvent(identity, request);
+      if (stale) {
+        return stale;
+      }
+      if (!result.ok) {
         return result;
       }
+      recordAckCursor(processTurn, { liveSeq: result.result.ackedSeq });
       const pending = pendingTerminalTurnFences.get(placement.sessionId);
       if (pending && !matchesTurnBinding(pending, processTurn)) {
         pendingTerminalTurnFences.delete(placement.sessionId);
@@ -561,6 +536,11 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
           claim: placement,
           liveSeq: result.result.ackedSeq,
         });
+        acknowledgeWorkerTurnFinishing(
+          identity,
+          result.result.ackedSeq,
+          () => validateLiveEvent(identity, request) === undefined,
+        );
         // A gap fill can ACK a previously buffered terminal event. Fence from
         // the observed high-water marks, not only from the request carrying it.
         terminalTurnFences.set(

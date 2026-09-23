@@ -1,3 +1,5 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -12,11 +14,18 @@ const mocks = vi.hoisted(() => ({
   prepareServer: vi.fn(),
   removeProfiles: vi.fn(),
   progressUpdate: vi.fn(),
+  hardware: vi.fn(),
+  downloadFetch: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-runtime")>()),
   removeProviderAuthProfilesWithLock: mocks.removeProfiles,
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
+  fetchWithSsrFGuard: mocks.downloadFetch,
 }));
 
 vi.mock("./managed-server.js", async (importOriginal) => ({
@@ -26,14 +35,20 @@ vi.mock("./managed-server.js", async (importOriginal) => ({
 }));
 
 import {
+  DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
   DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE,
   DEFAULT_LLAMA_CPP_MODEL_ID,
   DEFAULT_LLAMA_CPP_MODEL_SHA256,
   DEFAULT_LLAMA_CPP_MODEL_SIZE_BYTES,
   DEFAULT_LLAMA_CPP_MODEL_URI,
   LLAMA_CPP_PROVIDER_ID,
-  meetsLlamaCppDefaultModelRamFloor,
 } from "./defaults.js";
+vi.mock("./hardware.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./hardware.js")>()),
+  detectLlamaCppHardware: mocks.hardware,
+}));
+import { downloadVerifiedFile, type LlamaDownloadProgress } from "./llama-server-install.js";
+import { resolveLlamaCppCatalogArtifact, resolveLlamaCppModelCandidates } from "./model-catalog.js";
 import { detectLlamaCppSetup, prepareLlamaCppSetup, runLlamaCppSetup } from "./setup.js";
 
 const GIB = 1024 ** 3;
@@ -46,13 +61,24 @@ let modelPath: string;
 
 beforeEach(async () => {
   vi.spyOn(os, "totalmem").mockReturnValue(16 * GIB);
+  vi.spyOn(os, "hostname").mockReturnValue("gateway-host");
+  mocks.hardware.mockReset().mockImplementation(async () => ({
+    platform: "darwin",
+    arch: "arm64",
+    accelerator: { kind: "metal" },
+    totalMemoryBytes: os.totalmem(),
+    availableMemoryBytes: os.totalmem(),
+    availableDiskBytes: 100 * GIB,
+    availableRuntimeDiskBytes: 100 * GIB,
+    sharedDisk: true,
+  }));
   tempRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-setup-")));
   modelPath = path.join(tempRoot, "model.gguf");
   mocks.ensureModel.mockReset().mockImplementation(async ({ source, download }) => {
     if (!download) {
       throw new Error("not cached");
     }
-    return source === DEFAULT_LLAMA_CPP_MODEL_URI
+    return resolveLlamaCppCatalogArtifact(source)
       ? modelPath
       : path.join(tempRoot, "embedding.gguf");
   });
@@ -64,6 +90,7 @@ beforeEach(async () => {
   });
   mocks.removeProfiles.mockReset().mockResolvedValue({ version: 1, profiles: {} });
   mocks.progressUpdate.mockReset();
+  mocks.downloadFetch.mockReset();
 });
 
 afterEach(async () => {
@@ -152,17 +179,267 @@ const externalChatRoutes: Array<{
 ];
 
 describe("llama.cpp managed setup", () => {
+  it.each([
+    {
+      label: "initial shared tick",
+      times: [1000, 1000, 1010],
+      rates: [0, 0, 300_000_000],
+      mb: [0, 0, 300],
+    },
+    {
+      label: "established shared tick",
+      times: [1010, 1010, 1030],
+      rates: [100_000_000, 100_000_000, 100_000_000],
+      mb: [100, 100, 100],
+    },
+    {
+      label: "distinct ticks",
+      times: [1010, 1020, 1030],
+      rates: [100_000_000, 100_000_000, 100_000_000],
+      mb: [100, 100, 100],
+    },
+  ])(
+    "reports producer download rates during setup across $label",
+    async ({ label, times, rates, mb }) => {
+      vi.mocked(os.totalmem).mockReturnValue(4 * GIB);
+      const ctx = authContext(true);
+      requestUnconfiguredLocalMemory(ctx);
+      ctx.config.memory = {
+        search: { provider: "local", local: { modelPath: CUSTOM_EMBEDDING_MODEL } },
+      };
+      const stopped = vi.fn();
+      vi.mocked(ctx.prompter.progress).mockReturnValue({
+        update: mocks.progressUpdate,
+        stop: stopped,
+      });
+      const destination = path.join(tempRoot, "rate-embedding.gguf");
+      const chunks = [1, 2, 3].map((value) => Buffer.alloc(1_000_000, value));
+      const payload = Buffer.concat(chunks);
+      const observations: Array<Parameters<LlamaDownloadProgress>[0] & { text: string }> = [];
+      const release = vi.fn();
+      const existingEnsure = mocks.ensureModel.getMockImplementation()!;
+      mocks.ensureModel.mockImplementation(
+        async (
+          options: Parameters<typeof import("./managed-server.js").ensureLlamaCppModel>[0],
+        ) => {
+          if (!options.download || options.source !== CUSTOM_EMBEDDING_MODEL) {
+            return existingEnsure(options);
+          }
+          const report = options.onProgress;
+          if (!report) {
+            throw new Error("Selected setup download has no progress callback");
+          }
+          mocks.downloadFetch.mockResolvedValueOnce({
+            response: new Response(
+              new ReadableStream<Uint8Array>({
+                start(controller) {
+                  for (const chunk of chunks) {
+                    controller.enqueue(chunk);
+                  }
+                  controller.close();
+                },
+              }),
+            ),
+            release,
+          });
+          const clock = vi.spyOn(Date, "now").mockReturnValue(1000);
+          const actualOpen = fs.open.bind(fs);
+          let written = 0;
+          const opened = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+            const handle = await actualOpen(...args);
+            const writeFile = handle.writeFile.bind(handle);
+            handle.writeFile = async (...writeArgs) => {
+              await writeFile(...writeArgs);
+              clock.mockReturnValue(times[written++]!);
+            };
+            return handle;
+          });
+          try {
+            await downloadVerifiedFile({
+              url: "https://downloads.example/rate-embedding.gguf",
+              destination,
+              expectedSize: payload.byteLength,
+              expectedSha256: createHash("sha256").update(payload).digest("hex"),
+              onProgress: (progress) => {
+                expect(stopped).not.toHaveBeenCalled();
+                report(progress);
+                const text = mocks.progressUpdate.mock.lastCall?.[0];
+                expect(typeof text).toBe("string");
+                observations.push({ ...progress, text });
+              },
+            });
+          } finally {
+            opened.mockRestore();
+            clock.mockRestore();
+          }
+          return destination;
+        },
+      );
+
+      await runLlamaCppSetup(ctx);
+
+      assert.deepStrictEqual(await fs.readFile(destination), payload);
+      expect(release).toHaveBeenCalledOnce();
+      expect(stopped).toHaveBeenCalledExactlyOnceWith("Managed llama.cpp server prepared");
+      expect(mocks.downloadFetch).toHaveBeenCalledOnce();
+      expect(observations.map((progress) => progress.downloadedSize)).toEqual([
+        1_000_000, 2_000_000, 3_000_000,
+      ]);
+      expect(observations.map((progress) => progress.totalSize)).toEqual([
+        3_000_000, 3_000_000, 3_000_000,
+      ]);
+      console.info(
+        "[llama-rate-proof] " +
+          JSON.stringify({
+            label,
+            execPath: process.execPath,
+            version: process.version,
+            observations,
+            fileVerified: true,
+            releaseCount: release.mock.calls.length,
+            stoppedCount: stopped.mock.calls.length,
+          }),
+      );
+      expect(observations.map((progress) => progress.bytesPerSecond)).toEqual(rates);
+      expect(
+        observations.map((progress) => Number(progress.text.match(/, (\d+) MB\/s\)$/u)?.[1])),
+      ).toEqual(mb);
+      expect(
+        observations.every((progress) =>
+          progress.text.startsWith("Downloading configured embedding model…"),
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it("reuses a downloaded recommendation after cancelled activation with little free disk", async () => {
+    mocks.hardware.mockResolvedValue({
+      platform: "darwin",
+      arch: "arm64",
+      accelerator: { kind: "metal" },
+      totalMemoryBytes: 8 * GIB,
+      availableMemoryBytes: 8 * GIB,
+      availableDiskBytes: 3 * GIB,
+      availableRuntimeDiskBytes: 3 * GIB,
+      sharedDisk: true,
+    });
+    const recipe = resolveLlamaCppModelCandidates(await mocks.hardware(), "metal").recipes.at(-1)!;
+    mocks.ensureModel.mockImplementation(async ({ source }) => {
+      if (source === recipe.model.params?.modelPath) {
+        return modelPath;
+      }
+      if (source === DEFAULT_LLAMA_CPP_EMBEDDING_MODEL) {
+        return path.join(tempRoot, "embedding.gguf");
+      }
+      throw new Error("not cached");
+    });
+    const ctx = authContext(true);
+    const result = await runLlamaCppSetup(ctx);
+    expect(result.defaultModel).toBe(`llama-cpp/${recipe.model.id}`);
+    expect(ctx.prompter.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining(`Use cached ${recipe.model.name}`),
+      }),
+    );
+    expect(mocks.prepareServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatModel: expect.objectContaining({ id: recipe.model.id, path: modelPath }),
+      }),
+    );
+  });
+
+  it("offers the model that fits Gateway hardware and stages only its inventory", async () => {
+    vi.mocked(os.totalmem).mockReturnValue(64 * GIB);
+    const ctx = authContext(true);
+    const recipe = resolveLlamaCppModelCandidates(await mocks.hardware(), "metal").recipes[0]!;
+
+    const result = await runLlamaCppSetup(ctx);
+
+    expect(ctx.prompter.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining(
+          "Gateway host gateway-host (darwin/arm64), using Apple Metal",
+        ),
+      }),
+    );
+    expect(ctx.prompter.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining(`${recipe.model.name} (16.5 GB)`),
+      }),
+    );
+    expect(result.defaultModel).toBe(`llama-cpp/${recipe.model.id}`);
+    expect(result.configPatch?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]?.models).toEqual([
+      recipe.model,
+    ]);
+    expect(mocks.ensureModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: recipe.model.params?.modelPath,
+        download: true,
+      }),
+    );
+    expect(mocks.prepareServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isolated: true,
+        asset: expect.objectContaining({ backend: "metal" }),
+      }),
+    );
+  });
+
+  it("makes CPU execution explicit when the NVIDIA host lacks a verified CUDA build", async () => {
+    mocks.hardware.mockResolvedValue({
+      platform: "linux",
+      arch: "x64",
+      totalMemoryBytes: 64 * GIB,
+      availableMemoryBytes: 60 * GIB,
+      availableDiskBytes: 100 * GIB,
+      availableRuntimeDiskBytes: 100 * GIB,
+      sharedDisk: true,
+      accelerator: {
+        kind: "cuda",
+        devices: [
+          {
+            name: "GPU",
+            totalMemoryBytes: 48 * GIB,
+            availableMemoryBytes: 48 * GIB,
+            driverVersion: "580.65",
+          },
+        ],
+      },
+    });
+    const ctx = authContext(false);
+
+    await expect(runLlamaCppSetup(ctx)).resolves.toEqual({ profiles: [] });
+
+    expect(ctx.prompter.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("This recommendation uses CPU execution"),
+      }),
+    );
+    expect(ctx.prompter.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("verified CPU runtime") }),
+    );
+    expect(mocks.prepareServer).not.toHaveBeenCalled();
+    expect(mocks.ensureModel).not.toHaveBeenCalledWith(expect.objectContaining({ download: true }));
+  });
+
+  it("keeps the current model and credentials intact when preparation fails", async () => {
+    const ctx = authContext(true);
+    ctx.config.agents = { defaults: { model: { primary: "openai/gpt-5.4" } } };
+    const previous = structuredClone(ctx.config);
+    mocks.prepareServer.mockRejectedValue(new Error("runtime installation failed"));
+
+    await expect(runLlamaCppSetup(ctx)).rejects.toThrow("runtime installation failed");
+
+    expect(ctx.config).toEqual(previous);
+    expect(mocks.removeProfiles).not.toHaveBeenCalled();
+  });
+
   it("pins the default model identity and integrity", () => {
     expect(DEFAULT_LLAMA_CPP_MODEL_URI).toBe(
       "hf:unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf",
     );
     expect(DEFAULT_LLAMA_CPP_MODEL_SIZE_BYTES).toBe(4_977_171_584);
     expect(DEFAULT_LLAMA_CPP_MODEL_SHA256).toMatch(/^[a-f\d]{64}$/u);
-  });
-
-  it("keeps the 16 GiB default-model gate", () => {
-    expect(meetsLlamaCppDefaultModelRamFloor(16 * GIB - 1)).toBe(false);
-    expect(meetsLlamaCppDefaultModelRamFloor(16 * GIB)).toBe(true);
   });
 
   it("keeps app discovery read-only", async () => {
@@ -237,7 +514,7 @@ describe("llama.cpp managed setup", () => {
   });
 
   it("does not offer the default download below the RAM floor", async () => {
-    vi.mocked(os.totalmem).mockReturnValue(8 * GIB);
+    vi.mocked(os.totalmem).mockReturnValue(4 * GIB);
     const ctx = authContext(true);
 
     await expect(runLlamaCppSetup(ctx)).resolves.toEqual({ profiles: [] });
@@ -246,34 +523,38 @@ describe("llama.cpp managed setup", () => {
   });
 
   it("offers embedding-only setup for local memory below the chat RAM floor", async () => {
-    vi.mocked(os.totalmem).mockReturnValue(8 * GIB);
+    vi.mocked(os.totalmem).mockReturnValue(4 * GIB);
     const ctx = authContext(true);
     requestUnconfiguredLocalMemory(ctx);
     ctx.config.agents = { defaults: { model: { primary: "openai/gpt-5.4" } } };
 
     const result = await runLlamaCppSetup(ctx);
 
-    expect(ctx.prompter.confirm).toHaveBeenCalledWith({
-      message:
-        "OpenClaw can install a verified llama.cpp server and download only the local embedding model (about 0.3 GB). This will not install or change your chat model. Continue?",
-      initialValue: false,
-    });
+    expect(ctx.prompter.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("download only the local embedding model"),
+        initialValue: false,
+      }),
+    );
     expect(result.defaultModel).toBeUndefined();
     expect(result.configPatch?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]?.models).toEqual([]);
     expect(ctx.config.agents?.defaults?.model).toEqual({ primary: "openai/gpt-5.4" });
     expect(
       mocks.ensureModel.mock.calls.filter(([options]) => options.download === true),
     ).toHaveLength(1);
-    expect(mocks.prepareServer).toHaveBeenCalledWith({
-      chatModel: { mode: "remove" },
-      embeddingModelIsDefault: true,
-      embeddingModelPath: path.join(tempRoot, "embedding.gguf"),
-      port: undefined,
-    });
+    expect(mocks.prepareServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatModel: { mode: "remove" },
+        configuredChatModelIds: [],
+        embeddingModelIsDefault: true,
+        embeddingModelPath: path.join(tempRoot, "embedding.gguf"),
+        isolated: true,
+      }),
+    );
   });
 
   it.each([
-    { name: "embedding-only", totalmem: 8 * GIB },
+    { name: "embedding-only", totalmem: 4 * GIB },
     { name: "chat", totalmem: 16 * GIB },
   ])("uses the configured embedding model during $name setup", async ({ totalmem }) => {
     vi.mocked(os.totalmem).mockReturnValue(totalmem);
@@ -328,7 +609,7 @@ describe("llama.cpp managed setup", () => {
   });
 
   it("requires consent before embedding-only setup", async () => {
-    vi.mocked(os.totalmem).mockReturnValue(8 * GIB);
+    vi.mocked(os.totalmem).mockReturnValue(4 * GIB);
     const ctx = authContext(false);
     requestUnconfiguredLocalMemory(ctx);
 
@@ -358,7 +639,7 @@ describe("llama.cpp managed setup", () => {
   });
 
   it("uses the sole effective per-agent embedding model", async () => {
-    vi.mocked(os.totalmem).mockReturnValue(8 * GIB);
+    vi.mocked(os.totalmem).mockReturnValue(4 * GIB);
     const ctx = authContext(true);
     delete ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
     ctx.config.agents = {
@@ -415,7 +696,7 @@ describe("llama.cpp managed setup", () => {
   });
 
   it.each([
-    { name: "embedding-only", totalmem: 8 * GIB },
+    { name: "embedding-only", totalmem: 4 * GIB },
     { name: "chat", totalmem: 16 * GIB },
   ])("stops $name setup when local-memory agents use different models", async ({ totalmem }) => {
     vi.mocked(os.totalmem).mockReturnValue(totalmem);
@@ -457,7 +738,7 @@ describe("llama.cpp managed setup", () => {
   it.each(externalChatRoutes)(
     "does not replace an external llama.cpp provider used as $name",
     async ({ agents }) => {
-      vi.mocked(os.totalmem).mockReturnValue(8 * GIB);
+      vi.mocked(os.totalmem).mockReturnValue(4 * GIB);
       const ctx = authContext(true);
       ctx.config.memory = { search: { provider: "local" } };
       ctx.config.agents = agents;
@@ -494,7 +775,7 @@ describe("llama.cpp managed setup", () => {
   it.each(externalChatRoutes.filter(({ name }) => name !== "an agent primary"))(
     "does not replace a managed llama.cpp provider used as $name",
     async ({ agents }) => {
-      vi.mocked(os.totalmem).mockReturnValue(8 * GIB);
+      vi.mocked(os.totalmem).mockReturnValue(4 * GIB);
       const ctx = authContext(true);
       ctx.config.memory = { search: { provider: "local" } };
       ctx.config.agents = agents;
@@ -535,7 +816,7 @@ describe("llama.cpp managed setup", () => {
 
     await expect(runLlamaCppSetup(ctx)).resolves.toEqual({ profiles: [] });
     expect(ctx.prompter.confirm).toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringContaining("verified llama.cpp server") }),
+      expect.objectContaining({ message: expect.stringContaining("verified METAL runtime") }),
     );
     expect(mocks.ensureModel).not.toHaveBeenCalledWith(expect.objectContaining({ download: true }));
   });
@@ -545,7 +826,7 @@ describe("llama.cpp managed setup", () => {
 
     await expect(runLlamaCppSetup(ctx)).resolves.toMatchObject({
       profiles: [],
-      defaultModel: `${LLAMA_CPP_PROVIDER_ID}/${DEFAULT_LLAMA_CPP_MODEL_ID}`,
+      defaultModel: `${LLAMA_CPP_PROVIDER_ID}/qwen3.5-9b-q4_k_m`,
       configPatch: {
         models: {
           providers: {
@@ -661,12 +942,8 @@ describe("llama.cpp managed setup", () => {
       profiles: { "llama-cpp:default": undefined },
       order: { "llama-cpp": undefined },
     });
-    expect(mocks.removeProfiles).toHaveBeenCalledWith({
-      provider: "llama-cpp",
-      profileIds: ["llama-cpp:default"],
-      agentDir: ctx.agentDir,
-    });
-    expect(mocks.prepareServer).toHaveBeenCalledWith(expect.objectContaining({ port: undefined }));
+    expect(mocks.removeProfiles).not.toHaveBeenCalled();
+    expect(mocks.prepareServer).toHaveBeenCalledWith(expect.objectContaining({ isolated: true }));
     expect(mocks.ensureModel).toHaveBeenCalledWith(
       expect.not.objectContaining({ cacheDir: tempRoot }),
     );

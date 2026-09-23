@@ -3,7 +3,6 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { buildMediaUnderstandingRegistry } from "./provider-registry.js";
 import { resolveAutoImageModel, runCapability } from "./runner.js";
-import { clearMediaUnderstandingBinaryCacheForTests } from "./runner.test-support.js";
 import { withAudioFixture, withVideoFixture } from "./runner.test-utils.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
@@ -29,22 +28,61 @@ vi.mock("../plugins/capability-provider-runtime.js", () => ({
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: async () => [],
-  loadPreparedModelCatalog: async () => [],
+  readPreparedModelCatalog: async () => [],
 }));
 
 beforeEach(() => {
   selection.providers.length = 0;
   selection.auth.mockReset().mockResolvedValue(true);
-  clearMediaUnderstandingBinaryCacheForTests();
 });
 
 afterEach(() => {
   selection.providers.length = 0;
   selection.auth.mockReset();
-  clearMediaUnderstandingBinaryCacheForTests();
 });
 
 describe("automatic media selection", () => {
+  it.each(["manifest", "config"] as const)(
+    "auto-selects hookless image providers from %s",
+    async (source) => {
+      const provider = "selection-image";
+      const cfg: OpenClawConfig =
+        source === "config"
+          ? {
+              models: {
+                providers: {
+                  [provider]: {
+                    baseUrl: "https://image.example/v1",
+                    models: [
+                      {
+                        id: "vision",
+                        name: "Vision",
+                        reasoning: false,
+                        input: ["text", "image"],
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                        contextWindow: 8192,
+                        maxTokens: 128,
+                      },
+                    ],
+                  },
+                },
+              },
+            }
+          : {};
+      if (source === "manifest") {
+        selection.providers.push({
+          id: provider,
+          capabilities: ["image"],
+          defaultModels: { image: "vision" },
+          autoPriority: { image: 1 },
+        });
+      }
+
+      expect(await resolveAutoImageModel({ cfg })).toEqual({ provider, model: "vision" });
+      expect(selection.auth).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ provider }));
+    },
+  );
+
   it.each([
     { capability: "image", route: "active", model: "after-auth", provider: "google" },
     { capability: "image", route: "key", model: "before-auth", provider: "GEMINI" },
@@ -105,10 +143,8 @@ describe("automatic media selection", () => {
   );
 
   it.each(["provider-transcription", undefined])(
-    "key-selected audio ignores the chat model with provider default %s",
+    "configured audio ignores the chat model with provider default %s",
     async (model) => {
-      let attempts = 0;
-      selection.auth.mockImplementation(async () => ++attempts > 1);
       const seenModels: Array<string | undefined> = [];
       const provider: MediaUnderstandingProvider = {
         id: "selection-audio",
@@ -122,36 +158,42 @@ describe("automatic media selection", () => {
       await withAudioFixture("media-selection-key-audio", async ({ ctx, media, cache }) => {
         const result = await runCapability({
           capability: "audio",
-          cfg: {},
+          cfg: {
+            models: {
+              providers: {
+                [provider.id]: { baseUrl: "https://audio.example/v1", models: [] },
+              },
+            },
+          },
           ctx,
           media,
           attachments: cache,
           providerRegistry: new Map([[provider.id, provider]]),
-          activeModel: { provider: provider.id, model: "chat-only-model" },
+          activeModel: { provider: "chat-only", model: "chat-only-model" },
         });
         expect(result.decision.outcome).toBe("success");
         expect(seenModels).toEqual([model]);
-        expect(attempts).toBe(2);
+        expect(selection.auth).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ provider: provider.id }),
+        );
       });
     },
   );
 
-  it("retains the final key-provider pass after unavailable local audio", async () => {
+  it("checks audio providers once in priority order until auth is available", async () => {
     const calls: string[] = [];
     selection.auth.mockImplementation(async ({ provider }) => {
       calls.push(provider);
-      return calls.length === 4;
+      return provider === "second";
     });
-    const providers = ["first", "second"].map(
-      (id, priority): MediaUnderstandingProvider => ({
-        id,
-        capabilities: ["audio"],
-        autoPriority: { audio: priority },
-        defaultModels: { audio: `${id}-transcription` },
-        transcribeAudio: async ({ model }) => ({ text: id, model }),
-      }),
-    );
-    await withAudioFixture("media-selection-second-pass", async ({ ctx, media, cache }) => {
+    const providers = ["first", "second"].map((id, priority): MediaUnderstandingProvider => ({
+      id,
+      capabilities: ["audio"],
+      autoPriority: { audio: priority },
+      defaultModels: { audio: `${id}-transcription` },
+      transcribeAudio: async ({ model }) => ({ text: id, model }),
+    }));
+    await withAudioFixture("media-selection-provider-order", async ({ ctx, media, cache }) => {
       const result = await runCapability({
         capability: "audio",
         cfg: {},
@@ -160,7 +202,7 @@ describe("automatic media selection", () => {
         attachments: cache,
         providerRegistry: new Map(providers.map((provider) => [provider.id, provider])),
       });
-      expect(calls).toEqual(["first", "second", "first", "second"]);
+      expect(calls).toEqual(["first", "second"]);
       expect(result.outputs).toEqual([
         {
           kind: "audio.transcription",

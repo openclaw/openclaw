@@ -300,6 +300,21 @@ describe("custom silent tokens", () => {
   ])("handles custom token for $name", ({ check, expected }) => {
     expect(check()).toBe(expected);
   });
+
+  it.each(["[quiet]", "a+b?"])("keeps interleaved matching independent for %s", (token) => {
+    const upper = token.toUpperCase();
+    for (let pass = 0; pass < 2; pass++) {
+      expect(isSilentReplyText(`${upper} ${token}`, token)).toBe(true);
+      expect(stripSilentToken(`done ${upper}\n`, token)).toBe("done");
+      expect(startsWithSilentToken(`${upper}你好`, token)).toBe(true);
+      expect(stripLeadingSilentToken(`${upper}你好`, token)).toBe("你好");
+      expect(startsWithSilentToken(`${upper}7`, token)).toBe(true);
+      expect(startsWithSilentToken(`${upper}: literal`, token)).toBe(false);
+      expect(startsWithSilentToken(`${upper}\n: visible`, token)).toBe(true);
+      expect(stripLeadingSilentToken(`${upper}\n: visible`, token)).toBe(": visible");
+      expect(isSilentReplyText(`visible ${upper}`, token)).toBe(false);
+    }
+  });
 });
 
 describe("stripLeadingSilentToken", () => {

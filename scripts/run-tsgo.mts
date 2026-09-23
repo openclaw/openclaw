@@ -4,15 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { readFlagValue } from "./lib/arg-utils.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import {
   applyLocalTsgoPolicy,
-  ensureRepoToolNodeModulesLink,
   resolveLocalCheckEnv,
   resolveRepoToolBinPath,
 } from "./lib/local-check-runtime.mts";
-import { createManagedCommandInvocation, runManagedCommand } from "./lib/managed-child-process.mts";
+import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
+import { findRepoRoot } from "./lib/repo-root.mjs";
 import {
   getSparseTsgoGuardError,
   shouldSkipSparseTsgoGuardError,
@@ -51,11 +50,6 @@ export function prepareTsgoCommand(
     hostResources,
   );
 
-  const tsgoPath = resolveRepoToolBinPath("tsgo", { cwd });
-  const tsBuildInfoFile = readFlagValue(finalArgs, "--tsBuildInfoFile");
-  if (tsBuildInfoFile) {
-    fs.mkdirSync(path.dirname(path.resolve(cwd, tsBuildInfoFile)), { recursive: true });
-  }
   const sparseGuardError = getSparseTsgoGuardError(finalArgs, { cwd });
   if (sparseGuardError) {
     if (shouldSkipSparseTsgoGuardError(env)) {
@@ -66,7 +60,8 @@ export function prepareTsgoCommand(
     throw new Error(sparseGuardError);
   }
 
-  ensureRepoToolNodeModulesLink(tsgoPath, { cwd });
+  // Subdirectories share checkout ownership, but another checkout's install never does.
+  const tsgoPath = resolveRepoToolBinPath("tsgo", { cwd: findRepoRoot(cwd) ?? cwd });
   let timeoutMs: number | undefined;
   try {
     timeoutMs = resolveTsgoTimeoutMs(env);
@@ -75,12 +70,14 @@ export function prepareTsgoCommand(
       `[tsgo] OPENCLAW_TSGO_TIMEOUT_MS must be plain decimal digits with no leading zero, sign, exponent, or decimal point, between 1 and ${Number.MAX_SAFE_INTEGER}; got ${env.OPENCLAW_TSGO_TIMEOUT_MS}. Unset it to disable the watchdog.`,
     );
   }
-  const { command: bin, ...invocation } = createManagedCommandInvocation({
-    bin: tsgoPath,
+  return {
     args: finalArgs,
+    bin: tsgoPath,
+    cwd,
     env,
-  });
-  return { ...invocation, bin, cwd, env, timeoutMs };
+    shell: process.platform === "win32",
+    timeoutMs,
+  };
 }
 
 async function main(): Promise<void> {
@@ -96,12 +93,20 @@ async function main(): Promise<void> {
     return;
   }
   try {
-    // Managed cleanup forwards SIGTERM before bounded SIGKILL escalation, then
-    // joins the compiler group and output before reporting a timeout.
-    process.exitCode = await runManagedCommand({
-      ...command,
-      // Standalone execution owns the compiler group through verified completion.
-      requireProcessTreeExit: process.platform !== "win32",
+    // Preflight must refuse or skip before installed bootstrap dependencies load.
+    // Output mutation and the compiler still remain inside their checkout owner.
+    const { withDistArtifactOwnership } = await import("./lib/dist-artifact-ownership.mts");
+    await withDistArtifactOwnership(command.cwd, async () => {
+      const tsBuildInfoFile = readFlagValue(command.args, "--tsBuildInfoFile");
+      if (tsBuildInfoFile) {
+        fs.mkdirSync(path.dirname(path.resolve(command.cwd, tsBuildInfoFile)), { recursive: true });
+      }
+      // Managed cleanup forwards SIGTERM before bounded SIGKILL escalation, then
+      // joins the compiler group and output before reporting a timeout.
+      process.exitCode = await runManagedCommand({
+        ...command,
+        requireProcessTreeExit: process.platform !== "win32",
+      });
     });
   } catch (error) {
     if ((error as { code?: string } | undefined)?.code !== "ETIMEDOUT") {
@@ -115,6 +120,5 @@ async function main(): Promise<void> {
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
-  // Standalone checks serialize with dist consumers; inherited entries reuse their owner.
-  await withDistArtifactOwnership(process.cwd(), () => main());
+  await main();
 }

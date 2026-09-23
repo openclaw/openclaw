@@ -1,13 +1,24 @@
 // Doctor memory schema tests exercise registered agent databases through the repair path.
 import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { encodeMemoryEmbedding } from "../plugin-sdk/memory-core-host-engine-storage.js";
+import { AGENT_DATABASE_MAINTENANCE_LEASE } from "../state/openclaw-agent-db-lease.js";
+import { invalidateRegisteredAgentDatabasesMemo } from "../state/openclaw-agent-db-registry-listing.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
+import { seedOpenClawAgentSchemaV21 } from "../state/openclaw-agent-schema-v21.test-support.js";
+import { readOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { noteDoctorAgentMemorySchemaHealth } from "./doctor-agent-memory-schema.js";
 
 const tempDirs: string[] = [];
@@ -24,11 +35,19 @@ function createRegisteredAgentDatabase(): {
   return { databasePath, env };
 }
 
-function recreateUnreleasedInlineMemoryMetadata(databasePath: string): void {
+function recreateUnreleasedInlineMemoryMetadata(databasePath: string, legacyStorage = false): void {
+  if (legacyStorage) {
+    // The registered fixture is closed and empty. Seed frozen historical bytes,
+    // including TEXT caches/transcripts and their original indexes/triggers.
+    fs.rmSync(databasePath);
+  }
   const database = openNodeSqliteDatabase(databasePath);
   try {
+    if (legacyStorage) {
+      seedOpenClawAgentSchemaV21(database, "worker-1");
+    }
+    database.exec("PRAGMA foreign_keys = OFF");
     database.exec(`
-      PRAGMA foreign_keys = OFF;
       DROP TABLE memory_index_chunk_recall_metadata;
       ALTER TABLE memory_index_chunks ADD COLUMN importance INTEGER
         CHECK (importance IS NULL OR importance BETWEEN 1 AND 10);
@@ -41,16 +60,18 @@ function recreateUnreleasedInlineMemoryMetadata(databasePath: string): void {
           chunk_id, origin_class, session_kind, observed_at
         ) VALUES (NEW.id, 'agent', 'unknown', NEW.updated_at);
       END;
-      INSERT INTO memory_index_chunks (
+    `);
+    database
+      .prepare(`INSERT INTO memory_index_chunks (
         id, path, source, start_line, end_line, hash, model, text, embedding,
         updated_at, importance, triggers, project_key
       ) VALUES (
         'pre-provenance-sentinel', 'MEMORY.md', 'memory', 1, 2,
-        'sentinel-hash', 'sentinel-model', 'sentinel text', '[1,0]', 42,
+        'sentinel-hash', 'sentinel-model', 'sentinel text', ?, 42,
         9, 'when testing rollback', 'project/key'
-      );
-      PRAGMA foreign_keys = ON;
-    `);
+      )`)
+      .run(legacyStorage ? "[1,0]" : encodeMemoryEmbedding([1, 0]));
+    database.exec("PRAGMA foreign_keys = ON");
   } finally {
     database.close();
   }
@@ -89,13 +110,50 @@ afterEach(() => {
 });
 
 describe("doctor agent memory schema repair", () => {
-  it.each([17, 18])(
-    "moves v%s inline recall metadata, preserves rows, and lists the durable repair",
+  it("invalidates verification before a failed writable repair while inspection preserves it", async () => {
+    const { databasePath, env } = createRegisteredAgentDatabase();
+    recreateUnreleasedInlineMemoryMetadata(databasePath);
+    expect(readOpenClawAgentIntegrityVerification(databasePath, env)?.clean_close).toBe(1);
+    await noteDoctorAgentMemorySchemaHealth({ env, shouldRepair: false }, { note: vi.fn() });
+    expect(readOpenClawAgentIntegrityVerification(databasePath, env)?.clean_close).toBe(1);
+
+    const sqlite = await import("../infra/node-sqlite.js");
+    const nativeOpen = sqlite.openNodeSqliteDatabase;
+    let observedWritableOpen = false;
+    let receiptBeforeOpen: ReturnType<typeof readOpenClawAgentIntegrityVerification>;
+    const open = vi
+      .spyOn(sqlite, "openNodeSqliteDatabase")
+      .mockImplementation((pathname, options) => {
+        if (pathname === databasePath && !options?.readOnly) {
+          observedWritableOpen = true;
+          receiptBeforeOpen = readOpenClawAgentIntegrityVerification(databasePath, env);
+          throw new Error("synthetic maintenance native open failed");
+        }
+        return nativeOpen(pathname, options);
+      });
+    try {
+      const report = await noteDoctorAgentMemorySchemaHealth(
+        { env, shouldRepair: true },
+        { note: vi.fn() },
+      );
+      expect(observedWritableOpen).toBe(true);
+      expect(receiptBeforeOpen).toBeUndefined();
+      expect(report.repaired).toEqual([]);
+      expect(report.warnings.join(" ")).toContain("synthetic maintenance native open failed");
+      expect(readOpenClawAgentIntegrityVerification(databasePath, env)).toBeUndefined();
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  it.each(["v17", "current"] as const)(
+    "moves %s inline recall metadata, preserves rows, and lists the durable repair",
     async (version) => {
       const { databasePath, env } = createRegisteredAgentDatabase();
-      recreateUnreleasedInlineMemoryMetadata(databasePath);
-      if (version === 17) {
+      recreateUnreleasedInlineMemoryMetadata(databasePath, version === "v17");
+      if (version === "v17") {
         const legacy = openNodeSqliteDatabase(databasePath);
+        removeCanonicalValidationFromHistoricalAgentFixture(legacy);
         legacy.exec(
           "DROP TABLE session_participants; PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;",
         );
@@ -129,6 +187,7 @@ describe("doctor agent memory schema repair", () => {
       const database = openNodeSqliteDatabase(databasePath, { readOnly: true });
       try {
         expect(readMemoryChunkColumns(databasePath)).toEqual([
+          "chunk_rowid",
           "id",
           "path",
           "source",
@@ -140,9 +199,12 @@ describe("doctor agent memory schema repair", () => {
           "embedding",
           "updated_at",
         ]);
-        expect(database.prepare("SELECT id, text FROM memory_index_chunks").get()).toEqual({
+        expect(
+          database.prepare("SELECT id, text, embedding FROM memory_index_chunks").get(),
+        ).toEqual({
           id: "pre-provenance-sentinel",
           text: "sentinel text",
+          embedding: encodeMemoryEmbedding([1, 0]),
         });
         expect(
           database
@@ -177,6 +239,86 @@ describe("doctor agent memory schema repair", () => {
     },
   );
 
+  it("leaves a later runtime admission untouched after the first repair loses maintenance", async () => {
+    const { databasePath, env } = createRegisteredAgentDatabase();
+    const laterOptions = { agentId: "worker-2", env };
+    const laterPath = openOpenClawAgentDatabase(laterOptions).path;
+    closeOpenClawAgentDatabasesForTest();
+    recreateUnreleasedInlineMemoryMetadata(databasePath);
+    recreateUnreleasedInlineMemoryMetadata(laterPath);
+    const agentDatabase = await import("../state/openclaw-agent-db.js");
+    const integrityWorker = await import("../infra/sqlite-integrity-worker.js");
+    const sqlite = await import("../infra/node-sqlite.js");
+    const startAdmission = createDeferred();
+    const admissionChecked = createDeferred();
+    const releaseAdmission = createDeferred();
+    // Register outside the old maintenance ALS scope: this is a new runtime owner.
+    const newerAdmission = startAdmission.promise.then(() =>
+      agentDatabase.withOpenClawAgentDatabaseAsync(laterOptions, (database) =>
+        database.db.prepare("SELECT id, text FROM memory_index_chunks").all(),
+      ),
+    );
+    void newerAdmission.catch(() => {});
+    const check = integrityWorker.assertSqliteIntegrityInWorker;
+    const scan = vi
+      .spyOn(integrityWorker, "assertSqliteIntegrityInWorker")
+      .mockImplementation(async (...args) => {
+        await check(...args);
+        if (args[0] === laterPath) {
+          // Keep the real pending admission alive before it converges the legacy shape.
+          admissionChecked.resolve();
+          await releaseAdmission.promise;
+        }
+      });
+    const open = sqlite.openNodeSqliteDatabase;
+    const inspectedPaths: string[] = [];
+    const inspection = vi
+      .spyOn(sqlite, "openNodeSqliteDatabase")
+      .mockImplementation((pathname, options) => {
+        if (options?.readOnly) {
+          inspectedPaths.push(pathname);
+        }
+        return open(pathname, options);
+      });
+    const close = vi.spyOn(agentDatabase, "closeOpenClawAgentDatabaseByPath");
+    const migrate = agentDatabase.migrateOpenClawAgentDatabaseForMaintenance;
+    const repair = vi
+      .spyOn(agentDatabase, "migrateOpenClawAgentDatabaseForMaintenance")
+      .mockImplementationOnce(async (options, maintenance) => {
+        await migrate(options, maintenance);
+        const removed = openOpenClawStateDatabase({ env })
+          .db.prepare("DELETE FROM state_leases WHERE scope = ? AND lease_key = ?")
+          .run(AGENT_DATABASE_MAINTENANCE_LEASE.scope, AGENT_DATABASE_MAINTENANCE_LEASE.key);
+        expect(removed.changes).toBe(1);
+        // Earlier registry discovery may inspect targets while the lease is still valid.
+        inspectedPaths.length = 0;
+        close.mockClear();
+        startAdmission.resolve();
+        await Promise.race([admissionChecked.promise, newerAdmission]);
+      });
+    try {
+      await expect(
+        noteDoctorAgentMemorySchemaHealth({ env, shouldRepair: true }, { note: vi.fn() }),
+      ).rejects.toThrow(/maintenance lease.*was lost/iu);
+      expect(repair.mock.calls.map(([options]) => options.pathname)).toEqual([databasePath]);
+      expect(inspectedPaths).not.toContain(laterPath);
+      expect(close.mock.calls.some(([pathname]) => pathname === laterPath)).toBe(false);
+      expect(scan.mock.calls.filter(([pathname]) => pathname === laterPath)).toHaveLength(1);
+      releaseAdmission.resolve();
+      await expect(newerAdmission).resolves.toEqual([
+        { id: "pre-provenance-sentinel", text: "sentinel text" },
+      ]);
+    } finally {
+      startAdmission.resolve();
+      releaseAdmission.resolve();
+      await newerAdmission.catch(() => {});
+      repair.mockRestore();
+      close.mockRestore();
+      inspection.mockRestore();
+      scan.mockRestore();
+    }
+  });
+
   it("is idempotent on a second doctor fix run", async () => {
     const { databasePath, env } = createRegisteredAgentDatabase();
     recreateUnreleasedInlineMemoryMetadata(databasePath);
@@ -194,6 +336,8 @@ describe("doctor agent memory schema repair", () => {
 
   it("leaves a fresh canonical database untouched", async () => {
     const { databasePath, env } = createRegisteredAgentDatabase();
+    const options = { agentId: "worker-1", env };
+    const admitted = openOpenClawAgentDatabase(options);
     const beforeSql = readMemoryChunkTableSql(databasePath);
     const beforeStat = fs.statSync(databasePath);
 
@@ -204,6 +348,8 @@ describe("doctor agent memory schema repair", () => {
 
     const afterStat = fs.statSync(databasePath);
     expect(report).toEqual({ repaired: [], warnings: [] });
+    expect(admitted.db.isOpen).toBe(true);
+    expect(openOpenClawAgentDatabase(options)).toBe(admitted);
     expect(readMemoryChunkTableSql(databasePath)).toBe(beforeSql);
     expect({ mtimeMs: afterStat.mtimeMs, size: afterStat.size }).toEqual({
       mtimeMs: beforeStat.mtimeMs,
@@ -240,4 +386,109 @@ describe("doctor agent memory schema repair", () => {
       repaired.close();
     }
   });
+
+  it.each(["already-repaired", "new-repair"])(
+    "rediscovers memory repairs after acquiring maintenance: %s",
+    async (change) => {
+      const { databasePath, env } = createRegisteredAgentDatabase();
+      const laterPath = openOpenClawAgentDatabase({ agentId: "worker-2", env }).path;
+      closeOpenClawAgentDatabasesForTest();
+      recreateUnreleasedInlineMemoryMetadata(databasePath);
+      const agentDatabase = await import("../state/openclaw-agent-db.js");
+      const withLease = agentDatabase.withAgentDatabaseMaintenanceLease;
+      const lease = vi
+        .spyOn(agentDatabase, "withAgentDatabaseMaintenanceLease")
+        .mockImplementationOnce((options, run) =>
+          withLease(options, async (maintenance) => {
+            if (change === "already-repaired") {
+              await agentDatabase.migrateOpenClawAgentDatabaseForMaintenance(
+                { agentId: "worker-1", pathname: databasePath },
+                maintenance,
+              );
+            } else {
+              recreateUnreleasedInlineMemoryMetadata(laterPath);
+            }
+            return run(maintenance);
+          }),
+        );
+      try {
+        const report = await noteDoctorAgentMemorySchemaHealth(
+          { env, shouldRepair: true },
+          { note: vi.fn() },
+        );
+        expect(report.warnings).toEqual([]);
+        expect(report.repaired.map((repair) => repair.path)).toEqual(
+          change === "already-repaired" ? [] : [databasePath, laterPath],
+        );
+        expect(readMemoryChunkColumns(databasePath)).not.toContain("importance");
+        expect(readMemoryChunkColumns(laterPath)).not.toContain("importance");
+      } finally {
+        lease.mockRestore();
+      }
+    },
+  );
+
+  it.each(["before-doctor", "before-lease"])(
+    "discovers a peer registration committed %s despite cached inventory",
+    async (timing) => {
+      const { databasePath, env } = createRegisteredAgentDatabase();
+      const peerPath = openOpenClawAgentDatabase({ agentId: "worker-2", env }).path;
+      closeOpenClawAgentDatabasesForTest();
+      recreateUnreleasedInlineMemoryMetadata(peerPath);
+      if (timing === "before-lease") {
+        recreateUnreleasedInlineMemoryMetadata(databasePath);
+      }
+      const state = openOpenClawStateDatabase({ env });
+      const row = state.db
+        .prepare(
+          "SELECT agent_id,path,schema_version,last_seen_at,size_bytes FROM agent_databases WHERE agent_id = ?",
+        )
+        .get("worker-2");
+      if (!row) {
+        throw new Error("missing peer fixture registration");
+      }
+      state.db.prepare("DELETE FROM agent_databases WHERE agent_id = ?").run("worker-2");
+      invalidateRegisteredAgentDatabasesMemo({ env });
+      expect(listOpenClawRegisteredAgentDatabases({ env }).map((entry) => entry.agentId)).toEqual([
+        "worker-1",
+      ]);
+      const publishPeerRegistration = () => {
+        // A peer commit does not invalidate this process's registry memo.
+        const peer = openNodeSqliteDatabase(state.path);
+        try {
+          peer
+            .prepare(
+              "INSERT INTO agent_databases(agent_id,path,schema_version,last_seen_at,size_bytes) VALUES(?,?,?,?,?)",
+            )
+            .run(...Object.values(row));
+        } finally {
+          peer.close();
+        }
+      };
+      const agentDatabase = await import("../state/openclaw-agent-db.js");
+      const withLease = agentDatabase.withAgentDatabaseMaintenanceLease;
+      const lease = vi.spyOn(agentDatabase, "withAgentDatabaseMaintenanceLease");
+      if (timing === "before-doctor") {
+        publishPeerRegistration();
+      } else {
+        lease.mockImplementationOnce((options, run) => {
+          publishPeerRegistration();
+          return withLease(options, run);
+        });
+      }
+      try {
+        const report = await noteDoctorAgentMemorySchemaHealth(
+          { env, shouldRepair: true },
+          { note: vi.fn() },
+        );
+        expect(report.warnings).toEqual([]);
+        expect(report.repaired.map((repair) => repair.path)).toEqual(
+          timing === "before-doctor" ? [peerPath] : [databasePath, peerPath],
+        );
+        expect(readMemoryChunkColumns(peerPath)).not.toContain("importance");
+      } finally {
+        lease.mockRestore();
+      }
+    },
+  );
 });

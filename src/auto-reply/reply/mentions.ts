@@ -8,14 +8,13 @@ import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { resolveMentionPatternPolicy } from "../../channels/mention-pattern-policy.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import { getLoadedChannelPluginById } from "../../channels/plugins/registry-loaded.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { compileConfigRegexes, type ConfigRegexRejectReason } from "../../security/config-regex.js";
 import { escapeRegExp } from "../../utils.js";
 import type { MsgContext } from "../templating.js";
-import { HISTORY_CONTEXT_MARKER } from "./history.js";
+import { HISTORY_CONTEXT_MARKER, RECENT_HISTORY_CONTEXT_MARKER } from "./history.js";
 import type { BuildMentionRegexesOptions, ExplicitMentionSignal } from "./mentions.types.js";
 export type { BuildMentionRegexesOptions } from "./mentions.types.js";
 export { CURRENT_MESSAGE_MARKER } from "./history.js";
@@ -414,7 +413,10 @@ export function stripStructuralPrefixes(text: string): string {
   }
   // Ignore wrapper labels, timestamps, and sender prefixes so directive-only
   // detection still works in group batches that include history/context.
-  if (text.trimStart().startsWith(HISTORY_CONTEXT_MARKER)) {
+  if (
+    text.trimStart().startsWith(HISTORY_CONTEXT_MARKER) ||
+    text.trimStart().startsWith(RECENT_HISTORY_CONTEXT_MARKER)
+  ) {
     // Flat history has no trustworthy current-message range when users can quote
     // marker text. Leave it non-command-shaped instead of guessing a boundary.
     return text.trim();
@@ -446,7 +448,7 @@ export function stripMentions(
     (normalizeOptionalLowercaseString(ctx.Provider) as ChannelId | undefined) ??
     null;
   const providerMentions = providerId
-    ? (getLoadedChannelPluginById(providerId) as ChannelPlugin | undefined)?.mentions
+    ? getLoadedChannelPluginById(providerId)?.mentions
     : undefined;
   const resolvedPatterns = resolveMentionPatterns(cfg, agentId);
   const configRegexes = compileMentionPatternsCached({

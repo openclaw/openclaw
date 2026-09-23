@@ -1,13 +1,23 @@
 import type fs from "node:fs";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { err, ok } from "@openclaw/normalization-core/result";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { isVerbose } from "../global-state.js";
+import {
+  readDeferredPluginMigrations,
+  withDeferredPluginMigrationsCurrent,
+} from "../infra/deferred-plugin-migrations.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { replaceFileAtomic } from "../infra/replace-file.js";
-import { maintainConfigBackups } from "./backup-rotation.js";
+import {
+  getUpdateDoctorConfigWriteAuthority,
+  assertUpdateDoctorConfigInputHash,
+  recordUpdateDoctorConfigWrite,
+} from "../infra/update-doctor-result.js";
+import { initializeNativeSessionCatalogPreferences } from "../plugins/native-session-catalog-config.js";
+import { prepareConfigFileWrite } from "./backup-rotation.js";
 import { collectChangedPaths } from "./config-change-paths.js";
+import { cloneEnvWithPlatformSemantics, createConfigRuntimeEnvBase } from "./config-env-vars.js";
 import {
   configSnapshotAuditRecordMatchesPath,
   fingerprintConfigSnapshotAuthoredConfig,
@@ -19,12 +29,12 @@ import {
   applyUnsetPathsForWrite,
   resolveManagedUnsetPathsForWrite,
 } from "./config-path-mutation.js";
+import { assertConfigWriteAllowedInCurrentMode } from "./config-write-guard.js";
 import {
-  EnvRefArrayMutationError,
-  restoreEnvRefsFromMap,
-  restoreEnvVarRefs,
-} from "./env-preserve.js";
-import { INCLUDE_KEY, readConfigIncludeFileWithGuards, resolveConfigIncludes } from "./includes.js";
+  preserveDeferredPluginMigrationConfig,
+  setDeferredPluginMigrationConfigFacts,
+} from "./deferred-plugin-migration-config.js";
+import { resolveKeyedAgentEntryIncludePreservation } from "./include-write-boundary.js";
 import {
   appendConfigAuditRecord,
   capConfigAuditIssues,
@@ -38,31 +48,36 @@ import type { ConfigIoContext } from "./io.context.js";
 import { prepareCronOwnerWriteRefusal } from "./io.cron-owner-refusal.js";
 import { recordConfigWriteMetadata } from "./io.meta.js";
 import {
-  collectEnvRefPaths,
   containsConfigIncludeDirective,
   hashConfigRaw,
   hasConfigMeta,
-  parseConfigJson5,
-  rejectConfigNonFiniteNumbers,
-  resolveConfigSnapshotHash,
+  resolveConfigForRead,
   resolveGatewayMode,
   restoreAuthoredTildePathsForWrite,
 } from "./io.read-helpers.js";
+import { hashConfigRevision } from "./io.snapshot.js";
 import { loggedConfigWarningFingerprints, setBoundedConfigIoWarningEntry } from "./io.state.js";
 import type {
+  ConfigWriteInputBasis,
   ConfigWriteOptions,
   InternalConfigWriteResult,
   ReadConfigFileSnapshotInternalResult,
 } from "./io.types.js";
-import { ConfigRuntimeRefreshError, configWritePostCommitRollback } from "./io.types.js";
-import { logConfigWarningsOnce } from "./io.warnings.js";
-import { createConfigValidationFailedError } from "./io.write-errors.js";
 import {
-  preserveIncludeOwnedConfigForWrite,
-  resolvePersistCandidateForWrite,
-} from "./io.write-prepare.js";
+  ConfigRuntimeRefreshError,
+  configWriteCommittedSnapshot,
+  configWritePostCommitRollback,
+} from "./io.types.js";
+import { logConfigWarningsOnce } from "./io.warnings.js";
+import {
+  ConfigWritePostCommitError,
+  createConfigValidationFailedError,
+  type ConfigWriteRollbackStatus,
+} from "./io.write-errors.js";
+import { resolvePersistCandidateForWrite } from "./io.write-prepare.js";
 import {
   assertBaseSnapshotStillCurrent,
+  createGuardedConfigFileSystem,
   formatConfigArtifactTimestamp,
   resolveConfigSizeBaselineBytes,
   resolveConfigStatMetadata,
@@ -76,32 +91,37 @@ import { prepareConfigWriteTopology } from "./io.write-topology.js";
 import { formatConfigIssueLines } from "./issue-format.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import { applyMergePatch, createMergePatch } from "./merge-patch.js";
-import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
-import { resolveIncludeRoots } from "./paths.js";
+import { setConfigResolutionFacts } from "./resolution-facts.js";
 import { preflightRuntimeSnapshotWrite } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObjectRawWithPlugins } from "./validation.js";
-
-function hasOwnIncludeDirective(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && Object.hasOwn(value, INCLUDE_KEY);
-}
-
-function hasIncludedGatewayModeOwner(value: unknown): boolean {
-  return (
-    hasOwnIncludeDirective(value) ||
-    (isRecord(value) &&
-      (hasOwnIncludeDirective(value.gateway) ||
-        (isRecord(value.gateway) && hasOwnIncludeDirective(value.gateway.mode))))
-  );
-}
+import { rejectConfigNonFiniteNumbers } from "./value-tree.js";
+import { captureConfigWriteLockGuard } from "./write-lock.js";
 
 export async function writeConfigFileFromContext(
   context: ConfigIoContext,
   cfg: OpenClawConfig,
-  options: ConfigWriteOptions,
+  writeOptions: ConfigWriteOptions,
   readSnapshot: () => Promise<ReadConfigFileSnapshotInternalResult>,
 ): Promise<InternalConfigWriteResult> {
   const { deps, configPath } = context;
+  let options = writeOptions;
+  const sourceGuard = captureConfigWriteLockGuard(configPath);
+  const doctorAuthority = getUpdateDoctorConfigWriteAuthority(configPath);
+  if (sourceGuard) {
+    const original = options;
+    options = {
+      ...options,
+      assertConfigPathForWrite: () => {
+        sourceGuard();
+        original.assertConfigPathForWrite?.();
+      },
+      beforeCommit: async () => {
+        await original.beforeCommit?.();
+        sourceGuard();
+      },
+    };
+  }
   options.assertConfigPathForWrite?.();
   assertConfigWriteAllowedInCurrentMode({ configPath, env: deps.env });
   const unsetPaths = resolveManagedUnsetPathsForWrite(options.unsetPaths);
@@ -112,24 +132,46 @@ export async function writeConfigFileFromContext(
       }
     : await readSnapshot();
   const snapshot = snapshotRead.snapshot;
+  const deferredPluginMigrations = readDeferredPluginMigrations({ env: deps.env });
+  const configForWrite = preserveDeferredPluginMigrationConfig({
+    sourceConfig: snapshot.sourceConfig,
+    nextConfig: cfg,
+    pending: deferredPluginMigrations,
+    writeOptions: options,
+  });
+  if (doctorAuthority) {
+    sourceGuard?.();
+    assertUpdateDoctorConfigInputHash(configPath, hashConfigRaw(snapshot.raw));
+    options = { ...options, baseSnapshot: snapshot };
+  }
   if (options.baseSnapshot) {
     assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
   }
 
   const {
     nextConfig,
+    clearedSessionStoreOwner,
+    authoredConfig,
+    authoredSourceConfig,
+    authoredRuntimeConfig,
     explicitSetPaths,
     explicitSetValueSource,
+    persistCanonicalAgentRoster,
     preserveLegacyAgentRoster,
     cronOwner,
   } = prepareConfigWriteTopology({
     ...snapshotRead,
-    nextConfig: cfg,
+    nextConfig: configForWrite,
     options,
     unsetPaths,
     env: deps.env,
+    lowerPrecedenceEnv: deps.lowerPrecedenceEnv,
     homedir: deps.homedir,
   });
+  const inputBasis: ConfigWriteInputBasis = {
+    kind: options.inputBase ?? "runtime",
+    config: options.inputBase === "source" ? authoredSourceConfig : authoredRuntimeConfig,
+  };
   const cronOwnerRefusal = cronOwner
     ? await prepareCronOwnerWriteRefusal(snapshot.config, {
         storePath: resolveCronJobsStorePathFromConfig(nextConfig, deps.env),
@@ -138,87 +180,74 @@ export async function writeConfigFileFromContext(
       })
     : undefined;
 
-  let persistCandidate: unknown = nextConfig;
-  let envRefMap: Map<string, string> | null = null;
+  let persistCandidate: unknown = authoredConfig;
   const changedPaths = new Set<string>();
-  collectChangedPaths(snapshot.config, nextConfig, "", changedPaths);
+  collectChangedPaths(inputBasis.config, authoredConfig, "", changedPaths);
   for (const changedPath of [...explicitSetPaths, ...(options.unsetPaths ?? [])]) {
     const normalizedPath = changedPath.filter((segment) => segment.length > 0).join(".");
     if (normalizedPath) {
       changedPaths.add(normalizedPath);
     }
   }
-  const identityRestoredPaths = new Set<string>();
   const hasAuthoredIncludes = containsConfigIncludeDirective(snapshot.parsed);
-  const hasIncludes = hasAuthoredIncludes && !containsConfigIncludeDirective(snapshot.sourceConfig);
-  // Missing snapshots still need runtime-to-authored projection. Callers authoring an
-  // exact bootstrap roster mark that intent through explicitSetPaths.
-  if (snapshot.valid) {
+  // Doctor repairs need the same authored projection so roster moves preserve nested includes.
+  // Missing snapshots also use this owner; exact bootstrap rosters carry explicitSetPaths.
+  if (snapshot.valid || (snapshot.exists && hasAuthoredIncludes)) {
+    const keyedAgentEntryIncludes = resolveKeyedAgentEntryIncludePreservation({
+      configPath: snapshot.path,
+      provenance: snapshot.includeProvenance,
+    });
     persistCandidate = resolvePersistCandidateForWrite({
-      runtimeConfig: snapshot.config,
-      sourceConfig: snapshot.resolved,
+      inputBasis,
+      runtimeConfig: authoredRuntimeConfig,
+      sourceConfig: authoredSourceConfig,
+      sourceConfigValid: snapshot.valid,
       sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
-      nextConfig,
+      nextConfig: authoredConfig,
       rootAuthoredConfig: snapshot.parsed,
       agentRosterIncludeOwned: snapshot.agentRosterIncludeOwned,
+      keyedAgentEntryIncludePaths: keyedAgentEntryIncludes?.includePaths,
       unsetPaths,
       explicitSetPaths,
       explicitSetValueSource,
+      persistCanonicalAgentRoster,
       allowedAgentRosterRemovals: options.allowedAgentRosterRemovals,
       allowIncludeAncestorExplicitSetPaths: options.allowIncludeAncestorExplicitSetPaths,
       preserveLegacyAgentRoster,
     });
-  } else if (snapshot.exists && hasAuthoredIncludes) {
-    persistCandidate = preserveIncludeOwnedConfigForWrite({
-      runtimeConfig: snapshot.config,
-      sourceConfig: snapshot.resolved,
-      nextConfig,
-      rootAuthoredConfig: snapshot.parsed,
-    });
   }
-  if (snapshot.exists && (snapshot.valid || hasIncludes)) {
-    try {
-      const resolvedIncludes = resolveConfigIncludes(
-        snapshot.parsed,
-        configPath,
-        {
-          readFile: (candidate) => deps.fs.readFileSync(candidate, "utf-8"),
-          readFileWithGuards: ({ includePath, resolvedPath, rootRealDir }) =>
-            readConfigIncludeFileWithGuards({
-              includePath,
-              resolvedPath,
-              rootRealDir,
-              ioFs: deps.fs,
-            }),
-          parseJson: (raw) => deps.json5.parse(raw),
-        },
-        { allowedRoots: resolveIncludeRoots(deps.env, deps.homedir) },
+  const validationEnvBase = createConfigRuntimeEnvBase(
+    snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig,
+    deps.env,
+  );
+  const resolveValidationCandidate = (candidate: unknown) => {
+    // Validate removals now; apply them once to the final authored output after materialization.
+    const config = applyUnsetPathsForWrite(candidate as OpenClawConfig, unsetPaths);
+    if (containsConfigIncludeDirective(config)) {
+      return context.resolveRuntimePreflightSourceConfig(
+        config,
+        undefined,
+        undefined,
+        validationEnvBase,
       );
-      const collected = new Map<string, string>();
-      collectEnvRefPaths(resolvedIncludes, "", collected);
-      if (collected.size > 0) {
-        envRefMap = collected;
-      }
-    } catch {
-      envRefMap = null;
     }
-  }
-
-  persistCandidate = applyUnsetPathsForWrite(persistCandidate as OpenClawConfig, unsetPaths);
-  const envForRestore = options.envSnapshotForRestore ?? deps.env;
-  const resolveValidationCandidate = (candidate: unknown) =>
-    containsConfigIncludeDirective(candidate)
-      ? context.resolveRuntimePreflightSourceConfig(
-          restoreEnvVarRefs(candidate, snapshot.parsed, envForRestore) as OpenClawConfig,
-        )
-      : candidate;
+    // Plain writes resolve references without running the preflight's compatibility migrations.
+    const resolution = resolveConfigForRead(
+      config,
+      cloneEnvWithPlatformSemantics(validationEnvBase),
+      deps.lowerPrecedenceEnv,
+    );
+    setConfigResolutionFacts(resolution.resolvedConfigRaw, resolution.resolutionFacts);
+    return resolution.resolvedConfigRaw;
+  };
   const validationCandidate = resolveValidationCandidate(persistCandidate);
   const validateCandidate = (candidate: unknown) => {
     const result = validateConfigObjectRawWithPlugins(candidate, {
-      env: deps.env,
+      ...context.pathResolution,
       pluginValidation: options.skipPluginValidation ? "skip" : "full",
       semanticValidation: "strict",
       preservedLegacyRootKeys: options.preservedLegacyRootKeys,
+      deferredPluginMigrations,
     });
     if (!result.ok) {
       throw createConfigValidationFailedError(result.issues);
@@ -227,11 +256,16 @@ export async function writeConfigFileFromContext(
   };
   // Validate authored structure before stamping can replace malformed parents.
   validateCandidate(validationCandidate);
+  // SAFETY: the original resolved input was just validated; retain raw values, not parser defaults.
+  const validatedCandidate = validationCandidate as OpenClawConfig;
+  const previousSource =
+    snapshot.authoredConfig ?? snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig;
   const materialized = stampConfigVersion(
-    // SAFETY: the original resolved input was just validated; retain raw values, not parser defaults.
-    validationCandidate as OpenClawConfig,
+    snapshot.exists
+      ? validatedCandidate
+      : initializeNativeSessionCatalogPreferences(validatedCandidate),
     options.lastTouchedVersionOverride,
-    snapshot.exists ? (snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig) : null,
+    snapshot.exists ? previousSource : null,
   );
   // Resolve policy from included facts, but persist only its delta beside authored directives.
   persistCandidate = applyMergePatch(
@@ -241,57 +275,37 @@ export async function writeConfigFileFromContext(
   const validated = validateCandidate(resolveValidationCandidate(persistCandidate));
   const previousWarningFingerprint = loggedConfigWarningFingerprints.get(configPath);
   // Capture before commit so rollback cannot restore a watcher-updated slot.
+  options.assertConfigPathForWrite?.();
   const priorSnapshotAuditRecord = readLatestConfigSnapshotAuditRecord({
     env: deps.env,
     homedir: deps.homedir,
   });
 
-  let cfgToWrite = persistCandidate as OpenClawConfig;
-  try {
-    if (deps.fs.existsSync(configPath)) {
-      const currentRaw = await deps.fs.promises.readFile(configPath, "utf-8");
-      const parsed = parseConfigJson5(currentRaw, deps.json5);
-      if (parsed.ok) {
-        const beforeIdentityRestore = cfgToWrite;
-        cfgToWrite = restoreEnvVarRefs(cfgToWrite, parsed.parsed, envForRestore) as OpenClawConfig;
-        collectChangedPaths(beforeIdentityRestore, cfgToWrite, "", identityRestoredPaths);
-      }
-    }
-  } catch (error) {
-    if (error instanceof EnvRefArrayMutationError) {
-      throw error;
-    }
-    // A failed current-file reread leaves the already validated candidate unchanged.
-  }
-
+  options.assertConfigPathForWrite?.();
   await deps.fs.promises.mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
   await tightenStateDirPermissionsIfNeeded({
     configPath,
     env: deps.env,
     homedir: deps.homedir,
     fsModule: deps.fs,
+    assertConfigPathForWrite: options.assertConfigPathForWrite,
   });
-  const outputConfigBase = envRefMap
-    ? (restoreEnvRefsFromMap(
-        cfgToWrite,
-        "",
-        envRefMap,
-        changedPaths,
-        identityRestoredPaths,
-      ) as OpenClawConfig)
-    : cfgToWrite;
   const tildeRestoredOutputConfig = restoreAuthoredTildePathsForWrite(
-    outputConfigBase,
+    persistCandidate,
     snapshot.parsed,
     undefined,
     deps.homedir(),
   ) as OpenClawConfig;
-  const outputConfig = applyUnsetPathsForWrite(tildeRestoredOutputConfig, unsetPaths);
+  const outputConfig = preserveDeferredPluginMigrationConfig({
+    sourceConfig: snapshot.parsed,
+    nextConfig: applyUnsetPathsForWrite(tildeRestoredOutputConfig, unsetPaths),
+    pending: deferredPluginMigrations,
+  });
   const stampedOutputConfig = stampConfigVersion(outputConfig, options.lastTouchedVersionOverride);
   rejectConfigNonFiniteNumbers(stampedOutputConfig);
   const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
   const nextHash = hashConfigRaw(json);
-  const previousHash = resolveConfigSnapshotHash(snapshot);
+  const previousHash = hashConfigRaw(snapshot.raw);
   const changedPathCount = changedPaths.size;
   const previousBytes =
     typeof snapshot.raw === "string" ? Buffer.byteLength(snapshot.raw, "utf-8") : null;
@@ -307,21 +321,17 @@ export async function writeConfigFileFromContext(
   const hasMetaBefore = hasConfigMeta(snapshot.parsed);
   const hasMetaAfter = hasConfigMeta(stampedOutputConfig);
   const gatewayModeBefore = resolveGatewayMode(snapshot.resolved);
-  const authoredGateway = (snapshot.parsed as { gateway?: unknown }).gateway;
-  const gatewayModeAuthoredLocally =
-    isRecord(authoredGateway) &&
-    Object.hasOwn(authoredGateway, "mode") &&
-    !hasOwnIncludeDirective(authoredGateway.mode);
-  const preservesIncludedGatewayMode =
-    options.allowIncludeAncestorExplicitSetPaths === true &&
-    gatewayModeBefore != null &&
-    !gatewayModeAuthoredLocally &&
-    hasIncludedGatewayModeOwner(stampedOutputConfig) &&
-    !options.explicitSetPaths?.some((explicitPath) => explicitPath[0] === "gateway");
-  const gatewayModeAfter =
-    resolveGatewayMode(stampedOutputConfig) ??
-    (preservesIncludedGatewayMode ? gatewayModeBefore : null) ??
-    null;
+  const includeFileHashes: Record<string, string> = {};
+  const includeFileTargets: Record<string, string> = {};
+  const sourceConfigForPreflight = context.resolveRuntimePreflightSourceConfig(
+    stampedOutputConfig,
+    includeFileHashes,
+    includeFileTargets,
+    validationEnvBase,
+  );
+  const committedRevision = hashConfigRevision(json, includeFileHashes, includeFileTargets);
+  // Compare resolved modes: an unchanged authored $include has no local mode literal.
+  const gatewayModeAfter = resolveGatewayMode(sourceConfigForPreflight);
   const suspiciousReasons = resolveConfigWriteSuspiciousReasons({
     existsBefore: snapshot.exists,
     unreadableBefore: snapshot.readError != null,
@@ -396,6 +406,7 @@ export async function writeConfigFileFromContext(
     error?: unknown,
     nextStat?: fs.Stats | null,
   ) => {
+    options.assertConfigPathForWrite?.();
     await appendConfigAuditRecord({
       env: deps.env,
       homedir: deps.homedir,
@@ -410,13 +421,18 @@ export async function writeConfigFileFromContext(
   const blockingReasons = resolveConfigWriteBlockingReasons(suspiciousReasons, options);
   if (blockingReasons.length > 0 && options.allowDestructiveWrite !== true) {
     const rejectedPath = `${configPath}.rejected.${formatConfigArtifactTimestamp(new Date().toISOString())}`;
-    await deps.fs.promises
+    // Only the completed exclusive create proves this payload is available for inspection.
+    options.assertConfigPathForWrite?.();
+    const rejectedSave = await deps.fs.promises
       .writeFile(rejectedPath, json, { encoding: "utf-8", mode: 0o600, flag: "wx" })
-      .catch(() => {});
-    const message = `Config write rejected: ${configPath} (${blockingReasons.join(", ")}). Rejected payload saved to ${rejectedPath}.`;
+      .then(ok, err);
+    const saveDetail = rejectedSave.ok
+      ? `Rejected payload saved to ${rejectedPath}.`
+      : `Rejected payload could not be saved to ${rejectedPath}: ${formatErrorMessage(rejectedSave.error)}.`;
+    const message = `Config write rejected: ${configPath} (${blockingReasons.join(", ")}). ${saveDetail}`;
     const error = Object.assign(new Error(message), {
       code: "CONFIG_WRITE_REJECTED",
-      rejectedPath,
+      ...(rejectedSave.ok ? { rejectedPath } : {}),
       reasons: blockingReasons,
     });
     deps.logger.warn(message);
@@ -438,59 +454,70 @@ export async function writeConfigFileFromContext(
           ),
       });
     });
-  const sourceConfigForPreflight = context.resolveRuntimePreflightSourceConfig(stampedOutputConfig);
   await preCommitRuntimePreflight(sourceConfigForPreflight);
 
+  const publication: { phase: "unpublished" | "removed" | "published" | "accepted" } = {
+    phase: "unpublished",
+  };
+  let restoreFile: ((assertCurrent: () => void) => Promise<boolean>) | undefined;
+  let rollbackStatus: ConfigWriteRollbackStatus = "not-restored";
   try {
-    const result = await replaceFileAtomic({
-      filePath: configPath,
-      content: json,
-      dirMode: 0o700,
-      mode: 0o600,
-      tempPrefix: path.basename(configPath),
-      copyFallbackOnPermissionError: true,
-      fileSystem: deps.fs,
-      beforeRename: async () => {
-        options.assertConfigPathForWrite?.();
-        if (options.baseSnapshot) {
-          assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
-        }
-        if (deps.fs.existsSync(configPath)) {
-          await maintainConfigBackups(configPath, deps.fs.promises);
-        }
-        if (options.baseSnapshot) {
-          assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
-        }
-        options.assertConfigPathForWrite?.();
-        await cronOwnerRefusal?.recheck();
-        options.assertConfigPathForWrite?.();
-        // Warn only after final guards pass, with no later await before rename.
-        warnIfJSON5CommentsWillBeStripped({
-          raw: snapshot.raw,
-          filePath: configPath,
-          warn: (message) => deps.logger.warn(message),
-          skipOutputLogs: options.skipOutputLogs,
-        });
-      },
-    });
-    try {
-      options.assertConfigPathForWrite?.();
-    } catch (error) {
-      try {
-        await rollbackConfigFileWriteIfUnchanged({
-          configPath,
-          previousSnapshot: snapshot,
-          committedHash: nextHash,
-          fsModule: deps.fs,
-        });
-      } catch (rollbackError) {
-        throw new ConfigRuntimeRefreshError(
-          `${formatErrorMessage(error)} Rollback failed: ${formatErrorMessage(rollbackError)}`,
-          { cause: error },
-        );
-      }
-      throw error;
+    options.assertConfigPathForWrite?.();
+    if (options.baseSnapshot) {
+      assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
     }
+    options.assertConfigPathForWrite?.();
+    await cronOwnerRefusal?.recheck();
+    options.assertConfigPathForWrite?.();
+    warnIfJSON5CommentsWillBeStripped({
+      raw: snapshot.raw,
+      filePath: configPath,
+      warn: (message) => deps.logger.warn(message),
+      skipOutputLogs: options.skipOutputLogs,
+    });
+    const guardedFs = createGuardedConfigFileSystem(
+      configPath,
+      deps.fs,
+      options.assertConfigPathForWrite,
+      {
+        snapshot,
+        includeGraph: { hashes: includeFileHashes, targets: includeFileTargets },
+        onRootRemoved: () => {
+          publication.phase = "removed";
+        },
+        onRootPublished: () => {
+          publication.phase = "published";
+        },
+      },
+    );
+    // The writer owns compensation identity; callers supply the still-live enclosing owner.
+    restoreFile = (assertCurrent) =>
+      rollbackConfigFileWriteIfUnchanged({
+        configPath,
+        previousSnapshot: snapshot,
+        committedHash: publication.phase === "removed" ? hashConfigRaw(null) : nextHash,
+        fsModule: deps.fs,
+        ...guardedFs.captureRollbackProof(assertCurrent),
+      });
+    await using preparedFile = await prepareConfigFileWrite({
+      configPath,
+      content: json,
+      previousRaw: snapshot.raw,
+      fsModule: guardedFs.fileSystem,
+      assertCurrent: guardedFs.assertCurrent,
+    });
+    await options.beforeCommit?.();
+    const result = withDeferredPluginMigrationsCurrent(
+      { env: deps.env, expectedPending: deferredPluginMigrations },
+      () => {
+        const published = preparedFile.publish();
+        publication.phase = "published";
+        return published;
+      },
+    );
+    options.assertConfigPathForWrite?.();
+    publication.phase = "accepted";
+    recordUpdateDoctorConfigWrite(configPath, previousHash, nextHash, snapshot.parsed, json);
     try {
       recordConfigWriteMetadata(new Date().toISOString(), options.lastTouchedVersionOverride);
     } catch (error) {
@@ -503,6 +530,7 @@ export async function writeConfigFileFromContext(
       undefined,
       await deps.fs.promises.stat(configPath).catch(() => null),
     );
+    options.assertConfigPathForWrite?.();
     if (
       configSnapshotAuditRecordMatchesPath(priorSnapshotAuditRecord, configPath) &&
       priorSnapshotAuditRecord.rawHash !== previousHash
@@ -541,6 +569,7 @@ export async function writeConfigFileFromContext(
         },
       });
     }
+    options.assertConfigPathForWrite?.();
     const writtenSnapshotAuditRecord = upsertConfigSnapshotAuditRecord({
       env: deps.env,
       homedir: deps.homedir,
@@ -552,29 +581,94 @@ export async function writeConfigFileFromContext(
     if (!options.skipPluginValidation) {
       logConfigWarningsOnce({ configPath, warnings: validated.warnings, logger: deps.logger });
     }
+    if (clearedSessionStoreOwner && !options.skipOutputLogs) {
+      deps.logger.warn(
+        "Cleared agents.defaults.sessionStore.agentId because session.store changed. Set that owner path explicitly to assign the destination store's owner.",
+      );
+    }
+    setDeferredPluginMigrationConfigFacts(sourceConfigForPreflight, deferredPluginMigrations);
     return {
       persistedHash: nextHash,
       persistedConfig: stampedOutputConfig,
-      [configWritePostCommitRollback]: () => {
-        restoreConfigSnapshotAuditRecord({
-          env: deps.env,
-          homedir: deps.homedir,
-          snapshot: priorSnapshotAuditRecord,
-          expectedSnapshot: writtenSnapshotAuditRecord,
-        });
-        if (previousWarningFingerprint === undefined) {
-          loggedConfigWarningFingerprints.delete(configPath);
-        } else {
-          setBoundedConfigIoWarningEntry(
-            loggedConfigWarningFingerprints,
-            configPath,
-            previousWarningFingerprint,
-          );
-        }
+      persistedSourceConfig: sourceConfigForPreflight,
+      [configWriteCommittedSnapshot]: {
+        hash: committedRevision,
+        sourceConfig: sourceConfigForPreflight,
+      },
+      [configWritePostCommitRollback]: {
+        restoreFile,
+        restoreEffects: (assertCurrent) => {
+          assertCurrent();
+          restoreConfigSnapshotAuditRecord({
+            env: deps.env,
+            homedir: deps.homedir,
+            snapshot: priorSnapshotAuditRecord,
+            expectedSnapshot: writtenSnapshotAuditRecord,
+          });
+          if (previousWarningFingerprint === undefined) {
+            loggedConfigWarningFingerprints.delete(configPath);
+          } else {
+            setBoundedConfigIoWarningEntry(
+              loggedConfigWarningFingerprints,
+              configPath,
+              previousWarningFingerprint,
+            );
+          }
+        },
       },
     };
   } catch (error) {
-    await appendWriteAudit("failed", error);
-    throw error;
+    let failure = error;
+    if (restoreFile && (publication.phase === "removed" || publication.phase === "published")) {
+      try {
+        rollbackStatus = (await restoreFile(() => sourceGuard?.())) ? "restored" : "not-restored";
+      } catch (rollbackError) {
+        rollbackStatus = "unknown";
+        failure = new AggregateError(
+          [error, rollbackError],
+          `${formatErrorMessage(error)} Recovery failed: ${formatErrorMessage(rollbackError)}`,
+        );
+      }
+    }
+    try {
+      try {
+        sourceGuard?.();
+      } catch (ownershipError) {
+        if (ownershipError === error) {
+          throw error;
+        }
+        throw new AggregateError(
+          [error, ownershipError],
+          `Config write failed after source ownership changed: ${formatErrorMessage(error)}`,
+          { cause: ownershipError },
+        );
+      }
+      try {
+        writeOptions.assertConfigPathForWrite?.();
+      } catch {
+        // Lost path provenance forbids auditing, but does not replace the original failure.
+        throw error;
+      }
+      try {
+        await appendWriteAudit("failed", error);
+      } catch (auditError) {
+        throw new AggregateError(
+          [error, auditError],
+          `${formatErrorMessage(error)} Failure auditing failed: ${formatErrorMessage(auditError)}`,
+          { cause: auditError },
+        );
+      }
+    } catch (failureDuringAudit) {
+      failure = failureDuringAudit;
+    }
+    if (publication.phase === "unpublished") {
+      throw failure;
+    }
+    throw new ConfigWritePostCommitError({
+      configPath,
+      rollbackStatus,
+      cause: failure,
+      publication: publication.phase === "removed" ? "partial" : "complete",
+    });
   }
 }

@@ -54,10 +54,12 @@ export function resolveModelSelectionFromDirective(params: {
   allowedModelCatalog: Array<{ provider: string; id?: string; name?: string }>;
   provider: string;
   agentId?: string;
+  requesterProfileId?: string;
 }): {
   modelSelection?: ModelDirectiveSelection;
   profileOverride?: string;
   errorText?: string;
+  validateAuthProfileSelection?: () => string | undefined;
 } {
   if (!params.directives.hasModelDirective || !params.directives.rawModelDirective) {
     if (params.directives.rawModelProfile) {
@@ -73,6 +75,7 @@ export function resolveModelSelectionFromDirective(params: {
         provider: params.defaultProvider,
         model: params.defaultModel,
         isDefault: true,
+        resetToDefault: true,
       },
     };
   }
@@ -103,6 +106,7 @@ export function resolveModelSelectionFromDirective(params: {
     }) ===
       resolveProviderIdForAuth(storedNumericProfile?.profileProvider ?? "", {
         config: params.cfg,
+        storedCredential: true,
       });
   const modelRaw =
     useStoredNumericProfile && storedNumericProfile ? storedNumericProfile.modelRaw : raw;
@@ -135,6 +139,7 @@ export function resolveModelSelectionFromDirective(params: {
   const modelSelection = resolved.selection;
 
   let profileOverride: string | undefined;
+  let validateAuthProfileSelection: (() => string | undefined) | undefined;
   const rawProfile =
     params.directives.rawModelProfile ??
     (useStoredNumericProfile ? storedNumericProfile?.profileId : undefined);
@@ -144,12 +149,18 @@ export function resolveModelSelectionFromDirective(params: {
       provider: modelSelection.provider,
       cfg: params.cfg,
       agentDir: params.agentDir,
+      requesterProfileId: params.requesterProfileId,
     });
     if (profileResolved.error) {
       return { errorText: profileResolved.error };
     }
     profileOverride = profileResolved.profileId;
+    validateAuthProfileSelection = profileResolved.validateSelection;
   }
 
-  return { modelSelection, profileOverride };
+  return {
+    modelSelection,
+    profileOverride,
+    ...(validateAuthProfileSelection ? { validateAuthProfileSelection } : {}),
+  };
 }

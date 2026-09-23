@@ -5,7 +5,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { codexOrphanedSessionBindingMigration } from "./src/migration/session-binding-orphans.js";
-import { stateMigrations as legacyStateMigrations } from "./src/migration/session-binding-sidecars.js";
 
 type LegacyConfigRule = {
   path: string[];
@@ -172,6 +171,19 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
 }
 
 export const stateMigrations: PluginDoctorStateMigration[] = [
-  ...legacyStateMigrations,
+  {
+    id: "codex-app-server-sidecars-to-plugin-state",
+    label: "Codex app-server thread bindings",
+    // Config normalization loads this artifact too; state-only imports belong
+    // behind the detection and migration callbacks.
+    detectLegacyState: async (params) =>
+      (
+        await import("./src/migration/session-binding-sidecars.js")
+      ).detectLegacySessionBindingSidecars(params),
+    migrateLegacyState: async (params) =>
+      (
+        await import("./src/migration/session-binding-sidecars.js")
+      ).migrateLegacySessionBindingSidecars(params),
+  },
   codexOrphanedSessionBindingMigration,
 ];

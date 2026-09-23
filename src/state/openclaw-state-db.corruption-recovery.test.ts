@@ -6,7 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { isSqliteCorruptionError } from "../infra/sqlite-transaction.js";
+import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
+import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import { withOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
@@ -230,6 +231,7 @@ describe("shared state write transaction corruption recovery", () => {
       path: cached.path,
       walMaintenance: {
         checkpoint: () => false,
+        reclaimFreePages: createSqliteWalReclamationResult,
         close: () => false,
       },
     };

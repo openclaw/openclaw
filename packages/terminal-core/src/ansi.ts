@@ -3,9 +3,9 @@ import {
   ANSI_COMPAT_CONTROL_SEQUENCE_PATTERN,
   ANSI_OSC_INTRODUCER_PATTERN,
   ANSI_STRING_TERMINATOR_PATTERN,
+  iterateAnsiSegments,
   matchAnsiOscAt,
   scanAnsiCsiAt,
-  splitAnsiSegments,
 } from "./ansi-sequences.js";
 
 /*
@@ -74,11 +74,11 @@ function stripAnsiInternal(
     }
 
     const csi = scanAnsiCsiAt(input, index);
+    ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.lastIndex = index;
+    const compatibilityMatch = options.compatibilityGrammar
+      ? ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.exec(input)
+      : null;
     if (!csi) {
-      ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.lastIndex = index;
-      const compatibilityMatch = options.compatibilityGrammar
-        ? ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.exec(input)
-        : null;
       if (compatibilityMatch) {
         output.push(input.slice(copyStart, index));
         index += compatibilityMatch[0].length;
@@ -89,10 +89,6 @@ function stripAnsiInternal(
       continue;
     }
 
-    ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.lastIndex = index;
-    const compatibilityMatch = options.compatibilityGrammar
-      ? ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.exec(input)
-      : null;
     if (!csi.ended && options.preserveIncompleteCsi) {
       break;
     }
@@ -145,6 +141,13 @@ export function stripAnsiForStreamChunk(
     compatibilityGrammar: options?.compatibilityGrammar === true,
     preserveIncompleteCsi: true,
   });
+}
+
+/** Let sequential renderers consume graphemes without retaining a full-run array. */
+export function* iterateGraphemes(input: string): Generator<string, void> {
+  for (const { segment } of graphemeSegmenter.segment(input)) {
+    yield segment;
+  }
 }
 
 export function splitGraphemes(input: string): string[] {
@@ -294,7 +297,7 @@ export function truncateToVisibleWidth(input: string, maxWidth: number): string 
     used += fittedWidth;
     budgetSpent = true;
   };
-  for (const segment of splitAnsiSegments(input)) {
+  for (const segment of iterateAnsiSegments(input)) {
     if (segment.kind === "ansi") {
       // CSI retains only C0/DEL controls; TAB is the sole visible-width member.
       const widthControls = segment.controls.filter((control) => control === "\t");

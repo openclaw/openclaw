@@ -5,7 +5,7 @@ read_when:
   - You're doing first-run setup with the onboarding wizard
   - You want to set the default workspace path
   - You need the baseline-only setup flag for scripts
-title: "Setup"
+title: "Setup CLI"
 ---
 
 # `openclaw setup`
@@ -37,13 +37,26 @@ Guided inference detection runs on the Gateway host on macOS or Linux. The CLI
 and macOS app call the same Gateway-owned detector, which checks configured
 models, supported CLI logins, API-key environment variables, and already
 installed Ollama or LM Studio models. Local models are never downloaded by this
-automatic pass. Detected local runtimes are auto-tested after CLI and API-key
-candidates; when several local models are available, OpenClaw prefers the
-strongest tool-calling instruct family. The selected candidate must answer a
-real completion before its provider and model configuration is saved.
-Pi and OpenCode CLIs may also be reported for context when they cannot serve as
-the reusable inference route for guided setup. Gemini CLI and Antigravity are
-not offered as detected setup routes.
+discovery pass. Both CLI onboarding and the macOS app wait for you to choose a
+connection before testing it. A failed or cancelled attempt never selects another
+provider automatically. Setup saves the credential, then sends one tool-free
+confirmation turn using the candidate settings in memory. It saves the provider
+and model configuration only after that turn succeeds. A failed connection keeps
+the credential and leaves the configuration unchanged. Choose the saved sign-in
+to retry without signing in again. Custom endpoint settings stay available for
+retry while the Gateway runs; after a restart, enter the endpoint settings again.
+
+Initial Claude Code and Codex detection checks executable versions without
+running auth-status commands or starting an app server. Readable Codex
+credentials are reported as stored evidence; the active login remains
+unverified during detection. Stored credentials do not
+receive verified-subscription priority over environment API keys.
+
+In the Control UI, Model Setup can also select models from installed native
+agents through the shared model picker. **Use** saves that model and its runtime
+without running the setup test; authentication and tools stay with the native
+agent. Provider **Test & use** still requires a verified tool-free reply.
+Gemini CLI and Antigravity are not offered as detected setup routes.
 
 `setup` accepts the same onboarding flags as `openclaw onboard`, including
 auth (`--auth-choice`, `--token`, provider key flags), Gateway
@@ -56,6 +69,14 @@ terminal hatch as `openclaw onboard --tui`. See [Onboard](/cli/onboard) and
 [CLI automation](/start/wizard-cli-automation) for the full flag reference and
 non-interactive examples. `openclaw onboard --modern` remains a compatibility
 entry for the same inference-gated OpenClaw assistant.
+
+Local onboarding generates a Gateway secret in token mode by default, without
+asking you to choose token or password. Existing password-mode configs are
+preserved. Use `--gateway-auth password` or `--gateway-password <value>` to
+choose a password explicitly; Tailscale Funnel still requires password mode.
+
+Use `setup --team` for the same small-team onboarding as `onboard --team`.
+`--agent-name <name>` names the first agent or, with `--team`, the coordinator.
 
 <Note>
 `openclaw setup` is for mutable config installs. In Nix mode (`OPENCLAW_NIX_MODE=1`) OpenClaw refuses setup writes because the config file is managed by Nix. Use the first-party [nix-openclaw Quick Start](https://github.com/openclaw/nix-openclaw#quick-start) or the equivalent source config for another Nix package.
@@ -70,6 +91,8 @@ entry for the same inference-gated OpenClaw assistant.
 | `--workspace <dir>`            | Workspace proposal; existing fleets require classic confirmation and are preserved noninteractively. |
 | `--baseline`                   | Create baseline config/workspace/session folders without onboarding.                                 |
 | `--wizard`                     | Force interactive onboarding.                                                                        |
+| `--classic`                    | Run the classic multi-step onboarding wizard; not valid with `--non-interactive`.                    |
+| `--agent-name <name>`          | Name for the first agent (default: `main`).                                                          |
 | `--tui`                        | Use the terminal hatch instead of the browser handoff.                                               |
 | `--non-interactive`            | Run onboarding without prompts.                                                                      |
 | `--accept-risk`                | Acknowledge full-system agent access risk; required with `--non-interactive`.                        |
@@ -91,7 +114,9 @@ In interactive onboarding, `--remote-url`, `--remote-token`, and
 `--remote-password` prefill the remote Gateway step and take precedence over
 stored remote values for that run. Pass either a token or a password, not both.
 Changing the URL does not reuse stored credentials unless you also provide a new
-token or password. The credential remains masked and uses the wizard's selected
+token or password. The interactive step asks for one **Gateway secret** and
+stores it as `gateway.remote.token`; either field is accepted by the Gateway.
+The credential remains masked and uses the wizard's selected
 plaintext or SecretRef storage mode. `--gateway-token`, `--gateway-token-ref-env`,
 and `--gateway-password` configure a local Gateway and are not valid in remote
 mode. For remote token SecretRefs, set `OPENCLAW_GATEWAY_TOKEN` and use
@@ -104,7 +129,7 @@ creates the config, workspace, and session directories, then exits without
 running onboarding. It accepts `--workspace` and harmless output controls, but
 rejects explicit onboarding, Gateway, auth, reset, or daemon options instead of
 silently ignoring them. If an existing config is invalid, baseline setup preserves
-it and asks you to run `openclaw doctor` before retrying.
+it and asks you to run `openclaw doctor --fix` to apply supported repairs before retrying.
 
 ## Examples
 

@@ -120,37 +120,27 @@ function readOptionValue(params: { tokens: string[]; index: number; flag: string
     }
   | { matched: false } {
   const token = normalizeAcpOptionToken(params.tokens[params.index] ?? "");
+  let value: string;
+  let nextIndex = params.index + 1;
   if (token === params.flag) {
     const nextValue = normalizeAcpOptionToken(params.tokens[params.index + 1] ?? "");
-    if (!nextValue || nextValue.startsWith("--")) {
-      return {
-        matched: true,
-        nextIndex: params.index + 1,
-        error: `${params.flag} requires a value`,
-      };
+    value = nextValue.startsWith("--") ? "" : nextValue;
+    if (value) {
+      nextIndex += 1;
     }
+  } else if (token.startsWith(`${params.flag}=`)) {
+    value = token.slice(`${params.flag}=`.length).trim();
+  } else {
+    return { matched: false };
+  }
+  if (!value) {
     return {
       matched: true,
-      value: nextValue,
-      nextIndex: params.index + 2,
+      nextIndex,
+      error: `${params.flag} requires a value`,
     };
   }
-  if (token.startsWith(`${params.flag}=`)) {
-    const value = token.slice(`${params.flag}=`.length).trim();
-    if (!value) {
-      return {
-        matched: true,
-        nextIndex: params.index + 1,
-        error: `${params.flag} requires a value`,
-      };
-    }
-    return {
-      matched: true,
-      value,
-      nextIndex: params.index + 1,
-    };
-  }
-  return { matched: false };
+  return { matched: true, value, nextIndex };
 }
 
 function normalizeAcpOptionToken(raw: string): string {

@@ -27,7 +27,10 @@ import {
   resolveAllowAlwaysPatternCoverage,
   type AllowAlwaysPattern,
 } from "../infra/exec-approvals.js";
-import { isBlockedShellWrapperCommand } from "../infra/exec-wrapper-resolution.js";
+import {
+  hasPosixShellStartupBeforeInlineCommand,
+  isBlockedShellWrapperCommand,
+} from "../infra/exec-wrapper-resolution.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import {
   parsePreparedSystemRunPayload,
@@ -38,7 +41,7 @@ import {
   resolveSystemRunCommandRequest,
 } from "../infra/system-run-command.js";
 import { resolveEligibleNodeFromList } from "../shared/node-resolve.js";
-import { addSafeTimeoutDelayGraceMs } from "../utils/timer-delay.js";
+import { resolveNodeAutoApprovalEligibility } from "./bash-tools.exec-host-node-approval-eligibility.js";
 import {
   formatNodeInvokeFailureToolResult,
   invokeNodeSystemRun,
@@ -46,6 +49,7 @@ import {
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import { appendExecTimeoutRetryGuidance, renderExecUpdateText } from "./bash-tools.exec-output.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import { resolveNodeExecTimeouts } from "./exec-tool-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
@@ -57,7 +61,7 @@ type NodeExecutionTarget = {
   env: Record<string, string> | undefined;
   invokeDeadlineMs: number;
   invokeWaitMs: number;
-  runTimeoutSec: number;
+  runTimeoutMs: number;
   supportsSystemRunPrepare: boolean;
 };
 
@@ -82,43 +86,11 @@ type NodeApprovalAnalysis = {
   nodeAsk?: ExecAsk;
   inlineEvalHit: InterpreterInlineEvalHit | null;
   requiresSecurityAuditSuppressionApproval: boolean;
+  autoReviewBlockedByShellStartup: boolean;
+  autoReviewEligibility: ReturnType<typeof resolveNodeAutoApprovalEligibility>;
   autoReviewArgv?: string[];
   allowAlwaysPersistence: AllowAlwaysPersistenceDecision;
 };
-
-function resolveNodeRunTimeoutSec(
-  timeoutSec: number | null | undefined,
-  defaultTimeoutSec: number,
-): number {
-  return typeof timeoutSec === "number" && Number.isFinite(timeoutSec)
-    ? timeoutSec
-    : defaultTimeoutSec;
-}
-
-// Gateway invocation deadline: the node program budget plus transport grace. A
-// `timeout: 0` run keeps no program timer, so the deadline falls back to the
-// default budget instead of becoming unbounded.
-function resolveNodeInvokeDeadlineMs(runTimeoutSec: number, defaultTimeoutSec: number): number {
-  const baseTimeoutSec =
-    Number.isFinite(runTimeoutSec) && runTimeoutSec > 0 ? runTimeoutSec : defaultTimeoutSec;
-  if (!Number.isFinite(baseTimeoutSec) || baseTimeoutSec <= 0) {
-    return 10_000;
-  }
-  return Math.max(10_000, addSafeTimeoutDelayGraceMs(baseTimeoutSec * 1000, 5_000));
-}
-
-// Caller wait must outlast the Gateway deadline so the deadline expiry answer
-// wins the race instead of the caller giving up first. Both saturate together at
-// MAX_SAFE_TIMEOUT_DELAY_MS, where the ordering degenerates by design.
-function resolveNodeInvokeWaitMs(invokeDeadlineMs: number): number {
-  return addSafeTimeoutDelayGraceMs(invokeDeadlineMs, 5_000);
-}
-
-function resolveNodeRunTimeoutMs(runTimeoutSec: number): number {
-  return Number.isFinite(runTimeoutSec) && runTimeoutSec > 0
-    ? addSafeTimeoutDelayGraceMs(runTimeoutSec * 1000, 0, { minMs: 0 })
-    : 0;
-}
 
 type NodePolicyCommandEval = {
   command: string;
@@ -331,16 +303,12 @@ export async function resolveNodeExecutionTarget(
   );
   const nodeId = nodeInfo.nodeId;
 
-  const runTimeoutSec = resolveNodeRunTimeoutSec(params.timeoutSec, params.defaultTimeoutSec);
-  const invokeDeadlineMs = resolveNodeInvokeDeadlineMs(runTimeoutSec, params.defaultTimeoutSec);
   return {
     nodeId,
     platform: nodeInfo.platform,
     argv: buildNodeShellCommand(params.command, nodeInfo.platform),
     env: params.requestedEnv ? { ...params.requestedEnv } : undefined,
-    invokeDeadlineMs,
-    invokeWaitMs: resolveNodeInvokeWaitMs(invokeDeadlineMs),
-    runTimeoutSec,
+    ...resolveNodeExecTimeouts(params.timeoutSec, params.defaultTimeoutSec),
     supportsSystemRunPrepare: nodeInfo.commands?.includes("system.run.prepare") === true,
   };
 }
@@ -365,7 +333,6 @@ export function buildNodeSystemRunInvoke(params: {
   notifyOnExit?: boolean;
   systemRunPlan?: SystemRunApprovalPlan;
 }): Record<string, unknown> {
-  const timeoutMs = resolveNodeRunTimeoutMs(params.target.runTimeoutSec);
   const runId = params.runId ?? crypto.randomUUID();
   return {
     nodeId: params.target.nodeId,
@@ -380,7 +347,7 @@ export function buildNodeSystemRunInvoke(params: {
       ...(params.systemRunPlan ? { systemRunPlan: params.systemRunPlan } : {}),
       ...(params.cwd != null ? { cwd: params.cwd } : {}),
       env: params.target.env,
-      timeoutMs,
+      timeoutMs: params.target.runTimeoutMs,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       ...(params.turnSourceChannel != null ? { turnSourceChannel: params.turnSourceChannel } : {}),
@@ -688,6 +655,16 @@ export async function analyzeNodeApprovalRequirement(params: {
       `${obsoleteGeneratedApprovalCount} older generated exec ${obsoleteGeneratedApprovalCount === 1 ? "approval is" : "approvals are"} inactive on this node because they are not tied to a working directory. Run "openclaw doctor --fix" on the node, then rerun the workflow and choose "Always allow here".`,
     );
   }
+  const autoReviewEligibility = resolveNodeAutoApprovalEligibility({
+    argv: params.prepared.argv,
+    shellPayload: preparedShellPayload,
+    platform: params.target.platform,
+    authorizationPlan: autoReviewBindingEval.authorizationPlan,
+    segmentSatisfiedBy: autoReviewBindingEval.segmentSatisfiedBy,
+  });
+  const autoReviewBlockedByShellStartup = autoReviewBindingEval.segments.some((segment) =>
+    hasPosixShellStartupBeforeInlineCommand(segment.argv),
+  );
   return {
     analysisOk,
     allowlistSatisfied,
@@ -697,17 +674,23 @@ export async function analyzeNodeApprovalRequirement(params: {
     nodeAsk: params.prepared.execPolicy?.ask,
     inlineEvalHit,
     requiresSecurityAuditSuppressionApproval,
-    allowAlwaysPersistence: resolveAllowAlwaysPersistenceDecision({
-      segments: baseAllowlistEval.segments,
-      commandText: approvalCommand,
-      cwd: approvalCwd,
-      env: analysisEnv,
-      platform: params.target.platform,
-      strictInlineEval: params.request.strictInlineEval,
-      authorizationPlan: baseAllowlistEval.authorizationPlan,
-      runtimePayload: inlineEvalHit !== null,
-      preparedCoverage: params.prepared.allowAlwaysCoverage,
-    }),
+    autoReviewBlockedByShellStartup,
+    autoReviewEligibility,
+    allowAlwaysPersistence:
+      params.request.autoReview === true &&
+      (autoReviewBlockedByShellStartup || !autoReviewEligibility.eligible)
+        ? { kind: "one-shot", reasons: ["no-reusable-pattern"] }
+        : resolveAllowAlwaysPersistenceDecision({
+            segments: baseAllowlistEval.segments,
+            commandText: approvalCommand,
+            cwd: approvalCwd,
+            env: analysisEnv,
+            platform: params.target.platform,
+            strictInlineEval: params.request.strictInlineEval,
+            authorizationPlan: baseAllowlistEval.authorizationPlan,
+            runtimePayload: inlineEvalHit !== null,
+            preparedCoverage: params.prepared.allowAlwaysCoverage,
+          }),
     autoReviewArgv,
   };
 }

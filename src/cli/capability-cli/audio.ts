@@ -1,21 +1,20 @@
 import path from "node:path";
 import type { Command } from "commander";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
-import { getRuntimeConfig } from "../../config/config.js";
 import { inspectLocalAudioSelection } from "../../media-understanding/local-audio.js";
 import { buildMediaUnderstandingRegistry } from "../../media-understanding/provider-registry.js";
 import { transcribeAudioFile } from "../../media-understanding/runtime.js";
 import { defaultRuntime } from "../../runtime.js";
-import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
+import { getProviderEnvVarsCore } from "../../secrets/provider-env-vars.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { getModelsCommandSecretTargetIds } from "../command-secret-targets.js";
+import { prepareLocalCapabilityAccountSecrets } from "./local-account-secrets.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
 import type { CapabilityEnvelope } from "./metadata.js";
+import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
 import {
-  emitJsonOrText,
-  formatEnvelopeForText,
   providerHasGenericConfig,
-  providerSummaryText,
+  registerLocalProvidersCommand,
   requireProviderModelOverride,
   resolveCapabilityAgentOption,
   resolveCapabilityProviderAgentId,
@@ -33,17 +32,15 @@ async function runAudioTranscribe(params: {
     commandName: "infer audio transcribe",
     targetIds: getModelsCommandSecretTargetIds(),
   });
-  const agentDir = resolveAgentDir(
-    cfg,
-    resolveCapabilityProviderAgentId(cfg, params.agent, "infer audio transcribe"),
-  );
-  const activeModel = requireProviderModelOverride(params.model);
+  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer audio transcribe");
+  await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
   const result = await transcribeAudioFile({
+    agentDir: resolveAgentDir(cfg, agentId),
+    activeModel: requireProviderModelOverride(params.model),
     filePath: path.resolve(params.file),
     cfg,
-    agentDir,
+    agentId,
     language: params.language,
-    activeModel,
     prompt: params.prompt,
   });
   if (!result.text) {
@@ -58,6 +55,8 @@ async function runAudioTranscribe(params: {
     ok: true,
     capability: "audio.transcribe",
     transport: "local" as const,
+    provider: result.provider,
+    model: result.model,
     attempts: [],
     outputs: [{ path: path.resolve(params.file), text: result.text, kind: "audio.transcription" }],
   } satisfies CapabilityEnvelope;
@@ -91,59 +90,51 @@ export function registerAudioCapabilityCommands(capability: Command): void {
       });
     });
 
-  audio
-    .command("providers")
-    .description("List audio transcription providers")
-    .option("--agent <id>", "Agent whose provider state should be inspected")
-    .option("--json", "Output JSON", false)
-    .action(async (opts, command) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const cfg = getRuntimeConfig();
-        const agentId = resolveCapabilityProviderAgentId(
-          cfg,
-          resolveCapabilityAgentOption(command, opts.agent),
-        );
-        const remoteProviders = [...buildMediaUnderstandingRegistry(undefined, cfg).values()]
-          .filter((provider) => provider.capabilities?.includes("audio"))
-          .map((provider) => ({
-            available: true,
-            configured: providerHasGenericConfig({
-              cfg,
-              providerId: provider.id,
-              agentId,
-              envVars: getProviderEnvVars(provider.id, {
-                config: cfg,
-                includeUntrustedWorkspacePlugins: false,
-              }),
+  registerLocalProvidersCommand(
+    audio,
+    "List audio transcription providers",
+    async (cfg, agentId) => {
+      const remoteProviders = [...buildMediaUnderstandingRegistry(undefined, cfg).values()]
+        .filter((provider) => provider.capabilities?.includes("audio"))
+        .map((provider) => ({
+          available: true,
+          configured: providerHasGenericConfig({
+            cfg,
+            providerId: provider.id,
+            agentId,
+            envVars: getProviderEnvVarsCore(provider.id, {
+              config: cfg,
+              includeUntrustedWorkspacePlugins: false,
             }),
-            selected: false,
-            id: provider.id,
-            capabilities: provider.capabilities,
-            defaultModels: provider.defaultModels,
-          }));
-        const localSelection = await inspectLocalAudioSelection();
-        const localProviders = localSelection.candidates
-          .filter((candidate) => candidate.available)
-          .map((candidate) =>
-            Object.assign(
-              {
-                available: candidate.available,
-                configured: candidate.ready,
-                selected: false,
-                localFallbackSelected: candidate.selected,
-                id: `local/${candidate.id}`,
-                transport: "local-cli",
-                command: candidate.command,
-                observedBackend: candidate.observedBackend ?? "unknown",
-                evidence: candidate.evidence,
-              },
-              candidate.capableBackend ? { capableBackend: candidate.capableBackend } : {},
-              candidate.requestedBackend ? { requestedBackend: candidate.requestedBackend } : {},
-              candidate.reason ? { reason: candidate.reason } : {},
-            ),
-          );
-        const providers = [...remoteProviders, ...localProviders];
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), providers, providerSummaryText);
-      });
-    });
+          }),
+          selected: false,
+          id: provider.id,
+          capabilities: provider.capabilities,
+          defaultModels: provider.defaultModels,
+        }));
+      const localSelection = await inspectLocalAudioSelection();
+      const localProviders = localSelection.candidates
+        .filter((candidate) => candidate.available)
+        .map((candidate) =>
+          Object.assign(
+            {
+              available: candidate.available,
+              configured: candidate.ready,
+              selected: false,
+              localFallbackSelected: candidate.selected,
+              id: `local/${candidate.id}`,
+              transport: "local-cli",
+              command: candidate.command,
+              observedBackend: candidate.observedBackend ?? "unknown",
+              evidence: candidate.evidence,
+            },
+            candidate.capableBackend ? { capableBackend: candidate.capableBackend } : {},
+            candidate.requestedBackend ? { requestedBackend: candidate.requestedBackend } : {},
+            candidate.reason ? { reason: candidate.reason } : {},
+          ),
+        );
+      return [...remoteProviders, ...localProviders];
+    },
+    providerSummaryText,
+  );
 }

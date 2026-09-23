@@ -94,31 +94,16 @@ function skipValue(raw: string, cursor: Cursor): void {
     scanQuoted(raw, cursor);
     return;
   }
-  if (char === "{") {
+  if (char === "{" || char === "[") {
+    const close = char === "{" ? "}" : "]";
     cursor.pos++;
     while (cursor.pos < raw.length) {
       skipTrivia(raw, cursor);
-      if (raw[cursor.pos] === "}") {
+      if (raw[cursor.pos] === close) {
         cursor.pos++;
         return;
       }
-      if (readObjectKey(raw, cursor) === null || !consume(raw, cursor, ":")) {
-        return;
-      }
-      skipValue(raw, cursor);
-      skipTrivia(raw, cursor);
-      if (raw[cursor.pos] === ",") {
-        cursor.pos++;
-      }
-    }
-    return;
-  }
-  if (char === "[") {
-    cursor.pos++;
-    while (cursor.pos < raw.length) {
-      skipTrivia(raw, cursor);
-      if (raw[cursor.pos] === "]") {
-        cursor.pos++;
+      if (char === "{" && (readObjectKey(raw, cursor) === null || !consume(raw, cursor, ":"))) {
         return;
       }
       skipValue(raw, cursor);
@@ -212,18 +197,6 @@ function lineAtOffset(raw: string, offset: number): number {
     }
   }
   return line;
-}
-
-function formatConfigIssuePath(segments: readonly ConfigIssuePathSegment[]): string {
-  return segments.reduce<string>(
-    (result, segment) =>
-      typeof segment === "number"
-        ? `${result}[${segment}]`
-        : result
-          ? `${result}.${segment}`
-          : segment,
-    "",
-  );
 }
 
 function resolveConfigValueAtPath(
@@ -330,7 +303,6 @@ type AttachConfigIssueDiagnosticsParams = {
   parsed: unknown;
   effective: unknown;
   configPath?: string | null;
-  formatPathForDisplay?: boolean;
   includeReceivedValueHint?: boolean;
 };
 
@@ -365,7 +337,8 @@ function attachConfigIssueDiagnostics(
         : issue.message;
     return {
       ...issue,
-      path: params.formatPathForDisplay ? formatConfigIssuePath(segments) : issue.path,
+      // Validation path metadata is non-enumerable; preserve it through this display copy.
+      pathSegments: segments,
       message,
       ...(line === undefined ? {} : { line, sourceFile }),
     };
@@ -382,7 +355,6 @@ export function renderConfigValidationIssueLines(
     parsed: snapshot.parsed,
     effective: snapshot.sourceConfig,
     configPath: snapshot.path,
-    formatPathForDisplay: true,
     includeReceivedValueHint: true,
   });
   const lines = formatConfigIssueLines(issues, marker, { normalizeRoot: true });

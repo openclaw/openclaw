@@ -184,33 +184,53 @@ function substituteAny(
   path: string,
   opts?: SubstituteOptions,
 ): unknown {
-  if (typeof value === "string") {
-    return substituteString(value, env, path, opts);
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((item, index) => substituteAny(item, env, `${path}[${index}]`, opts));
-  }
-
-  if (isPlainObject(value)) {
-    const result: Record<string, unknown> = {};
-    for (const [key, val] of Object.entries(value)) {
-      const isPluginConfigPath =
-        path === "plugins.entries" ||
-        path.startsWith("plugins.entries.") ||
-        path.startsWith("plugins.entries[");
-      const childPath = isPluginConfigPath
-        ? appendConfigPathSegment(path, key)
-        : path
-          ? `${path}.${key}`
-          : key;
-      result[key] = substituteAny(val, env, childPath, opts);
+  // Resume one parent at a time so callbacks retain recursive depth-first order
+  // without consuming the engine stack for deeply nested replacement values.
+  const pending: Array<() => boolean> = [];
+  const visit = (current: unknown, currentPath: string): unknown => {
+    if (typeof current === "string") {
+      return substituteString(current, env, currentPath, opts);
     }
-    return result;
+    if (Array.isArray(current)) {
+      const length = current.length;
+      const result: unknown[] = [];
+      result.length = length;
+      let index = 0;
+      pending.push(() => {
+        while (index < length) {
+          const key = index++;
+          if (key in current) {
+            result[key] = visit(current[key], `${currentPath}[${key}]`);
+            return true;
+          }
+        }
+        return false;
+      });
+      return result;
+    }
+    if (isPlainObject(current)) {
+      const result: Record<string, unknown> = {};
+      const entries = Object.entries(current)[Symbol.iterator]();
+      pending.push(() => {
+        const entry = entries.next();
+        if (entry.done) {
+          return false;
+        }
+        const [key, child] = entry.value;
+        result[key] = visit(child, appendConfigPathSegment(currentPath, key));
+        return true;
+      });
+      return result;
+    }
+    return current;
+  };
+  const result = visit(value, path);
+  for (let next = pending.at(-1); next; next = pending.at(-1)) {
+    if (!next()) {
+      pending.pop();
+    }
   }
-
-  // Primitives (number, boolean, null) pass through unchanged
-  return value;
+  return result;
 }
 
 /**

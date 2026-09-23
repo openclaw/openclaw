@@ -4,7 +4,13 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
-import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, onTestFinished, vi } from "vitest";
+import { applyCodeModeCatalog } from "../agents/code-mode.js";
+import {
+  createCodeModeHarness,
+  resetCodeModeTestState,
+  resultDetails,
+} from "../agents/code-mode.test-support.js";
 import { createCapturedPluginRegistration } from "../plugins/captured-registration.js";
 import { defineToolPlugin, getToolPluginMetadata } from "./tool-plugin.js";
 
@@ -65,6 +71,53 @@ describe("defineToolPlugin", () => {
     expect(result.content).toEqual([
       { type: "text", text: JSON.stringify({ symbol: "OPEN", configured: true }, null, 2) },
     ]);
+  });
+
+  it("preserves input-dependent outputs through static metadata and registered execution", async () => {
+    onTestFinished(resetCodeModeTestState);
+    const variants = Object.entries({
+      list: Type.Object({ rows: Type.Array(Type.String()) }, { additionalProperties: false }),
+      status: Type.Object({ ready: Type.Boolean() }, { additionalProperties: false }),
+    });
+    const outputSchema = Type.Union(
+      variants.map(([, schema]) => schema),
+      {
+        "x-openclaw-input-discriminator": {
+          version: 1,
+          inputProperty: "kind",
+          mapping: Object.fromEntries(variants.map(([value], index) => [value, index])),
+        },
+      },
+    );
+    const entry = defineToolPlugin({
+      id: "action-fixture",
+      name: "Action fixture",
+      description: "Synthetic action outputs",
+      tools: (tool) => [
+        tool({
+          name: "sdk_records",
+          description: "List records or inspect status",
+          parameters: Type.Object({ kind: Type.String() }),
+          outputSchema,
+          execute: ({ kind }) => (kind === "list" ? { rows: ["one"] } : { ready: true }),
+        }),
+      ],
+    });
+    const metadata = expectDefined(getToolPluginMetadata(entry), "tool metadata");
+    expect(JSON.stringify(metadata.tools[0]?.outputSchema)).toBe(JSON.stringify(outputSchema));
+    const captured = createCapturedPluginRegistration({ id: "action-fixture" });
+    entry.register(captured.api);
+    const h = createCodeModeHarness();
+    applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, ...captured.tools] });
+    const result = resultDetails(
+      await h.tools[0]!.execute("sdk-actions", {
+        code: 'return { rows: (await sdk_records({kind:"list"})).rows, ready: (await sdk_records({kind:"status"})).ready };',
+      }),
+    );
+    expect(result, JSON.stringify(result)).toMatchObject({
+      status: "completed",
+      value: { rows: ["one"], ready: true },
+    });
   });
 
   it("wraps plain string results", async () => {

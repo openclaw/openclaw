@@ -11,10 +11,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
-import {
-  consumeRepairableCodeModeFailure,
-  createCodeModePermissionChangeReason,
-} from "./code-mode-repair-provenance.js";
+import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { createCodeModePermissionChangeReason } from "./code-mode-permission-change.js";
 import type { CodeModeSkill } from "./code-mode-skills.js";
 import { createSubscribedCodeModeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
@@ -27,9 +25,13 @@ import {
   resultDetails,
   testing,
 } from "./code-mode.test-support.js";
-import { installCodeModeOutcomeHook } from "./embedded-agent-runner/run/code-mode-outcome.js";
+import {
+  captureAgentPluginRuntimeRefresh,
+  createAgentPluginRuntimeRefresh,
+} from "./plugin-runtime-refresh.js";
 import { Agent } from "./runtime/index.js";
 import { createReadTool } from "./sessions/tools/read.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 import { isToolResultError, readToolResultDetails } from "./tool-result-error.js";
 import { jsonResult, ToolInputError, type AnyAgentTool } from "./tools/common.js";
 
@@ -53,14 +55,7 @@ function createAssistant(content: AssistantMessage["content"]): AssistantMessage
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: content.some((entry) => entry.type === "toolCall") ? "toolUse" : "stop",
     timestamp: Date.now(),
   };
@@ -101,7 +96,6 @@ async function runCodeModeAgent(params: {
     codeModeSkills: params.codeModeSkills,
   });
   const providerContexts: Context[] = [];
-  let reconciliationCandidates = 0;
   const agent = new Agent({
     initialState: { model, tools },
     afterToolCall: async ({ result, isError }) => ({
@@ -139,12 +133,6 @@ async function runCodeModeAgent(params: {
     },
   });
   params.configureAgent?.(agent, { tools, ctx });
-  installCodeModeOutcomeHook({
-    agent,
-    onReconciliationCandidate: () => {
-      reconciliationCandidates += 1;
-    },
-  });
   try {
     await agent.prompt("finish the task despite tool errors");
   } finally {
@@ -153,7 +141,7 @@ async function runCodeModeAgent(params: {
     }
   }
 
-  return { agent, providerContexts, reconciliationCandidates };
+  return { agent, providerContexts };
 }
 
 type ParkedFailure =
@@ -262,7 +250,6 @@ async function runParkedReadFailure(scenario: ParkedFailure) {
     expect(read.execute).toHaveBeenCalledOnce();
     expect(testing.activeRuns.size).toBe(0);
     expect(testing.resumingRunIds.size).toBe(0);
-    expect(result.reconciliationCandidates).toBe(0);
     expect(waitDetails).toMatchObject(
       scenario === "cancel wait"
         ? { status: "failed", code: "aborted" }
@@ -287,9 +274,151 @@ async function runParkedReadFailure(scenario: ParkedFailure) {
 }
 
 describe("Code Mode agent-loop error recovery", () => {
-  afterEach(() => {
-    resetCodeModeTestState();
+  it("drains the old cell before refreshing its complete catalog in the same session", async () => {
+    const refresh = createAgentPluginRuntimeRefresh();
+    const started = createDeferred();
+    const release = createDeferred();
+    const effects: string[] = [];
+    let retainedExec!: AnyAgentTool;
+    try {
+      await refresh.run(async () => {
+        captureAgentPluginRuntimeRefresh().bindConsumer(() => true);
+        const owner = captureAgentPluginRuntimeRefresh();
+        const slow = pluginToolWithExecute("slow_action", "Finish admitted work", async () => {
+          started.resolve();
+          await release.promise;
+          effects.push("old action completed");
+          return jsonResult({ finished: true });
+        });
+        const reload = pluginToolWithExecute("reload_runtime", "Reload plugin files", async () => {
+          await started.promise;
+          owner.request();
+          effects.push("reload committed");
+          return { ...jsonResult({ generation: 2 }), terminate: true };
+        });
+        const removed = pluginToolWithExecute("removed_tool", "Old capability", async () =>
+          jsonResult({ old: true }),
+        );
+        const harness = createCodeModeHarness();
+        applyCodeModeCatalog({ ...harness.ctx, tools: [...harness.tools, slow, reload, removed] });
+        retainedExec = wrapToolWithBeforeToolCallHook(harness.tools[0]!, undefined, {
+          emitDiagnostics: false,
+        });
+        const wait = wrapToolWithBeforeToolCallHook(harness.tools[1]!, undefined, {
+          emitDiagnostics: false,
+        });
+        const result = await retainedExec.execute("cell", {
+          code: 'const pending = slow_action({}); await reload_runtime({}); json("reload recorded"); await yield_control(); return await pending;',
+        });
+        expect(result).toMatchObject({ terminate: false, details: { status: "waiting" } });
+        expect(owner.isRequested()).toBe(true);
+        expect(owner.isPending()).toBe(false);
+        expect(effects).toEqual(["reload committed"]);
+        release.resolve();
+        const settled = await wait.execute("drain", {
+          runId: resultDetails(result).runId,
+        });
+        expect(settled).toMatchObject({ terminate: true, details: { status: "completed" } });
+        expect(owner.isPending()).toBe(true);
+        expect(effects).toEqual(["reload committed", "old action completed"]);
+        expect(reload.execute).toHaveBeenCalledOnce();
+        expect(slow.execute).toHaveBeenCalledOnce();
+        expect(removed.execute).not.toHaveBeenCalled();
+        expect(testing.activeRuns.size).toBe(0);
+      });
+      refresh.close();
+      await refresh.run(async () => {
+        captureAgentPluginRuntimeRefresh().bindConsumer(() => true);
+        const changed = pluginToolWithExecute("changed_tool", "New capability", async (_id, args) =>
+          jsonResult({ version: 2, input: args }),
+        );
+        changed.parameters = {
+          type: "object",
+          properties: { amount: { type: "number" } },
+          required: ["amount"],
+          additionalProperties: false,
+        };
+        const harness = createCodeModeHarness();
+        applyCodeModeCatalog({ ...harness.ctx, tools: [...harness.tools, changed] });
+        await expect(retainedExec.execute("stale-cell", { code: "return 1;" })).rejects.toThrow(
+          "Plugin runtime changed",
+        );
+        const verified = await harness.tools[0]!.execute("verify", {
+          code: "json({ removed: typeof removed_tool, schema: (await changed_tool.describe()).parameters }); return await changed_tool({ amount: 2 });",
+        });
+        expect(verified).toMatchObject({
+          details: {
+            status: "completed",
+            output: [{ type: "json", value: { removed: "undefined", schema: changed.parameters } }],
+          },
+        });
+        expect(changed.execute).toHaveBeenCalledOnce();
+        expect(vi.mocked(changed.execute).mock.calls[0]?.[1]).toEqual({ amount: 2 });
+        expect(effects).toEqual(["reload committed", "old action completed"]);
+      });
+    } finally {
+      release.resolve();
+      refresh.close();
+    }
+  });
+
+  afterEach(async () => {
+    await resetCodeModeTestState();
     vi.useRealTimers();
+  });
+
+  it("inspects source and completes multiple edits after a partially applied program fails", async () => {
+    const workspace = await realpath(await mkdtemp(join(tmpdir(), "code-mode-continue-")));
+    const file = join(workspace, "source.txt");
+    await writeFile(file, "original\n");
+    const patch = pluginToolWithExecute(
+      "apply_patch",
+      "Append a source change",
+      async (_id, input) => {
+        await writeFile(
+          file,
+          `${await readFile(file, "utf8")}${(input as { value: string }).value}\n`,
+        );
+        return jsonResult({ applied: true });
+      },
+    );
+    const shell = pluginToolWithExecute("shell_command", "Inspect source", async () =>
+      jsonResult({ source: await readFile(file, "utf8") }),
+    );
+
+    try {
+      const { agent, providerContexts } = await runCodeModeAgent({
+        hiddenTools: [patch, shell],
+        programs: [
+          'await apply_patch({ value: "first" }); throw new Error("interrupted after first change");',
+          "return await shell_command({});",
+          'return await apply_patch({ value: "second" });',
+          'return await apply_patch({ value: "third" });',
+          "return await shell_command({});",
+        ],
+      });
+
+      expect(providerContexts).toHaveLength(6);
+      expect(providerContexts[1]?.messages).toContainEqual(
+        expect.objectContaining({
+          role: "toolResult",
+          isError: true,
+          details: expect.objectContaining({
+            status: "failed",
+            error: expect.stringContaining("interrupted after first change"),
+          }),
+        }),
+      );
+      expect(patch.execute).toHaveBeenCalledTimes(3);
+      expect(shell.execute).toHaveBeenCalledTimes(2);
+      expect(await readFile(file, "utf8")).toBe("original\nfirst\nsecond\nthird\n");
+      expect(agent.state.messages.at(-1)).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: "recovered" }],
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 
   it("recovers from a real parked read failure and completes the requested mutation once", async () => {
@@ -303,21 +432,27 @@ describe("Code Mode agent-loop error recovery", () => {
     });
   });
 
-  it.each([
-    "earlier mutation",
-    "terminal read",
-    "copied details",
-    "cancel wait",
-    "abort outcome",
-  ] as const)("prevents another provider turn after a parked failure with %s", async (scenario) => {
-    const { providerContexts, complete, effects, waitDetails } =
-      await runParkedReadFailure(scenario);
-    expect(providerContexts).toHaveLength(2);
-    expect(complete.execute).toHaveBeenCalledTimes(scenario === "earlier mutation" ? 1 : 0);
-    expect(effects).toEqual(scenario === "earlier mutation" ? ["completed"] : []);
-    // Replacing details before the outcome boundary must leave the original proof unused.
-    expect(consumeRepairableCodeModeFailure(waitDetails)).toBe(scenario === "copied details");
-  });
+  it.each(["earlier mutation", "copied details"] as const)(
+    "continues after a parked failure with %s without replaying prior work",
+    async (scenario) => {
+      const { providerContexts, complete, effects } = await runParkedReadFailure(scenario);
+      expect(providerContexts).toHaveLength(4);
+      expect(complete.execute).toHaveBeenCalledTimes(scenario === "earlier mutation" ? 2 : 1);
+      expect(effects).toEqual(
+        scenario === "earlier mutation" ? ["completed", "completed"] : ["completed"],
+      );
+    },
+  );
+
+  it.each(["terminal read", "cancel wait", "abort outcome"] as const)(
+    "prevents another provider turn after a parked failure with %s",
+    async (scenario) => {
+      const { providerContexts, complete, effects } = await runParkedReadFailure(scenario);
+      expect(providerContexts).toHaveLength(2);
+      expect(complete.execute).not.toHaveBeenCalled();
+      expect(effects).toEqual([]);
+    },
+  );
 
   it("continues after an operator permission change without replaying earlier mutations", async () => {
     const generation = new AbortController();
@@ -384,10 +519,9 @@ describe("Code Mode agent-loop error recovery", () => {
     });
     await parked.promise;
     changePermissions();
-    const { agent, providerContexts, reconciliationCandidates } = await running;
+    const { agent, providerContexts } = await running;
 
     expect(providerContexts).toHaveLength(4);
-    expect(reconciliationCandidates).toBe(0);
     expect(applied).toEqual(["prior mutation", "remaining mutation"]);
     expect(recordEffect.execute).toHaveBeenCalledOnce();
     expect(pending.execute).toHaveBeenCalledOnce();
@@ -433,7 +567,7 @@ describe("Code Mode agent-loop error recovery", () => {
       const complete = pluginToolWithExecute("complete_task", "Complete the task", async () =>
         jsonResult({ completed: true }),
       );
-      const { agent, providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+      const { agent, providerContexts } = await runCodeModeAgent({
         hiddenTools: [complete],
         codeModeSkills: [
           {
@@ -460,7 +594,6 @@ describe("Code Mode agent-loop error recovery", () => {
       expect(agent.state.messages).toContainEqual(failure);
       expect(providerContexts).toHaveLength(3);
       expect(complete.execute).toHaveBeenCalledOnce();
-      expect(reconciliationCandidates).toBe(0);
       expect(agent.state.messages.at(-1)).toMatchObject({
         role: "assistant",
         content: [{ type: "text", text: "recovered" }],
@@ -479,7 +612,7 @@ describe("Code Mode agent-loop error recovery", () => {
       jsonResult({ recovered: true }),
     );
 
-    const { agent, providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+    const { agent, providerContexts } = await runCodeModeAgent({
       hiddenTools: [terminal, recover],
       programs: ["return await terminal({});", "return await recover_task({});"],
     });
@@ -500,7 +633,6 @@ describe("Code Mode agent-loop error recovery", () => {
     );
     expect(terminal.execute).not.toHaveBeenCalled();
     expect(recover.execute).toHaveBeenCalledOnce();
-    expect(reconciliationCandidates).toBe(0);
     expect(agent.state.messages.at(-1)).toMatchObject({
       role: "assistant",
       content: [{ type: "text", text: "recovered" }],
@@ -515,7 +647,7 @@ describe("Code Mode agent-loop error recovery", () => {
       jsonResult({ recovered: true }),
     );
 
-    const { agent, providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+    const { agent, providerContexts } = await runCodeModeAgent({
       hiddenTools: [terminal, recover],
       programs: [
         "return await terminal({ value: 42 });",
@@ -539,7 +671,6 @@ describe("Code Mode agent-loop error recovery", () => {
     );
     expect(terminal.execute).not.toHaveBeenCalled();
     expect(recover.execute).toHaveBeenCalledOnce();
-    expect(reconciliationCandidates).toBe(0);
     expect(agent.state.messages.at(-1)).toMatchObject({
       role: "assistant",
       content: [{ type: "text", text: "recovered" }],
@@ -555,7 +686,7 @@ describe("Code Mode agent-loop error recovery", () => {
       jsonResult({ recovered: true }),
     );
 
-    const { providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+    const { providerContexts } = await runCodeModeAgent({
       hiddenTools: [readOnly, recover],
       programs: ["return await sessions_history({});", "return await recover_task({});"],
     });
@@ -563,10 +694,9 @@ describe("Code Mode agent-loop error recovery", () => {
     expect(providerContexts).toHaveLength(3);
     expect(readOnly.execute).toHaveBeenCalledOnce();
     expect(recover.execute).toHaveBeenCalledOnce();
-    expect(reconciliationCandidates).toBe(0);
   });
 
-  it("uses the terminal owner's input-aware read receipt for ordinary recovery", async () => {
+  it("continues after a failed read through a mixed-action tool", async () => {
     const mixedAction = fakeTool("message", "Read or mutate messages");
     mixedAction.parameters = {
       type: "object",
@@ -580,7 +710,7 @@ describe("Code Mode agent-loop error recovery", () => {
       jsonResult({ recovered: true }),
     );
 
-    const { providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+    const { providerContexts } = await runCodeModeAgent({
       hiddenTools: [mixedAction, recover],
       harness: createSubscribedCodeModeHarness({ name: "input-aware-read-receipt" }),
       programs: ['return await message({ action: "read" });', "return await recover_task({});"],
@@ -589,10 +719,9 @@ describe("Code Mode agent-loop error recovery", () => {
     expect(providerContexts).toHaveLength(3);
     expect(mixedAction.execute).toHaveBeenCalledOnce();
     expect(recover.execute).toHaveBeenCalledOnce();
-    expect(reconciliationCandidates).toBe(0);
   });
 
-  it("uses the namespace owner's local read receipt for ordinary recovery", async () => {
+  it("continues after a namespace metadata call and a guest error", async () => {
     const listResources = mcpTool({
       name: "mcp_files_resources_list",
       serverName: "files",
@@ -603,7 +732,7 @@ describe("Code Mode agent-loop error recovery", () => {
       jsonResult({ recovered: true }),
     );
 
-    const { providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+    const { providerContexts } = await runCodeModeAgent({
       hiddenTools: [listResources, recover],
       programs: ["json(await MCP.$api()); return missingFn();", "return await recover_task({});"],
     });
@@ -611,10 +740,9 @@ describe("Code Mode agent-loop error recovery", () => {
     expect(providerContexts).toHaveLength(3);
     expect(listResources.execute).not.toHaveBeenCalled();
     expect(recover.execute).toHaveBeenCalledOnce();
-    expect(reconciliationCandidates).toBe(0);
   });
 
-  it("uses an exact plugin instance's replay-safe receipt for ordinary recovery", async () => {
+  it("continues after a replay-safe plugin failure", async () => {
     const readOnly = pluginToolWithExecute("plugin_read", "Read plugin state", async () => {
       throw new Error("plugin read failed after dispatch");
     });
@@ -627,7 +755,7 @@ describe("Code Mode agent-loop error recovery", () => {
       jsonResult({ recovered: true }),
     );
 
-    const { providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+    const { providerContexts } = await runCodeModeAgent({
       hiddenTools: [readOnly, recover],
       harness: createSubscribedCodeModeHarness({ name: "plugin-read-receipt" }),
       programs: ["return await plugin_read({});", "return await recover_task({});"],
@@ -636,10 +764,9 @@ describe("Code Mode agent-loop error recovery", () => {
     expect(providerContexts).toHaveLength(3);
     expect(readOnly.execute).toHaveBeenCalledOnce();
     expect(recover.execute).toHaveBeenCalledOnce();
-    expect(reconciliationCandidates).toBe(0);
   });
 
-  it("keeps replay-safe side-effecting plugin failures in restricted reconciliation", async () => {
+  it("continues after a side-effecting plugin failure without replaying it", async () => {
     const appliedChanges: string[] = [];
     const mutation = pluginToolWithExecute("plugin_mutation", "Mutate plugin state", async () => {
       appliedChanges.push("plugin state changed");
@@ -655,15 +782,14 @@ describe("Code Mode agent-loop error recovery", () => {
       jsonResult({ recovered: true }),
     );
 
-    const { providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+    const { providerContexts } = await runCodeModeAgent({
       hiddenTools: [mutation, recover],
       programs: ["return await plugin_mutation({});", "return await recover_task({});"],
     });
 
-    expect(providerContexts).toHaveLength(1);
+    expect(providerContexts).toHaveLength(3);
     expect(mutation.execute).toHaveBeenCalledOnce();
-    expect(recover.execute).not.toHaveBeenCalled();
-    expect(reconciliationCandidates).toBe(1);
+    expect(recover.execute).toHaveBeenCalledOnce();
     expect(appliedChanges).toEqual(["plugin state changed"]);
   });
 
@@ -698,7 +824,7 @@ describe("Code Mode agent-loop error recovery", () => {
     });
   });
 
-  it("blocks another action after an earlier side effect and a later tool failure", async () => {
+  it("continues after an earlier side effect and a later tool failure", async () => {
     const recordEffect = pluginToolWithExecute("record_effect", "Record an effect", async () =>
       jsonResult({ recorded: true }),
     );
@@ -709,19 +835,18 @@ describe("Code Mode agent-loop error recovery", () => {
       jsonResult({ repeated: true }),
     );
 
-    const { providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+    const { providerContexts } = await runCodeModeAgent({
       hiddenTools: [recordEffect, terminal, write],
       programs: ["await record_effect({}); return await terminal({});", "return await write({});"],
     });
 
-    expect(providerContexts).toHaveLength(1);
+    expect(providerContexts).toHaveLength(3);
     expect(recordEffect.execute).toHaveBeenCalledOnce();
     expect(terminal.execute).toHaveBeenCalledOnce();
-    expect(write.execute).not.toHaveBeenCalled();
-    expect(reconciliationCandidates).toBe(1);
+    expect(write.execute).toHaveBeenCalledOnce();
   });
 
-  it("routes a partially applied mutation with an input error to restricted reconciliation", async () => {
+  it("continues after a partially applied mutation reports an input error", async () => {
     const appliedChanges: string[] = [];
     const applyPatch = pluginToolWithExecute("apply_patch", "Apply a patch", async () => {
       appliedChanges.push("first hunk applied");
@@ -737,17 +862,16 @@ describe("Code Mode agent-loop error recovery", () => {
       jsonResult({ executed: true }),
     );
 
-    const { providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+    const { providerContexts } = await runCodeModeAgent({
       hiddenTools: [applyPatch, write, send, shell],
       programs: ["return await apply_patch({});", "return await write({});"],
     });
 
-    expect(providerContexts).toHaveLength(1);
+    expect(providerContexts).toHaveLength(3);
     expect(applyPatch.execute).toHaveBeenCalledOnce();
-    expect(write.execute).not.toHaveBeenCalled();
+    expect(write.execute).toHaveBeenCalledOnce();
     expect(send.execute).not.toHaveBeenCalled();
     expect(shell.execute).not.toHaveBeenCalled();
-    expect(reconciliationCandidates).toBe(1);
     expect(appliedChanges).toEqual(["first hunk applied"]);
   });
 

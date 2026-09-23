@@ -1,10 +1,15 @@
 import { randomUUID } from "node:crypto";
+import { stripCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
 import { derivePromptTokens, normalizeUsage } from "../../agents/usage.js";
+import { projectModelContextMessages } from "../../shared/model-context-message.js";
 import type {
   SessionParentForkDecision,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
+import { findSessionTranscriptHeader, isIndexedSessionEntry } from "./session-entry-codec.js";
+import { normalizeSessionContextEntryBoundaries } from "./session-entry-navigation.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import {
   isSessionTranscriptLeafControl,
@@ -14,12 +19,14 @@ import {
 } from "./transcript-tree.js";
 import type { SessionEntry } from "./types.js";
 import { resolveFreshSessionTotalTokens } from "./types.js";
+import { MIN_READABLE_SESSION_VERSION } from "./version.js";
 
 export type ParentForkSourceTranscript = {
   appendMode?: "side";
   appendParentId: string | null;
   branchEntries: TranscriptEvent[];
   cwd?: string;
+  version: number;
   labelsToWrite: Array<{ targetId: string; label: string; timestamp: string }>;
   leafId: string | null;
   preserveLeafControl: boolean;
@@ -51,7 +58,9 @@ export function planParentForkDecision(
     normalizePositiveTokenCount(options.maxTokens) ?? DEFAULT_PARENT_FORK_MAX_TOKENS;
   const parentTokens = options.preferTranscriptEstimate
     ? transcriptEstimate?.tokens
-    : (resolveFreshSessionTotalTokens(parentEntry) ?? transcriptEstimate?.tokens);
+    : normalizePositiveTokenCount(
+        Math.max(resolveFreshSessionTotalTokens(parentEntry) ?? 0, transcriptEstimate?.tokens ?? 0),
+      );
   if (typeof parentTokens === "number" && parentTokens > maxTokens) {
     return {
       status: "skip",
@@ -68,20 +77,40 @@ export function planParentForkDecision(
   };
 }
 
-export function estimateTranscriptPromptTokens(
-  events: readonly TranscriptEvent[],
+export function estimateParentForkPromptTokens(
+  source: ParentForkSourceTranscript | null,
 ): SqliteTranscriptParentTokenEstimate | undefined {
+  if (!source) {
+    return undefined;
+  }
   let byteEstimate = 0;
   let latestUsageEstimate: number | undefined;
   let latestUsageEstimateIsExactContext = false;
   let trailingBytes = 0;
-  for (const event of selectParentForkTokenEstimateEvents(events)) {
-    if (isRecord(event) && isRecord(event.message) && event.message.excludeFromContext === true) {
+  for (const { event, context } of selectParentForkTokenEstimateEvents(source.branchEntries)) {
+    if (
+      context !== "reset-retained" &&
+      isRecord(event) &&
+      isRecord(event.message) &&
+      event.message.excludeFromContext === true
+    ) {
       continue;
     }
-    const serializedBytes = Buffer.byteLength(JSON.stringify(event)) + 1;
+    let contextEvent = event;
+    if (isRecord(event) && isRecord(event.message)) {
+      const message =
+        context !== "current" &&
+        isIndexedSessionEntry(event) &&
+        event.type === "message" &&
+        event.message.role === "assistant"
+          ? stripCompactionReplayCheckpoint(event.message)
+          : event.message;
+      contextEvent = { ...event, message: projectModelContextMessages([message])[0] };
+    }
+    const serializedBytes = Buffer.byteLength(JSON.stringify(contextEvent)) + 1;
     byteEstimate += serializedBytes;
-    if (!isRecord(event)) {
+    // Retained messages carry usage from before the latest compaction or reset.
+    if (context !== "current" || !isRecord(event)) {
       if (latestUsageEstimate !== undefined) {
         trailingBytes += serializedBytes;
       }
@@ -150,18 +179,44 @@ export function estimateTranscriptPromptTokens(
   return tokens === undefined ? undefined : { kind: "legacy-or-bytes", tokens };
 }
 
-function selectParentForkTokenEstimateEvents(
-  events: readonly TranscriptEvent[],
-): TranscriptEvent[] {
-  const entries = events.filter((entry) => !(isRecord(entry) && entry.type === "session"));
-  const tree = scanSessionTranscriptTree(entries);
-  const visiblePath = selectSessionTranscriptTreePathNodes(tree, tree.leafId);
-  const appendPath = selectSessionTranscriptTreePathNodes(tree, tree.appendParentId);
-  return mergeSessionTranscriptVisiblePathWithOpaqueAppendPath({
-    visiblePath,
-    appendPath,
-    appendParentId: tree.appendParentId,
-  }).nodes.flatMap((node) => node.entry);
+function* selectParentForkTokenEstimateEvents(branch: readonly TranscriptEvent[]): Generator<{
+  event: TranscriptEvent;
+  context: "current" | "retained" | "reset-retained" | "opaque";
+}> {
+  if (
+    !branch.some(
+      (event) => isRecord(event) && (event.type === "compaction" || event.type === "reset"),
+    )
+  ) {
+    for (const event of branch) {
+      yield { event, context: "current" };
+    }
+    return;
+  }
+  const indexedEntries = branch.filter(isIndexedSessionEntry);
+  const selected = Array.from(iterateSessionContextEntries(indexedEntries));
+  const boundary = selected[0]?.entry;
+  if (boundary?.type !== "compaction" && boundary?.type !== "reset") {
+    for (const event of branch) {
+      yield { event, context: "current" };
+    }
+    return;
+  }
+  const contexts = new Map(selected.map(({ entry, context }) => [entry.id, context]));
+  const indexedIds = new Set(indexedEntries.map((entry) => entry.id));
+  const boundaryIndex = branch.findIndex((entry) => isRecord(entry) && entry.id === boundary.id);
+  for (const [index, event] of branch.entries()) {
+    const context =
+      isRecord(event) && typeof event.id === "string" ? contexts.get(event.id) : undefined;
+    if (context) {
+      yield { event, context };
+    } else if (
+      index > boundaryIndex &&
+      (!isRecord(event) || typeof event.id !== "string" || !indexedIds.has(event.id))
+    ) {
+      yield { event, context: "opaque" };
+    }
+  }
 }
 
 function normalizePositiveTokenCount(value: unknown): number | undefined {
@@ -194,9 +249,7 @@ export function resolveParentForkSourceTranscript(
   if (fileEntries.length === 0) {
     return null;
   }
-  const header = fileEntries.find(
-    (entry): entry is Record<string, unknown> => isRecord(entry) && entry.type === "session",
-  );
+  const header = findSessionTranscriptHeader(fileEntries);
   const entries = fileEntries.filter((entry) => !(isRecord(entry) && entry.type === "session"));
   const tree = scanSessionTranscriptTree(entries);
   const visiblePath = selectSessionTranscriptTreePathNodes(tree, tree.leafId);
@@ -206,13 +259,16 @@ export function resolveParentForkSourceTranscript(
     appendPath,
     appendParentId: tree.appendParentId,
   });
-  const visibleBranchEntries = mergedPath.nodes.flatMap((node) => {
-    if (!isRecord(node.entry)) {
-      return [];
-    }
-    const parentId = node.selectedParentId;
-    return [node.entry.parentId === parentId ? node.entry : { ...node.entry, parentId }];
-  });
+  const visibleBranchEntries = normalizeSessionContextEntryBoundaries(
+    mergedPath.nodes.flatMap((node) => {
+      if (!isRecord(node.entry)) {
+        return [];
+      }
+      const parentId = node.selectedParentId;
+      return [node.entry.parentId === parentId ? node.entry : { ...node.entry, parentId }];
+    }),
+    tree.nodes,
+  );
   const branchEntries =
     forkFrom === "last-completed"
       ? visibleBranchEntries.slice(0, findLastCompletedAssistantIndex(visibleBranchEntries) + 1)
@@ -233,6 +289,7 @@ export function resolveParentForkSourceTranscript(
       : {}),
     branchEntries,
     cwd: typeof header?.cwd === "string" ? header.cwd : undefined,
+    version: header?.version ?? MIN_READABLE_SESSION_VERSION,
     labelsToWrite: collectBranchLabels({ allEntries: entries, pathEntryIds }),
     leafId: forkFrom === "last-completed" ? lastBranchEntryId : tree.leafId,
     preserveLeafControl:
@@ -315,11 +372,17 @@ export function buildForkedChildTranscriptEvents(params: {
   source: ParentForkSourceTranscript;
   targetSessionId: string;
 }): TranscriptEvent[] {
+  const keepHistory =
+    params.source.preserveLeafControl || hasAssistantEntry(params.source.branchEntries);
   const header = {
-    ...createSessionTranscriptHeader({ cwd: params.source.cwd, sessionId: params.targetSessionId }),
+    ...createSessionTranscriptHeader({
+      cwd: params.source.cwd,
+      sessionId: params.targetSessionId,
+      version: keepHistory ? params.source.version : undefined,
+    }),
     parentSession: params.parentSessionFile,
   };
-  if (!params.source.preserveLeafControl && !hasAssistantEntry(params.source.branchEntries)) {
+  if (!keepHistory) {
     return [header];
   }
 

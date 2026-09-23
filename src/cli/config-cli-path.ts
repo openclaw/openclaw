@@ -1,6 +1,6 @@
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
-import { rejectConfigNonFiniteNumbers } from "../config/io.read-helpers.js";
+import { rejectConfigNonFiniteNumbers } from "../config/value-tree.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import {
   formatConcreteConfigPath,
@@ -333,8 +333,15 @@ function modelArrayIds(value: unknown): Set<string> | null {
   return ids;
 }
 
-function mergeModelArrays(existing: unknown[], patch: unknown[]): unknown[] {
+type ConfigMergeResult = { value: unknown; suppliedPaths: PathSegment[][] };
+
+function mergeModelArrays(
+  existing: unknown[],
+  patch: unknown[],
+  path: PathSegment[],
+): ConfigMergeResult {
   const merged = [...existing];
+  const suppliedPaths: PathSegment[][] = [];
   const indexById = new Map<string, number>();
   for (const [index, entry] of merged.entries()) {
     if (isPlainRecord(entry) && typeof entry.id === "string" && entry.id.trim()) {
@@ -343,6 +350,7 @@ function mergeModelArrays(existing: unknown[], patch: unknown[]): unknown[] {
   }
   for (const entry of patch) {
     if (!isPlainRecord(entry) || typeof entry.id !== "string" || !entry.id.trim()) {
+      suppliedPaths.push([...path, String(merged.length)]);
       merged.push(entry);
       continue;
     }
@@ -350,13 +358,17 @@ function mergeModelArrays(existing: unknown[], patch: unknown[]): unknown[] {
     const existingIndex = indexById.get(id);
     if (existingIndex === undefined) {
       indexById.set(id, merged.length);
+      suppliedPaths.push([...path, String(merged.length)]);
       merged.push(entry);
       continue;
     }
     const existingEntry = merged[existingIndex];
     merged[existingIndex] = isPlainRecord(existingEntry) ? { ...existingEntry, ...entry } : entry;
+    for (const key of Object.keys(entry)) {
+      suppliedPaths.push([...path, String(existingIndex), key]);
+    }
   }
-  return merged;
+  return { value: merged, suppliedPaths };
 }
 
 function isProviderModelListPath(path: PathSegment[]): boolean {
@@ -365,19 +377,85 @@ function isProviderModelListPath(path: PathSegment[]): boolean {
   );
 }
 
-function mergeConfigValue(existing: unknown, patch: unknown, path: PathSegment[]): unknown {
+type MergePath = {
+  parent?: MergePath;
+  segment: PathSegment;
+};
+
+function appendMergePath(parent: MergePath | undefined, segment: PathSegment): MergePath {
+  return { parent, segment };
+}
+
+function toMergePath(path: PathSegment[]): MergePath | undefined {
+  let current: MergePath | undefined;
+  for (const segment of path) {
+    current = appendMergePath(current, segment);
+  }
+  return current;
+}
+
+function mergePathSegments(path: MergePath): PathSegment[] {
+  const segments: PathSegment[] = [];
+  for (let current: MergePath | undefined = path; current; current = current.parent) {
+    segments.push(current.segment);
+  }
+  return segments.toReversed();
+}
+
+function isProviderModelListMergePath(path: MergePath): boolean {
+  const provider = path.parent;
+  const providers = provider?.parent;
+  const models = providers?.parent;
+  return (
+    path.segment === "models" &&
+    providers?.segment === "providers" &&
+    models?.segment === "models" &&
+    models.parent === undefined
+  );
+}
+
+function mergeConfigValue(
+  existing: unknown,
+  patch: unknown,
+  path: PathSegment[],
+): ConfigMergeResult {
   if (isProviderModelListPath(path) && Array.isArray(existing) && Array.isArray(patch)) {
-    return mergeModelArrays(existing, patch);
+    return mergeModelArrays(existing, patch, path);
   }
   if (isPlainRecord(existing) && isPlainRecord(patch)) {
     const next: Record<string, unknown> = { ...existing };
-    for (const [key, value] of Object.entries(patch)) {
-      next[key] =
-        hasOwnPathKey(next, key) && isPlainRecord(next[key]) && isPlainRecord(value)
-          ? mergeConfigValue(next[key], value, [...path, key])
-          : value;
+    const suppliedPaths: PathSegment[][] = [];
+    // Linked paths keep deep merges linear while preserving descendant-specific merge policy.
+    const pending = [{ target: next, patch, path: toMergePath(path) }];
+    while (pending.length > 0) {
+      const frame = pending.pop()!;
+      for (const [key, value] of Object.entries(frame.patch)) {
+        const current = frame.target[key];
+        const childPath = appendMergePath(frame.path, key);
+        if (
+          hasOwnPathKey(frame.target, key) &&
+          isProviderModelListMergePath(childPath) &&
+          Array.isArray(current) &&
+          Array.isArray(value)
+        ) {
+          const merged = mergeModelArrays(current, value, mergePathSegments(childPath));
+          frame.target[key] = merged.value;
+          suppliedPaths.push(...merged.suppliedPaths);
+        } else if (
+          hasOwnPathKey(frame.target, key) &&
+          isPlainRecord(current) &&
+          isPlainRecord(value)
+        ) {
+          const child = { ...current };
+          frame.target[key] = child;
+          pending.push({ target: child, patch: value, path: childPath });
+        } else {
+          frame.target[key] = value;
+          suppliedPaths.push(mergePathSegments(childPath));
+        }
+      }
     }
-    return next;
+    return { value: next, suppliedPaths };
   }
   throw new Error(`Cannot merge ${toDotPath(path)}; use --replace to replace intentionally.`);
 }
@@ -387,14 +465,13 @@ export function mergeAtPath(
   path: PathSegment[],
   value: unknown,
   options?: SetAtPathOptions,
-): void {
+): PathSegment[][] {
   const existing = getAtPath(root, path);
-  setAtPath(
-    root,
-    path,
-    existing.found ? mergeConfigValue(existing.value, value, path) : value,
-    options,
-  );
+  const merged = existing.found
+    ? mergeConfigValue(existing.value, value, path)
+    : { value, suppliedPaths: [path] };
+  setAtPath(root, path, merged.value, options);
+  return merged.suppliedPaths;
 }
 
 function isProtectedMapReplacementPath(path: PathSegment[]): boolean {
@@ -468,25 +545,7 @@ export function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]):
   if (last === undefined) {
     return { removed: false };
   }
-  let current: unknown = root;
-  for (const segment of path.slice(0, -1)) {
-    if (!current || typeof current !== "object") {
-      return { removed: false };
-    }
-    if (Array.isArray(current)) {
-      const index = parseIndexSegment(segment);
-      if (index === undefined || index >= current.length) {
-        return { removed: false };
-      }
-      current = current[index];
-      continue;
-    }
-    const record = current as Record<string, unknown>;
-    if (!hasOwnPathKey(record, segment)) {
-      return { removed: false };
-    }
-    current = record[segment];
-  }
+  const current = getAtPath(root, path.slice(0, -1)).value;
 
   if (Array.isArray(current)) {
     const index = parseIndexSegment(last);

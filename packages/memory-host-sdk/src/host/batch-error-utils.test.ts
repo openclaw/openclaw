@@ -5,7 +5,7 @@ import {
   formatBatchErrorDetail,
   formatUnavailableBatchError,
   isEmbeddingBatchUnavailableError,
-} from "../engine-embeddings.js";
+} from "./batch-error-utils.js";
 
 describe("extractBatchErrorMessage", () => {
   it("preserves line order when nested errors precede top-level errors", () => {

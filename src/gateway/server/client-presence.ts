@@ -5,6 +5,9 @@ import { WEBSOCKET_OPEN_READY_STATE } from "../server-constants.js";
 import type { GatewayClient } from "../server-methods/types.js";
 import type { GatewayWsClient } from "./ws-types.js";
 
+const ACTIVITY_BROADCAST_INTERVAL_MS = 30_000;
+const activityPublications = new WeakMap<GatewayWsClient, { identity: string; at: number }>();
+
 function isLiveClient(client: GatewayWsClient): boolean {
   return !client.invalidated && client.socket.readyState === WEBSOCKET_OPEN_READY_STATE;
 }
@@ -18,16 +21,17 @@ function presenceIdentity(client: GatewayWsClient): string | undefined {
       : undefined;
 }
 
-/** Reconciles canonical identity and timing using only currently registered sockets. */
+/** Reconciles live identity/timing and returns whether a presence snapshot is needed. */
 export function refreshClientPresence(
   clients: ReadonlySet<GatewayWsClient>,
   client: GatewayWsClient,
+  activityAt?: number,
 ): boolean {
   if (!clients.has(client) || !isLiveClient(client) || !client.presenceKey) {
     return false;
   }
   const identity = presenceIdentity(client);
-  if (!identity || !client.authenticatedUserId) {
+  if (!identity) {
     return false;
   }
   const peers = [...clients].filter(
@@ -47,18 +51,38 @@ export function refreshClientPresence(
       }
     }
   }
+  const publication = activityPublications.get(client);
+  const publish =
+    activityAt === undefined ||
+    timing?.lastActivityAt === undefined ||
+    publication?.identity !== identity ||
+    activityAt < publication.at ||
+    activityAt - publication.at >= ACTIVITY_BROADCAST_INTERVAL_MS;
+  if (timing && activityAt !== undefined) {
+    timing.lastActivityAt = activityAt;
+  }
+  // Keep exact activity in the store; only publication is coalesced. Share the
+  // window across live peers, with weak keys so a full reconnect starts fresh.
+  const nextPublication = publish
+    ? { identity, at: activityAt ?? timing?.lastActivityAt ?? Date.now() }
+    : publication;
   for (const peer of peers) {
     // Copy interval facts so later profile qualification cannot leave raw and
     // profile sockets sharing mutable activity. Nodes retain their device lifecycle.
     if (timing && peer.personPresence) {
       peer.personPresence = { ...timing };
     }
+    if (nextPublication) {
+      activityPublications.set(peer, nextPublication);
+    }
     upsertPresence(peer.presenceKey!, {
+      clientId: peer.connect.client.id,
+      mode: peer.connect.client.mode,
       user: buildAuthenticatedPresenceUser(peer),
       ...peer.personPresence,
     });
   }
-  return true;
+  return publish;
 }
 
 /** Records accepted human activity; copies and clients closed during admission cannot write. */
@@ -76,8 +100,7 @@ export function recordClientPresenceActivity(
     ) {
       continue;
     }
-    live.personPresence = { ...live.personPresence, lastActivityAt: Date.now() };
-    return refreshClientPresence(clients, live);
+    return refreshClientPresence(clients, live, Date.now());
   }
   return false;
 }

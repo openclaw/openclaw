@@ -1,4 +1,9 @@
+import type { ModelCatalogEntry } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import {
+  chatModelUnavailableMessage,
+  resolveChatModelUnavailableReason,
+} from "../../lib/chat/model-select-state.ts";
 import type { ChatComposerDisabledBanner } from "./components/chat-composer-types.ts";
 
 type ChatModelSetupState = {
@@ -16,11 +21,26 @@ export function requiresChatModelSetup(state: ChatModelSetupState): boolean {
   return !state.agentModel?.trim();
 }
 
-export function createChatModelSetupBanner(onAction: () => void): ChatComposerDisabledBanner {
+export function createChatModelSetupBanner(
+  onAction: () => void,
+  text = t("modelSetup.required.body"),
+): ChatComposerDisabledBanner {
   return {
-    kind: "composer-replacement",
-    text: t("modelSetup.required.body"),
+    kind: "above-composer",
+    text: `${text} ${t("modelSetup.commandHint")}`,
     actionLabel: t("modelSetup.required.action"),
     onAction,
   };
+}
+
+export function chatModelUnavailableBanner(
+  model: string | null | undefined,
+  provider: string | null | undefined,
+  catalog: ModelCatalogEntry[],
+  onSetup: () => void,
+): ChatComposerDisabledBanner | undefined {
+  const message = chatModelUnavailableMessage(
+    resolveChatModelUnavailableReason(model, provider, catalog),
+  );
+  return message ? createChatModelSetupBanner(onSetup, message) : undefined;
 }

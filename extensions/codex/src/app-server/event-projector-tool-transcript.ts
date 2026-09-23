@@ -23,11 +23,13 @@ import {
   itemToolError,
   itemToolResult,
   itemTranscriptResultText,
+  readCodeModeNativePatchInput,
+  readInterceptedNativePatchInput,
 } from "./event-projector-tool-items.js";
 import {
   collectDynamicToolContentText,
   normalizeToolTranscriptArguments,
-  truncateToolTranscriptText,
+  readCodexResponseOutput,
 } from "./event-projector-tool-output.js";
 import {
   CodexToolProgressProjection,
@@ -61,9 +63,7 @@ const MISSING_TOOL_RESULT_ERROR =
   "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed.";
 const NATIVE_PATCH_REJECTION_RE =
   /^\s*patch rejected:\s*writing outside of the project;\s*rejected by user approval settings\s*$/iu;
-const CODE_MODE_NATIVE_PATCH_SOURCE_RE =
-  /^\s*(?:\/\/[^\r\n]*\r?\n\s*)?(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+tools\.apply_patch\(\s*("(?:\\[\s\S]|[^"\\])*")\s*\)\s*;?\s*text\(\s*\1\s*\)\s*;?\s*$/u;
-const CODE_MODE_NATIVE_PATCH_RESULT_RE =
+const CODE_MODE_RESULT_RE =
   /^\s*Script (completed|failed)\s*\r?\nWall time\s+\d+(?:\.\d+)?\s+seconds\s*\r?\nOutput:\s*([\s\S]*?)\s*$/iu;
 const MAX_TOOL_APPROVAL_REVIEWS = 16;
 
@@ -84,58 +84,6 @@ function toolApprovalReviewOutcome(state: ToolApprovalReviewState): ToolApproval
       : "approved";
 }
 
-function readCodeModeNativePatchInput(source: unknown): string | undefined {
-  if (typeof source !== "string") {
-    return undefined;
-  }
-  const match = CODE_MODE_NATIVE_PATCH_SOURCE_RE.exec(source);
-  if (!match?.[2]) {
-    return undefined;
-  }
-  try {
-    const patch: unknown = JSON.parse(match[2]);
-    return typeof patch === "string" &&
-      /^\*\*\* Begin Patch\r?\n[\s\S]*\r?\n\*\*\* End Patch(?:\r?\n)?$/u.test(patch)
-      ? patch
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function readInterceptedNativePatchInput(
-  command: unknown,
-): { input: string; cwd?: string } | undefined {
-  if (typeof command !== "string") {
-    return undefined;
-  }
-  const lines = command.replace(/\r\n?/gu, "\n").split("\n");
-  const patchStart = lines.indexOf("*** Begin Patch");
-  // Nested heredocs and shell expansion can hide extra commands. Trust only
-  // a top-level patch, an inert cd, and a single-quoted matching delimiter.
-  const invocation =
-    /^[\t ]*(?:cd[\t ]+(?:'([^'\n]+)'|([A-Za-z0-9_./-]+))[\t ]+&&[\t ]+)?apply_patch[\t ]*<<-?[\t ]*'([^'\n]+)'[\t ]*$/u.exec(
-      lines[0] ?? "",
-    );
-  if (!invocation || patchStart !== 1) {
-    return undefined;
-  }
-  const patchEnd = lines.indexOf("*** End Patch", patchStart + 1);
-  const cwd = invocation[1] ?? invocation[2];
-  const delimiter = invocation[3];
-  if (
-    patchEnd < 0 ||
-    lines[patchEnd + 1] !== delimiter ||
-    lines.slice(patchEnd + 2).some((line) => line.trim().length > 0)
-  ) {
-    return undefined;
-  }
-  return {
-    input: `${lines.slice(patchStart, patchEnd + 1).join("\n")}\n`,
-    ...(cwd ? { cwd } : {}),
-  };
-}
-
 export class CodexToolTranscriptProjection {
   private readonly messages: AgentMessage[] = [];
   private readonly callIds = new Set<string>();
@@ -150,7 +98,8 @@ export class CodexToolTranscriptProjection {
   private readonly nativeMcpAppResultDetailsAttempted = new Set<string>();
   private readonly approvalReviewsByCallId = new Map<string, ToolApprovalReviewState>();
   private readonly rawNativeToolOutputByCallId = new Map<string, string>();
-  private readonly pendingRawPatchOutputIds = new Set<string>();
+  private readonly pendingRawOutputIds = new Set<string>();
+  private readonly rawCallsById = new Map<string, ToolTranscriptCallInput>();
   private readonly codeModeNativePatchInputsByCallId = new Map<string, string>();
 
   constructor(
@@ -263,6 +212,11 @@ export class CodexToolTranscriptProjection {
           this.rawNativeToolOutputByCallId.get(item.id) ??
           itemTranscriptResultText(item, this.progress.outputTextByItem),
         isError: isNonSuccessItemStatus(status),
+        ...(item.type === "commandExecution" &&
+        item.aggregatedOutput == null &&
+        this.progress.isOutputTruncated(item.id)
+          ? { captureTruncated: true }
+          : {}),
         details,
         ...(item.type === "webSearch" ? { resultContentSource: "network" } : {}),
       });
@@ -280,6 +234,18 @@ export class CodexToolTranscriptProjection {
           : undefined;
     if (!callId) {
       return;
+    }
+    if (
+      (type === "custom_tool_call" || type === "function_call") &&
+      typeof item.name === "string"
+    ) {
+      this.rawCallsById.set(callId, {
+        id: callId,
+        name: item.name,
+        arguments:
+          type === "custom_tool_call" ? { input: item.input } : { arguments: item.arguments },
+      });
+      this.pendingRawOutputIds.add(callId);
     }
     if (
       (type === "custom_tool_call" || type === "function_call") &&
@@ -336,36 +302,29 @@ export class CodexToolTranscriptProjection {
         }
       }
       if (args) {
-        this.pendingRawPatchOutputIds.add(callId);
+        this.pendingRawOutputIds.add(callId);
         this.recordToolCall({ id: callId, name: "apply_patch", arguments: args });
       }
       return;
     }
-    if (
-      (type !== "custom_tool_call_output" && type !== "function_call_output") ||
-      (this.namesById.get(callId) !== "apply_patch" &&
-        !this.codeModeNativePatchInputsByCallId.has(callId))
-    ) {
+    if (type !== "custom_tool_call_output" && type !== "function_call_output") {
       return;
     }
-    this.pendingRawPatchOutputIds.delete(callId);
-    const text =
+    this.pendingRawOutputIds.delete(callId);
+    const text = readCodexResponseOutput(item);
+    if (text === undefined) {
+      return;
+    }
+    this.rawNativeToolOutputByCallId.set(callId, text);
+    const rawCall = this.rawCallsById.get(callId);
+    const responseText =
       typeof item.output === "string"
         ? item.output
-        : Array.isArray(item.output)
-          ? collectDynamicToolContentText(item.output as CodexThreadItem["contentItems"])
-          : "";
-    if (!text.trim()) {
-      return;
-    }
+        : collectDynamicToolContentText(item.output as CodexThreadItem["contentItems"]);
+    const execution = rawCall?.name === "exec" ? CODE_MODE_RESULT_RE.exec(responseText) : null;
     const codeModePatchInput = this.codeModeNativePatchInputsByCallId.get(callId);
     if (codeModePatchInput) {
       this.codeModeNativePatchInputsByCallId.delete(callId);
-      const execution = CODE_MODE_NATIVE_PATCH_RESULT_RE.exec(text);
-      if (execution?.[1]?.toLowerCase() === "completed" && execution[2]?.trim() === "{}") {
-        // The canonical nested FileChange already owns successful patch audit.
-        return;
-      }
       if (execution?.[1]?.toLowerCase() === "failed") {
         const failure = execution[2]?.replace(/^Script error:\s*/iu, "").trim() || text;
         this.recordToolCall({
@@ -374,16 +333,31 @@ export class CodexToolTranscriptProjection {
           arguments: { input: codeModePatchInput },
         });
         this.recordToolResult({ id: callId, name: "apply_patch", text: failure, isError: true });
+        return;
       }
-      return;
+      // The nested FileChange owns patch success. Keep every outer response
+      // as exec, including unknown formats, without inventing patch success.
     }
-    this.rawNativeToolOutputByCallId.set(callId, text);
     const result = this.messages.find(
       (message): message is Extract<AgentMessage, { role: "toolResult" }> =>
         message.role === "toolResult" && message.toolCallId === callId,
     );
     if (!result) {
-      if (NATIVE_PATCH_REJECTION_RE.test(text)) {
+      if (!this.callIds.has(callId) && rawCall) {
+        // Code-mode calls can have no matching command item. Keep the outer
+        // response under its own call ID, never under a nested process ID.
+        this.recordToolCall(rawCall);
+        this.recordToolResult({
+          id: callId,
+          name: rawCall.name,
+          text,
+          isError: execution?.[1]?.toLowerCase() === "failed",
+          ...(!execution ? { outcomeUnknown: true } : {}),
+        });
+      } else if (
+        this.namesById.get(callId) === "apply_patch" &&
+        NATIVE_PATCH_REJECTION_RE.test(text)
+      ) {
         // Only the upstream's explicit rejection can settle without a native
         // FileChange status; unknown outcomes must remain failed-closed.
         this.recordToolResult({
@@ -395,18 +369,24 @@ export class CodexToolTranscriptProjection {
       }
       return;
     }
-    // Codex publishes its canonical FileChange terminal item before the
-    // model-visible raw output; preserve its authoritative success status.
+    // Terminal items describe execution; the response arrives separately.
+    // Enrich the pending checkpoint without replacing status, details or identity.
     const replacement = this.createToolResultMessage({
       id: callId,
-      name: "apply_patch",
+      name: result.toolName,
       text,
       isError: result.isError,
     });
     result.content = replacement.content;
+    const metadata = Reflect.get(result, "__openclaw");
+    Reflect.set(result, "__openclaw", {
+      ...(isJsonObject(metadata) ? metadata : {}),
+      toolOutput: { source: "provider-response", modelInput: "unverified" },
+    });
   }
 
-  async recordNativeToolResultWithDetails(item: CodexThreadItem | undefined): Promise<void> {
+  // Preparation can outlive finalization; the projector owns recording after its close guard.
+  async prepareNativeToolResultDetails(item: CodexThreadItem | undefined): Promise<unknown> {
     const preparedDetails = await this.prepareNativeMcpAppResultDetails(item);
     const approvalReviewState = item ? this.approvalReviewsByCallId.get(item.id) : undefined;
     // The terminal tool result is the durable owner for its reviews. Live
@@ -417,7 +397,7 @@ export class CodexToolTranscriptProjection {
           approvalReviewOutcome: toolApprovalReviewOutcome(approvalReviewState),
         }
       : undefined;
-    const details = reviewDetails
+    return reviewDetails
       ? isJsonObject(preparedDetails)
         ? { ...preparedDetails, ...reviewDetails }
         : {
@@ -425,7 +405,6 @@ export class CodexToolTranscriptProjection {
             ...reviewDetails,
           }
       : preparedDetails;
-    this.recordNativeToolResult(item, details);
   }
 
   private async prepareNativeMcpAppResultDetails(
@@ -588,18 +567,24 @@ export class CodexToolTranscriptProjection {
       : `${MISSING_TOOL_RESULT_ERROR} missingToolResultCount=${missingCount}`;
   }
 
-  async readMirroredSessionMessages(): Promise<AgentMessage[]> {
+  async readMirroredSessionMessages(signal?: AbortSignal): Promise<AgentMessage[]> {
     return (
-      (await readCodexMirroredSessionHistoryMessages({
-        agentId: this.params.agentId,
-        sessionFile: this.params.sessionFile,
-        sessionId: this.params.sessionId,
-        sessionKey: this.params.sessionKey,
-      })) ?? []
+      (await readCodexMirroredSessionHistoryMessages(
+        {
+          agentId: this.params.agentId,
+          sessionFile: this.params.sessionFile,
+          sessionId: this.params.sessionId,
+          sessionKey: this.params.sessionKey,
+          sessionTarget: this.params.sessionTarget,
+        },
+        undefined,
+        signal,
+        this.params.contextTokenBudget,
+      )) ?? []
     );
   }
 
-  private recordToolCall(params: ToolTranscriptCallInput): void {
+  recordToolCall(params: ToolTranscriptCallInput): void {
     if (!params.id || !params.name || this.callIds.has(params.id)) {
       return;
     }
@@ -614,7 +599,7 @@ export class CodexToolTranscriptProjection {
     this.options.checkpointMessage?.({ read: () => message });
   }
 
-  private recordToolResult(params: ToolTranscriptResultInput): void {
+  recordToolResult(params: ToolTranscriptResultInput): void {
     if (!params.id || !params.name || this.resultIds.has(params.id)) {
       return;
     }
@@ -627,9 +612,9 @@ export class CodexToolTranscriptProjection {
     this.messages.push(message);
     this.options.checkpointMessage?.({
       read: () => message,
-      // A linked raw patch output enriches FileChange after item/completed.
-      // Keep that result mutable only until the promised raw output arrives.
-      ready: () => !this.pendingRawPatchOutputIds.has(params.id),
+      // A raw model call promises a separate response; nested execution items
+      // have no such response ID and must not block later checkpoints.
+      ready: () => !this.pendingRawOutputIds.has(params.id),
     });
   }
 
@@ -676,46 +661,42 @@ export class CodexToolTranscriptProjection {
     const attribution = resolveCodexLocalRuntimeAttribution(this.params);
     return {
       role: "assistant",
-      content: [
-        { type: "toolCall", id: params.id, name: params.name, arguments: args, input: args },
-      ],
+      content: [{ type: "toolCall", id: params.id, name: params.name, arguments: args }],
       api: attribution.api ?? "openai-chatgpt-responses",
       provider: attribution.provider,
       model: this.params.modelId,
       usage: ZERO_USAGE,
       stopReason: "toolUse",
       timestamp: this.nextTranscriptTimestamp(),
-    } as unknown as AgentMessage;
+    };
   }
 
-  private createToolResultMessage(
-    params: ToolTranscriptResultInput,
-  ): Extract<AgentMessage, { role: "toolResult" }> {
-    const text = truncateToolTranscriptText(params.text?.trim() || toolResultStatusText(params));
-    return {
+  private createToolResultMessage(params: ToolTranscriptResultInput) {
+    const response = this.rawNativeToolOutputByCallId.get(params.id);
+    const text = response ?? params.text ?? toolResultStatusText(params);
+    const message = {
       role: "toolResult",
       toolCallId: params.id,
       toolName: params.name,
       isError: params.isError,
-      content: [
-        {
-          type: "toolResult",
-          id: params.id,
-          name: params.name,
-          toolName: params.name,
-          toolCallId: params.id,
-          toolUseId: params.id,
-          tool_use_id: params.id,
-          content: text,
-          text,
-        },
-      ],
+      content: [{ type: "text", text }],
       ...(params.details !== undefined ? { details: params.details } : {}),
-      ...(params.resultContentSource
-        ? { __openclaw: { resultContentSource: params.resultContentSource } }
-        : {}),
       timestamp: this.nextTranscriptTimestamp(),
-    } as unknown as Extract<AgentMessage, { role: "toolResult" }>;
+    } satisfies Extract<AgentMessage, { role: "toolResult" }>;
+    return {
+      ...message,
+      __openclaw: {
+        ...(params.resultContentSource ? { resultContentSource: params.resultContentSource } : {}),
+        // rawResponseItem precedes Codex history normalization/truncation. It is
+        // better evidence than stdout, but not an exact model-request receipt.
+        toolOutput: {
+          source: response === undefined ? "execution" : "provider-response",
+          modelInput: "unverified",
+          ...(params.outcomeUnknown ? { outcome: "unknown" } : {}),
+          ...(response === undefined && params.captureTruncated ? { captureTruncated: true } : {}),
+        },
+      },
+    };
   }
 }
 

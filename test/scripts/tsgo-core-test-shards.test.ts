@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  findOversizedTsgoCoreTestShards,
   findTsgoCoreTestShardViolations,
   selectChangedTsgoCoreTestShards,
   TSGO_CORE_GRAPHS,
@@ -10,11 +12,94 @@ import {
   selectTsgoCoreTestStripe,
   TSGO_CORE_TEST_SHARDS,
 } from "../../scripts/lib/tsgo-core-test-shards.mts";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { isProcessAlive, waitForPidFile } from "../helpers/process-wait.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
+import {
+  materializeNativeCompiler,
+  overrideNativeFixtureExecutable,
+} from "./native-boundary-fixture.js";
+import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
+import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
 describe("tsgo core test shards", () => {
+  it("covers the repository test roots exactly once", () => {
+    const roots = (config: string) => {
+      const parsed = ts.getParsedCommandLineOfConfigFile(
+        path.resolve(config),
+        {},
+        {
+          ...ts.sys,
+          onUnRecoverableConfigFileDiagnostic: (diagnostic) => {
+            throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
+          },
+        },
+      );
+      if (!parsed) {
+        throw new Error(`Could not parse ${config}`);
+      }
+      expect(parsed.errors, config).toEqual([]);
+      expect(parsed.projectReferences ?? [], config).toEqual([]);
+      return parsed.fileNames
+        .filter((file) => /\.test\.tsx?$/u.test(file))
+        .map((file) => path.relative(process.cwd(), file).replaceAll(path.sep, "/"));
+    };
+
+    const shards = TSGO_CORE_TEST_SHARDS.map((shard) => ({
+      name: shard.name,
+      roots: roots(shard.config),
+    }));
+    expect(
+      findTsgoCoreTestShardViolations({
+        canonicalRoots: roots("test/tsconfig/tsconfig.core.test.json"),
+        shards,
+      }),
+    ).toEqual([]);
+    // Shard size is advisory: warn so a rebalance gets scheduled, never block a PR on it.
+    for (const warning of findOversizedTsgoCoreTestShards({ shards })) {
+      console.warn(`[tsgo-core-test-shards] warning: ${warning}`);
+    }
+    for (const [file, owner] of [
+      ["src/agents/sessions/settings-storage.test.ts", "agents-sessions"],
+      ["ui/src/pages/chat/chat-send-submit.test.ts", "ui-chat"],
+      ["ui/src/pages/config/config-page.test.ts", "ui-pages"],
+      ["src/gateway/server-methods/update-owner.test.ts", "gateway-methods"],
+      ["src/gateway/talk/client-authority.test.ts", "gateway-other"],
+      ["src/gateway/worker-environments/service.plugin-create.test.ts", "gateway-other"],
+      ["src/gateway/server-methods/environments.test.ts", "gateway-methods"],
+      ["src/commands/doctor-session-worktree-workspace.test.ts", "commands-doctor"],
+      ["src/commands/doctor/repair-sequencing.test.ts", "commands-doctor"],
+      ["src/commands/oauth-tls-preflight.doctor.test.ts", "commands-doctor"],
+      ["src/commands/onboard-agent.test.ts", "commands"],
+      ["src/agents/command/session-store.test.ts", "commands"],
+      ["src/cli/program/build-program.test.ts", "commands"],
+      ["src/cli/program/register.agent.test.ts", "commands"],
+      ["src/tui/tui-plugin-approvals.test.ts", "commands"],
+      ["src/wizard/setup.test.ts", "commands"],
+      ["src/cli/cron-cli.test.ts", "services-cron"],
+      ["src/cli/cron-output.process.test.ts", "services-cron"],
+      ["src/cli/cron-cli/register.cron-edit.test.ts", "services-cron"],
+      ["src/cron/service/run-recovery.observation.test.ts", "services-cron"],
+      ["src/cli/program/command-registry.test.ts", "commands"],
+      ["src/cli/update-cli.test.ts", "cli-update"],
+      ["src/cli/update-cli/update-command-config-fence.test.ts", "cli-update"],
+      ["src/gateway/worker-environments/admission.test.ts", "gateway-other"],
+      ["src/gateway/worker-environments/computer-transport.test.ts", "gateway-other"],
+      ["src/gateway/server-plugin-reload.recovery.test.ts", "gateway-server"],
+      ["src/gateway/server-methods/plugins.decisions.test.ts", "gateway-methods"],
+      ["src/plugins/loader.native-module-loader.test.ts", "plugins-platform"],
+      ["src/acp/session-new-ordering.test.ts", "plugins-platform"],
+      ["src/system-agent/operations.test.ts", "services"],
+      ["src/system-agent/operations.gateway-lifecycle.test.ts", "services"],
+    ] as const) {
+      expect(
+        shards.filter((shard) => shard.roots.includes(file)).map((shard) => shard.name),
+        file,
+      ).toEqual([owner]);
+    }
+  });
+
   it("stripes partition the full shard list exactly once", () => {
     for (const stripeCount of [1, 2, 3, 5]) {
       const striped = Array.from(
@@ -34,13 +119,25 @@ describe("tsgo core test shards", () => {
     expect(selectTsgoCoreTestStripe("0/2")).toBeUndefined();
     expect(selectTsgoCoreTestStripe("3/2")).toBeUndefined();
     expect(selectTsgoCoreTestStripe("src")).toBeUndefined();
+    expect(selectTsgoCoreTestStripe("2-1/5")).toBeUndefined();
+    expect(selectTsgoCoreTestStripe("1-6/5")).toBeUndefined();
+    const paired = ["1-2/5", "3-4/5", "5/5"].flatMap(
+      (stripe) => selectTsgoCoreTestStripe(stripe) ?? [],
+    );
+    expect(paired.map((shard) => shard.name).toSorted()).toEqual(
+      TSGO_CORE_TEST_SHARDS.map((shard) => shard.name).toSorted(),
+    );
+    expect(selectTsgoCoreTestStripe("1-2/5")).toEqual(
+      TSGO_CORE_TEST_SHARDS.filter((shard) =>
+        ["1/5", "2/5"].some((stripe) => selectTsgoCoreTestStripe(stripe)?.includes(shard)),
+      ),
+    );
   });
 
-  it("accepts an exact once-only partition within the root budget", () => {
+  it("accepts an exact once-only partition", () => {
     expect(
       findTsgoCoreTestShardViolations({
         canonicalRoots: ["src/a.test.ts", "src/b.test.ts"],
-        maxRoots: 1,
         shards: [
           { name: "a", roots: ["src/a.test.ts"] },
           { name: "b", roots: ["src/b.test.ts"] },
@@ -49,19 +146,32 @@ describe("tsgo core test shards", () => {
     ).toEqual([]);
   });
 
-  it("reports missing, duplicate, extra, and oversized shard roots", () => {
+  it("warns about oversized shards without treating them as violations", () => {
+    const shards = [
+      { name: "big", roots: ["src/a.test.ts", "src/b.test.ts"] },
+      { name: "small", roots: ["src/c.test.ts"] },
+    ];
+    expect(findOversizedTsgoCoreTestShards({ maxRoots: 1, shards })).toEqual([
+      "big: 2 test roots exceeds the advisory 1 limit; rebalance when convenient",
+    ]);
+    expect(
+      findTsgoCoreTestShardViolations({
+        canonicalRoots: ["src/a.test.ts", "src/b.test.ts", "src/c.test.ts"],
+        shards,
+      }),
+    ).toEqual([]);
+  });
+
+  it("reports missing, duplicate, and extra shard roots", () => {
     expect(
       findTsgoCoreTestShardViolations({
         canonicalRoots: ["src/a.test.ts", "src/b.test.ts", "src/missing.test.ts"],
-        maxRoots: 1,
         shards: [
           { name: "first", roots: ["src/a.test.ts", "src/b.test.ts"] },
           { name: "second", roots: ["src/b.test.ts", "src/extra.test.ts"] },
         ],
       }),
     ).toEqual([
-      "first: 2 test roots exceeds the 1 limit",
-      "second: 2 test roots exceeds the 1 limit",
       "assigned 2 times (first, second): src/b.test.ts",
       "unassigned: src/missing.test.ts",
       "not in the canonical core-test graph (second): src/extra.test.ts",
@@ -85,6 +195,68 @@ describe("tsgo core test shards", () => {
     expect(selectTsgoCoreTestShards()).not.toContainEqual(
       expect.objectContaining({ name: "extension-declarations" }),
     );
+  });
+
+  it("keeps plugin browser source and tests in the extension type graphs", () => {
+    const root = lifetime.createTempDir("openclaw-browser-type-graphs-");
+    const coreConfigs = [
+      "tsconfig.ui.json",
+      "test/tsconfig/tsconfig.core.test.json",
+      "test/tsconfig/tsconfig.core.test.ui-other.json",
+    ];
+    const write = (file: string, content: string) => {
+      const target = path.join(root, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, content);
+    };
+    for (const config of [
+      "tsconfig.json",
+      "tsconfig.extensions.json",
+      "test/tsconfig/tsconfig.test.json",
+      "test/tsconfig/tsconfig.extensions.test.json",
+      "test/tsconfig/tsconfig.core.test.shard.json",
+      ...coreConfigs,
+    ]) {
+      write(config, fs.readFileSync(config, "utf8"));
+    }
+    const browserSource = "extensions/fixture/browser/index.ts";
+    const browserTest = "extensions/fixture/browser/index.test.ts";
+    for (const file of [
+      browserSource,
+      browserTest,
+      "extensions/fixture/index.ts",
+      "extensions/fixture/index.test.ts",
+      "ui/src/main.ts",
+      "ui/src/fixture.test.ts",
+    ]) {
+      write(file, "export {};\n");
+    }
+    const roots = (config: string) => {
+      const parsed = ts.getParsedCommandLineOfConfigFile(
+        path.join(root, config),
+        {},
+        {
+          ...ts.sys,
+          onUnRecoverableConfigFileDiagnostic: (diagnostic) => {
+            throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
+          },
+        },
+      );
+      if (!parsed) {
+        throw new Error(`Could not parse ${config}`);
+      }
+      expect(parsed.errors, config).toEqual([]);
+      return parsed.fileNames.map((file) => path.relative(root, file).replaceAll(path.sep, "/"));
+    };
+
+    expect(roots("tsconfig.extensions.json")).toContain(browserSource);
+    expect(roots("test/tsconfig/tsconfig.extensions.test.json")).toContain(browserTest);
+    for (const config of coreConfigs) {
+      expect(
+        roots(config).filter((file) => file.startsWith("extensions/")),
+        config,
+      ).toEqual([]);
+    }
   });
 
   it("routes aggregate package aliases through bounded processes", () => {
@@ -115,6 +287,15 @@ describe("changed core test graph selection", () => {
       "agents-other",
       "agents-tools",
     ]);
+  });
+
+  it("rejects a plugin browser test even when the inventory claims core ownership", () => {
+    const pluginTest = "extensions/example/browser/page.test.ts";
+    const graphs = inventory();
+    const uiGraph = graphs.find((graph) => graph.name === "core-test-ui-other")!;
+    uiGraph.roots = [pluginTest];
+    uiGraph.files = [pluginTest];
+    expect(selectChangedTsgoCoreTestShards([pluginTest], graphs)).toBeUndefined();
   });
 
   it.for([
@@ -164,6 +345,7 @@ it.runIf(process.platform !== "win32")(
     lifetime.run(async () => {
       const sourceRoot = process.cwd();
       const root = fs.realpathSync(lifetime.createTempDir("openclaw-changed-types-"));
+      const native = materializeNativeCompiler(root);
       const write = (name: string, content: string) => {
         const file = path.join(root, name);
         fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -205,6 +387,7 @@ it.runIf(process.platform !== "win32")(
               noEmit: true,
               strict: true,
               types: [],
+              lib: ["es5"],
               module: "nodenext",
               target: "es2022",
               incremental: true,
@@ -214,32 +397,53 @@ it.runIf(process.platform !== "win32")(
           }),
         );
       }
+      fs.unlinkSync(path.join(root, "node_modules/.bin/tsgo"));
       const compiler = write(
         "node_modules/.bin/tsgo",
         `#!/usr/bin/env node
 const fs=require('node:fs'),path=require('node:path'),{spawnSync}=require('node:child_process');
 const args=process.argv.slice(2);
 fs.appendFileSync(path.join(process.cwd(),'compiler-events.jsonl'),JSON.stringify(args)+'\\n');
-const result=spawnSync(process.execPath,[${JSON.stringify(path.join(sourceRoot, "node_modules/@typescript/native-preview/bin/tsgo"))},...args],{stdio:'inherit'});
+const result=spawnSync(${JSON.stringify(native)},args,{stdio:'inherit'});
 process.exit(result.status??1);
 `,
       );
       fs.chmodSync(compiler, 0o755);
-      const driver = write(
-        "check.mts",
-        `
-import {createChangedCoreTestCheck} from './scripts/run-tsgo-core-test-shards.mts';
-const check=createChangedCoreTestCheck([${JSON.stringify(leaf)}],process.env);
-const boundary=await check.checkBoundary();
-process.exitCode=boundary || await check.checkTypes();
-`,
+      overrideNativeFixtureExecutable(root, compiler);
+      const driver = path.join(root, "scripts/run-tsgo-core-test-shards.mts");
+      const preparedDriver = resolveRuntimeWorkerUrl(toolingMtsEntrypoints.tsgoCoreTestShards);
+      const env = preparedScriptWrapperEnv(
+        (
+          [
+            ["run-tsgo-core-test-shards.mts", toolingMtsEntrypoints.tsgoCoreTestShards],
+            ["check-tsgo-core-boundary.mts", toolingMtsEntrypoints.tsgoCoreBoundary],
+            ["run-tsgo.mts", toolingMtsEntrypoints.tsgo],
+          ] as const
+        ).map(([name, entry]): readonly [URL, URL] => {
+          const source = pathToFileURL(path.join(root, "scripts", name));
+          const prepared = resolveRuntimeWorkerUrl(entry);
+          return [source, prepared.pathname.endsWith(".mts") ? source : prepared];
+        }),
+        { ...process.env, OPENCLAW_LOCAL_CHECK: "0" },
+        [
+          [
+            new URL("./lib/tsdown-declaration-boundary.mts", preparedDriver),
+            resolveRuntimeWorkerUrl(toolingMtsEntrypoints.tsdownDeclarationBoundary),
+          ],
+        ],
       );
-      const check = async () => {
+      const changedArgs = (paths: string[]) => ["--changed-paths-json", JSON.stringify(paths)];
+      const check = async (paths = [leaf]) => {
         write("compiler-events.jsonl", "");
         const result = await lifetime.track(
           runNodeScript(
-            ["--import", pathToFileURL(path.join(sourceRoot, "scripts/tsx.mjs")).href, driver],
-            { ...process.env, OPENCLAW_LOCAL_CHECK: "0" },
+            [
+              "--import",
+              pathToFileURL(path.join(sourceRoot, "scripts/tsx.mjs")).href,
+              driver,
+              ...changedArgs(paths),
+            ],
+            env,
             undefined,
             { cwd: root, signal, requireProcessTreeExit: true },
           ),
@@ -252,9 +456,10 @@ process.exitCode=boundary || await check.checkTypes();
         expect(calls.filter((args) => args.includes("--listFilesOnly"))).toHaveLength(
           TSGO_CORE_GRAPHS.length,
         );
+        // Discovery and diagnostic checks both use project mode.
         const builds = calls
-          .filter((args) => args.includes("-b"))
-          .map((args) => args[args.indexOf("-b") + 1]);
+          .filter((args) => !args.includes("--listFilesOnly") && !args.includes("--showConfig"))
+          .map((args) => args[args.indexOf("-p") + 1]);
         return { result, builds };
       };
       const initial = await check();
@@ -270,6 +475,10 @@ process.exitCode=boundary || await check.checkTypes();
         "test/tsconfig/tsconfig.core.test.agents-other.json",
         "test/tsconfig/tsconfig.core.test.agents-tools.json",
       ]);
+      // A removed rename source has no current root: keep the full canonical check.
+      const renamed = await check([leaf, "src/agents/old.test.ts"]);
+      expect(renamed.result.status, renamed.result.stderr).toBe(0);
+      expect(renamed.builds).toEqual(TSGO_CORE_TEST_SHARDS.map((shard) => shard.config));
       write(leaf, "export type Value = string;\n");
       const brokenConsumer = await check();
       expect(brokenConsumer.result.status).not.toBe(0);
@@ -295,8 +504,13 @@ setInterval(()=>{},1000);
       const cancel = new AbortController();
       const running = lifetime.track(
         runNodeScript(
-          ["--import", pathToFileURL(path.join(sourceRoot, "scripts/tsx.mjs")).href, driver],
-          { ...process.env, OPENCLAW_LOCAL_CHECK: "0" },
+          [
+            "--import",
+            pathToFileURL(path.join(sourceRoot, "scripts/tsx.mjs")).href,
+            driver,
+            ...changedArgs([leaf]),
+          ],
+          env,
           undefined,
           {
             cwd: root,

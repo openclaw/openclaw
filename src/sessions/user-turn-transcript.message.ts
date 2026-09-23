@@ -61,6 +61,9 @@ export function buildPersistedUserTurnMediaInputsFromFields(
     if (fact.fileName) {
       media.fileName = fact.fileName;
     }
+    if (fact.origin) {
+      media.origin = fact.origin;
+    }
     if (fact.sizeBytes !== undefined) {
       media.sizeBytes = fact.sizeBytes;
     }
@@ -158,12 +161,17 @@ export function buildLateResolvedMediaMessage(params: {
     typeof resolvedIdempotencyKey === "string" && resolvedIdempotencyKey.length > 0
       ? `${resolvedIdempotencyKey}:late-media`
       : `late-media:${typeof resolvedTimestamp === "number" ? resolvedTimestamp : Date.now()}`;
+  const metadata: Record<string, unknown> = {
+    ...readOpenClawMessageMeta(params.resolvedMessage),
+    lateMedia: true,
+  };
+  delete metadata.humanMentions;
   // Like #111204, mark late-media scaffolding as wire-only so UIs never render it.
   return {
     ...params.resolvedMessage,
     content,
     idempotencyKey,
-    __openclaw: { ...readOpenClawMessageMeta(params.resolvedMessage), lateMedia: true },
+    __openclaw: metadata,
   };
 }
 

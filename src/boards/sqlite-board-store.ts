@@ -1,108 +1,87 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { Result } from "@openclaw/normalization-core/result";
 import type {
   BoardOp,
   BoardSnapshot,
   BoardWidgetMaterializedPutParams,
 } from "../../packages/gateway-protocol/src/index.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
+import { resolveStateDir } from "../config/state-dir.js";
 import {
-  runSqliteDeferredTransactionSync,
-  runSqliteImmediateTransactionSync,
-} from "../infra/sqlite-transaction.js";
-import { ensureOpenClawAgentBoardSchemaInTransaction } from "../state/openclaw-agent-board-schema.js";
+  collectErrorGraphCandidates,
+  extractErrorCode,
+  formatErrorMessage,
+  readErrorName,
+} from "../infra/errors.js";
+import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { isSqliteWorkerError, type SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
-  openOpenClawAgentDatabase,
+  getOpenClawAgentDatabaseIfOpen,
+  resolveOpenClawAgentSqlitePath,
+  withOpenClawAgentDatabaseAsync,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { applyBoardOps, BoardValidationError, normalizeBoardLayout } from "./board-layout.js";
+import { openOpenClawAgentSqliteWorkerStore } from "../state/openclaw-agent-worker-store.js";
+import {
+  runOpenClawAgentWorkerWrite,
+  runOpenClawAgentWriteAdmission,
+} from "../state/openclaw-agent-write-admission.js";
+import { BoardValidationError } from "./board-layout.js";
 import {
   cloneBoardSnapshot,
-  createBoardWidgetPutResult,
-  createBoardGrantSnapshot,
-  createBoardWidgetPutSnapshot,
   normalizeBoardWidgetPutParams,
   type BoardSessionTarget,
   type BoardStore,
+  type BoardWriteOptions,
+  type BoardWidgetWriteOptions,
+  type BoardWidgetDocument,
   type BoardSnapshotWithHtmlViewMetadata,
-  type BoardWidgetHtmlDocument,
-  type BoardWidgetHtmlViewMetadata,
   type BoardWidgetMcpAppDocument,
-  type BoardWidgetRegisteredDocument,
 } from "./board-store.js";
+import { rowToBoardWidgetDocument } from "./sqlite-board-codec.js";
+import type { BoardWriteOperations, BoardWriteOutcome } from "./sqlite-board-operations.js";
 import {
-  BOARD_WIDGET_SNAPSHOT_COLUMNS,
-  createBoardWidgetContentFields,
-  effectiveGrantState,
-  parseDescriptor,
-  parseManifest,
-  parsePluginContent,
-  resolveSqliteBoardWidgetPutParams,
-  rowToRegisteredDocument,
-  rowToTab,
-  rowToHtmlViewMetadata,
-  rowToWidget,
-  serializeManifest,
-  updateManifestHeightMode,
-  type SelectedBoardTabRow,
-  type SelectedBoardWidgetRow,
-  type SelectedBoardWidgetSnapshotRow,
-} from "./sqlite-board-codec.js";
+  ensureBoardSchema,
+  hasBoardSession,
+  readBoardSnapshotWithHtmlViewMetadata,
+  readBoardWidgetRow,
+  applyBoardOpsToDatabase,
+  putBoardWidgetInDatabase,
+  grantBoardWidgetInDatabase,
+} from "./sqlite-board-store.kernel.js";
 
-type BoardDatabase = Pick<
-  OpenClawAgentKyselyDatabase,
-  "board_tabs" | "board_widgets" | "session_nodes"
->;
-type BoardDatabaseHandle = Pick<OpenClawAgentDatabase, "db" | "path">;
+const log = createSubsystemLogger("boards/store");
 
-type StoredBoard = {
-  snapshot: BoardSnapshot;
-  tabRows: SelectedBoardTabRow[];
-  widgetRows: SelectedBoardWidgetSnapshotRow[];
-  htmlViewMetadata: ReadonlyMap<string, BoardWidgetHtmlViewMetadata>;
-};
-
-const ensuredBoardDatabases = new WeakSet<DatabaseSync>();
-const presentBoardDatabases = new WeakSet<DatabaseSync>();
-
-// Read-only connections cannot run the lazy DDL, and a pre-existing v13 DB has
-// no board tables until the first write. Reads must treat that as "no boards",
-// not "no such table".
-function boardTablesPresent(database: Pick<OpenClawAgentDatabase, "db">): boolean {
-  if (ensuredBoardDatabases.has(database.db) || presentBoardDatabases.has(database.db)) {
-    return true;
+function restoreBoardError(error: unknown): unknown {
+  if (
+    error instanceof Error &&
+    error.name === "BoardValidationError" &&
+    "code" in error &&
+    (error.code === "conflict" || error.code === "invalid_operation" || error.code === "not_found")
+  ) {
+    return new BoardValidationError(error.code, error.message);
   }
-  const row = database.db // sqlite-allow-raw: catalog probe before Kysely table access.
-    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'board_widgets'")
-    .get();
-  if (!row) {
-    return false;
-  }
-  presentBoardDatabases.add(database.db);
-  return true;
+  return error;
 }
 
-function ensureBoardSchema(database: OpenClawAgentDatabase): void {
-  if (ensuredBoardDatabases.has(database.db)) {
-    return;
-  }
-  if (database.db.isTransaction) {
-    throw new Error("board schema must be ensured before the write transaction starts");
-  }
-  runSqliteImmediateTransactionSync(
-    database.db,
-    () => ensureOpenClawAgentBoardSchemaInTransaction(database.db),
-    {
-      databaseLabel: database.path,
-      operationLabel: "board.ensure-schema",
-    },
+/** Invalidation never grants retries; transported post-execution failures are plain Errors. */
+function hasUnknownBoardWriteOutcome(error: unknown): boolean {
+  return collectErrorGraphCandidates(error, (current) =>
+    current instanceof AggregateError ? [current.cause] : [],
+  ).some(
+    (current) =>
+      isSqliteWorkerError(current, "outcome-unknown") ||
+      (current instanceof Error &&
+        readErrorName(current) === "SqliteWorkerError" &&
+        extractErrorCode(current) === "outcome-unknown"),
   );
-  // Additive-surface rule: fold this into the next natural schema bump, then delete this lazy ensure.
-  ensuredBoardDatabases.add(database.db);
-  presentBoardDatabases.add(database.db);
 }
 
 type SqliteBoardStoreOptions = {
@@ -114,241 +93,7 @@ type SqliteBoardStoreOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
-function readStoredBoard(database: BoardDatabaseHandle, sessionKey: string): StoredBoard {
-  // Write callers already hold an IMMEDIATE transaction; the shared helper nests
-  // this consistent read as a savepoint instead of issuing a second BEGIN.
-  return runSqliteDeferredTransactionSync(
-    database.db,
-    () => {
-      const db = getNodeSqliteKysely<BoardDatabase>(database.db);
-      const tabRows = executeSqliteQuerySync(
-        database.db,
-        db
-          .selectFrom("board_tabs")
-          .selectAll()
-          .where("session_key", "=", sessionKey)
-          .orderBy("position", "asc")
-          .orderBy("tab_id", "asc"),
-      ).rows as SelectedBoardTabRow[];
-      const selectedWidgetRows = executeSqliteQuerySync(
-        database.db,
-        db
-          .selectFrom("board_widgets")
-          .select(BOARD_WIDGET_SNAPSHOT_COLUMNS)
-          .where("session_key", "=", sessionKey)
-          .orderBy("tab_id", "asc")
-          .orderBy("position", "asc")
-          .orderBy("name", "asc"),
-      ).rows as SelectedBoardWidgetSnapshotRow[];
-      const parsedWidgetRows = selectedWidgetRows.map((row) => ({
-        row,
-        manifest: parseManifest(row.manifest),
-      }));
-      // Rows without the canonical authority snapshot predate this unreleased contract.
-      // Keep them out of runtime state so they can never mint an interactive lease.
-      const admittedWidgetRows = parsedWidgetRows.filter(({ row, manifest }) => {
-        if (row.content_kind !== "mcp-app") {
-          return true;
-        }
-        return manifest.mcpAppInteractive !== undefined && manifest.mcpAppInstanceId !== undefined;
-      });
-      const htmlViewMetadata = new Map<string, BoardWidgetHtmlViewMetadata>();
-      for (const { row, manifest } of admittedWidgetRows) {
-        const metadata = rowToHtmlViewMetadata(row, manifest);
-        if (metadata) {
-          htmlViewMetadata.set(row.name, metadata);
-        }
-      }
-      const layout = normalizeBoardLayout({
-        tabs: tabRows.map(rowToTab),
-        widgets: admittedWidgetRows.map(({ row, manifest }) => rowToWidget(row, manifest)),
-      });
-      return {
-        snapshot: {
-          sessionKey,
-          // Board existence is row-defined; deleting the last empty tab removes
-          // the board, so a later read starts again at the empty revision.
-          revision: tabRows.reduce((revision, row) => Math.max(revision, row.revision), 0),
-          ...layout,
-        },
-        tabRows,
-        widgetRows: admittedWidgetRows.map(({ row }) => row),
-        htmlViewMetadata,
-      };
-    },
-    { databaseLabel: database.path, operationLabel: "board.read" },
-  );
-}
-
-function rowToHtmlDocument(
-  row: Pick<
-    SelectedBoardWidgetRow,
-    "content_kind" | "html" | "revision" | "sha256" | "view_generation" | "grant_state" | "manifest"
-  >,
-): BoardWidgetHtmlDocument | undefined {
-  if (row.content_kind !== "html" || row.html === null || row.view_generation === null) {
-    return undefined;
-  }
-  const manifest = parseManifest(row.manifest);
-  const declared = manifest.declared;
-  return {
-    html: Buffer.from(row.html).toString("utf8"),
-    revision: row.revision,
-    sha256: row.sha256,
-    viewGeneration: row.view_generation,
-    grantState: effectiveGrantState(row.grant_state, manifest),
-    ...(declared ? { declared } : {}),
-  };
-}
-
-function upsertTabs(
-  database: BoardDatabaseHandle,
-  previous: StoredBoard,
-  next: BoardSnapshot,
-): void {
-  const db = getNodeSqliteKysely<BoardDatabase>(database.db);
-  const createdBy = new Map(previous.tabRows.map((row) => [row.tab_id, row.created_by]));
-  for (const tab of next.tabs) {
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .insertInto("board_tabs")
-        .values({
-          session_key: next.sessionKey,
-          tab_id: tab.tabId,
-          title: tab.title,
-          position: tab.position,
-          chat_dock: tab.chatDock,
-          created_by: createdBy.get(tab.tabId) ?? "agent",
-          revision: next.revision,
-        })
-        .onConflict((conflict) =>
-          conflict.columns(["session_key", "tab_id"]).doUpdateSet({
-            title: tab.title,
-            position: tab.position,
-            chat_dock: tab.chatDock,
-            revision: next.revision,
-          }),
-        ),
-    );
-  }
-}
-
-function updateWidgetLayouts(
-  database: BoardDatabaseHandle,
-  snapshot: BoardSnapshot,
-  updatedAt: number,
-): void {
-  const db = getNodeSqliteKysely<BoardDatabase>(database.db);
-  for (const widget of snapshot.widgets) {
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .updateTable("board_widgets")
-        .set({
-          tab_id: widget.tabId,
-          title: widget.title ?? null,
-          size_w: widget.sizeW,
-          size_h: widget.sizeH,
-          position: widget.position,
-          updated_at: updatedAt,
-        })
-        .where("session_key", "=", snapshot.sessionKey)
-        .where("name", "=", widget.name),
-    );
-  }
-}
-
-function updateWidgetHeightModes(
-  database: BoardDatabaseHandle,
-  previous: StoredBoard,
-  ops: readonly BoardOp[],
-): void {
-  const db = getNodeSqliteKysely<BoardDatabase>(database.db);
-  for (const op of ops) {
-    if (op.kind !== "widget_resize") {
-      continue;
-    }
-    const row = previous.widgetRows.find((candidate) => candidate.name === op.name);
-    if (!row) {
-      continue;
-    }
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .updateTable("board_widgets")
-        .set({ manifest: updateManifestHeightMode(row.manifest, op.heightMode ?? "fixed") })
-        .where("session_key", "=", previous.snapshot.sessionKey)
-        .where("name", "=", op.name),
-    );
-  }
-}
-
-function deleteRemovedWidgets(
-  database: BoardDatabaseHandle,
-  previous: StoredBoard,
-  next: BoardSnapshot,
-): void {
-  const db = getNodeSqliteKysely<BoardDatabase>(database.db);
-  const widgetNames = new Set(next.widgets.map((widget) => widget.name));
-  for (const row of previous.widgetRows) {
-    if (!widgetNames.has(row.name)) {
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .deleteFrom("board_widgets")
-          .where("session_key", "=", next.sessionKey)
-          .where("name", "=", row.name),
-      );
-    }
-  }
-}
-
-function deleteRemovedTabs(
-  database: BoardDatabaseHandle,
-  previous: StoredBoard,
-  next: BoardSnapshot,
-): void {
-  const db = getNodeSqliteKysely<BoardDatabase>(database.db);
-  const tabIds = new Set(next.tabs.map((tab) => tab.tabId));
-  for (const row of previous.tabRows) {
-    if (!tabIds.has(row.tab_id)) {
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .deleteFrom("board_tabs")
-          .where("session_key", "=", next.sessionKey)
-          .where("tab_id", "=", row.tab_id),
-      );
-    }
-  }
-}
-
-function hasSession(database: BoardDatabaseHandle, sessionKey: string): boolean {
-  const db = getNodeSqliteKysely<BoardDatabase>(database.db);
-  const row = executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("session_nodes")
-      .select("entry_json")
-      .where("session_key", "=", sessionKey)
-      .limit(1),
-  ).rows[0];
-  if (!row) {
-    return false;
-  }
-  try {
-    const entry = JSON.parse(row.entry_json) as unknown;
-    return Boolean(
-      entry &&
-      typeof entry === "object" &&
-      !Array.isArray(entry) &&
-      typeof (entry as { sessionId?: unknown }).sessionId === "string",
-    );
-  } catch {
-    return false;
-  }
-}
+type ResolvedBoardSession = ReturnType<SqliteBoardStoreOptions["resolveSession"]>;
 
 function emptyBoardSnapshot(sessionKey: string): BoardSnapshot {
   return { sessionKey, revision: 0, tabs: [], widgets: [] };
@@ -357,25 +102,31 @@ function emptyBoardSnapshot(sessionKey: string): BoardSnapshot {
 export class SqliteBoardStore implements BoardStore {
   constructor(private readonly options: SqliteBoardStoreOptions) {}
 
-  private resolve(target: BoardSessionTarget): {
-    agentId: string;
-    path?: string;
-    sessionKey: string;
-  } {
+  private resolve(target: BoardSessionTarget): ResolvedBoardSession {
     return this.options.resolveSession(target);
   }
 
-  private requireExistingSession(resolved: {
-    agentId: string;
-    path?: string;
-    sessionKey: string;
-  }): void {
+  private assertTargetCurrent(target: BoardSessionTarget, resolved: ResolvedBoardSession): void {
+    const current = this.resolve(target);
+    if (
+      current.agentId !== resolved.agentId ||
+      current.path !== resolved.path ||
+      current.sessionKey !== resolved.sessionKey
+    ) {
+      throw new BoardValidationError("invalid_operation", "board session changed; retry");
+    }
+  }
+
+  private requireExistingSession(
+    resolved: { agentId: string; path?: string; sessionKey: string },
+    env: NodeJS.ProcessEnv,
+  ): void {
     const result = withOpenClawAgentDatabaseReadOnly(
-      (database) => hasSession(database, resolved.sessionKey),
+      (database) => hasBoardSession(database, resolved.sessionKey),
       {
         agentId: resolved.agentId,
         ...(resolved.path ? { path: resolved.path } : {}),
-        env: this.options.env,
+        env,
       },
     );
     if (!result.found || !result.value) {
@@ -386,50 +137,189 @@ export class SqliteBoardStore implements BoardStore {
     }
   }
 
-  private prepareWrite(target: BoardSessionTarget): {
-    database: OpenClawAgentDatabase;
-    resolved: { agentId: string; path?: string; sessionKey: string };
-  } {
+  private write<T>(
+    target: BoardSessionTarget,
+    options: BoardWriteOptions | undefined,
+    operationLabel: string,
+    native: (database: OpenClawAgentDatabase, sessionKey: string) => T,
+    worker: (
+      scope: Pick<SqliteWorkerStore<BoardWriteOperations>, "execute">,
+      sessionKey: string,
+    ) => Promise<BoardWriteOutcome<T>>,
+    prepare?: () => Promise<void>,
+  ): Promise<T> {
     const resolved = this.resolve(target);
-    this.requireExistingSession(resolved);
-    const database = openOpenClawAgentDatabase({
-      agentId: resolved.agentId,
-      ...(resolved.path ? { path: resolved.path } : {}),
-      env: this.options.env,
+    const env = cloneEnvWithPlatformSemantics(this.options.env ?? process.env);
+    env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+    const databaseOptions = {
+      ...resolved,
+      env,
+      path: resolveOpenClawAgentSqlitePath({ ...resolved, env }),
+    };
+    const assertCurrent = () => {
+      options?.assertCurrent?.();
+      this.assertTargetCurrent(target, resolved);
+    };
+    const assertOpenCurrent = () => {
+      assertCurrent();
+      this.requireExistingSession({ ...resolved, path: databaseOptions.path }, env);
+    };
+    assertOpenCurrent();
+    return runOpenClawAgentWriteAdmission(
+      databaseOptions,
+      () =>
+        withOpenClawAgentDatabaseAsync(
+          databaseOptions,
+          async (database) => {
+            if (prepare) {
+              await prepare();
+            }
+            assertCurrent();
+            if (prepare && getOpenClawAgentDatabaseIfOpen(databaseOptions) !== database) {
+              throw new BoardValidationError(
+                "invalid_operation",
+                "board database closed or changed; retry",
+              );
+            }
+            // First-use schema work must precede the worker's strict native-open validation.
+            ensureBoardSchema(database);
+            if (typeof readOpenClawAgentDatabaseIdentity(database).identity === "symbol") {
+              return runOpenClawAgentWriteTransaction(
+                (current) => {
+                  assertCurrent();
+                  return native(current, resolved.sessionKey);
+                },
+                databaseOptions,
+                { operationLabel },
+              );
+            }
+            const publication = await openOpenClawAgentSqliteWorkerStore<BoardWriteOperations>(
+              databaseOptions,
+              database.db,
+              {
+                moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.boardStore),
+                input: undefined,
+              },
+            );
+            let outcome: Result<T, unknown>;
+            try {
+              const value = await publication.run(async (scope) => {
+                let committed: BoardWriteOutcome<T>;
+                try {
+                  committed = await worker(scope, resolved.sessionKey);
+                } catch (error) {
+                  if (hasUnknownBoardWriteOutcome(error)) {
+                    sessionChanges.emit({
+                      sessionKey: resolved.sessionKey,
+                      storePath: database.path,
+                    });
+                  }
+                  throw error;
+                }
+                // Committed invalidation belongs to the original store, even after caller revocation.
+                sessionChanges.emitBatch(committed.changes);
+                return committed.value;
+              }, assertCurrent);
+              outcome = { ok: true, value };
+            } catch (error) {
+              outcome = { ok: false, error: restoreBoardError(error) };
+            }
+            let cleanup: Result<void, unknown>;
+            try {
+              await publication.close();
+              cleanup = { ok: true, value: undefined };
+            } catch (error) {
+              cleanup = { ok: false, error };
+            }
+            if (!outcome.ok) {
+              if (!cleanup.ok) {
+                throw new AggregateError(
+                  [outcome.error, cleanup.error],
+                  "Board publication and cleanup failed",
+                  { cause: outcome.error },
+                );
+              }
+              throw outcome.error;
+            }
+            if (!cleanup.ok) {
+              try {
+                log.warn(
+                  `Board publication completed before cleanup failed: ${formatErrorMessage(cleanup.error)}`,
+                );
+              } catch {
+                // The resource owner retains cleanup; diagnostics cannot reverse a committed result.
+              }
+            }
+            return outcome.value;
+          },
+          assertOpenCurrent,
+        ),
+      true,
+    );
+  }
+
+  async getSnapshot(target: BoardSessionTarget): Promise<BoardSnapshot> {
+    return this.readSnapshotWithHtmlViewMetadata(this.resolve(target)).snapshot;
+  }
+
+  async getSnapshotWithHtmlViewMetadata(
+    target: BoardSessionTarget,
+  ): Promise<BoardSnapshotWithHtmlViewMetadata> {
+    return this.readSnapshotWithHtmlViewMetadata(this.resolve(target));
+  }
+
+  private async consumeRead<T>(
+    target: BoardSessionTarget,
+    consume: (resolved: ResolvedBoardSession, env: NodeJS.ProcessEnv) => T,
+  ): Promise<Awaited<T>> {
+    const resolved = this.resolve(target);
+    const env = cloneEnvWithPlatformSemantics(this.options.env ?? process.env);
+    env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+    const captured = {
+      ...resolved,
+      env,
+      path: resolveOpenClawAgentSqlitePath({ ...resolved, env }),
+    };
+    // Consumer continuations retain caller authority, not this read turn's reentrant grant.
+    const runInCallerContext = AsyncLocalStorage.snapshot();
+    // The reservation also queues writes started by consume instead of lending it reentrancy.
+    const result = await runOpenClawAgentWorkerWrite(captured, async () => {
+      this.assertTargetCurrent(target, resolved);
+      return { value: runInCallerContext(consume, captured, env) };
     });
-    ensureBoardSchema(database);
-    return { database, resolved };
+    // External consumer work must not hold the database's FIFO lane.
+    return await result.value;
   }
 
-  getSnapshot(target: BoardSessionTarget): BoardSnapshot {
-    const resolved = this.resolve(target);
-    const result = withOpenClawAgentDatabaseReadOnly(
-      (database) =>
-        hasSession(database, resolved.sessionKey) && boardTablesPresent(database)
-          ? readStoredBoard(database, resolved.sessionKey).snapshot
-          : undefined,
-      {
-        agentId: resolved.agentId,
-        ...(resolved.path ? { path: resolved.path } : {}),
-        env: this.options.env,
-      },
-    );
-    return cloneBoardSnapshot(
-      result.found && result.value ? result.value : emptyBoardSnapshot(resolved.sessionKey),
+  async useSnapshot<T>(
+    target: BoardSessionTarget,
+    consume: (snapshot: BoardSnapshot) => T,
+  ): Promise<Awaited<T>> {
+    return this.consumeRead(target, (resolved, env) =>
+      consume(this.readSnapshotWithHtmlViewMetadata(resolved, env).snapshot),
     );
   }
 
-  getSnapshotWithHtmlViewMetadata(target: BoardSessionTarget): BoardSnapshotWithHtmlViewMetadata {
-    const resolved = this.resolve(target);
+  async useWidgetDocument<T>(
+    target: BoardSessionTarget,
+    name: string,
+    consume: (document: BoardWidgetDocument | undefined) => T,
+  ): Promise<Awaited<T>> {
+    return this.consumeRead(target, (resolved, env) =>
+      consume(this.readWidgetDocument(resolved, name, undefined, env)),
+    );
+  }
+
+  private readSnapshotWithHtmlViewMetadata(
+    resolved: ResolvedBoardSession,
+    env = this.options.env,
+  ): BoardSnapshotWithHtmlViewMetadata {
     const result = withOpenClawAgentDatabaseReadOnly(
-      (database) =>
-        hasSession(database, resolved.sessionKey) && boardTablesPresent(database)
-          ? readStoredBoard(database, resolved.sessionKey)
-          : undefined,
+      (database) => readBoardSnapshotWithHtmlViewMetadata(database, resolved.sessionKey),
       {
         agentId: resolved.agentId,
         ...(resolved.path ? { path: resolved.path } : {}),
-        env: this.options.env,
+        env,
       },
     );
     const stored = result.found ? result.value : undefined;
@@ -439,273 +329,110 @@ export class SqliteBoardStore implements BoardStore {
     };
   }
 
-  applyOps(target: BoardSessionTarget, ops: readonly BoardOp[]): BoardSnapshot {
+  async applyOps(
+    target: BoardSessionTarget,
+    ops: readonly BoardOp[],
+    options?: BoardWriteOptions,
+  ): Promise<BoardSnapshot> {
     if (ops.length === 0) {
       return this.getSnapshot(target);
     }
-    const { database, resolved } = this.prepareWrite(target);
-    return runOpenClawAgentWriteTransaction(
-      (transactionDatabase) => {
-        if (!hasSession(transactionDatabase, resolved.sessionKey)) {
-          throw new BoardValidationError(
-            "not_found",
-            `board session not found: ${resolved.sessionKey}`,
-          );
-        }
-        const previous = readStoredBoard(transactionDatabase, resolved.sessionKey);
-        const layout = applyBoardOps(previous.snapshot, ops);
-        const next: BoardSnapshot = {
-          sessionKey: resolved.sessionKey,
-          revision: previous.snapshot.revision + 1,
-          ...layout,
-        };
-        const now = Date.now();
-        upsertTabs(transactionDatabase, previous, next);
-        deleteRemovedWidgets(transactionDatabase, previous, next);
-        updateWidgetLayouts(transactionDatabase, next, now);
-        updateWidgetHeightModes(transactionDatabase, previous, ops);
-        deleteRemovedTabs(transactionDatabase, previous, next);
-        return cloneBoardSnapshot(next);
-      },
-      { agentId: resolved.agentId, path: database.path, env: this.options.env },
-      { operationLabel: "board.apply-ops" },
+    const capturedOps = structuredClone(ops);
+    return this.write(
+      target,
+      options,
+      "board.apply-ops",
+      (database, sessionKey) => applyBoardOpsToDatabase(database, sessionKey, capturedOps),
+      (scope, sessionKey) =>
+        scope.execute({ type: "boards.applyOps", input: { sessionKey, ops: capturedOps } }),
     );
   }
 
-  putWidget(params: BoardWidgetMaterializedPutParams) {
-    const { database, resolved } = this.prepareWrite(params);
-    const canonicalInput = normalizeBoardWidgetPutParams(params, resolved.sessionKey);
+  async putWidget(params: BoardWidgetMaterializedPutParams, options?: BoardWidgetWriteOptions) {
+    const capturedParams = structuredClone(params);
     const viewGeneration = randomBytes(16).toString("hex");
-    return runOpenClawAgentWriteTransaction(
-      (transactionDatabase) => {
-        if (!hasSession(transactionDatabase, resolved.sessionKey)) {
-          throw new BoardValidationError(
-            "not_found",
-            `board session not found: ${resolved.sessionKey}`,
-          );
-        }
-        const previous = readStoredBoard(transactionDatabase, resolved.sessionKey);
-        const canonicalParams = resolveSqliteBoardWidgetPutParams(
-          previous.snapshot,
-          canonicalInput,
-          previous.widgetRows,
-        );
-        const existing = previous.widgetRows.find((row) => row.name === canonicalParams.name);
-        const grantScopeMatches = existing
-          ? existing.content_kind === "html"
-            ? canonicalParams.content.kind === "html"
-            : existing.content_kind === "mcp-app"
-              ? existing.descriptor_json !== null &&
-                canonicalParams.content.kind === "mcp-app" &&
-                parseDescriptor(existing.descriptor_json).serverName ===
-                  canonicalParams.content.descriptor.serverName
-              : existing.descriptor_json !== null &&
-                (canonicalParams.content.kind === "plugin" ||
-                  canonicalParams.content.kind === "registered") &&
-                parsePluginContent(existing.descriptor_json).pluginKind ===
-                  canonicalParams.content.pluginKind
-          : true;
-        const next = createBoardWidgetPutSnapshot(previous.snapshot, canonicalParams, {
-          grantScopeMatches,
-          grantedSha256: existing?.granted_sha ?? undefined,
-          instanceId: viewGeneration,
-        });
-        const widget = next.widgets.find((candidate) => candidate.name === canonicalParams.name)!;
-        const now = Date.now();
-        upsertTabs(transactionDatabase, previous, next);
-        const db = getNodeSqliteKysely<BoardDatabase>(transactionDatabase.db);
-        const fields = createBoardWidgetContentFields(
-          canonicalParams,
-          { presentation: widget.presentation, heightMode: widget.heightMode },
-          widget.revision,
-          widget.grantState,
+    let preparedParams = capturedParams;
+    const content = capturedParams.content;
+    const resolveInteraction = options?.resolveMcpAppInteraction;
+    const prepare =
+      content.kind === "mcp-app" && content.interactive && resolveInteraction
+        ? async () => {
+            if (!(await resolveInteraction())) {
+              preparedParams = {
+                ...capturedParams,
+                content: { ...content, interactive: false },
+                declared: undefined,
+              };
+            }
+          }
+        : undefined;
+    return this.write(
+      params,
+      options,
+      "board.put-widget",
+      (database, sessionKey) =>
+        putBoardWidgetInDatabase(
+          database,
+          sessionKey,
+          normalizeBoardWidgetPutParams(preparedParams, sessionKey),
           viewGeneration,
-          now,
-        );
-        executeSqliteQuerySync(
-          transactionDatabase.db,
-          db
-            .insertInto("board_widgets")
-            .values({
-              session_key: resolved.sessionKey,
-              name: canonicalParams.name,
-              tab_id: widget.tabId,
-              title: widget.title ?? null,
-              size_w: widget.sizeW,
-              size_h: widget.sizeH,
-              position: widget.position,
-              created_by: existing?.created_by ?? "agent",
-              created_at: existing?.created_at ?? now,
-              ...fields,
-            })
-            .onConflict((conflict) =>
-              conflict.columns(["session_key", "name"]).doUpdateSet({
-                tab_id: widget.tabId,
-                title: widget.title ?? null,
-                size_w: widget.sizeW,
-                size_h: widget.sizeH,
-                position: widget.position,
-                ...fields,
-              }),
-            ),
-        );
-        updateWidgetLayouts(transactionDatabase, next, now);
-        return createBoardWidgetPutResult(next, canonicalParams.name);
-      },
-      { agentId: resolved.agentId, path: database.path, env: this.options.env },
-      { operationLabel: "board.put-widget" },
+        ),
+      (scope, sessionKey) =>
+        scope.execute({
+          type: "boards.putWidget",
+          input: { sessionKey, params: preparedParams, viewGeneration },
+        }),
+      prepare,
     );
   }
 
-  grant(
+  async grant(
     target: BoardSessionTarget,
     name: string,
     decision: "granted" | "rejected",
     revision: number,
     instanceId?: string,
-  ): BoardSnapshot {
-    const { database, resolved } = this.prepareWrite(target);
-    return runOpenClawAgentWriteTransaction(
-      (transactionDatabase) => {
-        if (!hasSession(transactionDatabase, resolved.sessionKey)) {
-          throw new BoardValidationError(
-            "not_found",
-            `board session not found: ${resolved.sessionKey}`,
-          );
-        }
-        const previous = readStoredBoard(transactionDatabase, resolved.sessionKey);
-        const next = createBoardGrantSnapshot(
-          previous.snapshot,
-          name,
-          decision,
-          revision,
-          instanceId,
-        );
-        upsertTabs(transactionDatabase, previous, next);
-        const widget = next.widgets.find((candidate) => candidate.name === name)!;
-        if (!widget.contentOwner) {
-          throw new BoardValidationError(
-            "invalid_operation",
-            `board widget ${name} content ownership is unavailable`,
-          );
-        }
-        const row = previous.widgetRows.find((candidate) => candidate.name === name)!;
-        const manifest = parseManifest(row.manifest);
-        const declared = manifest.declared;
-        const db = getNodeSqliteKysely<BoardDatabase>(transactionDatabase.db);
-        executeSqliteQuerySync(
-          transactionDatabase.db,
-          db
-            .updateTable("board_widgets")
-            .set({
-              grant_state: decision,
-              granted_sha: decision === "granted" ? row.sha256 : null,
-              manifest: serializeManifest(
-                {
-                  contentOwner: widget.contentOwner,
-                  ...(widget.registeredContentKind
-                    ? { registeredContentKind: widget.registeredContentKind }
-                    : {}),
-                },
-                declared,
-                decision,
-                manifest.mcpAppInteractive !== undefined && manifest.mcpAppInstanceId
-                  ? {
-                      kind: "mcp-app" as const,
-                      interactive: manifest.mcpAppInteractive,
-                      instanceId: manifest.mcpAppInstanceId,
-                    }
-                  : manifest.registeredInstanceId
-                    ? { kind: "registered" as const, instanceId: manifest.registeredInstanceId }
-                    : undefined,
-                {
-                  presentation: manifest.presentation,
-                  heightMode: manifest.heightMode,
-                },
-                manifest.nameIdentity,
-              ),
-              updated_at: Date.now(),
-            })
-            .where("session_key", "=", resolved.sessionKey)
-            .where("name", "=", name),
-        );
-        return cloneBoardSnapshot(next);
-      },
-      { agentId: resolved.agentId, path: database.path, env: this.options.env },
-      { operationLabel: "board.grant-widget" },
+    options?: BoardWriteOptions,
+  ): Promise<BoardSnapshot> {
+    return this.write(
+      target,
+      options,
+      "board.grant-widget",
+      (database, sessionKey) =>
+        grantBoardWidgetInDatabase(database, sessionKey, name, decision, revision, instanceId),
+      (scope, sessionKey) =>
+        scope.execute({
+          type: "boards.grant",
+          input: { sessionKey, name, decision, revision, instanceId },
+        }),
     );
   }
 
-  private readWidgetRow(target: BoardSessionTarget, name: string) {
-    const resolved = this.resolve(target);
+  private readWidgetDocument(
+    resolved: ResolvedBoardSession,
+    name: string,
+    contentKind?: "mcp-app",
+    env = this.options.env,
+  ): BoardWidgetDocument | undefined {
     const result = withOpenClawAgentDatabaseReadOnly(
-      (database) => {
-        if (!hasSession(database, resolved.sessionKey) || !boardTablesPresent(database)) {
-          return undefined;
-        }
-        const db = getNodeSqliteKysely<BoardDatabase>(database.db);
-        const row = executeSqliteQuerySync(
-          database.db,
-          db
-            .selectFrom("board_widgets")
-            .select([
-              "content_kind",
-              "html",
-              "descriptor_json",
-              "title",
-              "revision",
-              "sha256",
-              "view_generation",
-              "grant_state",
-              "manifest",
-            ])
-            .where("session_key", "=", resolved.sessionKey)
-            .where("name", "=", name)
-            .limit(1),
-        ).rows[0];
-        return row;
-      },
+      (database) => readBoardWidgetRow(database, resolved.sessionKey, name),
       {
         agentId: resolved.agentId,
         ...(resolved.path ? { path: resolved.path } : {}),
-        env: this.options.env,
+        env,
       },
     );
-    return result.found ? result.value : undefined;
+    const row = result.found ? result.value : undefined;
+    return row && (!contentKind || row.content_kind === contentKind)
+      ? rowToBoardWidgetDocument(row)
+      : undefined;
   }
 
-  readWidgetHtml(target: BoardSessionTarget, name: string): BoardWidgetHtmlDocument | undefined {
-    const row = this.readWidgetRow(target, name);
-    return row ? rowToHtmlDocument(row) : undefined;
-  }
-
-  readWidgetMcpApp(
+  async readWidgetMcpApp(
     target: BoardSessionTarget,
     name: string,
-  ): BoardWidgetMcpAppDocument | undefined {
-    const row = this.readWidgetRow(target, name);
-    if (!row || row.content_kind !== "mcp-app" || row.descriptor_json === null) {
-      return undefined;
-    }
-    const manifest = parseManifest(row.manifest);
-    if (manifest.mcpAppInteractive === undefined || manifest.mcpAppInstanceId === undefined) {
-      return undefined;
-    }
-    return {
-      descriptor: parseDescriptor(row.descriptor_json),
-      revision: row.revision,
-      instanceId: manifest.mcpAppInstanceId,
-      grantState: effectiveGrantState(row.grant_state, manifest),
-      declaredTools: manifest.declared?.tools ?? [],
-      interactive: manifest.mcpAppInteractive,
-    };
-  }
-
-  readWidgetRegistered(
-    target: BoardSessionTarget,
-    name: string,
-  ): BoardWidgetRegisteredDocument | undefined {
-    const row = this.readWidgetRow(target, name);
-    return row ? rowToRegisteredDocument(row) : undefined;
+  ): Promise<BoardWidgetMcpAppDocument | undefined> {
+    const document = this.readWidgetDocument(this.resolve(target), name, "mcp-app");
+    return document && "descriptor" in document ? document : undefined;
   }
 }

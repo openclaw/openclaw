@@ -1,4 +1,3 @@
-// Slack plugin module implements approval native gates behavior.
 import {
   isChannelExecApprovalClientEnabledFromConfig,
   matchesApprovalRequestFilters,

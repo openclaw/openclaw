@@ -112,8 +112,6 @@ export function renderLogs(props: LogsProps) {
     <p class="settings-section__desc">${t("gatewayLogs.subtitle")}</p>
     ${renderPanelRefreshStatus({
       status: props.status,
-      onRetry: props.onRefresh,
-      retryDisabled: props.refreshDisabled,
       className: "logs-refresh-status",
     })}
     <div class="settings-group logs-card">
@@ -155,14 +153,24 @@ export function renderLogs(props: LogsProps) {
           <span class="settings-row__value">${t("gatewayLogs.autoFollow")}</span>
         </div>
       </div>
-      ${props.truncated
-        ? html`
-            <div class="settings-row">
-              ${renderSettingsStatus({ kind: "warn", label: t("gatewayLogs.truncated") })}
-            </div>
-          `
-        : nothing}
-      <div class="log-stream" @scroll=${props.onScroll}>${streamContent}</div>
+      ${
+        props.truncated
+          ? html`
+              <div class="settings-row">
+                ${renderSettingsStatus({ kind: "warn", label: t("gatewayLogs.truncated") })}
+              </div>
+            `
+          : nothing
+      }
+      <div
+        class="log-stream"
+        role="region"
+        aria-label=${t("gatewayLogs.title")}
+        tabindex="0"
+        @scroll=${props.onScroll}
+      >
+        ${streamContent}
+      </div>
     </div>
   `;
 }

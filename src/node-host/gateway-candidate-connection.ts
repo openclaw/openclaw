@@ -44,7 +44,7 @@ type GatewayCandidateConnectionParams = {
   onWinningCandidate: (candidate: NodeHostGatewayConfig) => void;
 };
 
-function formatGatewayCandidateUrl(gateway: NodeHostGatewayConfig): string {
+export function formatGatewayCandidateUrl(gateway: NodeHostGatewayConfig): string {
   const host = gateway.host ?? "127.0.0.1";
   const urlHost =
     host.includes(":") && !(host.startsWith("[") && host.endsWith("]")) ? `[${host}]` : host;

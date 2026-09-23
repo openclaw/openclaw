@@ -19,12 +19,9 @@ export async function prepareCodexAttemptRoute(
     trajectoryRecorder,
     releaseCurrentRoute,
     registerNativeSubagentMonitor,
-    activateNativePreToolUseFailureFallback,
-    releaseSandboxExecEnvironment,
-    releaseSharedClientLeaseOnce,
   } = resources;
   const { connection } = prompt.context.runtime;
-  const { params, runAbortController, abortFromUpstream } = connection;
+  const { runAbortController } = connection;
   const { state, turnIdRef, completeTurn } = turnRuntime;
   const { noteNotificationReceived, enqueueNotification } = notifications;
   const attachRouteAbort = (route: CodexThreadRouteReservation) => {
@@ -71,7 +68,7 @@ export async function prepareCodexAttemptRoute(
   };
   const ensureCurrentThreadRoute = async () => {
     if (resourceState.turnRoute?.threadId !== resourceState.thread.threadId) {
-      releaseCurrentRoute();
+      await releaseCurrentRoute();
       resourceState.turnRoute = resourceState.turnRouter.reserveThread({
         threadId: resourceState.thread.threadId,
       });
@@ -81,7 +78,7 @@ export async function prepareCodexAttemptRoute(
     }
     if (!resourceState.routeActivated) {
       if (!resourceState.nativeSubagentMonitor) {
-        registerNativeSubagentMonitor(resourceState.thread.threadId);
+        await registerNativeSubagentMonitor(resourceState.thread.threadId);
       }
       resourceState.detachRouteAbort = attachRouteAbort(resourceState.turnRoute);
       await resourceState.turnRoute.activate({
@@ -93,16 +90,6 @@ export async function prepareCodexAttemptRoute(
     }
     return resourceState.turnRoute;
   };
-  try {
-    await ensureCurrentThreadRoute();
-  } catch (error) {
-    activateNativePreToolUseFailureFallback();
-    releaseCurrentRoute();
-    resourceState.nativeHookRelay?.unregister();
-    await releaseSandboxExecEnvironment();
-    releaseSharedClientLeaseOnce();
-    params.abortSignal?.removeEventListener("abort", abortFromUpstream);
-    throw error;
-  }
+  await ensureCurrentThreadRoute();
   return { ensureCurrentThreadRoute };
 }

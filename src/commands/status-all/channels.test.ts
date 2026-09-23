@@ -169,18 +169,37 @@ describe("buildChannelsTable", () => {
     expect(row?.detail).toContain("unavailable");
   });
 
-  it("does not warn on SecretRef credentials when credential resolution was skipped", async () => {
+  it("renders a resolved credential as OK on fast-path scans without live channel status", async () => {
+    mocks.resolveInspectedChannelAccount.mockResolvedValue({
+      kind: "inspected",
+      account: {
+        token: "8905123456:AAF-example-bDTs",
+        tokenSource: "config",
+        tokenStatus: "available",
+      },
+      enabled: true,
+      configured: true,
+      snapshot: {
+        accountId: "default",
+        enabled: true,
+        configured: true,
+        token: "8905123456:AAF-example-bDTs",
+        tokenSource: "config",
+        tokenStatus: "available",
+      },
+    });
+
+    // Fast-path call shape: no live channel status, no setup fallback plugins.
     const table = await buildChannelsTable(
       { channels: { discord: { enabled: true } } },
-      { credentialResolutionSkipped: true },
+      { includeSetupFallbackPlugins: false, liveChannelStatus: null },
     );
 
     const row = table.rows.find((entry) => entry.id === "discord");
     expect(row?.state).toBe("ok");
-    expect(row?.detail).toBe("configured");
+    expect(row?.detail).toContain("token config");
     const detailRow = table.details[0]?.rows[0];
-    expect(detailRow?.Status).toBe("UNKNOWN");
-    expect(detailRow?.Notes).toContain("credential not checked");
+    expect(detailRow?.Status).toBe("OK");
   });
 
   it("formats human phone identity while preserving raw account ids", async () => {
@@ -297,22 +316,31 @@ describe("buildChannelsTable", () => {
 
   it("keeps configured channels visible when fast status skips setup fallback plugins", async () => {
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
-    mocks.missingConfiguredChannelIds = ["telegram"];
+    mocks.missingConfiguredChannelIds = ["zulu", "telegram", "alpha"];
 
     const table = await buildChannelsTable(
-      { channels: { telegram: { botToken: "123:abc" } } },
-      { includeSetupFallbackPlugins: false },
+      {
+        channels: {
+          telegram: { enabled: true },
+          shared: { enabled: true },
+          disabled: { enabled: false },
+        },
+      },
+      {
+        includeSetupFallbackPlugins: false,
+        sourceConfig: { channels: { beta: { enabled: true }, shared: { enabled: true } } },
+      },
     );
 
-    expect(table.rows).toStrictEqual([
-      {
-        id: "telegram",
-        label: "telegram",
+    expect(table.rows).toStrictEqual(
+      ["beta", "shared", "telegram", "alpha", "zulu"].map((id) => ({
+        id,
+        label: id,
         enabled: true,
         state: "setup",
         detail: "configured; status unavailable in fast mode",
-      },
-    ]);
+      })),
+    );
     expect(mocks.resolveInspectedChannelAccount).not.toHaveBeenCalled();
   });
 

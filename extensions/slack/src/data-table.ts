@@ -45,7 +45,6 @@ type ParsedSlackDataTable = {
   caption: string;
   headers: string[];
   rows: string[][];
-  cellCharacterCount: number;
 };
 
 function countCharacters(value: string): number {
@@ -119,10 +118,7 @@ function readSlackDataTableCell(value: unknown, allowRichText: boolean): string 
   return undefined;
 }
 
-function parseSlackDataTable(
-  value: unknown,
-  options: { enforceNativeLimits?: boolean } = {},
-): ParsedSlackDataTable | undefined {
+function parseSlackDataTable(value: unknown): ParsedSlackDataTable | undefined {
   const block = asOptionalRecord(value);
   const caption = readNonEmptyString(block?.caption);
   if (block?.type !== "data_table" || !caption || !Array.isArray(block.rows)) {
@@ -135,7 +131,7 @@ function parseSlackDataTable(
   if (!Array.isArray(rawHeader) || rawHeader.length < 1) {
     return undefined;
   }
-  const headers = rawHeader.map((cell) => readSlackDataTableCell(cell, false));
+  const headers = Array.from(rawHeader, (cell) => readSlackDataTableCell(cell, false));
   if (!headers.every((header): header is string => Boolean(header))) {
     return undefined;
   }
@@ -149,19 +145,7 @@ function parseSlackDataTable(
   if (!rows.every((row): row is string[] => Boolean(row))) {
     return undefined;
   }
-  const cellCharacterCount = [...headers, ...rows.flat()].reduce(
-    (total, cell) => total + countCharacters(cell),
-    0,
-  );
-  if (
-    options.enforceNativeLimits &&
-    (block.rows.length > SLACK_DATA_TABLE_ROWS_MAX + 1 ||
-      headers.length > SLACK_DATA_TABLE_COLUMNS_MAX ||
-      cellCharacterCount > SLACK_DATA_TABLE_AGGREGATE_CELL_CHARACTERS_MAX)
-  ) {
-    return undefined;
-  }
-  return { caption, headers, rows, cellCharacterCount };
+  return { caption, headers, rows };
 }
 
 /** Detect current native table blocks without depending on unreleased Slack SDK types. */
@@ -173,7 +157,21 @@ export function hasSlackDataTableBlock(blocks?: readonly unknown[]): boolean {
 export function countSlackDataTableCellCharacters(value: SlackDataTableBlock): number;
 export function countSlackDataTableCellCharacters(value: unknown): number | undefined;
 export function countSlackDataTableCellCharacters(value: unknown): number | undefined {
-  return parseSlackDataTable(value, { enforceNativeLimits: true })?.cellCharacterCount;
+  const parsed = parseSlackDataTable(value);
+  if (
+    !parsed ||
+    parsed.rows.length > SLACK_DATA_TABLE_ROWS_MAX ||
+    parsed.headers.length > SLACK_DATA_TABLE_COLUMNS_MAX
+  ) {
+    return undefined;
+  }
+  const cellCharacterCount = [...parsed.headers, ...parsed.rows.flat()].reduce(
+    (total, cell) => total + countCharacters(cell),
+    0,
+  );
+  return cellCharacterCount > SLACK_DATA_TABLE_AGGREGATE_CELL_CHARACTERS_MAX
+    ? undefined
+    : cellCharacterCount;
 }
 
 /** Count the aggregate native-table cell characters already present in a message. */
@@ -237,20 +235,20 @@ function resolvePortableTableCellCharacterCount(
   return values.reduce((total, value) => total + countCharacters(value), 0);
 }
 
-/** True when a portable table fits Slack's per-table and per-message contracts. */
-function canRenderSlackDataTable(
+/** Count portable table cells when the table fits Slack's native message budget. */
+export function resolveSlackDataTableCellCharacterCount(
   block: MessagePresentationTableBlock,
   options: SlackDataTableBuildOptions = {},
-): boolean {
+): number | undefined {
   const cellCharacterCountOffset = options.cellCharacterCountOffset ?? 0;
   if (!Number.isSafeInteger(cellCharacterCountOffset) || cellCharacterCountOffset < 0) {
-    return false;
+    return undefined;
   }
   const cellCharacterCount = resolvePortableTableCellCharacterCount(block);
-  return (
-    cellCharacterCount !== undefined &&
+  return cellCharacterCount !== undefined &&
     cellCharacterCountOffset + cellCharacterCount <= SLACK_DATA_TABLE_AGGREGATE_CELL_CHARACTERS_MAX
-  );
+    ? cellCharacterCount
+    : undefined;
 }
 
 /** Map a validated portable table to Slack's current app-facing Block Kit shape. */
@@ -258,7 +256,7 @@ export function buildSlackDataTableBlock(
   block: MessagePresentationTableBlock,
   options: SlackDataTableBuildOptions = {},
 ): SlackDataTableBlock | undefined {
-  if (!canRenderSlackDataTable(block, options)) {
+  if (resolveSlackDataTableCellCharacterCount(block, options) === undefined) {
     return undefined;
   }
   const header: SlackDataTableCell[] = block.headers.map((text) => ({ type: "raw_text", text }));
@@ -306,9 +304,7 @@ function escapeCompactFallbackCell(value: string): string {
 }
 
 function escapeSlackBasicTableCell(value: string, mrkdwnSafe: boolean): string {
-  // escapeSlackMrkdwn doubles backslashes before the TSV layer escapes row delimiters.
-  const escaped = mrkdwnSafe ? escapeSlackMrkdwn(value) : value.replaceAll("\\", "\\\\");
-  return escaped.replaceAll("\t", "\\t").replaceAll("\r", "\\r").replaceAll("\n", "\\n");
+  return escapeCompactFallbackCell(mrkdwnSafe ? escapeSlackMrkdwn(value) : value);
 }
 
 function renderSlackBasicTableRows(value: unknown, mrkdwnSafe: boolean): string | undefined {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TemplateContext } from "../templating.js";
@@ -11,18 +11,71 @@ import {
   fallbackAttemptOptions,
   initialFallbackAttemptOptions,
   createMinimalRunAgentTurnParams,
+  createRunAgentTurnParams,
 } from "./agent-runner-execution.test-support.js";
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: session state", () => {
-  it("restarts the active prompt when a live model switch is requested", async () => {
+  it("settles spawned children under the conversation identity while preserving peer policy", async ({
+    onTestFinished,
+  }) => {
+    const subagentRegistry = await import("../../agents/subagents/registry/subagent-registry.js");
+    const { resolveModelFallbackOptions } = await import("./agent-runner-run-params.js");
+    const { resolveModelFallbackOptions: resolveFallbackOptionsForTest } =
+      await import("./agent-runner-utils.js");
+    const resolver = vi.mocked(resolveFallbackOptionsForTest);
+    const previousResolver = resolver.getMockImplementation();
+    resolver.mockImplementation(resolveModelFallbackOptions);
+    onTestFinished(() => {
+      if (previousResolver) {
+        resolver.mockImplementation(previousResolver);
+      }
+    });
+    const settle = vi
+      .spyOn(subagentRegistry, "settleRequesterAfterSessionSpawns")
+      .mockReturnValue(true);
+    onTestFinished(() => settle.mockRestore());
+    state.runEmbeddedAgentEntryMock.mockImplementation(async (params, delegate) => {
+      await params.preparedRunAdmission.admit("embedded");
+      return delegate(params);
+    });
+    const followupRun = createFollowupRun();
+    const policyKey = "agent:main:whatsapp:default:direct:qa-peer";
+    followupRun.run.runtimePolicySessionKey = policyKey;
+    const acceptedSessionSpawns = [
+      {
+        runId: "qa-child",
+        childSessionKey: "agent:main:subagent:qa-child",
+        expectsCompletionMessage: true,
+      },
+    ];
+    state.runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [{ text: "Child started." }],
+      acceptedSessionSpawns,
+      meta: {},
+    });
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createRunAgentTurnParams(followupRun));
+
+    expect(result.kind).toBe("success");
+    expect(settle).toHaveBeenCalledExactlyOnceWith({
+      requesterSessionKey: "main",
+      requesterAgentId: "main",
+      requesterTurnRunId: expect.any(String),
+      requesterYielded: false,
+      acceptedSessionSpawns,
+    });
+    expect(state.runEmbeddedAgentEntryMock.mock.calls[0]?.[0].harness.sessionKey).toBe(policyKey);
+  });
+
+  it("keeps thinking paired with the winning runtime when a live model switch restarts the prompt", async () => {
     let fallbackInvocation = 0;
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
       const isInitialInvocation = fallbackInvocation++ === 0;
       const provider = isInitialInvocation ? "anthropic" : "openai";
-      const model = isInitialInvocation ? "claude" : "gpt-5.4";
+      const model = isInitialInvocation ? "claude" : "gpt-5.6-luna";
       return {
         result: await params.run(provider, model, initialFallbackAttemptOptions(params)),
         provider,
@@ -34,7 +87,7 @@ describe("executeAgentTurn: session state", () => {
       .mockImplementationOnce(async () => {
         throw new LiveSessionModelSwitchError({
           provider: "openai",
-          model: "gpt-5.4",
+          model: "gpt-5.6-luna",
           agentRuntimeOverride: "codex",
         });
       })
@@ -45,7 +98,7 @@ describe("executeAgentTurn: session state", () => {
             agentMeta: {
               sessionId: "session",
               provider: "openai",
-              model: "gpt-5.4",
+              model: "gpt-5.6-luna",
             },
           },
         };
@@ -53,35 +106,30 @@ describe("executeAgentTurn: session state", () => {
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
+    followupRun.run.thinkLevel = "ultra";
+    followupRun.run.thinkingCatalog?.push({
+      provider: "openai",
+      id: "gpt-5.6-luna",
+      input: ["text"],
+      reasoning: true,
+      compat: { supportedReasoningEfforts: ["medium", "high", "max"] },
+    });
+    const staleEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      agentRuntimeOverride: "openclaw",
+    };
     const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun,
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createRunAgentTurnParams(followupRun),
+      getActiveSessionEntry: () => staleEntry,
     });
 
     expect(result.kind).toBe("success");
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
     expect(followupRun.run.provider).toBe("openai");
-    expect(followupRun.run.model).toBe("gpt-5.4");
+    expect(followupRun.run.model).toBe("gpt-5.6-luna");
     expect(state.runEmbeddedAgentMock.mock.calls[1]?.[0]).toEqual(
-      expect.objectContaining({ agentHarnessRuntimeOverride: "codex" }),
+      expect.objectContaining({ agentHarnessRuntimeOverride: "codex", thinkLevel: "max" }),
     );
   });
 
@@ -114,28 +162,7 @@ describe("executeAgentTurn: session state", () => {
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
-    const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun,
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeAgentTurn(createRunAgentTurnParams(followupRun));
 
     // After two retries the loop must break instead of continuing
     // forever. The result should be a final error, not an infinite hang.
@@ -202,28 +229,7 @@ describe("executeAgentTurn: session state", () => {
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
-    const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun,
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeAgentTurn(createRunAgentTurnParams(followupRun));
 
     // Two switches (within the limit of 2) then success on third attempt
     expect(result.kind).toBe("success");
@@ -563,7 +569,7 @@ describe("executeAgentTurn: session state", () => {
     expect(sessionEntry.modelOverrideSource).toBe("user");
   });
 
-  it("latches assistant error stub suppression across main reply fallback candidates", async () => {
+  it("shares one deferred assistant error owner across main reply fallback candidates", async () => {
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       await params
         .run("anthropic", "claude-opus-4-7", initialFallbackAttemptOptions(params))
@@ -578,22 +584,7 @@ describe("executeAgentTurn: session state", () => {
         attempts: [],
       };
     });
-    state.runEmbeddedAgentMock.mockImplementationOnce(
-      async (args: {
-        onAssistantErrorMessagePersisted?: (message: {
-          role: "assistant";
-          content: string;
-          stopReason: "error";
-        }) => void;
-      }) => {
-        args.onAssistantErrorMessagePersisted?.({
-          role: "assistant",
-          content: "[assistant turn failed before producing content]",
-          stopReason: "error",
-        });
-        throw new Error("upstream 500");
-      },
-    );
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("upstream 500"));
     state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("upstream 500"));
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
@@ -604,18 +595,14 @@ describe("executeAgentTurn: session state", () => {
     await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(3);
-    expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "primary candidate", {
-      suppressAssistantErrorPersistence: false,
-    });
-    expectMockCallArgFields(state.runEmbeddedAgentMock, 1, "first fallback candidate", {
-      suppressAssistantErrorPersistence: true,
-    });
-    expectMockCallArgFields(state.runEmbeddedAgentMock, 2, "second fallback candidate", {
-      suppressAssistantErrorPersistence: true,
-    });
+    const owner = state.runEmbeddedAgentMock.mock.calls[0]?.[0].assistantErrorTranscript;
+    expect(owner).toMatchObject({ record: expect.any(Function), settle: expect.any(Function) });
+    for (const [args] of state.runEmbeddedAgentMock.mock.calls) {
+      expect(args.assistantErrorTranscript).toBe(owner);
+    }
   });
 
-  it("does not suppress the first embedded assistant error after a CLI fallback failure", async () => {
+  it("defers the first embedded assistant error after a CLI fallback failure", async () => {
     state.isCliProviderMock.mockImplementation((provider: unknown) => provider === "anthropic");
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       await params
@@ -640,7 +627,10 @@ describe("executeAgentTurn: session state", () => {
     expect(state.runCliAgentMock).toHaveBeenCalledOnce();
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
     expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded fallback candidate", {
-      suppressAssistantErrorPersistence: false,
+      assistantErrorTranscript: expect.objectContaining({
+        record: expect.any(Function),
+        settle: expect.any(Function),
+      }),
     });
   });
 

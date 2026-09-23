@@ -25,7 +25,7 @@ describe("new-session catalog target", () => {
     };
     const ready = {
       ...pending,
-      model: "anthropic/claude-opus-4-8",
+      startTerminal: true,
       catalogLabel: "Claude Code",
     };
 
@@ -65,6 +65,23 @@ describe("new-session catalog target", () => {
     expect(routeKeyFromSearch("?agent=main&catalog=claude")).not.toBe(routeKey(pending));
   });
 
+  it("isolates model-specific drafts while retaining ordinary draft storage keys", () => {
+    const plain = {
+      agentId: "main",
+      requestedAgentId: "main",
+      catalogId: "",
+      model: "",
+      catalogLabel: "",
+      startTerminal: false,
+    };
+    const first = { ...plain, requestedModel: "example/first", model: "example/first" };
+    const second = { ...plain, requestedModel: "example/second", model: "example/second" };
+    expect(routeKey(plain)).toBe('["main","",""]');
+    expect(routeKey(first)).not.toBe(routeKey(plain));
+    expect(routeKey(first)).not.toBe(routeKey(second));
+    expect(routeKeyFromSearch("?agent=main&model=example%2Ffirst")).toBe(routeKey(first));
+  });
+
   it("fails closed when the requested creation capability is unavailable", async () => {
     const request = vi.fn(async () => ({
       catalogs: [
@@ -87,7 +104,7 @@ describe("new-session catalog target", () => {
     });
   });
 
-  it("preserves the catalog terminal-start capability with the resolved target", async () => {
+  it("resolves native terminal hosts without model-chat eligibility", async () => {
     const request = vi.fn(async () => ({
       catalogs: [
         {
@@ -96,12 +113,18 @@ describe("new-session catalog target", () => {
           capabilities: {
             continueSession: true,
             archive: false,
-            createSession: {
-              model: "anthropic/claude-opus-4-8",
-              startTerminal: true,
-            },
+            startTerminal: true,
           },
-          hosts: [],
+          hosts: [
+            {
+              hostId: "node:dev",
+              label: "Dev",
+              kind: "node",
+              connected: false,
+              canStartTerminal: true,
+              sessions: [],
+            },
+          ],
         },
       ],
     }));
@@ -109,9 +132,10 @@ describe("new-session catalog target", () => {
     await expect(
       resolveCreateTarget({ request } as unknown as GatewayBrowserClient, "claude", "research"),
     ).resolves.toEqual({
-      model: "anthropic/claude-opus-4-8",
+      model: "",
       catalogLabel: "Claude Code",
       startTerminal: true,
+      terminalHosts: [{ hostId: "node:dev", label: "Dev" }],
     });
   });
 

@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { collectPackageDistImports } from "../../scripts/lib/package-dist-imports.mjs";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const CHECK_SCRIPT = "scripts/check-package-dist-imports.mjs";
@@ -9,6 +10,88 @@ const tempDirs: string[] = [];
 
 afterEach(() => {
   cleanupTempDirs(tempDirs);
+});
+
+describe("collectPackageDistImports", () => {
+  it("leaves installed dependency modules to their own package scope", () => {
+    expect(
+      collectPackageDistImports({
+        files: ["node_modules/vendor/index.js", "dist/node_modules/vendor/index.mjs"],
+        readText: () => {
+          throw new Error("Dependency source belongs to a separate package scope");
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it("collects runtime imports around JSDoc without including documentation references", () => {
+    const imports = collectPackageDistImports({
+      files: ["dist/index.js"],
+      readText: () =>
+        [
+          '/** @type {import("./type.js").Value} */',
+          'import value from "./value.js";',
+          '/** @example import "./example.js"; */',
+          'export * from "./exports.js";',
+          '/** @type {import("./malformed.js").Value< */',
+          'function load() { return import("./dynamic.js"); }',
+          'require("./common.cjs");',
+          'new URL("./worker.mjs", import.meta.url);',
+        ].join("\n"),
+    });
+    expect(imports).toEqual(
+      ["value.js", "exports.js", "dynamic.js", "common.cjs", "worker.mjs"].map((name) => ({
+        importerPath: "dist/index.js",
+        importedPath: `dist/${name}`,
+      })),
+    );
+  });
+
+  it("excludes only the handoff runtime's staged native URL", () => {
+    const stagedPath = "./node_modules/koffi/indirect.cjs";
+    const source = [
+      `new URL("${stagedPath}", import.meta.url);`,
+      `import "${stagedPath}";`,
+      `export * from "${stagedPath}";`,
+      `import("${stagedPath}");`,
+      `require("${stagedPath}");`,
+      'new URL("./node_modules/koffi/other.cjs", import.meta.url);',
+    ].join("\n");
+    for (const importerPath of ["dist/managed-handoff-runtime.mjs", "dist/other.mjs"]) {
+      const imports = collectPackageDistImports({
+        files: [importerPath],
+        readText: () => source,
+      });
+      const expectedNativeEdges = importerPath === "dist/managed-handoff-runtime.mjs" ? 4 : 5;
+      expect(imports).toEqual([
+        ...Array.from({ length: expectedNativeEdges }, () => ({
+          importerPath,
+          importedPath: "dist/node_modules/koffi/indirect.cjs",
+        })),
+        { importerPath, importedPath: "dist/node_modules/koffi/other.cjs" },
+      ]);
+    }
+  });
+
+  it("limits URL dependencies without filtering ordinary relative imports", () => {
+    const imports = collectPackageDistImports({
+      files: ["package\\dist\\index.mjs"],
+      readText: () =>
+        [
+          'import("./data.json");',
+          'require("../outside.cjs");',
+          'new URL("./worker.mjs?rev=1", import.meta.url);',
+          'new URL("./asset.png", import.meta.url);',
+          'new URL("../outside.cjs", import.meta.url);',
+        ].join("\n"),
+    });
+    expect(imports).toEqual(
+      ["dist/data.json", "outside.cjs", "dist/worker.mjs"].map((importedPath) => ({
+        importerPath: "dist/index.mjs",
+        importedPath,
+      })),
+    );
+  });
 });
 
 describe("check-package-dist-imports", () => {
@@ -36,16 +119,35 @@ describe("check-package-dist-imports", () => {
     expect(extra.stderr).not.toContain("missing dist directory");
   });
 
-  it("accepts a minimal package dist root", () => {
-    const root = makeTempDir(tempDirs, "openclaw-package-dist-imports-");
-    mkdirSync(join(root, "dist"), { recursive: true });
-    writeFileSync(join(root, "dist", "index.js"), "export {};\n", "utf8");
+  it.each([
+    { leading: [], tail: [], accepted: true },
+    { leading: ["--"], tail: [], accepted: true },
+    { leading: [], tail: [""], accepted: false },
+    { leading: [], tail: [" \t "], accepted: false },
+    { leading: [], tail: ["", "extra"], accepted: false },
+    { leading: [], tail: ["", "--unexpected"], accepted: false },
+    { leading: ["--"], tail: [""], accepted: false },
+  ])(
+    "enforces one dist root with leading $leading and tail $tail",
+    ({ leading, tail, accepted }) => {
+      const root = makeTempDir(tempDirs, "openclaw-package-dist-imports-");
+      mkdirSync(join(root, "dist"), { recursive: true });
+      writeFileSync(join(root, "dist", "index.js"), "export {};\n", "utf8");
 
-    const result = spawnSync("node", [CHECK_SCRIPT, root], { encoding: "utf8" });
+      const result = spawnSync(process.execPath, [CHECK_SCRIPT, ...leading, root, ...tail], {
+        encoding: "utf8",
+      });
 
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("OpenClaw package dist import closure passed.");
-  });
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.status, result.stderr).toBe(accepted ? 0 : 1);
+      if (accepted) {
+        expect(result.stdout).toContain("OpenClaw package dist import closure passed.");
+      } else {
+        expect(result.stderr).toContain("Unexpected package dist import check argument");
+        expect(result.stdout).not.toContain("OpenClaw package dist import closure passed.");
+      }
+    },
+  );
 
   it("rejects missing chunks across ESM import, re-export, and CommonJS forms", () => {
     const root = makeTempDir(tempDirs, "openclaw-package-dist-imports-");

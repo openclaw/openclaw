@@ -18,6 +18,7 @@ final class StatusMenuSessions: NSObject {
     @ObservationIgnored private let refreshInterval: TimeInterval = 12
 
     func refresh(force: Bool = false) async {
+        guard !Task.isCancelled else { return }
         if !force,
            let updatedAt,
            Date().timeIntervalSince(updatedAt) < self.refreshInterval
@@ -35,12 +36,14 @@ final class StatusMenuSessions: NSObject {
 
         do {
             let snapshot = try await SessionLoader.loadSnapshot(limit: 32)
+            guard !Task.isCancelled else { return }
             self.cachedSnapshot = snapshot
             self.rows = snapshot.rows
             self.errorText = nil
             self.updatedAt = Date()
             self.prewarmPreviews(for: snapshot.rows)
         } catch {
+            guard !Task.isCancelled else { return }
             self.cachedSnapshot = nil
             self.rows = []
             self.errorText = self.compactError(error)
@@ -60,11 +63,17 @@ final class StatusMenuSessions: NSObject {
         }
     }
 
-    func configureApprovalItem(_ item: NSMenuItem, request: ExecApprovalQueueItem) {
+    func configureApprovalItem(
+        _ item: NSMenuItem,
+        request: ExecApprovalQueueItem,
+        approvalQueue: ExecApprovalQueueStore)
+    {
         item.title = String(localized: "Approval requested")
         item.isEnabled = true
         item.submenu = nil
-        StatusMenuRenderer.configureHostedView(item, rootView: StatusApprovalCard(request: request))
+        StatusMenuRenderer.configureHostedView(
+            item,
+            rootView: StatusApprovalCard(request: request, approvalQueue: approvalQueue))
     }
 
     func cancelPreviewTasks() {

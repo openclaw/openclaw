@@ -1,6 +1,4 @@
 /** Reads and parses the installed plugin index in the state database. */
-import type { DatabaseSync } from "node:sqlite";
-import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { z } from "zod";
 import {
   parsePluginInstallRecordMap,
@@ -8,7 +6,10 @@ import {
 } from "../config/plugin-install-record-map.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
-import { getPersistedInstalledPluginIndexCacheEntry } from "./installed-plugin-index-record-state.js";
+import {
+  getPersistedInstalledPluginIndexCacheEntry,
+  preparePersistedInstalledPluginIndexCacheEntry,
+} from "./installed-plugin-index-record-state.js";
 import type { InstalledPluginIndexStoreOptions } from "./installed-plugin-index-store-path.js";
 import {
   extractPluginInstallRecordsFromInstalledPluginIndex,
@@ -16,6 +17,7 @@ import {
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
   type InstalledPluginIndex,
 } from "./installed-plugin-index.js";
+import type { PersistedInstalledPluginIndexCacheEntry } from "./plugin-cache-management.js";
 
 export {
   resolveInstalledPluginIndexStorePath,
@@ -24,8 +26,6 @@ export {
 } from "./installed-plugin-index-store-path.js";
 
 const StringArraySchema = z.array(z.string());
-// Shared with installed-plugin-index-store-write.ts.
-export const INSTALLED_PLUGIN_INDEX_STATE_KEY = "plugins.installedIndex";
 
 const InstalledPluginIndexStartupSchema = z.object({
   sidecar: z.boolean(),
@@ -100,6 +100,9 @@ const PluginDiagnosticSchema = z.object({
   pluginId: z.string().optional(),
   source: z.string().optional(),
   code: z.string().optional(),
+  configDisposition: z.literal("preserve").optional(),
+  errorCode: z.string().optional(),
+  fixHint: z.string().optional(),
 });
 
 const InstalledPluginIndexSchema = z.object({
@@ -156,59 +159,23 @@ export function parseInstalledPluginIndex(value: unknown): InstalledPluginIndex 
   };
 }
 
-// Shared with installed-plugin-index-store-write.ts.
-export type PersistedInstalledPluginIndexValue = {
-  revision: number;
-  index: unknown;
-};
-
-// Shared with installed-plugin-index-store-write.ts.
-export function parseInstalledPluginIndexSqliteRow(
-  value: PersistedInstalledPluginIndexValue | undefined,
-): InstalledPluginIndex | null {
-  return value ? parseInstalledPluginIndex(value.index) : null;
-}
-
-// Shared with installed-plugin-index-store-write.ts.
-export function readInstalledPluginIndexRow(
-  database: DatabaseSync,
-): PersistedInstalledPluginIndexValue | undefined {
-  const row = database
-    .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
-    // SAFETY: config_machine_state.value_json is TEXT NOT NULL under STRICT.
-    .get(INSTALLED_PLUGIN_INDEX_STATE_KEY) as { value_json: string } | undefined;
-  return parsePersistedInstalledPluginIndexRow(row);
-}
-
-function parsePersistedInstalledPluginIndexRow(
-  row: { value_json: string } | undefined,
-): PersistedInstalledPluginIndexValue | undefined {
-  if (!row) {
-    return undefined;
-  }
-  const value = safeParseJson(row.value_json);
-  if (
-    !value ||
-    typeof value !== "object" ||
-    // SAFETY: shape-checked field probe; the full value is validated below.
-    typeof (value as PersistedInstalledPluginIndexValue).revision !== "number"
-  ) {
-    return undefined;
-  }
-  // SAFETY: revision checked above; index stays unknown until parseInstalledPluginIndex.
-  return value as PersistedInstalledPluginIndexValue;
-}
-
 export async function readPersistedInstalledPluginIndex(
   options: InstalledPluginIndexStoreOptions = {},
 ): Promise<InstalledPluginIndex | null> {
-  return readPersistedInstalledPluginIndexSync(options);
+  const prepared = await preparePersistedInstalledPluginIndexCacheEntry(options);
+  prepared.assertCurrent();
+  return parseCachedInstalledPluginIndex(prepared.entry);
 }
 
 export function readPersistedInstalledPluginIndexSync(
   options: InstalledPluginIndexStoreOptions = {},
 ): InstalledPluginIndex | null {
-  const entry = getPersistedInstalledPluginIndexCacheEntry(options);
+  return parseCachedInstalledPluginIndex(getPersistedInstalledPluginIndexCacheEntry(options));
+}
+
+function parseCachedInstalledPluginIndex(
+  entry: PersistedInstalledPluginIndexCacheEntry,
+): InstalledPluginIndex | null {
   if (entry.index === undefined) {
     const value = entry.state.status === "present" ? entry.state.value : undefined;
     entry.index =

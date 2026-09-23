@@ -5,9 +5,42 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { safeRealpathSync } from "../../infra/boundary-path.js";
 import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
-import { resolveStateDir } from "../paths.js";
+import {
+  isIncognitoSessionKey,
+  normalizeAgentId,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { resolveStateDir } from "../state-dir.js";
 import { isCompactionCheckpointTranscriptFileName } from "./artifacts.js";
+
+export type SessionStorePathScope = {
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+  sessionKey?: string;
+  storePath?: string;
+};
+
+/** Incognito key identity takes precedence over an explicit durable store path. */
+export function resolveExplicitSessionStorePathForScope(
+  scope: SessionStorePathScope,
+): string | undefined {
+  if (isIncognitoSessionKey(scope.sessionKey)) {
+    return resolveIncognitoOpenClawAgentSqlitePath({
+      agentId: resolveAgentIdFromSessionKey(scope.sessionKey),
+      env: scope.env,
+    });
+  }
+  return scope.storePath || undefined;
+}
+
+export function resolveConcreteSessionStorePath(storePath: string | undefined): string | undefined {
+  const trimmed = storePath?.trim();
+  if (!trimmed || trimmed === MULTI_STORE_PATH_SENTINEL || trimmed.includes("{agentId}")) {
+    return undefined;
+  }
+  return trimmed;
+}
 
 function resolveAgentSessionsDir(
   agentId: string,
@@ -32,6 +65,14 @@ export function resolveSessionTranscriptsDirForAgent(
 
 export function resolveDefaultSessionStorePath(agentId: string): string {
   return path.join(resolveAgentSessionsDir(agentId), "sessions.json");
+}
+
+/** Store selectors and explicit databases share the owning agent's session artifact directory. */
+export function resolveSessionArtifactDirectory(storePath: string): string {
+  const storeDir = path.dirname(storePath);
+  return path.basename(storeDir) === "agent"
+    ? path.join(path.dirname(storeDir), "sessions")
+    : storeDir;
 }
 
 type SessionFilePathOptions = {
@@ -340,7 +381,6 @@ export function resolveSessionStorePathCore(
       throw new SessionStoreAgentIdRequiredError();
     }
     const agentId = normalizeAgentId(opts.agentId);
-    // Template expansion is the only supported way to share one config path across agent stores.
     const expanded = store.replaceAll("{agentId}", agentId);
     if (expanded.startsWith("~")) {
       return path.resolve(

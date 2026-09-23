@@ -6,6 +6,7 @@ type ToolTerminalState = {
 };
 
 type ToolErrorState = {
+  read: () => ToolTerminalState;
   recordFailure: (failure: ToolErrorSummary) => ToolTerminalState;
   recordSuccess: (toolName: string) => ToolTerminalState;
 };
@@ -16,6 +17,7 @@ export function createToolErrorState(): ToolErrorState {
   const terminalState = (): ToolTerminalState => (lastToolError ? { lastToolError } : {});
 
   return {
+    read: terminalState,
     recordFailure(failure) {
       lastToolError = failure;
       return terminalState();

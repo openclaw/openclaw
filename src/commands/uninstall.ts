@@ -129,7 +129,7 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
       ],
       initialValues: ["service"],
     });
-    if (isCancel(selection)) {
+    if (typeof selection === "symbol") {
       cancel(stylePromptTitle("Uninstall cancelled.") ?? "Uninstall cancelled.");
       runtime.exit(0);
       return;
@@ -248,7 +248,7 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
   }
 
   if (!failed) {
-    runtime.log("CLI still installed. Remove via npm/pnpm if desired.");
+    runtime.log("CLI removal instructions: https://docs.openclaw.ai/install/uninstall");
   }
 
   if (scopes.has("state") && !scopes.has("workspace") && cleanupPlan) {

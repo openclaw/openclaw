@@ -10,7 +10,11 @@ import {
   resolveStateDir,
 } from "../../config/paths.js";
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "../../daemon/program-args.js";
-import { resolveBunRuntimeInfo } from "../../daemon/runtime-paths.js";
+import {
+  resolveBunRuntimeInfo,
+  resolvePinnedDaemonRuntimePath,
+} from "../../daemon/runtime-paths.js";
+import { readDaemonRuntimePin } from "../../daemon/runtime-pin-state.js";
 import {
   assertServiceDefinitionWritable,
   hasGatewayServiceEnvironmentDifference,
@@ -184,24 +188,39 @@ export async function repairLoadedGatewayServiceForStart(
     existingServiceEnv: existingEnvironment,
   });
   const wrapperPath = await resolveOpenClawWrapperPath(installEnv[OPENCLAW_WRAPPER_ENV_KEY]);
-  const installedRuntime = resolveGatewayDaemonRuntime(managedCommand?.programArguments);
+  const pinSnapshot = readDaemonRuntimePin(
+    { kind: "gateway", env: installEnv },
+    params.state.command,
+  );
+  const pinnedRuntime = wrapperPath ? undefined : pinSnapshot.pin?.path;
+  const installedRuntime = resolveGatewayDaemonRuntime(
+    pinnedRuntime ? [pinnedRuntime] : managedCommand?.programArguments,
+  );
+  if (!wrapperPath) {
+    await resolvePinnedDaemonRuntimePath(pinnedRuntime, installedRuntime, installEnv);
+  }
   const installedRuntimePath =
-    installedRuntime === "bun" ? managedCommand?.programArguments[0] : undefined;
+    installedRuntime === "bun" ? (pinnedRuntime ?? managedCommand?.programArguments[0]) : undefined;
   const runtimeInfo = installedRuntimePath
     ? await resolveBunRuntimeInfo(installedRuntimePath)
     : undefined;
   if (runtimeInfo?.status === "probe-failed") {
     throw runtimeInfo.error;
   }
-  const runtime = runtimeInfo?.status === "supported" ? "bun" : "node";
+  // An invalid OPENCLAW_SQLITE_LIBRARY is operator state to fix, not grounds to rewrite the service to Node.
+  if (runtimeInfo?.status === "unsupported" && runtimeInfo.sqliteSelectionError) {
+    throw new Error(runtimeInfo.sqliteSelectionError);
+  }
+  const runtime = pinnedRuntime
+    ? installedRuntime
+    : runtimeInfo?.status === "supported"
+      ? "bun"
+      : "node";
 
   const tokenResolution = await resolveGatewayInstallToken({
     config: cfg,
-    configSnapshot,
-    configWriteOptions,
     env: installEnv,
-    autoGenerateWhenMissing: true,
-    persistGeneratedToken: true,
+    generateIfMissing: { snapshot: configSnapshot, writeOptions: configWriteOptions },
   });
   if (tokenResolution.unavailableReason) {
     throw new Error(tokenResolution.unavailableReason);
@@ -224,6 +243,7 @@ export async function repairLoadedGatewayServiceForStart(
       port,
       runtime,
       runtimePath: runtime === "bun" ? installedRuntimePath : undefined,
+      pinnedRuntimePath: pinSnapshot.pin?.path,
       wrapperPath,
       existingCommand: params.state.command,
       existingEnvironment,
@@ -238,6 +258,7 @@ export async function repairLoadedGatewayServiceForStart(
     });
 
   await params.service.install({
+    runtimePinUpdate: { expected: pinSnapshot, pin: pinSnapshot.pin },
     env: installEnv as GatewayServiceEnv,
     stdout: params.stdout,
     warn: params.warn,
@@ -247,11 +268,9 @@ export async function repairLoadedGatewayServiceForStart(
     environmentValueSources,
   });
 
-  let loaded;
-  try {
-    loaded = await params.service.isLoaded({ env: installEnv });
-  } catch {
-    loaded = true;
+  const loaded = await params.service.isLoaded({ env: installEnv });
+  if (!loaded) {
+    throw new Error("Gateway service is not loaded after repair.");
   }
 
   return {

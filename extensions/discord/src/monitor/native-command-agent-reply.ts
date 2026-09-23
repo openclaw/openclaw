@@ -1,4 +1,3 @@
-// Discord plugin module implements native command agent reply behavior.
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   hasVisibleInboundReplyDispatch,
@@ -48,7 +47,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
   discordConfig: DiscordConfig;
   accountId: string;
   interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
-  ctxPayload: ReturnType<typeof buildDiscordNativeCommandContext>;
+  ctxPayload: Awaited<ReturnType<typeof buildDiscordNativeCommandContext>>;
   effectiveRoute: NativeCommandEffectiveRoute;
   channelConfig: DiscordChannelConfigResolved | null;
   mediaLocalRoots: ReturnType<typeof getAgentScopedMediaLocalRoots>;
@@ -85,6 +84,12 @@ export async function dispatchDiscordNativeAgentReply(params: {
         const payloadDelivered = await deliverDiscordInteractionReply({
           interaction: params.interaction,
           payload,
+          componentRoute: {
+            accountId: params.effectiveRoute.accountId,
+            agentId: params.effectiveRoute.agentId,
+            sessionKey:
+              params.ctxPayload.CommandTargetSessionKey ?? params.effectiveRoute.sessionKey,
+          },
           mediaLocalRoots: params.mediaLocalRoots,
           textLimit: resolveTextChunkLimit(params.cfg, "discord", params.accountId, {
             fallbackLimit: 2000,

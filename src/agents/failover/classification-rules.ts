@@ -49,7 +49,6 @@ export function isUnclassifiedNoBodyHttpSignal(signal: FailoverSignal): boolean 
   const message = signal.message?.trim();
   return !message || isExplicitNoBodyHttpMessage(message, status);
 }
-const TRANSIENT_HTTP_ERROR_CODES = new Set([499, 500, 502, 503, 504, 521, 522, 523, 524, 529]);
 type PaymentRequiredFailoverReason = Extract<FailoverReason, "billing" | "rate_limit">;
 // Provider SDKs often keep semantic error fields outside Error.message.
 // These bounded candidates feed classification only; user-facing copy still
@@ -125,7 +124,12 @@ function hasKnownBareLeading402Signal(text: string): boolean {
   );
 }
 function normalize402Message(raw: string): string {
-  return normalizeOptionalLowercaseString(raw)?.replace(LEADING_402_WRAPPER_RE, "").trim() ?? "";
+  return (
+    normalizeOptionalLowercaseString(raw)
+      ?.replace(LEADING_402_WRAPPER_RE, "")
+      .replace(/\bhttps?:\/\/[^\s<>"']+/g, " ")
+      .trim() ?? ""
+  );
 }
 function classify402Message(message: string): PaymentRequiredFailoverReason {
   const normalized = normalize402Message(message);
@@ -176,17 +180,6 @@ export function failoverReasonFromClassification(
     return null;
   }
   return classification.kind === "reason" ? classification.reason : "context_overflow";
-}
-export function isTransientHttpError(raw: string): boolean {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
-  const status = extractLeadingHttpStatus(trimmed);
-  if (!status) {
-    return false;
-  }
-  return TRANSIENT_HTTP_ERROR_CODES.has(status.code);
 }
 export function classifyFailoverClassificationFromHttpStatus(
   status: number | undefined,
@@ -270,20 +263,23 @@ export function classifyFailoverClassificationFromHttpStatus(
     }
     return toReasonClassification("model_not_found");
   }
-  if (status === 503 || status === 499) {
-    if (messageReason === "overloaded") {
-      return messageClassification;
-    }
-    return toReasonClassification("timeout");
-  }
-  if (status === 500 || status === 502 || status === 504) {
-    if (messageReason === "server_error") {
-      return messageClassification;
-    }
-    return toReasonClassification("timeout");
-  }
   if (status === 529) {
     return toReasonClassification("overloaded");
+  }
+  if (status === 499 || (status >= 500 && status < 600)) {
+    // Gateways can wrap a deterministic request rejection in a 5xx response.
+    if (
+      messageReason === "overloaded" ||
+      messageReason === "server_error" ||
+      (status >= 500 && messageReason === "format")
+    ) {
+      return messageClassification;
+    }
+    return toReasonClassification(
+      status === 499 || status === 504 || status === 522 || status === 524
+        ? "timeout"
+        : "server_error",
+    );
   }
   if (status === 400 || status === 422) {
     // 400/422 are ambiguous: inspect the payload first so provider-specific
@@ -313,6 +309,8 @@ export function classifyFailoverReasonFromCode(raw: string | undefined): Failove
     return null;
   }
   switch (normalized) {
+    case "UNKNOWN_PARAMETER":
+      return "format";
     case "RESOURCE_EXHAUSTED":
     case "RATE_LIMIT":
     case "RATE_LIMITED":
@@ -325,6 +323,8 @@ export function classifyFailoverReasonFromCode(raw: string | undefined): Failove
       return "rate_limit";
     case "DEACTIVATED_WORKSPACE":
       return "auth_permanent";
+    case "SELECTED_AUTH_PROFILE_UNAVAILABLE":
+      return "auth";
     case "OVERLOADED":
     case "OVERLOADED_ERROR":
       return "overloaded";
@@ -388,6 +388,16 @@ function isBilling429MessageForProvider(raw: string, provider: string | undefine
     return false;
   }
   return hasProviderBilling429Override(provider) || !isAmbiguousGeneric429BalanceMessage(raw);
+}
+const REPLAY_INVALID_RE =
+  /\bprevious_response_id\b.*\b(?:invalid|unknown|not found|does not exist|expired|mismatch)\b|\btool_(?:use|call)\.(?:input|arguments)\b.*\b(?:missing|required)\b|\bincorrect role information\b|\broles must alternate\b|\binput item id does not belong to this connection\b/i;
+const THINKING_SIGNATURE_ERROR_RE =
+  /\b(?:invalid|expired)\b.*\bsignature\b|\bsignature\b.*\b(?:invalid|expired)\b/i;
+function isThinkingSignatureReplayInvalidErrorMessage(raw: string): boolean {
+  return /\bthinking\b/i.test(raw) && THINKING_SIGNATURE_ERROR_RE.test(raw);
+}
+export function isReplayInvalidErrorMessage(raw: string): boolean {
+  return REPLAY_INVALID_RE.test(raw) || isThinkingSignatureReplayInvalidErrorMessage(raw);
 }
 // shared model runtime providers throw `Error("An unknown error occurred")` provider-agnostically
 // (anthropic, google, vertex, openai-completions, mistral, bedrock, etc.) when a

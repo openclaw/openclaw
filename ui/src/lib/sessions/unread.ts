@@ -1,3 +1,6 @@
+import { ErrorCodes } from "@openclaw/gateway-client/browser";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+
 /**
  * Acknowledges unread state at most once per unread episode: the pending flag
  * clears when the server-confirmed read (unread=false) is observed, so fresh
@@ -34,6 +37,11 @@ export class SessionUnreadPatchGuard {
       this.activationMarkedUnreadAt = marker;
     }
     if (unread === false) {
+      // An optimistic read keeps the observed marker until the Gateway confirms it.
+      // Clearing the latch here would let rollback synchronously dispatch a duplicate.
+      if (marker !== undefined) {
+        return false;
+      }
       this.activationMarkedUnreadAt = undefined;
       this.requested = false;
       return false;
@@ -48,10 +56,14 @@ export class SessionUnreadPatchGuard {
     return true;
   }
 
-  /** A failed read patch must unlatch the episode so later snapshots retry. */
-  patchFailed(activeSessionKey: string) {
+  /** Permanent rejections latch this episode; transport failures may retry. */
+  patchFailed(activeSessionKey: string, error?: unknown) {
     if (activeSessionKey.trim() === this.activeSessionKey) {
-      this.requested = false;
+      const code = asNullableRecord(error)?.gatewayCode;
+      this.requested =
+        code === ErrorCodes.INVALID_REQUEST ||
+        code === ErrorCodes.FORBIDDEN ||
+        code === ErrorCodes.APPROVAL_NOT_FOUND;
     }
   }
 }

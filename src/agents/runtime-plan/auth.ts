@@ -35,13 +35,14 @@ export function buildAgentRuntimeAuthPlan(params: {
   authProfileProvider?: string;
   authProfileMode?: string;
   sessionAuthProfileId?: string;
-  sessionAuthProfileSource?: "auto" | "user";
+  sessionAuthProfileSource?: "auto" | "user" | "user-link";
   sessionAuthProfileCandidateIds?: string[];
   modelRoute?: AgentRuntimeAuthPlan["modelRoute"];
   deferredRouteSupport?: AgentRuntimeAuthPlan["deferredRouteSupport"];
   credentialSource?: AgentRuntimeAuthPlan["credentialSource"];
   config?: OpenClawConfig;
   workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   providerAuthAliasesEnabled?: boolean;
   harnessId?: string;
@@ -56,13 +57,17 @@ export function buildAgentRuntimeAuthPlan(params: {
   const aliasLookupParams = {
     config: params.config,
     workspaceDir: params.workspaceDir,
+    env: params.env,
     ...(metadataSnapshot ? { metadataSnapshot } : {}),
   };
   const providerForAuth = resolveProviderIdForAuth(params.provider, aliasLookupParams);
-  const authProfileProviderForAuth = resolveProviderIdForAuth(
-    params.authProfileProvider ?? params.provider,
-    aliasLookupParams,
-  );
+  const authProfileProviderForAuth =
+    params.authProfileProvider !== undefined
+      ? resolveProviderIdForAuth(params.authProfileProvider, {
+          ...aliasLookupParams,
+          storedCredential: true,
+        })
+      : providerForAuth;
   const harnessAuthProvider = resolveHarnessAuthProvider(params);
   const harnessProviderForAuth = harnessAuthProvider
     ? resolveProviderIdForAuth(harnessAuthProvider, aliasLookupParams)
@@ -85,7 +90,11 @@ export function buildAgentRuntimeAuthPlan(params: {
     ...(harnessProviderForAuth ? { harnessAuthProvider: harnessProviderForAuth } : {}),
     ...(canForwardProfile ? { forwardedAuthProfileId } : {}),
     ...(canForwardProfile && params.sessionAuthProfileId && params.sessionAuthProfileSource
-      ? { forwardedAuthProfileSource: params.sessionAuthProfileSource }
+      ? {
+          // Person-linked pins forward at user-pin strength; the wire plan
+          // keeps the closed auto/user contract.
+          forwardedAuthProfileSource: params.sessionAuthProfileSource === "auto" ? "auto" : "user",
+        }
       : {}),
     ...(canForwardProfile && params.sessionAuthProfileCandidateIds?.length
       ? { forwardedAuthProfileCandidateIds: params.sessionAuthProfileCandidateIds }

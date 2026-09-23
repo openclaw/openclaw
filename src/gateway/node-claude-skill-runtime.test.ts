@@ -24,11 +24,10 @@ import {
 } from "../skills/library/selection.js";
 import { listSkillLibrary, readSkillLibrary, saveSkillLibrary } from "../skills/library/service.js";
 import { buildSkillSnapshot } from "../skills/loading/workspace-skill-prompt.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { invokeNodeClaudeCliRun } from "./node-agent-cli-runtime.js";
-import { NodeRegistry } from "./node-registry.js";
+import { NodeRegistry, type NodeRegistryOptions } from "./node-registry.js";
 import {
   libraryAuthority,
   type SkillLibraryRequestOwner,
@@ -41,8 +40,9 @@ import { createWorkerSessionPlacementStore } from "./worker-environments/placeme
 const temps = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     vi.restoreAllMocks();
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    for (const stateDir of temps.dirs) {
+      await cleanupSessionStateForTest({ stateDir });
+    }
     vi.unstubAllEnvs();
     cleanup();
   }),
@@ -52,7 +52,12 @@ const content =
 
 async function fixture(
   source: string,
-  options: { managed?: boolean; authoring?: boolean; capability?: boolean } = {},
+  options: {
+    managed?: boolean;
+    authoring?: boolean;
+    capability?: boolean;
+    resolveCurrentPairingState?: NodeRegistryOptions["resolveCurrentPairingState"];
+  } = {},
 ) {
   const root = await fs.realpath(temps.make("node-skill-wire-"));
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
@@ -62,7 +67,9 @@ async function fixture(
   await fs.writeFile(executable, `#!${process.execPath}\n${source}\n`, { mode: 0o700 });
   const profile = ensureProfileForEmail("requester@example.test");
   ensureProfileForEmail("collaborator@example.test");
-  const registry = new NodeRegistry();
+  const registry = new NodeRegistry({
+    resolveCurrentPairingState: options.resolveCurrentPairingState,
+  });
   const placements = createWorkerSessionPlacementStore();
   const gateway = {
     nodeRegistry: registry,
@@ -121,7 +128,7 @@ async function fixture(
   capability?.bind(admitted);
   const snapshot = options.managed
     ? {
-        ...buildSkillSnapshot(workspace, { entries: loadSkillLibrarySelection(pins) }),
+        ...(await buildSkillSnapshot(workspace, { entries: loadSkillLibrarySelection(pins) })),
         librarySelections: pins,
       }
     : undefined;
@@ -187,7 +194,8 @@ async function fixture(
         const request = await decodeClaudeCliNodeRunParams(frame.paramsJSON);
         let seq = 0;
         endpoint = createNodeDuplexEndpoint({
-          sendFrame: (text) => {
+          sendFrame: (payload) => {
+            const text = JSON.stringify(payload);
             expect(Buffer.byteLength(text)).toBeLessThanOrEqual(16 * 1024);
             progress(text, seq++);
           },
@@ -395,6 +403,50 @@ let input = ''; process.stdin.on('data', b => input += b); process.stdin.on('end
       await f.close();
     }
   });
+
+  it.each([false, true])(
+    "refuses retired request authority after pairing awaits (managed skills: %s)",
+    async (managed) => {
+      const pairingStarted = createDeferredCore();
+      const pairing = createDeferredCore<{ identity: string; generation: string }>();
+      const f = await fixture(
+        "console.log(JSON.stringify({type:'result',result:'unexpected dispatch'}));",
+        {
+          managed,
+          resolveCurrentPairingState: async () => {
+            pairingStarted.resolve();
+            return await pairing.promise;
+          },
+        },
+      );
+      const retired = new Error("request authority retired while resolving node pairing");
+      let current = true;
+      f.context.params.assertCurrent = () => {
+        if (!current) {
+          throw retired;
+        }
+      };
+      const running = f.execute();
+      const outcome = Promise.allSettled([running]);
+      try {
+        await Promise.race([
+          pairingStarted.promise,
+          running.then(() => {
+            throw new Error("Node turn completed before pairing resolution");
+          }),
+        ]);
+        current = false;
+        pairing.resolve({ identity: "node-1", generation: "generation-1" });
+
+        expect(await outcome).toEqual([{ status: "rejected", reason: retired }]);
+        expect(f.requests).toEqual([]);
+      } finally {
+        pairing.resolve({ identity: "node-1", generation: "generation-1" });
+        await outcome;
+        await f.close();
+      }
+    },
+  );
 
   it("requires the additive node capability before dispatching a selected bundle", async () => {
     const f = await fixture("process.exit(99)", { managed: true, capability: false });

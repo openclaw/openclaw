@@ -1,14 +1,16 @@
 // Database-bound delivery queue serialization and mutations used by shared transactions.
 import type { DatabaseSync } from "node:sqlite";
-import type { Insertable } from "kysely";
+import type { RawBuilder, Selectable } from "kysely";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import type { DeliveryQueueEntryState } from "./delivery-queue-sqlite.types.js";
 import {
   executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
+  prepareSqliteQuerySync,
+  prepareSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "./sqlite-number.js";
 
 type QueueStatus = "pending" | "failed" | "completed";
 export type DeliveryQueueReadMode = "pending" | "unfinished" | "all";
@@ -41,16 +43,10 @@ const deliveryQueueRowColumns = [
   "recovery_state",
 ] as const;
 
-export type DeliveryQueueSqliteRow = {
-  id: string;
-  entry_json: string;
-  enqueued_at: number | bigint;
-  retry_count: number | bigint;
-  last_attempt_at: number | bigint | null;
-  last_error: string | null;
-  platform_send_started_at: number | bigint | null;
-  recovery_state: string | null;
-};
+type DeliveryQueueSqliteRow = Pick<
+  Selectable<DeliveryQueueTable>,
+  (typeof deliveryQueueRowColumns)[number]
+>;
 
 type DeliveryQueueRowMetadata = {
   entryKind?: string;
@@ -76,25 +72,24 @@ export function pruneDeliveryQueueTombstones(
   db: DatabaseSync,
   now: number,
   prefix?: { queueName: string; idPrefix: string },
-): void {
-  // sqlite-allow-raw: JSON1 and a window rank enforce authored policies in place.
-  db.prepare(`WITH policies AS (
+): boolean {
+  // Let producer-scoped cleanup use the existing queue/status indexes.
+  const result =
+    // sqlite-allow-raw: JSON1 and a window rank enforce authored policies in place.
+    db
+      .prepare(`WITH policies AS (
       ${BOUNDED_DELIVERY_RECEIPTS_SQL}
-      AND (@queueName IS NULL OR (queue_name = @queueName AND id_prefix = @idPrefix))
+      ${prefix ? "AND queue_name = @queueName AND id_prefix = @idPrefix" : ""}
     ), ranked AS (
       SELECT *, row_number() OVER (PARTITION BY queue_name, id_prefix
         ORDER BY enqueued_at DESC, id DESC) retention_rank FROM policies
     ) DELETE FROM delivery_queue_entries WHERE rowid IN (
       SELECT receipt_rowid FROM ranked
       WHERE enqueued_at < @now - max_age_ms OR retention_rank > max_entries
-    )`).run({
-    now,
-    queueName: prefix?.queueName ?? null,
-    idPrefix: prefix?.idPrefix ?? null,
-  });
-  if (!prefix) {
-    pruneOrdinaryDeliveryReceipts(db, now);
-  }
+    )`)
+      .run(prefix ? { now, ...prefix } : { now });
+  const ordinaryPruned = prefix ? false : pruneOrdinaryDeliveryReceipts(db, now);
+  return result.changes > 0 || ordinaryPruned;
 }
 
 /** Cheap maintenance cleanup: age predicates only, with no window sort. */
@@ -116,51 +111,51 @@ export function terminalizeBoundDeliveryQueueEntry(
   now: number,
   expectedStatus: "pending" | "failed" = "pending",
 ): boolean {
-  if (!failedEntry) {
-    return (
-      // sqlite-allow-raw: Exact JSON CAS keeps deletion atomic on the caller's transaction.
-      db
-        .prepare(
-          `DELETE FROM delivery_queue_entries
-          WHERE queue_name = ? AND id = ? AND status = ? AND entry_json = ?`,
-        )
-        .run(queueName, id, expectedStatus, expectedJson).changes === 1
-    );
-  }
-  return (
-    // sqlite-allow-raw: Exact JSON CAS keeps compaction atomic on the caller's transaction.
-    db
-      .prepare(
-        `UPDATE delivery_queue_entries SET status = 'failed', entry_kind = NULL,
-        session_key = NULL, channel = NULL, target = NULL, account_id = NULL,
-        last_attempt_at = NULL, last_error = NULL, platform_send_started_at = NULL,
-        recovery_state = ?, entry_json = ?, enqueued_at = ?, updated_at = ?, failed_at = ?
-      WHERE queue_name = ? AND id = ? AND status = ? AND entry_json = ?`,
-      )
-      .run(
-        failedEntry.recoveryState ?? null,
-        JSON.stringify(failedEntry),
-        now,
-        now,
-        now,
-        queueName,
-        id,
-        expectedStatus,
-        expectedJson,
-      ).changes === 1
-  );
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(db);
+  const expected = { queue_name: queueName, id, status: expectedStatus, entry_json: expectedJson };
+  const query = failedEntry
+    ? queueDb
+        .updateTable("delivery_queue_entries")
+        .where((eb) => eb.and(expected))
+        .set({
+          status: "failed",
+          entry_kind: null,
+          session_key: null,
+          channel: null,
+          target: null,
+          account_id: null,
+          last_attempt_at: null,
+          last_error: null,
+          platform_send_started_at: null,
+          recovery_state: failedEntry.recoveryState ?? null,
+          entry_json: JSON.stringify(failedEntry),
+          enqueued_at: now,
+          updated_at: now,
+          failed_at: now,
+        })
+    : queueDb.deleteFrom("delivery_queue_entries").where((eb) => eb.and(expected));
+  return executeSqliteQuerySync(db, query).numAffectedRows === 1n;
 }
 
-function pruneOrdinaryDeliveryReceipts(db: DatabaseSync, now: number): void {
-  // sqlite-allow-raw: This bounded age delete runs on the caller's existing database handle.
-  db.prepare(`DELETE FROM delivery_queue_entries WHERE status = 'completed'
-    AND enqueued_at < ? AND (recovery_state IS NULL OR recovery_state NOT IN (
-      'completed_permanent', 'completed_bounded'
-    ))`).run(now - COMPLETED_TOMBSTONE_RETENTION_MS);
+function pruneOrdinaryDeliveryReceipts(db: DatabaseSync, now: number): boolean {
+  const result = executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<DeliveryQueueDatabase>(db)
+      .deleteFrom("delivery_queue_entries")
+      .where("status", "=", "completed")
+      .where("enqueued_at", "<", now - COMPLETED_TOMBSTONE_RETENTION_MS)
+      .where((eb) =>
+        eb.or([
+          eb("recovery_state", "is", null),
+          eb("recovery_state", "not in", ["completed_permanent", "completed_bounded"]),
+        ]),
+      ),
+  );
+  return (result.numAffectedRows ?? 0n) > 0n;
 }
 
 type BoundDeliveryQueueEntry = {
-  row: Insertable<DeliveryQueueTable>;
+  row: Selectable<DeliveryQueueTable>;
   insertOnly: boolean;
   updatePendingOnly: boolean;
   completeExisting: boolean;
@@ -178,13 +173,13 @@ export function inflateDeliveryQueueRow(
   return {
     ...parsed,
     id: row.id,
-    enqueuedAt: Number(row.enqueued_at),
-    retryCount: Number(row.retry_count),
-    ...(row.last_attempt_at == null ? {} : { lastAttemptAt: Number(row.last_attempt_at) }),
+    enqueuedAt: sqliteNumber(row.enqueued_at),
+    retryCount: sqliteNumber(row.retry_count),
+    ...(row.last_attempt_at == null ? {} : { lastAttemptAt: sqliteNumber(row.last_attempt_at) }),
     ...(row.last_error == null ? {} : { lastError: row.last_error }),
     ...(row.platform_send_started_at == null
       ? {}
-      : { platformSendStartedAt: Number(row.platform_send_started_at) }),
+      : { platformSendStartedAt: sqliteNumber(row.platform_send_started_at) }),
     ...(row.recovery_state == null ? {} : { recoveryState: row.recovery_state }),
   };
 }
@@ -245,47 +240,92 @@ export function bindDeliveryQueueEntry(
   };
 }
 
+type DeliveryQueueUpsertMode = "insert" | "pending" | "complete" | "replace";
+
+function createDeliveryQueueUpsert(database: DatabaseSync, mode: DeliveryQueueUpsertMode) {
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database);
+  return prepareSqliteQuerySync<BoundDeliveryQueueEntry["row"]>(database, (parameter) => {
+    const insert = queueDb.insertInto("delivery_queue_entries").values({
+      queue_name: parameter((row) => row.queue_name),
+      id: parameter((row) => row.id),
+      status: parameter((row) => row.status),
+      entry_kind: parameter((row) => row.entry_kind),
+      session_key: parameter((row) => row.session_key),
+      channel: parameter((row) => row.channel),
+      target: parameter((row) => row.target),
+      account_id: parameter((row) => row.account_id),
+      retry_count: parameter((row) => row.retry_count),
+      last_attempt_at: parameter((row) => row.last_attempt_at),
+      last_error: parameter((row) => row.last_error),
+      recovery_state: parameter((row) => row.recovery_state),
+      platform_send_started_at: parameter((row) => row.platform_send_started_at),
+      entry_json: parameter((row) => row.entry_json),
+      enqueued_at: parameter((row) => row.enqueued_at),
+      updated_at: parameter((row) => row.updated_at),
+      failed_at: parameter((row) => row.failed_at),
+    });
+    const query =
+      mode === "insert"
+        ? insert.onConflict((conflict) => conflict.columns(["queue_name", "id"]).doNothing())
+        : insert.onConflict((conflict) => {
+            const update = conflict.columns(["queue_name", "id"]).doUpdateSet({
+              status: (eb) => eb.ref("excluded.status"),
+              entry_kind: (eb) => eb.ref("excluded.entry_kind"),
+              session_key: (eb) => eb.ref("excluded.session_key"),
+              channel: (eb) => eb.ref("excluded.channel"),
+              target: (eb) => eb.ref("excluded.target"),
+              account_id: (eb) => eb.ref("excluded.account_id"),
+              retry_count: (eb) => eb.ref("excluded.retry_count"),
+              last_attempt_at: (eb) => eb.ref("excluded.last_attempt_at"),
+              last_error: (eb) => eb.ref("excluded.last_error"),
+              recovery_state: (eb) => eb.ref("excluded.recovery_state"),
+              platform_send_started_at: (eb) => eb.ref("excluded.platform_send_started_at"),
+              entry_json: (eb) => eb.ref("excluded.entry_json"),
+              enqueued_at: (eb) => eb.ref("excluded.enqueued_at"),
+              updated_at: (eb) => eb.ref("excluded.updated_at"),
+              failed_at: (eb) => eb.ref("excluded.failed_at"),
+            });
+            if (mode === "pending") {
+              return update.where("delivery_queue_entries.status", "=", "pending");
+            }
+            return mode === "complete"
+              ? update.where("delivery_queue_entries.status", "in", ["pending", "failed"])
+              : update;
+          });
+    return query;
+  });
+}
+
+const deliveryQueueUpserts = new WeakMap<
+  DatabaseSync,
+  Partial<Record<DeliveryQueueUpsertMode, ReturnType<typeof createDeliveryQueueUpsert>>>
+>();
+
 /** Mutates only the exact supplied shared-state handle; never opens or hardens a file. */
 export function upsertBoundDeliveryQueueEntryInDatabase(
   bound: BoundDeliveryQueueEntry,
   database: OpenClawStateDatabase,
 ): boolean {
-  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
-  const insert = queueDb.insertInto("delivery_queue_entries").values(bound.row);
-  const query = bound.insertOnly
-    ? insert.onConflict((conflict) => conflict.columns(["queue_name", "id"]).doNothing())
-    : insert.onConflict((conflict) => {
-        const update = conflict.columns(["queue_name", "id"]).doUpdateSet({
-          status: (eb) => eb.ref("excluded.status"),
-          entry_kind: (eb) => eb.ref("excluded.entry_kind"),
-          session_key: (eb) => eb.ref("excluded.session_key"),
-          channel: (eb) => eb.ref("excluded.channel"),
-          target: (eb) => eb.ref("excluded.target"),
-          account_id: (eb) => eb.ref("excluded.account_id"),
-          retry_count: (eb) => eb.ref("excluded.retry_count"),
-          last_attempt_at: (eb) => eb.ref("excluded.last_attempt_at"),
-          last_error: (eb) => eb.ref("excluded.last_error"),
-          recovery_state: (eb) => eb.ref("excluded.recovery_state"),
-          platform_send_started_at: (eb) => eb.ref("excluded.platform_send_started_at"),
-          entry_json: (eb) => eb.ref("excluded.entry_json"),
-          enqueued_at: (eb) => eb.ref("excluded.enqueued_at"),
-          updated_at: (eb) => eb.ref("excluded.updated_at"),
-          failed_at: (eb) => eb.ref("excluded.failed_at"),
-        });
-        if (bound.updatePendingOnly) {
-          return update.where("delivery_queue_entries.status", "=", "pending");
-        }
-        return bound.completeExisting
-          ? update.where("delivery_queue_entries.status", "in", ["pending", "failed"])
-          : update;
-      });
-  return executeSqliteQuerySync(database.db, query).numAffectedRows === 1n;
+  const mode = bound.insertOnly
+    ? "insert"
+    : bound.updatePendingOnly
+      ? "pending"
+      : bound.completeExisting
+        ? "complete"
+        : "replace";
+  let queries = deliveryQueueUpserts.get(database.db);
+  if (!queries) {
+    queries = {};
+    deliveryQueueUpserts.set(database.db, queries);
+  }
+  const query = (queries[mode] ??= createDeliveryQueueUpsert(database.db, mode));
+  return query(bound.row).numAffectedRows === 1n;
 }
 
 /** Recovery and media custody share the same inventory of unfinished work. */
 export function deliveryQueueEntriesQuery(
   database: OpenClawStateDatabase,
-  queueNames: readonly string[],
+  queueNames: readonly (string | RawBuilder<string>)[],
   mode: DeliveryQueueReadMode,
 ) {
   const query = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db)
@@ -307,6 +347,23 @@ export function deliveryQueueEntriesQuery(
       );
 }
 
+function createDeliveryQueueRead(database: OpenClawStateDatabase, mode: DeliveryQueueReadMode) {
+  return prepareSqliteQueryTakeFirstSync<{ queueName: string; id: string }, DeliveryQueueSqliteRow>(
+    database.db,
+    (parameter) =>
+      deliveryQueueEntriesQuery(database, [parameter((params) => params.queueName)], mode).where(
+        "id",
+        "=",
+        parameter((params) => params.id),
+      ),
+  );
+}
+
+const deliveryQueueReads = new WeakMap<
+  DatabaseSync,
+  Partial<Record<DeliveryQueueReadMode, ReturnType<typeof createDeliveryQueueRead>>>
+>();
+
 /** Reads one row from the exact supplied handle for cross-owner invariant validation. */
 export function loadDeliveryQueueEntryInDatabase(
   database: OpenClawStateDatabase,
@@ -314,9 +371,13 @@ export function loadDeliveryQueueEntryInDatabase(
   id: string,
   mode: DeliveryQueueReadMode = "all",
 ): DeliveryQueueEntryState | null {
-  const query = deliveryQueueEntriesQuery(database, [queueName], mode).where("id", "=", id);
-  const row = executeSqliteQueryTakeFirstSync(database.db, query) as
-    | DeliveryQueueSqliteRow
-    | undefined;
+  let queries = deliveryQueueReads.get(database.db);
+  if (!queries) {
+    queries = {};
+    deliveryQueueReads.set(database.db, queries);
+  }
+  const readMode = mode === "all" || mode === "pending" ? mode : "unfinished";
+  const query = (queries[readMode] ??= createDeliveryQueueRead(database, readMode));
+  const row = query({ queueName, id });
   return row ? inflateDeliveryQueueRow(row) : null;
 }

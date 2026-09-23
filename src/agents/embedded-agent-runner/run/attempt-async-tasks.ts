@@ -5,8 +5,7 @@ import { createAbortError as createNamedAbortError } from "../../../infra/abort-
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { toErrorObject } from "../../../infra/errors.js";
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
-import { isTerminalTaskStatus } from "../../../tasks/task-executor-policy.js";
-import type { TaskRecord } from "../../../tasks/task-registry.types.js";
+import { isTerminalTaskStatus, type TaskRecord } from "../../../tasks/task-registry.types.js";
 import {
   findTaskByRunIdForStatus,
   listTasksForOwnerOrRequesterSessionKeyForStatus,

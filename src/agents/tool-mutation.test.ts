@@ -26,6 +26,17 @@ describe("tool mutation helpers", () => {
     }
   });
 
+  it.each(["list", "get", "set", "import", "future-action", undefined])(
+    "classifies theme action %s for safe replay",
+    (action) => {
+      const readOnly = action === "list" || action === "get";
+      expect(buildToolMutationState("theme", { action })).toEqual({
+        mutatingAction: !readOnly,
+        replaySafe: readOnly,
+      });
+    },
+  );
+
   it("treats owner-declared side effects as mutating and replay-unsafe", () => {
     expect(
       buildToolMutationState(
@@ -41,7 +52,16 @@ describe("tool mutation helpers", () => {
   it.each([
     ["exec", "sed -n '1,220p' src/agents/tool-mutation.ts"],
     ["bash", "cat package.json"],
+    [
+      "bash",
+      "find . -maxdepth 1 -type f | wc -l && find . -maxdepth 1 -type f ! -name '.*' | wc -l",
+    ],
+    ["bash", "rg --files src | wc -l"],
+    ["bash", "find . -name '*.md' -type f"],
     ["exec", "rg -n tool-mutation src/agents"],
+    ["exec", "rg -n 'token|8123|http|secret' notes.md"],
+    ["exec", 'rg -n "foo|bar" notes.md'],
+    ["exec", "rg -n '[$*?{}]' notes.md"],
     ["exec", "gh search prs --repo openclaw/openclaw tool-mutation --json number,title,state"],
     ["bash", "gh pr view 123 --repo openclaw/openclaw --json title,state"],
   ])("treats read-only shell command as non-mutating: %s %s", (toolName, command) => {
@@ -54,8 +74,14 @@ describe("tool mutation helpers", () => {
     ["exec", "sed --in-place 's/a/b/' file.txt"],
     ["exec", "sed -n '1p' -i file.txt"],
     ["exec", "sed -n -e '1p' -e 'w /tmp/out' file.txt"],
+    ["exec", "sed -n '-e$w /tmp/out' 1p"],
+    ["exec", "sed -n --expression='1p' file.txt"],
     ["bash", "cat package.json > /tmp/package.json"],
-    ["bash", "rg foo src | wc -l"],
+    ["exec", 'rg "$(touch /tmp/out)" notes.md'],
+    ["exec", 'rg "`touch /tmp/out`" notes.md'],
+    ["exec", "rg 'literal'$(touch /tmp/out) notes.md"],
+    ["exec", "rg 'literal'; touch /tmp/out"],
+    ["exec", "rg '--pre=touch' notes.md"],
     ["bash", "rg --pre touch pattern file"],
     ["bash", "rg --pre=touch pattern file"],
     ["bash", "rg --hostname-bin /tmp/helper pattern file"],
@@ -66,6 +92,19 @@ describe("tool mutation helpers", () => {
     ["exec", "file --compile -m custom.magic"],
     ["exec", "python3 <<'PY'\nprint('hello')\nPY"],
     ["exec", "npm start"],
+    ["bash", "find . -delete | wc -l"],
+    ["bash", "find . -exec touch /tmp/out ';' | wc -l"],
+    ["bash", "find . -fprint /tmp/out | wc -l"],
+    ["bash", "find . -type f | tee /tmp/out"],
+    ["bash", "find . -type f | wc -l && touch /tmp/out"],
+    ["bash", "find . -type f || wc -l"],
+    ["bash", "find . -type f | wc -l &"],
+    ["bash", "find . -type f > /tmp/out"],
+    ["bash", "find =(touch /tmp/out) -type f"],
+    ["bash", "find . -name '' -exec touch /tmp/out ';'"],
+    ["bash", "find . -type f |"],
+    ["bash", "find . -type f &&"],
+    ["bash", "find . -type f | | wc -l"],
     ["exec", "zsh -lc 'rg TODO src'"],
     ["exec", "./zsh -lc 'rg TODO src'"],
     ["exec", "/tmp/zsh -lc 'rg TODO src'"],

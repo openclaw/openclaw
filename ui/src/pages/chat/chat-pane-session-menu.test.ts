@@ -3,6 +3,7 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { loadSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { showToast } from "../../lib/toast.ts";
 import {
@@ -21,6 +22,48 @@ afterEach(() => {
 });
 
 describe("chat pane session menu boundary", () => {
+  it.each([false, true])(
+    "keeps the header archive/restore action enabled (archived=%s)",
+    async (archived) => {
+      const { pane, state } = createTestChatPane({
+        client: createGatewayBrowserClientFixture(),
+        sessions: createSessionCapabilityFixture(),
+      });
+      state.settings = loadSettings();
+      const session = {
+        key: "agent:main:current",
+        sessionId: "current",
+        kind: "direct",
+        archived,
+      } satisfies GatewaySessionRow;
+      const container = document.body.appendChild(document.createElement("div"));
+      render(
+        pane.renderPaneHeader(
+          createSessionWorkspaceProps(state),
+          createBackgroundTasksProps(state),
+          session,
+          false,
+          undefined,
+          false,
+          null,
+        ),
+        container,
+      );
+      const menu = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+        "openclaw-chat-header-session-menu",
+      );
+      await menu?.updateComplete;
+      const action = menu?.querySelector<HTMLElement & { disabled: boolean }>(
+        '[value="toggle-archived"]',
+      );
+      expect(action).not.toBeNull();
+      expect(action?.disabled).toBe(false);
+      expect(action?.textContent).toContain(
+        t(archived ? "sessionsView.restoreSession" : "sessionsView.archiveSession"),
+      );
+    },
+  );
+
   it("forks through the shared session organizer flow and selects the new session", async () => {
     const create = vi.fn(async () => "agent:main:forked");
     const sessions = createSessionCapabilityFixture({
@@ -87,18 +130,18 @@ describe("chat pane session menu boundary", () => {
     });
   });
 
-  it("marks parent-linked fork rows as child sessions in the header menu", () => {
+  it.each([
+    { key: "agent:main:fork", parentSessionKey: "agent:main:parent" },
+    { key: "agent:main:subagent:child" },
+  ])("hides pinning a lineage child $key in the header menu", async (lineage) => {
     const { pane, state } = createTestChatPane({
       client: createGatewayBrowserClientFixture(),
       sessions: createSessionCapabilityFixture(),
     });
-    const session = {
-      key: "agent:main:fork",
-      kind: "direct",
-      updatedAt: 0,
-      parentSessionKey: "agent:main:parent",
-    } satisfies GatewaySessionRow;
+    state.settings = loadSettings();
+    const session = { ...lineage, kind: "direct", updatedAt: 0 } satisfies GatewaySessionRow;
     const container = document.createElement("div");
+    document.body.append(container);
 
     render(
       pane.renderPaneHeader(
@@ -113,10 +156,12 @@ describe("chat pane session menu boundary", () => {
       container,
     );
 
-    const menu = container.querySelector<HTMLElement & { session: { isChild: boolean } }>(
+    const menu = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
       "openclaw-chat-header-session-menu",
     );
-    expect(menu?.session.isChild).toBe(true);
+    expect(menu).not.toBeNull();
+    await menu?.updateComplete;
+    expect(menu?.querySelector('[value="toggle-pin"]')).toBeNull();
   });
 
   it("uses the refreshed category when deciding whether a header group move is a no-op", async () => {

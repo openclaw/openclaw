@@ -114,7 +114,7 @@ function optionArgs(options: PathCommandOptions): string[] {
 
 async function invokePathCli(args: string[], runtime: TestRuntime): Promise<void> {
   const previousExitCode = process.exitCode;
-  process.exitCode = undefined;
+  process.exitCode = 0;
   const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
     runtime.writeStdout(String(chunk));
     return true;
@@ -141,7 +141,9 @@ async function invokePathCli(args: string[], runtime: TestRuntime): Promise<void
   } finally {
     stdoutWrite.mockRestore();
     stderrWrite.mockRestore();
-    process.exitCode = previousExitCode;
+    // oxlint-disable-next-line no-warning-comments -- replace the pending link after Bun ships the fix.
+    // TODO(bun#42607): Assign undefined once Bun clears a nonzero process.exitCode.
+    process.exitCode = previousExitCode ?? 0;
   }
 }
 
@@ -441,25 +443,49 @@ describe("openclaw path CLI", () => {
       expect(readFileSync(filePath, "utf-8")).toBe(before);
     });
 
-    it("CLI-S05 --dry-run --diff prints a unified diff", async () => {
+    it.runIf(process.platform !== "win32").each([
+      { label: "LF", before: '{ "version": "1.0" }\n', json: false },
+      { label: "CRLF", before: '{ "version": "1.0" }\r\n', json: true },
+      { label: "no final newline", before: '{ "version": "1.0" }', json: true },
+      {
+        label: "middle-of-file",
+        before: `{\n${"  // leading context\n".repeat(5)}  "version": "1.0"\n${"  // trailing context\n".repeat(5)}}\n`,
+        json: true,
+      },
+    ])("emits an applicable $label dry-run patch", async ({ before, json }) => {
       const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "gateway.jsonc");
-      const before = '{\n  "version": "1.0",\n  "enabled": true\n}\n';
+      const patchPath = join(workspaceDir, "preview.patch");
+      const after = before.replace('"1.0"', '"2.0"');
       writeFileSync(filePath, before, "utf-8");
       const rt = createTestRuntime();
       await pathSetCommand(
         "oc://gateway.jsonc/version",
         "2.0",
-        { cwd: workspaceDir, human: true, dryRun: true, diff: true },
+        { cwd: workspaceDir, human: !json, json, dryRun: true, diff: true },
         rt,
       );
+
       expect(rt.exitCode).toBe(0);
-      const out = stdoutText(rt);
-      expect(out).toContain("--- ");
-      expect(out).toContain("+++ ");
-      expect(out).toContain('-  "version": "1.0",');
-      expect(out).toContain('+  "version": "2.0",');
+      const output = stdoutText(rt);
+      const payload = json ? JSON.parse(output) : undefined;
+      const patch = json ? payload.diff : output;
+      if (json) {
+        expect(payload.bytes).toBe(after);
+      }
+      writeFileSync(patchPath, patch, "utf-8");
       expect(readFileSync(filePath, "utf-8")).toBe(before);
+      execFileSync(
+        "git",
+        ["apply", "--check", `-p${filePath.split("/").filter(Boolean).length}`, patchPath],
+        {
+          cwd: workspaceDir,
+        },
+      );
+      execFileSync("patch", ["--dry-run", "--fuzz=0", filePath, patchPath]);
+      expect(readFileSync(filePath, "utf-8")).toBe(before);
+      execFileSync("patch", ["--fuzz=0", filePath, patchPath]);
+      expect(readFileSync(filePath, "utf-8")).toBe(after);
     });
 
     it("CLI-S05c --dry-run --diff shows line-ending-only byte changes", async () => {
@@ -557,6 +583,49 @@ describe("openclaw path CLI", () => {
         "allowlist",
       );
     });
+
+    it("writes literal dollar replacement text through the registered Markdown command", async () => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
+      const filePath = join(workspaceDir, "AGENTS.md");
+      writeFileSync(filePath, "## Tools\n\n- command: old\n- keep: stable\n", "utf-8");
+      const value = "literal $$ $& $1 $` $' $HOME";
+      const rt = createTestRuntime();
+
+      await pathSetCommand(
+        "oc://AGENTS.md/tools/command/command",
+        value,
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
+
+      expect(rt.exitCode).toBe(0);
+      expect(readFileSync(filePath, "utf-8")).toBe(
+        `## Tools\n\n- command: ${value}\n- keep: stable\n`,
+      );
+    });
+
+    it.each([false, true])(
+      "refuses sentinel-bearing Markdown insertion in the CLI (dry-run=%s)",
+      async (dryRun) => {
+        const workspaceDir = tempDirs.make("oc-path-cli-");
+        const filePath = join(workspaceDir, "AGENTS.md");
+        const before = "---\nname: x\n---\n";
+        writeFileSync(filePath, before, "utf-8");
+        const rt = createTestRuntime();
+
+        await pathSetCommand(
+          "oc://AGENTS.md/[frontmatter]/+note",
+          "before__OPENCLAW_REDACTED__after",
+          { cwd: workspaceDir, json: true, dryRun },
+          rt,
+        );
+
+        expect(rt.exitCode).toBe(1);
+        expect(stderrText(rt)).toContain("OC_EMIT_SENTINEL");
+        expect(stderrText(rt)).toContain("oc://AGENTS.md/[frontmatter]/+note");
+        expect(readFileSync(filePath, "utf-8")).toBe(before);
+      },
+    );
 
     it("CLI-S03 sentinel-bearing value is refused at emit", async () => {
       const workspaceDir = tempDirs.make("oc-path-cli-");

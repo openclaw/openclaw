@@ -9,13 +9,15 @@ import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import {
-  deliveryContextFromChannelRoute,
   deliveryContextFromSession,
+  sessionDeliveryOrigin,
+  sessionDeliveryRoute,
+} from "../../utils/delivery-context.read.js";
+import {
+  deliveryContextFromChannelRoute,
   mergeDeliveryContext,
   normalizeDeliveryContext,
   normalizeSessionDeliveryState,
-  sessionDeliveryOrigin,
-  sessionDeliveryRoute,
 } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
@@ -171,7 +173,8 @@ function deriveGroupSessionPatch(params: {
   }
 
   const channel = resolution.channel;
-  const subject = params.ctx.GroupSubject?.trim();
+  const subject = normalizeOptionalString(params.ctx.GroupSubject);
+  const topicName = normalizeOptionalString(params.ctx.TopicName);
   const space = params.ctx.GroupSpace?.trim();
   const explicitChannel = params.ctx.GroupChannel?.trim();
   const subjectLooksChannel = Boolean(subject?.startsWith("#"));
@@ -207,10 +210,14 @@ function deriveGroupSessionPatch(params: {
   if (space) {
     patch.space = space;
   }
+  if (topicName) {
+    patch.topicName = topicName;
+  }
 
   const displayName = buildGroupDisplayName({
     provider: channel,
     subject: nextSubject ?? (nextGroupChannel ? undefined : params.existing?.subject),
+    topicName: topicName ?? params.existing?.topicName,
     groupChannel: nextGroupChannel ?? (nextSubject ? undefined : params.existing?.groupChannel),
     space: space ?? params.existing?.space,
     id: resolution.id,

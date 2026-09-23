@@ -1,8 +1,9 @@
-import { execFile } from "node:child_process";
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import { listAgentIds, resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { resolveEffectiveAgentRuntime } from "openclaw/plugin-sdk/command-auth-native";
 import type { HealthCheck, HealthFinding } from "openclaw/plugin-sdk/health";
+import { runUtf8CommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
+import { readCodexPluginConfig } from "./app-server/config-parsing.js";
 import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexAppServerStartOptionsForAgent,
@@ -12,6 +13,7 @@ import {
   resolveManagedCodexAppServerStartOptions,
   resolveManagedCodexNativeCommand,
 } from "./app-server/managed-binary.js";
+import { describeCodexSpawnError, findCodexAppServerSpawnError } from "./app-server/spawn-error.js";
 import { CODEX_APP_SERVER_VERSION } from "./app-server/version.js";
 
 export const CODEX_MANAGED_APP_SERVER_CHECK_ID = "codex/managed-app-server";
@@ -39,13 +41,14 @@ type CodexManagedDoctorRegistrationHost = {
 
 function managedCodexFinding(params: {
   message: string;
+  severity?: HealthFinding["severity"];
   path?: string;
   requirement?: string;
   fixHint?: string;
 }): HealthFinding {
   return {
     checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
-    severity: "error",
+    severity: params.severity ?? "error",
     source: "codex",
     message: params.message,
     ...(params.path ? { path: params.path } : {}),
@@ -64,26 +67,31 @@ function parseCodexVersion(output: string): string | undefined {
   )?.[1];
 }
 
-function runVersionCommand(command: string): Promise<VersionCommandResult> {
-  return new Promise((resolve, reject) => {
-    execFile(
-      command,
-      ["--version"],
-      {
-        encoding: "utf8",
-        maxBuffer: CODEX_VERSION_MAX_BUFFER_BYTES,
-        timeout: CODEX_VERSION_TIMEOUT_MS,
-        windowsHide: true,
-      },
-      (error, stdout, stderr) => {
-        if (error) {
-          reject(new Error(readErrorMessage(error), { cause: error }));
-          return;
-        }
-        resolve({ stdout, stderr });
-      },
-    );
+async function runVersionCommand(
+  command: string,
+  env: NodeJS.ProcessEnv,
+): Promise<VersionCommandResult> {
+  const result = await runUtf8CommandWithTimeout([command, "--version"], {
+    baseEnv: env,
+    input: "",
+    timeoutMs: CODEX_VERSION_TIMEOUT_MS,
+    maxOutputBytes: CODEX_VERSION_MAX_BUFFER_BYTES,
+    outputCapture: "head",
+    terminateOnOutputLimit: true,
+    killProcessTree: true,
+    killSignal: "SIGKILL",
+    killGraceMs: 0,
   });
+  if (result.termination !== "exit" || result.code !== 0 || result.outputLimitExceeded) {
+    throw new Error(
+      result.outputLimitExceeded
+        ? "Version output exceeded its capture limit"
+        : result.termination === "timeout"
+          ? `Version probe timed out after ${CODEX_VERSION_TIMEOUT_MS} ms`
+          : `Version probe failed (${result.signal ?? result.code ?? result.termination})`,
+    );
+  }
+  return result;
 }
 
 function createCodexManagedAppServerHealthCheck(params: {
@@ -97,7 +105,6 @@ function createCodexManagedAppServerHealthCheck(params: {
   const isDesktopCommand = params.deps?.isDesktopCommand ?? isManagedCodexDesktopCommand;
   const resolveNativeCommand =
     params.deps?.resolveNativeCommand ?? resolveManagedCodexNativeCommand;
-  const executeVersion = params.deps?.runVersionCommand ?? runVersionCommand;
 
   return {
     id: CODEX_MANAGED_APP_SERVER_CHECK_ID,
@@ -116,7 +123,12 @@ function createCodexManagedAppServerHealthCheck(params: {
       }
 
       const env = ctx.env ?? process.env;
-      let resolved;
+      const isFinalization = ctx.mode === "fix" && env.OPENCLAW_UPDATE_POST_CORE === "1";
+      const versionFailureSeverity = isFinalization ? "warning" : "error";
+      const versionFailureHint = isFinalization
+        ? "Codex readiness will be rechecked by its plugin after restart; inspect the Codex plugin if the warning persists."
+        : undefined;
+      const candidates = [];
       for (const agentId of listAgentIds(ctx.cfg)) {
         const model = resolveDefaultModelForAgent({ cfg: ctx.cfg, agentId });
         if (
@@ -129,13 +141,25 @@ function createCodexManagedAppServerHealthCheck(params: {
         ) {
           continue;
         }
-        const agentStart = resolveAgentStartOptions({
-          startOptions: start,
-          agentDir: resolveAgentDir(ctx.cfg, agentId, env),
-          env,
-        });
+        candidates.push(
+          resolveAgentStartOptions({
+            startOptions: start,
+            agentDir: resolveAgentDir(ctx.cfg, agentId, env),
+            env,
+          }),
+        );
+      }
+      if (
+        ctx.cfg.plugins?.entries?.codex?.enabled === true &&
+        readCodexPluginConfig(pluginConfig).sessionCatalog?.enabled !== false
+      ) {
+        // Passive catalogs use the package even when no agent routes turns through Codex.
+        candidates.push({ ...start, managedCommandOrder: "package-only" as const });
+      }
+      let resolved;
+      for (const candidate of candidates) {
         try {
-          resolved = await resolveStartOptions(agentStart, { pluginRoot: params.pluginRoot });
+          resolved = await resolveStartOptions(candidate, { pluginRoot: params.pluginRoot });
         } catch (error) {
           return [
             managedCodexFinding({
@@ -172,14 +196,26 @@ function createCodexManagedAppServerHealthCheck(params: {
 
       let output: VersionCommandResult;
       try {
-        output = await executeVersion(nativeCommand);
+        output = await (params.deps?.runVersionCommand
+          ? params.deps.runVersionCommand(nativeCommand)
+          : runVersionCommand(nativeCommand, env));
       } catch (error) {
+        const spawnFailure = findCodexAppServerSpawnError(
+          describeCodexSpawnError(error, nativeCommand),
+        );
         return [
           managedCodexFinding({
-            message: `Managed Codex app-server version check failed: ${readErrorMessage(error)}`,
+            message:
+              spawnFailure?.message ??
+              `Managed Codex app-server version check failed: ${readErrorMessage(error)}`,
+            severity:
+              spawnFailure && resolved.managedCommandOrder === "package-only"
+                ? "warning"
+                : versionFailureSeverity,
             path: nativeCommand,
             requirement: `Codex ${CODEX_APP_SERVER_VERSION} must report its version within ${CODEX_VERSION_TIMEOUT_MS} ms`,
             fixHint:
+              versionFailureHint ??
               "Repair or reinstall the staged OpenClaw package, then rerun the candidate check before cutover.",
           }),
         ];
@@ -189,12 +225,14 @@ function createCodexManagedAppServerHealthCheck(params: {
       if (detectedVersion !== CODEX_APP_SERVER_VERSION) {
         return [
           managedCodexFinding({
+            severity: versionFailureSeverity,
             message: detectedVersion
               ? `Managed Codex app-server version mismatch: expected ${CODEX_APP_SERVER_VERSION}, detected ${detectedVersion}.`
               : `Managed Codex app-server did not report a parseable version; expected ${CODEX_APP_SERVER_VERSION}.`,
             path: nativeCommand,
             requirement: `the exact OpenClaw-pinned Codex version ${CODEX_APP_SERVER_VERSION}`,
             fixHint:
+              versionFailureHint ??
               "Reinstall the staged OpenClaw package so its managed @openai/codex dependency matches the pinned version, then rerun the candidate check.",
           }),
         ];

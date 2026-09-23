@@ -3,15 +3,27 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 function databasePath(stateDir: string, agentId: string): string {
   return path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite");
@@ -38,11 +50,6 @@ function readClaim(databaseAgentId: string, databasePathname: string, key: strin
   );
 }
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-});
-
 it("keys the startup shortcut to source layout and makes Doctor rescan", async () => {
   const root = fs.realpathSync.native(tempDirs.make("openclaw-legacy-main-layout-"));
   const stateDir = path.join(root, "state");
@@ -52,7 +59,7 @@ it("keys the startup shortcut to source layout and makes Doctor rescan", async (
   const mainPath = databasePath(stateDir, "main");
   const opsPath = databasePath(stateDir, "ops");
   seedClaim("main", mainPath, "agent:other:keep");
-  await migrateLegacyMainSessionKeys({ cfg, env, mode: "automatic" });
+  await migrateLegacyMainSessionKeys({ cfg, env, mode: "doctor-fix" });
 
   const changedStore = await migrateLegacyMainSessionKeys({
     cfg: {
@@ -70,7 +77,7 @@ it("keys the startup shortcut to source layout and makes Doctor rescan", async (
   closeOpenClawAgentDatabasesForTest();
   fs.renameSync(mainPath, `${mainPath}.before-restore`);
   fs.renameSync(restoredPath, mainPath);
-  const restored = await migrateLegacyMainSessionKeys({ cfg, env, mode: "automatic" });
+  const restored = await migrateLegacyMainSessionKeys({ cfg, env, mode: "doctor-fix" });
   expect(restored.outcomes.map((outcome) => outcome.kind)).toContain("migrated-cross-store");
   expect(readClaim("main", mainPath, "agent:main:restored")).toBeUndefined();
   expect(readClaim("ops", opsPath, "agent:ops:restored")).toBeDefined();
@@ -78,12 +85,12 @@ it("keys the startup shortcut to source layout and makes Doctor rescan", async (
   const jsonPath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
   fs.mkdirSync(path.dirname(jsonPath), { recursive: true });
   fs.writeFileSync(jsonPath, "{}\n");
-  const laterJson = await migrateLegacyMainSessionKeys({ cfg, env, mode: "automatic" });
+  const laterJson = await migrateLegacyMainSessionKeys({ cfg, env, mode: "detect" });
   expect(laterJson.outcomes.map((outcome) => outcome.kind)).toContain("legacy-json-store");
   fs.unlinkSync(jsonPath);
 
   seedClaim("main", mainPath, "agent:main:late");
-  const startupShortcut = await migrateLegacyMainSessionKeys({ cfg, env, mode: "automatic" });
+  const startupShortcut = await migrateLegacyMainSessionKeys({ cfg, env, mode: "detect" });
   expect(startupShortcut.outcomes).toEqual([
     { kind: "no-legacy-rows", detail: "matching completed ledger" },
   ]);

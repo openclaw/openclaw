@@ -12,6 +12,7 @@ import { buildConfigSchemaCore } from "../config/schema.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import { readRegularFileSync } from "../infra/regular-file.js";
+import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { VERSION } from "../version.js";
 import {
@@ -38,6 +39,7 @@ import {
   type SupportRedactionContext,
 } from "./diagnostic-support-redaction.js";
 import { readConfiguredLogTail, type LogTailPayload } from "./log-tail.js";
+import { formatDiagnosticFilenameTimestamp } from "./timestamps.js";
 
 const DIAGNOSTIC_SUPPORT_EXPORT_VERSION = 1;
 
@@ -182,10 +184,6 @@ type CollectedSupportSnapshot = {
   summary: SupportSnapshotStatus;
   file?: DiagnosticSupportExportFile;
 };
-
-function formatExportTimestamp(now: Date): string {
-  return now.toISOString().replace(/[:.]/g, "-");
-}
 
 function normalizePositiveInteger(value: unknown, fallback: number): number {
   const parsed = typeof value === "number" ? value : Number(value);
@@ -332,6 +330,7 @@ function readConfigExport(options: {
   const redactedConfigPath = redactPathForSupport(options.configPath, options);
   let stat: fs.Stats | undefined;
   try {
+    assertNotUpdateCapturePath(options.configPath, options.stateDir);
     stat = fs.statSync(options.configPath);
     const { buffer } = readRegularFileSync({
       filePath: options.configPath,
@@ -414,10 +413,21 @@ function readStabilityBundle(
   if (target === false) {
     return { status: "missing", dir: "$OPENCLAW_STATE_DIR/logs/stability" };
   }
-  if (target === undefined || target === "latest") {
-    return readLatestDiagnosticStabilityBundleSync({ stateDir });
+  try {
+    if (target !== undefined && target !== "latest") {
+      assertNotUpdateCapturePath(target, stateDir);
+    }
+    const result =
+      target === undefined || target === "latest"
+        ? readLatestDiagnosticStabilityBundleSync({ stateDir })
+        : readDiagnosticStabilityBundleFileSync(target);
+    if (result.status === "found") {
+      assertNotUpdateCapturePath(result.path, stateDir);
+    }
+    return result;
+  } catch (error) {
+    return { status: "failed", error };
   }
-  return readDiagnosticStabilityBundleFileSync(target);
 }
 
 function sanitizeLogTail(tail: LogTailPayload, options: SupportRedactionContext): SanitizedLogTail {
@@ -531,6 +541,7 @@ async function collectSupportLogTail(params: {
       limit: params.limit,
       maxBytes: params.maxBytes,
     });
+    assertNotUpdateCapturePath(tail.file, params.redaction.stateDir);
     return sanitizeLogTail(tail, params.redaction);
   } catch (error) {
     return failedLogTail(error, params.redaction);
@@ -580,7 +591,7 @@ function renderSummary(params: {
       : `no stability bundle included (${params.stability.status})`;
   const configLine = params.config.exists
     ? `config shape included (${params.config.parseOk ? "parsed" : "parse failed"})`
-    : "config file not found";
+    : (params.config.error ?? "config file not found");
   const logTailLine =
     params.logTail.status === "failed"
       ? `sanitized log tail unavailable (${params.logTail.error})`
@@ -636,7 +647,7 @@ function defaultOutputPath(options: { now: Date; stateDir: string }): string {
     options.stateDir,
     "logs",
     "support",
-    `${SUPPORT_EXPORT_PREFIX}${formatExportTimestamp(options.now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`,
+    `${SUPPORT_EXPORT_PREFIX}${formatDiagnosticFilenameTimestamp(options.now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`,
   );
 }
 
@@ -659,7 +670,7 @@ function resolveOutputPath(options: {
     if (fs.statSync(resolved).isDirectory()) {
       return path.join(
         resolved,
-        `${SUPPORT_EXPORT_PREFIX}${formatExportTimestamp(options.now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`,
+        `${SUPPORT_EXPORT_PREFIX}${formatDiagnosticFilenameTimestamp(options.now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`,
       );
     }
   } catch {

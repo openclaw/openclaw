@@ -3,7 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
+import { readDeviceAuthTokenForTest } from "../infra/device-auth-store.test-support.js";
 import { generateStoredDeviceIdentity } from "../infra/device-identity-store.js";
 import { loadDeviceIdentityIfPresent } from "../infra/device-identity.js";
 import { resolveExecApprovalsPath } from "../infra/exec-approvals-config.js";
@@ -96,7 +96,9 @@ describe("node-host startup state migrations", () => {
     await runStartupMigrations({ env, log });
 
     expect(fs.existsSync(sourcePath)).toBe(false);
-    expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env })).toMatchObject({
+    expect(
+      readDeviceAuthTokenForTest({ deviceId: "device-1", role: "operator", env }),
+    ).toMatchObject({
       token: "legacy-token",
       scopes: ["operator.read", "operator.write"],
     });

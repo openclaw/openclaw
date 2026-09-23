@@ -4,7 +4,6 @@ import {
   createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
-  type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
   collectErrorGraphCandidates,
@@ -15,20 +14,16 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginJsonValue } from "openclaw/plugin-sdk/plugin-entry";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getSlackRuntime } from "../runtime.js";
+import { parseSlackMessageEvent } from "../types.js";
+import type { SlackIngressTurnLifecycle } from "./ingress.types.js";
 import { isNonRecoverableSlackAuthError } from "./reconnect-policy.js";
+import { isTransientSlackThreadLookupError } from "./thread-resolution.js";
 
 const SLACK_INGRESS_PAYLOAD_VERSION = 1;
 const SLACK_INGRESS_POLL_INTERVAL_MS = 1_000;
 const SLACK_BOLT_AUTHORIZATION_ERROR = "slack_bolt_authorization_error";
 
 const SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY = "openclawIngressLifecycle";
-
-export type SlackIngressTurnLifecycle = Omit<
-  ChannelIngressMonitorLifecycle,
-  "onAdoptionFinalizing"
-> & {
-  onSessionRouted?: (sessionKey: string) => Promise<void>;
-};
 
 type SlackIngressPayload = {
   version: number;
@@ -160,7 +155,7 @@ function decodeSlackIngressPayload(
   eventId: string,
 ): { version: unknown; body: SlackIngressBody } {
   if (payload.kind === "relay") {
-    if (!asOptionalRecord(payload.message)) {
+    if (!parseSlackMessageEvent(payload.message)) {
       throw new SlackIngressPayloadError(`Slack relay ingress payload ${eventId} was invalid.`);
     }
     return { version: payload.version, body: payload };
@@ -190,16 +185,21 @@ function inspectSlackIngress(raw: SlackIngressRawEvent): { eventId: string; lane
 }
 
 function resolveSlackIngressNonRetryableFailure(error: unknown) {
-  for (const candidate of collectErrorGraphCandidates(error, (current) => [
+  const candidates = collectErrorGraphCandidates(error, (current) => [
     current.cause,
     current.error,
     current.original,
-  ])) {
+  ]);
+  // Bolt wraps auth.test outages in AuthorizationError too. Keep the durable
+  // event retryable for those failures; dispatch still requires authorization.
+  const transientAuthorizationFailure = candidates.some(isTransientSlackThreadLookupError);
+  for (const candidate of candidates) {
     if (candidate instanceof SlackIngressPayloadError || candidate instanceof SyntaxError) {
       return { reason: "invalid-event", message: formatErrorMessage(candidate) };
     }
     if (
-      extractErrorCode(candidate) === SLACK_BOLT_AUTHORIZATION_ERROR ||
+      (extractErrorCode(candidate) === SLACK_BOLT_AUTHORIZATION_ERROR &&
+        !transientAuthorizationFailure) ||
       isNonRecoverableSlackAuthError(candidate)
     ) {
       return { reason: "slack-auth", message: formatErrorMessage(candidate) };
@@ -292,8 +292,35 @@ export function createSlackDurableIngress(
         releaseChannel?.();
         lifecycle.abortSignal.removeEventListener("abort", settleTurn);
       };
+      const retainChannelTurn = () => {
+        if (releaseChannel) {
+          return;
+        }
+        const channelTurn = createDeferred<void>();
+        const channelTurns = activeChannelTurns.get(laneKey) ?? new Set<Promise<void>>();
+        channelTurns.add(channelTurn.promise);
+        activeChannelTurns.set(laneKey, channelTurns);
+        releaseChannel = () => channelTurn.resolve();
+        void channelTurn.promise.then(() => {
+          channelTurns.delete(channelTurn.promise);
+          if (channelTurns.size === 0 && activeChannelTurns.get(laneKey) === channelTurns) {
+            activeChannelTurns.delete(laneKey);
+          }
+        });
+        lifecycle.abortSignal.addEventListener("abort", settleTurn, { once: true });
+      };
       const routedLifecycle: SlackIngressTurnLifecycle = {
         ...lifecycle,
+        onDispatchWaiting: () => {
+          lifecycle.abortSignal.throwIfAborted();
+          // Waiting for a twin's durable adoption must not occupy the channel
+          // lane. Retain the migration fence until this event settles, though.
+          retainChannelTurn();
+          adoptOnCompletion = true;
+          lifecycle.onDeferred();
+          lifecycle.onAdoptionFinalizing();
+          monitor.requestDrain();
+        },
         onSessionRouted: async (sessionKey) => {
           if (routedSession !== undefined) {
             if (routedSession !== sessionKey) {
@@ -310,24 +337,13 @@ export function createSlackDurableIngress(
             ? previousTurn.then(() => releasedCurrentTurn.promise)
             : releasedCurrentTurn.promise;
           activeSessionTurns.set(sessionKey, currentTurn);
-          const channelTurn = createDeferred<void>();
-          const channelTurns = activeChannelTurns.get(laneKey) ?? new Set<Promise<void>>();
-          channelTurns.add(channelTurn.promise);
-          activeChannelTurns.set(laneKey, channelTurns);
+          retainChannelTurn();
           void currentTurn.then(() => {
             if (activeSessionTurns.get(sessionKey) === currentTurn) {
               activeSessionTurns.delete(sessionKey);
             }
           });
-          void channelTurn.promise.then(() => {
-            channelTurns.delete(channelTurn.promise);
-            if (channelTurns.size === 0 && activeChannelTurns.get(laneKey) === channelTurns) {
-              activeChannelTurns.delete(laneKey);
-            }
-          });
           releaseSession = () => releasedCurrentTurn.resolve();
-          releaseChannel = () => channelTurn.resolve();
-          lifecycle.abortSignal.addEventListener("abort", settleTurn, { once: true });
           // Preserve shipped channel lanes until the prepared route proves its
           // session; channel-ID migration therefore still fences all traffic.
           lifecycle.onDeferred();
@@ -400,10 +416,15 @@ export function createSlackDurableIngress(
           await routedLifecycle.onAdopted();
         }
       } catch (error) {
-        settleTurn();
+        try {
+          await lifecycle.onFailed?.(error);
+        } finally {
+          settleTurn();
+        }
         throw error;
       }
     },
+    deferredClaims: "wait-on-stop",
     pollIntervalMs: options.pollIntervalMs ?? SLACK_INGRESS_POLL_INTERVAL_MS,
     retention: "standard",
     appendRetryDelaysMs: [0],

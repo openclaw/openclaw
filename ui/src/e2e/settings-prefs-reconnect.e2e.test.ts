@@ -2,6 +2,7 @@
 import type { BrowserContext, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
+  controlUiBundledSettingsStorageKey,
   installMockGateway,
   type MockGatewayControls,
   type MockGatewayRequest,
@@ -136,6 +137,82 @@ function themeModeOption(page: Page, mode: "system" | "light" | "dark") {
 }
 
 suite.define(() => {
+  it.each(["new", "chat"])(
+    "keeps %s renders storage-free and applies cross-tab send preferences",
+    async (route) => {
+      const context = await createContext();
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page, { agentModel: "openai/gpt-5.6-luna" });
+      try {
+        await page.goto(`${suite.server.baseUrl}${route}`);
+        const selector =
+          route === "new"
+            ? ".new-session-page__message"
+            : ".agent-chat__composer-combobox textarea";
+        const textarea = page.locator(selector).first();
+        await textarea.waitFor();
+        await textarea.fill("Synthetic preference proof");
+        const reads = await page.evaluate(async (activeRoute) => {
+          const owner = document.querySelector(
+            activeRoute === "new" ? "openclaw-new-session-page" : "openclaw-chat-pane",
+          ) as HTMLElement & { requestUpdate(): void; updateComplete: Promise<unknown> };
+          const descriptor = Object.getOwnPropertyDescriptor(Storage.prototype, "getItem")!;
+          const keys: string[] = [];
+          Storage.prototype.getItem = function (key) {
+            if (/^openclaw\.control\.(settings|currentGateway|token)\./u.test(key)) {
+              keys.push(key);
+            }
+            return Reflect.apply(descriptor.value, this, [key]);
+          };
+          try {
+            for (let index = 0; index < 10; index++) {
+              owner.requestUpdate();
+              await owner.updateComplete;
+            }
+            return keys;
+          } finally {
+            Object.defineProperty(Storage.prototype, "getItem", descriptor);
+          }
+        }, route);
+        expect(reads).toEqual([]);
+
+        const otherTab = await context.newPage();
+        // An inert same-origin document produces a real cross-tab storage event,
+        // without a second app racing to write server preferences.
+        await otherTab.route("**/preference-writer", (request) =>
+          request.fulfill({
+            contentType: "text/html",
+            body: "<!doctype html><title>Preference writer</title>",
+          }),
+        );
+        await otherTab.goto(`${suite.server.baseUrl}preference-writer`);
+        await otherTab.evaluate((key) => {
+          const current = JSON.parse(localStorage.getItem(key) ?? "{}");
+          localStorage.setItem(
+            key,
+            JSON.stringify({ ...current, chatSendShortcut: "modifier-enter" }),
+          );
+        }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
+        await expect
+          .poll(() =>
+            page.evaluate(() => {
+              const app = document.querySelector("openclaw-app") as HTMLElement & {
+                runtime: { context: { theme: { settings: { chatSendShortcut: string } } } };
+              };
+              return app.runtime.context.theme.settings.chatSendShortcut;
+            }),
+          )
+          .toBe("modifier-enter");
+        await textarea.press("Enter");
+        expect(await textarea.inputValue()).toBe("Synthetic preference proof\n");
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      } finally {
+        await context.close();
+      }
+    },
+  );
+
   it("preserves a profile's explicit light theme while reconnecting", async () => {
     const context = await createContext("dark");
     const page = await context.newPage();
@@ -166,10 +243,10 @@ suite.define(() => {
         .toMatchObject({ theme: "claw", themeMode: "light" });
 
       await gateway.setOnline(false);
-      await page.locator(".sidebar-footer-bar__status").filter({ hasText: "Offline" }).waitFor();
+      await page.locator(".gateway-status__label").filter({ hasText: "Reconnecting…" }).waitFor();
       await page
         .locator(".agent-chat__composer-status-band")
-        .filter({ hasText: "Offline" })
+        .filter({ hasText: "You can keep writing." })
         .waitFor();
 
       await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
@@ -188,7 +265,10 @@ suite.define(() => {
     const context = await createContext();
     const page = await context.newPage();
     const initial = configResponse({ theme: "claw", themeMode: "system" }, "prefs-a-1");
-    const committed = configResponse({ theme: "knot", themeMode: "system" }, "prefs-a-2");
+    const committed = configResponse(
+      { theme: "knot", themeMode: "system", accent: "theme" },
+      "prefs-a-2",
+    );
     const gateway = await installMockGateway(page, {
       methodResponses: { "config.get": initial },
     });
@@ -207,7 +287,7 @@ suite.define(() => {
       });
 
       const patch = await gateway.waitForRequest("config.patch");
-      expect(patchPrefs(patch)).toEqual({ theme: "knot" });
+      expect(patchPrefs(patch)).toEqual({ theme: "knot", accent: "theme" });
       // Reconnect owns one authoritative read even while the pending LWW preference shadows it.
       await waitForRequestCount(gateway, "config.get", configGetsBeforeEdit + 1);
 
@@ -224,7 +304,10 @@ suite.define(() => {
     const context = await createContext();
     const page = await context.newPage();
     const initial = configResponse({ theme: "claw", themeMode: "system" }, "prefs-scope-1");
-    const committed = configResponse({ theme: "knot", themeMode: "system" }, "prefs-scope-2");
+    const committed = configResponse(
+      { theme: "knot", themeMode: "system", accent: "theme" },
+      "prefs-scope-2",
+    );
     const gateway = await installMockGateway(page, {
       methodResponses: { "config.get": initial },
     });
@@ -251,7 +334,7 @@ suite.define(() => {
       });
 
       const patch = await gateway.waitForRequest("config.patch");
-      expect(patchPrefs(patch)).toEqual({ theme: "knot" });
+      expect(patchPrefs(patch)).toEqual({ theme: "knot", accent: "theme" });
       await gateway.resolveDeferred("config.patch", committed);
       await expectThemeActive(page, "knot");
       await expect
@@ -291,7 +374,9 @@ suite.define(() => {
       await proxyReconnect(pageA, gatewayA, async () => {
         await themeCard(pageA, "knot").click();
         await expectThemeActive(pageA, "knot");
-        expect(await readPendingPrefStorage(pageA)).toEqual([{ theme: "knot" }]);
+        expect(await readPendingPrefStorage(pageA)).toEqual([
+          { theme: "knot", accent: "theme", fontUi: null, fontChat: null },
+        ]);
         await themeCard(pageB, "dash").click();
         await expectThemeActive(pageB, "dash");
         expect(await readPendingPrefStorage(pageB)).toEqual([]);
@@ -334,7 +419,7 @@ suite.define(() => {
       await themeCard(pageA, "knot").click();
       const patchA = await gatewayA.waitForRequest("config.patch");
       const prefsA = patchPrefs(patchA);
-      expect(prefsA).toEqual({ theme: "knot" });
+      expect(prefsA).toEqual({ theme: "knot", accent: "theme" });
       const themeCommitted = configResponse(prefsA, "prefs-b-2");
       await gatewayA.setMethodResponse("config.get", themeCommitted);
       await gatewayA.resolveDeferred("config.patch", themeCommitted);
@@ -391,7 +476,7 @@ suite.define(() => {
 
       await themeCard(page, "knot").click();
       const patch = await gateway.waitForRequest("config.patch");
-      expect(patchPrefs(patch)).toEqual({ theme: "knot" });
+      expect(patchPrefs(patch)).toEqual({ theme: "knot", accent: "theme" });
 
       const serverChanged = configResponse({ locale: "de", theme: "claw" }, "prefs-c-2");
       await gateway.setMethodResponse("config.get", serverChanged);

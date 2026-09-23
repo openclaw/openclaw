@@ -1,4 +1,3 @@
-// Matrix plugin module implements session store metadata behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   deliveryContextFromSession,

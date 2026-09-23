@@ -4,9 +4,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, type TestContext } from "vitest";
 import { inspectManagedProcessGroup } from "../../scripts/lib/managed-child-process.mts";
-import { isProcessAlive, waitForDead, waitForFile } from "../helpers/process-wait.js";
+import {
+  isProcessAlive,
+  waitForDead,
+  waitForFile,
+  waitForFixtureFile,
+} from "../helpers/process-wait.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 import { runVitestShutdownCommand } from "../helpers/vitest-shutdown-command.js";
+import { fixturePreloadArgs } from "./fixtures/ci-fixture-runtime.cjs";
 
 const fixture = fileURLToPath(new URL("../fixtures/vitest-fork-shutdown.mjs", import.meta.url));
 // Outside the enclosing Vitest TMPDIR: its owner must not erase retained writers.
@@ -73,6 +79,12 @@ it.for([
   { scenario: "hung-exit", setup: "shared", fail: false },
   { scenario: "bad-exit", setup: "shared", fail: false },
   { scenario: "forced", setup: "raw", fail: false },
+  { scenario: "unexpected-exit-zero", setup: "raw", fail: false },
+  { scenario: "unexpected-exit-nonzero", setup: "raw", fail: false },
+  { scenario: "unexpected-start", setup: "raw", fail: false },
+  ...(process.platform === "win32"
+    ? []
+    : [{ scenario: "unexpected-signal", setup: "raw", fail: false }]),
 ])("joins $scenario shutdown with $setup setup (test failure: $fail)", (options, context) =>
   runJoinedShutdownTest(context, async () => {
     const tempDirs = createTempDirTracker();
@@ -91,7 +103,8 @@ it.for([
       return;
     }
     const brokenShutdown = scenario.startsWith("hung-") || scenario === "bad-exit";
-    expect(result.code, result.output).toBe(fail || brokenShutdown ? 1 : 0);
+    const unexpectedExit = scenario.startsWith("unexpected-");
+    expect(result.code, result.output).toBe(fail || brokenShutdown || unexpectedExit ? 1 : 0);
     if (fail) {
       expect(result.output).toContain("intentional fixture failure");
     }
@@ -109,7 +122,17 @@ it.for([
       );
     }
     expect(result.callerPreserved).toBe(true);
-    if (scenario.startsWith("hung-")) {
+    if (unexpectedExit) {
+      expect(result.output).toContain("Worker exited unexpectedly");
+      if (scenario === "unexpected-start") {
+        expect(result.output).toContain("during starting state");
+      }
+      expect(result.output).toContain("unexpected-exit-tail");
+      expect(result.output).not.toContain("[test] passed");
+      expect(result.events.some((event: { event: string }) => event.event === "terminate")).toBe(
+        false,
+      );
+    } else if (scenario.startsWith("hung-")) {
       // Advance the real stop deadline only after the worker reaches the hung boundary.
       expect(result.events).toContainEqual({ event: "deadline", delay: 60_000 });
       expect(result.output).toContain("Timeout waiting for worker to respond");
@@ -185,14 +208,18 @@ it.runIf(process.platform !== "win32").for(["signal", "timeout"])(
       const ownedDirs = createTempDirTracker();
       const root = ownedDirs.make("vitest-fork-cancellation-", fixtureRoots);
       const control = new URL("../fixtures/vitest-shutdown-cancellation.mjs", import.meta.url);
-      control.searchParams.set("root", root);
-      // Subscribe before launch; the producer publishes worker.pid atomically.
-      const watcher = fs.watch(root);
+      const preload = path.join(root, "cancellation-preload.mjs");
+      fs.writeFileSync(
+        preload,
+        `import {installVitestShutdownCancellation} from ${JSON.stringify(control.href)};
+installVitestShutdownCancellation({root:${JSON.stringify(root)},preload:import.meta.url});
+`,
+      );
       let child!: ChildProcess;
       const invocation = runFixture(
         root,
         { scenario: "slow-exit", setup: "shared", fail: false },
-        ["--import", control.href],
+        fixturePreloadArgs(preload),
         {
           onReady(owned) {
             child = owned;
@@ -204,36 +231,11 @@ it.runIf(process.platform !== "win32").for(["signal", "timeout"])(
         (result) => ({ result, error: undefined }),
         (error: unknown) => ({ result: undefined, error }),
       );
-      let cancelReady!: () => void;
-      const ready = new Promise<{ shim: number; worker: number }>((resolve, reject) => {
-        const readReady = () => {
-          try {
-            if (fs.existsSync(path.join(root, "worker.pid"))) {
-              resolve({
-                shim: Number(fs.readFileSync(path.join(root, "shim.pid"), "utf8")),
-                worker: Number(fs.readFileSync(path.join(root, "worker.pid"), "utf8")),
-              });
-            }
-          } catch (error) {
-            reject(error);
-          }
-        };
-        cancelReady = () => reject(context.signal.reason);
-        watcher.on("change", readReady).once("error", reject);
-        context.signal.addEventListener("abort", cancelReady, { once: true });
-        if (context.signal.aborted) cancelReady();
-        else readReady();
-        void outcome.then((result) => {
-          reject(
-            new Error(`Fixture exited before worker receipt: ${JSON.stringify(result)}`, {
-              cause: result.error,
-            }),
-          );
-        });
-      });
       const pids: number[] = [];
       try {
-        const { worker, shim } = await ready;
+        await waitForFixtureFile(path.join(root, "worker.pid"), invocation);
+        const shim = Number(fs.readFileSync(path.join(root, "shim.pid"), "utf8"));
+        const worker = Number(fs.readFileSync(path.join(root, "worker.pid"), "utf8"));
         context.signal.throwIfAborted();
         pids.push(shim, worker);
         process.kill(shim, "SIGSTOP");
@@ -297,9 +299,6 @@ it.runIf(process.platform !== "win32").for(["signal", "timeout"])(
         expectReleasedNamespace(root);
         ownedDirs.cleanup();
       } finally {
-        context.signal.removeEventListener("abort", cancelReady);
-        watcher.close();
-        watcher.removeAllListeners();
         for (const pid of pids) {
           if (isProcessAlive(pid)) {
             process.kill(pid, "SIGCONT");
@@ -336,8 +335,6 @@ fs.writeFileSync(process.argv[1] + ".tmp", String(process.pid));
 fs.renameSync(process.argv[1] + ".tmp", process.argv[1]);
 `;
       const controller = new AbortController();
-      // Watch before launch; the existing command deadline also bounds readiness.
-      const watcher = fs.watch(root);
       let child!: ChildProcess;
       const invocation = runVitestShutdownCommand({
         args: [
@@ -365,29 +362,12 @@ spawn(process.execPath, ["-e", ${JSON.stringify(descendantSource)}, process.argv
         (result) => ({ result, error: undefined }),
         (error: unknown) => ({ result: undefined, error }),
       );
-      let cancelReady!: () => void;
-      const ready = new Promise<number>((resolve, reject) => {
-        const readReady = () => {
-          try {
-            if (fs.existsSync(descendantPidPath)) {
-              const pid = Number(fs.readFileSync(descendantPidPath, "utf8"));
-              if (Number.isSafeInteger(pid) && pid > 0) resolve(pid);
-            }
-          } catch (error) {
-            reject(error);
-          }
-        };
-        cancelReady = () => reject(context.signal.reason);
-        watcher.on("change", readReady).once("error", reject);
-        context.signal.addEventListener("abort", cancelReady, { once: true });
-        if (context.signal.aborted) cancelReady();
-        else readReady();
-        void outcome.then((result) => {
-          reject(result.error ?? new Error("Fixture exited before descendant PID receipt"));
-        });
-      });
       try {
-        const descendantPid = await ready;
+        await waitForFixtureFile(descendantPidPath, invocation);
+        const descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+        if (!Number.isSafeInteger(descendantPid) || descendantPid <= 0) {
+          throw new Error("Invalid descendant PID receipt");
+        }
         context.signal.throwIfAborted();
         const childPid = child.pid!;
         const processes = execFileSync(
@@ -436,9 +416,6 @@ spawn(process.execPath, ["-e", ${JSON.stringify(descendantSource)}, process.argv
           }),
         );
       } finally {
-        context.signal.removeEventListener("abort", cancelReady);
-        watcher.close();
-        watcher.removeAllListeners();
         controller.abort();
         expect((await outcome).error).toMatchObject({ code: "ABORT_ERR" });
       }

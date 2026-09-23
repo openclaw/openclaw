@@ -14,6 +14,9 @@ const CASES: Array<{
   filename?: string;
   componentsV2?: boolean;
   expectedName: string;
+  text?: string;
+  textBlocks?: string[];
+  expectedText?: string;
 }> = [
   { label: "classic declared name", declaredName: "report.pdf", expectedName: "report.pdf" },
   {
@@ -35,6 +38,35 @@ const CASES: Array<{
     componentsV2: true,
     expectedName: "report.pdf",
   },
+  {
+    label: "classic repeated text blocks",
+    text: "",
+    textBlocks: ["Step A", "Step B", "Step A"],
+    expectedText: "Step A\n\nStep B\n\nStep A",
+    expectedName: "source.pdf",
+  },
+  {
+    label: "classic repeated blocks beside top-level fallback",
+    text: "Step A",
+    textBlocks: ["Step A", "Step B", "Step A"],
+    expectedText: "Step A\n\nStep B\n\nStep A",
+    expectedName: "source.pdf",
+  },
+  {
+    label: "component repeated text blocks",
+    text: "",
+    textBlocks: ["Step A", "Step B", "Step A"],
+    expectedText: "Step A\n\nStep B\n\nStep A",
+    componentsV2: true,
+    expectedName: "source.pdf",
+  },
+  {
+    label: "classic later matches beside a distinct leading block",
+    text: "Step A",
+    textBlocks: ["Step B", "Step A", "Step A"],
+    expectedText: "Step A\n\nStep B\n\nStep A\n\nStep A",
+    expectedName: "source.pdf",
+  },
 ];
 
 describe("Discord component attachment multipart filenames", () => {
@@ -46,10 +78,13 @@ describe("Discord component attachment multipart filenames", () => {
       const loopback = await createDiscordLoopbackRest();
       try {
         const spec: DiscordComponentMessageSpec = {
-          text: "See attached report",
-          blocks: testCase.declaredName
-            ? [{ type: "file", file: `attachment://${testCase.declaredName}` }]
-            : [],
+          text: testCase.text ?? "See attached report",
+          blocks: [
+            ...(testCase.textBlocks ?? []).map((text) => ({ type: "text" as const, text })),
+            ...(testCase.declaredName
+              ? [{ type: "file" as const, file: `attachment://${testCase.declaredName}` as const }]
+              : []),
+          ],
           ...(testCase.componentsV2 ? { container: { accentColor: 0x123456 } } : {}),
         };
         const result = await sendDiscordComponentMessage("channel:789", spec, {
@@ -80,7 +115,14 @@ describe("Discord component attachment multipart filenames", () => {
         const payload = JSON.parse(payloadJson) as {
           attachments?: Array<{ id: number; filename: string }>;
           flags?: number;
+          content?: string;
+          components?: Array<{ components?: Array<{ content?: string }> }>;
         };
+        const text = testCase.componentsV2
+          ? payload.components?.[0]?.components
+              ?.flatMap((component) => (component.content ? [component.content] : []))
+              .join("\n\n")
+          : payload.content;
         process.stdout.write(
           `${JSON.stringify({
             case: testCase.label,
@@ -88,6 +130,7 @@ describe("Discord component attachment multipart filenames", () => {
             contentType: file.type,
             attachments: payload.attachments,
             componentsV2: Boolean((payload.flags ?? 0) & MessageFlags.IsComponentsV2),
+            text,
           })}\n`,
         );
         expect(await file.text()).toBe(FILE_CONTENT);
@@ -97,6 +140,9 @@ describe("Discord component attachment multipart filenames", () => {
         expect(Boolean((payload.flags ?? 0) & MessageFlags.IsComponentsV2)).toBe(
           testCase.componentsV2 === true,
         );
+        if (testCase.expectedText !== undefined) {
+          expect(text).toBe(testCase.expectedText);
+        }
       } finally {
         await loopback.close();
       }

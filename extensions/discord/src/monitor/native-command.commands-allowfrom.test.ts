@@ -6,6 +6,7 @@ import type { OpenClawConfig, DiscordAccountConfig } from "openclaw/plugin-sdk/c
 import { matchPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import * as dispatcherModule from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
 import { createDiscordNativeCommand } from "./native-command.js";
 
@@ -184,12 +185,31 @@ describe("Discord native slash commands with commands.allowFrom", () => {
     expectNotUnauthorizedReply(interaction);
   });
 
+  it.each([false, true])(
+    "preserves explicit owner name compatibility only when opted in: %s",
+    async (dangerouslyAllowNameMatching) => {
+      const { dispatchSpy, interaction } = await runGuildSlashCommand({
+        mutateConfig: (cfg) => {
+          cfg.commands = { ownerAllowFrom: ["discord:discord-user"] };
+          cfg.channels!.discord!.dangerouslyAllowNameMatching = dangerouslyAllowNameMatching;
+        },
+      });
+      if (dangerouslyAllowNameMatching) {
+        expect(dispatchSpy).toHaveBeenCalledOnce();
+        expectNotUnauthorizedReply(interaction);
+      } else {
+        expect(dispatchSpy).not.toHaveBeenCalled();
+        expectUnauthorizedReply(interaction);
+      }
+    },
+  );
+
   it("authorizes command allowlist users even when commands.ownerAllowFrom is also configured", async () => {
     const { dispatchSpy, interaction } = await runGuildSlashCommand({
       userId: "999999999999999999",
       mutateConfig: (cfg) => {
         cfg.commands = {
-          ownerAllowFrom: ["user:123456789012345678"],
+          ownerAllowFrom: ["discord:123456789012345678"],
           allowFrom: {
             discord: ["user:999999999999999999"],
           },
@@ -388,7 +408,7 @@ describe("Discord native slash commands with commands.allowFrom", () => {
       userId: "999999999999999999",
       mutateConfig: (cfg) => {
         cfg.commands = {
-          ownerAllowFrom: ["user:123456789012345678"],
+          ownerAllowFrom: ["discord:123456789012345678"],
         };
       },
     });
@@ -635,3 +655,5 @@ describe("Discord native slash commands with commands.allowFrom", () => {
     expect(interaction.followUp).not.toHaveBeenCalled();
   });
 });
+
+installDiscordIngressTestRuntime();

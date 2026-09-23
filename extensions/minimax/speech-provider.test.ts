@@ -7,6 +7,7 @@ import {
   saveAuthProfileStore,
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
+import { isProviderAuthProfileConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
@@ -15,7 +16,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
   transcodeAudioBufferToOpus: transcodeAudioBufferToOpusMock,
 }));
 
-import { buildMinimaxSpeechProvider } from "./speech-provider.js";
+import { buildMinimaxSpeechProvider } from "./speech-provider-factory.js";
 
 function clearMinimaxAuthEnv() {
   vi.stubEnv("MINIMAX_API_KEY", undefined);
@@ -45,7 +46,7 @@ function seedMinimaxPortalProfile(agentDir: string) {
 }
 
 describe("buildMinimaxSpeechProvider", () => {
-  const provider = buildMinimaxSpeechProvider();
+  const provider = buildMinimaxSpeechProvider({ isProviderAuthProfileConfigured });
 
   function resolveProviderConfig(
     params: Parameters<NonNullable<typeof provider.resolveConfig>>[0],
@@ -398,12 +399,7 @@ describe("buildMinimaxSpeechProvider", () => {
     it("requests non-streaming hex audio and decodes the hex response", async () => {
       const hexAudio = Buffer.from("fake-audio-data").toString("hex");
       const mockFetch = vi.mocked(globalThis.fetch);
-      mockFetch.mockResolvedValueOnce(
-        new Response(JSON.stringify({ data: { audio: hexAudio } }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-      );
+      mockFetch.mockResolvedValueOnce(Response.json({ data: { audio: hexAudio } }));
 
       const result = await provider.synthesize({
         text: "Hello world",
@@ -435,12 +431,7 @@ describe("buildMinimaxSpeechProvider", () => {
     it("transcodes MiniMax MP3 to Opus for voice-note targets", async () => {
       const hexAudio = Buffer.from("fake-mp3-data").toString("hex");
       const mockFetch = vi.mocked(globalThis.fetch);
-      mockFetch.mockResolvedValueOnce(
-        new Response(JSON.stringify({ data: { audio: hexAudio } }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-      );
+      mockFetch.mockResolvedValueOnce(Response.json({ data: { audio: hexAudio } }));
       transcodeAudioBufferToOpusMock.mockResolvedValueOnce(Buffer.from("fake-opus-data"));
 
       const result = await provider.synthesize({

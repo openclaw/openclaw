@@ -5,6 +5,7 @@ import net, { type NetConnectOpts, type Server, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import tls from "node:tls";
+import { PROXY_FIXTURE_CERTIFICATE, PROXY_FIXTURE_KEY } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   detectContentType,
@@ -101,7 +102,8 @@ const BAD_GATEWAY_RESPONSE = "HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\
 const GATEWAY_TIMEOUT_RESPONSE = "HTTP/1.1 504 Gateway Timeout\r\nConnection: close\r\n\r\n";
 
 const TEST_TLS_OPTIONS = {
-  ciphers: "aNULL:@SECLEVEL=0",
+  cert: PROXY_FIXTURE_CERTIFICATE,
+  key: PROXY_FIXTURE_KEY,
   minVersion: "TLSv1.2",
   maxVersion: "TLSv1.2",
 } as const;
@@ -396,12 +398,12 @@ describe("proxyUpgradeRequest loopback transport", () => {
   });
 
   it("returns a flushed 502 when the upstream connection is refused", async () => {
+    const { browser, proxySocket } = await openBrowserPair();
     const refusedServer = net.createServer();
     const refusedPort = await listenLoopback(refusedServer);
     await new Promise<void>((resolve) => {
       refusedServer.close(() => resolve());
     });
-    const { browser, proxySocket } = await openBrowserPair();
     const endSpy = vi.spyOn(proxySocket, "end");
     const responsePromise = readToEnd(browser);
 

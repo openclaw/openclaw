@@ -7,11 +7,10 @@ import { readConfiguredProviderCatalogEntries } from "openclaw/plugin-sdk/provid
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
   buildProviderReplayFamilyHooks,
-  cloneFirstTemplateModel,
-  normalizeModelCompat,
+  resolveFamilyForwardCompatModel,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
-import { applyFeatherlessConfig, FEATHERLESS_DEFAULT_MODEL_REF } from "./onboard.js";
+import { applyFeatherlessConnectionConfig, FEATHERLESS_DEFAULT_MODEL_REF } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
   FEATHERLESS_BASE_URL,
@@ -30,35 +29,28 @@ function resolveFeatherlessDynamicModel(ctx: ProviderResolveDynamicModelContext)
     return undefined;
   }
 
-  return (
-    cloneFirstTemplateModel({
-      providerId: PROVIDER_ID,
-      modelId,
-      templateIds: [FEATHERLESS_DEFAULT_MODEL_ID],
-      ctx,
-      patch: {
-        provider: PROVIDER_ID,
-        reasoning: false,
-        input: ["text"],
-        contextWindow: FEATHERLESS_DYNAMIC_CONTEXT_WINDOW,
-        maxTokens: FEATHERLESS_DYNAMIC_MAX_TOKENS,
-        compat: FEATHERLESS_DYNAMIC_COMPAT,
+  return resolveFamilyForwardCompatModel({
+    providerId: PROVIDER_ID,
+    modelId,
+    ctx,
+    cases: [
+      {
+        match: () => true,
+        templateIds: [FEATHERLESS_DEFAULT_MODEL_ID],
+        patch: ({ template }) =>
+          template ? undefined : { api: "openai-completions", baseUrl: FEATHERLESS_BASE_URL },
       },
-    }) ??
-    normalizeModelCompat({
-      id: modelId,
-      name: modelId,
+    ],
+    patch: {
       provider: PROVIDER_ID,
-      api: "openai-completions",
-      baseUrl: FEATHERLESS_BASE_URL,
       reasoning: false,
       input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: FEATHERLESS_DYNAMIC_CONTEXT_WINDOW,
       maxTokens: FEATHERLESS_DYNAMIC_MAX_TOKENS,
       compat: FEATHERLESS_DYNAMIC_COMPAT,
-    })
-  );
+    },
+    synthesize: true,
+  });
 }
 
 function normalizeFeatherlessResolvedModel(model: ProviderRuntimeModel): ProviderRuntimeModel {
@@ -81,7 +73,7 @@ export default defineSingleProviderPluginEntry({
     docsPath: "/providers/featherless",
     manifestAuth: {
       defaultModel: FEATHERLESS_DEFAULT_MODEL_REF,
-      applyConfig: applyFeatherlessConfig,
+      applyConfig: applyFeatherlessConnectionConfig,
       noteTitle: "Featherless AI",
       noteMessage: [
         "Featherless AI serves open models through an OpenAI-compatible API.",
@@ -89,6 +81,7 @@ export default defineSingleProviderPluginEntry({
       ].join("\n"),
     },
     catalog: {
+      discoveryMode: "strict",
       allowExplicitBaseUrl: true,
       liveModelDiscovery: {
         endpointPath: "models?capabilities=chat",

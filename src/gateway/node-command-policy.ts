@@ -16,11 +16,10 @@ import {
   NODE_WORKER_PRIVATE_COMMANDS,
   isPrivateNodeInvokeCommand,
 } from "../infra/node-commands.js";
-import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime.js";
+import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime-state.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import { normalizeDeviceMetadataForPolicy } from "./device-metadata-normalization.js";
 import { MOBILE_NODE_COMMANDS } from "./node-command-policy-mobile.js";
-import type { NodeSession } from "./node-registry.js";
 
 const CAMERA_COMMANDS = ["camera.list"];
 const MAC_CAMERA_COMMANDS = ["camera.ptz.status"];
@@ -28,7 +27,8 @@ const MAC_CAMERA_COMMANDS = ["camera.ptz.status"];
 const CAMERA_DANGEROUS_COMMANDS = ["camera.snap", "camera.clip", "camera.ptz.control"];
 
 const SCREEN_COMMANDS = ["screen.snapshot"];
-const SCREEN_DANGEROUS_COMMANDS = ["screen.record", NODE_DESKTOP_STREAM_COMMAND];
+const SCREEN_DANGEROUS_COMMANDS = ["screen.record"];
+const DESKTOP_SCREEN_COMMANDS = [...SCREEN_COMMANDS, NODE_DESKTOP_STREAM_COMMAND];
 
 // Desktop computer use is advertised only while the node-local control is
 // enabled. Pairing approval of that advertised surface is the durable grant.
@@ -154,16 +154,16 @@ export const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...PHOTOS_COMMANDS,
     ...MOTION_COMMANDS,
     ...SYSTEM_COMMANDS,
-    ...SCREEN_COMMANDS,
+    ...DESKTOP_SCREEN_COMMANDS,
     ...COMPUTER_COMMANDS,
   ],
-  linux: [...SYSTEM_COMMANDS, ...SCREEN_COMMANDS, ...COMPUTER_COMMANDS],
+  linux: [...SYSTEM_COMMANDS, ...DESKTOP_SCREEN_COMMANDS, ...COMPUTER_COMMANDS],
   windows: [
     ...CAMERA_COMMANDS,
     ...MOBILE_NODE_COMMANDS.location,
     ...MOBILE_NODE_COMMANDS.device,
     ...SYSTEM_COMMANDS,
-    ...SCREEN_COMMANDS,
+    ...DESKTOP_SCREEN_COMMANDS,
     ...COMPUTER_COMMANDS,
   ],
   // Fail-safe: unknown metadata should not receive host exec defaults.
@@ -273,14 +273,17 @@ export function listDangerousPluginNodeCommands(): string[] {
   if (!registry) {
     return [];
   }
-  const commands = [
-    ...registry.nodeHostCommands
-      .filter((entry) => entry.command.dangerous === true)
-      .map((entry) => entry.command.command),
-    ...registry.nodeInvokePolicies
-      .filter((entry) => entry.policy.dangerous === true)
-      .flatMap((entry) => entry.policy.commands),
-  ];
+  const commands: string[] = [];
+  registry.nodeHostCommands.forEach(({ command }) => {
+    if (command.dangerous === true) {
+      commands.push(command.command);
+    }
+  });
+  registry.nodeInvokePolicies.forEach(({ policy }) => {
+    if (policy.dangerous === true) {
+      policy.commands.forEach((command) => commands.push(command));
+    }
+  });
   return normalizeUniqueStringEntries(commands);
 }
 
@@ -294,23 +297,18 @@ function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
   if (!registry) {
     return [];
   }
-  const policyCommands = registry.nodeInvokePolicies.flatMap((entry) => {
-    if (entry.policy.dangerous === true) {
-      return [];
+  const commands: string[] = [];
+  registry.nodeInvokePolicies.forEach(({ policy }) => {
+    if (policy.dangerous !== true && policy.defaultPlatforms?.includes(platformId)) {
+      policy.commands.forEach((command) => commands.push(command));
     }
-    const defaults = entry.policy.defaultPlatforms ?? [];
-    return defaults.includes(platformId) ? entry.policy.commands : [];
   });
-  const nodeHostCommands = registry.nodeHostCommands
-    .filter((entry) => {
-      if (entry.command.dangerous === true) {
-        return false;
-      }
-      const defaults = entry.command.agentTool?.defaultPlatforms ?? [];
-      return defaults.includes(platformId);
-    })
-    .map((entry) => entry.command.command);
-  return normalizeUniqueStringEntries([...policyCommands, ...nodeHostCommands]);
+  registry.nodeHostCommands.forEach(({ command: { dangerous, agentTool, command } }) => {
+    if (dangerous !== true && agentTool?.defaultPlatforms?.includes(platformId)) {
+      commands.push(command);
+    }
+  });
+  return normalizeUniqueStringEntries(commands);
 }
 
 export function isForegroundRestrictedPluginNodeCommand(command: string): boolean {
@@ -328,10 +326,15 @@ export function isForegroundRestrictedPluginNodeCommand(command: string): boolea
       entry.policy.commands.some((policyCommand) => policyCommand.trim() === normalized),
   );
 }
-type NodeCommandPolicyNode = Pick<NodeSession, "platform" | "deviceFamily"> &
-  Partial<Pick<NodeSession, "caps" | "commands" | "connId" | "nodeId">> & {
-    approvedCommands?: readonly string[];
-  };
+type NodeCommandPolicyNode = {
+  platform?: string;
+  deviceFamily?: string;
+  caps?: string[];
+  commands?: string[];
+  connId?: string;
+  nodeId?: string;
+  approvedCommands?: readonly string[];
+};
 
 function isDesktopPlatformId(platformId: PlatformId): boolean {
   return platformId === "macos" || platformId === "windows" || platformId === "linux";
@@ -512,7 +515,7 @@ const CAPABILITY_COMMAND_FAMILIES: ReadonlyMap<string, ReadonlySet<string>> = ne
   ["camera", new Set([...CAMERA_COMMANDS, ...MAC_CAMERA_COMMANDS, ...CAMERA_DANGEROUS_COMMANDS])],
   ["computer", new Set(COMPUTER_COMMANDS)],
   ["location", new Set(MOBILE_NODE_COMMANDS.location)],
-  ["screen", new Set([...SCREEN_COMMANDS, ...SCREEN_DANGEROUS_COMMANDS])],
+  ["screen", new Set([...DESKTOP_SCREEN_COMMANDS, ...SCREEN_DANGEROUS_COMMANDS])],
 ]);
 
 /** Drops capabilities whose commands policy withheld without admitting a sibling. */
@@ -533,7 +536,7 @@ export function retainFulfilledNodeCapabilities(params: {
 
 export function isNodeCommandAllowed(params: {
   command: string;
-  declaredCommands?: string[];
+  declaredCommands?: readonly string[];
   allowlist: Set<string>;
 }): { ok: true } | { ok: false; reason: string } {
   const command = params.command.trim();
@@ -554,4 +557,50 @@ export function isNodeCommandAllowed(params: {
     return { ok: false, reason: "node did not declare commands" };
   }
   return { ok: true };
+}
+
+export type RequiredNodeCommandAuthority = {
+  command: string;
+  state: "invocable" | "pending-approval" | "undeclared" | "unauthorized";
+};
+
+/**
+ * Resolves declaration, pairing, and runtime policy once at their Gateway owner.
+ * Clients receive one closed state instead of rebuilding authority from partial lists.
+ */
+export function resolveRequiredNodeCommandAuthority(params: {
+  requiredCommands: readonly string[];
+  declaredCommands: readonly string[];
+  effectiveCommands: readonly string[];
+  withheldCommands: readonly string[];
+  allowlist: Set<string>;
+}): RequiredNodeCommandAuthority | undefined {
+  const declaredCommands = new Set(params.declaredCommands);
+  const effectiveCommands = new Set(params.effectiveCommands);
+  // A denial anywhere in the required set takes precedence over pairing approval.
+  const denied = params.requiredCommands.find((cmd) => params.withheldCommands.includes(cmd));
+  if (denied) {
+    return { command: denied, state: "unauthorized" };
+  }
+  for (const command of params.requiredCommands) {
+    if (
+      effectiveCommands.has(command) &&
+      isNodeCommandAllowed({
+        command,
+        declaredCommands: params.effectiveCommands,
+        allowlist: params.allowlist,
+      }).ok
+    ) {
+      continue;
+    }
+    if (declaredCommands.has(command) && !effectiveCommands.has(command)) {
+      return { command, state: "pending-approval" };
+    }
+    if (declaredCommands.has(command)) {
+      return { command, state: "unauthorized" };
+    }
+    return { command, state: "undeclared" };
+  }
+  const command = params.requiredCommands[0];
+  return command ? { command, state: "invocable" } : undefined;
 }

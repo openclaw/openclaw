@@ -1,11 +1,14 @@
 // Auth modes suite covers password, token, none, Tailscale, and control-UI
 // origin behavior across gateway WebSocket authentication modes.
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import {
   connectReq,
   CONTROL_UI_CLIENT,
   ConnectErrorDetailCodes,
-  getGatewayTestPort,
   openTailscaleWs,
   openWs,
   originForPort,
@@ -15,6 +18,7 @@ import {
   testState,
   testTailscaleWhois,
 } from "./server.auth.test-helpers.js";
+import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 
 async function requestModels(port: number, secret: string): Promise<Response> {
   return await fetch(`http://127.0.0.1:${port}/v1/models`, {
@@ -31,8 +35,9 @@ export function registerAuthModesSuite(): void {
 
     beforeAll(async () => {
       testState.gatewayAuth = { mode: "password", password: "secret" }; // pragma: allowlist secret
-      port = await getGatewayTestPort();
-      server = await startTestGatewayServer(port, { openAiChatCompletionsEnabled: true });
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      port = portClaim.port;
+      server = await startTestGatewayServer(portClaim, { openAiChatCompletionsEnabled: true });
     });
 
     beforeEach(() => {
@@ -58,14 +63,13 @@ export function registerAuthModesSuite(): void {
       ws.close();
     });
 
-    test("rejects token credentials in password mode", async () => {
+    test("accepts the configured password in the token field", async () => {
       const ws = await openWs(port);
       const res = await connectReq(ws, {
         skipDefaultAuth: true,
         token: "secret",
       });
-      expect(res.ok).toBe(false);
-      expect(res.error?.message ?? "").toContain("unauthorized");
+      expect(res.ok).toBe(true);
       ws.close();
     });
 
@@ -89,8 +93,9 @@ export function registerAuthModesSuite(): void {
       prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
       process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
       testState.gatewayAuth = { mode: "token", token: "secret" };
-      port = await getGatewayTestPort();
-      server = await startTestGatewayServer(port, { openAiChatCompletionsEnabled: true });
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      port = portClaim.port;
+      server = await startTestGatewayServer(portClaim, { openAiChatCompletionsEnabled: true });
     });
 
     beforeEach(() => {
@@ -107,6 +112,7 @@ export function registerAuthModesSuite(): void {
       const ws = await openWs(port);
       const res = await connectReq(ws, { token: "secret" });
       expect(res.ok).toBe(true);
+      expect(res.payload).toMatchObject({ auth: { method: "token" } });
       ws.close();
     });
 
@@ -118,14 +124,13 @@ export function registerAuthModesSuite(): void {
       ws.close();
     });
 
-    test("rejects password credentials in token mode", async () => {
+    test("accepts the configured token in the password field", async () => {
       const ws = await openWs(port);
       const res = await connectReq(ws, {
         skipDefaultAuth: true,
         password: "secret", // pragma: allowlist secret
       });
-      expect(res.ok).toBe(false);
-      expect(res.error?.message ?? "").toContain("unauthorized");
+      expect(res.ok).toBe(true);
       ws.close();
     });
 
@@ -179,8 +184,9 @@ export function registerAuthModesSuite(): void {
       prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
       testState.gatewayAuth = { mode: "none" };
-      port = await getGatewayTestPort();
-      server = await startTestGatewayServer(port);
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      port = portClaim.port;
+      server = await startTestGatewayServer(portClaim);
     });
 
     beforeEach(() => {
@@ -206,15 +212,14 @@ export function registerAuthModesSuite(): void {
       {
         mode: "token" as const,
         envKey: "OPENCLAW_GATEWAY_TOKEN" as const,
-        expected:
-          "gateway auth mode is token, but no token was configured (set gateway.auth.token or OPENCLAW_GATEWAY_TOKEN)",
+        expected: "gateway auth token is blank",
       },
       {
         mode: "password" as const,
         envKey: "OPENCLAW_GATEWAY_PASSWORD" as const,
-        expected: "gateway auth mode is password, but no password was configured",
+        expected: "gateway auth password is blank",
       },
-    ])("rejects $mode mode before startup when its credential is missing", async (testCase) => {
+    ])("rejects $mode mode before startup when its credential is empty", async (testCase) => {
       const previous = process.env[testCase.envKey];
       delete process.env[testCase.envKey];
       // Use an explicit empty override so suite-level credentials cannot satisfy
@@ -224,10 +229,12 @@ export function registerAuthModesSuite(): void {
           ? { mode: "token" as const, token: "", allowTailscale: false }
           : { mode: "password" as const, password: "", allowTailscale: false };
       testState.gatewayAuth = auth;
-      const port = await getGatewayTestPort();
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
 
       try {
-        await expect(startTestGatewayServer(port, { auth })).rejects.toThrow(testCase.expected);
+        await expect(startTestGatewayServer(portClaim, { auth })).rejects.toThrow(
+          testCase.expected,
+        );
       } finally {
         if (previous === undefined) {
           delete process.env[testCase.envKey];
@@ -239,10 +246,10 @@ export function registerAuthModesSuite(): void {
 
     test("rejects non-loopback exposure without effective auth before listening", async () => {
       testState.gatewayAuth = { mode: "none" };
-      const port = await getGatewayTestPort();
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
 
       await expect(
-        startTestGatewayServer(port, {
+        startTestGatewayServer(portClaim, {
           bind: "lan",
           host: "0.0.0.0",
           auth: { mode: "none" },
@@ -275,7 +282,10 @@ export function registerAuthModesSuite(): void {
         },
         afterWrite: { mode: "auto" },
       });
-      server = await startTestGatewayServer(await getGatewayTestPort());
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      server = await startTestGatewayServer(portClaim, {
+        controlUiEnabled: true,
+      });
       const endpoint = server.getTailscaleIngressEndpoint();
       if (!endpoint) {
         throw new Error("expected managed Tailscale listener");
@@ -290,6 +300,8 @@ export function registerAuthModesSuite(): void {
     beforeEach(() => {
       testState.gatewayAuth = { mode: "token", token: "secret", allowTailscale: true };
       testState.gatewayControlUi = { allowedOrigins: [tailscaleOrigin] };
+      // The shared-server reset published defaults before this suite restored its policy.
+      setRuntimeConfigSnapshot(loadGatewayTestConfig());
       testTailscaleWhois.value = { login: "peter", name: "Peter" };
     });
 
@@ -305,7 +317,7 @@ export function registerAuthModesSuite(): void {
       ws.close();
     });
 
-    test("skips pairing for tailscale-authenticated control ui with device identity", async () => {
+    test("authorizes assistant media through the live Tailscale identity", async () => {
       const ws = await openTailscaleWs(tailscaleEndpoint, { origin: tailscaleOrigin });
       const res = await connectReq(ws, {
         skipDefaultAuth: true,
@@ -314,6 +326,62 @@ export function registerAuthModesSuite(): void {
         },
       });
       expect(res.ok, JSON.stringify(res)).toBe(true);
+      // SAFETY: a successful connect response carries the hello-ok payload shape.
+      const payload = res.payload as { auth?: { deviceToken?: string } } | undefined;
+      expect(payload?.auth?.deviceToken).toBe(undefined);
+      testTailscaleWhois.calls.length = 0;
+
+      const stateDir = process.env.OPENCLAW_STATE_DIR;
+      if (!stateDir) {
+        throw new Error("expected Tailscale Control UI media fixture");
+      }
+      const mediaDir = path.join(stateDir, "media", "tailscale-control-ui");
+      await fs.mkdir(mediaDir, { recursive: true });
+      const mediaPath = path.join(mediaDir, "preview.png");
+      await fs.writeFile(mediaPath, Buffer.from("not-a-real-png"));
+      const mediaUrl = new URL(
+        "/__openclaw__/assistant-media",
+        `http://${tailscaleEndpoint.host}:${tailscaleEndpoint.port}`,
+      );
+      mediaUrl.searchParams.set("meta", "1");
+      mediaUrl.searchParams.set("source", mediaPath);
+      const headers = {
+        origin: tailscaleOrigin,
+        "sec-fetch-site": "same-origin",
+        "x-forwarded-for": "100.64.0.1",
+        "x-forwarded-proto": "https",
+        "x-forwarded-host": "gateway.tailnet.ts.net",
+        "tailscale-user-login": "peter",
+        "tailscale-user-name": "Peter",
+      };
+
+      const media = await fetch(mediaUrl, { headers });
+      const mediaBody = await media.json();
+      expect(media.status, JSON.stringify(mediaBody)).toBe(200);
+      expect(mediaBody).toMatchObject({ available: true, mimeType: "image/png" });
+
+      testTailscaleWhois.value = null;
+      const revokedMedia = await fetch(mediaUrl, { headers });
+      expect(revokedMedia.status).toBe(401);
+      const revokedBytesUrl = new URL(mediaUrl);
+      revokedBytesUrl.searchParams.delete("meta");
+      const revokedBytes = await fetch(revokedBytesUrl, { headers });
+      expect(revokedBytes.status).toBe(401);
+      expect(testTailscaleWhois.calls).toEqual([
+        {
+          ip: "100.64.0.1",
+          opts: { cacheTtlMs: 0, errorTtlMs: 0 },
+        },
+        {
+          ip: "100.64.0.1",
+          opts: { cacheTtlMs: 0, errorTtlMs: 0 },
+        },
+        {
+          ip: "100.64.0.1",
+          opts: { cacheTtlMs: 0, errorTtlMs: 0 },
+        },
+      ]);
+
       const status = await rpcReq(ws, "status");
       expect(status.ok).toBe(true);
       ws.close();

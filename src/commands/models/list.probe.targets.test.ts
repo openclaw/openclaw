@@ -1,6 +1,7 @@
 // Model probe target tests cover selecting provider/model targets for probing.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
+import { createApiKeyCredential } from "../../agents/auth-profiles/credential-fixtures.test-support.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveConfigForRead } from "../../config/io.read-helpers.js";
@@ -23,7 +24,7 @@ const resolveSecretRefStringMock = vi.fn(async () => "resolved-secret");
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalog: loadModelCatalogMock,
+  readPreparedModelCatalog: loadModelCatalogMock,
 }));
 vi.mock("../../agents/model-auth.js", () => ({
   hasSyntheticLocalProviderAuthConfig: () => false,
@@ -602,11 +603,7 @@ describe("buildProbeTargets reason codes", () => {
     mockStore = {
       version: 1,
       profiles: {
-        [ref]: {
-          type: "api_key",
-          provider: "anthropic",
-          key: "placeholder",
-        },
+        [ref]: createApiKeyCredential("anthropic", "placeholder"),
       },
       order: {},
     };
@@ -736,11 +733,7 @@ describe("buildProbeTargets reason codes", () => {
     mockStore = {
       version: 1,
       profiles: {
-        "byteplus:plan": {
-          type: "api_key",
-          provider: "byteplus",
-          key: "byteplus-plan-key",
-        },
+        "byteplus:plan": createApiKeyCredential("byteplus", "byteplus-plan-key"),
       },
       order: { byteplus: ["byteplus:plan"] },
     };
@@ -790,11 +783,7 @@ describe("buildProbeTargets reason codes", () => {
     mockStore = {
       version: 1,
       profiles: {
-        "byteplus-plan:saved": {
-          type: "api_key",
-          provider: "byteplus-plan",
-          key: "byteplus-plan-key",
-        },
+        "byteplus-plan:saved": createApiKeyCredential("byteplus-plan", "byteplus-plan-key"),
       },
       order: { "byteplus-plan": ["byteplus-plan:saved"] },
     };
@@ -1013,11 +1002,7 @@ describe("buildProbeTargets reason codes", () => {
     mockAgentStore = {
       version: 1,
       profiles: {
-        "anthropic:coder": {
-          type: "api_key",
-          provider: "anthropic",
-          key: "sk-ant-coder-profile",
-        },
+        "anthropic:coder": createApiKeyCredential("anthropic", "sk-ant-coder-profile"),
       },
       order: {},
     };

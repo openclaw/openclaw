@@ -2,11 +2,12 @@ import { normalizeNullableString as toOptionalTrimmedString } from "@openclaw/no
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
-  parseOpenClawSchemaVersions,
+  parsePackageOpenClawSchemaVersions,
   type OpenClawSchemaVersions,
 } from "../state/openclaw-schema-versions.js";
 import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 import { cancelUnreadResponseBody } from "./http-body.js";
+import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
 
 type NpmPackageTargetStatus = {
   target: string;
@@ -30,7 +31,10 @@ export type NpmMetadataCommandRunner = (
   code: number | null;
 }>;
 
-function parseNpmPackageTargetMetadata(raw: string): {
+function parseNpmPackageTargetMetadata(
+  raw: string,
+  packageName: string,
+): {
   version: string | null;
   nodeEngine: string | null;
   schemaVersions?: OpenClawSchemaVersions;
@@ -51,12 +55,13 @@ function parseNpmPackageTargetMetadata(raw: string): {
   const nodeEngine =
     toOptionalTrimmedString(rec["engines.node"]) ??
     (engines ? toOptionalTrimmedString((engines as Record<string, unknown>).node) : null);
-  const openclaw = rec.openclaw && typeof rec.openclaw === "object" ? rec.openclaw : null;
-  const schemaVersions =
-    parseOpenClawSchemaVersions(rec["openclaw.schemaVersions"]) ??
-    (openclaw
-      ? parseOpenClawSchemaVersions((openclaw as Record<string, unknown>).schemaVersions)
-      : undefined);
+  const schemaVersions = parsePackageOpenClawSchemaVersions({
+    name: packageName,
+    version: rec.version,
+    openclaw: Object.hasOwn(rec, "openclaw.schemaVersions")
+      ? { schemaVersions: rec["openclaw.schemaVersions"] }
+      : rec.openclaw,
+  });
   return {
     version: toOptionalTrimmedString(rec.version),
     nodeEngine,
@@ -101,7 +106,7 @@ async function fetchNpmPackageTargetStatusFromRegistry(params: {
     target: params.target,
   });
   const { signal, cleanup } = buildTimeoutAbortSignal({
-    timeoutMs: Math.max(250, params.timeoutMs),
+    timeoutMs: Math.max(1, params.timeoutMs),
     operation: "npm-registry-update-check",
     url,
   });
@@ -123,7 +128,10 @@ async function fetchNpmPackageTargetStatusFromRegistry(params: {
       engines?: { node?: unknown };
       openclaw?: { schemaVersions?: unknown };
     }>(res, "npm package target status");
-    const schemaVersions = parseOpenClawSchemaVersions(json.openclaw?.schemaVersions);
+    const schemaVersions = parsePackageOpenClawSchemaVersions({
+      ...json,
+      name: params.packageName ?? PUBLIC_NPM_PACKAGE_NAME,
+    });
     return {
       target: params.target,
       version: toOptionalTrimmedString(json.version),
@@ -149,7 +157,7 @@ export async function fetchNpmPackageTargetStatus(params: {
   registryUrl?: string;
   packageName?: string;
 }): Promise<NpmPackageTargetStatus> {
-  const timeoutMs = params.timeoutMs ?? 3500;
+  const timeoutMs = params.timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS;
   const target = params.target;
   if (!params.command && !params.runCommand) {
     return await fetchNpmPackageTargetStatusFromRegistry({
@@ -160,12 +168,13 @@ export async function fetchNpmPackageTargetStatus(params: {
     });
   }
   const runCommand = params.runCommand ?? runCommandWithTimeout;
+  const spec = packageTargetSpec(params);
   try {
     const res = await runCommand(
       [
         params.command ?? "npm",
         "view",
-        packageTargetSpec({ target, spec: params.spec }),
+        spec,
         "version",
         "engines.node",
         "openclaw.schemaVersions",
@@ -173,7 +182,7 @@ export async function fetchNpmPackageTargetStatus(params: {
         "--global",
       ],
       {
-        timeoutMs: Math.max(250, timeoutMs),
+        timeoutMs: Math.max(1, timeoutMs),
         cwd: params.cwd,
         env: params.env,
         maxOutputBytes: 1024 * 1024,
@@ -187,7 +196,10 @@ export async function fetchNpmPackageTargetStatus(params: {
         error: formatNpmViewError(res),
       };
     }
-    const { version, nodeEngine, schemaVersions } = parseNpmPackageTargetMetadata(res.stdout);
+    const { version, nodeEngine, schemaVersions } = parseNpmPackageTargetMetadata(
+      res.stdout,
+      spec === "openclaw" || /^openclaw@[^:/]+$/.test(spec) ? "openclaw" : "",
+    );
     return { target, version, nodeEngine, ...(schemaVersions ? { schemaVersions } : {}) };
   } catch (err) {
     return { target, version: null, nodeEngine: null, error: String(err) };

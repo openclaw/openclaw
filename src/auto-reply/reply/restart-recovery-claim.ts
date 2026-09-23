@@ -11,12 +11,13 @@ import {
   patchSessionEntryCore,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import type {
-  SessionTranscriptTurnExpectedState,
-  SessionTranscriptTurnLifecyclePatch,
-} from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
-import { sessionMatchesExpectedTranscriptTurn } from "../../config/sessions/session-transcript-turn-state.js";
+import type { SessionTranscriptTurnLifecyclePatch } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
+import {
+  buildRestartRecoveryExpectedState,
+  sessionMatchesExpectedTranscriptTurn,
+} from "../../config/sessions/session-transcript-turn-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import { resolveSessionWorkerPlacementContext } from "../../gateway/session-worker-placement-context.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { createAgentRunStaleLifecycleError } from "../../infra/agent-lifecycle-error.js";
 import type {
@@ -58,6 +59,7 @@ export function isDuplicateRestartRecoverySource(
 }
 
 export async function retireTerminalRestartRecoverySourceClaim(params: {
+  agentId: string;
   sessionId: string;
   sessionKey: string;
   sourceTurnId: string;
@@ -65,7 +67,7 @@ export async function retireTerminalRestartRecoverySourceClaim(params: {
 }): Promise<SessionEntry | undefined> {
   let didRetire = false;
   const retired = await updateSessionEntry(
-    { storePath: params.storePath, sessionKey: params.sessionKey },
+    { agentId: params.agentId, storePath: params.storePath, sessionKey: params.sessionKey },
     (current) => {
       if (
         current.sessionId !== params.sessionId ||
@@ -90,28 +92,8 @@ export async function retireTerminalRestartRecoverySourceClaim(params: {
   return didRetire ? (retired ?? undefined) : undefined;
 }
 
-function buildExpectedSessionState(entry: SessionEntry): SessionTranscriptTurnExpectedState {
-  return {
-    abortedLastRun: entry.abortedLastRun,
-    mainRestartRecoveryCycleId: entry.mainRestartRecovery?.cycleId,
-    mainRestartRecoveryRevision: entry.mainRestartRecovery?.revision,
-    restartRecoveryBeforeAgentReplyState: entry.restartRecoveryBeforeAgentReplyState,
-    restartRecoveryDeliveryReceiptState: entry.restartRecoveryDeliveryReceiptState,
-    restartRecoveryDeliveryToolCallId: entry.restartRecoveryDeliveryToolCallId,
-    restartRecoveryDeliveryRequestFingerprint: entry.restartRecoveryDeliveryRequestFingerprint,
-    restartRecoveryDeliveryRunId: entry.restartRecoveryDeliveryRunId,
-    restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
-    restartRecoveryRequesterAccountId: entry.restartRecoveryRequesterAccountId,
-    restartRecoveryRequesterSenderId: entry.restartRecoveryRequesterSenderId,
-    restartRecoverySameChannelThreadRequired: entry.restartRecoverySameChannelThreadRequired,
-    restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
-    restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
-    restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
-    status: entry.status,
-  };
-}
-
 export function createReplyRestartRecoveryClaimController(params: {
+  agentId: string;
   admissionRunId?: unknown;
   lifecycleGeneration: string | undefined;
   getEntry: () => SessionEntry | undefined;
@@ -145,7 +127,7 @@ export function createReplyRestartRecoveryClaimController(params: {
     sessionKey: string;
     storePath: string;
   }): Promise<SessionEntry> => {
-    const expectedSessionState = buildExpectedSessionState(options.entry);
+    const expectedSessionState = buildRestartRecoveryExpectedState(options.entry);
     if (options.recorder && !options.recorder.hasPersisted()) {
       const result = await options.recorder.persistApproved({
         target: params.resolveUserTurnTarget?.({
@@ -164,7 +146,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       return result.sessionEntry as SessionEntry;
     }
     const persisted = await updateSessionEntry(
-      { storePath: options.storePath, sessionKey: options.sessionKey },
+      { agentId: params.agentId, storePath: options.storePath, sessionKey: options.sessionKey },
       (current) =>
         sessionMatchesExpectedTranscriptTurn(
           { entry: current },
@@ -213,6 +195,7 @@ export function createReplyRestartRecoveryClaimController(params: {
     const sessionId = params.getSessionId();
     const entry =
       loadSessionEntry({
+        agentId: params.agentId,
         storePath: params.storePath,
         sessionKey: params.sessionKey,
         clone: false,
@@ -232,6 +215,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       if (!isExactRecoveryClaim && hasRestartRecoverySourceClaim(entry, sourceTurnId)) {
         if (entry.status !== "running") {
           const retired = await retireTerminalRestartRecoverySourceClaim({
+            agentId: params.agentId,
             sessionId,
             sessionKey: params.sessionKey,
             sourceTurnId,
@@ -242,6 +226,16 @@ export function createReplyRestartRecoveryClaimController(params: {
           }
         }
         return "duplicate-source";
+      }
+    }
+    if (recorder?.getPendingInputMessage?.() && !recorder.hasPersisted()) {
+      const placement = resolveSessionWorkerPlacementContext()
+        .workerSessionPlacementService?.getMany([sessionId])
+        .get(sessionId);
+      // A staged worker input belongs to placement admission, not local restart
+      // recovery. Its runtime writer consumes it only after setup and sync finish.
+      if (placement && placement.state !== "local") {
+        return "admitted";
       }
     }
     if (isExactRecoveryClaim) {
@@ -360,7 +354,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       }
       const updatedAt = Date.now();
       const persisted = await updateSessionEntry(
-        { storePath: params.storePath, sessionKey: params.sessionKey },
+        { agentId: params.agentId, storePath: params.storePath, sessionKey: params.sessionKey },
         (current) =>
           current.sessionId === params.getSessionId() &&
           current.restartRecoveryDeliveryRunId === recoveryRunId &&
@@ -408,7 +402,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       // finished unhandled hook clears it so recovery can re-enter normally.
       const updatedAt = Date.now();
       const persisted = await updateSessionEntry(
-        { storePath: params.storePath, sessionKey: params.sessionKey },
+        { agentId: params.agentId, storePath: params.storePath, sessionKey: params.sessionKey },
         (persistedCurrent) =>
           persistedCurrent.sessionId === params.getSessionId() &&
           persistedCurrent.restartRecoveryDeliveryRunId === recoveryRunId &&
@@ -437,7 +431,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       return;
     }
     const persisted = await patchSessionEntryCore(
-      { storePath: params.storePath, sessionKey: params.sessionKey },
+      { agentId: params.agentId, storePath: params.storePath, sessionKey: params.sessionKey },
       (current) => {
         if (
           (current.abortedLastRun === true && current.mainRestartRecovery !== undefined) ||
@@ -525,6 +519,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       return false;
     }
     const persisted = loadSessionEntry({
+      agentId: params.agentId,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
       clone: false,

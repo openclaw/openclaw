@@ -7,14 +7,17 @@ import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveArchiveKind } from "../infra/archive.js";
-import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
-import { pathExists } from "../infra/fs-safe.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { pathExists, root as fsRoot } from "../infra/fs-safe.js";
+import { acquireGitSource } from "../infra/git-source.js";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
+import { readChunkWithIdleTimeout } from "../infra/http-response-body-timeout.js";
+import type { TimedInstallModeOptions } from "../infra/install-mode-options.js";
 import { tryReadJson } from "../infra/json-files.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { tempWorkspace, type TempWorkspace } from "../infra/private-temp-workspace.js";
 import { readRegularFile } from "../infra/regular-file.js";
-import { runCommandWithTimeout } from "../process/exec.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
 import { resolveUserPath } from "../utils.js";
 import { isImmutableGitCommitRef } from "./git-install.js";
@@ -23,7 +26,6 @@ import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
 import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
 import { installPluginFromPath, type InstallPluginResult } from "./install.js";
 
-const DEFAULT_GIT_TIMEOUT_MS = 120_000;
 const DEFAULT_MARKETPLACE_DOWNLOAD_TIMEOUT_MS = 120_000;
 const MAX_MARKETPLACE_ARCHIVE_BYTES = 256 * 1024 * 1024;
 const MAX_MARKETPLACE_MANIFEST_BYTES = 16 * 1024 * 1024;
@@ -173,35 +175,23 @@ function normalizeEntrySource(
     return { ok: true, source: { kind: "path", path: sourcePath } };
   }
 
-  if (kind === "github") {
-    const repo = normalizeOptionalString(rec.repo) ?? normalizeOptionalString(rec.url);
-    if (!repo) {
-      return { ok: false, error: 'github source missing "repo"' };
+  if (kind === "github" || kind === "git") {
+    const identifier =
+      kind === "github"
+        ? (normalizeOptionalString(rec.repo) ?? normalizeOptionalString(rec.url))
+        : (normalizeOptionalString(rec.url) ?? normalizeOptionalString(rec.repo));
+    if (!identifier) {
+      return {
+        ok: false,
+        error: kind === "github" ? 'github source missing "repo"' : 'git source missing "url"',
+      };
     }
+    const source: MarketplaceEntrySource =
+      kind === "github" ? { kind, repo: identifier } : { kind, url: identifier };
     return {
       ok: true,
       source: {
-        kind: "github",
-        repo,
-        path: normalizeOptionalString(rec.path),
-        ref:
-          normalizeOptionalString(rec.ref) ??
-          normalizeOptionalString(rec.branch) ??
-          normalizeOptionalString(rec.tag),
-      },
-    };
-  }
-
-  if (kind === "git") {
-    const url = normalizeOptionalString(rec.url) ?? normalizeOptionalString(rec.repo);
-    if (!url) {
-      return { ok: false, error: 'git source missing "url"' };
-    }
-    return {
-      ok: true,
-      source: {
-        kind: "git",
-        url,
+        ...source,
         path: normalizeOptionalString(rec.path),
         ref:
           normalizeOptionalString(rec.ref) ??
@@ -538,43 +528,25 @@ async function cloneMarketplaceRepo(params: {
 
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-marketplace-"));
   const repoDir = path.join(tmpDir, "repo");
-  const refIsCommit = isImmutableGitCommitRef(normalized.ref);
-  const argv = ["git", "clone"];
-  if (!normalized.ref) {
-    argv.push("--depth", "1");
-  } else if (!refIsCommit) {
-    argv.push("--depth", "1");
-    argv.push("--branch", normalized.ref);
-  }
-  argv.push(normalized.url, repoDir);
-  params.logger?.info?.(`Cloning marketplace source ${normalized.label}...`);
-  const res = await runCommandWithTimeout(argv, {
-    timeoutMs: params.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS,
-  });
-  if (res.code !== 0) {
+  const cleanup = async () => {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
-    const detail = res.stderr.trim() || res.stdout.trim() || "git clone failed";
-    return {
-      ok: false,
-      error: `failed to clone marketplace source ${normalized.label}: ${detail}`,
-    };
-  }
-  if (refIsCommit) {
-    const checkout = await runCommandWithTimeout(
-      ["git", "switch", "--detach", "--", normalized.ref as string],
-      {
-        cwd: repoDir,
-        timeoutMs: params.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS,
-      },
-    );
-    if (checkout.code !== 0) {
-      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
-      const detail = checkout.stderr.trim() || checkout.stdout.trim() || "git checkout failed";
-      return {
-        ok: false,
-        error: `failed to checkout marketplace source ${normalized.label}: ${detail}`,
-      };
-    }
+  };
+  params.logger?.info?.(`Cloning marketplace source ${normalized.label}...`);
+  const acquired = await acquireGitSource({
+    ...normalized,
+    repoDir,
+    refMode: isImmutableGitCommitRef(normalized.ref) ? "detached" : "shallow-branch",
+    timeoutMs: params.timeoutMs,
+    cloneSeparator: false,
+    recordCommit: false,
+    cleanupOnFailure: cleanup,
+    formatFailure: ({ action, stdout, stderr }) => {
+      const detail = stderr.trim() || stdout.trim() || `git ${action} failed`;
+      return `failed to ${action} marketplace source ${normalized.label}: ${detail}`;
+    },
+  });
+  if (!acquired.ok) {
+    return acquired;
   }
 
   return {
@@ -582,9 +554,7 @@ async function cloneMarketplaceRepo(params: {
     rootDir: repoDir,
     label: normalized.label,
     ...(normalized.ref ? { ref: normalized.ref } : {}),
-    cleanup: async () => {
-      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
-    },
+    cleanup,
   };
 }
 
@@ -779,10 +749,6 @@ function hasStreamingResponseBody(
   );
 }
 
-async function cancelUnreadMarketplaceResponseBody(response: Response): Promise<void> {
-  await response.body?.cancel().catch(() => undefined);
-}
-
 function parseMarketplaceContentLength(raw: string): number {
   const trimmed = raw.trim();
   if (!/^\d+$/.test(trimmed)) {
@@ -795,72 +761,18 @@ function parseMarketplaceContentLength(raw: string): number {
   return size;
 }
 
-async function readMarketplaceChunkWithTimeout(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  chunkTimeoutMs: number,
-): Promise<Awaited<ReturnType<typeof reader.read>>> {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  let timedOut = false;
-
-  return await new Promise((resolve, reject) => {
-    const clear = () => {
-      if (timeoutId !== undefined) {
-        clearTimeout(timeoutId);
-        timeoutId = undefined;
-      }
-    };
-
-    timeoutId = setTimeout(() => {
-      timedOut = true;
-      clear();
-      void reader.cancel().catch(() => undefined);
-      reject(new Error(`download timed out after ${chunkTimeoutMs}ms`));
-    }, chunkTimeoutMs);
-
-    void reader.read().then(
-      (result) => {
-        clear();
-        if (!timedOut) {
-          resolve(result);
-        }
-      },
-      (err: unknown) => {
-        clear();
-        if (!timedOut) {
-          reject(toErrorObject(err, "Non-Error rejection"));
-        }
-      },
-    );
-  });
-}
-
-async function writeMarketplaceChunk(
-  fileHandle: Awaited<ReturnType<typeof fs.open>>,
-  chunk: Uint8Array,
-): Promise<void> {
-  let offset = 0;
-  while (offset < chunk.length) {
-    const { bytesWritten } = await fileHandle.write(chunk, offset, chunk.length - offset);
-    if (bytesWritten <= 0) {
-      throw new Error("failed to write download chunk");
-    }
-    offset += bytesWritten;
-  }
-}
-
-async function streamMarketplaceResponseToFile(params: {
-  response: Response & { body: ReadableStream<Uint8Array> };
-  targetPath: string;
-  maxBytes: number;
-  chunkTimeoutMs: number;
-}): Promise<void> {
-  const reader = params.response.body.getReader();
-  const fileHandle = await fs.open(params.targetPath, "wx");
-  let total = 0;
-
+async function* marketplaceResponseChunks(
+  body: ReadableStream<Uint8Array>,
+  timeoutMs: number,
+): AsyncIterable<Uint8Array> {
+  const reader = body.getReader();
   try {
     while (true) {
-      const { done, value } = await readMarketplaceChunkWithTimeout(reader, params.chunkTimeoutMs);
+      const { done, value } = await readChunkWithIdleTimeout(
+        reader,
+        timeoutMs,
+        ({ chunkTimeoutMs }) => new Error(`download timed out after ${chunkTimeoutMs}ms`),
+      );
       if (done) {
         return;
       }
@@ -868,21 +780,10 @@ async function streamMarketplaceResponseToFile(params: {
         continue;
       }
 
-      const nextTotal = total + value.length;
-      if (nextTotal > params.maxBytes) {
-        throw new Error(`download too large: ${nextTotal} bytes (limit: ${params.maxBytes} bytes)`);
-      }
-
-      await writeMarketplaceChunk(fileHandle, value);
-      total = nextTotal;
+      yield value;
     }
-  } catch (error) {
-    if (typeof reader.cancel === "function") {
-      await reader.cancel().catch(() => undefined);
-    }
-    throw error;
   } finally {
-    await fileHandle.close().catch(() => undefined);
+    await reader.cancel().catch(() => undefined);
     try {
       reader.releaseLock();
     } catch {}
@@ -904,7 +805,7 @@ async function downloadUrlToTempFile(
     }
 > {
   let sourceFileName = "plugin.tgz";
-  let tmpDir: string | undefined;
+  let workspace: TempWorkspace | undefined;
   try {
     sourceFileName = resolveSafeMarketplaceDownloadFileName(url, sourceFileName);
     const downloadTimeoutMs = resolveMarketplaceDownloadTimeoutMs(timeoutMs);
@@ -915,7 +816,6 @@ async function downloadUrlToTempFile(
     });
     try {
       if (!response.ok) {
-        await cancelUnreadMarketplaceResponseBody(response);
         return {
           ok: false,
           error: formatMarketplaceDownloadError(url, `HTTP ${response.status}`),
@@ -929,7 +829,6 @@ async function downloadUrlToTempFile(
       }
       // Fail closed unless we can stream and enforce the archive size bound incrementally.
       if (!hasStreamingResponseBody(response)) {
-        await cancelUnreadMarketplaceResponseBody(response);
         return {
           ok: false,
           error: formatMarketplaceDownloadError(url, "streaming response body unavailable"),
@@ -938,15 +837,8 @@ async function downloadUrlToTempFile(
 
       const contentLength = response.headers.get("content-length");
       if (contentLength) {
-        let size: number;
-        try {
-          size = parseMarketplaceContentLength(contentLength);
-        } catch (error) {
-          await cancelUnreadMarketplaceResponseBody(response);
-          throw error;
-        }
+        const size = parseMarketplaceContentLength(contentLength);
         if (size > MAX_MARKETPLACE_ARCHIVE_BYTES) {
-          await cancelUnreadMarketplaceResponseBody(response);
           throw new Error(
             `download too large: ${size} bytes (limit: ${MAX_MARKETPLACE_ARCHIVE_BYTES} bytes)`,
           );
@@ -955,32 +847,35 @@ async function downloadUrlToTempFile(
 
       const finalFileName = resolveSafeMarketplaceDownloadFileName(finalUrl, sourceFileName);
       const fileName = resolveArchiveKind(finalFileName) ? finalFileName : sourceFileName;
-      tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-marketplace-download-"));
-      const createdTmpDir = tmpDir;
-      const targetPath = path.resolve(createdTmpDir, fileName);
-      if (!isPathInside(createdTmpDir, targetPath)) {
-        throw new Error("invalid download filename");
-      }
-      await streamMarketplaceResponseToFile({
-        response,
-        targetPath,
-        maxBytes: MAX_MARKETPLACE_ARCHIVE_BYTES,
-        chunkTimeoutMs: downloadTimeoutMs,
+      workspace = await tempWorkspace({
+        rootDir: os.tmpdir(),
+        prefix: "openclaw-marketplace-download-",
       });
+      const createdWorkspace = workspace;
+      const targetPath = workspace.path(fileName);
+      const destination = await fsRoot(workspace.dir);
+      await destination.create(
+        fileName,
+        marketplaceResponseChunks(response.body, downloadTimeoutMs),
+        {
+          maxBytes: MAX_MARKETPLACE_ARCHIVE_BYTES,
+          mode: 0o666 & ~process.umask(),
+          durable: false,
+        },
+      );
       return {
         ok: true,
         path: targetPath,
         cleanup: async () => {
-          await fs.rm(createdTmpDir, { recursive: true, force: true }).catch(() => undefined);
+          await createdWorkspace.cleanup().catch(() => undefined);
         },
       };
     } finally {
+      await response.body?.cancel().catch(() => undefined);
       await release().catch(() => undefined);
     }
   } catch (error) {
-    if (tmpDir) {
-      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
-    }
+    await workspace?.cleanup().catch(() => undefined);
     return {
       ok: false,
       error: formatMarketplaceDownloadError(url, formatErrorMessage(error)),
@@ -1011,8 +906,8 @@ async function ensureInsideMarketplaceRoot(
 
       const rootRealPath = await fs.realpath(options.canonicalRootDir);
       let existingPath = resolved;
-      // `pathExists` uses `fs.access`, so dangling symlinks are treated as missing and we walk up
-      // to the nearest existing ancestor. Live symlinks stop here and are canonicalized below.
+      // Dangling symlinks are treated as missing; live symlinks stop the ancestor
+      // search here and are canonicalized below.
       while (!(await pathExists(existingPath))) {
         const parentPath = path.dirname(existingPath);
         if (parentPath === existingPath) {
@@ -1279,18 +1174,15 @@ export async function resolveMarketplaceInstallShortcut(
 }
 
 export async function installPluginFromMarketplace(
-  params: InstallSafetyOverrides & {
-    marketplace: string;
-    plugin: string;
-    logger?: MarketplaceLogger;
-    timeoutMs?: number;
-    mode?: "install" | "update";
-    extensionsDir?: string;
-    dryRun?: boolean;
-    expectedPluginId?: string;
-    onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
-    beforePersistentApply?: () => void;
-  },
+  params: InstallSafetyOverrides &
+    TimedInstallModeOptions<MarketplaceLogger> & {
+      marketplace: string;
+      plugin: string;
+      extensionsDir?: string;
+      expectedPluginId?: string;
+      onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
+      beforePersistentApply?: () => void;
+    },
 ): Promise<MarketplaceInstallResult> {
   const loaded = await loadMarketplace({
     source: params.marketplace,
@@ -1330,7 +1222,6 @@ export async function installPluginFromMarketplace(
 
     const result = await installPluginFromPath(
       copyPluginInstallTransactionRequest(params, {
-        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
         onInstallPolicyWarning: params.onInstallPolicyWarning,
         config: params.config,
         path: resolved.path,
@@ -1338,6 +1229,7 @@ export async function installPluginFromMarketplace(
         mode: params.mode,
         extensionsDir: params.extensionsDir,
         timeoutMs: params.timeoutMs,
+        workTimeoutMs: params.workTimeoutMs,
         dryRun: params.dryRun,
         expectedPluginId: params.expectedPluginId,
         onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,

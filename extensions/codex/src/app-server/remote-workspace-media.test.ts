@@ -2,7 +2,6 @@ import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
@@ -28,6 +27,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await rm(localWorkspaceRoot, { recursive: true, force: true });
   await openClawState.cleanup();
 });
@@ -113,7 +113,7 @@ describe("readBoundedCodexRemoteWorkspaceFile", () => {
       maxBytes: expected.byteLength,
     });
 
-    expect(Buffer.from(result.dataBase64, "base64")).toEqual(expected);
+    expect(Buffer.from(result.dataBase64, "base64").equals(expected)).toBe(true);
     expect(client.request).toHaveBeenCalledTimes(2);
     expect(client.request.mock.calls[0]?.[1].command).toEqual([
       "node",
@@ -136,6 +136,53 @@ describe("readBoundedCodexRemoteWorkspaceFile", () => {
       "524288",
     ]);
     expect(client.request.mock.calls[1]?.[1]).not.toHaveProperty("outputBytesCap");
+  });
+
+  it.each([
+    { timeoutMs: 500, elapsedMs: 100.25, budgets: [500, 399], expires: false },
+    { timeoutMs: 500, elapsedMs: 500.25, budgets: [500], expires: true },
+    { timeoutMs: undefined, elapsedMs: 500.25, budgets: [undefined, undefined], expires: false },
+  ])("keeps chunk deadlines across a clock rewind ($timeoutMs, $elapsedMs)", async (test) => {
+    let elapsed = 0;
+    let wallClock = 10_000;
+    vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    vi.spyOn(Date, "now").mockImplementation(() => wallClock);
+    const bytes = Buffer.alloc(512 * 1024 + 17, 0x62);
+    let offset = 0;
+    const request = vi.fn(
+      async (
+        _method: "command/exec",
+        _params: CodexCommandExecParams,
+        _options: { timeoutMs?: number },
+      ): Promise<CodexCommandExecResponse> => {
+        const chunk = bytes.subarray(offset, offset + 512 * 1024);
+        offset += chunk.byteLength;
+        elapsed = test.elapsedMs;
+        wallClock -= 5_000;
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            dataBase64: chunk.toString("base64"),
+            size: bytes.byteLength,
+            revision: "stable-file",
+          }),
+          stderr: "",
+        };
+      },
+    );
+    const transfer = readBoundedCodexRemoteWorkspaceFile({
+      client: { request },
+      path: "/remote/chunked.bin",
+      maxBytes: bytes.byteLength,
+      timeoutMs: test.timeoutMs,
+    });
+    if (test.expires) {
+      await expect(transfer).rejects.toThrow("timed out");
+    } else {
+      expect(Buffer.from((await transfer).dataBase64, "base64")).toEqual(bytes);
+    }
+    expect(request.mock.calls.map(([, params]) => params.timeoutMs)).toEqual(test.budgets);
+    expect(request.mock.calls.map((call) => call[2].timeoutMs)).toEqual(test.budgets);
   });
 
   it("rejects oversized remote files before base64 allocation or transfer", async () => {
@@ -228,43 +275,54 @@ describe("readBoundedCodexRemoteWorkspaceFile", () => {
 });
 
 describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
-  it("stages scalar, list, and structured attachments from authoritative remote bytes", async () => {
-    const reportPath = `${remoteWorkspaceRoot}/reports/slack-upload.txt`;
-    const imagePath = `${remoteWorkspaceRoot}/images/preview.png`;
-    const readRemoteFile = createRemoteFileReader({
-      [reportPath]: "authoritative remote report\n",
-      [imagePath]: "authoritative remote image\n",
-    });
+  it.each([
+    { remoteRoot: remoteWorkspaceRoot, reportAlias: "reports/./slack-upload.txt" },
+    { remoteRoot: "C:/Work/Repo", reportAlias: "c:\\work\\repo\\reports\\slack-upload.txt" },
+  ])(
+    "stages scalar, list, and structured attachments from $remoteRoot",
+    async ({ remoteRoot, reportAlias }) => {
+      const reportPath = `${remoteRoot}/reports/slack-upload.txt`;
+      const imagePath = `${remoteRoot}/images/preview.png`;
+      const readRemoteFile = createRemoteFileReader({
+        [reportPath]: "authoritative remote report\n",
+        [imagePath]: "authoritative remote image\n",
+      });
 
-    const result = await prepareCodexRemoteWorkspaceMessageMedia({
-      args: {
+      const result = await prepareCodexRemoteWorkspaceMessageMedia({
+        args: {
+          action: "upload-file",
+          filePath: reportAlias,
+          mediaUrls: ["reports/slack-upload.txt", "https://example.com/image.png"],
+          attachments: [{ filePath: imagePath, title: "Preview" }],
+        },
+        localWorkspaceRoot,
+        remoteWorkspaceRoot: remoteRoot,
+        readRemoteFile,
+      });
+      const stagedReportPath = result.args.filePath;
+      const stagedImagePath = (result.args.attachments as Array<{ filePath: string }>)[0]?.filePath;
+
+      expect(result.args).toEqual({
         action: "upload-file",
-        filePath: reportPath,
-        mediaUrls: [reportPath, "https://example.com/image.png"],
-        attachments: [{ filePath: imagePath, title: "Preview" }],
-      },
-      localWorkspaceRoot,
-      remoteWorkspaceRoot,
-      readRemoteFile,
-    });
-    const stagedReportPath = result.filePath;
-    const stagedImagePath = (result.attachments as Array<{ filePath: string }>)[0]?.filePath;
-
-    expect(result).toEqual({
-      action: "upload-file",
-      filePath: stagedReportPath,
-      mediaUrls: [stagedReportPath, "https://example.com/image.png"],
-      attachments: [{ filePath: stagedImagePath, title: "Preview" }],
-    });
-    expect(readRemoteFile).toHaveBeenCalledTimes(2);
-    expect(stagedReportPath).toContain(`${path.sep}media${path.sep}outbound${path.sep}`);
-    await expect(readFile(String(stagedReportPath), "utf8")).resolves.toBe(
-      "authoritative remote report\n",
-    );
-    await expect(readFile(String(stagedImagePath), "utf8")).resolves.toBe(
-      "authoritative remote image\n",
-    );
-  });
+        filePath: stagedReportPath,
+        mediaUrls: [stagedReportPath, "https://example.com/image.png"],
+        attachments: [{ filePath: stagedImagePath, title: "Preview" }],
+      });
+      expect(result.sourcePathsByStagedPath.size).toBe(2);
+      expect(new Set(result.sourcePathsByStagedPath.get(String(stagedReportPath)))).toEqual(
+        new Set([reportAlias, reportPath, "reports/slack-upload.txt"]),
+      );
+      expect(result.sourcePathsByStagedPath.get(String(stagedImagePath))).toEqual([imagePath]);
+      expect(readRemoteFile).toHaveBeenCalledTimes(2);
+      expect(stagedReportPath).toContain(`${path.sep}media${path.sep}outbound${path.sep}`);
+      await expect(readFile(String(stagedReportPath), "utf8")).resolves.toBe(
+        "authoritative remote report\n",
+      );
+      await expect(readFile(String(stagedImagePath), "utf8")).resolves.toBe(
+        "authoritative remote image\n",
+      );
+    },
+  );
 
   it("uses authoritative remote bytes even when a stale local file has the same timestamp", async () => {
     const remotePath = `${remoteWorkspaceRoot}/reused-upload.txt`;
@@ -277,7 +335,7 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
       readRemoteFile: createRemoteFileReader({ [remotePath]: "authoritative remote content\n" }),
     });
 
-    await expect(readFile(String(result.filePath), "utf8")).resolves.toBe(
+    await expect(readFile(String(result.args.filePath), "utf8")).resolves.toBe(
       "authoritative remote content\n",
     );
   });
@@ -292,7 +350,7 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
       readRemoteFile: createRemoteFileReader({ [remotePath]: "new remote attachment\n" }),
     });
 
-    await expect(readFile(String(result.filePath), "utf8")).resolves.toBe(
+    await expect(readFile(String(result.args.filePath), "utf8")).resolves.toBe(
       "new remote attachment\n",
     );
   });
@@ -304,12 +362,15 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
       attachments: [{ fileUrl: "media://inbound/image.png" }],
     };
 
-    await expect(
-      prepareCodexRemoteWorkspaceMessageMedia({ args, localWorkspaceRoot, remoteWorkspaceRoot }),
-    ).resolves.toBe(args);
-    await expect(
-      prepareCodexRemoteWorkspaceMessageMedia({ args, localWorkspaceRoot }),
-    ).resolves.toBe(args);
+    for (const remoteRoot of [remoteWorkspaceRoot, undefined]) {
+      const result = await prepareCodexRemoteWorkspaceMessageMedia({
+        args,
+        localWorkspaceRoot,
+        remoteWorkspaceRoot: remoteRoot,
+      });
+      expect(result.args).toBe(args);
+      expect(result.sourcePathsByStagedPath.size).toBe(0);
+    }
   });
 
   it("preserves securely validated Gateway-owned media in a remote run", async () => {
@@ -323,14 +384,14 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
     const args = { action: "send", filePath: saved.path };
     const readRemoteFile = createRemoteFileReader({});
 
-    await expect(
-      prepareCodexRemoteWorkspaceMessageMedia({
-        args,
-        localWorkspaceRoot,
-        remoteWorkspaceRoot,
-        readRemoteFile,
-      }),
-    ).resolves.toBe(args);
+    const result = await prepareCodexRemoteWorkspaceMessageMedia({
+      args,
+      localWorkspaceRoot,
+      remoteWorkspaceRoot,
+      readRemoteFile,
+    });
+    expect(result.args).toBe(args);
+    expect(result.sourcePathsByStagedPath.size).toBe(0);
     expect(readRemoteFile).not.toHaveBeenCalled();
   });
 
@@ -427,31 +488,36 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
     ).rejects.toThrow("limit of 2 bytes");
   });
 
-  it("shares one configured deadline across an entire attachment batch", async () => {
+  it.each([
+    { elapsedMs: 100.25, budgets: [500, 399], expires: false },
+    { elapsedMs: 499.75, budgets: [500], expires: true },
+  ])("keeps batch deadlines across a clock rewind ($elapsedMs)", async (test) => {
+    let elapsed = 0;
+    let wallClock = 10_000;
+    vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    vi.spyOn(Date, "now").mockImplementation(() => wallClock);
     const first = `${remoteWorkspaceRoot}/reports/first.txt`;
     const second = `${remoteWorkspaceRoot}/reports/second.txt`;
     const readRemoteFile = vi.fn<CodexRemoteWorkspaceFileReader>(async ({ path: remotePath }) => {
-      await delay(20);
+      elapsed = test.elapsedMs;
+      wallClock -= 5_000;
       return {
         dataBase64: Buffer.from(remotePath === first ? "first" : "second").toString("base64"),
       };
     });
-
-    await prepareCodexRemoteWorkspaceMessageMedia({
+    const transfer = prepareCodexRemoteWorkspaceMessageMedia({
       args: { mediaUrls: [first, second] },
       localWorkspaceRoot,
       remoteWorkspaceRoot,
       readRemoteFile,
       timeoutMs: 500,
     });
-
-    expect(readRemoteFile).toHaveBeenCalledTimes(2);
-    const firstBudget = readRemoteFile.mock.calls[0]?.[0].timeoutMs;
-    const secondBudget = readRemoteFile.mock.calls[1]?.[0].timeoutMs;
-    expect(firstBudget).toBeGreaterThan(0);
-    expect(firstBudget).toBeLessThanOrEqual(500);
-    expect(secondBudget).toBeGreaterThan(0);
-    expect(secondBudget).toBeLessThan(firstBudget ?? 0);
+    if (test.expires) {
+      await expect(transfer).rejects.toThrow("timed out");
+    } else {
+      await transfer;
+    }
+    expect(readRemoteFile.mock.calls.map(([params]) => params.timeoutMs)).toEqual(test.budgets);
   });
 
   it("counts repeated attachment entries before issuing any remote request", async () => {
@@ -484,7 +550,7 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
     });
     remoteFiles[remotePath] = "changed remote content\n";
 
-    await expect(readFile(String(result.filePath), "utf8")).resolves.toBe(
+    await expect(readFile(String(result.args.filePath), "utf8")).resolves.toBe(
       "immutable transferred report\n",
     );
   });

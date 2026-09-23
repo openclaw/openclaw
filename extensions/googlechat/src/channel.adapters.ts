@@ -8,6 +8,7 @@ import { identityEntryAuthenticationClassifier } from "openclaw/plugin-sdk/chann
 import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
+  type ChannelMessageSendTextContext,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
@@ -47,6 +48,18 @@ const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
   "googleChatChannelRuntime",
 );
 
+type GoogleChatTextSendContext = Pick<
+  ChannelMessageSendTextContext,
+  | "cfg"
+  | "to"
+  | "text"
+  | "accountId"
+  | "replyToId"
+  | "threadId"
+  | "assertDirectAdapterHandoff"
+  | "onPlatformSendDispatch"
+>;
+
 function createGoogleChatSendReceipt(params: {
   messageId?: string;
   chatId: string;
@@ -84,7 +97,7 @@ const collectGoogleChatGroupPolicyWarnings =
 const collectGoogleChatOpenGroupFindings = createConditionalWarningCollector.findings({
   collectWarnings: collectGoogleChatGroupPolicyWarnings,
   checkId: "channels.googlechat.groups.open",
-  severity: "critical",
+  severity: "warn",
   title: "Google Chat security warning",
 });
 
@@ -234,19 +247,18 @@ export const googlechatOutboundAdapter = {
       accountId,
       replyToId,
       threadId,
-    }: {
-      cfg: OpenClawConfig;
-      to: string;
-      text: string;
-      accountId?: string | null;
-      replyToId?: string | null;
-      threadId?: string | number | null;
-    }) => {
+      assertDirectAdapterHandoff,
+      onPlatformSendDispatch,
+    }: GoogleChatTextSendContext) => {
       const account = resolveGoogleChatAccount({
         cfg,
         accountId,
       });
-      const space = await resolveGoogleChatOutboundSpace({ account, target: to });
+      const space = await resolveGoogleChatOutboundSpace({
+        account,
+        target: to,
+        assertDirectAdapterHandoff,
+      });
       const thread =
         typeof threadId === "number" ? String(threadId) : (threadId ?? replyToId ?? undefined);
       const { sendGoogleChatMessage } = await loadGoogleChatChannelRuntime();
@@ -255,6 +267,8 @@ export const googlechatOutboundAdapter = {
         space,
         text,
         thread,
+        assertDirectAdapterHandoff,
+        onPlatformSendDispatch,
       });
       const messageId = result?.messageName ?? "";
       return {

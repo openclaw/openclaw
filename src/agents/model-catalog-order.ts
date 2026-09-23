@@ -1,5 +1,6 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 
 /**
  * Provider catalogs declare models strongest-first. Preserve that owner order
@@ -10,6 +11,7 @@ export function assignProviderModelOrder(
   existingEntries: readonly ModelCatalogEntry[] = [],
   options: { appendUnknown?: boolean } = {},
 ): ModelCatalogEntry[] {
+  const keyOf = createModelCatalogIdentityKeyResolver();
   const orderByModel = new Map<string, number>();
   const nextOrderByProvider = new Map<string, number>();
   for (const entry of existingEntries) {
@@ -17,7 +19,7 @@ export function assignProviderModelOrder(
       continue;
     }
     const provider = normalizeProviderId(entry.provider);
-    const key = `${provider}/${entry.id.trim().toLowerCase()}`;
+    const key = keyOf(entry);
     orderByModel.set(key, entry.providerOrder);
     nextOrderByProvider.set(
       provider,
@@ -26,7 +28,7 @@ export function assignProviderModelOrder(
   }
   return entries.map((entry) => {
     const provider = normalizeProviderId(entry.provider);
-    const key = `${provider}/${entry.id.trim().toLowerCase()}`;
+    const key = keyOf(entry);
     const existingOrder = orderByModel.get(key);
     if (existingOrder !== undefined) {
       return { ...entry, providerOrder: existingOrder };

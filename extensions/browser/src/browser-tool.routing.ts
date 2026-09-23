@@ -18,6 +18,7 @@ export type BrowserNodeTarget = {
 
 export async function resolveBrowserToolNodeTarget(params: {
   requestedNode?: string;
+  profile?: string;
   target?: "sandbox" | "host" | "node";
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
@@ -35,7 +36,7 @@ export async function resolveBrowserToolNodeTarget(params: {
   const explicitTarget = params.target === "node";
   const requestedNode = params.requestedNode?.trim();
   if (policy?.mode === "off") {
-    resolveBrowserNodeTarget({ nodes: [], policy, requestedNode, explicitTarget });
+    await resolveBrowserNodeTarget({ nodes: () => [], config: cfg, requestedNode, explicitTarget });
     return null;
   }
   if (params.sandboxBridgeUrl?.trim() && !explicitTarget && !requestedNode) {
@@ -59,13 +60,15 @@ export async function resolveBrowserToolNodeTarget(params: {
   ) {
     return null;
   }
-  const node = resolveBrowserNodeTarget({
-    nodes: await listNodes({}, params.signal),
-    policy,
+  const node = await resolveBrowserNodeTarget({
+    nodes: () => listNodes({}, params.signal),
+    config: cfg,
+    profile: params.profile,
     requestedNode,
     explicitTarget,
     requireConnected: true,
   });
+  params.signal?.throwIfAborted();
   return node
     ? {
         nodeId: node.nodeId,
@@ -117,6 +120,7 @@ const EXISTING_SESSION_MANAGE_ACTIONS = new Set([
   "focus",
   "close",
 ]);
+const PERSISTENT_TAB_ACTIONS = new Set(["profiles", "tabs", "open", "focus", "close"]);
 
 function hasExistingSessionProfile(resolved: ReturnType<typeof resolveBrowserConfig>) {
   return Object.keys(resolved.profiles).some((name) => {
@@ -129,18 +133,30 @@ export function resolveBrowserToolTimeoutMs({
   requestedTimeoutMs,
   action,
   isUserBrowserProfile,
+  usesPersistentPlaywright,
+  isNodeProxy,
   resolvedBrowser,
 }: {
   requestedTimeoutMs?: number;
   action: string;
   isUserBrowserProfile: boolean;
+  usesPersistentPlaywright: boolean;
+  isNodeProxy: boolean;
   resolvedBrowser: ReturnType<typeof resolveBrowserConfig>;
 }) {
-  return (
-    requestedTimeoutMs ??
-    (EXISTING_SESSION_MANAGE_ACTIONS.has(action) &&
+  if (requestedTimeoutMs !== undefined) {
+    return requestedTimeoutMs;
+  }
+  if (
+    EXISTING_SESSION_MANAGE_ACTIONS.has(action) &&
     (isUserBrowserProfile || (action === "profiles" && hasExistingSessionProfile(resolvedBrowser)))
-      ? DEFAULT_EXISTING_SESSION_MANAGE_TIMEOUT_MS
-      : undefined)
-  );
+  ) {
+    return DEFAULT_EXISTING_SESSION_MANAGE_TIMEOUT_MS;
+  }
+  // A node proxy resolves the profile on its execution host, so the Gateway
+  // must budget tab operations for the possible persistent Playwright path.
+  if (PERSISTENT_TAB_ACTIONS.has(action) && (usesPersistentPlaywright || isNodeProxy)) {
+    return resolvedBrowser.actionTimeoutMs;
+  }
+  return undefined;
 }

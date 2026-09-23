@@ -1,9 +1,15 @@
+import path from "node:path";
 import { expect, it } from "vitest";
-import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { activateChatHeaderPanelAction } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { installDesktopClientFake, installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
+import { openDesktopPanel, openPalette, sessionsList } from "./desktop-panel.test-support.ts";
+import {
+  createRfbClipboardProvide,
+  createRfbRawFrame,
+  installDesktopClientFake,
+  installScriptedRfbServer,
+} from "./desktop-rfb-test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "desktop source panel",
@@ -11,27 +17,6 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`.`,
 });
-
-function sessionsList(placement: "local" | "active") {
-  return {
-    count: 1,
-    defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
-    path: "",
-    sessions: [
-      {
-        key: "main",
-        kind: "direct",
-        label: "Main",
-        placement: {
-          state: placement,
-          ...(placement === "active" ? { environmentId: "worker-desktop-1" } : {}),
-        },
-        updatedAt: Date.now(),
-      },
-    ],
-    ts: Date.now(),
-  };
-}
 
 const workerDesktopEnvironment = {
   id: "worker-desktop-1",
@@ -48,23 +33,6 @@ const workerDesktopEnvironment = {
   },
 } as const;
 
-async function openPalette(page: import("playwright").Page) {
-  await waitForControlUiGatewayReady(page);
-  await page.evaluate(() => {
-    window.dispatchEvent(new CustomEvent("openclaw:command-palette-open"));
-  });
-  await page.getByRole("combobox", { name: "Search chats and commands…" }).waitFor();
-}
-
-async function openDesktopPanel(page: import("playwright").Page) {
-  await page.goto(`${suite.server.baseUrl}activity`);
-  await openPalette(page);
-  await page.getByRole("option", { name: "Desktop", exact: true }).click();
-  const panel = page.locator("openclaw-desktop-panel");
-  await panel.locator("section[aria-label='Desktop']").waitFor();
-  return panel;
-}
-
 async function openDirectDesktop(page: import("playwright").Page, environmentId: string) {
   await page.evaluate((targetEnvironmentId) => {
     window.dispatchEvent(
@@ -73,6 +41,41 @@ async function openDirectDesktop(page: import("playwright").Page, environmentId:
       }),
     );
   }, environmentId);
+}
+
+async function openScriptedDesktop(
+  page: import("playwright").Page,
+  options: { disconnectAfterLastPeer?: boolean } = {},
+) {
+  const gateway = await installMockGateway(page, {
+    featureMethods: ["desktop.observe", "environments.list"],
+    methodResponses: {
+      "sessions.list": sessionsList("active"),
+      "environments.list": { environments: [workerDesktopEnvironment] },
+      "desktop.observe": {
+        cases: [false, true].map((control) => ({
+          match: {
+            source: { kind: "environment", environmentId: "worker-desktop-1" },
+            control,
+          },
+          response: {
+            transport: "rfb",
+            wsPath: `/desktop/observe?token=${control ? "control" : "view"}`,
+            expiresAtMs: 60_000,
+            control,
+          },
+        })),
+      },
+    },
+  });
+  await page.goto(`${suite.server.baseUrl}activity`);
+  // DesktopClient owns the real noVNC parser; only its RFB wire peer is scripted.
+  const rfb = await installScriptedRfbServer(page, options);
+  await openDirectDesktop(page, "worker-desktop-1");
+  const panel = page.locator("openclaw-desktop-panel");
+  await panel.locator(".desktop-surface canvas").waitFor();
+  await expect.poll(rfb.events).toEqual(["authenticated:1"]);
+  return { gateway, rfb, panel };
 }
 
 suite.define(() => {
@@ -98,7 +101,7 @@ suite.define(() => {
   });
 
   it.each(["local", "active"] as const)(
-    "opens the global desktop picker on a %s chat session",
+    "opens only the assigned desktop on a %s chat session",
     async (placement) => {
       await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
         const inventory = {
@@ -112,6 +115,8 @@ suite.define(() => {
           methodResponses: {
             "sessions.list": sessionsList(placement),
             "environments.list": inventory,
+            "environments.status":
+              placement === "local" ? inventory.environments[0] : workerDesktopEnvironment,
             "desktop.observe": {
               transport: "rfb",
               wsPath: "/desktop/observe?token=palette-session",
@@ -125,15 +130,26 @@ suite.define(() => {
         await openPalette(page);
         expect(await page.getByRole("option", { name: "Desktop", exact: true }).count()).toBe(1);
 
+        await gateway.deferNext("environments.status");
         await page.getByRole("option", { name: "Desktop", exact: true }).click();
         const panel = page.locator("openclaw-desktop-panel");
         await panel.locator("section[aria-label='Desktop']").waitFor();
-        await panel.getByText("Desktop sources", { exact: true }).waitFor();
-        await gateway.waitForRequest("environments.list");
+        const target = await gateway.waitForRequest("environments.status");
+        expect(target.params).toEqual({
+          environmentId: placement === "local" ? "gateway" : workerDesktopEnvironment.id,
+        });
+        expect(await panel.getByText("Desktop sources", { exact: true }).count()).toBe(0);
+        expect(await panel.getByRole("button", { name: "Connect", exact: true }).count()).toBe(0);
         expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
-
-        await activateChatHeaderPanelAction(page, "Desktop");
-        await activateChatHeaderPanelAction(page, "Desktop");
+        if (placement === "active") {
+          await page.screenshot({
+            path: path.join(suite.artifactDir, "session-desktop-connecting.png"),
+          });
+        }
+        await gateway.resolveDeferred(
+          "environments.status",
+          placement === "local" ? inventory.environments[0] : workerDesktopEnvironment,
+        );
         await panel.getByLabel("VNC password", { exact: true }).waitFor();
         const observation = await gateway.waitForRequest("desktop.observe");
         expect(observation.params).toEqual({
@@ -144,7 +160,11 @@ suite.define(() => {
           control: false,
         });
 
-        await gateway.setMethodResponse("environments.list", {
+        const password = panel.getByLabel("VNC password", { exact: true });
+        await password.fill("synthetic-unsent-password");
+        const passwordInput = await password.elementHandle();
+        const inventoryReads = await gateway.getRequests("environments.status");
+        await gateway.setMethodResponse("environments.status", {
           __mockError: {
             code: "UNAVAILABLE",
             message: "desktop inventory temporarily unavailable",
@@ -152,24 +172,52 @@ suite.define(() => {
         });
         await openPalette(page);
         await page.getByRole("option", { name: "Desktop", exact: true }).click();
+        await page
+          .locator("openclaw-command-palette")
+          .getByRole("textbox", { name: "Search or start a task…" })
+          .waitFor({ state: "hidden" });
+        expect(await passwordInput?.evaluate((element) => element.isConnected)).toBe(true);
+        expect(await password.inputValue()).toBe("synthetic-unsent-password");
+        expect(await gateway.getRequests("environments.status")).toEqual(inventoryReads);
+
+        await activateChatHeaderPanelAction(page, "Desktop");
+        await panel.waitFor({ state: "detached" });
+        await openPalette(page);
+        await page.getByRole("option", { name: "Desktop", exact: true }).click();
+        await gateway.waitForRequest("environments.status", { after: inventoryReads.length });
         await panel.getByRole("alert").filter({ hasText: "inventory" }).waitFor();
-        await gateway.setMethodResponse("environments.list", inventory);
+        await gateway.setMethodResponse(
+          "environments.status",
+          placement === "local" ? inventory.environments[0] : workerDesktopEnvironment,
+        );
         await panel.getByRole("button", { name: "Retry", exact: true }).click();
-        await panel.getByText("Desktop sources", { exact: true }).waitFor();
-        expect(await gateway.getRequests("desktop.observe")).toHaveLength(1);
+        await panel.getByLabel("VNC password", { exact: true }).waitFor();
+        expect(await gateway.getRequests("desktop.observe")).toHaveLength(2);
+        expect(await panel.getByText("Desktop sources", { exact: true }).count()).toBe(0);
+
+        await activateChatHeaderPanelAction(page, "Desktop");
+        await activateChatHeaderPanelAction(page, "Desktop");
+        await panel.getByLabel("VNC password", { exact: true }).waitFor();
+        expect(await gateway.getRequests("desktop.observe")).toHaveLength(3);
       });
     },
   );
 
-  it("refreshes direct-target inventory before observing the exact worker", async () => {
+  it("refreshes direct-target status before observing the exact worker", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
-        featureMethods: ["desktop.launch", "desktop.observe", "environments.list"],
+        featureMethods: [
+          "desktop.launch",
+          "desktop.observe",
+          "environments.list",
+          "environments.status",
+        ],
         methodResponses: {
           "sessions.list": sessionsList("active"),
           "environments.list": {
             environments: [workerDesktopEnvironment],
           },
+          "environments.status": workerDesktopEnvironment,
           "desktop.observe": {
             transport: "rfb",
             wsPath: "/desktop/observe?token=direct",
@@ -179,7 +227,7 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      const panel = await openDesktopPanel(page);
+      const panel = await openDesktopPanel(page, suite.server.baseUrl);
       await installDesktopClientFake(panel);
       const requestCount = (await gateway.getRequests()).length;
 
@@ -193,9 +241,13 @@ suite.define(() => {
       expect(
         (await gateway.getRequests())
           .slice(requestCount)
-          .filter((request) => ["environments.list", "desktop.observe"].includes(request.method))
+          .filter((request) =>
+            ["environments.status", "environments.list", "desktop.observe"].includes(
+              request.method,
+            ),
+          )
           .map((request) => request.method),
-      ).toEqual(["environments.list", "desktop.observe"]);
+      ).toEqual(["environments.status", "desktop.observe"]);
       expect(await panel.getByText("Desktop sources", { exact: true }).count()).toBe(0);
       await panel.getByRole("button", { name: "Browser", exact: true }).waitFor();
       await panel.getByRole("button", { name: "Terminal", exact: true }).waitFor();
@@ -235,7 +287,7 @@ suite.define(() => {
     });
   });
 
-  it("shows direct-target inventory failure without observing or falling back", async () => {
+  it("shows direct-target status failure without observing or falling back", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const sessions = sessionsList("active");
       const [session] = sessions.sessions;
@@ -248,7 +300,7 @@ suite.define(() => {
               { ...session, placement: { state: "active", environmentId: "other-worker" } },
             ],
           },
-          "environments.list": {
+          "environments.status": {
             __mockError: {
               code: "UNAVAILABLE",
               message: "desktop inventory is temporarily unavailable",
@@ -271,15 +323,13 @@ suite.define(() => {
       expect(await panel.getByText("Desktop sources", { exact: true }).count()).toBe(0);
       expect(await panel.getByText("This machine", { exact: true }).count()).toBe(0);
 
-      await gateway.setMethodResponse("environments.list", {
-        environments: [workerDesktopEnvironment],
-      });
+      await gateway.setMethodResponse("environments.status", workerDesktopEnvironment);
       await installDesktopClientFake(panel);
       const requestCount = (await gateway.getRequests()).length;
       await panel.getByRole("button", { name: "Retry", exact: true }).click();
 
       await expect
-        .poll(async () => (await gateway.getRequests("environments.list")).length)
+        .poll(async () => (await gateway.getRequests("environments.status")).length)
         .toBe(2);
       const observeRequest = await gateway.waitForRequest("desktop.observe");
       expect(observeRequest.params).toEqual({
@@ -289,9 +339,13 @@ suite.define(() => {
       expect(
         (await gateway.getRequests())
           .slice(requestCount)
-          .filter((request) => ["environments.list", "desktop.observe"].includes(request.method))
+          .filter((request) =>
+            ["environments.status", "environments.list", "desktop.observe"].includes(
+              request.method,
+            ),
+          )
           .map((request) => request.method),
-      ).toEqual(["environments.list", "desktop.observe"]);
+      ).toEqual(["environments.status", "desktop.observe"]);
       await panel.getByRole("button", { name: "Browser", exact: true }).waitFor();
       await panel.getByRole("button", { name: "Terminal", exact: true }).waitFor();
       expect(await panel.getAttribute("data-connect-count")).toBe("1");
@@ -299,7 +353,7 @@ suite.define(() => {
     });
   });
 
-  it("does not observe a direct target after its inventory refresh is closed", async () => {
+  it("does not observe a direct target after its status refresh is closed", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         featureMethods: ["desktop.observe", "environments.list"],
@@ -315,19 +369,19 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.deferNext("environments.list");
-      const inventoryCount = (await gateway.getRequests("environments.list")).length;
+      await gateway.deferNext("environments.status");
+      const inventoryCount = (await gateway.getRequests("environments.status")).length;
 
       await openDirectDesktop(page, "worker-desktop-1");
       await expect
-        .poll(async () => (await gateway.getRequests("environments.list")).length)
+        .poll(async () => (await gateway.getRequests("environments.status")).length)
         .toBe(inventoryCount + 1);
       await page.evaluate(() => {
         window.dispatchEvent(
           new CustomEvent("openclaw:desktop-toggle", { detail: { open: false } }),
         );
       });
-      await gateway.resolveDeferred("environments.list", { environments: [] });
+      await gateway.resolveDeferred("environments.status", workerDesktopEnvironment);
       await page.evaluate(
         () =>
           new Promise<void>((resolve) => {
@@ -351,7 +405,7 @@ suite.define(() => {
           "environments.list": { environments: [] },
         },
       });
-      await openDesktopPanel(page);
+      await openDesktopPanel(page, suite.server.baseUrl);
       const [popup] = await Promise.all([
         page.waitForEvent("popup"),
         page.getByRole("button", { name: "Open desktop in new window", exact: true }).click(),
@@ -435,7 +489,7 @@ suite.define(() => {
         },
       });
 
-      const panel = await openDesktopPanel(page);
+      const panel = await openDesktopPanel(page, suite.server.baseUrl);
       await gateway.waitForRequest("environments.list");
       await panel.getByText("This machine", { exact: true }).waitFor();
       expect(await panel.getByText("legacy-nested-worker", { exact: true }).count()).toBe(0);
@@ -461,68 +515,6 @@ suite.define(() => {
         credentials: { password: "memory-only-test-password" },
       });
       expect(await gateway.getRequests("desktop.launch")).toHaveLength(0);
-    });
-  });
-
-  it("retries host observe with ARD credentials without passing them to noVNC", async () => {
-    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods: ["desktop.observe", "environments.list"],
-        methodResponses: {
-          "sessions.list": sessionsList("local"),
-          "environments.list": {
-            environments: [{ id: "gateway", type: "local", status: "available", desktop: true }],
-          },
-          "desktop.observe": {
-            sequence: [
-              {
-                __mockError: {
-                  code: "INVALID_REQUEST",
-                  message: "macOS account credentials are required to observe Screen Sharing",
-                  details: {
-                    code: "DESKTOP_CREDENTIALS_REQUIRED",
-                    auth: "ard-account",
-                  },
-                },
-              },
-              {
-                transport: "rfb",
-                wsPath: "/desktop/observe?token=ard-host",
-                expiresAtMs: 60_000,
-                control: false,
-                auth: "ard-account",
-              },
-            ],
-          },
-        },
-      });
-
-      const panel = await openDesktopPanel(page);
-      await gateway.waitForRequest("environments.list");
-      await installDesktopClientFake(panel);
-      await panel.getByRole("button", { name: "Connect", exact: true }).click();
-      await panel
-        .getByText("Enter a macOS account to authenticate Screen Sharing.", { exact: true })
-        .waitFor();
-      expect((await gateway.getRequests("desktop.observe"))[0]?.params).toEqual({
-        source: { kind: "host" },
-        control: false,
-      });
-
-      await panel.getByLabel("macOS username", { exact: true }).fill("operator");
-      await panel
-        .getByLabel("macOS password", { exact: true })
-        .fill("memory-only-account-password");
-      await panel.getByRole("button", { name: "Connect", exact: true }).click();
-      await expect.poll(async () => await panel.getAttribute("data-connect-count")).toBe("1");
-      expect(await panel.getAttribute("data-used-credentials")).toBe("false");
-      const requests = await gateway.getRequests("desktop.observe");
-      expect(requests).toHaveLength(2);
-      expect(requests[1]?.params).toEqual({
-        source: { kind: "host" },
-        control: false,
-        credentials: { username: "operator", password: "memory-only-account-password" },
-      });
     });
   });
 
@@ -573,7 +565,7 @@ suite.define(() => {
           },
         },
       });
-      const panel = await openDesktopPanel(page);
+      const panel = await openDesktopPanel(page, suite.server.baseUrl);
       await gateway.waitForRequest("environments.list");
       await panel.getByText("node:paired-node", { exact: true }).waitFor();
       expect(await panel.getByText("node:plain-node", { exact: true }).count()).toBe(0);
@@ -593,10 +585,9 @@ suite.define(() => {
     });
   });
 
-  it("launches advertised desktop apps and keeps observe controls working", async () => {
+  it("settles desktop app launches across takeover and source changes", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
-        deferredMethods: ["desktop.launch"],
         featureMethods: ["desktop.launch", "desktop.observe", "environments.list"],
         methodResponses: {
           "sessions.list": sessionsList("active"),
@@ -650,11 +641,12 @@ suite.define(() => {
         },
       });
 
-      const panel = await openDesktopPanel(page);
+      const panel = await openDesktopPanel(page, suite.server.baseUrl);
       await gateway.waitForRequest("environments.list");
       await panel.getByText("worker-desktop-1", { exact: true }).waitFor();
       await panel.getByText("agent:main:desktop", { exact: true }).waitFor();
-      await installDesktopClientFake(panel);
+      const rfb = await installScriptedRfbServer(page);
+      await gateway.deferNext("desktop.observe");
 
       await panel.getByRole("button", { name: "Connect", exact: true }).click();
       const viewRequest = await gateway.waitForRequest("desktop.observe");
@@ -688,42 +680,6 @@ suite.define(() => {
       });
       expect(stageUsesAppBackground).toBe(true);
 
-      await browserButton.click();
-      const launchRequest = await gateway.waitForRequest("desktop.launch");
-      expect(launchRequest.params).toEqual({
-        source: { kind: "environment", environmentId: "worker-desktop-1" },
-        app: "browser",
-      });
-      await expect.poll(async () => await browserButton.getAttribute("aria-busy")).toBe("true");
-      expect(await terminalButton.isEnabled()).toBe(true);
-      await gateway.resolveDeferred("desktop.launch", { app: "browser", status: "ready" });
-      await expect.poll(async () => await browserButton.getAttribute("aria-busy")).toBe("false");
-
-      // Pin past the first launch so a slow runner can't return it stale.
-      const launchesBeforeRetry = (await gateway.getRequests("desktop.launch")).length;
-      await gateway.deferNext("desktop.launch");
-      await browserButton.click();
-      await gateway.waitForRequest("desktop.launch", { after: launchesBeforeRetry });
-      await gateway.rejectDeferred("desktop.launch", {
-        message: "worker desktop app launch unavailable; try again",
-      });
-      await panel
-        .getByRole("alert")
-        .filter({ hasText: "worker desktop app launch unavailable; try again" })
-        .waitFor();
-      await panel.getByRole("button", { name: "Browser", exact: true }).waitFor();
-      expect(await browserButton.isEnabled()).toBe(true);
-
-      await panel.getByRole("button", { name: "Disconnect", exact: true }).click();
-      await panel.getByText("Desktop sources", { exact: true }).waitFor();
-      expect(
-        await panel
-          .getByText("worker desktop app launch unavailable; try again", { exact: true })
-          .count(),
-      ).toBe(0);
-      await panel.getByRole("button", { name: "Connect", exact: true }).click();
-      await expect.poll(async () => (await gateway.getRequests("desktop.observe")).length).toBe(2);
-
       const takeControl = panel.getByRole("button", { name: "Take control", exact: true });
       const overlayCoversStage = await panel.evaluate((element) => {
         const stage = element.shadowRoot?.querySelector<HTMLElement>(".desktop-stage");
@@ -741,71 +697,110 @@ suite.define(() => {
         );
       });
       expect(overlayCoversStage).toBe(true);
-      await takeControl.click();
-      await expect.poll(async () => (await gateway.getRequests("desktop.observe")).length).toBe(3);
-      const observeRequests = await gateway.getRequests("desktop.observe");
-      expect(observeRequests[2]?.params).toEqual({
-        source: { kind: "environment", environmentId: "worker-desktop-1" },
-        control: true,
+      expect(await takeControl.isEnabled()).toBe(false);
+      await gateway.resolveDeferred("desktop.observe");
+      await expect.poll(rfb.events).toContain("authenticated:1");
+      await expect.poll(() => takeControl.isEnabled()).toBe(true);
+      expect(await panel.getByText("View only", { exact: true }).count()).toBe(1);
+      for (const outcome of ["success", "failure"] as const) {
+        const launchesBefore = (await gateway.getRequests("desktop.launch")).length;
+        await gateway.deferNext("desktop.launch");
+        await browserButton.click();
+        const launchRequest = await gateway.waitForRequest("desktop.launch", {
+          after: launchesBefore,
+        });
+        expect(launchRequest.params).toEqual({
+          source: { kind: "environment", environmentId: "worker-desktop-1" },
+          app: "browser",
+        });
+        await expect.poll(() => browserButton.getAttribute("aria-busy")).toBe("true");
+        expect(await terminalButton.isEnabled()).toBe(true);
+
+        const observationsBefore = (await gateway.getRequests("desktop.observe")).length;
+        const connectionsBefore = await rfb.connectionCount();
+        await gateway.deferNext("desktop.observe");
+        await takeControl.click();
+        const controlRequest = await gateway.waitForRequest("desktop.observe", {
+          after: observationsBefore,
+        });
+        expect(controlRequest.params).toEqual({
+          source: { kind: "environment", environmentId: "worker-desktop-1" },
+          control: true,
+        });
+        // Launch completion belongs to the machine while its replacement viewer is pending.
+        if (outcome === "success") {
+          await gateway.resolveDeferred("desktop.launch", { app: "browser", status: "ready" });
+        } else {
+          await gateway.rejectDeferred("desktop.launch", {
+            message: "worker desktop app launch unavailable; try again",
+          });
+        }
+        await page.screenshot({
+          path: path.join(suite.artifactDir, `desktop-launch-takeover-${outcome}.png`),
+        });
+        await expect.poll(() => browserButton.getAttribute("aria-busy")).toBe("false");
+        expect(await browserButton.isEnabled()).toBe(true);
+        if (outcome === "failure") {
+          await panel
+            .getByRole("alert")
+            .filter({ hasText: "worker desktop app launch unavailable; try again" })
+            .waitFor();
+        } else {
+          expect(await panel.getByRole("alert").count()).toBe(0);
+        }
+        await gateway.resolveDeferred("desktop.observe");
+        await expect.poll(rfb.connectionCount).toBe(connectionsBefore + 1);
+        expect(await takeControl.count()).toBe(0);
+
+        await panel.getByRole("button", { name: "Disconnect", exact: true }).click();
+        await panel.getByText("Desktop sources", { exact: true }).waitFor();
+        expect(await panel.getByRole("alert").count()).toBe(0);
+        await panel.getByRole("button", { name: "Connect", exact: true }).click();
+        await browserButton.waitFor();
+      }
+
+      const launchesBeforeSwitch = (await gateway.getRequests("desktop.launch")).length;
+      await gateway.deferNext("desktop.launch");
+      await browserButton.click();
+      await gateway.waitForRequest("desktop.launch", { after: launchesBeforeSwitch });
+      await panel.getByRole("button", { name: "Disconnect", exact: true }).click();
+      await panel.getByText("Desktop sources", { exact: true }).waitFor();
+      await gateway.setMethodResponse("environments.list", {
+        environments: [{ ...workerDesktopEnvironment, id: "worker-desktop-2" }],
       });
-      expect(await panel.getByRole("button", { name: "Take control", exact: true }).count()).toBe(
-        0,
-      );
+      await gateway.setMethodResponse("desktop.observe", {
+        transport: "rfb",
+        wsPath: "/desktop/observe?token=replacement",
+        control: false,
+      });
+      await panel.getByRole("button", { name: "Refresh", exact: true }).click();
+      await panel.getByText("worker-desktop-2", { exact: true }).waitFor();
+      await panel.getByRole("button", { name: "Connect", exact: true }).click();
+      await browserButton.waitFor();
+      await gateway.rejectDeferred("desktop.launch", { message: "stale desktop launch failure" });
+      await page.screenshot({
+        path: path.join(suite.artifactDir, "desktop-launch-source-switch.png"),
+      });
+      expect(await panel.getByRole("alert").count()).toBe(0);
+      expect(await browserButton.getAttribute("aria-busy")).toBe("false");
+      expect(await browserButton.isEnabled()).toBe(true);
 
       await panel.getByRole("button", { name: "Disconnect", exact: true }).click();
       await panel.getByText("Desktop sources", { exact: true }).waitFor();
-      expect(Number((await panel.getAttribute("data-disconnect-count")) ?? "0")).toBeGreaterThan(0);
+      await expect
+        .poll(
+          async () => (await rfb.events()).filter((event) => event.startsWith("closed:")).length,
+        )
+        .toBe(await rfb.connectionCount());
     });
   });
 
   it("takes control by clicking a real noVNC-mounted desktop", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods: ["desktop.observe", "environments.list"],
-        methodResponses: {
-          "sessions.list": sessionsList("active"),
-          "environments.list": { environments: [workerDesktopEnvironment] },
-          "desktop.observe": {
-            cases: [
-              {
-                match: {
-                  source: { kind: "environment", environmentId: "worker-desktop-1" },
-                  control: false,
-                },
-                response: {
-                  transport: "rfb",
-                  wsPath: "/desktop/observe?token=view",
-                  expiresAtMs: 60_000,
-                  control: false,
-                },
-              },
-              {
-                match: {
-                  source: { kind: "environment", environmentId: "worker-desktop-1" },
-                  control: true,
-                },
-                response: {
-                  transport: "rfb",
-                  wsPath: "/desktop/observe?token=control",
-                  expiresAtMs: 60_000,
-                  control: true,
-                },
-              },
-            ],
-          },
-        },
+      const { gateway, rfb, panel } = await openScriptedDesktop(page, {
+        disconnectAfterLastPeer: true,
       });
-      await page.goto(`${suite.server.baseUrl}activity`);
-      // The production DesktopClient still owns noVNC; only the RFB endpoint
-      // is scripted here so this CI test remains deterministic.
-      const rfb = await installScriptedRfbServer(page, { disconnectAfterLastPeer: true });
-
-      await openDirectDesktop(page, "worker-desktop-1");
-      const panel = page.locator("openclaw-desktop-panel");
-      await panel.locator("section[aria-label='Desktop']").waitFor();
       const canvas = panel.locator(".desktop-surface canvas");
-      await canvas.waitFor();
-      await expect.poll(rfb.events).toEqual(["authenticated:1"]);
       const canvasHandle = await canvas.elementHandle();
       await panel.getByRole("button", { name: "Enter fullscreen", exact: true }).click();
       await expect.poll(() => page.evaluate(() => document.fullscreenElement !== null)).toBe(true);
@@ -832,6 +827,85 @@ suite.define(() => {
       expect(await page.evaluate(() => document.fullscreenElement !== null)).toBe(true);
       await panel.getByRole("button", { name: "Exit fullscreen", exact: true }).click();
       await expect.poll(() => page.evaluate(() => document.fullscreenElement)).toBeNull();
+    });
+  });
+
+  it.each(
+    [
+      { name: "view-only text", control: false, format: 1 as const },
+      { name: "controlling unsupported format", control: true, format: 2 as const },
+      { name: "controlling text", control: true, format: 1 as const },
+    ].flatMap(({ name, control, format }) =>
+      (["coalesced", "fragmented"] as const).map((delivery) => ({
+        name,
+        control,
+        format,
+        delivery,
+      })),
+    ),
+  )(
+    "renders the next RFB frame after $name Provide ($delivery)",
+    async ({ control, format, delivery }) => {
+      await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+        const { gateway, rfb, panel } = await openScriptedDesktop(page);
+        if (control) {
+          await panel.getByRole("button", { name: "Take control", exact: true }).click();
+          await expect.poll(rfb.events).toEqual(["authenticated:1", "authenticated:2", "closed:1"]);
+        }
+        const provide = createRfbClipboardProvide(format);
+        const frame = createRfbRawFrame();
+        await rfb.send(
+          delivery === "coalesced"
+            ? [[...provide, ...frame]]
+            : [...provide.map((byte) => [byte]), frame],
+        );
+        // Observe both terminal outcomes so the broken stream fails without waiting for a missing frame.
+        const outcome = () =>
+          panel.evaluate((element) => {
+            if (element.shadowRoot?.textContent?.includes("Desktop disconnected:")) {
+              return "disconnected";
+            }
+            const canvas =
+              element.shadowRoot?.querySelector<HTMLCanvasElement>(".desktop-surface canvas");
+            const pixel = canvas?.getContext("2d")?.getImageData(0, 0, 1, 1).data;
+            return pixel && [...pixel].join(",") === "24,180,160,255" ? "frame" : null;
+          });
+        await expect.poll(outcome).not.toBeNull();
+        await page.screenshot({ path: path.join(suite.artifactDir, "clipboard-stream.png") });
+        expect(await outcome()).toBe("frame");
+        expect(await gateway.getRequests("desktop.observe")).toHaveLength(control ? 2 : 1);
+        expect(await panel.getByRole("button", { name: "Reconnect", exact: true }).count()).toBe(0);
+      });
+    },
+  );
+
+  it.each([
+    {
+      kind: "invalid server message",
+      expected: "Reconnect. If it fails again,",
+    },
+    { kind: "server close", expected: "synthetic desktop service stopped" },
+  ])("explains real RFB $kind failures", async ({ kind, expected }) => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const consoleErrors: string[] = [];
+      page.on("console", (message) => {
+        if (message.type() === "error") {
+          consoleErrors.push(message.text());
+        }
+      });
+      const { rfb, panel } = await openScriptedDesktop(page);
+      if (kind === "server close") {
+        await rfb.disconnect(expected);
+      } else {
+        await rfb.send([[120]]);
+      }
+      await panel.getByRole("button", { name: "Reconnect", exact: true }).waitFor();
+      await page.screenshot({ path: path.join(suite.artifactDir, "desktop-disconnect.png") });
+      const message = await panel.locator(".desktop-status").textContent();
+      expect(message).toContain(expected);
+      expect(message).not.toContain("unknown reason");
+      await expect.poll(rfb.events).toEqual(["authenticated:1", "closed:1"]);
+      expect(consoleErrors).not.toContain("Tried changing state of a disconnected RFB object");
     });
   });
 
@@ -868,7 +942,7 @@ suite.define(() => {
         },
       });
 
-      const panel = await openDesktopPanel(page);
+      const panel = await openDesktopPanel(page, suite.server.baseUrl);
       await gateway.waitForRequest("environments.list");
       await installDesktopClientFake(panel);
       await panel.getByRole("button", { name: "Connect", exact: true }).click();

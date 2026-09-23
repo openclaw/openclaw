@@ -1,10 +1,25 @@
 import { Blob as NodeBlob, File as NodeFile } from "node:buffer";
 import { IDBFactory } from "fake-indexeddb";
-import { afterEach, vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 import * as payloads from "./durable-composer-persistence.ts";
 
 let factory: IDBFactory | undefined;
 let restoreLocks: (() => void) | undefined;
+
+export function useChatSendBrowserFixture(): void {
+  beforeEach(() => {
+    installOutboxBrowserStorage();
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    vi.stubGlobal("requestAnimationFrame", () => 1);
+    vi.stubGlobal("cancelAnimationFrame", () => undefined);
+  });
+  afterEach(async () => {
+    await Promise.resolve();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+}
 
 function createDocumentLocks() {
   const held = new Set<string>();

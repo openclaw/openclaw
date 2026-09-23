@@ -13,14 +13,30 @@ export type TelegramUserbotUpdate = {
   entities: TelegramTextEntity[];
   botApiMessageId?: number;
   chatId: number;
+  contentType?: string;
+  richMessage?: Record<string, unknown>;
   kind: "edit" | "message";
   messageId: number;
   replyToMessageId?: number;
+  forumTopicId?: number;
+  threadId?: number;
   senderId: number;
   senderUsername?: string;
   text: string;
   timestamp: number;
 };
+
+type PendingUserbotCommand =
+  | {
+      kind: "send";
+      reject(error: Error): void;
+      resolve(value: TelegramUserbotUpdate): void;
+    }
+  | {
+      kind: "cleanup-private-forum";
+      reject(error: Error): void;
+      resolve(): void;
+    };
 
 function isUtf16Boundary(text: string, offset: number) {
   const before = text.charCodeAt(offset - 1);
@@ -78,6 +94,16 @@ function parseUserbotUpdate(value: unknown): TelegramUserbotUpdate {
   if (typeof value.text !== "string") {
     throw new Error("Telegram userbot update has invalid text.");
   }
+  const richMessage = value.contentType === "messageRichMessage" ? value.richMessage : undefined;
+  if (
+    value.contentType === "messageRichMessage" &&
+    (!isRecord(richMessage) ||
+      !Array.isArray(richMessage.blocks) ||
+      typeof richMessage.is_full !== "boolean" ||
+      typeof richMessage.is_rtl !== "boolean")
+  ) {
+    throw new Error("Telegram userbot update has an invalid rich message.");
+  }
   return {
     kind,
     chatId,
@@ -86,12 +112,17 @@ function parseUserbotUpdate(value: unknown): TelegramUserbotUpdate {
     timestamp,
     text: value.text,
     entities: parseTextEntities(value.entities, value.text),
+    // Keep TDLib's observed tree and completeness flag; text alone loses URL/style evidence.
+    ...(isRecord(richMessage) ? { richMessage } : {}),
+    ...(typeof value.contentType === "string" ? { contentType: value.contentType } : {}),
     ...(typeof value.botApiMessageId === "number"
       ? { botApiMessageId: value.botApiMessageId }
       : {}),
     ...(typeof value.replyToMessageId === "number"
       ? { replyToMessageId: value.replyToMessageId }
       : {}),
+    ...(typeof value.forumTopicId === "number" ? { forumTopicId: value.forumTopicId } : {}),
+    ...(typeof value.threadId === "number" ? { threadId: value.threadId } : {}),
     ...(typeof value.senderUsername === "string" ? { senderUsername: value.senderUsername } : {}),
   };
 }
@@ -115,12 +146,11 @@ function waitForChildExit(child: ChildProcessWithoutNullStreams, timeoutMs: numb
 }
 
 export class TelegramUserbotDriver {
+  private activeChatId: number | undefined;
+  private activeUserId: number | undefined;
   private closing = false;
   private commandId = 0;
-  private readonly pending = new Map<
-    string,
-    { reject(error: Error): void; resolve(value: TelegramUserbotUpdate): void }
-  >();
+  private readonly pending = new Map<string, PendingUserbotCommand>();
   private readyReject: (error: Error) => void = () => undefined;
   private readyResolve: () => void = () => undefined;
   private readonly ready: Promise<void>;
@@ -165,16 +195,28 @@ export class TelegramUserbotDriver {
 
   static async start(params: {
     chatId: string;
+    observeChatIds?: string[];
+    expectedUserId?: string;
     driverEnv: Record<string, string>;
     leaseHealth: { assertHealthy(): void; whenUnhealthy: Promise<Error> };
     onUpdate(update: TelegramUserbotUpdate): Promise<void> | void;
     userDriverPath: string;
   }): Promise<TelegramUserbotDriver> {
     params.leaseHealth.assertHealthy();
-    const child = spawn("python3", [params.userDriverPath, "serve", "--chat", params.chatId], {
-      env: { ...process.env, ...params.driverEnv },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    const child = spawn(
+      "python3",
+      [
+        params.userDriverPath,
+        "serve",
+        "--chat",
+        params.chatId,
+        ...(params.observeChatIds ?? []).flatMap((chatId) => ["--observe-chat", chatId]),
+      ],
+      {
+        env: { ...process.env, ...params.driverEnv },
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
     const driver = new TelegramUserbotDriver(
       child,
       (update) => params.onUpdate(update),
@@ -187,9 +229,15 @@ export class TelegramUserbotDriver {
     timer.unref?.();
     try {
       await driver.ready;
+      if (
+        params.expectedUserId !== undefined &&
+        String(driver.activeUserId) !== params.expectedUserId
+      ) {
+        throw new Error("Telegram userbot authorization does not match the leased participant.");
+      }
       return driver;
     } catch (error) {
-      child.kill("SIGTERM");
+      await driver.close();
       throw error;
     } finally {
       clearTimeout(timer);
@@ -209,6 +257,14 @@ export class TelegramUserbotDriver {
       return;
     }
     if (message.type === "ready") {
+      const chatId = message.chatId;
+      if (typeof chatId !== "number" || !Number.isInteger(chatId) || chatId === 0) {
+        this.fail(new Error("Telegram userbot emitted an invalid ready chat id."));
+        return;
+      }
+      this.activeChatId = chatId;
+      this.activeUserId =
+        isRecord(message.user) && typeof message.user.id === "number" ? message.user.id : undefined;
       this.readyResolve();
       return;
     }
@@ -241,6 +297,17 @@ export class TelegramUserbotDriver {
       pending.reject(new Error("Telegram userbot emitted an invalid command result."));
       return;
     }
+    if (pending.kind === "cleanup-private-forum") {
+      if (
+        message.result.ok !== true ||
+        (message.result.status !== "deleted" && message.result.status !== "not-created")
+      ) {
+        pending.reject(new Error("Telegram userbot did not confirm private forum cleanup."));
+        return;
+      }
+      pending.resolve();
+      return;
+    }
     try {
       pending.resolve(parseUserbotUpdate({ ...message.result, kind: "message" }));
     } catch (error) {
@@ -269,18 +336,40 @@ export class TelegramUserbotDriver {
     }
   }
 
-  async send(params: { replyToMessageId?: number; text: string }): Promise<TelegramUserbotUpdate> {
+  get chatId(): number {
+    if (this.activeChatId === undefined) {
+      throw new Error("Telegram userbot chat id is unavailable before readiness.");
+    }
+    return this.activeChatId;
+  }
+
+  async send(params: {
+    chatId?: string;
+    forumTopicId?: number;
+    replyToMessageId?: number;
+    text: string;
+  }): Promise<TelegramUserbotUpdate> {
     this.leaseHealth.assertHealthy();
     this.assertHealthy();
     this.commandId += 1;
     const id = String(this.commandId);
     const result = new Promise<TelegramUserbotUpdate>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      this.pending.set(id, { kind: "send", resolve, reject });
     });
-    this.child.stdin.write(
-      `${JSON.stringify({ id, method: "send", text: params.text, replyToMessageId: params.replyToMessageId })}\n`,
-    );
+    this.child.stdin.write(`${JSON.stringify({ id, method: "send", ...params })}\n`);
     return await result;
+  }
+
+  async cleanupPrivateForum() {
+    this.leaseHealth.assertHealthy();
+    this.assertHealthy();
+    this.commandId += 1;
+    const id = String(this.commandId);
+    const result = new Promise<void>((resolve, reject) => {
+      this.pending.set(id, { kind: "cleanup-private-forum", resolve, reject });
+    });
+    this.child.stdin.write(`${JSON.stringify({ id, method: "cleanup-private-forum" })}\n`);
+    await result;
   }
 
   async close() {
@@ -294,7 +383,9 @@ export class TelegramUserbotDriver {
     }
     if (!(await waitForChildExit(this.child, 2_000))) {
       this.child.kill("SIGKILL");
-      await waitForChildExit(this.child, 2_000);
+      if (!(await waitForChildExit(this.child, 2_000))) {
+        throw new Error("Telegram userbot process exit is unconfirmed.");
+      }
     }
     await this.updateChain;
   }

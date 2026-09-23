@@ -4,6 +4,8 @@
 # `bare` is a clean Node/Git runner for install/update lanes. `functional`
 # installs the prepared OpenClaw npm tarball into /app for built-app lanes.
 
+ARG OPENCLAW_NODE_ALPINE_IMAGE="docker.io/library/node:24-alpine@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43"
+
 FROM node:24-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS e2e-runner
 
 # openssl provisions short-lived fixture certificates for HTTPS-only provider
@@ -17,10 +19,13 @@ RUN apt-get update \
 RUN corepack enable
 RUN npm install -g tsx@4.23.12 --no-fund --no-audit
 
-COPY scripts/prepublish-plugin-registry-artifact.mjs /opt/openclaw-e2e/scripts/
+COPY --chmod=0644 scripts/prepublish-plugin-registry-artifact.mjs /opt/openclaw-e2e/scripts/
 COPY --chmod=0755 scripts/e2e/lib/prepublish-plugin-registry.sh /opt/openclaw-e2e/scripts/e2e/lib/
 COPY scripts/e2e/lib/plugins/npm-registry-server.mjs /opt/openclaw-e2e/scripts/e2e/lib/plugins/
 COPY scripts/lib/bounded-response.mjs /opt/openclaw-e2e/scripts/lib/
+
+# COPY --chmod can also set modes on newly created parent directories.
+RUN find /opt/openclaw-e2e -type d -exec chmod 0755 {} +
 
 RUN useradd --create-home --shell /bin/bash appuser \
  && mkdir -p /app \
@@ -43,6 +48,15 @@ CMD ["bash"]
 FROM bare AS build
 
 CMD ["bash"]
+
+FROM ${OPENCLAW_NODE_ALPINE_IMAGE} AS musl
+
+# Native dependencies without musl prebuilds must compile during real npm installs.
+RUN apk add --no-cache bash g++ make python3
+COPY --from=e2e-runner /opt/openclaw-e2e /opt/openclaw-e2e
+COPY scripts/docker/verify-fs-safe-native.mjs /tmp/verify-fs-safe-native.mjs
+
+CMD ["sh"]
 
 FROM bare AS functional-manifest
 
@@ -102,23 +116,24 @@ INSTALL_DEPS
 
 FROM bare AS functional
 
+ARG OPENCLAW_FS_SAFE_NATIVE_CONTRACT=required
+
 # The app under test enters through the named BuildKit context, not by copying
 # checkout sources into the image.
 COPY --from=openclaw_package --chown=appuser:appuser openclaw-current.tgz /tmp/openclaw-current.tgz
 COPY --from=functional-deps --chown=appuser:appuser /tmp/openclaw-deps/node_modules /app/node_modules
-# Extract the package over the prebuilt dependency tree (bundled deps ship in
-# the tarball), then run its packaged postinstall. Functional E2E lanes exercise
-# private bundled plugins too, so skip the production migration's intentionally
-# curated persisted registry in this test image. The /app/node_modules/openclaw
-# self-link preserves package self-reference imports such as
-# openclaw/plugin-sdk/*; create it after postinstall so its prune walks cannot
-# cycle through the link.
+COPY --chown=appuser:appuser scripts/docker/verify-fs-safe-native.mjs /tmp/verify-fs-safe-native.mjs
+# Complete postinstall while the image is writable; read-only runs cannot finish
+# a pending package lifecycle. Create the package self-link afterward so
+# postinstall's prune walks cannot cycle through it.
 RUN tar -xzf /tmp/openclaw-current.tgz -C /app --strip-components=1 \
  && chmod +x /app/openclaw.mjs \
- && node --input-type=module -e "import { runBundledPluginPostinstall } from '/app/scripts/postinstall-bundled-plugins.mjs'; runBundledPluginPostinstall();" \
+ && node /app/scripts/postinstall-bundled-plugins.mjs \
  && ln -sfn /app /app/node_modules/openclaw \
  && mkdir -p "$HOME/.local/bin" \
  && ln -sf /app/openclaw.mjs "$HOME/.local/bin/openclaw" \
+ && OPENCLAW_FS_SAFE_NATIVE_CONTRACT="$OPENCLAW_FS_SAFE_NATIVE_CONTRACT" \
+      node /tmp/verify-fs-safe-native.mjs --package-root /app --mode require \
  && rm -f /tmp/openclaw-current.tgz
 
 CMD ["bash"]

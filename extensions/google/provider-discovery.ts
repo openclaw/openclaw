@@ -4,7 +4,7 @@ import {
   buildGoogleStaticCatalogProvider,
   buildGoogleVertexStaticCatalogProvider,
 } from "./provider-catalog.js";
-import { resolveGoogleVertexConfigApiKey } from "./vertex-adc.js";
+import { resolveGoogleVertexConfigApiKey } from "./vertex-adc-config.js";
 
 const googleProviderDiscovery: ProviderPlugin = {
   id: "google",

@@ -1,4 +1,6 @@
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
 // Qwen tests cover index plugin behavior.
 import {
   registerProviderPlugin,
@@ -6,7 +8,8 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ProviderCatalogResult } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { describe, expect, it, vi } from "vitest";
+import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   QWEN_36_FLASH_MODEL_ID,
   QWEN_36_PLUS_MODEL_ID,
@@ -40,6 +43,14 @@ async function registerQwenProvider() {
 }
 
 describe("qwen provider plugin", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ data: [{ id: "qwen3.8-max" }, { id: "qwen3.8-flash" }] })),
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
   it("keeps Standard-only models out of Coding Plan normalized catalogs", async () => {
     const provider = await registerQwenProvider();
 
@@ -253,8 +264,62 @@ describe("qwen provider plugin", () => {
     }
   });
 
+  it.each(
+    ["qwen", "qwen-token-plan"].flatMap((providerId) =>
+      (["off", "low", "high"] as const).map((thinkingLevel) => ({ providerId, thinkingLevel })),
+    ),
+  )(
+    "applies $providerId simple-completion thinking at $thinkingLevel through the original API",
+    async ({ providerId, thinkingLevel }) => {
+      const { providers } = await registerProviderPlugin({
+        plugin: qwenPlugin,
+        id: "qwen",
+        name: "Qwen Provider",
+      });
+      const provider = requireRegisteredProvider(providers, providerId);
+      const wireModel: Model<"openai-completions"> = {
+        id: "qwen3.8-max",
+        name: "Qwen 3.8 Max",
+        provider: providerId,
+        api: "openai-completions",
+        baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        reasoning: true,
+        input: ["text"],
+        contextWindow: 1_000_000,
+        maxTokens: 131_072,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      };
+      const model = { ...wireModel, api: "openclaw-provider-simple:qwen-fixture" };
+      let payload: Record<string, unknown> | undefined;
+      const streamFn: StreamFn = (_model, context, options) => {
+        payload = buildOpenAICompletionsParams(wireModel, context, { reasoning: thinkingLevel });
+        options?.onPayload?.(payload, wireModel);
+        const stream = createAssistantMessageEventStream();
+        stream.end();
+        return stream;
+      };
+      const wrapped = provider.wrapSimpleCompletionStreamFn?.({
+        provider: providerId,
+        modelId: model.id,
+        model,
+        sourceApi: wireModel.api,
+        streamFn,
+        thinkingLevel,
+      });
+      expect(wrapped).toBeTypeOf("function");
+      await wrapped?.(model, { messages: [] }, { reasoning: thinkingLevel });
+
+      expect(payload?.enable_thinking).toBe(thinkingLevel !== "off");
+      if (thinkingLevel === "off") {
+        expect(payload).not.toHaveProperty("reasoning_effort");
+      } else {
+        expect(payload?.reasoning_effort).toBe(thinkingLevel === "low" ? "low" : "xhigh");
+      }
+    },
+  );
+
   it("switches Token Plan regions without replacing custom catalog rows", () => {
-    const initialGlobal = applyQwenTokenPlanConfig({}, "global");
+    const initialGlobal = applyQwenTokenPlanConfig({ models: { mode: "replace" } }, "global");
     const globalProvider = initialGlobal.models?.providers?.[QWEN_TOKEN_PLAN_PROVIDER_ID];
     if (!globalProvider) {
       throw new Error("Token Plan provider missing after onboarding");
@@ -279,6 +344,7 @@ describe("qwen provider plugin", () => {
       ...initialGlobal,
       models: {
         ...initialGlobal.models,
+        mode: "merge",
         providers: {
           ...initialGlobal.models?.providers,
           [QWEN_TOKEN_PLAN_PROVIDER_ID]: {

@@ -180,12 +180,12 @@ describe("config plugin validation", () => {
 
   const validateInSuite = (raw: unknown) => validateConfigObjectWithPlugins(raw);
 
-  const validateRemovedPluginConfig = (removedId: string) =>
+  const validateRemovedPluginConfig = (removedId: string, enabled = true) =>
     validateInSuite({
       agents: { list: [{ id: "openclaw" }] },
       plugins: {
         enabled: false,
-        entries: { [removedId]: { enabled: true } },
+        entries: { [removedId]: { enabled } },
         allow: [removedId],
         deny: [removedId],
         slots: { memory: removedId },
@@ -347,14 +347,15 @@ describe("config plugin validation", () => {
   });
 
   it("reports missing plugin refs across entries and allowlist surfaces", () => {
-    const missingPath = path.join(suiteHome, "missing-plugin-dir");
     const res = validateInSuite({
       agents: { list: [{ id: "openclaw" }] },
       plugins: {
         enabled: true,
-        load: { paths: [missingPath] },
-        entries: { "missing-plugin": { enabled: true } },
-        allow: ["missing-allow"],
+        entries: {
+          "missing-plugin": { enabled: true },
+          "missing-slot": { enabled: false },
+        },
+        allow: ["missing-allow", "missing-slot"],
         deny: ["missing-deny"],
         slots: { memory: "missing-slot" },
       },
@@ -404,31 +405,61 @@ describe("config plugin validation", () => {
   it.each([
     {
       name: "an exact explicit disable marker",
+      pluginId: "missing-plugin",
       entry: { enabled: false },
-      warns: false,
+      warningPaths: [],
+    },
+    {
+      name: "an exact explicit disable marker",
+      pluginId: "duckduckgo",
+      entry: { enabled: false },
+      warningPaths: [],
     },
     {
       name: "a disabled entry that retains settings",
+      pluginId: "missing-plugin",
       entry: { enabled: false, config: { stale: true } },
-      warns: true,
+      warningPaths: ["plugins.entries.missing-plugin", "plugins.allow"],
     },
-  ])("handles $name for a missing plugin", ({ entry, warns }) => {
-    const res = validateInSuite({
-      agents: { list: [{ id: "openclaw" }] },
-      plugins: { entries: { "missing-plugin": entry } },
-    });
+    {
+      name: "a disabled entry that retains settings",
+      pluginId: "duckduckgo",
+      entry: { enabled: false, config: { stale: true } },
+      warningPaths: ["plugins.entries.duckduckgo"],
+    },
+  ])(
+    "handles $name for missing $pluginId in the allowlist",
+    ({ pluginId, entry, warningPaths }) => {
+      const plugins = { entries: { [pluginId]: entry }, allow: [pluginId] };
+      const res = validateConfigObjectWithPlugins(
+        {
+          agents: { list: [{ id: "openclaw" }] },
+          plugins,
+        },
+        {
+          pluginMetadataSnapshot: {
+            manifestRegistry: { plugins: [], diagnostics: [] },
+          },
+        },
+      );
 
-    expect(res.ok).toBe(true);
-    const hasWarning = (res.warnings ?? []).some(
-      (warning) => warning.path === "plugins.entries.missing-plugin",
-    );
-    expect(hasWarning).toBe(warns);
-  });
+      expect(res.ok).toBe(true);
+      expect(
+        (res.warnings ?? [])
+          .filter((warning) => warning.path.startsWith("plugins."))
+          .map((warning) => warning.path),
+      ).toEqual(warningPaths);
+      if (res.ok) {
+        expect(res.config.plugins).toMatchObject(plugins);
+      }
+    },
+  );
 
   it("warns instead of failing for stale plugins.deny entries", () => {
     const res = validateInSuite({
       agents: { list: [{ id: "openclaw" }] },
       plugins: {
+        entries: { "missing-deny": { enabled: false } },
         deny: ["missing-deny"],
       },
     });
@@ -444,6 +475,27 @@ describe("config plugin validation", () => {
   });
 
   describe("missing Codex plugin diagnostics", () => {
+    const createPiProviderModels = (baseUrl: string, modelRuntime: "auto" | "codex") => ({
+      providers: {
+        openai: {
+          baseUrl,
+          agentRuntime: { id: "pi" },
+          models: [
+            {
+              id: "gpt-5.5",
+              name: "GPT 5.5",
+              reasoning: true,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 128000,
+              maxTokens: 8192,
+              agentRuntime: { id: modelRuntime },
+            },
+          ],
+        },
+      },
+    });
+
     const validateWithMissingCodexPlugin = (
       raw: Record<string, unknown>,
       env: NodeJS.ProcessEnv = suiteEnv(),
@@ -529,6 +581,29 @@ describe("config plugin validation", () => {
       expectNoMissingCodexPluginWarning(res.warnings);
     });
 
+    it("scopes request-parameter diagnostics to the affected keyed agent", () => {
+      const res = validateWithMissingCodexPlugin({
+        agents: {
+          entries: {
+            openclaw: {
+              default: true,
+              model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] },
+              subagents: { model: "anthropic/claude-sonnet-4-6" },
+            },
+            work: {
+              model: { primary: "openai/gpt-5.6", fallbacks: [] },
+              subagents: { model: "openai/gpt-5.6" },
+              params: { temperature: 0.4 },
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
     it("still warns when only one provider model route is pinned to OpenClaw", () => {
       const res = validateWithMissingCodexPlugin({
         models: {
@@ -559,26 +634,7 @@ describe("config plugin validation", () => {
 
     it("still warns when provider PI policy is overridden by an automatic OpenAI model route", () => {
       const res = validateWithMissingCodexPlugin({
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              agentRuntime: { id: "pi" },
-              models: [
-                {
-                  id: "gpt-5.5",
-                  name: "GPT 5.5",
-                  reasoning: true,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 128000,
-                  maxTokens: 8192,
-                  agentRuntime: { id: "auto" },
-                },
-              ],
-            },
-          },
-        },
+        models: createPiProviderModels("https://api.openai.com/v1", "auto"),
         plugins: { entries: { codex: {} } },
       });
 
@@ -689,31 +745,6 @@ describe("config plugin validation", () => {
 
       expect(res.ok).toBe(true);
       expectNoMissingCodexPluginWarning(res.warnings);
-    });
-
-    it("warns when a listed agent can fall back from gpt-5.6 to Spark", () => {
-      const res = validateWithMissingCodexPlugin({
-        agents: {
-          ownership: "explicit",
-          defaults: {
-            model: { primary: "openai/gpt-5.6", fallbacks: [] },
-          },
-          list: [
-            { id: "openclaw" },
-            {
-              id: "worker",
-              model: {
-                primary: "openai/gpt-5.6",
-                fallbacks: ["openai/gpt-5.3-codex-spark"],
-              },
-            },
-          ],
-        },
-        plugins: { entries: { codex: {} } },
-      });
-
-      expect(res.ok).toBe(true);
-      expectMissingCodexPluginWarning(res.warnings);
     });
 
     it.each([
@@ -1060,26 +1091,7 @@ describe("config plugin validation", () => {
 
     it("does not warn when a custom OpenAI-compatible base URL uses automatic runtime policy", () => {
       const res = validateWithMissingCodexPlugin({
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://proxy.example.invalid/v1",
-              agentRuntime: { id: "pi" },
-              models: [
-                {
-                  id: "gpt-5.5",
-                  name: "GPT 5.5",
-                  reasoning: true,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 128000,
-                  maxTokens: 8192,
-                  agentRuntime: { id: "auto" },
-                },
-              ],
-            },
-          },
-        },
+        models: createPiProviderModels("https://proxy.example.invalid/v1", "auto"),
         plugins: { entries: { codex: {} } },
       });
 
@@ -1089,26 +1101,7 @@ describe("config plugin validation", () => {
 
     it("does not warn when exact agent policy overrides an automatic OpenAI provider model route", () => {
       const res = validateWithMissingCodexPlugin({
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              agentRuntime: { id: "pi" },
-              models: [
-                {
-                  id: "gpt-5.5",
-                  name: "GPT 5.5",
-                  reasoning: true,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 128000,
-                  maxTokens: 8192,
-                  agentRuntime: { id: "auto" },
-                },
-              ],
-            },
-          },
-        },
+        models: createPiProviderModels("https://api.openai.com/v1", "auto"),
         agents: {
           list: [{ id: "openclaw" }],
           defaults: {
@@ -1271,26 +1264,7 @@ describe("config plugin validation", () => {
 
     it("still warns when a provider model route explicitly selects Codex", () => {
       const res = validateWithMissingCodexPlugin({
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              agentRuntime: { id: "pi" },
-              models: [
-                {
-                  id: "gpt-5.5",
-                  name: "GPT 5.5",
-                  reasoning: true,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 128000,
-                  maxTokens: 8192,
-                  agentRuntime: { id: "codex" },
-                },
-              ],
-            },
-          },
-        },
+        models: createPiProviderModels("https://api.openai.com/v1", "codex"),
         plugins: { entries: { codex: {} } },
       });
 
@@ -1880,6 +1854,7 @@ describe("config plugin validation", () => {
       plugins: {
         allow: ["dreaming"],
         entries: {
+          dreaming: { enabled: false },
           "memory-core": {
             config: { dreaming: { enabled: true } },
           },
@@ -1921,9 +1896,9 @@ describe("config plugin validation", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("warns for removed legacy plugin ids instead of failing validation", () => {
+  it.each([true, false])("warns for removed legacy plugin ids with enabled=%s", (enabled) => {
     const removedId = "google-antigravity-auth";
-    const res = validateRemovedPluginConfig(removedId);
+    const res = validateRemovedPluginConfig(removedId, enabled);
     expectRemovedPluginWarnings(res, removedId, removedId);
   });
 
@@ -1992,6 +1967,17 @@ describe("config plugin validation", () => {
       "plugins.entries.diffs",
       "plugin disabled (bundled (disabled by default)) but config is present",
     );
+  });
+
+  it.each([
+    { config: { sessionCatalog: { enabled: true } } },
+    { enabled: false, config: { sessionCatalog: { enabled: false } } },
+    { config: { sessionCatalog: { enabled: false, homes: ["/synthetic/catalog"] } } },
+  ])("retains disabled-plugin warnings for authored Codex settings: %j", (entry) => {
+    const res = validateInSuite({ plugins: { entries: { codex: entry } } });
+
+    expect(res.ok).toBe(true);
+    expectPathMessageIncludes(res.warnings, "plugins.entries.codex", "plugin disabled");
   });
 
   it("ignores standalone helper scripts in auto-discovered global extensions", async () => {

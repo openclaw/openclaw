@@ -7,7 +7,7 @@ import {
 import type { ClickClackDiscussionBinding } from "./binding-store.js";
 import { discussionCredentialFingerprint } from "./naming.js";
 import { markClickClackDiscussionChannelRevoked } from "./revoked-channel-store.js";
-import { assertChannelPatch, assertManagedChannelListContract } from "./service-open.js";
+import { assertChannelPatch } from "./service-open.js";
 import {
   TEST_DESTINATION_IDENTITY,
   createHarness,
@@ -74,22 +74,24 @@ describe("ClickClack discussion service contracts", () => {
     );
   });
 
-  it("accepts a managed list entry whose external URL is omitted", () => {
-    expect(() =>
-      assertManagedChannelListContract([
-        {
-          id: "chn_managed",
-          route_id: "managed-route",
-          workspace_id: "wsp_team",
-          name: "managed",
-          kind: "public",
-          external_managed: true,
-          external_ref: "openclaw:discussion:example",
-          sidebar_section: "Sessions",
-          created_at: "2026-07-19T00:00:00.000Z",
-        },
-      ]),
-    ).not.toThrow();
+  it("accepts a managed list entry whose external URL is omitted", async () => {
+    const harness = createHarness({ label: "Managed channel without URL" });
+    vi.mocked(harness.channels).mockResolvedValue([
+      {
+        id: "chn_managed",
+        route_id: "managed-route",
+        workspace_id: "wsp_team",
+        name: "managed",
+        kind: "public",
+        external_managed: true,
+        external_ref: "openclaw:discussion:example",
+        sidebar_section: "Sessions",
+        created_at: "2026-07-19T00:00:00.000Z",
+      },
+    ]);
+    await expect(harness.service.open("agent:main:managed-without-url")).resolves.toMatchObject({
+      state: "open",
+    });
   });
 
   it("does not retain a generation when channel preflight cannot run", async () => {
@@ -602,7 +604,7 @@ describe("ClickClack discussion service contracts", () => {
     if (!binding?.credentialFingerprint) {
       throw new Error("expected persisted binding");
     }
-    const generation = reserveDiscussionBindingGeneration({
+    const generation = await reserveDiscussionBindingGeneration({
       runtime: harness.runtime,
       sessionKey,
       accountId: binding.accountId,
@@ -610,7 +612,7 @@ describe("ClickClack discussion service contracts", () => {
       destinationIdentity: TEST_DESTINATION_IDENTITY,
       createGeneration: () => "interrupted-commit-generation",
     });
-    recordPendingDiscussionOpen({
+    await recordPendingDiscussionOpen({
       runtime: harness.runtime,
       sessionKey,
       generation,
@@ -632,11 +634,11 @@ describe("ClickClack discussion service contracts", () => {
     expect(harness.revokedStore.entries()).toHaveLength(0);
   });
 
-  it("rejects a pending open when ownership changes after reservation", () => {
+  it("rejects a pending open when ownership changes after reservation", async () => {
     const harness = createHarness({ label: "Ownership changed" });
     const sessionKey = "agent:main:ownership-changed";
     const credentialFingerprint = discussionCredentialFingerprint("original-token");
-    const generation = reserveDiscussionBindingGeneration({
+    const generation = await reserveDiscussionBindingGeneration({
       runtime: harness.runtime,
       sessionKey,
       accountId: "account-original",
@@ -645,7 +647,7 @@ describe("ClickClack discussion service contracts", () => {
       createGeneration: () => "ownership-generation",
     });
 
-    expect(() =>
+    await expect(
       recordPendingDiscussionOpen({
         runtime: harness.runtime,
         sessionKey,
@@ -659,7 +661,7 @@ describe("ClickClack discussion service contracts", () => {
           credentialFingerprint: discussionCredentialFingerprint("replacement-token"),
         },
       }),
-    ).toThrow("ClickClack discussion ownership changed before channel creation");
+    ).rejects.toThrow("ClickClack discussion ownership changed before channel creation");
     expect(harness.generationStore.lookup(sessionKey)).toEqual({
       accountId: "account-original",
       credentialFingerprint,

@@ -1,4 +1,3 @@
-// Discord plugin module implements agent components guild auth behavior.
 import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth-native";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -6,6 +5,7 @@ import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runti
 import type { DiscordComponentEntry } from "../components.js";
 import { resolveDiscordChannelContext } from "./agent-components-context.js";
 import { resolveInteractionContextWithDmAuth } from "./agent-components-dm-auth.js";
+import { resolveAgentComponentPolicyContext } from "./agent-components-live-policy.js";
 import { replySilently } from "./agent-components-reply.js";
 import type {
   AgentComponentContext,
@@ -173,10 +173,14 @@ export async function ensureAgentComponentInteractionAllowed(params: {
   componentLabel: string;
   unauthorizedReply: string;
 }) {
+  const ctx = await resolveAgentComponentPolicyContext(params);
+  if (!ctx) {
+    return null;
+  }
   const guildInfo = resolveDiscordGuildEntry({
     guild: params.interaction.guild ?? undefined,
     guildId: params.rawGuildId,
-    guildEntries: params.ctx.guildEntries,
+    guildEntries: ctx.guildEntries,
   });
   const channelCtx = resolveDiscordChannelContext(params.interaction);
   const memberAllowed = await ensureGuildComponentMemberAllowed({
@@ -190,10 +194,17 @@ export async function ensureAgentComponentInteractionAllowed(params: {
     replyOpts: params.replyOpts,
     componentLabel: params.componentLabel,
     unauthorizedReply: params.unauthorizedReply,
-    allowNameMatching: isDangerousNameMatchingEnabled(params.ctx.discordConfig),
-    groupPolicy: resolveComponentRuntimeGroupPolicy(params.ctx),
+    allowNameMatching: isDangerousNameMatchingEnabled(ctx.discordConfig),
+    groupPolicy: resolveComponentRuntimeGroupPolicy(ctx),
   });
   if (!memberAllowed) {
+    return null;
+  }
+  if (ctx.isPolicyCurrent?.() === false) {
+    await replySilently(params.interaction, {
+      content: "Access policy changed. Try this interaction again.",
+      ...params.replyOpts,
+    });
     return null;
   }
   return { parentId: channelCtx.parentId };
@@ -207,8 +218,12 @@ export async function resolveAuthorizedComponentInteraction(params: {
   unauthorizedReply: string;
   defer?: boolean;
 }) {
+  const ctx = await resolveAgentComponentPolicyContext(params);
+  if (!ctx) {
+    return null;
+  }
   const interactionCtx = await resolveInteractionContextWithDmAuth({
-    ctx: params.ctx,
+    ctx,
     interaction: params.interaction,
     label: params.label,
     componentLabel: params.componentLabel,
@@ -222,10 +237,10 @@ export async function resolveAuthorizedComponentInteraction(params: {
   const guildInfo = resolveDiscordGuildEntry({
     guild: params.interaction.guild ?? undefined,
     guildId: rawGuildId,
-    guildEntries: params.ctx.guildEntries,
+    guildEntries: ctx.guildEntries,
   });
   const channelCtx = resolveDiscordChannelContext(params.interaction);
-  const allowNameMatching = isDangerousNameMatchingEnabled(params.ctx.discordConfig);
+  const allowNameMatching = isDangerousNameMatchingEnabled(ctx.discordConfig);
   const channelConfig = resolveDiscordChannelConfigWithFallback({
     guildInfo,
     channelId,
@@ -248,21 +263,29 @@ export async function resolveAuthorizedComponentInteraction(params: {
     componentLabel: params.componentLabel,
     unauthorizedReply: params.unauthorizedReply,
     allowNameMatching,
-    groupPolicy: resolveComponentRuntimeGroupPolicy(params.ctx),
+    groupPolicy: resolveComponentRuntimeGroupPolicy(ctx),
   });
   if (!memberAllowed) {
     return null;
   }
 
   const commandAuthorized = await resolveComponentCommandAuthorized({
-    ctx: params.ctx,
+    ctx,
     interactionCtx,
     channelConfig,
     guildInfo,
     allowNameMatching,
   });
 
+  if (ctx.isPolicyCurrent?.() === false) {
+    await replySilently(params.interaction, {
+      content: "Access policy changed. Try this interaction again.",
+      ...replyOpts,
+    });
+    return null;
+  }
   return {
+    ctx,
     interactionCtx,
     channelCtx,
     guildInfo,

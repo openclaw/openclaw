@@ -2,13 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  getLogger,
-  getResolvedLoggerSettings,
-  resetLogger,
-  setLoggerOverride,
-} from "../logging.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
+import { getLogger, getResolvedLoggerSettings, resetLogger, setLoggerOverride } from "./logger.js";
 import { testApi } from "./logger.test-support.js";
 
 const DEFAULT_MAX_FILE_BYTES = 100 * 1024 * 1024;
@@ -60,9 +55,7 @@ describe("log file size cap", () => {
   });
 
   it("rotates file writes after cap is reached and keeps logging", async () => {
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(
-      () => true as unknown as ReturnType<typeof process.stderr.write>, // preserve stream contract in test spy
-    );
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     setLoggerOverride({ level: "info", file: logPath, maxFileBytes: 256 });
     const logger = getLogger();
 
@@ -86,9 +79,7 @@ describe("log file size cap", () => {
     vi.spyOn(fs, "renameSync").mockImplementation(() => {
       throw new Error("rotation denied");
     });
-    const stderrSpy = vi
-      .spyOn(process.stderr, "write")
-      .mockImplementation(() => true as unknown as ReturnType<typeof process.stderr.write>);
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     setLoggerOverride({
       level: "info",
       file: logPath,

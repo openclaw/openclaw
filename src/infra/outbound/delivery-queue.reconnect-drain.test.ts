@@ -4,6 +4,7 @@ import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { controlNextRecoverySleep } from "../../../test/helpers/infra/delivery-recovery.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { beginConversationDeliveryOperation } from "../../config/sessions/conversation-delivery-store.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -361,10 +362,7 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
       setQueuedEntryState(tmpDir, id, { retryCount: 0, enqueuedAt: index + 1 });
     }
     const pendingBefore = await loadPendingDeliveries(tmpDir);
-    let releaseFirst!: () => void;
-    const firstBlocked = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
+    const { promise: firstBlocked, resolve: releaseFirst } = createDeferred();
     const deliver = vi.fn<DeliverFn>(async () => {
       if (deliver.mock.calls.length === 1) {
         await firstBlocked;
@@ -539,10 +537,7 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
 
   it("second concurrent call is skipped (concurrency guard)", async () => {
     const log = createRecoveryLog();
-    let resolveDeliver: () => void;
-    const deliverPromise = new Promise<void>((resolve) => {
-      resolveDeliver = resolve;
-    });
+    const { promise: deliverPromise, resolve: resolveDeliver } = createDeferred();
     const deliver = vi.fn<DeliverFn>(async () => {
       await deliverPromise;
     });
@@ -571,10 +566,7 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
   it("does not re-deliver an entry already being recovered at startup", async () => {
     const log = createRecoveryLog();
     const startupLog = createRecoveryLog();
-    let resolveDeliver: () => void;
-    const deliverPromise = new Promise<void>((resolve) => {
-      resolveDeliver = resolve;
-    });
+    const { promise: deliverPromise, resolve: resolveDeliver } = createDeferred();
     const deliver = vi.fn<DeliverFn>(async () => {
       await deliverPromise;
     });
@@ -614,14 +606,8 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
       const controlledSleep = controlNextRecoverySleep(sleepMock);
       const log = createRecoveryLog();
       const startupLog = createRecoveryLog();
-      let firstStarted!: () => void;
-      const firstStartedPromise = new Promise<void>((resolve) => {
-        firstStarted = resolve;
-      });
-      let releaseFirst!: () => void;
-      const firstBlocked = new Promise<void>((resolve) => {
-        releaseFirst = resolve;
-      });
+      const { promise: firstStartedPromise, resolve: firstStarted } = createDeferred();
+      const { promise: firstBlocked, resolve: releaseFirst } = createDeferred();
       const deliveryTimes: number[] = [];
       const deliver = vi.fn<DeliverFn>(async () => {
         deliveryTimes.push(Date.now());
@@ -666,10 +652,7 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
   it("does not re-deliver a stale startup snapshot after reconnect already acked it", async () => {
     const log = createRecoveryLog();
     const startupLog = createRecoveryLog();
-    let releaseBlocker: () => void;
-    const blocker = new Promise<void>((resolve) => {
-      releaseBlocker = resolve;
-    });
+    const { promise: blocker, resolve: releaseBlocker } = createDeferred();
     const deliveredTargets: string[] = [];
     const deliver = vi.fn<DeliverFn>(async ({ to }) => {
       deliveredTargets.push(to);

@@ -15,7 +15,6 @@ const {
   getMatrixRuntimeMock,
   acquireSharedMatrixClientMock,
   sharedLeaseReleaseMock,
-  isBunRuntimeMock,
   resolveMatrixAuthContextMock,
 } = matrixClientResolverMocks;
 
@@ -27,7 +26,6 @@ vi.mock("../../runtime.js", () => ({
 
 vi.mock("../client.js", () => ({
   acquireSharedMatrixClient: acquireSharedMatrixClientMock,
-  isBunRuntime: () => isBunRuntimeMock(),
   resolveMatrixAuthContext: resolveMatrixAuthContextMock,
 }));
 
@@ -38,6 +36,41 @@ vi.mock("../send.js", () => ({
 let withResolvedActionClient: typeof import("./client.js").withResolvedActionClient;
 let withResolvedRoomAction: typeof import("./client.js").withResolvedRoomAction;
 let withStartedActionClient: typeof import("./client.js").withStartedActionClient;
+
+describe("action client lazy loading", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.doUnmock("../client-bootstrap.js");
+    vi.resetModules();
+  });
+
+  it("defers bootstrap evaluation until action work starts", async () => {
+    const evaluateBootstrap = vi.fn(async () =>
+      vi.importActual<typeof import("../client-bootstrap.js")>("../client-bootstrap.js"),
+    );
+    vi.doMock("../client-bootstrap.js", evaluateBootstrap);
+
+    const { withResolvedActionClient: runAction } = await import("./client.js");
+    expect(evaluateBootstrap).not.toHaveBeenCalled();
+
+    const client = createMockMatrixClient();
+    const run = vi.fn(async () => "first result");
+    await expect(runAction({ client }, run)).resolves.toBe("first result");
+    expect(run).toHaveBeenCalledWith(client, undefined);
+    expect(evaluateBootstrap).toHaveBeenCalledTimes(1);
+
+    const failure = new Error("action failed");
+    await expect(
+      runAction({ client }, async () => {
+        throw failure;
+      }),
+    ).rejects.toBe(failure);
+    expect(evaluateBootstrap).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("action client helpers", () => {
   beforeAll(async () => {

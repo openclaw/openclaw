@@ -6,6 +6,7 @@ import {
 import {
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
+  resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { formatByteSize } from "openclaw/plugin-sdk/number-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -36,7 +37,7 @@ import {
   type DreamingArtifactsAuditSummary,
   type RepairDreamingArtifactsResult,
 } from "./dreaming-repair.js";
-import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
+import { formatRecallRepairDetails } from "./dreaming-shared.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import {
   auditShortTermPromotionArtifacts,
@@ -66,6 +67,7 @@ function formatMemoryIndexIdentityWarning(
 ): {
   reason: string;
   fix: string;
+  paused: string;
 } | null {
   const diagnostic = resolveMemoryIndexIdentityDiagnostic(status);
   if (!diagnostic) {
@@ -74,12 +76,13 @@ function formatMemoryIndexIdentityWarning(
   return {
     reason: `${diagnostic.reason} (owner: ${diagnostic.owner}, code: ${diagnostic.code})`,
     fix: `Run: ${formatMemoryIndexRebuildGuidance(status, agentId)}`,
+    paused: diagnostic.owner === "configuration" ? "paused until memory is rebuilt" : "paused",
   };
 }
 function formatDreamingSummary(cfg: OpenClawConfig): string {
   const pluginConfig = resolveMemoryPluginConfig(cfg);
   const light = resolveMemoryLightDreamingConfig({ pluginConfig, cfg });
-  const deep = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg });
+  const deep = resolveMemoryDeepDreamingConfig({ pluginConfig, cfg });
   const rem = resolveMemoryRemDreamingConfig({ pluginConfig, cfg });
   const timezone = deep.timezone ?? light.timezone ?? rem.timezone;
   const formatCron = (cron: string) => (timezone ? `${cron} (${timezone})` : cron);
@@ -99,16 +102,7 @@ function formatDreamingSummary(cfg: OpenClawConfig): string {
 function formatRepairSummary(repair: RepairShortTermPromotionArtifactsResult): string {
   const actions: string[] = [];
   if (repair.rewroteStore) {
-    const removedOverflowEntries = repair.removedOverflowEntries ?? 0;
-    const details = [
-      repair.removedInvalidEntries > 0 ? `-${repair.removedInvalidEntries} invalid` : null,
-      (repair.removedDanglingEntries ?? 0) > 0
-        ? `-${repair.removedDanglingEntries} dangling`
-        : null,
-      removedOverflowEntries > 0 ? `-${removedOverflowEntries} overflow` : null,
-    ]
-      .filter(Boolean)
-      .join(", ");
+    const details = formatRecallRepairDetails(repair);
     actions.push(`rewrote store${details ? ` (${details})` : ""}`);
   }
   if (repair.removedStaleLock) {
@@ -148,6 +142,7 @@ export async function runMemoryStatus(
   hostOptions?: MemoryCoreRuntimeHost,
 ) {
   setVerbose(Boolean(opts.verbose));
+  const deep = Boolean(opts.deep || opts.index);
   const allResults: Array<{
     agentId: string;
     status: ReturnType<MemoryManager["status"]>;
@@ -168,7 +163,6 @@ export async function runMemoryStatus(
     inspectSources: true,
     ...hostOptions,
     run: async ({ manager, agentId }) => {
-      const deep = Boolean(opts.deep || opts.index);
       let embeddingProbe: MemoryEmbeddingProbeResult | undefined;
       let indexError: string | undefined;
       const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
@@ -312,6 +306,22 @@ export async function runMemoryStatus(
       `${label("Workspace")} ${info(workspacePath)}`,
       `${label("Dreaming")} ${info(formatDreamingSummary(cfg))}`,
     ].filter(Boolean) as string[];
+    if (status.storage) {
+      const storage = status.storage;
+      const bytes = (value: number) =>
+        formatByteSize(value, { style: "iec", maxUnit: "tera", separator: " ", fractionDigits: 1 });
+      lines.push(
+        `${label("Agent database")} ${info(bytes(storage.databaseBytes))} · WAL ${bytes(storage.walBytes)} · reusable ${bytes(storage.reusableBytes)}`,
+      );
+      lines.push(
+        `${label("Stored embedding cache")} ${info(bytes(storage.embeddingCacheBytes))} · ${storage.embeddingCacheEntries} entries`,
+      );
+      lines.push(
+        muted(
+          "Database includes sessions and other agent data. Reusable pages remain allocated until compaction.",
+        ),
+      );
+    }
     if (embeddingProbe) {
       const state =
         embeddingProbe.ok && embeddingProbe.checked === false
@@ -325,7 +335,7 @@ export async function runMemoryStatus(
         lines.push(`${label("Embeddings error")} ${warn(embeddingProbe.error)}`);
       }
     }
-    const llamaCppRuntime = opts.deep ? readLlamaCppRuntimeStatus(status) : null;
+    const llamaCppRuntime = deep ? readLlamaCppRuntimeStatus(status) : null;
     if (llamaCppRuntime) {
       const runtime = llamaCppRuntime;
       const backend = runtime.backend ?? "unknown";
@@ -362,7 +372,7 @@ export async function runMemoryStatus(
     const identityWarning = formatMemoryIndexIdentityWarning(status, agentId);
     if (identityWarning) {
       lines.push(`${label("Index identity")} ${warn(identityWarning.reason)}`);
-      lines.push(`${label("Vector search")} ${warn("paused until memory is rebuilt")}`);
+      lines.push(`${label("Vector search")} ${warn(identityWarning.paused)}`);
       lines.push(`${label("Fix")} ${muted(identityWarning.fix)}`);
     }
     if (status.sourceCounts?.length) {

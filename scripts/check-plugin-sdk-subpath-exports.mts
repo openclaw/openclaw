@@ -8,6 +8,7 @@ import { normalizeRepoPath, visitModuleSpecifiers } from "./lib/guard-inventory-
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectTypeScriptFilesFromRoots,
+  isTestLikeTypeScriptFile,
   resolveSourceRoots,
   toLine,
 } from "./lib/ts-guard-utils.mts";
@@ -19,6 +20,7 @@ const scanRoots = resolveSourceRoots(repoRoot, [
   "scripts",
   "test",
 ]);
+const extraTestSuffixes = [".test-support.ts", ".test-loader.ts", ".test-fixtures.ts"];
 
 type PluginSdkViolation = {
   file: string;
@@ -107,16 +109,6 @@ async function collectViolations(): Promise<PluginSdkViolation[]> {
   const entrypoints = readEntrypoints();
   const exports = readPackageExports();
   const privateLocalOnlySubpaths = readPrivateLocalOnlySubpaths();
-  // Workspace packages resolve private facades through root TS paths and bundle them into dist;
-  // live jiti source stages inject the same private map. Core src callers must stay relative.
-  const coreRuntimeFiles = new Set(
-    (
-      await collectTypeScriptFilesFromRoots(resolveSourceRoots(repoRoot, ["src"]), {
-        includeTests: false,
-        extraTestSuffixes: [".test-support.ts", ".test-loader.ts", ".test-fixtures.ts"],
-      })
-    ).filter((filePath) => !isGeneratedBuildArtifact(filePath)),
-  );
   const files = (await collectTypeScriptFilesFromRoots(scanRoots, { includeTests: true }))
     .filter((filePath) => !isGeneratedBuildArtifact(filePath))
     .toSorted((left, right) =>
@@ -126,6 +118,14 @@ async function collectViolations(): Promise<PluginSdkViolation[]> {
 
   for (const filePath of files) {
     const sourceText = readFileSync(filePath, "utf8");
+    // Escaped module names need parsing even when the literal SDK prefix is absent.
+    if (!sourceText.includes("plugin-sdk") && !sourceText.includes("\\")) {
+      continue;
+    }
+    const repoPath = normalizeRepoPath(repoRoot, filePath);
+    // Workspace packages resolve private facades through TS paths; core runtime stays relative.
+    const isCoreRuntimeFile =
+      repoPath.startsWith("src/") && !isTestLikeTypeScriptFile(filePath, extraTestSuffixes);
     const sourceFile = ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, true);
 
     function push(kind: string, node: ts.Node, specifierNode: ts.Node, specifier: string): void {
@@ -134,8 +134,7 @@ async function collectViolations(): Promise<PluginSdkViolation[]> {
         return;
       }
       if (privateLocalOnlySubpaths.has(subpath)) {
-        const repoPath = normalizeRepoPath(repoRoot, filePath);
-        if (coreRuntimeFiles.has(filePath) && isRuntimeModuleReference(node)) {
+        if (isCoreRuntimeFile && isRuntimeModuleReference(node)) {
           violations.push({
             file: repoPath,
             line: toLine(sourceFile, specifierNode),
@@ -160,7 +159,7 @@ async function collectViolations(): Promise<PluginSdkViolation[]> {
       }
 
       violations.push({
-        file: normalizeRepoPath(repoRoot, filePath),
+        file: repoPath,
         line: toLine(sourceFile, specifierNode),
         kind,
         specifier,

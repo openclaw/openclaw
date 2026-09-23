@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Guards the multi-node-install update fix.
 #
 # Sets up two independent Node installations inside a Docker container, installs
@@ -107,9 +111,8 @@ export npm_config_fund=false
 export npm_config_audit=false
 export PATH="$NPM_PREFIX_A/bin:$NODE_A_DIR:$PATH"
 
-echo "Installing OpenClaw package under node-A prefix: $NPM_PREFIX_A"
 openclaw_e2e_install_package "$ARTIFACTS/install-a.log" "OpenClaw package under node-A prefix" "$NPM_PREFIX_A"
-echo "Installed. Checking openclaw location..."
+echo "Checking openclaw location..."
 
 OPENCLAW_A="$(command -v openclaw)"
 echo "openclaw binary: $OPENCLAW_A"

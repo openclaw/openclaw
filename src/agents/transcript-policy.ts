@@ -3,6 +3,8 @@
  * Combines provider plugin replay hooks with core transport fallbacks so chat
  * history sanitization, tool IDs, thinking blocks, and turn validation align.
  */
+import { bindsClaudeThinkingPrefix } from "@openclaw/llm-core";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
@@ -11,8 +13,8 @@ import { resolveProviderRuntimePlugin } from "../plugins/provider-hook-runtime.j
 import { shouldDropClaudeThinkingBlocks } from "../plugins/provider-replay-helpers.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { ProviderReplayPolicy } from "../plugins/types.js";
+import { isAnthropicApi } from "./embedded-agent-helpers/anthropic-api.js";
 import { isGoogleModelApi } from "./embedded-agent-helpers/google.js";
-import { normalizeProviderId } from "./model-selection.js";
 import type { ToolCallIdMode } from "./tool-call-id.js";
 
 /** Scope of transcript content sanitization before provider replay. */
@@ -27,6 +29,7 @@ export type TranscriptPolicy = {
   preserveNativeAnthropicToolUseIds: boolean;
   repairToolUseResultPairing: boolean;
   preserveSignatures: boolean;
+  appendOnlyRuntimeContext?: boolean;
   sanitizeThoughtSignatures?: {
     allowBase64Only?: boolean;
     includeCamelCase?: boolean;
@@ -39,32 +42,6 @@ export type TranscriptPolicy = {
   allowSyntheticToolResults: boolean;
 };
 
-const SIGNED_THINKING_PROVIDERS = new Set(["anthropic", "amazon-bedrock", "anthropic-vertex"]);
-
-/** Return true when a provider family owns signed thinking blocks. */
-export function providerRequiresSignedThinking(provider?: string | null): boolean {
-  return SIGNED_THINKING_PROVIDERS.has(normalizeProviderId(provider ?? ""));
-}
-
-/** Decide whether signed thinking can be replayed under the current provider policy. */
-export function shouldAllowProviderOwnedThinkingReplay(params: {
-  modelApi?: string | null;
-  provider?: string | null;
-  policy: Pick<
-    TranscriptPolicy,
-    "validateAnthropicTurns" | "preserveSignatures" | "dropThinkingBlocks"
-  >;
-}): boolean {
-  const hasProviderOwnedSignedThinking =
-    params.policy.preserveSignatures || providerRequiresSignedThinking(params.provider);
-  return (
-    isAnthropicApi(params.modelApi) &&
-    params.policy.validateAnthropicTurns &&
-    hasProviderOwnedSignedThinking &&
-    !params.policy.dropThinkingBlocks
-  );
-}
-
 const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   sanitizeMode: "images-only",
   sanitizeToolCallIds: false,
@@ -73,6 +50,7 @@ const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   preserveNativeAnthropicToolUseIds: false,
   repairToolUseResultPairing: true,
   preserveSignatures: false,
+  appendOnlyRuntimeContext: false,
   sanitizeThoughtSignatures: undefined,
   dropThinkingBlocks: false,
   dropReasoningFromHistory: false,
@@ -81,10 +59,6 @@ const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   validateAnthropicTurns: false,
   allowSyntheticToolResults: false,
 };
-
-function isAnthropicApi(modelApi?: string | null): boolean {
-  return modelApi === "anthropic-messages" || modelApi === "bedrock-converse-stream";
-}
 
 function isOpenAiResponsesCompatibleApi(modelApi?: string | null): boolean {
   return (
@@ -153,7 +127,15 @@ function buildUnownedProviderTransportReplayFallback(params: {
           toolCallIdMode: "strict" as const,
         }
       : {}),
-    ...(isAnthropic ? { preserveSignatures: true } : {}),
+    ...(isAnthropic
+      ? {
+          preserveSignatures: true,
+          appendOnlyRuntimeContext: bindsClaudeThinkingPrefix({
+            id: modelId,
+            params: params.model?.params,
+          }),
+        }
+      : {}),
     ...(isGoogle
       ? {
           sanitizeThoughtSignatures: {
@@ -195,7 +177,9 @@ const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
   "mimo-v2-omni",
   "mimo-v2.5",
   "mimo-v2.5-pro",
+  "mimo-v2.6-flash",
   "mimo-v2.6-pro",
+  "mimo-v2.6-pro-ultraspeed",
 ]);
 
 function requiresReasoningContentReplay(modelId: string | null | undefined): boolean {
@@ -239,6 +223,9 @@ function mergeTranscriptPolicy(
       : {}),
     ...(typeof policy.preserveSignatures === "boolean"
       ? { preserveSignatures: policy.preserveSignatures }
+      : {}),
+    ...(typeof policy.appendOnlyRuntimeContext === "boolean"
+      ? { appendOnlyRuntimeContext: policy.appendOnlyRuntimeContext }
       : {}),
     ...(policy.sanitizeThoughtSignatures
       ? { sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures }

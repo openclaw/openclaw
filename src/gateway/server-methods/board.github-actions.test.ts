@@ -1,13 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import type {
   BoardSnapshot,
   BoardWidgetDeclared,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { clearGitHubCredentialVerificationCache } from "../../agents/github-oauth-client.js";
 import { resolveManagedGitHubProfileDir } from "../../agents/github-tool-identity.js";
-import { createTestBoardStore } from "../../boards/board-store.test-support.js";
+import { readBoardHtml, createTestBoardStore } from "../../boards/board-store.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginBoardWidgetContentKindRegistrar } from "../../plugins/board-widget-content-kinds.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
@@ -20,7 +21,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { toRequestUrl } from "../../test-utils/provider-usage-fetch.js";
-import { readGitHubJsonResponse } from "../control-ui-github-api.js";
+import { gitHubPublicApi } from "../github-public-api.js";
 import { createBoardHarness } from "./board.test-support.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
@@ -53,9 +54,10 @@ const commandResult = (value = "", code = 0) => ({
   termination: "exit" as const,
 });
 
+const getOrCreatePromise = lazyPromise.getOrCreatePromise;
+
 function observeSharedReadAdmission() {
   const joined = createDeferred();
-  const getOrCreatePromise = lazyPromise.getOrCreatePromise;
   vi.spyOn(lazyPromise, "getOrCreatePromise").mockImplementation((cache, key, create, options) => {
     const pending = cache.get(key);
     const shared = getOrCreatePromise(cache, key, create, options);
@@ -72,7 +74,7 @@ describe("board authenticated GitHub Actions", () => {
   let state: OpenClawTestState;
   let config: OpenClawConfig;
   let actions: () => Response | Promise<Response>;
-  const http = vi.fn<typeof fetch>();
+  let http: Mock<typeof fetch>;
   const account = vi.fn(async () => json({ id: 100, login: "fixture-user", avatar_url: null }));
   const native = vi.fn<typeof processExec.runCommandBuffered>();
 
@@ -93,6 +95,7 @@ describe("board authenticated GitHub Actions", () => {
 
   beforeEach(async () => {
     resetPluginRuntimeStateForTest();
+    clearGitHubCredentialVerificationCache();
     state = await createOpenClawTestState({
       prefix: "board-github-",
       env: { GH_TOKEN: undefined, GITHUB_TOKEN: undefined },
@@ -109,8 +112,9 @@ describe("board authenticated GitHub Actions", () => {
     account
       .mockReset()
       .mockImplementation(async () => json({ id: 100, login: "fixture-user", avatar_url: null }));
-    http
-      .mockReset()
+    // Each test owns an independent GitHub transport, including its quota state.
+    http = vi
+      .fn<typeof fetch>()
       .mockImplementation(async (url) =>
         toRequestUrl(url).endsWith("/user") ? account() : actions(),
       );
@@ -181,7 +185,7 @@ describe("board authenticated GitHub Actions", () => {
         name: "runs",
         content: { kind: "html", html: "original" },
       });
-      const before = store.getSnapshot(target);
+      const before = await store.getSnapshot(target);
       broadcast.mockClear();
       if (unavailable === "missing native" || unavailable === "native failure") {
         delete config.tools!.github;
@@ -207,8 +211,8 @@ describe("board authenticated GitHub Actions", () => {
       expect(response.mock.calls[0]?.[0]).toBe(false);
       expect(response.mock.calls[0]?.[2]?.message).toMatch(/reconnect|retry/);
       expect(JSON.stringify(response.mock.calls)).not.toContain(token);
-      expect(store.getSnapshot(target)).toEqual(before);
-      expect(store.readWidgetHtml(target, "runs")?.html).toContain("original");
+      expect(await store.getSnapshot(target)).toEqual(before);
+      expect((await readBoardHtml(store, target, "runs"))?.html).toContain("original");
       expect(broadcast).not.toHaveBeenCalled();
       expect(http).not.toHaveBeenCalled();
       if (unavailable === "missing managed" || unavailable === "invalid managed") {
@@ -260,17 +264,20 @@ describe("board authenticated GitHub Actions", () => {
       expect(account).toHaveBeenCalledOnce();
       expect(native).not.toHaveBeenCalled();
       expect(actionCalls()).toHaveLength(0);
-      expect(store.getSnapshot(target).widgets[0]?.declared?.tools).toEqual([
+      expect((await store.getSnapshot(target)).widgets[0]?.declared?.tools).toEqual([
         "github.actions.runs:owner/repo",
       ]);
-      const before = store.getSnapshot(target);
+      const before = await store.getSnapshot(target);
       broadcast.mockClear();
+      // Verified credentials are reused within their TTL; expire the entry so the
+      // next pin must prove the credential again.
+      clearGitHubCredentialVerificationCache();
       account.mockImplementationOnce(async () => new Response(token, { status: 401 }));
       const denied = await invoke("board.widget.put", input);
       expect(denied.mock.calls[0]?.[0]).toBe(false);
       expect(denied.mock.calls[0]?.[2]?.message).toMatch(/reconnect|retry/);
       expect(JSON.stringify(denied.mock.calls)).not.toContain(token);
-      expect(store.getSnapshot(target)).toEqual(before);
+      expect(await store.getSnapshot(target)).toEqual(before);
       expect(broadcast).not.toHaveBeenCalled();
     },
   );
@@ -321,8 +328,12 @@ describe("board authenticated GitHub Actions", () => {
       expect(response.mock.calls[0]?.[0]).toBe(true);
       if (kind === "mcp-app") {
         expect(
-          store.readWidgetMcpApp({ sessionKey: "agent:main:runs", agentId: "main" }, "other")
-            ?.declaredTools,
+          (
+            await store.readWidgetMcpApp(
+              { sessionKey: "agent:main:runs", agentId: "main" },
+              "other",
+            )
+          )?.declaredTools,
         ).toEqual(["github.actions.runs:owner/repo"]);
       }
       expect(native).not.toHaveBeenCalled();
@@ -344,7 +355,7 @@ describe("board authenticated GitHub Actions", () => {
     async (changed) => {
       const { handlers, context, store, broadcast } = createGitHubBoardHarness();
       const target = { sessionKey: "agent:main:runs", agentId: "main" };
-      const before = store.getSnapshot(target);
+      const before = await store.getSnapshot(target);
       const controller = new AbortController();
       let current = true;
       const assertCurrent = () => {
@@ -396,7 +407,7 @@ describe("board authenticated GitHub Actions", () => {
       });
       await handlers["board.widget.put"]!(invocation);
       expect(respond.mock.calls[0]?.[0]).toBe(false);
-      expect(store.getSnapshot(target)).toEqual(before);
+      expect(await store.getSnapshot(target)).toEqual(before);
       expect(broadcast).not.toHaveBeenCalled();
       expect(actionCalls()).toHaveLength(0);
     },
@@ -508,7 +519,10 @@ describe("board authenticated GitHub Actions", () => {
     }));
     const raw = { total_count: 30, workflow_runs: runs };
     expect(Buffer.byteLength(JSON.stringify(raw))).toBeGreaterThan(256 * 1024);
-    await expect(readGitHubJsonResponse(json(raw))).rejects.toThrow("Content too large");
+    await expect(gitHubPublicApi.readGitHubJsonResponse(json(raw))).rejects.toMatchObject({
+      statusCode: 502,
+      message: expect.stringContaining("size limit"),
+    });
     actions = () => json(raw);
     const { read } = await reader();
     expect((await read({ repository: "owner/repo", perPage: 30 })).mock.calls[0]).toEqual([
@@ -537,13 +551,20 @@ describe("board authenticated GitHub Actions", () => {
 
   it.each([
     { status: 403, headers: undefined, message: "access denied" },
-    { status: 403, headers: { "x-ratelimit-remaining": "0" }, message: "rate limited" },
-    { status: 429, headers: undefined, message: "rate limited" },
+    {
+      status: 403,
+      headers: { "x-ratelimit-remaining": "0" },
+      message: "rate limited",
+      cooldownMs: 60_000,
+    },
+    { status: 429, headers: undefined, message: "rate limited", cooldownMs: 60_000 },
     { status: 401, headers: undefined, message: "reconnect" },
     { status: 500, headers: undefined, message: "request failed" },
   ])(
     "sanitizes HTTP $status without anonymous retry ($message)",
-    async ({ status, headers, message }) => {
+    async ({ status, headers, message, cooldownMs }) => {
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
       actions = () => new Response(token, { status, headers });
       const { read } = await reader();
       const response = await read();
@@ -552,6 +573,11 @@ describe("board authenticated GitHub Actions", () => {
       expect(JSON.stringify(response.mock.calls)).not.toContain(token);
       expect(actionCalls()).toHaveLength(1);
       actions = () => json(result);
+      if (cooldownMs) {
+        expect((await read()).mock.calls[0]?.[2]?.message).toContain("rate limited");
+        expect(actionCalls()).toHaveLength(1);
+        clock.mockReturnValue(now + cooldownMs);
+      }
       expect((await read()).mock.calls[0]).toEqual([true, result]);
       expect(actionCalls()).toHaveLength(2);
     },
@@ -577,6 +603,35 @@ describe("board authenticated GitHub Actions", () => {
     const unavailable = await read();
     expect(unavailable.mock.calls[0]?.[2]?.message).toContain("reconnect");
     expect(actionCalls()).toHaveLength(1);
+  });
+
+  it("does not start an Actions read after its widget is removed during credential preparation", async () => {
+    delete config.tools!.github;
+    native.mockImplementation(async () => commandResult(token));
+    const { read, invoke } = await reader();
+    // Pinning warmed native auth; this case needs an actual delayed credential read.
+    clearGitHubCredentialVerificationCache();
+    const started = createDeferred();
+    const release = createDeferred();
+    native.mockImplementationOnce(async () => {
+      started.resolve();
+      await release.promise;
+      return commandResult(token);
+    });
+    const pending = read();
+    try {
+      expect(
+        await Promise.race([started.promise.then(() => "reading"), pending.then(() => "done")]),
+      ).toBe("reading");
+      await invoke("board.update", {
+        sessionKey: "agent:main:runs",
+        ops: [{ kind: "widget_remove", name: "runs" }],
+      });
+    } finally {
+      release.resolve();
+    }
+    expect((await pending).mock.calls[0]?.[0]).toBe(false);
+    expect(actionCalls()).toHaveLength(0);
   });
 
   it("coalesces successful reads and scopes cache entries to filters and current credentials", async () => {
@@ -691,6 +746,7 @@ describe("board authenticated GitHub Actions", () => {
       const survivor = surviving === "leader" ? leader : follower;
       expect((await survivor.read()).mock.calls[0]).toEqual([true, result]);
       expect(actionCalls()).toHaveLength(1);
+      clearGitHubCredentialVerificationCache();
       account.mockImplementationOnce(async () => {
         await survivor.invoke("board.update", {
           sessionKey: "agent:main:runs",
@@ -727,6 +783,7 @@ describe("board authenticated GitHub Actions", () => {
       sessionKey: "agent:main:runs",
       ops: [{ kind: "widget_remove", name: "leader" }],
     });
+    clearGitHubCredentialVerificationCache();
     native.mockImplementationOnce(async () => {
       rereading.resolve();
       await resume.promise;
@@ -734,9 +791,21 @@ describe("board authenticated GitHub Actions", () => {
     });
     release.resolve();
     try {
-      await rereading.promise;
+      expect(
+        await Promise.race([
+          rereading.promise.then(() => "reading"),
+          followerRead.then(() => "done"),
+        ]),
+      ).toBe("reading");
       expect((await leaderRead).mock.calls[0]?.[0]).toBe(false);
-      expect((await third.read()).mock.calls[0]).toEqual([true, result]);
+      const nativeJoined = observeSharedReadAdmission();
+      const thirdRead = third.read();
+      // Native revalidation is shared too; both surviving callers await this lookup.
+      expect(
+        await Promise.race([nativeJoined.then(() => "joined"), thirdRead.then(() => "done")]),
+      ).toBe("joined");
+      resume.resolve();
+      expect((await thirdRead).mock.calls[0]).toEqual([true, result]);
       expect(actionCalls()).toHaveLength(1);
     } finally {
       resume.resolve();

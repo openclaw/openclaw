@@ -11,7 +11,11 @@ import type {
   PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   legacyConfigRules,
@@ -65,6 +69,8 @@ async function removeCodexDoctorFixture(stateDir: string): Promise<void> {
   // the temporary state dir; both must be released before removal or Windows keeps the files
   // locked and the removal fails with EBUSY. Agent close first: it releases leases through
   // shared state, so the reverse order can reopen it.
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawAgentDatabasesForTest();
   resetPluginStateStoreForTests();
   await fs.rm(stateDir, { recursive: true, force: true });
@@ -136,7 +142,9 @@ async function createBindingMigrationFixture(options: {
   };
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
 });
 
@@ -422,7 +430,7 @@ describe("codex doctor contract", () => {
         }),
       ),
     ).resolves.toMatchObject({ state: "active", binding: { threadId: "thread-1" } });
-    await expect(fs.access(`${fixture.sidecarPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${fixture.sidecarPath}.migrated`);
     expect(
       getSessionEntry({
         agentId: "main",
@@ -527,7 +535,7 @@ describe("codex doctor contract", () => {
         storePath: fixture.storePath,
       }),
     ).toMatchObject({ agentHarnessId: "codex" });
-    await expect(fs.access(`${fixture.sidecarPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${fixture.sidecarPath}.migrated`);
 
     await removeCodexDoctorFixture(fixture.stateDir);
   });
@@ -571,7 +579,7 @@ describe("codex doctor contract", () => {
         }),
       ),
     ).resolves.toMatchObject({ sessionId: "explicit-ops-owner" });
-    await expect(fs.access(`${fixture.sidecarPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${fixture.sidecarPath}.migrated`);
 
     await removeCodexDoctorFixture(fixture.stateDir);
   });
@@ -635,7 +643,7 @@ describe("codex doctor contract", () => {
     expect(JSON.stringify(stored)).not.toContain("user-mcp-marker");
     expect(JSON.stringify(stored)).not.toContain("legacy-secret");
     await expect(fs.access(fixture.sidecarPath)).rejects.toThrow();
-    await expect(fs.access(`${fixture.sidecarPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${fixture.sidecarPath}.migrated`);
     await expect(fixture.migration.migrateLegacyState(fixture.params)).resolves.toEqual({
       changes: [],
       warnings: [],
@@ -713,7 +721,7 @@ describe("codex doctor contract", () => {
       binding: { dynamicToolsFingerprint: expectedFingerprint },
     });
     await expect(fs.access(fixture.sidecarPath)).rejects.toThrow();
-    await expect(fs.access(`${fixture.sidecarPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${fixture.sidecarPath}.migrated`);
     await expect(fixture.migration.migrateLegacyState(fixture.params)).resolves.toEqual({
       changes: [],
       warnings: [],
@@ -785,7 +793,7 @@ describe("codex doctor contract", () => {
       binding: { dynamicToolsFingerprint: expectedFingerprint },
     });
     await expect(fs.access(fixture.sidecarPath)).rejects.toThrow();
-    await expect(fs.access(`${fixture.sidecarPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${fixture.sidecarPath}.migrated`);
     await expect(fixture.migration.migrateLegacyState(fixture.params)).resolves.toEqual({
       changes: [],
       warnings: [],
@@ -1116,7 +1124,7 @@ describe("codex doctor contract", () => {
     expect(result.warnings).toEqual([
       expect.stringContaining(`canonical plugin state changed at ${sessionBindingKey}`),
     ]);
-    await expect(fs.access(fixture.sidecarPath)).resolves.toBeUndefined();
+    await fs.access(fixture.sidecarPath);
     await expect(store.lookup(sessionBindingKey)).resolves.toEqual(retired);
     await expect(
       fs.readFile(path.join(fixture.sessionsDir, "sessions.json"), "utf8").then(JSON.parse),
@@ -1307,7 +1315,7 @@ describe("codex doctor contract", () => {
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toContain("session index");
     expect(result.warnings[0]).toContain(detail);
-    await expect(fs.access(fixture.sidecarPath)).resolves.toBeUndefined();
+    await fs.access(fixture.sidecarPath);
     await expect(fs.access(`${fixture.sidecarPath}.migrated`)).rejects.toThrow();
     await expect(openBindingStore(fixture.env).entries()).resolves.toEqual([]);
 

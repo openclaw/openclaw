@@ -10,29 +10,21 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { COMPACTION_RUN_USAGE_CLEAR_PATCH } from "../../config/sessions/session-entry-projection.js";
 import { projectSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createLazyPromise } from "../../shared/lazy-promise.js";
-import {
-  clearAllCliSessions,
-  clearCliSession,
-  getCliSessionBinding,
-  setCliSessionBinding,
-  setCliSessionId,
-} from "../cli-session.js";
+import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
+import { clearAllCliSessions, setCliSessionBinding } from "../cli-session.js";
+import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import type { CompactionAccountingFact } from "../embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
 import { clearMainSessionRecoveryAfterAgentRun } from "../main-session-recovery/main-session-recovery-clear.js";
-import { isCliProvider } from "../model-selection.js";
 import { deriveSessionTotalTokens, hasBillableUsage, hasNonzeroUsage } from "../usage.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
-
-const getUsageFormatModule = createLazyPromise(() => import("../../utils/usage-format.js"));
-const getContextModule = createLazyPromise(() => import("../context.js"));
 
 export function normalizeSessionTokenCount(value: number | undefined): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
@@ -41,8 +33,9 @@ export function normalizeSessionTokenCount(value: number | undefined): number | 
   return Math.floor(value);
 }
 
-/** Applies run result metadata, usage, and CLI bindings to a session entry. */
+/** Applies run result metadata and usage to a session entry. */
 export async function updateSessionStoreAfterAgentRun(params: {
+  agentId: string;
   cfg: OpenClawConfig;
   agentDir: string;
   sessionId: string;
@@ -100,7 +93,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const contextTokens =
     runtimeContextTokens !== undefined
       ? runtimeContextTokens
-      : ((await getContextModule()).resolveContextTokensForModel({
+      : (resolveContextTokensForModel({
           cfg,
           provider: providerUsed,
           model: modelUsed,
@@ -165,19 +158,6 @@ export async function updateSessionStoreAfterAgentRun(params: {
     if (!preserveRuntimeModel) {
       next.agentHarnessId = agentHarnessId;
     }
-    if (!preserveRuntimeModel && isCliProvider(providerUsed, cfg)) {
-      const cliSessionBinding = result.meta.agentMeta?.cliSessionBinding;
-      if (result.meta.agentMeta?.clearCliSessionBinding === true) {
-        clearCliSession(next, providerUsed);
-      } else if (cliSessionBinding?.sessionId?.trim()) {
-        setCliSessionBinding(next, providerUsed, cliSessionBinding);
-      } else {
-        const cliSessionId = result.meta.agentMeta?.sessionId?.trim();
-        if (cliSessionId) {
-          setCliSessionId(next, providerUsed, cliSessionId);
-        }
-      }
-    }
     next.abortedLastRun = result.meta.aborted ?? false;
     clearMainSessionRecoveryAfterAgentRun(next, params.clearRestartRecoveryForceSafeTools);
     if (result.meta.systemPromptReport) {
@@ -189,16 +169,13 @@ export async function updateSessionStoreAfterAgentRun(params: {
   }
   const hasUsage = hasNonzeroUsage(usage);
   if (hasBillableUsage(usage) && !preserveUserFacingRunState) {
-    const { estimateAggregateUsageCost, resolveModelCostConfig } = await getUsageFormatModule();
     const runEstimatedCostUsd = asNonNegativeFiniteNumber(
       estimateAggregateUsageCost({
         usage,
-        cost: resolveModelCostConfig({
-          provider: providerUsed,
-          model: modelUsed,
-          config: cfg,
-          agentDir: params.agentDir,
-        }),
+        provider: providerUsed,
+        model: modelUsed,
+        config: cfg,
+        agentDir: params.agentDir,
       }),
     );
     if (hasUsage) {
@@ -238,6 +215,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const maintenanceConfig = resolveMaintenanceConfigFromInput(cfg.session?.maintenance);
   await patchSessionEntryCore(
     {
+      agentId: params.agentId,
       storePath,
       sessionKey,
     },
@@ -276,62 +254,14 @@ export async function updateSessionStoreAfterAgentRun(params: {
   );
 }
 
-/** Clears a stored CLI session binding after a failed or invalidated run. */
-export async function clearCliSessionInStore(params: {
-  provider: string;
-  sessionKey: string;
-  sessionStore: Record<string, SessionEntry>;
-  storePath: string;
-  expectedSessionId?: string;
-  expectedCliSessionId?: string;
-}): Promise<SessionEntry | undefined> {
-  const { provider, sessionKey, sessionStore, storePath, expectedSessionId, expectedCliSessionId } =
-    params;
-  const entry = sessionStore[sessionKey];
-  if (!entry) {
-    return undefined;
-  }
-
-  let didClear = false;
-  const persisted = await patchSessionEntryCore(
-    {
-      storePath,
-      sessionKey,
-    },
-    (currentEntry, context) => {
-      if (
-        expectedSessionId &&
-        (!context.existingEntry || currentEntry.sessionId !== expectedSessionId)
-      ) {
-        return null;
-      }
-      if (
-        expectedCliSessionId &&
-        getCliSessionBinding(currentEntry, provider)?.sessionId !== expectedCliSessionId
-      ) {
-        return null;
-      }
-      const next = { ...currentEntry };
-      clearCliSession(next, provider);
-      next.updatedAt = Date.now();
-      didClear = true;
-      return next;
-    },
-    { fallbackEntry: entry },
-  );
-  if (persisted && didClear) {
-    sessionStore[sessionKey] = persisted;
-    return persisted;
-  }
-  return undefined;
-}
-
 type CliSessionForkStoreParams = {
+  agentId: string;
   provider: string;
   sessionKey: string;
   sessionStore: Record<string, SessionEntry>;
   storePath: string;
   expectedCliSessionId: string;
+  assertCommitAllowed?: () => void;
 };
 
 function isSameSessionLifecycleOwner(
@@ -356,7 +286,7 @@ async function patchCliSessionForkBinding(
   }
   let committed: SessionEntry | undefined;
   await patchSessionEntryCore(
-    { storePath, sessionKey },
+    { agentId: params.agentId, storePath, sessionKey },
     (currentEntry) => {
       const currentBinding = currentEntry.cliSessionBindings?.[provider];
       // A binding id can survive session rollover. Fork authority belongs to the exact lifecycle.
@@ -375,6 +305,7 @@ async function patchCliSessionForkBinding(
       return next;
     },
     {
+      assertCommitAllowed: params.assertCommitAllowed,
       onCommitted: (current) => {
         // Only the commit edge proves this transition and owns cache publication.
         committed = current;
@@ -425,6 +356,7 @@ export async function persistCliSessionForkSuccessorInStore(
 
 /** Records CLI compaction metadata on the persisted session entry. */
 export async function recordCliCompactionInStore(params: {
+  agentId: string;
   compactionKind: NonNullable<EmbeddedAgentCompactResult["compactionKind"]>;
   sessionKey: string;
   sessionStore: Record<string, SessionEntry>;
@@ -450,10 +382,7 @@ export async function recordCliCompactionInStore(params: {
   next.updatedAt = Date.now();
   const tokensAfterCompaction = asNonNegativeFiniteNumber(params.tokensAfter);
   next.contextBudgetStatus = undefined;
-  next.inputTokens = undefined;
-  next.outputTokens = undefined;
-  next.cacheRead = undefined;
-  next.cacheWrite = undefined;
+  Object.assign(next, COMPACTION_RUN_USAGE_CLEAR_PATCH);
   if (tokensAfterCompaction !== undefined) {
     next.totalTokens = Math.floor(tokensAfterCompaction);
     next.totalTokensFresh = true;
@@ -466,6 +395,7 @@ export async function recordCliCompactionInStore(params: {
   let committedEntry: SessionEntry | undefined;
   await patchSessionEntryCore(
     {
+      agentId: params.agentId,
       storePath,
       sessionKey,
     },

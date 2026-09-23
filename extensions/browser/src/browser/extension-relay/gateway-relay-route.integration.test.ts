@@ -8,8 +8,8 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { withEnvAsync, withTempDir } from "openclaw/plugin-sdk/test-env";
+import { WebSocket, type RawData } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocket, type RawData } from "ws";
 import { parsePairingString } from "../../../chrome-extension/modules/relay-core.js";
 import { relayTestKey } from "../../../chrome-extension/relay-key.test-support.js";
 import {
@@ -130,7 +130,7 @@ afterEach(async () => {
   getPluginRuntimeGatewayRequestScopeMock.mockReset();
 });
 
-describe.sequential("local Gateway extension relay wakeup", () => {
+describe("local Gateway extension relay wakeup", { concurrent: false }, () => {
   it.each([
     { name: "disabled Browser", enabled: false, driver: "extension" as const },
     { name: "no extension profiles", enabled: true, driver: "openclaw" as const },

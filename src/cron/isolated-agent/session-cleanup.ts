@@ -5,7 +5,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { CronJob } from "../types.js";
 
 const gatewayCallRuntimeLoader = createLazyImportLoader(
-  () => import("../../gateway/call.runtime.js"),
+  () => import("../../agents/tools/in-process-gateway.js"),
 );
 
 export type CronRunSessionCleanupOutcome =
@@ -14,6 +14,29 @@ export type CronRunSessionCleanupOutcome =
   | "retired"
   | "survived"
   | "changed";
+
+export async function deleteCronSessionViaGateway(params: {
+  agentSessionKey: string;
+  sessionId: string;
+  lifecycleRevision?: string;
+  sessionUpdatedAt?: number;
+}): Promise<boolean> {
+  const { bindAgentToolGatewayRequest } = await gatewayCallRuntimeLoader.load();
+  const callGateway = bindAgentToolGatewayRequest({ hostedOnly: true });
+  const result = await callGateway<{ deleted?: boolean }>({
+    method: "sessions.delete",
+    params: {
+      key: params.agentSessionKey,
+      deleteTranscript: true,
+      emitLifecycleHooks: false,
+      expectedSessionId: params.sessionId,
+      expectedLifecycleRevision: params.lifecycleRevision,
+      expectedSessionUpdatedAt: params.sessionUpdatedAt,
+    },
+    timeoutMs: 10_000,
+  });
+  return result.deleted === true;
+}
 
 export async function cleanupCronRunSessionAfterRun(params: {
   job: Pick<CronJob, "deleteAfterRun" | "sessionTarget">;
@@ -29,20 +52,7 @@ export async function cleanupCronRunSessionAfterRun(params: {
   }
   params.beforeDelete?.();
   try {
-    const { callGateway } = await gatewayCallRuntimeLoader.load();
-    const result = await callGateway<{ deleted?: boolean }>({
-      method: "sessions.delete",
-      params: {
-        key: params.agentSessionKey,
-        deleteTranscript: true,
-        emitLifecycleHooks: false,
-        expectedSessionId: params.sessionId,
-        expectedLifecycleRevision: params.lifecycleRevision,
-        expectedSessionUpdatedAt: params.sessionUpdatedAt,
-      },
-      timeoutMs: 10_000,
-    });
-    return result.deleted === true ? "deleted" : "changed";
+    return (await deleteCronSessionViaGateway(params)) ? "deleted" : "changed";
   } catch (error) {
     if (isSessionChangedGatewayError(error)) {
       return "changed";

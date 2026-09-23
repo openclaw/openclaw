@@ -153,6 +153,68 @@ afterEach(() => {
 });
 
 describe("Raft wake gateway", () => {
+  it.each(["claim", "commit"] as const)(
+    "joins an admitted wake during shutdown while %s is pending",
+    async (phase) => {
+      const { ctx, controller, run, wakeDedupe } = createContext();
+      Object.defineProperty(ctx, "abortSignal", { value: controller.signal });
+      const bridge = new FakeBridge();
+      const pending = createDeferred<void>();
+      const reached = createDeferred<void>();
+      let processing: Promise<unknown> | undefined;
+      const processGuarded = wakeDedupe.processGuarded.bind(wakeDedupe);
+      wakeDedupe.processGuarded = (event, process, options) => {
+        const operation = processGuarded(
+          event,
+          async () => {
+            if (phase === "claim") {
+              reached.resolve();
+              await pending.promise;
+            }
+            const result = await process();
+            if (phase === "commit") {
+              reached.resolve();
+              await pending.promise;
+            }
+            return result;
+          },
+          options,
+        );
+        processing = operation;
+        return operation;
+      };
+      let stopped = false;
+      const start = startRaftGatewayAccount(ctx, { wakeDedupe, spawnBridge: bridge.spawn }).finally(
+        () => {
+          stopped = true;
+        },
+      );
+      try {
+        const { endpoint, token } = await bridge.started.promise;
+        const request = fetch(endpoint, {
+          method: "POST",
+          headers: { "x-raft-bridge-token": token },
+          body: JSON.stringify({ eventId: "wake-settlement" }),
+        }).catch(() => undefined);
+        await reached.promise;
+        controller.abort();
+        await request;
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(stopped).toBe(false);
+        pending.resolve();
+        await start;
+        expect(run).toHaveBeenCalledTimes(phase === "commit" ? 1 : 0);
+      } finally {
+        pending.resolve();
+        controller.abort();
+        await start;
+        await processing?.catch(() => undefined);
+      }
+    },
+  );
+
   it("marks the internal wake path explicitly unsupported", async () => {
     const { ctx, buildContext } = createContext();
     await dispatchRaftWake({ ctx });

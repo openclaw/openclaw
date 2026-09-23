@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 
 export type SandboxHostCsp = {
   connectDomains?: string[];
   resourceDomains?: string[];
+  mediaDomains?: string[];
   frameDomains?: string[];
   baseUriDomains?: string[];
   blockDescendantFrames?: boolean;
@@ -50,7 +52,6 @@ function buildSandboxDocumentGuardHtml(blockDescendantFrames: boolean): string {
   wrapMethod(Element.prototype,"insertAdjacentHTML",[1]);wrapMethod(Document.prototype,"write");wrapMethod(Document.prototype,"writeln");wrapMethod(Range.prototype,"createContextualFragment",[0]);wrapMethod(DOMParser.prototype,"parseFromString",[0]);
   wrapMethod(Element.prototype,"setHTMLUnsafe",[0]);wrapMethod(Element.prototype,"setHTML",[0]);
   if(globalThis.ShadowRoot){wrapMethod(ShadowRoot.prototype,"setHTMLUnsafe",[0]);wrapMethod(ShadowRoot.prototype,"setHTML",[0]);}
-  lock(globalThis,"open",undefined);
 })();</script>`;
 }
 
@@ -77,7 +78,7 @@ const RESOLVE_LEADING_DOCTYPE_END_SOURCE = `(html) => {
 
 function normalizeDomains(
   value: unknown,
-  options?: { allowWebSocket?: boolean },
+  options?: { allowWebSocket?: boolean; allowMediaSchemes?: boolean },
 ): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
@@ -100,6 +101,9 @@ function normalizeDomains(
         if (code <= 31 || code === 127) {
           return false;
         }
+      }
+      if (options?.allowMediaSchemes && (entry === "https:" || entry === "blob:")) {
+        return true;
       }
       let parsed: URL;
       try {
@@ -124,7 +128,11 @@ function normalizeDomains(
         /^(?:\*\.)?[A-Za-z0-9.-]+$/u.test(parsed.hostname)
       );
     })
-    .map((entry) => new URL(entry).origin);
+    .map((entry) =>
+      options?.allowMediaSchemes && (entry === "https:" || entry === "blob:")
+        ? entry
+        : new URL(entry).origin,
+    );
   return entries.length > 0 ? entries : undefined;
 }
 
@@ -136,6 +144,7 @@ export function normalizeSandboxHostCsp(value: unknown): SandboxHostCsp | undefi
   const csp: SandboxHostCsp = {
     connectDomains: normalizeDomains(record.connectDomains, { allowWebSocket: true }),
     resourceDomains: normalizeDomains(record.resourceDomains),
+    mediaDomains: normalizeDomains(record.mediaDomains, { allowMediaSchemes: true }),
     frameDomains: normalizeDomains(record.frameDomains),
     baseUriDomains: normalizeDomains(record.baseUriDomains),
     blockDescendantFrames: record.blockDescendantFrames === true ? true : undefined,
@@ -163,8 +172,33 @@ function encodeCsp(csp?: SandboxHostCsp): string | undefined {
 }
 
 export function buildSandboxHostPath(csp?: SandboxHostCsp): string {
-  const encoded = encodeCsp(csp);
-  return encoded ? `${SANDBOX_HOST_PATH}?${SANDBOX_HOST_CSP_QUERY}=${encoded}` : SANDBOX_HOST_PATH;
+  const normalized = normalizeSandboxHostCsp(csp);
+  const encoded = encodeCsp(normalized);
+  const { version } = buildSandboxHostDocument(normalized);
+  const query = new URLSearchParams();
+  if (encoded) {
+    query.set(SANDBOX_HOST_CSP_QUERY, encoded);
+  }
+  query.set("v", version);
+  return `${SANDBOX_HOST_PATH}?${query}`;
+}
+
+/** Version the public shell and its security headers together, never widget content. */
+export function buildSandboxHostDocument(csp?: SandboxHostCsp) {
+  const html = buildSandboxHostProxyHtml(csp);
+  const headers = {
+    "Content-Type": "text/html; charset=utf-8",
+    "Content-Security-Policy": buildSandboxHostContentSecurityPolicy(csp),
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), clipboard-write=()",
+    "Cross-Origin-Resource-Policy": "cross-origin",
+    "Origin-Agent-Cluster": "?1",
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+  };
+  const version = createHash("sha256")
+    .update(JSON.stringify([headers, html]))
+    .digest("hex");
+  return { html, headers, version };
 }
 
 export function resolveSandboxHostPort(gatewayPort: number, configuredPort?: number): number {
@@ -205,7 +239,7 @@ export function decodeSandboxHostCsp(value: string | null): SandboxHostCsp | und
 }
 
 /** Trusted outer document. Untrusted content is written only into its inner iframe. */
-export function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
+function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
   const blockDescendantFrames = csp?.blockDescendantFrames === true;
   const serializedDocumentGuard = JSON.stringify(
     buildSandboxDocumentGuardHtml(blockDescendantFrames),
@@ -228,14 +262,15 @@ export function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
   try { void window.top.document; throw new Error("MCP App sandbox isolation failed"); } catch (error) {
     if (error instanceof Error && error.message === "MCP App sandbox isolation failed") throw error;
   }
-  const createInner = () => {
+  const createInner = (allowScripts = true) => {
     const frame = document.createElement("iframe");
-    frame.setAttribute("sandbox", "allow-scripts allow-forms");
+    // Block native popups here without reserving widget globals such as open.
+    frame.setAttribute("sandbox", allowScripts ? "allow-scripts allow-forms" : "");
     return frame;
   };
   let inner = createInner();
   document.body.appendChild(inner);
-  let widgetBridgePortOffered = false;
+  const widgetPortsOffered = new Set();
   const blockDescendantFrames = ${blockDescendantFrames};
   const descendantSelector = "iframe,frame,object,embed,portal,fencedframe,webview,browser";
   const hasBlockedDescendant = root => {
@@ -264,8 +299,16 @@ export function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
           const guardedHtml = guardDocument(params.html);
           // Replace the browsing context so a superseded document cannot race
           // the new wrapper's first private bridge-port offer.
-          const nextInner = createInner();
-          widgetBridgePortOffered = false;
+          const nextInner = createInner(params.allowScripts !== false);
+          nextInner.addEventListener("load", () => {
+            if (inner !== nextInner || typeof params.renderId !== "string") return;
+            window.parent.postMessage({
+              jsonrpc: "2.0",
+              method: "ui/notifications/sandbox-resource-loaded",
+              params: { renderId: params.renderId },
+            }, hostOrigin);
+          }, { once: true });
+          widgetPortsOffered.clear();
           nextInner.srcdoc = guardedHtml;
           inner.replaceWith(nextInner);
           inner = nextInner;
@@ -278,10 +321,12 @@ export function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
     }
     if (event.source === inner.contentWindow) {
       if (typeof event.data?.method === "string" && event.data.method.startsWith("ui/notifications/sandbox-")) return;
-      if (event.data?.type === "openclaw:widget-bridge-port-offer") {
+      if (event.data?.type === "openclaw:widget-bridge-port-offer" || event.data?.type === "openclaw:widget-prompt-offer") {
         const port = event.ports[0];
-        if (!widgetBridgePortOffered && port) {
-          widgetBridgePortOffered = true;
+        // Each wrapper offers its private channels before untrusted code runs.
+        // Only the first offer of each kind belongs to this document instance.
+        if (!widgetPortsOffered.has(event.data.type) && port) {
+          widgetPortsOffered.add(event.data.type);
           window.parent.postMessage(event.data, hostOrigin, [port]);
         } else {
           port?.close();
@@ -302,8 +347,9 @@ export function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
 }
 
 /** HTTP response policy for the isolated proxy and its inner about:blank content. */
-export function buildSandboxHostContentSecurityPolicy(csp?: SandboxHostCsp): string {
+function buildSandboxHostContentSecurityPolicy(csp?: SandboxHostCsp): string {
   const resources = csp?.resourceDomains ?? [];
+  const media = csp?.mediaDomains ?? resources;
   const connections = csp?.connectDomains ?? [];
   const frames = csp?.frameDomains ?? [];
   const bases = csp?.baseUriDomains ?? [];
@@ -313,7 +359,7 @@ export function buildSandboxHostContentSecurityPolicy(csp?: SandboxHostCsp): str
     `script-src 'self' 'unsafe-inline' ${resources.join(" ")}`.trim(),
     `style-src 'self' 'unsafe-inline' ${resources.join(" ")}`.trim(),
     `img-src 'self' data: ${resources.join(" ")}`.trim(),
-    `media-src 'self' data: ${resources.join(" ")}`.trim(),
+    `media-src 'self' data: ${media.join(" ")}`.trim(),
     `connect-src ${sources(connections)}`,
     "webrtc 'block'",
     // This policy belongs to the trusted outer document, so frame-src also

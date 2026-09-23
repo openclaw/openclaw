@@ -10,44 +10,26 @@ import {
   formatZonedTimestamp,
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
-import {
-  isExecCompletionEvent,
-  isHeartbeatDeliveryAwarenessEvent,
-} from "../../infra/heartbeat-events-filter.js";
+import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
 // Records system-level session events for restarts, forks, and resets.
-import { selectAgentSystemEvents } from "../../infra/system-event-ownership.js";
+import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import {
   consumeSelectedSystemEventEntries,
   peekSystemEventEntries,
   type SystemEvent,
 } from "../../infra/system-events.js";
+import { SESSION_CREATED_NOTICE_CONTEXT_PREFIX } from "../../sessions/session-state-event-kinds.js";
 import { acknowledgeSessionStateNotices } from "../../sessions/session-state-events.js";
 import { decodeSessionStateNoticeContextKey } from "../../sessions/session-state-notices.js";
 
-function isCronContextSystemEvent(event: SystemEvent): boolean {
-  return event.contextKey?.startsWith("cron:") ?? false;
-}
-
-function selectGenericSystemEvents(
-  events: readonly SystemEvent[],
-  options?: { suppressHeartbeatOwnedEvents?: boolean },
-): SystemEvent[] {
-  // Exec/cron events own dedicated heartbeat prompts. Heartbeat delivery
-  // awareness stays queued for the next ordinary target turn.
-  return events.filter(
-    (event) =>
-      !isExecCompletionEvent(event.text) &&
-      !(
-        options?.suppressHeartbeatOwnedEvents === true &&
-        (isCronContextSystemEvent(event) || isHeartbeatDeliveryAwarenessEvent(event))
-      ),
-  );
-}
-
-function compactSystemEvent(line: string): string | null {
-  const trimmed = line.trim();
+function compactSystemEvent(event: SystemEvent): string | null {
+  const trimmed = event.text.trim();
   if (!trimmed) {
     return null;
+  }
+  // Creation metadata may mention heartbeat work; it is not a retired wake prompt.
+  if (event.contextKey?.startsWith(SESSION_CREATED_NOTICE_CONTEXT_PREFIX)) {
+    return trimmed;
   }
   const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (lower.includes("reason periodic")) {
@@ -112,17 +94,17 @@ export async function drainFormattedSystemEvents(params: {
   sessionKey: string;
   isMainSession: boolean;
   isNewSession: boolean;
-  suppressHeartbeatOwnedEvents?: boolean;
+  events?: readonly SystemEvent[];
 }): Promise<string | undefined> {
   const summaryLines: string[] = [];
   const systemLines: string[] = [];
+  const queueKey = resolveSystemEventQueueKey(params.sessionKey, params.agentId);
   // Exec completions have a dedicated heartbeat prompt; leave those entries queued
   // so the heartbeat path can consume and deliver them.
   const queued = consumeSelectedSystemEventEntries(
-    params.sessionKey,
-    selectGenericSystemEvents(
-      selectAgentSystemEvents(peekSystemEventEntries(params.sessionKey), params.agentId),
-      { suppressHeartbeatOwnedEvents: params.suppressHeartbeatOwnedEvents },
+    queueKey,
+    (params.events ?? peekSystemEventEntries(queueKey)).filter(
+      (event) => !isExecCompletionEvent(event.text),
     ),
   );
   const sessionStateTargets = queued
@@ -134,7 +116,7 @@ export async function drainFormattedSystemEvents(params: {
     acknowledgeSessionStateNotices(params.sessionKey, sessionStateTargets);
   }
   for (const event of queued) {
-    const compacted = compactSystemEvent(event.text);
+    const compacted = compactSystemEvent(event);
     if (!compacted) {
       continue;
     }

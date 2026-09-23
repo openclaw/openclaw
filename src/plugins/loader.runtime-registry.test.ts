@@ -1,8 +1,7 @@
-// Verifies plugin loader runtime registry behavior.
 import fs, { writeFileSync } from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -15,19 +14,19 @@ import { drainSystemEvents } from "../infra/system-events.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { VERSION } from "../version.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import {
   getRegisteredEmbeddingProvider,
   registerEmbeddingProvider,
 } from "./embedding-providers.js";
-import {
-  loadInstalledPluginIndexInstallRecordsSync,
-  writePersistedInstalledPluginIndexInstallRecordsSync,
-} from "./installed-plugin-index-records.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
+import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
-import * as loaderModule from "./loader-module-runtime.js";
-import { createLazyPluginRuntime } from "./loader-module-runtime.js";
+import {
+  resolveNativePluginModelAuth,
+  resolveNativePluginModelConfig,
+} from "./loader-runtime-load.js";
+import { PluginLoadFailureError } from "./loader-shared.js";
 import {
   clearPluginRegistryLoadCache,
   loadAndActivateRootPluginRegistry,
@@ -43,9 +42,9 @@ import {
   writePlugin,
 } from "./loader.test-fixtures.js";
 import { buildMemoryPromptSection, registerMemoryCapability } from "./memory-state.js";
+import * as nativeModule from "./native-module-require.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
-import { getPluginModuleLoaderStats } from "./plugin-module-loader-cache.js";
-import { pluginLoaderCacheState } from "./registry-lifecycle.js";
+import { getPluginLoaderCacheState } from "./registry-lifecycle.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
@@ -57,6 +56,10 @@ import {
   setActivePluginRegistry,
   stageActivePluginRegistry,
 } from "./runtime.js";
+import {
+  buildPluginRuntimeLoadOptions,
+  getPluginRuntimeLoadContext,
+} from "./runtime/load-context.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import * as sdkAlias from "./sdk-alias.js";
 
@@ -68,25 +71,39 @@ afterEach(() => {
 });
 
 it.each(["cjs", "ts"])(
-  "keeps host config/state/system ownership before and after broad runtime loading (%s)",
+  "keeps host config/state/system/model policy ownership before and after broad runtime loading (%s)",
   async (extension) => {
     const root = fs.realpathSync(makePluginLoaderTempDir());
     const bundledDir = path.join(root, "bundled");
     const observed = path.join(root, "observed.json");
     const registration = `{ id: "state-cli", register(api) {
+      const runtimeStore = createPluginRuntimeStore({
+        pluginId: "state-cli-${extension}",
+        errorMessage: "state-cli runtime not initialized",
+      });
       const sync = api.runtime.state.openSyncKeyedStore({ namespace: "registration", maxEntries: 2 });
+      runtimeStore.setRuntime(api.runtime);
       const entries = sync.entries();
+      const modelConfig = api.runtime.modelConfig;
+      const selection = modelConfig.resolveAllowedModelRef({
+        cfg: api.config, catalog: [], raw: "fixture/allowed", defaultProvider: "fixture", manifestPlugins: [],
+      });
+      const runtimePolicy = modelConfig.resolveModelRuntimePolicy({
+        config: api.config, provider: "fixture", modelId: "allowed",
+      });
+      const provider = api.runtime.modelAuth.resolveProviderIdForAuth(" Fixture ", { metadataSnapshot: { plugins: [] } });
       const system = api.runtime.system;
       system.enqueueSystemEvent("registration", { sessionKey: "prepared-runtime-system" });
       system.requestHeartbeat({ source: "other", intent: "immediate", reason: "registration", coalesceMs: 0 });
       const asyncStore = api.runtime.state.openKeyedStore({ namespace: "registration", maxEntries: 2 });
-      fs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify({ entries, config: api.runtime.config.current() }));
+      fs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify({ entries, selection, runtimePolicy, provider, config: api.runtime.config.current() }));
       api.registerCli(({ program }) => program.command("state-proof").action(async () => {
+        const runtime = runtimeStore.getRuntime();
         sync.register("before", { value: "retained" });
-        const chunks = api.runtime.channel.text.chunkText("channel runtime works", 100);
-        const version = api.runtime.version;
-        api.runtime.system.enqueueSystemEvent("materialized", { sessionKey: "prepared-runtime-system" });
-        api.runtime.system.requestHeartbeat({ source: "other", intent: "immediate", reason: "materialized", coalesceMs: 0 });
+        const chunks = runtime.channel.text.chunkText("channel runtime works", 100);
+        const version = runtime.version;
+        runtime.system.enqueueSystemEvent("materialized", { sessionKey: "prepared-runtime-system" });
+        runtime.system.requestHeartbeat({ source: "other", intent: "immediate", reason: "materialized", coalesceMs: 0 });
         const row = await asyncStore.lookup("before");
         fs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify({ chunks, version, row }));
       }), { commands: ["state-proof"] });
@@ -95,11 +112,15 @@ it.each(["cjs", "ts"])(
       id: "state-cli",
       dir: path.join(bundledDir, "state-cli"),
       filename: `index.${extension}`,
-      body: `${extension === "ts" ? 'import fs from "node:fs"; export default' : 'const fs = require("node:fs"); module.exports ='} ${registration}`,
+      body: `${
+        extension === "ts"
+          ? 'import fs from "node:fs"; import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store"; export default'
+          : 'const fs = require("node:fs"); const { createPluginRuntimeStore } = require("openclaw/plugin-sdk/runtime-store"); module.exports ='
+      } ${registration}`,
     });
     fs.writeFileSync(
       path.join(plugin.dir, "cli-metadata.cjs"),
-      `const fs = require("node:fs"); module.exports = ${registration}`,
+      `const fs = require("node:fs"); const { createPluginRuntimeStore } = require("openclaw/plugin-sdk/runtime-store"); module.exports = ${registration}`,
     );
     await withEnvAsync(
       {
@@ -117,29 +138,40 @@ it.each(["cjs", "ts"])(
             "resolvePluginRuntimeModulePathWithDiagnostics",
           );
           let fullRuntime: typeof import("./runtime/index.js") | null = null;
-          const createLoader = loaderModule.createPluginModuleLoader;
+          const nativeLoad = nativeModule.tryNativeRequireModule;
           const factories = vi.fn(
             (...args: Parameters<typeof import("./runtime/index.js").createPluginRuntime>) =>
               fullRuntime!.createPluginRuntime(...args),
           );
-          vi.spyOn(loaderModule, "createPluginModuleLoader").mockImplementation((options) => {
-            const load = createLoader(options);
-            return (modulePath) => {
+          vi.spyOn(nativeModule, "tryNativeRequireModule").mockImplementation(
+            (modulePath, options) => {
               if (modulePath === resolveRuntime.mock.results.at(-1)?.value?.resolvedPath) {
                 if (!fullRuntime) {
                   throw new Error("broad runtime requested before state registration completed");
                 }
-                return { createPluginRuntime: factories };
+                return { ok: true, moduleExport: { createPluginRuntime: factories } };
               }
-              return load(modulePath);
-            };
-          });
+              return nativeLoad(modulePath, options);
+            },
+          );
+          const modelAuth = resolveNativePluginModelAuth();
+          const modelConfig = resolveNativePluginModelConfig();
           const hooks = {
             dispatchHookAgentTurn: vi.fn<PluginRuntime["hooks"]["dispatchHookAgentTurn"]>(),
           };
+          const nodes = {
+            list: vi.fn<PluginRuntime["nodes"]["list"]>(),
+            invoke: vi.fn<PluginRuntime["nodes"]["invoke"]>(),
+            openDuplex: vi.fn<PluginRuntime["nodes"]["openDuplex"]>(),
+          };
           const dispatchReplyFromConfig =
             vi.fn<PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"]>();
-          const config = { plugins: { entries: { [plugin.id]: { enabled: true } } } };
+          const config = {
+            agents: {
+              defaults: { models: { "fixture/*": { agentRuntime: { id: "openclaw" } } } },
+            },
+            plugins: { entries: { [plugin.id]: { enabled: true } } },
+          };
           setRuntimeConfigSnapshot(config);
           const metadata = await loadOpenClawPluginCliRegistry({
             config,
@@ -154,28 +186,26 @@ it.each(["cjs", "ts"])(
           );
           expect(fs.existsSync(observed)).toBe(false);
           expect(resolveRuntime).not.toHaveBeenCalled();
-          const loaderStats = getPluginModuleLoaderStats();
           const registry = loadPluginRegistryHandle({
             config,
             cache: false,
             pluginSdkResolution: "src",
-            runtimeOptions: { hooks, dispatchReplyFromConfig },
+            runtimeOptions: { hooks, nodes, dispatchReplyFromConfig, modelAuth, modelConfig },
           });
           expect(registry.plugins).toContainEqual(
             expect.objectContaining({ id: plugin.id, status: "loaded" }),
           );
-          const loadedStats = getPluginModuleLoaderStats();
-          if (extension === "ts") {
-            expect(loadedStats.sourceTransformForced).toBeGreaterThan(
-              loaderStats.sourceTransformForced,
-            );
-            expect(loadedStats.topSourceTransformTargets).toContainEqual(
-              expect.objectContaining({ target: plugin.file }),
-            );
-          } else {
-            expect(loadedStats.nativeHits).toBeGreaterThan(loaderStats.nativeHits);
-          }
-          expect(JSON.parse(fs.readFileSync(observed, "utf8"))).toEqual({ entries: [], config });
+          expect(JSON.parse(fs.readFileSync(observed, "utf8"))).toEqual({
+            entries: [],
+            selection: { ref: { provider: "fixture", model: "allowed" }, key: "fixture/allowed" },
+            runtimePolicy: {
+              policy: { id: "openclaw" },
+              source: "model",
+              matchedProvider: "fixture",
+            },
+            provider: "fixture",
+            config,
+          });
           expect(fs.existsSync(path.join(root, "state", "state", "openclaw.sqlite"))).toBe(false);
           expect(resolveRuntime).not.toHaveBeenCalled();
           const runtime = getPluginRegistryRuntime(registry)!;
@@ -187,7 +217,7 @@ it.each(["cjs", "ts"])(
           const system = runtime.system;
           expect(system.requestHeartbeat).toBe(requestHeartbeat);
           expect(system.runCommandWithTimeout).toBe(runCommandWithTimeout);
-          expect(drainSystemEvents("prepared-runtime-system")).toEqual(["registration"]);
+          expect(drainSystemEvents("agent:main:prepared-runtime-system")).toEqual(["registration"]);
           await vi.waitFor(() =>
             expect(heartbeat).toHaveBeenCalledWith(
               expect.objectContaining({ reason: "registration" }),
@@ -204,7 +234,24 @@ it.each(["cjs", "ts"])(
             config: Object.getOwnPropertyDescriptor(runtime, "config")!,
             state: Object.getOwnPropertyDescriptor(runtime, "state")!,
             system: Object.getOwnPropertyDescriptor(runtime, "system")!,
+            nodes: Object.getOwnPropertyDescriptor(runtime, "nodes")!,
+            modelAuth: Object.getOwnPropertyDescriptor(runtime, "modelAuth")!,
+            modelConfig: Object.getOwnPropertyDescriptor(runtime, "modelConfig")!,
           };
+          expect(descriptors.nodes.get?.()).toBe(nodes);
+          for (const [key, facade] of [
+            ["modelAuth", modelAuth],
+            ["modelConfig", modelConfig],
+          ] as const) {
+            expect(runtime[key]).toBe(facade);
+            expect(descriptors[key].get?.()).toBe(facade);
+            expect(descriptors[key]).toEqual({
+              configurable: true,
+              enumerable: true,
+              get: expect.any(Function),
+              set: undefined,
+            });
+          }
           for (const [key, prepared] of [
             ["config", configApi],
             ["state", state],
@@ -239,14 +286,64 @@ it.each(["cjs", "ts"])(
           expect(runtime.system.formatNativeDependencyHint({ packageName: "fixture" })).toBe(
             "retained method",
           );
-          expect(drainSystemEvents("prepared-runtime-system")).toEqual(["materialized"]);
+          expect(drainSystemEvents("agent:main:prepared-runtime-system")).toEqual(["materialized"]);
           await vi.waitFor(() =>
             expect(heartbeat).toHaveBeenCalledWith(
               expect.objectContaining({ reason: "materialized" }),
             ),
           );
           expect(runtime.hooks).toBe(hooks);
+          expect(runtime.nodes).toBe(nodes);
+          for (const [key, facade] of [
+            ["modelAuth", modelAuth],
+            ["modelConfig", modelConfig],
+          ] as const) {
+            expect(runtime[key]).toBe(facade);
+            expect(descriptors[key].get?.()).toBe(facade);
+            expect(Object.getOwnPropertyDescriptor(runtime, key)).toEqual({
+              configurable: true,
+              enumerable: true,
+              get: expect.any(Function),
+              set: undefined,
+            });
+            expect(Reflect.set(runtime, key, {})).toBe(false);
+            expect(runtime[key]).toBe(facade);
+          }
           expect(runtime.channel.reply.dispatchReplyFromConfig).toBe(dispatchReplyFromConfig);
+          for (const key of [
+            "gateway",
+            "subagent",
+            "hooks",
+            "nodes",
+            "sandbox",
+            "worktrees",
+            "webSearch",
+            "tasks",
+          ] as const) {
+            const replacement = { ...runtime[key] };
+            expect.soft(Reflect.set(runtime, key, replacement), key).toBe(true);
+            expect.soft(runtime[key], key).toBe(replacement);
+            expect(Object.getOwnPropertyDescriptor(runtime, key)).toEqual({
+              value: replacement,
+              writable: true,
+              configurable: true,
+              enumerable: true,
+            });
+          }
+          expect(descriptors.nodes.get?.()).toBe(runtime.nodes);
+          for (const key of [
+            "tts",
+            "mediaUnderstanding",
+            "modelAuth",
+            "imageGeneration",
+            "videoGeneration",
+            "musicGeneration",
+            "llm",
+          ] as const) {
+            const descriptor = Object.getOwnPropertyDescriptor(runtime, key)!;
+            expect(descriptor).toMatchObject({ get: expect.any(Function), set: undefined });
+            expect(Reflect.set(runtime, key, {})).toBe(false);
+          }
           for (const [key, prepared] of [
             ["config", configApi],
             ["state", state],
@@ -254,11 +351,16 @@ it.each(["cjs", "ts"])(
           ] as const) {
             const descriptor = descriptors[key];
             const replacement = { ...prepared };
-            // The existing lazy descriptor is an accessor: Reflect.set with the proxy receiver
-            // fails, while its explicit setter replaces the materialized data property.
-            expect(Reflect.set(runtime, key, replacement)).toBe(false);
-            descriptor.set?.(replacement);
+            expect(Reflect.set(runtime, key, replacement)).toBe(true);
             expect(descriptor.get?.()).toBe(replacement);
+            descriptor.set?.(prepared);
+            expect(runtime[key]).toBe(prepared);
+            const setterError = new Error("runtime setter rejected");
+            const setter = vi.fn(function (this: unknown, value: unknown) {
+              if (value === setterError) {
+                throw setterError;
+              }
+            });
             Object.defineProperty(runtime, key, {
               configurable: true,
               get(this: unknown) {
@@ -267,6 +369,7 @@ it.each(["cjs", "ts"])(
                 }
                 return this === runtime ? prepared : replacement;
               },
+              set: setter,
             });
             expect(runtime[key]).toBe(prepared);
             expect(descriptor.get?.()).toBe(replacement);
@@ -274,6 +377,17 @@ it.each(["cjs", "ts"])(
             expect
               .soft(Reflect.get(runtime, key, undefined), "explicit undefined receiver")
               .toBeUndefined();
+            for (const receiver of [runtime, null, undefined]) {
+              expect(Reflect.set(runtime, key, replacement, receiver)).toBe(true);
+              expect(setter.mock.contexts.at(-1)).toBe(receiver);
+            }
+            expect(() => Reflect.set(runtime, key, setterError)).toThrow(setterError);
+            Object.defineProperty(runtime, key, {
+              configurable: true,
+              value: prepared,
+              writable: false,
+            });
+            expect(Reflect.set(runtime, key, replacement)).toBe(false);
             Reflect.deleteProperty(runtime, key);
             expect(runtime[key]).toBeUndefined();
             expect(descriptor.get?.()).toBeUndefined();
@@ -281,7 +395,7 @@ it.each(["cjs", "ts"])(
           expect(resolveRuntime).toHaveBeenCalledTimes(1);
         } finally {
           disposeHeartbeat();
-          drainSystemEvents("prepared-runtime-system");
+          drainSystemEvents("agent:main:prepared-runtime-system");
         }
       },
     );
@@ -296,24 +410,44 @@ it("keeps an empty scoped handle load from replacing the root registry", () => {
   expect(getActivePluginRegistry()).toBe(root);
 });
 
-it("keeps version and injected instance surfaces independent of the broad runtime module", () => {
-  const gateway = {} as PluginRuntime["gateway"];
-  const nodes = {} as PluginRuntime["nodes"];
-  const subagent = {} as PluginRuntime["subagent"];
-  const loadPluginModule = vi.fn((_modulePath: string): unknown => {
-    throw new Error("broad runtime should stay lazy");
+it("reuses discovered registrations through prepared load options until invalidated", () => {
+  useNoBundledPlugins();
+  const plugin = writePlugin({
+    id: "prepared-cache",
+    body: 'module.exports = { id: "prepared-cache", register() {} };',
   });
-  const runtime = createLazyPluginRuntime({
-    loadPluginModule,
-    runtimeOptions: { gateway, nodes, subagent },
-  });
-
-  expect(runtime.version).toBe(VERSION);
-  expect(Object.getOwnPropertyDescriptor(runtime, "version")?.get?.()).toBe(VERSION);
-  expect(runtime.gateway).toBe(gateway);
-  expect(runtime.nodes).toBe(nodes);
-  expect(runtime.subagent).toBe(subagent);
-  expect(loadPluginModule).not.toHaveBeenCalled();
+  const options = {
+    config: {
+      plugins: {
+        allow: [plugin.id],
+        load: { paths: [plugin.file] },
+        slots: { memory: "none" },
+      },
+    },
+  };
+  const first = loadPluginRegistryHandle(options);
+  expect(first.plugins).toContainEqual(
+    expect.objectContaining({ id: plugin.id, status: "loaded" }),
+  );
+  const context = getPluginRuntimeLoadContext(first);
+  if (!context) {
+    throw new Error("Expected loader-owned context");
+  }
+  const prepared = buildPluginRuntimeLoadOptions(context);
+  expect(loadPluginRegistryHandle(prepared) === first).toBe(true);
+  expect(loadPluginRegistryHandle({ ...prepared, cache: false })).not.toBe(first);
+  expect(
+    loadPluginRegistryHandle({
+      ...prepared,
+      config: { ...options.config, plugins: { ...options.config.plugins, enabled: false } },
+    }).plugins,
+  ).toContainEqual(expect.objectContaining({ id: plugin.id, status: "disabled" }));
+  clearPluginRegistryLoadCache();
+  const refreshed = loadPluginRegistryHandle(prepared);
+  expect(refreshed).not.toBe(first);
+  expect(refreshed.plugins).toContainEqual(
+    expect.objectContaining({ id: plugin.id, status: "loaded" }),
+  );
 });
 
 describe("cached plugin load failures", () => {
@@ -350,6 +484,58 @@ describe("cached plugin load failures", () => {
     expect(getActivePluginRegistry()).toBe(active);
     expect(load(options)).toBe(cached);
     expect(getActivePluginRegistry()).toBe(activates ? cached : active);
+  });
+
+  it("reports only newly failed replacements while retaining the complete diagnostic registry", () => {
+    useNoBundledPlugins();
+    const broken = writePlugin({
+      id: "startup-broken",
+      body: 'throw new Error("retained startup failure");',
+    });
+    const healthy = writePlugin({
+      id: "healthy-replacement",
+      body: "module.exports = { register() {} };",
+    });
+    const options = {
+      config: {
+        plugins: {
+          allow: [broken.id, healthy.id],
+          load: { paths: [broken.file, healthy.file] },
+          slots: { memory: "none" },
+        },
+      },
+      cache: false,
+    };
+    const previous = loadPluginRegistryHandle(options);
+    const retained = previous.plugins.find((entry) => entry.id === broken.id);
+    expect(retained).toMatchObject({ status: "error" });
+    expect(previous.plugins.find((entry) => entry.id === healthy.id)).toMatchObject({
+      status: "loaded",
+    });
+    fs.writeFileSync(healthy.file, 'throw new Error("new replacement failure");');
+    let failure: unknown;
+    try {
+      loadPluginRegistryHandle({
+        ...options,
+        previousRegistry: previous,
+        replacePluginIds: [healthy.id],
+        throwOnLoadError: true,
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(PluginLoadFailureError);
+    if (!(failure instanceof PluginLoadFailureError)) {
+      throw failure;
+    }
+    expect(failure.pluginIds).toEqual([healthy.id]);
+    expect(failure.message).not.toContain(broken.id);
+    expect(failure.registry.plugins.find((entry) => entry.id === broken.id)).toBe(retained);
+    expect(failure.registry.plugins.find((entry) => entry.id === healthy.id)).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("new replacement failure"),
+    });
+    expect(failure.registry.diagnostics).toEqual(expect.arrayContaining(previous.diagnostics));
   });
 
   it("continues to reuse healthy cached registries for strict loads", () => {
@@ -437,31 +623,30 @@ describe("resolvePluginLoadCacheContext", () => {
     expect(resolvePluginLoadCacheContext({ config: {} }).channelPluginLoadIntent).toBe("full");
   });
 
-  it("keys concrete runtime bindings by identity", () => {
-    const firstNodes = {} as PluginRuntime["nodes"];
-    const firstSubagent = {} as PluginRuntime["subagent"];
-    const firstOptions = {
-      config: {},
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-        nodes: firstNodes,
-        subagent: firstSubagent,
-      },
-    };
-    const firstKey = resolvePluginLoadCacheContext(firstOptions).cacheKey;
-
-    expect(resolvePluginLoadCacheContext(firstOptions).cacheKey).toBe(firstKey);
-    expect(
-      resolvePluginLoadCacheContext({
-        ...firstOptions,
+  it.each(["modelAuth", "modelConfig", "nodes", "subagent"] as const)(
+    "keys concrete %s bindings independently by identity",
+    (binding) => {
+      const firstOptions = {
+        config: {},
         runtimeOptions: {
-          ...firstOptions.runtimeOptions,
+          allowGatewaySubagentBinding: true,
+          modelAuth: resolveNativePluginModelAuth(),
+          modelConfig: resolveNativePluginModelConfig(),
           nodes: {} as PluginRuntime["nodes"],
           subagent: {} as PluginRuntime["subagent"],
         },
-      }).cacheKey,
-    ).not.toBe(firstKey);
-  });
+      };
+      const firstKey = resolvePluginLoadCacheContext(firstOptions).cacheKey;
+
+      expect(resolvePluginLoadCacheContext(firstOptions).cacheKey).toBe(firstKey);
+      expect(
+        resolvePluginLoadCacheContext({
+          ...firstOptions,
+          runtimeOptions: { ...firstOptions.runtimeOptions, [binding]: {} },
+        }).cacheKey,
+      ).not.toBe(firstKey);
+    },
+  );
 
   it("reuses prepared install records from the compatible metadata generation", () => {
     const { config, env, installRecords, snapshot, workspaceDir } = setLoaderMetadataSnapshot();
@@ -488,9 +673,11 @@ describe("resolvePluginLoadCacheContext", () => {
     };
     // Writing an installed index invalidates the current metadata generation,
     // so prepare the custom profile before installing the process snapshot.
-    writePersistedInstalledPluginIndexInstallRecordsSync(profileInstallRecords, {
+    refreshPersistedInstalledPluginIndex({
       env: profileEnv,
       candidates: [],
+      reason: "source-changed",
+      installRecords: profileInstallRecords,
     });
     const { config, env, installRecords, workspaceDir } = setLoaderMetadataSnapshot();
 
@@ -651,19 +838,19 @@ describe("clearPluginRegistryLoadCache", () => {
     (action) => {
       const original = createEmptyPluginRegistry();
       const candidate = createEmptyPluginRegistry();
-      pluginLoaderCacheState.set("original", original);
-      pluginLoaderCacheState.set("original-alias", original);
-      pluginLoaderCacheState.set("candidate", candidate);
-      pluginLoaderCacheState.set("candidate-alias", candidate);
+      getPluginLoaderCacheState().set("original", original);
+      getPluginLoaderCacheState().set("original-alias", original);
+      getPluginLoaderCacheState().set("candidate", candidate);
+      getPluginLoaderCacheState().set("candidate-alias", candidate);
       setActivePluginRegistry(original, "original");
       const snapshot = captureActivePluginRegistrySnapshot();
 
       stageActivePluginRegistry(candidate, "candidate", "default");
-      expect(pluginLoaderCacheState.get("original") === original).toBe(true);
-      expect(pluginLoaderCacheState.get("candidate") === candidate).toBe(true);
+      expect(getPluginLoaderCacheState().get("original") === original).toBe(true);
+      expect(getPluginLoaderCacheState().get("candidate") === candidate).toBe(true);
       // Reusing a key must not let the old value's retirement evict its successor.
-      pluginLoaderCacheState.set("reused-key", original);
-      pluginLoaderCacheState.set("reused-key", candidate);
+      getPluginLoaderCacheState().set("reused-key", original);
+      getPluginLoaderCacheState().set("reused-key", candidate);
 
       if (action === "commit") {
         commitStagedPluginRegistry(original, candidate);
@@ -673,10 +860,10 @@ describe("clearPluginRegistryLoadCache", () => {
 
       const committed = action === "commit";
       for (const key of ["original", "original-alias"]) {
-        expect(pluginLoaderCacheState.get(key) === original).toBe(!committed);
+        expect(getPluginLoaderCacheState().get(key) === original).toBe(!committed);
       }
       for (const key of ["candidate", "candidate-alias", "reused-key"]) {
-        expect(pluginLoaderCacheState.get(key) === candidate).toBe(committed);
+        expect(getPluginLoaderCacheState().get(key) === candidate).toBe(committed);
       }
     },
   );
@@ -685,17 +872,22 @@ describe("clearPluginRegistryLoadCache", () => {
     "rebuilds plugin registrations after runtime %s with unchanged load options",
     async (retirement) => {
       useNoBundledPlugins();
+      const event = `retirement-probe-${retirement}`;
+      const cleanup = vi.fn();
+      process.on(event, cleanup);
+      onTestFinished(() => {
+        process.off(event, cleanup);
+      });
       const plugin = writePlugin({
         id: "retirement-probe",
         body: `module.exports = {
           id: "retirement-probe",
           register(api) {
-            let closed = false;
-            api.registerRuntimeLifecycle({ id: "close", cleanup() { closed = true; } });
+            api.registerRuntimeLifecycle({ id: "close", cleanup() { process.emit(${JSON.stringify(event)}); } });
             api.registerTool({
               name: "retirement_probe", description: "Read fixture lifetime",
               parameters: { type: "object", properties: {} },
-              execute() { return { content: [{ type: "text", text: closed ? "closed" : "live" }] }; },
+              execute() { return { content: [{ type: "text", text: "live" }] }; },
             });
           },
         };`,
@@ -717,14 +909,17 @@ describe("clearPluginRegistryLoadCache", () => {
           },
         },
       };
-      const read = async (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+      const resolveTool = (registry: ReturnType<typeof loadOpenClawPlugins>) => {
         const tool = registry.tools[0]!.factory({ config: options.config });
         if (!tool || Array.isArray(tool)) {
           throw new Error("expected one lifetime probe tool");
         }
-        return await tool.execute("probe", {});
+        return tool;
       };
+      const read = async (registry: ReturnType<typeof loadOpenClawPlugins>) =>
+        await resolveTool(registry).execute("probe", {});
       const original = loadOpenClawPlugins(options);
+      const retainedTool = resolveTool(original);
       const originalKey = resolvePluginLoadCacheContext(options).cacheKey;
       expect(loadOpenClawPlugins(options)).toBe(original);
       expect(await read(original)).toMatchObject({ content: [{ text: "live" }] });
@@ -736,17 +931,19 @@ describe("clearPluginRegistryLoadCache", () => {
         const replacement = loadOpenClawPlugins(replacementOptions);
         expect(replacement).not.toBe(original);
         expect(await read(replacement)).toMatchObject({ content: [{ text: "live" }] });
-        await vi.waitFor(async () => {
-          expect(await read(original)).toMatchObject({ content: [{ text: "closed" }] });
-        });
+        await vi.waitFor(() => expect(cleanup).toHaveBeenCalledTimes(1));
         expect(loadOpenClawPlugins(replacementOptions)).toBe(replacement);
         expect(
-          pluginLoaderCacheState.get(resolvePluginLoadCacheContext(replacementOptions).cacheKey),
+          getPluginLoaderCacheState().get(
+            resolvePluginLoadCacheContext(replacementOptions).cacheKey,
+          ),
         ).toBe(replacement);
       }
 
-      expect(pluginLoaderCacheState.get(originalKey) === undefined).toBe(true);
-      expect(await read(original)).toMatchObject({ content: [{ text: "closed" }] });
+      expect(getPluginLoaderCacheState().get(originalKey) === undefined).toBe(true);
+      expect(cleanup).toHaveBeenCalledTimes(1);
+      await expect(read(original)).rejects.toThrow(/reloaded or disabled/);
+      expect(() => retainedTool.execute("probe", {})).toThrow(/reloaded or disabled/);
       const reloaded = loadOpenClawPlugins(options);
       expect(await read(reloaded)).toMatchObject({ content: [{ text: "live" }] });
       expect(reloaded).not.toBe(original);

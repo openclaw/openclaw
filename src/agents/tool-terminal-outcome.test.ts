@@ -9,11 +9,40 @@ import {
 } from "./agent-tools.before-tool-call.state.js";
 import { buildPayloads } from "./embedded-agent-runner/run/payloads.test-helpers.js";
 import { inferToolMetaFromArgsCore } from "./tool-display.js";
-import { consumeToolEffectReceipt, registerToolEffectReceipt } from "./tool-effect-receipt.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 
 describe("tool terminal outcome observer", () => {
   afterEach(() => resetAdjustedParamsByToolCallIdForTests());
+
+  it("retains a genuine message failure across suppression until a real send succeeds", () => {
+    const observe = createToolTerminalObserver("run-suppression");
+    const suppression = {
+      toolName: "message",
+      arguments: { action: "send", target: "123", message: "omitted" },
+      outcome: "success" as const,
+      result: { details: { status: "suppressed", reason: "cancelled_by_message_sending_hook" } },
+    };
+    expect(observe(suppression).lastToolError).toBeUndefined();
+    observe({
+      toolName: "message",
+      arguments: { action: "send", target: "123", message: "failed" },
+      outcome: "failure",
+      failure: { error: "Telegram transport failed" },
+    });
+    const afterSuppression = observe(suppression);
+    expect(afterSuppression.lastToolError).toMatchObject({ error: "Telegram transport failed" });
+    expect(buildPayloads({ lastToolError: afterSuppression.lastToolError })).toEqual([
+      expect.objectContaining({ isError: true }),
+    ]);
+    expect(
+      observe({
+        toolName: "message",
+        arguments: { action: "send", target: "123", message: "delivered" },
+        outcome: "success",
+        result: { details: { ok: true, messageId: "sent-1" } },
+      }).lastToolError,
+    ).toBeUndefined();
+  });
 
   it("keeps the latest failure when a different tool succeeds", () => {
     const observe = createToolTerminalObserver("run-1");
@@ -195,14 +224,6 @@ describe("tool terminal outcome observer", () => {
     });
   });
 
-  it("binds effect receipts to one exact host-owned result", () => {
-    const result = registerToolEffectReceipt({ status: "failed" }, { state: "failed_no_effect" });
-
-    expect(consumeToolEffectReceipt({ ...result })).toBeUndefined();
-    expect(consumeToolEffectReceipt(result)).toEqual({ state: "failed_no_effect" });
-    expect(consumeToolEffectReceipt(result)).toBeUndefined();
-  });
-
   it("clears a failed sessions_spawn once a retry with adjusted arguments succeeds", () => {
     const observe = createToolTerminalObserver("run-spawn-retry");
     const failedArgs = {
@@ -272,6 +293,70 @@ describe("tool terminal outcome observer", () => {
       }),
     ).toMatchObject({ executionStarted: true, sideEffectEvidence: false });
   });
+
+  it.each([
+    {
+      name: "keyword fallback",
+      timedOut: true,
+      timeoutMs: 30_000,
+      results: [{ path: "memory/one.md" }, { path: "memory/two.md" }],
+      expected: "⚠️ Memory Search timed out after 30s; 2 partial results are available.",
+    },
+    {
+      name: "one keyword match",
+      timedOut: true,
+      timeoutMs: 30_000,
+      results: [{ path: "memory/one.md" }],
+      expected: "⚠️ Memory Search timed out after 30s; 1 partial result is available.",
+    },
+    {
+      name: "no fallback",
+      timedOut: true,
+      timeoutMs: 30_000,
+      results: [],
+      expected: "⚠️ Memory Search timed out after 30s.",
+    },
+    {
+      name: "provider error with timeout wording",
+      timedOut: false,
+      timeoutMs: 30_000,
+      results: [],
+      expected: "⚠️ Memory Search failed",
+    },
+    {
+      name: "invalid timeout metadata",
+      timedOut: true,
+      timeoutMs: -1,
+      results: [],
+      expected: "⚠️ Memory Search failed",
+    },
+  ])(
+    "preserves $name in the final timeout warning",
+    ({ timedOut, timeoutMs, results, expected }) => {
+      const terminal = createToolTerminalObserver("run-memory-timeout")({
+        toolName: "memory_search",
+        arguments: { query: "project notes" },
+        outcome: "failure",
+        result: {
+          details: {
+            timedOut,
+            timeoutMs,
+            partial: true,
+            results,
+            error: "memory_search timed out after 30s: PRIVATE_PROVIDER_DIAGNOSTIC",
+          },
+        },
+        failure: { error: "memory_search timed out after 30s: PRIVATE_PROVIDER_DIAGNOSTIC" },
+      });
+
+      const payloads = buildPayloads({
+        lastToolError: terminal.lastToolError,
+        verboseLevel: "off",
+      });
+      expect(payloads).toEqual([expect.objectContaining({ text: expected, isError: true })]);
+      expect(terminal.sideEffectEvidence).toBe(true);
+    },
+  );
 
   it("treats the assistant reply as authoritative after a failed persistence call", () => {
     const observation = {

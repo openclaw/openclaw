@@ -1,8 +1,9 @@
 // Signal plugin module implements setup core behavior.
-import { normalizeAccountId, resolveAccountEntry } from "openclaw/plugin-sdk/account-resolution";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import { parseAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
+import { patchTopLevelChannelConfigSection } from "openclaw/plugin-sdk/setup";
 import {
   createCliPathTextInput,
   createDelegatedSetupWizardProxy,
@@ -26,6 +27,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveSignalAccountEntry, resolveSignalAccountKey } from "./account-selection.js";
 import type { SignalTransportConfig } from "./account-types.js";
 import { resolveDefaultSignalAccountId, resolveSignalAccount } from "./accounts.js";
 import {
@@ -210,7 +212,7 @@ function resolveSignalSetupAccount(params: {
     params.accountId ?? resolveDefaultSignalAccountId(params.cfg),
   );
   const signal = params.cfg.channels?.signal;
-  const account = resolveAccountEntry(signal?.accounts, accountId);
+  const account = resolveSignalAccountEntry(signal?.accounts, accountId);
   return account?.account ?? signal?.account;
 }
 
@@ -360,32 +362,23 @@ const signalSetupAdapterBase = createPatchedAccountSetupAdapter<SignalSetupInput
 
 function restorePromotedSignalDefaultAccount(cfg: OpenClawConfig): OpenClawConfig {
   const signal = cfg.channels?.signal;
-  const promoted = signal?.accounts?.[DEFAULT_ACCOUNT_ID];
-  if (!signal?.transport || signal.account || !promoted?.account) {
+  const promotedKey = resolveSignalAccountKey(signal?.accounts, DEFAULT_ACCOUNT_ID);
+  const promoted = promotedKey === undefined ? undefined : signal?.accounts?.[promotedKey];
+  if (!signal?.transport || signal.account || !promoted?.account || promotedKey === undefined) {
     return cfg;
   }
   const { account, transport: _shadowedTransport, ...remainingDefault } = promoted;
   const accounts = { ...signal.accounts };
-  if (Object.keys(remainingDefault).length === 0) {
-    delete accounts[DEFAULT_ACCOUNT_ID];
-  } else {
-    accounts[DEFAULT_ACCOUNT_ID] = remainingDefault;
-  }
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      signal: {
-        ...signal,
-        account,
-        accounts,
-      },
-    },
-  };
+  delete accounts[promotedKey];
+  // Retain the canonical winner after its number moves to root, including an empty entry.
+  accounts[DEFAULT_ACCOUNT_ID] = remainingDefault;
+  return patchTopLevelChannelConfigSection({ cfg, channel, patch: { account, accounts } });
 }
 
 export const signalSetupAdapter: ChannelSetupAdapter<SignalSetupInput> = {
   ...signalSetupAdapterBase,
+  // Named accounts inherit the root number; moving it would change existing routes.
+  namedAccountPromotionKeys: [],
   prepareAccountConfigInput: ({ cfg, accountId, input }) =>
     prepareSignalSetupInput({ cfg, accountId, input }),
   singleAccountKeysToMove: [

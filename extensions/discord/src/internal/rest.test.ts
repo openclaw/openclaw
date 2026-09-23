@@ -851,10 +851,7 @@ describe("RequestClient", () => {
       expect(init?.headers).toBeInstanceOf(Headers);
       expect((init!.headers as Headers).get("Content-Type")).toBeNull();
       expect(init?.body).toBeInstanceOf(FormData);
-      return new Response(JSON.stringify({ id: "msg" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+      return Response.json({ id: "msg" });
     });
     const client = new RequestClient("test-token", { fetch: fetchSpy, queueRequests: false });
 

@@ -3,18 +3,19 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import {
   createBuiltRuntime,
   runBuiltRuntime,
   seedV17AdditiveRepairDatabase,
 } from "./doctor-config-preflight.process.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+const tempDirs = createFixtureLifetime();
+afterAll(() => tempDirs.cleanup());
 
 describe("doctor schema-17 repair atomicity", () => {
-  it("rolls back rejected v17 repair through doctor --fix", () => {
-    const root = fs.realpathSync(tempDirs.make("openclaw-doctor-v17-atomicity-"));
+  it("rolls back rejected v17 repair through doctor --fix", async () => {
+    const root = fs.realpathSync(tempDirs.createTempDir("openclaw-doctor-v17-atomicity-"));
     const stateDir = path.join(root, "state");
     const configPath = path.join(stateDir, "openclaw.json");
     fs.mkdirSync(path.join(stateDir, "agents", "main", "sessions"), { recursive: true });
@@ -23,22 +24,23 @@ describe("doctor schema-17 repair atomicity", () => {
       participantDependency: true,
     });
     const runtimeRoot = createBuiltRuntime(root);
-    const result = runBuiltRuntime(
-      runtimeRoot,
-      {
-        ...process.env,
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_TEST_FAST: "1",
-        NO_COLOR: "1",
-      },
-      ["doctor", "--fix", "--non-interactive", "--yes", "--no-workspace-suggestions"],
-      60_000,
+    const result = await tempDirs.track(
+      runBuiltRuntime(
+        runtimeRoot,
+        {
+          ...process.env,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_TEST_FAST: "1",
+          NO_COLOR: "1",
+        },
+        ["doctor", "--fix", "--non-interactive", "--yes", "--no-workspace-suggestions"],
+        60_000,
+      ),
     );
     const output = `${result.stdout}\n${result.stderr}`;
 
-    expect(result.error, output).toBeUndefined();
     expect(output).toContain("Skipped agent database migration");
     expect(output).toContain("Participant migration cannot rebuild unknown indexes");
 

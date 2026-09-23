@@ -1,4 +1,3 @@
-// Feishu plugin module implements channel behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-resolution";
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
@@ -18,8 +17,6 @@ import {
   defineChannelMessageAdapter,
   createRuntimeOutboundDelegates,
   createAccountStatusSink,
-  type ChannelMessageSendResult,
-  type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
@@ -36,6 +33,7 @@ import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-run
 import { resolveLegacyInteractiveTextFallback } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { patchTopLevelChannelConfigSection } from "openclaw/plugin-sdk/setup";
 import {
   buildProbeChannelStatusSummary,
   createComputedAccountStatusAdapter,
@@ -93,6 +91,7 @@ import { resolveFeishuGroupToolPolicy } from "./policy.js";
 import {
   assertFeishuCardWithinEnvelope,
   buildFeishuPresentationCard,
+  feishuCardWithinTableLimit,
   FEISHU_PRESENTATION_CAPABILITIES,
   isFeishuCardWithinEnvelope,
   resolveFeishuRichReply,
@@ -108,7 +107,8 @@ import {
 } from "./read-policy.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { collectFeishuSecurityAuditFindings } from "./security-audit.js";
-import { createFeishuSendReceipt } from "./send-result.js";
+import { withFeishuRequestContext, withFeishuSendContext } from "./send-context.js";
+import { toFeishuMessageSendResult } from "./send-result.js";
 import { resolveFeishuSessionConversation } from "./session-conversation.js";
 import { resolveFeishuOutboundSessionRoute } from "./session-route.js";
 import { feishuSetupContract } from "./setup-core.js";
@@ -305,23 +305,6 @@ const resolveFeishuMediaSender = () =>
     unavailableMessage: "Feishu media sending is not available.",
   });
 
-function toFeishuMessageSendResult(
-  result: { messageId?: string; chatId?: string; receipt?: ChannelMessageSendResult["receipt"] },
-  kind: MessageReceiptPartKind,
-): ChannelMessageSendResult {
-  const receipt =
-    result.receipt ??
-    createFeishuSendReceipt({
-      messageId: result.messageId,
-      chatId: result.chatId ?? "",
-      kind,
-    });
-  return {
-    messageId: result.messageId || receipt.primaryPlatformMessageId,
-    receipt,
-  };
-}
-
 const feishuMessageAdapter = defineChannelMessageAdapter({
   id: "feishu",
   durableFinal: {
@@ -426,7 +409,7 @@ const collectFeishuSecurityWarnings = createAllowlistProviderGroupPolicyWarningC
 const collectFeishuOpenGroupFindings = createConditionalWarningCollector.findings({
   collectWarnings: collectFeishuSecurityWarnings,
   checkId: "channels.feishu.groups.open",
-  severity: "critical",
+  severity: "warn",
   title: "Feishu security warning",
 });
 
@@ -1009,6 +992,7 @@ async function requireAuthorizedFeishuMessage(
   params: Parameters<typeof getAuthorizedFeishuMessage>[0],
 ) {
   const message = await getAuthorizedFeishuMessage(params);
+  params.ctx.assertDirectAdapterHandoff?.();
   if (!message) {
     throw new Error(`Feishu message not found: ${params.messageId}`);
   }
@@ -1121,7 +1105,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       mentions: {
         stripPatterns: () => ['<at user_id="[^"]*">[^<]*</at>'],
       },
-      reload: { configPrefixes: ["channels.feishu"] },
+      reload: { configPrefixes: ["channels.feishu"], noopPrefixes: ["messages.inbound"] },
       doctor: feishuDoctor,
       configSchema: FeishuChannelConfigSchema,
       config: {
@@ -1147,16 +1131,13 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           const accounts = { ...feishuCfg?.accounts };
           delete accounts[accountId];
 
-          return {
-            ...cfg,
-            channels: {
-              ...cfg.channels,
-              feishu: {
-                ...feishuCfg,
-                accounts: Object.keys(accounts).length > 0 ? accounts : undefined,
-              },
+          return patchTopLevelChannelConfigSection({
+            cfg,
+            channel: "feishu",
+            patch: {
+              accounts: Object.keys(accounts).length > 0 ? accounts : undefined,
             },
-          };
+          });
         },
         isConfigured: (account) => account.configured,
         describeAccount: (account) =>
@@ -1176,9 +1157,19 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       },
       actions: {
         providerOwnedReadGates: true,
+        readAuthorityActions: [
+          "read",
+          "reactions",
+          "list-pins",
+          "member-info",
+          "channel-info",
+          "channel-list",
+          "sticker-search",
+        ],
         messageActionTargetAliases,
         describeMessageTool: describeFeishuMessageTool,
         handleAction: async (ctx) => {
+          const { assertDirectAdapterHandoff } = ctx;
           const account = resolveFeishuAccount({
             cfg: ctx.cfg,
             accountId: ctx.accountId ?? undefined,
@@ -1230,6 +1221,10 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             return jsonActionResult({ ok: true, channel: "feishu", action: "sticker", ...result });
           }
           if (ctx.action === "send" || ctx.action === "thread-reply") {
+            const sendContext = {
+              assertDirectAdapterHandoff,
+              onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+            };
             const to = resolveFeishuActionTarget(ctx);
             if (!to) {
               throw new Error(`Feishu ${ctx.action} requires a target (to).`);
@@ -1262,7 +1257,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 })
               : undefined;
             const presentationCard =
-              generatedCard && isFeishuCardWithinEnvelope(generatedCard)
+              generatedCard &&
+              feishuCardWithinTableLimit(generatedCard) &&
+              isFeishuCardWithinEnvelope(generatedCard)
                 ? generatedCard
                 : undefined;
             const presentationFellBack = Boolean(generatedCard && !presentationCard);
@@ -1295,6 +1292,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               // structured presentation; never expose it in the text fallback.
               const fallbackText = textCard ? undefined : text;
               result = await sendPayload({
+                ...sendContext,
                 cfg: ctx.cfg,
                 to,
                 text: fallbackText ?? "",
@@ -1333,16 +1331,19 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                   "Feishu card buttons that trigger text or commands must use structured interaction envelopes.",
                 );
               }
-              result = await runtime.sendCardFeishu({
-                cfg: ctx.cfg,
-                to,
-                card,
-                accountId: ctx.accountId ?? undefined,
-                replyToMessageId,
-                replyInThread,
-              });
+              result = await withFeishuSendContext(sendContext, () =>
+                runtime.sendCardFeishu({
+                  cfg: ctx.cfg,
+                  to,
+                  card,
+                  accountId: ctx.accountId ?? undefined,
+                  replyToMessageId,
+                  replyInThread,
+                }),
+              );
             } else {
               const outboundContext = {
+                ...sendContext,
                 cfg: ctx.cfg,
                 to,
                 text: text ?? "",
@@ -1408,79 +1409,71 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           }
 
           if (ctx.action === "edit") {
-            const messageId = resolveFeishuMessageId(ctx.params);
-            if (!messageId) {
-              throw new Error("Feishu edit requires messageId.");
-            }
-            const text = readFirstString(ctx.params, ["text", "message"]);
-            const card =
-              ctx.params.card && typeof ctx.params.card === "object"
-                ? (ctx.params.card as Record<string, unknown>)
-                : undefined;
-            const runtime = await loadFeishuChannelRuntime();
-            await requireAuthorizedFeishuMessage({
-              ctx,
-              account,
-              runtime,
-              messageId,
-            });
-            const result = await runtime.editMessageFeishu({
-              cfg: ctx.cfg,
-              messageId,
-              text,
-              card,
-              accountId: ctx.accountId ?? undefined,
-            });
-            return jsonActionResult({
-              ok: true,
-              channel: "feishu",
-              action: "edit",
-              ...result,
+            return withFeishuRequestContext(assertDirectAdapterHandoff, async () => {
+              const messageId = resolveFeishuMessageId(ctx.params);
+              if (!messageId) {
+                throw new Error("Feishu edit requires messageId.");
+              }
+              const text = readFirstString(ctx.params, ["text", "message"]);
+              const card =
+                ctx.params.card && typeof ctx.params.card === "object"
+                  ? (ctx.params.card as Record<string, unknown>)
+                  : undefined;
+              const runtime = await loadFeishuChannelRuntime();
+              await requireAuthorizedFeishuMessage({
+                ctx,
+                account,
+                runtime,
+                messageId,
+              });
+              const result = await runtime.editMessageFeishu({
+                cfg: ctx.cfg,
+                messageId,
+                text,
+                card,
+                accountId: ctx.accountId ?? undefined,
+              });
+              return jsonActionResult({
+                ok: true,
+                channel: "feishu",
+                action: "edit",
+                ...result,
+              });
             });
           }
 
-          if (ctx.action === "pin") {
-            const messageId = resolveFeishuMessageId(ctx.params);
-            if (!messageId) {
-              throw new Error("Feishu pin requires messageId.");
-            }
-            const runtime = await loadFeishuChannelRuntime();
-            await requireAuthorizedFeishuMessage({
-              ctx,
-              account,
-              runtime,
-              messageId,
-            });
-            const pin = await runtime.createPinFeishu({
-              cfg: ctx.cfg,
-              messageId,
-              accountId: ctx.accountId ?? undefined,
-            });
-            return jsonActionResult({ ok: true, channel: "feishu", action: "pin", pin });
-          }
-
-          if (ctx.action === "unpin") {
-            const messageId = resolveFeishuMessageId(ctx.params);
-            if (!messageId) {
-              throw new Error("Feishu unpin requires messageId.");
-            }
-            const runtime = await loadFeishuChannelRuntime();
-            await requireAuthorizedFeishuMessage({
-              ctx,
-              account,
-              runtime,
-              messageId,
-            });
-            await runtime.removePinFeishu({
-              cfg: ctx.cfg,
-              messageId,
-              accountId: ctx.accountId ?? undefined,
-            });
-            return jsonActionResult({
-              ok: true,
-              channel: "feishu",
-              action: "unpin",
-              messageId,
+          if (ctx.action === "pin" || ctx.action === "unpin") {
+            return withFeishuRequestContext(assertDirectAdapterHandoff, async () => {
+              const messageId = resolveFeishuMessageId(ctx.params);
+              if (!messageId) {
+                throw new Error(`Feishu ${ctx.action} requires messageId.`);
+              }
+              const runtime = await loadFeishuChannelRuntime();
+              await requireAuthorizedFeishuMessage({
+                ctx,
+                account,
+                runtime,
+                messageId,
+              });
+              if (ctx.action === "pin") {
+                const pin = await runtime.createPinFeishu({
+                  cfg: ctx.cfg,
+                  messageId,
+                  accountId: ctx.accountId ?? undefined,
+                });
+                return jsonActionResult({ ok: true, channel: "feishu", action: "pin", pin });
+              }
+              await runtime.removePinFeishu({
+                cfg: ctx.cfg,
+                messageId,
+                accountId: ctx.accountId ?? undefined,
+              });
+              return jsonActionResult({
+                ok: true,
+                channel: "feishu",
+                action: "unpin",
+                messageId,
+              });
             });
           }
 
@@ -1720,16 +1713,83 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           }
 
           if (ctx.action === "react") {
-            const messageId = resolveFeishuMessageId(ctx.params);
-            if (!messageId) {
-              throw new Error("Feishu reaction requires messageId.");
-            }
-            const emoji = typeof ctx.params.emoji === "string" ? ctx.params.emoji.trim() : "";
-            const remove = ctx.params.remove === true;
-            const clearAll = ctx.params.clearAll === true;
-            if (remove) {
+            return withFeishuRequestContext(assertDirectAdapterHandoff, async () => {
+              const messageId = resolveFeishuMessageId(ctx.params);
+              if (!messageId) {
+                throw new Error("Feishu reaction requires messageId.");
+              }
+              const emoji = typeof ctx.params.emoji === "string" ? ctx.params.emoji.trim() : "";
+              const remove = ctx.params.remove === true;
+              const clearAll = ctx.params.clearAll === true;
+              if (remove) {
+                if (!emoji) {
+                  throw new Error("Emoji is required to remove a Feishu reaction.");
+                }
+                const runtime = await loadFeishuChannelRuntime();
+                await requireAuthorizedFeishuMessage({
+                  ctx,
+                  account,
+                  runtime,
+                  messageId,
+                });
+                const matches = await runtime.listReactionsFeishu({
+                  cfg: ctx.cfg,
+                  messageId,
+                  emojiType: emoji,
+                  accountId: ctx.accountId ?? undefined,
+                });
+                const ownReaction = matches.find(
+                  (entry) =>
+                    entry.operatorType === "app" &&
+                    Boolean(account.appId) &&
+                    entry.operatorId === account.appId,
+                );
+                if (!ownReaction) {
+                  return jsonActionResult({ ok: true, removed: null });
+                }
+                await runtime.removeReactionFeishu({
+                  cfg: ctx.cfg,
+                  messageId,
+                  reactionId: ownReaction.reactionId,
+                  accountId: ctx.accountId ?? undefined,
+                });
+                return jsonActionResult({ ok: true, removed: emoji });
+              }
               if (!emoji) {
-                throw new Error("Emoji is required to remove a Feishu reaction.");
+                if (!clearAll) {
+                  throw new Error(
+                    "Emoji is required to add a Feishu reaction. Set clearAll=true to remove all bot reactions.",
+                  );
+                }
+                const runtime = await loadFeishuChannelRuntime();
+                await requireAuthorizedFeishuMessage({
+                  ctx,
+                  account,
+                  runtime,
+                  messageId,
+                });
+                const reactions = await runtime.listReactionsFeishu({
+                  cfg: ctx.cfg,
+                  messageId,
+                  accountId: ctx.accountId ?? undefined,
+                });
+                let removed = 0;
+                const ownReactions = reactions.filter(
+                  (entry) =>
+                    entry.operatorType === "app" &&
+                    Boolean(account.appId) &&
+                    entry.operatorId === account.appId,
+                );
+                for (const reaction of ownReactions) {
+                  await runtime.removeReactionFeishu({
+                    cfg: ctx.cfg,
+                    messageId,
+                    reactionId: reaction.reactionId,
+                    accountId: ctx.accountId ?? undefined,
+                  });
+                  removed += 1;
+                }
+                return jsonActionResult({ ok: true, removed });
               }
               const runtime = await loadFeishuChannelRuntime();
               await requireAuthorizedFeishuMessage({
@@ -1738,79 +1798,14 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 runtime,
                 messageId,
               });
-              const matches = await runtime.listReactionsFeishu({
+              await runtime.addReactionFeishu({
                 cfg: ctx.cfg,
                 messageId,
                 emojiType: emoji,
                 accountId: ctx.accountId ?? undefined,
               });
-              const ownReaction = matches.find(
-                (entry) =>
-                  entry.operatorType === "app" &&
-                  Boolean(account.appId) &&
-                  entry.operatorId === account.appId,
-              );
-              if (!ownReaction) {
-                return jsonActionResult({ ok: true, removed: null });
-              }
-              await runtime.removeReactionFeishu({
-                cfg: ctx.cfg,
-                messageId,
-                reactionId: ownReaction.reactionId,
-                accountId: ctx.accountId ?? undefined,
-              });
-              return jsonActionResult({ ok: true, removed: emoji });
-            }
-            if (!emoji) {
-              if (!clearAll) {
-                throw new Error(
-                  "Emoji is required to add a Feishu reaction. Set clearAll=true to remove all bot reactions.",
-                );
-              }
-              const runtime = await loadFeishuChannelRuntime();
-              await requireAuthorizedFeishuMessage({
-                ctx,
-                account,
-                runtime,
-                messageId,
-              });
-              const reactions = await runtime.listReactionsFeishu({
-                cfg: ctx.cfg,
-                messageId,
-                accountId: ctx.accountId ?? undefined,
-              });
-              let removed = 0;
-              const ownReactions = reactions.filter(
-                (entry) =>
-                  entry.operatorType === "app" &&
-                  Boolean(account.appId) &&
-                  entry.operatorId === account.appId,
-              );
-              for (const reaction of ownReactions) {
-                await runtime.removeReactionFeishu({
-                  cfg: ctx.cfg,
-                  messageId,
-                  reactionId: reaction.reactionId,
-                  accountId: ctx.accountId ?? undefined,
-                });
-                removed += 1;
-              }
-              return jsonActionResult({ ok: true, removed });
-            }
-            const runtime = await loadFeishuChannelRuntime();
-            await requireAuthorizedFeishuMessage({
-              ctx,
-              account,
-              runtime,
-              messageId,
+              return jsonActionResult({ ok: true, added: emoji });
             });
-            await runtime.addReactionFeishu({
-              cfg: ctx.cfg,
-              messageId,
-              emojiType: emoji,
-              accountId: ctx.accountId ?? undefined,
-            });
-            return jsonActionResult({ ok: true, added: emoji });
           }
 
           if (ctx.action === "reactions") {

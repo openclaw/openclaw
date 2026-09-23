@@ -1,6 +1,8 @@
 /** Shared command-handler test harness and config fixtures. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getTaskFlowRegistryStore } from "../../tasks/task-flow-registry.store.js";
 import { configureTaskRegistryRuntime } from "../../tasks/task-registry.store.js";
+import { createInMemoryTaskRegistryStore } from "../../test-utils/task-registry-store.js";
 import type { MsgContext } from "../templating.js";
 import { buildCommandContext } from "./commands-context.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -61,20 +63,7 @@ export function buildCommandTestParams(
 
 export function configureInMemoryTaskRegistryStoreForTests(): void {
   configureTaskRegistryRuntime({
-    store: {
-      loadSnapshot: () => ({
-        tasks: new Map(),
-        deliveryStates: new Map(),
-      }),
-      saveSnapshot: () => {},
-      upsertTaskWithDeliveryState: () => {},
-      upsertTask: () => {},
-      deleteTaskWithDeliveryState: () => {},
-      deleteTask: () => {},
-      upsertDeliveryState: () => {},
-      deleteDeliveryState: () => {},
-      close: () => {},
-    },
+    store: createInMemoryTaskRegistryStore(undefined, getTaskFlowRegistryStore()),
   });
 }
 

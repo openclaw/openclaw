@@ -2,78 +2,17 @@
 
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
-import type { PresenceViewer } from "../../lib/presence-users.ts";
+import { SESSION_NAVIGATION_KEY_PARAM } from "../../lib/sessions/route-navigation.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
+import { createContext, createGateway, createSessions } from "../../test-helpers/app-sidebar.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { loadChatRoute } from "../chat/route-loader.ts";
+import { renderDashboards } from "../dashboards/view.ts";
+import { props, row } from "./session-activity-view.test-harness.ts";
 import { renderSessionActivityView } from "./session-activity-view.ts";
-
-function row(
-  key: string,
-  owner: { id: string; label?: string },
-  updatedAt: number,
-  overrides: Partial<GatewaySessionRow> = {},
-) {
-  const actor = {
-    type: "human" as const,
-    ...owner,
-    identity: { type: "profile" as const, id: owner.id },
-  };
-  return {
-    key,
-    kind: "direct",
-    displayName: key,
-    updatedAt,
-    createdActor: actor,
-    owner: { actor },
-    ...overrides,
-  } satisfies GatewaySessionRow;
-}
-
-function props({
-  rows = [],
-  ...overrides
-}: Partial<Parameters<typeof renderSessionActivityView>[0]> & {
-  rows?: GatewaySessionRow[];
-} = {}): Parameters<typeof renderSessionActivityView>[0] {
-  return {
-    context: {
-      basePath: "",
-      navigate: vi.fn(),
-      gateway: { snapshot: { hello: null } },
-      agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
-      agentSelection: { state: { selectedId: "main" } },
-      sessions: { state: { result: { sessions: [] } } },
-    } as unknown as ApplicationContext,
-    filters: { personId: null, query: "", time: "7d" as const },
-    presenceViewers: [] as PresenceViewer[],
-    result: {
-      ts: 1,
-      path: "",
-      count: rows.length,
-      sessions: rows,
-      defaults: { model: null, modelProvider: null, contextTokens: null },
-      people: [
-        {
-          identity: { type: "profile" as const, id: "online" },
-          label: "Online person",
-          sessionCount: 1,
-        },
-        {
-          identity: { type: "profile" as const, id: "offline" },
-          label: "Offline person",
-          sessionCount: 1,
-        },
-      ],
-    },
-    loading: false,
-    onRetry: vi.fn(),
-    expandedAutomationDays: new Set<string>(),
-    onAutomationDayToggle: vi.fn(),
-    onFiltersChange: vi.fn(),
-    ...overrides,
-  };
-}
 
 describe("session activity semantics", () => {
   afterEach(() => {
@@ -92,6 +31,181 @@ describe("session activity semantics", () => {
 
     expect(container.querySelectorAll("main")).toHaveLength(0);
   });
+
+  it.each(["missing", "stale"])(
+    "opens the displayed Activity rows when the sidebar is %s",
+    (sidebar) => {
+      const rows = (["chat", "dashboard"] as const).map((face, index) =>
+        row(
+          `agent:research:${face}:12345678-90ab-cdef-1234-567890abcde${index}`,
+          { id: "owner" },
+          Date.now(),
+          { boardFace: face, displayName: `Research ${face}` },
+        ),
+      );
+      const input = props({ rows });
+      input.context = {
+        ...input.context,
+        basePath: "/control",
+        agentSelection: { state: { selectedId: "other" } },
+        sessions: {
+          state: {
+            agentId: "other",
+            result: {
+              sessions:
+                sidebar === "missing"
+                  ? []
+                  : rows.map((session) => ({ ...session, displayName: "Old title" })),
+            },
+          },
+        },
+      } as unknown as ApplicationContext;
+      const container = document.createElement("div");
+      document.body.append(container);
+
+      render(renderSessionActivityView(input), container);
+
+      const links = container.querySelectorAll<HTMLAnchorElement>("[data-activity-session]");
+      expect(links).toHaveLength(rows.length);
+      for (const [index, session] of rows.entries()) {
+        const link = links[index]!;
+        const pathname = `/control/${session.boardFace}/research/research-${session.boardFace}-1234567890abcdef1234567890abcde${index}`;
+        expect(link.getAttribute("href")).toBe(pathname);
+        link.click();
+        expect(input.context.navigate).toHaveBeenLastCalledWith(session.boardFace, {
+          pathname,
+          search: `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(session.key)}`,
+        });
+      }
+    },
+  );
+
+  it.each([
+    ["workspace", "/control/chat/research", undefined],
+    ["global", "/control/chat/research", undefined],
+    [
+      "catalog:native:gateway%3Alocal:Thread-1",
+      "/control/chat/research",
+      "?catalog=native&host=gateway%3Alocal&thread=Thread-1",
+    ],
+  ] as const)(
+    "preserves configured main and selected-agent routing for %s",
+    (key, pathname, search) => {
+      const input = props({ rows: [row(key, { id: "owner" }, Date.now())] });
+      input.context = {
+        ...input.context,
+        basePath: "/control",
+        agents: {
+          state: {
+            agentsList: {
+              defaultId: "main",
+              mainKey: "workspace",
+              scope: key === "global" ? "global" : "per-sender",
+            },
+          },
+        },
+        agentSelection: { state: { selectedId: "research" } },
+      } as unknown as ApplicationContext;
+      const container = document.createElement("div");
+      document.body.append(container);
+
+      render(renderSessionActivityView(input), container);
+
+      const link = container.querySelector<HTMLAnchorElement>("[data-activity-session]")!;
+      expect(link.getAttribute("href")).toBe(`${pathname}${search ?? ""}`);
+      link.click();
+      expect(input.context.navigate).toHaveBeenCalledWith(
+        "chat",
+        search ? { pathname, search } : { pathname },
+      );
+    },
+  );
+
+  it.each(
+    (["activity", "dashboards"] as const).flatMap((surface) =>
+      (
+        [
+          ["unknown", false, null],
+          ["unknown", true, null],
+          ["global", false, null],
+          ["global", true, "global"],
+          ["agent:qa-writer:global", false, "agent:qa-writer:global"],
+        ] as const
+      ).map(([key, globalScope, expectedKey]) => ({ surface, key, globalScope, expectedKey })),
+    ),
+  )(
+    "$surface preserves $key identity with global scope $globalScope",
+    async ({ surface, key, globalScope, expectedKey }) => {
+      const session = row(key, { id: "owner" }, Date.now(), {
+        agentId: "qa-writer",
+        displayName: "Stored session",
+      });
+      const input = props({ rows: [session] });
+      const agentsList = {
+        defaultId: "main",
+        mainKey: "main",
+        scope: globalScope ? "global" : "per-sender",
+      } as const;
+      const request = vi.fn(async () => {
+        throw new Error(
+          "An exact Home or qualified literal open must not discover another session",
+        );
+      });
+      input.context = {
+        ...input.context,
+        agents: { state: { agentsList: { ...agentsList, agents: [] } } },
+        gateway: {
+          ...input.context.gateway,
+          snapshot: {
+            ...input.context.gateway.snapshot,
+            phase: "connected",
+            client: createTestGatewayClient(request),
+          },
+        },
+      } as unknown as ApplicationContext;
+      const container = document.createElement("div");
+      document.body.append(container);
+      render(
+        surface === "activity"
+          ? renderSessionActivityView(input)
+          : renderDashboards({
+              result: input.result!,
+              error: null,
+              basePath: "",
+              fallbackAgentId: "main",
+              mainKey: "main",
+              globalScope,
+            }),
+        container,
+      );
+      const item = container.querySelector<HTMLElement>(
+        surface === "activity" ? "[data-activity-session]" : ".dashboard-card__main",
+      )!;
+      expect(item.textContent).toContain("Stored session");
+      if (!expectedKey) {
+        expect(item.hasAttribute("href")).toBe(false);
+        item.click();
+        expect(input.context.navigate).not.toHaveBeenCalled();
+        return;
+      }
+      const href = item.getAttribute("href")!;
+      const loaded = await loadChatRoute(
+        input.context,
+        { pathname: href, search: "", hash: "" },
+        surface === "activity" ? "chat" : "dashboard",
+        new AbortController().signal,
+      );
+      expect(loaded).toMatchObject({ kind: "session" });
+      if (!("kind" in loaded) || loaded.kind !== "session") {
+        throw new Error("Expected a loaded session");
+      }
+      expect(resolveUiConversationIdentity({ agentsList }, loaded.sessionKey)).toEqual({
+        sessionKey: expectedKey,
+        agentId: "qa-writer",
+      });
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
 
   it("renders agent-owned sessions and profile pictures without making agents or channels people", async () => {
     setAvatarGatewayOrigin("https://gateway.example.test");
@@ -183,6 +297,47 @@ describe("session activity semantics", () => {
           .querySelector('[data-activity-session="Unattributed session"] img')
           ?.getAttribute("src"),
       ).toBe("blob:agent");
+    });
+  });
+
+  it("keeps human attribution beside the session agent's configured avatar and name", async () => {
+    const context = createContext(
+      createGateway(createTestGatewayClient(vi.fn(async () => ({})))),
+      createSessions("main", []),
+      {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "research", name: "Research partner", identity: { emoji: "🔬" } }],
+      },
+    );
+    const container = createApplicationContextProvider(context);
+    document.body.append(container);
+    render(
+      renderSessionActivityView(
+        props({
+          context,
+          rows: [
+            row("agent:research:review", { id: "person", label: "Alex Morgan" }, Date.now(), {
+              channel: "discord",
+            }),
+          ],
+        }),
+      ),
+      container,
+    );
+
+    await vi.waitFor(() => {
+      const session = container.querySelector('[data-activity-session="agent:research:review"]');
+      expect(session?.textContent).toContain("Alex Morgan");
+      expect(session?.textContent).toContain("Channel: discord");
+      expect(session?.textContent).not.toContain("Agent:");
+      expect(
+        session?.querySelector('[aria-label="Research partner (agent:research)"]'),
+      ).not.toBeNull();
+      expect(session?.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe(
+        "🔬",
+      );
     });
   });
 });
@@ -310,7 +465,9 @@ describe("session activity people filter", () => {
       });
       render(renderSessionActivityView({ ...input, result: undefined, loading: true }), container);
       expect(container.querySelector(".activity-feed__not-found")).toBeNull();
-      expect(container.querySelector('[role="status"]')?.textContent).toContain("Loading");
+      expect(
+        container.querySelector('.activity-feed__loading [role="status"]')?.textContent,
+      ).toContain("Loading");
 
       render(renderSessionActivityView(input), container);
       if (personId === "offline") {

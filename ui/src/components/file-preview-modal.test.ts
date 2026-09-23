@@ -1,9 +1,11 @@
 /* @vitest-environment jsdom */
 
+import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { i18n } from "../i18n/index.ts";
 import { OpenClawFilePreviewModal } from "./file-preview-modal.ts";
+import { icons } from "./icons.ts";
 
 type FilePreviewModalElement = HTMLElement & {
   files: typeof files;
@@ -80,6 +82,23 @@ describe("openclaw-file-preview-modal", () => {
     expect(shadowText(modal)).toContain("filters/auto-senders.txt");
     expect(shadowText(modal)).not.toContain("templates/digest.md");
     expect(shadowText(modal)).toContain("noreply@example.com");
+  });
+
+  it("uses the composer skill glyph for skill files but keeps ordinary Markdown icons", async () => {
+    const modal = await renderPreview({
+      activePath: "SKILL.md",
+      previewFiles: [
+        { path: "SKILL.md", size: "1 KB", contents: "Skill instructions" },
+        { path: "README.md", size: "1 KB", contents: "Documentation" },
+      ],
+    });
+    const reference = document.createElement("div");
+    render(icons.pencilSparkles, reference);
+    const expectedIcon = reference.querySelector("svg")?.outerHTML;
+    const skillIcon = modal.shadowRoot?.querySelector('[data-path="SKILL.md"] .item-icon svg');
+    const markdownIcon = modal.shadowRoot?.querySelector('[data-path="README.md"] .item-icon svg');
+    expect(skillIcon?.outerHTML).toBe(expectedIcon);
+    expect(markdownIcon?.outerHTML).not.toBe(expectedIcon);
   });
 
   it("shows the Escape shortcut only on the close button", async () => {
@@ -215,11 +234,13 @@ describe("openclaw-file-preview-modal", () => {
     expect(firstChunks.map((chunk) => chunk.textContent ?? "").join("\n")).toBe(firstContents);
 
     body!.scrollTop = 2200;
+    expect(body!.scrollTop).toBe(2200);
 
-    const updatedModal = await renderPreview({ activePath: "second.ts", previewFiles });
-    const updatedBody = updatedModal.shadowRoot?.querySelector<HTMLElement>(".detail-body");
+    modal.activePath = "second.ts";
+    await modal.updateComplete;
+    const updatedBody = modal.shadowRoot?.querySelector<HTMLElement>(".detail-body");
     const secondChunks = [
-      ...(updatedModal.shadowRoot?.querySelectorAll<HTMLElement>(".code-chunk") ?? []),
+      ...(modal.shadowRoot?.querySelectorAll<HTMLElement>(".code-chunk") ?? []),
     ];
 
     expect(updatedBody?.scrollTop).toBe(0);

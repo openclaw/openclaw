@@ -28,8 +28,6 @@ export default class VitestResourceReporter implements Reporter {
       arch: process.arch,
       ...detectVitestHostInfo(),
       osLogicalCpuCount: os.cpus().length,
-      constrainedMemoryBytes: process.constrainedMemory(),
-      availableMemoryBytes: process.availableMemory(),
       rootMaxWorkers: ctx.config.maxWorkers ?? null,
     });
   }
@@ -48,13 +46,13 @@ export default class VitestResourceReporter implements Reporter {
         name: project.name,
         files,
         configuredPool: config.pool,
-        maxWorkers: config.maxWorkers ?? null,
+        // V5 resolves fileParallelism into the effective worker limit.
+        maxWorkers: config.maxWorkers ?? project.vitest.config.maxWorkers ?? null,
         isolate: config.isolate,
         browser: {
           enabled: config.browser.enabled,
           headless: config.browser.headless,
-          fileParallelism: config.browser.fileParallelism,
-          isolate: config.browser.isolate,
+          isolate: config.isolate,
         },
       });
     }

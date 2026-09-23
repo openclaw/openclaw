@@ -1,8 +1,8 @@
-// Matrix plugin module implements actions behavior.
 export {
   sendMatrixMessage,
   editMatrixMessage,
   deleteMatrixMessage,
+  readMatrixMessage,
   readMatrixMessages,
 } from "./actions/messages.js";
 export { voteMatrixPoll } from "./actions/polls.js";

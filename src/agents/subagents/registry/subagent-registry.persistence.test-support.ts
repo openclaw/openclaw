@@ -14,10 +14,20 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
-import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
+import {
+  getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
+} from "../../../process/gateway-work-admission.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import type { captureTaskDeliveryWork } from "../../../tasks/task-registry-delivery.test-support.js";
+import { captureTaskRegistryReadFence } from "../../../tasks/task-registry-listener-state.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
-import type { SubagentRegistryDeps } from "./subagent-registry-deps.js";
+import {
+  createSubagentRunRecord,
+  type SubagentRunRecordOverrides,
+} from "../../subagent-test-fixtures.test-helpers.js";
+import type { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type SessionStore = Record<string, Record<string, unknown>>;
@@ -36,11 +46,11 @@ export function expectDeferredSubagentAnnouncement(
 
 /** Hold the real lazy settlement dependency without replacing its completion policy. */
 export function gateSubagentRequesterSettlement(
-  settle: SubagentRegistryDeps["maybeWakeRequesterAfterAllChildrenSettled"],
+  settle: typeof maybeWakeRequesterAfterAllChildrenSettled,
 ) {
   const released = createDeferred();
   let pending: Promise<boolean> | undefined;
-  const run = vi.fn<SubagentRegistryDeps["maybeWakeRequesterAfterAllChildrenSettled"]>((params) => {
+  const run = vi.fn<typeof maybeWakeRequesterAfterAllChildrenSettled>((params) => {
     pending = (async () => {
       await released.promise;
       return await settle(params);
@@ -57,17 +67,50 @@ export function gateSubagentRequesterSettlement(
 }
 
 /** Gates owned by a test must be released before waiting for imports and detached tails. */
-export async function settleSubagentRegistryPersistenceWork() {
+export async function settleSubagentRegistryPersistenceWork(
+  deliveries?: ReturnType<typeof captureTaskDeliveryWork>,
+) {
   await vi.dynamicImportSettled();
-  await vi.waitFor(() =>
-    expect(getActiveGatewayRootWorkCount(), "residual registry roots").toBe(0),
-  );
+  // Accepted task events can outlive both reset and synchronous task reads.
+  const failures: unknown[] = [];
+  try {
+    await captureTaskRegistryReadFence(captureOpenClawStateWorkerContext().admission);
+  } catch (error) {
+    failures.push(error);
+  }
+  // A committed event can publish delivery even when its own cleanup failed.
+  try {
+    await deliveries?.settle();
+  } catch (error) {
+    failures.push(error);
+  }
+  // Terminal notification writes run off the Gateway thread, so uncaptured
+  // deliveries can outlive the default fence on a loaded runner.
+  try {
+    await vi.waitFor(
+      () => {
+        const holders = getActiveGatewayRootWorkHolders();
+        expect(
+          getActiveGatewayRootWorkCount(),
+          `residual registry roots: ${holders.join(", ") || "unattributed"}`,
+        ).toBe(0);
+      },
+      { timeout: 10_000 },
+    );
+  } catch (error) {
+    failures.push(error);
+  }
+  if (failures.length === 1) {
+    throw failures[0];
+  }
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Subagent registry fixture work failed");
+  }
 }
 
 type PersistenceCleanup = {
   stateDir: string;
   resetRegistry: () => void;
-  resetDeps: () => void;
   closeDatabases?: () => void | Promise<void>;
 };
 
@@ -76,7 +119,6 @@ export async function cleanupSubagentRegistryPersistenceTest(params: Persistence
   params.resetRegistry();
   await cleanupSessionStateForTest({ stateDir: params.stateDir });
   await params.closeDatabases?.();
-  params.resetDeps();
   await fs.rm(params.stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 }
 
@@ -182,23 +224,84 @@ export async function removeSubagentSessionEntry(params: {
   return storePath;
 }
 
-/** Builds default dependency mocks used by subagent registry persistence tests. */
-export function createSubagentRegistryTestDeps(
-  extra: Record<string, unknown> = {},
-): Record<string, unknown> {
-  return {
-    cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
-    captureSubagentCompletionReply: vi.fn(async () => undefined),
-    ensureContextEnginesInitialized: vi.fn(),
-    loadAgentRuntimePluginRegistryHandle: vi.fn(),
-    getRuntimeConfig: vi.fn(() => ({})),
-    resolveAgentTimeoutMs: vi.fn(() => 100),
-    resolveContextEngine: vi.fn(async () => ({
-      info: { id: "test", name: "Test", version: "0.0.1" },
-      ingest: vi.fn(async () => ({ ingested: false })),
-      assemble: vi.fn(async ({ messages }) => ({ messages, estimatedTokens: 0 })),
-      compact: vi.fn(async () => ({ ok: false, compacted: false })),
-    })),
-    ...extra,
-  };
+export function createDeliveredWake(
+  runId: string,
+  requesterSettleWake?: NonNullable<SubagentRunRecord["requesterSettleWake"]>,
+  overrides: Partial<SubagentRunRecordOverrides> = {},
+): SubagentRunRecord {
+  const endedAt = overrides.endedAt ?? Date.now();
+  return createSubagentRunRecord({
+    runId,
+    childSessionKey: `agent:main:subagent:${runId}`,
+    endedAt,
+    outcome: { status: "ok" },
+    expectsCompletionMessage: true,
+    completion: { required: true, resultText: "done", capturedAt: endedAt },
+    delivery: { status: "delivered", deliveredAt: endedAt },
+    cleanupHandled: true,
+    cleanupCompletedAt: endedAt,
+    requesterSettleWake,
+    ...overrides,
+  });
+}
+
+export function writeChildSession(
+  stateDir: string,
+  sessionKey: string,
+  defaultSessionId: string,
+  lifecycleRevision?: string,
+) {
+  return writeSubagentSessionEntry({
+    stateDir,
+    agentId: "main",
+    sessionKey,
+    defaultSessionId,
+    lifecycleRevision,
+  });
+}
+
+export function createOrphanedRequiredDelivery(
+  status: "pending" | "suspended" | "in_progress",
+): SubagentRunRecord {
+  const now = Date.now();
+  const runId = `run-orphan-${status}-delivery`;
+  const childSessionKey = `agent:main:subagent:orphan-${status}-delivery`;
+  const terminalReply = { disposition: "visible" as const, text: "durable final reply" };
+  return createSubagentRunRecord({
+    runId,
+    childSessionKey,
+    task: "deliver after restart",
+    cleanup: "delete",
+    createdAt: now - 100,
+    expectsCompletionMessage: true,
+    cleanupHandled: false,
+    startedAt: now - 50,
+    endedAt: now,
+    outcome: { status: "ok" },
+    completion: {
+      required: true,
+      resultText: "canonical final reply",
+      capturedAt: now,
+      terminalReply,
+    },
+    delivery: {
+      status,
+      ...(status === "suspended" ? { suspendedAt: now, suspendedReason: "expiry" as const } : {}),
+      ...(status === "in_progress"
+        ? { disposition: "session_queued" as const, queueId: "queue-1" }
+        : {}),
+      payload: {
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        childSessionKey,
+        childRunId: runId,
+        task: "deliver after restart",
+        startedAt: now - 50,
+        endedAt: now,
+        outcome: { status: "ok" },
+        expectsCompletionMessage: true,
+        terminalReply,
+      },
+    },
+  });
 }

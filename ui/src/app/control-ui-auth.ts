@@ -1,51 +1,83 @@
-// Control UI module implements control ui auth behavior.
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { formatUiExternalText } from "../lib/format-error.ts";
+import { fetchControlUiResource } from "./browser-http.ts";
 
-type ControlUiAuthSource = {
+/** Decode a Gateway JSON response once, preserving validation details and HTTP status. */
+export async function readControlUiJsonResponse(response: Response, signal: AbortSignal) {
+  let data: Record<string, unknown> | null = null;
+  try {
+    data = asNullableRecord(await response.json());
+  } catch {
+    signal.throwIfAborted();
+  }
+  const error = data?.error;
+  const message =
+    typeof error === "string"
+      ? error
+      : error &&
+          typeof error === "object" &&
+          "message" in error &&
+          typeof error.message === "string"
+        ? error.message
+        : "";
+  const detail = formatUiExternalText(message);
+  return {
+    data,
+    response,
+    errorMessage: detail ? `HTTP ${response.status}: ${detail}` : `HTTP ${response.status}`,
+  };
+}
+
+export type ControlUiAuthSource = {
   hello?: { auth?: { deviceToken?: string | null } | null } | null;
   settings?: { token?: string | null } | null;
   password?: string | null;
 };
 
-// The gateway's shared-secret auth contract accepts either `token` or
-// `password` as the Bearer credential on authenticated control-UI routes.
-// Passing the password through the Authorization header is the intended
-// server-side contract for `gateway.auth.mode="password"`. Callers that need
-// resilience to stale credentials should use `resolveControlUiAuthCandidates`
-// below to retry with the alternate credential on 401.
-function sanitizeHeaderToken(value: string | null): string | null {
-  if (!value) {
-    return null;
-  }
-  // Reject tokens that would smuggle CR/LF into the HTTP header.
-  return /[\r\n]/.test(value) ? null : value;
+// Saved tokens and passwords are Bearer credentials too. Keep them after the
+// live device token so callers can recover from a rejected credential.
+export function resolveControlUiAuthCandidates(source: ControlUiAuthSource): string[] {
+  return normalizeUniqueTrimmedStringList([
+    source.hello?.auth?.deviceToken,
+    source.settings?.token,
+    source.password,
+  ]).filter((token) => !/[\r\n]/.test(token));
 }
 
 export function resolveControlUiAuthToken(source: ControlUiAuthSource): string | null {
-  return (
-    sanitizeHeaderToken(normalizeOptionalString(source.hello?.auth?.deviceToken) ?? null) ??
-    sanitizeHeaderToken(normalizeOptionalString(source.settings?.token) ?? null) ??
-    sanitizeHeaderToken(normalizeOptionalString(source.password) ?? null) ??
-    null
-  );
+  return resolveControlUiAuthCandidates(source)[0] ?? null;
 }
 
-export function resolveControlUiAuthHeader(source: ControlUiAuthSource): string | null {
-  const token = resolveControlUiAuthToken(source);
-  return token ? `Bearer ${token}` : null;
-}
-
-// Ordered list of non-empty, header-safe Control UI credentials. Used by
-// call sites that can retry a single request against an alternate credential
-// when the first returns 401 — for example, recovering from a stale
-// `settings.token` when the live session is authenticated via `password`.
-export function resolveControlUiAuthCandidates(source: ControlUiAuthSource): string[] {
-  return uniqueStrings(
-    [
-      normalizeOptionalString(source.hello?.auth?.deviceToken),
-      normalizeOptionalString(source.settings?.token),
-      normalizeOptionalString(source.password),
-    ].flatMap((raw) => sanitizeHeaderToken(raw ?? null) ?? []),
-  );
+export async function fetchWithControlUiAuth(
+  url: string,
+  init: Omit<RequestInit, "headers" | "signal"> & {
+    headers?: Record<string, string>;
+    signal: AbortSignal;
+  },
+  authCandidates: readonly string[],
+  isCurrent: () => boolean,
+): Promise<Response> {
+  const candidates = authCandidates.length ? authCandidates : [""];
+  const readOnly = !init.method || init.method === "GET" || init.method === "HEAD";
+  for (let index = 0; ; index++) {
+    init.signal.throwIfAborted();
+    if (!isCurrent()) {
+      throw new DOMException("Gateway request is no longer current", "AbortError");
+    }
+    const token = candidates[index];
+    const response = await fetchControlUiResource(url, {
+      ...init,
+      ...(token ? { headers: { ...init.headers, Authorization: `Bearer ${token}` } } : {}),
+    });
+    init.signal.throwIfAborted();
+    // A mutation's 403 is a scope/origin rejection, not a rejected credential.
+    if (
+      index === candidates.length - 1 ||
+      (response.status !== 401 && !(readOnly && response.status === 403))
+    ) {
+      return response;
+    }
+    void response.body?.cancel().catch(() => undefined);
+  }
 }

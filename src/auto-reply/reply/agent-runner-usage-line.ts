@@ -6,8 +6,6 @@ import {
   estimateAggregateUsageCost,
   formatTokenCount,
   formatUsd,
-  type ModelCostConfig,
-  resolveModelCostConfig,
 } from "../../utils/usage-format.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { resolveEffectiveResponseUsage } from "../thinking.js";
@@ -16,38 +14,40 @@ import { buildUsageContract } from "../usage-bar/contract.js";
 import { loadUsageBarTemplate } from "../usage-bar/template.js";
 import { renderUsageBar } from "../usage-bar/translator.js";
 
-const formatResponseUsageLine = (params: {
-  usage?: NormalizedUsage;
-  showCost: boolean;
-  costConfig?: ModelCostConfig;
-}): string | null => {
+const formatResponseUsageLine = (
+  params: Parameters<typeof estimateAggregateUsageCost>[0] & {
+    showCost: boolean;
+  },
+): string | null => {
   const usage = params.usage;
   if (!usage) {
     return null;
   }
   const input = usage.input;
   const output = usage.output;
+  const hasSplitTokens = typeof input === "number" || typeof output === "number";
   const inputLabel = typeof input === "number" ? formatTokenCount(input) : "?";
   const outputLabel = typeof output === "number" ? formatTokenCount(output) : "?";
+  const totalLabel =
+    !hasSplitTokens && typeof usage.total === "number"
+      ? `${formatTokenCount(usage.total)} total`
+      : undefined;
   const cacheRead = typeof usage.cacheRead === "number" ? usage.cacheRead : undefined;
   const cacheWrite = typeof usage.cacheWrite === "number" ? usage.cacheWrite : undefined;
   const canPriceUsage =
     usage.cost !== undefined || (typeof input === "number" && typeof output === "number");
-  const cost =
-    params.showCost && canPriceUsage
-      ? estimateAggregateUsageCost({ usage, cost: params.costConfig })
-      : undefined;
+  const cost = params.showCost && canPriceUsage ? estimateAggregateUsageCost(params) : undefined;
   const costLabel = params.showCost ? formatUsd(cost) : undefined;
-  if (typeof input !== "number" && typeof output !== "number" && !costLabel) {
-    return null;
-  }
   const cacheSuffix =
     (typeof cacheRead === "number" && cacheRead > 0) ||
     (typeof cacheWrite === "number" && cacheWrite > 0)
       ? ` · cache ${formatTokenCount(cacheRead ?? 0)} cached / ${formatTokenCount(cacheWrite ?? 0)} new`
       : "";
+  if (!hasSplitTokens && !totalLabel && !cacheSuffix && !costLabel) {
+    return null;
+  }
   const suffix = costLabel ? ` · est ${costLabel}` : "";
-  return `Usage: ${inputLabel} in / ${outputLabel} out${cacheSuffix}${suffix}`;
+  return `Usage: ${totalLabel ?? `${inputLabel} in / ${outputLabel} out`}${cacheSuffix}${suffix}`;
 };
 
 export const resolveResponseUsageLine = (params: {
@@ -72,17 +72,14 @@ export const resolveResponseUsageLine = (params: {
     return undefined;
   }
 
-  const costConfig = resolveModelCostConfig({
+  const formatted = formatResponseUsageLine({
+    usage: params.usage,
+    showCost,
     provider: params.provider,
     model: params.model,
     config: params.config,
     agentDir: params.agentDir,
     allowPluginNormalization: false,
-  });
-  const formatted = formatResponseUsageLine({
-    usage: params.usage,
-    showCost,
-    costConfig,
   });
   const usageTemplate =
     responseUsageMode === "full" && params.replyUsageState

@@ -2,8 +2,7 @@
 import { lstat, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { defaultQaSuiteConcurrencyForTransport } from "./qa-transport-registry.js";
+import { describe, expect, it } from "vitest";
 import { readQaScenarioById } from "./scenario-catalog.js";
 import { requireFlowScenario } from "./scenario-catalog.test-utils.js";
 import {
@@ -12,12 +11,9 @@ import {
   collectQaSuiteGatewayRuntimeOptions,
   collectQaSuitePluginIds,
   collectQaSuiteTransportPolicy,
-  mapQaSuiteWithConcurrency,
-  normalizeQaSuiteConcurrency,
   normalizeQaSuiteScenarioChannel,
   resolveQaSuiteScenarioChannel,
   resolveQaSuiteScenarioChannels,
-  resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
   scenarioRequiresIsolatedQaSuiteWorker,
@@ -63,42 +59,6 @@ describe("qa suite planning helpers", () => {
         makeQaSuiteTestScenario("matrix-channel", { channel: " Matrix " }),
       ),
     ).toBe("matrix");
-  });
-
-  it("normalizes suite concurrency to a bounded integer", () => {
-    const previous = process.env.OPENCLAW_QA_SUITE_CONCURRENCY;
-    delete process.env.OPENCLAW_QA_SUITE_CONCURRENCY;
-    try {
-      expect(normalizeQaSuiteConcurrency(undefined, 10)).toBe(10);
-      expect(normalizeQaSuiteConcurrency(undefined, 80)).toBe(64);
-      expect(
-        normalizeQaSuiteConcurrency(
-          undefined,
-          80,
-          defaultQaSuiteConcurrencyForTransport("qa-channel"),
-        ),
-      ).toBe(4);
-      expect(normalizeQaSuiteConcurrency(2.8, 10)).toBe(2);
-      expect(normalizeQaSuiteConcurrency(20, 3)).toBe(3);
-      expect(normalizeQaSuiteConcurrency(0, 3)).toBe(1);
-
-      process.env.OPENCLAW_QA_SUITE_CONCURRENCY = "3";
-      expect(normalizeQaSuiteConcurrency(undefined, 10)).toBe(3);
-
-      process.env.OPENCLAW_QA_SUITE_CONCURRENCY = "0";
-      expect(normalizeQaSuiteConcurrency(undefined, 10)).toBe(1);
-
-      for (const value of ["0x10", "1e2", "2.5"]) {
-        process.env.OPENCLAW_QA_SUITE_CONCURRENCY = value;
-        expect(normalizeQaSuiteConcurrency(undefined, 10)).toBe(10);
-      }
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_QA_SUITE_CONCURRENCY;
-      } else {
-        process.env.OPENCLAW_QA_SUITE_CONCURRENCY = previous;
-      }
-    }
   });
 
   it("keeps programmatic suite output dirs within the repo root", async () => {
@@ -152,138 +112,6 @@ describe("qa suite planning helpers", () => {
     }
   });
 
-  it("maps suite work with bounded concurrency while preserving order", async () => {
-    let active = 0;
-    let maxActive = 0;
-    let releaseStartedTasks = false;
-    let resolveBothStarted: () => void = () => {};
-    const bothStarted = new Promise<void>((resolve) => {
-      resolveBothStarted = resolve;
-    });
-    const taskReleases: Array<() => void> = [];
-    const releaseQueuedTasks = () => {
-      if (!releaseStartedTasks) {
-        return;
-      }
-      let releaseTask: (() => void) | undefined;
-      while ((releaseTask = taskReleases.shift())) {
-        releaseTask();
-      }
-    };
-
-    const resultPromise = mapQaSuiteWithConcurrency([1, 2, 3, 4], 2, async (item) => {
-      active += 1;
-      maxActive = Math.max(maxActive, active);
-      if (active === 2) {
-        resolveBothStarted();
-      }
-      await new Promise<void>((resolve) => {
-        taskReleases.push(resolve);
-        releaseQueuedTasks();
-      });
-      active -= 1;
-      return item * 10;
-    });
-
-    await bothStarted;
-    expect(maxActive).toBe(2);
-    releaseStartedTasks = true;
-    releaseQueuedTasks();
-    const result = await resultPromise;
-    expect(result).toEqual([10, 20, 30, 40]);
-  });
-
-  it("stops sequential suite work after the first matching result", async () => {
-    const started: number[] = [];
-    const result = await mapQaSuiteWithConcurrency(
-      [1, 2, 3, 4],
-      1,
-      async (item) => {
-        started.push(item);
-        return { item, failed: item === 2 };
-      },
-      { shouldStop: (entry) => entry.failed },
-    );
-
-    expect(started).toEqual([1, 2]);
-    expect(result).toEqual([
-      { item: 1, failed: false },
-      { item: 2, failed: true },
-    ]);
-  });
-
-  it("staggers scenario starts without reducing mapped concurrency", async () => {
-    const sleeps: number[] = [];
-    const releaseSleeps: Array<() => void> = [];
-    const started: number[] = [];
-    const waitForStarted = async (expected: number[]) => {
-      await vi.waitFor(() => {
-        expect(started).toEqual(expected);
-      });
-    };
-    const resultPromise = mapQaSuiteWithConcurrency(
-      [1, 2, 3, 4],
-      3,
-      async (item) => {
-        started.push(item);
-        return item;
-      },
-      {
-        startStaggerMs: 25,
-        sleepImpl: async (ms) => {
-          sleeps.push(ms);
-          await new Promise<void>((resolve) => {
-            releaseSleeps.push(resolve);
-          });
-        },
-      },
-    );
-
-    await waitForStarted([1]);
-    releaseSleeps.shift()?.();
-    await waitForStarted([1, 2]);
-    releaseSleeps.shift()?.();
-    await waitForStarted([1, 2, 3]);
-    releaseSleeps.shift()?.();
-    await waitForStarted([1, 2, 3, 4]);
-
-    const result = await resultPromise;
-    expect(result).toEqual([1, 2, 3, 4]);
-    expect(sleeps).toEqual([25, 25, 25]);
-  });
-
-  it("resolves a default worker startup stagger for concurrent suite workers", () => {
-    expect(resolveQaSuiteWorkerStartStaggerMs(1, {})).toBe(0);
-    expect(resolveQaSuiteWorkerStartStaggerMs(4, {})).toBe(1500);
-    expect(
-      resolveQaSuiteWorkerStartStaggerMs(4, {
-        OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS: "0",
-      }),
-    ).toBe(0);
-    expect(
-      resolveQaSuiteWorkerStartStaggerMs(4, {
-        OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS: "25",
-      }),
-    ).toBe(25);
-    for (const value of ["0x10", "1e3", "10.5"]) {
-      expect(
-        resolveQaSuiteWorkerStartStaggerMs(4, {
-          OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS: value,
-        }),
-      ).toBe(1500);
-    }
-    expect(resolveQaSuiteWorkerStartStaggerMs(4, {}, 500)).toBe(500);
-    expect(
-      resolveQaSuiteWorkerStartStaggerMs(
-        4,
-        {
-          OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS: "25",
-        },
-        500,
-      ),
-    ).toBe(25);
-  });
-
   it("rejects an explicitly requested scenario for the wrong model", () => {
     const scenarios = [
       makeQaSuiteTestScenario("openai-model", {
@@ -327,6 +155,21 @@ describe("qa suite planning helpers", () => {
     ).toThrow(
       "selected QA scenario(s) do not match the current QA lane: claude-subscription (authMode=subscription)",
     );
+  });
+
+  it("preserves ordered independent flow instances for repeated requested IDs", () => {
+    const scenarios = [makeQaSuiteTestScenario("first"), makeQaSuiteTestScenario("second")];
+    const selected = selectQaFlowSuiteScenarios({
+      scenarios,
+      scenarioIds: ["first", "second", "first"],
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/test-model",
+    });
+    expect(selected.map((scenario) => scenario.id)).toEqual(["first", "second", "first"]);
+    expect(new Set(selected).size).toBe(3);
+    expect(selected[0]).toEqual(scenarios[0]);
+    expect(selected[0]).not.toBe(scenarios[0]);
+    expect(selected[2]).not.toBe(selected[0]);
   });
 
   it("keeps an explicitly requested scenario when every lane contract matches", () => {
@@ -555,6 +398,7 @@ describe("qa suite planning helpers", () => {
   it("isolates and collects scenario-declared transport policy", () => {
     const scenario = makeQaSuiteTestScenario("sender-policy", {
       transportPolicy: {
+        directMessageOnly: true,
         requireGroupMention: true,
         senderAllowlist: ["driver"],
       },
@@ -562,6 +406,7 @@ describe("qa suite planning helpers", () => {
 
     expect(scenarioRequiresIsolatedQaSuiteWorker(scenario)).toBe(true);
     expect(collectQaSuiteTransportPolicy([scenario])).toEqual({
+      directMessageOnly: true,
       requireGroupMention: true,
       senderAllowlist: ["driver"],
     });

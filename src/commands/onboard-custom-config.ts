@@ -646,26 +646,16 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
       inferKnownModels: !isAzure,
     }),
   );
-  const nextModel = isAzure
-    ? {
-        id: modelId,
-        name: `${modelId} (Custom Provider)`,
-        contextWindow: AZURE_DEFAULT_CONTEXT_WINDOW,
-        maxTokens: AZURE_DEFAULT_MAX_TOKENS,
-        input: generatedInput,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        reasoning: isLikelyReasoningModel,
-        compat: { supportsStore: false },
-      }
-    : {
-        id: modelId,
-        name: `${modelId} (Custom Provider)`,
-        contextWindow: DEFAULT_CONTEXT_WINDOW,
-        maxTokens: DEFAULT_MAX_TOKENS,
-        input: generatedInput,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        reasoning: false,
-      };
+  const nextModel = {
+    id: modelId,
+    name: `${modelId} (Custom Provider)`,
+    contextWindow: isAzure ? AZURE_DEFAULT_CONTEXT_WINDOW : DEFAULT_CONTEXT_WINDOW,
+    maxTokens: isAzure ? AZURE_DEFAULT_MAX_TOKENS : DEFAULT_MAX_TOKENS,
+    input: generatedInput,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    reasoning: isLikelyReasoningModel,
+    ...(isAzure ? { compat: { supportsStore: false } } : {}),
+  };
   const mergedModels = hasModel
     ? existingModels.map((model) =>
         model.id === modelId

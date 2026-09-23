@@ -6,6 +6,7 @@
 // styles/chat/text.css). Adding a kind here is the only place a new file glyph
 // starts, so the two surfaces cannot drift apart.
 export type FileKind =
+  | "skill"
   | "markdown"
   | "component"
   | "package"
@@ -22,6 +23,7 @@ const FILE_KIND_BY_NAME: Record<string, FileKind> = {
   "package-lock.json": "package",
   "package.json": "package",
   "pnpm-lock.yaml": "package",
+  "skill.md": "skill",
   "yarn.lock": "package",
 };
 
@@ -152,9 +154,8 @@ function shortestUniqueSuffixDepth(root: SuffixTrieNode, segments: readonly stri
  */
 export function shortestFileLabels(paths: readonly string[]): Map<string, string> {
   const unique = [...new Set(paths)];
-  const segmentsByPath = new Map(
-    unique.map((path) => [path, path.split(PATH_SEPARATOR_RE).filter(Boolean)]),
-  );
+  // The leading empty segment distinguishes absolute paths from matching relative paths.
+  const segmentsByPath = new Map(unique.map((path) => [path, path.split(PATH_SEPARATOR_RE)]));
   const suffixTrie: SuffixTrieNode = { pathCount: 0, children: new Map() };
   for (const segments of segmentsByPath.values()) {
     insertReversedSegments(suffixTrie, segments);

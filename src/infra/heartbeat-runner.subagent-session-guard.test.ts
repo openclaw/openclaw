@@ -1,11 +1,12 @@
 // Tests heartbeat runner guardrails for subagent sessions.
 import fs from "node:fs/promises";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
-import { withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
+import { heartbeatTestConfig, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
 import {
   enqueueSystemEvent,
   peekSystemEventEntries,
@@ -18,34 +19,10 @@ afterEach(() => {
   resetSystemEventsForTest();
 });
 
-function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
-}
-
 describe("runHeartbeatOnce", () => {
   it("falls back to the main session when a subagent session key is forced", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            workspace: tmpDir,
-            heartbeat: {
-              every: "5m",
-              target: "whatsapp",
-            },
-          },
-        },
-        channels: {
-          whatsapp: {
-            allowFrom: ["*"],
-          },
-        },
-        session: { store: storePath },
-      };
+      const cfg: OpenClawConfig = heartbeatTestConfig(tmpDir, "whatsapp", "whatsapp", storePath);
 
       const mainSessionKey = resolveMainSessionKey(cfg);
       await fs.writeFile(
@@ -86,10 +63,10 @@ describe("runHeartbeatOnce", () => {
       });
 
       expect(replySpy).toHaveBeenCalledTimes(1);
-      const [replyParams, _replyRuntime, replyConfig] = requireFirstMockCall(
-        replySpy,
-        "reply",
-      ) as Parameters<typeof replySpy>;
+      const [replyParams, _replyRuntime, replyConfig] = expectDefined(
+        replySpy.mock.calls[0],
+        "reply call",
+      );
       expect(replyParams?.SessionKey).toBe(mainSessionKey);
       expect(replyParams?.OriginatingChannel).toBeUndefined();
       expect(replyParams?.OriginatingTo).toBeUndefined();
@@ -155,7 +132,7 @@ describe("runHeartbeatOnce", () => {
       });
 
       expect(replySpy).toHaveBeenCalledTimes(1);
-      const [replyParams] = requireFirstMockCall(replySpy, "reply") as Parameters<typeof replySpy>;
+      const [replyParams] = expectDefined(replySpy.mock.calls[0], "reply call");
       expect(replyParams?.SessionKey).toBe(mainSessionKey);
       expect(replyParams?.Body).toContain("async command completion event");
       expect(peekSystemEventEntries(mainSessionKey)).toStrictEqual([]);

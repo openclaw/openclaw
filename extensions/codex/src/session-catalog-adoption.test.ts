@@ -1,6 +1,13 @@
+import {
+  createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 // Codex supervision tests cover passive listing and safe local session takeover.
 /* oxlint-disable typescript/unbound-method -- assertions inspect vi.fn-backed object methods, not unbound class methods. */
 import { describe, expect, it, vi } from "vitest";
+import { createLazyCodexAppServerBindingStore } from "./app-server/session-binding-store.js";
+import { bindingStoreKey, type StoredCodexAppServerBinding } from "./app-server/session-binding.js";
+import { listAdoptedSessionEntries } from "./session-catalog-adoption.js";
 import {
   commandRpcMocks,
   pinnedConnectionMocks,
@@ -35,6 +42,131 @@ import {
 } from "./session-catalog.test-helpers.js";
 
 describe("Codex supervision catalog", () => {
+  it("refreshes bulk adoption authority after a generation changes or a binding disappears", async () => {
+    const state = createPluginStateSyncKeyedStoreForTests<StoredCodexAppServerBinding>("codex", {
+      namespace: "adoption-cohort",
+      maxEntries: 10,
+    });
+    const bindingStore = createLazyCodexAppServerBindingStore(state);
+    const entries = ["first", "second"].map((sourceThreadId) => ({
+      sessionKey: supervisionSessionKey(sourceThreadId),
+      entry: adoptedEntry({ sourceThreadId, sessionId: `session-${sourceThreadId}` }),
+    }));
+    const { runtime } = createRuntime({ entries });
+    try {
+      for (const [index, sourceThreadId] of ["first", "second"].entries()) {
+        await seedSupervisionBinding({
+          bindingStore,
+          sessionId: entries[index]!.entry.sessionId,
+          sessionKey: entries[index]!.sessionKey,
+          sourceThreadId,
+        });
+      }
+      const lookupMany = vi.spyOn(state, "lookupMany");
+      const lookup = vi.spyOn(state, "lookup");
+      const list = () =>
+        listCodexSessionCatalog({
+          bindingStore,
+          config,
+          runtime,
+          control: createControl({
+            listPage: vi.fn(async () => ({
+              sessions: ["first", "second"].map((threadId) => ({
+                threadId,
+                status: "idle",
+                archived: false as const,
+              })),
+            })),
+          }),
+        });
+      expect((await list()).hosts[0]?.sessions.map((entry) => entry.sessionKey)).toEqual(
+        entries.map((entry) => entry.sessionKey),
+      );
+      entries[0]!.entry.sessionId = "successor";
+      expect((await list()).hosts[0]?.sessions.map((entry) => entry.sessionKey)).toEqual([
+        undefined,
+        entries[1]!.sessionKey,
+      ]);
+      const firstIdentity = sessionBindingIdentity({
+        sessionId: "successor",
+        sessionKey: entries[0]!.sessionKey,
+        config,
+      });
+      state.update(
+        bindingStoreKey(firstIdentity),
+        (row) => row && { ...row, sessionId: "successor" },
+      );
+      state.delete(
+        bindingStoreKey(
+          sessionBindingIdentity({
+            sessionId: entries[1]!.entry.sessionId,
+            sessionKey: entries[1]!.sessionKey,
+            config,
+          }),
+        ),
+      );
+      expect((await list()).hosts[0]?.sessions.map((entry) => entry.sessionKey)).toEqual([
+        entries[0]!.sessionKey,
+        undefined,
+      ]);
+      expect(lookupMany).toHaveBeenCalled();
+      expect(lookup).not.toHaveBeenCalled();
+    } finally {
+      resetPluginStateStoreForTests();
+    }
+  });
+
+  it("reports duplicate adoption across agents before decoding a later malformed bulk row", async () => {
+    const state = createPluginStateSyncKeyedStoreForTests<StoredCodexAppServerBinding>("codex", {
+      namespace: "adoption-order",
+      maxEntries: 10,
+    });
+    const bindingStore = createLazyCodexAppServerBindingStore(state);
+    const cohortConfig: OpenClawConfig = {
+      agents: { list: [{ id: "main", default: true }, { id: "beta" }, { id: "gamma" }] },
+    };
+    const duplicates = ["main", "beta"].map((agentId) => ({
+      sessionKey: `agent:${agentId}:${supervisionSessionInputKey("duplicate")}`,
+      entry: adoptedEntry({ sourceThreadId: "duplicate", sessionId: `${agentId}-session` }),
+    }));
+    const malformed = {
+      sessionKey: `agent:gamma:${supervisionSessionInputKey("malformed")}`,
+      entry: adoptedEntry({ sourceThreadId: "malformed", sessionId: "malformed-session" }),
+    };
+    const { runtime, entries } = createRuntime({ entries: [...duplicates, malformed] });
+    try {
+      for (const duplicate of duplicates) {
+        await seedSupervisionBinding({
+          bindingStore,
+          sessionId: duplicate.entry.sessionId,
+          sessionKey: duplicate.sessionKey,
+          sourceThreadId: "duplicate",
+        });
+      }
+      const key = bindingStoreKey(
+        sessionBindingIdentity({
+          sessionId: malformed.entry.sessionId,
+          sessionKey: malformed.sessionKey,
+          config: cohortConfig,
+        }),
+      );
+      state.register(key, { version: 1, state: "active", binding: { threadId: "", cwd: "/repo" } });
+      const lookupMany = vi.spyOn(state, "lookupMany");
+      await expect(
+        listAdoptedSessionEntries({ bindingStore, config: cohortConfig, runtime }),
+      ).rejects.toThrow(
+        "multiple OpenClaw sessions adopt Codex thread duplicate from the same home",
+      );
+      entries.splice(1, 1);
+      await expect(
+        listAdoptedSessionEntries({ bindingStore, config: cohortConfig, runtime }),
+      ).rejects.toThrow(`Invalid Codex app-server binding row: ${key}`);
+      expect(lookupMany).toHaveBeenCalledTimes(2);
+    } finally {
+      resetPluginStateStoreForTests();
+    }
+  });
+
   it("enriches only the local source row with its adopted OpenClaw session", async () => {
     const control = createControl({
       listPage: vi.fn(async () => ({
@@ -270,7 +402,7 @@ describe("Codex supervision actions", () => {
       getRuntimeConfig: () => config,
       env: { CODEX_HOME: home },
     });
-    const source = factory.homesForAgent("main")[0]!;
+    const source = (await factory.homesForAgent("main"))[0]!;
     const { runtime, createSessionEntry } = createRuntime();
     const { api } = createGatewayApi(runtime);
     await expect(
@@ -289,7 +421,6 @@ describe("Codex supervision actions", () => {
     );
     expect(pinnedConnectionMocks.request.mock.calls.map(([request]) => request.method)).toEqual([
       "thread/read",
-      "thread/list",
       "thread/read",
     ]);
   });
@@ -417,7 +548,7 @@ describe("Codex supervision actions", () => {
       modelProvider: "openai",
       config,
     });
-    await expect(
+    expect(
       bindingStore.read(
         sessionBindingIdentity({
           sessionId: runtime.agent.session.getSessionEntry({ sessionKey: first.sessionKey })!
@@ -426,7 +557,7 @@ describe("Codex supervision actions", () => {
           config,
         }),
       ),
-    ).resolves.toMatchObject({
+    ).toMatchObject({
       threadId: "thread-1",
       connectionScope: "supervision",
       supervisionSourceThreadId: "thread-1",
@@ -684,7 +815,7 @@ describe("Codex supervision actions", () => {
       sessionKey: continued.sessionKey,
       config,
     });
-    const pending = (await bindingStore.read(identity))?.pendingSupervisionBranch;
+    const pending = bindingStore.read(identity)?.pendingSupervisionBranch;
     if (!pending) {
       throw new Error("expected a pending supervision branch");
     }

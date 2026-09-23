@@ -20,14 +20,18 @@ const { resolveSlackDmChannelIdMock, sendMessageSlackMock } = vi.hoisted(() => (
   sendMessageSlackMock: vi.fn(),
 }));
 const {
-  assistantThreadsSetStatusMock,
+  sessionApiCallMock,
   conversationsInfoMock,
   conversationsOpenMock,
+  usersInfoMock,
+  authTeamsListMock,
   getSlackWriteClientMock,
 } = vi.hoisted(() => ({
-  assistantThreadsSetStatusMock: vi.fn(),
+  sessionApiCallMock: vi.fn(),
   conversationsInfoMock: vi.fn(),
   conversationsOpenMock: vi.fn(),
+  usersInfoMock: vi.fn(),
+  authTeamsListMock: vi.fn(),
   getSlackWriteClientMock: vi.fn(),
 }));
 
@@ -47,19 +51,18 @@ vi.mock("./send.runtime.js", () => ({
 vi.mock("./client.js", async () => {
   const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
   const createClient = () => ({
-    assistant: {
-      threads: {
-        setStatus: assistantThreadsSetStatusMock,
-      },
-    },
+    apiCall: sessionApiCallMock,
     conversations: {
       info: conversationsInfoMock,
       open: conversationsOpenMock,
     },
+    users: { info: usersInfoMock },
+    auth: { teams: { list: authTeamsListMock } },
   });
   return {
     ...actual,
     createSlackReadClient: vi.fn(createClient),
+    createSlackLookupClient: vi.fn(createClient),
     getSlackWriteClient: getSlackWriteClientMock.mockImplementation(createClient),
   };
 });
@@ -70,10 +73,12 @@ beforeEach(async () => {
   resolveSlackDmChannelIdMock.mockResolvedValue("D123");
   sendMessageSlackMock.mockReset();
   sendMessageSlackMock.mockResolvedValue({ messageId: "msg-1", channelId: "D123" });
-  assistantThreadsSetStatusMock.mockReset();
-  assistantThreadsSetStatusMock.mockResolvedValue({ ok: true });
+  sessionApiCallMock.mockReset();
+  sessionApiCallMock.mockResolvedValue({ ok: true });
   conversationsInfoMock.mockReset();
   conversationsOpenMock.mockReset();
+  usersInfoMock.mockReset();
+  authTeamsListMock.mockReset();
   getSlackWriteClientMock.mockClear();
   setSlackRuntime({
     channel: {
@@ -782,6 +787,64 @@ describe("slackPlugin status", () => {
     });
   });
 
+  it.each(["heartbeat-owner", undefined] as const)(
+    "limits Enterprise workspace discovery to owner heartbeats: %s",
+    async (deliveryPurpose) => {
+      const installation = registerSlackInstallationState("default", "enterprise");
+      usersInfoMock.mockResolvedValue({
+        ok: true,
+        user: { id: "U12345678", enterprise_user: { teams: ["T22222222", "T11111111"] } },
+      });
+      authTeamsListMock.mockResolvedValue({
+        ok: true,
+        teams: [{ id: "T22222222" }, { id: "T11111111" }],
+      });
+      try {
+        const route = await slackPlugin.messaging!.resolveOutboundSessionRoute!({
+          cfg: { channels: { slack: { botToken: "sending-fixture" } } },
+          agentId: "main",
+          target: "user:u12345678",
+          deliveryPurpose,
+        });
+        if (!deliveryPurpose) {
+          expectRecordFields(route, "Detached Enterprise Slack DM route", {
+            to: "user:u12345678",
+          });
+          expect(usersInfoMock).not.toHaveBeenCalled();
+          expect(authTeamsListMock).not.toHaveBeenCalled();
+          return;
+        }
+        expectRecordFields(route, "Enterprise Slack owner DM route", {
+          baseSessionKey: "agent:main:main:account:default:team:t11111111",
+          to: "team:T11111111:user:U12345678",
+          recipientSessionExact: true,
+        });
+        expect(usersInfoMock).toHaveBeenCalledExactlyOnceWith({ user: "U12345678" });
+        expect(conversationsOpenMock).not.toHaveBeenCalled();
+      } finally {
+        installation.release();
+      }
+    },
+  );
+
+  it("preserves an explicit Enterprise user workspace without discovery", async () => {
+    const installation = registerSlackInstallationState("default", "enterprise");
+    try {
+      const route = await slackPlugin.messaging!.resolveOutboundSessionRoute!({
+        cfg: {},
+        agentId: "main",
+        target: "team:T22222222:user:U12345678",
+      });
+      expectRecordFields(route, "Explicit Enterprise Slack DM route", {
+        to: "team:T22222222:user:U12345678",
+      });
+      expect(usersInfoMock).not.toHaveBeenCalled();
+      expect(authTeamsListMock).not.toHaveBeenCalled();
+    } finally {
+      installation.release();
+    }
+  });
+
   it("routes a folded bare W user id as a direct session", async () => {
     const resolveRoute = slackPlugin.messaging?.resolveOutboundSessionRoute;
     if (!resolveRoute) {
@@ -1276,7 +1339,7 @@ describe("slackPlugin outbound", () => {
     expect(requireMockCallArg(sendSlack, 0, 2).threadTs).toBeUndefined();
   });
 
-  it("sets and clears Slack assistant status for channel thread targets", async () => {
+  it("sets and clears Slack session status for channel thread targets", async () => {
     const target = {
       cfg,
       to: "channel:c08gqh53ejm",
@@ -1288,21 +1351,21 @@ describe("slackPlugin outbound", () => {
     await requireSlackHeartbeatClearTyping()(target);
 
     expect(resolveSlackDmChannelIdMock).not.toHaveBeenCalled();
-    expect(assistantThreadsSetStatusMock).toHaveBeenNthCalledWith(1, {
+    expect(sessionApiCallMock).toHaveBeenNthCalledWith(1, "agents.sessions.setStatus", {
       token: "xoxb-test",
       channel_id: "C08GQH53EJM",
       thread_ts: "1712345678.123456",
-      status: "is typing...",
+      status: "processing",
     });
-    expect(assistantThreadsSetStatusMock).toHaveBeenNthCalledWith(2, {
+    expect(sessionApiCallMock).toHaveBeenNthCalledWith(2, "agents.sessions.setStatus", {
       token: "xoxb-test",
       channel_id: "C08GQH53EJM",
       thread_ts: "1712345678.123456",
-      status: "",
+      status: "active",
     });
   });
 
-  it("uses the workspace-partitioned write-client cache for Grid assistant status", async () => {
+  it("uses the workspace-partitioned write-client cache for Grid session status", async () => {
     const target = {
       cfg: { channels: { slack: { botToken: "xoxb-test" } } },
       to: "team:T123:channel:C456",
@@ -1317,7 +1380,7 @@ describe("slackPlugin outbound", () => {
     expect(getSlackWriteClientMock).toHaveBeenNthCalledWith(2, "xoxb-test", { teamId: "T123" });
   });
 
-  it("resolves user targets to concrete DM channels for assistant status", async () => {
+  it("resolves user targets to concrete DM channels for session status", async () => {
     await requireSlackHeartbeatSendTyping()({
       cfg,
       to: "user:u09g2dj0275",
@@ -1331,11 +1394,11 @@ describe("slackPlugin outbound", () => {
       accountId: "default",
       token: "xoxb-test",
     });
-    expect(assistantThreadsSetStatusMock).toHaveBeenCalledWith({
+    expect(sessionApiCallMock).toHaveBeenCalledWith("agents.sessions.setStatus", {
       token: "xoxb-test",
       channel_id: "D123",
       thread_ts: "1712345678.123456",
-      status: "is typing...",
+      status: "processing",
     });
   });
 
@@ -1458,6 +1521,12 @@ describe("slackPlugin outbound", () => {
 
   it.each([
     {
+      name: "current",
+      replyToIsExplicit: true,
+      replyToCurrent: true,
+      expectedReplyToId: "1712345678.123456",
+    },
+    {
       name: "inherited",
       replyToIsExplicit: false,
       expectedReplyToId: "1712345678.123456",
@@ -1466,7 +1535,7 @@ describe("slackPlugin outbound", () => {
     { name: "unknown", replyToIsExplicit: undefined, expectedReplyToId: "1712345688.654321" },
   ])(
     "routes $name child replies to $expectedReplyToId",
-    ({ replyToIsExplicit, expectedReplyToId }) => {
+    ({ replyToIsExplicit, replyToCurrent, expectedReplyToId }) => {
       const resolveReplyTransport = slackPlugin.threading?.resolveReplyTransport;
       if (!resolveReplyTransport) {
         throw new Error("slack threading.resolveReplyTransport unavailable");
@@ -1478,6 +1547,7 @@ describe("slackPlugin outbound", () => {
           replyToId: "1712345688.654321",
           threadId: "1712345678.123456",
           replyToIsExplicit,
+          replyToCurrent,
         }),
       ).toEqual({ replyToId: expectedReplyToId, threadId: null });
     },
@@ -1670,7 +1740,7 @@ describe("slackPlugin outbound", () => {
 
     expect(requireMockCallArgValue(sendSlack, 0, 0)).toBe("user:U123");
     expect(requireMockCallArgValue(sendSlack, 0, 1)).toBe(
-      "Slack interactive smoke.\n\nApprove\nReject\n\nChoose a target",
+      "Slack interactive smoke.\n\nApprove\nReject\n\nChoose a target\nCanary\nProduction",
     );
     const blocks = requireArray(requireMockCallArg(sendSlack, 0, 2).blocks, "Slack blocks");
     expectRecordFields(blocks[0], "text block", { type: "section" });

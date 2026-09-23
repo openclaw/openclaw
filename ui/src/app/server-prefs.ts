@@ -3,16 +3,22 @@
 // stays authoritative when this client cannot write config (viewer scope, offline). Pending local
 // intent shadows server snapshots until the hash-free LWW ack; failed pushes degrade device-local.
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { ConfigPatchAck } from "../lib/config/config-gateway-operations.ts";
 import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import { hasOperatorWriteAccess } from "./operator-access.ts";
 import {
+  requestServerUiPrefReset,
+  resetServerUiPrefIntent,
+  selectThemeSettings,
+} from "./server-prefs-intent.ts";
+import {
   loadProfileAppearancePrefs,
+  rememberProfileAppearanceIdentity,
   resetProfileAppearancePrefs,
   resolveProfileAppearanceProfileId,
   resolveProfileAppearancePrefs,
   resolveProfilePreferenceScope,
-  writeProfileAppearancePrefs,
 } from "./server-prefs-profile.ts";
 import {
   extractServerUiPrefs,
@@ -20,6 +26,7 @@ import {
   prefValuesEqual,
   resolveServerUiPrefStateFromSnapshot,
   serverPrefsLocalPatch,
+  serverUiPrefsSnapshotDelta,
   SYNCED_PREF_KEYS,
   SYNCED_PREFS,
   type ResettableServerUiPrefKey,
@@ -40,6 +47,7 @@ import {
 } from "./server-prefs-storage.ts";
 import { loadSettings, patchSettings, type UiSettings } from "./settings.ts";
 import type { ThemeName } from "./theme.ts";
+import { invalidateUserPreferences } from "./user-prefs-cache.ts";
 
 type ServerUiPrefsWriter = Pick<RuntimeConfigCapability, "canPatch" | "runExternalMutation"> & {
   readonly state: {
@@ -64,55 +72,39 @@ export function resolveServerUiPrefState<K extends SyncedPrefKey>(
   configObject: unknown,
   key: K,
   scope = "",
-  settings = loadSettings(),
+  settings = loadSettings(scope || undefined),
   options: { canSync?: boolean | null; profileId?: string | null } = {},
 ): ServerUiPrefState<SyncedPrefValue<K>> {
-  const effectiveScope = resolveProfilePreferenceScope(scope, options.profileId);
+  const disconnectedProfile =
+    !options.profileId && isAppearancePref(key) && options.canSync === null;
+  const profileId =
+    options.profileId ?? (disconnectedProfile ? resolveProfileAppearanceProfileId(scope) : null);
+  const effectiveScope = resolveProfilePreferenceScope(scope, profileId);
   const shadowPrefs =
     effectiveScope === pendingScope
       ? pendingPrefs
       : parseStoredPrefs(readStorage(PENDING_KEY, effectiveScope));
-  return resolveServerUiPrefStateFromSnapshot(
+  const profilePrefs = resolveProfileAppearancePrefs(scope, profileId);
+  const pendingAppearance = profileId && isAppearancePref(key) && profilePrefs === null;
+  // The boot mirror is still compared with its last server appearance while
+  // loading. This merged baseline does not identify which values came from the profile.
+  const appearanceSnapshot = pendingAppearance
+    ? (parseStoredPrefs(readStorage(LAST_SEEN_KEY, effectiveScope)) ?? {})
+    : profilePrefs;
+  const state = resolveServerUiPrefStateFromSnapshot(
     configObject,
     key,
     shadowPrefs,
     settings,
     options.canSync,
-    resolveProfileAppearancePrefs(scope, options.profileId),
+    appearanceSnapshot,
   );
-}
-/** Synced-key delta between two local settings snapshots, for the push path. */
-export function changedServerUiPrefs(previous: UiSettings, next: UiSettings): ServerUiPrefs | null {
-  const prefs: ServerUiPrefs = {};
-  for (const key of SYNCED_PREF_KEYS) {
-    if (requestedDeviceLocalPrefResets.delete(key)) {
-      continue;
-    }
-    if (requestedServerUiPrefResets.delete(key)) {
-      (prefs as Record<string, unknown>)[key] = null;
-      continue;
-    }
-    const specification = SYNCED_PREFS[key];
-    const previousValue = specification.local(previous);
-    const nextValue = specification.local(next);
-    if (prefValuesEqual(previousValue, nextValue)) {
-      continue;
-    }
-    if (nextValue === undefined) {
-      // JSON merge patch removes keys via explicit null.
-      if (specification.clearable) {
-        (prefs as Record<string, unknown>)[key] = null;
-      }
-      continue;
-    }
-    (prefs as Record<string, unknown>)[key] = nextValue;
-  }
-  return Object.keys(prefs).length > 0 ? prefs : null;
+  return pendingAppearance && state.provenance === "profile"
+    ? { ...state, provenance: "synced" }
+    : state;
 }
 const CONFLICT_REDRAIN_DELAY_MS = 1_000;
 const MAX_CONFLICT_REDRAINS = 5;
-const requestedServerUiPrefResets = new Set<SyncedPrefKey>();
-const requestedDeviceLocalPrefResets = new Set<SyncedPrefKey>();
 let applyingServerPrefs = false;
 let pendingScope = "";
 let pendingPrefs: ServerUiPrefs | null = null;
@@ -263,17 +255,24 @@ export function resetServerUiPrefsSync() {
   lastReconciledScope = "";
   lastReconciledConfigObject = null;
   resetProfileAppearancePrefs();
-  requestedServerUiPrefResets.clear();
-  requestedDeviceLocalPrefResets.clear();
+  resetServerUiPrefIntent();
 }
 
 export function resetServerUiPref<K extends ResettableServerUiPrefKey>(
   key: K,
   state?: ServerUiPrefState<SyncedPrefValue<K>>,
   scope = pendingScope,
+  profileId?: string | null,
 ): UiSettings {
   const specification = SYNCED_PREFS[key];
-  const activeProfile = isAppearancePref(key) ? resolveProfileAppearanceProfileId(scope) : null;
+  const applyReset = (patch: Partial<UiSettings>) =>
+    key === "theme" && patch.theme !== undefined
+      ? selectThemeSettings(patch.theme)
+      : patchSettings(patch);
+  // Disconnected clients retain their last known profile for local cancellation.
+  const activeProfile = isAppearancePref(key)
+    ? (profileId ?? resolveProfileAppearanceProfileId(scope))
+    : null;
   const effectiveScope = resolveProfilePreferenceScope(scope, activeProfile);
   const reset = specification.reset;
   if (!reset) {
@@ -286,25 +285,35 @@ export function resetServerUiPref<K extends ResettableServerUiPrefKey>(
     if (!write) {
       throw new Error(`Server UI preference cannot restore a retained local value: ${key}`);
     }
-    cancelPendingKeys(effectiveScope, [key]);
-    updateRetainedLocalKeys(effectiveScope, [key], false);
-    requestedDeviceLocalPrefResets.add(key);
-    return patchSettings(write(state.resetValue));
+    const patch = write(state.resetValue);
+    const keys: SyncedPrefKey[] =
+      key === "theme" && patch.theme !== loadSettings().theme
+        ? [key, "accent", "fontUi", "fontChat"]
+        : [key];
+    cancelPendingKeys(effectiveScope, keys);
+    // Edits made after disconnect lose the profile and queue in the Gateway scope.
+    if (effectiveScope !== scope) {
+      cancelPendingKeys(scope, keys);
+    }
+    updateRetainedLocalKeys(effectiveScope, keys, false);
+    for (const resetKey of keys) {
+      requestServerUiPrefReset(resetKey, "device-local");
+    }
+    return applyReset(patch);
   }
-  requestedServerUiPrefResets.add(key);
-  // Profile-bound reset deletes the profile key and lands on the gateway value,
-  // so the local settings must move to state.resetValue (that fallback), not the
-  // product default the generic reset would apply.
-  if (activeProfile && state) {
+  requestServerUiPrefReset(key, "server");
+  // The resolved state owns the reset target, including the Gateway fallback
+  // while the profile is still loading. Config preferences use product defaults.
+  if (state) {
     // SAFETY: SYNCED_PREFS pairs each key's write() with that key's own value type.
     const write = specification.write as
       | ((value: SyncedPrefValue<K> | undefined) => Partial<UiSettings>)
       | undefined;
     if (write) {
-      return patchSettings(write(state.resetValue));
+      return applyReset(write(state.resetValue));
     }
   }
-  return patchSettings(reset(loadSettings()));
+  return applyReset(reset(loadSettings()));
 }
 export function applyServerUiPrefs(
   configObject: unknown,
@@ -325,6 +334,10 @@ export function applyServerUiPrefs(
   // mean the DOM shows this profile's values, so a switch between two known
   // scopes forces a full reconcile. Boot keeps the shortcut (mirror is current).
   const scopeChanged = lastReconciledScope !== "" && scope !== lastReconciledScope;
+  const profilePrefs = resolveProfileAppearancePrefs(gatewayScope, hooks.profileId);
+  // A known identity switch keeps the existing full reset; its mirror belongs
+  // to the previous identity. Only defer a pending profile within the same scope.
+  const appearanceReady = !hooks.profileId || profilePrefs !== null || scopeChanged;
   const recordReconciledObject = () => {
     lastReconciledScope = scope;
     lastReconciledConfigObject = configObject;
@@ -332,67 +345,48 @@ export function applyServerUiPrefs(
   const shadowPrefs =
     scope === pendingScope ? pendingPrefs : parseStoredPrefs(readStorage(PENDING_KEY, scope));
   const retainedLocalKeys = readRetainedLocalKeys(scope);
-  const prefs = {
-    ...extractServerUiPrefs(configObject),
-    ...resolveProfileAppearancePrefs(gatewayScope, hooks.profileId),
-  };
-  const key = JSON.stringify(prefs);
+  const reconciledRetainedKeys = [...retainedLocalKeys].filter(
+    (key) => appearanceReady || !isAppearancePref(key),
+  );
+  const prefs = { ...extractServerUiPrefs(configObject), ...profilePrefs };
   const lastSeenRaw = readStorage(LAST_SEEN_KEY, scope);
+  const lastSeen = parseStoredPrefs(lastSeenRaw) ?? {};
+  if (!appearanceReady) {
+    // A pending profile is not an empty profile. Keep its mirror and last-seen
+    // appearance until the profile can confirm overrides or Gateway fallbacks.
+    for (const key of SYNCED_PREF_KEYS) {
+      if (isAppearancePref(key)) {
+        delete prefs[key];
+        if (Object.hasOwn(lastSeen, key)) {
+          Object.assign(prefs, { [key]: lastSeen[key] });
+        }
+      }
+    }
+  }
+  const key = JSON.stringify(prefs);
   if (!scopeChanged && key === lastSeenRaw) {
-    if (retainedLocalKeys.size) {
-      updateRetainedLocalKeys(scope, [...retainedLocalKeys], false);
+    if (reconciledRetainedKeys.length) {
+      updateRetainedLocalKeys(scope, reconciledRetainedKeys, false);
     }
     recordReconciledObject();
     return false;
   }
-  const lastSeen = parseStoredPrefs(lastSeenRaw) ?? {};
-  const changed: ServerUiPrefs = {};
-  // Apply per field: only keys whose server value changed since last seen. Reapplying unchanged
-  // fields would revert unpushable local edits whenever any other server field moves.
-  for (const prefKey of Object.keys(prefs) as Array<keyof ServerUiPrefs>) {
-    if (
-      !(shadowPrefs && prefKey in shadowPrefs) &&
-      !retainedLocalKeys.has(prefKey) &&
-      (scopeChanged || lastSeenRaw === null || !prefValuesEqual(prefs[prefKey], lastSeen[prefKey]))
-    ) {
-      (changed as Record<string, unknown>)[prefKey] = prefs[prefKey];
-    }
-  }
-  for (const prefKey of Object.keys(lastSeen) as Array<keyof ServerUiPrefs>) {
-    if (
-      !(prefKey in prefs) &&
-      !(shadowPrefs && prefKey in shadowPrefs) &&
-      !retainedLocalKeys.has(prefKey) &&
-      SYNCED_PREFS[prefKey]?.clearable
-    ) {
-      (changed as Record<string, unknown>)[prefKey] = null;
-    }
-  }
-  if (scopeChanged) {
-    // The previous identity may have rendered appearance values this scope has
-    // never seen (absent from both prefs and this scope's last-seen); clear
-    // them back to defaults so the new identity never wears the old one's look.
-    for (const prefKey of SYNCED_PREF_KEYS) {
-      if (
-        isAppearancePref(prefKey) &&
-        !(prefKey in prefs) &&
-        !(shadowPrefs && prefKey in shadowPrefs) &&
-        !retainedLocalKeys.has(prefKey) &&
-        SYNCED_PREFS[prefKey].clearable
-      ) {
-        (changed as Record<string, unknown>)[prefKey] = null;
-      }
-    }
-  }
+  const changed = serverUiPrefsSnapshotDelta(prefs, lastSeen, {
+    appearanceReady,
+    scopeChanged,
+    firstSnapshot: lastSeenRaw === null,
+    shadowPrefs,
+    retainedLocalKeys,
+  });
   writeStorage(LAST_SEEN_KEY, scope, key);
-  if (retainedLocalKeys.size) {
-    updateRetainedLocalKeys(scope, [...retainedLocalKeys], false);
+  if (reconciledRetainedKeys.length) {
+    updateRetainedLocalKeys(scope, reconciledRetainedKeys, false);
   }
   recordReconciledObject();
   if (Object.hasOwn(changed, "theme")) {
     hooks.onThemeChanged?.(changed.theme ?? null);
   }
-  const patch = serverPrefsLocalPatch(changed, loadSettings());
+  const patch = serverPrefsLocalPatch(changed, loadSettings(gatewayScope || undefined));
   if (!patch) {
     return false;
   }
@@ -426,7 +420,11 @@ export function isApplyingServerUiPrefs(): boolean {
 }
 function adoptPushWriter(writer: ServerUiPrefsWriter, hooks: ServerUiPrefsPushHooks): void {
   const profileId = hooks.profileId ?? hooks.profile?.selfUser?.id ?? null;
-  const scope = resolveProfilePreferenceScope(writer.state.client?.gatewayUrl ?? "", profileId);
+  const gatewayScope = writer.state.client?.gatewayUrl ?? "";
+  if (profileId) {
+    rememberProfileAppearanceIdentity(gatewayScope, profileId);
+  }
+  const scope = resolveProfilePreferenceScope(gatewayScope, profileId);
   pushCanWrite = hooks.canWrite ?? hasOperatorWriteAccess(hooks.profile?.hello?.auth ?? null);
   if (pushWriter === writer && pushScope === scope && pushProfileId === profileId) {
     return;
@@ -498,7 +496,10 @@ async function drainPendingPrefs(writer: ServerUiPrefsWriter, epoch: number): Pr
     const localOnlyKeys = SYNCED_PREF_KEYS.filter(
       (key) =>
         pendingPrefs?.[key] !== undefined &&
-        SYNCED_PREFS[key].configSync === false &&
+        (SYNCED_PREFS[key].configSync === false ||
+          (key === "theme" &&
+            typeof pendingPrefs.theme === "string" &&
+            pendingPrefs.theme.includes("/"))) &&
         !(pushProfileId && pushCanWrite),
     );
     if (localOnlyKeys.length) {
@@ -534,18 +535,28 @@ async function drainPendingPrefs(writer: ServerUiPrefsWriter, epoch: number): Pr
       if (pushWriter !== writer || pushEpoch !== epoch) {
         return;
       }
+      if (useProfile && writer.state.client) {
+        invalidateUserPreferences(writer.state.client);
+      }
       const result = useProfile
-        ? await writeProfileAppearancePrefs(
-            writer.state.client,
-            batch,
-            writer.state.connected && pushCanWrite && batchIsCurrent(batch),
+        ? await import("./server-prefs-profile-runtime.ts").then(
+            ({ writeProfileAppearancePrefs }) =>
+              writeProfileAppearancePrefs(
+                writer.state.client,
+                batch,
+                pushWriter === writer &&
+                  pushEpoch === epoch &&
+                  writer.state.connected &&
+                  pushCanWrite &&
+                  batchIsCurrent(batch),
+              ),
           )
         : await writer.runExternalMutation(
             (client) =>
               // ui.prefs is a deliberately narrow hashless LWW surface enforced by
               // hasHashlessPatchLwwStructure in the gateway. Serialization still
               // matters: a pending whole-config save must commit before this merge.
-              client.request("config.patch", {
+              client.request<ConfigPatchAck>("config.patch", {
                 raw: JSON.stringify({ ui: { prefs: batch } }),
                 ...(batch.sidebarEntries !== undefined
                   ? { replacePaths: ["ui.prefs.sidebarEntries"] }
@@ -554,6 +565,7 @@ async function drainPendingPrefs(writer: ServerUiPrefsWriter, epoch: number): Pr
               }),
             {
               waitForWritesResumed: true,
+              configWriteAck: (ack) => ack,
               canDispatch: () => {
                 if (writer.canPatch === false) {
                   return false;

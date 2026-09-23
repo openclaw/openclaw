@@ -104,7 +104,7 @@ describe("ManagedWorktreeService run-end cleanup outcomes", () => {
     await expect(fs.access(created.path)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("preserves the winning removal outcome when a stale remover claims late", async () => {
+  it("preserves removal outcomes against late claims and post-abort writes", async () => {
     const created = await materialize("late-claim");
     await service.acquire(created.id);
     const staleRecord = getRegistryWorktree(env, created.id)!;
@@ -126,12 +126,6 @@ describe("ManagedWorktreeService run-end cleanup outcomes", () => {
       removedAt: now,
       runEndCleanup: { outcome: "removed-lossless", at: now },
     });
-  });
-
-  it("keeps the winning removal outcome when a post-abort write lands after finalization", async () => {
-    const created = await materialize("post-abort-race");
-    await service.acquire(created.id);
-    await expect(service.removeIfLossless(created.id)).resolves.toBe(true);
 
     // A stale remover that aborted its claim writes retained/failed outcomes with
     // the live-row condition (recordOutcome); against a finalized row it must be
@@ -149,8 +143,9 @@ describe("ManagedWorktreeService run-end cleanup outcomes", () => {
     });
   });
 
-  it("lets a newer post-restore cleanup outcome supersede the removal fact", async () => {
+  it("rejects stale lifecycle writes and records a newer post-restore cleanup outcome", async () => {
     const created = await materialize("restore-generation");
+    const staleActiveAt = created.lastActiveAt;
     await service.acquire(created.id);
     await expect(service.removeIfLossless(created.id)).resolves.toBe(true);
     expect(getRegistryWorktree(env, created.id)?.runEndCleanup).toMatchObject({
@@ -158,29 +153,12 @@ describe("ManagedWorktreeService run-end cleanup outcomes", () => {
     });
 
     const restored = await service.restore({ id: created.id });
+    // The pinned clock still requires a fresh activity stamp after restore.
+    expect(restored.lastActiveAt).toBe(staleActiveAt + 1);
     // Restore starts a new lifecycle: the stale removal outcome must not show
     // on the now-live row.
     expect(restored.runEndCleanup).toBeUndefined();
     expect(getRegistryWorktree(env, created.id)?.runEndCleanup).toBeUndefined();
-    await fs.writeFile(path.join(restored.path, "untracked.txt"), "retain me\n");
-    await service.acquire(created.id);
-    await expect(service.removeIfLossless(created.id)).resolves.toBe(false);
-
-    expect(getRegistryWorktree(env, created.id)).toMatchObject({
-      runEndCleanup: { outcome: "retained-dirty", at: now },
-    });
-  });
-
-  it("drops a prior-lifecycle outcome write after a concurrent remove and restore", async () => {
-    const created = await materialize("aba-restore-race");
-    const staleActiveAt = created.lastActiveAt;
-    await service.acquire(created.id);
-    await expect(service.removeIfLossless(created.id)).resolves.toBe(true);
-    // The pinned clock makes remove and restore share one millisecond — the
-    // exact case where restore must still advance the activity stamp so the
-    // stale writer's fence cannot match.
-    const restored = await service.restore({ id: created.id });
-    expect(restored.lastActiveAt).toBe(staleActiveAt + 1);
 
     // A stale remover from the pre-restore lifecycle writes with the activity
     // stamp it observed (recordOutcome's condition); against the revived row it
@@ -193,6 +171,13 @@ describe("ManagedWorktreeService run-end cleanup outcomes", () => {
     );
 
     expect(getRegistryWorktree(env, created.id)?.runEndCleanup).toBeUndefined();
+    await fs.writeFile(path.join(restored.path, "untracked.txt"), "retain me\n");
+    await service.acquire(created.id);
+    await expect(service.removeIfLossless(created.id)).resolves.toBe(false);
+
+    expect(getRegistryWorktree(env, created.id)).toMatchObject({
+      runEndCleanup: { outcome: "retained-dirty", at: now },
+    });
   });
 
   it("records dirty retention and keeps the checkout intact", async () => {

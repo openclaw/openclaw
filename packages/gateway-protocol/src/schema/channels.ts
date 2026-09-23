@@ -3,6 +3,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString, SecretInputSchema } from "./primitives.js";
+import { GatewayEventLoopHealthSchema } from "./runtime-vitals.js";
 
 /**
  * Channel and Talk protocol schemas.
@@ -194,6 +195,7 @@ const VoiceIdString = Type.String({ pattern: "^[A-Za-z0-9_-]{1,128}$" });
 export const TalkClientCreateParamsSchema = closedObject({
   sessionKey: Type.Optional(NonEmptyString),
   voiceSessionId: Type.Optional(VoiceIdString),
+  voiceChangeId: Type.Optional(NonEmptyString),
   provider: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
   voice: Type.Optional(Type.String()),
@@ -210,6 +212,7 @@ export const TalkClientCreateParamsSchema = closedObject({
         Type.Literal("camera-frame"),
         Type.Literal("voice-transcript"),
         Type.Literal("gateway-control-v1"),
+        Type.Literal("voice-selection"),
       ]),
       { uniqueItems: true },
     ),
@@ -290,6 +293,8 @@ export const TalkAgentControlResultSchema = closedObject({
 /** Creates a gateway-managed Talk session for realtime, transcription, or relay use. */
 export const TalkSessionCreateParamsSchema = closedObject({
   sessionKey: Type.Optional(Type.String()),
+  voiceChangeId: Type.Optional(NonEmptyString),
+  capabilities: Type.Optional(Type.Array(Type.Literal("voice-selection"), { uniqueItems: true })),
   spawnedBy: Type.Optional(NonEmptyString),
   provider: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
@@ -354,8 +359,11 @@ export const TalkSessionCloseParamsSchema = closedObject({
   sessionId: NonEmptyString,
 });
 
-/** Empty request payload for reading configured Talk provider capabilities. */
-export const TalkCatalogParamsSchema = closedObject({});
+/** Reads Talk provider capabilities with optional realtime launch overrides. */
+export const TalkCatalogParamsSchema = closedObject({
+  provider: Type.Optional(NonEmptyString),
+  model: Type.Optional(NonEmptyString),
+});
 
 /** One provider entry in the Talk capability catalog. */
 const TalkCatalogProviderSchema = closedObject({
@@ -365,6 +373,8 @@ const TalkCatalogProviderSchema = closedObject({
   aliases: Type.Optional(Type.Array(NonEmptyString)),
   models: Type.Optional(Type.Array(Type.String())),
   voices: Type.Optional(Type.Array(Type.String())),
+  activeVoices: Type.Optional(Type.Array(Type.String())),
+  activeVoiceSelectionPolicy: Type.Optional(Type.Literal("allowlist-default")),
   voicesByModel: Type.Optional(Type.Record(Type.String(), Type.Array(Type.String()))),
   defaultModel: Type.Optional(Type.String()),
   modes: Type.Optional(Type.Array(TalkModeSchema)),
@@ -571,6 +581,16 @@ export const TalkConfigResultSchema = closedObject({
         seamColor: Type.Optional(Type.String()),
       }),
     ),
+    clientHints: Type.Optional(
+      closedObject({
+        realtime: Type.Optional(
+          closedObject({
+            modelSource: Type.Optional(Type.Literal("gateway")),
+            gatewayRelaySupported: Type.Optional(Type.Boolean()),
+          }),
+        ),
+      }),
+    ),
   }),
 });
 
@@ -662,20 +682,8 @@ const ChannelUiMetaSchema = closedObject({
 
 /** Event-loop health snapshot included with channel status responses. */
 const ChannelEventLoopHealthSchema = closedObject({
-  degraded: Type.Boolean(),
-  degradedSinceMs: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
-  reasons: Type.Array(
-    Type.Union([
-      Type.Literal("event_loop_delay"),
-      Type.Literal("event_loop_utilization"),
-      Type.Literal("cpu"),
-    ]),
-  ),
+  ...GatewayEventLoopHealthSchema.properties,
   intervalMs: Type.Integer({ minimum: 0 }),
-  delayP99Ms: Type.Number({ minimum: 0 }),
-  delayMaxMs: Type.Number({ minimum: 0 }),
-  utilization: Type.Number({ minimum: 0 }),
-  cpuCoreRatio: Type.Number({ minimum: 0 }),
 });
 
 /** Full channel status result for dashboard and operator diagnostics. */
@@ -692,6 +700,24 @@ export const ChannelsStatusResultSchema = closedObject({
   eventLoop: Type.Optional(ChannelEventLoopHealthSchema),
   partial: Type.Optional(Type.Boolean()),
   warnings: Type.Optional(Type.Array(Type.String())),
+  statusIssues: Type.Optional(
+    Type.Array(
+      closedObject({
+        channel: NonEmptyString,
+        accountId: NonEmptyString,
+        kind: Type.Union([
+          Type.Literal("intent"),
+          Type.Literal("permissions"),
+          Type.Literal("config"),
+          Type.Literal("auth"),
+          Type.Literal("runtime"),
+        ]),
+        message: Type.String(),
+        fix: Type.Optional(Type.String()),
+      }),
+      { maxItems: 50 },
+    ),
+  ),
 });
 
 /** Logs out one channel account. */
@@ -714,6 +740,7 @@ export const ChannelsStartParamsSchema = closedObject({
 
 /** Starts browser/web login for a channel account. */
 export const WebLoginStartParamsSchema = closedObject({
+  channel: Type.Optional(NonEmptyString),
   force: Type.Optional(Type.Boolean()),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
   verbose: Type.Optional(Type.Boolean()),
@@ -727,6 +754,8 @@ const QrDataUrlSchema = Type.String({
 
 /** Waits for web login completion or the next QR code. */
 export const WebLoginWaitParamsSchema = closedObject({
+  channel: Type.Optional(NonEmptyString),
+  sessionKey: Type.Optional(NonEmptyString),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
   accountId: Type.Optional(Type.String()),
   currentQrDataUrl: Type.Optional(QrDataUrlSchema),

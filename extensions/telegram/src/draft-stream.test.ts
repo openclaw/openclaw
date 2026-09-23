@@ -1,6 +1,11 @@
 // Telegram tests cover draft stream plugin behavior.
 import type { Bot } from "grammy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createDraftStream,
+  createMockDraftApi,
+  type MockSentMessage,
+} from "./draft-stream.api.test-helpers.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import {
   markdownToTelegramChunks,
@@ -9,52 +14,8 @@ import {
 } from "./format.js";
 import { buildTelegramRichMarkdown, type TelegramInputRichMessage } from "./rich-message.js";
 
-type TelegramDraftStreamParams = Parameters<typeof createTelegramDraftStream>[0];
-type MockSentMessage = { message_id: number; message_thread_id?: number };
-type MockSendMessage = (
-  chatId: string | number,
-  text: string,
-  params?: Record<string, unknown>,
-) => Promise<MockSentMessage>;
-type MockSendRichMessage = (params: {
-  rich_message?: TelegramInputRichMessage;
-}) => Promise<MockSentMessage>;
-
-function createMockDraftApi(sendMessageImpl?: () => Promise<MockSentMessage>) {
-  const resolveSend = sendMessageImpl ?? (async () => ({ message_id: 17 }));
-  const sendRichMessage = vi.fn<MockSendRichMessage>(async () => await resolveSend());
-  const editRichMessageText = vi.fn().mockResolvedValue(true);
-  return {
-    sendMessage: vi.fn<MockSendMessage>(async () => await resolveSend()),
-    editMessageText: vi.fn().mockResolvedValue(true),
-    deleteMessage: vi.fn().mockResolvedValue(true),
-    raw: {
-      sendRichMessage,
-      editMessageText: editRichMessageText,
-    },
-  };
-}
-
 function createForumDraftStream(api: ReturnType<typeof createMockDraftApi>) {
-  return createThreadedDraftStream(api, { id: 99, scope: "forum" });
-}
-
-function createThreadedDraftStream(
-  api: ReturnType<typeof createMockDraftApi>,
-  thread: { id: number; scope: "direct-messages" | "dm" | "forum" },
-) {
-  return createDraftStream(api, { thread });
-}
-
-function createDraftStream(
-  api: ReturnType<typeof createMockDraftApi>,
-  overrides: Omit<Partial<TelegramDraftStreamParams>, "api" | "chatId"> = {},
-) {
-  return createTelegramDraftStream({
-    api: api as unknown as Bot["api"],
-    chatId: 123,
-    ...overrides,
-  });
+  return createDraftStream(api, { thread: { id: 99, scope: "forum" } });
 }
 
 async function expectInitialForumSend(
@@ -270,7 +231,7 @@ describe("createTelegramDraftStream", () => {
 
   it("omits message_thread_id for general topic id", async () => {
     const api = createMockDraftApi();
-    const stream = createThreadedDraftStream(api, { id: 1, scope: "forum" });
+    const stream = createDraftStream(api, { thread: { id: 1, scope: "forum" } });
 
     stream.update("Hello");
 
@@ -279,7 +240,7 @@ describe("createTelegramDraftStream", () => {
 
   it("uses message_thread_id for bot-private topic previews", async () => {
     const api = createMockDraftApi();
-    const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
+    const stream = createDraftStream(api, { thread: { id: 42, scope: "dm" } });
 
     stream.update("Hello");
     await vi.waitFor(() => expectPreviewSend(api, "Hello", { message_thread_id: 42 }));
@@ -293,7 +254,7 @@ describe("createTelegramDraftStream", () => {
 
   it("uses direct_messages_topic_id only for channel Direct Messages previews", async () => {
     const api = createMockDraftApi();
-    const stream = createThreadedDraftStream(api, { id: 77, scope: "direct-messages" });
+    const stream = createDraftStream(api, { thread: { id: 77, scope: "direct-messages" } });
 
     stream.update("Hello");
     await vi.waitFor(() => expectPreviewSend(api, "Hello", { direct_messages_topic_id: 77 }));
@@ -464,7 +425,7 @@ describe("createTelegramDraftStream", () => {
     vi.useFakeTimers();
     try {
       const api = createMockDraftApi();
-      const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
+      const stream = createDraftStream(api, { thread: { id: 42, scope: "dm" } });
 
       stream.update("Hello");
       await stream.flush();
@@ -555,6 +516,7 @@ describe("createTelegramDraftStream", () => {
 
         stream.update("🛠️ Exec");
         await stream.flush();
+        expect(stream.currentMessageSnapshot()?.replyToMessageId).toBe(411);
         expectNthPreviewSend(api, 1, "🛠️ Exec", {
           message_thread_id: 42,
           reply_parameters: {
@@ -563,8 +525,7 @@ describe("createTelegramDraftStream", () => {
           },
         });
         // Reposition: rewind for a new message; the old one's delete is deferred.
-        const superseded = stream.rotateToNewMessageDeferringDelete();
-        expect(superseded).toBe(17);
+        stream.rotateToNewMessageDeferringDelete();
 
         // The replacement lands before detached cleanup, so the old message
         // still owns the single-use reply and the replacement must omit it.
@@ -573,17 +534,20 @@ describe("createTelegramDraftStream", () => {
         expectNthPreviewSend(api, 2, "Answer below", {
           message_thread_id: 42,
         });
+        expect(stream.currentMessageSnapshot()?.replyToMessageId).toBeUndefined();
         expect(api.deleteMessage).not.toHaveBeenCalled();
 
         await vi.advanceTimersByTimeAsync(4_000);
         expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
         // Only the superseded (old) message is deleted; the new one stays.
         expect(api.deleteMessage).toHaveBeenCalledTimes(1);
+        expect(stream.currentMessageSnapshot()?.replyToMessageId).toBeUndefined();
 
         // Confirmed deletion releases ownership for the next concrete message.
         stream.forceNewMessage();
         stream.update("Later answer");
         await stream.flush();
+        expect(stream.currentMessageSnapshot()?.replyToMessageId).toBe(411);
         expectNthPreviewSend(api, 3, "Later answer", {
           message_thread_id: 42,
           reply_parameters: {
@@ -599,11 +563,43 @@ describe("createTelegramDraftStream", () => {
 
   it("rotateToNewMessageDeferringDelete is a no-op with no live message", () => {
     const api = createMockDraftApi();
-    const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
+    const stream = createDraftStream(api, { thread: { id: 42, scope: "dm" } });
 
-    expect(stream.rotateToNewMessageDeferringDelete()).toBeUndefined();
+    stream.rotateToNewMessageDeferringDelete();
     expect(api.deleteMessage).not.toHaveBeenCalled();
   });
+
+  it.each(["send", "edit"] as const)(
+    "does not recover a retired preview after a delayed %s receipt",
+    async (operation) => {
+      const api = createMockDraftApi();
+      const stream = createDraftStream(api);
+      let resolveReceipt!: (message: MockSentMessage) => void;
+      const receipt = new Promise<MockSentMessage>((resolve) => {
+        resolveReceipt = resolve;
+      });
+      if (operation === "edit") {
+        stream.update("Initial preview");
+        await stream.flush();
+        api.editMessageText.mockReturnValueOnce(receipt);
+      } else {
+        api.sendMessage.mockReturnValueOnce(receipt);
+      }
+
+      stream.update("Retired pre-tool preview");
+      const pending = stream.flush();
+      await vi.waitFor(() =>
+        expect(operation === "edit" ? api.editMessageText : api.sendMessage).toHaveBeenCalled(),
+      );
+      stream.rotateToNewMessageDeferringDelete();
+      resolveReceipt({ message_id: 17 });
+      await pending;
+
+      // Final-error recovery reads this value; a retired generation cannot supply it.
+      expect(stream.lastDeliveredText()).toBe("");
+      await stream.stop();
+    },
+  );
 
   it.each(["first", "batched"] as const)(
     "keeps a settled %s reply target owned when reposition cleanup fails",
@@ -2001,6 +1997,41 @@ describe("draft stream initial message debounce", () => {
   });
 
   describe("minInitialChars threshold", () => {
+    it.each([false, true])(
+      "sends short complete progress and resumes after clear (richMessages=%s)",
+      async (richMessages) => {
+        const api = createMockApi();
+        const stream = createDraftStream(api, { richMessages, minInitialChars: 30 });
+        const send = richMessages ? api.raw.sendRichMessage : api.sendMessage;
+        const progress = (text: string) => ({
+          text,
+          complete: true as const,
+          ...(richMessages ? { richMessage: buildTelegramRichMarkdown(text) } : {}),
+        });
+
+        stream.updatePreview(progress("0/1 complete"));
+        await stream.flush();
+        expect(send).toHaveBeenCalledOnce();
+
+        await stream.clear();
+        stream.forceNewMessage();
+        stream.update("Hi");
+        await stream.flush();
+        expect(send).toHaveBeenCalledOnce();
+
+        stream.updatePreview(progress("1/1 complete"));
+        await stream.flush();
+        expect(send).toHaveBeenCalledTimes(2);
+
+        stream.update("Done");
+        await stream.stop();
+        const edits = richMessages ? api.raw.editMessageText : api.editMessageText;
+        expect(edits).toHaveBeenCalled();
+        await vi.runOnlyPendingTimersAsync();
+        expect(api.deleteMessage).toHaveBeenCalledOnce();
+      },
+    );
+
     it("does not send first message below threshold", async () => {
       const api = createMockApi();
       const stream = createDebouncedStream(api);

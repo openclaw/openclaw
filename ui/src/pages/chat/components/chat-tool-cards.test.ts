@@ -349,6 +349,9 @@ describe("tool-cards", () => {
     expect(onOpenWorkspaceFile).toHaveBeenCalledWith({ path: "src/new.ts" });
     expect(onToggleExpanded).not.toHaveBeenCalled();
 
+    expect(container.querySelector(".chat-tool-row__toggle")?.getAttribute("aria-label")).toBe(
+      "Created new.ts",
+    );
     container.querySelector<HTMLButtonElement>(".chat-tool-row__toggle")?.click();
     expect(onToggleExpanded).toHaveBeenCalledWith("msg:patch:add");
     expect(onOpenWorkspaceFile).toHaveBeenCalledOnce();
@@ -745,34 +748,37 @@ describe("tool-cards", () => {
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
   });
 
-  it("shows the first message line in collapsed message tool rows", () => {
-    const container = document.createElement("div");
-    render(
-      renderToolCard(
-        {
-          id: "msg:5-message:call-5-message",
-          name: "message",
-          args: {
-            action: "send",
-            channel: "reef",
-            target: "@molty",
-            message: "Hello Molty, first claw-to-claw hello.\nSecond line stays in details.",
-          },
-          inputText: "message input",
-        },
-        { messageKey: "test-message", expanded: false, onToggleExpanded: vi.fn() },
-      ),
-      container,
-    );
+  it.each(["structured", "serialized"])(
+    "keeps %s message captions in expanded diagnostics, not the collapsed row",
+    (shape) => {
+      const container = document.createElement("div");
+      const privateCaption =
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nPrivate synthetic caption.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+      const args = { action: "send", to: "fixture-room", message: privateCaption };
+      const card = {
+        id: "message-caption",
+        name: "message",
+        args: shape === "structured" ? args : JSON.stringify(args),
+        inputText: JSON.stringify(args),
+      };
+      const options = { messageKey: "test-message", onToggleExpanded: vi.fn() };
+      render(renderToolCard(card, { ...options, expanded: false }), container);
 
-    const summaryButton = container.querySelector("button.chat-tool-msg-summary");
-    expect(summaryButton?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
-      "Message",
-    );
-    expect(summaryButton?.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe(
-      "Hello Molty, first claw-to-claw hello.",
-    );
-  });
+      const summary = container.querySelector("button.chat-tool-msg-summary");
+      expect(summary?.textContent).toContain("Message");
+      if (shape === "structured") {
+        expect(summary?.textContent).toContain("fixture-room");
+      }
+      expect(summary?.textContent).not.toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
+      expect(container.textContent).not.toContain("Private synthetic caption.");
+      expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
+
+      render(renderToolCard(card, { ...options, expanded: true }), container);
+      const diagnostics = container.querySelector(".chat-tool-msg-body");
+      expect(diagnostics?.textContent).toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
+      expect(diagnostics?.textContent).toContain("Private synthetic caption.");
+    },
+  );
 
   it("previews common intent arguments across generic tools", () => {
     expect(resolveCollapsedToolArgumentPreview({ task: "Review the PR" })).toBe("Review the PR");
@@ -1047,33 +1053,5 @@ describe("tool-cards", () => {
     expect(sidebar.kind).toBe("canvas");
     expect(sidebar.docId).toBe("cv_sidebar");
     expect(sidebar.entryUrl).toBe("/__openclaw__/canvas/documents/cv_sidebar/index.html");
-  });
-
-  it("opens ambiguous tool details with the same sidebar output", () => {
-    const container = document.createElement("div");
-    const onOpenSidebar = vi.fn();
-    render(
-      renderToolCard(
-        {
-          id: "msg:tool:full",
-          name: "browser.open",
-          outputText: "Opened page",
-          messageId: "msg-tool-full",
-        },
-        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn(), onOpenSidebar },
-      ),
-      container,
-    );
-
-    const sidebarButton = container.querySelector<HTMLButtonElement>(".chat-tool-card__action-btn");
-    expect(sidebarButton).toBeInstanceOf(HTMLButtonElement);
-    sidebarButton!.click();
-
-    const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");
-    expect(sidebar).toEqual({
-      kind: "markdown",
-      content: "## Browser.open\n\n**Tool:** `browser.open`\n\n### Tool output\nOpened page",
-      rawText: "Opened page",
-    });
   });
 });

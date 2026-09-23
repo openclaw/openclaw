@@ -1,6 +1,12 @@
 // Deepinfra provider module implements model/runtime integration.
-import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
-import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import {
+  detectMime,
+  extensionForMime,
+  mediaKindFromMime,
+  normalizeMimeType,
+} from "openclaw/plugin-sdk/media-mime";
+import { canonicalizeBase64, estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -30,7 +36,7 @@ import {
   normalizeDeepInfraBaseUrl,
   normalizeDeepInfraModelRef,
 } from "./media-models.js";
-import type { DeepInfraSurfaceModel } from "./provider-models.js";
+import type { DeepInfraSurfaceModel } from "./media-models.js";
 import { resolveDeepInfraVideoModelCapabilities } from "./surface-model-catalogs.js";
 
 // Per-poll request budget; the total operation budget comes from req.timeoutMs.
@@ -57,21 +63,45 @@ function normalizeDeepInfraVideoUrl(url: string, baseUrl: string): string {
   return new URL(url, baseUrl).href;
 }
 
-function parseVideoDataUrl(url: string): GeneratedVideoAsset | undefined {
-  const match = /^data:([^;,]+);base64,(.+)$/u.exec(url);
-  if (!match) {
+async function parseVideoDataUrl(
+  url: string,
+  maxBytes: number,
+): Promise<GeneratedVideoAsset | undefined> {
+  if (!url.startsWith("data:")) {
     return undefined;
   }
-  const mimeType = match[1] ?? "video/mp4";
-  const ext = extensionForMime(mimeType)?.slice(1) ?? "mp4";
-  const canonicalBase64 = canonicalizeBase64(match[2] ?? "");
+  const match = /^data:([^;,]+);base64,(.*)$/su.exec(url);
+  if (!match) {
+    throw new Error("DeepInfra video response: malformed video response");
+  }
+  const mimeType = normalizeMimeType(match[1]);
+  if (
+    !mimeType ||
+    (mediaKindFromMime(mimeType) !== "video" && mimeType !== "application/octet-stream")
+  ) {
+    throw new Error("DeepInfra video response: malformed video response");
+  }
+  const base64 = match[2] ?? "";
+  if (!base64) {
+    throw new Error("DeepInfra video response: malformed video response");
+  }
+  if (estimateBase64DecodedBytes(base64) > maxBytes) {
+    throw new Error(`DeepInfra generated video exceeds ${maxBytes} bytes`);
+  }
+  const canonicalBase64 = canonicalizeBase64(base64);
   if (!canonicalBase64) {
     throw new Error("DeepInfra video response returned malformed data URL base64");
   }
+  const buffer = Buffer.from(canonicalBase64, "base64");
+  // The provider label is untrusted: sniff only bytes, without filename or MIME hints.
+  const detectedMime = await detectMime({ buffer });
+  if (!detectedMime || mediaKindFromMime(detectedMime) !== "video") {
+    throw new Error("DeepInfra video response: malformed video response");
+  }
   return {
-    buffer: Buffer.from(canonicalBase64, "base64"),
-    mimeType,
-    fileName: `video-1.${ext}`,
+    buffer,
+    mimeType: detectedMime,
+    fileName: `video-1.${extensionForMime(detectedMime)?.slice(1) ?? "mp4"}`,
   };
 }
 
@@ -131,14 +161,18 @@ function firstDeepInfraVideoUrl(job: DeepInfraVideoJob): string | undefined {
   return undefined;
 }
 
-function extractDeepInfraVideoAsset(job: DeepInfraVideoJob, baseUrl: string): GeneratedVideoAsset {
+async function extractDeepInfraVideoAsset(
+  job: DeepInfraVideoJob,
+  baseUrl: string,
+  maxBytes: number,
+): Promise<GeneratedVideoAsset> {
   const videoUrl = firstDeepInfraVideoUrl(job);
   if (!videoUrl) {
     throw new Error("DeepInfra video response missing video URL");
   }
   const normalizedUrl = normalizeDeepInfraVideoUrl(videoUrl, baseUrl);
   // Some models return the MP4 inline as a data: URL, others a hosted https URL.
-  const dataAsset = parseVideoDataUrl(normalizedUrl);
+  const dataAsset = await parseVideoDataUrl(normalizedUrl, maxBytes);
   if (dataAsset) {
     return dataAsset;
   }
@@ -299,7 +333,11 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
                   : undefined,
             });
 
-      const video = extractDeepInfraVideoAsset(completed, baseUrl);
+      const video = await extractDeepInfraVideoAsset(
+        completed,
+        baseUrl,
+        resolveGeneratedMediaMaxBytes(req.cfg, "video"),
+      );
       return {
         videos: [video],
         model: normalizeOptionalString(completed.model) ?? model,

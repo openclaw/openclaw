@@ -10,23 +10,54 @@ read_when:
 
 `sessions_search` searches the user and assistant text in visible past sessions. Each result
 includes a `sessionKey`, timestamp, role, and a short matching excerpt. Pass the returned
-`sessionKey` to `sessions_history` when you need the surrounding conversation.
+`sessionKey`, `messageId`, and `sessionId` together to `sessions_history` to reopen the matched
+context, including retained history from before a session reset. Without `messageId`, history
+returns the newest reset-relative tail. An explicit `messageId` that remains in that
+current view, including a pre-reset row kept after reset, keeps current-view behavior
+and can include later post-reset turns. An explicit `messageId` for a retained
+active-path row outside the current view opens that original closed interval and does
+not mix later post-reset turns.
+
+Anchored reads use `limit` to bound the surrounding messages. Omit `offset` when using an anchor.
+For SQLite transcript history, a missing or off-path message returns empty history rather than
+the newest tail; a `sessionId` that does not belong to the selected session key is rejected.
+These rules also apply in local embedded mode, without a running Gateway.
 
 ## Visibility and output
 
 Search uses the same configured session visibility rules as `sessions_history`. The default
-`tools.sessions.visibility: "agent"` permits unsandboxed callers to search all sessions belonging to
-their agent, including other users' conversations in shared-agent deployments. Set explicit `tree`
-or `self`, or use separate agents, when callers need a narrower trust boundary. Per-peer DM routing
-separates conversation context but does not restrict session-tool visibility.
+`tools.sessions.visibility: "all"` permits unsandboxed callers to search sessions across agents on
+the Gateway, including other users' conversations. Cross-agent access is on by default and governed
+by `tools.agentToAgent`; set `enabled: false` to block ordinary cross-agent access or use `allow` to
+restrict agent pairs (requester-owned native subagent and ACP child sessions stay reachable under `tree` or `all`). Set explicit `agent`, `tree`, or `self` when callers need narrower session visibility.
+Per-peer DM routing separates conversation context but does not restrict session-tool visibility.
 
 Results outside the caller's effective visibility scope are removed before result limits are
 applied. Sandboxed agents remain limited to sessions they spawned when spawned-session visibility
-is enabled. Incognito sessions remain excluded; ordinary cross-agent access requires `all` plus
-agent-to-agent policy.
+is enabled. Incognito sessions remain excluded; narrowing visibility from `all` blocks ordinary
+cross-agent access.
 
 Excerpts are redacted before they return to the model. Results are also bounded by count, excerpt
 length, and total response size.
+
+## Control UI search
+
+The command palette and Threads page send their session filters to the Gateway, which
+searches the full authorized indexed history in that scope. The browser does not download
+a session roster to choose which transcripts to search, and a roster page size does not
+exclude older matching sessions.
+
+The command palette also finds agent-created conversations assigned to a custom
+sidebar group, by title or transcript, after you switch to another conversation.
+Ungrouped spawned sessions and subagent runs remain excluded from the palette.
+Groups do not grant access to private conversations or include incognito or
+archived sessions in active search.
+
+Search returns a bounded set of the best matches. More matches than the result limit is
+normal, not an incomplete-index warning; refine the query to narrow the results. Genuine
+indexing work and cold archived transcripts excluded from search have separate status
+messages. Cold transcript history becomes searchable again when its session is opened
+and the history is restored. Search does not restore archived history automatically.
 
 ## Index lifecycle
 
@@ -40,11 +71,15 @@ sessions whose active branch was rewound are reindexed by a background reconcili
 with the next search. A response with `indexing: true` can therefore be incomplete; retry after
 indexing finishes. Deleting a session removes its index entries in the same transaction.
 
-Search currently uses SQLite's Unicode word tokenizer with diacritic removal. Trigram tokenization
-for CJK substring matching is a future improvement.
+Search uses SQLite's Unicode word tokenizer with diacritic removal.
 
 ## Session search vs. memory search
 
 Use `sessions_search` for exact words or phrases from raw session transcripts. Use
 [`memory_search`](/concepts/memory-search) for durable memory files and semantic recall. The
-experimental session-memory corpus is the semantic complement to this exact transcript search.
+[experimental session-memory corpus](/concepts/memory-search#session-memory-search) is the semantic
+complement to this exact transcript search.
+
+## Related
+
+- [Session tools](/concepts/session-tool) — the `sessions_*` tool surface that exposes this search

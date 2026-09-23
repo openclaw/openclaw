@@ -9,6 +9,7 @@ import type {
 } from "../../memory-host-sdk/host/types.js";
 import { resolveMemorySearchStaleness } from "../../memory-host-sdk/host/types.js";
 import { getActiveMemorySearchManagerCore } from "../../plugins/memory-runtime.js";
+import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -153,22 +154,37 @@ export const memorySearchHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    let readRebuildWarning: () => string | undefined = () => undefined;
     try {
+      const { captureMemoryRebuildNotice } = loadBundledPluginPublicArtifactModuleSync<{
+        captureMemoryRebuildNotice: (status: MemoryProviderStatus) => () => string | undefined;
+      }>({ dirName: "memory-core", artifactBasename: "search-api.js" });
+      readRebuildWarning = captureMemoryRebuildNotice(manager.status());
       const results = await manager.search(query, searchOptions);
       const status = manager.status();
+      const staleness = resolveMemorySearchStaleness(status, agentId);
+      const warning = [staleness?.warning, readRebuildWarning()]
+        .filter((message): message is string => typeof message === "string")
+        .join(" ");
       const payload: MemorySearchResponse = {
         agentId,
         provider: status.provider,
         searchMode: resolveSearchMode(status),
         results,
-        ...resolveMemorySearchStaleness(status, agentId),
+        ...staleness,
+        ...(warning ? { warning } : {}),
       };
       respond(true, payload, undefined);
     } catch (error) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, `memory search failed: ${formatErrorMessage(error)}`),
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          [`memory search failed: ${formatErrorMessage(error)}`, readRebuildWarning()]
+            .filter(Boolean)
+            .join(" "),
+        ),
       );
     } finally {
       await manager.close?.().catch(() => {});

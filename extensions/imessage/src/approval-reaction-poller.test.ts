@@ -165,7 +165,7 @@ describe("iMessage approval reaction poller", () => {
   });
 
   it("does not scan recent chats during fast polling for handle-only targets", async () => {
-    registerTarget({
+    await registerTarget({
       conversation: { handle: "+15551230000" },
     });
     const request = vi.fn();
@@ -176,7 +176,7 @@ describe("iMessage approval reaction poller", () => {
   });
 
   it("discovers typed handle-only targets through recent chat history", async () => {
-    registerTarget({
+    await registerTarget({
       conversation: { handle: APPROVER },
     });
     const request = createRpcRequest([buildApprovalMessage()], [DEFAULT_CHAT_ID]);
@@ -204,10 +204,10 @@ describe("iMessage approval reaction poller", () => {
   });
 
   it("uses learned chat ids for fast scoped polling after discovery", async () => {
-    registerTarget({
+    await registerTarget({
       conversation: { handle: "+15551230000" },
     });
-    registerTarget({
+    await registerTarget({
       conversation: { chatId: 42, chatGuid: "SMS;-;+15551230000" },
     });
     const request = createRpcRequest([]);
@@ -223,7 +223,7 @@ describe("iMessage approval reaction poller", () => {
   });
 
   it("continues scanning after an unauthorized reaction leaves the approval pending", async () => {
-    registerIMessageApprovalReactionTarget({
+    await registerIMessageApprovalReactionTarget({
       accountId,
       conversation: { chatId: 42, chatGuid: "iMessage;+;chat-guid" },
       messageId: "msg-1",
@@ -277,7 +277,7 @@ describe("iMessage approval reaction poller", () => {
       applied: false,
       approval: { status: "denied", decision: "deny", reason: "user" },
     });
-    registerIMessageApprovalReactionTarget({
+    await registerIMessageApprovalReactionTarget({
       accountId,
       conversation: { chatId: 42, chatGuid: "iMessage;+;chat-guid" },
       messageId: "msg-1",
@@ -329,7 +329,7 @@ describe("iMessage approval reaction poller", () => {
 
   it("propagates an authorized resolver failure and retries it on the next poll", async () => {
     resolverMocks.resolveApprovalOverGateway.mockRejectedValueOnce(new Error("gateway down"));
-    registerIMessageApprovalReactionTarget({
+    await registerIMessageApprovalReactionTarget({
       accountId,
       conversation: { chatId: 42, chatGuid: "iMessage;+;chat-guid" },
       messageId: "msg-1",

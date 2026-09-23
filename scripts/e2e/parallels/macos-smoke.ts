@@ -25,7 +25,6 @@ import {
   resolveLatestVersion,
   resolveProviderAuth,
   resolveSnapshot,
-  run,
   say,
   shouldSkipSnapshotRestore,
   shellQuote,
@@ -44,6 +43,7 @@ import {
 import { MacosGuest } from "./guest-transports.ts";
 import { runSmokeLane, type SmokeLane, type SmokeLaneStatus } from "./lane-runner.ts";
 import { MacosDiscordSmoke } from "./macos-discord.ts";
+import { runMacosHostCommand as run } from "./macos-exec.ts";
 import { resolveMacosVmName, waitForVmStatus } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
 import {
@@ -51,6 +51,7 @@ import {
   npmRegistryEnv,
   packAndServeSmokeArtifact,
   parseSmokeCliArgs,
+  posixAgentTurnScript,
   posixStopGatewayScript,
   type SmokeCliOptions,
 } from "./smoke-common.ts";
@@ -1062,43 +1063,14 @@ rm -f "$provider_config_batch"`);
     this.guestSh(
       `${posixAgentWorkspaceScript("Parallels macOS smoke test assistant.")}
 ${posixCodexPlatformPackageRepairFunction()}
-agent_ok=false
-for attempt in 1 2; do
-  session_id="parallels-macos-smoke"
-  if [ "$attempt" -gt 1 ]; then session_id="parallels-macos-smoke-retry-$attempt"; fi
-  rm -f "$HOME/.openclaw/agents/main/sessions/$session_id.jsonl"
-  output_file="$(mktemp)"
-  set +e
-  /usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} ${guestOpenClawEntryRunner} agent --local --agent main --session-id "$session_id" --message ${shellQuote(
+${posixAgentTurnScript({
+  command: `/usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} ${guestOpenClawEntryRunner} agent --local --agent main --session-id "$session_id" --message ${shellQuote(
     "Reply with exact ASCII text OK only.",
-  )} --thinking off --timeout ${this.modelTimeoutSeconds} --json >"$output_file" 2>&1
-  rc=$?
-  set -e
-  cat "$output_file"
-  if [ "$rc" -ne 0 ]; then
-    if [ "$attempt" -lt 2 ] && repair_missing_codex_platform_package "$output_file"; then
-      rm -f "$output_file"
-      echo "agent turn attempt $attempt hit a missing Codex platform package; retrying"
-      continue
-    fi
-    rm -f "$output_file"
-    exit "$rc"
-  fi
-  if grep -Eq '"finalAssistant(Raw|Visible)Text"[[:space:]]*:[[:space:]]*"OK"' "$output_file"; then
-    agent_ok=true
-    rm -f "$output_file"
-    break
-  fi
-  rm -f "$output_file"
-  if [ "$attempt" -lt 2 ]; then
-    echo "agent turn attempt $attempt finished without OK response; retrying"
-    sleep 3
-  fi
-done
-if [ "$agent_ok" != true ]; then
-  echo "openclaw agent finished without OK response" >&2
-  exit 1
-fi`,
+  )} --thinking off --timeout ${this.modelTimeoutSeconds} --json`,
+  sessionIdExpression: '"parallels-macos-smoke"',
+  retrySessionIdExpression: '"parallels-macos-smoke-retry-$attempt"',
+  printOutput: "cat",
+})}`,
     );
   }
 

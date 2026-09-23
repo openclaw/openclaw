@@ -11,6 +11,7 @@ function createRunsProps(overrides: Partial<CronRunsSectionProps> = {}): CronRun
     basePath: "",
     agentId: "main",
     runs: [],
+    runsState: "ready",
     runsHasMore: false,
     runsLoadingMore: false,
     runsStatuses: [],
@@ -18,6 +19,7 @@ function createRunsProps(overrides: Partial<CronRunsSectionProps> = {}): CronRun
     runsQuery: "",
     runsSortDir: "desc",
     onLoadMoreRuns: () => undefined,
+    onRefresh: () => undefined,
     onRunsFiltersChange: () => undefined,
     ...overrides,
   };

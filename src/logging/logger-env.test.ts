@@ -1,13 +1,9 @@
 // Logger env tests cover log level and transport behavior from environment config.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  getResolvedConsoleSettings,
-  getResolvedLoggerSettings,
-  resetLogger,
-  setLoggerOverride,
-} from "../logging.js";
 import { captureEnv } from "../test-utils/env.js";
+import { getResolvedConsoleSettings } from "./console.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
+import { getResolvedLoggerSettings, resetLogger, setLoggerOverride } from "./logger.js";
 import { loggingState } from "./state.js";
 
 const defaultMaxFileBytes = 100 * 1024 * 1024;
@@ -72,9 +68,7 @@ describe("OPENCLAW_LOG_LEVEL", () => {
       file: testLogPath,
     });
     process.env.OPENCLAW_LOG_LEVEL = "nope";
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(
-      () => true as unknown as ReturnType<typeof process.stderr.write>, // preserve stream contract in test spy
-    );
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
     expect(getResolvedLoggerSettings().level).toBe("error");
     expect(getResolvedLoggerSettings().maxFileBytes).toBe(defaultMaxFileBytes);
@@ -96,9 +90,7 @@ describe("OPENCLAW_LOG_LEVEL", () => {
       file: testLogPath,
     });
     process.env.OPENCLAW_LOG_LEVEL = "nope";
-    const stderrSpy = vi
-      .spyOn(process.stderr, "write")
-      .mockImplementation(() => true as unknown as ReturnType<typeof process.stderr.write>);
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
     expect(getResolvedConsoleSettings().level).toBe("info");
 

@@ -8,6 +8,7 @@ import {
   collectHostedGateEvidence as collectHostedGateEvidenceRaw,
   HOSTED_GATE_MAX_AGE_HOURS,
   loadPullRequestCommitShas,
+  main,
   notApplicableScheduledHostedWorkflows,
   parseArgs,
   parseWorkflowRunPage,
@@ -15,6 +16,9 @@ import {
   workflowRunQueryPaths,
   workflowRunPageCount,
 } from "../../scripts/verify-pr-hosted-gates.mts";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+
+const testNodeExecPath = resolveTestNodeExecPath();
 
 const sha = "773ffd87a1e1e34451ad6e38fda37380c2569a50";
 const mainSha = "d".repeat(40);
@@ -211,8 +215,9 @@ describe("verify-pr-hosted-gates", () => {
         loadCiReuseCandidates: () => [priorSuccessfulCiRun({ head_sha: candidate })],
         execGit: (args, options) => {
           const result = git(args, options);
-          if (args[0] === "patch-id" && ++comparisons === 1)
+          if (args[0] === "patch-id" && ++comparisons === 1) {
             git(["update-ref", "refs/remotes/origin/main", candidate]);
+          }
           return result;
         },
       });
@@ -257,7 +262,7 @@ describe("verify-pr-hosted-gates", () => {
       );
 
       const result = spawnSync(
-        process.execPath,
+        testNodeExecPath,
         [join(process.cwd(), "scripts/verify-pr-hosted-gates.mjs"), "--older-cwd-startup-probe"],
         {
           cwd: targetRoot,
@@ -591,6 +596,154 @@ describe("verify-pr-hosted-gates", () => {
         ciGateJobs: [gateJob],
       }),
     ).toThrow(/Missing successful recent CI workflow/);
+  });
+
+  it.each(SCHEDULED_HOSTED_WORKFLOWS)(
+    "retains the newest non-skipped %s decision by creation order",
+    (workflowName) => {
+      const evidence = collectHostedGateEvidence({
+        sha,
+        workflowRuns: [
+          successfulRun("CI", 1, "2026-06-17T10:47:00Z"),
+          successfulRun(workflowName, 10, "2026-06-17T10:54:00Z"),
+          successfulRun(workflowName, 20, "2026-06-17T10:53:00Z"),
+          {
+            ...successfulRun(workflowName, 30, "2026-06-17T10:50:00Z"),
+            conclusion: "skipped",
+          },
+        ],
+      });
+
+      expect(evidence.workflows).toEqual([
+        expect.objectContaining({ name: "CI", id: 1 }),
+        expect.objectContaining({ name: workflowName, id: 20 }),
+      ]);
+    },
+  );
+
+  it.each(SCHEDULED_HOSTED_WORKFLOWS.filter((name) => name !== BUILD_ARTIFACTS_WORKFLOW))(
+    "covers queued artifacts after a skipped duplicate of supporting %s",
+    (workflowName) => {
+      const workflowRuns = queuedBuildArtifactFallbackRuns();
+      const supportingRun = expectDefined(
+        workflowRuns.find((run) => run.name === workflowName),
+        "successful supporting workflow",
+      );
+      const evidence = collectHostedGateEvidence({
+        sha,
+        workflowRuns: [
+          ...workflowRuns,
+          {
+            ...successfulRun(workflowName, 30, "2026-06-17T10:50:00Z"),
+            conclusion: "skipped",
+          },
+        ],
+      });
+
+      expect(evidence.workflows).toContainEqual(
+        expect.objectContaining({ name: workflowName, id: supportingRun.id }),
+      );
+      expect(evidence.fallbackCoveredWorkflows).toEqual([
+        {
+          name: BUILD_ARTIFACTS_WORKFLOW,
+          coveredBy: "CI release gate",
+          reason: "scheduled workflow is queued",
+        },
+      ]);
+    },
+  );
+
+  it.each(SCHEDULED_HOSTED_WORKFLOWS)(
+    "does not look past a non-skipped unsuccessful %s decision",
+    (workflowName) => {
+      for (const [status, conclusion] of [
+        ["completed", "failure"],
+        ["completed", "cancelled"],
+        ["completed", "timed_out"],
+        ["completed", "action_required"],
+        ["completed", "neutral"],
+        ["completed", "unknown"],
+        ["completed", null],
+        ["queued", null],
+        ["in_progress", null],
+        ["unknown", "skipped"],
+        ["in_progress", "skipped"],
+      ] as const) {
+        expect(
+          () =>
+            collectHostedGateEvidence({
+              sha,
+              workflowRuns: [
+                successfulRun("CI", 1, "2026-06-17T10:47:00Z"),
+                successfulRun(workflowName, 10, "2026-06-17T10:54:00Z"),
+                {
+                  ...successfulRun(workflowName, 20, "2026-06-17T10:53:00Z"),
+                  run_attempt: 2,
+                  status,
+                  conclusion,
+                },
+                {
+                  ...successfulRun(workflowName, 30, "2026-06-17T10:50:00Z"),
+                  conclusion: "skipped",
+                },
+              ],
+            }),
+          `${status}/${conclusion}`,
+        ).toThrow(`Missing successful recent ${workflowName} workflow`);
+      }
+    },
+  );
+
+  it.each(SCHEDULED_HOSTED_WORKFLOWS)(
+    "requires eligible recent %s success before a skipped duplicate",
+    (workflowName) => {
+      const success = successfulRun(workflowName, 10, "2026-06-17T10:54:00Z");
+      const cases: Array<[string, WorkflowRunFixture[]]> = [
+        ["skip only", []],
+        ["stale", [{ ...success, updated_at: "2026-06-16T10:54:59Z" }]],
+        ["future", [{ ...success, updated_at: "2026-06-17T11:01:00Z" }]],
+        ["manual", [{ ...success, event: "workflow_dispatch" }]],
+        ["wrong workflow", [{ ...success, name: "Unrelated" }]],
+        [
+          "wrong head without PR membership",
+          [{ ...success, head_sha: previousSha, pull_requests: [{ number: pr + 1 }] }],
+        ],
+      ];
+      for (const [label, earlierRuns] of cases) {
+        expect(
+          () =>
+            collectHostedGateEvidence({
+              sha,
+              workflowRuns: [
+                successfulRun("CI", 1, "2026-06-17T10:47:00Z"),
+                ...earlierRuns,
+                {
+                  ...successfulRun(workflowName, 30, "2026-06-17T10:50:00Z"),
+                  conclusion: "skipped",
+                },
+              ],
+            }),
+          label,
+        ).toThrow(`Missing successful recent ${workflowName} workflow`);
+      }
+    },
+  );
+
+  it("keeps skipped artifact history ineligible for queued-artifact coverage", () => {
+    for (const id of [0, 30]) {
+      expect(() =>
+        collectHostedGateEvidence({
+          sha,
+          workflowRuns: [
+            ...queuedBuildArtifactFallbackRuns(),
+            {
+              ...successfulRun(BUILD_ARTIFACTS_WORKFLOW, id, "2026-06-17T10:50:00Z"),
+              conclusion: "skipped",
+            },
+          ],
+        }),
+      ).toThrow("Missing successful recent Blacksmith Build Artifacts Testbox workflow");
+    }
   });
 
   it("requires the latest scheduled workflow run to pass", () => {
@@ -1590,7 +1743,7 @@ describe("verify-pr-hosted-gates", () => {
 
   it("rejects malformed PR numbers before invoking GitHub", () => {
     const result = spawnSync(
-      process.execPath,
+      testNodeExecPath,
       [
         join(process.cwd(), "scripts/verify-pr-hosted-gates.mjs"),
         ...requiredCliArgs.with(5, "1e3"),
@@ -1601,6 +1754,23 @@ describe("verify-pr-hosted-gates", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Expected --pr <positive-integer>.");
     expect(result.stderr).not.toContain("spawnSync gh");
+  });
+
+  it.each([
+    { number: pr + 1, repo: "openclaw/openclaw", head: sha, error: "does not identify" },
+    { number: pr, repo: "replacement/openclaw", head: sha, error: "does not identify" },
+    { number: pr, repo: "openclaw/openclaw", head: previousSha, error: "head changed" },
+    { number: pr, repo: "openclaw/openclaw", head: "", error: "missing head metadata" },
+  ])("rejects carried observation drift before hosted discovery: $number/$repo/$head", (value) => {
+    expect(() =>
+      main(requiredCliArgs, {
+        number: value.number,
+        baseRepository: { nameWithOwner: value.repo },
+        headRefName: "topic",
+        headRefOid: value.head,
+        headRepository: { nameWithOwner: "openclaw/openclaw" },
+      }),
+    ).toThrow(value.error);
   });
 
   it("rejects duplicate hosted gate verifier CLI arguments", () => {

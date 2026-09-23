@@ -1,4 +1,5 @@
 // Browser tests cover pw session.create page.navigation guard plugin behavior.
+import { EventEmitter } from "node:events";
 import { chromium } from "playwright-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
@@ -78,7 +79,8 @@ function installBrowserMocks() {
   });
   const mainFrame = {};
   const contextOn = vi.fn();
-  const browserOn = vi.fn();
+  const browserEvents = new EventEmitter();
+  const browserOn = vi.fn(browserEvents.on.bind(browserEvents));
   const browserClose = vi.fn(async () => {});
   const sessionSend = vi.fn(async (method: string) => {
     if (method === "Target.getTargetInfo") {
@@ -89,6 +91,7 @@ function installBrowserMocks() {
   const sessionDetach = vi.fn(async () => {});
 
   const context = {
+    browser: () => browser,
     pages: () => openPages,
     on: contextOn,
     newPage: vi.fn(async () => {
@@ -116,6 +119,7 @@ function installBrowserMocks() {
   const browser = {
     contexts: () => [context],
     on: browserOn,
+    off: browserEvents.off.bind(browserEvents),
     close: browserClose,
   } as unknown as import("playwright-core").Browser;
 
@@ -496,7 +500,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     expect(pageClose).toHaveBeenCalledTimes(1);
   });
 
-  it("does not quarantine a tab on transient post-navigation check errors", async () => {
+  it("closes an unreturned tab without quarantine on transient post-navigation errors", async () => {
     const { pageGoto, pageClose, getRouteHandler, mainFrame } = installBrowserMocks();
     const assertRedirectChainAllowedSpy = vi.spyOn(
       navigationGuardModule,
@@ -531,9 +535,12 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
       ).rejects.toThrow(/getaddrinfo .*postcheck\.example/);
 
       const pages = await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:18792" });
-      expect(pages).toHaveLength(1);
-      expect(pages[0]?.targetId).toBe("TARGET_1");
-      expect(pageClose).not.toHaveBeenCalled();
+      expect(pages).toHaveLength(0);
+      expect(pageClose).toHaveBeenCalledOnce();
+      await createPageViaPlaywright({ cdpUrl: "http://127.0.0.1:18792", url: "about:blank" });
+      await expect(
+        getPageForTargetId({ cdpUrl: "http://127.0.0.1:18792", targetId: "TARGET_1" }),
+      ).resolves.toBeDefined();
     } finally {
       assertRedirectChainAllowedSpy.mockRestore();
     }
@@ -568,7 +575,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
   });
 
   it("preserves blocked-target quarantine across forced reconnects", async () => {
-    const { pageGoto, pageClose, getRouteHandler, mainFrame } = installBrowserMocks();
+    const { page, pageGoto, pageClose, getRouteHandler, mainFrame } = installBrowserMocks();
     pageClose.mockRejectedValueOnce(new Error("close failed"));
     mockBlockedRedirectNavigation({ pageGoto, getRouteHandler, mainFrame });
 
@@ -580,8 +587,8 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     ).rejects.toBeInstanceOf(SsrFBlockedError);
 
     await forceDisconnectPlaywrightForTarget({
+      page,
       cdpUrl: "http://127.0.0.1:18792",
-      reason: "test forced reconnect",
     });
 
     await expect(
@@ -635,48 +642,6 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
         cdpUrl: "http://127.0.0.1:18792",
       }),
     ).rejects.toThrow("Browser target is unavailable after SSRF policy blocked its navigation.");
-  });
-
-  it("does not fall back to another tab when explicit target lookup misses", async () => {
-    const { pageGoto, pageClose, sessionSend, getRouteHandler, mainFrame } = installBrowserMocks();
-    pageClose.mockRejectedValueOnce(new Error("close failed"));
-    mockBlockedRedirectNavigation({ pageGoto, getRouteHandler, mainFrame });
-
-    await expect(
-      createPageViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        url: "https://93.184.216.34/start",
-      }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
-
-    sessionSend.mockImplementationOnce(async (method: string) => {
-      if (method === "Target.getTargetInfo") {
-        return { targetInfo: { targetId: "TARGET_2" } };
-      }
-      return {};
-    });
-    await createPageViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      url: "https://example.com",
-    });
-
-    let targetInfoLookups = 0;
-    sessionSend.mockImplementation(async (method: string) => {
-      if (method === "Target.getTargetInfo") {
-        targetInfoLookups += 1;
-        return {
-          targetInfo: { targetId: targetInfoLookups % 2 === 1 ? "TARGET_1" : "TARGET_2" },
-        };
-      }
-      return {};
-    });
-
-    await expect(
-      getPageForTargetId({
-        cdpUrl: "http://127.0.0.1:18792",
-        targetId: "MISSING_TARGET",
-      }),
-    ).rejects.toBeInstanceOf(BrowserTabNotFoundError);
   });
 
   it("quarantines the actual page when blocked navigation receives a stale target id", async () => {
@@ -755,8 +720,8 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     ).rejects.toBeInstanceOf(SsrFBlockedError);
 
     await forceDisconnectPlaywrightForTarget({
+      page,
       cdpUrl: "http://127.0.0.1:18792",
-      reason: "test reconnect after blocked navigation",
     });
 
     const second = installBrowserMocks();

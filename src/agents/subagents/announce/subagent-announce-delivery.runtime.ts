@@ -1,22 +1,18 @@
 /**
  * Runtime dependency owner for subagent announcement delivery.
- *
- * Tests override this module's delivery capabilities while origin routing keeps
- * using the direct runtime exports below.
  */
-import { resolveQueueSettings } from "../../../auto-reply/reply/queue.js";
+import "../../../auto-reply/reply/queue.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { loadSessionEntryReadOnly as loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { callGateway } from "../../../gateway/call.js";
-import { resolveExternalBestEffortDeliveryTarget } from "../../../infra/outbound/best-effort-delivery.js";
-import { createBoundDeliveryRouter } from "../../../infra/outbound/bound-delivery-router.js";
-import { resolveConversationIdFromTargets } from "../../../infra/outbound/conversation-id.js";
+import "../../../infra/outbound/best-effort-delivery.js";
+import "../../../infra/outbound/bound-delivery-router.js";
+import "../../../infra/outbound/conversation-id.js";
 import { sendMessage } from "../../../infra/outbound/message.js";
-import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import "../../../plugins/hook-runner-global.js";
 import {
   normalizeAgentId,
   normalizeMainKey,
@@ -27,44 +23,20 @@ import type { EmbeddedAgentQueueMessageOptions } from "../../embedded-agent-runn
 import {
   formatEmbeddedAgentQueueFailureSummary,
   isEmbeddedAgentRunActive,
-  isEmbeddedRunAbandoned,
   queueEmbeddedAgentMessageWithOutcomeAsync,
+  queueGuardedEmbeddedAgentMessageWithOutcomeAsync,
+  resolveEmbeddedRunAbandonment,
   type EmbeddedAgentQueueMessageOutcome,
 } from "../../embedded-agent-runner/runs.js";
 import { dispatchGatewayMethodInProcess } from "./subagent-announce.runtime.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
+export { resolveQueueSettings } from "../../../auto-reply/reply/queue.js";
+export { resolveExternalBestEffortDeliveryTarget } from "../../../infra/outbound/best-effort-delivery.js";
+export { createBoundDeliveryRouter } from "../../../infra/outbound/bound-delivery-router.js";
+export { resolveConversationIdFromTargets } from "../../../infra/outbound/conversation-id.js";
+export { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 
-export {
-  createBoundDeliveryRouter,
-  formatEmbeddedAgentQueueFailureSummary,
-  getGlobalHookRunner,
-  isEmbeddedAgentRunActive,
-  resolveConversationIdFromTargets,
-  resolveExternalBestEffortDeliveryTarget,
-  resolveQueueSettings,
-};
-
-export type SubagentAnnounceDeliveryDeps = {
-  callGateway: typeof callGateway;
-  dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
-  getRuntimeConfig: typeof getRuntimeConfig;
-  getRequesterSessionActivity: (
-    requesterSessionKey: string,
-    requesterAgentId?: string,
-  ) => {
-    sessionId?: string;
-    isActive: boolean;
-  };
-  isRequesterSessionAbandoned: (requesterSessionKey: string, sessionId?: string) => boolean;
-  loadSessionEntry: typeof loadSessionEntry;
-  loadRequesterSessionEntry: typeof loadRequesterSessionEntry;
-  queueEmbeddedAgentMessageWithOutcome: (
-    sessionId: string,
-    text: string,
-    options?: EmbeddedAgentQueueMessageOptions,
-  ) => EmbeddedAgentQueueMessageOutcome | Promise<EmbeddedAgentQueueMessageOutcome>;
-  sendMessage: typeof sendMessage;
-};
+export { formatEmbeddedAgentQueueFailureSummary, isEmbeddedAgentRunActive };
 
 type RequesterSessionEntryResult = {
   cfg: ReturnType<typeof getRuntimeConfig>;
@@ -105,11 +77,11 @@ export function tryResolveSubagentRequesterAgentId(
   );
 }
 
-function loadDefaultRequesterSessionEntry(
+export function loadRequesterSessionEntry(
   requesterSessionKey: string,
   explicitAgentId?: string,
 ): RequesterSessionEntryResult {
-  const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
+  const cfg = getRuntimeConfig();
   const rawStorageKey = requesterSessionKey.trim();
   const canonicalKey = resolveRequesterStoreKey(cfg, requesterSessionKey, explicitAgentId);
   const configuredMainKey = normalizeMainKey(cfg.session?.mainKey);
@@ -120,7 +92,7 @@ function loadDefaultRequesterSessionEntry(
     return { cfg, entry: undefined, canonicalKey };
   }
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
-  const entry = subagentAnnounceDeliveryDeps.loadSessionEntry({
+  const entry = loadSessionEntry({
     storePath,
     sessionKey: storageKey,
     agentId,
@@ -129,111 +101,52 @@ function loadDefaultRequesterSessionEntry(
   return { cfg, entry, canonicalKey, agentId, storePath };
 }
 
-const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
-  callGateway: ((...args) => callGateway(...args)) as typeof callGateway,
-  dispatchGatewayMethodInProcess: ((...args) =>
-    dispatchGatewayMethodInProcess(...args)) as typeof dispatchGatewayMethodInProcess,
-  getRuntimeConfig: () => getRuntimeConfig(),
-  getRequesterSessionActivity: (requesterSessionKey: string, requesterAgentId?: string) => {
-    const cfg = getRuntimeConfig();
-    const resolvedAgentId = tryResolveSubagentRequesterAgentId(
-      cfg,
-      requesterSessionKey,
-      requesterAgentId,
-    );
-    if (!resolvedAgentId) {
-      return { isActive: false };
-    }
-    const storedSessionId = loadRequesterSessionEntry(requesterSessionKey, resolvedAgentId).entry
-      ?.sessionId;
-    // Unscoped active-run keys are ambiguous across agents. An explicit owner
-    // must use its logical store entry instead of accepting another agent's run.
-    const activeSessionId = parseAgentSessionKey(requesterSessionKey)
-      ? resolveActiveEmbeddedRunSessionId(requesterSessionKey)
-      : undefined;
-    const sessionId = activeSessionId ?? storedSessionId;
-    return {
-      sessionId,
-      isActive: Boolean(sessionId && isEmbeddedAgentRunActive(sessionId)),
-    };
-  },
-  isRequesterSessionAbandoned: (requesterSessionKey, sessionId) =>
-    isEmbeddedRunAbandoned({ sessionKey: requesterSessionKey, sessionId }),
-  loadSessionEntry: (...args) => loadSessionEntry(...args),
-  loadRequesterSessionEntry: loadDefaultRequesterSessionEntry,
-  queueEmbeddedAgentMessageWithOutcome: (...args) =>
-    queueEmbeddedAgentMessageWithOutcomeAsync(...args),
-  sendMessage: (...args) => sendMessage(...args),
-};
-
-let subagentAnnounceDeliveryDeps = defaultSubagentAnnounceDeliveryDeps;
-
-export function setSubagentAnnounceDeliveryDepsForTest(
-  overrides?: Partial<SubagentAnnounceDeliveryDeps>,
-): void {
-  const callGatewayOverride = overrides?.callGateway;
-  const dispatchGatewayMethodInProcessOverride =
-    overrides?.dispatchGatewayMethodInProcess ??
-    (callGatewayOverride
-      ? ((async (method, agentParams, options) =>
-          await callGatewayOverride({
-            method,
-            params: agentParams,
-            expectFinal: options?.expectFinal,
-            onAccepted: options?.onAccepted,
-            timeoutMs: options?.timeoutMs,
-          })) satisfies typeof dispatchGatewayMethodInProcess)
-      : undefined);
-  subagentAnnounceDeliveryDeps = overrides
-    ? {
-        ...defaultSubagentAnnounceDeliveryDeps,
-        ...overrides,
-        ...(dispatchGatewayMethodInProcessOverride
-          ? { dispatchGatewayMethodInProcess: dispatchGatewayMethodInProcessOverride }
-          : {}),
-      }
-    : defaultSubagentAnnounceDeliveryDeps;
-}
-
 export function getSubagentAnnounceRuntimeConfig() {
-  return subagentAnnounceDeliveryDeps.getRuntimeConfig();
+  return getRuntimeConfig();
 }
 
 export function getSubagentRequesterSessionActivity(
   requesterSessionKey: string,
   requesterAgentId?: string,
 ) {
-  return subagentAnnounceDeliveryDeps.getRequesterSessionActivity(
+  const cfg = getRuntimeConfig();
+  const resolvedAgentId = tryResolveSubagentRequesterAgentId(
+    cfg,
     requesterSessionKey,
     requesterAgentId,
   );
+  if (!resolvedAgentId) {
+    return { isActive: false };
+  }
+  const storedSessionId = loadRequesterSessionEntry(requesterSessionKey, resolvedAgentId).entry
+    ?.sessionId;
+  // Unscoped active-run keys are ambiguous across agents. An explicit owner
+  // must use its logical store entry instead of accepting another agent's run.
+  const activeSessionId = parseAgentSessionKey(requesterSessionKey)
+    ? resolveActiveEmbeddedRunSessionId(requesterSessionKey)
+    : undefined;
+  const sessionId = activeSessionId ?? storedSessionId;
+  return {
+    sessionId,
+    isActive: Boolean(sessionId && isEmbeddedAgentRunActive(sessionId)),
+  };
 }
 
-export function isSubagentRequesterSessionAbandoned(
+export function resolveSubagentRequesterSessionAbandonment(
   requesterSessionKey: string,
   sessionId?: string,
 ) {
-  return subagentAnnounceDeliveryDeps.isRequesterSessionAbandoned(requesterSessionKey, sessionId);
-}
-
-export function loadRequesterSessionEntry(
-  requesterSessionKey: string,
-  explicitAgentId?: string,
-): RequesterSessionEntryResult {
-  return subagentAnnounceDeliveryDeps.loadRequesterSessionEntry(
-    requesterSessionKey,
-    explicitAgentId,
-  );
+  return resolveEmbeddedRunAbandonment({ sessionKey: requesterSessionKey, sessionId });
 }
 
 export function loadSessionEntryByKey(sessionKey: string, explicitAgentId?: string) {
-  const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
+  const cfg = getRuntimeConfig();
   const agentId = tryResolveSubagentRequesterAgentId(cfg, sessionKey, explicitAgentId);
   if (!agentId) {
     return undefined;
   }
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
-  return subagentAnnounceDeliveryDeps.loadSessionEntry({
+  return loadSessionEntry({
     storePath,
     sessionKey,
     agentId,
@@ -245,27 +158,28 @@ export async function queueSubagentAnnounceMessage(
   sessionId: string,
   text: string,
   options?: EmbeddedAgentQueueMessageOptions,
+  canInject?: () => boolean,
 ): Promise<EmbeddedAgentQueueMessageOutcome> {
-  return await subagentAnnounceDeliveryDeps.queueEmbeddedAgentMessageWithOutcome(
-    sessionId,
-    text,
-    options,
-  );
+  if (canInject) {
+    return await queueGuardedEmbeddedAgentMessageWithOutcomeAsync(
+      sessionId,
+      text,
+      options,
+      canInject,
+    );
+  }
+  return await queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, text, options);
 }
 
 export async function dispatchSubagentAnnounceAgent(
   agentParams: Record<string, unknown>,
   options: Parameters<typeof dispatchGatewayMethodInProcess>[2],
 ): Promise<unknown> {
-  return await subagentAnnounceDeliveryDeps.dispatchGatewayMethodInProcess(
-    "agent",
-    agentParams,
-    options,
-  );
+  return await dispatchGatewayMethodInProcess("agent", agentParams, options);
 }
 
 export async function sendSubagentAnnounceMessage(
   params: Parameters<typeof sendMessage>[0],
 ): ReturnType<typeof sendMessage> {
-  return await subagentAnnounceDeliveryDeps.sendMessage(params);
+  return await sendMessage(params);
 }

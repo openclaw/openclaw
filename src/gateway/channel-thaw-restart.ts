@@ -4,7 +4,7 @@ import type { ChannelManager } from "./server-channels.js";
 
 type ThawRestartManager = Pick<
   ChannelManager,
-  "getRuntimeSnapshot" | "isManuallyStopped" | "stopChannel" | "startChannel"
+  "getRuntimeSnapshot" | "isManuallyStopped" | "isAccountListed" | "stopChannel" | "startChannel"
 >;
 
 export type ThawRestartTarget = { channelId: ChannelId; accountId: string };
@@ -14,11 +14,15 @@ export type ThawRestartSelection =
   | { kind: "deferred-retry"; targets: readonly ThawRestartTarget[] };
 
 function snapshotRunningTargets(manager: ThawRestartManager): ThawRestartTarget[] {
-  return Object.entries(manager.getRuntimeSnapshot().channelAccounts).flatMap(
-    ([channelId, accounts]) =>
-      Object.entries(accounts ?? {})
-        .filter(([, status]) => status?.running === true)
-        .map(([accountId]) => ({ channelId: channelId as ChannelId, accountId })),
+  return Object.entries(
+    manager.getRuntimeSnapshot({ inspectAccounts: false }).channelAccounts,
+  ).flatMap(([channelId, accounts]) =>
+    Object.entries(accounts ?? {})
+      .filter(
+        ([accountId, status]) =>
+          status?.running === true && manager.isAccountListed(channelId, accountId),
+      )
+      .map(([accountId]) => ({ channelId, accountId })),
   );
 }
 
@@ -35,7 +39,7 @@ function dedupeTargets(targets: readonly ThawRestartTarget[]): ThawRestartTarget
 }
 
 /**
- * Restarts every running, non-manually-stopped channel account after a host
+ * Restarts running listed, non-manually-stopped channel accounts after a host
  * thaw. Dead sockets from a freeze otherwise wait for the slow health sweep.
  */
 export async function restartRunningChannelAccounts(
@@ -59,31 +63,39 @@ export async function restartRunningChannelAccounts(
       return [...failedTargets, ...targets.slice(index)];
     }
     try {
-      let current = manager.getRuntimeSnapshot().channelAccounts[channelId]?.[accountId];
-      if (!current) {
+      const snapshotOptions = { channelId, inspectAccounts: false };
+      let current =
+        manager.getRuntimeSnapshot(snapshotOptions).channelAccounts[channelId]?.[accountId];
+      if (!current || !manager.isAccountListed(channelId, accountId)) {
         continue;
       }
       await manager.stopChannel(channelId, accountId, { manual: false });
       if (!opts.shouldContinue()) {
         return [...failedTargets, target, ...targets.slice(index + 1)];
       }
-      current = manager.getRuntimeSnapshot().channelAccounts[channelId]?.[accountId];
-      if (!current) {
+      current = manager.getRuntimeSnapshot(snapshotOptions).channelAccounts[channelId]?.[accountId];
+      if (!current || !manager.isAccountListed(channelId, accountId)) {
         continue;
       }
       let startOutcomes = await manager.startChannel(channelId, accountId, {
         preserveManualStop: true,
       });
       let startOutcome = startOutcomes.get(accountId);
-      let restarted = manager.getRuntimeSnapshot().channelAccounts[channelId]?.[accountId];
-      if (startOutcome?.status === "retry" && restarted?.restartPending === true) {
+      let restarted =
+        manager.getRuntimeSnapshot(snapshotOptions).channelAccounts[channelId]?.[accountId];
+      if (
+        startOutcome?.status === "retry" &&
+        restarted?.restartPending === true &&
+        manager.isAccountListed(channelId, accountId)
+      ) {
         // A timed-out stop uses a two-call recovery contract: the first call
         // requests replacement and the second discards the stale task.
         startOutcomes = await manager.startChannel(channelId, accountId, {
           preserveManualStop: true,
         });
         startOutcome = startOutcomes.get(accountId);
-        restarted = manager.getRuntimeSnapshot().channelAccounts[channelId]?.[accountId];
+        restarted =
+          manager.getRuntimeSnapshot(snapshotOptions).channelAccounts[channelId]?.[accountId];
       }
       // The channel manager owns all failures after handoff through its restart
       // supervisor. Intentional configuration skips are complete; only a

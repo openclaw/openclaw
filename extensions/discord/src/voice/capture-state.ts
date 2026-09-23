@@ -1,8 +1,9 @@
-// Discord plugin module implements capture state behavior.
 import type { Readable } from "node:stream";
 
 type VoiceCaptureEntry = {
   stream?: Readable;
+  stopInput?: () => void;
+  startRecording?: () => void;
   finalizeTimer?: ReturnType<typeof setTimeout>;
 };
 
@@ -18,7 +19,11 @@ export function stopVoiceCaptureState(state: VoiceCaptureState): void {
   state.clear();
   for (const capture of captures) {
     clearVoiceCaptureFinalizeTimer(capture);
-    capture.stream?.destroy();
+    if (capture.stopInput) {
+      capture.stopInput();
+    } else {
+      capture.stream?.destroy();
+    }
   }
 }
 
@@ -29,6 +34,27 @@ export function clearVoiceCaptureFinalizeTimer(capture: VoiceCaptureEntry): bool
   clearTimeout(capture.finalizeTimer);
   delete capture.finalizeTimer;
   return true;
+}
+
+export async function waitForVoiceCaptureAdmission(params: {
+  capture: VoiceCaptureEntry;
+  conversationAuthorized: Promise<boolean>;
+  isRecordingCurrent: () => boolean;
+}): Promise<boolean> {
+  const recordingStarted = new Promise<void>((resolve) => {
+    params.capture.startRecording = resolve;
+  });
+  try {
+    await Promise.race([params.conversationAuthorized, recordingStarted]);
+  } catch (error) {
+    // Receive owns conversation failures once recording has its own authority.
+    if (!params.isRecordingCurrent()) {
+      throw error;
+    }
+  } finally {
+    delete params.capture.startRecording;
+  }
+  return params.isRecordingCurrent() || (await params.conversationAuthorized);
 }
 
 export function beginVoiceCapture(

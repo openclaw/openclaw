@@ -6,6 +6,12 @@ import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
 import { recoverEmbeddedRunTimeout } from "./run/timeout-context-recovery.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
+import {
+  resolveEmbeddedRunAbandonment,
+  markActiveEmbeddedRunAbandoned,
+  setActiveEmbeddedRun,
+} from "./runs.js";
+import { createEmbeddedRunHandle, testing as runsTesting } from "./runs.test-support.js";
 import { createUsageAccumulator } from "./usage-accumulator.js";
 
 const mocks = vi.hoisted(() => ({
@@ -128,18 +134,16 @@ function makeInput(overrides: RecoveryOverrides = {}): RecoveryInput {
     sessionAgentId: "main",
     agentDir: "/tmp/agent",
     workspaceDir: "/tmp/workspace",
-    provider: "openai",
-    modelId: "gpt-5.6-luna",
+    modelSelection: { provider: "openai", model: "gpt-5.6-luna", authProfileIdSource: "auto" },
     harnessRuntime: "openclaw",
     thinkLevel: "off",
-    authProfileIdSource: "auto",
     resolveContextEnginePluginId: () => undefined,
     buildRuntimeSettings: ({ tokenBudget, degradedReason }) =>
       buildContextEngineRuntimeSettings({
         contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
-        provider: input.provider,
-        requestedModel: input.modelId,
-        resolvedModel: input.modelId,
+        provider: input.modelSelection.provider,
+        requestedModel: input.modelSelection.model,
+        resolvedModel: input.modelSelection.model,
         promptTokenBudget: tokenBudget,
         degradedReason,
       }),
@@ -162,6 +166,7 @@ describe("recoverEmbeddedRunTimeout", () => {
     mocks.info.mockReset();
     mocks.postCompactionSideEffects.mockReset();
     mocks.warn.mockReset();
+    runsTesting.resetActiveEmbeddedRuns();
   });
 
   it.each([
@@ -299,6 +304,64 @@ describe("recoverEmbeddedRunTimeout", () => {
       undefined,
     );
   });
+
+  it("restores terminal abandonment when recovery throws after marking the run", async () => {
+    const handle = {} as Parameters<typeof setActiveEmbeddedRun>[1];
+    setActiveEmbeddedRun("session-1", handle, "agent:main:session-1");
+    expect(
+      markActiveEmbeddedRunAbandoned({
+        sessionId: "session-1",
+        handle,
+        sessionKey: "agent:main:session-1",
+        reason: "timeout",
+      }),
+    ).toBe(true);
+
+    const input = makeInput({
+      runOwnsCompactionAfterHook: vi.fn(async () => {
+        throw new Error("after-hook failed");
+      }),
+    });
+
+    await expect(recoverEmbeddedRunTimeout(input)).rejects.toThrow("after-hook failed");
+    expect(resolveEmbeddedRunAbandonment({ sessionId: "session-1" })).toBe("timeout");
+  });
+
+  it.each(["session-1", "compaction-successor"])(
+    "recovers active abandonment and restores it if retry cannot start (%s)",
+    async (sessionId) => {
+      const handle = createEmbeddedRunHandle({ runId: "run-1" });
+      setActiveEmbeddedRun(sessionId, handle, "agent:main:session-1");
+      expect(
+        markActiveEmbeddedRunAbandoned({
+          sessionId,
+          handle,
+          sessionKey: "agent:main:session-1",
+          reason: "timeout",
+        }),
+      ).toBe(true);
+
+      const state = createEmbeddedRunContextRecoveryState();
+      let abandonmentDuringCompaction: ReturnType<typeof resolveEmbeddedRunAbandonment>;
+      mocks.compact.mockImplementationOnce(async () => {
+        abandonmentDuringCompaction = resolveEmbeddedRunAbandonment({ sessionId });
+        return successfulCompaction();
+      });
+      const input = makeInput({
+        state,
+        attempt: { sessionIdUsed: sessionId },
+        getActiveSession: () => ({ id: sessionId, file: "/tmp/current-session.jsonl" }),
+      });
+      expect(await recoverEmbeddedRunTimeout(input)).toBe(true);
+      expect(abandonmentDuringCompaction).toBe("recovering_timeout");
+      expect(resolveEmbeddedRunAbandonment({ sessionId })).toBe("recovering_timeout");
+
+      // The run loop owns this cleanup after recovery returns, including the
+      // fallible preparation window before the next active run is registered.
+      expect(state.restoreTimeoutRecoveryAbandonment()).toBe(true);
+      expect(resolveEmbeddedRunAbandonment({ sessionId })).toBe("timeout");
+    },
+  );
 
   it.each(["durable", "detached"] as const)(
     "keeps %s recovery accounting separate from durable post-compaction effects",

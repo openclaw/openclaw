@@ -5,7 +5,7 @@ import {
   observeRealtimeTalkDevices,
   type RealtimeTalkDeviceIssue,
   type RealtimeTalkInputDevice,
-} from "./realtime-talk-input.ts";
+} from "./talk/input.ts";
 
 export type ComposerTalkCapabilityStatus = "checking" | "ready" | "unavailable" | "unknown";
 
@@ -120,11 +120,8 @@ export class ComposerMicrophonePicker {
     this.issueValue = null;
     const request = ++this.discoveryRequest;
     this.requestUpdate();
-    // Permission-requesting discovery on every pass, including device changes:
-    // a microphone that just appeared has hidden labels until the probe runs,
-    // and the probe only prompts while the picker is the surface in front of
-    // the user.
-    void discoverRealtimeTalkInputs(true)
+    // A closed or replaced picker cannot turn delayed discovery into a prompt.
+    void discoverRealtimeTalkInputs(() => this.openValue && request === this.discoveryRequest)
       .then((result) => {
         if (request !== this.discoveryRequest) {
           return;

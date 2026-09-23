@@ -20,6 +20,7 @@ import { acquireGatewayLock, type GatewayLockOptions } from "../infra/gateway-lo
 import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { agentCliCommand, agentViaGatewayTesting } from "./agent-via-gateway.js";
 import type { agentCommand as AgentCommand } from "./agent.js";
 
@@ -79,6 +80,7 @@ function mockConfig(storePath: string, overrides?: Partial<OpenClawConfig>) {
       },
       ...(overrides?.agents?.ownership ? { ownership: overrides.agents.ownership } : {}),
       ...(overrides?.agents?.list ? { list: overrides.agents.list } : {}),
+      ...(overrides?.agents?.entries ? { entries: overrides.agents.entries } : {}),
     },
     session: {
       store: storePath,
@@ -321,10 +323,12 @@ function resetAgentCliCommandMocksForTest() {
   vi.stubEnv("OPENCLAW_GATEWAY_URL", "");
   agentViaGatewayTesting.resetLazyImportsForTests();
   agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests([0, 0, 0, 0]);
-  loadAgentSessionModuleMock.mockImplementation(
-    async () => await import("./agent/session.runtime.js"),
-  );
-  agentViaGatewayTesting.setAgentSessionModuleLoaderForTests(loadAgentSessionModuleMock);
+  // Each test observes a fresh mock generation, even after the real module was
+  // warmed; a single hoisted factory would hide later unexpected imports.
+  vi.doMock("./agent/session.runtime.js", async (importOriginal) => {
+    loadAgentSessionModuleMock();
+    return await importOriginal<typeof import("./agent/session.runtime.js")>();
+  });
   originalForceConsoleToStderr = loggingState.forceConsoleToStderr;
   loggingState.forceConsoleToStderr = false;
 }
@@ -334,6 +338,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.doUnmock("./agent/session.runtime.js");
   vi.unstubAllEnvs();
   configureExecutionIdentityAdmissionSink(() => false)();
   agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests();
@@ -355,6 +360,7 @@ describe("agentCliCommand", () => {
         zeroTimeoutGatewayRequestMs = request.timeoutMs;
       });
     } finally {
+      vi.doUnmock("./agent/session.runtime.js");
       agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests();
       loggingState.forceConsoleToStderr = restoreForceConsoleToStderr;
     }
@@ -413,23 +419,35 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("uses owner authority with the configured local gateway by default", async () => {
-    await withTempStore(async () => {
-      mockGatewaySuccessReply();
+  it.each([false, true])(
+    "uses owner authority with the local gateway (explicit sole: %s)",
+    async (explicitOwnership) => {
+      await withTempStore(
+        async () => {
+          mockGatewaySuccessReply();
 
-      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+          await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
 
-      expect(callGateway).toHaveBeenCalledTimes(1);
-      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
-      expect(request.clientName).toBe("cli");
-      expect(request.mode).toBe("cli");
-      expect(request.scopes).toEqual(["operator.admin"]);
-      expect(request.params).toHaveProperty("cleanupBundleMcpOnRunEnd", true);
-      expect(agentCommand).not.toHaveBeenCalled();
-      expect(agentModuleLoadCount).not.toHaveBeenCalled();
-      expect(runtime.log).toHaveBeenCalledWith("hello");
-    });
-  });
+          expect(callGateway).toHaveBeenCalledTimes(1);
+          const request = requireRecord(
+            requireFirstCallArg(callGateway, "gateway"),
+            "gateway request",
+          );
+          expect(request.clientName).toBe("cli");
+          expect(request.mode).toBe("cli");
+          expect(request.scopes).toEqual(["operator.admin"]);
+          expect(request.params).toMatchObject({ agentId: explicitOwnership ? "solo" : "main" });
+          expect(request.params).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
+          expect(agentCommand).not.toHaveBeenCalled();
+          expect(agentModuleLoadCount).not.toHaveBeenCalled();
+          expect(runtime.log).toHaveBeenCalledWith("hello");
+        },
+        explicitOwnership
+          ? { agents: { ownership: "explicit", entries: { solo: {} } } }
+          : undefined,
+      );
+    },
+  );
 
   it("keeps an agent-scoped gateway turn off session and delivery runtimes", async () => {
     await withTempStore(
@@ -2464,6 +2482,58 @@ describe("agentCliCommand", () => {
     }, remoteGatewayConfig);
   });
 
+  it.each([
+    {
+      label: "timed out",
+      createError: createGatewayTimeoutError,
+      expectTimeoutAdvice: true,
+    },
+    {
+      label: "connection closed",
+      createError: createGatewayClosedError,
+      expectTimeoutAdvice: false,
+    },
+  ])(
+    "names the accepted run in the transport-loss hint after the Gateway $label",
+    async ({ createError, expectTimeoutAdvice }) => {
+      await withTempStore(async () => {
+        const error = createError();
+        const signal = createSignalProcess();
+        callGateway.mockImplementation(
+          async (request: { onAccepted?: (payload: unknown) => void }) => {
+            request.onAccepted?.({ status: "accepted", runId: "gateway-accepted" });
+            throw error;
+          },
+        );
+
+        await expect(
+          agentCliCommand(
+            { message: "hi", sessionKey: "agent:ops:run-proof", json: true },
+            jsonRuntime,
+            { process: signal.processLike },
+          ),
+        ).rejects.toBe(error);
+
+        expect(callGateway).toHaveBeenCalledOnce();
+        expect(agentCommand).not.toHaveBeenCalled();
+        const hint = mockMessages(jsonRuntime.error).join("\n");
+        expect(hint).toContain("Gateway agent call");
+        expect(hint).toContain("accepted run gateway-accepted");
+        if (expectTimeoutAdvice) {
+          expect(hint).toContain("--timeout <seconds>");
+        }
+        // The documented JSON failure envelope keeps ok:false and error.type/message
+        // alongside the accepted run provenance for the shared failure renderer.
+        expect(formatCliJsonFailure(error, { env: {} })).toEqual({
+          ok: false,
+          runId: "gateway-accepted",
+          origin: "gateway",
+          error: { type: "cli_error", message: error.message },
+        });
+      }, remoteGatewayConfig);
+    },
+  );
+
   it("rejects gateway timeout errors unchanged with a local retry hint", async () => {
     await withTempStore(async () => {
       const error = createGatewayTimeoutError();
@@ -2523,7 +2593,7 @@ describe("agentCliCommand", () => {
 
         await agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime);
 
-        expect(auditRecorderMocks.create).toHaveBeenCalledWith({ messageMode: "off" });
+        expect(auditRecorderMocks.create).toHaveBeenCalledOnce();
         expect(auditRecorderMocks.stop).toHaveBeenCalledOnce();
         expect(hasExecutionIdentityAdmissionSink()).toBe(false);
       },
@@ -2619,8 +2689,10 @@ describe("agentCliCommand", () => {
       try {
         await withTempStore(async () => {
           const error = createGatewayNormalCloseError();
+          const gatewayStarted = createDeferredCore();
           callGateway.mockImplementation(
             async (request: { onAccepted?: (payload: unknown) => void }) => {
+              gatewayStarted.resolve();
               if (accepted && callGateway.mock.calls.length === 1) {
                 request.onAccepted?.({ status: "accepted", runId: "gateway-before-retry" });
                 throw createGatewayNormalCloseError();
@@ -2631,6 +2703,8 @@ describe("agentCliCommand", () => {
 
           const command = agentCliCommand({ message: "hi", to: "+1555" }, runtime);
           const rejection = expect(command).rejects.toBe(error);
+          // Module loading is not driven by fake time; observe dispatch before advancing it.
+          await gatewayStarted.promise;
           await vi.advanceTimersByTimeAsync(33_000);
           await rejection;
 
@@ -2961,6 +3035,70 @@ describe("agentCliCommand", () => {
 
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(runtime.exit).not.toHaveBeenCalledWith(1);
+  });
+
+  it("keeps a resolved session module cached until the existing lazy reset", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+      const run = () => agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+      await expect(run()).resolves.toEqual(gatewaySuccessReply("hello"));
+      expect(loadAgentSessionModuleMock).toHaveBeenCalledOnce();
+
+      const nextGeneration = vi.fn();
+      vi.doMock("./agent/session.runtime.js", async (importOriginal) => {
+        nextGeneration();
+        return await importOriginal<typeof import("./agent/session.runtime.js")>();
+      });
+      await expect(run()).resolves.toEqual(gatewaySuccessReply("hello"));
+      expect(nextGeneration).not.toHaveBeenCalled();
+
+      agentViaGatewayTesting.resetLazyImportsForTests();
+      await expect(run()).resolves.toEqual(gatewaySuccessReply("hello"));
+      expect(nextGeneration).toHaveBeenCalledOnce();
+      expect(callGateway).toHaveBeenCalledTimes(3);
+      expect(
+        callGateway.mock.calls.map(([value]) => {
+          const request = requireRecord(value, "gateway request");
+          return requireRecord(request.params, "gateway params").sessionKey;
+        }),
+      ).toEqual(["agent:main:main", "agent:main:main", "agent:main:main"]);
+    });
+  });
+
+  it("keeps a rejected session module cached until the existing lazy reset", async () => {
+    await withTempStore(async () => {
+      const failure = new Error("synthetic session module load failure");
+      const rejectedGeneration = vi.fn(() => {
+        throw failure;
+      });
+      vi.doMock("./agent/session.runtime.js", rejectedGeneration);
+      const signals = createSignalProcess();
+      const run = () =>
+        agentCliCommand({ message: "hi", to: "+1555" }, runtime, {
+          process: signals.processLike,
+        });
+      const firstError = await run().catch((error: unknown) => error);
+      expect(firstError).toBeInstanceOf(Error);
+      expect(firstError).toMatchObject({ cause: failure });
+      expect(rejectedGeneration).toHaveBeenCalledOnce();
+
+      const nextGeneration = vi.fn();
+      vi.doMock("./agent/session.runtime.js", async (importOriginal) => {
+        nextGeneration();
+        return await importOriginal<typeof import("./agent/session.runtime.js")>();
+      });
+      await expect(run()).rejects.toBe(firstError);
+      expect(nextGeneration).not.toHaveBeenCalled();
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(signals.listenerCount("SIGINT") + signals.listenerCount("SIGTERM")).toBe(0);
+
+      agentViaGatewayTesting.resetLazyImportsForTests();
+      mockGatewaySuccessReply();
+      await expect(run()).resolves.toEqual(gatewaySuccessReply("hello"));
+      expect(nextGeneration).toHaveBeenCalledOnce();
+      expect(callGateway).toHaveBeenCalledOnce();
+      expect(signals.listenerCount("SIGINT") + signals.listenerCount("SIGTERM")).toBe(0);
+    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

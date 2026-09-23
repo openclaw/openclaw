@@ -295,6 +295,25 @@ describe("check-database-first-legacy-stores", () => {
     expect(copiedUriViolations).toEqual([{ kind: "legacy exec approvals reference", line: 1 }]);
   });
 
+  it("preserves boundary family order and distinct duplicate policies in migration paths", () => {
+    const content = String.raw`
+      type ApprovalPath = "exec\x2dapprovals.json";
+      const sentinels = ["restart-sentinel.json", "restart-sentinel.json"];
+      type SentinelPath = "restart\x2dsentinel.json";
+      const approvals = ["exec-approvals.json", "exec-approvals.json"];
+    `;
+
+    expect(
+      collectDatabaseFirstLegacyStoreViolations(content, "src/commands/doctor/boundaries.ts"),
+    ).toEqual([
+      { kind: "legacy restart sentinel reference", line: 3 },
+      { kind: "legacy restart sentinel reference", line: 4 },
+      { kind: "legacy exec approvals reference", line: 2 },
+      { kind: "legacy exec approvals reference", line: 5 },
+      { kind: "legacy exec approvals reference", line: 5 },
+    ]);
+  });
+
   // Legacy paths and literal propagation.
   it.each(
     namedCases({

@@ -1,5 +1,5 @@
 /** OpenRouter free-model scanner and fallback updater for model commands. */
-import { cancel, multiselect as clackMultiselect, isCancel } from "@clack/prompts";
+import { cancel, type CANCEL_SYMBOL, multiselect as clackMultiselect } from "@clack/prompts";
 import { getEnvApiKey } from "@openclaw/ai/internal/runtime";
 import {
   parseStrictFiniteNumber,
@@ -25,8 +25,8 @@ const CTX_PAD = 8;
 const multiselect = <T>(params: Parameters<typeof clackMultiselect<T>>[0]) =>
   clackMultiselect(styleSelectParams(params));
 
-function guardPromptCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
-  if (isCancel(value)) {
+function guardPromptCancel<T>(value: T | typeof CANCEL_SYMBOL, runtime: RuntimeEnv): T {
+  if (typeof value === "symbol") {
     cancel(stylePromptTitle("Model scan cancelled.") ?? "Model scan cancelled.");
     runtime.exit(0);
     throw new Error("unreachable");
@@ -151,7 +151,7 @@ function printScanTable(results: ModelScanResult[], runtime: RuntimeEnv) {
 }
 
 function parseOptionalNonNegativeFiniteOption(raw: unknown, label: string): number | undefined {
-  if (raw === undefined || raw === null || raw === "") {
+  if (raw === undefined || raw === null) {
     return undefined;
   }
   const parsed = parseStrictFiniteNumber(raw);
@@ -162,7 +162,7 @@ function parseOptionalNonNegativeFiniteOption(raw: unknown, label: string): numb
 }
 
 function parseOptionalPositiveFiniteOption(raw: unknown, label: string): number | undefined {
-  if (raw === undefined || raw === null || raw === "") {
+  if (raw === undefined || raw === null) {
     return undefined;
   }
   const parsed = parseStrictFiniteNumber(raw);
@@ -173,7 +173,7 @@ function parseOptionalPositiveFiniteOption(raw: unknown, label: string): number 
 }
 
 function parsePositiveIntegerOption(raw: unknown, label: string, fallback: number): number {
-  if (raw === undefined || raw === null || raw === "") {
+  if (raw === undefined || raw === null) {
     return fallback;
   }
   const parsed = parseStrictPositiveInteger(raw);

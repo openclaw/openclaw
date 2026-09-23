@@ -1,6 +1,6 @@
 {
   "id": "qwen",
-  "icon": "https://cdn.simpleicons.org/qwen",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
@@ -49,6 +49,10 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "qwen": "alibaba-coding-plan",
+      "qwen-token-plan": "alibaba-token-plan"
+    },
     "suppressions": [
       {
         "provider": "qwen",

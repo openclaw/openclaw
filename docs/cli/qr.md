@@ -10,6 +10,8 @@ title: "QR"
 
 Generate a mobile pairing QR and setup code from your current Gateway configuration.
 
+The legacy [`openclaw clawbot qr`](/cli/clawbot) alias accepts every flag below.
+
 ```bash
 openclaw qr
 openclaw qr --setup-code-only
@@ -38,7 +40,7 @@ openclaw devices approve <requestId>
 - `--password <password>`: override the gateway password the bootstrap flow authenticates against
 - `--limited`: omit administrative Gateway access from the handed-off operator token
 - `--voice-node`: issue node credentials plus only `operator.read` and `operator.talk`
-- `--setup-code-only`: print only the setup code
+- `--setup-code-only`: print only the setup code; `--json` takes precedence and emits the JSON document instead
 - `--no-ascii`: skip ASCII QR rendering
 - `--json`: emit JSON (`setupCode`, `gatewayUrl`, optional `gatewayUrls`, `auth`, `access`, optional `accessDowngraded`, `urlSource`)
 
@@ -77,6 +79,11 @@ same manual cleanup; Doctor prints the relevant guidance.
 With `--remote`, one of `gateway.remote.url` or `gateway.tailscale.mode=serve|funnel` is required.
 
 ## Auth resolution (no `--remote`)
+
+Gateways with `gateway.auth.mode="trusted-proxy"` can generate setup codes without a shared token or password.
+The proxy still authenticates the mobile connection before it reaches the Gateway.
+The setup code does not bypass Cloudflare Access or another proxy login.
+Bootstrap expiry, device binding, and access profiles stay the same.
 
 When no CLI auth override is passed, local gateway auth SecretRefs resolve as follows:
 

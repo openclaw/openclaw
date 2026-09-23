@@ -10,6 +10,7 @@ export {
   extractBindableShellWrapperInlineCommand,
   extractShellWrapperCommand,
   hasEnvManipulationBeforeShellWrapper,
+  hasPosixShellStartupBeforeInlineCommand,
   isBlockedShellWrapperCommand,
   isShellWrapperExecutable,
   isShellWrapperInvocation,

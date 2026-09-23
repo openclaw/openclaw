@@ -1,4 +1,3 @@
-// Discord plugin module implements agent components.modal behavior.
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import { parseDiscordModalCustomIdForInteraction } from "../component-custom-id.js";
 import { resolveDiscordModalEntryWithPersistence } from "../components-registry.js";
@@ -57,6 +56,7 @@ export class DiscordComponentModal extends Modal {
     if (!authorized) {
       return;
     }
+    const ctx = authorized.ctx;
     const {
       interactionCtx,
       channelCtx,
@@ -101,7 +101,7 @@ export class DiscordComponentModal extends Modal {
         values: resolveModalFieldValues(field, interaction),
       }));
       const pluginDispatch = await dispatchPluginDiscordInteractiveEvent({
-        ctx: this.ctx,
+        ctx,
         interaction,
         interactionCtx,
         channelCtx,
@@ -124,7 +124,7 @@ export class DiscordComponentModal extends Modal {
 
     const eventText = formatModalSubmissionText(consumed, interaction);
     await dispatchDiscordComponentEvent({
-      ctx: this.ctx,
+      ctx,
       interaction,
       interactionCtx,
       channelCtx,

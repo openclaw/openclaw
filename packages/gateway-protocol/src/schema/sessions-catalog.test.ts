@@ -53,6 +53,7 @@ describe("SessionsCatalogListResultSchema", () => {
                 startTerminal: true,
               },
               openTerminal: true,
+              startTerminal: true,
             },
             shareRoute: SHARE_ROUTE,
             hosts: [
@@ -61,6 +62,7 @@ describe("SessionsCatalogListResultSchema", () => {
                 label: "Gateway",
                 kind: "gateway",
                 connected: true,
+                canStartTerminal: true,
                 sessions: [
                   {
                     threadId: "thread-1",
@@ -103,6 +105,17 @@ describe("SessionsCatalogStartTerminal schemas", () => {
     expect(
       Value.Check(SessionsCatalogStartTerminalParamsSchema, { ...params, unexpected: true }),
     ).toBe(false);
+    for (const invalid of [
+      { argv: ["sh"] },
+      { executable: "/bin/sh" },
+      { env: {} },
+      { cwd: "x".repeat(4097) },
+      { initialMessage: "x".repeat(16385) },
+    ]) {
+      expect(Value.Check(SessionsCatalogStartTerminalParamsSchema, { ...params, ...invalid })).toBe(
+        false,
+      );
+    }
     expect(Value.Check(SessionsCatalogStartTerminalResultSchema, result)).toBe(true);
     expect(
       Value.Check(SessionsCatalogStartTerminalResultSchema, { ...result, unexpected: true }),
@@ -111,11 +124,19 @@ describe("SessionsCatalogStartTerminal schemas", () => {
 });
 
 describe("SessionsCatalogListParamsSchema", () => {
+  it("accepts only boolean metadata selection while retaining full-list defaults", () => {
+    for (const params of [{}, { metadataOnly: false }, { metadataOnly: true }]) {
+      expect(Value.Check(SessionsCatalogListParamsSchema, params)).toBe(true);
+    }
+    expect(Value.Check(SessionsCatalogListParamsSchema, { metadataOnly: "true" })).toBe(false);
+  });
+
   it("accepts an optional progressive stream id without a catalog selector", () => {
     expect(
       Value.Check(SessionsCatalogListParamsSchema, {
         agentId: "main",
         progressId: "progress-1",
+        allowPartialResults: true,
       }),
     ).toBe(true);
   });
@@ -164,6 +185,12 @@ describe("SessionsCatalogHostEventSchema", () => {
     };
 
     expect(Value.Check(SessionsCatalogHostEventSchema, event)).toBe(true);
+    expect(
+      Value.Check(SessionsCatalogHostEventSchema, {
+        ...event,
+        catalog: { ...event.catalog, hosts: [{ ...event.catalog.hosts[0], pending: true }] },
+      }),
+    ).toBe(true);
     expect(Value.Check(SessionsCatalogHostEventSchema, { ...event, unexpected: true })).toBe(false);
     expect(
       Value.Check(SessionsCatalogHostEventSchema, {

@@ -1,5 +1,6 @@
 {
   "id": "moonshot",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
@@ -42,6 +43,9 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "moonshot": "moonshotai"
+    },
     "aliases": {
       "moonshotai": {
         "provider": "moonshot"
@@ -211,6 +215,14 @@
       }
     }
   },
+  "configGroups": [
+    {
+      "id": "web-search",
+      "title": "Web search",
+      "order": 10,
+      "properties": ["webSearch"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

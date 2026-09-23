@@ -25,8 +25,9 @@ export async function authorizeSessionCatalogThread(params: {
   const visible = await isSessionCatalogThreadVisible({
     access: params.access,
     allowProcessHomeFallback: allowHomeFallback,
+    audience: params.provider.audience,
     client: params.client,
-    getConfig: () => params.context.getRuntimeConfig(),
+    context: params.context,
     fallbackAgentId: params.agentId,
     hostId: params.request.hostId,
     list: (request) =>

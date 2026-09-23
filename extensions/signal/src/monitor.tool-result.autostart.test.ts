@@ -82,6 +82,41 @@ function expectWaitForTransportReadyTimeout(timeoutMs: number) {
 }
 
 describe("monitorSignalProvider autostart", () => {
+  it("uses the configured private socket for startup, readiness, and receive without HTTP", async () => {
+    setSignalAutoStartConfig({
+      transport: { kind: "managed-native", socketPath: "/private/signal/rpc" },
+    });
+    waitForTransportReadyMock.mockImplementationOnce(
+      async ({ check }: { check: () => Promise<unknown> }) => {
+        await check();
+      },
+    );
+    const abortController = createAutoAbortController();
+    await runMonitorWithMocks({
+      abortSignal: abortController.signal,
+      runtime: createMonitorRuntime(),
+    });
+    expect(assertSignalDaemonEndpointAvailableMock).toHaveBeenCalledWith(
+      expect.objectContaining({ socketPath: "/private/signal/rpc" }),
+    );
+    expect(spawnSignalDaemonMock).toHaveBeenCalledWith(
+      expect.objectContaining({ socketPath: "/private/signal/rpc" }),
+    );
+    expect(signalCheckMock).toHaveBeenCalledWith("unix:///private/signal/rpc", expect.any(Number));
+    expect(streamMock).toHaveBeenCalledWith(
+      expect.objectContaining({ baseUrl: "unix:///private/signal/rpc" }),
+    );
+  });
+
+  it("refuses HTTP overrides for an opted-in private transport", async () => {
+    setSignalAutoStartConfig({
+      transport: { kind: "managed-native", socketPath: "/private/signal/rpc" },
+    });
+    await expect(
+      runMonitorWithMocks({ baseUrl: SIGNAL_BASE_URL, runtime: createMonitorRuntime() }),
+    ).rejects.toThrow("cannot be combined with HTTP endpoint overrides");
+    expect(spawnSignalDaemonMock).not.toHaveBeenCalled();
+  });
   it.each(["external-native", "container"] as const)(
     "does not spawn a daemon for %s transport",
     async (kind) => {

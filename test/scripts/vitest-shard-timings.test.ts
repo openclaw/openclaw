@@ -39,6 +39,35 @@ describe("scripts/lib/vitest-shard-timings.mts", () => {
     ).toBe("test/vitest/vitest.auto-reply-reply.config.ts#auto-reply-reply-agent-dispatch");
   });
 
+  it("keeps expanded chunk samples separate under one inherited shard name", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shard-timings-"));
+    tempDirs.push(tempDir);
+    const env = {
+      OPENCLAW_TEST_PROJECTS_TIMINGS_PATH: path.join(tempDir, "timings.json"),
+      OPENCLAW_VITEST_SHARD_NAME: "same-parent",
+    };
+    const config = "test/vitest/vitest.tooling.config.ts";
+    const first = { config, env, includePatterns: null, timingTargets: ["src/a.test.ts"] };
+    const second = { ...first, timingTargets: ["src/b.test.ts"] };
+    const firstKey = resolveShardTimingKey(first);
+    const secondKey = resolveShardTimingKey(second);
+    expect(firstKey).not.toBe(config);
+    expect(firstKey).not.toBe(secondKey);
+    const firstSample = createShardTimingSample(first, 1000)!;
+    const secondSample = createShardTimingSample(second, 3000)!;
+    expect(firstSample.includePatternCount).toBe(1);
+    expect(secondSample.includePatternCount).toBe(1);
+
+    writeShardTimings([firstSample, secondSample], tempDir, env);
+
+    expect(readShardTimings(tempDir, env)).toEqual(
+      new Map([
+        [firstKey, 1000],
+        [secondKey, 3000],
+      ]),
+    );
+  });
+
   it.each([
     ["src/b.test.ts", "src/a.test.ts"],
     ["src/ä.test.ts", "src/z.test.ts", "src/A.test.ts"],

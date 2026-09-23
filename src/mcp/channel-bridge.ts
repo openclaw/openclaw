@@ -129,7 +129,7 @@ export class OpenClawChannelBridge {
     ] = await Promise.all([
       import("../gateway/client-bootstrap.js"),
       import("../gateway/client.js"),
-      import("../gateway/client-start-readiness.js"),
+      import("../../packages/gateway-client/src/readiness.js"),
       import("../gateway/method-scopes.js"),
       import("../../packages/gateway-protocol/src/client-info.js"),
     ]);

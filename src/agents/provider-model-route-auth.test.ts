@@ -53,6 +53,70 @@ function direct(
 }
 
 describe("provider model route auth", () => {
+  it("applies the provider preference before an automatic remembered API profile", () => {
+    const decision = selectProviderModelRouteAuth({
+      provider: "openai",
+      resolution: { ...routes, preferredAuthRequirement: "subscription" },
+      sourcePlan: buildProviderModelAuthSourcePlan({
+        preferredProfileId: "openai:platform",
+        profiles: [
+          profile("openai:platform", "api_key", "ready"),
+          profile("openai:chatgpt", "oauth", "ready"),
+        ],
+      }),
+    });
+    expect(decision).toMatchObject({
+      kind: "selected",
+      selection: {
+        source: { profileId: "openai:chatgpt" },
+        route: { authRequirement: "subscription" },
+      },
+    });
+  });
+
+  it.each([
+    "unavailable",
+    "cooldown",
+    "explicit-order",
+    "profile-priority",
+    "required-profile",
+    "configured-auth",
+    "api-only",
+  ])("preserves API selection for %s despite a subscription preference", (selection) => {
+    const api = profile("openai:platform", "api_key", "ready");
+    const decision = selectProviderModelRouteAuth({
+      provider: "openai",
+      resolution: { ...routes, preferredAuthRequirement: "subscription" },
+      configuredAuthMode: selection === "configured-auth" ? "api-key" : undefined,
+      sourcePlan: buildProviderModelAuthSourcePlan({
+        ownership:
+          selection === "required-profile" ? { reason: "runtime-binding", source: api } : undefined,
+        explicitOrder: selection === "explicit-order",
+        preserveProfilePriority: selection === "profile-priority",
+        profiles: [
+          api,
+          ...(selection === "api-only"
+            ? []
+            : [
+                profile(
+                  "openai:chatgpt",
+                  "oauth",
+                  selection === "unavailable" ? "unavailable" : "ready",
+                  selection === "cooldown" ? "active" : "clear",
+                ),
+              ]),
+        ],
+      }),
+    });
+    expect(decision).toMatchObject({
+      kind: "selected",
+      selection: {
+        source: { profileId: "openai:platform" },
+        route: { authRequirement: "api-key" },
+      },
+    });
+  });
+
   it.each([
     ["api-key", "api-key", "api_key"],
     ["api_key", "api-key", "api_key"],

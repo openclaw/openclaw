@@ -5,9 +5,14 @@ import {
   createOpenAiResponsesPartial,
   createOpenAiResponsesTextEvent,
 } from "../../agents/embedded-agent-subscribe.openai-responses.test-helpers.js";
+import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import * as activeThinkingPolicy from "../../plugins/provider-thinking-active.js";
+import { prepareModelCatalogThinkingPolicies } from "../../plugins/provider-thinking.js";
 import type { FinalizedTemplateContext as TemplateContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
@@ -18,6 +23,7 @@ import {
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { withFastReplyConfig } from "./get-reply-fast-path.test-support.js";
+import { prepareReplyConversation } from "./prompt-session-context.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -32,6 +38,27 @@ const skillCommandMocks = vi.hoisted(() => ({
   listForWorkspace: vi.fn(),
 }));
 
+const directiveModel: ModelDefinitionConfig = {
+  id: "claude-opus-4-6",
+  name: "Directive fixture",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 200_000,
+  maxTokens: 8192,
+};
+const directiveCatalog = [{ provider: "anthropic", ...directiveModel }];
+const directiveMetadata = createPluginMetadataSnapshotFixture();
+const preparedDirectiveCatalog: ModelCatalogSnapshot = {
+  entries: directiveCatalog,
+  routeVariants: directiveCatalog,
+};
+prepareModelCatalogThinkingPolicies({
+  catalog: preparedDirectiveCatalog,
+  metadataSnapshot: directiveMetadata,
+  providers: [{ provider: { id: "anthropic", resolveThinkingProfile: () => undefined } }],
+});
+
 vi.mock("./get-reply-directives-apply.js", () => ({
   applyInlineDirectiveOverrides: (...args: unknown[]) => directiveApplyMocks.apply(...args),
 }));
@@ -39,7 +66,7 @@ vi.mock("../commands-text-routing.js", () => ({
   shouldHandleTextCommands: (...args: unknown[]) => textRoutingMocks.shouldHandle(...args),
 }));
 vi.mock("../../skills/discovery/chat-commands.runtime.js", () => ({
-  listSkillCommandsForWorkspace: (...args: unknown[]) =>
+  prepareSkillCommandsForWorkspace: (...args: unknown[]) =>
     skillCommandMocks.listForWorkspace(...args),
 }));
 
@@ -100,6 +127,7 @@ async function resolveModelDirective(params: {
   surface?: string;
   agentCfg?: Parameters<typeof resolveReplyDirectives>[0]["agentCfg"];
   opts?: Parameters<typeof resolveReplyDirectives>[0]["opts"];
+  preparedModelCatalog?: ModelCatalogSnapshot;
 }) {
   const authorized = params.authorized ?? true;
   const { body } = params;
@@ -118,39 +146,62 @@ async function resolveModelDirective(params: {
     Provider: surface,
     Surface: surface,
   } as TemplateContext;
-  const result = await resolveReplyDirectives({
-    ctx: buildTestCtx({
-      Body: agentText,
-      CommandBody: body,
-      CommandAuthorized: authorized,
-      Provider: surface,
-      Surface: surface,
-    }),
-    cfg: withFastReplyConfig(params.cfg ?? configWithModelAlias("fable")),
-    agentId: "main",
-    agentDir: "/tmp/main-agent",
-    workspaceDir: "/tmp",
-    agentCfg: params.agentCfg ?? {},
-    opts: params.opts,
-    sessionCtx,
-    sessionEntry,
-    sessionStore: { [sessionKey]: sessionEntry },
-    sessionKey,
-    sessionScope: "per-sender",
-    groupResolution: undefined,
-    isGroup: false,
-    triggerBodyNormalized: body,
-    resetTriggered: false,
-    commandAuthorized: authorized,
-    defaultProvider: "anthropic",
-    defaultModel: "claude-opus-4-6",
-    aliasIndex: createAliasIndex(),
-    provider: "anthropic",
-    model: "claude-opus-4-6",
-    hasResolvedHeartbeatModelOverride: false,
-    typing: makeTypingController(),
+  const cfg = withFastReplyConfig({
+    ...(params.cfg ?? configWithModelAlias("fable")),
+    models: params.cfg?.models ?? {
+      providers: {
+        anthropic: { baseUrl: "https://directive.invalid", models: [directiveModel] },
+      },
+    },
   });
-  return { result, sessionEntry, sessionCtx };
+  const ambientPolicy = vi
+    .spyOn(activeThinkingPolicy, "resolveActiveProviderThinkingProfile")
+    .mockImplementation(() => {
+      throw new Error("Directive fixture attempted ambient model-policy discovery.");
+    });
+  try {
+    const result = await withPluginMetadataSnapshotScope(
+      directiveMetadata,
+      () =>
+        resolveReplyDirectives({
+          ctx: buildTestCtx({
+            Body: agentText,
+            CommandBody: body,
+            CommandAuthorized: authorized,
+            Provider: surface,
+            Surface: surface,
+          }),
+          cfg,
+          agentId: "main",
+          agentDir: "/tmp/main-agent",
+          workspaceDir: "/tmp",
+          agentCfg: params.agentCfg ?? {},
+          opts: params.opts,
+          sessionCtx,
+          sessionEntry,
+          sessionStore: { [sessionKey]: sessionEntry },
+          sessionKey,
+          sessionScope: "per-sender",
+          conversation: prepareReplyConversation({ ctx: sessionCtx, sessionEntry }),
+          isGroup: false,
+          triggerBodyNormalized: body,
+          resetTriggered: false,
+          commandAuthorized: authorized,
+          defaultProvider: "anthropic",
+          defaultModel: "claude-opus-4-6",
+          aliasIndex: createAliasIndex(),
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          hasResolvedHeartbeatModelOverride: false,
+          preparedModelCatalog: params.preparedModelCatalog ?? preparedDirectiveCatalog,
+          typing: makeTypingController(),
+        }),
+      { config: cfg, trustConfigIdentity: true },
+    );
+    return { result, sessionEntry, sessionCtx };
+  } finally {
+    ambientPolicy.mockRestore();
+  }
 }
 
 describe("reply directive resolution", () => {
@@ -172,6 +223,138 @@ describe("reply directive resolution", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it("uses prepared thinking defaults for an unrestricted ordinary reply", async () => {
+    const model = { ...directiveModel, reasoning: true };
+    const preparedModelCatalog: ModelCatalogSnapshot = {
+      entries: [{ provider: "anthropic", ...model }],
+      routeVariants: [],
+    };
+    prepareModelCatalogThinkingPolicies({
+      catalog: preparedModelCatalog,
+      metadataSnapshot: directiveMetadata,
+      providers: [
+        {
+          provider: {
+            id: "anthropic",
+            resolveThinkingProfile: () => ({
+              levels: [{ id: "off" }, { id: "high" }],
+              defaultLevel: "high",
+            }),
+          },
+        },
+      ],
+    });
+    const { result } = await resolveModelDirective({
+      body: "Summarize the notes.",
+      cfg: {
+        models: {
+          providers: {
+            anthropic: { baseUrl: "https://directive.invalid", models: [model] },
+          },
+        },
+      },
+      preparedModelCatalog,
+    });
+    if (result.kind !== "continue") {
+      throw new Error(`expected continue result, got ${result.kind}`);
+    }
+    await expect(result.result.resolveModelLevels()).resolves.toMatchObject({
+      resolvedThinkLevel: "high",
+    });
+  });
+
+  it.each([
+    { body: "Please read https://example.invalid/fable before replying", skipInventory: true },
+    { body: "Please read /fable/notes.md before replying", skipInventory: false },
+    { body: "Please read /tmp/fable before replying", skipInventory: false },
+    { body: "Please read C:/notes/fable before replying", skipInventory: true },
+    { body: "Please compare /fable-extra with the default", skipInventory: false },
+    { body: "Please keep \\/fable literal", skipInventory: true },
+    {
+      body: "Please keep this spacing:\r\n  https://example.invalid/fable\r\n  /tmp/notes",
+      skipInventory: false,
+    },
+  ])("preserves ordinary slash text: $body", async ({ body, skipInventory }) => {
+    skillCommandMocks.listForWorkspace.mockReturnValue([
+      { name: "fable", skillName: "fable", description: "A colliding skill command" },
+    ]);
+
+    const { result, sessionEntry, sessionCtx } = await resolveModelDirective({ body });
+
+    if (result.kind !== "continue") {
+      throw new Error(`expected continue result, got ${result.kind}`);
+    }
+    expect(result.result.directives).toEqual(clearInlineDirectives(body));
+    expect(result.result.cleanedBody).toBe(body);
+    expect(sessionCtx).toMatchObject({
+      agentText: body,
+      Body: body,
+      BodyForAgent: body,
+      BodyStripped: body,
+    });
+    expect(result.result.provider).toBe("anthropic");
+    expect(result.result.model).toBe("claude-opus-4-6");
+    expect(sessionEntry).toEqual(createSessionEntry());
+    if (skipInventory) {
+      expect(skillCommandMocks.listForWorkspace).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(["/fable", "Please use /FABLE: now"])(
+    "keeps an invoked skill name from selecting its configured model alias: %s",
+    async (body) => {
+      const skillCommands = [
+        { name: "fable", skillName: "fable", description: "A colliding skill command" },
+      ];
+      skillCommandMocks.listForWorkspace.mockReturnValue(skillCommands);
+
+      const { result, sessionEntry, sessionCtx } = await resolveModelDirective({ body });
+
+      if (result.kind !== "continue") {
+        throw new Error(`expected continue result, got ${result.kind}`);
+      }
+      expect(result.result.directives).toEqual(clearInlineDirectives(body));
+      expect(result.result.cleanedBody).toBe(body);
+      expect(result.result.skillCommands).toEqual(skillCommands);
+      expect(sessionCtx.Body).toBe(body);
+      expect(sessionEntry).toEqual(createSessionEntry());
+    },
+  );
+
+  it("selects a later model alias after reserving a colliding skill name", async () => {
+    const cfg: OpenClawConfig = {
+      commands: { text: true },
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-opus-4-6": { alias: "fable" },
+            "anthropic/other-model": { alias: "github" },
+          },
+        },
+      },
+    };
+    const skillCommands = [{ name: "github", skillName: "github", description: "GitHub" }];
+    skillCommandMocks.listForWorkspace.mockReturnValue(skillCommands);
+
+    const { result, sessionEntry, sessionCtx } = await resolveModelDirective({
+      body: "please /github /fable now",
+      cfg,
+    });
+
+    if (result.kind !== "continue") {
+      throw new Error(`expected continue result, got ${result.kind}`);
+    }
+    expect(result.result.directives).toMatchObject({
+      hasModelDirective: true,
+      rawModelDirective: "fable",
+      cleaned: "please /github now",
+    });
+    expect(result.result.cleanedBody).toBe("please /github now");
+    expect(result.result.skillCommands).toEqual(skillCommands);
+    expect(sessionCtx.Body).toBe("please /github now");
+    expect(sessionEntry).toEqual(createSessionEntry());
   });
 
   it.each([
@@ -236,8 +419,7 @@ describe("reply directive resolution", () => {
       }),
       blockStreamingEnabled: result.result.blockStreamingEnabled,
       blockReplyPipeline: null,
-      directlySentBlockKeys: new Set(),
-      directlySentBlockPayloads: [],
+      directBlockDeliveries: [],
     });
     const { emit, subscription } = createSubscribedSessionHarness({
       runId: "media-caption-directives",
@@ -320,6 +502,25 @@ describe("reply directive resolution", () => {
       },
     },
     {
+      body: "please /FABLE: --session now",
+      expected: {
+        cleaned: "please now",
+        hasModelDirective: true,
+        rawModelDirective: "FABLE",
+        modelScope: "session",
+      },
+    },
+    {
+      body: "/think high/fable now",
+      expected: {
+        cleaned: "now",
+        hasThinkDirective: true,
+        thinkLevel: "high",
+        hasModelDirective: true,
+        rawModelDirective: "fable",
+      },
+    },
+    {
       body: "please /model anthropic/claude-opus-4-6@work --runtime codex -s now",
       expected: {
         cleaned: "please now",
@@ -376,8 +577,18 @@ describe("reply directive resolution", () => {
     expect(sessionEntry).toEqual(createSessionEntry());
   });
 
-  it("keeps explicitly referenced skill payloads opaque to model directives", async () => {
-    const body = "Please use $office_hours to compare /model openai/gpt-5.6-luna with the default";
+  it.each([
+    {
+      label: "a model directive without configured aliases",
+      body: "Please use $office_hours to compare /model openai/gpt-5.6-luna with the default",
+      cfg: { commands: { text: true } } as OpenClawConfig,
+    },
+    {
+      label: "a configured alias",
+      body: "Please use $office_hours to compare /fable with the default",
+      cfg: configWithModelAlias("fable"),
+    },
+  ])("keeps explicitly referenced skill payloads opaque to $label", async ({ body, cfg }) => {
     skillCommandMocks.listForWorkspace.mockReturnValue([
       {
         name: "office_hours",
@@ -389,7 +600,7 @@ describe("reply directive resolution", () => {
 
     const { result, sessionEntry, sessionCtx } = await resolveModelDirective({
       body,
-      cfg: { commands: { text: true } } as OpenClawConfig,
+      cfg,
       surface: "webchat",
     });
 

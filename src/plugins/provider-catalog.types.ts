@@ -12,6 +12,8 @@ export type { ProviderCatalogOutcome } from "./provider-catalog-outcome.js";
 export type ProviderCatalogOrder = "simple" | "profile" | "paired" | "late";
 
 export type ProviderCatalogContext = {
+  /** Acquisition lifetime; release awaited work and join its cleanup when aborted. */
+  signal?: AbortSignal;
   config: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
@@ -21,6 +23,9 @@ export type ProviderCatalogContext = {
   resolveProviderApiKey: (providerId?: string) => {
     apiKey: string | undefined;
     discoveryApiKey?: string;
+    profileId?: string;
+    /** Credential kind from this lookup when known; never infer it from another selection. */
+    mode?: "api_key" | "oauth" | "token";
   };
   resolveProviderAuth: (
     providerId?: string,
@@ -33,6 +38,8 @@ export type ProviderCatalogContext = {
     mode: "api_key" | "aws-sdk" | "oauth" | "token" | "none";
     source: "env" | "profile" | "none";
     profileId?: string;
+    /** Credential preparation exhausted its candidates; not an unconfigured provider. */
+    preparationFailed?: boolean;
   };
 };
 
@@ -54,7 +61,6 @@ export type ProviderPluginCatalog = {
 };
 
 export type UnifiedModelCatalogProviderContext = ProviderCatalogContext & {
-  signal?: AbortSignal;
   includeLive?: boolean;
   timeoutMs?: number;
 };

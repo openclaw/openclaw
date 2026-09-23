@@ -3,7 +3,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
-import { createSessionCapability } from "../../lib/sessions/index.ts";
+import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { prunePersistedAssistantStreamSegments } from "./stream-segment-pruning.ts";
 import type { FallbackStatus } from "./tool-stream-contract.ts";
@@ -16,24 +16,17 @@ import {
 } from "./tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
 
-function expectCompactionCompleteAndAutoClears(host: ReturnType<typeof createHost>) {
+function expectCompactionCompleteAndRetained(host: ReturnType<typeof createHost>, itemId?: string) {
   expect(host.compactionStatus).toEqual({
+    ...(itemId ? { itemId } : {}),
     phase: "complete",
     runId: "run-1",
     startedAt: TOOL_STREAM_TEST_NOW,
     completedAt: TOOL_STREAM_TEST_NOW,
   });
-  const clearTimer = host.compactionClearTimer as unknown as {
-    hasRef?: unknown;
-    ref?: unknown;
-    unref?: unknown;
-  };
-  expect(typeof clearTimer.hasRef).toBe("function");
-  expect(typeof clearTimer.ref).toBe("function");
-  expect(typeof clearTimer.unref).toBe("function");
-
+  const status = host.compactionStatus;
   vi.advanceTimersByTime(5_000);
-  expect(host.compactionStatus).toBeNull();
+  expect(host.compactionStatus).toBe(status);
   expect(host.compactionClearTimer).toBeNull();
 }
 
@@ -211,17 +204,20 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       const request = vi.fn(async (method: string) =>
         method === "sessions.patch" ? pendingPatch.promise : result,
       );
-      const sessions = createSessionCapability({
-        snapshot: {
-          client: { request } as unknown as GatewayBrowserClient,
-          phase: "connected",
-          hello: null,
-          assistantAgentId: agentId,
-          sessionKey: key,
+      const sessions = createTestSessionCapability(
+        {
+          snapshot: {
+            client: { request } as unknown as GatewayBrowserClient,
+            phase: "connected",
+            hello: null,
+            assistantAgentId: agentId,
+            sessionKey: key,
+          },
+          subscribe: () => () => undefined,
+          subscribeEvents: () => () => undefined,
         },
-        subscribe: () => () => undefined,
-        subscribeEvents: () => () => undefined,
-      });
+        agentId,
+      );
       const host = createHost({
         sessionKey: key,
         assistantAgentId: agentId,
@@ -303,71 +299,30 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       ),
       agentId: "work",
     });
-    expect(host.sessions.refreshReplacement).not.toHaveBeenCalled();
+    expect(host.sessions.reconcileMutation).not.toHaveBeenCalled();
     expect(host.sessions.state.modelOverrides).toEqual({});
-  });
-
-  it("tags stream segments with the tool they precede without resetting elapsed time", () => {
-    useToolStreamFakeTimers();
-    const host = createHost({
-      chatRunId: "run-1",
-      chatStream: "visible text before tool",
-      chatStreamStartedAt: TOOL_STREAM_TEST_NOW - 10,
-    });
-
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "tool",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
-        phase: "start",
-        name: "exec",
-        toolCallId: "call_1",
-      },
-    });
-
-    expect(host.chatStreamSegments).toEqual([
-      {
-        text: "visible text before tool",
-        ts: TOOL_STREAM_TEST_NOW - 10,
-        runId: "run-1",
-        toolCallId: "call_1",
-      },
-    ]);
-    expect(host.chatStream).toBeNull();
-    vi.useRealTimers();
   });
 
   it("stores keyed preamble item progress as stream segments", () => {
     useToolStreamFakeTimers();
     const host = createHost({ chatRunId: "run-1" });
 
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "item",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "item", {
         kind: "preamble",
         itemId: "msg-preamble-1",
         progressText: "Checking",
-      },
-    });
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 2,
-      stream: "item",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "item", {
         kind: "preamble",
         itemId: "msg-preamble-1",
         progressText: "Checking the app-server stream",
-      },
-    });
+      }),
+    );
 
     expect(host.chatStreamSegments).toEqual([
       {
@@ -425,18 +380,14 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     useToolStreamFakeTimers();
     const host = createHost({ chatRunId: "run-1" });
 
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "item",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "item", {
         kind: "preamble",
         itemId: "msg-preamble-1",
         progressText: "The active run's commentary",
-      },
-    });
+      }),
+    );
     handleAgentEvent(host, {
       runId: "run-2",
       seq: 2,
@@ -460,18 +411,14 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     useToolStreamFakeTimers();
     const host = createHost({ chatRunId: "run-1" });
 
-    handleAgentEvent(host, {
-      runId: "run-2",
-      seq: 1,
-      stream: "item",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
+    handleAgentEvent(
+      host,
+      agentEvent("run-2", 1, "item", {
         kind: "preamble",
         itemId: "msg-preamble-2",
         progressText: "Another run's commentary",
-      },
-    });
+      }),
+    );
 
     expect(host.chatStreamSegments).toEqual([]);
   });
@@ -480,18 +427,14 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     useToolStreamFakeTimers();
     const host = createHost();
 
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "item",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "item", {
         kind: "preamble",
         itemId: "msg-preamble-1",
         progressText: "An already active session's commentary",
-      },
-    });
+      }),
+    );
 
     expect(host.chatStreamSegments).toEqual([
       {
@@ -507,30 +450,22 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     useToolStreamFakeTimers();
     const host = createHost({ chatRunId: "run-1" });
 
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "item",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "item", {
         kind: "preamble",
         itemId: "msg-preamble-1",
         progressText: "Checking",
-      },
-    });
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 2,
-      stream: "item",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "item", {
         kind: "preamble",
         itemId: "msg-preamble-1",
         progressText: "",
-      },
-    });
+      }),
+    );
 
     expect(host.chatStreamSegments).toEqual([]);
     vi.useRealTimers();
@@ -540,42 +475,30 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     useToolStreamFakeTimers();
     const host = createHost({ chatRunId: "run-1" });
 
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "item",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "item", {
         kind: "preamble",
         itemId: "msg-preamble-1",
         progressText: "Checking [[reply_to_current]]",
-      },
-    });
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 2,
-      stream: "item",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "item", {
         kind: "preamble",
         itemId: "msg-preamble-2",
         progressText: "[[reply_to_current]]",
-      },
-    });
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 3,
-      stream: "item",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 3, "item", {
         kind: "preamble",
         itemId: "msg-preamble-1",
         progressText: "**NO_REPLY",
-      },
-    });
+      }),
+    );
 
     expect(host.chatStreamSegments).toEqual([]);
     vi.useRealTimers();
@@ -656,13 +579,66 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.fallbackStatus).toBeNull();
   });
 
+  it.each([
+    { phase: "start" },
+    { phase: "end", completed: true },
+    { phase: "end", completed: false },
+    { phase: "end", completed: true, willRetry: true },
+  ])("keeps newer compaction active after stale $phase event %j", (staleData) => {
+    useToolStreamFakeTimers();
+    const host = createHost();
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "compaction", { phase: "start", itemId: "compact-1" }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 3, "compaction", { phase: "start", itemId: "compact-2" }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "compaction", { ...staleData, itemId: "compact-1" }),
+    );
+    expect(host.compactionStatus).toMatchObject({ phase: "active", itemId: "compact-2" });
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 4, "compaction", {
+        phase: "end",
+        completed: true,
+        itemId: "compact-2",
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 3, "compaction", { phase: "start", itemId: "compact-2" }),
+    );
+    expectCompactionCompleteAndRetained(host, "compact-2");
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-2", 1, "compaction", { phase: "start", itemId: "compact-3" }),
+    );
+    expect(host.compactionStatus).toMatchObject({
+      phase: "active",
+      runId: "run-2",
+      itemId: "compact-3",
+    });
+    vi.advanceTimersByTime(5 * 60_000);
+    expect(host.compactionStatus).toBeNull();
+  });
+
   it("keeps compaction in retry-pending state until the matching lifecycle end", () => {
     useToolStreamFakeTimers();
     const host = createHost();
 
-    handleAgentEvent(host, agentEvent("run-1", 1, "compaction", { phase: "start" }));
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "compaction", { phase: "start", itemId: "compact-1" }),
+    );
 
     expect(host.compactionStatus).toEqual({
+      itemId: "compact-1",
       phase: "active",
       runId: "run-1",
       startedAt: TOOL_STREAM_TEST_NOW,
@@ -679,6 +655,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     );
 
     expect(host.compactionStatus).toEqual({
+      itemId: "compact-1",
       phase: "retrying",
       runId: "run-1",
       startedAt: TOOL_STREAM_TEST_NOW,
@@ -687,8 +664,10 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.compactionClearTimer).not.toBeNull();
 
     handleAgentEvent(host, agentEvent("run-2", 3, "lifecycle", { phase: "end" }));
+    handleAgentEvent(host, agentEvent("run-1", 1, "lifecycle", { phase: "end" }));
 
     expect(host.compactionStatus).toEqual({
+      itemId: "compact-1",
       phase: "retrying",
       runId: "run-1",
       startedAt: TOOL_STREAM_TEST_NOW,
@@ -697,7 +676,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
 
     handleAgentEvent(host, agentEvent("run-1", 4, "lifecycle", { phase: "end" }));
 
-    expectCompactionCompleteAndAutoClears(host);
+    expectCompactionCompleteAndRetained(host, "compact-1");
 
     vi.useRealTimers();
   });
@@ -927,7 +906,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
 
     handleAgentEvent(host, agentEvent("run-1", 3, "lifecycle", { phase: "error", error: "boom" }));
 
-    expectCompactionCompleteAndAutoClears(host);
+    expectCompactionCompleteAndRetained(host);
 
     vi.useRealTimers();
   });

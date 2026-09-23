@@ -8,10 +8,14 @@ import {
   loadCronRows,
   upsertCronJobRow,
 } from "../store/row-codec.js";
-import type { CronStoreTransactionHooks } from "../store/transaction-hooks.js";
-import type { CronJob } from "../types.js";
+import {
+  loadCronRuntimeAuthorities,
+  repairCronRuntimeAuthorityRows,
+} from "../store/runtime-authority-store.js";
+import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types.js";
+import type { CronJob, CronStoredJob } from "../types.js";
+import { publishCronRuntimeRows } from "./runtime-publication.js";
 import type { CronServiceState } from "./state.js";
-import { publishCronRuntimeRows } from "./store.js";
 
 type CronRuntimeMutation<T> = {
   deleteJobIds?: Iterable<string>;
@@ -53,22 +57,28 @@ export function commitCronRuntimeRows<T>(params: {
   transactionHooks?: CronStoreTransactionHooks;
   mutate: (context: {
     database: DatabaseSync;
-    jobs: ReadonlyMap<string, CronJob>;
+    jobs: ReadonlyMap<string, CronStoredJob>;
   }) => CronRuntimeMutation<T>;
 }): T {
   const storeKey = cronStoreKey(params.state.deps.storePath);
   const jobIds = new Set(params.jobIds);
   const committed = runOpenClawStateWriteTransaction(
     ({ db }) => {
-      const rows = loadCronRows(db, storeKey).filter((row) => jobIds.has(row.job_id));
+      const rows = loadCronRows(db, storeKey, jobIds, {
+        includeGrantDefinitionProjection: true,
+      });
       const rowsByJobId = new Map(rows.map((row) => [row.job_id, row] as const));
-      const jobs = new Map<string, CronJob>();
-      for (const row of rows) {
-        const job = loadedCronStoreFromRows([row]).store.jobs[0];
-        if (job) {
-          jobs.set(job.id, job);
-        }
+      const loadedJobs = loadedCronStoreFromRows(rows).store.jobs;
+      const { repairJobIds } = loadCronRuntimeAuthorities({ db, storeKey, jobs: loadedJobs });
+      if (repairJobIds.length > 0) {
+        repairCronRuntimeAuthorityRows({
+          db,
+          storeKey,
+          jobs: loadedJobs,
+          jobIds: repairJobIds,
+        });
       }
+      const jobs = new Map(loadedJobs.map((job) => [job.id, job] as const));
       const mutation = params.mutate({ database: db, jobs });
       const upsertJobIds = [...new Set(mutation.upsertJobIds ?? [])].toSorted();
       const deleteJobIds = [...new Set(mutation.deleteJobIds ?? [])].toSorted();
@@ -83,7 +93,7 @@ export function commitCronRuntimeRows<T>(params: {
         const row = rowsByJobId.get(jobId);
         const job = jobs.get(jobId);
         if (row && job && !deleteJobIds.includes(jobId)) {
-          upsertCronJobRow(db, storeKey, job, row.sort_order);
+          upsertCronJobRow(db, storeKey, job, row.sort_order, { knownExistingRow: row });
         }
       }
       if (runHooks) {

@@ -31,7 +31,6 @@ import {
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../../config/sessions/store-maintenance.js";
-import type { ResolvedSessionMaintenanceConfigInput } from "../../config/sessions/store-maintenance.js";
 import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
 import {
   captureSessionInitializationOwner,
@@ -49,49 +48,16 @@ import { resolveRuntimeThinkingCatalog } from "./runtime-agent-thinking.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import type { PluginRuntime } from "./types.js";
 
-type RuntimeSessionStoreReadParams = {
-  agentId?: string;
-  env?: NodeJS.ProcessEnv;
-  hydrateSkillPromptRefs?: boolean;
-  sessionKey: string;
-  readConsistency?: "latest";
-  storePath?: string;
-};
-
-type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">> & {
-  readOnly?: boolean;
-};
-
-type RuntimeSessionStoreEntrySummary = {
-  sessionKey: string;
-  entry: SessionEntry;
-};
-
-type RuntimeSessionStoreEntryUpdateParams = {
-  storePath: string;
-  sessionKey: string;
-  update: (
-    entry: SessionEntry,
-  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
-  skipMaintenance?: boolean;
-  takeCacheOwnership?: boolean;
-  requireWriteSuccess?: boolean;
-};
-
-type RuntimeSessionStoreEntryPatchParams = RuntimeSessionStoreReadParams & {
-  fallbackEntry?: SessionEntry;
-  maintenanceConfig?: ResolvedSessionMaintenanceConfigInput;
-  preserveActivity?: boolean;
-  replaceEntry?: boolean;
-  update: (
-    entry: SessionEntry,
-    context: { existingEntry?: SessionEntry },
-  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
-};
-
-type RuntimeUpsertSessionEntryParams = RuntimeSessionStoreReadParams & {
-  entry: SessionEntry;
-};
+type RuntimeSession = PluginRuntime["agent"]["session"];
+type RuntimeSessionStoreReadParams = Parameters<RuntimeSession["getSessionEntry"]>[0];
+type RuntimeSessionStoreListParams = NonNullable<
+  Parameters<RuntimeSession["listSessionEntries"]>[0]
+>;
+type RuntimeSessionStoreEntrySummary = ReturnType<RuntimeSession["listSessionEntries"]>[number];
+type RuntimeSessionStoreEntryUpdateParams = Parameters<
+  RuntimeSession["updateSessionStoreEntry"]
+>[0];
+type RuntimeUpsertSessionEntryParams = Parameters<RuntimeSession["upsertSessionEntry"]>[0];
 
 const loadEmbeddedAgentRuntime = createLazyRuntimeModule(
   () => import("./runtime-embedded-agent.runtime.js"),
@@ -140,9 +106,10 @@ function listSessionEntries(
 }
 
 async function patchSessionEntry(
-  params: RuntimeSessionStoreEntryPatchParams,
+  params: Parameters<PluginRuntime["agent"]["session"]["patchSessionEntry"]>[0],
 ): Promise<SessionEntry | null> {
   return await patchAccessorSessionEntry(toSessionAccessScope(params), params.update, {
+    assertCommitAllowed: params.assertCommitAllowed,
     fallbackEntry: params.fallbackEntry,
     maintenanceConfig:
       params.maintenanceConfig !== undefined
@@ -181,7 +148,7 @@ async function upsertSessionEntry(params: RuntimeUpsertSessionEntryParams): Prom
 async function createSessionEntry(
   params: Parameters<PluginRuntime["agent"]["session"]["createSessionEntry"]>[0],
 ): Promise<Awaited<ReturnType<PluginRuntime["agent"]["session"]["createSessionEntry"]>>> {
-  const assertCreationOwner = captureSessionInitializationOwner(
+  const creationOwner = captureSessionInitializationOwner(
     "agentHarnessId" in params.initialEntry ? params.initialEntry.agentHarnessId : undefined,
   );
   // Session creation stays behind the canonical Gateway lifecycle boundary while
@@ -189,17 +156,17 @@ async function createSessionEntry(
   const [
     { createGatewaySession },
     { resolveGatewaySessionStoreTarget },
-    { readAcpSessionMetaForEntry, upsertAcpSessionMeta },
+    { readAcpSessionMetaForEntry },
+    { upsertAcpSessionMeta },
     { resolveSandboxedSessionCreation },
   ] = await Promise.all([
     import("../../gateway/session-create-service.js"),
     import("../../gateway/session-utils.js"),
-    // session-meta rides the same lazy boundary: session-utils already pulls it
-    // in transitively, so a separate import here would only duplicate the edge.
+    import("../../acp/runtime/session-meta-readonly.js"),
     import("../../acp/runtime/session-meta.js"),
     import("../../gateway/operator-role-policy.js"),
   ]);
-  assertCreationOwner();
+  creationOwner.assertCurrent();
   const requiredCreation = resolveSandboxedSessionCreation(
     getPluginRuntimeGatewayRequestScope()?.client,
     params.cfg,
@@ -272,7 +239,7 @@ async function createSessionEntry(
       }
     },
     run: async () => {
-      assertCreationOwner();
+      creationOwner.assertCurrent();
       const afterCreate = params.afterCreate;
       let initialization: ReturnType<typeof createSessionInitialization> | undefined;
       let callbackContext: CreatedContext | undefined;
@@ -311,8 +278,12 @@ async function createSessionEntry(
             sessionId: expected.sessionId,
             lifecycleRevision: expected.lifecycleRevision,
           },
-          (deleted) => {
-            assertCreationOwner();
+          (phase, deleted) => {
+            if (phase === "rollback") {
+              creationOwner.assertRollbackCurrent();
+            } else {
+              creationOwner.assertCurrent();
+            }
             const current = getSessionEntry({
               sessionKey: captured.key,
               storePath: captured.storePath,
@@ -409,6 +380,7 @@ async function createSessionEntry(
           await runAfterCreate({
             ...created,
             storePath: target.storePath,
+            isNew: false,
           });
         } else {
           const result = await createGatewaySession({

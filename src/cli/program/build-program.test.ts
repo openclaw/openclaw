@@ -54,7 +54,6 @@ describe("buildProgram", () => {
     mockProcessOutput();
     createProgramContextMock.mockReturnValue({
       programVersion: "9.9.9-test",
-      channelOptions: ["quietchat"],
       messageChannelOptions: "quietchat",
       agentChannelOptions: "last|quietchat",
     } satisfies ProgramContext);

@@ -3,7 +3,8 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATHS = [
   "scripts/test-cli-startup-bench-budget.mts",
@@ -11,6 +12,184 @@ const SCRIPT_PATHS = [
 ];
 
 describe("CLI startup benchmark script spawners", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it("generates legacy reports by default that pass and fail enforced legacy RSS budgets", () => {
+    const tmpDir = tempDirs.make("openclaw-bench-default-rss-");
+    const entryPath = path.join(tmpDir, "entry.mjs");
+    const baselinePath = path.join(tmpDir, "baseline.json");
+    const reportPath = path.join(tmpDir, "current.json");
+    fs.writeFileSync(
+      entryPath,
+      [
+        'if (process.env.OPENCLAW_BENCH_MEMORY) throw new Error("unexpected runtime RSS sidecar");',
+        "const usage = process.resourceUsage();",
+        "process.resourceUsage = () => ({ ...usage, maxRSS: Number(process.env.FIXTURE_RSS_MB) * 1024 });",
+        'console.log("ready");',
+      ].join("\n"),
+    );
+    fs.writeFileSync(
+      baselinePath,
+      JSON.stringify({
+        primary: {
+          cases: [
+            {
+              id: "health",
+              name: "health",
+              samples: [{ exitCode: 0, signal: null, maxRssMb: 10 }],
+              summary: { durationMs: { avg: 60_000 }, maxRssMb: { avg: 10 } },
+            },
+          ],
+        },
+      }),
+    );
+    for (const rss of [10, 13]) {
+      const generated = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          "scripts/bench-cli-startup.ts",
+          "--entry",
+          entryPath,
+          "--case",
+          "health",
+          "--runs",
+          "1",
+          "--warmup",
+          "0",
+          "--output",
+          reportPath,
+        ],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: { ...process.env, FIXTURE_RSS_MB: String(rss) },
+        },
+      );
+      expect(generated.status, generated.stderr).toBe(0);
+      const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+      expect(report.primary).not.toHaveProperty("memoryMetric");
+      expect(report.primary.cases[0].samples[0]).not.toHaveProperty("memory");
+      expect(report.primary.cases[0].samples[0].maxRssMb).toBe(rss);
+      const checked = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          "scripts/test-cli-startup-bench-budget.mts",
+          "--baseline",
+          baselinePath,
+          "--report",
+          reportPath,
+          "--preset",
+          "startup",
+        ],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_STARTUP_BENCH_ENFORCE_NONCANONICAL_ARCH: "1",
+            OPENCLAW_STARTUP_BENCH_MAX_RSS_REGRESSION_PCT: "20",
+          },
+        },
+      );
+      expect(checked.status, checked.stderr).toBe(rss === 10 ? 0 : 1);
+      if (rss === 13) {
+        expect(checked.stderr).toContain("avg RSS 13.0MiB exceeded 12.0MiB");
+      }
+    }
+  });
+
+  it("rejects incompatible reused RSS metrics and still enforces compatible RSS budgets", () => {
+    const tmpDir = tempDirs.make("openclaw-bench-rss-contract-");
+    const baselinePath = path.join(tmpDir, "baseline.json");
+    const reportPath = path.join(tmpDir, "current.json");
+    const makeReport = (rss: number, memoryMetric?: string, executionMode?: unknown) => ({
+      primary: {
+        memoryMetric,
+        executionMode,
+        cases: [
+          {
+            id: "version",
+            name: "--version",
+            samples: [{ exitCode: 0, signal: null, maxRssMb: rss }],
+            summary: { durationMs: { avg: 10 }, maxRssMb: { avg: rss } },
+          },
+        ],
+      },
+    });
+    const run = (skipBaseline = false) =>
+      spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          "scripts/test-cli-startup-bench-budget.mts",
+          "--baseline",
+          baselinePath,
+          "--report",
+          reportPath,
+          "--preset",
+          "startup",
+          ...(skipBaseline ? ["--skip-baseline"] : []),
+        ],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_STARTUP_BENCH_ENFORCE_NONCANONICAL_ARCH: "1",
+            OPENCLAW_STARTUP_BENCH_MAX_RSS_REGRESSION_PCT: "20",
+          },
+        },
+      );
+    fs.writeFileSync(baselinePath, JSON.stringify(makeReport(10)));
+    fs.writeFileSync(reportPath, JSON.stringify(makeReport(10, "cli-runtime-max-rss-v1")));
+    const incompatible = run();
+    expect(incompatible.status).toBe(1);
+    expect(incompatible.stderr).toContain("Incompatible CLI RSS metrics");
+
+    fs.writeFileSync(baselinePath, JSON.stringify(makeReport(10, "cli-runtime-max-rss-v1")));
+    expect(run().status).toBe(0);
+    fs.writeFileSync(reportPath, JSON.stringify(makeReport(13, "cli-runtime-max-rss-v1")));
+    const regression = run();
+    expect(regression.status).toBe(1);
+    expect(regression.stderr).toContain("avg RSS 13.0MiB exceeded 12.0MiB");
+
+    fs.writeFileSync(reportPath, JSON.stringify(makeReport(10, "unknown-metric")));
+    expect(run().stderr).toContain("Unknown CLI RSS metric");
+
+    for (const [before, after, error] of [
+      [undefined, "native", null],
+      ["native", undefined, null],
+      ["native", "native", null],
+      ["transport", "transport", null],
+      [undefined, "transport", "Incompatible CLI execution modes"],
+      ["transport", "native", "Incompatible CLI execution modes"],
+      ["unknown", "unknown", "Unknown CLI execution mode"],
+      [null, "native", "Unknown CLI execution mode"],
+      ["native", 1, "Unknown CLI execution mode"],
+    ] satisfies Array<[unknown, unknown, string | null]>) {
+      fs.writeFileSync(baselinePath, JSON.stringify(makeReport(10, undefined, before)));
+      fs.writeFileSync(reportPath, JSON.stringify(makeReport(10, undefined, after)));
+      const result = run();
+      expect(result.status, result.stderr).toBe(error ? 1 : 0);
+      if (error) {
+        expect(result.stderr).toContain(error);
+      }
+    }
+    for (const mode of [null, "unknown", 1]) {
+      fs.writeFileSync(reportPath, JSON.stringify(makeReport(10, undefined, mode)));
+      const result = run(true);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Unknown CLI execution mode");
+    }
+    fs.writeFileSync(reportPath, JSON.stringify(makeReport(10, undefined, "transport")));
+    expect(run(true).status).toBe(0);
+  });
+
   it("use the active Node executable for benchmark child processes", () => {
     for (const scriptPath of SCRIPT_PATHS) {
       const source = fs.readFileSync(path.resolve(process.cwd(), scriptPath), "utf8");

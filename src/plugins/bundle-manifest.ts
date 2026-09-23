@@ -224,51 +224,6 @@ function resolveClaudeComponentPaths(
   return mergeBundlePathLists(existingDefaults, declared);
 }
 
-function resolveClaudeSkillsRootDirs(raw: Record<string, unknown>, rootDir: string): string[] {
-  return resolveClaudeComponentPaths(raw, "skills", rootDir, ["skills"]);
-}
-
-function resolveClaudeCommandRootDirs(raw: Record<string, unknown>, rootDir: string): string[] {
-  return resolveClaudeComponentPaths(raw, "commands", rootDir, ["commands"]);
-}
-
-function resolveClaudeSkillDirs(raw: Record<string, unknown>, rootDir: string): string[] {
-  return mergeBundlePathLists(
-    resolveClaudeSkillsRootDirs(raw, rootDir),
-    resolveClaudeCommandRootDirs(raw, rootDir),
-    resolveClaudeAgentDirs(raw, rootDir),
-    resolveClaudeOutputStylePaths(raw, rootDir),
-  );
-}
-
-function resolveClaudeAgentDirs(raw: Record<string, unknown>, rootDir: string): string[] {
-  return resolveClaudeComponentPaths(raw, "agents", rootDir, ["agents"]);
-}
-
-function resolveClaudeHookPaths(raw: Record<string, unknown>, rootDir: string): string[] {
-  return resolveClaudeComponentPaths(raw, "hooks", rootDir, ["hooks/hooks.json"]);
-}
-
-function resolveClaudeMcpPaths(raw: Record<string, unknown>, rootDir: string): string[] {
-  return resolveClaudeComponentPaths(raw, "mcpServers", rootDir, [".mcp.json"]);
-}
-
-function resolveClaudeLspPaths(raw: Record<string, unknown>, rootDir: string): string[] {
-  return resolveClaudeComponentPaths(raw, "lspServers", rootDir, [".lsp.json"]);
-}
-
-function resolveClaudeOutputStylePaths(raw: Record<string, unknown>, rootDir: string): string[] {
-  return resolveClaudeComponentPaths(raw, "outputStyles", rootDir, ["output-styles"]);
-}
-
-function resolveClaudeSettingsFiles(_raw: Record<string, unknown>, rootDir: string): string[] {
-  return pluginCacheExistsSync(path.join(rootDir, "settings.json")) ? ["settings.json"] : [];
-}
-
-function hasClaudeHookCapability(raw: Record<string, unknown>, rootDir: string): boolean {
-  return hasInlineCapabilityValue(raw.hooks) || resolveClaudeHookPaths(raw, rootDir).length > 0;
-}
-
 function buildCodexCapabilities(raw: Record<string, unknown>, rootDir: string): string[] {
   const capabilities: string[] = [];
   if (resolveCodexSkillDirs(raw, rootDir).length > 0) {
@@ -288,38 +243,6 @@ function buildCodexCapabilities(raw: Record<string, unknown>, rootDir: string): 
     pluginCacheExistsSync(path.join(rootDir, ".app.json"))
   ) {
     capabilities.push("apps");
-  }
-  return capabilities;
-}
-
-function buildClaudeCapabilities(raw: Record<string, unknown>, rootDir: string): string[] {
-  const capabilities: string[] = [];
-  if (resolveClaudeSkillDirs(raw, rootDir).length > 0) {
-    capabilities.push("skills");
-  }
-  if (resolveClaudeCommandRootDirs(raw, rootDir).length > 0) {
-    capabilities.push("commands");
-  }
-  if (resolveClaudeAgentDirs(raw, rootDir).length > 0) {
-    capabilities.push("agents");
-  }
-  if (hasClaudeHookCapability(raw, rootDir)) {
-    capabilities.push("hooks");
-  }
-  if (hasInlineCapabilityValue(raw.mcpServers) || resolveClaudeMcpPaths(raw, rootDir).length > 0) {
-    capabilities.push("mcpServers");
-  }
-  if (hasInlineCapabilityValue(raw.lspServers) || resolveClaudeLspPaths(raw, rootDir).length > 0) {
-    capabilities.push("lspServers");
-  }
-  if (
-    hasInlineCapabilityValue(raw.outputStyles) ||
-    resolveClaudeOutputStylePaths(raw, rootDir).length > 0
-  ) {
-    capabilities.push("outputStyles");
-  }
-  if (resolveClaudeSettingsFiles(raw, rootDir).length > 0) {
-    capabilities.push("settings");
   }
   return capabilities;
 }
@@ -500,19 +423,63 @@ export function loadBundleManifest(params: {
     };
   }
 
+  const id = slugifyPluginId(name, params.rootDir);
+  const skillRoots = resolveClaudeComponentPaths(raw, "skills", params.rootDir, ["skills"]);
+  const commands = resolveClaudeComponentPaths(raw, "commands", params.rootDir, ["commands"]);
+  const agents = resolveClaudeComponentPaths(raw, "agents", params.rootDir, ["agents"]);
+  const outputStyles = resolveClaudeComponentPaths(raw, "outputStyles", params.rootDir, [
+    "output-styles",
+  ]);
+  const skills = mergeBundlePathLists(skillRoots, commands, agents, outputStyles);
+  const settingsFiles = pluginCacheExistsSync(path.join(params.rootDir, "settings.json"))
+    ? ["settings.json"]
+    : [];
+  const hooks = resolveClaudeComponentPaths(raw, "hooks", params.rootDir, ["hooks/hooks.json"]);
+  const activation = normalizeManifestActivation(raw.activation);
+  const capabilities: string[] = [];
+  if (skills.length > 0) {
+    capabilities.push("skills");
+  }
+  if (commands.length > 0) {
+    capabilities.push("commands");
+  }
+  if (agents.length > 0) {
+    capabilities.push("agents");
+  }
+  if (hasInlineCapabilityValue(raw.hooks) || hooks.length > 0) {
+    capabilities.push("hooks");
+  }
+  if (
+    hasInlineCapabilityValue(raw.mcpServers) ||
+    resolveClaudeComponentPaths(raw, "mcpServers", params.rootDir, [".mcp.json"]).length > 0
+  ) {
+    capabilities.push("mcpServers");
+  }
+  if (
+    hasInlineCapabilityValue(raw.lspServers) ||
+    resolveClaudeComponentPaths(raw, "lspServers", params.rootDir, [".lsp.json"]).length > 0
+  ) {
+    capabilities.push("lspServers");
+  }
+  if (hasInlineCapabilityValue(raw.outputStyles) || outputStyles.length > 0) {
+    capabilities.push("outputStyles");
+  }
+  if (settingsFiles.length > 0) {
+    capabilities.push("settings");
+  }
   return {
     ok: true,
     manifest: {
-      id: slugifyPluginId(name, params.rootDir),
+      id,
       name,
       description,
       version,
-      skills: resolveClaudeSkillDirs(raw, params.rootDir),
-      settingsFiles: resolveClaudeSettingsFiles(raw, params.rootDir),
-      hooks: resolveClaudeHookPaths(raw, params.rootDir),
+      skills,
+      settingsFiles,
+      hooks,
       bundleFormat: "claude",
-      activation: normalizeManifestActivation(raw.activation),
-      capabilities: buildClaudeCapabilities(raw, params.rootDir),
+      activation,
+      capabilities,
     },
     manifestPath: loaded.manifestPath,
   };

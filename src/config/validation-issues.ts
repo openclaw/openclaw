@@ -3,7 +3,6 @@ import { unsupportedSecretRefSurfacePolicy } from "../secrets/unsupported-surfac
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import type { ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
-import { bundledChannelSchemaById } from "./validation-channel-rules.js";
 
 type UnknownIssueRecord = Record<string, unknown>;
 type ConfigPathSegment = string | number;
@@ -12,9 +11,7 @@ type AllowedValuesCollection = {
   incomplete: boolean;
   hasValues: boolean;
 };
-type JsonSchemaLike = Record<string, unknown>;
 
-const CUSTOM_EXPECTED_ONE_OF_RE = /expected one of ((?:"[^"]+"(?:\|"?[^"]+"?)*)+)/i;
 const SECRETREF_POLICY_DOC_URL = "https://docs.openclaw.ai/reference/secretref-credential-surface";
 
 function toConfigPathSegments(path: unknown): ConfigPathSegment[] {
@@ -40,98 +37,6 @@ export function withConfigIssuePath(
     enumerable: false,
   });
   return issue;
-}
-
-function lookupJsonSchemaNode(
-  schema: unknown,
-  pathSegments: readonly ConfigPathSegment[],
-): JsonSchemaLike | null {
-  let current = asNullableObjectRecord(schema);
-  for (const segment of pathSegments) {
-    if (!current) {
-      return null;
-    }
-    if (typeof segment === "number") {
-      const items = current.items;
-      if (Array.isArray(items)) {
-        current = asNullableObjectRecord(items[segment] ?? items[0]);
-        continue;
-      }
-      current = asNullableObjectRecord(items);
-      continue;
-    }
-    const properties = asNullableObjectRecord(current.properties);
-    const next =
-      (properties && asNullableObjectRecord(properties[segment])) ||
-      asNullableObjectRecord(current.additionalProperties);
-    current = next;
-  }
-  return current;
-}
-
-function collectAllowedValuesFromJsonSchemaNode(schema: unknown): AllowedValuesCollection {
-  const node = asNullableObjectRecord(schema);
-  if (!node) {
-    return { values: [], incomplete: false, hasValues: false };
-  }
-  if (Object.hasOwn(node, "const")) {
-    return { values: [node.const], incomplete: false, hasValues: true };
-  }
-  if (Array.isArray(node.enum)) {
-    return { values: node.enum, incomplete: false, hasValues: node.enum.length > 0 };
-  }
-  const type = node.type;
-  if (type === "boolean" || (Array.isArray(type) && type.includes("boolean"))) {
-    return { values: [true, false], incomplete: false, hasValues: true };
-  }
-  const unionBranches = Array.isArray(node.anyOf)
-    ? node.anyOf
-    : Array.isArray(node.oneOf)
-      ? node.oneOf
-      : null;
-  if (!unionBranches) {
-    return { values: [], incomplete: false, hasValues: false };
-  }
-  const collected: unknown[] = [];
-  for (const branch of unionBranches) {
-    const branchCollected = collectAllowedValuesFromJsonSchemaNode(branch);
-    if (branchCollected.incomplete || !branchCollected.hasValues) {
-      return { values: [], incomplete: true, hasValues: false };
-    }
-    collected.push(...branchCollected.values);
-  }
-  return { values: collected, incomplete: false, hasValues: collected.length > 0 };
-}
-
-function collectAllowedValuesFromBundledChannelSchemaPath(
-  pathSegments: readonly ConfigPathSegment[],
-): AllowedValuesCollection {
-  if (pathSegments[0] !== "channels" || typeof pathSegments[1] !== "string") {
-    return { values: [], incomplete: false, hasValues: false };
-  }
-  const channelSchema = bundledChannelSchemaById.get(pathSegments[1]);
-  if (!channelSchema) {
-    return { values: [], incomplete: false, hasValues: false };
-  }
-  const targetNode = lookupJsonSchemaNode(channelSchema, pathSegments.slice(2));
-  return targetNode
-    ? collectAllowedValuesFromJsonSchemaNode(targetNode)
-    : { values: [], incomplete: false, hasValues: false };
-}
-
-function collectAllowedValuesFromCustomIssue(record: UnknownIssueRecord): AllowedValuesCollection {
-  const message = typeof record.message === "string" ? record.message : "";
-  const expectedMatch = message.match(CUSTOM_EXPECTED_ONE_OF_RE);
-  if (expectedMatch?.[1]) {
-    const values = [...expectedMatch[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
-    return { values, incomplete: false, hasValues: values.length > 0 };
-  }
-
-  // Custom Zod issues usually come from superRefine rules, but some normalized
-  // channel unions collapse to a generic custom issue. Use generated channel
-  // config metadata here so we can recover enum hints without touching runtime
-  // plugin registries during validation formatting.
-  return collectAllowedValuesFromBundledChannelSchemaPath(toConfigPathSegments(record.path));
 }
 
 function appendNumericBoundHint(message: string, record: UnknownIssueRecord): string {
@@ -178,9 +83,6 @@ function collectAllowedValuesFromIssue(issue: unknown): AllowedValuesCollection 
     return record.expected === "boolean"
       ? { values: [true, false], incomplete: false, hasValues: true }
       : { values: [], incomplete: true, hasValues: false };
-  }
-  if (code === "custom") {
-    return collectAllowedValuesFromCustomIssue(record);
   }
   if (code !== "invalid_union") {
     return { values: [], incomplete: false, hasValues: false };

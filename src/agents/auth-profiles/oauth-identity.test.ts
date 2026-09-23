@@ -5,6 +5,7 @@
  */
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
+import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import {
   isSafeToCopyOAuthIdentity,
   normalizeAuthEmailToken,
@@ -258,11 +259,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
     },
     {
       name: "api key override",
-      existing: {
-        type: "api_key",
-        provider: "openai",
-        key: "operator-key",
-      },
+      existing: createApiKeyCredential("openai", "operator-key"),
       shouldMirror: false,
       reason: "non-oauth-existing-credential",
     },

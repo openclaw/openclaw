@@ -683,6 +683,71 @@ describe("openshell backend manager", () => {
     expect(cliMocks.runOpenShellCli).not.toHaveBeenCalled();
   });
 
+  it.each(["remote", "mirror"] as const)(
+    "rejects invalid exec environment before SSH staging and releases the %s session",
+    async (mode) => {
+      await using workspace = await createOpenShellTestWorkspace("env-workspace");
+      await using remote = await createOpenShellTestWorkspace("env-remote");
+      await using agentRemote = await createOpenShellTestWorkspace("env-agent");
+      sandboxMocks.remoteRoot = remote.dir;
+      sandboxMocks.remoteAgentRoot = agentRemote.dir;
+      cliMocks.runOpenShellCli.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+      const sshCommand = await makeExecutable({
+        name: "ssh-refuse",
+        script: ["#!/bin/sh", `printf 'unexpected launch\\n' >> "__LOG__"`, "exit 91"].join("\n"),
+      });
+      const logPath = expectDefined(process.env.OPEN_SHELL_CLI_TEST_LOG, "SSH launch record");
+      await fs.writeFile(logPath, "not launched\n", "utf8");
+      const session = {
+        command: sshCommand,
+        configPath: path.join(workspace.dir, "ssh-config"),
+        host: "openshell-test",
+      };
+      cliMocks.createOpenShellSshSession.mockResolvedValue(session);
+      const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/sandbox")>(
+        "openclaw/plugin-sdk/sandbox",
+      );
+      let disposalCallsAtPrepare = 0;
+      sandboxMocks.prepareSshSandboxExec.mockImplementationOnce(async (params) => {
+        disposalCallsAtPrepare = sandboxMocks.disposeSshSandboxSession.mock.calls.length;
+        return await actual.prepareSshSandboxExec(params);
+      });
+      const backend = await createOpenShellBackendFixture({
+        workspaceDir: workspace.dir,
+        mode,
+      });
+      const rejection = await backend
+        .buildExecSpec({
+          command: "true",
+          env: { "INVALID-NAME": "fixture" },
+          usePty: false,
+        })
+        .catch((error: unknown) => error);
+
+      expect(rejection).toBeInstanceOf(Error);
+      await expect(fs.readFile(logPath, "utf8")).resolves.toBe("not launched\n");
+      expect(sandboxMocks.disposeSshSandboxSession).toHaveBeenCalledTimes(
+        disposalCallsAtPrepare + 1,
+      );
+      expect(sandboxMocks.disposeSshSandboxSession).toHaveBeenLastCalledWith(session);
+
+      const valid = await backend.buildExecSpec({
+        command: "true",
+        env: { VALID_NAME: "fixture" },
+        usePty: false,
+      });
+      await backend.finalizeExec?.({
+        status: "completed",
+        exitCode: 0,
+        timedOut: false,
+        token: valid.finalizeToken,
+      });
+      expect(sandboxMocks.cleanupPreparedExec).toHaveBeenCalledOnce();
+      await expect(fs.readFile(logPath, "utf8")).resolves.toBe("not launched\n");
+      expect(String(rejection)).toContain("Invalid sandbox environment variable name");
+    },
+  );
+
   it.each(["completed", "failed"] as const)(
     "stages exec environment outside SSH argv and finalizes %s before session disposal",
     async (status) => {
@@ -763,62 +828,168 @@ describe("openshell backend manager", () => {
     expect(sandboxMocks.disposeSshSandboxSession).toHaveBeenCalledTimes(2);
   });
 
-  it("preserves a local sandbox skills shadow when mirror sync crosses filesystems", async () => {
-    await using workspace = await createOpenShellTestWorkspace("workspace");
-    const workspaceDir = workspace.dir;
-    const shadowFile = path.join(workspaceDir, ".openclaw", "sandbox-skills", "user-note.txt");
-    await fs.mkdir(path.dirname(shadowFile), { recursive: true });
-    await fs.writeFile(shadowFile, "local shadow", "utf8");
-
-    const originalRename = fs.rename.bind(fs);
-    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
-      const source = String(from);
-      const target = String(to);
-      const shadowDir = path.dirname(shadowFile);
-      const isFallbackStagedMove = path.basename(source).startsWith(".fs-safe-move-");
-      if (source === shadowDir || (target === shadowDir && !isFallbackStagedMove)) {
-        throw Object.assign(new Error("cross-device link not permitted"), { code: "EXDEV" });
+  it.each([
+    "success",
+    "source cleanup failure",
+    "retained source replacement",
+    "restore cleanup failure",
+  ] as const)(
+    "preserves and reports a local shadow when cross-filesystem mirror sync ends with %s",
+    async (outcome) => {
+      await using workspace = await createOpenShellTestWorkspace("workspace");
+      const workspaceDir = workspace.dir;
+      const shadowFile = path.join(workspaceDir, ".openclaw", "sandbox-skills", "user-note.txt");
+      await fs.mkdir(path.dirname(shadowFile), { recursive: true });
+      await fs.writeFile(shadowFile, "local shadow", "utf8");
+      const sourceContents = new Map([["user-note.txt", "local shadow"]]);
+      if (outcome === "source cleanup failure" || outcome === "restore cleanup failure") {
+        sourceContents.set("second-note.txt", "second shadow");
+        await fs.writeFile(path.join(path.dirname(shadowFile), "second-note.txt"), "second shadow");
       }
-      return await originalRename(from, to);
-    });
-    cliMocks.runOpenShellCli.mockImplementation(async ({ args }: { args: string[] }) => {
-      if (args[0] === "sandbox" && args[1] === "download") {
-        const tmpDir = expectDefined(args[4], "OpenShell download destination");
-        await fs.writeFile(path.join(tmpDir, "from-remote.txt"), "remote", "utf8");
-        await fs.mkdir(path.join(tmpDir, ".openclaw", "sandbox-skills", "skills"), {
-          recursive: true,
-        });
-        await fs.writeFile(
-          path.join(tmpDir, ".openclaw", "sandbox-skills", "skills", "generated.txt"),
-          "generated",
-          "utf8",
-        );
-      }
-      return { code: 0, stdout: "", stderr: "" };
-    });
 
-    const backend = await createOpenShellBackendFixture({ workspaceDir, mode: "mirror" });
-
-    try {
-      await backend.finalizeExec?.({
-        status: "completed",
-        exitCode: 0,
-        timedOut: false,
-        token: undefined,
+      let preservedPath: string | undefined;
+      let sourceCleanupFailed = false;
+      const removedSourceFiles: string[] = [];
+      let retainedSourceFile: string | undefined;
+      let sourceAtCleanupFailure: string[] = [];
+      const originalRename = fs.rename.bind(fs);
+      const originalUnlink = fs.unlink.bind(fs);
+      const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+        const source = String(from);
+        const target = String(to);
+        const shadowDir = path.dirname(shadowFile);
+        const isFallbackStagedMove = path.basename(source).startsWith(".fs-safe-move-");
+        if (source === shadowDir || (target === shadowDir && !isFallbackStagedMove)) {
+          throw Object.assign(new Error("cross-device link not permitted"), { code: "EXDEV" });
+        }
+        await originalRename(from, to);
+        if (isFallbackStagedMove && path.basename(target) === "shadow") {
+          // Observe a real completed destination publication before injecting a source race.
+          preservedPath = target;
+          if (outcome === "retained source replacement") {
+            await originalUnlink(shadowFile);
+            await fs.writeFile(shadowFile, "concurrent replacement", "utf8");
+          }
+        }
+      });
+      const unlinkSpy = vi.spyOn(fs, "unlink").mockImplementation(async (target) => {
+        const cleanupRoot =
+          outcome === "source cleanup failure"
+            ? path.dirname(shadowFile)
+            : outcome === "restore cleanup failure"
+              ? preservedPath
+              : undefined;
+        const sourceCleanup =
+          cleanupRoot !== undefined && path.dirname(String(target)) === cleanupRoot;
+        if (sourceCleanup && removedSourceFiles.length === 1 && !sourceCleanupFailed) {
+          retainedSourceFile = String(target);
+          sourceAtCleanupFailure = await fs.readdir(
+            expectDefined(cleanupRoot, "source cleanup root"),
+          );
+          sourceCleanupFailed = true;
+          // The first source unlink completed; the second is refused before dispatch.
+          throw Object.assign(new Error("source cleanup failed after publication"), {
+            code: "EACCES",
+          });
+        }
+        await originalUnlink(target);
+        if (sourceCleanup) {
+          removedSourceFiles.push(String(target));
+        }
+      });
+      cliMocks.runOpenShellCli.mockImplementation(async ({ args }: { args: string[] }) => {
+        if (args[0] === "sandbox" && args[1] === "download") {
+          const tmpDir = expectDefined(args[4], "OpenShell download destination");
+          await fs.writeFile(path.join(tmpDir, "from-remote.txt"), "remote", "utf8");
+          await fs.mkdir(path.join(tmpDir, ".openclaw", "sandbox-skills", "skills"), {
+            recursive: true,
+          });
+          await fs.writeFile(
+            path.join(tmpDir, ".openclaw", "sandbox-skills", "skills", "generated.txt"),
+            "generated",
+            "utf8",
+          );
+        }
+        return { code: 0, stdout: "", stderr: "" };
       });
 
-      expect(renameSpy).toHaveBeenCalled();
-      await expect(fs.readFile(shadowFile, "utf8")).resolves.toBe("local shadow");
-      await expect(fs.readFile(path.join(workspaceDir, "from-remote.txt"), "utf8")).resolves.toBe(
-        "remote",
-      );
-      await expectPathMissing(
-        path.join(workspaceDir, ".openclaw", "sandbox-skills", "skills", "generated.txt"),
-      );
-    } finally {
-      renameSpy.mockRestore();
-    }
-  });
+      const backend = await createOpenShellBackendFixture({ workspaceDir, mode: "mirror" });
+
+      try {
+        let finalizeError: unknown;
+        try {
+          await backend.finalizeExec?.({
+            status: "completed",
+            exitCode: 0,
+            timedOut: false,
+            token: undefined,
+          });
+        } catch (error) {
+          finalizeError = error;
+        }
+
+        expect(renameSpy).toHaveBeenCalled();
+        expect(preservedPath).toBeDefined();
+        if (outcome === "success") {
+          expect(finalizeError).toBeUndefined();
+          await expect(fs.readFile(shadowFile, "utf8")).resolves.toBe("local shadow");
+          await expect(
+            fs.readFile(path.join(workspaceDir, "from-remote.txt"), "utf8"),
+          ).resolves.toBe("remote");
+        } else {
+          expect(finalizeError).toMatchObject({
+            cause: { code: outcome === "retained source replacement" ? "ESTALE" : "EACCES" },
+          });
+          const backup = expectDefined(preservedPath, "completed shadow publication");
+          const completeCopy =
+            outcome === "restore cleanup failure" ? path.dirname(shadowFile) : backup;
+          for (const [name, contents] of sourceContents) {
+            await expect(fs.readFile(path.join(completeCopy, name), "utf8")).resolves.toBe(
+              contents,
+            );
+          }
+          if (outcome === "restore cleanup failure") {
+            await expect(
+              fs.readFile(path.join(workspaceDir, "from-remote.txt"), "utf8"),
+            ).resolves.toBe("remote");
+          } else {
+            await expectPathMissing(path.join(workspaceDir, "from-remote.txt"));
+          }
+          if (outcome === "source cleanup failure" || outcome === "restore cleanup failure") {
+            expect(sourceCleanupFailed).toBe(true);
+            expect(removedSourceFiles).toHaveLength(1);
+            await expectPathMissing(expectDefined(removedSourceFiles[0], "removed source file"));
+            const retained = expectDefined(retainedSourceFile, "refused source unlink");
+            expect(sourceAtCleanupFailure).toEqual([path.basename(retained)]);
+            await expect(fs.readFile(retained, "utf8")).resolves.toBe(
+              sourceContents.get(path.basename(retained)),
+            );
+          } else {
+            await expect(fs.readFile(shadowFile, "utf8")).resolves.toBe("concurrent replacement");
+          }
+          // The caller must be able to locate its retained original after a partial move.
+          expect(
+            String(finalizeError),
+            JSON.stringify({
+              outcome,
+              sourceFiles: await fs.readdir(path.dirname(shadowFile)),
+              backupFiles: await fs.readdir(backup),
+              sourceAtCleanupFailure,
+            }),
+          ).toContain(backup);
+        }
+        await expectPathMissing(
+          path.join(workspaceDir, ".openclaw", "sandbox-skills", "skills", "generated.txt"),
+        );
+      } finally {
+        renameSpy.mockRestore();
+        unlinkSpy.mockRestore();
+        if (preservedPath) {
+          await fs.rm(path.dirname(preservedPath), { recursive: true, force: true });
+        }
+      }
+    },
+  );
 
   it("drops non-directory materialized sandbox skills from mirror downloads", async () => {
     await using workspace = await createOpenShellTestWorkspace("workspace");
@@ -848,35 +1019,181 @@ describe("openshell backend manager", () => {
     await expectPathMissing(path.join(workspaceDir, ".openclaw", "sandbox-skills"));
   });
 
-  it("restores a local sandbox skills shadow when mirror download has a file parent", async () => {
-    await using workspace = await createOpenShellTestWorkspace("workspace");
-    const workspaceDir = workspace.dir;
-    const shadowFile = path.join(workspaceDir, ".openclaw", "sandbox-skills", "user-note.txt");
-    await fs.mkdir(path.dirname(shadowFile), { recursive: true });
-    await fs.writeFile(shadowFile, "local shadow", "utf8");
-    cliMocks.runOpenShellCli.mockImplementation(async ({ args }: { args: string[] }) => {
-      if (args[0] === "sandbox" && args[1] === "download") {
-        const tmpDir = expectDefined(args[4], "OpenShell download destination");
-        await fs.writeFile(path.join(tmpDir, "from-remote.txt"), "remote", "utf8");
-        await fs.writeFile(path.join(tmpDir, ".openclaw"), "poison", "utf8");
+  it.each(["original", "replaced"] as const)(
+    "restores only the %s backup when mirror download has a file parent",
+    async (backupState) => {
+      await using workspace = await createOpenShellTestWorkspace("workspace");
+      const workspaceDir = workspace.dir;
+      const shadowFile = path.join(workspaceDir, ".openclaw", "sandbox-skills", "user-note.txt");
+      const parentPath = path.join(workspaceDir, ".openclaw");
+      await fs.mkdir(path.dirname(shadowFile), { recursive: true });
+      await fs.writeFile(shadowFile, "local shadow", "utf8");
+      cliMocks.runOpenShellCli.mockImplementation(async ({ args }: { args: string[] }) => {
+        if (args[0] === "sandbox" && args[1] === "download") {
+          const tmpDir = expectDefined(args[4], "OpenShell download destination");
+          await fs.writeFile(path.join(tmpDir, "from-remote.txt"), "remote", "utf8");
+          await fs.writeFile(path.join(tmpDir, ".openclaw"), "poison", "utf8");
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      });
+      let preservedPath: string | undefined;
+      let replaced = false;
+      const rename = fs.rename;
+      const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+        await rename(from, to);
+        if (path.basename(String(to)) === "shadow") {
+          preservedPath = String(to);
+        }
+      });
+      const lstat = fs.lstat;
+      let parentConflictCreated = false;
+      const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+        let stat;
+        try {
+          stat = await lstat(...args);
+        } catch (error) {
+          if (
+            !preservedPath ||
+            parentConflictCreated ||
+            String(args[0]) !== parentPath ||
+            !(error instanceof Error) ||
+            !("code" in error) ||
+            error.code !== "ENOENT"
+          ) {
+            throw error;
+          }
+          // Mirror removed the empty ancestor; exercise restoration's file-parent contract.
+          await fs.writeFile(parentPath, "poison", "utf8");
+          parentConflictCreated = true;
+          stat = await lstat(...args);
+        }
+        if (
+          backupState === "replaced" &&
+          !replaced &&
+          preservedPath &&
+          String(args[0]) === parentPath &&
+          stat.isFile()
+        ) {
+          // Change backup ownership during the last awaited parent check before restoration.
+          await rename(preservedPath, `${preservedPath}-original`);
+          await fs.mkdir(preservedPath);
+          await fs.writeFile(path.join(preservedPath, "replacement.txt"), "replacement backup");
+          replaced = true;
+        }
+        return stat;
+      });
+      const backend = await createOpenShellBackendFixture({ workspaceDir, mode: "mirror" });
+      try {
+        const finalization = backend.finalizeExec?.({
+          status: "completed",
+          exitCode: 0,
+          timedOut: false,
+          token: undefined,
+        });
+        if (backupState === "replaced") {
+          await expect(finalization).rejects.toThrow("unverified workspace shadow");
+          expect(replaced).toBe(true);
+          const backup = expectDefined(preservedPath, "published original shadow");
+          await expect(fs.readFile(parentPath, "utf8")).resolves.toBe("poison");
+          await expect(fs.readFile(path.join(backup, "replacement.txt"), "utf8")).resolves.toBe(
+            "replacement backup",
+          );
+          await expect(
+            fs.readFile(path.join(`${backup}-original`, "user-note.txt"), "utf8"),
+          ).resolves.toBe("local shadow");
+        } else {
+          await finalization;
+          await expect(fs.readFile(shadowFile, "utf8")).resolves.toBe("local shadow");
+          expect((await fs.stat(parentPath)).isDirectory()).toBe(true);
+        }
+        expect(parentConflictCreated).toBe(true);
+        await expect(fs.readFile(path.join(workspaceDir, "from-remote.txt"), "utf8")).resolves.toBe(
+          "remote",
+        );
+      } finally {
+        renameSpy.mockRestore();
+        lstatSpy.mockRestore();
+        if (preservedPath) {
+          await fs.rm(path.dirname(preservedPath), { recursive: true, force: true });
+        }
       }
-      return { code: 0, stdout: "", stderr: "" };
+    },
+  );
+  it("reports completed restoration cleanup accurately and restores earlier shadows", async () => {
+    await using workspace = await createOpenShellTestWorkspace("workspace");
+    await using agentWorkspace = await createOpenShellTestWorkspace("agent-workspace");
+    const skillsDir = path.join(workspace.dir, ".openclaw", "sandbox-skills");
+    const agentShadowDir = path.join(workspace.dir, "nested", "agent");
+    for (const directory of [skillsDir, agentShadowDir]) {
+      await fs.mkdir(directory, { recursive: true });
+      await fs.writeFile(path.join(directory, "note.txt"), path.basename(directory), "utf8");
+    }
+    cliMocks.runOpenShellCli.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+    const preservationRoots = new Set<string>();
+    let failedCleanupRoot: string | undefined;
+    let cleanupFailed = false;
+    const cleanupError = Object.assign(new Error("preservation directory cleanup denied"), {
+      code: "EACCES",
     });
-
-    const backend = await createOpenShellBackendFixture({ workspaceDir, mode: "mirror" });
-
-    await backend.finalizeExec?.({
-      status: "completed",
-      exitCode: 0,
-      timedOut: false,
-      token: undefined,
+    const rename = fs.rename;
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      await rename(from, to);
+      if (path.basename(String(to)) === "shadow") {
+        const preserveRoot = path.dirname(String(to));
+        preservationRoots.add(preserveRoot);
+        if (String(from) === skillsDir) {
+          failedCleanupRoot = preserveRoot;
+        }
+      }
     });
-
-    await expect(fs.readFile(path.join(workspaceDir, "from-remote.txt"), "utf8")).resolves.toBe(
-      "remote",
-    );
-    await expect(fs.readFile(shadowFile, "utf8")).resolves.toBe("local shadow");
-    expect((await fs.stat(path.join(workspaceDir, ".openclaw"))).isDirectory()).toBe(true);
+    const rmdir = fs.rmdir;
+    const rmdirSpy = vi.spyOn(fs, "rmdir").mockImplementation(async (...args) => {
+      if (String(args[0]) === failedCleanupRoot) {
+        const leftover = expectDefined(failedCleanupRoot, "completed restoration cleanup root");
+        await expect(fs.readdir(leftover)).resolves.toEqual([]);
+        await expectPathMissing(path.join(leftover, "shadow"));
+        await expect(fs.readFile(path.join(skillsDir, "note.txt"), "utf8")).resolves.toBe(
+          "sandbox-skills",
+        );
+        cleanupFailed = true;
+        throw cleanupError;
+      }
+      return await rmdir(...args);
+    });
+    const backend = await createOpenShellBackendFixture({
+      workspaceDir: workspace.dir,
+      agentWorkspaceDir: agentWorkspace.dir,
+      remoteAgentWorkspaceDir: "/sandbox/nested/agent",
+      mode: "mirror",
+    });
+    try {
+      const result = await backend
+        .finalizeExec?.({
+          status: "completed",
+          exitCode: 0,
+          timedOut: false,
+          token: undefined,
+        })
+        .catch((error: unknown) => error);
+      expect(cleanupFailed).toBe(true);
+      expect(preservationRoots.size).toBe(2);
+      expect(result).toMatchObject({ cause: cleanupError });
+      for (const directory of [skillsDir, agentShadowDir]) {
+        await expect(fs.readFile(path.join(directory, "note.txt"), "utf8")).resolves.toBe(
+          path.basename(directory),
+        );
+      }
+      const leftover = expectDefined(failedCleanupRoot, "retained preservation directory");
+      expect(String(result)).toContain(leftover);
+      expect(String(result)).not.toContain(path.join(leftover, "shadow"));
+      expect(String(result)).toContain("was restored");
+    } finally {
+      renameSpy.mockRestore();
+      rmdirSpy.mockRestore();
+      for (const directory of preservationRoots) {
+        await fs.rm(directory, { recursive: true, force: true });
+      }
+    }
   });
 });
 
@@ -954,15 +1271,23 @@ async function createOpenShellBackendFixture(params: {
   workspaceDir: string;
   mode: "mirror" | "remote";
   skillsWorkspaceDir?: string;
+  agentWorkspaceDir?: string;
+  remoteAgentWorkspaceDir?: string;
 }): Promise<OpenShellSandboxBackend> {
   const factory = createOpenShellSandboxBackendFactory({
-    pluginConfig: resolveOpenShellPluginConfig({ command: "openshell", mode: params.mode }),
+    pluginConfig: resolveOpenShellPluginConfig({
+      command: "openshell",
+      mode: params.mode,
+      ...(params.remoteAgentWorkspaceDir
+        ? { remoteAgentWorkspaceDir: params.remoteAgentWorkspaceDir }
+        : {}),
+    }),
   });
   return (await factory({
     sessionKey: "agent:main:turn",
     scopeKey: "agent:main",
     workspaceDir: params.workspaceDir,
-    agentWorkspaceDir: params.workspaceDir,
+    agentWorkspaceDir: params.agentWorkspaceDir ?? params.workspaceDir,
     ...(params.skillsWorkspaceDir ? { skillsWorkspaceDir: params.skillsWorkspaceDir } : {}),
     cfg: createOpenShellBackendSandboxConfig(),
   })) as OpenShellSandboxBackend;
@@ -998,6 +1323,9 @@ describe("openshell fs bridges", () => {
       const { bridge } = await createMirrorFsBridgeFixture(workspace.dir);
 
       expect(() => bridge.resolvePath({ filePath })).toThrow("Sandbox path escapes allowed mounts");
+      await expect(bridge.readDirectory({ filePath })).rejects.toThrow(
+        "Sandbox path escapes allowed mounts",
+      );
     },
   );
 
@@ -1042,6 +1370,10 @@ describe("openshell fs bridges", () => {
       if (!bridge) {
         throw new Error("Expected an OpenShell filesystem bridge");
       }
+      expect(bridge.pathMappings).toContainEqual({
+        hostRoot: path.resolve(workspaceDir),
+        containerRoot: "/sandbox",
+      });
       expect(bridge.resolvePath({ filePath: "owner.txt" })).toEqual({
         ...(mode === "mirror" ? { hostPath: path.join(workspaceDir, "owner.txt") } : {}),
         relativePath: "owner.txt",
@@ -1356,21 +1688,29 @@ describe("openshell fs bridges", () => {
     });
   });
 
-  it("removes recursive local mirror directories without raw path deletion", async () => {
-    await using workspace = await createOpenShellTestWorkspace("fs");
-    const workspaceDir = workspace.dir;
-    await fs.mkdir(path.join(workspaceDir, "nested", "child"), { recursive: true });
-    await fs.writeFile(path.join(workspaceDir, "nested", "child", "target.txt"), "payload", "utf8");
-    const { backend, bridge } = await createMirrorFsBridgeFixture(workspaceDir);
-    await bridge.remove({ filePath: "nested", recursive: true, force: true });
+  it.each(["nested", "."])(
+    "removes deep local mirror trees at %s while retaining the mounted root",
+    async (filePath) => {
+      await using workspace = await createOpenShellTestWorkspace("fs");
+      const workspaceDir = workspace.dir;
+      const rootIdentity = await fs.stat(workspaceDir, { bigint: true });
+      const deepestDir = path.join(workspaceDir, "nested", ...Array<string>(65).fill("d"));
+      await fs.mkdir(deepestDir, { recursive: true });
+      await fs.writeFile(path.join(deepestDir, "target.txt"), "payload", "utf8");
+      const { backend, bridge } = await createMirrorFsBridgeFixture(workspaceDir);
+      await bridge.remove({ filePath, recursive: true, force: true });
 
-    await expectPathMissing(path.join(workspaceDir, "nested"));
-    expect(backend["removeRemotePath"]).toHaveBeenCalledWith("/sandbox/nested", {
-      recursive: true,
-      signal: undefined,
-      ignoreMissing: true,
-    });
-  });
+      await expect(fs.readdir(workspaceDir)).resolves.toEqual([]);
+      await expect(fs.stat(workspaceDir, { bigint: true })).resolves.toMatchObject({
+        dev: rootIdentity.dev,
+        ino: rootIdentity.ino,
+      });
+      expect(backend["removeRemotePath"]).toHaveBeenCalledWith(
+        filePath === "." ? "/sandbox" : "/sandbox/nested",
+        { recursive: true, signal: undefined, ignoreMissing: true },
+      );
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "removes recursive local mirror directories containing symlink leaves without following them",
@@ -1383,6 +1723,8 @@ describe("openshell fs bridges", () => {
       await fs.mkdir(path.join(workspaceDir, "nested"), { recursive: true });
       await fs.writeFile(outsideTarget, "outside", "utf8");
       await fs.symlink(outsideTarget, path.join(workspaceDir, "nested", "link.txt"));
+      await fs.symlink(outsideDir, path.join(workspaceDir, "nested", "directory-link"));
+      await fs.symlink("missing", path.join(workspaceDir, "nested", "dangling-link"));
       const { bridge } = await createMirrorFsBridgeFixture(workspaceDir);
       await bridge.remove({ filePath: "nested", recursive: true, force: true });
 
@@ -1391,9 +1733,9 @@ describe("openshell fs bridges", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "removes local mirror symlink leaves when force is false",
-    async () => {
+  it.runIf(process.platform !== "win32").each([false, true])(
+    "removes local mirror symlink leaves when force is false and recursive is %s",
+    async (recursive) => {
       await using workspace = await createOpenShellTestWorkspace("fs");
       const workspaceDir = workspace.dir;
       await using outsideWorkspace = await createOpenShellTestWorkspace("outside");
@@ -1402,15 +1744,28 @@ describe("openshell fs bridges", () => {
       await fs.writeFile(outsideTarget, "outside", "utf8");
       await fs.symlink(outsideTarget, path.join(workspaceDir, "link.txt"));
       const { backend, bridge } = await createMirrorFsBridgeFixture(workspaceDir);
-      await bridge.remove({ filePath: "link.txt", force: false });
+      await bridge.remove({ filePath: "link.txt", force: false, recursive });
 
       await expectPathMissing(path.join(workspaceDir, "link.txt"));
       await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("outside");
       expect(backend["removeRemotePath"]).toHaveBeenCalledWith("/sandbox/link.txt", {
-        recursive: false,
+        recursive,
         signal: undefined,
         ignoreMissing: false,
       });
+    },
+  );
+
+  it.each([false, true])(
+    "preserves missing local mirror path handling when recursive is %s",
+    async (recursive) => {
+      await using workspace = await createOpenShellTestWorkspace("fs");
+      const { bridge } = await createMirrorFsBridgeFixture(workspace.dir);
+
+      await expect(
+        bridge.remove({ filePath: "missing", recursive, force: false }),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(bridge.remove({ filePath: "missing", recursive })).resolves.toBeUndefined();
     },
   );
 
@@ -1580,16 +1935,26 @@ describe("openshell fs bridges", () => {
     await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).rejects.toThrow(
       "Sandbox boundary checks failed",
     );
+    await expect(bridge.readDirectory({ filePath: "subdir" })).rejects.toThrow(
+      "Sandbox path escapes allowed mounts",
+    );
   });
 
-  it("reads regular files through the shared safe fs root", async () => {
+  it("reads regular files and directories through the shared safe fs root", async () => {
     await using workspace = await createOpenShellTestWorkspace("fs");
     const workspaceDir = workspace.dir;
-    await fs.mkdir(path.join(workspaceDir, "subdir"), { recursive: true });
+    await fs.mkdir(path.join(workspaceDir, "subdir", "nested"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "subdir", "secret.txt"), "inside", "utf8");
 
     const { bridge } = await createMirrorFsBridgeFixture(workspaceDir);
 
+    await expect(bridge.readDirectory({ filePath: "." })).resolves.toEqual([
+      { name: "subdir", isDirectory: true },
+    ]);
+    await expect(bridge.readDirectory({ filePath: ".", cwd: "/sandbox/subdir" })).resolves.toEqual([
+      { name: "nested", isDirectory: true },
+      { name: "secret.txt", isDirectory: false },
+    ]);
     await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).resolves.toEqual(
       Buffer.from("inside"),
     );
@@ -1621,6 +1986,7 @@ describe("openshell fs bridges", () => {
       await fs.mkdir(path.dirname(skillFile), { recursive: true });
       await fs.mkdir(path.dirname(shadowFile), { recursive: true });
       await fs.writeFile(skillFile, "# Demo\nmaterialized\n", "utf8");
+      await fs.writeFile(path.join(path.dirname(skillFile), "examples.md"), "examples", "utf8");
       await fs.writeFile(shadowFile, "# Demo\nworkspace shadow\n", "utf8");
 
       const backend = createMirrorBackendMock();
@@ -1638,6 +2004,12 @@ describe("openshell fs bridges", () => {
       const { createOpenShellFsBridge } = await import("./fs-bridge.js");
       const bridge = createOpenShellFsBridge({ sandbox, backend });
 
+      await expect(
+        bridge.readDirectory({ filePath: "/sandbox/.openclaw/sandbox-skills/skills/demo" }),
+      ).resolves.toEqual([
+        { name: "SKILL.md", isDirectory: false },
+        { name: "examples.md", isDirectory: false },
+      ]);
       await expect(
         bridge.readFile({
           filePath: "/sandbox/.openclaw/sandbox-skills/skills/demo/SKILL.md",
@@ -1713,7 +2085,7 @@ describe("openshell fs bridges", () => {
     await using agentWorkspace = await createOpenShellTestWorkspace("agent");
     const agentWorkspaceDir = agentWorkspace.dir;
     await fs.writeFile(path.join(agentWorkspaceDir, "note.txt"), "agent", "utf8");
-    const backend = createMirrorBackendMock();
+    const backend = { ...createMirrorBackendMock(), remoteAgentWorkspaceDir: "/native-agent-root" };
     const sandbox = createSandboxTestContext({
       overrides: {
         backendId: "openshell",
@@ -1726,9 +2098,18 @@ describe("openshell fs bridges", () => {
 
     const { createOpenShellFsBridge } = await import("./fs-bridge.js");
     const bridge = createOpenShellFsBridge({ sandbox, backend });
-    const resolved = bridge.resolvePath({ filePath: "/agent/note.txt" });
+    expect(bridge.pathMappings).toContainEqual({
+      hostRoot: path.resolve(agentWorkspaceDir),
+      containerRoot: "/native-agent-root",
+    });
+    const resolved = bridge.resolvePath({ filePath: "/native-agent-root/note.txt" });
     expect(resolved.hostPath).toBe(path.join(agentWorkspaceDir, "note.txt"));
-    expect(await bridge.readFile({ filePath: "/agent/note.txt" })).toEqual(Buffer.from("agent"));
+    expect(await bridge.readFile({ filePath: "/native-agent-root/note.txt" })).toEqual(
+      Buffer.from("agent"),
+    );
+    await expect(bridge.readDirectory({ filePath: "/native-agent-root" })).resolves.toEqual([
+      { name: "note.txt", isDirectory: false },
+    ]);
   });
 
   it.each([

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ExecutionDecisionWork } from "../../../audit/execution-decision-work.js";
+import type { ExecutionDecisionWork } from "../../../audit/execution-decision-work.types.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -25,6 +25,8 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   let forkSession: ForkSession;
   let spawnSubagentDirect: SpawnSubagent;
   let createSessionsSpawnTool: typeof import("../../tools/sessions-spawn-tool.js").createSessionsSpawnTool;
+  let createAgentsWaitTool: typeof import("../../tools/agents-wait-tool.js").createAgentsWaitTool;
+  let finalizeAgentToolAvailability: typeof import("../../agent-tool-availability.js").finalizeAgentToolAvailability;
   let decisionWork: typeof import("../../../audit/execution-decision-work.js");
   let identityAdmission: typeof import("../../../audit/execution-identity-admission.js");
   let callerContext: typeof import("../../tools/gateway-caller-context.js");
@@ -79,7 +81,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       settleFailedQueuedSubagentLaunchMock: settleFailedQueuedSubagentLaunch,
       completeCollectorLaunchCleanupMock: completeCollectorLaunchCleanup,
       resolveContextEngineMock: async () => ({ prepareSubagentSpawn }),
-      resolveSubagentSpawnModelSelection: () => "openai/gpt-5.6-luna",
       getRuntimeConfig: () => config,
       getSessionBindingService: () => ({
         getCapabilities: () => ({
@@ -124,6 +125,8 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       .mockImplementation(sessions.upsertSessionEntryCore);
     restoreUpsert = () => upsert.mockRestore();
     ({ createSessionsSpawnTool } = await import("../../tools/sessions-spawn-tool.js"));
+    ({ createAgentsWaitTool } = await import("../../tools/agents-wait-tool.js"));
+    ({ finalizeAgentToolAvailability } = await import("../../agent-tool-availability.js"));
     decisionWork = await import("../../../audit/execution-decision-work.js");
     identityAdmission = await import("../../../audit/execution-identity-admission.js");
     callerContext = await import("../../tools/gateway-caller-context.js");
@@ -351,6 +354,8 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
         agentAccountId: "default",
         agentTo: "channel:123",
       });
+      const wait = createAgentsWaitTool({ config, agentSessionKey: parentKey, agentId: "main" });
+      finalizeAgentToolAvailability([tool, wait]);
       const clearSink = decisionWork.configureExecutionDecisionWorkSink((item) => {
         work.push(decisionWork.parseExecutionDecisionWork(item));
         return true;

@@ -88,7 +88,7 @@ async function persistedJob(storePath: string, jobId: string) {
   return (await loadCronStore(storePath)).jobs.find((job) => job.id === jobId);
 }
 
-describe.sequential("cron delivery outcomes", () => {
+describe("cron delivery outcomes", { concurrent: false }, () => {
   it("delivers a command result through the guarded webhook boundary and persists it", async () => {
     const receiver = await createWebhookReceiver();
     try {
@@ -321,6 +321,12 @@ describe.sequential("cron delivery outcomes", () => {
           resetTaskRegistryForTests({ persist: false });
           const storePath = state.path("cron", "jobs.json");
           let now = Date.now();
+          const runIsolatedAgentJob = vi.fn(async () => ({
+            status: "ok" as const,
+            delivered: false,
+            deliveryAttempted: true,
+            deliveryError: "primary route rejected",
+          }));
           const cron = new CronService({
             storePath,
             cronEnabled: true,
@@ -328,12 +334,7 @@ describe.sequential("cron delivery outcomes", () => {
             log: createNoopLogger(),
             enqueueSystemEvent: vi.fn(),
             requestHeartbeat: vi.fn(),
-            runIsolatedAgentJob: vi.fn(async () => ({
-              status: "ok" as const,
-              delivered: false,
-              deliveryAttempted: true,
-              deliveryError: "primary route rejected",
-            })),
+            runIsolatedAgentJob,
             sendCronFailureAlert: async (params) =>
               await sendGatewayCronFailureAlert({
                 ...params,
@@ -370,15 +371,18 @@ describe.sequential("cron delivery outcomes", () => {
                   'Automation "required completion delivery" delivery failed\nLast error: primary route rejected',
               },
             });
-            expect(await persistedJob(storePath, job.id)).toMatchObject({
-              state: {
-                lastRunStatus: "ok",
-                lastDeliveryStatus: "not-delivered",
-                lastDeliveryError: "primary route rejected",
-                consecutiveErrors: 0,
-                lastFailureNotificationDeliveryStatus: "unknown",
-                lastFailureAlertAtMs: now,
-              },
+            await vi.waitFor(async () => {
+              expect(await persistedJob(storePath, job.id)).toMatchObject({
+                state: {
+                  lastRunStatus: "ok",
+                  lastDeliveryStatus: "not-delivered",
+                  lastDeliveryError: "primary route rejected",
+                  consecutiveErrors: 0,
+                  lastFailureNotificationDelivered: true,
+                  lastFailureNotificationDeliveryStatus: "delivered",
+                  lastFailureAlertAtMs: now,
+                },
+              });
             });
 
             now += 60_000;
@@ -404,6 +408,12 @@ describe.sequential("cron delivery outcomes", () => {
             ).toHaveLength(1);
 
             now += 3_540_000;
+            runIsolatedAgentJob.mockResolvedValue({
+              status: "ok",
+              delivered: false,
+              deliveryAttempted: true,
+              deliveryError: "primary target no longer exists",
+            });
             await cron.run(job.id, "force");
             await vi.waitFor(() => expect(receiver.requests).toHaveLength(2));
 
@@ -443,8 +453,9 @@ describe.sequential("cron delivery outcomes", () => {
       async (state) => {
         const enqueueSystemEvent = vi.fn();
         const requestHeartbeat = vi.fn();
+        const storePath = state.path("cron", "jobs.json");
         const cron = new CronService({
-          storePath: state.path("cron", "jobs.json"),
+          storePath,
           cronEnabled: true,
           log: createNoopLogger(),
           enqueueSystemEvent,
@@ -495,6 +506,17 @@ describe.sequential("cron delivery outcomes", () => {
             reason: "wake",
             agentId: "work",
             sessionKey,
+          });
+          await vi.waitFor(async () => {
+            expect(await persistedJob(storePath, job.id)).toMatchObject({
+              state: {
+                lastFailureNotificationDelivered: false,
+                lastFailureNotificationDeliveryStatus: "not-delivered",
+                lastFailureNotificationDeliveryError: expect.stringContaining(
+                  "Blocked hostname or private/internal/special-use IP address",
+                ),
+              },
+            });
           });
         } finally {
           cron.stop();
@@ -562,12 +584,16 @@ describe.sequential("cron delivery outcomes", () => {
                   'Automation "skipped run alert" skipped 1 times\nSkip reason: requests-in-flight',
               },
             });
-            expect(await persistedJob(storePath, job.id)).toMatchObject({
-              state: {
-                lastRunStatus: "skipped",
-                consecutiveSkipped: 1,
-                lastFailureAlertAtMs: expect.any(Number),
-              },
+            await vi.waitFor(async () => {
+              expect(await persistedJob(storePath, job.id)).toMatchObject({
+                state: {
+                  lastRunStatus: "skipped",
+                  consecutiveSkipped: 1,
+                  lastFailureAlertAtMs: expect.any(Number),
+                  lastFailureNotificationDelivered: true,
+                  lastFailureNotificationDeliveryStatus: "delivered",
+                },
+              });
             });
             expect(historyEntry(storePath, job.id)).toMatchObject({
               status: "skipped",

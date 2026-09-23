@@ -1,9 +1,7 @@
-import { statSync, type Dirent } from "node:fs";
-import fs from "node:fs/promises";
-import path from "node:path";
+import { statSync } from "node:fs";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../../infra/disk-space.js";
-import { isMissingPathError } from "../../infra/errors.js";
-import { requireGit } from "./git.js";
+import { runGitWorkerOperation, type GitWorkerOperationOptions } from "../../infra/git-worker.js";
+import type { GitWorktreeOperations } from "./git-worktree-operations.js";
 
 const GiB = 1024 ** 3;
 export const WORKTREE_SETUP_HEADROOM_BYTES = 4 * GiB;
@@ -53,64 +51,53 @@ export function requireWorktreeDiskSpace(
   }
 }
 
-export async function estimateWorktreeGitBytes(repoRoot: string, ref: string): Promise<number> {
-  const commit = await requireGit(repoRoot, [
-    "rev-parse",
-    "--verify",
-    "--end-of-options",
-    `${ref === "-" ? "@{-1}" : ref}^{commit}`,
-  ]);
-  const sizes = await requireGit(repoRoot, [
-    "ls-tree",
-    "-r",
-    "--format=%(objectsize)",
-    commit,
-    "--",
-  ]);
-  let bytes = 0;
-  for (const size of sizes.split("\n")) {
-    if (!size || size === "-") {
-      continue;
-    }
-    const value = Number(size);
-    if (!Number.isSafeInteger(value) || value < 0) {
-      throw new Error(
-        "Cannot estimate worktree checkout size; inspect the repository objects and retry.",
-      );
-    }
-    bytes += Math.max(4096, Math.ceil(value / 4096) * 4096);
-  }
-  return bytes;
+export async function estimateWorktreeGitBytes(
+  repoRoot: string,
+  ref: string,
+  options: Pick<GitWorkerOperationOptions, "signal" | "assertCurrent" | "git"> = {},
+): Promise<number> {
+  return await runGitWorkerOperation(
+    {
+      type: "worktree.git-size",
+      input: {
+        repoRoot,
+        ref,
+        replacementRefBase: process.env.GIT_REPLACE_REF_BASE ?? "refs/replace/",
+      },
+    },
+    options,
+  );
 }
 
-/** Measure without following links; unreadable trees must never be counted as empty. */
-export async function directorySizeBytes(root: string, excludeGit = false): Promise<number> {
-  let entries: Dirent[];
-  try {
-    entries = await fs.readdir(root, { withFileTypes: true });
-  } catch (error) {
-    if (isMissingPathError(error)) {
-      return 0;
-    }
-    throw error;
-  }
-  let total = 0;
-  for (const entry of entries) {
-    if (excludeGit && entry.name === ".git") {
-      continue;
-    }
-    const child = path.join(root, entry.name);
-    if (entry.isDirectory() && !entry.isSymbolicLink()) {
-      total += await directorySizeBytes(child, excludeGit);
-    } else {
-      try {
-        total += (await fs.lstat(child)).size;
-      } catch (error) {
-        if (!isMissingPathError(error)) {
-          throw error;
-        }
-      }
-    }
-  }
-  return total;
+/** Budget a full snapshot checkout or the destination blobs written over a source clone. */
+export async function estimateWorktreeCheckoutTransitionBytes(
+  repoRoot: string,
+  baseRef: string,
+  targetRef: string,
+  options: Pick<GitWorkerOperationOptions, "signal" | "assertCurrent"> = {},
+): Promise<GitWorktreeOperations["worktree.checkout-transition-size"]["output"]> {
+  return await runGitWorkerOperation(
+    {
+      type: "worktree.checkout-transition-size",
+      input: {
+        repoRoot,
+        baseRef,
+        targetRef,
+        replacementRefBase: process.env.GIT_REPLACE_REF_BASE ?? "refs/replace/",
+      },
+    },
+    options,
+  );
+}
+
+/** Each call measures current files; allocation cannot use a settled directory-size cache. */
+export async function directorySizeBytes(
+  root: string,
+  excludeGit = false,
+  options: Pick<GitWorkerOperationOptions, "signal" | "assertCurrent"> = {},
+): Promise<number> {
+  return await runGitWorkerOperation(
+    { type: "worktree.directory-size", input: { root, excludeGit } },
+    options,
+  );
 }

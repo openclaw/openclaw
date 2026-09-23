@@ -6,10 +6,79 @@ import {
   requireRecord,
   requireString,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("reconciles a fallback notice around one streamed terminal answer", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const runId = "fallback-terminal-run";
+      const answer = "The workspace check is complete.";
+      const notice =
+        "Model Fallback: backup/model (selected primary/model; selected model unavailable)";
+      const terminalAnswer = [
+        "<relevant-memories>",
+        "Internal memory context",
+        "</relevant-memories>",
+        answer,
+      ].join("\n");
+      const user = {
+        role: "user",
+        content: [{ type: "text", text: "Check the workspace." }],
+        __openclaw: { id: "fallback-user", seq: 1, idempotencyKey: `${runId}:user` },
+      };
+      const streamedAnswer = {
+        role: "assistant",
+        content: [{ type: "text", text: answer }],
+        openclawStreamFallback: {
+          itemId: "fallback-answer-item",
+          replacementText: answer,
+          runId,
+          source: "segment",
+        },
+      };
+      const gateway = await installMockGateway(page, {
+        historyMessages: [user, streamedAnswer],
+        inFlightRun: { runId, startedAt: 1_000, text: "" },
+        sessionInfo: {
+          activeRunIds: [runId],
+          hasActiveRun: true,
+          key: "agent:main:main",
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.getByRole("button", { name: "Stop generating" }).waitFor();
+      await gateway.emitGatewayEvent("chat", {
+        sessionKey: "agent:main:main",
+        runId,
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: notice, openclawStatusNotice: true },
+            { type: "text", text: terminalAnswer },
+          ],
+        },
+      });
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ state: "hidden" });
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(suite.artifactDir, "fallback-terminal-answer.png"),
+        });
+      }
+
+      const answerOccurrences = async () =>
+        (await page.locator(".chat-group.assistant .chat-text").allTextContents()).filter((text) =>
+          text.includes(answer),
+        ).length;
+      await expect.poll(answerOccurrences).toBe(1);
+    });
+  });
+
   it.each([
     { order: "before hydration", tool: false, steer: false },
     { order: "after hydration", tool: false, steer: false },
@@ -36,6 +105,20 @@ suite.define(() => {
               toolCallId: "workspace-check",
               name: "read",
               result: { content: [{ type: "text", text: "Workspace ready." }] },
+            },
+          };
+          const itemEvent = {
+            ...toolEvent,
+            seq: 2,
+            stream: "item",
+            data: {
+              itemId: "tool:workspace-check",
+              toolCallId: "workspace-check",
+              kind: "tool",
+              name: "read",
+              title: "Check workspace",
+              phase: "end",
+              status: "completed",
             },
           };
           const message = {
@@ -69,7 +152,7 @@ suite.define(() => {
             runId,
             startedAt: 1_000,
             text: steer ? `${text} Checking the follow-up.` : text,
-            ...(tool ? { events: [toolEvent] } : {}),
+            ...(tool ? { events: [toolEvent, itemEvent] } : {}),
           };
           const gateway = await installMockGateway(page, {
             historyMessages: [],
@@ -87,6 +170,7 @@ suite.define(() => {
           });
           if (tool) {
             await gateway.emitGatewayEvent("agent", toolEvent);
+            await gateway.emitGatewayEvent("agent", itemEvent);
           }
           const persist = () =>
             gateway.emitGatewayEvent("session.message", {
@@ -166,76 +250,138 @@ suite.define(() => {
   );
 
   it("reconciles distinct commentary items once across reconnect", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
-      async ({ page }) => {
-        const runId = "commentary-reconciliation-run";
-        const items = [
-          { itemId: "commentary-item-one", text: "Inspecting the workspace." },
-          { itemId: "commentary-item-two", text: "Checking the result." },
-        ];
-        const events = items.map(({ itemId, text }, index) => ({
-          data: { kind: "preamble", itemId, phase: "update", progressText: text },
-          runId,
-          seq: index + 1,
-          sessionKey: "agent:main:main",
-          stream: "item",
-          ts: 2_000 + index,
-        }));
-        const historyMessages = items.map(({ itemId, text }, index) => ({
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const runId = "commentary-reconciliation-run";
+      const items = [
+        { itemId: "commentary-item-one", text: "Inspecting the workspace." },
+        { itemId: "commentary-item-two", text: "Checking the result." },
+      ];
+      const events = items.map(({ itemId, text }, index) => ({
+        data: { kind: "preamble", itemId, phase: "end", progressText: text },
+        runId,
+        seq: index + 1,
+        sessionKey: "agent:main:main",
+        stream: "item",
+        ts: 2_000 + index,
+      }));
+      const historyMessages = items.map(({ itemId, text }, index) => ({
+        role: "assistant",
+        content: [{ type: "text", text }],
+        timestamp: 1_000 + index,
+        __openclaw: { id: `commentary-message-${index}`, runId, seq: index + 1 },
+        openclawStreamFallback: { itemId, replacementText: text, source: "segment" },
+      }));
+      const sessionInfo = {
+        activeRunIds: [runId],
+        hasActiveRun: true,
+        key: "agent:main:main",
+      };
+      const gateway = await installMockGateway(page, {
+        historyMessages: [],
+        inFlightRun: { runId, startedAt: 1_000, text: "" },
+        sessionInfo,
+      });
+      const transcript = page.locator(".chat-thread-inner");
+      const itemOccurrences = async () => {
+        const bubbles = await transcript.locator(".chat-bubble").allTextContents();
+        return items.map(({ text }) => bubbles.filter((bubble) => bubble.trim() === text).length);
+      };
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.getByRole("button", { name: "Stop generating" }).waitFor();
+      for (const event of events) {
+        await gateway.emitGatewayEvent("agent", event);
+      }
+      await expect.poll(itemOccurrences).toEqual([1, 1]);
+
+      const startupCount = (await gateway.getRequests("chat.startup")).length;
+      await gateway.setMethodResponse("chat.startup", {
+        messages: historyMessages,
+        inFlightRun: { runId, startedAt: 1_000, text: "", events },
+        sessionInfo,
+        thinkingLevel: null,
+      });
+      await gateway.setOnline(false);
+      await gateway.setOnline(true);
+      await gateway.waitForRequest("chat.startup", { after: startupCount });
+      await expect.poll(itemOccurrences).toEqual([1, 1]);
+
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(suite.artifactDir, "commentary-reconciliation.png"),
+        });
+      }
+    });
+  });
+
+  it("keeps persisted commentary once when its replay items were evicted", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const runId = "evicted-commentary-run";
+      const commentary = ["Checking the workspace.", "The focused tests are green."];
+      const historyMessages = [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Inspect the workspace." }],
+          __openclaw: { id: "user", seq: 1, idempotencyKey: `${runId}:user` },
+        },
+        ...commentary.map((text, index) => ({
           role: "assistant",
           content: [{ type: "text", text }],
-          timestamp: 1_000 + index,
-          __openclaw: { id: `commentary-message-${index}`, runId, seq: index + 1 },
-          openclawStreamFallback: { itemId, replacementText: text, source: "segment" },
-        }));
-        const sessionInfo = {
-          activeRunIds: [runId],
-          hasActiveRun: true,
-          key: "agent:main:main",
-        };
-        const gateway = await installMockGateway(page, {
-          historyMessages: [],
-          inFlightRun: { runId, startedAt: 1_000, text: "" },
-          sessionInfo,
+          __openclaw: { id: `commentary-${index}`, runId, seq: index + 2 },
+          openclawStreamFallback: {
+            itemId: `preamble-${index}`,
+            replacementText: text,
+            source: "segment",
+          },
+        })),
+      ];
+      const sessionInfo = {
+        activeRunIds: [runId],
+        hasActiveRun: true,
+        key: "agent:main:main",
+      };
+      await installMockGateway(page, {
+        historyMessages,
+        inFlightRun: {
+          runId,
+          startedAt: 1_000,
+          text: `${commentary.join("\n\n")}\n\nStill working.`,
+          events: [
+            {
+              runId,
+              seq: 51,
+              stream: "tool",
+              ts: 2_000,
+              sessionKey: "agent:main:main",
+              data: {
+                phase: "result",
+                toolCallId: "focused-tests",
+                name: "exec",
+                result: { content: [{ type: "text", text: "Tests passed." }] },
+              },
+            },
+          ],
+        },
+        sessionInfo,
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.getByRole("button", { name: "Stop generating" }).waitFor();
+      const assistantTexts = async () =>
+        (await page.locator(".chat-group.assistant .chat-text").allTextContents()).map((value) =>
+          value.trim(),
+        );
+      await expect.poll(assistantTexts).toEqual([...commentary, "Still working."]);
+      expect(await page.locator(".chat-tool-msg-summary").count()).toBe(1);
+
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(suite.artifactDir, "evicted-commentary-after.png"),
         });
-        const transcript = page.locator(".chat-thread-inner");
-        const itemOccurrences = async () => {
-          const bubbles = await transcript.locator(".chat-bubble").allTextContents();
-          return items.map(({ text }) => bubbles.filter((bubble) => bubble.trim() === text).length);
-        };
-
-        await page.goto(`${suite.server.baseUrl}chat`);
-        await page.getByRole("button", { name: "Stop generating" }).waitFor();
-        for (const event of events) {
-          await gateway.emitGatewayEvent("agent", event);
-        }
-        await expect.poll(itemOccurrences).toEqual([1, 1]);
-
-        const startupCount = (await gateway.getRequests("chat.startup")).length;
-        await gateway.setMethodResponse("chat.startup", {
-          messages: historyMessages,
-          inFlightRun: { runId, startedAt: 1_000, text: "", events },
-          sessionInfo,
-          thinkingLevel: null,
-        });
-        await gateway.setOnline(false);
-        await gateway.setOnline(true);
-        await gateway.waitForRequest("chat.startup", { after: startupCount });
-        await expect.poll(itemOccurrences).toEqual([1, 1]);
-
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          await page.screenshot({
-            fullPage: true,
-            path: path.join(suite.artifactDir, "commentary-reconciliation.png"),
-          });
-        }
-      },
-    );
+      }
+    });
   });
 
   it.each([
@@ -244,119 +390,110 @@ suite.define(() => {
   ])(
     "keeps one answer during workspace reconciliation with persistence $persistence and $terminal",
     async ({ persistence, terminal }) => {
-      await suite.withPage(
-        {
-          locale: "en-US",
-          serviceWorkers: "block",
-          viewport: { height: 900, width: 1280 },
-        },
-        async ({ page }) => {
-          const gateway = await installMockGateway(page, { historyMessages: [] });
-          await page.goto(`${suite.server.baseUrl}chat`);
-          await page.locator(".agent-chat__composer-combobox textarea").fill("Check the workspace");
-          await page.getByRole("button", { name: "Send message" }).click();
-          const send = await gateway.waitForRequest("chat.send");
-          const runId = requireString(requireRecord(send.params).idempotencyKey, "chat run id");
-          const text = "Workspace changes are ready.";
-          const partial = "Workspace";
-          const emitDelta = (snapshot: string, deltaText: string) =>
-            gateway.emitGatewayEvent("chat", {
-              sessionKey: "main",
-              runId,
-              state: "delta",
-              deltaText,
-              message: { role: "assistant", content: [{ type: "text", text: snapshot }] },
-            });
-          if (persistence === "between deltas") {
-            await emitDelta(partial, partial);
-            await page.locator(".chat-bubble.streaming", { hasText: partial }).waitFor();
-          }
-          // Hold background refreshes so only the live message/delta boundary can repair the view.
-          await gateway.deferNext("chat.history");
-          await gateway.emitGatewayEvent("session.message", {
+      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        const gateway = await installMockGateway(page, { historyMessages: [] });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.locator(".agent-chat__composer-combobox textarea").fill("Check the workspace");
+        await page.getByRole("button", { name: "Send message" }).click();
+        const send = await gateway.waitForRequest("chat.send");
+        const runId = requireString(requireRecord(send.params).idempotencyKey, "chat run id");
+        const text = "Workspace changes are ready.";
+        const partial = "Workspace";
+        const emitDelta = (snapshot: string, deltaText: string) =>
+          gateway.emitGatewayEvent("chat", {
             sessionKey: "main",
             runId,
-            clientRunId: runId,
+            state: "delta",
+            deltaText,
+            message: { role: "assistant", content: [{ type: "text", text: snapshot }] },
+          });
+        if (persistence === "between deltas") {
+          await emitDelta(partial, partial);
+          await page.locator(".chat-bubble.streaming", { hasText: partial }).waitFor();
+        }
+        // Hold background refreshes so only the live message/delta boundary can repair the view.
+        await gateway.deferNext("chat.history");
+        await gateway.emitGatewayEvent("session.message", {
+          sessionKey: "main",
+          runId,
+          clientRunId: runId,
+          hasActiveRun: true,
+          activeRunIds: [runId],
+          messageId: "workspace-answer",
+          messageSeq: 2,
+          session: {
+            key: "main",
+            kind: "direct",
+            status: "running",
+            updatedAt: Date.now(),
             hasActiveRun: true,
             activeRunIds: [runId],
-            messageId: "workspace-answer",
-            messageSeq: 2,
-            session: {
-              key: "main",
-              kind: "direct",
-              status: "running",
-              updatedAt: Date.now(),
-              hasActiveRun: true,
-              activeRunIds: [runId],
-            },
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text }],
-              __openclaw: { id: "workspace-answer", seq: 2, runId },
-            },
-          });
-          await page.locator(".chat-group.assistant .chat-text", { hasText: text }).waitFor();
-          if (persistence === "before streaming") {
-            await emitDelta(partial, partial);
-          }
-          await emitDelta(text, text.slice(partial.length));
-          await gateway.emitGatewayEvent("agent", {
-            sessionKey: "main",
-            runId,
-            seq: 3,
-            ts: Date.now(),
-            stream: "lifecycle",
-            data: { phase: "finishing" },
-          });
-          // Positive telemetry proves a render after the deltas; absence alone can pass on the old frame.
-          await gateway.emitGatewayEvent("agent", {
-            sessionKey: "main",
-            runId,
-            seq: 4,
-            ts: Date.now(),
-            stream: "usage",
-            data: { outputTokens: 2400 },
-          });
-          await expect
-            .poll(async () =>
-              (await page.locator(".chat-working-indicator__tokens").textContent())?.trim(),
-            )
-            .toBe("2.4k output tokens");
-          await expect.poll(() => page.locator(".chat-bubble.streaming").count()).toBe(0);
-          expect(
-            (await page.locator(".chat-group.assistant .chat-text").allTextContents()).map(
-              (value) => value.trim(),
-            ),
-          ).toEqual([text]);
-          expect(await page.locator(".chat-duplicate-count").count()).toBe(0);
-          expect(await page.getByRole("button", { name: "Stop generating" }).isEnabled()).toBe(
-            true,
-          );
-          await page.locator(".chat-working-indicator").waitFor();
+          },
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text }],
+            __openclaw: { id: "workspace-answer", seq: 2, runId },
+          },
+        });
+        await page.locator(".chat-group.assistant .chat-text", { hasText: text }).waitFor();
+        if (persistence === "before streaming") {
+          await emitDelta(partial, partial);
+        }
+        await emitDelta(text, text.slice(partial.length));
+        await gateway.emitGatewayEvent("agent", {
+          sessionKey: "main",
+          runId,
+          seq: 3,
+          ts: Date.now(),
+          stream: "lifecycle",
+          data: { phase: "finishing" },
+        });
+        // Positive telemetry proves a render after the deltas; absence alone can pass on the old frame.
+        await gateway.emitGatewayEvent("agent", {
+          sessionKey: "main",
+          runId,
+          seq: 4,
+          ts: Date.now(),
+          stream: "usage",
+          data: { outputTokens: 2400 },
+        });
+        await expect
+          .poll(async () =>
+            (await page.locator(".chat-working-indicator__tokens").textContent())?.trim(),
+          )
+          .toBe("2.4k output tokens");
+        await expect.poll(() => page.locator(".chat-bubble.streaming").count()).toBe(0);
+        expect(
+          (await page.locator(".chat-group.assistant .chat-text").allTextContents()).map((value) =>
+            value.trim(),
+          ),
+        ).toEqual([text]);
+        expect(await page.locator(".chat-duplicate-count").count()).toBe(0);
+        expect(await page.getByRole("button", { name: "Stop generating" }).isEnabled()).toBe(true);
+        await page.locator(".chat-working-indicator").waitFor();
 
-          const errorMessage = "Workspace reconciliation failed: the destination is read-only.";
-          await gateway.emitGatewayEvent("chat", {
-            sessionKey: "main",
-            runId,
-            state: terminal,
-            ...(terminal === "error" ? { errorMessage } : {}),
-            message: { role: "assistant", content: [{ type: "text", text }] },
-          });
-          await page.getByRole("button", { name: "Stop generating" }).waitFor({ state: "hidden" });
-          await page.locator(".chat-working-indicator").waitFor({ state: "hidden" });
-          if (terminal === "error") {
-            await page.locator(".chat-error strong", { hasText: errorMessage }).waitFor();
-          }
-          await emitDelta(text, text.slice(partial.length));
-          await expect.poll(() => page.locator(".chat-bubble.streaming").count()).toBe(0);
-          expect(
-            (await page.locator(".chat-group.assistant .chat-text").allTextContents()).map(
-              (value) => value.trim(),
-            ),
-          ).toEqual([text]);
-          expect(await page.locator(".chat-duplicate-count").count()).toBe(0);
-        },
-      );
+        const errorMessage = "Workspace reconciliation failed: the destination is read-only.";
+        await gateway.emitGatewayEvent("chat", {
+          sessionKey: "main",
+          runId,
+          state: terminal,
+          ...(terminal === "error" ? { errorMessage } : {}),
+          message: { role: "assistant", content: [{ type: "text", text }] },
+        });
+        await page.getByRole("button", { name: "Stop generating" }).waitFor({ state: "hidden" });
+        await page.locator(".chat-working-indicator").waitFor({ state: "hidden" });
+        if (terminal === "error") {
+          await page.locator(".chat-error strong", { hasText: errorMessage }).waitFor();
+        }
+        await emitDelta(text, text.slice(partial.length));
+        await expect.poll(() => page.locator(".chat-bubble.streaming").count()).toBe(0);
+        expect(
+          (await page.locator(".chat-group.assistant .chat-text").allTextContents()).map((value) =>
+            value.trim(),
+          ),
+        ).toEqual([text]);
+        expect(await page.locator(".chat-duplicate-count").count()).toBe(0);
+      });
     },
   );
 });

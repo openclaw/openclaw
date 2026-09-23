@@ -1,8 +1,12 @@
 package ai.openclaw.app.node
 
 import android.Manifest
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -49,6 +53,32 @@ class CameraHandlerTest {
   }
 
   @Test
+  fun stoppedActivityFailsBeforeOpeningACamera() {
+    val app = RuntimeEnvironment.getApplication()
+    shadowOf(app).grantPermissions(Manifest.permission.CAMERA)
+    val owner =
+      object : LifecycleOwner {
+        val registry = LifecycleRegistry(this)
+        override val lifecycle: Lifecycle get() = registry
+      }
+    owner.registry.currentState = Lifecycle.State.CREATED
+    val camera = CameraCaptureManager(app).apply { attachLifecycleOwner(owner) }
+    val handler = CameraHandler(app, camera, { true }, ::invokeErrorFromThrowable)
+
+    runBlocking {
+      val snap = async(Dispatchers.Unconfined) { handler.handleSnap(null) }
+      try {
+        assertTrue("Stopped Activity must fail before awaiting CameraX", snap.isCompleted)
+        assertEquals("NODE_BACKGROUND_UNAVAILABLE", snap.await().error?.code)
+      } finally {
+        snap.cancel()
+        snap.join()
+      }
+      assertEquals("NODE_BACKGROUND_UNAVAILABLE", handler.handleClip("""{"includeAudio":false}""").error?.code)
+    }
+  }
+
+  @Test
   fun clipFailsImmediatelyWhenCameraPermissionIsMissing() {
     val app = RuntimeEnvironment.getApplication()
     shadowOf(app).denyPermissions(Manifest.permission.CAMERA)
@@ -85,7 +115,6 @@ class CameraHandlerTest {
           appContext = app,
           camera = CameraCaptureManager(app),
           setCameraAudioCaptureActive = { false },
-          showCameraHud = { _, _, _ -> },
           invokeErrorFromThrowable = { "UNAVAILABLE" to (it.message ?: "camera failed") },
         )
 

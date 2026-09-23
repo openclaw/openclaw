@@ -7,7 +7,10 @@ import {
   type ProviderAuthMethodNonInteractiveContext,
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
+import {
+  CUSTOM_LOCAL_AUTH_MARKER,
+  normalizeOptionalSecretInput,
+} from "openclaw/plugin-sdk/provider-auth";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { lmstudioMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import {
@@ -88,6 +91,10 @@ export default definePluginEntry({
           },
           run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
             const providerSetup = await loadProviderSetup();
+            const suppliedApiKey =
+              ctx.opts?.tokenProvider === PROVIDER_ID
+                ? normalizeOptionalSecretInput(ctx.opts.token)
+                : undefined;
             return await providerSetup.promptAndConfigureLmstudioInteractive({
               config: ctx.config,
               agentDir: ctx.agentDir,
@@ -97,6 +104,12 @@ export default definePluginEntry({
               allowSecretRefPrompt: ctx.allowSecretRefPrompt,
               isRemote: ctx.isRemote,
               signal: ctx.signal,
+              ...(suppliedApiKey
+                ? {
+                    suppliedApiKey,
+                    requestedModelId: normalizeOptionalSecretInput(ctx.opts?.customModelId),
+                  }
+                : {}),
             });
           },
           validateNonInteractive: async (ctx) => {
@@ -114,7 +127,7 @@ export default definePluginEntry({
         order: "late",
         run: async (ctx) => {
           const providerSetup = await loadProviderSetup();
-          return await providerSetup.discoverLmstudioProvider(ctx);
+          return await providerSetup.discoverLmstudioProvider(ctx, { discoveryMode: "strict" });
         },
       },
       resolveSyntheticAuth: ({ providerConfig }) => {

@@ -1,10 +1,9 @@
-// Matrix plugin module implements approval handler behavior.
-import type {
-  ChannelApprovalCapabilityHandlerContext,
-  PendingApprovalView,
-  ResolvedApprovalView,
+import {
+  createChannelApprovalNativeRuntimeAdapter,
+  type ChannelApprovalCapabilityHandlerContext,
+  type PendingApprovalView,
+  type ResolvedApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import {
   buildExecApprovalPendingReplyPayload,
@@ -14,10 +13,9 @@ import {
 import {
   buildApprovalPendingReplyPayload,
   buildPluginApprovalResolvedReplyPayload,
-} from "openclaw/plugin-sdk/approval-runtime";
-import type {
-  ExecApprovalRequest,
-  PluginApprovalRequest,
+  formatChannelApprovalResolvedLabel,
+  type ExecApprovalRequest,
+  type PluginApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import {
   listMessageReceiptPlatformIds,
@@ -36,7 +34,7 @@ import {
   isMatrixAnyApprovalClientEnabled,
   shouldHandleMatrixApprovalRequest,
 } from "./exec-approvals.js";
-import { resolveMatrixAccount } from "./matrix/accounts.js";
+import { resolveMatrixAccountConfig } from "./matrix/account-config.js";
 import { deleteMatrixMessage, editMatrixMessage } from "./matrix/actions/messages.js";
 import { repairMatrixDirectRooms } from "./matrix/direct-management.js";
 import type { MatrixClient } from "./matrix/sdk.js";
@@ -223,7 +221,7 @@ async function prepareTarget(
   }
   const threadId = normalizeThreadId(params.rawTarget.threadId);
   if (target.kind === "user") {
-    const account = resolveMatrixAccount({
+    const accountConfig = resolveMatrixAccountConfig({
       cfg: params.cfg,
       accountId: resolved.accountId,
     });
@@ -233,7 +231,7 @@ async function prepareTarget(
         await repairDirectRooms({
           client: resolved.context.client,
           remoteUserId: target.id,
-          encrypted: account.config.encryption === true,
+          encrypted: accountConfig.encryption === true,
         }),
     );
     if (!repaired.activeRoomId) {
@@ -394,18 +392,7 @@ function buildResolvedApprovalText(view: ResolvedApprovalView): string {
       }).text ?? ""
     );
   }
-  const decisionLabel =
-    view.approvalKind === "system-agent" && view.terminalStatus === "cancelled"
-      ? "Cancelled"
-      : view.approvalKind === "system-agent" && view.applicationStatus === "applied"
-        ? "Applied"
-        : view.approvalKind === "system-agent" && view.applicationStatus === "not-applied"
-          ? "Not applied"
-          : view.decision === "allow-once"
-            ? "Allowed once"
-            : view.decision === "allow-always"
-              ? "Allowed always"
-              : "Denied";
+  const decisionLabel = formatChannelApprovalResolvedLabel(view);
   return [
     `${view.approvalKind === "system-agent" ? "OpenClaw change" : "Exec approval"}: ${decisionLabel}`,
     "",
@@ -529,7 +516,7 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
         result.primaryMessageId?.trim() ||
         platformMessageIds[0] ||
         result.messageId.trim();
-      registerMatrixApprovalReactionTarget({
+      await registerMatrixApprovalReactionTarget({
         accountId: resolved.accountId,
         roomId: result.roomId,
         eventId: reactionEventId,
@@ -602,7 +589,7 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
     },
   },
   interactions: {
-    bindPending: (params) => {
+    bindPending: async (params) => {
       const accountId = params.accountId?.trim();
       if (!accountId) {
         return null;
@@ -615,7 +602,7 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       if (!target) {
         return null;
       }
-      registerMatrixApprovalReactionTarget({
+      await registerMatrixApprovalReactionTarget({
         accountId: target.accountId,
         roomId: target.roomId,
         eventId: target.eventId,
@@ -626,14 +613,14 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       });
       return target;
     },
-    unbindPending: (params) => {
+    unbindPending: async (params) => {
       const target = normalizeReactionTargetRef(params.binding);
       if (!target) {
         return;
       }
-      unregisterMatrixApprovalReactionTarget(target);
+      await unregisterMatrixApprovalReactionTarget(target);
     },
-    cancelDelivered: (params) => {
+    cancelDelivered: async (params) => {
       const accountId = params.accountId?.trim();
       if (!accountId) {
         return;
@@ -646,7 +633,7 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       if (!target) {
         return;
       }
-      unregisterMatrixApprovalReactionTarget(target);
+      await unregisterMatrixApprovalReactionTarget(target);
     },
   },
 });

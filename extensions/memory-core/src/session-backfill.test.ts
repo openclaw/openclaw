@@ -12,14 +12,17 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { writeBackfillDiaryEntries } from "./dreaming-narrative.js";
+import { writeBackfillDiaryEntries } from "./dreaming-dreams-file.js";
 import {
   clearMemoryCoreWorkspaceNamespace,
   SESSION_BACKFILL_REWIND_NAMESPACE,
 } from "./dreaming-state.js";
-import { listMemoryEntryOrigins, recordMemorySessionTombstones } from "./memory-entry-origins.js";
+import { listMemoryEntryOrigins } from "./memory-entry-origins.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import {
   markSessionBackfillRewindBaseline,
@@ -37,7 +40,11 @@ import {
   recordGroundedShortTermCandidates,
   recordShortTermRecalls,
 } from "./short-term-promotion.js";
-import { createMemoryCoreTestHarness, dreamingTestState } from "./test-helpers.js";
+import {
+  createMemoryCoreTestHarness,
+  dreamingTestState,
+  seedMemoryForgetTombstones,
+} from "./test-helpers.js";
 
 const harness = createMemoryCoreTestHarness();
 
@@ -161,7 +168,7 @@ describe("runSessionBackfill", () => {
         owner: true,
       },
     ]);
-    recordMemorySessionTombstones({ agentId: "main", sessionIds: ["forgotten"] });
+    seedMemoryForgetTombstones({ agentId: "main", sessionIds: ["forgotten"] });
 
     const result = await runSessionBackfill({
       agentId: "main",
@@ -291,7 +298,7 @@ describe("runSessionBackfill", () => {
       source: "memory" as const,
       sessionOrigin: { agentId: "main", sessionId: "forgotten" },
     };
-    recordMemorySessionTombstones({ agentId: "main", sessionIds: ["forgotten"] });
+    seedMemoryForgetTombstones({ agentId: "main", sessionIds: ["forgotten"] });
 
     await recordShortTermRecalls({
       workspaceDir,
@@ -724,6 +731,7 @@ describe("runSessionBackfill", () => {
         expect(repeated.writtenDiaryEntries).toBe(0);
         expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual(origins);
       }
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       const preview = await forgetMemoryEntries({
         cfg,

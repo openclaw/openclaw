@@ -5,11 +5,13 @@ import https from "node:https";
 import { generateSecureUuid } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { signalUnixRpcRequest, streamSignalUnixEvents } from "./client-unix.js";
 
 export type SignalRpcOptions = {
   baseUrl: string;
   timeoutMs?: number;
   maxResponseBytes?: number;
+  assertDirectAdapterHandoff?: () => void;
 };
 
 type SignalRpcError = {
@@ -24,6 +26,16 @@ type SignalRpcResponse<T> = {
   error?: SignalRpcError;
   id?: string | number | null;
 };
+
+/** Thrown when the native SSE endpoint rejects the request with a non-2xx HTTP status. */
+export class SignalSseRejectionError extends Error {
+  constructor(
+    readonly status: number,
+    statusText: string,
+  ) {
+    super(`Signal SSE failed (${status} ${statusText})`);
+  }
+}
 
 type SignalSseEvent = {
   event?: string;
@@ -123,11 +135,13 @@ function requestSignalHttp(
     body?: string;
     timeoutMs: number;
     maxResponseBytes?: number;
+    assertDirectAdapterHandoff?: () => void;
   },
 ): Promise<SignalHttpResponse> {
   assertSignalHttpProtocol(url, "HTTP");
   const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, DEFAULT_TIMEOUT_MS);
   const client = url.protocol === "https:" ? https : http;
+  options.assertDirectAdapterHandoff?.();
   return new Promise((resolve, reject) => {
     let settled = false;
     const deadline = setTimeout(() => {
@@ -201,6 +215,9 @@ export async function signalRpcRequest<T = unknown>(
   params: Record<string, unknown> | undefined,
   opts: SignalRpcOptions,
 ): Promise<T> {
+  if (opts.baseUrl.trim().startsWith("unix:")) {
+    return signalUnixRpcRequest<T>(method, params, opts);
+  }
   const id = generateSecureUuid();
   const body = JSON.stringify({
     jsonrpc: "2.0",
@@ -217,6 +234,7 @@ export async function signalRpcRequest<T = unknown>(
     body,
     timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     maxResponseBytes: opts.maxResponseBytes,
+    assertDirectAdapterHandoff: opts.assertDirectAdapterHandoff,
   });
   if (res.status === 201) {
     return undefined as T;
@@ -240,6 +258,10 @@ export async function signalCheck(
   timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
   try {
+    if (baseUrl.trim().startsWith("unix:")) {
+      await signalUnixRpcRequest("version", undefined, { baseUrl, timeoutMs });
+      return { ok: true, status: null, error: null };
+    }
     const res = await requestSignalHttp(resolveSignalEndpointUrl(baseUrl, "/api/v1/check"), {
       method: "GET",
       timeoutMs,
@@ -309,7 +331,7 @@ function openSignalEventStream(
         const status = res.statusCode ?? 0;
         if (status < 200 || status >= 300) {
           res.resume();
-          rejectOnce(new Error(`Signal SSE failed (${status} ${res.statusMessage || "error"})`));
+          rejectOnce(new SignalSseRejectionError(status, res.statusMessage || "error"));
           return;
         }
         if (settled) {
@@ -345,6 +367,9 @@ export async function streamSignalEvents(params: {
   onEvent: (event: SignalSseEvent) => unknown;
   onStreamOpen?: () => void;
 }): Promise<void> {
+  if (params.baseUrl.trim().startsWith("unix:")) {
+    return streamSignalUnixEvents(params);
+  }
   const url = resolveSignalEndpointUrl(params.baseUrl, "/api/v1/events");
   if (params.account) {
     url.searchParams.set("account", params.account);

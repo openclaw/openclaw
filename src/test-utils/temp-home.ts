@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { captureEnv, setTestEnvValue } from "./env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "./env.js";
 import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
 
 const HOME_ENV_KEYS = [
@@ -11,6 +11,7 @@ const HOME_ENV_KEYS = [
   "USERPROFILE",
   "HOMEDRIVE",
   "HOMEPATH",
+  "OPENCLAW_HOME",
   "OPENCLAW_STATE_DIR",
 ] as const;
 
@@ -53,9 +54,10 @@ export async function createTempHomeEnv(prefix: string): Promise<TempHomeEnv> {
   const snapshot = captureEnv([...HOME_ENV_KEYS]);
   try {
     await fs.rm(home, { recursive: true, force: true });
-    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
     setTestEnvValue("HOME", home);
     setTestEnvValue("USERPROFILE", home);
+    deleteTestEnvValue("OPENCLAW_HOME");
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
 
     if (process.platform === "win32") {
@@ -75,8 +77,11 @@ export async function createTempHomeEnv(prefix: string): Promise<TempHomeEnv> {
   return {
     home,
     restore: async () => {
-      await cleanupSessionStateForTest({ stateDir }).catch(() => undefined);
-      snapshot.restore();
+      try {
+        await cleanupSessionStateForTest({ stateDir });
+      } finally {
+        snapshot.restore();
+      }
       await fs.rm(home, { recursive: true, force: true });
     },
   };

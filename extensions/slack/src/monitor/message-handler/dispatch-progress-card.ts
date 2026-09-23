@@ -1,4 +1,5 @@
 import {
+  type createChannelProgressWorkCounter,
   formatChannelProgressDraftText,
   type ChannelProgressDraftCompositorSnapshot,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -7,6 +8,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { buildControlUiSessionPath } from "openclaw/plugin-sdk/session-discussion";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { formatSlackError } from "../../errors.js";
+import { normalizeSlackOutboundText } from "../../format.js";
 import { buildSlackProgressCardBlocks } from "../../progress-blocks.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
 import {
@@ -22,6 +24,7 @@ export function createSlackDraftProgressCardRuntime(params: {
   setup: Pick<SlackDispatchSetup, "account" | "cfg" | "ctx" | "prepared" | "slackClient">;
   draftStream: ReturnType<typeof createSlackDraftStream> | undefined;
   enabled: boolean;
+  progressWorkCounter: ReturnType<typeof createChannelProgressWorkCounter> | undefined;
   progressSeed: string;
   explicitTitle: string | undefined;
   maxLineChars: number;
@@ -61,13 +64,14 @@ export function createSlackDraftProgressCardRuntime(params: {
   const resolveText = (snapshot: ChannelProgressDraftCompositorSnapshot) =>
     latestFallbackText ||
     formatChannelProgressDraftText({
-      presentation: "summary",
       entry: account.config,
       lines: [...snapshot.lines],
       seed: params.progressSeed,
       formatLine: formatSlackProgressDraftLine,
       narration: snapshot.statusHeadline,
+      narrationFormat: snapshot.statusHeadlineFormat,
       plan: snapshot.plan,
+      diffStat: snapshot.diffStat,
     });
 
   const resolvePresentation = (
@@ -75,19 +79,38 @@ export function createSlackDraftProgressCardRuntime(params: {
     state: DraftProgressCardState,
   ) => {
     const title = params.explicitTitle ?? snapshot.statusHeadline ?? "Working";
+    const titleFormat = params.explicitTitle ? undefined : snapshot.statusHeadlineFormat;
     const narration = params.explicitTitle
-      ? combineProgressHeadlineAndExplanation(snapshot.statusHeadline, snapshot.planExplanation)
-      : snapshot.planExplanation && snapshot.planExplanation !== title
-        ? snapshot.planExplanation
+      ? snapshot.statusHeadlineFormat === "plain" || snapshot.planExplanationFormat === "plain"
+        ? [
+            ...(snapshot.statusHeadline &&
+            (snapshot.statusHeadline !== snapshot.planExplanation ||
+              snapshot.statusHeadlineFormat !== snapshot.planExplanationFormat)
+              ? [{ text: snapshot.statusHeadline, format: snapshot.statusHeadlineFormat }]
+              : []),
+            ...(snapshot.planExplanation
+              ? [{ text: snapshot.planExplanation, format: snapshot.planExplanationFormat }]
+              : []),
+          ]
+        : combineProgressHeadlineAndExplanation(snapshot.statusHeadline, snapshot.planExplanation)
+      : snapshot.planExplanation &&
+          (snapshot.planExplanation !== title || snapshot.planExplanationFormat !== titleFormat)
+        ? [{ text: snapshot.planExplanation, format: snapshot.planExplanationFormat }]
         : undefined;
+    const workCounter = state === "working" ? params.progressWorkCounter : undefined;
+    const sessionUrl = state === "working" ? undefined : resolveSessionUrl();
     return buildSlackProgressCardBlocks({
       state,
       title,
+      titleFormat,
       narration,
       plan: snapshot.plan,
       lines: resolveStructuredProgressLines(snapshot.lines),
       maxLineChars: params.maxLineChars,
-      ...(state !== "working" ? { sessionUrl: resolveSessionUrl() } : {}),
+      diffStat: snapshot.diffStat,
+      toolCalls: workCounter?.toolCalls,
+      elapsedSeconds: workCounter?.elapsedSeconds,
+      sessionUrl,
     });
   };
 
@@ -162,20 +185,10 @@ export function formatSlackProgressDraftLine(line: string): string {
     return escapeSlackMrkdwn(line);
   }
 
-  const content = italicCommentary[1]!
-    .split(/(`[^`\n]+`)/u)
-    .map((segment, index) => {
-      if (index % 2 === 0) {
-        return escapeSlackMrkdwn(segment);
-      }
-      const code = segment
-        .slice(1, -1)
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;");
-      return `\`${code}\``;
-    })
-    .join("");
+  const content = normalizeSlackOutboundText(italicCommentary[1]!, {
+    mentions: "escape",
+    enclosingStyle: "italic",
+  });
 
   return `_${content}_`;
 }

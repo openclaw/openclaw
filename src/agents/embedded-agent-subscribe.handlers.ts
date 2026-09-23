@@ -19,6 +19,7 @@ import {
   handleToolExecutionUpdate,
 } from "./embedded-agent-subscribe.handlers.tools.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
+import { recordEmbeddedToolTrajectoryEvent } from "./embedded-agent-subscribe.trajectory.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
 
 /** Create the serialized event dispatcher for subscribed embedded-agent sessions. */
@@ -28,6 +29,9 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
     // suppression flags would discard those events instead of preserving order.
     const run = () => {
       try {
+        if (evt.type !== "message_update") {
+          ctx.flushAssistantStream();
+        }
         return handler();
       } catch (err) {
         ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
@@ -59,6 +63,8 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
   return (evt: AgentSessionEvent) => {
     // Model facts advance before persistence, independently of queued reply delivery.
     ctx.captureModelEvent(evt);
+    // Capture tool facts before reply delivery can delay their lifecycle handlers.
+    recordEmbeddedToolTrajectoryEvent(ctx, evt);
     switch (evt.type) {
       case "message_start":
         void scheduleEvent(evt, () => handleMessageStart(ctx, evt));
@@ -68,6 +74,9 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         return;
       case "message_end":
         void scheduleEvent(evt, () => handleMessageEnd(ctx, evt));
+        return;
+      case "turn_end":
+        void scheduleEvent(evt, () => ctx.noteLastAssistant(evt.message));
         return;
       case "tool_execution_start":
         void scheduleEvent(evt, () => handleToolExecutionStart(ctx, evt));

@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-import { WebSocket } from "ws";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import {
   createRelayProof,
   isCanonicalBase64UrlBytes,

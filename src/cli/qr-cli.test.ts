@@ -197,7 +197,12 @@ describe("registerQrCli", () => {
     vi.unstubAllEnvs();
   });
 
-  it("prints setup code only when requested", async () => {
+  it.each([
+    { args: ["--setup-code-only"], json: false },
+    { args: ["--json"], json: true },
+    { args: ["--setup-code-only", "--json"], json: true },
+    { args: ["--json", "--setup-code-only"], json: true },
+  ])("prints the requested output for $args", async ({ args, json }) => {
     loadConfig.mockReturnValue({
       gateway: {
         bind: "custom",
@@ -206,20 +211,57 @@ describe("registerQrCli", () => {
       },
     });
 
-    await runQr(["--setup-code-only"]);
+    await runQr(args);
 
     const expected = encodePairingSetupCode({
       url: "ws://127.0.0.1:18789",
       bootstrapToken: "bootstrap-123",
       expiresAtMs: 123,
     });
-    expect(runtime.log).toHaveBeenCalledWith(expected);
+    if (json) {
+      expect(runtime.writeJson, "QR_JSON_WRITER_NOT_REACHED").toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ setupCode: expected, gatewayUrl: "ws://127.0.0.1:18789" }),
+      );
+      expect(runtime.log).not.toHaveBeenCalledWith(expected);
+    } else {
+      expect(runtime.log).toHaveBeenCalledWith(expected);
+      expect(runtime.writeJson).not.toHaveBeenCalled();
+    }
     expect(renderTerminal).not.toHaveBeenCalled();
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
     expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledWith(
       expect.objectContaining({ profile: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE }),
     );
   });
+
+  it.each([
+    { args: [], profile: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE, access: "full" },
+    { args: ["--limited"], profile: PAIRING_SETUP_BOOTSTRAP_PROFILE, access: "limited" },
+    {
+      args: ["--voice-node"],
+      profile: VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      access: "limited",
+    },
+  ])(
+    "issues trusted-proxy QR output with the existing $args grant",
+    async ({ args, profile, access }) => {
+      loadConfig.mockReturnValue(createLocalGatewayConfigWithAuth({ mode: "trusted-proxy" }));
+
+      await runQr(["--json", "--url", "wss://gateway.example.test", ...args]);
+
+      expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          auth: "trusted-proxy",
+          gatewayUrl: "wss://gateway.example.test",
+          access,
+        }),
+      );
+      expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ profile }),
+      );
+      expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses the bounded bootstrap profile with --limited", async () => {
     loadConfig.mockReturnValue({

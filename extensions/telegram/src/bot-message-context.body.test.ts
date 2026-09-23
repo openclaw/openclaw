@@ -1,6 +1,15 @@
 // Telegram tests cover bot message context.body plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeAllowFrom } from "./bot-access.js";
+import {
+  GROUP_ID,
+  photoMessage,
+  stickerMessage,
+  voiceMessage,
+  forumMessage,
+} from "./bot-message-context.body.test-support.js";
+import { setTelegramRuntime } from "./runtime.js";
 
 const {
   resolveStickerVisionSupportRuntimeMock,
@@ -35,10 +44,12 @@ type BodyParams = Parameters<typeof resolveTelegramInboundBody>[0];
 type BodyResult = Awaited<ReturnType<typeof resolveTelegramInboundBody>>;
 type Message = Record<string, unknown>;
 type LogInfo = (obj: Record<string, unknown>, msg: string) => void;
-const GROUP_ID = -1_001_234_567_890;
 const BOT_PATTERN = ["\\bbot\\b"];
 const SKIPPED_GROUP = { chatId: -1001234567890, reason: "no-mention" };
-const FORUM_CHAT = { id: GROUP_ID, type: "supergroup", title: "Test Forum", is_forum: true };
+
+beforeEach(() => {
+  setTelegramRuntime(createPluginRuntimeMock());
+});
 
 const createLogger = () => ({ info: vi.fn<LogInfo>() });
 type TestLogger = ReturnType<typeof createLogger>;
@@ -91,51 +102,6 @@ function cachedSticker(stickerMetadata: Record<string, unknown>) {
 
 const richMessage = (value: Message): Message => ({ rich_message: value });
 
-function photoMessage(messageId: number, id: string, extra: Message = {}): Message {
-  return {
-    message_id: messageId,
-    photo: [{ file_id: id, file_unique_id: `${id}-unique`, width: 120, height: 80 }],
-    ...extra,
-  };
-}
-
-function stickerMessage(messageId: number, id: string, extra: Message = {}): Message {
-  return {
-    message_id: messageId,
-    sticker: {
-      file_id: id,
-      file_unique_id: `${id}-unique`,
-      type: "regular",
-      width: 256,
-      height: 256,
-      is_animated: false,
-      is_video: false,
-      ...extra,
-    },
-  };
-}
-
-function voiceMessage(fileId: string, messageId = 1, extra: Message = {}): Message {
-  return {
-    message_id: messageId,
-    date: 1_700_000_000 + messageId,
-    voice: { file_id: fileId },
-    entities: [],
-    ...extra,
-  };
-}
-
-function forumMessage(messageId: number, extra: Message = {}) {
-  return {
-    message_id: messageId,
-    date: 1_700_000_000 + messageId,
-    message_thread_id: 99,
-    chat: FORUM_CHAT,
-    entities: [],
-    ...extra,
-  };
-}
-
 async function resolveBody(overrides: Partial<BodyParams> = {}) {
   const chatId = overrides.chatId ?? 42;
   return resolveTelegramInboundBody({
@@ -151,8 +117,6 @@ async function resolveBody(overrides: Partial<BodyParams> = {}) {
     effectiveGroupAllow: normalizeAllowFrom([]),
     effectiveDmAllow: normalizeAllowFrom([]),
     requireMention: false,
-    groupHistories: new Map(),
-    historyLimit: 0,
     logger: createLogger(),
     ...overrides,
   } as BodyParams);
@@ -220,6 +184,53 @@ function transcribeCallContext(): Record<string, unknown> {
 }
 
 describe("resolveTelegramInboundBody", () => {
+  it.each<{
+    text: string;
+    admitted: boolean;
+    sessionKey?: string;
+    acpBinding?: boolean;
+    direct?: boolean;
+  }>([
+    { text: "@Analyst please review", admitted: true },
+    { text: "Analyst wrote the summary", admitted: false },
+    { text: "🔎 review this", admitted: false },
+    { text: "@Other ask Analyst", admitted: false },
+    { text: "@Analyst please review", admitted: false, sessionKey: "agent:primary:acp:bound" },
+    { text: "@Analyst please review", admitted: false, acpBinding: true },
+    { text: "Please review", admitted: true, direct: true },
+  ])(
+    "resolves participant admission for $text (ACP $acpBinding, session $sessionKey, direct $direct)",
+    async ({ text, admitted, sessionKey, acpBinding, direct }) => {
+      const peerId = direct ? "42" : String(GROUP_ID);
+      const overrides: Partial<BodyParams> = {
+        routeAgentId: "primary",
+        sessionKey,
+        acpBinding,
+        cfg: {
+          agents: {
+            entries: {
+              primary: { identity: { name: "Primary" } },
+              analyst: { identity: { name: "Analyst", emoji: "🔎" } },
+            },
+          },
+          broadcast: { [`telegram:${peerId}`]: ["primary", "analyst"] },
+        },
+      };
+      const result = direct
+        ? await resolvePrivate({ text }, overrides)
+        : await resolveGroup({ message: { text }, logger: createLogger(), overrides });
+      if (admitted) {
+        expect(result?.groupThread?.peerId).toBe(peerId);
+        expect(result?.groupThread?.mentionedAgentIds).toEqual(direct ? [] : ["analyst"]);
+        if (!direct) {
+          expect(result?.effectiveWasMentioned).toBe(true);
+        }
+      } else {
+        expect(result).toBeNull();
+      }
+    },
+  );
+
   privateBodyTest(
     "delivers native poll questions, options, voter totals, and state",
     {
@@ -344,6 +355,52 @@ describe("resolveTelegramInboundBody", () => {
       expect(logger.info).not.toHaveBeenCalledWith(SKIPPED_GROUP, "skipping group message");
       expect(result?.rawBody).toBe("@bot please read this");
       expect(result?.effectiveWasMentioned).toBe(true);
+    },
+  );
+
+  groupBodyTest(
+    "routes group updates that tag the bot via a text_mention (display-name tap)",
+    {
+      message: {
+        text: "Assistant please read this",
+        entities: [
+          {
+            type: "text_mention",
+            offset: 0,
+            length: 9,
+            user: { id: 7, is_bot: true, first_name: "Assistant" },
+          },
+        ],
+      },
+    },
+    (result, logger) => {
+      // The bot (primaryCtx.me.id === 7) is tagged by display name — no `@bot`
+      // text and no `mention` entity — so this reaches the caller as a mention
+      // only via the text_mention branch, and must be dispatched, not skipped.
+      expect(logger.info).not.toHaveBeenCalledWith(SKIPPED_GROUP, "skipping group message");
+      expect(result?.effectiveWasMentioned).toBe(true);
+    },
+  );
+
+  groupBodyTest(
+    "skips group text_mention entities that target a different user id",
+    {
+      message: {
+        text: "Eve please read this",
+        entities: [
+          {
+            type: "text_mention",
+            offset: 0,
+            length: 3,
+            user: { id: 999, is_bot: false, first_name: "Eve" },
+          },
+        ],
+      },
+    },
+    (result, logger) => {
+      // A text_mention of someone other than the bot is not a mention of us.
+      expect(logger.info).toHaveBeenCalledWith(SKIPPED_GROUP, "skipping group message");
+      expect(result).toBeNull();
     },
   );
 
@@ -563,6 +620,34 @@ describe("resolveTelegramInboundBody", () => {
       '[Audio transcript (machine-generated, untrusted)]: "hey bot please help"',
     );
     expect(result?.effectiveWasMentioned).toBe(true);
+  });
+
+  it("admits a transcript participant mention despite a whitespace-only audio caption", async () => {
+    transcribeFirstAudioMock.mockReset();
+    transcribeFirstAudioMock.mockResolvedValueOnce("@Analyst please review");
+    const result = await resolveGroup({
+      logger: createLogger(),
+      allowFrom: ["46"],
+      message: voiceMessage("voice-participant", 2, { caption: " \n " }),
+      overrides: {
+        routeAgentId: "primary",
+        allMedia: [media("/tmp/voice-participant.ogg", "audio")],
+        cfg: {
+          agents: {
+            entries: {
+              primary: { identity: { name: "Primary" } },
+              analyst: { identity: { name: "Analyst" } },
+            },
+          },
+          broadcast: { [`telegram:${GROUP_ID}`]: ["primary", "analyst"] },
+          tools: { media: { audio: { enabled: true } } },
+        },
+      },
+    });
+
+    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
+    expect(result?.effectiveWasMentioned).toBe(true);
+    expect(result?.groupThread?.mentionedAgentIds).toEqual(["analyst"]);
   });
 
   it("transcribes DM voice notes via preflight (not only groups)", async () => {

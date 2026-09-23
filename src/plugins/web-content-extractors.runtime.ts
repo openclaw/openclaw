@@ -22,6 +22,8 @@ export function resolvePluginWebContentExtractors(params?: {
     const loaded = loadBundledWebContentExtractorEntriesFromDir({
       dirName: plugin.id,
       pluginId: plugin.id,
+      env: params?.env,
+      owner: plugin,
     });
     if (loaded) {
       extractors.push(...loaded);

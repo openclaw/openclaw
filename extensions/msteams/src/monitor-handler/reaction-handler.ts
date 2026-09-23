@@ -1,10 +1,10 @@
-// Msteams plugin module implements reaction handler behavior.
-import { normalizeMSTeamsConversationId } from "../inbound.js";
+import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } from "../inbound.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
 import { resolveMSTeamsReactionEmoji } from "../reaction-types.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 import { resolveMSTeamsSenderAccess } from "./access.js";
+import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
 
 type ReactionDirection = "added" | "removed";
 
@@ -41,20 +41,38 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
 
     const rawConversationId = activity.conversation?.id ?? "";
     const conversationId = normalizeMSTeamsConversationId(rawConversationId);
-    const conversationType = activity.conversation?.conversationType ?? "personal";
-    const isGroupChat = conversationType === "groupChat" || activity.conversation?.isGroup === true;
-    const isChannel = conversationType === "channel";
-    const isDirectMessage = !isGroupChat && !isChannel;
+    const isChannel = activity.conversation?.conversationType === "channel";
 
     const senderId = from.aadObjectId ?? from.id;
     const senderName = from.name ?? from.id;
 
+    // A reaction enqueues a session-scoped event, so it must reuse the message admission
+    // classification and gates. Re-deriving direct/group locally lets a conversation that
+    // admission treats as direct route into a team-scoped session without the team/channel gate.
+    const access = await resolveMSTeamsSenderAccess({ cfg, activity });
+    const { isDirectMessage, channelGate } = access;
+    if (access.hasConflictingConversationScope) {
+      // Bot Framework marks group and channel conversations as non-personal. Fail closed when
+      // their scope metadata contradicts a personal conversation instead of choosing a session.
+      log.info("dropping reaction (conflicting conversation scope)", { conversationId });
+      return;
+    }
+
     if (msteamsCfg) {
-      const senderAccess = await resolveMSTeamsSenderAccess({ cfg, activity });
-      if (senderAccess.senderAccess.decision !== "allow") {
+      if (access.senderAccess.decision !== "allow") {
         log.debug?.("dropping reaction (access denied)", {
           sender: senderId,
-          reason: senderAccess.senderAccess.reasonCode,
+          reason: access.senderAccess.reasonCode,
+        });
+        return;
+      }
+      if (!isDirectMessage && channelGate.allowlistConfigured && !channelGate.allowed) {
+        log.info("dropping reaction (not in team/channel allowlist)", {
+          conversationId,
+          teamKey: channelGate.teamKey ?? "none",
+          channelKey: channelGate.channelKey ?? "none",
+          channelMatchKey: channelGate.channelMatchKey ?? "none",
+          channelMatchSource: channelGate.channelMatchSource ?? "none",
         });
         return;
       }
@@ -71,6 +89,11 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
         id: isDirectMessage ? senderId : conversationId,
       },
       ...(teamId ? { teamId } : {}),
+    });
+    const sessionKey = resolveMSTeamsRouteSessionKey({
+      baseSessionKey: route.sessionKey,
+      isChannel,
+      conversationMessageId: extractMSTeamsConversationMessageId(rawConversationId),
     });
 
     // The replyToId points to the message that was reacted to.
@@ -93,7 +116,7 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
       });
 
       core.system.enqueueSystemEvent(label, {
-        sessionKey: route.sessionKey,
+        sessionKey,
         contextKey: `msteams:reaction:${conversationId}:${targetMessageId}:${senderId}:${reactionType}:${direction}`,
       });
     }

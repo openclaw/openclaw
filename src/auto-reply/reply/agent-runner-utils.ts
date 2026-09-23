@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
@@ -23,9 +24,15 @@ import {
   type OpenClawConfig,
 } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import {
+  isTrustedMessageActionTurnIngress,
+  mintMessageActionTurnCapability,
+  resolveMessageActionTurnCapabilityLifetime,
+} from "../../gateway/message-action-turn-capability.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { TemplateContext } from "../templating.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
+import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import { buildEmbeddedRunBaseParams as buildEmbeddedRunBaseParamsCore } from "./agent-runner-run-params.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
@@ -107,9 +114,6 @@ export async function resolveQueuedReplyExecutionConfig(
   return scopedResolved.resolvedConfig ?? baseResolvedConfig;
 }
 
-/**
- * Build provider-specific threading context for tool auto-injection.
- */
 /** Builds channel threading context for message-tool replies. */
 export function buildThreadingToolContext(params: {
   sessionCtx: TemplateContext;
@@ -203,6 +207,23 @@ export const formatBunFetchSocketError = (message: string) => {
     "```",
   ].join("\n");
 };
+
+/** Remaps the original inline request without reusing a queued model's clamped level. */
+export function resolveRunThinkingLevelForFallbackCandidate(
+  params: Omit<Parameters<typeof resolveCandidateThinkingLevel>[0], "level"> & {
+    run: FollowupRun["run"];
+  },
+) {
+  const { run, ...candidate } = params;
+  return resolveCandidateThinkingLevel({
+    ...candidate,
+    // Reset and inherited choices already resolved defaults when this turn was admitted.
+    level:
+      run.thinkLevelOverride === "default"
+        ? run.thinkLevel
+        : (run.thinkLevelOverride ?? run.thinkLevel),
+  });
+}
 
 /** Resolves candidate-scoped fast mode after model fallback changes provider/model. */
 export function resolveRunFastModeForFallbackCandidate(params: {
@@ -311,6 +332,86 @@ function buildTemplateSenderContext(sessionCtx: TemplateContext) {
     senderUsername: normalizeOptionalString(sessionCtx.SenderUsername),
     senderE164: normalizeOptionalString(sessionCtx.SenderE164),
   };
+}
+
+/** Bind either runtime to the same trusted source turn and requester. */
+export function mintReplyMessageActionTurnCapability(
+  turn: Pick<
+    AgentTurnParams,
+    "followupRun" | "sessionCtx" | "opts" | "isHeartbeat" | "runtimePolicySessionKey"
+  >,
+  runId: string,
+): string | undefined {
+  const channelIngress = isTrustedMessageActionTurnIngress(turn.sessionCtx.Provider);
+  const dashboardAdmission = turn.opts?.dashboardReadAdmission;
+  if (
+    turn.isHeartbeat ||
+    (!channelIngress &&
+      (turn.sessionCtx.Provider !== "webchat" || dashboardAdmission?.runId !== runId))
+  ) {
+    return undefined;
+  }
+  const context = buildEmbeddedContextFromTemplate({
+    run: turn.followupRun.run,
+    replyRoute: turn.followupRun,
+    sessionCtx: turn.sessionCtx,
+    hasRepliedRef: turn.opts?.hasRepliedRef,
+  });
+  const sessionKey = turn.runtimePolicySessionKey ?? context.sessionKey;
+  if (!context.agentId || !sessionKey) {
+    return undefined;
+  }
+  if (!channelIngress) {
+    // Queue options may come from another input. Match the original admission,
+    // not opts.runId, which followup execution replaces with its own run ID.
+    if (
+      !dashboardAdmission ||
+      dashboardAdmission.agentId !== context.agentId ||
+      dashboardAdmission.sessionKey !== sessionKey ||
+      dashboardAdmission.sessionId !== context.sessionId
+    ) {
+      return undefined;
+    }
+    dashboardAdmission.assertCurrent();
+    return mintMessageActionTurnCapability({
+      agentId: context.agentId,
+      runId,
+      sessionKey,
+      sessionId: context.sessionId,
+      assertDashboardReadCurrent: dashboardAdmission.assertCurrent,
+      expiresWithRun: true,
+    });
+  }
+  if (!context.messageProvider || !context.currentChannelId) {
+    return undefined;
+  }
+  const sender = buildTemplateSenderContext(turn.sessionCtx);
+  return mintMessageActionTurnCapability({
+    agentId: context.agentId,
+    runId,
+    sessionKey,
+    sourceReplySessionKey: context.sessionKey,
+    sessionId: context.sessionId,
+    requesterAccountId: context.agentAccountId,
+    requesterSenderId: sender.senderId,
+    requesterSenderName: sender.senderName,
+    requesterSenderUsername: sender.senderUsername,
+    requesterSenderE164: sender.senderE164,
+    toolContext: {
+      currentChannelId: context.currentChannelId,
+      currentChatType: context.chatType,
+      currentMessagingTarget: context.currentMessagingTarget,
+      currentGraphChannelId: context.currentGraphChannelId,
+      currentChannelProvider: context.currentChannelProvider,
+      currentThreadTs: context.currentThreadTs,
+      currentMessageId: context.currentMessageId,
+      currentSourceTurnId: context.currentSourceTurnId,
+      replyToMode: context.replyToMode,
+      hasRepliedRef: context.hasRepliedRef,
+      sameChannelThreadRequired: context.sameChannelThreadRequired,
+    },
+    ...resolveMessageActionTurnCapabilityLifetime(turn.followupRun.run.timeoutMs),
+  });
 }
 
 /** Builds execution-specific embedded run params for queued reply dispatch. */

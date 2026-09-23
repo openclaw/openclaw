@@ -1,9 +1,5 @@
 // Google plugin module implements vertex adc behavior.
-import { existsSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { gunzipSync } from "node:zlib";
-import type { GoogleAuthOptions } from "google-auth-library";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import {
   asDateTimestampMs,
@@ -11,9 +7,13 @@ import {
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { readSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  readGoogleAdcCredentials,
+  resolveGoogleApplicationCredentialsPath,
+  type GoogleAdcConfig,
+} from "./vertex-adc-config.js";
 
 type GoogleAuthorizedUserCredentials = {
   type: "authorized_user";
@@ -41,7 +41,6 @@ type GoogleOauthTokenResponsePayload = {
   error_description?: unknown;
 };
 
-const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
 const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_VERTEX_OAUTH_SCOPE = "https://www.googleapis.com/auth/cloud-platform";
 const GOOGLE_VERTEX_ADC_TOKEN_REFRESH_TIMEOUT_MS = 30_000;
@@ -108,68 +107,6 @@ if (process.env.VITEST) {
   };
 }
 
-export function isGoogleVertexCredentialsMarker(
-  apiKey: string | undefined,
-): apiKey is undefined | typeof GCP_VERTEX_CREDENTIALS_MARKER {
-  return apiKey === undefined || apiKey === GCP_VERTEX_CREDENTIALS_MARKER;
-}
-
-function hasGoogleVertexProjectEnv(env: NodeJS.ProcessEnv): boolean {
-  return Boolean(
-    normalizeOptionalString(env.GOOGLE_CLOUD_PROJECT) ||
-    normalizeOptionalString(env.GCLOUD_PROJECT),
-  );
-}
-
-function hasGoogleVertexLocationEnv(env: NodeJS.ProcessEnv): boolean {
-  return Boolean(normalizeOptionalString(env.GOOGLE_CLOUD_LOCATION));
-}
-
-function resolveGoogleApplicationCredentialsPath(
-  env: NodeJS.ProcessEnv = process.env,
-): string | undefined {
-  const explicit = normalizeOptionalString(env.GOOGLE_APPLICATION_CREDENTIALS);
-  if (explicit) {
-    return existsSync(explicit) ? explicit : undefined;
-  }
-  const cloudSdkDir = normalizeOptionalString(env.CLOUDSDK_CONFIG);
-  if (cloudSdkDir) {
-    const cloudSdkFallback = path.join(cloudSdkDir, "application_default_credentials.json");
-    return existsSync(cloudSdkFallback) ? cloudSdkFallback : undefined;
-  }
-  const homeDir = normalizeOptionalString(env.HOME) ?? os.homedir();
-  const homeFallback = path.join(
-    homeDir,
-    ".config",
-    "gcloud",
-    "application_default_credentials.json",
-  );
-  if (existsSync(homeFallback)) {
-    return homeFallback;
-  }
-  const appDataDir = normalizeOptionalString(env.APPDATA);
-  if (!appDataDir) {
-    return undefined;
-  }
-  const appDataFallback = path.join(appDataDir, "gcloud", "application_default_credentials.json");
-  return existsSync(appDataFallback) ? appDataFallback : undefined;
-}
-
-type GoogleAdcConfig = NonNullable<GoogleAuthOptions["credentials"]>;
-const GOOGLE_VERTEX_ADC_FILE_MAX_BYTES = 1024 * 1024;
-
-function readGoogleAdcCredentials(adcPath: string): GoogleAdcConfig {
-  const text = readSecretFileSync(adcPath, "Google Vertex ADC credentials", {
-    maxBytes: GOOGLE_VERTEX_ADC_FILE_MAX_BYTES,
-    rejectHardlinks: false,
-  });
-  const parsed = JSON.parse(text) as unknown;
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Google Vertex ADC credentials must be a JSON object: ${adcPath}`);
-  }
-  return parsed as GoogleAdcConfig;
-}
-
 function resolveGoogleAuthorizedUserCredentials(
   adcConfig: GoogleAdcConfig,
 ): GoogleAuthorizedUserCredentials | undefined {
@@ -183,51 +120,6 @@ function resolveGoogleAuthorizedUserCredentials(
     client_secret: normalizeOptionalString(record.client_secret),
     refresh_token: normalizeOptionalString(record.refresh_token),
   };
-}
-
-function readGoogleAdcCredentialsTypeSync(credentialsPath: string): string | undefined {
-  try {
-    const type = (readGoogleAdcCredentials(credentialsPath) as { type?: unknown }).type;
-    return typeof type === "string" ? type : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Returns true when a file/env Application Default Credentials source usable
- * for Google Vertex AI is detectable synchronously. We still call the function
- * `...AuthorizedUserAdcSync` for backwards compatibility with older tests; the
- * predicate now also covers:
- *
- *   1. `authorized_user` credentials file (existing case - `gcloud auth
- *      application-default login` produces this).
- *   2. `external_account` credentials file (Workload Identity Federation).
- *   3. `service_account` credentials file (raw GSA key - rarely used in
- *      OpenClaw, included for completeness).
- * Metadata-server ADC is intentionally not detected here: `google-auth-library`
- * probes the default metadata hosts asynchronously at request time, and the
- * provider wires the Vertex transport without this sync predicate.
- */
-function hasGoogleVertexAuthorizedUserAdcSync(env: NodeJS.ProcessEnv = process.env): boolean {
-  const credentialsPath = resolveGoogleApplicationCredentialsPath(env);
-  if (credentialsPath) {
-    const type = readGoogleAdcCredentialsTypeSync(credentialsPath);
-    if (type === "authorized_user" || type === "external_account" || type === "service_account") {
-      return true;
-    }
-  }
-  return false;
-}
-
-export function resolveGoogleVertexConfigApiKey(
-  env: NodeJS.ProcessEnv = process.env,
-): string | undefined {
-  return hasGoogleVertexProjectEnv(env) &&
-    hasGoogleVertexLocationEnv(env) &&
-    hasGoogleVertexAuthorizedUserAdcSync(env)
-    ? GCP_VERTEX_CREDENTIALS_MARKER
-    : undefined;
 }
 
 async function refreshGoogleVertexAuthorizedUserAccessToken(params: {

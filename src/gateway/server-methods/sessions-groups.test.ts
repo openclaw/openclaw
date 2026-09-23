@@ -9,6 +9,7 @@ const groupMocks = vi.hoisted(() => ({
   put: vi.fn(),
   rename: vi.fn(),
   update: vi.fn(),
+  defaults: vi.fn<() => Array<{ name: string; cwd?: string; worktree?: boolean }>>(() => []),
 }));
 const pathMocks = vi.hoisted(() => ({
   isCurrent: vi.fn(),
@@ -17,15 +18,17 @@ const pathMocks = vi.hoisted(() => ({
 
 vi.mock("../session-groups.js", () => ({
   deleteSessionGroup: vi.fn(),
-  listSessionGroupDefaults: vi.fn(() => []),
+  listSessionGroupDefaults: groupMocks.defaults,
   listSessionGroups: vi.fn(() => []),
   listSidebarSectionOrder: vi.fn(() => []),
   putSessionGroups: groupMocks.put,
   renameSessionGroup: groupMocks.rename,
-  resolveSessionGroupMutationTargetsByName: vi.fn(() => new Map()),
   SessionGroupNotEmptyError: groupMocks.NotEmpty,
   SessionGroupNotFoundError: groupMocks.NotFound,
   updateSessionGroupDefaults: groupMocks.update,
+}));
+vi.mock("../session-group-defaults-access.js", () => ({
+  filterMutableSessionGroupRecords: async ({ records }: { records: () => unknown[] }) => records(),
 }));
 vi.mock("./workspace-path-containment.js", () => ({
   isWorkspacePathContainmentCurrent: pathMocks.isCurrent,
@@ -54,7 +57,10 @@ function renameOptions(params: Record<string, unknown>, respond: ReturnType<type
   return {
     params,
     respond,
-    context: { getRuntimeConfig: () => ({}) },
+    context: {
+      getRuntimeConfig: () => ({}),
+      getSessionEventSubscriberConnIds: () => new Set<string>(),
+    },
   } as unknown as GatewayRequestHandlerOptions;
 }
 
@@ -132,6 +138,7 @@ describe("sessions.groups.put", () => {
 describe("sessions.groups.update", () => {
   beforeEach(() => {
     groupMocks.update.mockReset();
+    groupMocks.defaults.mockReset().mockReturnValue([]);
     pathMocks.isCurrent.mockReset();
     pathMocks.isCurrent.mockReturnValue(true);
     pathMocks.resolveContainment.mockReset();
@@ -196,9 +203,12 @@ describe("sessions.groups.update", () => {
       path: "/workspace/client",
       workspaceRoot: "/workspace",
     });
-    groupMocks.update.mockReturnValue([
-      { name: "Client", cwd: "/workspace/client", worktree: true },
-    ]);
+    groupMocks.update.mockImplementation((_name, _defaults, _env, assertCurrent) => {
+      assertCurrent();
+      const records = [{ name: "Client", cwd: "/workspace/client", worktree: true }];
+      groupMocks.defaults.mockReturnValue(records);
+      return records;
+    });
     const respond = vi.fn();
     const assertCurrent = vi.fn();
     const options = updateOptions(
@@ -216,10 +226,16 @@ describe("sessions.groups.update", () => {
     )(options);
 
     expect(assertCurrent).toHaveBeenCalledOnce();
-    expect(groupMocks.update).toHaveBeenCalledWith("Client", {
-      cwd: "/workspace/client",
-      worktree: true,
-    });
+    expect(groupMocks.update).toHaveBeenCalledWith(
+      "Client",
+      {
+        cwd: "/workspace/client",
+        worktree: true,
+      },
+      expect.any(Object),
+      expect.any(Function),
+      {},
+    );
     expect(respond).toHaveBeenCalledWith(
       true,
       {

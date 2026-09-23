@@ -16,6 +16,10 @@ import { ensureOpenClawAgentProgressCardSchemaInTransaction } from "../state/ope
 type ProgressCardDatabase = Pick<OpenClawAgentKyselyDatabase, "session_progress_cards">;
 type ProgressCardDatabaseInput = string | DatabaseSync;
 type StoredProgressCardRow = Selectable<ProgressCardDatabase["session_progress_cards"]>;
+type StoredProgressCardMetadata = Pick<
+  StoredProgressCardRow,
+  "session_key" | "revision" | "created_at" | "updated_at"
+>;
 
 function withProgressCardDatabase<T>(
   input: ProgressCardDatabaseInput,
@@ -55,6 +59,23 @@ function selectProgressCard(db: DatabaseSync, sessionKey: string): StoredProgres
       kysely
         .selectFrom("session_progress_cards")
         .select(["session_key", "markdown", "steps_json", "revision", "created_at", "updated_at"])
+        .where("session_key", "=", sessionKey)
+        .limit(1),
+    ).rows[0] ?? null
+  );
+}
+
+function selectProgressCardMetadata(
+  db: DatabaseSync,
+  sessionKey: string,
+): StoredProgressCardMetadata | null {
+  const kysely = getNodeSqliteKysely<ProgressCardDatabase>(db);
+  return (
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .selectFrom("session_progress_cards")
+        .select(["session_key", "revision", "created_at", "updated_at"])
         .where("session_key", "=", sessionKey)
         .limit(1),
     ).rows[0] ?? null
@@ -112,6 +133,15 @@ export function readSessionProgressCard(
   });
 }
 
+/** Retain revision tombstones, but keep never-used lazy storage dormant during reset. */
+export function clearSessionProgressCardForReset(db: DatabaseSync, sessionKey: string): boolean {
+  if (!progressCardTablePresent(db) || !selectProgressCardMetadata(db, sessionKey)) {
+    return false;
+  }
+  writeSessionProgressCard(db, sessionKey, {});
+  return true;
+}
+
 export function writeSessionProgressCard(
   dbPathOrDb: ProgressCardDatabaseInput,
   sessionKey: string,
@@ -124,17 +154,21 @@ export function writeSessionProgressCard(
       const markdown = input.markdown?.trim() ? input.markdown : undefined;
       const steps = input.steps && input.steps.length > 0 ? input.steps : undefined;
       if (!markdown && !steps) {
-        const previous = selectProgressCard(db, sessionKey);
+        let previous: StoredProgressCardMetadata | null;
         if (input.expectedRevision !== undefined) {
-          const current = previous ? rowToProgressCard(previous) : null;
+          const currentRow = selectProgressCard(db, sessionKey);
+          const current = currentRow ? rowToProgressCard(currentRow) : null;
           if (
-            !previous ||
-            previous.revision !== input.expectedRevision ||
+            !currentRow ||
+            currentRow.revision !== input.expectedRevision ||
             !current?.steps?.length ||
             current.steps.some((step) => step.status !== "completed")
           ) {
             return { card: current };
           }
+          previous = currentRow;
+        } else {
+          previous = selectProgressCardMetadata(db, sessionKey);
         }
         if (previous) {
           executeSqliteQuerySync(
@@ -152,7 +186,7 @@ export function writeSessionProgressCard(
         }
         return { cleared: true };
       }
-      const previous = selectProgressCard(db, sessionKey);
+      const previous = selectProgressCardMetadata(db, sessionKey);
       const now = Date.now();
       const revision = (previous?.revision ?? 0) + 1;
       const stepsJson = steps ? JSON.stringify(steps) : null;

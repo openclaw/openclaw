@@ -29,7 +29,7 @@ describe("processDiscordMessage session routing and room events", () => {
   it("suppresses Discord reactions for room events when ack scope does not force all messages", async () => {
     vi.useFakeTimers();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.replyOptions?.onReasoningStream?.();
+      await params?.replyOptions?.onReasoningStream?.({});
       await new Promise((resolve) => {
         setTimeout(resolve, 1_000);
       });
@@ -67,7 +67,7 @@ describe("processDiscordMessage session routing and room events", () => {
   it("sends Discord ack reactions for room events when ack scope is all", async () => {
     vi.useFakeTimers();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.replyOptions?.onReasoningStream?.();
+      await params?.replyOptions?.onReasoningStream?.({});
       await new Promise((resolve) => {
         setTimeout(resolve, 1_000);
       });
@@ -123,7 +123,7 @@ describe("processDiscordMessage session routing and room events", () => {
     expect(guildHistories.get("c1")).toMatchObject([
       {
         body: "hi",
-        messageId: "m1",
+        messageId: "1001",
         sender: "Alice",
         senderProvenance: {
           id: "U1",
@@ -364,7 +364,7 @@ describe("processDiscordMessage session routing and room events", () => {
   });
 
   it("omits thread starter context when the effective thread session already exists", async () => {
-    const threadId = "thread-existing-session";
+    const threadId = "1001";
     const threadSessionKey = `agent:main:discord:channel:${threadId}`;
     readSessionUpdatedAt.mockImplementation((params?: unknown) => {
       const sessionKey = (params as { sessionKey?: string } | undefined)?.sessionKey;

@@ -5,10 +5,12 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import ts from "typescript";
+import type ts from "typescript";
+import { resolveNodeRuntimeExecutable } from "../src/infra/node-runtime-executable.ts";
 import { collectSourceCheckoutPluginBuildEntries } from "./lib/bundled-plugin-build-entries.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
+import { getTypeScript } from "./lib/ts-guard-utils.mts";
 
 type BuiltPluginControlPlaneModule = {
   pluginId: string;
@@ -69,10 +71,12 @@ process.stdout.write("\n${PROBE_RESULT_MARKER}" + JSON.stringify({ failures }));
 `;
 
 function propertyNameText(name: ts.PropertyName) {
+  const ts = getTypeScript();
   return ts.isIdentifier(name) || ts.isStringLiteralLike(name) ? name.text : "";
 }
 
 function listLegacySetupModuleSpecifiers(setupEntryPath: string) {
+  const ts = getTypeScript();
   const source = fs.readFileSync(setupEntryPath, "utf8");
   const sourceFile = ts.createSourceFile(setupEntryPath, source, ts.ScriptTarget.Latest, true);
   const specifiers: Array<{ kind: string; specifier: string }> = [];
@@ -165,12 +169,16 @@ export function probeBuiltPluginControlPlaneModules(
   }
   const rootDir = path.resolve(params.rootDir ?? ROOT);
   const encodedTargets = Buffer.from(JSON.stringify(modules), "utf8").toString("base64url");
-  const result = spawnSync(process.execPath, ["-e", REQUIRE_PROBE_SOURCE, encodedTargets], {
-    cwd: rootDir,
-    encoding: "utf8",
-    maxBuffer: 8 * 1024 * 1024,
-    timeout: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  });
+  const result = spawnSync(
+    resolveNodeRuntimeExecutable() ?? process.execPath,
+    ["-e", REQUIRE_PROBE_SOURCE, encodedTargets],
+    {
+      cwd: rootDir,
+      encoding: "utf8",
+      maxBuffer: 8 * 1024 * 1024,
+      timeout: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    },
+  );
   if (result.error) {
     throw new Error(
       `built plugin control-plane native-require probe failed: ${result.error.message}`,
@@ -201,6 +209,7 @@ export function probeBuiltPluginControlPlaneModules(
 // Follow ESM declarations and eager CJS require calls emitted by isolated builds.
 // Dynamic imports and requires inside functions are lazy, not enumeration costs.
 function parseStaticModuleSpecifiers(source: string, filePath: string): string[] {
+  const ts = getTypeScript();
   const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
   const specifiers: string[] = [];
   const visit = (node: ts.Node): void => {

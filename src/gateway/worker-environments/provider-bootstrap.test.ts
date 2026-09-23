@@ -1,6 +1,8 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
 import { writeSessionStore } from "../test-helpers.js";
 import { directSessionReq } from "../test/server-sessions.test-helpers.js";
@@ -34,7 +36,10 @@ describe("worker environment service", () => {
     );
 
     await expect(
-      workerService.create("development", "request-device-install-failure"),
+      workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-device-install-failure",
+      }),
     ).rejects.toMatchObject({
       code: "bootstrap_failure",
       message: "Worker node bootstrap failed: bundle transfer unavailable",
@@ -75,7 +80,10 @@ describe("worker environment service", () => {
     );
 
     await expect(
-      workerService.create("development", "request-device-cleanup"),
+      workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-device-cleanup",
+      }),
     ).rejects.toMatchObject({
       code: "bootstrap_failure",
       message: "Worker node bootstrap failed; teardown is pending: bundle transfer unavailable",
@@ -98,17 +106,14 @@ describe("worker environment service", () => {
   });
 
   it("stays bootstrapping until the SSH install receipt is durable", async () => {
-    let finishBootstrap: (() => void) | undefined;
-    const bootstrapPending = new Promise<void>((resolve) => {
-      finishBootstrap = resolve;
-    });
+    const { promise: bootstrapPending, resolve: finishBootstrap } = createDeferred();
     support.testState.bootstrapWorker = vi.fn(async () => {
       await bootstrapPending;
       return support.BOOTSTRAP_RECEIPT;
     });
     const creation = support
       .createService(support.createProvider())
-      .create("development", "request-bootstrap");
+      .createWithRequest({ profileId: "development", idempotencyKey: "request-bootstrap" });
 
     await support.waitForFast(() =>
       expect(support.testState.store.list()[0]).toMatchObject({
@@ -132,7 +137,10 @@ describe("worker environment service", () => {
     const workerService = support.createService(support.createProvider({ provision }));
 
     await expect(
-      workerService.create("development", "request-preparation-failure"),
+      workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-preparation-failure",
+      }),
     ).rejects.toMatchObject({
       code: "bootstrap_failure",
       message: expect.stringContaining("npm install requires a released gateway package"),
@@ -167,7 +175,10 @@ describe("worker environment service", () => {
     const workerService = support.createService(support.createProvider({ destroy }));
 
     await expect(
-      workerService.create("development", "request-receipt-write-failure"),
+      workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-receipt-write-failure",
+      }),
     ).rejects.toThrow("receipt database write failed");
     expect(support.testState.store.list()[0]).toMatchObject({
       state: "bootstrapping",
@@ -197,7 +208,10 @@ describe("worker environment service", () => {
     const destroy = vi.fn(async () => {});
     const workerService = support.createService(support.createProvider({ destroy }));
 
-    const creation = workerService.create("development", "request-bootstrap-failure");
+    const creation = workerService.createWithRequest({
+      profileId: "development",
+      idempotencyKey: "request-bootstrap-failure",
+    });
     await expect(creation).rejects.toMatchObject({
       code: "bootstrap_failure",
       message: expect.stringContaining("Worker bootstrap failed: remote bootstrap rejected"),
@@ -237,16 +251,18 @@ describe("worker environment service", () => {
       runnerAvailability: { read: () => undefined, version: () => 0 },
       workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
       runLocalBarrier: async ({ startDispatch }) => startDispatch(),
-      runRecoveryBarrier: async ({ run }) => await run("/gateway/workspace"),
+      runRecoveryBarrier: async ({ run }) =>
+        await run({ kind: "local", path: "/gateway/workspace" }),
       runActivationBarrier: async ({ activate }) => activate(),
       runMoveBarrier: async ({ begin }) => begin(),
       resolveMoveDestination: async () => undefined,
       runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
-      runReclaimBarrier: async ({ begin, reclaim }) => await reclaim("/gateway/workspace", begin()),
+      runReclaimBarrier: async ({ begin, reclaim }) =>
+        await reclaim({ kind: "local", path: "/gateway/workspace" }, begin()),
       runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-      resolveWorkspacePath: async () => "/gateway/workspace",
+      resolveWorkspace: async () => ({ kind: "local", path: "/gateway/workspace" }),
       reportWorkspaceResultConflict: async () => {},
-      resolveWorkspaceResultConflict: async () => undefined,
+      resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
     });
 
     await expect(
@@ -307,7 +323,10 @@ describe("worker environment service", () => {
     );
 
     await expect(
-      workerService.create("development", "request-bootstrap-cleanup"),
+      workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-bootstrap-cleanup",
+      }),
     ).rejects.toMatchObject({
       code: "bootstrap_failure",
       message: "Worker bootstrap failed; teardown is pending: remote bootstrap failed",
@@ -331,11 +350,11 @@ describe("worker environment service", () => {
   });
 
   it("bounds worker identity resolution as a provider operation", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const events: string[] = [];
-    let finishIdentity: (() => void) | undefined;
-    const identityPending = new Promise<void>((resolve) => {
-      finishIdentity = resolve;
-    });
+    const identityStarted = createDeferred();
+    const destroying = createDeferred();
+    const { promise: identityPending, resolve: finishIdentity } = createDeferred();
     support.testState.bootstrapWorker = vi.fn(async ({ installation, resolveIdentity, signal }) => {
       signal.addEventListener("abort", () => void events.push("abort"), { once: true });
       await resolveIdentity(support.SSH_ENDPOINT.keyRef);
@@ -352,27 +371,55 @@ describe("worker environment service", () => {
       providerCallTimeoutMs: 5,
       resolveSshIdentity: async () => {
         events.push("identity:start");
+        identityStarted.resolve();
         await identityPending;
         events.push("identity:end");
         return { kind: "path", path: "/keys/worker" };
       },
     });
-
-    const creation = workerService.create("development", "request-identity-timeout");
-    const creationResult = expect(creation).rejects.toMatchObject({
-      code: "bootstrap_failure",
-    } satisfies Partial<WorkerEnvironmentServiceError>);
+    const unsubscribe = sessionChanges.subscribe((change) => {
+      if (
+        "all" in change &&
+        change.scope === "worker-environments" &&
+        support.testState.store.list()[0]?.state === "destroying"
+      ) {
+        destroying.resolve();
+      }
+    });
+    const creation = workerService.createWithRequest({
+      profileId: "development",
+      idempotencyKey: "request-identity-timeout",
+    });
+    const creationResult = creation.then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
     try {
-      await support.waitForFast(() =>
-        expect(support.testState.store.list()[0]).toMatchObject({ state: "destroying" }),
-      );
+      await Promise.race([
+        identityStarted.promise,
+        creationResult.then((result) => {
+          throw new Error("Creation ended before identity resolution", { cause: result });
+        }),
+      ]);
+      await vi.advanceTimersByTimeAsync(5);
+      await Promise.race([
+        destroying.promise,
+        creationResult.then((result) => {
+          throw new Error("Creation ended before bootstrap teardown", { cause: result });
+        }),
+      ]);
       expect(events).toEqual(["identity:start", "abort"]);
       expect(destroy).not.toHaveBeenCalled();
     } finally {
-      finishIdentity?.();
+      unsubscribe();
+      finishIdentity();
+      await creationResult;
     }
 
-    await creationResult;
+    expect(await creationResult).toMatchObject({
+      ok: false,
+      error: { code: "bootstrap_failure" } satisfies Partial<WorkerEnvironmentServiceError>,
+    });
     expect(destroy).toHaveBeenCalledOnce();
     expect(events).toEqual(["identity:start", "abort", "identity:end", "destroy"]);
     expect(support.testState.store.list()[0]).toMatchObject({ state: "failed", leaseId: null });
@@ -401,7 +448,10 @@ describe("worker environment service", () => {
     });
 
     await expect(
-      workerService.create("development", "request-bootstrap-timeout"),
+      workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-bootstrap-timeout",
+      }),
     ).rejects.toMatchObject({
       code: "bootstrap_failure",
     } satisfies Partial<WorkerEnvironmentServiceError>);
@@ -411,15 +461,13 @@ describe("worker environment service", () => {
   });
 
   it("allows a large bundle bootstrap to outlive the former service deadline", async () => {
-    vi.useFakeTimers();
+    // Keep the monotonic clock shared with real SQLite workers on its native epoch.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     support.testState.prepareInstallation = vi.fn(async () => ({
       ...support.BUNDLE_ARTIFACT,
       tarballBytes: 243_000_000,
     }));
-    let finishBootstrap: (() => void) | undefined;
-    const bootstrapPending = new Promise<void>((resolve) => {
-      finishBootstrap = resolve;
-    });
+    const { promise: bootstrapPending, resolve: finishBootstrap } = createDeferred();
     let bootstrapSignal: AbortSignal | undefined;
     support.testState.bootstrapWorker = vi.fn(async ({ signal }) => {
       bootstrapSignal = signal;
@@ -428,7 +476,10 @@ describe("worker environment service", () => {
     });
     const workerService = support.createService(support.createProvider());
 
-    const creation = workerService.create("development", "request-large-bundle-bootstrap");
+    const creation = workerService.createWithRequest({
+      profileId: "development",
+      idempotencyKey: "request-large-bundle-bootstrap",
+    });
     await support.waitForFast(() =>
       expect(support.testState.bootstrapWorker).toHaveBeenCalledOnce(),
     );

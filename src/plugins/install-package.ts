@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import type { ExtractedArchiveVerification } from "../infra/install-flow.js";
 import { resolveUserPath } from "../utils.js";
 import {
   inspectBundlePluginArtifact,
@@ -47,12 +48,12 @@ function pickPackageInstallCommonParams(
 ): InternalPackageInstallCommonParams {
   return copyPluginInstallTransactionRequest(params, {
     config: params.config,
-    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     onInstallPolicyWarning: params.onInstallPolicyWarning,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     extensionsDir: params.extensionsDir,
     npmDir: params.npmDir,
     timeoutMs: params.timeoutMs,
+    workTimeoutMs: params.workTimeoutMs,
     logger: params.logger,
     mode: params.mode,
     dryRun: params.dryRun,
@@ -102,7 +103,7 @@ async function installBundleFromSourceDir(
     return null;
   }
 
-  const { logger, timeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(
+  const { logger, timeoutMs, workTimeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(
     params,
     defaultLogger,
   );
@@ -164,7 +165,6 @@ async function installBundleFromSourceDir(
     sourceFamily: sourceFamilyForInstallPolicyKind(params.installPolicyRequest?.kind, "archive"),
     scan: async () =>
       await runtime.scanBundleInstallSource({
-        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
         onInstallPolicyWarning: params.onInstallPolicyWarning,
         config: params.config,
         sourceDir: params.sourceDir,
@@ -192,6 +192,7 @@ async function installBundleFromSourceDir(
       extensionsDir: params.extensionsDir,
       logger,
       timeoutMs,
+      workTimeoutMs,
       mode: targetResult.target.effectiveMode,
       dryRun,
       copyErrorPrefix: "failed to copy plugin bundle",
@@ -267,7 +268,7 @@ async function installPluginFromPackageDir(
   } & InternalPackageInstallCommonParams,
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
-  const { logger, timeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(
+  const { logger, timeoutMs, workTimeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(
     params,
     defaultLogger,
   );
@@ -296,7 +297,6 @@ async function installPluginFromPackageDir(
     expectedPluginId: params.expectedPluginId,
     requirePluginManifest: params.requirePluginManifest,
     allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
-    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     onInstallPolicyWarning: params.onInstallPolicyWarning,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     config: params.config,
@@ -314,11 +314,8 @@ async function installPluginFromPackageDir(
   preparedTarget = await resolvePreparedTargetForPluginId(plugin.pluginId);
   const effectiveMode = preparedTarget.effectiveMode;
   params.onEffectiveMode?.(effectiveMode);
-  const hasBundleManifest = Boolean(runtime.detectBundleManifestFormat(params.packageDir));
   const shouldInstallRuntimeDeps =
-    plugin.hasRuntimeDependencies &&
-    !hasBundleManifest &&
-    params.installPolicyRequest?.kind === "plugin-archive";
+    plugin.hasRuntimeDependencies && params.installPolicyRequest?.kind === "plugin-archive";
 
   return await installPluginDirectoryIntoExtensions(
     copyPluginInstallTransactionRequest(params, {
@@ -332,6 +329,7 @@ async function installPluginFromPackageDir(
       extensionsDir: params.extensionsDir,
       logger,
       timeoutMs,
+      workTimeoutMs,
       mode: effectiveMode,
       dryRun,
       copyErrorPrefix: "failed to copy plugin",
@@ -363,15 +361,19 @@ async function installPluginFromPackageDir(
   );
 }
 
-export async function installPluginFromArchive(
+export async function installPluginFromArchive<
+  TFailure extends { ok: false; error: string; code?: string } = never,
+>(
   params: {
     archivePath: string;
+    verification?: ExtractedArchiveVerification<TFailure>;
   } & PackageInstallCommonParams,
-): Promise<InstallPluginResult> {
+): Promise<InstallPluginResult | NoInfer<TFailure>> {
   const runtime = await loadPluginInstallRuntime();
-  const logger = params.logger ?? defaultLogger;
-  const timeoutMs = params.timeoutMs ?? 120_000;
-  const mode = params.mode ?? "install";
+  const { logger, timeoutMs, workTimeoutMs, mode } = runtime.resolveTimedInstallModeOptions(
+    params,
+    defaultLogger,
+  );
   const installPolicyRequest = params.installPolicyRequest ?? {
     kind: "plugin-archive",
     requestedSpecifier: params.archivePath,
@@ -388,17 +390,19 @@ export async function installPluginFromArchive(
     archivePath,
     tempDirPrefix: "openclaw-plugin-",
     timeoutMs,
+    workTimeoutMs,
     logger,
+    verification: params.verification,
     rootMarkers: PLUGIN_ARCHIVE_ROOT_MARKERS,
     onExtracted: async (sourceDir) =>
       await installPluginFromSourceDir({
         sourceDir,
         ...pickPackageInstallCommonParams(
           copyPluginInstallTransactionRequest(params, {
-            dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
             onInstallPolicyWarning: params.onInstallPolicyWarning,
             extensionsDir: params.extensionsDir,
             timeoutMs,
+            workTimeoutMs,
             logger,
             mode,
             dryRun: params.dryRun,
@@ -416,12 +420,14 @@ export async function installPluginFromArchive(
         ),
       }),
   });
-  emitSuccessfulPluginInstallSecurityEvent(result, {
-    dryRun: params.dryRun,
-    mode: effectiveMode,
-    sourceFamily: "archive",
-    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-  });
+  if (result.ok) {
+    emitSuccessfulPluginInstallSecurityEvent(result, {
+      dryRun: params.dryRun,
+      mode: effectiveMode,
+      sourceFamily: "archive",
+      trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+    });
+  }
   return result;
 }
 

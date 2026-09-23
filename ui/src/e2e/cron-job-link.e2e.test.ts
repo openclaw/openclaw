@@ -1,14 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { CronJob } from "../api/types.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI automation job links" });
 
 suite.define(() => {
   it("opens a linked automation outside the first inventory page", async () => {
-    const job = {
+    const job: CronJob = {
       id: "linked-automation",
       agentId: "writer",
       configRevision: "linked-definition",
@@ -47,7 +50,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
             "cron.status": { enabled: true, jobs: 51, nextWakeAtMs: null },
-            "cron.list": {
+            "cron.list": cronListResponseFixture({
               jobs,
               total: 51,
               offset: 0,
@@ -55,7 +58,7 @@ suite.define(() => {
               hasMore: true,
               nextOffset: 50,
               snapshotRevision: "linked-inventory",
-            },
+            }),
             "cron.get": job,
             "cron.runs": {
               cases: [
@@ -106,10 +109,12 @@ suite.define(() => {
             }),
           );
         } finally {
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "linked-automation.png"),
-            fullPage: true,
-          });
+          await fs.writeFile(
+            path.join(suite.artifactDir, "linked-automation.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".cron-page"), [
+              page.locator(".cron-detail-title"),
+            ]),
+          );
           await fs.writeFile(
             path.join(suite.artifactDir, "gateway-requests.json"),
             JSON.stringify(await gateway.getRequests(), null, 2),

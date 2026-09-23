@@ -9,6 +9,10 @@ require "digest/md5"
 require "time"
 require "rubygems/version"
 
+# Only a completed deterministic planner rejection is reportable as no plan.
+# App Store/API failures must still abort read-only inspection.
+class IosReleasePlanRejected < StandardError; end
+
 default_platform(:ios)
 
 APP_STORE_APP_IDENTIFIER = "ai.openclawfoundation.app"
@@ -444,21 +448,12 @@ def normalize_watch_screenshot_status_bar(path)
   end
 end
 
-def capture_watch_screenshot
-  device = resolve_simulator_device(watch_snapshot_device)
-  device_name = device.fetch("name")
-  udid = device.fetch("udid")
-  output_dir = File.join(ios_root, "fastlane", "screenshots", "en-US")
-  output_path = File.join(output_dir, "#{device_name}-01-now-face.png")
+def build_watch_screenshot_app
   derived_data_path = File.join(ios_root, "build", "WatchScreenshotDerivedData")
   app_path = File.join(derived_data_path, "Build", "Products", "Debug-watchsimulator", "OpenClawWatchApp.app")
-
-  FileUtils.mkdir_p(output_dir)
-  Dir[File.join(output_dir, "Apple Watch*-*.png")].each { |path| FileUtils.rm_f(path) }
   FileUtils.rm_rf(derived_data_path)
 
   # Single-target watch apps only expose generic simulator build destinations in Xcode.
-  # Keep the selected UDID for install/launch/screenshot below.
   sh(
     xcodebuild_shell_join([
       "xcodebuild",
@@ -475,7 +470,21 @@ def capture_watch_screenshot
       "build",
     ])
   )
+  app_path
+end
 
+def capture_watch_screenshot
+  device = resolve_simulator_device(watch_snapshot_device)
+  device_name = device.fetch("name")
+  udid = device.fetch("udid")
+  output_dir = File.join(ios_root, "fastlane", "screenshots", "en-US")
+  output_path = File.join(output_dir, "#{device_name}-01-now-face.png")
+
+  FileUtils.mkdir_p(output_dir)
+  Dir[File.join(output_dir, "Apple Watch*-*.png")].each { |path| FileUtils.rm_f(path) }
+
+  # Clear old evidence before a standalone build can fail.
+  app_path = yield
   UI.user_error!("Watch screenshot build did not produce #{app_path}.") unless File.exist?(app_path)
   watch_app_identifier = bundle_identifier_for_product(app_path)
   screenshot_mode_bundle_identifiers = [watch_app_identifier]
@@ -1216,7 +1225,7 @@ def upload_app_store_screenshots_deterministically!(app_identifier:, app_id:, sh
   UI.success("Uploaded and verified #{screenshots.length} App Store screenshots for #{short_version}.")
 end
 
-def read_ios_version_metadata(release_version: nil, app_store_revision: nil)
+def read_ios_version_metadata(release_version: nil, app_store_revision: nil, source_root: repo_root)
   script_path = File.join(repo_root, "scripts", "ios-version.ts")
   args = [
     "node",
@@ -1224,6 +1233,7 @@ def read_ios_version_metadata(release_version: nil, app_store_revision: nil)
     "tsx",
     script_path,
     "--json",
+    "--root", source_root,
   ]
   args.push("--version", release_version) if env_present?(release_version)
   args.push("--revision", app_store_revision) if env_present?(app_store_revision)
@@ -1285,28 +1295,28 @@ def app_store_build_upload_state(upload)
   state
 end
 
-def release_source_clean?
+def release_source_clean?(source_root: repo_root)
   stdout, _stderr, status = Open3.capture3(
     "git",
     "status",
     "--porcelain=v1",
     "--untracked-files=all",
-    chdir: repo_root
+    chdir: source_root
   )
   status.success? && stdout.strip.empty?
 end
 
-def resolve_ios_release_plan!(release_version: nil, app_store_revision: nil, build_number: nil)
-  gateway_metadata = read_ios_version_metadata
+def resolve_ios_release_plan!(release_version: nil, app_store_revision: nil, build_number: nil, source_root: repo_root, app: nil)
+  gateway_metadata = read_ios_version_metadata(source_root: source_root)
   if env_present?(release_version.to_s)
-    explicit_gateway = read_ios_version_metadata(release_version: release_version)[:version]
+    explicit_gateway = read_ios_version_metadata(release_version: release_version, source_root: source_root)[:version]
     if explicit_gateway != gateway_metadata[:version]
       UI.user_error!(
-        "Explicit iOS gateway version #{explicit_gateway} does not match canonical root version #{gateway_metadata[:version]}."
+        "Explicit iOS gateway version #{explicit_gateway} does not match canonical mobile version #{gateway_metadata[:version]}."
       )
     end
   end
-  app = app_store_connect_target_app
+  app ||= app_store_connect_target_app
   versions = app.get_app_store_versions(
     filter: { platform: Spaceship::ConnectAPI::Platform::IOS },
     includes: nil
@@ -1330,9 +1340,9 @@ def resolve_ios_release_plan!(release_version: nil, app_store_revision: nil, bui
     explicitBuildNumber: env_present?(build_number.to_s) ? build_number.to_s : nil,
     explicitRevision: env_present?(app_store_revision.to_s) ? app_store_revision.to_s : nil,
     gatewayVersion: gateway_metadata[:version],
-    rootDir: repo_root,
-    sourceClean: release_source_clean?,
-    sourceSha: release_git_sha
+    rootDir: source_root,
+    sourceClean: release_source_clean?(source_root: source_root),
+    sourceSha: release_git_sha(source_root: source_root)
   }
 
   stdout = ""
@@ -1354,11 +1364,28 @@ def resolve_ios_release_plan!(release_version: nil, app_store_revision: nil, bui
   unless status&.success?
     detail = stderr.to_s.strip
     detail = stdout.to_s.strip if detail.empty?
-    UI.user_error!("Unable to resolve deterministic iOS release plan: #{detail}")
+    raise IosReleasePlanRejected, "Unable to resolve deterministic iOS release plan: #{detail}"
   end
   JSON.parse(stdout)
 rescue JSON::ParserError => e
   UI.user_error!("Invalid JSON from iOS release planner: #{e.message}")
+end
+
+def check_mobile_release_versioning!(app_store_revision:)
+  sh(
+    shell_join([
+      "node",
+      "--import",
+      "tsx",
+      File.join(repo_root, "scripts", "android-sync-versioning.ts"),
+      "--check",
+      "--require-mobile-release",
+      "--revision",
+      app_store_revision.to_s,
+      "--root",
+      repo_root
+    ])
+  )
 end
 
 def sync_ios_versioning!(release_version: nil, app_store_revision: nil)
@@ -1477,8 +1504,8 @@ def mobile_release_ref_script
   File.join(repo_root, "scripts", "mobile-release-ref.ts")
 end
 
-def release_git_sha
-  stdout, stderr, status = Open3.capture3("git", "rev-parse", "HEAD", chdir: repo_root)
+def release_git_sha(source_root: repo_root)
+  stdout, stderr, status = Open3.capture3("git", "rev-parse", "HEAD", chdir: source_root)
   UI.user_error!("Unable to resolve release Git SHA: #{stderr.strip}") unless status.success?
   stdout.strip
 end
@@ -1571,6 +1598,186 @@ def record_mobile_release_ref!(platform:, version:, build: nil, version_code: ni
     version_code: version_code,
     sha: sha
   )
+end
+
+def mobile_release_intent_context!(gateway_version:)
+  mode = ENV.fetch("OPENCLAW_MOBILE_RELEASE_REF_MODE", "").strip
+  return nil if mode.empty?
+
+  UI.user_error!("OPENCLAW_MOBILE_RELEASE_REF_MODE must be empty or intent.") unless mode == "intent"
+  intent_path = ENV.fetch("OPENCLAW_MOBILE_RELEASE_INTENT_PATH", "").strip
+  receipt_digest = ENV.fetch("OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST", "").strip
+  target_ref = ENV.fetch("OPENCLAW_MOBILE_RELEASE_TARGET_REF", "").strip
+  UI.user_error!("OPENCLAW_MOBILE_RELEASE_INTENT_PATH is required in intent mode.") if intent_path.empty?
+  unless receipt_digest.match?(/\Asha256:[0-9a-f]{64}\z/)
+    UI.user_error!("OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST must be a canonical SHA-256 digest.")
+  end
+  unless target_ref == "release/#{gateway_version}-mobile"
+    UI.user_error!("OPENCLAW_MOBILE_RELEASE_TARGET_REF must exactly match the mobile gateway version.")
+  end
+  {
+    intent_path: intent_path,
+    receipt_digest: receipt_digest,
+    target_ref: target_ref
+  }
+end
+
+def configured_ci_testflight_internal_group_id!
+  group_id = ENV.fetch("TESTFLIGHT_INTERNAL_GROUP", "").strip
+  UI.user_error!(
+    "TESTFLIGHT_INTERNAL_GROUP must be a nonblank App Store Connect beta-group ID."
+  ) if group_id.empty?
+  group_id
+end
+
+def select_ci_testflight_internal_group_by_id!(groups:, group_id:)
+  matches = groups.select { |group| group.id == group_id }
+  unless matches.length == 1
+    UI.user_error!("TESTFLIGHT_INTERNAL_GROUP must match exactly one App Store Connect beta-group ID.")
+  end
+  name_collision = groups.any? { |group| group.id != group_id && group.name == group_id }
+  if name_collision
+    UI.user_error!("TESTFLIGHT_INTERNAL_GROUP collides with another TestFlight group name.")
+  end
+
+  group = matches.first
+  UI.user_error!("The configured TestFlight beta group must be internal.") unless group.is_internal_group == true
+  unsafe_internal_group = groups.any? do |candidate|
+    candidate.id != group_id &&
+      candidate.is_internal_group == true &&
+      candidate.has_access_to_all_builds != false
+  end
+  if unsafe_internal_group
+    UI.user_error!(
+      "Every non-target internal TestFlight group must explicitly disable automatic all-build access."
+    )
+  end
+  group
+end
+
+def resolve_ci_testflight_internal_group_id!
+  group_id = configured_ci_testflight_internal_group_id!
+  app_identifier = ENV["APP_STORE_CONNECT_APP_IDENTIFIER"]
+  app_id = ENV["APP_STORE_CONNECT_APP_ID"]
+  app_identifier = nil unless env_present?(app_identifier)
+  app_id = nil unless env_present?(app_id)
+  app = resolve_app_store_connect_app(
+    app_identifier: app_identifier,
+    app_id: app_id
+  )
+  group = select_ci_testflight_internal_group_by_id!(groups: app.get_beta_groups, group_id: group_id)
+  group.id
+end
+
+def resolve_ci_testflight_build!(app:, app_store_version:, build_number:)
+  builds = app.get_builds(
+    filter: {
+      "preReleaseVersion.version" => app_store_version,
+      version: build_number.to_s
+    },
+    includes: "preReleaseVersion"
+  ).select do |candidate|
+    candidate.app_version == app_store_version &&
+      candidate.version == build_number.to_s &&
+      candidate.platform == Spaceship::ConnectAPI::Platform::IOS
+  end
+  unless builds.length == 1
+    UI.user_error!("Uploaded TestFlight build could not be resolved after processing.")
+  end
+  builds.first
+end
+
+def ci_testflight_build_group_ids(groups:, build:)
+  groups.select do |candidate_group|
+    candidate_group.fetch_builds.any? { |candidate| candidate.id == build.id }
+  end.map(&:id)
+end
+
+def assign_and_verify_ci_testflight_internal_group!(group_id:, app_store_version:, build_number:)
+  app_identifier = ENV["APP_STORE_CONNECT_APP_IDENTIFIER"]
+  app_id = ENV["APP_STORE_CONNECT_APP_ID"]
+  app_identifier = nil unless env_present?(app_identifier)
+  app_id = nil unless env_present?(app_id)
+  app = resolve_app_store_connect_app(
+    app_identifier: app_identifier,
+    app_id: app_id
+  )
+  group = select_ci_testflight_internal_group_by_id!(
+    groups: app.get_beta_groups,
+    group_id: group_id
+  )
+  build = resolve_ci_testflight_build!(app: app, app_store_version: app_store_version, build_number: build_number)
+  current_groups = app.get_beta_groups
+  group = select_ci_testflight_internal_group_by_id!(groups: current_groups, group_id: group_id)
+  current_group_ids = ci_testflight_build_group_ids(groups: current_groups, build: build)
+  unless (current_group_ids - [group_id]).empty?
+    UI.user_error!("Uploaded TestFlight build is assigned outside the configured internal group.")
+  end
+  unless current_group_ids.include?(group_id)
+    # Do not explicitly assign automatic groups. Their flag is not proof
+    # of access: require the exact build relationship before accepting success.
+    unless group.has_access_to_all_builds == false
+      UI.user_error!("Uploaded TestFlight build is not assigned to the configured internal group.")
+    end
+    # Relationship reads can outlive a group change. Revalidate immediately
+    # before assigning by immutable ID, never by Fastlane's name-or-ID option.
+    group = select_ci_testflight_internal_group_by_id!(groups: app.get_beta_groups, group_id: group_id)
+    unless group.has_access_to_all_builds == false
+      UI.user_error!("Uploaded TestFlight build is not assigned to the configured internal group.")
+    end
+    build.add_beta_groups(beta_groups: [group])
+  end
+  verified_groups = app.get_beta_groups
+  verified_group = select_ci_testflight_internal_group_by_id!(
+    groups: verified_groups,
+    group_id: group_id
+  )
+  assigned_group_ids = ci_testflight_build_group_ids(groups: verified_groups, build: build)
+  unless assigned_group_ids.include?(group_id)
+    UI.user_error!("Uploaded TestFlight build is not assigned to the configured internal group.")
+  end
+  unless assigned_group_ids == [group_id]
+    UI.user_error!("Uploaded TestFlight build is assigned outside the configured internal group.")
+  end
+  { group: verified_group }
+end
+
+def finalize_mobile_release_ref!(platform:, gateway_version:, app_store_version:, build_number:, internal_group:, intent_context:, sha:)
+  unless intent_context
+    record_mobile_release_ref!(
+      platform: platform,
+      version: app_store_version,
+      build: build_number,
+      sha: sha
+    )
+    return
+  end
+  UI.user_error!("An exact internal TestFlight group is required in intent mode.") unless internal_group
+  sh(shell_join([
+    "node",
+    File.join(repo_root, "scripts", "mobile-release-intent.mjs"),
+    "write",
+    "--output",
+    intent_context.fetch(:intent_path),
+    "--platform",
+    platform,
+    "--authority-receipt-digest",
+    intent_context.fetch(:receipt_digest),
+    "--gateway-version",
+    gateway_version,
+    "--app-store-version",
+    app_store_version,
+    "--build-number",
+    build_number.to_s,
+    "--internal-group-id",
+    internal_group.fetch(:group).id,
+    "--internal-group-name",
+    internal_group.fetch(:group).name,
+    "--target-ref",
+    intent_context.fetch(:target_ref),
+    "--target-sha",
+    sha
+  ]))
 end
 
 def validate_app_store_ipa!(ipa_path, expected_commit:, expected_build_timestamp:)
@@ -1885,9 +2092,11 @@ platform :ios do
       if release_plan.fetch("changelogStatus") != "ready"
         UI.user_error!(
           "iOS release notes are not cut for #{release_plan.fetch("appStoreVersion")}. " \
-          "Run `pnpm ios:release:cut`, commit apps/ios/CHANGELOG.md, then rerun the upload."
+          "Run the shared mobile cutter prepare/plan/finalize flow, commit its five outputs, " \
+          "then rerun the upload."
         )
       end
+      check_mobile_release_versioning!(app_store_revision: app_store_revision)
     else
       if release_version.empty?
         UI.user_error!("Missing iOS gateway version. Use explicit --version and --revision for local archive validation.")
@@ -1953,6 +2162,80 @@ platform :ios do
     )
   end
 
+  desc "Inspect the candidate release plan and exact TestFlight relationships without publication"
+  lane :release_inspect do |options|
+    # This read-only lane is not a repair/upload/record mode. Never manufacture
+    # a publication intent from observed relationships or an old uploaded build.
+    if env_present?(ENV["OPENCLAW_MOBILE_RELEASE_REF_MODE"]) ||
+       env_present?(ENV["OPENCLAW_MOBILE_RELEASE_INTENT_PATH"]) ||
+       env_present?(ENV["OPENCLAW_IOS_RELEASE_WRAPPER"])
+      UI.user_error!("Read-only inspection rejects writer context.")
+    end
+    source_root = File.realpath(options.fetch(:source_root))
+    output_directory = options.fetch(:output_directory).to_s
+    app_store_version = options.fetch(:app_store_version).to_s
+    build_number = options.fetch(:build_number).to_s
+    unless build_number.match?(/\A[1-9][0-9]{0,17}\z/) && app_store_version.match?(/\A20[0-9]{2}\.[1-9][0-9]?\.[1-9][0-9]*\z/)
+      UI.user_error!("Inspection requires an exact candidate App Store version and positive build number.")
+    end
+    UI.user_error!("Inspection output directory must be new.") if File.exist?(output_directory)
+    group_id = configured_ci_testflight_internal_group_id!
+    app_store_connect_api_key_config
+    app = app_store_connect_target_app
+    build = resolve_ci_testflight_build!(app: app, app_store_version: app_store_version, build_number: build_number)
+    groups = app.get_beta_groups(includes: nil)
+    ids = [app.id, build.id, *groups.map(&:id)]
+    unless ids.all? { |id| id.is_a?(String) && !id.strip.empty? } && groups.map(&:id).uniq.length == groups.length
+      UI.user_error!("Inspection requires unambiguous app, build, and group IDs.")
+    end
+    assigned_group_ids = ci_testflight_build_group_ids(groups: groups, build: build)
+    # Query failures stay outside this policy-only rescue. Unsafe policy remains
+    # an observation, not a reason to assign a group or assert distribution.
+    group_policy_valid = begin
+      select_ci_testflight_internal_group_by_id!(groups: groups, group_id: group_id)
+      true
+    rescue StandardError
+      false
+    end
+    plan = begin
+      resolve_ios_release_plan!(source_root: source_root, app: app)
+    rescue IosReleasePlanRejected
+      nil
+    end
+    report = {
+      kind: "openclaw-ios-release-inspection",
+      publicationVerified: false,
+      sourceSha: release_git_sha(source_root: source_root),
+      workflowSha: release_git_sha,
+      appId: app.id,
+      appStoreVersion: app_store_version,
+      buildNumber: build_number,
+      buildId: build.id,
+      buildProcessingState: build.processing_state,
+      buildExpired: build.expired,
+      buildUsable: build.processing_state == "VALID" && build.expired == false,
+      targetGroupId: group_id,
+      groupPolicyValid: group_policy_valid,
+      exclusiveGroupRelationship: assigned_group_ids == [group_id],
+      groups: groups.map do |group|
+        {
+          id: group.id,
+          internal: group.is_internal_group,
+          allBuilds: group.has_access_to_all_builds,
+          containsBuild: assigned_group_ids.include?(group.id)
+        }
+      end,
+      planValidation: plan ? "passed" : "failed"
+    }
+    FileUtils.mkdir_p(output_directory)
+    File.write(File.join(output_directory, "plan.json"), "#{JSON.pretty_generate(plan)}\n") if plan
+    File.write(File.join(output_directory, "inspection.json"), "#{JSON.pretty_generate(report)}\n")
+    UI.success("Read-only iOS observations captured; publication is not verified.")
+  rescue StandardError
+    # Do not retain raw API payloads, group names, or credential diagnostics.
+    UI.user_error!("Read-only iOS inspection failed; no publication evidence was produced.")
+  end
+
   desc "Print the App Store signing plan"
   lane :signing_plan do
     sh(shell_join(["node", File.join(repo_root, "scripts", "ios-release-signing.mjs"), "--mode", "plan"]))
@@ -2013,6 +2296,8 @@ platform :ios do
       build_number: options[:build_number]
     )
     release_sha = context[:git_commit]
+    intent_context = mobile_release_intent_context!(gateway_version: context[:version])
+    internal_group_id = intent_context ? resolve_ci_testflight_internal_group_id! : nil
     preflight_app_store_version!(short_version: context[:short_version])
     ensure_mobile_release_ref_available!(
       platform: "ios",
@@ -2047,18 +2332,38 @@ platform :ios do
       app_store_revision: context[:app_store_revision]
     )
 
-    upload_to_testflight(
+    upload_options = {
       api_key: context[:api_key],
       ipa: build[:ipa_path],
-      skip_submission: true,
       skip_waiting_for_build_processing: false,
       wait_processing_timeout_duration: APP_STORE_BUILD_PROCESSING_TIMEOUT_SECONDS,
       uses_non_exempt_encryption: false
-    )
-    record_mobile_release_ref!(
+    }
+    if internal_group_id
+      upload_options.merge!(
+        distribute_external: false,
+        skip_submission: false,
+        submit_beta_review: false
+      )
+    else
+      upload_options[:skip_submission] = true
+    end
+    upload_to_testflight(**upload_options)
+    internal_group = nil
+    if internal_group_id
+      internal_group = assign_and_verify_ci_testflight_internal_group!(
+        group_id: internal_group_id,
+        app_store_version: build[:short_version],
+        build_number: build[:build_number]
+      )
+    end
+    finalize_mobile_release_ref!(
       platform: "ios",
-      version: build[:short_version],
-      build: build[:build_number],
+      gateway_version: build[:version],
+      app_store_version: build[:short_version],
+      build_number: build[:build_number],
+      internal_group: internal_group,
+      intent_context: intent_context,
       sha: release_sha
     )
 
@@ -2074,10 +2379,10 @@ platform :ios do
     release_version = options[:release_version].to_s.strip
     app_store_revision = options[:app_store_revision].to_s.strip
     if release_version.empty?
-      UI.user_error!("Missing iOS gateway version. Use `pnpm ios:release:upload -- --version YYYY.M.D --revision N`.")
+      UI.user_error!("Missing iOS gateway version. Use `pnpm ios:release:upload -- --version YYYY.M.PATCH --revision N`.")
     end
     if app_store_revision.empty?
-      UI.user_error!("Missing iOS App Store revision. Use `pnpm ios:release:upload -- --version YYYY.M.D --revision N`.")
+      UI.user_error!("Missing iOS App Store revision. Use `pnpm ios:release:upload -- --version YYYY.M.PATCH --revision N`.")
     end
     sync_ios_versioning!(
       release_version: release_version,
@@ -2224,11 +2529,11 @@ platform :ios do
     FileUtils.rm_rf(File.join(output_directory, "test_output"))
 
     unless ENV["OPENCLAW_SNAPSHOT_SKIP_WATCH"] == "1"
-      watch_screenshot(
-        release_version: release_version,
-        app_store_revision: app_store_revision,
-        build_number: build_number
-      )
+      # The fresh OpenClawUITests build also compiles its Watch app dependency.
+      # Keep this product in the same invocation; standalone capture builds separately.
+      capture_watch_screenshot do
+        File.join(derived_data_path, "Build", "Products", "Debug-watchsimulator", "OpenClawWatchApp.app")
+      end
     end
   end
 
@@ -2246,7 +2551,7 @@ platform :ios do
     sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-write-version-xcconfig.sh"), *version_args]))
     sh(shell_join(["node", File.join(repo_root, "scripts", "ios-write-swift-filelist.mjs")]))
     sh(shell_join(["xcodegen", "generate", "--spec", File.join(ios_root, "project.yml"), "--project", ios_root]))
-    capture_watch_screenshot
+    capture_watch_screenshot { build_watch_screenshot_app }
   end
 
   desc "Validate App Store Connect API auth"

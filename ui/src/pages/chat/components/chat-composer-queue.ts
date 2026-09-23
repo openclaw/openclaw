@@ -9,24 +9,27 @@ import {
   chatQueueMovableSegments,
   isMovableChatQueueItem,
 } from "../../../lib/chat/chat-queue-order.ts";
-import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
+import type { ChatQueueItem, HumanMention } from "../../../lib/chat/chat-types.ts";
+import { updateHumanMentions, type HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
 import { isQueuedSendInlineState } from "../chat-progress.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 
 type ChatQueueProps = {
   queue: ChatQueueItem[];
+  displayQueue?: ChatQueueItem[];
   offline?: boolean;
   canAbort?: boolean;
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
-  onQueueMove?: (id: string, toIndex: number) => void;
+  onQueueMove?: (id: string, targetId: string) => void;
   onQueueEdit?: (id: string) => void;
-  onQueueEditChange?: (text: string) => void;
+  onQueueEditChange?: (text: string, mentions?: readonly HumanMention[]) => void;
   onQueueEditSubmit?: () => void;
   onQueueEditCancel?: () => void;
   editingId?: string | null;
   editingText?: string;
+  editingMentions?: readonly HumanMention[];
   editingSource?: ChatQueueItem;
   onQueueRemove: (id: string) => void;
 };
@@ -45,6 +48,7 @@ const QUEUE_ROW_CONTROL_SELECTOR =
 const QUEUE_DRAG_SCROLL_EDGE = 24;
 const QUEUE_DRAG_SCROLL_MAX_SPEED = 12;
 const mountedQueueEditInputs = new WeakSet<HTMLTextAreaElement>();
+const queueMentionInputs = new WeakMap<HTMLTextAreaElement, HumanMentionInput>();
 const queueWaitingIcon = strokeIcon(svg` <path d="M16 5H3" />
   <path d="M16 12H3" />
   <path d="M9 19H3" />
@@ -133,7 +137,12 @@ function mountQueueEditInput(element: Element | undefined, value: string): void 
 }
 
 function sendStateLabel(item: ChatQueueItem, offline: boolean): string | null {
-  if (offline && item.sendState !== "failed" && item.sendState !== "unconfirmed") {
+  if (
+    offline &&
+    item.sendState !== "failed" &&
+    item.sendState !== "unconfirmed" &&
+    item.sendState !== "held"
+  ) {
     return t("chat.queue.states.waitingForReconnect");
   }
   switch (item.sendState) {
@@ -145,6 +154,7 @@ function sendStateLabel(item: ChatQueueItem, offline: boolean): string | null {
     case "waiting-reconnect":
       return t("chat.queue.states.waitingForReconnect");
     case "unconfirmed":
+    case "held":
       return t("chat.queue.states.needsReview");
     case "failed":
       return t("common.failed");
@@ -154,8 +164,11 @@ function sendStateLabel(item: ChatQueueItem, offline: boolean): string | null {
 }
 
 export function renderChatQueue(props: ChatQueueProps) {
-  const visibleQueue = props.queue.filter(
-    (item) => item.sendState !== "sending" && !isQueuedSendInlineState(item),
+  const visibleQueue = (props.displayQueue ?? props.queue).filter(
+    (item) =>
+      item.sendState !== "submitting" &&
+      item.sendState !== "sending" &&
+      !isQueuedSendInlineState(item),
   );
   // A peer can retire the source while this pane is away. Render its retained
   // correction for recovery/cancel; this never recreates a row in the outbox.
@@ -169,13 +182,13 @@ export function renderChatQueue(props: ChatQueueProps) {
   if (!visibleQueue.length) {
     return nothing;
   }
-  // Move positions address one movable segment, matching what the reorder owner
-  // permutes. A row attached to a run keeps its place and ends the segment, so
-  // the handle never offers a move across it. An edited row holds the queue
-  // behind it in the drain, so it is a barrier on the same terms.
+  // Hidden and edited rows retain their delivery positions and split the
+  // offered segments even though they may not appear in this tray.
+  const visibleIds = new Set(visibleQueue.map((item) => item.id));
   const movableSegments = chatQueueMovableSegments(
-    visibleQueue,
-    (item) => isMovableChatQueueItem(item) && item.id !== props.editingId,
+    props.queue,
+    (item) =>
+      visibleIds.has(item.id) && isMovableChatQueueItem(item) && item.id !== props.editingId,
   ).map((rows) => rows.map((row) => row.id));
   const reorder: ChatQueueReorder = {
     segments: movableSegments,
@@ -187,7 +200,8 @@ export function renderChatQueue(props: ChatQueueProps) {
   // Keep their unresolved delivery visible beside the messages they block.
   const head = props.queue.find((item) => item.sendState !== "failed" || item.localCommandName);
   const globalState =
-    head?.sendState === "unconfirmed" && isQueuedSendInlineState(head)
+    (head?.sendState === "unconfirmed" || head?.sendState === "held") &&
+    isQueuedSendInlineState(head)
       ? { label: t("chat.queue.states.blockedByUnconfirmed"), tone: "warn" }
       : visibleQueue.some((item) => item.sendState === "waiting-model") && !props.offline
         ? { label: t("chat.queue.states.applyingSettings"), tone: "settings" }
@@ -196,14 +210,16 @@ export function renderChatQueue(props: ChatQueueProps) {
   // it in place; that is what keeps focus on the handle the operator is using.
   return html`
     <div class="chat-queue" role="status" aria-live="polite">
-      ${globalState
-        ? html`<div
-            class="chat-queue__global-state"
-            data-chat-queue-global-state=${globalState.tone}
-          >
-            ${globalState.label}
-          </div>`
-        : nothing}
+      ${
+        globalState
+          ? html`<div
+              class="chat-queue__global-state"
+              data-chat-queue-global-state=${globalState.tone}
+            >
+              ${globalState.label}
+            </div>`
+          : nothing
+      }
       <div
         class="chat-queue__scroll"
         data-scrollable=${visibleQueue.length > 3 ? "true" : "false"}
@@ -264,12 +280,15 @@ function renderChatQueueItem(
 ) {
   const authorAvatar = renderChatAuthorAvatar(item.sender);
   const hasAuthorAvatar = authorAvatar !== nothing;
-  const failed = item.sendState === "failed" || item.sendState === "unconfirmed";
+  const failed =
+    item.sendState === "failed" || item.sendState === "unconfirmed" || item.sendState === "held";
   const reconnecting = !failed && (props.offline || item.sendState === "waiting-reconnect");
   const stateLabel = sendStateLabel(item, props.offline === true);
   const steered = item.queueMode === "steer" && stateLabel === null;
   const busy = item.sendState === "executing-command";
   const editing = props.editingId === item.id;
+  const mentionText = editing ? (props.editingText ?? item.text) : item.text;
+  const mentions = editing ? props.editingMentions : item.mentions;
   const canSteer =
     Boolean(props.canAbort && props.onQueueSteer) && isSteerableQueuedMessage(item) && !editing;
   const showsSteer =
@@ -321,249 +340,328 @@ function renderChatQueueItem(
           queueDoubleClickEditRows.add(row);
         }
       }}
-      @dblclick=${canEdit
-        ? (event: MouseEvent) => {
-            const row = event.currentTarget;
-            if (!(row instanceof Element) || !queueDoubleClickEditRows.has(row)) {
-              return;
-            }
-            queueDoubleClickEditRows.delete(row);
-            event.stopPropagation();
-            markQueueEditFocus(row, false);
-            props.onQueueEdit?.(item.id);
-          }
-        : undefined}
-      @dragover=${canMove
-        ? (event: DragEvent) => {
-            if (!event.dataTransfer?.types.includes(DRAG_MIME)) {
-              return;
-            }
-            event.preventDefault();
-            event.dataTransfer.dropEffect = "move";
-            setDropTarget(event, true);
-          }
-        : undefined}
-      @dragleave=${canMove ? (event: DragEvent) => setDropTarget(event, false) : undefined}
-      @drop=${canMove
-        ? (event: DragEvent) => {
-            const draggedId = event.dataTransfer?.getData(DRAG_MIME);
-            setDropTarget(event, false);
-            // Index space is per segment, so a drop from another one would land
-            // the row at an unrelated position; refuse it instead of guessing.
-            if (!draggedId || draggedId === item.id || !segment.includes(draggedId)) {
-              return;
-            }
-            event.preventDefault();
-            move?.(draggedId, moveIndex);
-          }
-        : undefined}
-    >
-      ${showsHandle
-        ? html`<button
-            class="chat-queue__leading chat-queue__grip"
-            type="button"
-            draggable=${canMove ? "true" : "false"}
-            ?disabled=${!canMove}
-            aria-label=${canMove
-              ? t("chat.queue.reorderQueuedMessage")
-              : t("chat.queue.reorderUnavailable")}
-            aria-keyshortcuts=${ifDefined(canMove ? "ArrowUp ArrowDown" : undefined)}
-            @dragstart=${canMove
-              ? (event: DragEvent) => {
-                  event.dataTransfer?.setData(DRAG_MIME, item.id);
-                  if (event.dataTransfer) {
-                    event.dataTransfer.effectAllowed = "move";
-                  }
-                }
-              : undefined}
-            @dragend=${stopQueueDragAutoScroll}
-            @keydown=${(event: KeyboardEvent) => {
-              if (!canMove) {
+      @dblclick=${
+        canEdit
+          ? (event: MouseEvent) => {
+              const row = event.currentTarget;
+              if (!(row instanceof Element) || !queueDoubleClickEditRows.has(row)) {
                 return;
               }
-              const delta = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
-              if (delta === 0) {
+              queueDoubleClickEditRows.delete(row);
+              event.stopPropagation();
+              markQueueEditFocus(row, false);
+              props.onQueueEdit?.(item.id);
+            }
+          : undefined
+      }
+      @dragover=${
+        canMove
+          ? (event: DragEvent) => {
+              if (!event.dataTransfer?.types.includes(DRAG_MIME)) {
                 return;
               }
-              // The handle owns reordering for pointer and keyboard alike, so
-              // arrow keys here must not also scroll the transcript.
               event.preventDefault();
-              move?.(item.id, moveIndex + delta);
-            }}
-          >
-            <span class="chat-queue__grip-state chat-queue__grip-state--idle" aria-hidden="true"
-              >${leadingIcon}</span
-            >
-            ${canMove
-              ? html`<span
-                  class="chat-queue__grip-state chat-queue__grip-state--active"
-                  aria-hidden="true"
-                  >${icons.gripVertical}</span
-                >`
-              : nothing}
-          </button>`
-        : html`<span class="chat-queue__leading chat-queue__icon" aria-hidden="true"
-            >${leadingIcon}</span
-          >`}
-      ${authorAvatar}
-      ${editing
-        ? html`<textarea
-            class="chat-queue__edit-input"
-            rows="1"
-            ${ref((element) => mountQueueEditInput(element, props.editingText ?? item.text))}
-            aria-label=${t("chat.queue.editQueuedMessage")}
-            @input=${(event: Event) => {
-              if (event.currentTarget instanceof HTMLTextAreaElement) {
-                fitQueueEditInput(event.currentTarget);
-                props.onQueueEditChange?.(event.currentTarget.value);
-              }
-            }}
-            @keydown=${(event: KeyboardEvent) => {
-              if (event.isComposing || event.keyCode === 229) {
+              event.dataTransfer.dropEffect = "move";
+              setDropTarget(event, true);
+            }
+          : undefined
+      }
+      @dragleave=${canMove ? (event: DragEvent) => setDropTarget(event, false) : undefined}
+      @drop=${
+        canMove
+          ? (event: DragEvent) => {
+              const draggedId = event.dataTransfer?.getData(DRAG_MIME);
+              setDropTarget(event, false);
+              // A drop cannot cross a hidden delivery barrier.
+              if (!draggedId || draggedId === item.id || !segment.includes(draggedId)) {
                 return;
               }
-              if (event.key === "Escape") {
-                event.preventDefault();
-                event.stopPropagation();
-                props.onQueueEditCancel?.();
-              } else if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                props.onQueueEditSubmit?.();
+              event.preventDefault();
+              move?.(draggedId, item.id);
+            }
+          : undefined
+      }
+    >
+      ${
+        showsHandle
+          ? html`<button
+              class="chat-queue__leading chat-queue__grip"
+              type="button"
+              draggable=${canMove ? "true" : "false"}
+              ?disabled=${!canMove}
+              aria-label=${
+                canMove ? t("chat.queue.reorderQueuedMessage") : t("chat.queue.reorderUnavailable")
               }
-            }}
-          ></textarea>`
-        : html`<span class="chat-queue__copy">
-            <span class="chat-queue__text" title=${text}>${text}</span>
-            ${steered
-              ? html`<span class="chat-queue__badge chat-queue__badge--steered"
-                  >${t("chat.queue.steer")}</span
-                >`
-              : nothing}
-            ${stateLabel && (!failed || !item.sendError)
-              ? html`<span
-                  class=${failed
-                    ? "chat-queue__badge"
-                    : reconnecting
-                      ? "chat-queue__badge chat-queue__badge--reconnect"
-                      : "chat-queue__state"}
-                  title=${ifDefined(reconnecting ? item.sendError : undefined)}
-                  >${stateLabel}</span
-                >`
-              : nothing}
-          </span>`}
+              aria-keyshortcuts=${ifDefined(canMove ? "ArrowUp ArrowDown" : undefined)}
+              @dragstart=${
+                canMove
+                  ? (event: DragEvent) => {
+                      event.dataTransfer?.setData(DRAG_MIME, item.id);
+                      if (event.dataTransfer) {
+                        event.dataTransfer.effectAllowed = "move";
+                      }
+                    }
+                  : undefined
+              }
+              @dragend=${stopQueueDragAutoScroll}
+              @keydown=${(event: KeyboardEvent) => {
+                if (!canMove) {
+                  return;
+                }
+                const delta = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
+                if (delta === 0) {
+                  return;
+                }
+                // The handle owns reordering for pointer and keyboard alike, so
+                // arrow keys here must not also scroll the transcript.
+                event.preventDefault();
+                const targetId = segment[moveIndex + delta];
+                if (targetId) {
+                  move?.(item.id, targetId);
+                }
+              }}
+            >
+              <span class="chat-queue__grip-state chat-queue__grip-state--idle" aria-hidden="true"
+                >${leadingIcon}</span
+              >
+              ${
+                canMove
+                  ? html`<span
+                      class="chat-queue__grip-state chat-queue__grip-state--active"
+                      aria-hidden="true"
+                      >${icons.gripVertical}</span
+                    >`
+                  : nothing
+              }
+            </button>`
+          : html`<span class="chat-queue__leading chat-queue__icon" aria-hidden="true"
+              >${leadingIcon}</span
+            >`
+      }
+      ${authorAvatar}
+      ${
+        editing
+          ? html`<textarea
+              class="chat-queue__edit-input"
+              rows="1"
+              ${ref((element) => mountQueueEditInput(element, props.editingText ?? item.text))}
+              aria-label=${t("chat.queue.editQueuedMessage")}
+              @beforeinput=${(event: InputEvent) => {
+                if (event.currentTarget instanceof HTMLTextAreaElement) {
+                  queueMentionInputs.set(event.currentTarget, {
+                    value: event.currentTarget.value,
+                    start: event.currentTarget.selectionStart,
+                    end: event.currentTarget.selectionEnd,
+                    inputType: event.inputType,
+                  });
+                }
+              }}
+              @input=${(event: Event) => {
+                if (event.currentTarget instanceof HTMLTextAreaElement) {
+                  const textarea = event.currentTarget;
+                  fitQueueEditInput(textarea);
+                  if (mentions?.length) {
+                    props.onQueueEditChange?.(
+                      textarea.value,
+                      updateHumanMentions(
+                        mentionText,
+                        textarea.value,
+                        mentions,
+                        queueMentionInputs.get(textarea),
+                      ),
+                    );
+                  } else {
+                    props.onQueueEditChange?.(textarea.value);
+                  }
+                  queueMentionInputs.delete(textarea);
+                }
+              }}
+              @keydown=${(event: KeyboardEvent) => {
+                if (event.isComposing || event.keyCode === 229) {
+                  return;
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  props.onQueueEditCancel?.();
+                } else if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  props.onQueueEditSubmit?.();
+                }
+              }}
+            ></textarea>`
+          : html`<span class="chat-queue__copy">
+              <span class="chat-queue__text" title=${text}>${text}</span>
+              ${
+                steered && !canSteer
+                  ? html`<span class="chat-queue__badge chat-queue__badge--steered"
+                      >${t("chat.queue.steer")}</span
+                    >`
+                  : nothing
+              }
+              ${
+                stateLabel && (!failed || !item.sendError)
+                  ? html`<span
+                      class=${
+                        failed
+                          ? "chat-queue__badge"
+                          : reconnecting
+                            ? "chat-queue__badge chat-queue__badge--reconnect"
+                            : "chat-queue__state"
+                      }
+                      title=${ifDefined(reconnecting ? item.sendError : undefined)}
+                      >${stateLabel}</span
+                    >`
+                  : nothing
+              }
+            </span>`
+      }
       <span class="chat-queue__actions">
-        ${failed && !editing && props.onQueueRetry
-          ? html`
-              <button
-                class="chat-queue__action chat-queue__retry"
-                type="button"
-                aria-label=${t("chat.queue.retryQueuedMessage")}
-                @click=${() => props.onQueueRetry?.(item.id)}
-              >
-                ${icons.refresh}
-                <span>${t("chat.queue.retry")}</span>
-              </button>
-            `
-          : nothing}
-        ${showsSteer
-          ? html`
-              <button
-                class="chat-queue__action chat-queue__steer"
-                type="button"
-                ?disabled=${!canSteer}
-                aria-label=${t("chat.queue.steerQueuedMessage")}
-                @click=${() => props.onQueueSteer?.(item.id)}
-              >
-                ${icons.arrowUp}
-                <span>${t("chat.queue.steer")}</span>
-              </button>
-            `
-          : nothing}
-        ${editing
-          ? html`
-              <button
-                class="chat-queue__edit-submit"
-                type="button"
-                aria-label=${t("chat.runControls.sendMessage")}
-                @click=${() => props.onQueueEditSubmit?.()}
-              >
-                ${icons.check}
-              </button>
-              <button
-                class="chat-queue__edit-cancel"
-                type="button"
-                aria-label=${t("chat.queue.cancelEdit")}
-                @click=${() => props.onQueueEditCancel?.()}
-              >
-                ${icons.x}
-              </button>
-            `
-          : nothing}
-        ${busy || editing
-          ? nothing
-          : html`
-              <openclaw-tooltip .content=${t("chat.queue.removeQueuedMessage")}>
+        ${
+          failed && !editing && props.onQueueRetry
+            ? html`
                 <button
-                  class="chat-queue__remove"
+                  class="chat-queue__action chat-queue__retry"
                   type="button"
-                  ?disabled=${editing}
-                  aria-label=${t("chat.queue.removeQueuedMessage")}
-                  @click=${(event: MouseEvent) => {
-                    // Chromium retargets click 2 after row removal; detail still owns the gesture.
-                    if (event.detail <= 1) {
-                      props.onQueueRemove(item.id);
+                  aria-label=${t("chat.queue.retryQueuedMessage")}
+                  @click=${() => props.onQueueRetry?.(item.id)}
+                >
+                  ${icons.refresh}
+                  <span>${t("chat.queue.retry")}</span>
+                </button>
+              `
+            : nothing
+        }
+        ${
+          showsSteer
+            ? html`
+                <button
+                  class="chat-queue__action chat-queue__steer"
+                  type="button"
+                  ?disabled=${!canSteer}
+                  aria-label=${t("chat.queue.steerQueuedMessage")}
+                  @click=${() => props.onQueueSteer?.(item.id)}
+                >
+                  ${icons.arrowUp}
+                  <span>${t("chat.queue.steer")}</span>
+                </button>
+              `
+            : nothing
+        }
+        ${
+          editing
+            ? html`
+                <button
+                  class="chat-queue__edit-submit"
+                  type="button"
+                  aria-label=${t("chat.runControls.sendMessage")}
+                  @click=${() => props.onQueueEditSubmit?.()}
+                >
+                  ${icons.check}
+                </button>
+                <button
+                  class="chat-queue__edit-cancel"
+                  type="button"
+                  aria-label=${t("chat.queue.cancelEdit")}
+                  @click=${() => props.onQueueEditCancel?.()}
+                >
+                  ${icons.x}
+                </button>
+              `
+            : nothing
+        }
+        ${
+          busy || editing
+            ? nothing
+            : html`
+                <openclaw-tooltip .content=${t("chat.queue.removeQueuedMessage")}>
+                  <button
+                    class="chat-queue__remove"
+                    type="button"
+                    ?disabled=${editing}
+                    aria-label=${t("chat.queue.removeQueuedMessage")}
+                    @click=${(event: MouseEvent) => {
+                      // Chromium retargets click 2 after row removal; detail still owns the gesture.
+                      if (event.detail <= 1) {
+                        props.onQueueRemove(item.id);
+                      }
+                    }}
+                    @dblclick=${(event: MouseEvent) => event.stopPropagation()}
+                  >
+                    ${icons.trash}
+                  </button>
+                </openclaw-tooltip>
+              `
+        }
+        ${
+          editing || !editable
+            ? nothing
+            : html`
+                <wa-dropdown
+                  class="chat-queue__overflow"
+                  placement="top-end"
+                  @wa-select=${(event: CustomEvent<{ item: Element & { value?: string } }>) => {
+                    const selectedItem = event.detail.item;
+                    if (selectedItem.value === "edit" && canEdit) {
+                      const dropdown = event.currentTarget;
+                      const row =
+                        dropdown instanceof Element ? dropdown.closest(".chat-queue__item") : null;
+                      const keyboard = selectedItem.matches(":focus-visible");
+                      markQueueEditFocus(row, keyboard);
+                      props.onQueueEdit?.(item.id);
                     }
                   }}
-                  @dblclick=${(event: MouseEvent) => event.stopPropagation()}
                 >
-                  ${icons.trash}
-                </button>
-              </openclaw-tooltip>
-            `}
-        ${editing || !editable
-          ? nothing
-          : html`
-              <wa-dropdown
-                class="chat-queue__overflow"
-                placement="top-end"
-                @wa-select=${(event: CustomEvent<{ item: Element & { value?: string } }>) => {
-                  const selectedItem = event.detail.item;
-                  if (selectedItem.value === "edit" && canEdit) {
-                    const dropdown = event.currentTarget;
-                    const row =
-                      dropdown instanceof Element ? dropdown.closest(".chat-queue__item") : null;
-                    const keyboard = selectedItem.matches(":focus-visible");
-                    markQueueEditFocus(row, keyboard);
-                    props.onQueueEdit?.(item.id);
-                  }
-                }}
-              >
-                <button
-                  slot="trigger"
-                  class="chat-queue__more"
-                  type="button"
-                  ?disabled=${!canEdit}
-                  aria-label=${t("chat.queue.moreActions")}
-                  @dblclick=${(event: MouseEvent) => event.stopPropagation()}
-                >
-                  ${icons.moreHorizontal}
-                </button>
-                <wa-dropdown-item value="edit" ?disabled=${!canEdit}>
-                  <span slot="icon" aria-hidden="true">${icons.pencil}</span>
-                  ${t("chat.queue.editQueuedMessage")}
-                </wa-dropdown-item>
-              </wa-dropdown>
-            `}
+                  <button
+                    slot="trigger"
+                    class="chat-queue__more"
+                    type="button"
+                    ?disabled=${!canEdit}
+                    aria-label=${t("chat.queue.moreActions")}
+                    @dblclick=${(event: MouseEvent) => event.stopPropagation()}
+                  >
+                    ${icons.moreHorizontal}
+                  </button>
+                  <wa-dropdown-item value="edit" ?disabled=${!canEdit}>
+                    <span slot="icon" aria-hidden="true">${icons.pencil}</span>
+                    ${t("chat.queue.editQueuedMessage")}
+                  </wa-dropdown-item>
+                </wa-dropdown>
+              `
+        }
       </span>
+      ${
+        mentions?.length
+          ? html`<span class="chat-queue__mentions">
+              ${t("chat.mentions.selected", {
+                names: mentions.map(({ start, end }) => mentionText.slice(start, end)).join(", "),
+              })}
+              ${
+                editing
+                  ? html`<button
+                      class="chat-queue__remove"
+                      type="button"
+                      aria-label=${t("chat.mentions.remove")}
+                      @click=${() => props.onQueueEditChange?.(mentionText, [])}
+                    >
+                      ${icons.x}
+                    </button>`
+                  : nothing
+              }
+            </span>`
+          : nothing
+      }
       ${
         // Reconnect rows auto-retry, so the raw transport error is noise there;
         // it stays inspectable via the badge tooltip. Failed/unconfirmed rows
         // keep the visible error because the user must act on them.
         item.sendError && !reconnecting
           ? html`<span class="chat-queue__error">
-              ${failed && stateLabel
-                ? html`<span class="chat-queue__badge">${stateLabel}</span>`
-                : nothing}
+              ${
+                failed && stateLabel
+                  ? html`<span class="chat-queue__badge">${stateLabel}</span>`
+                  : nothing
+              }
               <span class="chat-queue__error-text">${item.sendError}</span>
             </span>`
           : nothing

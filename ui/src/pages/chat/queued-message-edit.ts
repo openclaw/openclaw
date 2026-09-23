@@ -1,7 +1,8 @@
 // Control UI chat module owns editing a queued message in its queue row.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { chatQueueOrderKey, isMovableChatQueueItem } from "../../lib/chat/chat-queue-order.ts";
-import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatQueueItem, HumanMention } from "../../lib/chat/chat-types.ts";
+import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import { storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
@@ -13,7 +14,7 @@ import {
   anyChatOutboxPaneMatches,
   isDurableQueuedMessage,
   readQueuedMessageById,
-  removeVisibleOrScopedQueuedMessageWithoutReleasing,
+  removeQueuedMessageWithoutReleasing,
   type ChatQueueScopedSessionHost,
 } from "./chat-queue.ts";
 import { storedChatOutboxScopeKey } from "./composer-persistence.ts";
@@ -30,6 +31,7 @@ export type QueuedMessageEdit = {
   readonly recoveryScope?: string;
   attachments: readonly ChatAttachment[];
   draftText: string;
+  mentions?: readonly HumanMention[];
   id: string;
   orderKey: number;
   revision: number;
@@ -96,7 +98,10 @@ export function activeQueuedMessageEdit(host: QueuedMessageEditHost): QueuedMess
  * drain lane, so a hold that only its own pane could see would let the other one
  * deliver the text an operator is visibly rewriting.
  */
-export function isQueuedMessageBeingEdited(host: QueuedMessageEditHost, id: string): boolean {
+export function isQueuedMessageBeingEdited(
+  host: ChatQueueScopedSessionHost & Pick<QueuedMessageEditHost, "chatQueuedEdit">,
+  id: string,
+): boolean {
   // Credentials fence edit actions, but a pane still on the captured conversation
   // holds its source against a peer drain until the correction is released.
   const gatewayOwner = storageTargetForGateway(host.settings?.gatewayUrl).gatewayOwner;
@@ -138,6 +143,7 @@ export function beginQueuedMessageEdit(
     ...owner,
     attachments: item.attachments ?? [],
     draftText: item.text,
+    mentions: item.mentions,
     id,
     orderKey: chatQueueOrderKey(item),
     revision: 0,
@@ -148,11 +154,16 @@ export function beginQueuedMessageEdit(
   return "started";
 }
 
-export function updateQueuedMessageEdit(host: QueuedMessageEditHost, draftText: string): boolean {
+export function updateQueuedMessageEdit(
+  host: QueuedMessageEditHost,
+  draftText: string,
+  mentions?: readonly HumanMention[],
+): boolean {
   const edit = activeQueuedMessageEdit(host);
   if (!edit) {
     return false;
   }
+  edit.mentions = mentions ?? updateHumanMentions(edit.draftText, draftText, edit.mentions);
   edit.draftText = draftText;
   edit.revision += 1;
   return true;
@@ -206,7 +217,7 @@ export function retireEditedQueuedMessageSource(
     }
   }
   host.chatQueuedEdit = null;
-  removeVisibleOrScopedQueuedMessageWithoutReleasing(host, edit.id, edit.sessionKey);
+  removeQueuedMessageWithoutReleasing(host, edit.id);
   // Images the operator dropped during the edit lose their last owner here; the
   // ones the replacement still carries must survive, so release only the rest.
   // The payloads come from the token: a successful write already retired the row

@@ -1,14 +1,18 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { danger, shouldLogVerbose } from "../globals.js";
-import {
-  decodeWindowsOutputBuffer,
-  resolveWindowsConsoleEncoding,
-} from "../infra/windows-encoding.js";
-import { logDebug, logError } from "../logger.js";
+import { decodeWindowsOutputBuffer } from "../infra/windows-encoding.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { releaseChildProcessOutputAfterExit } from "./child-process.js";
 import { resolveMaxOutputBytes, type CommandOutputStream } from "./exec-output.js";
+import { createSanitizedCommandError } from "./exec-result.js";
 import { runCommandWithTimeout } from "./exec-runner.js";
-import { COMMAND_PROCESS_TREE_KILL_GRACE_MS, spawnCommand } from "./exec-spawn.js";
+import {
+  COMMAND_PROCESS_TREE_KILL_GRACE_MS,
+  resolveCommandProcessSignal,
+  retainCommandProcessCleanup,
+  spawnCommand,
+  waitForCommandSpawn,
+} from "./exec-spawn.js";
+import { BrokerChild } from "./spawn-broker/child.js";
 export { runCommandWithTimeout, runUtf8CommandWithTimeout } from "./exec-runner.js";
 export type { CommandOptions } from "./exec-runner.js";
 export { isPlainCommandExitFailure, resolveProcessExitCode } from "./exec-result.js";
@@ -27,12 +31,13 @@ export type RunExecOptions = {
   input?: string | Uint8Array;
   stdinFileDescriptor?: number;
   signal?: AbortSignal;
+  /** Observe received bytes without changing buffering, completion or cancellation. */
+  onOutputChunk?: (chunk: Buffer, stream: CommandOutputStream) => void;
 };
 
-function decodeExecOutput(buffer: Uint8Array, windowsEncoding: string | null): string {
+function decodeExecOutput(buffer: Uint8Array): string {
   return decodeWindowsOutputBuffer({
     buffer: Buffer.from(buffer.buffer, buffer.byteOffset, buffer.byteLength),
-    windowsEncoding,
   });
 }
 
@@ -55,6 +60,10 @@ export async function runExec(
   if (resolvedOptions?.input !== undefined && resolvedOptions.stdinFileDescriptor !== undefined) {
     throw new Error("runExec accepts either input or stdinFileDescriptor, not both");
   }
+  let acceptingOutput = true;
+  let awaitingStartup = true;
+  let deadlineExpired = false;
+  let releaseCancellation = () => {};
   try {
     const subprocess = spawnCommand([command, ...args], {
       baseEnv: resolvedOptions?.baseEnv,
@@ -75,47 +84,171 @@ export async function runExec(
       stripFinalNewline: false,
       timeout,
     });
-    const releaseOutput = releaseChildProcessOutputAfterExit(subprocess.nodeChildProcess);
-    const { stdout, stderr } = await subprocess.finally(releaseOutput);
-    const windowsEncoding = resolveWindowsConsoleEncoding();
-    const decodedStdout = decodeExecOutput(stdout, windowsEncoding);
-    const decodedStderr = decodeExecOutput(stderr, windowsEncoding);
-    if (resolvedOptions?.logOutput !== false && shouldLogVerbose()) {
-      if (decodedStdout.trim()) {
-        logDebug(decodedStdout.trim());
+    const startupCanceled =
+      subprocess.nodeChildProcess instanceof BrokerChild && subprocess.pid === undefined
+        ? createDeferredCore<never>()
+        : undefined;
+    if (startupCanceled) {
+      const signal = resolveCommandProcessSignal(resolvedOptions?.signal);
+      let cancellationOpen = true;
+      let deadline: NodeJS.Timeout | undefined;
+      const stopCommand = (reason: "timeout" | "signal") => {
+        if (!cancellationOpen) {
+          return;
+        }
+        releaseCancellation();
+        // Caller abort is already bridged; the host deadline needs its own stop request.
+        if (reason === "timeout") {
+          deadlineExpired = true;
+          subprocess.kill();
+        }
+        // After admission, await execa's output and cleanup before reporting the timeout.
+        if (!awaitingStartup) {
+          return;
+        }
+        acceptingOutput = false;
+        const flags = {
+          failed: true,
+          timedOut: reason === "timeout",
+          isCanceled: reason === "signal",
+          isMaxBuffer: false,
+          isTerminated: false,
+        };
+        const error = createSanitizedCommandError(flags);
+        startupCanceled.reject(
+          Object.assign(error, flags, {
+            shortMessage: error.message,
+            stdout: "",
+            stderr: "",
+            cleanup: "uncertain",
+          }),
+        );
+      };
+      const onAbort = () => stopCommand("signal");
+      releaseCancellation = () => {
+        cancellationOpen = false;
+        clearTimeout(deadline);
+        signal?.removeEventListener("abort", onAbort);
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      if (timeout !== undefined) {
+        deadline = setTimeout(() => stopCommand("timeout"), timeout);
       }
-      if (decodedStderr.trim()) {
-        logError(decodedStderr.trim());
+      if (signal?.aborted) {
+        onAbort();
       }
     }
-    return { stdout: decodedStdout, stderr: decodedStderr };
+    // Keep draining and settling a late process after a local startup failure returns.
+    const completion = (async () => {
+      if (subprocess.pid === undefined) {
+        await waitForCommandSpawn(subprocess);
+      }
+      awaitingStartup = false;
+      const releaseOutput = releaseChildProcessOutputAfterExit(subprocess.nodeChildProcess);
+      let observer = acceptingOutput ? resolvedOptions?.onOutputChunk : undefined;
+      const observe = (chunk: Buffer, stream: CommandOutputStream) => {
+        try {
+          observer?.(chunk, stream);
+        } catch {
+          // Diagnostic observers cannot replace the command's outcome.
+          observer = undefined;
+        }
+      };
+      const onStdout = (chunk: Buffer) => observe(chunk, "stdout");
+      const onStderr = (chunk: Buffer) => observe(chunk, "stderr");
+      if (observer) {
+        subprocess.nodeChildProcess.stdout?.on("data", onStdout);
+        subprocess.nodeChildProcess.stderr?.on("data", onStderr);
+      }
+      const result = await subprocess.finally(() => {
+        releaseCancellation();
+        releaseOutput();
+        subprocess.nodeChildProcess.stdout?.off("data", onStdout);
+        subprocess.nodeChildProcess.stderr?.off("data", onStderr);
+      });
+      if (deadlineExpired) {
+        const error = createSanitizedCommandError({ timedOut: true });
+        throw Object.assign(error, result, {
+          failed: true,
+          timedOut: true,
+          shortMessage: error.message,
+        });
+      }
+      const { stdout, stderr } = result;
+      const decodedStdout = decodeExecOutput(stdout);
+      const decodedStderr = decodeExecOutput(stderr);
+      if (acceptingOutput && resolvedOptions?.logOutput !== false) {
+        const [{ shouldLogVerbose }, { logDebug, logError }] = await Promise.all([
+          import("../globals.js"),
+          import("../logger.js"),
+        ]);
+        if (shouldLogVerbose()) {
+          if (decodedStdout.trim()) {
+            logDebug(decodedStdout.trim());
+          }
+          if (decodedStderr.trim()) {
+            logError(decodedStderr.trim());
+          }
+        }
+      }
+      return { stdout: decodedStdout, stderr: decodedStderr };
+    })();
+    retainCommandProcessCleanup(
+      completion.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    return await (startupCanceled
+      ? Promise.race([completion, startupCanceled.promise])
+      : completion);
   } catch (err) {
-    const windowsEncoding = resolveWindowsConsoleEncoding();
+    releaseCancellation();
     if (err && typeof err === "object") {
       const errorWithOutput = err as {
         code?: string | number;
         exitCode?: unknown;
         stdout?: unknown;
         stderr?: unknown;
+        timedOut?: boolean;
       };
+      if (deadlineExpired && !errorWithOutput.timedOut) {
+        const message = createSanitizedCommandError({ timedOut: true }).message;
+        if (err instanceof Error) {
+          err.stack = err.stack?.replace(err.message, message);
+        }
+        Object.assign(err, { failed: true, timedOut: true, message, shortMessage: message });
+      }
       if (errorWithOutput.code === undefined && typeof errorWithOutput.exitCode === "number") {
         errorWithOutput.code = errorWithOutput.exitCode;
       }
       if (errorWithOutput.stdout instanceof Uint8Array) {
-        errorWithOutput.stdout = decodeExecOutput(errorWithOutput.stdout, windowsEncoding);
+        errorWithOutput.stdout = decodeExecOutput(errorWithOutput.stdout);
       }
       if (errorWithOutput.stderr instanceof Uint8Array) {
-        errorWithOutput.stderr = decodeExecOutput(errorWithOutput.stderr, windowsEncoding);
+        errorWithOutput.stderr = decodeExecOutput(errorWithOutput.stderr);
       }
     }
-    if (resolvedOptions?.logOutput !== false && shouldLogVerbose()) {
-      logError(danger(`Command failed: ${command}`));
+    if (resolvedOptions?.logOutput !== false) {
+      // Logging imports must not replace the original command failure.
+      const logging = await Promise.all([import("../globals.js"), import("../logger.js")]).catch(
+        () => undefined,
+      );
+      if (logging) {
+        const [{ danger, shouldLogVerbose }, { logError }] = logging;
+        if (shouldLogVerbose()) {
+          logError(danger(`Command failed: ${command}`));
+        }
+      }
     }
     throw err;
+  } finally {
+    acceptingOutput = false;
+    releaseCancellation();
   }
 }
 
-type BufferedCommandOptions = {
+export type BufferedCommandOptions = {
   timeoutMs?: number;
   cwd?: string;
   input?: string | Uint8Array;
@@ -131,7 +264,7 @@ type BufferedCommandOptions = {
   killGraceMs?: number;
 };
 
-type BufferedCommandResult = {
+export type BufferedCommandResult = {
   stdout: Buffer;
   stderr: Buffer;
   code: number | null;

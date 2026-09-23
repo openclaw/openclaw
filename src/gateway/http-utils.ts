@@ -43,11 +43,9 @@ export {
   authorizeOpenAiCompatibleHttpModelOverride,
   authorizeGatewayHttpRequestOrReply,
   authorizeScopedGatewayHttpRequestOrReply,
-  authorizeScopedUserProfileAvatarHttpRequestOrReply,
   checkGatewayHttpRequestAuth,
   getBearerToken,
   getHeader,
-  resolveOpenAiCompatibleHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
   resolveSharedSecretHttpOperatorScopes,
   resolveTrustedHttpOperatorScopes,
@@ -198,7 +196,7 @@ export async function resolveOpenAiCompatModelOverride(params: {
 
   // Overrides must pass the same visibility policy as model picker surfaces;
   // otherwise API clients could target hidden plugin/provider models by header.
-  const catalog = await loadGatewayModelCatalog();
+  const catalog = await loadGatewayModelCatalog({ agentId: params.agentId });
   const policy = createModelVisibilityPolicy({
     cfg,
     catalog,
@@ -209,7 +207,7 @@ export async function resolveOpenAiCompatModelOverride(params: {
     ...modelManifestContext,
   });
   const normalized = modelKey(parsed.provider, parsed.model);
-  if (!policy.allowsKey(normalized)) {
+  if (!policy.allows(parsed)) {
     return {
       errorMessage: `Model '${normalized}' is not allowed for agent '${params.agentId}'.`,
     };
@@ -324,9 +322,8 @@ export function authorizeOpenAiCompatibleHttpSession(params: {
     cfg,
     client: createSyntheticPluginRuntimeClient({
       ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
-      ...(params.senderIsOwner && !authenticatedUserProfile
-        ? { operatorRoleActor: { kind: "system" as const } }
-        : {}),
+      operatorRoleActor: params.requestAuth.operatorRoleActor,
+      operatorAccessAuthority: params.requestAuth.operatorAccessAuthority,
       scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [],
     }),
     sessionKey: params.sessionKey,

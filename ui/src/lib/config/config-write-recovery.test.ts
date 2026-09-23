@@ -1,11 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
   createConfigCapabilityHarness,
   createConfigServerMock,
-  deferred,
 } from "./config-test-harness.ts";
 
 const originalRaw = '{ "tools": { "exec": { "node": "original" } } }\n';
@@ -21,7 +21,7 @@ function createRecoveryHarness(
   let hash = "before";
   let getCount = 0;
   const firstAck = deferred<unknown>();
-  const recoveryRead = deferred<void>();
+  const recoveryRead = deferred();
   const submissions: Array<{ raw: string; baseHash: string }> = [];
   const request = vi.fn(async (method: string, params?: unknown) => {
     if (method === "config.get") {
@@ -58,7 +58,7 @@ function createRecoveryHarness(
     }
     storedRaw = submission.raw;
     hash = "explicit-save";
-    return { hash };
+    return { config: JSON.parse(storedRaw), hash };
   });
   const { runtimeConfig, publish } = createConfigCapabilityHarness(
     request as GatewayBrowserClient["request"],
@@ -103,6 +103,36 @@ function createRecoveryHarness(
 }
 
 describe("config write recovery", () => {
+  it("reconciles the bytes dispatched after original-config parsing settles", async () => {
+    vi.useFakeTimers();
+    const harness = createRecoveryHarness();
+    const { runtimeConfig, submissions } = harness;
+    const parsing = deferred();
+    try {
+      await runtimeConfig.ensureLoaded();
+      runtimeConfig.state.configRawOriginalParsePending = parsing.promise;
+      runtimeConfig.patchForm(nodePath, "before-parse");
+      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+      expect(submissions).toHaveLength(0);
+
+      runtimeConfig.patchForm(nodePath, "dispatched");
+      parsing.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(submissions).toEqual([{ raw: rawForNode("dispatched"), baseHash: "before" }]);
+
+      runtimeConfig.patchForm(nodePath, "newer");
+      await harness.reconnect();
+      expect(runtimeConfig.state.configDraftBaseHash).toBe("own-commit");
+      expect(runtimeConfig.state.configForm).toEqual(nodeConfig("newer"));
+      expect(runtimeConfig.state.configAutoSaveStatus).toBe("paused");
+      await expect(runtimeConfig.save()).resolves.toBe(true);
+      expect(submissions[1]).toEqual({ raw: rawForNode("newer"), baseHash: "own-commit" });
+    } finally {
+      parsing.resolve();
+      harness.dispose();
+    }
+  });
+
   it("retains pending plugin allowlist ownership without removing authored entries", async () => {
     vi.useFakeTimers();
     const harness = createRecoveryHarness(

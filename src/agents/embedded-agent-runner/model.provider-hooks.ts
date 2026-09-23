@@ -1,7 +1,10 @@
+import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Api, Model } from "../../llm/types.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { resolveProviderPolicySurface } from "../../plugins/provider-public-artifacts.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
   applyProviderResolvedTransportWithPlugin,
@@ -12,51 +15,20 @@ import {
   runProviderDynamicModel,
   shouldPreferProviderRuntimeResolvedModel,
 } from "../../plugins/provider-runtime.js";
+import { modelTransportRoutesMatch } from "../model-compat-catalog.js";
 import { canonicalizeOpenAIModelId } from "../openai-routing.js";
 import { inheritModelProviderRequestRouteFacts } from "../provider-request-config.js";
 import {
   normalizeResolvedTransportApi,
   resolveProviderModelInput,
 } from "./model.inline-provider.js";
+import type { ProviderRuntimeHooks } from "./model.provider-hooks.types.js";
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
+export type { ProviderRuntimeHooks } from "./model.provider-hooks.types.js";
+export { resolveProviderTransport } from "./model.provider-transport.js";
 
-export type ProviderRuntimeHooks = {
-  applyProviderResolvedTransportWithPlugin?: (
-    params: Parameters<typeof applyProviderResolvedTransportWithPlugin>[0],
-  ) => unknown;
-  buildProviderUnknownModelHintWithPlugin: (
-    params: Parameters<typeof buildProviderUnknownModelHintWithPlugin>[0],
-  ) => string | undefined;
-  prepareProviderDynamicModel: (
-    params: Parameters<typeof prepareProviderDynamicModel>[0],
-  ) => ReturnType<typeof prepareProviderDynamicModel>;
-  runProviderDynamicModel: (params: Parameters<typeof runProviderDynamicModel>[0]) => unknown;
-  shouldPreferProviderRuntimeResolvedModel?: (
-    params: Parameters<typeof shouldPreferProviderRuntimeResolvedModel>[0],
-  ) => boolean;
-  normalizeProviderResolvedModelWithPlugin: (
-    params: Parameters<typeof normalizeProviderResolvedModelWithPlugin>[0],
-  ) => unknown;
-  normalizeProviderTransportWithPlugin: typeof normalizeProviderTransportWithPlugin;
-};
-
-const TARGET_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
-  buildProviderUnknownModelHintWithPlugin,
-  prepareProviderDynamicModel,
-  runProviderDynamicModel,
-  shouldPreferProviderRuntimeResolvedModel,
-  normalizeProviderResolvedModelWithPlugin,
-  // Target-provider resolution keeps owner hooks, but avoids broad
-  // cross-provider hooks that can load unrelated bundled provider runtimes.
-  applyProviderResolvedTransportWithPlugin: () => undefined,
-  normalizeProviderTransportWithPlugin: () => undefined,
-};
-
-export const DEFAULT_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
-  ...TARGET_PROVIDER_RUNTIME_HOOKS,
-  applyProviderResolvedTransportWithPlugin,
-  normalizeProviderTransportWithPlugin,
-};
+let targetProviderRuntimeHooks: ProviderRuntimeHooks | undefined;
+let defaultProviderRuntimeHooks: ProviderRuntimeHooks | undefined;
 
 const STATIC_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   applyProviderResolvedTransportWithPlugin: () => undefined,
@@ -65,11 +37,6 @@ const STATIC_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   runProviderDynamicModel: () => undefined,
   normalizeProviderResolvedModelWithPlugin: () => undefined,
   normalizeProviderTransportWithPlugin: () => undefined,
-};
-
-const SKIP_AGENT_DISCOVERY_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
-  // skipAgentDiscovery is the lean path used before agent discovery/models.json has run.
-  ...TARGET_PROVIDER_RUNTIME_HOOKS,
 };
 
 export function resolveRuntimeHooks(params?: {
@@ -83,10 +50,41 @@ export function resolveRuntimeHooks(params?: {
   if (params?.runtimeHooks) {
     return params.runtimeHooks;
   }
+  // Bind provider hooks only when model resolution requests them.
+  targetProviderRuntimeHooks ??= {
+    resolveToolSearchMode: (context) => {
+      const metadataSnapshot = getCurrentPluginMetadataSnapshot({
+        allowScopedSnapshot: true,
+        allowWorkspaceScopedSnapshot: true,
+      });
+      const metadata = {
+        manifestRegistry: metadataSnapshot?.manifestRegistry,
+      };
+      const policy =
+        resolveProviderPolicySurface(context.provider, metadata)?.resolveToolSearchMode ??
+        (context.api !== context.provider
+          ? resolveProviderPolicySurface(context.api, metadata)?.resolveToolSearchMode
+          : undefined);
+      return policy?.(context);
+    },
+    buildProviderUnknownModelHintWithPlugin,
+    prepareProviderDynamicModel,
+    runProviderDynamicModel,
+    shouldPreferProviderRuntimeResolvedModel,
+    normalizeProviderResolvedModelWithPlugin,
+    // Target-provider resolution keeps owner hooks, but avoids broad
+    // cross-provider hooks that can load unrelated bundled provider runtimes.
+    applyProviderResolvedTransportWithPlugin: () => undefined,
+    normalizeProviderTransportWithPlugin: () => undefined,
+  };
   if (params?.skipAgentDiscovery) {
-    return SKIP_AGENT_DISCOVERY_PROVIDER_RUNTIME_HOOKS;
+    return targetProviderRuntimeHooks;
   }
-  return DEFAULT_PROVIDER_RUNTIME_HOOKS;
+  return (defaultProviderRuntimeHooks ??= {
+    ...targetProviderRuntimeHooks,
+    applyProviderResolvedTransportWithPlugin,
+    normalizeProviderTransportWithPlugin,
+  });
 }
 
 function canonicalizeLegacyResolvedModel(params: { provider: string; model: Model }): Model {
@@ -186,7 +184,7 @@ export function normalizeResolvedModel(params: {
     }),
     cost: normalizeModelCost((params.model as { cost?: unknown }).cost),
   } as Model & ProviderRuntimeModel;
-  const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
+  const runtimeHooks = params.runtimeHooks ?? resolveRuntimeHooks();
   const pluginNormalized = runtimeHooks.normalizeProviderResolvedModelWithPlugin({
     provider: params.provider,
     config: params.cfg,
@@ -233,43 +231,33 @@ export function normalizeResolvedModel(params: {
     normalizedInputModel.requestTimeoutMs !== undefined
       ? { ...normalizedModel, requestTimeoutMs: normalizedInputModel.requestTimeoutMs }
       : normalizedModel;
+  const providerConfig = findNormalizedProviderValue(
+    params.cfg?.models?.providers,
+    params.provider,
+  );
+  const toolSearchMode =
+    runtimeHooks.resolveToolSearchMode?.({
+      provider: params.provider,
+      modelId: modelWithProviderTimeout.id,
+      api: modelWithProviderTimeout.api,
+      baseUrl: modelWithProviderTimeout.baseUrl,
+    }) ??
+    (providerConfig?.localService &&
+    modelTransportRoutesMatch(
+      { baseUrl: providerConfig.baseUrl },
+      { baseUrl: modelWithProviderTimeout.baseUrl },
+    )
+      ? "tools"
+      : undefined);
+  // Capture the final route's preference once; tool construction must not reload provider policy.
+  const modelWithToolSearch = { ...modelWithProviderTimeout, toolSearchMode };
   return inheritModelProviderRequestRouteFacts(
     params.model,
     canonicalizeLegacyResolvedModel({
       provider: params.provider,
-      model: modelWithProviderTimeout,
+      model: modelWithToolSearch,
     }),
   );
-}
-
-export function resolveProviderTransport(params: {
-  provider: string;
-  modelId?: string;
-  api?: Api | null;
-  baseUrl?: string;
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  runtimeHooks?: ProviderRuntimeHooks;
-}): { api?: Api; baseUrl?: string } {
-  const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
-  const normalized = runtimeHooks.normalizeProviderTransportWithPlugin({
-    provider: params.provider,
-    ...(params.modelId ? { modelId: params.modelId } : {}),
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    context: {
-      config: params.cfg,
-      workspaceDir: params.workspaceDir,
-      provider: params.provider,
-      ...(params.modelId ? { modelId: params.modelId } : {}),
-      api: params.api,
-      baseUrl: params.baseUrl,
-    },
-  }) as { api?: Api | null; baseUrl?: string } | undefined;
-  return {
-    api: normalizeResolvedTransportApi(normalized?.api ?? params.api),
-    baseUrl: normalized?.baseUrl ?? params.baseUrl,
-  };
 }
 
 export function normalizeTransportBaseUrl(baseUrl: unknown): string | undefined {

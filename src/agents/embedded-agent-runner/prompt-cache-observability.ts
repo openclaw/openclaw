@@ -17,6 +17,7 @@ type PromptCacheChangeCode =
   | "model"
   | "streamStrategy"
   | "systemPrompt"
+  | "systemPromptSuffix"
   | "tools"
   | "transport";
 
@@ -25,7 +26,7 @@ export type PromptCacheChange = {
   detail: string;
 };
 
-export type PromptCacheToolSnapshot = {
+type PromptCacheToolSnapshot = {
   name: string;
   descriptionDigest?: string;
   schemaDigest?: string;
@@ -45,6 +46,8 @@ type PromptCacheSnapshot = {
   streamStrategy: string;
   transport?: string;
   systemPromptDigest: string;
+  /** Digest of the volatile suffix below the cache boundary; undefined when the prompt has none. */
+  systemPromptSuffixDigest?: string;
   toolDigest: string;
   toolCount: number;
   toolNames: string[];
@@ -56,7 +59,7 @@ type PromptCacheObservationStart = {
   previousCacheRead: number | null;
 };
 
-export type PromptCacheBreak = {
+type PromptCacheBreak = {
   previousCacheRead: number;
   cacheRead: number;
   changes: PromptCacheChange[] | null;
@@ -65,6 +68,8 @@ export type PromptCacheBreak = {
 type PromptCacheTracker = {
   snapshot: PromptCacheSnapshot;
   lastCacheRead: number | null;
+  /** Missing usage must not bind an older hit to a new request fingerprint. */
+  lastCacheReadSnapshot?: PromptCacheSnapshot;
   pendingChanges: PromptCacheChange[] | null;
 };
 
@@ -216,6 +221,15 @@ function diffSnapshots(
       detail: "system prompt digest changed",
     });
   }
+  // OpenAI Responses routes send the suffix inline in `instructions`, so a
+  // suffix change re-caches from that point; Anthropic-style checkpoints lose
+  // the later conversation checkpoint. Track it separately from the prefix.
+  if (previous.systemPromptSuffixDigest !== next.systemPromptSuffixDigest) {
+    changes.push({
+      code: "systemPromptSuffix",
+      detail: "system prompt suffix digest changed",
+    });
+  }
   if (previous.toolDigest !== next.toolDigest) {
     changes.push({
       code: "tools",
@@ -283,6 +297,7 @@ export function beginPromptCacheObservation(params: {
 }): PromptCacheObservationStart {
   const key = buildTrackerKey(params);
   const tools = sortPromptCacheToolsByName(params.tools);
+  const splitSystemPrompt = splitSystemPromptCacheBoundary(params.systemPrompt);
   const snapshot: PromptCacheSnapshot = {
     provider: params.provider,
     modelId: params.modelId,
@@ -290,23 +305,32 @@ export function beginPromptCacheObservation(params: {
     cacheRetention: params.cacheRetention,
     streamStrategy: params.streamStrategy,
     transport: params.transport,
-    systemPromptDigest: digestText(
-      splitSystemPromptCacheBoundary(params.systemPrompt)?.stablePrefix ?? params.systemPrompt,
-    ),
+    systemPromptDigest: digestText(splitSystemPrompt?.stablePrefix ?? params.systemPrompt),
+    ...(splitSystemPrompt
+      ? { systemPromptSuffixDigest: digestText(splitSystemPrompt.dynamicSuffix) }
+      : {}),
     toolDigest: buildToolDigest(tools),
     toolCount: tools.length,
     toolNames: tools.map((tool) => tool.name),
   };
   const previous = trackers.get(key);
-  const changes = previous ? diffSnapshots(previous.snapshot, snapshot) : null;
+  const changes = previous
+    ? [
+        ...(previous.pendingChanges?.filter(
+          (change) => change.code === "aggregateToolResultTruncation",
+        ) ?? []),
+        ...(diffSnapshots(previous.snapshot, snapshot) ?? []),
+      ]
+    : [];
   setTracker(key, {
     snapshot,
     lastCacheRead: previous?.lastCacheRead ?? null,
-    pendingChanges: changes,
+    lastCacheReadSnapshot: previous?.lastCacheReadSnapshot,
+    pendingChanges: changes.length > 0 ? changes : null,
   });
   return {
     snapshot,
-    changes,
+    changes: changes.length > 0 ? changes : null,
     previousCacheRead: previous?.lastCacheRead ?? null,
   };
 }
@@ -348,7 +372,9 @@ export function completePromptCacheObservation(params: {
     return null;
   }
   const previousCacheRead = tracker.lastCacheRead;
+  const previousSnapshot = tracker.lastCacheReadSnapshot;
   tracker.lastCacheRead = cacheRead;
+  tracker.lastCacheReadSnapshot = tracker.snapshot;
 
   if (previousCacheRead == null || previousCacheRead <= 0) {
     tracker.pendingChanges = null;
@@ -359,13 +385,19 @@ export function completePromptCacheObservation(params: {
   const hasMeaningfulDrop =
     cacheRead < previousCacheRead * MAX_STABLE_CACHE_READ_RATIO &&
     tokenDrop >= MIN_CACHE_BREAK_TOKEN_DROP;
-  const result = hasMeaningfulDrop
-    ? {
-        previousCacheRead,
-        cacheRead,
-        changes: tracker.pendingChanges,
-      }
-    : null;
+  const completeMiss =
+    cacheRead === 0 &&
+    (params.usage?.input ?? 0) > 0 &&
+    previousSnapshot !== undefined &&
+    diffSnapshots(previousSnapshot, tracker.snapshot) === null;
+  const result =
+    hasMeaningfulDrop || completeMiss
+      ? {
+          previousCacheRead,
+          cacheRead,
+          changes: tracker.pendingChanges,
+        }
+      : null;
   tracker.pendingChanges = null;
   return result;
 }

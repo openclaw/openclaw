@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Package-installed media and memory release smoke.
 set -euo pipefail
 
@@ -9,13 +13,7 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-release-media-memory-e2e" OPENCLAW_RELEASE_MEDIA_MEMORY_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_RELEASE_MEDIA_MEMORY_E2E_SKIP_BUILD:-0}"
 run_log=""
-cleanup() {
-  docker_e2e_cleanup_package_tgz "${PACKAGE_TGZ:-}"
-  if [ -n "${run_log:-}" ]; then
-    rm -f "$run_log"
-  fi
-}
-trap cleanup EXIT
+trap 'docker_e2e_cleanup_package_run "${PACKAGE_TGZ:-}" "${run_log:-}"' EXIT
 
 PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz release-media-memory "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
 docker_e2e_package_mount_args "$PACKAGE_TGZ"

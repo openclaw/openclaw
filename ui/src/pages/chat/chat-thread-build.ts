@@ -4,7 +4,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
-import { t } from "../../i18n/index.ts";
 import {
   type ChatGuardianNotice,
   type ChatItem,
@@ -22,18 +21,24 @@ import {
   stripHeartbeatTokenForDisplay,
 } from "../../lib/chat/heartbeat-display.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
-import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
-import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import {
+  canvasPreviewsMatch,
+  normalizeRoleForGrouping,
+} from "../../lib/chat/message-normalizer.ts";
+import type { CanvasToolPreview } from "../../lib/chat/tool-cards.ts";
+import type { ChatMessageRecovery } from "./chat-message-recovery.ts";
 import { buildPendingInputItems } from "./chat-pending-inputs.ts";
 import {
   buildCompactionDividerItem,
   buildGuardianNoticeItem,
   buildResetDividerItem,
   clearWorkingProgress,
-  projectContextCompactionActivity,
+  isContextCompactionMessage,
+  matchesCompactionOperation,
   resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
+import { projectChatSystemNotice } from "./chat-system-notice.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import {
   appendCanvasBlockToAssistantMessage,
@@ -53,9 +58,7 @@ import {
   sanitizeStreamText,
   timestampAfterVisibleItems,
   transcriptPositionTimestamp,
-  turnHasMatchingAssistant,
   type TurnInsertionBounds,
-  userTurnRunId,
 } from "./chat-thread-items.ts";
 import {
   applyPersistedToolInvocationBounds,
@@ -70,14 +73,19 @@ import {
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { selectChatInputDisplay } from "./history-merge.ts";
-import { resolveSystemNoticeKind } from "./system-notice-kinds.ts";
-import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
+import {
+  isLiveTerminalForRun,
+  readLiveTerminalRunId,
+  readLiveTerminalAfterBoundaryRunId,
+} from "./terminal-message-identity.ts";
+import type { CompactionStatus } from "./tool-stream-contract.ts";
 
 export type BuildChatItemsProps = {
   paneId: string;
   sessionKey: string;
   archiveNotice?: Extract<ChatItem, { kind: "notice" }>;
   runId?: string | null;
+  compactionStatus?: CompactionStatus | null;
   /** Invalidates cached display copy when the active UI language changes. */
   locale?: string;
   messages: unknown[];
@@ -87,7 +95,10 @@ export type BuildChatItemsProps = {
   stream: string | null;
   streamStartedAt: number | null;
   queue?: ChatQueueItem[];
+  initialTurnId?: string;
   pendingInputs?: ChatPendingInputsPage["items"];
+  workspaceSyncPendingRunIds?: readonly string[];
+  workerSetupPending?: boolean;
   showToolCalls: boolean;
   persistCommentary?: boolean;
   /** True while the agent is visibly working (isChatRunWorking). */
@@ -99,7 +110,17 @@ export type BuildChatItemsProps = {
   loading?: boolean;
   searchOpen?: boolean;
   searchQuery?: string;
+  messageRecovery?: ChatMessageRecovery;
 };
+
+function canvasAssistantItemKey(
+  message: unknown,
+  source: Parameters<typeof canvasPreviewBaseIdentity>[1],
+  fallback: string,
+): string {
+  const identity = canvasPreviewBaseIdentity(message, source);
+  return identity ? `canvas:${identity}` : `${fallback}:canvas`;
+}
 
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
@@ -124,18 +145,65 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   );
   const searchFiltering = props.searchOpen === true && Boolean(props.searchQuery?.trim());
   const persistedCanvasIdentities = new Set<string>();
-  for (const [i, item] of buildMessageItems(history).entries()) {
-    const msg = projectContextCompactionActivity(item.message);
-    item.message = msg;
+  const normalizedHistory = history.map(safeNormalizeMessage);
+  const historyItems = buildMessageItems(history);
+  let canvasTurn: {
+    previews: { preview: CanvasToolPreview; item: (typeof historyItems)[number] }[];
+    lastMatchingAssistantIndex: number;
+  } = {
+    previews: [],
+    lastMatchingAssistantIndex: -1,
+  };
+  // Rows in one turn share these facts so a tool result can see the assistant
+  // projection that follows it, without consuming a view from another turn.
+  const canvasTurns = historyItems.map((item, index) => {
+    const message = normalizedHistory[index];
+    const role = message && normalizeRoleForGrouping(message.role);
+    if (role === "user" || role === "system") {
+      canvasTurn = { previews: [], lastMatchingAssistantIndex: -1 };
+    }
+    if (
+      role === "assistant" &&
+      message &&
+      (!searchFiltering ||
+        messageMatchesSearchQuery(history[index], props.searchQuery ?? "", props.messageRecovery))
+    ) {
+      canvasTurn.lastMatchingAssistantIndex = index;
+      canvasTurn.previews.push(
+        ...message.content.flatMap((block) =>
+          block.type === "canvas" ? [{ preview: block.preview, item }] : [],
+        ),
+      );
+    }
+    return canvasTurn;
+  });
+  const compaction = props.compactionStatus;
+  const compactionKey = compaction
+    ? `divider:compaction:live:${compaction.runId}:${compaction.itemId ?? "manual"}`
+    : undefined;
+  let hasPersistedCompaction = false;
+  for (const [i, item] of historyItems.entries()) {
+    const msg = item.message;
     const itemKey = item.key;
-    const normalized = safeNormalizeMessage(msg);
-    if (!normalized) {
+    const raw = asRecord(msg) ?? {};
+    const marker = asRecord(raw["__openclaw"]);
+    if (marker?.kind === "compaction" || isContextCompactionMessage(msg)) {
+      const matchesLive = compaction != null && matchesCompactionOperation(msg, compaction);
+      const divider = buildCompactionDividerItem(
+        marker ?? {},
+        rawMessageTimestamp(msg) ?? Date.now(),
+        i,
+      );
+      items.push({
+        ...divider,
+        compactionId: divider.key,
+        ...(matchesLive && compactionKey ? { key: compactionKey } : {}),
+      });
+      hasPersistedCompaction ||= matchesLive;
       continue;
     }
-    const raw = asRecord(msg) ?? {};
-    const marker = raw["__openclaw"] as Record<string, unknown> | undefined;
-    if (marker && marker.kind === "compaction") {
-      items.push(buildCompactionDividerItem(marker, normalized.timestamp ?? Date.now(), i));
+    const normalized = normalizedHistory[i];
+    if (!normalized) {
       continue;
     }
     if (marker && marker.kind === "reset") {
@@ -160,13 +228,28 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         persistedCanvasIdentities.add(identity);
       }
     }
+    const matchingCanvas =
+      persistedCanvasSource &&
+      canvasTurns[i]!.previews.find(({ preview }) =>
+        canvasPreviewsMatch(preview, persistedCanvasSource.preview),
+      );
+    if (persistedCanvasSource && matchingCanvas) {
+      // Enrich the owned display row, including a later assistant shortcode,
+      // without changing transcript input or introducing a second widget card.
+      matchingCanvas.item.message = appendCanvasBlockToAssistantMessage(
+        matchingCanvas.item.message,
+        persistedCanvasSource.preview,
+        persistedCanvasSource.text,
+      );
+    }
     const renderPersistedPreview =
       persistedCanvasSource != null &&
-      (!searchFiltering || turnHasMatchingAssistant(history, i, props.searchQuery ?? ""));
+      !matchingCanvas &&
+      (!searchFiltering || canvasTurns[i]!.lastMatchingAssistantIndex > i);
     if (persistedCanvasSource && renderPersistedPreview) {
       items.push({
         kind: "message",
-        key: `${itemKey}:canvas`,
+        key: canvasAssistantItemKey(msg, persistedCanvasSource, itemKey),
         message: createCanvasAssistantMessage(
           persistedCanvasSource,
           persistedCanvasSource.timestamp ?? transcriptPositionTimestamp(history, i),
@@ -179,7 +262,11 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
 
     const searchQuery = props.searchQuery ?? "";
-    if (props.searchOpen && searchQuery.trim() && !messageMatchesSearchQuery(msg, searchQuery)) {
+    if (
+      props.searchOpen &&
+      searchQuery.trim() &&
+      !messageMatchesSearchQuery(msg, searchQuery, props.messageRecovery)
+    ) {
       continue;
     }
     if (
@@ -189,31 +276,10 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       continue;
     }
 
-    const provenance = asRecord(raw.provenance);
-    if (role === "user" && provenance?.kind === "internal_system") {
-      const noticeKind = resolveSystemNoticeKind(
-        typeof provenance.sourceTool === "string" ? provenance.sourceTool : undefined,
-      );
-      const text = noticeKind?.summaryKey
-        ? t(noticeKind.summaryKey)
-        : extractTextCached(msg)?.replace(/^\[System\] /u, "");
-      if (text?.trim()) {
-        items.push({
-          kind: "notice",
-          key: itemKey,
-          icon: noticeKind?.icon ?? "cpu",
-          label: noticeKind ? t(noticeKind.labelKey) : t("common.system"),
-          ...(noticeKind?.startsTurn === false ? {} : { startsTurn: true }),
-          ...(noticeKind?.collapsedBody ? { collapsedBody: true } : {}),
-          text,
-          timestamp: normalized.timestamp,
-          ...optionalBoundaryIdentity(userTurnRunId(msg)),
-        });
-      }
-      continue;
+    const projected = projectChatSystemNotice(item, normalized);
+    if (projected) {
+      items.push(projected);
     }
-
-    items.push(item);
   }
   const queuedSends = props.queue ?? [];
   const { queue: threadQueuedSends, pendingInputs } = selectChatInputDisplay(
@@ -223,6 +289,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   );
   const currentRunQueuedSends = threadQueuedSends.filter(
     (queued) =>
+      queued.sendState === "submitting" ||
       queued.sendState === "sending" ||
       queued.sendState === "waiting-model" ||
       (queued.sendState === "waiting-reconnect" &&
@@ -237,12 +304,6 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       earliest == null ? queued.createdAt : Math.min(earliest, queued.createdAt),
     null,
   );
-  // Transient projections merge into stable history + queued-send rows by timestamp.
-  // Stable rows keep their relative order despite client and Gateway clock skew.
-  const projections: ChatProjection[] = buildPendingInputItems(
-    pendingInputs,
-    props.searchOpen ? props.searchQuery : undefined,
-  ).map((item) => ({ item }));
   const appendQueuedSend = (queued: ChatQueueItem) => {
     if (!shouldRenderQueuedSendInThread(queued)) {
       return;
@@ -255,7 +316,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     if (
       props.searchOpen &&
       searchQuery.trim() &&
-      !messageMatchesSearchQuery(message, searchQuery)
+      !messageMatchesSearchQuery(message, searchQuery, props.messageRecovery)
     ) {
       return;
     }
@@ -273,7 +334,10 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         (identity?.role === "assistant" && !identity.isImported && identity.runId === runId)
       );
     });
-    items.splice(insertionIndex < 0 ? items.length : insertionIndex, 0, {
+    // The retained New Session prompt predates all recovery output, including
+    // after a reload when its original browser timestamp is unavailable.
+    const position = queued.id === props.initialTurnId ? 0 : insertionIndex;
+    items.splice(position < 0 ? items.length : position, 0, {
       kind: "message",
       key: queued.sendRunId ? buildMessageItems([message])[0]!.key : `pending-send:${queued.id}`,
       message,
@@ -346,13 +410,44 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     // rather than being re-sorted with live stream/tool cards.
     items.splice(insertionIndex, 0, {
       kind: "message",
-      key: `${projection.item.key}:canvas`,
+      key: canvasAssistantItemKey(projection.item.message, preview, projection.item.key),
       message: createCanvasAssistantMessage(preview, timestamp),
     });
   }
   items = items.filter(
     (item) => item.kind !== "message" || hasRenderableNormalizedMessage(item.message),
   );
+  // Transient projections merge into stable history + queued-send rows by timestamp.
+  // Stable rows keep their relative order despite client and Gateway clock skew.
+  const pendingInputItems = buildPendingInputItems(
+    pendingInputs,
+    props.searchOpen ? props.searchQuery : undefined,
+    props.queue,
+    props.workspaceSyncPendingRunIds,
+    props.workerSetupPending,
+    props.messageRecovery,
+  );
+  // Custody follows visible history. Choose its floor after canvas placement and
+  // hidden-row filtering so the anchor survives projection insertion.
+  const custodyFloor = items.at(-1)?.key;
+  const projections: ChatProjection[] = pendingInputItems.map((item) => ({
+    item,
+    ...(custodyFloor ? { bounds: { afterKey: custodyFloor } } : {}),
+  }));
+  if (compaction && compactionKey && !hasPersistedCompaction) {
+    const timestamp = compaction.startedAt ?? compaction.completedAt ?? Date.now();
+    projections.push({
+      item: {
+        ...buildCompactionDividerItem(
+          {},
+          timestamp,
+          0,
+          compaction.phase === "complete" ? "complete" : "active",
+        ),
+        key: compactionKey,
+      },
+    });
+  }
   const segments = props.streamSegments;
   const afterBoundaryBySegment = new Map<ChatStreamSegment, string>();
   let latestBoundaryRunId: string | undefined;
@@ -487,11 +582,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   for (const prompt of props.questionPrompts ?? []) {
     // Pending questions live in the composer dock. Their terminal summaries are
     // timestamped transient projections, so keep their historical placement.
-    if (
-      prompt.status === "pending" ||
-      !prompt.sessionKey ||
-      !areUiSessionKeysEquivalent(prompt.sessionKey, props.sessionKey)
-    ) {
+    if (prompt.status === "pending") {
       continue;
     }
     const questionItem: ChatItem = {
@@ -514,6 +605,39 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   );
   insertChatItemsByTimestamp(items, projections);
 
+  // Completion time must not move an already visible reply across queued custody.
+  // Only unsequenced live terminals use the same causal ceiling as their stream;
+  // canonical history order is never rewritten.
+  if (pendingInputItems.length) {
+    const pendingKeys = new Set(pendingInputItems.map((item) => item.key));
+    const findTerminalBounds = createRunTurnLookup(items);
+    // Relocation mutates items, so iterate a narrowed snapshot of message candidates.
+    for (const item of items.filter((candidate) => candidate.kind === "message")) {
+      const runId =
+        readLiveTerminalAfterBoundaryRunId(item.message) ?? readLiveTerminalRunId(item.message);
+      const identity = readSessionMessageIdentity(item.message);
+      if (
+        !runId ||
+        identity?.role !== "assistant" ||
+        identity.id !== null ||
+        identity.sequence !== null ||
+        identity.isImported
+      ) {
+        continue;
+      }
+      const bounds = findTerminalBounds(runId);
+      if (!bounds?.beforeKey || !pendingKeys.has(bounds.beforeKey)) {
+        continue;
+      }
+      const index = items.indexOf(item);
+      const { maximum } = insertionIndexesForBounds(items, bounds);
+      if (index > maximum) {
+        items.splice(index, 1);
+        items.splice(maximum, 0, item);
+      }
+    }
+  }
+
   // The active claw is telemetry, not a placeholder: it stays through visible
   // assistant text and tool cards until the run settles. The initial-load
   // skeleton still owns an otherwise empty thread, but not an active stream.
@@ -522,11 +646,14 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   // catches up.
   const hasEmptyLiveStream = props.stream !== null && props.stream.trim().length === 0;
   const showWorkingIndicator =
-    (props.runWorking === true && !initialHistoryLoad) ||
-    hasEmptyLiveStream ||
-    queuedSends.some(
-      (item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item),
-    );
+    (!compaction || compaction.phase === "complete") &&
+    ((props.runWorking === true && !initialHistoryLoad) ||
+      hasEmptyLiveStream ||
+      queuedSends.some(
+        (item) =>
+          (item.sendState === "submitting" || item.sendState === "sending") &&
+          shouldRenderQueuedSendInThread(item),
+      ));
   if (props.runWorking !== true && props.stream === null && !showWorkingIndicator) {
     clearWorkingProgress(props.sessionKey);
   }
@@ -540,6 +667,18 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       segments,
       tools,
     ));
+  const activeTurnRunId = latestBoundaryRunId ?? normalizeOptionalString(props.runId);
+  const activeTurnBounds = activeTurnRunId ? createRunTurnLookup(items)(activeTurnRunId) : null;
+  const appendActiveRunItem = (item: ChatItem) => {
+    // Queued custody is a ceiling for the whole live response, not just its text.
+    // Moving its working indicator past that ceiling splits and remeasures the run.
+    if (activeTurnBounds) {
+      const { maximum } = insertionIndexesForBounds(items, activeTurnBounds);
+      items.splice(maximum, 0, item);
+    } else {
+      items.push(item);
+    }
+  };
   if (props.stream !== null) {
     const text = sanitizeStreamText(props.stream);
     const prefix = accumulatedStreamText(segments, sanitizeStreamText);
@@ -558,21 +697,13 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         ...optionalRunIdentity(liveRunId),
         ...optionalBoundaryIdentity(latestBoundaryRunId ?? liveRunId),
       };
-      const liveTurnRunId = latestBoundaryRunId ?? normalizeOptionalString(props.runId);
-      // Pending-custody user rows now participate in the live tail's ceiling.
-      const liveTurnBounds = liveTurnRunId ? createRunTurnLookup(items)(liveTurnRunId) : null;
-      if (liveTurnBounds) {
-        const { maximum } = insertionIndexesForBounds(items, liveTurnBounds);
-        items.splice(maximum, 0, liveStreamItem);
-      } else {
-        items.push(liveStreamItem);
-      }
+      appendActiveRunItem(liveStreamItem);
     }
   }
   if (showWorkingIndicator) {
     const workingProgress = resolveProgress();
     const workingRunId = props.runId ?? workingProgress.runId;
-    items.push({
+    appendActiveRunItem({
       kind: "reading-indicator",
       key: workingProgress.key,
       startedAt: workingProgress.startedAt,

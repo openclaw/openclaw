@@ -7,7 +7,8 @@ import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool
 import { createAbortError as createNamedAbortError } from "../infra/abort-signal.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
-import { getProcessSupervisor } from "../process/supervisor/index.js";
+import type { ManagedRunStdin } from "../process/supervisor/types.js";
+import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import { cancelBackgroundExecSession } from "./bash-process-control.js";
 import {
   acknowledgeNotifyOnExit,
@@ -19,9 +20,7 @@ import {
   hasPendingPollDelivery,
   listFinishedSessions,
   listRunningSessions,
-  markTerminalPollObserved,
   prepareSessionPoll,
-  setJobTtlMs,
 } from "./bash-process-registry.js";
 import { describeProcessTool } from "./bash-tools.descriptions.js";
 import {
@@ -29,11 +28,8 @@ import {
   appendExecTimeoutRetryGuidance,
   renderExecExitLabel,
 } from "./bash-tools.exec-output.js";
-import {
-  handleProcessSendKeys,
-  type WritableStdin,
-  writeProcessStdin,
-} from "./bash-tools.process-send-keys.js";
+import { ProcessToolOutputSchema } from "./bash-tools.process-schema.js";
+import { handleProcessSendKeys, writeProcessStdin } from "./bash-tools.process-send-keys.js";
 import { processSchema } from "./bash-tools.schemas.js";
 import {
   clampWithDefault,
@@ -53,7 +49,6 @@ import { textResult } from "./tools/tool-results.js";
 
 /** Defaults injected by tests, agent scopes, and scoped process registries. */
 export type ProcessToolDefaults = {
-  cleanupMs?: number;
   hasCronTool?: boolean;
   inputWaitIdleMs?: number;
   scopeKey?: string;
@@ -117,11 +112,7 @@ type RunningSessionRuntime = {
   lastOutputAt: number;
 };
 
-function resolveSessionStdin(session: ProcessSession): WritableStdin | undefined {
-  return session.stdin as WritableStdin | undefined;
-}
-
-function isWritableStdin(stdin: WritableStdin | undefined): stdin is WritableStdin {
+function isWritableStdin(stdin: ManagedRunStdin | undefined): stdin is ManagedRunStdin {
   if (!stdin || stdin.destroyed) {
     return false;
   }
@@ -154,7 +145,7 @@ function resolvePollWaitMs(value: unknown) {
 }
 
 function failText(text: string): AgentToolResult<unknown> {
-  return textResult(text, { status: "failed" });
+  return textResult(text, { status: "failed", error: text });
 }
 
 function recordPollRetrySuggestion(sessionId: string, hasNewOutput: boolean): number | undefined {
@@ -175,9 +166,20 @@ function resetPollRetrySuggestion(sessionId: string): void {
   }
 }
 
+function isConfirmedRequestedStop(session: ProcessSession): boolean {
+  return (
+    session.cancellationRequested === true &&
+    session.exitReason === "manual-cancel" &&
+    session.finalizationFailed !== true
+  );
+}
+
 function finishedSessionDetails(sessionId: string, finished: ProcessSession) {
   return {
-    status: finished.terminalStatus === "completed" ? "completed" : "failed",
+    status:
+      finished.terminalStatus === "completed" || isConfirmedRequestedStop(finished)
+        ? "completed"
+        : "failed",
     sessionId,
     exitCode: finished.exitCode ?? undefined,
     ...(finished.exitSignal != null ? { exitSignal: finished.exitSignal } : {}),
@@ -202,7 +204,6 @@ function finishedPollResult(
   pollScope: object | undefined,
 ): AgentToolResult<unknown> {
   resetPollRetrySuggestion(sessionId);
-  acknowledgeNotifyOnExit(finished);
   const delivery = prepareSessionPoll(finished, pollScope);
   const { output: unreadOutput, outputDropped } = delivery;
   const output = unreadOutput.trim();
@@ -217,7 +218,9 @@ function finishedPollResult(
     retentionCapNote(finished) +
       retainedOutputNote +
       (output || "(no new output)") +
-      `\n\nProcess exited with ${renderExecExitLabel(finished)}.`,
+      (isConfirmedRequestedStop(finished)
+        ? `\n\nProcess stopped by request (${renderExecExitLabel(finished)}).`
+        : `\n\nProcess exited with ${renderExecExitLabel(finished)}.`),
     finished.exitReason,
   );
   return attachInternalToolResultAcknowledgement(
@@ -225,7 +228,10 @@ function finishedPollResult(
       ...finishedSessionDetails(sessionId, finished),
       aggregated: finished.aggregated,
     }),
-    () => delivery.acknowledge(),
+    () => {
+      delivery.acknowledge();
+      acknowledgeNotifyOnExit(finished);
+    },
   );
 }
 
@@ -257,21 +263,18 @@ async function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void
       cleanup();
       reject(createAbortError(signal?.reason));
     };
+    // An active poll must outlive the child's last handle so one-shot callers receive its result.
     const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(onResolve, ms);
-    timer.unref?.();
     signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 
-/** Build the process-control tool with optional cleanup, scope, and input-idle defaults. */
+/** Build the process-control tool with optional scope and input-idle defaults. */
 export function createProcessTool(
   defaults?: ProcessToolDefaults,
 ): AgentToolWithMeta<typeof processSchema, unknown> {
-  if (defaults?.cleanupMs !== undefined) {
-    setJobTtlMs(defaults.cleanupMs);
-  }
+  const assertSourceCurrent = captureAgentToolSourceExecutionGuard();
   const scopeKey = defaults?.scopeKey;
-  const supervisor = getProcessSupervisor();
   const inputWaitIdleMs = clampWithDefault(
     defaults?.inputWaitIdleMs ?? readEnvInt("OPENCLAW_PROCESS_INPUT_WAIT_IDLE_MS"),
     DEFAULT_INPUT_WAIT_IDLE_MS,
@@ -282,10 +285,9 @@ export function createProcessTool(
     !scopeKey || session?.scopeKey === scopeKey;
 
   const describeRunningSession = (session: ProcessSession): RunningSessionRuntime => {
-    const record = supervisor.getRecord(session.id);
-    const lastOutputAt = record?.lastOutputAtMs ?? session.startedAt;
+    const lastOutputAt = session.processActivity?.lastOutputAtMs ?? session.startedAt;
     const idleMs = Math.max(0, Date.now() - lastOutputAt);
-    const stdinWritable = isWritableStdin(resolveSessionStdin(session));
+    const stdinWritable = isWritableStdin(session.stdin);
     return {
       stdinWritable,
       waitingForInput: stdinWritable && idleMs >= inputWaitIdleMs,
@@ -308,7 +310,13 @@ export function createProcessTool(
     displaySummary: PROCESS_TOOL_DISPLAY_SUMMARY,
     description: describeProcessTool({ hasCronTool: defaults?.hasCronTool === true }),
     parameters: processSchema,
+    outputSchema: ProcessToolOutputSchema,
     execute: async (_toolCallId, args, signal, _onUpdate): Promise<AgentToolResult<unknown>> => {
+      const assertCurrent = () => {
+        signal?.throwIfAborted();
+        assertSourceCurrent();
+      };
+      assertCurrent();
       const action = (args as { action?: unknown }).action;
       if (!PROCESS_TOOL_ACTIONS.includes(action as ProcessToolAction)) {
         return failText(
@@ -349,9 +357,9 @@ export function createProcessTool(
               },
               s.endedAt !== undefined
                 ? {
+                    ...finishedSessionDetails(s.id, s),
+                    status: s.terminalStatus ?? "running",
                     endedAt: s.endedAt,
-                    exitCode: s.exitCode ?? undefined,
-                    exitSignal: s.exitSignal ?? undefined,
                   }
                 : Object.assign(
                     { pid: s.pid ?? undefined },
@@ -361,10 +369,16 @@ export function createProcessTool(
           );
         const lines = sessions.map((s) => {
           const label = s.name ? truncateMiddle(s.name, 80) : truncateMiddle(s.command, 120);
+          const timeoutReason =
+            "exitReason" in s &&
+            (s.exitReason === "overall-timeout" || s.exitReason === "no-output-timeout")
+              ? s.exitReason
+              : undefined;
+          const timeoutMarker = timeoutReason ? ` [${timeoutReason}]` : "";
           const marker = "waitingForInput" in s && s.waitingForInput ? " [input-wait]" : "";
           return `${s.sessionId} ${padProcessStatus(s.status, 9)} ${
             formatDurationCompact(s.runtimeMs) ?? "n/a"
-          }${marker} :: ${label}`;
+          }${timeoutMarker}${marker} :: ${label}`;
         });
         return textResult(lines.join("\n") || "No running or recent sessions.", {
           status: "completed",
@@ -400,7 +414,7 @@ export function createProcessTool(
             result: failText(`Session ${params.sessionId} is finalizing.`),
           };
         }
-        const stdin = resolveSessionStdin(scopedSession);
+        const stdin = scopedSession.stdin;
         if (!isWritableStdin(stdin)) {
           return {
             ok: false as const,
@@ -451,7 +465,6 @@ export function createProcessTool(
             }
           }
           if (scopedSession.exited) {
-            markTerminalPollObserved(scopedSession);
             // Retention admission survives clear/eviction on this exact object.
             // A process removed before exit was never retained; never read a successor.
             if (scopedSession.endedAt !== undefined && isInScope(scopedSession)) {
@@ -506,26 +519,29 @@ export function createProcessTool(
           const text =
             retentionCapNote(record) +
             (slice || (scopedSession ? "(no output yet)" : "(no output recorded)")) +
-            defaultTailNote(totalLines, window.usingDefaultTail);
-          return textResult(
-            runtime
-              ? text + buildInputWaitHint(runtime)
-              : appendExecTimeoutRetryGuidance(text, record.exitReason),
-            {
-              ...(runtime
-                ? {
-                    status: record.exited ? "completed" : "running",
-                    sessionId: params.sessionId,
-                    name: deriveSessionName(record.command),
-                    ...runningSessionInputDetails(runtime),
-                  }
-                : finishedSessionDetails(params.sessionId, record)),
-              total: totalLines,
-              totalLines,
-              totalChars,
-              truncated: record.truncated,
-            },
-          );
+            defaultTailNote(totalLines, window.usingDefaultTail) +
+            (isConfirmedRequestedStop(record)
+              ? `\n\nProcess stopped by request (${renderExecExitLabel(record)}).`
+              : "");
+          const output = runtime
+            ? text + buildInputWaitHint(runtime)
+            : appendExecTimeoutRetryGuidance(text, record.exitReason);
+          return textResult(output, {
+            ...(runtime
+              ? {
+                  status: record.exited ? "completed" : "running",
+                  sessionId: params.sessionId,
+                  name: deriveSessionName(record.command),
+                  ...runningSessionInputDetails(runtime),
+                }
+              : finishedSessionDetails(params.sessionId, record)),
+            // Code Mode reads details, so preserve the requested page and its recovery hints.
+            output,
+            total: totalLines,
+            totalLines,
+            totalChars,
+            truncated: record.truncated,
+          });
         }
 
         case "write": {
@@ -535,6 +551,7 @@ export function createProcessTool(
           }
           await writeProcessStdin(resolved.stdin, params.data ?? "");
           if (params.eof) {
+            assertCurrent();
             resolved.stdin.end();
           }
           return runningSessionResult(

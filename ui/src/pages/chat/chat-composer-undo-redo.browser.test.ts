@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Composer native undo/redo regression: the controlled `.value` binding must
 // not re-apply the textarea value after native input, which clobbers the
 // browser's undo/redo bookkeeping (#131708).

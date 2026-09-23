@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { WebSocket, type RawData } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WebSocket, type RawData } from "ws";
 import {
   createRelayProof,
   randomRelayNonce,
@@ -344,7 +344,7 @@ describe("extension relay WebSocket auth v2 frame boundary", () => {
   });
 });
 
-describe.sequential("extension relay HTTP auth v2", () => {
+describe("extension relay HTTP auth v2", { concurrent: false }, () => {
   let stateDir: string;
   let previousStateDir: string | undefined;
   let handle: ExtensionRelayHandle | null = null;

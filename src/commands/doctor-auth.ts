@@ -39,6 +39,8 @@ import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { updateConfigMachineState } from "../state/config-machine-state-write.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import { isRecord } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
@@ -48,9 +50,51 @@ const CODEX_OAUTH_WARNING_TITLE = "Codex OAuth";
 const OPENAI_BASE_URL = "https://api.openai.com/v1";
 const LEGACY_CODEX_APIS = new Set(["openai-responses", "openai-completions"]);
 const AUTH_PROFILES_CHECK_ID = "core/doctor/auth-profiles";
+const COPILOT_NOTICE_KEY = "doctor.githubCopilotAmbientTokenNotice";
 const DOCTOR_REAUTH_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
   [LEGACY_CODEX_PROVIDER_ID]: OPENAI_PROVIDER_ID,
 };
+
+/** Explain the retired ambient-token activation once per state directory. */
+export function noteCopilotAmbientToken(cfg: OpenClawConfig, env = process.env): void {
+  if (
+    !(env.GH_TOKEN?.trim() || env.GITHUB_TOKEN?.trim()) ||
+    env.COPILOT_GITHUB_TOKEN?.trim() ||
+    cfg.models?.providers?.["github-copilot"] ||
+    Object.values(cfg.auth?.profiles ?? {}).some(
+      (profile) => profile.provider === "github-copilot",
+    ) ||
+    readConfigMachineState<boolean>(COPILOT_NOTICE_KEY, { env })
+  ) {
+    return;
+  }
+  const agentDirs = [undefined, ...listAgentIds(cfg).map((id) => resolveAgentDir(cfg, id, env))];
+  for (const agentDir of agentDirs) {
+    const store = loadAuthProfileStoreForRuntime(
+      agentDir,
+      { readOnly: true, allowKeychainPrompt: false },
+      env,
+    );
+    if (Object.values(store.profiles).some((profile) => profile.provider === "github-copilot")) {
+      return;
+    }
+  }
+  let claimed = false;
+  updateConfigMachineState<boolean>(
+    COPILOT_NOTICE_KEY,
+    (shown) => {
+      claimed = shown !== true;
+      return true;
+    },
+    { env },
+  );
+  if (claimed) {
+    note(
+      "GitHub Copilot is no longer enabled by GH_TOKEN/GITHUB_TOKEN. To use Copilot, run `openclaw models auth login --provider github-copilot` or set COPILOT_GITHUB_TOKEN.",
+      "GitHub Copilot",
+    );
+  }
+}
 
 /** Surface the one-time relocation while the legacy shared owner is still active. */
 export function noteSharedAuthStoreStatus(env: NodeJS.ProcessEnv = process.env): void {
@@ -401,6 +445,7 @@ function loadAuthProfileHealth(params: {
           ([profileId, local]) =>
             local.type !== "oauth" ||
             !shouldUseMainOwnerForLocalOAuthCredential({
+              profileId,
               local,
               main: findPersistedAuthProfileCredential({ profileId }),
             }),

@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import {
   GatewayRequestError,
   type GatewayBrowserClient,
@@ -8,14 +9,13 @@ import {
 import type { ConfigSnapshot } from "../../api/types.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
-  deferred,
   createConfigServerMock,
   createDeferredSetServerMock,
   createConfigCapabilityHarness,
 } from "./config-test-harness.ts";
 
 describe("config write coordinator", () => {
-  it("rebinds a retained draft to an opaque revision when the reconnect base is unchanged", async () => {
+  it("config.set rebinds a retained draft to an opaque revision when the reconnect base is unchanged", async () => {
     vi.useFakeTimers();
     let hash = "legacy-raw-hash";
     const raw = '{\n  "count": 1\n}\n';
@@ -26,7 +26,7 @@ describe("config write coordinator", () => {
       }
       if (method === "config.set") {
         submissions.push(params as { raw: string; baseHash: string });
-        return { hash: "opaque-next" };
+        return { config: JSON.parse((params as { raw: string }).raw), hash: "opaque-next" };
       }
       return {};
     });
@@ -50,7 +50,7 @@ describe("config write coordinator", () => {
     runtimeConfig.dispose();
   });
 
-  it("keeps the old revision and conflicts when the reconnect base changed", async () => {
+  it("config.set keeps the old revision and conflicts when the reconnect base changed", async () => {
     vi.useFakeTimers();
     let hash = "legacy-raw-hash";
     let raw = '{\n  "count": 1\n}\n';
@@ -65,7 +65,7 @@ describe("config write coordinator", () => {
         if (submission.baseHash !== hash) {
           throw new Error("config changed since last load; re-run config.get and retry");
         }
-        return { hash: "opaque-next" };
+        return { config: JSON.parse((params as { raw: string }).raw), hash: "opaque-next" };
       }
       return {};
     });
@@ -134,7 +134,7 @@ describe("config write coordinator", () => {
     expect(runtimeConfig.state.configFormDirty).toBe(false);
     expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
     expect(runtimeConfig.state.configNeedsApply).toBe(true);
-    // The post-save reload rebased the clean draft onto the new hash.
+    // The acknowledgement rebased the clean draft onto the new hash.
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
     runtimeConfig.dispose();
   });
@@ -309,9 +309,9 @@ describe("config write coordinator", () => {
     runtimeConfig.dispose();
   });
 
-  it("skips the teardown flush when the settled flight acked without a hash", async () => {
+  it("skips the teardown flush when the pending save fails", async () => {
     vi.useFakeTimers();
-    const { request, submissions, firstSet } = createDeferredSetServerMock({ legacyAck: true });
+    const { request, submissions, firstSet } = createDeferredSetServerMock();
     const { runtimeConfig } = createConfigCapabilityHarness(
       request as GatewayBrowserClient["request"],
     );
@@ -325,37 +325,40 @@ describe("config write coordinator", () => {
     // final flush; failing closed beats clobbering a foreign write.
     runtimeConfig.patchForm(["count"], 3);
     runtimeConfig.dispose();
-    firstSet.resolve({});
+    firstSet.reject(new Error("write unavailable"));
     await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
     expect(submissions).toHaveLength(1);
   });
 
-  it("drains in-flight saves before a discard without trailing the discarded bytes", async () => {
-    vi.useFakeTimers();
-    const { request, submissions, firstSet } = createDeferredSetServerMock();
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
+  it.each([false, true])(
+    "drains saves without trailing discarded bytes (reloadOnly: %s)",
+    async (reloadOnly) => {
+      vi.useFakeTimers();
+      const { request, submissions, firstSet } = createDeferredSetServerMock();
+      const { runtimeConfig } = createConfigCapabilityHarness(
+        request as GatewayBrowserClient["request"],
+      );
+      await runtimeConfig.ensureLoaded();
 
-    runtimeConfig.patchForm(["count"], 2);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-    expect(submissions).toHaveLength(1);
+      runtimeConfig.patchForm(["count"], 2);
+      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+      expect(submissions).toHaveLength(1);
 
-    // A mid-flight edit would normally spawn a trailing save; a discard must
-    // wait for the flight and then throw the draft away instead.
-    runtimeConfig.patchForm(["count"], 3);
-    const discardPromise = runtimeConfig.discardDraft();
-    firstSet.resolve({});
-    await vi.advanceTimersByTimeAsync(0);
-    await discardPromise;
+      // A mid-flight edit would normally spawn a trailing save; a discard must
+      // wait for the flight and then throw the draft away instead.
+      runtimeConfig.patchForm(["count"], 3);
+      const discardPromise = runtimeConfig.discardDraft({ reloadOnly });
+      firstSet.resolve({});
+      await vi.advanceTimersByTimeAsync(0);
+      await discardPromise;
 
-    expect(submissions).toHaveLength(1);
-    expect(runtimeConfig.state.configFormDirty).toBe(false);
-    // The draft ends clean against the acked/reloaded state, not the old bytes.
-    expect(runtimeConfig.state.configForm).toEqual({ count: 2 });
-    runtimeConfig.dispose();
-  });
+      expect(submissions).toHaveLength(1);
+      expect(runtimeConfig.state.configFormDirty).toBe(false);
+      // The draft ends clean against the acked/reloaded state, not the old bytes.
+      expect(runtimeConfig.state.configForm).toEqual({ count: 2 });
+      runtimeConfig.dispose();
+    },
+  );
 
   it("suspends config writes while the app updater runs and resumes after", async () => {
     vi.useFakeTimers();
@@ -429,14 +432,14 @@ describe("config write coordinator", () => {
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(drained).toBe(false);
-    patchGate.resolve({});
+    patchGate.resolve({ config: { count: 5 }, hash: "hash-2" });
     await vi.advanceTimersByTimeAsync(0);
     await drainPromise;
     await expect(patchPromise).resolves.toBe(true);
     runtimeConfig.dispose();
   });
 
-  it("flushes a scheduled autosave when a write barrier runs before the debounce", async () => {
+  it("config.set flushes a scheduled autosave when a write barrier runs before the debounce", async () => {
     vi.useFakeTimers();
     const setGate = deferred<unknown>();
     const methods: string[] = [];
@@ -472,14 +475,14 @@ describe("config write coordinator", () => {
     expect(methods.filter((method) => method === "config.set")).toHaveLength(1);
     expect(drained).toBe(false);
 
-    setGate.resolve({ hash: "hash-2" });
+    setGate.resolve({ config: { count: 2 }, hash: "hash-2" });
     await drain;
     expect(drained).toBe(true);
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
     runtimeConfig.dispose();
   });
 
-  it("serializes external mutations after scheduled drafts and refreshes before resolving", async () => {
+  it("config.set serializes external mutations after scheduled drafts and refreshes before resolving", async () => {
     vi.useFakeTimers();
     const order: string[] = [];
     let storedConfig: Record<string, unknown> = { count: 1 };
@@ -499,7 +502,7 @@ describe("config write coordinator", () => {
         order.push("config.set");
         storedConfig = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
         hash = "hash-2";
-        return { hash };
+        return { config: storedConfig, hash };
       }
       if (method === "plugins.setEnabled") {
         order.push("plugins.setEnabled");
@@ -531,7 +534,7 @@ describe("config write coordinator", () => {
     runtimeConfig.dispose();
   });
 
-  it("rechecks external mutation access after pending config writes settle", async () => {
+  it("config.set rechecks external mutation access after pending config writes settle", async () => {
     vi.useFakeTimers();
     const firstSet = deferred<unknown>();
     const methods: string[] = [];
@@ -568,7 +571,7 @@ describe("config write coordinator", () => {
     );
     await vi.waitFor(() => expect(methods).toEqual(["config.set"]));
     canDispatch = false;
-    firstSet.resolve({ hash: "hash-2" });
+    firstSet.resolve({ config: { count: 2 }, hash: "hash-2" });
 
     await expect(result).resolves.toEqual({
       ok: false,
@@ -792,7 +795,7 @@ describe("config write coordinator", () => {
     runtimeConfig.dispose();
   });
 
-  it("retries a background mutation when suspension begins during its write drain", async () => {
+  it("config.set retries a background mutation when suspension begins during its write drain", async () => {
     vi.useFakeTimers();
     const firstSet = deferred<unknown>();
     const methods: string[] = [];
@@ -825,7 +828,7 @@ describe("config write coordinator", () => {
       { waitForWritesResumed: true },
     );
     runtimeConfig.setWritesSuspended(true);
-    firstSet.resolve({ hash: "hash-2" });
+    firstSet.resolve({ config: { count: 2 }, hash: "hash-2" });
     await vi.advanceTimersByTimeAsync(0);
     expect(methods).toEqual(["config.set"]);
 
@@ -839,9 +842,12 @@ describe("config write coordinator", () => {
     runtimeConfig.dispose();
   });
 
-  it("flushes a pre-ack revert during disposal", async () => {
+  it("config.set flushes a pre-ack revert during disposal with canonical siblings", async () => {
     vi.useFakeTimers();
-    const { request, submissions, firstSet } = createDeferredSetServerMock();
+    const { request, submissions, firstSet } = createDeferredSetServerMock({
+      count: 2,
+      ui: { prefs: { locale: "fr" } },
+    });
     const { runtimeConfig } = createConfigCapabilityHarness(
       request as GatewayBrowserClient["request"],
     );
@@ -862,7 +868,11 @@ describe("config write coordinator", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(submissions).toHaveLength(2);
-    expect(submissions[1]).toEqual({ raw: '{\n  "count": 1\n}\n', baseHash: "hash-2" });
+    expect(submissions[1]?.baseHash).toBe("hash-2");
+    expect(submissions.map(({ raw }) => JSON.parse(raw))).toEqual([
+      { count: 2 },
+      { count: 1, ui: { prefs: { locale: "fr" } } },
+    ]);
   });
 
   it("does not write when an edit is reverted within the debounce window", async () => {
@@ -972,31 +982,38 @@ describe("config write coordinator", () => {
     runtimeConfig.dispose();
   });
 
-  it("drains in-flight saves before a discarding refresh", async () => {
-    vi.useFakeTimers();
-    const { request, submissions, firstSet } = createDeferredSetServerMock();
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
+  it.each([false, true])(
+    "preserves the offline discard policy after draining (reloadOnly: %s)",
+    async (reloadOnly) => {
+      vi.useFakeTimers();
+      const { request, submissions, firstSet } = createDeferredSetServerMock();
+      const { runtimeConfig, publish } = createConfigCapabilityHarness(
+        request as GatewayBrowserClient["request"],
+      );
+      await runtimeConfig.ensureLoaded();
 
-    runtimeConfig.patchForm(["count"], 2);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-    expect(submissions).toHaveLength(1);
+      runtimeConfig.patchForm(["count"], 2);
+      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+      expect(submissions).toHaveLength(1);
 
-    // Same barrier as discardDraft: the settling flight must not trail the
-    // just-discarded edit back to disk after the refresh.
-    runtimeConfig.patchForm(["count"], 3);
-    const refreshPromise = runtimeConfig.refresh({ discardPendingChanges: true });
-    firstSet.resolve({});
-    await vi.advanceTimersByTimeAsync(0);
-    await refreshPromise;
+      runtimeConfig.patchForm(["count"], 3);
+      const discardPromise = runtimeConfig.discardDraft({ reloadOnly });
+      publish(false);
+      await discardPromise;
 
-    expect(submissions).toHaveLength(1);
-    expect(runtimeConfig.state.configFormDirty).toBe(false);
-    expect(runtimeConfig.state.configForm).toEqual({ count: 2 });
-    runtimeConfig.dispose();
-  });
+      expect(runtimeConfig.state.configForm).toEqual({ count: reloadOnly ? 3 : 1 });
+      expect(runtimeConfig.state.configFormDirty).toBe(reloadOnly);
+      expect(request.mock.calls.filter(([method]) => method === "config.get")).toHaveLength(1);
+
+      // A disconnected write's late acknowledgement cannot replace either result.
+      firstSet.resolve({});
+      await vi.advanceTimersByTimeAsync(0);
+      expect(submissions).toHaveLength(1);
+      expect(runtimeConfig.state.configForm).toEqual({ count: reloadOnly ? 3 : 1 });
+      expect(runtimeConfig.state.configFormDirty).toBe(reloadOnly);
+      runtimeConfig.dispose();
+    },
+  );
 
   it("flushes a scheduled form autosave before config.patch and re-arms after", async () => {
     vi.useFakeTimers();
@@ -1015,7 +1032,7 @@ describe("config write coordinator", () => {
       if (method === "config.set" || method === "config.patch") {
         order.push(method);
         hashCounter += 1;
-        return Promise.resolve({ hash: `hash-${hashCounter}` });
+        return Promise.resolve({ config: { count: 2, other: true }, hash: `hash-${hashCounter}` });
       }
       return Promise.resolve({});
     });
@@ -1070,7 +1087,7 @@ describe("config write coordinator", () => {
     ]);
   });
 
-  it("skips the teardown flush behind a pending apply", async () => {
+  it("config.apply chains the final form edit from its acknowledged revision during teardown", async () => {
     vi.useFakeTimers();
     const firstApply = deferred<unknown>();
     let setCalls = 0;
@@ -1086,10 +1103,10 @@ describe("config write coordinator", () => {
       }
       if (method === "config.set") {
         setCalls += 1;
-        return Promise.resolve({ hash: "hash-9" });
+        return Promise.resolve({ config: { count: 3 }, hash: "hash-9" });
       }
       if (method === "config.apply") {
-        return firstApply.promise.then(() => ({ hash: "hash-2" }));
+        return firstApply.promise.then(() => ({ config: { count: 2 }, hash: "hash-2" }));
       }
       return Promise.resolve({});
     });
@@ -1102,12 +1119,17 @@ describe("config write coordinator", () => {
     const applyPromise = runtimeConfig.apply();
     await vi.advanceTimersByTimeAsync(0);
 
-    // The gateway is about to restart; a post-apply write is meaningless.
+    // Apply can hot-reload without disconnecting this client.
     runtimeConfig.patchForm(["count"], 3);
     runtimeConfig.dispose();
     firstApply.resolve({});
     await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
     await applyPromise;
-    expect(setCalls).toBe(0);
+    expect(setCalls).toBe(1);
+    expect(request).toHaveBeenCalledWith("config.set", {
+      raw: '{\n  "count": 3\n}\n',
+      baseHash: "hash-2",
+    });
+    expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-9");
   });
 });

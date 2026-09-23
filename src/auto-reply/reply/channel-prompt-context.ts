@@ -1,5 +1,7 @@
 /** Appends channel-supplied prompt context to the user-role body under a marked label. */
 import { truncateUtf16Safe } from "../../utils.js";
+import type { TemplateContext } from "../templating.js";
+import { resolvePromptHistoryLimit } from "./history-limit.js";
 import { markInboundContextLabel } from "./inbound-context-marker.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 
@@ -54,4 +56,25 @@ function sanitizeContextJsonValue(value: unknown): unknown {
 
 export function formatContextJsonBlock(label: string, payload: unknown): string {
   return [label, "```json", JSON.stringify(sanitizeContextJsonValue(payload)), "```"].join("\n");
+}
+
+/** Preserve a platform-selected window; legacy pending buffers keep their defensive tail cap. */
+export function selectInboundHistoryContext(
+  ctx: Pick<TemplateContext, "InboundHistory" | "SessionTranscriptContext">,
+) {
+  const history = Array.isArray(ctx.InboundHistory) ? ctx.InboundHistory : [];
+  const recent = ctx.SessionTranscriptContext?.historyKind === "recent";
+  const configuredLimit = ctx.SessionTranscriptContext?.historyLimit;
+  const limit =
+    recent &&
+    typeof configuredLimit === "number" &&
+    Number.isSafeInteger(configuredLimit) &&
+    configuredLimit >= 0
+      ? resolvePromptHistoryLimit(configuredLimit, 20)
+      : 20;
+  return {
+    boundedHistory: limit > 0 ? history.slice(-limit) : [],
+    historyLabel: recent ? "Recent chat history:" : "Chat history since last reply:",
+    truncated: history.length > limit,
+  };
 }

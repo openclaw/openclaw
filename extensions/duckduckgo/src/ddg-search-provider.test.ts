@@ -190,6 +190,24 @@ describe("duckduckgo web search provider", () => {
     }
   });
 
+  it("preserves HTTP status for search failure guidance", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("rate limited", { status: 429 }));
+
+    try {
+      await expect(
+        runActualDuckDuckGoSearch({ query: "duckduckgo rate limited", cacheTtlMinutes: 0 }),
+      ).rejects.toMatchObject({
+        status: 429,
+        statusCode: 429,
+        message: "DuckDuckGo search error (429): rate limited",
+      });
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   it("bounds successful DuckDuckGo HTML bodies without using response.text()", async () => {
     const streamed = createStreamingResponse({
       chunkCount: 32,

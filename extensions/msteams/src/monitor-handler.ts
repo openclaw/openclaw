@@ -1,4 +1,3 @@
-// Msteams plugin module implements monitor handler behavior.
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { serializeMSTeamsAdaptiveCardActionValue } from "./adaptive-card-submit.js";
 import { maybeHandleMSTeamsApprovalCardSubmit } from "./approval-card-submit.js";
@@ -50,11 +49,19 @@ async function isInvokeAuthorized(params: {
     activity: context.activity,
   });
   const { msteamsCfg, isDirectMessage, conversationId, senderId } = resolved;
+  const maybeInvokeName = includeInvokeName ? { name: context.activity.name } : undefined;
+
+  if (resolved.hasConflictingConversationScope) {
+    deps.log.info("dropping invoke (conflicting conversation scope)", {
+      conversationId,
+      ...maybeInvokeName,
+    });
+    return false;
+  }
+
   if (!msteamsCfg) {
     return true;
   }
-
-  const maybeInvokeName = includeInvokeName ? { name: context.activity.name } : undefined;
 
   if (isDirectMessage && resolved.senderAccess.decision !== "allow") {
     deps.log.debug?.(deniedLogs.dm, {

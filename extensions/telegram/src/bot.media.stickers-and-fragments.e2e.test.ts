@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { holdTelegramMediaTimeouts } from "./bot-media-timers.test-support.js";
 import { readRemoteMediaBufferSpy, telegramBotDepsForTest } from "./bot.media.e2e.test-harness.js";
 import {
   TELEGRAM_TEST_TIMINGS,
@@ -106,7 +107,7 @@ describe("telegram stickers", () => {
         }),
       );
 
-      getCachedStickerSpy.mockReturnValue({
+      getCachedStickerSpy.mockResolvedValue({
         fileId: "old_file_id",
         fileUniqueId: "sticker_unique_456",
         emoji: "😴",
@@ -315,7 +316,7 @@ describe("telegram text fragments", () => {
         suffix: ` ${quote}`,
       });
       const part2 = "B".repeat(50);
-      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.textFragmentGapMs);
       const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
 
       try {
@@ -386,6 +387,7 @@ describe("telegram text fragments", () => {
     async () => {
       const originalLoadConfig = telegramBotDepsForTest.getRuntimeConfig;
       telegramBotDepsForTest.getRuntimeConfig = (() => ({
+        messages: { inbound: { debounceMs: 0 } },
         channels: {
           telegram: {
             dmPolicy: "open",
@@ -404,12 +406,7 @@ describe("telegram text fragments", () => {
 
       const runtimeError = vi.fn();
       const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });
-      let nextTimerHandle = 1;
-      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(() => {
-        const handle = nextTimerHandle;
-        nextTimerHandle += 1;
-        return handle as unknown as ReturnType<typeof setTimeout>;
-      });
+      const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.textFragmentGapMs);
       const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
       const part1 = "A".repeat(4050);
       const part2 = "B".repeat(50);
@@ -463,8 +460,11 @@ describe("telegram text fragments", () => {
   it(
     "buffers different forum topic fragments independently",
     async () => {
+      const bufferRuntime = await import("./bot-handlers.inbound-buffer.js");
+      const createBuffers = vi.spyOn(bufferRuntime, "createTelegramInboundBuffers");
       const originalLoadConfig = telegramBotDepsForTest.getRuntimeConfig;
       telegramBotDepsForTest.getRuntimeConfig = (() => ({
+        messages: { inbound: { debounceMs: 0 } },
         channels: {
           telegram: {
             dmPolicy: "open",
@@ -480,12 +480,7 @@ describe("telegram text fragments", () => {
 
       const runtimeError = vi.fn();
       const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });
-      let nextTimerHandle = 1;
-      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(() => {
-        const handle = nextTimerHandle;
-        nextTimerHandle += 1;
-        return handle as unknown as ReturnType<typeof setTimeout>;
-      });
+      const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.textFragmentGapMs);
       const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
 
       try {
@@ -527,7 +522,12 @@ describe("telegram text fragments", () => {
           clearTimeout(timer.handle);
           await timer.callback();
         }
-        await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(2));
+        const buffers = createBuffers.mock.results[0];
+        if (buffers?.type !== "return") {
+          throw new Error("Expected the bot's inbound buffers");
+        }
+        await buffers.value.inboundDebouncer.drain();
+        expect(replySpy).toHaveBeenCalledTimes(2);
         const rawBodies = replySpy.mock.calls.map(
           (call) => (call[0] as { RawBody?: string }).RawBody,
         );
@@ -548,6 +548,7 @@ describe("telegram text fragments", () => {
         }
         setTimeoutSpy.mockRestore();
         clearTimeoutSpy.mockRestore();
+        createBuffers.mockRestore();
         telegramBotDepsForTest.getRuntimeConfig = originalLoadConfig;
       }
     },

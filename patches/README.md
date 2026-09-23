@@ -2,16 +2,109 @@
 
 Keep existing insertion anchors when extending these patches: pnpm 12 can apply a zero-context, zero-length insertion one line early. After regeneration and installation, verify installed files against the patch's target blob hashes before testing.
 
-`matrix-js-sdk@42.2.0` has an approved temporary patch for saved-sync verification replay. Classic sync propagates its existing cache provenance through ordinary client events, and the crypto listener ignores restored events. This preserves room history, sync cursors, ordinary event listeners, fresh verification events, and to-device processing while preventing cached verification requests from restarting after a clean client shutdown.
+`@awesome.me/webawesome@3.12.0` retains its approved dropdown, submenu, select, tooltip, and animation lifecycle repairs. The dropdown initializes focus after its popup becomes usable, before joining animation cleanup or completion, and preserves a newer composed focus target during popup rendering. Freshly mounted open menus also join the popup's initial anchor resolution before focusing; already anchored menus retain their existing visibility and native occlusion across reopen. Initial-focus handlers can close or disconnect the menu; the existing transition owner fences those reentrant paths before starting an animation. Opening completion never resets a newer item, submenu, or outside focus. Both published distributions carry the same owner; no public types or package versions change.
+
+Remove the dropdown focus hunk when an upstream release passes `ui/src/e2e/chat-attachment-focus.e2e.test.ts`, the unchanged platform attachment menu suite, and both `web-awesome-dropdown*.browser.test.ts` lifecycle suites without a consumer animation wait. These tests use real CSS animation boundaries, native keyboard input, and the actual browser filechooser; mobile identities are emulated, not native OS-picker certification. Retain the other patch owners until their respective regressions pass upstream.
+
+`chrome-devtools-mcp@1.8.0` has an approved exact-version snapshot-identity patch, backported from [ChromeDevTools/chrome-devtools-mcp#2788](https://github.com/ChromeDevTools/chrome-devtools-mcp/pull/2788) at `06c8d4bc44f68bde8bd3fcd97dcc47375df81fe9`. Stable IDs include the frame's captured CDP session and document generation; ambiguous IDs stay capture-local, and stale lazy handles cannot resolve into a replacement renderer. Frame-local lookup and retained extra handles preserve actions and labeled screenshots. The published bundle also needs its existing `CdpFrame` export exposed. Original license notices remain intact, with modifications recorded in `build/src/OPENCLAW_PATCH_NOTICE.md`.
+
+The published integrity is `sha512-Wrm9z0/5WbVs778apjWgYRkpe9bvYQWjK2zVRwqoPAtz1IHQ5+GvotM07UGXJcfrA0rj6Gt1Pnn5+w/Tf1nU4w==`; the patch SHA-256 is `c9e9590160eb099415e7ff6e705b0e0f725e364419f91153a0207e31a71f8547`.
+
+| Target | Published SHA-256 | Patched SHA-256 |
+| --- | --- | --- |
+| `build/src/TextSnapshot.js` | `f3496989b93d174723fcf394628fabc36936b37e6a815fd85cbe20fba46d5ea0` | `299833ad0e4cfc171a417afaec41df594e4862fe53a7ada6ba160409f979788b` |
+| `build/src/McpPage.js` | `24c2dd374c2f48c02069d2e21fa2cb006a3771f7faa5dee3fccca798d7345641` | `b9e791d758e4d28589525e2d427600e24b271d365a5879893a392043a11cf426` |
+| `build/src/third_party/index.js` | `f8d1c452d8a10734929e87d46151fff0d12651ae2d2a3e2e7aed0ed28fbdb4cb` | `a8f5cb1e02405d347117114141b58572f71c083861fb50ab31a27511e3a279bf` |
+| `build/src/OPENCLAW_PATCH_NOTICE.md` | Added | `8f5a32aaedf4bb6f8ad39f226bd343bf804132c11ebc6c3c19f667669856287c` |
+
+The root package bundles this patched dependency so npm installations preserve the same bytes as pnpm source installs. Browser launches the packaged CLI directly with Node. Remove this patch, its registration, and the patch-specific package checks when a published upstream version passes `pnpm test:e2e:browser-mcp` and the installed-package stdio proof, including renderer replacement, cross-origin frames, cancellation, and snapshot → wait → action.
+
+`@novnc/novnc@1.7.0` has an approved temporary patch for ignored extended-clipboard payloads. The RFB owner consumes the remaining compressed bytes before returning for view-only clients or unsupported clipboard formats. It does not inflate or publish ignored clipboard data, and controlling text clipboard handling stays unchanged. This keeps clipboard bytes from becoming the next RFB message and disconnecting WebVNC.
+
+Remove the noVNC patch, its registration, and its exact-version guard exception when an upstream version passes the Desktop panel and document browser suites (`test/vitest/vitest.ui-e2e.config.ts`) and the live view-only selection/type stress check. The regression uses the real noVNC parser, covers coalesced and fragmented payload delivery, and requires the next framebuffer update without a reconnect.
+
+`matrix-js-sdk@42.3.0` has an approved temporary patch for saved-sync verification replay. Classic sync propagates its existing cache provenance through ordinary client events, and the crypto listener ignores restored events. This preserves room history, sync cursors, ordinary event listeners, fresh verification events, and to-device processing while preventing cached verification requests from restarting after a clean client shutdown. Version 42.3.0 still routes restored events into crypto, so the patch remains necessary.
 
 Remove the Matrix patch, its registration, and its exact-version guard exception when an upstream release passes `node scripts/run-vitest.mjs extensions/matrix/src/matrix/client/file-sync-store.sdk.test.ts` and the full Matrix QA catalog, including the original DM SAS-to-QR sequence. The regression exercises the real SQLite sync store, SDK cache hydration, and crypto event wiring; it observes crypto input rather than substituting for native verification proof.
 
-`@vitest/runner@4.1.11` has an approved temporary pnpm patch for lost trailing task updates. It accepts the exact batching deadline and clears the consumed timer handle before re-entering the throttle, allowing an early callback to rearm. The 100 ms batching interval and immediate-call cancellation stay unchanged; this is not a maintained fork or a reporting SLA.
+`vitest@5.0.0` has one approved exact-version pnpm patch. Vitest 5 bundles the
+runner, and `@vitest/runner@5.0.0` is not published, so no standalone runner
+dependency or patch remains. The published package integrity is
+`sha512-gpsMNoRhMjMktVxPtstOH4/PJuPyovVaMDr4oDilXaGH1EcqM2OE96SoHT2VIQ6fTGtTjqmHDrEu2X9RQiXf8Q==`.
+The patch SHA-256 is
+`883cdb073fe7cc1097c58700a80e0fe180b3d08a5313222fa91eeb989849c675`
+and it changes exactly these eight published files:
 
-Remove the runner patch, its registration, and its exact-version guard exception when upgrading to an upstream fixed version with `test/scripts/vitest-runner-task-updates.test.ts` green. Keep that regression to verify completion delivery without later task events or file-finalization rescue. Generate and register patches through pnpm; never edit installed dependency files manually.
+| Target | Published SHA-256 | Patched SHA-256 |
+| --- | --- | --- |
+| `dist/chunks/cac.D805sv8h.js` | `a0971660b8c52884366a1ca3dceb6a7eb7ff41e2e3cfaed27b98395ed054e1d0` | `f37acc539be54a668448c9ae1faeacc4b37df68f81952a21001c377a775da55e` |
+| `dist/chunks/index.1_nbEjJY.js` | `9868c71ba3a06ca6f9890c60a9e6b298762b0fca74b09595a8f76340d3f92fe9` | `ad9069287604e97d9e965f7f5a74dc5d23da2e8420ce1cbd2d051765d37d900b` |
+| `dist/chunks/index.B89dZ0-N.js` | `7ae1406d3a808a5a2915895eede01e4e79fac5838f5a6457adbffd78df1bf56d` | `54a978632cf3584e4507bed3f09ba22d6f344ec45bac5ea37fda0b9718b59e58` |
+| `dist/chunks/index.OVGXnVRj.js` | `57c89e884bab20623afc06a58119c70c4f2e06397ae63e961ad0a0810c9a94b5` | `c4b8a1c9f865c4719d1bf01d871d89fd405b9a3141f2ef9bc9690e1d5078d0a8` |
+| `dist/chunks/init-forks.CiCtIMPj.js` | `ef8cf8283d7b420d2fae017b8f284555ed67e207ea12fa9f53ab28421168adfc` | `ce9b827f016907bd054c9c8041e70db67ba28943c13a0b66b8551b5b51f1fafa` |
+| `dist/chunks/plugin.d.BbcoZhuj.d.ts` | `fc8d53b3329bf55bc3dba0709c2280e997a860d2b45189589f43ea21b4076087` | `9409856e49fb8b6b9a84725340c7f68af76dc5c35e237ba7da71e5534d22e54c` |
+| `dist/chunks/run.CQOUYP-x.js` | `8aa94c491fc34a880fdcaaea493fdba5d05affd8e5be68bb7a70c6ebe74ddf63` | `1d424d73af1e301188789e2b82a28cde2e037998a7d995a5374dfc36c352fe99` |
+| `dist/node.d.ts` | `2b82496067d8e4387e08f4902a8f81718f1ba5b2504097c6c7d05b420ea18f63` | `d09c5c26f971a500cc8f34a5c5a29eafca3988e13f42408ef91b488702aa6305` |
 
-`vitest@4.1.11` has an approved temporary patch for graceful fork shutdown. The built-in forks/vmForks transport marks its stopped response with `willExit`, flushes it, and explicitly exits; its parent joins actual exit through the worker's exit observer within the existing 60-second stop deadline, before computing the run result. Custom fork entrypoints that omit this fact retain parent-owned termination; they can explicitly opt in with the response and observer contract. This lets exit cleanup and native CPU/heap profiles finish without racing SIGTERM or its 500 ms escalation. Timeout and abnormal-exit paths still report failure and terminate/join the worker; forced termination retains the existing signal deadline. Threads retain their existing stop protocol. No OpenClaw setup or profiling option changes are needed.
+The patch owns these temporary invariants and removal gates:
 
-The same exact-version patch also restores native CLI validation in public `parseCLI`: after parsing without execution, it runs CAC's existing unknown-option, required-value, and required-argument checks. Help/version retain their native validation bypass, repeated-option transforms stay unchanged, and `allowUnknownOptions` still controls unknown-option rejection. No option catalog is copied and no command or config executes during parsing.
+- **Mock resolution (`index.1_nbEjJY.js`):** module fetches join the mocker's
+  serialized resolution before reading its registry, even after the pending-id
+  queue is emptied by an in-flight pass. Resolution drains ids queued during a
+  pass; failed callers retain their errors without poisoning later callers.
+  Shared-worker cleanup joins the native completion tail. Remove this hunk when
+  stock Vitest passes `test/scripts/vitest-mock-resolution.test.ts` and the
+  original cold Gateway CI group containing
+  `authenticated-request-dispatch.lifetime.test.ts`.
+- **CLI validation (`cac.D805sv8h.js`):** public `parseCLI` validates unknown
+  options, required values, and required arguments without executing a command.
+  Help/version and `allowUnknownOptions` retain native semantics. Remove this
+  hunk when stock Vitest passes the native validation cases in
+  `test/scripts/run-vitest-profile.test.ts` and
+  `test/scripts/vitest-report-owner.test.ts`.
+- **Filesystem cache generations (`index.B89dZ0-N.js`):** persistence remains
+  disabled until lockfile integrity completes; generation participates in cache
+  keys; lock transitions rewrite metadata and reset retained roots, keys, and
+  transform temporary markers; invalidation covers the root and selected
+  projects. Remove these hunks when stock Vitest passes the four cache-generation
+  and invalidation regressions in `test/vitest-performance-config.test.ts`.
+- **Graceful fork shutdown (`index.B89dZ0-N.js`,
+  `init-forks.CiCtIMPj.js`, `plugin.d.BbcoZhuj.d.ts`, `dist/node.d.ts`):**
+  built-in fork workers flush a `willExit` response, exit explicitly, and are
+  joined before run completion. Deadline and abnormal-exit paths still fail and
+  terminate the worker; custom transports remain parent-owned unless they opt
+  into the contract. Remove these hunks when stock Vitest passes
+  `test/scripts/vitest-fork-shutdown.test.ts`,
+  `test/scripts/run-vitest-state-cleanup.test.ts`, and
+  `test/scripts/run-vitest-profile.test.ts`.
+- **File-backed report projects (`index.B89dZ0-N.js`,
+  `plugin.d.BbcoZhuj.d.ts`):** a Vitest-owned
+  `{ config, root?, namePrefix? }` descriptor loads its config exactly once,
+  keeps the file-owned root when omitted, preserves the explicit root when
+  supplied, and derives its final name after Vite hooks. A replayed prefix
+  retains the container-owned identity and marks the executed config as a
+  standalone project so its children are not rediscovered. Remove these hunks
+  when stock Vitest passes
+  `test/scripts/vitest-report-owner.test.ts` without pre-resolving configs or
+  injecting captured names and `test/vitest-ui-package-config.test.ts` without
+  losing omitted or explicit project roots.
+- **Trailing task updates (`run.CQOUYP-x.js`):** the bundled runner accepts the
+  exact batching deadline and clears a consumed timer before re-entering the
+  throttle, so an early callback can rearm without losing the trailing update.
+  Remove this hunk when stock Vitest passes
+  `test/scripts/vitest-runner-task-updates.test.ts`.
+- **Fake timer heap order (`index.OVGXnVRj.js`):** refresh removes a timer from
+  the heap before mutating its ordering key, then reinserts it. Remove this hunk
+  when stock Vitest passes `test/scripts/vitest-fake-timers.test.ts` and
+  `extensions/telegram/src/probe.response-body-timeout.test.ts`.
 
-Remove this patch, its registration, and its exact-version guard exception when an upstream version passes `node scripts/run-vitest.mjs test/scripts/vitest-fork-shutdown.test.ts test/scripts/run-vitest-state-cleanup.test.ts test/scripts/run-vitest-profile.test.ts`. The regressions cover slow exit cleanup, delayed stop-response delivery during natural exit, custom entrypoint compatibility/opt-in, vmForks, abnormal exits, and bounded hung/forced cleanup with actual installed workers and native profile artifacts. The stop-deadline test clock advances the existing deadline only after the worker reaches its shutdown boundary; it does not change production timeouts.
+Generate and register dependency patches through pnpm; never edit installed
+dependency files manually. A clean `pnpm install --frozen-lockfile` must apply
+the recorded patch hash to the published integrity and reproduce every patched
+target hash above.
+
+Stable Vitest 5.0.0 packages were published on September 3, 2026. The latest
+package in the pinned family, `@vitest/browser@5.0.0`, was published at
+12:24:37.187 UTC, so the exact family cooldown exclusions in
+`pnpm-workspace.yaml` remain required until September 10, 2026 at
+12:24:37.187 UTC.

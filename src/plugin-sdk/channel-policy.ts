@@ -51,6 +51,8 @@ export {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
   resolveChannelGroupToolsPolicy,
+  resolveChannelGroups,
+  resolveChannelGroupsConfigPath,
   resolveToolsBySender,
   type ChannelGroupPolicy,
 } from "../config/group-policy.js";
@@ -414,7 +416,7 @@ export function createRestrictSendersChannelSecurity<
       mentionGated: params.mentionGated,
     }),
     checkId: `channels.${params.channelKey}.groups.open`,
-    severity: "critical",
+    severity: "warn",
     title: params.findingTitle ?? `${params.surface} security warning`,
   });
   return {

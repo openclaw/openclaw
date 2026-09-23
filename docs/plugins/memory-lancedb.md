@@ -65,12 +65,17 @@ with the current memory provider.
 }
 ```
 
-Restart the Gateway after installation, then verify it loaded:
+Installation applies to a running Gateway automatically, and configuration
+changes apply with the default hybrid reload mode. If the Gateway is offline,
+start it after configuration. Check the application result and inspect the
+plugin's runtime registration:
 
 ```bash
-openclaw gateway restart
-openclaw plugins list
+openclaw plugins inspect memory-lancedb --runtime --json
 ```
+
+See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect)
+and [Hot reload](/gateway/configuration/hot-reload).
 
 ## Embedding config
 
@@ -104,10 +109,10 @@ remain unchanged.
 
 <Warning>
 `embedding.provider`, `embedding.model`, and `embedding.dimensions` define the
-persisted LanceDB index identity and do not change live. Before restarting with
-a new identity, plan a LanceDB re-embedding or rebuild so every stored row uses
-the new vector space and dimensions. The plugin does not re-embed existing rows
-automatically.
+persisted LanceDB index identity. Before changing any of them, plan a LanceDB
+re-embedding or rebuild so every stored row uses the new vector space and
+dimensions. Automatic plugin reload creates a new instance with the changed
+identity; it does not re-embed existing rows.
 </Warning>
 
 OpenAI Codex / ChatGPT OAuth is not an OpenAI Platform embeddings credential.
@@ -211,10 +216,9 @@ local server returns context-length errors.
 
 `recallMaxChars` bounds the `before_prompt_build` auto-recall query, the
 `memory_recall` tool, the `memory_forget` query path, and `openclaw ltm search`.
-Auto-recall embeds the latest user message from the turn and falls back to the
-full prompt only when no user message is present, keeping channel metadata and
-large prompt blocks out of the embedding request. It also bounds each recalled
-item after prompt escaping before that text reaches the model.
+Auto-recall embeds the current turn's prompt after removing media attachment
+notes and normalizing whitespace. The same limit bounds each recalled item
+after prompt escaping before that text reaches the model.
 
 `captureMaxChars` gates whether a user message from the turn's `agent_end`
 event is short enough to be considered for auto-capture. `memory_store` rejects

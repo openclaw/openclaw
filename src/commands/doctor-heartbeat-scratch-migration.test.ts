@@ -11,7 +11,10 @@ import {
   resolveCronJobsStorePath,
   resolveCronJobsStorePathFromConfig,
 } from "../cron/store.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import {
   collectHeartbeatScratchMigrationFindings,
   maybeMigrateHeartbeatFilesToScratch,
@@ -28,6 +31,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   if (originalHome === undefined) {
@@ -115,9 +119,13 @@ describe("HEARTBEAT.md cron scratch migration", () => {
       expect.objectContaining({ content, revision: 1, sourceSha256: expect.any(String) }),
     );
     const archiveDir = path.join(fixture.stateDir, "backups", "heartbeat-migration");
-    const archives = await fs.readdir(archiveDir);
-    expect(archives).toHaveLength(1);
-    await expect(fs.readFile(path.join(archiveDir, archives[0]!), "utf8")).resolves.toBe(content);
+    const archives = await fs.readdir(archiveDir, { withFileTypes: true });
+    const snapshot = archives.find((entry) => entry.isFile())!;
+    const original = archives.find((entry) => entry.isDirectory())!;
+    await expect(fs.readFile(path.join(archiveDir, snapshot.name), "utf8")).resolves.toBe(content);
+    await expect(
+      fs.readFile(path.join(archiveDir, original.name, "HEARTBEAT.md"), "utf8"),
+    ).resolves.toBe(content);
 
     const rerun = await maybeMigrateHeartbeatFilesToScratch({
       cfg: fixture.cfg,

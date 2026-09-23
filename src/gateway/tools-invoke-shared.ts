@@ -34,6 +34,7 @@ import type { GatewayClient } from "./server-methods/shared-types.js";
 import { withOperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
+import { authorizeSessionAgentRun } from "./session-sharing-policy.js";
 import {
   authorizeResolvedSessionMutation,
   resolveSessionSharingTarget,
@@ -186,11 +187,16 @@ type InvokeGatewayToolParams = {
   toolCallIdPrefix: string;
   approvalMode?: "request" | "report";
   signal?: AbortSignal;
+  assertInvocationCurrent?: () => void;
 };
 
 async function invokeGatewayToolWithSignal(
   params: InvokeGatewayToolParams & { signal: AbortSignal },
 ): Promise<ToolsInvokeOutcome> {
+  const assertInvocationCurrent = () => {
+    params.signal.throwIfAborted();
+    params.assertInvocationCurrent?.();
+  };
   const conversationReadOrigin = normalizeConversationReadInvocationOrigin(
     params.conversationReadOrigin,
   );
@@ -250,23 +256,30 @@ async function invokeGatewayToolWithSignal(
   const authenticatedUserProfile = params.cfg.gateway?.roles
     ? params.authenticatedUserProfile
     : undefined;
-  // The calling connection already resolved its authority at connect (shared-secret
-  // owners mint system authority there). Carry that exact fact forward instead of
-  // re-deriving it from scopes, or role boundaries deny the caller's own dispatch.
-  const operatorRoleActor =
-    params.operatorRoleActor ??
-    (params.senderIsOwner && !authenticatedUserProfile ? { kind: "system" as const } : undefined);
+  // HTTP and RPC auth boundaries supply authority independently of profile attribution.
   const client = createSyntheticPluginRuntimeClient({
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
-    ...(operatorRoleActor ? { operatorRoleActor } : {}),
+    operatorRoleActor: params.operatorRoleActor,
     scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [...(params.operatorScopes ?? [])],
   });
-  const primarySessionAuthorizationError = authorizeResolvedSessionMutation({
-    cfg: params.cfg,
-    client,
-    sessionKey,
+  const sessionEntry = loadGatewaySessionEntryReadOnly(sessionKey, {
     agentId: selectedAgentId,
-  });
+  }).entry;
+  const primarySessionAuthorizationError =
+    authorizeResolvedSessionMutation({
+      cfg: params.cfg,
+      client,
+      sessionKey,
+      agentId: selectedAgentId,
+    }) ??
+    // Standalone calls cannot create the sandbox provenance a normal session run records.
+    (!sessionEntry
+      ? authorizeSessionAgentRun({
+          cfg: params.cfg,
+          client,
+          target: { agentId: selectedAgentId, canonicalKey: sessionKey },
+        })
+      : null);
   if (primarySessionAuthorizationError) {
     return {
       ok: false,
@@ -313,7 +326,7 @@ async function invokeGatewayToolWithSignal(
       (!existingTarget
         ? authorizeGatewaySessionCreation({
             cfg: params.cfg,
-            profileId: authenticatedUserProfile.profileId,
+            client,
             agentId: targetAgentId,
           })
         : null);
@@ -326,9 +339,6 @@ async function invokeGatewayToolWithSignal(
       };
     }
   }
-  const sessionEntry = loadGatewaySessionEntryReadOnly(sessionKey, {
-    agentId: selectedAgentId,
-  }).entry;
   if (
     isAgentHarnessSessionKey(sessionKey) &&
     (!sessionEntry || isAgentHarnessSessionStoreEntryProtected(sessionKey, sessionEntry))
@@ -359,6 +369,7 @@ async function invokeGatewayToolWithSignal(
       allowGatewaySubagentBinding: true,
       allowMediaInvokeCommands: true,
       surface: "http",
+      assertInvocationCurrent,
       disablePluginTools,
       gatewayRequestedTools,
     });
@@ -400,6 +411,7 @@ async function invokeGatewayToolWithSignal(
       action,
       args,
     });
+    assertInvocationCurrent();
     const hookResult = await runBeforeToolCallHook({
       toolName,
       params: toolArgs,
@@ -426,15 +438,18 @@ async function invokeGatewayToolWithSignal(
         },
       };
     }
-    params.signal?.throwIfAborted();
-    const executeTool = async () =>
-      await gatewayTool.execute?.(toolCallId, hookResult.params, params.signal);
-    const result = authenticatedUserProfile
-      ? await withOperatorToolGatewayAuthority(
-          { authenticatedUserProfile, scopes: params.operatorScopes ?? [] },
-          executeTool,
-        )
-      : await executeTool();
+    const result = await withOperatorToolGatewayAuthority(
+      {
+        authenticatedUserProfile,
+        operatorRoleActor: params.operatorRoleActor,
+        scopes: client.connect.scopes ?? [],
+        assertCurrent: assertInvocationCurrent,
+      },
+      async () => {
+        assertInvocationCurrent();
+        return await gatewayTool.execute?.(toolCallId, hookResult.params, params.signal);
+      },
+    );
     return {
       ok: true,
       status: 200,

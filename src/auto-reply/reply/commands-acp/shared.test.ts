@@ -31,6 +31,42 @@ describe("parseSteerInput", () => {
       },
     });
   });
+
+  it.each([
+    [["--session", " primary ", "one", "two"], "primary", "one two"],
+    [["--session= primary ", "one", "two"], "primary", "one two"],
+    [["--session=--literal", "one"], "--literal", "one"],
+    [["--session=—target", "one"], "—target", "one"],
+    [
+      ["one", "--session", "first", "two", "--session=second", "—literal"],
+      "second",
+      "one two —literal",
+    ],
+  ])(
+    "consumes session values without changing instructions: %s",
+    (tokens, sessionToken, instruction) => {
+      expect(parseSteerInput(tokens)).toEqual({
+        ok: true,
+        value: { sessionToken, instruction },
+      });
+    },
+  );
+
+  it.each([
+    { tokens: ["--session"] },
+    { tokens: ["--session", "", "one"] },
+    { tokens: ["--session", "  ", "one"] },
+    { tokens: ["--session", "--next", "one"] },
+    { tokens: ["--session", "—next", "one"] },
+    { tokens: ["--session=", "one"] },
+    { tokens: ["--session=  ", "one"] },
+  ])("rejects missing session values: $tokens", ({ tokens }) => {
+    expect(parseSteerInput(tokens)).toEqual({
+      ok: false,
+      error:
+        "--session requires a value. Usage: /acp steer [--session <session-key|session-id|session-label>] <instruction>",
+    });
+  });
 });
 
 describe("parseSpawnInput", () => {

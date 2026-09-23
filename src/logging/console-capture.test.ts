@@ -1,23 +1,28 @@
 // Console capture tests cover intercepting and restoring console output.
 import { Console } from "node:console";
 import fs from "node:fs";
+import { Writable } from "node:stream";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  registerActiveProgressLine,
+  unregisterActiveProgressLine,
+} from "../../packages/terminal-core/src/progress-line.js";
 import { setVerbose } from "../global-state.js";
 import { logError, logInfo, logWarn } from "../logger.js";
-import {
-  createSubsystemLogger,
-  enableConsoleCapture,
-  resetLogger,
-  routeLogsToStderr,
-  setConsoleTimestampPrefix,
-  setLoggerOverride,
-} from "../logging.js";
 import { defaultRuntime } from "../runtime.js";
 import { withEnv } from "../test-utils/env.js";
+import { mockCall } from "../test-utils/mock-call-assertions.js";
+import {
+  enableConsoleCapture,
+  routeLogsToStderr,
+  setConsoleTimestampPrefix,
+  writeRootConsoleLine,
+} from "./console.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import { applyLoggingConfig } from "./logger.js";
+import { applyLoggingConfig, resetLogger, setLoggerOverride } from "./logger.js";
 import { testApi } from "./logger.test-support.js";
 import { loggingState } from "./state.js";
+import { createSubsystemLogger } from "./subsystem.js";
 import {
   captureConsoleSnapshot,
   type ConsoleSnapshot,
@@ -58,16 +63,51 @@ afterAll(async () => {
   await logPathTracker.cleanup();
 });
 
-function firstMockArgAsString(mock: { mock: { calls: readonly unknown[][] } }): string {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error("expected mock call");
-  }
-  return String(call[0]);
-}
-
 describe("enableConsoleCapture", () => {
   const secret = "sk-testsecret1234567890abcd";
+
+  it.each([
+    { source: "captured", active: true, suppressed: false },
+    { source: "root", active: true, suppressed: false },
+    { source: "captured", active: false, suppressed: false },
+    { source: "root", active: true, suppressed: true },
+  ] as const)(
+    "keeps $source diagnostics separate from progress (active: $active, suppressed: $suppressed)",
+    ({ source, active, suppressed }) => {
+      const writes: string[] = [];
+      const stream = Object.assign(
+        new Writable({
+          write(chunk: Buffer, _encoding, callback) {
+            writes.push(chunk.toString());
+            callback();
+          },
+        }),
+        { isTTY: active },
+      );
+      setLoggerOverride({ level: "silent", consoleStyle: "pretty" });
+      vi.stubGlobal("console", new Console({ stdout: stream, stderr: stream }));
+      try {
+        enableConsoleCapture();
+        registerActiveProgressLine(stream as NodeJS.WriteStream);
+        if (active) {
+          stream.write("PROGRESS");
+        }
+        const message = suppressed ? "Closing session: synthetic" : "DIAGNOSTIC";
+        if (source === "captured") {
+          console.error(message);
+        } else {
+          writeRootConsoleLine("error", message);
+        }
+        expect(writes.join("")).toBe(
+          suppressed ? "PROGRESS" : `${active ? "PROGRESS\r\x1b[2K" : ""}DIAGNOSTIC\n`,
+        );
+      } finally {
+        unregisterActiveProgressLine(stream as NodeJS.WriteStream);
+        vi.unstubAllGlobals();
+        stream.destroy();
+      }
+    },
+  );
 
   it("swallows EIO from stderr writes", () => {
     setLoggerOverride({ level: "info", file: tempLogPath() });
@@ -99,7 +139,7 @@ describe("enableConsoleCapture", () => {
     enableConsoleCapture();
     console.warn("[EventQueue] Slow listener detected");
     expect(warn).toHaveBeenCalledTimes(1);
-    const firstArg = firstMockArgAsString(warn);
+    const firstArg = String(mockCall(warn)[0]);
     // Timestamp uses local time with timezone offset instead of UTC "Z" suffix
     expect(firstArg).toMatch(
       /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2} \[EventQueue\]/,
@@ -126,7 +166,7 @@ describe("enableConsoleCapture", () => {
     const payload = JSON.stringify({ ok: true });
     console.log(payload);
     expect(log).toHaveBeenCalledTimes(1);
-    const firstArg = firstMockArgAsString(log);
+    const firstArg = String(mockCall(log)[0]);
     expect(firstArg).toMatch(/^(?:\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T)/);
     expect(firstArg.endsWith(` ${payload}`)).toBe(true);
   });
@@ -148,7 +188,7 @@ describe("enableConsoleCapture", () => {
 
       expect(warn).toHaveBeenCalledTimes(1);
       if (consoleStyle === "json") {
-        expect(JSON.parse(firstMockArgAsString(warn))).toMatchObject({
+        expect(JSON.parse(String(mockCall(warn)[0]))).toMatchObject({
           level: "warn",
           message: "tool failed { attempt: 1 }",
         });
@@ -167,7 +207,7 @@ describe("enableConsoleCapture", () => {
     createSubsystemLogger("gateway/auth").warn("authentication retry", { attempt: 2 });
 
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(firstMockArgAsString(warn))).toMatchObject({
+    expect(JSON.parse(String(mockCall(warn)[0]))).toMatchObject({
       level: "warn",
       subsystem: "gateway/auth",
       message: "authentication retry",
@@ -209,7 +249,7 @@ describe("enableConsoleCapture", () => {
         expect.objectContaining({ _meta: expect.objectContaining({ logLevelName: "TRACE" }) }),
       ]);
       expect(stderrWrite).toHaveBeenCalledTimes(1);
-      const written = firstMockArgAsString(stderrWrite);
+      const written = String(mockCall(stderrWrite)[0]);
       const event = consoleStyle === "json" ? JSON.parse(written) : { stack: written };
       if (consoleStyle === "json") {
         expect(event).toMatchObject({ level: "trace", message: "trace diagnostic\nsecond line" });
@@ -227,7 +267,7 @@ describe("enableConsoleCapture", () => {
 
     console.trace(`Authorization: Bearer ${secret}`);
 
-    const written = firstMockArgAsString(error);
+    const written = String(mockCall(error)[0]);
     const event = JSON.parse(written) as Record<string, unknown>;
     expect(event).toMatchObject({ level: "trace" });
     expect(written).not.toContain(secret);
@@ -265,7 +305,7 @@ describe("enableConsoleCapture", () => {
       );
     });
 
-    const written = firstMockArgAsString(warn);
+    const written = String(mockCall(warn)[0]);
     const event = JSON.parse(written) as {
       message: string;
       level: string;
@@ -302,7 +342,7 @@ describe("enableConsoleCapture", () => {
       console.trace("custom-only-secret");
     });
 
-    const written = firstMockArgAsString(error);
+    const written = String(mockCall(error)[0]);
     const event = JSON.parse(written) as { message: string; stack: string };
     expect(written).not.toContain("custom-only-secret");
     expect(event.message).not.toBe("custom-only-secret");
@@ -326,7 +366,7 @@ describe("enableConsoleCapture", () => {
 
       expect(error).toHaveBeenCalledTimes(1);
       if (consoleStyle === "json") {
-        expect(JSON.parse(firstMockArgAsString(error))).toMatchObject({
+        expect(JSON.parse(String(mockCall(error)[0]))).toMatchObject({
           level: "error",
           message: "[tools] exec failed",
         });
@@ -345,7 +385,7 @@ describe("enableConsoleCapture", () => {
     console.error(`Authorization: Bearer ${secret}`);
 
     expect(stderrWrite).toHaveBeenCalledTimes(1);
-    const written = firstMockArgAsString(stderrWrite);
+    const written = String(mockCall(stderrWrite)[0]);
     expect(JSON.parse(written)).toMatchObject({ level: "error" });
     expect(written).not.toContain(secret);
   });
@@ -365,7 +405,7 @@ describe("enableConsoleCapture", () => {
     console.log("diag");
     defaultRuntime.writeJson({ ok: true });
 
-    expect(JSON.parse(firstMockArgAsString(stderrWrite))).toMatchObject({
+    expect(JSON.parse(String(mockCall(stderrWrite)[0]))).toMatchObject({
       level: "info",
       message: "diag",
     });
@@ -421,7 +461,7 @@ describe("enableConsoleCapture", () => {
         countMatchingLines(fs.readFileSync(logPath, "utf-8"), "[tools] operation failed"),
       ).toBe(1);
       expect(consoleSpy).toHaveBeenCalledTimes(1);
-      const consoleLine = firstMockArgAsString(consoleSpy);
+      const consoleLine = String(mockCall(consoleSpy)[0]);
       expect(consoleLine).toContain("[tools] operation failed");
       expect(consoleLine).not.toContain(secret);
     },
@@ -436,7 +476,7 @@ describe("enableConsoleCapture", () => {
     console.log("apiKey:", secret);
 
     expect(log).toHaveBeenCalledTimes(1);
-    const line = firstMockArgAsString(log);
+    const line = String(mockCall(log)[0]);
     expect(line).toContain("apiKey:");
     expect(line).not.toContain(secret);
   });
@@ -450,7 +490,7 @@ describe("enableConsoleCapture", () => {
     console.error(`Authorization: Bearer ${secret}`);
 
     expect(stderrWrite).toHaveBeenCalledTimes(1);
-    const line = firstMockArgAsString(stderrWrite);
+    const line = String(mockCall(stderrWrite)[0]);
     expect(line).toContain("Authorization: Bearer");
     expect(line).not.toContain(secret);
   });
@@ -465,7 +505,7 @@ describe("enableConsoleCapture", () => {
     console.warn(`token=${secret}`);
 
     expect(warn).toHaveBeenCalledTimes(1);
-    const line = firstMockArgAsString(warn);
+    const line = String(mockCall(warn)[0]);
     expect(line).toMatch(/^(?:\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T)/);
     expect(line).toContain("token=");
     expect(line).not.toContain(secret);

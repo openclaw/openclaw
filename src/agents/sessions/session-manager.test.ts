@@ -1,8 +1,13 @@
 // Session manager tests cover SQLite persistence and in-memory tree behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { serialize } from "node:v8";
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import * as configEnv from "../../config/config-env-vars.js";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -13,11 +18,12 @@ import {
   loadTranscriptEvents,
   readTranscriptRawDelta,
   replaceTranscriptEventsSync,
-  updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { redactIdentifier } from "../../logging/redact-identifier.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import {
   buildSessionContext,
   CURRENT_SESSION_VERSION,
@@ -25,7 +31,14 @@ import {
   type SessionMessageEntry,
 } from "./session-manager.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const stateDir of tempDirs.dirs) {
+      await cleanupSessionStateForTest({ stateDir });
+    }
+    cleanup();
+  }),
+);
 
 function openMarker(marker: string, sessionKey: string, cwd: string): SessionManager {
   const target = parseSqliteSessionFileMarker(marker);
@@ -36,6 +49,71 @@ function openMarker(marker: string, sessionKey: string, cwd: string): SessionMan
 }
 
 describe("SessionManager.open", () => {
+  it.each(["native", "windows"])(
+    "commits ordered metadata with a %s environment without host transcript writes",
+    async (environment) => {
+      const dir = tempDirs.make("openclaw-session-metadata-worker-");
+      const target = {
+        agentId: "main",
+        sessionId: "metadata-worker",
+        sessionKey: "agent:main:metadata-worker",
+        storePath: path.join(dir, "agents", "main", "agent", "openclaw-agent.sqlite"),
+      };
+      const manager = SessionManager.open(target, dir);
+      // Preserve the implementation so each observed call uses its actual database receiver.
+      // oxlint-disable-next-line typescript/unbound-method
+      const nativePrepare = DatabaseSync.prototype.prepare;
+      const hostWrites: string[] = [];
+      const prepare = vi
+        .spyOn(DatabaseSync.prototype, "prepare")
+        .mockImplementation(function (this: DatabaseSync, sql) {
+          const mutation = /^\s*(insert|update|delete|replace)\b/i.exec(sql)?.[1];
+          if (mutation && /\b(?:transcript_events|session_windows|session_nodes)\b/i.test(sql)) {
+            hostWrites.push(mutation);
+          }
+          return nativePrepare.call(this, sql);
+        });
+      const cloneEnv = configEnv.cloneEnvWithPlatformSemantics;
+      const clone =
+        environment === "windows"
+          ? vi.spyOn(configEnv, "cloneEnvWithPlatformSemantics").mockImplementation((env) => {
+              const { OPENCLAW_STATE_DIR, ...rest } = env;
+              const captured = withMockedPlatform("win32", () =>
+                cloneEnv({
+                  ...rest,
+                  OpenClaw_State_Dir: OPENCLAW_STATE_DIR,
+                }),
+              );
+              expect(() => serialize(captured)).toThrow("could not be cloned");
+              return captured;
+            })
+          : undefined;
+      let ids: string[];
+      try {
+        ids = await Promise.all([
+          manager.appendModelChange("test-provider", "test-model"),
+          manager.appendThinkingLevelChange("high"),
+        ]);
+      } finally {
+        prepare.mockRestore();
+        clone?.mockRestore();
+      }
+      expect(hostWrites).toEqual([]);
+      expect(manager.getEntries()).toMatchObject([
+        {
+          type: "model_change",
+          id: ids[0],
+          parentId: null,
+          provider: "test-provider",
+          modelId: "test-model",
+        },
+        { type: "thinking_level_change", id: ids[1], parentId: ids[0], thinkingLevel: "high" },
+      ]);
+      expect(SessionManager.open(target, dir).getEntries()).toEqual(manager.getEntries());
+      expect(loadSessionEntry(target)?.sessionId).toBe(target.sessionId);
+    },
+  );
+
   it("opens SQLite markers without creating marker-named files and persists assistant replies", async () => {
     const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");
@@ -73,25 +151,12 @@ describe("SessionManager.open", () => {
       api: "openai-responses",
       provider: "openai",
       model: "gpt-5.5",
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          total: 0,
-        },
-      },
+      usage: createZeroUsageFixture(),
       stopReason: "stop",
       timestamp: Date.now(),
     });
-    const thinkingChangeId = sessionManager.appendThinkingLevelChange("high");
-    const modelChangeId = sessionManager.appendModelChange("openai", "gpt-5.5");
+    const thinkingChangeId = await sessionManager.appendThinkingLevelChange("high");
+    const modelChangeId = await sessionManager.appendModelChange("openai", "gpt-5.5");
     const compactionId = sessionManager.appendCompaction("summary", "assistant-1", 42);
     const resetId = sessionManager.appendResetBoundary("new", assistantId);
     expect(sessionManager.getBoundaryCount()).toBe(2);
@@ -192,7 +257,7 @@ describe("SessionManager.open", () => {
     expect(() => currentManager.setSessionTarget(scope)).toThrow(
       "require doctor/import migration before runtime use",
     );
-    currentManager.appendModelChange("test-provider", "test-model");
+    await currentManager.appendModelChange("test-provider", "test-model");
     await expect(loadTranscriptEvents(currentScope)).resolves.toEqual([
       expect.objectContaining({
         type: "session",
@@ -279,7 +344,7 @@ describe("SessionManager.open", () => {
     });
 
     const manager = SessionManager.open(scope, dir);
-    manager.appendModelChange("test-provider", "test-model");
+    await manager.appendModelChange("test-provider", "test-model");
 
     await expect(loadTranscriptEvents(scope)).resolves.toEqual([
       expect.objectContaining({
@@ -309,11 +374,7 @@ describe("SessionManager.open", () => {
     expect(loadSessionEntry(scope)).toBeUndefined();
     const manager = SessionManager.open(scope, dir);
     expect(loadSessionEntry(scope)).toBeUndefined();
-    const messageId = manager.appendMessage({
-      role: "user",
-      content: "first message",
-      timestamp: 1,
-    });
+    const messageId = manager.appendMessage(makeUserMessage("first message", 1));
 
     await expect(loadTranscriptEvents(scope)).resolves.toEqual([
       expect.objectContaining({
@@ -372,11 +433,13 @@ describe("SessionManager.open", () => {
     expect(loadSessionEntry(scope)).toEqual(before);
   });
 
-  it("rejects invalid entries before mutating in-memory state", () => {
+  it("rejects invalid entries before mutating in-memory state", async () => {
     const manager = SessionManager.inMemory("/tmp");
     const entriesBefore = manager.getEntries();
 
-    expect(() => manager.appendModelChange("", "")).toThrow("Invalid session transcript entry");
+    await expect(manager.appendModelChange("", "")).rejects.toThrow(
+      "Invalid session transcript entry",
+    );
     expect(manager.getEntries()).toEqual(entriesBefore);
     expect(manager.getLeafId()).toBeNull();
     expect(manager.getAppendParentId()).toBeNull();
@@ -588,14 +651,7 @@ describe("SessionManager.open", () => {
         api: "openai-responses",
         provider: "openai",
         model: "gpt-5.5",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsageFixture(),
         stopReason: "stop",
         timestamp: Date.now(),
       }),
@@ -721,12 +777,31 @@ describe("SessionManager.open", () => {
     ).toMatchObject([{ content: "root" }, { content: "side middle" }, { content: "side leaf" }]);
   });
 
-  it("normalizes session names to one line", () => {
+  it.each([
+    { label: "missing", names: [], expected: undefined, rewind: false },
+    {
+      label: "single-line normalized",
+      names: ["  first\nsecond\r\nthird  "],
+      expected: "first second third",
+      rewind: false,
+    },
+    { label: "cleared", names: ["old name", "  "], expected: undefined, rewind: false },
+    {
+      label: "off-branch latest",
+      names: ["old name", "latest name"],
+      expected: "latest name",
+      rewind: true,
+    },
+  ])("reads $label session names", ({ names, expected, rewind }) => {
     const manager = SessionManager.inMemory();
-
-    manager.appendSessionInfo("  first\nsecond\r\nthird  ");
-
-    expect(manager.getSessionName()).toBe("first second third");
+    const root = manager.appendMessage({ role: "user", content: "root", timestamp: 1 });
+    for (const name of names) {
+      manager.appendSessionInfo(name);
+    }
+    if (rewind) {
+      manager.branch(root);
+    }
+    expect(manager.getSessionName()).toBe(expected);
   });
 
   it("ignores opaque SQLite rows while resolving the session cwd", async () => {
@@ -787,15 +862,15 @@ describe("SessionManager.open", () => {
       expectedSessionIdHash: redactIdentifier(sessionId),
       sessionKeyHash: redactIdentifier(sessionKey),
     };
-    const captureError = (run: () => unknown): unknown => {
+    const captureError = async (run: () => unknown): Promise<unknown> => {
       try {
-        run();
+        await run();
       } catch (error) {
         return error;
       }
       throw new Error("expected rebound transcript persistence to fail");
     };
-    const compactionError = captureError(() =>
+    const compactionError = await captureError(() =>
       sessionManager.appendCompaction("late summary", assistant.messageId, 42),
     );
     expect(compactionError).toMatchObject({ cause: expectedCause });
@@ -806,8 +881,10 @@ describe("SessionManager.open", () => {
     expect(() => sessionManager.branchWithSummary(null, "late summary")).toThrow(
       "entry was not persisted",
     );
-    const eventError = captureError(() => sessionManager.appendModelChange("openai", "gpt-5.5"));
-    const messageError = captureError(() =>
+    const eventError = await captureError(() =>
+      sessionManager.appendModelChange("openai", "gpt-5.5"),
+    );
+    const messageError = await captureError(() =>
       sessionManager.appendMessage({ role: "user", content: "late message", timestamp: 1 }),
     );
     for (const error of [eventError, messageError]) {
@@ -882,138 +959,6 @@ describe("SessionManager.open", () => {
     ]);
   });
 
-  it("creates SQLite-backed branch sessions without rewriting the source transcript", async () => {
-    const dir = tempDirs.make("openclaw-session-manager-");
-    const storePath = path.join(dir, "sessions.json");
-    const sessionId = "sqlite-branch-source";
-    const sessionKey = "agent:main:dashboard:sqlite-branch-source";
-    const marker = formatSqliteSessionFileMarker({
-      agentId: "main",
-      sessionId,
-      storePath,
-    });
-    const scope = { agentId: "main", sessionId, sessionKey, storePath };
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey, storePath },
-      {
-        delivery: { kind: "internal" },
-        sessionFile: marker,
-        sessionId,
-        updatedAt: 10,
-      },
-    );
-    const user = await appendTranscriptMessage(scope, {
-      cwd: dir,
-      eventId: "user-message",
-      message: { role: "user", content: "question before branch" },
-    });
-    const assistant = await appendTranscriptMessage(scope, {
-      cwd: dir,
-      eventId: "assistant-message",
-      message: buildAssistantMessage("answer before branch"),
-      parentId: user.messageId,
-    });
-
-    const sessionManager = openMarker(marker, sessionKey, dir);
-    const branchedMarker = await sessionManager.createBranchedSession(assistant.messageId);
-    const branchedSessionId = sessionManager.getSessionId();
-
-    expect(branchedMarker).toBe(branchedSessionId);
-    expect(branchedSessionId).not.toBe(sessionId);
-    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
-      delivery: { kind: "internal" },
-      sessionId: branchedSessionId,
-    });
-    await expect(loadTranscriptEvents({ agentId: "main", sessionId, storePath })).resolves.toEqual([
-      expect.objectContaining({ id: sessionId, type: "session" }),
-      expect.objectContaining({ id: user.messageId, type: "message" }),
-      expect.objectContaining({ id: assistant.messageId, type: "message" }),
-    ]);
-    await expect(
-      loadTranscriptEvents({
-        agentId: "main",
-        sessionId: branchedSessionId,
-        sessionKey,
-        storePath,
-      }),
-    ).resolves.toEqual([
-      expect.objectContaining({
-        id: branchedSessionId,
-        parentSession: sessionId,
-        type: "session",
-      }),
-      expect.objectContaining({ id: user.messageId, type: "message" }),
-      expect.objectContaining({ id: assistant.messageId, type: "message" }),
-    ]);
-  });
-
-  it("rejects a queued branch when lifecycle ownership changes before persistence", async () => {
-    const dir = tempDirs.make("openclaw-session-manager-");
-    const storePath = path.join(dir, "sessions.json");
-    const sessionId = "sqlite-branch-race-source";
-    const sessionKey = "agent:main:dashboard:sqlite-branch-race-source";
-    const marker = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
-    const scope = { agentId: "main", sessionId, sessionKey, storePath };
-    await upsertSessionEntryCore(scope, {
-      lifecycleRevision: "branch-original-revision",
-      sessionFile: marker,
-      sessionId,
-      updatedAt: 10,
-    });
-    const user = await appendTranscriptMessage(scope, {
-      cwd: dir,
-      eventId: "branch-race-user",
-      message: { role: "user", content: "question before raced branch" },
-    });
-    const assistant = await appendTranscriptMessage(scope, {
-      cwd: dir,
-      eventId: "branch-race-assistant",
-      message: buildAssistantMessage("answer before raced branch"),
-      parentId: user.messageId,
-    });
-    const sessionManager = openMarker(marker, sessionKey, dir);
-
-    let releaseOwnerChange = () => {};
-    const ownerChangeGate = new Promise<void>((resolve) => {
-      releaseOwnerChange = resolve;
-    });
-    let markOwnerChangeStarted = () => {};
-    const ownerChangeStarted = new Promise<void>((resolve) => {
-      markOwnerChangeStarted = resolve;
-    });
-    const ownerChange = updateSessionEntry(scope, async () => {
-      markOwnerChangeStarted();
-      await ownerChangeGate;
-      return { lifecycleRevision: "branch-replacement-revision" };
-    });
-    await ownerChangeStarted;
-
-    const branch = sessionManager.createBranchedSession(assistant.messageId);
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    releaseOwnerChange();
-
-    await ownerChange;
-    await expect(branch).rejects.toMatchObject({
-      cause: {
-        code: "session-rebound",
-        expectedSessionId: sessionId,
-        sessionKey,
-      },
-    });
-    expect(loadSessionEntry(scope)).toMatchObject({
-      lifecycleRevision: "branch-replacement-revision",
-      sessionId,
-    });
-    expect(sessionManager.getSessionId()).toBe(sessionId);
-    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
-      expect.objectContaining({ id: sessionId, type: "session" }),
-      expect.objectContaining({ id: user.messageId, type: "message" }),
-      expect.objectContaining({ id: assistant.messageId, type: "message" }),
-    ]);
-  });
-
   it("persists user turns when a SQLite marker has no external recorder", async () => {
     const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");
@@ -1059,14 +1004,7 @@ function buildAssistantMessage(text: string) {
     api: "messages" as const,
     provider: "anthropic" as const,
     model: "sonnet-4.6" as const,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop" as const,
     timestamp: Date.now(),
   };

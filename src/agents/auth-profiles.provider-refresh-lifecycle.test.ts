@@ -13,15 +13,11 @@ import {
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  oauthCred,
-  readAuthProfileStoreForTest,
-  storeWith,
-} from "./auth-profiles/oauth-test-utils.js";
+import { oauthCred } from "./auth-profiles/credential-fixtures.test-support.js";
+import { readAuthProfileStoreForTest, storeWith } from "./auth-profiles/oauth-test-utils.js";
 import { resolveApiKeyForProfile } from "./auth-profiles/oauth.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 
-const START_AUTH_CALLBACK = "__openclawProviderRefreshLifecycleStart";
 const PLUGIN_ID = "provider-refresh-lifecycle";
 const PROVIDER_ID = "lifecycle-provider";
 const PROFILE_ID = `${PROVIDER_ID}:default`;
@@ -60,7 +56,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.unstubAllGlobals();
   clearRuntimeAuthProfileStoreSnapshots();
   resetFileLockStateForTest();
   resetPluginLoaderTestStateForTest();
@@ -88,7 +83,7 @@ describe("provider OAuth refresh lifecycle", () => {
         const initialStore = storeWith(PROFILE_ID, expiredCredential);
         await state.writeAuthProfiles(initialStore);
         const plugin = writeLifecycleProviderPlugin(`
-          globalThis[${JSON.stringify(START_AUTH_CALLBACK)}]();
+          api.logger.info("registration-start");
           api.registerProvider({
             id: ${JSON.stringify(PROVIDER_ID)},
             label: "Lifecycle Provider",
@@ -130,9 +125,10 @@ describe("provider OAuth refresh lifecycle", () => {
             profileId: PROFILE_ID,
           });
         });
-        vi.stubGlobal(START_AUTH_CALLBACK, startAuthDuringRegister);
-
-        loadOpenClawPlugins(loadOptions);
+        loadOpenClawPlugins({
+          ...loadOptions,
+          logger: { info: startAuthDuringRegister, warn: vi.fn(), error: vi.fn() },
+        });
 
         expect(isPluginRegistryLoadInFlight(loadOptions)).toBe(false);
         if (!authResolution) {

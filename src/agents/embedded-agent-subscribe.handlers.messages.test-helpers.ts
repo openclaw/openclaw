@@ -84,12 +84,13 @@ export function createMessageUpdateContext(
     emitReasoningStream: params.emitReasoningStream ?? vi.fn(),
     openReasoningStream: params.openReasoningStream ?? vi.fn(),
     flushBlockReplyBuffer: params.flushBlockReplyBuffer ?? vi.fn(),
+    flushAssistantStream: vi.fn(),
     blockChunker: new EmbeddedBlockChunker(),
     resetAssistantMessageState: params.resetAssistantMessageState ?? vi.fn(),
     captureModelEvent: vi.fn(),
-    resetBlockReplyDirectives: vi.fn(),
     resetPartialReplyDirectives: () => {
       partialReplyDirectiveAccumulator.reset();
+      ctx.state.lastAssistantAudioDirectiveCount = 0;
       ctx.state.pendingAssistantReplyDirectives = undefined;
     },
     emitAssistantStreamData: vi.fn(
@@ -117,8 +118,6 @@ export function createMessageEndContext(
     onAgentEvent?: ReturnType<typeof vi.fn>;
     onBlockReply?: ReturnType<typeof vi.fn>;
     finalizeAssistantTexts?: Mock<EmbeddedAgentSubscribeContext["finalizeAssistantTexts"]>;
-    flushBlockReplyBuffer?: Mock<EmbeddedAgentSubscribeContext["flushBlockReplyBuffer"]>;
-    stripBlockTags?: Mock<EmbeddedAgentSubscribeContext["stripBlockTags"]>;
     warn?: ReturnType<typeof vi.fn>;
     builtinToolNames?: ReadonlySet<string>;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
@@ -148,12 +147,12 @@ export function createMessageEndContext(
   ctx.state = {
     ...createEmbeddedAgentSubscribeState(ctx.params),
     blockReplyBreak: "message_end",
-    deltaBuffer: "Need send.",
     ...params.state,
   };
   ctx.blockChunker.append(params.bufferedText ?? "");
   const delivery = createReplyDelivery(ctx);
   ctx.emitAssistantStreamData = delivery.emitAssistantStreamData;
+  ctx.flushAssistantStream = delivery.flushAssistantStream;
   ctx.emitBlockReply = vi.fn(delivery.emitBlockReply);
   ctx.finalizeAssistantTexts =
     params.finalizeAssistantTexts ?? vi.fn(delivery.finalizeAssistantTexts);
@@ -164,9 +163,6 @@ export function createMessageEndContext(
     shouldSkipAssistantText: delivery.shouldSkipAssistantText,
   });
   Object.assign(ctx, rendering);
-  ctx.stripBlockTags = params.stripBlockTags ?? vi.fn(rendering.stripBlockTags);
-  ctx.flushBlockReplyBuffer =
-    params.flushBlockReplyBuffer ?? vi.fn(rendering.flushBlockReplyBuffer);
   return ctx;
 }
 

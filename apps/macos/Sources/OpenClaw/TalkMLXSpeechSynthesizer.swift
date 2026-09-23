@@ -38,7 +38,7 @@ actor TalkMLXSpeechSynthesizer {
     private var transport: (any MLXTTSTransport)?
     private var activeID: String?
     private var cancelRequestedID: String?
-    private var fallbackRequiredID: String?
+    private var fallbackRequiredIDs: Set<String> = []
     private var cancelEscalationTask: Task<Void, Never>?
     private var idleTask: Task<Void, Never>?
     private var memoryPressureMonitor: MLXMemoryPressureMonitor?
@@ -62,94 +62,6 @@ actor TalkMLXSpeechSynthesizer {
         self.idleDuration = idleDuration
         self.cancelGraceDuration = cancelGraceDuration
         self.observesMemoryPressure = observesMemoryPressure
-    }
-
-    func synthesize(
-        text: String,
-        modelRepo: String?,
-        language: String?,
-        voicePreset: String?,
-        referenceAudioPath: String? = nil,
-        referenceText: String? = nil) async throws -> Data
-    {
-        #if !arch(arm64)
-        throw SynthesizeError.modelLoadFailed("MLX TTS requires Apple silicon")
-        #else
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return Data() }
-        guard self.activeID == nil else {
-            throw SynthesizeError.audioGenerationFailed
-        }
-
-        self.ensureMemoryPressureMonitor()
-        self.idleTask?.cancel()
-        self.idleTask = nil
-
-        let id = UUID().uuidString
-        self.activeID = id
-        let request = MLXTTSRequest.synthesize(MLXTTSSynthesizeRequest(
-            id: id,
-            text: trimmed,
-            modelRepo: Self.resolvedModelRepo(modelRepo),
-            language: language?.nilIfBlank,
-            voice: voicePreset?.nilIfBlank,
-            referenceAudioPath: referenceAudioPath?.nilIfBlank,
-            referenceText: referenceText?.nilIfBlank))
-
-        for attempt in 0...1 {
-            do {
-                let transport = try await ensureTransport()
-                guard self.activeID == id, self.cancelRequestedID != id else {
-                    await self.discardTransport(forRequest: id)
-                    throw SynthesizeError.canceled
-                }
-                try await transport.send(request)
-                let audio = try await waitForAudio(id: id, transport: transport)
-                self.finishRequest(id: id)
-                return try Self.makeWAV(audio: audio)
-            } catch let error as SynthesizeError {
-                let requiresFallback = self.fallbackRequiredID == id
-                self.finishRequest(id: id)
-                if requiresFallback {
-                    throw SynthesizeError.audioGenerationFailed
-                }
-                throw error
-            } catch is CancellationError {
-                if self.activeID == id {
-                    try? await self.transport?.send(.cancel(id: id))
-                }
-                await self.discardTransport(forRequest: id)
-                self.finishRequest(id: id)
-                throw SynthesizeError.canceled
-            } catch {
-                self.logger.error(
-                    """
-                    talk mlx helper transport failed attempt=\(attempt + 1, privacy: .public): \
-                    \(error.localizedDescription, privacy: .public)
-                    """)
-                await self.discardTransport(forRequest: id)
-                if self.fallbackRequiredID == id {
-                    self.finishRequest(id: id)
-                    throw SynthesizeError.audioGenerationFailed
-                }
-                if self.cancelRequestedID == id {
-                    self.finishRequest(id: id)
-                    throw SynthesizeError.canceled
-                }
-                guard self.activeID == id else {
-                    throw SynthesizeError.canceled
-                }
-                if attempt == 0 {
-                    continue
-                }
-                self.finishRequest(id: id)
-                throw SynthesizeError.modelLoadFailed(Self.helperInvocation().displayName)
-            }
-        }
-
-        self.finishRequest(id: id)
-        throw SynthesizeError.audioGenerationFailed
-        #endif
     }
 
     func synthesizeStream(
@@ -192,13 +104,14 @@ actor TalkMLXSpeechSynthesizer {
 
         for attempt in 0...1 {
             do {
-                let transport = try await ensureTransport()
+                let transport = try await ensureTransport(forRequest: id)
                 guard self.activeID == id, self.cancelRequestedID != id else {
                     await self.discardTransport(forRequest: id)
                     throw SynthesizeError.canceled
                 }
                 try await transport.send(request)
                 let start = try await waitForStreamStart(id: id, transport: transport)
+                try self.requireCurrentRequest(id)
                 switch start {
                 case let .stream(info):
                     return MLXTTSPlaybackStream(
@@ -217,12 +130,7 @@ actor TalkMLXSpeechSynthesizer {
                         })
                 }
             } catch let error as SynthesizeError {
-                let requiresFallback = self.fallbackRequiredID == id
-                self.finishRequest(id: id)
-                if requiresFallback {
-                    throw SynthesizeError.audioGenerationFailed
-                }
-                throw error
+                throw self.finishRequestFailure(id: id, error: error)
             } catch is CancellationError {
                 if self.activeID == id {
                     try? await self.transport?.send(.cancel(id: id))
@@ -235,27 +143,19 @@ actor TalkMLXSpeechSynthesizer {
                     "talk mlx helper stream failed attempt=\(attempt + 1, privacy: .public): " +
                         "\(error.localizedDescription, privacy: .public)")
                 await self.discardTransport(forRequest: id)
-                if self.fallbackRequiredID == id {
-                    self.finishRequest(id: id)
-                    throw SynthesizeError.audioGenerationFailed
-                }
-                if self.cancelRequestedID == id {
-                    self.finishRequest(id: id)
-                    throw SynthesizeError.canceled
-                }
-                guard self.activeID == id else {
-                    throw SynthesizeError.canceled
+                if self.fallbackRequiredIDs.contains(id) || self.cancelRequestedID == id || self.activeID != id {
+                    throw self.finishRequestFailure(id: id, error: error)
                 }
                 if attempt == 0 {
                     continue
                 }
-                self.finishRequest(id: id)
-                throw SynthesizeError.modelLoadFailed(Self.helperInvocation().displayName)
+                throw self.finishRequestFailure(
+                    id: id,
+                    error: SynthesizeError.modelLoadFailed(Self.helperInvocation().displayName))
             }
         }
 
-        self.finishRequest(id: id)
-        throw SynthesizeError.audioGenerationFailed
+        throw self.finishRequestFailure(id: id, error: SynthesizeError.audioGenerationFailed)
         #endif
     }
 
@@ -275,21 +175,30 @@ actor TalkMLXSpeechSynthesizer {
         self.cancelEscalationTask = nil
         self.idleTask?.cancel()
         self.idleTask = nil
-        if let activeID {
-            try? await self.transport?.send(.cancel(id: activeID))
-        }
-        try? await self.transport?.send(.shutdown)
-        activeID = nil
+        // Revoke ownership before sends suspend; retire only the captured helper.
+        let transport = self.transport
+        let activeID = self.activeID
+        self.transport = nil
+        self.activeID = nil
         self.cancelRequestedID = nil
-        await self.discardTransport()
+        if let activeID {
+            try? await transport?.send(.cancel(id: activeID))
+        }
+        try? await transport?.send(.shutdown)
+        await transport?.close()
     }
 
-    private func ensureTransport() async throws -> any MLXTTSTransport {
+    private func ensureTransport(forRequest id: String) async throws -> any MLXTTSTransport {
         if let transport = self.transport {
             return transport
         }
 
         let transport = try await transportFactory()
+        // A factory can complete after shutdown has admitted another request.
+        guard self.activeID == id, self.cancelRequestedID != id else {
+            await transport.close()
+            throw SynthesizeError.canceled
+        }
         // Publish the starting transport before waiting for `ready` so talk
         // cancellation and app shutdown can still terminate a wedged startup.
         self.transport = transport
@@ -310,34 +219,15 @@ actor TalkMLXSpeechSynthesizer {
         }
     }
 
-    private func waitForAudio(id: String, transport: any MLXTTSTransport) async throws -> MLXTTSAudio {
-        while true {
-            switch try await transport.nextEvent() {
-            case let .audio(audio) where audio.id == id:
-                guard self.cancelRequestedID != id else {
-                    throw SynthesizeError.canceled
-                }
-                return audio
-            case let .canceled(canceledID) where canceledID == id:
-                throw SynthesizeError.canceled
-            case let .error(error) where error.id == nil || error.id == id:
-                switch error.code {
-                case .canceled:
-                    throw SynthesizeError.canceled
-                case .modelLoadFailed:
-                    throw SynthesizeError.modelLoadFailed(error.message)
-                case .busy, .generationFailed, .invalidRequest, .protocolError:
-                    throw SynthesizeError.audioGenerationFailed
-                }
-            case .ready, .audio, .streamStarted, .audioChunk, .completed, .error, .canceled:
-                continue
-            }
-        }
-    }
-
     private enum StreamStart {
         case stream(MLXTTSStreamStart)
         case legacy(MLXTTSAudio)
+    }
+
+    private func requireCurrentRequest(_ id: String) throws {
+        guard self.activeID == id, self.cancelRequestedID != id else {
+            throw SynthesizeError.canceled
+        }
     }
 
     private func waitForStreamStart(
@@ -415,15 +305,15 @@ actor TalkMLXSpeechSynthesizer {
                     operation: { try await transport.nextEvent() })
                 switch event {
                 case let .audioChunk(chunk) where chunk.id == id:
-                    guard self.cancelRequestedID != id else {
-                        throw SynthesizeError.canceled
-                    }
+                    try self.requireCurrentRequest(id)
                     continuation.yield(chunk.pcm)
                 case let .completed(completedID) where completedID == id:
+                    try self.requireCurrentRequest(id)
                     self.finishRequest(id: id)
                     continuation.finish()
                     return
                 case let .audio(audio) where audio.id == id:
+                    try self.requireCurrentRequest(id)
                     continuation.yield(audio.pcm)
                     self.finishRequest(id: id)
                     continuation.finish()
@@ -436,14 +326,11 @@ actor TalkMLXSpeechSynthesizer {
                     continue
                 }
             }
-        } catch SynthesizeError.timedOut {
-            await self.discardTransport(forRequest: id)
-            self.finishRequest(id: id)
-            continuation.finish(throwing: SynthesizeError.timedOut)
         } catch {
-            let requiresFallback = self.fallbackRequiredID == id
-            self.finishRequest(id: id)
-            continuation.finish(throwing: requiresFallback ? SynthesizeError.audioGenerationFailed : error)
+            if case SynthesizeError.timedOut = error {
+                await self.discardTransport(forRequest: id)
+            }
+            continuation.finish(throwing: self.finishRequestFailure(id: id, error: error))
         }
     }
 
@@ -458,10 +345,21 @@ actor TalkMLXSpeechSynthesizer {
         }
     }
 
-    private func finishRequest(id: String) {
-        if self.fallbackRequiredID == id {
-            self.fallbackRequiredID = nil
+    private func finishRequestFailure(id: String, error: Error) -> Error {
+        // Capture provider failure intent before finishing clears the request's state.
+        let failure: Error = if self.fallbackRequiredIDs.contains(id) {
+            SynthesizeError.audioGenerationFailed
+        } else if self.cancelRequestedID == id || self.activeID != id {
+            SynthesizeError.canceled
+        } else {
+            error
         }
+        self.finishRequest(id: id)
+        return failure
+    }
+
+    private func finishRequest(id: String) {
+        self.fallbackRequiredIDs.remove(id)
         guard self.activeID == id else { return }
         self.activeID = nil
         self.cancelRequestedID = nil
@@ -471,6 +369,7 @@ actor TalkMLXSpeechSynthesizer {
     }
 
     private func scheduleCancelEscalation(id: String) {
+        guard self.activeID == id, self.cancelRequestedID == id else { return }
         self.cancelEscalationTask?.cancel()
         let duration = self.cancelGraceDuration
         self.cancelEscalationTask = Task { [weak self] in
@@ -519,7 +418,10 @@ actor TalkMLXSpeechSynthesizer {
 
     func handleMemoryPressure() async {
         self.logger.info("talk mlx helper memory-pressure shutdown")
-        self.fallbackRequiredID = self.activeID
+        // A later pressure callback must not erase an earlier request's pending fallback.
+        if let activeID {
+            self.fallbackRequiredIDs.insert(activeID)
+        }
         await self.shutdown()
     }
 
@@ -569,43 +471,6 @@ actor TalkMLXSpeechSynthesizer {
     private static func resolvedModelRepo(_ modelRepo: String?) -> String {
         modelRepo?.nilIfBlank ?? self.defaultModelRepo
     }
-
-    static func makeWAV(audio: MLXTTSAudio) throws -> Data {
-        guard audio.format == .pcmS16LE,
-              audio.sampleRate > 0,
-              audio.sampleRate <= Int(UInt32.max),
-              audio.channels > 0,
-              audio.channels <= Int(UInt16.max),
-              audio.pcm.count <= Int(UInt32.max) - 36,
-              audio.pcm.count.isMultiple(of: MemoryLayout<Int16>.size * audio.channels)
-        else {
-            throw SynthesizeError.audioGenerationFailed
-        }
-
-        let channels = UInt16(audio.channels)
-        let sampleRate = UInt32(audio.sampleRate)
-        let bitsPerSample: UInt16 = 16
-        let blockAlign = channels * (bitsPerSample / 8)
-        let byteRate = sampleRate * UInt32(blockAlign)
-        let dataSize = UInt32(audio.pcm.count)
-
-        var data = Data(capacity: 44 + audio.pcm.count)
-        data.append(contentsOf: [0x52, 0x49, 0x46, 0x46])
-        data.appendLEUInt32(36 + dataSize)
-        data.append(contentsOf: [0x57, 0x41, 0x56, 0x45])
-        data.append(contentsOf: [0x66, 0x6D, 0x74, 0x20])
-        data.appendLEUInt32(16)
-        data.appendLEUInt16(1)
-        data.appendLEUInt16(channels)
-        data.appendLEUInt32(sampleRate)
-        data.appendLEUInt32(byteRate)
-        data.appendLEUInt16(blockAlign)
-        data.appendLEUInt16(bitsPerSample)
-        data.append(contentsOf: [0x64, 0x61, 0x74, 0x61])
-        data.appendLEUInt32(dataSize)
-        data.append(audio.pcm)
-        return data
-    }
 }
 
 private enum MLXTTSTransportError: Error {
@@ -616,7 +481,7 @@ private enum MLXTTSTransportError: Error {
 private actor ProcessMLXTTSTransport: MLXTTSTransport {
     private let process: ManagedProcess
     private let input: FileHandle
-    private let output: FileHandle
+    private let output: PipeReadStream
     private let chunkContinuation: AsyncStream<Data>.Continuation
     private let chunks: MLXChunkIterator
     private var decoder = MLXTTSFrameDecoder()
@@ -626,7 +491,7 @@ private actor ProcessMLXTTSTransport: MLXTTSTransport {
     private init(
         process: ManagedProcess,
         input: FileHandle,
-        output: FileHandle,
+        output: PipeReadStream,
         chunks: AsyncStream<Data>,
         chunkContinuation: AsyncStream<Data>.Continuation)
     {
@@ -646,19 +511,11 @@ private actor ProcessMLXTTSTransport: MLXTTSTransport {
         // send() to its stdin raises SIGPIPE and kills the app.
         inputPipe.fileHandleForWriting.disableSIGPIPE()
 
-        let output = outputPipe.fileHandleForReading
         let (stream, continuation) = AsyncStream<Data>.makeStream()
-        output.readabilityHandler = { handle in
-            // Throwing read wrapper; availableData can raise ObjC exceptions on
-            // closed/invalid handles and abort the process (FileHandle+SafeRead).
-            let data = handle.readSafely(upToCount: 64 * 1024)
-            if data.isEmpty {
-                handle.readabilityHandler = nil
-                continuation.finish()
-            } else {
-                continuation.yield(data)
-            }
-        }
+        let output = try PipeReadStream(
+            handle: outputPipe.fileHandleForReading,
+            onData: { continuation.yield($0) },
+            onClose: { continuation.finish() })
 
         let configuration = Subprocess.Configuration(
             executable: .path(.init(invocation.executableURL.path)),
@@ -674,6 +531,7 @@ private actor ProcessMLXTTSTransport: MLXTTSTransport {
             error: .currentStandardError,
             closeAfterSpawn: [
                 inputPipe.fileHandleForReading,
+                outputPipe.fileHandleForReading,
                 outputPipe.fileHandleForWriting,
             ])
         do {
@@ -681,8 +539,9 @@ private actor ProcessMLXTTSTransport: MLXTTSTransport {
         } catch {
             // The detached launch can still spawn; reap it before closing inherited pipes.
             await process.terminate(gracefully: false)
-            output.readabilityHandler = nil
+            output.close()
             continuation.finish()
+            await output.finish()
             throw error
         }
 
@@ -714,11 +573,11 @@ private actor ProcessMLXTTSTransport: MLXTTSTransport {
     func close() async {
         guard !self.isClosed else { return }
         self.isClosed = true
-        self.output.readabilityHandler = nil
+        self.output.close()
         self.chunkContinuation.finish()
         self.input.closeFile()
-        self.output.closeFile()
         await self.process.terminate()
+        await self.output.finish()
     }
 }
 
@@ -754,17 +613,5 @@ extension String {
     fileprivate var nilIfBlank: String? {
         let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
-    }
-}
-
-extension Data {
-    fileprivate mutating func appendLEUInt16(_ value: UInt16) {
-        var littleEndian = value.littleEndian
-        Swift.withUnsafeBytes(of: &littleEndian) { self.append(contentsOf: $0) }
-    }
-
-    fileprivate mutating func appendLEUInt32(_ value: UInt32) {
-        var littleEndian = value.littleEndian
-        Swift.withUnsafeBytes(of: &littleEndian) { self.append(contentsOf: $0) }
     }
 }

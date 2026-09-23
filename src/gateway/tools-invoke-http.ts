@@ -1,9 +1,8 @@
 // HTTP endpoint adapter for invoking gateway tools from OpenAI-compatible clients.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
 import {
   readJsonBodyOrError,
   sendJson,
@@ -11,11 +10,18 @@ import {
   watchClientDisconnect,
 } from "./http-common.js";
 import {
+  assertGatewayHttpRequestCurrent,
+  type GatewayHttpRequestAuthOptions,
+} from "./http-request-authority.js";
+import {
   authorizeScopedGatewayHttpRequestOrReply,
   getHeader,
-  resolveOpenAiCompatibleHttpOperatorScopes,
+  resolveSharedSecretHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
+import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
+import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { invokeGatewayTool, type ToolsInvokeInput } from "./tools-invoke-shared.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
@@ -24,12 +30,9 @@ const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
 export async function handleToolsInvokeHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: {
-    auth: ResolvedGatewayAuth;
+  opts: GatewayHttpRequestAuthOptions & {
     maxBodyBytes?: number;
-    trustedProxies?: string[];
-    allowRealIpFallback?: boolean;
-    rateLimiter?: AuthRateLimiter;
+    resolveGatewayContext?: GatewayContextResolver;
   },
 ): Promise<boolean> {
   let url: URL;
@@ -53,14 +56,11 @@ export async function handleToolsInvokeHttpRequest(
   // the OpenAI-compatible APIs: token/password bearer auth is full operator
   // access for the gateway, not a narrower per-request scope boundary.
   const authResult = await authorizeScopedGatewayHttpRequestOrReply({
+    ...opts,
     req,
     res,
-    auth: opts.auth,
-    trustedProxies: opts.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback,
-    rateLimiter: opts.rateLimiter,
     operatorMethod: "agent",
-    resolveOperatorScopes: resolveOpenAiCompatibleHttpOperatorScopes,
+    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
   });
   if (!authResult) {
     return true;
@@ -70,6 +70,10 @@ export async function handleToolsInvokeHttpRequest(
     return true;
   }
   const abortController = new AbortController();
+  const operatorAccessAuthority = requestAuth.operatorAccessAuthority;
+  const signal = operatorAccessAuthority
+    ? AbortSignal.any([abortController.signal, operatorAccessAuthority.signal])
+    : abortController.signal;
   const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController);
 
   try {
@@ -78,9 +82,10 @@ export async function handleToolsInvokeHttpRequest(
       res,
       opts.maxBodyBytes ?? DEFAULT_BODY_BYTES,
     );
-    if (bodyUnknown === undefined || abortController.signal.aborted) {
+    if (bodyUnknown === undefined || signal.aborted) {
       return true;
     }
+    await requestAuth.revalidate();
     const body = (bodyUnknown ?? {}) as ToolsInvokeInput;
 
     // Resolve message channel/account hints (optional headers) for policy inheritance.
@@ -91,21 +96,47 @@ export async function handleToolsInvokeHttpRequest(
     const agentTo = normalizeOptionalString(getHeader(req, "x-openclaw-message-to"));
     const agentThreadId = normalizeOptionalString(getHeader(req, "x-openclaw-thread-id"));
     const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth);
-    const outcome = await invokeGatewayTool({
-      cfg,
-      input: body,
-      messageChannel: messageChannel ?? undefined,
-      accountId,
-      agentTo,
-      agentThreadId,
+    const client = createSyntheticPluginRuntimeClient({
       authenticatedUserProfile: requestAuth.authenticatedUserProfile,
-      operatorScopes,
-      senderIsOwner,
-      conversationReadOrigin: "direct-operator",
-      toolCallIdPrefix: "http",
-      signal: abortController.signal,
+      operatorRoleActor: requestAuth.operatorRoleActor,
+      operatorAccessAuthority,
+      scopes: operatorScopes,
     });
-    if (abortController.signal.aborted) {
+    const context = opts.resolveGatewayContext?.();
+    if (resolveGatewayOperatorRoleActor(client)?.kind === "operator" && !context) {
+      sendJson(res, 503, {
+        error: { message: "Gateway context is unavailable; retry shortly.", type: "unavailable" },
+      });
+      return true;
+    }
+    const outcome = await withPluginRuntimeGatewayRequestScope(
+      {
+        client,
+        context,
+        resolveGatewayContext: opts.resolveGatewayContext,
+        signal,
+        hasCurrentClientAuthority: () => !signal.aborted && requestAuth.hasCurrentClientAuthority(),
+        isWebchatConnect: () => false,
+      },
+      () =>
+        invokeGatewayTool({
+          cfg,
+          input: body,
+          messageChannel: messageChannel ?? undefined,
+          accountId,
+          agentTo,
+          agentThreadId,
+          authenticatedUserProfile: requestAuth.authenticatedUserProfile,
+          operatorRoleActor: requestAuth.operatorRoleActor,
+          operatorScopes,
+          senderIsOwner,
+          conversationReadOrigin: "direct-operator",
+          toolCallIdPrefix: "http",
+          signal,
+          assertInvocationCurrent: () => assertGatewayHttpRequestCurrent(requestAuth),
+        }),
+    );
+    if (signal.aborted) {
       return true;
     }
     if (outcome.ok) {
@@ -113,8 +144,13 @@ export async function handleToolsInvokeHttpRequest(
     } else {
       sendJson(res, outcome.status, { ok: false, error: outcome.error });
     }
+  } catch (error) {
+    if (!res.writableEnded && !res.destroyed) {
+      throw error;
+    }
   } finally {
     stopWatchingDisconnect();
+    abortController.abort(new Error("HTTP tool invocation authority ended"));
   }
 
   return true;

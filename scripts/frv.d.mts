@@ -1,3 +1,9 @@
+import type { PublicationObservation } from "./frv-publication-status.mts";
+
+export type FrvPublicationStatus = Partial<FrvContinuationStatus> & {
+  publication: PublicationObservation;
+};
+
 export interface FrvChildStatus extends Record<string, unknown> {
   effectiveRunAttempt: number | null;
   key: string;
@@ -16,6 +22,9 @@ export interface FrvContinuationStatus {
 
 export interface FrvClient {
   repository?: string;
+  getReleaseEvidenceClient: () => ReturnType<
+    typeof import("./release-ci-summary.mjs").createReleaseEvidenceClient
+  >;
   getAttemptJobs: (runId: string, runAttempt: number) => Promise<Record<string, unknown>[]>;
   getJobLog: (jobId: number) => Promise<string>;
   getParentJobs: (runId: string) => Promise<Record<string, unknown>[]>;
@@ -51,7 +60,10 @@ export function createClient(
 export function preflightContinuation(
   plan: Record<string, unknown>,
   rootRunId: string,
-  client: Pick<FrvClient, "getJobLog" | "getParentJobs" | "getRunAttempt">,
+  client: Pick<
+    FrvClient,
+    "getJobLog" | "getParentJobs" | "getRunAttempt" | "getReleaseEvidenceClient" | "getRun"
+  >,
   repository?: string,
 ): Promise<Record<string, unknown>>;
 export function loadPlan(

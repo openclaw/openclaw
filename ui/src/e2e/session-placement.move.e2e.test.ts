@@ -205,7 +205,7 @@ suite.define(() => {
         ...session.placement,
         runner: { kind: "device", status: "available" },
       } as typeof session.placement;
-      await gateway.setMethodResponse("sessions.list", chatSessionListResponse([session]));
+      await gateway.setSessionsListResponse(chatSessionListResponse([session]));
       await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
       await page.getByRole("button", { name: "Runs on device" }).waitFor();
       expect(await page.locator(".chat-pane__placement-note").count()).toBe(0);
@@ -214,7 +214,7 @@ suite.define(() => {
         ...session.placement,
         runner: { kind: "device", status: "offline" },
       } as typeof session.placement;
-      await gateway.setMethodResponse("sessions.list", chatSessionListResponse([session]));
+      await gateway.setSessionsListResponse(chatSessionListResponse([session]));
       await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
       await page.getByRole("button", { name: "Device offline" }).waitFor();
       const continueAction = page.getByText("Continue on Gateway…", { exact: true });
@@ -512,6 +512,7 @@ suite.define(() => {
     const page = await context.newPage();
     const parent = {
       key: "agent:main:placement-parent",
+      sessionId: "session:agent:main:placement-parent",
       kind: "direct" as const,
       label: "Placement parent",
       updatedAt: 1,
@@ -527,12 +528,22 @@ suite.define(() => {
       ...offline.placement,
       runner: { kind: "device", status: "offline" },
     } as typeof offline.placement;
+    const historyMessages = [
+      { role: "assistant", content: "Deferred available startup transcript settled." },
+    ];
+    const models = [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }];
+    const staleStartup = {
+      sessionId: available.sessionId,
+      sessionInfo: { ...available, archived: false, pinned: false },
+      messages: historyMessages,
+      thinkingLevel: null,
+      metadata: { models },
+    };
     const gateway = await installMockGateway(page, {
       deferredMethods: ["chat.startup"],
       featureMethods: ["chat.startup", "sessions.move"],
-      historyMessages: [
-        { role: "assistant", content: "Deferred available startup transcript settled." },
-      ],
+      historyMessages,
+      models,
       methodResponses: {
         "sessions.list": {
           cases: [
@@ -593,11 +604,33 @@ suite.define(() => {
         ).runnerFreshnessPresentation = state;
         inspect();
       });
-      const listCount = (await gateway.getRequests("sessions.list")).length;
-      await gateway.deferNext("sessions.list", { agentId: "main" });
+      const descriptorMatch = { key: available.key };
+      const descriptorCount = (await gateway.getRequests("sessions.describe", descriptorMatch))
+        .length;
+      // Current primary, child, and descriptor reads share one offline fixture owner.
+      await gateway.setSessionsListResponse(chatSessionListResponse([parent, offline]));
+      await gateway.setMethodResponse("sessions.list", {
+        cases: [
+          { match: { spawnedBy: parent.key }, response: chatSessionListResponse([offline]) },
+          { response: chatSessionListResponse([parent, offline]) },
+        ],
+      });
+      await gateway.deferNext("sessions.describe", descriptorMatch);
       await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
-      await gateway.waitForRequest("sessions.list", { after: listCount });
-      await gateway.resolveDeferred("sessions.list", chatSessionListResponse([parent, offline]));
+      await gateway.waitForRequest("sessions.describe", {
+        after: descriptorCount,
+        match: descriptorMatch,
+      });
+      await page.getByRole("button", { name: "Runs on device" }).waitFor();
+      await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
+      expect(await gateway.getRequests("sessions.describe", descriptorMatch)).toHaveLength(
+        descriptorCount + 1,
+      );
+      await gateway.resolveDeferred("sessions.describe", { session: available });
+      await gateway.waitForRequest("sessions.describe", {
+        after: descriptorCount + 1,
+        match: descriptorMatch,
+      });
       await page.getByRole("button", { name: "Device offline" }).waitFor();
       expect(
         await page.evaluate(() => {
@@ -620,7 +653,7 @@ suite.define(() => {
       await expect.poll(() => panes.count()).toBe(2);
       expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
 
-      await gateway.resolveDeferred("chat.startup");
+      await gateway.resolveDeferred("chat.startup", staleStartup);
       await expect
         .poll(() => page.getByText("Deferred available startup transcript settled.").count())
         .toBe(2);
@@ -654,7 +687,7 @@ suite.define(() => {
 
   it.each([
     { machineId: "fast", expectedMachineClass: "fast" },
-    { machineId: "standard", expectedMachineClass: undefined },
+    { machineId: "standard", expectedMachineClass: "standard" },
     { machineId: undefined, expectedMachineClass: undefined },
   ])(
     "moves to a cloud profile with machine $machineId",

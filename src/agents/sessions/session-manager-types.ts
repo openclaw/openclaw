@@ -1,6 +1,6 @@
+import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ImageContent, TextContent } from "../../llm/types.js";
-import type { AgentMessage } from "../runtime/index.js";
 
 export interface SessionHeader {
   type: "session";
@@ -43,9 +43,12 @@ export interface ModelChangeEntry extends SessionEntryBase {
 
 export interface CompactionEntry<T = unknown> extends SessionEntryBase {
   type: "compaction";
+  __openclaw?: { runId?: string; itemId?: string };
   summary: string;
   firstKeptEntryId: string;
   tokensBefore: number;
+  /** Context estimate after compaction, retained with its ordinary transcript marker. */
+  tokensAfter?: number;
   /** Extension-specific data, such as artifact indexes or version markers. */
   details?: T;
   /** True for extension-generated compaction entries. */
@@ -113,6 +116,8 @@ export type FileEntry = SessionHeader | SessionEntry;
 
 export type AppendPersistenceOptions = {
   appendIntent?: "active-branch";
+  /** Synchronous fresh SQLite message assertion; never serialized into an entry. */
+  beforeFreshMessageCommit?: () => void;
   config?: OpenClawConfig;
   idempotencyLookup?: "scan" | "scan-assistant" | "caller-checked";
   invalidateSerializedPrefixCache?: boolean;

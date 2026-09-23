@@ -386,11 +386,15 @@ function lineNumber(source: string, offset: number): number {
 }
 
 function decodeKotlinLiteral(value: string): string {
-  return value
-    .replaceAll("\\n", "\n")
-    .replaceAll('\\"', '"')
-    .replaceAll("\\$", "$")
-    .replaceAll("\\\\", "\\");
+  return value.replace(
+    /\\(?:u([0-9a-fA-F]{4})|[n"$\\])/gu,
+    (escape, codeUnit: string | undefined) => {
+      if (codeUnit) {
+        return String.fromCharCode(Number.parseInt(codeUnit, 16));
+      }
+      return escape === "\\n" ? "\n" : escape.slice(1);
+    },
+  );
 }
 
 function collectExplicitRuntimeSources(
@@ -526,10 +530,6 @@ const ALLOWED_UI_LITERALS = new Map<string, ReadonlySet<string>>([
     new Set(["${endpoint.host}:${endpoint.port}"]),
   ],
   [
-    "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
-    new Set(["${normalized.takeUtf16Safe(87)}..."]),
-  ],
-  [
     "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarShell.kt",
     // Compose animation labels are tooling identifiers, not rendered copy.
     new Set(["sidebar-content-translation"]),
@@ -588,6 +588,26 @@ function shouldScanUiLiterals(repoPath: string): boolean {
   );
 }
 
+function createDoubleQuoteScanner() {
+  let quoted = false;
+  let escaped = false;
+  return (character: string | undefined): boolean => {
+    if (escaped) {
+      escaped = false;
+      return true;
+    }
+    if (quoted && character === "\\") {
+      escaped = true;
+      return true;
+    }
+    if (character === '"') {
+      quoted = !quoted;
+      return true;
+    }
+    return quoted;
+  };
+}
+
 function findClosingDelimiter(
   source: string,
   openingOffset: number,
@@ -595,23 +615,10 @@ function findClosingDelimiter(
   closing: string,
 ): number | null {
   let depth = 0;
-  let quoted = false;
-  let escaped = false;
+  const skipQuoted = createDoubleQuoteScanner();
   for (let index = openingOffset; index < source.length; index += 1) {
     const character = source[index];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (quoted && character === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (character === '"') {
-      quoted = !quoted;
-      continue;
-    }
-    if (quoted) {
+    if (skipQuoted(character)) {
       continue;
     }
     if (character === opening) {
@@ -632,26 +639,13 @@ function expressionEnd(source: string, expressionStart: number): number {
     return source.length;
   }
   const start = expressionStart + cursor;
-  let quoted = false;
-  let escaped = false;
+  const skipQuoted = createDoubleQuoteScanner();
   let lineStart = start;
   const depths = { "(": 0, "[": 0, "{": 0 };
   const closingToOpening = { ")": "(", "]": "[", "}": "{" } as const;
   for (let index = start; index < source.length; index += 1) {
     const character = source[index];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (quoted && character === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (character === '"') {
-      quoted = !quoted;
-      continue;
-    }
-    if (quoted) {
+    if (skipQuoted(character)) {
       continue;
     }
     if (character === "(" || character === "[" || character === "{") {
@@ -691,27 +685,14 @@ function splitTopLevelSegments(
 ): Array<{ end: number; start: number; value: string }> {
   const segments: Array<{ end: number; start: number; value: string }> = [];
   let segmentStart = start;
-  let quoted = false;
-  let escaped = false;
+  const skipQuoted = createDoubleQuoteScanner();
   let typeArgumentDepth = 0;
   let inDefaultValue = false;
   const depths = { "(": 0, "[": 0, "{": 0 };
   const closingToOpening = { ")": "(", "]": "[", "}": "{" } as const;
   for (let index = start; index < end; index += 1) {
     const character = source[index];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (quoted && character === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (character === '"') {
-      quoted = !quoted;
-      continue;
-    }
-    if (quoted) {
+    if (skipQuoted(character)) {
       continue;
     }
     if (options.trackTypeArguments && !inDefaultValue && character === "<") {

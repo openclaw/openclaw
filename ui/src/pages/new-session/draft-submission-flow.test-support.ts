@@ -1,6 +1,9 @@
+import { createRouter } from "@openclaw/uirouter";
 import { vi } from "vitest";
+import type { RouteId } from "../../app-routes.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { registerChatAttachmentPayload } from "../chat/attachment-payload-store.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
@@ -9,26 +12,38 @@ import type { NewSessionRouteData } from "./location.ts";
 import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
 type FixtureOptions = {
+  gateway?: ApplicationContext["gateway"];
+  takePreparedTitle?: () => string | undefined;
   phase?: "connected" | "connecting";
   agents?: unknown[];
   methods?: string[];
   scopes?: string[];
   selfUser?: { id: string };
   data?: NewSessionRouteData;
-  request?: (method: string) => Promise<unknown>;
+  request?: (method: string, params?: unknown) => Promise<unknown>;
+  modelCatalog?: (params?: unknown) => Promise<unknown>;
 };
 
 export function createDraftFixture(options: FixtureOptions = {}) {
-  const request = vi.fn((method: string) => {
+  const request = vi.fn((method: string, params?: unknown) => {
+    if (method === "models.list") {
+      return options.modelCatalog ? options.modelCatalog(params) : Promise.resolve({ models: [] });
+    }
     if (options.request) {
-      return options.request(method);
+      return options.request(method, params);
     }
     return Promise.resolve({});
   });
   const client = { recoveryScope: "principal-a", recoveryScopeReady: true, request };
   const phase = options.phase ?? "connected";
+  const router = createRouter<RouteId, ApplicationContext>({
+    routes: [{ id: "chat", path: "/chat", component: () => ({}) }],
+  });
   const context = {
-    gateway: {
+    router,
+    gateway: options.gateway ?? {
+      subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
       connection: { gatewayUrl: "ws://gateway.example" },
       snapshot: {
         phase,
@@ -40,6 +55,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
             ? {
                 server: { bootId: "gateway-boot-a" },
                 auth: {
+                  recoveryScope: client.recoveryScope,
                   role: "operator",
                   scopes: options.scopes ?? ["operator.read", "operator.write"],
                 },
@@ -72,9 +88,14 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     chatSubmissions: createChatSubmissions(),
     agentSelection: { state: { selectedId: "main" }, set: vi.fn() },
     config: { current: { cliAgentsEnabled: true, terminalEnabled: true } },
+    basePath: "",
+    replace: vi.fn(),
     navigateAndWait: vi.fn(async () => undefined),
     preload: vi.fn(async () => undefined),
   } as unknown as ApplicationContext;
+  // The navigation spy represents an admitted Chat route; route ownership is
+  // exercised with the real router in the transition tests.
+  void router.navigate("chat", context);
   vi.mocked(context.gateway.setSessionKey).mockImplementation((sessionKey) => {
     context.gateway.snapshot.sessionKey = sessionKey;
   });
@@ -95,6 +116,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
         recoveryScope: "",
       },
       agentsHydrated: place?.agentsHydrated ?? false,
+      runtimeId: place?.devicePlacementRuntime()?.id ?? "",
     }),
     {
       requestUpdate: vi.fn(),
@@ -106,7 +128,8 @@ export function createDraftFixture(options: FixtureOptions = {}) {
       onPendingPlacementReset: () => flow?.releasePendingPlacementOwner(),
       onRecoveryReady: (gatewayUrl, recoveryScope) =>
         flow?.restorePendingPlacementRecovery(gatewayUrl, recoveryScope),
-      onAdoptAgentDefaults: () => place?.adoptAgentDefaults(),
+      onAdoptAgentDefaults: () =>
+        place?.adoptAgentDefaults({ preserveSelectedAgent: true, preserveSelectedFolder: true }),
     },
   );
   const browser = new DraftPlaceBrowser(
@@ -138,7 +161,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     {
       requestUpdate: vi.fn(),
       onError: (error) => flow?.setError(error),
-      onClearError: (error) => flow?.clearErrorIf(error),
+      onClearError: (error) => flow?.clearError(error),
     },
   );
   const requestUpdate = vi.fn();
@@ -146,10 +169,26 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     gateway,
     place,
     () => ({ context, data: options.data, isConnected: phase === "connected" }),
-    { requestUpdate, closeTransientUi: vi.fn() },
+    { requestUpdate, closeTransientUi: vi.fn(), takePreparedTitle: options.takePreparedTitle },
   );
   gateway.synchronize(context.gateway);
   place.setAgentsHydrated(true);
   place.adoptAgentDefaults();
   return { capabilities: flow.capabilities, context, flow, gateway, place, request, requestUpdate };
+}
+
+export function registerTextPayload(id: string) {
+  return registerChatAttachmentPayload({
+    attachment: { id, mimeType: "text/plain", fileName: `${id}.txt` },
+    dataUrl: `data:text/plain;base64,${btoa(id)}`,
+    file: new File([id], `${id}.txt`, { type: "text/plain" }),
+  });
+}
+
+export function stubObjectUrls(...urls: string[]) {
+  const createObjectURL = vi.fn();
+  urls.forEach((url) => createObjectURL.mockReturnValueOnce(url));
+  const revokeObjectURL = vi.fn();
+  vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
+  return revokeObjectURL;
 }

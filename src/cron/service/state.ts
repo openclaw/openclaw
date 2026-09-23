@@ -7,15 +7,14 @@ import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
-import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
+import type { SessionEventWakeWaitOptions } from "../../infra/session-event-wake.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
-import type { CronActiveJobMarker } from "../active-jobs.js";
 import { toPublicCronJob } from "../public-job.js";
 import type { CronRuntimeAuthority } from "../runtime-authority.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { QuarantinedCronConfigJob } from "../store.js";
-import type { CronRunReceiptHandle } from "../store/run-receipt-store.js";
+import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import type {
   CronCompletionStatus,
   CronTriggerEvaluationResult,
@@ -40,6 +39,11 @@ import type {
   CronToolsAllowExecTarget,
   CronToolsAllowProvenance,
 } from "../types.js";
+import type {
+  CronNotificationIntent,
+  CronNotificationJob,
+  ResolvedFailureAlert,
+} from "./notification-intents.js";
 
 /** Event payload emitted for cron lifecycle changes and completed runs. */
 export type CronEvent = {
@@ -96,7 +100,18 @@ export type CronSystemEventEnqueueResult =
     };
 
 /** Notifications queued by cron mutations until their state is durable. */
-export type DeferredCronNotifications = Array<() => void>;
+export type DeferredCronNotifications = CronNotificationIntent[];
+
+export type CronRunDeliveryResult = {
+  /** True after verified delivery, including a matching messaging-tool send. */
+  delivered?: boolean;
+  /** Delivery may have been attempted without a confirmed transport acknowledgment. */
+  deliveryAttempted?: boolean;
+  deliveryError?: string;
+  deliverySuppressionReason?: NormalizeReplySkipReason;
+  deliveryState?: CronResolvedDeliveryState;
+  delivery?: CronDeliveryTrace;
+};
 
 /** Dependency injection surface for the cron service runtime. */
 export type CronServiceDeps = {
@@ -114,6 +129,7 @@ export type CronServiceDeps = {
     state: unknown;
     streamBatch?: string;
     abortSignal?: AbortSignal;
+    executionIdentity?: CronExecutionIdentityAdmission;
   }) => Promise<CronTriggerEvaluationResult>;
   /** Default agent id for jobs without an agent id. */
   defaultAgentId?: string;
@@ -165,47 +181,21 @@ export type CronServiceDeps = {
     sessionKey?: string;
     agentId?: string;
   }) => DeliveryContext | undefined;
-  /** Runs timer and startup work inside the owning Gateway's detached scope. */
+  /** Binds the Gateway for complete scheduled operations, including admission and settlement. */
   runSchedulerOwned?: <T>(run: () => Promise<T>) => Promise<T>;
-  requestHeartbeat: (
-    opts: HeartbeatWakeRequest,
-    retry?: Extract<HeartbeatRunResult, { status: "skipped" }>,
-  ) => void;
+  requestHeartbeat: (opts: HeartbeatWakeRequest) => void;
   /** Waits for the terminal result of a cron-owned coalesced heartbeat wake. */
   requestHeartbeatAndWait?: (
     opts: HeartbeatWakeRequest,
-    lifecycle: { abortSignal?: AbortSignal },
+    lifecycle: SessionEventWakeWaitOptions,
   ) => Promise<HeartbeatRunResult>;
-  runHeartbeatOnce?: (opts?: {
-    source?: HeartbeatWakeRequest["source"];
-    intent?: HeartbeatWakeRequest["intent"];
-    reason?: string;
-    agentId?: string;
-    sessionKey?: string;
-    /** Exact cron run marker whose own activity must not block its awaited wake. */
-    owningCronJobMarker?: CronActiveJobMarker;
-    /** Exact command-lane task whose own slot must not block its awaited wake. */
-    owningCronLaneTaskMarker?: CommandLaneTaskMarker;
-    /** Optional heartbeat config override (e.g. target: "last" for cron-triggered heartbeats). */
-    heartbeat?: HeartbeatWakeRequest["heartbeat"];
-  }) => Promise<HeartbeatRunResult>;
-  runSkillCollectionReview?: (params: {
-    agentId: string;
-    abortSignal?: AbortSignal;
-  }) => Promise<
-    | { status: "ok" | "skipped"; summary: string }
-    | { status: "error"; summary: string; error: string }
-  >;
-  /**
-   * WakeMode=now: max time to wait for runHeartbeatOnce to stop returning
-   * { status:"skipped", reason:"requests-in-flight" } before falling back to
-   * requestHeartbeat.
-   */
-  wakeNowHeartbeatBusyMaxWaitMs?: number;
-  /** WakeMode=now: delay between runHeartbeatOnce retries while busy. */
-  wakeNowHeartbeatBusyRetryDelayMs?: number;
+  /** Resolves the outer watchdog for an awaited heartbeat handoff. */
+  resolveHeartbeatTimeoutMs?: (
+    opts: HeartbeatWakeRequest & { agentId: string },
+  ) => number | undefined;
   runIsolatedAgentJob: (params: {
     job: CronJob;
+    admissionSource?: AdmittedRunContext["admissionSource"];
     message: string;
     abortSignal?: AbortSignal;
     onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
@@ -213,57 +203,32 @@ export type CronServiceDeps = {
     onLaneWait?: (info?: { waiting?: boolean }) => void;
     executionIdentity?: CronExecutionIdentityAdmission;
   }) => Promise<
-    {
-      summary?: string;
-      /** Last non-empty agent text output (not truncated). */
-      outputText?: string;
-      /**
-       * `true` when the isolated run already delivered its output to the target
-       * channel (including matching messaging-tool sends). See:
-       * https://github.com/openclaw/openclaw/issues/15692
-       */
-      delivered?: boolean;
-      deliveryError?: string;
-      deliverySuppressionReason?: NormalizeReplySkipReason;
-      deliveryState?: CronResolvedDeliveryState;
-      /**
-       * `true` when announce/direct delivery was attempted for this run, even
-       * if the final per-message ack status is uncertain.
-       */
-      deliveryAttempted?: boolean;
-      delivery?: CronDeliveryTrace;
-      nextCheck?: CronNextCheckProposal;
-    } & CronRunOutcome &
-      CronRunTelemetry
+    CronRunOutcome &
+      CronRunTelemetry &
+      CronRunDeliveryResult & {
+        /** Last non-empty agent text output (not truncated). */
+        outputText?: string;
+        nextCheck?: CronNextCheckProposal;
+      }
   >;
-  runCommandJob?: (params: { job: CronJob; abortSignal?: AbortSignal }) => Promise<
-    {
-      delivered?: boolean;
-      deliveryAttempted?: boolean;
-      deliveryError?: string;
-      deliverySuppressionReason?: NormalizeReplySkipReason;
-      deliveryState?: CronResolvedDeliveryState;
-      delivery?: CronDeliveryTrace;
-    } & CronRunOutcome
-  >;
+  runCommandJob?: (params: {
+    job: CronJob;
+    abortSignal?: AbortSignal;
+  }) => Promise<CronRunOutcome & CronRunDeliveryResult>;
   runScriptJob?: (params: {
     job: CronStoredJob;
     streamBatch?: string;
     abortSignal?: AbortSignal;
+    executionIdentity?: CronExecutionIdentityAdmission;
   }) => Promise<
-    {
-      delivered?: boolean;
-      deliveryAttempted?: boolean;
-      deliveryError?: string;
-      deliverySuppressionReason?: NormalizeReplySkipReason;
-      deliveryState?: CronResolvedDeliveryState;
-      delivery?: CronDeliveryTrace;
-      notify?: string;
-      wake?: "now" | "next-heartbeat";
-      stateChanged?: boolean;
-      state?: unknown;
-      nextCheck?: CronNextCheckProposal;
-    } & CronRunOutcome
+    CronRunOutcome &
+      CronRunDeliveryResult & {
+        notify?: string;
+        wake?: "now" | "next-heartbeat";
+        stateChanged?: boolean;
+        state?: unknown;
+        nextCheck?: CronNextCheckProposal;
+      }
   >;
   /** Deliver a primary cron webhook before the run outcome is finalized. */
   sendCronWebhook?: (params: {
@@ -283,7 +248,7 @@ export type CronServiceDeps = {
     timeoutMs: number;
   }) => void | Promise<void>;
   sendCronFailureAlert?: (params: {
-    job: CronJob;
+    job: CronNotificationJob;
     payload: ReplyPayload;
     runAtMs?: number;
     channel: CronMessageChannel;
@@ -292,7 +257,8 @@ export type CronServiceDeps = {
     accountId?: string;
     threadId?: string | number;
     inheritSessionThread?: false;
-    onDeliveryAttempt?: (reachedRecipient: boolean) => void;
+    /** Persists the transport-owned terminal fact before Gateway work admission releases. */
+    onDeliverySettled: (outcome: CronFailureNotificationDelivery) => Promise<void>;
   }) => Promise<void>;
   onEvent?: (evt: CronEvent, context?: CronEventContext) => void;
 };
@@ -300,13 +266,20 @@ export type CronServiceDeps = {
 export type CronExecutionIdentityAdmission = {
   ingress: ExecutionIdentityAdmissionFacts["ingress"];
   invoker?: ExecutionIdentityAdmissionFacts["invoker"];
-  onPostAdmission?: (context: AdmittedRunContext) => void;
-  onExecutionStarted?: () => void;
+  onPostAdmission?: (context: AdmittedRunContext) => void | Promise<void>;
+  onExecutionStarted?: () => void | Promise<void>;
 };
 
 /** Cron deps after optional defaults have been made concrete. */
 type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
   nowMs: () => number;
+};
+
+/** Dependencies consumed by job policy before its mutation is committed. */
+export type CronJobPolicyContext = {
+  deps: Pick<CronServiceDepsInternal, "cronConfig" | "nowMs" | "log">;
+  /** Resolved by the host for this exact job while its recovery transaction holds the row. */
+  preparedFailureAlert?: { jobId: string; value: ResolvedFailureAlert | null };
 };
 
 /** Process-local admission state shared by every execution entry point of one cron service. */
@@ -323,6 +296,7 @@ type QueuedCronRunReservation = {
   markerAtMs: number;
   runReceipt: CronRunReceiptHandle;
   preserveWhenDisabled: boolean;
+  onExit?: boolean;
   activationPreviousLastError?: { value: string | undefined };
 };
 
@@ -358,8 +332,6 @@ export type CronServiceState = {
    * until the runtime can quarantine and sanitize the active store.
    */
   warnedInvalidPersistedJobKeys: Set<string>;
-  /** Availability is rechecked every tick; this set only bounds skip diagnostics. */
-  reportedUnavailableReaperAgentIds: Set<string>;
   pendingQuarantineConfigJobs: QuarantinedCronConfigJob[];
   lastQuarantineFailureWarnKey: string | null;
   storeLoadedAtMs: number | null;
@@ -389,7 +361,6 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     op: Promise.resolve(),
     warnedDisabled: false,
     warnedInvalidPersistedJobKeys: new Set<string>(),
-    reportedUnavailableReaperAgentIds: new Set<string>(),
     pendingQuarantineConfigJobs: [],
     lastQuarantineFailureWarnKey: null,
     storeLoadedAtMs: null,
@@ -443,10 +414,13 @@ export type CronRunResult =
   | { ok: true; ran: false; reason: "already-running" }
   | { ok: true; ran: false; reason: "invalid-spec" }
   | { ok: true; ran: false; reason: "stopped" }
+  | { ok: true; ran: false; reason: "ownerless" }
   | { ok: false };
 
-/** Remove result that distinguishes missing jobs from failed removal. */
-export type CronRemoveResult = { ok: true; removed: boolean } | { ok: false; removed: false };
+/** Remove result, including deferred base-session cleanup after durable deletion. */
+export type CronRemoveResult =
+  | { ok: true; removed: boolean; sessionCleanup?: "pending" }
+  | { ok: false; removed: false };
 
 /** Created cron job returned by service mutation calls. */
 type CronDeclarativeAddResult = CronStoredJob & {
@@ -487,7 +461,8 @@ export type CronAddOptions = {
 export type CronUpdateInput = CronJobPatch;
 /** Authenticated caller provenance used only when a tool policy is explicitly adopted. */
 export type CronUpdateOptions = {
-  scheduledToolPolicy?: CronScheduledToolPolicy;
+  /** Null forbids policy adoption; undefined retains in-process operator defaults. */
+  scheduledToolPolicy?: CronScheduledToolPolicy | null;
   toolsAllowProvenance?: CronToolsAllowProvenance;
   /** Restrict-only exec pin from the signed creator-turn identity. */
   toolsAllowExecTarget?: CronToolsAllowExecTarget;

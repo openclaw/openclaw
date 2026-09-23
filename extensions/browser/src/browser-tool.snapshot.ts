@@ -138,7 +138,7 @@ export function formatBrowserDebugLogResult(
   limit: number,
 ): AgentToolResult<unknown> {
   const total = entries.length;
-  const records = entries.slice(-limit);
+  let records = entries.slice(-limit);
   const details = () => ({
     ok: result.ok,
     targetId: result.targetId,
@@ -154,11 +154,26 @@ export function formatBrowserDebugLogResult(
       includeWarning: false,
     });
   let wrapped = wrap();
-  // Drop whole records so large URLs or stacks cannot leave partial JSON or
-  // report more returned entries than the model actually receives.
-  while (wrapped.truncated && records.length > 0) {
-    records.shift();
-    wrapped = wrap();
+  // Whole JSON records have independent serialized and sanitized lengths, so
+  // dropping older records can only reduce the space needed by the suffix.
+  if (wrapped.truncated && records.length > 0) {
+    const initialRecords = records;
+    let lower = 1;
+    let upper = initialRecords.length;
+    while (lower < upper) {
+      const middle = Math.floor((lower + upper) / 2);
+      records = initialRecords.slice(middle);
+      wrapped = wrap();
+      if (wrapped.truncated) {
+        lower = middle + 1;
+      } else {
+        upper = middle;
+      }
+    }
+    if (records.length !== initialRecords.length - lower) {
+      records = initialRecords.slice(lower);
+      wrapped = wrap();
+    }
   }
   return {
     content: [{ type: "text", text: wrapped.wrappedText }],
@@ -258,19 +273,11 @@ export async function executeSnapshotAction(params: {
   };
   let refsFallback: "role" | undefined;
   const readSnapshot = async (query: typeof snapshotQuery) =>
-    proxyRequest
-      ? ((await proxyRequest({
-          method: "GET",
-          path: "/snapshot",
-          profile,
-          query,
-          timeoutMs: snapshotTimeoutMs,
-        })) as Awaited<ReturnType<typeof browserSnapshot>>)
-      : await browserSnapshot(baseUrl, {
-          ...query,
-          profile,
-          signal: params.signal,
-        });
+    await browserSnapshot(proxyRequest ?? baseUrl, {
+      ...query,
+      profile,
+      signal: params.signal,
+    });
   let snapshot: Awaited<ReturnType<typeof browserSnapshot>>;
   try {
     snapshot = await readSnapshot(snapshotQuery);

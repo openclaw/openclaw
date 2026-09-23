@@ -19,21 +19,14 @@ export async function extractPdfContent(params: {
   minTextChars: number;
   password?: string;
   pageNumbers?: number[];
+  signal?: AbortSignal;
   config?: OpenClawConfig;
   onImageExtractionError?: (error: unknown) => void;
 }): Promise<PdfExtractedContent> {
+  // The document owner strips config and loader-only fields before plugin dispatch.
   const extracted = await extractDocumentContent({
-    buffer: params.buffer,
+    ...params,
     mimeType: "application/pdf",
-    maxPages: params.maxPages,
-    maxPixels: params.maxPixels,
-    minTextChars: params.minTextChars,
-    ...(params.password ? { password: params.password } : {}),
-    ...(params.pageNumbers ? { pageNumbers: params.pageNumbers } : {}),
-    ...(params.config ? { config: params.config } : {}),
-    ...(params.onImageExtractionError
-      ? { onImageExtractionError: params.onImageExtractionError }
-      : {}),
   });
   if (!extracted) {
     throw new Error(

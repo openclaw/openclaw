@@ -2,7 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import { createWriteStream, write, writev } from "node:fs";
 import { createRequire } from "node:module";
 import type { Writable } from "node:stream";
-import { toErrorObject } from "../infra/errors.js";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { SpawnSecretInput } from "./supervisor/types.js";
 
 export type SpawnStdioEntry = "ignore" | "inherit" | "ipc" | "overlapped" | "pipe" | number;
@@ -50,10 +50,19 @@ function createSecretPipe(): SecretPipe {
   return createPipe();
 }
 
+type SecretDeliveryOptions = {
+  abortSignal?: AbortSignal;
+};
+
 export function prepareSecretInputStdio(
   stdio: SpawnStdioEntry[],
   secretInput: SpawnSecretInput | undefined,
-): { deliverTo: (child: ChildProcess) => Promise<void>; [Symbol.dispose]: () => void } | undefined {
+):
+  | {
+      deliverTo: (child: ChildProcess, options?: SecretDeliveryOptions) => Promise<void>;
+      [Symbol.dispose]: () => void;
+    }
+  | undefined {
   if (!secretInput) {
     return undefined;
   }
@@ -69,6 +78,7 @@ export function prepareSecretInputStdio(
   const pipe = process.platform === "win32" ? undefined : createSecretPipe();
   let [readFd, writeFd] = pipe?.fds ?? [];
   stdio[secretInput.fd] = readFd ?? "overlapped";
+  // Numeric secret descriptors keep this launch in-process; IPC cannot transfer them.
   const closeRead = () => {
     if (readFd !== undefined) {
       pipe!.close(readFd);
@@ -83,7 +93,7 @@ export function prepareSecretInputStdio(
         writeFd = undefined;
       }
     },
-    async deliverTo(child) {
+    async deliverTo(child, options) {
       closeRead();
       const stream =
         writeFd === undefined
@@ -108,6 +118,11 @@ export function prepareSecretInputStdio(
       if (!stream || typeof stream.end !== "function") {
         throw new Error(`secret input file descriptor ${secretInput.fd} is unavailable`);
       }
+      const abortSignal = options?.abortSignal;
+      if (abortSignal?.aborted) {
+        stream.destroy();
+        throw new Error("secret delivery aborted");
+      }
       let data: Buffer | undefined;
       try {
         data = secretInput.createData();
@@ -119,15 +134,21 @@ export function prepareSecretInputStdio(
               return;
             }
             settled = true;
+            abortSignal?.removeEventListener("abort", onAbort);
             if (error) {
               reject(error);
             } else {
               resolve();
             }
           };
+          const onAbort = () => {
+            stream.destroy();
+            settle(new Error("secret delivery aborted"));
+          };
           const onError = (error: Error) => settle(error);
           // A pipe can emit its terminal error after end's callback. Retain the
           // handler until close while only the first outcome settles delivery.
+          abortSignal?.addEventListener("abort", onAbort, { once: true });
           stream.on("error", onError);
           stream.once("close", () => stream.off("error", onError));
           stream.end(data, settle);

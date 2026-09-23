@@ -3,6 +3,8 @@ import { AsyncResource } from "node:async_hooks";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
+import { resolveReplyCompletion } from "../../agents/reply-completion.js";
+import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import {
   interruptSessionWorkAdmissions,
   isSessionWorkAdmissionActive,
@@ -31,17 +33,18 @@ import {
   setNoAbort,
 } from "./dispatch-from-config.test-harness.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
+import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
 
-let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
+let getActiveReplyRunCount: typeof import("./reply-run-registry.registry.js").getActiveReplyRunCount;
 let runAfterReplyOperationClear: typeof import("./reply-run-registry.js").runAfterReplyOperationClear;
 let resetReplyRunRegistry: typeof import("./reply-run-registry.test-support.js").testing.resetReplyRunRegistry;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 
 beforeAll(async () => {
   await globalBeforeAll0();
-  ({ getActiveReplyRunCount, runAfterReplyOperationClear } =
-    await import("./reply-run-registry.js"));
+  ({ getActiveReplyRunCount } = await import("./reply-run-registry.registry.js"));
+  ({ runAfterReplyOperationClear } = await import("./reply-run-registry.js"));
   ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
   const { testing } = await import("./reply-run-registry.test-support.js");
   resetReplyRunRegistry = () => testing.resetReplyRunRegistry();
@@ -55,6 +58,170 @@ describe("dispatchReplyFromConfig owner settlement", () => {
     resetInboundDedupe();
     vi.useRealTimers();
     clearAgentHarnesses();
+  });
+
+  it("waits for late resolver cleanup and real delivery after finalization expiry", async () => {
+    setNoAbort();
+    const ownerWork = createDeferred();
+    const resolverEntered = createDeferred();
+    const delivery = createDeferred();
+    const deliveryStarted = createDeferred();
+    const delivered = vi.fn();
+    const dispatcher = createReplyDispatcher({
+      deliver: async () => {
+        deliveryStarted.resolve();
+        await delivery.promise;
+        delivered();
+      },
+    });
+    const sessionKey = "agent:main:late-finalization";
+    let operation: ReturnType<typeof createReplyOperation> | undefined;
+    const dispatch = dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "discord", Surface: "discord", SessionKey: sessionKey }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async (_ctx, opts) => {
+        operation = opts?.replyOperation;
+        await opts?.onBlockReply?.({ text: "finished answer" });
+        resolverEntered.resolve();
+        await ownerWork.promise;
+        return undefined;
+      },
+    });
+    await resolverEntered.promise;
+    await deliveryStarted.promise;
+    expect(operation?.ownerSettlement).toBeDefined();
+    const settled = vi.fn();
+    void operation?.ownerSettlement?.then(settled);
+    vi.useFakeTimers();
+    try {
+      operation?.freezeAbort();
+      await vi.advanceTimersByTimeAsync(60_000);
+      await dispatch;
+      expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+      expect(settled).not.toHaveBeenCalled();
+      expect(delivered).not.toHaveBeenCalled();
+
+      ownerWork.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).not.toHaveBeenCalled();
+      expect(delivered).not.toHaveBeenCalled();
+
+      delivery.resolve();
+      await operation?.ownerSettlement;
+      expect(delivered).toHaveBeenCalledOnce();
+      expect(settled).toHaveBeenCalledOnce();
+      expect(operation?.result).toMatchObject({ kind: "failed", code: "run_stalled" });
+    } finally {
+      ownerWork.resolve();
+      delivery.resolve();
+      dispatcher.markComplete();
+      await dispatch;
+      await dispatcher.waitForIdle();
+      await operation?.ownerSettlement;
+      vi.useRealTimers();
+    }
+  });
+
+  it("suppresses superseded output and awaits the successor delivery receipt", async () => {
+    setNoAbort();
+    const entered = createDeferred();
+    const releaseOld = createDeferred();
+    const deliveryStarted = createDeferred();
+    const releaseDelivery = createDeferred();
+    const successorFinished = createDeferred();
+    const delivered: string[] = [];
+    const oldDispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        delivered.push(payload.text ?? "");
+      },
+    });
+    const nextDispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        deliveryStarted.resolve();
+        await releaseDelivery.promise;
+        delivered.push(payload.text ?? "");
+      },
+    });
+    const sessionKey = "agent:main:superseded-delivery";
+    let predecessor: ReturnType<typeof createReplyOperation> | undefined;
+    let successor: ReturnType<typeof createReplyOperation> | undefined;
+    let nextDispatch: Promise<unknown> | undefined;
+    const oldDispatch = dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: sessionKey,
+        MessageSid: "old-turn",
+      }),
+      cfg: emptyConfig,
+      dispatcher: oldDispatcher,
+      replyResolver: async (_ctx, opts) => {
+        predecessor = opts?.replyOperation;
+        entered.resolve();
+        await releaseOld.promise;
+        await opts?.onBlockReply?.({ text: "stale block" });
+        return { text: "stale final" };
+      },
+    });
+    try {
+      await entered.promise;
+      if (!predecessor) {
+        throw new Error("missing predecessor owner");
+      }
+      runAfterReplyOperationClear(predecessor, () => {
+        nextDispatch = dispatchReplyFromConfig({
+          ctx: buildTestCtx({
+            Provider: "discord",
+            Surface: "discord",
+            SessionKey: sessionKey,
+            MessageSid: "next-turn",
+          }),
+          cfg: emptyConfig,
+          dispatcher: nextDispatcher,
+          replyResolver: async (_ctx, opts) => {
+            successor = opts?.replyOperation;
+            return { text: "successor answer" };
+          },
+        });
+        void nextDispatch.then(() => successorFinished.resolve(), successorFinished.reject);
+      });
+      predecessor.supersede();
+      releaseOld.resolve();
+      await oldDispatch;
+      await deliveryStarted.promise;
+      expect(predecessor.result).toMatchObject({
+        kind: "aborted",
+        code: "aborted_for_supersession",
+      });
+      expect(delivered).toEqual([]);
+      if (!successor) {
+        throw new Error("missing successor owner");
+      }
+      const settled = vi.fn();
+      void successor.ownerSettlement?.then(settled);
+      await Promise.resolve();
+      expect(settled).not.toHaveBeenCalled();
+      releaseDelivery.resolve();
+      await successorFinished.promise;
+      nextDispatcher.markComplete();
+      const receipt = await nextDispatcher.waitForIdle();
+      await successor.ownerSettlement;
+      expect(receipt?.counts.final.delivered).toBe(1);
+      expect(delivered).toEqual(["successor answer"]);
+      expect(settled).toHaveBeenCalledOnce();
+      expect(getActiveReplyRunCount()).toBe(0);
+    } finally {
+      releaseOld.resolve();
+      releaseDelivery.resolve();
+      oldDispatcher.markComplete();
+      nextDispatcher.markComplete();
+      await Promise.allSettled([oldDispatch, nextDispatch]);
+      await oldDispatcher.waitForIdle();
+      await nextDispatcher.waitForIdle();
+      await predecessor?.ownerSettlement;
+      await successor?.ownerSettlement;
+    }
   });
 
   it("holds an owned lifecycle lease until abort-insensitive resolver work settles", async () => {
@@ -171,6 +338,246 @@ describe("dispatchReplyFromConfig owner settlement", () => {
         runtimePluginMocks.pluginRegistry,
       );
     });
+
+    it.each([
+      "before delivery",
+      "transport failure",
+      "overlapping progress",
+      "subsequent block",
+      "aborted progress",
+      "tool-only reply",
+      "cancelled block and tool-only reply",
+      "no pending reply",
+    ] as const)(
+      "dispatchReplyFromConfig settles queued presentation after %s through retained callbacks",
+      async (phase) => {
+        type ResolverOptions = import("./get-reply.types.js").InternalGetReplyOptions;
+        let retained: ResolverOptions | undefined;
+        const release = createDeferred();
+        const entered = createDeferred();
+        const secondEntered = createDeferred();
+        const releaseSecond = createDeferred();
+        const resolverEntered = createDeferred();
+        const returnResolver = createDeferred();
+        const failure = new Error("queued transport failed");
+        const onError = vi.fn();
+        const onQueuedFollowupSettled = vi.fn();
+        const abortController = new AbortController();
+        let progress: Promise<unknown> | undefined;
+        const dispatcher = createReplyDispatcher({
+          humanDelay: { mode: "custom", minMs: 1, maxMs: 1 },
+          beforeDeliver: async (payload) => {
+            if (
+              phase === "cancelled block and tool-only reply" &&
+              payload.text === "initial reply"
+            ) {
+              return null;
+            }
+            if (payload.text === "queued reply" && phase === "before delivery") {
+              entered.resolve();
+              await release.promise;
+            }
+            return payload;
+          },
+          deliver: async (payload) => {
+            if (payload.text === "second queued reply") {
+              secondEntered.resolve();
+              await releaseSecond.promise;
+            }
+            if (payload.text === "queued reply" && phase !== "before delivery") {
+              entered.resolve();
+              await release.promise;
+              if (phase === "transport failure") {
+                throw failure;
+              }
+            }
+          },
+          onError,
+        });
+        const dispatch = dispatchReplyFromConfig({
+          ctx: createHookCtx(),
+          cfg: emptyConfig,
+          dispatcher,
+          replyOptions: { onQueuedFollowupSettled, abortSignal: abortController.signal },
+          replyResolver: async (_ctx, opts) => {
+            retained = opts;
+            await opts?.onBlockReply?.({ text: "initial reply" });
+            if (phase === "cancelled block and tool-only reply") {
+              const runState = resolveReplyOperationRunState(opts);
+              if (!runState) {
+                throw new Error("expected reply operation run state");
+              }
+              runState.replyCompletion = resolveReplyCompletion(
+                runState.replyCompletion?.expectation ?? "required",
+                "blocked",
+              );
+            }
+            resolverEntered.resolve();
+            if (phase === "aborted progress") {
+              await returnResolver.promise;
+            }
+            return undefined;
+          },
+        });
+        try {
+          if (phase === "aborted progress") {
+            await resolverEntered.promise;
+          } else {
+            await dispatch;
+          }
+          dispatcher.markComplete();
+          await dispatcher.waitForIdle();
+          if (phase !== "no pending reply") {
+            if (phase === "tool-only reply" || phase === "cancelled block and tool-only reply") {
+              dispatcher.sendToolResult({ text: "queued reply" });
+            } else {
+              await retained?.onBlockReply?.({ text: "queued reply" });
+            }
+            await entered.promise;
+          }
+          if (
+            phase === "overlapping progress" ||
+            phase === "subsequent block" ||
+            phase === "aborted progress"
+          ) {
+            progress = Promise.resolve(retained?.onPlanUpdate?.({ phase: "update", steps: [] }));
+            if (phase === "aborted progress") {
+              abortController.abort();
+              await progress;
+            }
+          }
+          if (phase === "subsequent block") {
+            await retained?.onBlockReply?.({ text: "second queued reply" });
+          }
+          const cleanup = retained?.onQueuedFollowupSettled?.();
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          const cleanedUpBeforeDelivery = onQueuedFollowupSettled.mock.calls.length;
+          release.resolve();
+          returnResolver.resolve();
+          if (phase === "subsequent block") {
+            await secondEntered.promise;
+            expect(onQueuedFollowupSettled).not.toHaveBeenCalled();
+          }
+          releaseSecond.resolve();
+          await cleanup;
+          await progress;
+          await dispatch;
+          const receipt = await dispatcher.waitForIdle();
+          const noPendingBlock =
+            phase === "no pending reply" ||
+            phase === "tool-only reply" ||
+            phase === "cancelled block and tool-only reply";
+          expect(cleanedUpBeforeDelivery).toBe(noPendingBlock ? 1 : 0);
+          expect(onQueuedFollowupSettled).toHaveBeenCalledOnce();
+          expect(receipt?.counts.block.delivered).toBe(
+            phase === "cancelled block and tool-only reply"
+              ? 0
+              : noPendingBlock || phase === "transport failure"
+                ? 1
+                : phase === "subsequent block"
+                  ? 3
+                  : 2,
+          );
+          expect(receipt?.counts.block.failedAfterSend).toBe(phase === "transport failure" ? 1 : 0);
+          if (phase === "transport failure") {
+            expect(onError).toHaveBeenCalledExactlyOnceWith(failure, { kind: "block" });
+          } else {
+            expect(onError).not.toHaveBeenCalled();
+          }
+        } finally {
+          release.resolve();
+          releaseSecond.resolve();
+          returnResolver.resolve();
+          dispatcher.markComplete();
+          await dispatcher.waitForIdle();
+          await progress;
+          await dispatch;
+        }
+      },
+    );
+
+    it.each([
+      { phase: "rejected delivery", deliveryFails: true, cleanupFails: false },
+      { phase: "rejected delivery and cleanup", deliveryFails: true, cleanupFails: true },
+      { phase: "rejected cleanup", deliveryFails: false, cleanupFails: true },
+    ])(
+      "runs queued cleanup after $phase and preserves the first failure",
+      async ({ deliveryFails, cleanupFails }) => {
+        type ResolverOptions = import("./get-reply.types.js").InternalGetReplyOptions;
+        let retained: ResolverOptions | undefined;
+        const entered = createDeferred();
+        const release = createDeferred();
+        const deliveryFailure = new PlatformMessageNotDispatchedError("offline before dispatch", {
+          cause: new Error("offline"),
+        });
+        const cleanupFailure = new Error("queued cleanup failed");
+        const onError = vi.fn();
+        const onQueuedFollowupSettled = vi.fn(async () => {
+          if (cleanupFails) {
+            throw cleanupFailure;
+          }
+        });
+        const dispatcher = createReplyDispatcher({
+          propagateRetryableNoSendFailure: true,
+          deliver: async () => {
+            entered.resolve();
+            await release.promise;
+            if (deliveryFails) {
+              throw deliveryFailure;
+            }
+          },
+          onError,
+        });
+        try {
+          await dispatchReplyFromConfig({
+            ctx: createHookCtx(),
+            cfg: emptyConfig,
+            dispatcher,
+            replyOptions: { onQueuedFollowupSettled },
+            replyResolver: async (_ctx, opts) => {
+              retained = opts;
+              const runState = resolveReplyOperationRunState(opts);
+              if (!runState) {
+                throw new Error("expected reply operation run state");
+              }
+              runState.replyCompletion = resolveReplyCompletion(
+                runState.replyCompletion?.expectation ?? "required",
+                "blocked",
+              );
+              return undefined;
+            },
+          });
+          dispatcher.markComplete();
+          await dispatcher.waitForIdle();
+          await retained?.onBlockReply?.({ text: "queued reply" });
+          await entered.promise;
+          const cleanup = Promise.resolve(retained?.onQueuedFollowupSettled?.()).catch(
+            (error: unknown) => error,
+          );
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          expect(onQueuedFollowupSettled).not.toHaveBeenCalled();
+          release.resolve();
+
+          expect(await cleanup).toBe(deliveryFails ? deliveryFailure : cleanupFailure);
+          expect(onQueuedFollowupSettled).toHaveBeenCalledOnce();
+          if (deliveryFails) {
+            expect(onError).toHaveBeenCalledExactlyOnceWith(deliveryFailure, { kind: "block" });
+            await expect(dispatcher.waitForIdle()).rejects.toBe(deliveryFailure);
+          } else {
+            expect(onError).not.toHaveBeenCalled();
+            expect((await dispatcher.waitForIdle())?.counts.block.delivered).toBe(1);
+          }
+        } finally {
+          release.resolve();
+          dispatcher.markComplete();
+          await dispatcher.waitForIdle().catch(() => undefined);
+        }
+      },
+    );
 
     it.each(["final delivery", "block receipt callback"] as const)(
       "clears the reply lane but defers follow-up admission until %s settles",

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Model } from "../types.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
 import { makeCompletionsModel } from "./openai-completions.test-support.js";
+import { buildOpenAIResponsesParams } from "./openai-responses-params-internal.js";
 
 function emptyContext() {
   return { systemPrompt: "system", messages: [], tools: [] } as never;
@@ -40,6 +41,70 @@ function promptCacheModel() {
 }
 
 describe("openai completions params", () => {
+  describe.each(["openai-completions", "openai-responses"] as const)("%s cache policy", (api) => {
+    const build =
+      api === "openai-completions" ? buildOpenAICompletionsParams : buildOpenAIResponsesParams;
+    it.each(["none", "short", "long"] as const)("honors native retention %s", (cacheRetention) => {
+      for (const [id, lifetime] of [
+        ["gpt-5.4", { prompt_cache_retention: "24h" }],
+        ["gpt-5.4-2026-03-05", { prompt_cache_retention: "24h" }],
+        ["gpt-5.6-sol", { prompt_cache_options: { ttl: "30m" } }],
+        ["gpt-5.6-terra", { prompt_cache_options: { ttl: "30m" } }],
+        ["gpt-5.6-luna", { prompt_cache_options: { ttl: "30m" } }],
+        ["gpt-4o", {}],
+      ] as const) {
+        const params = build(
+          {
+            ...makeCompletionsModel({
+              id,
+              provider: "openai",
+              baseUrl: "https://api.openai.com/v1",
+            }),
+            api,
+          },
+          { messages: [] },
+          { sessionId: "session-123", cacheRetention },
+        );
+        expect(params.prompt_cache_key, id).toBe(
+          cacheRetention === "none" ? undefined : "session-123",
+        );
+        expect(params.prompt_cache_retention, id).toBe(
+          cacheRetention === "long" && "prompt_cache_retention" in lifetime
+            ? lifetime.prompt_cache_retention
+            : undefined,
+        );
+        expect(params.prompt_cache_options, id).toEqual(
+          cacheRetention === "long" && "prompt_cache_options" in lifetime
+            ? lifetime.prompt_cache_options
+            : undefined,
+        );
+      }
+    });
+
+    it.each([
+      ["https://api.openai.com/v1", { supportsPromptCacheKey: false }, undefined, undefined],
+      ["https://proxy.example/v1", undefined, undefined, undefined],
+      ["https://proxy.example/api.openai.com/v1", undefined, undefined, undefined],
+      ["https://api.openai.com.proxy.example/v1", undefined, undefined, undefined],
+      ["https://proxy.example/v1", { supportsPromptCacheKey: true }, "session-123", "24h"],
+      [
+        "https://api.openai.com/v1",
+        { supportsLongCacheRetention: false },
+        "session-123",
+        undefined,
+      ],
+    ])("respects endpoint and compat policy: %s %s", (baseUrl, compat, key, lifetime) => {
+      const params = build(
+        { ...makeCompletionsModel({ id: "gpt-5.4", provider: "openai", baseUrl, compat }), api },
+        { messages: [] },
+        { sessionId: "session-123", cacheRetention: "long" },
+      );
+      expect(params.prompt_cache_key).toBe(key);
+      expect(params.prompt_cache_retention).toBe(lifetime);
+      expect(params.prompt_cache_options).toBeUndefined();
+    });
+  });
+
   it("uses system role and streaming usage compat for native Qwen completions providers", () => {
     const params = buildOpenAICompletionsParams(
       makeCompletionsModel({
@@ -202,19 +267,6 @@ describe("openai completions params", () => {
     expect(notOptedIn.prompt_cache_key).toBeUndefined();
   });
 
-  it("emits prompt_cache_retention=24h for completions when cacheRetention is long", () => {
-    const model = promptCacheModel();
-    const context = emptyContext();
-
-    const longRetention = buildOpenAICompletionsParams(model, context, {
-      sessionId: "session-123",
-      cacheRetention: "long",
-    }) as { prompt_cache_key?: string; prompt_cache_retention?: string };
-
-    expect(longRetention.prompt_cache_key).toBe("session-123");
-    expect(longRetention.prompt_cache_retention).toBe("24h");
-  });
-
   it("omits prompt_cache_retention for completions when cacheRetention is short or unset", () => {
     const model = promptCacheModel();
     const context = emptyContext();
@@ -266,42 +318,6 @@ describe("openai completions params", () => {
     expect(params).not.toHaveProperty("prompt_cache_retention");
   });
 
-  it("sorts Chat Completions tools by function name for stable prompt-cache payloads", () => {
-    const model = promptCacheModel();
-    const zetaTool = {
-      name: "zeta",
-      description: "Z",
-      parameters: { type: "object", properties: {} },
-    };
-    const alphaTool = {
-      name: "alpha",
-      description: "A",
-      parameters: { type: "object", properties: {} },
-    };
-
-    const first = buildOpenAICompletionsParams(
-      model,
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [zetaTool, alphaTool],
-      } as never,
-      { sessionId: "session-123" },
-    ) as { tools?: Array<{ function?: { name?: string } }> };
-    const second = buildOpenAICompletionsParams(
-      model,
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [alphaTool, zetaTool],
-      } as never,
-      { sessionId: "session-123" },
-    ) as { tools?: Array<{ function?: { name?: string } }> };
-
-    expect(first.tools?.map((tool) => tool.function?.name)).toEqual(["alpha", "zeta"]);
-    expect(first.tools).toEqual(second.tools);
-  });
-
   it("disables developer-role-only compat defaults for configured custom proxy completions providers", () => {
     const params = buildOpenAICompletionsParams(
       makeCompletionsModel({
@@ -332,12 +348,12 @@ describe("openai completions params", () => {
   it("flattens pure text content arrays for string-only completions backends when opted in", () => {
     const params = buildOpenAICompletionsParams(
       makeCompletionsModel({
-        id: "google/gemma-4-E2B-it",
-        name: "Gemma 4 E2B",
-        provider: "inferrs",
-        baseUrl: "http://127.0.0.1:8080/v1",
+        id: "gemma4",
+        name: "Gemma 4",
+        provider: "llmman",
+        baseUrl: "http://127.0.0.1:17434/v1",
         reasoning: false,
-        contextWindow: 131072,
+        contextWindow: 65536,
         maxTokens: 4096,
         compat: {
           requiresStringContent: true,

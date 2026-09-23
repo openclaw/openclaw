@@ -1,7 +1,12 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/index.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import { ensureProfileForEmail, linkEmail, setAvatar } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { GatewayClient } from "./types.js";
 import { usersHandlers } from "./users.js";
@@ -38,6 +43,7 @@ test("users.prefs remains self-scoped across durable identities", async () => {
   try {
     const ada = ensureProfileForEmail("ada@example.test");
     const grace = ensureProfileForEmail("grace@example.test");
+    const prepare = vi.spyOn(requireNodeSqlite().DatabaseSync.prototype, "prepare");
     expect(
       await invokePreferenceMethod(
         "users.prefs.set",
@@ -56,6 +62,8 @@ test("users.prefs remains self-scoped across durable identities", async () => {
       ok: true,
       payload: { status: "ok", entries: {} },
     });
+    expect(prepare).not.toHaveBeenCalled();
+    prepare.mockRestore();
     linkEmail("ada@example.test", grace.id);
     expect(await invokePreferenceMethod("users.prefs.get", {}, grace.id)).toMatchObject({
       ok: true,
@@ -99,6 +107,10 @@ test("users.prefs.set notifies only connections belonging to the same merged pro
     const retired = ensureProfileForEmail("retired@example.test");
     const owner = ensureProfileForEmail("owner@example.test");
     const other = ensureProfileForEmail("other@example.test");
+    const avatar = new Uint8Array(64 * 1024).fill(0x7f);
+    for (const profile of [retired, owner, other]) {
+      expect(setAvatar(profile.id, avatar, "image/png").ok).toBe(true);
+    }
     linkEmail("retired@example.test", owner.id);
 
     const connectedClients = [
@@ -118,19 +130,32 @@ test("users.prefs.set notifies only connections belonging to the same merged pro
         ),
     };
 
-    expect(
-      await invokePreferenceMethod(
-        "users.prefs.set",
-        { entries: { "ui.accent": "#A1B2C3", "ui.theme": null } },
-        retired.id,
-        context,
-      ),
-    ).toMatchObject({ ok: true, payload: { status: "ok" } });
-    expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
-      "users.prefs.changed",
-      { profileId: owner.id, keys: ["ui.accent", "ui.theme"] },
-      new Set(["owner", "merged"]),
+    // Measure recipient selection on this handle; the preference worker has its own connection.
+    const reads = trackSqliteStatementExecutions(
+      openOpenClawStateDatabase().db,
+      ["profiles"],
+      (sql) =>
+        /^select\b/i.test(sql) && /\bfrom "user_profiles"(?:\s|$)/i.test(sql) ? "profiles" : null,
     );
+    try {
+      expect(
+        await invokePreferenceMethod(
+          "users.prefs.set",
+          { entries: { "ui.accent": "#A1B2C3", "ui.theme": null } },
+          retired.id,
+          context,
+        ),
+      ).toMatchObject({ ok: true, payload: { status: "ok" } });
+      expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+        "users.prefs.changed",
+        { profileId: owner.id, keys: ["ui.accent", "ui.theme"] },
+        new Set(["owner", "merged"]),
+      );
+      expect(reads.rowCounts.profiles).toBeGreaterThan(0);
+      expect.soft(reads.blobBytes.profiles).toBe(0);
+    } finally {
+      reads.restore();
+    }
   } finally {
     await state.cleanup();
   }
@@ -167,6 +192,74 @@ test("users.prefs.set returns typed profile quota details", async () => {
           currentCount: 128,
         },
       },
+    });
+  } finally {
+    await state.cleanup();
+  }
+});
+
+test("users.prefs.set compares canonical preferences atomically and publishes only committed writes", async () => {
+  const state = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "users-prefs-conditional-",
+  });
+  try {
+    const retired = ensureProfileForEmail("conditional-retired@example.test");
+    const owner = ensureProfileForEmail("conditional-owner@example.test");
+    const original = {
+      selection: { folder: "/new", model: "new", nested: [1, { a: 2, b: 3 }] },
+      removed: true,
+    };
+    expect(
+      await invokePreferenceMethod("users.prefs.set", { entries: original }, owner.id),
+    ).toMatchObject({
+      ok: true,
+      payload: { status: "ok" },
+    });
+    linkEmail("conditional-retired@example.test", owner.id);
+    const context = {
+      broadcastToConnIds: vi.fn(),
+      getClientConnIds: vi.fn(() => new Set(["owner"])),
+    };
+    for (const entries of [{ removed: null, inserted: true }, {}]) {
+      expect(
+        await invokePreferenceMethod(
+          "users.prefs.set",
+          {
+            entries,
+            expectedEntries: { selection: { folder: "/old" } },
+          },
+          retired.id,
+          context,
+        ),
+      ).toEqual({ ok: true, payload: { status: "conflict" }, error: undefined });
+    }
+    expect(context.broadcastToConnIds).not.toHaveBeenCalled();
+    expect(context.getClientConnIds).not.toHaveBeenCalled();
+    expect(await invokePreferenceMethod("users.prefs.get", {}, owner.id)).toMatchObject({
+      payload: { status: "ok", entries: original },
+    });
+    expect(
+      await invokePreferenceMethod(
+        "users.prefs.set",
+        {
+          entries: { removed: null, inserted: true },
+          expectedEntries: {
+            selection: { nested: [1, { b: 3, a: 2 }], model: "new", folder: "/new" },
+            inserted: null,
+          },
+        },
+        retired.id,
+        context,
+      ),
+    ).toEqual({ ok: true, payload: { status: "ok" }, error: undefined });
+    expect(context.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+      "users.prefs.changed",
+      { profileId: owner.id, keys: ["removed", "inserted"] },
+      new Set(["owner"]),
+    );
+    expect(await invokePreferenceMethod("users.prefs.get", {}, owner.id)).toMatchObject({
+      payload: { status: "ok", entries: { selection: original.selection, inserted: true } },
     });
   } finally {
     await state.cleanup();

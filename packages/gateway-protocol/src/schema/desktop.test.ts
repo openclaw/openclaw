@@ -3,10 +3,28 @@ import { describe, expect, it } from "vitest";
 import {
   DesktopLaunchParamsSchema,
   DesktopObserveResultSchema,
+  WorkerDesktopObserveResultSchema,
   validateDesktopObserveParams,
 } from "../index.js";
 
 describe("desktop protocol schemas", () => {
+  it.each([DesktopObserveResultSchema, WorkerDesktopObserveResultSchema])(
+    "keeps resize permission optional and boolean",
+    (schema) => {
+      const observed = {
+        transport: "rfb",
+        wsPath: "/desktop/observe?token=abc",
+        expiresAtMs: 1,
+        control: true,
+      };
+      expect(Value.Check(schema, observed)).toBe(true);
+      for (const canResize of [true, false, "true"]) {
+        expect(Value.Check(schema, { ...observed, canResize })).toBe(
+          typeof canResize === "boolean",
+        );
+      }
+    },
+  );
   it("accepts host, environment, and node observe sources", () => {
     expect(validateDesktopObserveParams({ source: { kind: "host" }, control: true })).toBe(true);
     expect(

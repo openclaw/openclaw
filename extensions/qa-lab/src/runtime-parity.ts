@@ -36,6 +36,15 @@ type RuntimeParityStatus = "pass" | "fail" | "skip";
 
 const CANONICAL_RUNTIME_IDS = ["openclaw", "codex"] as const satisfies readonly RuntimeId[];
 
+export function normalizeRuntimePair(
+  pair: [RuntimeId, RuntimeId] | null | undefined,
+): [RuntimeId, RuntimeId] {
+  if (pair?.[0] && pair?.[1]) {
+    return pair;
+  }
+  return ["openclaw", "codex"];
+}
+
 export type RuntimeParityToolCall = {
   tool: string;
   argsHash: string;
@@ -120,13 +129,8 @@ export type RuntimeParityScenarioExecution = {
   cell: RuntimeParityCell;
 };
 
-export function runtimeParityCellStatus(
-  cell: RuntimeParityCell | undefined,
-): "pass" | "fail" | "missing" {
-  if (!cell) {
-    return "missing";
-  }
-  return cell.runtimeErrorClass || cell.transportErrorClass ? "fail" : "pass";
+export function runtimeParityCellStatus(cell: RuntimeParityResultCell): RuntimeParityStatus {
+  return isRuntimeParityCellPassable(cell) ? cell.status : "fail";
 }
 
 export function isRuntimeParityResultPass(result: RuntimeParityResult) {
@@ -1434,15 +1438,15 @@ async function loadRuntimeParityMockToolCalls(
     if (!Array.isArray(payload)) {
       return null;
     }
-    const requests = payload.filter(isMessageRecord).map(
-      (entry): RuntimeParityMockRequestSnapshot => ({
+    const requests = payload
+      .filter(isMessageRecord)
+      .map((entry): RuntimeParityMockRequestSnapshot => ({
         prompt: readNonEmptyString(entry.prompt),
         allInputText: readNonEmptyString(entry.allInputText),
         plannedToolName: readNonEmptyString(entry.plannedToolName),
         plannedToolArgs: entry.plannedToolArgs ?? null,
         toolOutput: readNonEmptyString(entry.toolOutput) ?? "",
-      }),
-    );
+      }));
     return resolveToolCallOrderFromMockRequests(
       filterMockRequestsForParentPrompt(requests, parentPrompt, parentPrompts),
     );

@@ -1,9 +1,7 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  configureExecutionDecisionWorkSink,
-  type ExecutionDecisionWork,
-} from "../../audit/execution-decision-work.js";
+import { configureExecutionDecisionWorkSink } from "../../audit/execution-decision-work.js";
+import type { ExecutionDecisionWork } from "../../audit/execution-decision-work.types.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import {
   loadSessionEntry,
@@ -147,6 +145,9 @@ describe("sessions tool", () => {
             ownership: "explicit",
             entries: { ops: {}, research: {} },
           },
+          // Narrowed visibility keeps the cross-agent denial as the observable proof
+          // that the foreign bare row was resolved to its owner, not treated as self.
+          tools: { sessions: { visibility: "agent" } },
         },
         callGateway,
       });
@@ -190,6 +191,7 @@ describe("sessions tool", () => {
         action: {
           type: "string",
           enum: [
+            "cloud_profiles",
             "patch",
             "reset",
             "delete",

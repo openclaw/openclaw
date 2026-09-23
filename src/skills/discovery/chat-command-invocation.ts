@@ -4,11 +4,29 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { getChatCommands } from "../../auto-reply/commands-registry.data.js";
-import type { SkillCommandSpec } from "../types.js";
+import type { ExplicitSkillSelection, SkillCommandSpec } from "../types.js";
 
 const MAX_EXPLICIT_SKILL_REFERENCES = 8;
 const MAX_EXPLICIT_SKILL_REFERENCE_CHARS = 512;
 const MAX_EXPLICIT_SKILL_INSTRUCTION_CHARS = 1_000;
+
+export function skillCommandsToExplicitSelections(
+  skills: readonly SkillCommandSpec[],
+): ExplicitSkillSelection[] {
+  return skills.flatMap((skill) =>
+    skill.skillFile ? [{ name: skill.name, path: skill.skillFile }] : [],
+  );
+}
+
+export function mergeExplicitSkillSelections(
+  ...groups: ReadonlyArray<readonly ExplicitSkillSelection[] | undefined>
+): ExplicitSkillSelection[] | undefined {
+  const merged = new Map<string, ExplicitSkillSelection>();
+  for (const selection of groups.flatMap((group) => group ?? [])) {
+    merged.set(`${selection.name}\0${selection.path}`, selection);
+  }
+  return merged.size > 0 ? [...merged.values()] : undefined;
+}
 
 /** Lists slash command names reserved by built-in chat commands and callers. */
 export function listReservedChatSlashCommandNames(extraNames: string[] = []): Set<string> {
@@ -99,24 +117,6 @@ export function hasSkillReferenceCandidate(text: string): boolean {
   return !skillReferenceNames(text).next().done;
 }
 
-/** Resolves explicit `$skill-name` references against the current eligible skill commands. */
-function resolveSkillReferenceInvocations(params: {
-  text: string;
-  skillCommands: SkillCommandSpec[];
-}): SkillCommandSpec[] {
-  const resolved: SkillCommandSpec[] = [];
-  const seen = new Set<string>();
-  for (const name of skillReferenceNames(params.text)) {
-    const command = findSkillCommand(params.skillCommands, name);
-    if (!command || command.promptTemplate || seen.has(command.name)) {
-      continue;
-    }
-    seen.add(command.name);
-    resolved.push(command);
-  }
-  return resolved;
-}
-
 export function resolveSkillCommandInvocation(params: {
   commandBodyNormalized: string;
   skillCommands: SkillCommandSpec[];
@@ -169,47 +169,14 @@ export function expandBundleCommandPromptTemplate(template: string, args?: strin
   return `${rendered.trim()}\n\nUser input:\n${normalizedArgs}`;
 }
 
-function resolveExplicitSkillCommands(text: string, skillCommands: SkillCommandSpec[]) {
-  if (!text.trimStart().startsWith("/")) {
-    return resolveSkillReferenceInvocations({ text, skillCommands });
-  }
-  const invocation = resolveSkillCommandInvocation({
-    commandBodyNormalized: text,
-    skillCommands,
-  });
-  return invocation ? [invocation.command] : [];
-}
-
-function resolveUnavailableExplicitSkillCommand(params: {
-  text: string;
-  skillCommands: SkillCommandSpec[];
-  allSkillCommands: SkillCommandSpec[];
-}): SkillCommandSpec | undefined {
-  if (params.text.trimStart().startsWith("/")) {
-    if (resolveExplicitSkillCommands(params.text, params.skillCommands).length > 0) {
-      return undefined;
-    }
-    return resolveExplicitSkillCommands(params.text, params.allSkillCommands)[0];
-  }
-  for (const name of skillReferenceNames(params.text)) {
-    if (findSkillCommand(params.skillCommands, name)) {
-      continue;
-    }
-    const unavailable = findSkillCommand(params.allSkillCommands, name);
-    if (unavailable) {
-      return unavailable;
-    }
-  }
-  return undefined;
-}
-
 /** Expands model-routed skill references while leaving unknown slash commands untouched. */
 export function expandExplicitSkillReferences(params: {
   text: string;
   skillCommands: SkillCommandSpec[];
   allSkillCommands?: SkillCommandSpec[];
 }): { body: string; error?: string; skills: SkillCommandSpec[] } {
-  const leadingInvocation = params.text.trimStart().startsWith("/")
+  const leadingSlash = params.text.trimStart().startsWith("/");
+  const leadingInvocation = leadingSlash
     ? resolveSkillCommandInvocation({
         commandBodyNormalized: params.text,
         skillCommands: params.skillCommands,
@@ -224,41 +191,47 @@ export function expandExplicitSkillReferences(params: {
       skills: [leadingInvocation.command],
     };
   }
-  const available = resolveExplicitSkillCommands(params.text, params.skillCommands);
+  const available: SkillCommandSpec[] = [];
   const allCommands = params.allSkillCommands ?? params.skillCommands;
-  const unavailable =
-    allCommands === params.skillCommands
-      ? undefined
-      : resolveUnavailableExplicitSkillCommand({
-          text: params.text,
-          skillCommands: params.skillCommands,
-          allSkillCommands: allCommands,
-        });
+  let unavailable: SkillCommandSpec | undefined;
+  if (leadingSlash) {
+    if (leadingInvocation) {
+      available.push(leadingInvocation.command);
+    } else if (allCommands !== params.skillCommands) {
+      unavailable = resolveSkillCommandInvocation({
+        commandBodyNormalized: params.text,
+        skillCommands: allCommands,
+      })?.command;
+    }
+  } else {
+    const seen = new Set<string>();
+    for (const name of skillReferenceNames(params.text)) {
+      const command = findSkillCommand(params.skillCommands, name);
+      if (command) {
+        if (!command.promptTemplate && !seen.has(command.name)) {
+          seen.add(command.name);
+          available.push(command);
+        }
+      } else if (allCommands !== params.skillCommands) {
+        unavailable = findSkillCommand(allCommands, name);
+        if (unavailable) {
+          break;
+        }
+      }
+    }
+  }
   const error = unavailable
     ? `Skill "${unavailable.skillName}" is not available for this agent. Update the skill allowlist or choose an allowed skill.`
     : available.length > MAX_EXPLICIT_SKILL_REFERENCES
       ? `Too many skill references. Use at most ${MAX_EXPLICIT_SKILL_REFERENCES} skills in one message.`
       : undefined;
-  return expandResolvedSkillReferences({ text: params.text, skills: available, error });
-}
-
-function expandResolvedSkillReferences(params: {
-  text: string;
-  skills: SkillCommandSpec[];
-  error?: string;
-}): { body: string; error?: string; skills: SkillCommandSpec[] } {
-  const error =
-    params.error ??
-    (params.skills.length > MAX_EXPLICIT_SKILL_REFERENCES
-      ? `Too many skill references. Use at most ${MAX_EXPLICIT_SKILL_REFERENCES} skills in one message.`
-      : undefined);
   if (error) {
     return { body: params.text, error, skills: [] };
   }
-  if (params.skills.length === 0) {
+  if (available.length === 0) {
     return { body: params.text, skills: [] };
   }
-  const referenceLines = params.skills.map((skill) =>
+  const referenceLines = available.map((skill) =>
     skill.modelVisible === false && skill.skillFile
       ? `- ${skill.skillName} (SKILL.md: ${skill.skillFile})`
       : `- ${skill.skillName}`,
@@ -289,6 +262,6 @@ function expandResolvedSkillReferences(params: {
   }
   return {
     body: `${instructionPrefix}${params.text}`,
-    skills: params.skills,
+    skills: available,
   };
 }

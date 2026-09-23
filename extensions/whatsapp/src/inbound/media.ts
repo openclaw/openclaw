@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements media behavior.
 import type { proto, WAMessage } from "baileys";
 import { saveMediaStream, type SavedMedia } from "openclaw/plugin-sdk/media-store";
 import { identitiesOverlap } from "../identity.js";
@@ -49,12 +48,7 @@ export async function downloadInboundMedia(
     "inbound",
     maxBytes,
     fileName,
-  ).catch((err: unknown) => {
-    if (err instanceof Error && /Media exceeds/i.test(err.message)) {
-      throw new Error(`Media exceeds ${Math.round(maxBytes / (1024 * 1024))}MB limit`);
-    }
-    throw err;
-  });
+  );
   return { saved, mimetype, fileName };
 }
 

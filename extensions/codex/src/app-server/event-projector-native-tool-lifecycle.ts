@@ -10,7 +10,9 @@ import {
   auditNativeToolName,
   auditNativeToolTerminalStatus,
   auditNativeToolUnfinishedStatus,
+  itemName,
   itemStatus,
+  shouldClearTerminalPresentationForNativeItem,
   type CodexNativeToolAuditStatus,
   type CodexNativeToolUnfinishedStatus,
 } from "./event-projector-items.js";
@@ -20,7 +22,7 @@ import {
   type CodexNativePreToolUseFailure,
 } from "./native-hook-relay.js";
 import { isCodexNotificationForTurn } from "./notification-correlation.js";
-import { readCodexTurn } from "./protocol-validators.js";
+import { readCodexTurnCompletedNotification } from "./protocol-validators.js";
 import {
   isJsonObject,
   type CodexServerNotification,
@@ -31,7 +33,7 @@ import {
 
 type CodexNativeToolLifecycleContext = Pick<
   EmbeddedRunAttemptParams,
-  "agentId" | "runId" | "sessionId" | "sessionKey"
+  "agentId" | "runId" | "sessionId" | "sessionKey" | "allocateToolOutcomeOrdinal" | "onToolOutcome"
 >;
 
 type CodexNativeToolLifecycleProjectorOptions = {
@@ -58,8 +60,10 @@ function isMcpToolCallItemNotification(method: string, params: JsonObject): bool
   );
 }
 
-/** Owns native item lifetimes for diagnostics and MCP approval correlation. */
+/** Owns native item lifetimes, outcome order, presentation, and approval correlation. */
 export class CodexNativeToolLifecycleProjector {
+  private readonly terminalPresentationClearedItemIds = new Set<string>();
+  private readonly nativeToolOutcomeOrdinals = new Map<string, number>();
   private readonly startedAtByItem = new Map<string, number>();
   private readonly activeItems = new Map<
     string,
@@ -89,6 +93,40 @@ export class CodexNativeToolLifecycleProjector {
     private readonly turnId: string,
     private readonly options: CodexNativeToolLifecycleProjectorOptions = {},
   ) {}
+
+  recordNativeToolOutcome(item: CodexThreadItem | undefined): void {
+    if (
+      !item ||
+      this.nativeToolOutcomeOrdinals.has(item.id) ||
+      !shouldClearTerminalPresentationForNativeItem(item)
+    ) {
+      return;
+    }
+    const ordinal = this.context.allocateToolOutcomeOrdinal?.(item.id);
+    if (ordinal !== undefined) {
+      this.nativeToolOutcomeOrdinals.set(item.id, ordinal);
+    }
+  }
+
+  clearTerminalPresentationForNativeItem(item: CodexThreadItem | undefined): void {
+    if (
+      !item ||
+      this.terminalPresentationClearedItemIds.has(item.id) ||
+      !shouldClearTerminalPresentationForNativeItem(item)
+    ) {
+      return;
+    }
+    const toolCallOrdinal = this.nativeToolOutcomeOrdinals.get(item.id);
+    this.terminalPresentationClearedItemIds.add(item.id);
+    this.context.onToolOutcome?.({
+      toolName: itemName(item) ?? item.type,
+      argsHash: "",
+      resultHash: "",
+      ...(toolCallOrdinal !== undefined ? { toolCallOrdinal } : {}),
+      terminalPresentation: undefined,
+      presentationOnly: true,
+    });
+  }
 
   getActiveMcpToolCall(serverName: string): CodexActiveMcpToolCall | undefined {
     if (
@@ -143,7 +181,7 @@ export class CodexNativeToolLifecycleProjector {
       this.pendingMcpNotifications += 1;
     } else if (
       notification.method === "turn/completed" &&
-      readCodexTurn(params.turn)?.id === this.turnId
+      readCodexTurnCompletedNotification(params)?.turn.id === this.turnId
     ) {
       this.turnCompleted = true;
     }
@@ -161,12 +199,12 @@ export class CodexNativeToolLifecycleProjector {
       this.pendingMcpNotifications -= 1;
     }
     if (notification.method === "turn/completed") {
-      const turn = readCodexTurn(params.turn);
+      const turn = readCodexTurnCompletedNotification(params)?.turn;
       if (!turn || turn.id !== this.turnId) {
         return;
       }
       this.turnCompleted = true;
-      for (const item of turn.items ?? []) {
+      for (const item of turn.items) {
         this.recordSnapshotItem(item);
       }
       return;

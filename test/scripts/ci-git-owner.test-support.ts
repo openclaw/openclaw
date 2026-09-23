@@ -33,7 +33,26 @@ type Step = {
   "working-directory"?: string;
 };
 type WorkflowTarget = { file: string; job: string; step: string };
+type WorkflowInput = { jobs: Record<string, { steps: Step[] }> };
+type ActionInput = { runs: { steps: (Step & { run: string })[] } };
 export type FetchResult = number | "hang" | "cleanup-failure";
+
+const workflowInputs = new Map<string, WorkflowInput>();
+const actionInputs = new Map<string, ActionInput>();
+const ownerSource = readFileSync(".github/actions/git-owner/owner.py", "utf8");
+const basePolicySource = readFileSync(".github/actions/ensure-base-commit/policy.py", "utf8");
+const publisherPolicySource = readFileSync(
+  ".github/actions/publish-generated-pr/policy.py",
+  "utf8",
+);
+
+function readActionSteps(action: string) {
+  const input =
+    actionInputs.get(action) ??
+    (parse(readFileSync(`.github/actions/${action}/action.yml`, "utf8")) as ActionInput);
+  actionInputs.set(action, input);
+  return input.runs.steps;
+}
 
 const candidate = "a".repeat(40);
 const harness = "b".repeat(40);
@@ -55,19 +74,16 @@ const defaults: Record<string, string> = {
   EVENT_BASE_SHA: base,
   GH_TOKEN: "",
   PULL_REQUEST_NUMBER: "17",
-  PR_COMMIT_COUNT: "5",
-  PR_MERGE_SHA: merge,
   TARGET_SHA: candidate,
   RELEASE_GATE: "false",
   FROZEN_TARGET: "false",
   HISTORICAL_TARGET: "false",
   FORMAT_CHECK: "false",
+  CHANGED_CORE_TEST_PATHS_JSON: "",
   RUN_CONTROL_UI_I18N: "false",
   RUN_UI_TESTS: "false",
   HOSTED_RUNNER_STRIPES: "false",
   RUNNER_PROFILE: "github",
-  PR_BASE_SHA: base,
-  DIFF_BASE_SHA: base,
   PROTOCOL_SINCE_BASE_SHA: base,
   RATCHET_PR_HEAD_SHA: candidate,
 };
@@ -87,9 +103,8 @@ function stepEnvironment(step: Step, supplied: Record<string, string>) {
 }
 
 function readWorkflowStep({ file, job, step: name }: WorkflowTarget): Step & { run: string } {
-  const parsed = parse(readFileSync(file, "utf8")) as {
-    jobs: Record<string, { steps: Step[] }>;
-  };
+  const parsed = workflowInputs.get(file) ?? (parse(readFileSync(file, "utf8")) as WorkflowInput);
+  workflowInputs.set(file, parsed);
   const step = parsed.jobs[job]?.steps.find((entry) => entry.name === name);
   if (!step?.run) {
     throw new Error(`Missing executable workflow step ${file}/${job}/${name}`);
@@ -138,6 +153,7 @@ export async function runCiGitStep(options: {
   checkoutResults?: number[];
   mergeSnapshots?: { sha: string; head: string }[];
   prepare?: boolean;
+  checkoutBeforeStep?: boolean;
   cancelDuringCleanup?: boolean;
   cleanupCancelMatch?: string;
   startupDelay?: { tree: number };
@@ -149,7 +165,9 @@ export async function runCiGitStep(options: {
   scenario?: string;
   lsRemoteResults?: { output: string; code: number | "hang" | "cleanup-failure" }[];
   realClock?: boolean;
+  virtualBackoff?: boolean;
   realDrain?: boolean;
+  readyFetchClockAdvanceSeconds?: number;
   objects?: Record<string, { probe?: number; code?: number; text: string }>;
   cooperativeTrees?: boolean;
   cancelDuringBackoff?: boolean;
@@ -186,11 +204,9 @@ export async function runCiGitStep(options: {
       options.cancelDuringCleanup || options.scenario?.startsWith("cancel-") || options.realDrain,
   };
   const step: (Step & { run: string }) | undefined = options.action
-    ? (
-        parse(readFileSync(`.github/actions/${options.action}/action.yml`, "utf8")) as {
-          runs: { steps: (Step & { run: string })[] };
-        }
-      ).runs.steps.find((entry) => (options.step ? entry.name === options.step : entry.run))
+    ? readActionSteps(options.action).find((entry) =>
+        options.step ? entry.name === options.step : entry.run,
+      )
     : options.workflow
       ? readWorkflowStep(
           options.workflow === "workflow-sanity"
@@ -215,8 +231,9 @@ export async function runCiGitStep(options: {
     `linux:${options.scenario ?? "configured"}`,
     (root) => {
       const actions = path.join(root, "trusted-actions");
-      if (options.performance)
+      if (options.performance) {
         performanceFixture = preparePerformanceFixture(root, options.performance);
+      }
       env = stepEnvironment(step, {
         PUBLISH_ACTION_PATH: path.resolve(".github/actions/publish-generated-pr"),
         CONTENTS_TOKEN: "fixture-contents",
@@ -263,6 +280,7 @@ export async function runCiGitStep(options: {
         env.GITHUB_SHA = candidate;
         // Never let a caller's credential reach fixture command reports.
         env.OPENCLAW_DOCS_SYNC_TOKEN = "fixture-docs-token";
+        env.OPENCLAW_DOCS_MDX_CACHE = path.join(root, "docs-mdx-cache.json");
         mkdirSync(path.join(workspace, "clawhub-source/.git"), { recursive: true });
         const publish = path.join(workspace, "publish");
         if (options.publishPath === "file") {
@@ -300,7 +318,7 @@ export async function runCiGitStep(options: {
         mkdirSync(path.join(actions, action), { recursive: true });
         const name = action === "git-owner" ? "owner.py" : "policy.py";
         let source = renderGitTestClock(
-          readFileSync(`.github/actions/${action}/${name}`, "utf8"),
+          action === "git-owner" ? ownerSource : basePolicySource,
           clock,
         );
         if (
@@ -337,10 +355,7 @@ def main():`,
         mkdirSync(path.join(actions, "publish-generated-pr"), { recursive: true });
         writeFileSync(
           path.join(actions, "publish-generated-pr/policy.py"),
-          renderGitTestClock(
-            readFileSync(".github/actions/publish-generated-pr/policy.py", "utf8"),
-            clock,
-          ),
+          renderGitTestClock(publisherPolicySource, clock),
         );
         env.PUBLISH_ACTION_PATH = path.join(actions, "publish-generated-pr");
       }
@@ -399,7 +414,7 @@ def main():`,
           releaseAdmission,
           checkoutResults: options.checkoutResults,
           mergeSnapshots: options.mergeSnapshots,
-          consumers: Boolean(options.prepare || externalOwner),
+          consumers: Boolean(options.prepare || options.checkoutBeforeStep || externalOwner),
           cancelDuringCleanup: options.cancelDuringCleanup,
           cleanupCancelMatch: options.cleanupCancelMatch,
           baseAvailableAfter: options.baseAvailableAfter,
@@ -418,10 +433,7 @@ def main():`,
         }
       }
       if (externalOwner) {
-        const prepare = parse(readFileSync(".github/actions/git-owner/action.yml", "utf8")) as {
-          runs: { steps: { run?: string }[] };
-        };
-        const prepareRun = prepare.runs.steps[0]?.run;
+        const prepareRun = readActionSteps("git-owner")[0]?.run;
         if (!prepareRun) {
           throw new Error("Missing Git owner preparation body");
         }
@@ -448,6 +460,11 @@ ${run}`;
         writeFileSync(path.join(root, "prepare.sh"), renderGitTestClock(prepare.run, clock));
         // Run the actual prepare body in its own shell: its exec must not replace the caller.
         run = `CHECKOUT_KIND=${prepareEnv.CHECKOUT_KIND} bash --noprofile --norc -eo pipefail "$TMPDIR/prepare.sh"\n${run}`;
+      }
+      if (options.checkoutBeforeStep) {
+        const checkout = readCiCheckoutStep(options.job ?? "checks-fast-core");
+        writeFileSync(path.join(root, "bootstrap.sh"), renderGitTestClock(checkout.run, clock));
+        run = `bash --noprofile --norc -eo pipefail "$TMPDIR/bootstrap.sh"\n${run}`;
       }
       if (options.performance) {
         const mapfileShim =
@@ -545,6 +562,16 @@ ${run}`;
         : false;
       return {
         ...report,
+        backoffClockAdvancedSeconds: [
+          ...report.output.matchAll(/fixture backoff advanced: ([\d.]+)/gu),
+        ].reduce((total, match) => total + Number(match[1]), 0),
+        ...(options.readyFetchClockAdvanceSeconds === undefined
+          ? {}
+          : {
+              fetchClockAdvancedSeconds:
+                options.readyFetchClockAdvanceSeconds *
+                readdirSync(root).filter((name) => /^fetch-tick-\d+\.json$/u.test(name)).length,
+            }),
         authHeaderPresent,
         initialBranch: publisherFixture?.initialBranch,
         publication: publisherFixture?.inspect(report.output, false),
@@ -566,8 +593,6 @@ ${run}`;
         ),
         rebases: report.commands.filter(({ tool, args }) => tool === "git" && args[0] === "rebase"),
         pushes: report.commands.filter(({ tool, args }) => tool === "git" && args[0] === "push"),
-        go: report.commands.filter(({ tool }) => tool === "go"),
-        crabbox: report.commands.filter(({ tool }) => tool === "crabbox"),
         checkouts: report.commands.filter(
           ({ tool, args }) => tool === "git" && args[0] === "checkout",
         ),

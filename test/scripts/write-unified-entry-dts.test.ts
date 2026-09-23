@@ -1,9 +1,9 @@
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { TSDOWN_NON_SDK_DTS_CONFIG_GROUPS } from "../../scripts/lib/tsdown-config-groups.mts";
 import { resolveTsdownDeclarationGeneratorInputs } from "../../scripts/lib/tsdown-declaration-generator-inputs.mts";
+import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 import {
   createFixture,
   declarationCacheRecords,
@@ -26,15 +26,40 @@ describe("write-unified-entry-dts", () => {
     expect(closure).toEqual(
       expect.arrayContaining([
         "scripts/lib/tsdown-declaration-generator-inputs.mts",
+        "scripts/lib/tsdown-declaration-boundary.mts",
         "scripts/lib/plugin-sdk-entrypoints.json",
-        "scripts/lib/record-shared.mjs",
+        "scripts/windows-cmd-helpers.mjs",
         "packages/normalization-core/src/mountinfo-path.ts",
         "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
         "src/state/openclaw-state-schema.sql",
         "src/state/openclaw-agent-schema.sql",
+        "src/shared/freebsd-process-identity.ts",
+        "src/infra/update-managed-service-handoff-native-loader.ts",
       ]),
     );
     expect(closure).not.toContain("scripts/lib/ci-node-test-plan.mts");
+    expect(closure).not.toContain("src/infra/node_modules/koffi/indirect.cjs");
+  });
+
+  it("still traverses a compiler source when the generator also imports it", () => {
+    const readFileSync = fs.readFileSync.bind(fs);
+    const read = vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
+      const contents = readFileSync(file, options);
+      return typeof contents === "string" &&
+        String(file).endsWith("managed-handoff-build-config.mts")
+        ? `${contents}\nimport "../../src/infra/update-managed-service-handoff-native-loader.ts";\n`
+        : contents;
+    });
+    try {
+      expect(() =>
+        resolveTsdownDeclarationGeneratorInputs(
+          process.cwd(),
+          "scripts/write-unified-entry-dts.ts",
+        ),
+      ).toThrow(/node_modules[/\\]koffi[/\\]indirect\.cjs/u);
+    } finally {
+      read.mockRestore();
+    }
   });
 
   it.each([
@@ -105,10 +130,45 @@ describe("write-unified-entry-dts", () => {
     }
   });
 
-  it("reuses unaffected canonical groups while rebuilding runtime after input edits", () => {
-    const { root, write, production, declarations } = createFixture(
-      TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
+  it("reuses unaffected canonical groups while rebuilding runtime after input edits", ({
+    onTestFailed,
+  }) => {
+    const phases: Array<{
+      phase: string;
+      durationMs: number;
+      outcome: "returned" | "threw";
+      exitStatus?: number | null;
+    }> = [];
+    // Vitest can reject the synchronous body after it returns, outside a local catch.
+    onTestFailed(() => {
+      console.error(`[unified-entry-dts phases] ${JSON.stringify(phases)}`);
+    });
+    const measurePhase = <T>(
+      phase: string,
+      run: () => T,
+      readExitStatus?: (result: T) => number | null,
+    ): T => {
+      const started = performance.now();
+      let outcome: "returned" | "threw" = "threw";
+      let exitStatus: number | null | undefined;
+      try {
+        const result = run();
+        exitStatus = readExitStatus?.(result);
+        outcome = "returned";
+        return result;
+      } finally {
+        phases.push({
+          phase,
+          durationMs: Math.round(performance.now() - started),
+          outcome,
+          ...(readExitStatus ? { exitStatus } : {}),
+        });
+      }
+    };
+    const { root, write, production, declarations } = measurePhase("fixture", () =>
+      createFixture(TSDOWN_NON_SDK_DTS_CONFIG_GROUPS),
     );
+    measurePhase("native-compiler-fixture", () => materializeNativeCompiler(root));
     expect(Object.values(declarations).every((entries) => entries.length > 0)).toBe(true);
     expect(production).toHaveLength(Object.values(declarations).flat().length);
     write("extensions/fixture-a/runtime-only.js", 'export const runtimeOnly = "runtime";');
@@ -134,13 +194,6 @@ describe("write-unified-entry-dts", () => {
     }
     write("dist/obsolete.d.ts", "obsolete root declaration");
     write("dist/extensions/removed/api.d.ts", "obsolete plugin declaration");
-    write("dist/extensions/anthropic/api.d.ts", "obsolete plugin API declaration");
-    write(
-      "dist/extensions/anthropic/agent-sdk-generated/old.d.ts",
-      "obsolete generated declaration",
-    );
-    const sdkAssetRoot = "dist/extensions/anthropic/agent-sdk";
-    write(`${sdkAssetRoot}/obsolete.d.ts`, "removed upstream SDK declaration");
     write(
       "consumer.ts",
       [
@@ -166,7 +219,11 @@ describe("write-unified-entry-dts", () => {
         files: ["consumer.ts"],
       }),
     );
-    const initial = runUnifiedBuild(root);
+    const initial = measurePhase(
+      "initial-build",
+      () => runUnifiedBuild(root),
+      (result) => result.status,
+    );
     expect(initial.status, initial.stdout + initial.stderr).toBe(0);
     expect(
       (initial.stdout + initial.stderr).match(/\[tsdown-build\] invocation \d\/\d finished/gu),
@@ -180,12 +237,12 @@ describe("write-unified-entry-dts", () => {
       /^(?:export )?declare function literalOrder\(.*;$/mu,
     )?.[0];
     expect(originalFunction).toBeDefined();
-    const consumer = runFixture(root, [
-      path.resolve("scripts/run-tsgo.mjs"),
-      "-p",
-      "consumer.json",
-      "--noEmit",
-    ]);
+    const consumer = measurePhase(
+      "consumer-typecheck",
+      () =>
+        runFixture(root, [path.resolve("scripts/run-tsgo.mjs"), "-p", "consumer.json", "--noEmit"]),
+      (result) => result.status,
+    );
     expect(consumer.status, consumer.stdout + consumer.stderr).toBe(0);
     for (const name of ["runtime-only", "typed-runtime"]) {
       expect(
@@ -195,29 +252,6 @@ describe("write-unified-entry-dts", () => {
     }
     expect(fs.existsSync(path.join(root, "dist/obsolete.d.ts"))).toBe(false);
     expect(fs.existsSync(path.join(root, "dist/extensions/removed/api.d.ts"))).toBe(false);
-    expect(fs.existsSync(path.join(root, "dist/extensions/anthropic/api.d.ts"))).toBe(false);
-    expect(
-      fs.existsSync(path.join(root, "dist/extensions/anthropic/agent-sdk-generated/old.d.ts")),
-    ).toBe(false);
-    const sdkSource = path.dirname(
-      createRequire(import.meta.url).resolve("@anthropic-ai/claude-agent-sdk"),
-    );
-    const sourceManifest = JSON.parse(
-      fs.readFileSync(path.join(sdkSource, "package.json"), "utf8"),
-    );
-    const sdkFiles: string[] = [...sourceManifest.files, "LICENSE.md", "README.md"];
-    expect(fs.readdirSync(path.join(root, sdkAssetRoot)).toSorted()).toEqual(
-      [...sdkFiles, "package.json"].toSorted(),
-    );
-    for (const file of sdkFiles) {
-      expect(fs.readFileSync(path.join(root, sdkAssetRoot, file))).toEqual(
-        fs.readFileSync(path.join(sdkSource, file)),
-      );
-    }
-    const { optionalDependencies: _nativeCli, ...packagedManifest } = sourceManifest;
-    expect(
-      JSON.parse(fs.readFileSync(path.join(root, sdkAssetRoot, "package.json"), "utf8")),
-    ).toEqual(packagedManifest);
     for (const [file, bytes] of Object.entries(preserved)) {
       expect(fs.readFileSync(path.join(root, file), "utf8")).toBe(bytes);
     }
@@ -236,15 +270,10 @@ describe("write-unified-entry-dts", () => {
     expect(
       records
         .flatMap((record) => Object.keys(record.outputs))
-        .some(
-          (file) =>
-            file.includes(".app/") ||
-            file.includes("control-ui/") ||
-            file.startsWith(`${sdkAssetRoot}/`),
-        ),
+        .some((file) => file.includes(".app/") || file.includes("control-ui/")),
     ).toBe(false);
-    const cached = treeHashes(cache);
-    const before = treeHashes(path.join(root, "dist"));
+    const cached = measurePhase("initial-cache-hash", () => treeHashes(cache));
+    const before = measurePhase("initial-dist-hash", () => treeHashes(path.join(root, "dist")));
     write("test/unrelated.test.ts", "export const test = 2;\n");
     write("ui/unrelated.ts", "export const view = 2;\n");
     write(".github/workflows/unrelated.yml", "name: unrelated after\n");
@@ -256,14 +285,19 @@ describe("write-unified-entry-dts", () => {
     for (const [file, bytes] of Object.entries(preserved)) {
       write(file, bytes);
     }
-    write(`${sdkAssetRoot}/obsolete.d.ts`, "removed upstream SDK declaration");
-    const repeated = runUnifiedBuild(root);
+    const repeated = measurePhase(
+      "unchanged-build",
+      () => runUnifiedBuild(root),
+      (result) => result.status,
+    );
     expect(repeated.status, repeated.stdout + repeated.stderr).toBe(0);
     expect(
       (repeated.stdout + repeated.stderr).match(/\[tsdown-build\] invocation \d\/\d finished/gu),
     ).toHaveLength(1);
-    expect(treeHashes(path.join(root, "dist"))).toEqual(before);
-    expect(treeHashes(cache)).toEqual(cached);
+    expect(measurePhase("unchanged-dist-hash", () => treeHashes(path.join(root, "dist")))).toEqual(
+      before,
+    );
+    expect(measurePhase("unchanged-cache-hash", () => treeHashes(cache))).toEqual(cached);
     const pluginInput = "extensions/fixture-a/index.ts";
     // A prior literal allocation must not reorder the unchanged function's public type.
     write(
@@ -272,7 +306,11 @@ describe("write-unified-entry-dts", () => {
         .readFileSync(path.join(root, pluginInput), "utf8")
         .replace('pluginRevision = "fixture_zeta"', 'pluginRevision = "fixture_alpha"'),
     );
-    const isolatedEdit = runUnifiedBuild(root);
+    const isolatedEdit = measurePhase(
+      "edited-build",
+      () => runUnifiedBuild(root),
+      (result) => result.status,
+    );
     expect(isolatedEdit.status, isolatedEdit.stdout + isolatedEdit.stderr).toBe(0);
     expect(
       (isolatedEdit.stdout + isolatedEdit.stderr).match(
@@ -290,18 +328,26 @@ describe("write-unified-entry-dts", () => {
       changedDeclaration.match(/^(?:export )?declare function literalOrder\(.*;$/mu)?.[0],
     ).toBe(originalFunction);
     const changedCacheGroups = new Set(
-      Object.entries(treeHashes(cache))
+      Object.entries(measurePhase("edited-cache-hash", () => treeHashes(cache)))
         .filter(([file, digest]) => cached[file] !== digest)
         .map(([file]) => file.split("/")[0]),
     );
     expect(changedCacheGroups.size).toBe(1);
-    const mixedGeneration = treeHashes(path.join(root, "dist"));
-    const cold = runUnifiedWriter(root, { OPENCLAW_BUILD_CACHE: "0" });
+    const mixedGeneration = measurePhase("edited-dist-hash", () =>
+      treeHashes(path.join(root, "dist")),
+    );
+    const cold = measurePhase(
+      "cold-writer",
+      () => runUnifiedWriter(root, { OPENCLAW_BUILD_CACHE: "0" }),
+      (result) => result.status,
+    );
     expect(cold.status, cold.stdout + cold.stderr).toBe(0);
     expect(
       (cold.stdout + cold.stderr).match(/\[tsdown-build\] invocation \d\/6 finished/gu),
     ).toHaveLength(6);
-    expect(treeHashes(path.join(root, "dist"))).toEqual(mixedGeneration);
+    expect(measurePhase("cold-dist-hash", () => treeHashes(path.join(root, "dist")))).toEqual(
+      mixedGeneration,
+    );
     expectStagingClean(root);
   });
 
@@ -310,6 +356,11 @@ describe("write-unified-entry-dts", () => {
     const env = { OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "fixture-a" };
     const initial = runUnifiedWriter(root, env);
     expect(initial.status, initial.stdout + initial.stderr).toBe(0);
+    for (const group of TSDOWN_NON_SDK_DTS_CONFIG_GROUPS) {
+      expect(initial.stderr).toContain(
+        `[tsdown-unified] ${group}: cache miss (record-unavailable)`,
+      );
+    }
     expect(
       (initial.stdout + initial.stderr).match(/\[tsdown-build\] invocation \d\/6 finished/gu),
     ).toHaveLength(6);
@@ -318,6 +369,9 @@ describe("write-unified-entry-dts", () => {
     const before = treeHashes(path.join(root, "dist"));
     const repeated = runUnifiedWriter(root, env);
     expect(repeated.status, repeated.stdout + repeated.stderr).toBe(0);
+    for (const group of TSDOWN_NON_SDK_DTS_CONFIG_GROUPS) {
+      expect(repeated.stderr).toContain(`[tsdown-unified] ${group}: cache hit (fresh-cache)`);
+    }
     expect(repeated.stdout + repeated.stderr).not.toContain("[tsdown-build] invocation");
     expect(treeHashes(path.join(root, "dist"))).toEqual(before);
     expectStagingClean(root);
@@ -341,17 +395,19 @@ describe("write-unified-entry-dts", () => {
         "tsdown.config.ts",
         `${fs.readFileSync(path.join(root, "tsdown.config.ts"), "utf8")}
 const selected = configs.find(config => config.name === ${JSON.stringify(last)});
+const register = selected.hooks;
+selected.hooks = async hooks => {
+  await register(hooks);
 ${
   failure === "missing successful receipt"
-    ? "selected.hooks = {};"
-    : `const done = selected.hooks["build:done"];
-selected.hooks = { "build:done": async (context) => {
-  await done(context);
-  if (fs.existsSync(".artifacts/mutate-cached-input")) {
-    fs.appendFileSync(${JSON.stringify(declarations[TSDOWN_NON_SDK_DTS_CONFIG_GROUPS[0]!]![0])}, "\\nexport const cachedRevision = 'after';\\n");
-  }
-}};`
+    ? '  hooks.clearHook("build:done");'
+    : `  hooks.hook("build:done", () => {
+    if (fs.existsSync(".artifacts/mutate-cached-input")) {
+      fs.appendFileSync(${JSON.stringify(declarations[TSDOWN_NON_SDK_DTS_CONFIG_GROUPS[0]!]![0])}, "\\nexport const cachedRevision = 'after';\\n");
+    }
+  });`
 }
+};
 `,
       );
     }

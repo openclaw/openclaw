@@ -2,7 +2,7 @@
 import { type WebClient, WebAPIRateLimitedError } from "@slack/web-api";
 import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatSlackTarget } from "../target-parsing.js";
@@ -28,6 +28,7 @@ type PresenceObservation = { presence: "active" } | { presence: "away"; firstObs
 
 type PresenceTarget = {
   key: string;
+  isPolicyCurrent: () => boolean;
   teamId?: string;
   mode: Exclude<SlackPresenceEventsMode, "off">;
   prompt: string | undefined;
@@ -158,6 +159,7 @@ function resolveObservedTarget(params: {
     }),
     sessionKey: prepared.route.sessionKey,
     agentId: prepared.route.agentId,
+    isPolicyCurrent: prepared.ctx.isRuntimePolicyCurrent,
     participants: new Map([[userId, params.nowMs]]),
     lastActivityAtMs: params.nowMs,
     autoEligibleKind,
@@ -169,7 +171,7 @@ export function createSlackPresenceMonitor(params: {
   accountConfig?: SlackPresenceEventsConfig;
   client?: SlackPresenceClient;
   resolveClient?: (teamId?: string) => SlackPresenceClient;
-  cooldownStore: PluginStateSyncKeyedStore<number>;
+  cooldownStore: PluginStateKeyedStore<number>;
   log?: (message: string) => void;
   error?: (message: string) => void;
   nowMs?: () => number;
@@ -193,7 +195,10 @@ export function createSlackPresenceMonitor(params: {
 
   const pruneTargets = (now: number) => {
     for (const [key, target] of targets) {
-      if (now - target.lastActivityAtMs >= SLACK_PRESENCE_TARGET_TTL_MS) {
+      if (
+        !target.isPolicyCurrent() ||
+        now - target.lastActivityAtMs >= SLACK_PRESENCE_TARGET_TTL_MS
+      ) {
         targets.delete(key);
       }
     }
@@ -229,7 +234,7 @@ export function createSlackPresenceMonitor(params: {
       accountConfig: params.accountConfig,
       nowMs: now,
     });
-    if (!observed) {
+    if (!observed || !observed.isPolicyCurrent()) {
       return;
     }
     const current = targets.get(observed.key);
@@ -251,20 +256,23 @@ export function createSlackPresenceMonitor(params: {
     pruneTargets(now);
   };
 
-  const emitTransition = (
+  const emitTransition = async (
     subject: PresenceSubject,
     awayObservation: { observedAwayAtMs: number; observedActiveAtMs: number },
   ) => {
     const { teamId, userId } = subject;
-    const target = Array.from(targets.values())
-      .filter(
-        (candidate) =>
-          candidate.teamId === teamId &&
-          candidate.participants.has(userId) &&
-          isTargetEligible(candidate),
-      )
-      .toSorted((a, b) => (b.participants.get(userId) ?? 0) - (a.participants.get(userId) ?? 0))[0];
-    if (!target) {
+    const resolveTarget = () =>
+      Array.from(targets.values())
+        .filter(
+          (candidate) =>
+            candidate.teamId === teamId &&
+            candidate.participants.has(userId) &&
+            isTargetEligible(candidate),
+        )
+        .toSorted(
+          (a, b) => (b.participants.get(userId) ?? 0) - (a.participants.get(userId) ?? 0),
+        )[0];
+    if (!resolveTarget()) {
       return;
     }
     const workspaceKey = teamId ?? "workspace";
@@ -272,7 +280,7 @@ export function createSlackPresenceMonitor(params: {
     const now = awayObservation.observedActiveAtMs;
     let reserved: boolean;
     try {
-      reserved = params.cooldownStore.registerIfAbsent(cooldownKey, now, {
+      reserved = await params.cooldownStore.registerIfAbsent(cooldownKey, now, {
         ttlMs: SLACK_PRESENCE_GREETING_COOLDOWN_MS,
       });
     } catch (err) {
@@ -280,6 +288,12 @@ export function createSlackPresenceMonitor(params: {
       return;
     }
     if (!reserved) {
+      return;
+    }
+    pruneTargets(nowMs());
+    const target = stopped ? undefined : resolveTarget();
+    if (!target) {
+      await params.cooldownStore.deleteIfEqual?.(cooldownKey, now);
       return;
     }
     const queued = enqueue(formatSlackPresenceEvent(target, userId, awayObservation), target, {
@@ -292,7 +306,7 @@ export function createSlackPresenceMonitor(params: {
       },
     });
     if (!queued) {
-      params.cooldownStore.delete(cooldownKey);
+      await params.cooldownStore.deleteIfEqual?.(cooldownKey, now);
       return;
     }
     wake({
@@ -379,7 +393,7 @@ export function createSlackPresenceMonitor(params: {
             : { presence: "active" };
         presenceByUser.set(subjectKey, observation);
         if (previous?.presence === "away" && next === "active") {
-          emitTransition(subject, {
+          await emitTransition(subject, {
             observedAwayAtMs: previous.firstObservedAtMs,
             observedActiveAtMs: observedAtMs,
           });

@@ -163,6 +163,8 @@ export const matrixOutbound: ChannelOutboundAdapter = {
     accountId,
     audioAsVoice,
     deliveryQueueId,
+    signal,
+    assertDirectAdapterHandoff,
     onPlatformSendDispatch,
     onDeliveryResult,
   }) => {
@@ -196,6 +198,8 @@ export const matrixOutbound: ChannelOutboundAdapter = {
             deliveryQueueId,
             deliveryPartIndex: index,
             deliveryPartCount: urls.length,
+            signal,
+            assertDirectAdapterHandoff,
             onPlatformSendDispatch,
             extraContent: isFirst ? resolveMatrixExtraContent(payload) : undefined,
             onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
@@ -231,6 +235,8 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       deliveryQueueId,
       deliveryPartIndex: 0,
       deliveryPartCount: 1,
+      signal,
+      assertDirectAdapterHandoff,
       onPlatformSendDispatch,
       extraContent: resolveMatrixExtraContent(payload),
       onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
@@ -249,6 +255,8 @@ export const matrixOutbound: ChannelOutboundAdapter = {
     deliveryQueueId,
     deliveryPartIndex,
     deliveryPartCount,
+    signal,
+    assertDirectAdapterHandoff,
     onPlatformSendDispatch,
     onDeliveryResult,
   }) => {
@@ -265,6 +273,8 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       deliveryQueueId,
       deliveryPartIndex,
       ...(deliveryQueueId !== undefined ? { deliveryPartCount } : {}),
+      signal,
+      assertDirectAdapterHandoff,
       onPlatformSendDispatch,
       onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
     });
@@ -286,6 +296,8 @@ export const matrixOutbound: ChannelOutboundAdapter = {
     deliveryQueueId,
     deliveryPartIndex,
     deliveryPartCount,
+    signal,
+    assertDirectAdapterHandoff,
     onPlatformSendDispatch,
     onDeliveryResult,
   }) => {
@@ -306,6 +318,8 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       deliveryQueueId,
       deliveryPartIndex,
       ...(deliveryQueueId !== undefined ? { deliveryPartCount } : {}),
+      signal,
+      assertDirectAdapterHandoff,
       onPlatformSendDispatch,
       onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
     });

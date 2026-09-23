@@ -1,5 +1,6 @@
 // Coordinates active TUI runs, watchdogs, terminal errors, and history refresh.
-import { classifyFailoverReason, isAuthErrorMessage } from "../agents/embedded-agent-helpers.js";
+import { classifyFailoverReasonCore } from "../agents/failover/classify-core.js";
+import { isAuthErrorMessage } from "../agents/failover/message-patterns.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import { formatPrimitiveString } from "./tui-formatters.js";
 import { matchesSelectedTuiSession } from "./tui-session-events.js";
@@ -167,7 +168,7 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
       return undefined;
     }
     const provider = state.sessionInfo.modelProvider?.trim();
-    const failoverReason = classifyFailoverReason(errorMessage, { provider, providerPlugin: null });
+    const failoverReason = classifyFailoverReasonCore(errorMessage, { provider });
     if (failoverReason === "billing" || failoverReason === "rate_limit") {
       return undefined;
     }
@@ -181,10 +182,7 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     if (event.stream !== "lifecycle" || formatPrimitiveString(data.phase, "") !== "fallback_step") {
       return false;
     }
-    if (typeof data.fallbackStepToModel !== "string") {
-      return false;
-    }
-    const modelRef = data.fallbackStepToModel.trim();
+    const modelRef = formatPrimitiveString(data.fallbackStepToModel).trim();
     const separator = modelRef.indexOf("/");
     if (separator <= 0 || separator >= modelRef.length - 1) {
       return false;

@@ -94,9 +94,10 @@ describe("createPersistentDedupeCache", () => {
     const { cache, backing } = createCache({ readTimestamp: (record) => record.at });
     backing.entries.set("k3", { at: 1_000_000 - 59_000 });
     expect(await cache.lookup("k3")).toBe(true);
-    // Re-primed at the original timestamp: expires 59s later instead of a fresh 60s TTL.
+    // Restoring the record retains its original expiry instead of starting a fresh TTL.
     vi.setSystemTime(1_000_000 + 2_000);
     expect(cache.peek("k3")).toBe(false);
+    expect(await cache.lookup("k3")).toBe(false);
   });
 
   it("keeps legacy persistent expirations authoritative in non-expiring memory", async () => {

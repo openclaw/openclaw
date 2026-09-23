@@ -7,13 +7,13 @@ import {
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { parseMediaContentLength } from "@openclaw/media-core/content-length";
 import { detectMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { logWarn } from "../logger.js";
 import { convertHeicToJpeg } from "./media-services.js";
 import { extractPdfContent, type PdfExtractedImage } from "./pdf-extract.js";
@@ -35,17 +35,17 @@ type InputPdfLimits = {
   minTextChars: number;
 };
 
-/** Resolved input_file limits with normalized MIME allowlist and PDF sub-limits. */
-export type InputFileLimits = {
+type InputSourceLimits = {
   allowUrl: boolean;
   urlAllowlist?: string[];
   allowedMimes: Set<string>;
   maxBytes: number;
-  maxChars: number;
   maxRedirects: number;
   timeoutMs: number;
-  pdf: InputPdfLimits;
 };
+
+/** Resolved input_file limits with normalized MIME allowlist and PDF sub-limits. */
+export type InputFileLimits = InputSourceLimits & { maxChars: number; pdf: InputPdfLimits };
 
 /** Optional config shape accepted by input_file limit resolution. */
 export type InputFileLimitsConfig = {
@@ -63,14 +63,7 @@ export type InputFileLimitsConfig = {
 };
 
 /** Resolved input_image limits with normalized MIME allowlist and URL fetch controls. */
-export type InputImageLimits = {
-  allowUrl: boolean;
-  urlAllowlist?: string[];
-  allowedMimes: Set<string>;
-  maxBytes: number;
-  maxRedirects: number;
-  timeoutMs: number;
-};
+export type InputImageLimits = InputSourceLimits;
 
 /** Supported input_image source variants before base64 decoding or guarded URL fetch. */
 export type InputImageSource =
@@ -197,23 +190,26 @@ export function resolveInputFileLimits(config?: InputFileLimitsConfig): InputFil
 }
 
 /** Fetches an input source URL through SSRF, redirect, timeout, and byte-limit guards. */
-async function fetchWithGuard(params: {
-  url: string;
-  maxBytes: number;
-  timeoutMs: number;
-  maxRedirects: number;
-  policy?: SsrFPolicy;
-  auditContext?: string;
-}): Promise<InputFetchResult> {
+async function fetchWithGuard(
+  url: string,
+  limits: InputSourceLimits,
+  kind: "input_image" | "input_file",
+  signal?: AbortSignal,
+): Promise<InputFetchResult> {
+  if (!limits.allowUrl) {
+    throw new Error(`${kind} URL sources are disabled by config`);
+  }
   const { response, release } = await fetchWithSsrFGuard({
-    url: params.url,
-    maxRedirects: params.maxRedirects,
-    timeoutMs: params.timeoutMs,
-    policy: params.policy,
-    auditContext: params.auditContext,
+    url,
+    maxRedirects: limits.maxRedirects,
+    timeoutMs: limits.timeoutMs,
+    signal,
+    policy: { allowPrivateNetwork: false, hostnameAllowlist: limits.urlAllowlist },
+    auditContext: `openresponses.${kind}`,
     init: { headers: { "User-Agent": "OpenClaw-Gateway/1.0" } },
   });
 
+  let result: InputFetchResult;
   try {
     if (!response.ok) {
       await cancelUnreadResponseBody(response);
@@ -227,55 +223,86 @@ async function fetchWithGuard(params: {
       await cancelUnreadResponseBody(response);
       throw err;
     }
-    if (contentLength !== null && contentLength > params.maxBytes) {
+    if (contentLength !== null && contentLength > limits.maxBytes) {
       await cancelUnreadResponseBody(response);
       throw new Error(
-        `Content too large: ${contentLength} bytes (limit: ${params.maxBytes} bytes)`,
+        `Content too large: ${contentLength} bytes (limit: ${limits.maxBytes} bytes)`,
       );
     }
 
-    const buffer = await readResponseWithLimit(response, params.maxBytes);
+    const buffer = await readResponseWithLimit(response, limits.maxBytes);
 
     const contentType = response.headers.get("content-type") ?? undefined;
-    return { buffer, contentType };
+    result = { buffer, contentType };
   } finally {
     await release();
   }
+  // Successful downloads can finish transport cleanup after their caller canceled.
+  signal?.throwIfAborted();
+  return result;
 }
 
-function decodeTextContent(buffer: Buffer, charset: string | undefined): string {
+function decodeTextContent(buffer: Buffer, charset: string | undefined, maxChars: number): string {
   const encoding = normalizeOptionalLowercaseString(charset) || "utf-8";
+  const limit = Math.max(0, Math.floor(maxChars));
+  const decode = (label: string) => {
+    const decoder = new TextDecoder(label);
+    let text = "";
+    for (let offset = 0; offset < buffer.length && text.length < limit; offset += 16_384) {
+      const end = Math.min(offset + 16_384, buffer.length);
+      // Preserve charset state across chunks; only actual EOF flushes incomplete bytes.
+      text += decoder.decode(buffer.subarray(offset, end), { stream: end < buffer.length });
+    }
+    return truncateUtf16Safe(text, limit);
+  };
   try {
-    return new TextDecoder(encoding).decode(buffer);
+    return decode(encoding);
   } catch {
-    return new TextDecoder("utf-8").decode(buffer);
+    return decode("utf-8");
   }
 }
 
-function withInputFileTimeout<T>(params: {
-  task: Promise<T>;
+async function withInputFileTimeout<T>(params: {
+  task: (signal: AbortSignal) => Promise<T>;
   timeoutMs: number;
   label: string;
+  signal?: AbortSignal;
 }): Promise<T> {
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
-  let timeout: NodeJS.Timeout | undefined;
-  const timedOut = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => {
-      reject(new Error(`${params.label} timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
+  const controller = new AbortController();
+  const signal = params.signal
+    ? AbortSignal.any([params.signal, controller.signal])
+    : controller.signal;
+  signal.throwIfAborted();
+  let onAbort!: () => void;
+  const cancelled = new Promise<never>((_, reject) => {
+    onAbort = () => reject(toErrorObject(signal.reason, "Input file extraction aborted"));
+    signal.addEventListener("abort", onAbort, { once: true });
   });
-  return Promise.race([params.task, timedOut]).finally(() => {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  });
+  const timeout = setTimeout(
+    () => controller.abort(new Error(`${params.label} timed out after ${timeoutMs}ms`)),
+    timeoutMs,
+  );
+  try {
+    // Legacy extractors may not cooperate, but the worker also receives the deadline cancellation.
+    return await Promise.race([params.task(signal), cancelled]);
+  } finally {
+    clearTimeout(timeout);
+    signal.removeEventListener("abort", onAbort);
+  }
 }
 
-async function normalizeInputImage(params: {
+/** Validates image bytes and converts HEIC/HEIF to JPEG, keeping the original Buffer otherwise. */
+export async function normalizeInputImageBuffer(params: {
   buffer: Buffer;
   mimeType?: string;
-  limits: InputImageLimits;
-}): Promise<InputImageContent> {
+  limits: Pick<InputImageLimits, "allowedMimes" | "maxBytes">;
+}): Promise<{ buffer: Buffer; mimeType: string }> {
+  if (params.buffer.byteLength > params.limits.maxBytes) {
+    throw new Error(
+      `Image too large: ${params.buffer.byteLength} bytes (limit: ${params.limits.maxBytes} bytes)`,
+    );
+  }
   const declaredMime = normalizeMimeType(params.mimeType) ?? "application/octet-stream";
   const detectedMime = normalizeMimeType(
     await detectMime({ buffer: params.buffer, headerMime: params.mimeType }),
@@ -292,11 +319,7 @@ async function normalizeInputImage(params: {
   }
 
   if (!HEIC_INPUT_IMAGE_MIMES.has(sourceMime)) {
-    return {
-      type: "image",
-      data: params.buffer.toString("base64"),
-      mimeType: sourceMime,
-    };
+    return { buffer: params.buffer, mimeType: sourceMime };
   }
 
   // Normalize HEIC/HEIF to JPEG because downstream model and channel surfaces expect common images.
@@ -306,60 +329,40 @@ async function normalizeInputImage(params: {
       `Image too large after HEIC conversion: ${normalizedBuffer.byteLength} bytes (limit: ${params.limits.maxBytes} bytes)`,
     );
   }
-  return {
-    type: "image",
-    data: normalizedBuffer.toString("base64"),
-    mimeType: NORMALIZED_INPUT_IMAGE_MIME,
-  };
+  return { buffer: normalizedBuffer, mimeType: NORMALIZED_INPUT_IMAGE_MIME };
 }
 
 /** Extracts and normalizes an input_image source from base64 or guarded URL input. */
 export async function extractImageContentFromSource(
   source: InputImageSource,
   limits: InputImageLimits,
+  signal?: AbortSignal,
 ): Promise<InputImageContent> {
+  signal?.throwIfAborted();
+  let buffer: Buffer;
+  let mimeType: string | undefined;
+  let canonicalData: string | undefined;
   if (source.type === "base64") {
     rejectOversizedBase64Payload({ data: source.data, maxBytes: limits.maxBytes, label: "Image" });
-    const canonicalData = canonicalizeBase64(source.data);
+    canonicalData = canonicalizeBase64(source.data);
     if (!canonicalData) {
       throw new Error("input_image base64 source has invalid 'data' field");
     }
-    const buffer = Buffer.from(canonicalData, "base64");
-    if (buffer.byteLength > limits.maxBytes) {
-      throw new Error(
-        `Image too large: ${buffer.byteLength} bytes (limit: ${limits.maxBytes} bytes)`,
-      );
-    }
-    return await normalizeInputImage({
-      buffer,
-      mimeType: normalizeMimeType(source.mediaType) ?? "image/png",
-      limits,
-    });
+    buffer = Buffer.from(canonicalData, "base64");
+    mimeType = normalizeMimeType(source.mediaType) ?? "image/png";
+  } else if (source.type === "url") {
+    const result = await fetchWithGuard(source.url, limits, "input_image", signal);
+    buffer = result.buffer;
+    mimeType = parseContentType(result.contentType).mimeType;
+  } else {
+    throw new Error(`Unsupported input_image source type: ${(source as { type: string }).type}`);
   }
-
-  if (source.type === "url") {
-    if (!limits.allowUrl) {
-      throw new Error("input_image URL sources are disabled by config");
-    }
-    const result = await fetchWithGuard({
-      url: source.url,
-      maxBytes: limits.maxBytes,
-      timeoutMs: limits.timeoutMs,
-      maxRedirects: limits.maxRedirects,
-      policy: {
-        allowPrivateNetwork: false,
-        hostnameAllowlist: limits.urlAllowlist,
-      },
-      auditContext: "openresponses.input_image",
-    });
-    return await normalizeInputImage({
-      buffer: result.buffer,
-      mimeType: parseContentType(result.contentType).mimeType,
-      limits,
-    });
-  }
-
-  throw new Error(`Unsupported input_image source type: ${(source as { type: string }).type}`);
+  const image = await normalizeInputImageBuffer({ buffer, mimeType, limits });
+  signal?.throwIfAborted();
+  // Conversions replace the buffer; unchanged bytes already have validated base64.
+  const data =
+    image.buffer === buffer && canonicalData ? canonicalData : image.buffer.toString("base64");
+  return { type: "image", data, mimeType: image.mimeType };
 }
 
 /** Extracts model-visible text and images from an input_file source after MIME validation. */
@@ -367,8 +370,10 @@ export async function extractFileContentFromSource(params: {
   source: InputFileSource;
   limits: InputFileLimits;
   config?: OpenClawConfig;
+  signal?: AbortSignal;
 }): Promise<InputFileExtractResult> {
-  const { source, limits } = params;
+  const { source, limits, signal } = params;
+  signal?.throwIfAborted();
   const filename = source.filename || "file";
 
   let buffer: Buffer;
@@ -386,37 +391,27 @@ export async function extractFileContentFromSource(params: {
     charset = parsed.charset;
     buffer = Buffer.from(canonicalData, "base64");
   } else {
-    if (!limits.allowUrl) {
-      throw new Error("input_file URL sources are disabled by config");
-    }
-    const result = await fetchWithGuard({
-      url: source.url,
-      maxBytes: limits.maxBytes,
-      timeoutMs: limits.timeoutMs,
-      maxRedirects: limits.maxRedirects,
-      policy: {
-        allowPrivateNetwork: false,
-        hostnameAllowlist: limits.urlAllowlist,
-      },
-      auditContext: "openresponses.input_file",
-    });
+    const result = await fetchWithGuard(source.url, limits, "input_file", signal);
     const parsed = parseContentType(result.contentType);
     mimeType = parsed.mimeType;
     charset = parsed.charset;
     buffer = result.buffer;
   }
 
-  return await extractFileContentFromBuffer({
+  const extracted = await extractFileContentFromBuffer({
     buffer,
     filename,
     mimeType,
     charset,
     limits,
     config: params.config,
+    ...(signal ? { signal } : {}),
   });
+  signal?.throwIfAborted();
+  return extracted;
 }
 
-/** Extracts owned bytes after shared size and MIME checks; no source encoding is required. */
+/** Extracts text from borrowed bytes or PDFs from owned bytes after shared size and MIME checks. */
 export async function extractFileContentFromBuffer(params: {
   buffer: Buffer;
   filename?: string;
@@ -425,8 +420,10 @@ export async function extractFileContentFromBuffer(params: {
   limits: InputFileLimits;
   config?: OpenClawConfig;
   classification?: AttachmentClassification;
+  signal?: AbortSignal;
 }): Promise<InputFileExtractResult> {
   const { buffer, limits } = params;
+  params.signal?.throwIfAborted();
   const filename = params.filename || "file";
   if (buffer.byteLength > limits.maxBytes) {
     throw new Error(`File too large: ${buffer.byteLength} bytes (limit: ${limits.maxBytes} bytes)`);
@@ -437,6 +434,7 @@ export async function extractFileContentFromBuffer(params: {
   const classification =
     params.classification ??
     (await classifyAttachmentBytes({ buffer, declaredMime: params.mimeType }));
+  params.signal?.throwIfAborted();
   const mimeType = classification.mime;
   const charset = classification.charset ?? params.charset;
 
@@ -451,16 +449,19 @@ export async function extractFileContentFromBuffer(params: {
     const extracted = await withInputFileTimeout({
       label: "PDF extraction",
       timeoutMs: limits.timeoutMs,
-      task: extractPdfContent({
-        buffer,
-        maxPages: limits.pdf.maxPages,
-        maxPixels: limits.pdf.maxPixels,
-        minTextChars: limits.pdf.minTextChars,
-        ...(params.config ? { config: params.config } : {}),
-        onImageExtractionError: (err) => {
-          logWarn(`media: PDF image extraction skipped, ${String(err)}`);
-        },
-      }),
+      signal: params.signal,
+      task: (signal) =>
+        extractPdfContent({
+          buffer,
+          signal,
+          maxPages: limits.pdf.maxPages,
+          maxPixels: limits.pdf.maxPixels,
+          minTextChars: limits.pdf.minTextChars,
+          ...(params.config ? { config: params.config } : {}),
+          onImageExtractionError: (err) => {
+            logWarn(`media: PDF image extraction skipped, ${String(err)}`);
+          },
+        }),
     });
     const text = extracted.text ? truncateUtf16Safe(extracted.text, limits.maxChars) : "";
     return {
@@ -470,6 +471,6 @@ export async function extractFileContentFromBuffer(params: {
     };
   }
 
-  const text = truncateUtf16Safe(decodeTextContent(buffer, charset), limits.maxChars);
+  const text = decodeTextContent(buffer, charset, limits.maxChars);
   return { filename, text };
 }

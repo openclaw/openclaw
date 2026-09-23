@@ -56,7 +56,6 @@ vi.mock("../config/config.js", () => ({
 }));
 
 let getPluginCliCommandDescriptors: typeof import("./cli.js").getPluginCliCommandDescriptors;
-let loadValidatedConfigForPluginRegistration: typeof import("./cli.js").loadValidatedConfigForPluginRegistration;
 let registerPluginCliCommands: typeof import("./cli.js").registerPluginCliCommands;
 let registerPluginCliCommandsFromValidatedConfig: typeof import("./cli.js").registerPluginCliCommandsFromValidatedConfig;
 
@@ -197,7 +196,6 @@ describe("registerPluginCliCommands", () => {
   beforeAll(async () => {
     ({
       getPluginCliCommandDescriptors,
-      loadValidatedConfigForPluginRegistration,
       registerPluginCliCommands,
       registerPluginCliCommandsFromValidatedConfig,
     } = await import("./cli.js"));
@@ -345,6 +343,8 @@ describe("registerPluginCliCommands", () => {
 
   it("loads root-help descriptors from manifests without entering the plugin module loader", async () => {
     const { rawConfig, autoEnabledConfig } = createAutoEnabledCliFixture();
+    const siblingConfig = { enabled: false };
+    autoEnabledConfig.plugins!.entries!["external-cli"] = siblingConfig;
     mocks.applyPluginAutoEnable.mockReturnValue({
       config: autoEnabledConfig,
       changes: [],
@@ -352,7 +352,30 @@ describe("registerPluginCliCommands", () => {
         demo: ["demo configured"],
       },
     });
-    mocks.resolvePluginMetadataSnapshot.mockReturnValue(createCliMetadataSnapshot());
+    const snapshot = createCliMetadataSnapshot();
+    const sibling = {
+      id: "external-cli",
+      origin: "global",
+      format: "openclaw",
+      cliCommands: [
+        { name: "external-cli", description: "External utilities", hasSubcommands: false },
+      ],
+    };
+    const plugins = [...snapshot.plugins, sibling];
+    mocks.resolvePluginMetadataSnapshot.mockReturnValue({
+      ...snapshot,
+      index: {
+        ...snapshot.index,
+        plugins: [
+          ...snapshot.index.plugins,
+          { pluginId: "matrix", enabled: true, enabledByDefault: false, origin: "bundled" },
+          { pluginId: sibling.id, enabled: true, origin: sibling.origin },
+        ],
+      },
+      manifestRegistry: { plugins, diagnostics: [] },
+      plugins,
+      byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
+    });
 
     await expect(getPluginCliCommandDescriptors(rawConfig)).resolves.toEqual([
       {
@@ -365,6 +388,11 @@ describe("registerPluginCliCommands", () => {
     const help = await renderRootHelpText({ config: rawConfig });
     expect(help).toContain("matrix *");
     expect(help).toContain("Matrix channel utilities");
+    expect(help).not.toContain("External utilities");
+
+    autoEnabledConfig.plugins!.entries!.matrix = { enabled: false };
+    siblingConfig.enabled = true;
+    await expect(getPluginCliCommandDescriptors(rawConfig)).resolves.toEqual(sibling.cliCommands);
     expect(mocks.loadOpenClawPluginCliRegistry).not.toHaveBeenCalled();
     expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith(
       expect.objectContaining({ config: rawConfig }),
@@ -674,7 +702,9 @@ describe("registerPluginCliCommands", () => {
       runtimeConfig: snapshotConfig,
     });
 
-    await expect(loadValidatedConfigForPluginRegistration()).resolves.toBe(snapshotConfig);
+    await expect(registerPluginCliCommandsFromValidatedConfig(createProgram())).resolves.toBe(
+      snapshotConfig,
+    );
     expect(mocks.getRuntimeConfigSnapshot).toHaveBeenCalledTimes(1);
     expect(mocks.loadConfig).not.toHaveBeenCalled();
   });
@@ -688,7 +718,9 @@ describe("registerPluginCliCommands", () => {
     });
 
     await expect(
-      loadValidatedConfigForPluginRegistration({ skipPluginValidation: true }),
+      registerPluginCliCommandsFromValidatedConfig(createProgram(), undefined, undefined, {
+        skipPluginValidation: true,
+      }),
     ).resolves.toBe(snapshotConfig);
     expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith({ skipPluginValidation: true });
   });
@@ -703,28 +735,26 @@ describe("registerPluginCliCommands", () => {
     });
     mocks.getRuntimeConfigSnapshot.mockReturnValueOnce(activeConfig);
 
-    await expect(loadValidatedConfigForPluginRegistration()).resolves.toBe(activeConfig);
+    await expect(registerPluginCliCommandsFromValidatedConfig(createProgram())).resolves.toBe(
+      activeConfig,
+    );
     expect(mocks.loadConfig).not.toHaveBeenCalled();
   });
 
-  it("short-circuits validated plugin CLI config when the snapshot is invalid", async () => {
+  it("reports invalid configuration without loading plugins", async () => {
     mocks.readConfigFileSnapshot.mockResolvedValueOnce({
       valid: false,
-      config: { plugins: { load: { paths: ["/tmp/evil"] } } },
+      path: "/tmp/openclaw.json",
+      config: { plugins: { load: { paths: ["/tmp/unvalidated-plugin"] } } },
+      issues: [{ path: "gateway.port", message: "Expected a number" }],
     });
 
-    await expect(loadValidatedConfigForPluginRegistration()).resolves.toBeNull();
-    expect(mocks.getRuntimeConfigSnapshot).not.toHaveBeenCalled();
-    expect(mocks.loadConfig).not.toHaveBeenCalled();
-  });
-
-  it("skips plugin CLI registration from validated config when the snapshot is invalid", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValueOnce({
-      valid: false,
-      config: {},
+    await expect(
+      registerPluginCliCommandsFromValidatedConfig(createProgram()),
+    ).rejects.toMatchObject({
+      code: "INVALID_CONFIG",
+      message: "Invalid config at /tmp/openclaw.json:\n- gateway.port: Expected a number",
     });
-
-    await expect(registerPluginCliCommandsFromValidatedConfig(createProgram())).resolves.toBeNull();
     expect(mocks.getRuntimeConfigSnapshot).not.toHaveBeenCalled();
     expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
   });

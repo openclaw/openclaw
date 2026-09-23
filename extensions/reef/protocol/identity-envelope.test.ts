@@ -22,7 +22,7 @@ import {
   signRotation,
   verifyRotation,
 } from "./identity.js";
-import { MemoryReplayStore } from "./replay.js";
+import { MemoryReplayStore } from "./memory-stores.test-support.js";
 
 const now = 1_752_300_000;
 const id = "01JZ0000000000000000000000";
@@ -45,7 +45,7 @@ function fixture() {
 }
 
 async function openFixture(
-  envelope: Envelope,
+  envelope: Parameters<typeof open>[0]["envelope"],
   alice: ReturnType<typeof generateIdentity>,
   bob: ReturnType<typeof generateIdentity>,
   self = "bob#1",
@@ -175,8 +175,8 @@ describe("envelope", () => {
 
   it("verifies every signed field before acting on it", async () => {
     const { alice, bob, envelope } = fixture();
-    const mutations: Envelope[] = [
-      { ...envelope, v: 2 as 1 },
+    const mutations: Array<Parameters<typeof open>[0]["envelope"]> = [
+      { ...envelope, v: 2 },
       { ...envelope, id: `${envelope.id.slice(0, -1)}1` },
       { ...envelope, from: "mallory#1" },
       { ...envelope, to: "mallory#1" },

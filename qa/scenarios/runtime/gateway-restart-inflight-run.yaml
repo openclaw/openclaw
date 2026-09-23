@@ -123,11 +123,11 @@ flow:
                 args:
                   - lambda:
                       async: true
-                      expr: "readSessionTranscriptSummary(env, sessionKey, { probeText: config.promptMarker }).then((summary) => (summary.assistantToolCallCounts.exec ?? 0) >= checkpoint && (summary.assistantToolCallCounts.wait ?? 0) >= checkpoint && (summary.assistantToolCallCounts.wait ?? 0) > (summary.completedToolCallCounts.wait ?? 0) ? summary : undefined).catch(() => undefined)"
+                      expr: "readSessionTranscriptSummary(env, sessionKey, { probeText: config.promptMarker, pendingCodeModeExecNeedle: `CHECKPOINT-${checkpoint}` }).then((summary) => summary.hasPendingCodeModeWait ? summary : undefined).catch(() => undefined)"
                   - expr: liveTurnTimeoutMs(env, 120000)
                   - 25
               - assert:
-                  expr: "(checkpointTranscript.assistantToolCallCounts.wait ?? 0) > (checkpointTranscript.completedToolCallCounts.wait ?? 0)"
+                  expr: checkpointTranscript.hasPendingCodeModeWait
                   message:
                     expr: "`checkpoint ${checkpoint} wait was not pending before restart: ${JSON.stringify(checkpointTranscript)}`"
               - set: checkpointRequests
@@ -208,7 +208,7 @@ flow:
               - call: waitForCondition
                 args:
                   - lambda:
-                      expr: "readGatewayLogs().slice(gatewayLogCursor).split('dispatching restart-safe recovery').length - 1 >= checkpoint ? true : undefined"
+                      expr: "readGatewayLogs(gatewayLogCursor).split('dispatching restart-safe recovery').length - 1 >= checkpoint ? true : undefined"
                   - expr: liveTurnTimeoutMs(env, 120000)
                   - 25
         - call: waitForOutboundMessage
@@ -292,7 +292,7 @@ flow:
               expr: "`restart recovery left a terminal artifact: ${JSON.stringify(finalTranscript)}`"
         - set: recoveryLogs
           value:
-            expr: readGatewayLogs().slice(gatewayLogCursor)
+            expr: readGatewayLogs(gatewayLogCursor)
         - set: recoveryDispatches
           value:
             expr: "recoveryLogs.split('dispatching restart-safe recovery').length - 1"

@@ -23,12 +23,13 @@ export async function handleCodexCommand(
   ctx: PluginCommandContext,
   options: CodexCommandInternalOptions,
 ): Promise<PluginCommandResult> {
+  const commandContext = { ...ctx, gatewayClientScopes: ctx.gatewayClientScopes?.slice() };
   const { loadSubcommandHandler, resolvePluginConfig, ...subcommandOptions } = options;
   try {
     const handleCodexSubcommand = loadSubcommandHandler
       ? await loadSubcommandHandler()
       : await loadDefaultCodexSubcommandHandler();
-    return await handleCodexSubcommand(ctx, {
+    return await handleCodexSubcommand(commandContext, {
       ...subcommandOptions,
       pluginConfig: resolvePluginConfig?.() ?? subcommandOptions.pluginConfig,
     });

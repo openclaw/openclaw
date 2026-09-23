@@ -1,5 +1,6 @@
-// Voice Call tests cover response generator plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+// Voice Call tests cover response generator plugin behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import { VoiceCallConfigSchema } from "./config.js";
@@ -16,6 +17,7 @@ type TestSessionEntry = {
   model?: string;
   modelProvider?: string;
   modelSelectionLocked?: boolean;
+  pluginOwnerId?: string;
   pluginExtensions?: Record<string, unknown>;
   contextTokens?: number;
   authProfileOverride?: string;
@@ -50,6 +52,9 @@ type EmbeddedAgentArgs = {
   senderIsOwner?: boolean;
   toolsAllow?: string[];
   blockReplyBreak?: "text_end" | "message_end";
+  resolveReplyDelivery?: (
+    minimumAssistantMessageIndex?: number,
+  ) => Promise<"delivered" | "pending" | "missing">;
   onBlockReply?: (
     payload: Record<string, unknown>,
     context?: { assistantMessageIndex?: number },
@@ -178,8 +183,8 @@ function createAgentRuntime(
 
 function requireEmbeddedAgentArgs(runEmbeddedAgent: ReturnType<typeof vi.fn>) {
   const calls = runEmbeddedAgent.mock.calls as unknown[][];
-  const firstCall = requireFirstMockCall(
-    calls,
+  const firstCall = expectDefined(
+    calls.at(0),
     "voice response generator embedded agent invocation",
   );
   const args = firstCall[0] as Partial<EmbeddedAgentArgs> | undefined;
@@ -187,14 +192,6 @@ function requireEmbeddedAgentArgs(runEmbeddedAgent: ReturnType<typeof vi.fn>) {
     throw new Error("voice response generator did not pass the spoken-output contract prompt");
   }
   return args as EmbeddedAgentArgs;
-}
-
-function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
-  const call = calls.at(0);
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
 }
 
 async function runGenerateVoiceResponse(
@@ -380,7 +377,10 @@ describe("generateVoiceResponse", () => {
     const { runtime, runEmbeddedAgent } = createAgentRuntime([]);
     runEmbeddedAgent.mockImplementationOnce(async (args: EmbeddedAgentArgs) => {
       args.onBlockReply?.({ text: '{"spoken":"Already ready."}' });
+      expect(await args.resolveReplyDelivery?.()).toBe("missing");
       await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: true });
+      expect(await args.resolveReplyDelivery?.()).toBe("pending");
+      expect(await args.resolveReplyDelivery?.(1)).toBe("missing");
       return await runFinished;
     });
     let reportEarlyDelivery: () => void = () => {};
@@ -655,8 +655,8 @@ describe("generateVoiceResponse", () => {
     expect(pinnedSessionEntry?.modelProvider).toBeUndefined();
     expect(pinnedSessionEntry?.contextTokens).toBeUndefined();
     expect(pinnedSessionEntry?.authProfileOverride).toBeUndefined();
-    const patchSessionEntryCall = requireFirstMockCall(
-      patchSessionEntry.mock.calls,
+    const patchSessionEntryCall = expectDefined(
+      patchSessionEntry.mock.calls.at(0),
       "session entry patch",
     );
     expect(patchSessionEntryCall[0]).toMatchObject({
@@ -720,6 +720,7 @@ describe("generateVoiceResponse", () => {
       sessionId: "catalog-adopted-session",
       updatedAt: 100,
       agentHarnessId: "codex",
+      agentRuntimeOverride: "openclaw",
       modelSelectionLocked: true,
       pluginExtensions: {
         codex: {
@@ -753,6 +754,47 @@ describe("generateVoiceResponse", () => {
       agentHarnessRuntimeOverride: "codex",
       sessionKey,
     });
+  });
+
+  it.each([
+    {
+      name: "unlocked observation",
+      entry: { agentHarnessId: "codex" },
+    },
+    {
+      name: "plugin-owned locked observation",
+      entry: {
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+        pluginOwnerId: "voice-call",
+      },
+    },
+    {
+      name: "plugin-owned runtime request",
+      entry: {
+        agentHarnessId: "codex",
+        agentRuntimeOverride: "openclaw",
+        modelSelectionLocked: true,
+        pluginOwnerId: "voice-call",
+      },
+    },
+  ])("does not turn $name into a native voice pin", async ({ entry }) => {
+    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime([
+      { text: '{"spoken":"Voice continued."}' },
+    ]);
+    sessionStore["agent:main:voice:15550001111"] = {
+      sessionId: "existing-session",
+      updatedAt: 100,
+      ...entry,
+    };
+
+    const { result } = await runGenerateVoiceResponse([], { runtime });
+
+    expect(result.text).toBe("Voice continued.");
+    const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
+    expect(args.agentHarnessId).toBeUndefined();
+    expect(args.agentHarnessRuntimeOverride).toBeUndefined();
+    expect(args.modelSelectionLocked).toBe(entry.modelSelectionLocked === true);
   });
 
   it("canonicalizes a restored legacy per-call key for classic responses", async () => {

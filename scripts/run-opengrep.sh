@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # scripts/run-opengrep.sh
 #
 # Run the OpenClaw precise OpenGrep rulepack against the local working tree
@@ -46,7 +50,7 @@ if ! command -v opengrep >/dev/null 2>&1; then
 error: 'opengrep' not found on PATH.
 
 Install with:
-  curl -fsSL https://raw.githubusercontent.com/opengrep/opengrep/v1.27.1/install.sh | bash -s -- -v v1.27.1
+  curl -fsSL https://raw.githubusercontent.com/opengrep/opengrep/v1.30.0/install.sh | bash -s -- -v v1.30.0
 
 (See https://opengrep.dev for other options.)
 EOF
@@ -116,7 +120,7 @@ write_empty_sarif() {
         "driver": {
           "name": "Opengrep OSS",
           "informationUri": "https://opengrep.dev",
-          "semanticVersion": "1.27.1",
+          "semanticVersion": "1.30.0",
           "rules": []
         }
       },

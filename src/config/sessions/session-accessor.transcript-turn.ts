@@ -17,7 +17,6 @@ import { updateSessionEntry } from "./session-accessor.entry-mutation.js";
 import {
   loadSessionEntryReadOnly,
   resolveSessionEntryFromStore,
-  resolveSessionEntrySelection,
 } from "./session-accessor.entry.js";
 import {
   readCommittedTranscriptMessageSequence,
@@ -37,6 +36,7 @@ import type {
   SessionTranscriptTurnPersistResult,
 } from "./session-accessor.types.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "./session-store-owner.js";
+import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
 import {
   getOwnedSessionTranscriptWriterFence,
   runWithOwnedSessionTranscriptWrite,
@@ -167,25 +167,17 @@ export async function persistSessionTranscriptTurn(
   // entries (from scope.sessionStore/scope.sessionEntry) and transcript-only
   // scopes (no entry) keep the legacy append — the guarded transaction
   // requires a persisted row to validate. (#119221)
-  if (
-    target.entryFromPersistedStore &&
-    target.storePath &&
-    target.sessionKey &&
-    target.sessionEntry &&
-    target.sessionId
-  ) {
+  if (target.entryFromPersistedStore && target.storePath && target.sessionKey && target.sessionId) {
     return await persistExpectedSessionTranscriptTurn(
       {
         ...scope,
-        agentId: target.agentId,
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
-        storePath: target.storePath,
+        ...target,
       },
       {
         ...options,
         expectedSessionId: target.sessionId,
       },
+      target,
     );
   }
   const appendedMessages = await runWithOwnedSessionTranscriptWrite(
@@ -219,7 +211,7 @@ export async function persistSessionTranscriptTurn(
 }
 
 async function appendTranscriptTurnMessages(
-  target: SessionTranscriptTurnWriteContext,
+  target: SessionTranscriptWriteScope,
   options: SessionTranscriptTurnPersistOptions,
 ): Promise<TranscriptMessageAppendResult<unknown>[]> {
   const selectedMessages = await selectAppendableTranscriptTurnMessages(target, options);
@@ -229,6 +221,7 @@ async function appendTranscriptTurnMessages(
     const result = await appendTranscriptMessage(
       {
         ...(target.agentId ? { agentId: target.agentId } : {}),
+        ...(target.env ? { env: target.env } : {}),
         ...(target.sessionId ? { sessionId: target.sessionId } : {}),
         ...(target.sessionKey ? { sessionKey: target.sessionKey } : {}),
         ...(target.storePath ? { storePath: target.storePath } : {}),
@@ -287,43 +280,13 @@ async function persistExpectedSessionTranscriptTurn(
     atomicGroup?: boolean;
     expectedSessionId: string;
   },
+  preparedTarget?: Awaited<ReturnType<typeof prepareTranscriptTurnTarget>>,
 ): Promise<SessionTranscriptTurnPersistResult> {
   const requestedSessionKey = scope.sessionKey?.trim();
-  if (!scope.storePath || !requestedSessionKey) {
-    throw new Error("Cannot guard a transcript turn without a session store and key");
-  }
-  const storePath = scope.storePath;
   const expectedSessionId = options.expectedSessionId;
-  const agentId = resolveTranscriptTurnAgentId({
-    config: options.config ?? getRuntimeConfig(),
-    scopeAgentId: scope.agentId,
-    sessionKey: requestedSessionKey,
-    storePath,
-    sessionStore: scope.sessionStore,
-    env: scope.env,
-  });
-  const runtimeTarget = await resolveSessionTranscriptRuntimeTarget({
-    agentId,
-    ...(scope.env ? { env: scope.env } : {}),
-    sessionId: expectedSessionId,
-    sessionKey: requestedSessionKey,
-    storePath,
-  });
-  const sessionKey = runtimeTarget.sessionKey;
-  const resolved = scope.sessionStore
-    ? resolveSessionEntryFromStore({ store: scope.sessionStore, sessionKey })
-    : resolveSessionEntrySelection({
-        agentId,
-        ...(scope.env ? { env: scope.env } : {}),
-        sessionKey,
-        storePath,
-      });
-  const target: SessionTranscriptTurnWriteContext = {
-    agentId,
-    sessionId: expectedSessionId,
-    sessionKey: resolved.normalizedKey,
-    storePath,
-  };
+  const { selectedSessionId, selectedLifecycleRevision, ...target } =
+    preparedTarget ??
+    (await prepareTranscriptTurnTarget({ ...scope, sessionId: expectedSessionId }, options.config));
   const inheritedWriterFence = getOwnedSessionTranscriptWriterFence({
     sessionFile: target.sessionKey,
     sessionKey: target.sessionKey,
@@ -335,43 +298,33 @@ async function persistExpectedSessionTranscriptTurn(
       sessionKey: target.sessionKey,
       sessionTarget: target,
     },
-    async () => {
-      const committed = await appendExpectedSessionTranscriptTurn(
-        {
-          agentId,
-          sessionKey: resolved.normalizedKey,
-          sessionId: expectedSessionId,
-          storePath,
-        },
-        {
-          config: options.config,
-          cwd: options.cwd,
-          expectedLifecycleRevision:
-            options.expectedLifecycleRevision !== undefined
-              ? options.expectedLifecycleRevision
-              : inheritedWriterFence?.expectedLifecycleRevision,
-          expectedWriterRunId:
-            options.expectedWriterRunId ?? inheritedWriterFence?.expectedWriterRunId,
-          expectedSessionState: options.expectedSessionState,
-          expectedSessionId,
-          initialSessionEntry: options.initialSessionEntry,
-          atomicGroup: options.atomicGroup,
-          messages: options.messages.map((append) => ({
-            ...append,
-            message: attachSessionTranscriptRunId(append.message, options.runId),
-          })),
-          sessionLifecyclePatch: options.sessionLifecyclePatch,
-          sessionTurnMutation: options.sessionTurnMutation,
-          sessionFile: target.sessionKey!,
-          touchSessionEntry: options.touchSessionEntry,
-        },
-      );
-      // Owned-write teardown can reject after commit; complete custody before that drain.
-      for (const message of committed.appendedMessages) {
-        options.onMessageCommitted?.(message);
-      }
-      return committed;
-    },
+    () =>
+      appendExpectedSessionTranscriptTurn(target, {
+        config: options.config,
+        cwd: options.cwd,
+        keyFormat: "agent-qualified",
+        selectedSessionId,
+        selectedLifecycleRevision,
+        expectedLifecycleRevision:
+          options.expectedLifecycleRevision !== undefined
+            ? options.expectedLifecycleRevision
+            : inheritedWriterFence?.expectedLifecycleRevision,
+        expectedWriterRunId:
+          options.expectedWriterRunId ?? inheritedWriterFence?.expectedWriterRunId,
+        expectedSessionState: options.expectedSessionState,
+        expectedSessionId,
+        initialSessionEntry: options.initialSessionEntry,
+        atomicGroup: options.atomicGroup,
+        messages: options.messages.map((append) => ({
+          ...append,
+          message: attachSessionTranscriptRunId(append.message, options.runId),
+        })),
+        onMessageCommitted: options.onMessageCommitted,
+        sessionLifecyclePatch: options.sessionLifecyclePatch,
+        sessionTurnMutation: options.sessionTurnMutation,
+        sessionFile: target.sessionKey!,
+        touchSessionEntry: options.touchSessionEntry,
+      }),
   );
 
   if (turn.rejectedReason === "session-rebound") {
@@ -398,7 +351,7 @@ async function persistExpectedSessionTranscriptTurn(
   });
 
   if (turn.sessionEntry && scope.sessionStore) {
-    scope.sessionStore[resolved.normalizedKey] = turn.sessionEntry;
+    scope.sessionStore[target.sessionKey] = turn.sessionEntry;
   }
   return {
     sessionTurnMutationResult: turn.sessionTurnMutationResult,
@@ -408,18 +361,12 @@ async function persistExpectedSessionTranscriptTurn(
   };
 }
 
-async function resolveTranscriptTurnTarget(
+async function prepareTranscriptTurnTarget(
   scope: SessionTranscriptWriteScope & {
-    sessionEntry?: SessionEntry;
     sessionStore?: Record<string, SessionEntry>;
   },
-  config?: import("../types.openclaw.js").OpenClawConfig,
-): Promise<
-  SessionTranscriptTurnWriteContext & {
-    sessionEntry: SessionEntry | undefined;
-    entryFromPersistedStore: boolean;
-  }
-> {
+  config?: OpenClawConfig,
+) {
   const sessionKey = scope.sessionKey?.trim();
   if (!sessionKey || !scope.sessionId) {
     throw new Error("Cannot persist a transcript turn without a session key and session id");
@@ -442,33 +389,43 @@ async function resolveTranscriptTurnTarget(
   // A caller snapshot may retain the routing key that admitted the turn. The
   // persisted window owns durable writes; resolving it is read-only, so a
   // memory-only mirror still avoids materializing SQLite state.
-  const runtimeTarget = await resolveSessionTranscriptRuntimeTarget({
+  const binding = captureSessionTranscriptTargetBinding({
     agentId,
     ...(scope.env ? { env: scope.env } : {}),
     sessionId: scope.sessionId,
     sessionKey,
     storePath,
   });
-  const resolvedSessionKey = runtimeTarget.sessionKey;
+  const runtimeTarget = await resolveSessionTranscriptRuntimeTarget(binding, config, {
+    keyFormat: "agent-qualified",
+  });
+  // Keep the selected locator and private storage namespace across the await.
+  // Incognito accessors resolve their owner from env even with a concrete locator.
+  return { ...runtimeTarget, storePath: binding.storePath, env: binding.env };
+}
+
+async function resolveTranscriptTurnTarget(
+  scope: SessionTranscriptWriteScope & {
+    sessionEntry?: SessionEntry;
+    sessionStore?: Record<string, SessionEntry>;
+  },
+  config?: OpenClawConfig,
+) {
+  const target = await prepareTranscriptTurnTarget(scope, config);
   const resolved = scope.sessionStore
-    ? resolveSessionEntryFromStore({ store: scope.sessionStore, sessionKey: resolvedSessionKey })
+    ? resolveSessionEntryFromStore({ store: scope.sessionStore, sessionKey: target.sessionKey })
     : undefined;
   // Mirrors can represent either durable Gateway state or memory-only internal
   // sessions. Classify that provenance without materializing SQLite state.
   const persistedEntry = loadSessionEntryReadOnly({
     ...scope,
-    agentId,
-    sessionKey: resolvedSessionKey,
-    storePath,
+    ...target,
   });
   const sessionEntry = persistedEntry ?? resolved?.existing ?? scope.sessionEntry;
   return {
-    agentId,
-    sessionId: scope.sessionId,
-    sessionKey: runtimeTarget.sessionKey,
-    storePath,
+    ...target,
     sessionEntry,
-    entryFromPersistedStore: persistedEntry != null,
+    entryFromPersistedStore: target.selectedSessionId != null,
   };
 }
 
@@ -477,7 +434,7 @@ async function touchTranscriptTurnSessionEntry(params: {
     sessionEntry?: SessionEntry;
     sessionStore?: Record<string, SessionEntry>;
   };
-  target: SessionTranscriptTurnWriteContext & {
+  target: SessionTranscriptWriteScope & {
     sessionEntry: SessionEntry | undefined;
   };
   shouldTouch: boolean;
@@ -496,6 +453,7 @@ async function touchTranscriptTurnSessionEntry(params: {
       sessionKey: params.target.sessionKey,
       storePath: params.target.storePath,
       ...(params.target.agentId ? { agentId: params.target.agentId } : {}),
+      ...(params.target.env ? { env: params.target.env } : {}),
     },
     (current) =>
       current.sessionId === params.target.sessionId

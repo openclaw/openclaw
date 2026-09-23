@@ -5,6 +5,7 @@ import type {
   CronRunsResult,
   CronStatus,
 } from "../ui/src/api/types.ts";
+import { cronListResponseFixture } from "../ui/src/test-helpers/cron.ts";
 
 const CRON_LIST_SNAPSHOT_REVISION = "control-ui-mock-cron";
 
@@ -46,7 +47,10 @@ function singleJobListCases(jobs: CronJob[], match: Record<string, unknown>) {
   }));
 }
 
-export function buildCronMocks(baseTime: number, options: { richAttention?: boolean } = {}) {
+export function buildCronMocks(
+  baseTime: number,
+  options: { richAttention?: boolean; secondAgentId?: string } = {},
+) {
   const richAttention = options.richAttention === true;
   const minute = 60_000;
   const hour = 60 * minute;
@@ -67,6 +71,14 @@ export function buildCronMocks(baseTime: number, options: { richAttention?: bool
       message: "Sync the team calendar and summarize schedule conflicts.",
     },
     delivery: { mode: "announce", channel: "telegram", to: "@operations" },
+    failureAlert: {
+      after: 2,
+      channel: "telegram",
+      to: "@operations",
+      cooldownMs: 3_600_000,
+      includeSkipped: false,
+      mode: "announce",
+    },
     state: {
       nextRunAtMs: baseTime + 5 * hour,
       lastRunAtMs: baseTime - 5 * minute,
@@ -188,7 +200,7 @@ export function buildCronMocks(baseTime: number, options: { richAttention?: bool
     : [];
   const healthyJob: CronJob = {
     id: "mock-cron-release-digest",
-    agentId: "main",
+    agentId: options.secondAgentId ?? "main",
     name: "Publish release digest",
     description: "Summarize merged changes for the engineering channel.",
     enabled: true,
@@ -220,7 +232,7 @@ export function buildCronMocks(baseTime: number, options: { richAttention?: bool
     durationMs: job.state?.lastDurationMs,
     error: job.state?.lastError,
     deliveryStatus: "not-requested",
-    model: index === 1 ? "claude-sonnet-4-6" : "gpt-5.6-sol",
+    model: index === 1 ? "claude-sonnet-4-6" : "gpt-5",
     provider: index === 1 ? "anthropic" : "openai",
   }));
   const runs: CronRunLogEntry[] = [
@@ -249,7 +261,8 @@ export function buildCronMocks(baseTime: number, options: { richAttention?: bool
       durationMs: overdueJob.state?.lastDurationMs,
       summary: "Classified 23 messages and prepared 6 replies.",
       deliveryStatus: "not-requested",
-      model: "gpt-5.6-sol",
+      deliverySuppressionReason: "Delivery mode is none for this inbox-only automation.",
+      model: "gpt-5",
       provider: "openai",
     },
   ];
@@ -265,7 +278,7 @@ export function buildCronMocks(baseTime: number, options: { richAttention?: bool
       durationMs: 42_000 + index * 2_500,
       summary: `Completed an on-demand run for ${job.name}.`,
       deliveryStatus: "not-requested",
-      model: "gpt-5.6-sol",
+      model: "gpt-5",
       provider: "openai",
     },
   }));
@@ -313,30 +326,28 @@ export function buildCronMocks(baseTime: number, options: { richAttention?: bool
 
   return {
     "cron.status": status,
-    "cron.list": {
+    "cron.list": cronListResponseFixture([
       // Cases mirror the concrete queries today's Cron UI issues. Unknown combinations fall back
       // to the full fixture list; dynamic evaluation is intentionally out of scope because the
       // scenario is JSON-serialized into the page rather than installed as a live responder.
-      cases: [
-        {
-          match: { enabled: "enabled", lastRunStatus: "error" },
-          response: listResult(failedJobs, { limit: failedJobs.length }),
-        },
-        { match: { enabled: "disabled" }, response: listResult([]) },
-        ...singleJobListCases(jobs, {
-          enabled: "enabled",
-          sortBy: "nextRunAtMs",
-          sortDir: "asc",
-          limit: 1,
-        }),
-        ...singleJobListCases(jobs, { includeDisabled: true, limit: 1 }),
-        ...sortedJobLists.map((entry) => ({
-          match: entry.match,
-          response: listResult(entry.jobs),
-        })),
-        { response: listResult(jobs) },
-      ],
-    },
+      {
+        match: { enabled: "enabled", lastRunStatus: "error" },
+        response: listResult(failedJobs, { limit: failedJobs.length }),
+      },
+      { match: { enabled: "disabled" }, response: listResult([]) },
+      ...singleJobListCases(jobs, {
+        enabled: "enabled",
+        sortBy: "nextRunAtMs",
+        sortDir: "asc",
+        limit: 1,
+      }),
+      ...singleJobListCases(jobs, { includeDisabled: true, limit: 1 }),
+      ...sortedJobLists.map((entry) => ({
+        match: entry.match,
+        response: listResult(entry.jobs),
+      })),
+      { response: listResult(jobs) },
+    ]),
     "cron.runs": {
       cases: [
         ...queuedRuns.map((run) => ({

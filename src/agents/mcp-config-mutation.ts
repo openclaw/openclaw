@@ -2,8 +2,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { mcpConfigInternal } from "../config/mcp-config.js";
 import { withMcpLifecycleLease } from "./mcp-lifecycle-lease.js";
-import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
-import { clearMcpOAuthRequesters, clearMcpOAuthServer } from "./mcp-oauth.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 
 function hasOAuthAuth(server: unknown): boolean {
@@ -32,19 +30,20 @@ async function clearReplacedMcpOAuth(mutation: {
   const next = hasOAuthAuth(mutation.next)
     ? resolveMcpTransportConfig(mutation.name, mutation.next)
     : undefined;
-  if (next?.kind === "http" && next.url === previous.url) {
-    const wasRequester = hasRequesterIdentity(mutation.previous);
-    const isRequester = hasRequesterIdentity(mutation.next);
-    if (wasRequester === isRequester) {
-      return;
-    }
-    if (wasRequester) {
-      // The operator row becomes the shared destination; only requester rows are stale.
-      await clearMcpOAuthRequesters(operatorMcpOAuthIdentity(mutation.name, previous.url));
-      return;
-    }
+  const sameServerUrl = next?.kind === "http" && next.url === previous.url;
+  const wasRequester = hasRequesterIdentity(mutation.previous);
+  if (sameServerUrl && wasRequester === hasRequesterIdentity(mutation.next)) {
+    return;
   }
-  await clearMcpOAuthServer(operatorMcpOAuthIdentity(mutation.name, previous.url));
+  const [{ operatorMcpOAuthIdentity }, { clearMcpOAuthRequesters, clearMcpOAuthServer }] =
+    await Promise.all([import("./mcp-oauth-identity.js"), import("./mcp-oauth.js")]);
+  const identity = operatorMcpOAuthIdentity(mutation.name, previous.url);
+  if (sameServerUrl && wasRequester) {
+    // The operator row becomes the shared destination; only requester rows are stale.
+    await clearMcpOAuthRequesters(identity);
+    return;
+  }
+  await clearMcpOAuthServer(identity);
 }
 
 async function withMcpOwnershipCoordination<T>(

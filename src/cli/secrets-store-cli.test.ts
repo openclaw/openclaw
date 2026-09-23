@@ -2,8 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { registerSecretsCli } from "./secrets-cli.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const mocks = await vi.hoisted(async () => {
   const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
@@ -21,6 +24,10 @@ const mocks = await vi.hoisted(async () => {
 });
 
 vi.mock("../runtime.js", () => ({ defaultRuntime: mocks.defaultRuntime }));
+vi.mock("./one-shot-exit.js", () => ({
+  exitCliAfterOutput: (runtime: typeof mocks.defaultRuntime, exitCode: number) =>
+    runtime.exit(exitCode),
+}));
 vi.mock("../secrets/store/secret-store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../secrets/store/secret-store.js")>();
   return {
@@ -75,6 +82,68 @@ beforeEach(() => {
 });
 
 describe("secrets store CLI", () => {
+  it.each(["set", "import"])(
+    "preserves an existing credential during a redacted %s round-trip",
+    async (command) => {
+      const file = path.join(tempDirs.make("store-cli-redacted-"), "input");
+      await fs.writeFile(
+        file,
+        command === "set"
+          ? "__OPENCLAW_REDACTED__"
+          : "OPENCLAW_GATEWAY_TOKEN=__OPENCLAW_REDACTED__\n",
+      );
+      mocks.read.mockReturnValue({ ok: true, value: "synthetic-existing-token" });
+      await createProgram().parseAsync(
+        command === "set"
+          ? ["secrets", "store", "set", "OPENCLAW_GATEWAY_TOKEN", "--value-file", file]
+          : ["secrets", "store", "import", "--from", file, "--yes"],
+        { from: "user" },
+      );
+      expect(mocks.write).not.toHaveBeenCalled();
+      expect(mocks.runtimeLogs.join("\n")).toContain(
+        "Skipped redacted value for OPENCLAW_GATEWAY_TOKEN; existing entry unchanged.",
+      );
+      expect(mocks.gatewayIdentity).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses a redacted import without a usable existing credential before writing other entries", async () => {
+    const file = path.join(tempDirs.make("store-cli-redacted-"), "input.env");
+    await fs.writeFile(file, "SERVICE_MODE=test\nOPENCLAW_GATEWAY_TOKEN=__OPENCLAW_REDACTED__\n");
+    mocks.read.mockReturnValue({ ok: false, error: { code: "SECRET_STORE_NOT_FOUND" } });
+    await expect(
+      createProgram().parseAsync(["secrets", "store", "import", "--from", file, "--yes"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("__exit__:2");
+    expect(mocks.write).not.toHaveBeenCalled();
+    expect(mocks.runtimeErrors.join("\n")).toContain("OPENCLAW_GATEWAY_TOKEN");
+  });
+  it("writes JSON results for list and get", async () => {
+    mocks.list.mockReturnValueOnce([
+      { name: "SERVICE_MODE", kind: "env", valuePreview: "production" },
+    ]);
+    await createProgram().parseAsync(["secrets", "store", "list", "--json"], { from: "user" });
+
+    mocks.list.mockReturnValueOnce([{ name: "SERVICE_MODE", kind: "env" }]);
+    mocks.read.mockReturnValueOnce({ ok: true, value: "production" });
+    await createProgram().parseAsync(["secrets", "store", "get", "SERVICE_MODE", "--json"], {
+      from: "user",
+    });
+
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledTimes(2);
+    expect(mocks.runtimeLogs).toHaveLength(2);
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenNthCalledWith(1, [
+      { name: "SERVICE_MODE", kind: "env", valuePreview: "production" },
+    ]);
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenNthCalledWith(2, {
+      name: "SERVICE_MODE",
+      kind: "env",
+      value: "production",
+    });
+    expect(mocks.runtimeErrors).toHaveLength(0);
+  });
+
   it("shows non-secret allowed-host metadata in list output", async () => {
     mocks.list.mockReturnValue([
       {
@@ -237,20 +306,38 @@ describe("secrets store CLI", () => {
     expect(mocks.updateHosts).not.toHaveBeenCalled();
   });
 
-  it("returns exit 3 for a missing get and exit 1 for a database failure", async () => {
-    mocks.list.mockReturnValueOnce([]);
-    await expect(
-      createProgram().parseAsync(["secrets", "store", "get", "MISSING_VALUE"], {
-        from: "user",
-      }),
-    ).rejects.toThrow("__exit__:3");
+  it.each([
+    {
+      name: "missing get",
+      prepare: () => mocks.list.mockReturnValueOnce([]),
+      args: ["secrets", "store", "get", "MISSING_VALUE", "--json"],
+      exitCode: 3,
+      message: 'Secret store entry "MISSING_VALUE" was not found.',
+    },
+    {
+      name: "database failure",
+      prepare: () =>
+        mocks.list.mockImplementationOnce(() => {
+          throw new Error("database unavailable");
+        }),
+      args: ["secrets", "store", "list", "--json"],
+      exitCode: 1,
+      message: "database unavailable",
+    },
+  ])("writes one JSON failure for $name", async (testCase) => {
+    testCase.prepare();
 
-    mocks.list.mockImplementationOnce(() => {
-      throw new Error("database unavailable");
+    await expect(createProgram().parseAsync(testCase.args, { from: "user" })).rejects.toThrow(
+      `__exit__:${testCase.exitCode}`,
+    );
+
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
+    expect(mocks.runtimeLogs).toHaveLength(1);
+    expect(JSON.parse(mocks.runtimeLogs[0] ?? "")).toEqual({
+      ok: false,
+      error: { type: "cli_error", message: testCase.message },
     });
-    await expect(
-      createProgram().parseAsync(["secrets", "store", "list"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
+    expect(mocks.runtimeErrors).toHaveLength(0);
   });
 
   it("keeps rm idempotent when entries are already missing", async () => {

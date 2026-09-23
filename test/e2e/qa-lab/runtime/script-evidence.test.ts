@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { validateQaEvidenceSummaryJson } from "../../../../extensions/qa-lab/api.js";
+import {
+  type QaProviderMode,
+  validateQaEvidenceSummaryJson,
+} from "../../../../extensions/qa-lab/test-api.js";
 import {
   createQaScriptBlockedStatusTracker,
   createQaScriptEvidenceWriter,
@@ -11,7 +14,15 @@ import {
 
 const tempRoots: string[] = [];
 
-async function makeWriter(params: { maxDetailsBytes?: number; maxLogBytes?: number } = {}) {
+async function makeWriter(
+  params: {
+    maxDetailsBytes?: number;
+    maxLogBytes?: number;
+    primaryModel?: string;
+    providerId?: string;
+    providerMode?: QaProviderMode;
+  } = {},
+) {
   const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-script-evidence-"));
   tempRoots.push(repoRoot);
   return {
@@ -23,8 +34,9 @@ async function makeWriter(params: { maxDetailsBytes?: number; maxLogBytes?: numb
       logFileName: "producer.log",
       maxDetailsBytes: params.maxDetailsBytes,
       maxLogBytes: params.maxLogBytes ?? 64,
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      providerMode: "mock-openai",
+      primaryModel: params.primaryModel ?? "mock-openai/gpt-5.6-luna",
+      providerMode: params.providerMode ?? "mock-openai",
+      providerId: params.providerId,
       repoRoot,
       target: {
         id: "script-evidence-test",
@@ -43,6 +55,46 @@ afterEach(async () => {
 });
 
 describe("QA script evidence writer", () => {
+  it.each([
+    { name: "unknown model", primaryModel: "", expectedId: "openai", expectedName: null },
+    {
+      name: "explicit model precedence",
+      primaryModel: "custom/model",
+      expectedId: "custom",
+      expectedName: "model",
+    },
+  ])(
+    "provider identity fallback: persists $name",
+    async ({ primaryModel, expectedId, expectedName }) => {
+      const { artifactBase, writer } = await makeWriter({
+        primaryModel,
+        providerMode: "live-frontier",
+        providerId: "  openai  ",
+      });
+      const evidence = await writer.write({
+        details: "missing candidate",
+        durationMs: 1,
+        status: "blocked",
+      });
+      const diskEvidence = validateQaEvidenceSummaryJson(
+        JSON.parse(await fs.readFile(path.join(artifactBase, "qa-evidence.json"), "utf8")),
+      );
+
+      expect(diskEvidence).toEqual(evidence);
+      expect(diskEvidence.entries[0]?.result).toMatchObject({
+        status: "blocked",
+        failure: { reason: "missing candidate" },
+      });
+      expect(await fs.readFile(path.join(artifactBase, "producer.log"), "utf8")).toBe("");
+      expect(diskEvidence.entries[0]?.execution?.provider).toEqual({
+        id: expectedId,
+        live: true,
+        auth: "live-frontier",
+        model: { name: expectedName, ref: primaryModel || null },
+      });
+    },
+  );
+
   for (const status of ["pass", "fail", "blocked"] as const) {
     it(`writes ${status} evidence with normalized artifact paths`, async () => {
       const { artifactBase, writer } = await makeWriter();

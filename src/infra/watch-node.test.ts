@@ -37,7 +37,11 @@ const createKillableChild = () => {
     kill: vi.fn(),
   });
   child.kill.mockImplementation((signal: NodeJS.Signals = "SIGTERM") => {
-    queueMicrotask(() => child.emit("exit", null, signal));
+    // A native run-node owner that completes requested cleanup acknowledges
+    // SIGTERM with a code. Raw signal death is covered independently below.
+    queueMicrotask(() =>
+      signal === "SIGTERM" ? child.emit("exit", 143, null) : child.emit("exit", null, signal),
+    );
     return true;
   });
   return child;
@@ -109,6 +113,92 @@ function requireSpawnEnv(spawn: ReturnType<typeof vi.fn>, callIndex: number) {
 }
 
 describe("watch-node script", () => {
+  it.each(["SIGTERM", "SIGKILL", "SIGHUP"] as const)(
+    "preserves raw Unix runner %s without doctor or restart",
+    async (signal) => {
+      const child = Object.assign(new EventEmitter(), { kill: vi.fn() });
+      const spawn = vi.fn(() => child);
+      const fakeProcess = Object.assign(createFakeProcess(), { platform: "linux" });
+      const run = runWatch({
+        args: ["gateway"],
+        env: {},
+        lockDisabled: true,
+        process: fakeProcess,
+        spawn,
+        createWatcher: () => ({ on: () => {}, close: async () => {} }),
+      });
+      child.emit("exit", null, signal);
+      await expect(run).resolves.toBe(signal);
+      expect(spawn).toHaveBeenCalledOnce();
+      expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
+    },
+  );
+
+  it.each(["restart", "shutdown", "doctor", "startup-error"] as const)(
+    "does not hide raw Unix signal loss during %s",
+    async (phase) => {
+      const child = Object.assign(new EventEmitter(), { kill: vi.fn() });
+      const doctor = Object.assign(new EventEmitter(), { kill: vi.fn() });
+      const spawn = vi.fn().mockReturnValueOnce(child).mockReturnValueOnce(doctor);
+      const watcher = Object.assign(new EventEmitter(), { close: vi.fn(async () => {}) });
+      const fakeProcess = Object.assign(createFakeProcess(), { platform: "linux" });
+      const startupError = new Error("watcher dependency failed");
+      const run = runWatch({
+        args: ["gateway"],
+        env: {},
+        fs: { existsSync: () => true },
+        lockDisabled: true,
+        process: fakeProcess,
+        spawn,
+        ...(phase === "startup-error"
+          ? {
+              loadChokidar: async () => {
+                throw startupError;
+              },
+            }
+          : { createWatcher: () => watcher }),
+      });
+      if (phase === "restart") {
+        watcher.emit("change", "src/index.ts");
+      } else if (phase === "shutdown") {
+        fakeProcess.emit("SIGTERM");
+      } else if (phase === "doctor") {
+        child.emit("exit", 1, null);
+      } else {
+        await vi.waitFor(() => expect(child.kill).toHaveBeenCalledWith("SIGTERM"));
+      }
+      (phase === "doctor" ? doctor : child).emit("exit", null, "SIGKILL");
+      await expect(run).resolves.toBe("SIGKILL");
+      expect(spawn).toHaveBeenCalledTimes(phase === "doctor" ? 2 : 1);
+      expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
+    },
+  );
+
+  it("preserves requested Windows SIGTERM rebuilds and shutdown", async () => {
+    const first = Object.assign(new EventEmitter(), { kill: vi.fn() });
+    const second = Object.assign(new EventEmitter(), { kill: vi.fn() });
+    const spawn = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const watcher = Object.assign(new EventEmitter(), { close: vi.fn(async () => {}) });
+    const fakeProcess = Object.assign(createFakeProcess(), { platform: "win32" });
+    const run = runWatch({
+      args: ["gateway"],
+      env: {},
+      fs: { existsSync: () => true },
+      lockDisabled: true,
+      process: fakeProcess,
+      spawn,
+      createWatcher: () => watcher,
+    });
+    watcher.emit("change", "src/index.ts");
+    expect(first.kill).toHaveBeenCalledWith("SIGTERM");
+    first.emit("exit", null, "SIGTERM");
+    expect(spawn).toHaveBeenCalledTimes(2);
+    fakeProcess.emit("SIGTERM");
+    second.emit("exit", null, "SIGTERM");
+    await expect(run).resolves.toBe(143);
+    expect(second.kill).toHaveBeenCalledWith("SIGTERM");
+  });
+
   it("wires chokidar watch to run-node with watched source/config paths", async () => {
     const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
     await withTestDir({ prefix: "openclaw-watch-node-" }, async (cwd) => {
@@ -684,49 +774,56 @@ describe("watch-node script", () => {
   });
 
   it("prints recovery guidance when chokidar fails with invalid package config", async () => {
-    const error = Object.assign(
-      new Error(
-        'Invalid package config /tmp/openclaw/.pnpm/chokidar/package.json while importing "chokidar" from /tmp/openclaw/scripts/watch-node.mjs.',
-      ),
-      { code: "ERR_INVALID_PACKAGE_CONFIG" },
-    );
-    const child = createKillableChild();
-    const spawn = vi.fn(() => child);
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await withTestDir({ prefix: "openclaw-watch-node-" }, async (cwd) => {
+      const packageConfigPath = path.join(cwd, ".pnpm", "chokidar", "package.json");
+      const scriptPath = path.join(cwd, "scripts", "watch-node.mjs");
+      const error = Object.assign(
+        new Error(
+          `Invalid package config ${packageConfigPath} while importing "chokidar" from ${scriptPath}.`,
+        ),
+        { code: "ERR_INVALID_PACKAGE_CONFIG" },
+      );
+      const child = createKillableChild();
+      const spawn = vi.fn(() => child);
+      const loadChokidar = vi.fn(async () => {
+        throw error;
+      });
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    try {
-      await expect(
-        runWatch({
-          args: ["gateway", "--force"],
-          cwd: "/tmp/openclaw",
-          loadChokidar: vi.fn(async () => {
-            throw error;
+      try {
+        await expect(
+          runWatch({
+            args: ["gateway", "--force"],
+            cwd,
+            loadChokidar,
+            process: createFakeProcess(),
+            spawn,
           }),
-          process: createFakeProcess(),
-          spawn,
-        }),
-      ).rejects.toBe(error);
+        ).rejects.toBe(error);
 
-      expect(spawn).toHaveBeenCalledTimes(1);
-      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
-      expect(errorSpy.mock.calls).toEqual([
-        [""],
-        [
-          "[openclaw] gateway:watch could not start because a dependency package config looks corrupted.",
-        ],
-        ["[openclaw] Invalid package config: /tmp/openclaw/.pnpm/chokidar/package.json"],
-        ["[openclaw] This usually means a file in node_modules is empty or truncated."],
-        ["[openclaw] Recommended recovery:"],
-        ["[openclaw]   rm -rf node_modules"],
-        ["[openclaw]   pnpm store prune"],
-        ["[openclaw]   pnpm install"],
-        [""],
-        ["[openclaw] Original error:"],
-        [error],
-      ]);
-    } finally {
-      errorSpy.mockRestore();
-    }
+        expect(loadChokidar).toHaveBeenCalledOnce();
+        expect(spawn).toHaveBeenCalledTimes(1);
+        expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+        expect(fs.existsSync(resolveTestWatchLockPath(cwd, ["gateway", "--force"]))).toBe(false);
+        expect(errorSpy.mock.calls).toEqual([
+          [""],
+          [
+            "[openclaw] gateway:watch could not start because a dependency package config looks corrupted.",
+          ],
+          [`[openclaw] Invalid package config: ${packageConfigPath}`],
+          ["[openclaw] This usually means a file in node_modules is empty or truncated."],
+          ["[openclaw] Recommended recovery:"],
+          ["[openclaw]   rm -rf node_modules"],
+          ["[openclaw]   pnpm store prune"],
+          ["[openclaw]   pnpm install"],
+          [""],
+          ["[openclaw] Original error:"],
+          [error],
+        ]);
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
   });
 
   it("does not log non-package-config chokidar import errors before rethrowing", async () => {

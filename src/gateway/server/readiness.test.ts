@@ -2,8 +2,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelId } from "../../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import { createAgentDatabaseInspectionRefusal } from "../../state/agent-database-admission.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { ChannelManager } from "../server-channels.js";
+import type { GatewayPluginReloadStatus } from "../server-plugin-runtime-generation.js";
 import { createReadinessChecker } from "./readiness.js";
 
 /**
@@ -30,10 +32,11 @@ function snapshotWith(
 function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
   return {
     getRuntimeSnapshot: vi.fn(() => snapshot),
-    getPluginCommandCatalogAccounts: vi.fn(() => new Map()),
+    pauseChannelStarts: vi.fn(() => () => {}),
     startChannels: vi.fn(),
     startChannel: vi.fn(),
     stopChannel: vi.fn(),
+    releaseChannelRouteHandoffs: vi.fn(),
     setAutostartSuppression: vi.fn(),
     getAutostartSuppression: vi.fn(() => null),
     recoverAutostartSuppression: vi.fn(async () => false),
@@ -41,6 +44,7 @@ function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
     isAmbientAutostartSuppressed: vi.fn(() => false),
     markChannelLoggedOut: vi.fn(),
     isHealthMonitorEnabled: vi.fn(() => true),
+    isAccountListed: vi.fn(() => true),
     isManuallyStopped: vi.fn(() => false),
     isAutoRestartScheduled: vi.fn(() => false),
     resetRestartAttempts: vi.fn(),
@@ -234,6 +238,78 @@ describe("createReadinessChecker", () => {
       expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
     });
   });
+
+  it("reports plugin replacement recovery immediately and resumes channel readiness after settlement", () => {
+    withReadinessClock(() => {
+      let pluginReload: GatewayPluginReloadStatus | undefined;
+      const startedAt = Date.now() - FIVE_MIN_MS;
+      const manager = createHealthyDiscordManager(startedAt, Date.now());
+      const readiness = createReadinessChecker({
+        channelManager: manager,
+        startedAt,
+        getPluginReloadStatus: () => pluginReload,
+      });
+      expect(readiness()).toEqual(readySnapshot());
+
+      vi.mocked(manager.getRuntimeSnapshot).mockReturnValue(
+        snapshotWith({ discord: stoppedAccount({ connected: false }) }),
+      );
+
+      pluginReload = {
+        phase: "recovering",
+        pluginIds: ["discord"],
+        deadlineAtMs: Date.now() + 5_000,
+        reason: "Waiting for admitted work before restoring the previous plugin runtime.",
+      };
+      expect(readiness()).toEqual({
+        ...failingSnapshot(["plugin-reload"]),
+        pluginReload,
+      });
+      pluginReload = {
+        phase: "failed",
+        pluginIds: ["discord"],
+        reason: "Plugin recovery failed; inspect discord and restart the Gateway.",
+      };
+      expect(readiness()).toEqual({
+        ...failingSnapshot(["plugin-reload"]),
+        pluginReload,
+      });
+
+      pluginReload = undefined;
+      expect(readiness()).toEqual(failingSnapshot(["discord"]));
+    });
+  });
+
+  it.each([false, true])(
+    "reports core agent refusal and recovery immediately (skip channels: %s)",
+    (skipChannels) => {
+      withReadinessClock(() => {
+        const refusal = createAgentDatabaseInspectionRefusal({
+          agentId: "main",
+          paths: ["/isolated/agents/main/openclaw-agent.sqlite"],
+          reason: "Session identities require migration before this agent can run.",
+        });
+        let refused = false;
+        const readiness = createReadinessChecker({
+          channelManager: createManager(snapshotWith({})),
+          startedAt: Date.now() - FIVE_MIN_MS,
+          cacheTtlMs: 1_000,
+          shouldSkipChannelReadiness: () => skipChannels,
+          getAgentDatabaseAdmissionRefusals: () => (refused ? [refusal] : []),
+        });
+        expect(readiness()).toEqual(readySnapshot());
+
+        refused = true;
+        expect(readiness()).toEqual({
+          ...failingSnapshot(["agent-database:main"]),
+          agentDatabases: [refusal],
+        });
+
+        refused = false;
+        expect(readiness()).toEqual(readySnapshot());
+      });
+    },
+  );
 
   it("ignores disabled and unconfigured channels", () => {
     withReadinessClock(() => {

@@ -27,6 +27,7 @@ import type {
   CronToolsAllowProvenance,
 } from "../types.js";
 import { resolveInitialCronDelivery } from "./initial-delivery.js";
+import { normalizeDeclarativeLabel } from "./jobs-declarative.js";
 import {
   computeJobNextRunAtMs,
   normalizeStreamScheduleBounds,
@@ -49,8 +50,18 @@ import { normalizeOptionalAgentId, normalizeRequiredName } from "./normalize.js"
 import { mergeCronPayload } from "./payload-merge.js";
 import type { CronServiceState } from "./state.js";
 
-const CRON_DECLARATIVE_LABEL_MAX_LENGTH = 200;
 type DeliveryValidationOptions = { configuredChannels?: readonly string[] };
+
+function resetJobFailureState(job: CronStoredJob): void {
+  delete job.state.autoDisabled;
+  job.state.consecutiveErrors = 0;
+  job.state.scheduleErrorCount = 0;
+  if (job.schedule.kind === "stream") {
+    job.state.streamRestartExhausted = undefined;
+    job.state.streamConsecutiveFailures = 0;
+    job.state.streamError = undefined;
+  }
+}
 
 type ScheduleNormalizationContext =
   | { kind: "create"; nowMs: number }
@@ -106,23 +117,6 @@ function normalizeJobSchedule(
   }
   const input = context.kind === "declarative" ? structuredClone(schedule) : schedule;
   return normalizeStreamScheduleBounds(input);
-}
-
-function normalizeDeclarativeLabel(
-  value: unknown,
-  field: "declarationKey" | "displayName",
-  nullable = false,
-): string | undefined {
-  const normalized = normalizeOptionalString(value);
-  if (!(nullable && value == null) && value !== undefined && !normalized) {
-    throw new Error(`cron ${field} must not be blank`);
-  }
-  if (normalized && normalized.length > CRON_DECLARATIVE_LABEL_MAX_LENGTH) {
-    throw new Error(
-      `cron ${field} must be at most ${CRON_DECLARATIVE_LABEL_MAX_LENGTH} characters`,
-    );
-  }
-  return normalized;
 }
 
 type JobValidationContext =
@@ -184,7 +178,11 @@ function validateFullJob(
   if (context.kind !== "declarative") {
     validateCapabilities();
   }
-  assertMainSessionAgentId(job, context.defaultAgentId);
+  assertMainSessionAgentId(
+    job,
+    context.defaultAgentId,
+    context.kind === "patch" ? context.patch : undefined,
+  );
   assertDeliverySupport(job);
   assertAnnounceDeliveryChannelSupport(
     job,
@@ -229,6 +227,7 @@ export function createJob(
   // Schedule activation is stamped only by committed scheduling mutations.
   // Accepting caller state here would let imports spoof restart catch-up ownership.
   delete initialState.scheduleActivatedAtMs;
+  delete initialState.runningScheduleChangeId;
   delete initialState.autoDisabled;
   assertCronJobStateTimestamps(initialState);
   const job: CronStoredJob = {
@@ -303,7 +302,7 @@ export function applyJobPatch(
     defaultAgentId?: string;
     scheduleValidationNowMs?: number;
     cronConfig?: CronConfig;
-    scheduledToolPolicy?: CronScheduledToolPolicy;
+    scheduledToolPolicy?: CronScheduledToolPolicy | null;
     toolsAllowProvenance?: CronToolsAllowProvenance;
     toolsAllowExecTarget?: CronToolsAllowExecTarget;
   } & DeliveryValidationOptions,
@@ -420,25 +419,19 @@ export function applyJobPatch(
     // Runtime state patches may report execution progress, but the scheduler
     // alone owns the boundary that decides whether restart catch-up can run.
     delete statePatch.scheduleActivatedAtMs;
+    delete statePatch.runningScheduleChangeId;
     delete statePatch.autoDisabled;
     assertCronJobStateTimestamps(statePatch);
     job.state = { ...job.state, ...statePatch };
   }
   if (patch.enabled === true) {
-    delete job.state.autoDisabled;
-    job.state.consecutiveErrors = 0;
-    job.state.scheduleErrorCount = 0;
+    resetJobFailureState(job);
   }
   if ("agentId" in patch) {
     job.agentId = normalizeOptionalAgentId((patch as { agentId?: unknown }).agentId);
   }
   if ("sessionKey" in patch) {
     job.sessionKey = normalizeOptionalString((patch as { sessionKey?: unknown }).sessionKey);
-  }
-  if (job.schedule.kind === "stream" && patch.enabled === true) {
-    job.state.streamRestartExhausted = undefined;
-    job.state.streamConsecutiveFailures = 0;
-    job.state.streamError = undefined;
   }
   if (previousScheduleKind === "stream" && job.schedule.kind !== "stream") {
     job.state.streamStatus = undefined;
@@ -539,6 +532,14 @@ export function applyDeclarativeJobSpec(
     delete job.delivery;
   }
   if (opts.enabledExplicit) {
+    // Reconciliation preserves an enabled job's failure streak; explicit recovery
+    // of a stopped job uses the same reset as the enable command.
+    if (
+      input.enabled &&
+      (!job.enabled || job.state.autoDisabled || job.state.streamRestartExhausted)
+    ) {
+      resetJobFailureState(job);
+    }
     job.enabled = input.enabled;
   }
   assertCronJobStateTimestamps(input.state ?? {});

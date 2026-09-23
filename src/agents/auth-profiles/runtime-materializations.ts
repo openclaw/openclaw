@@ -60,7 +60,7 @@ export function recordRuntimeAuthMaterialization(params: {
   const provider = normalizeProviderId(params.provider);
   const fact: RuntimeAuthMaterialization = {
     provider,
-    modelId: params.modelId.trim().toLowerCase(),
+    modelId: params.modelId.trim(),
     modelApi: params.modelApi.trim().toLowerCase(),
     modelBaseUrl: params.modelBaseUrl.trim(),
     requestTransportOverrides: params.requestTransportOverrides,

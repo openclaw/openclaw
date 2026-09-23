@@ -15,10 +15,12 @@ import {
   evaluateRuntimeEligibility,
   hasBinary,
   isConfigPathTruthyWithDefaults,
+  prepareBinaryAvailability,
 } from "../../shared/config-eval.js";
 import type { SkillEligibilityContext, SkillEntry, SkillsInstallPreferences } from "../types.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import { resolveSkillSource } from "./source.js";
+import type { WorkspaceSkillSources } from "./workspace-skill-sources.js";
 
 const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
   "browser.enabled": true,
@@ -126,6 +128,8 @@ export function shouldIncludeSkill(params: {
   config?: OpenClawConfig;
   bundledAllowlist: ReadonlySet<string> | undefined;
   eligibility?: SkillEligibilityContext;
+  hasBin?: (bin: string) => boolean;
+  platform?: string;
 }): boolean {
   const { entry, config, bundledAllowlist, eligibility } = params;
   const skillKey = resolveSkillKey(entry.skill, entry);
@@ -142,10 +146,11 @@ export function shouldIncludeSkill(params: {
   }
   return evaluateRuntimeEligibility({
     os: entry.metadata?.os,
+    platform: params.platform,
     remotePlatforms: eligibility?.remote?.platforms,
     always: entry.metadata?.always,
     requires: entry.metadata?.requires,
-    hasBin: hasBinary,
+    hasBin: params.hasBin ?? hasBinary,
     hasRemoteBin: eligibility?.remote?.hasBin,
     hasAnyRemoteBin: eligibility?.remote?.hasAnyBin,
     hasEnv: (envName) =>
@@ -156,4 +161,58 @@ export function shouldIncludeSkill(params: {
       }),
     isConfigPathTruthy: (configPath) => isSkillConfigPathTruthy(config, configPath),
   });
+}
+
+export async function prepareSkillBinaryProbe(
+  entries: SkillEntry[],
+  opts?: { config?: OpenClawConfig; eligibility?: SkillEligibilityContext },
+  assertCurrent?: () => void,
+  runtime?: WorkspaceSkillSources["runtime"],
+) {
+  if (runtime) {
+    const available = new Set(runtime.bins);
+    return { hasBin: (bin: string) => available.has(bin), needsRetry: () => false };
+  }
+  const bins = new Set<string>();
+  const bundledAllowlist = resolveBundledAllowlist(opts?.config);
+  let needsBinaries: boolean;
+  const recordBinaryRequirement = () => {
+    needsBinaries = true;
+    return true;
+  };
+  for (const entry of entries) {
+    const requires = entry.metadata?.requires;
+    if (!requires?.bins?.length && !requires?.anyBins?.length) {
+      continue;
+    }
+    needsBinaries = false;
+    shouldIncludeSkill({
+      entry,
+      config: opts?.config,
+      bundledAllowlist,
+      eligibility: opts?.eligibility,
+      hasBin: recordBinaryRequirement,
+    });
+    if (needsBinaries) {
+      for (const bin of entry.metadata?.requires?.bins ?? []) {
+        bins.add(bin);
+      }
+      for (const bin of entry.metadata?.requires?.anyBins ?? []) {
+        bins.add(bin);
+      }
+    }
+  }
+  const facts = await prepareBinaryAvailability(bins, assertCurrent);
+  let unprepared = false;
+  return {
+    hasBin: (bin: string) => {
+      // Eligibility can change while probing; prepare newly requested facts before publishing.
+      if (!bins.has(bin)) {
+        unprepared = true;
+        return false;
+      }
+      return facts.hasBinary(bin);
+    },
+    needsRetry: () => unprepared || !facts.isCurrent(),
+  };
 }

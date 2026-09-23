@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import {
@@ -94,10 +94,39 @@ async function createNpmLauncherFixture(root: string) {
   await fs.chmod(path.join(binDir, "node"), 0o755);
   const command = path.join(binDir, "codex");
   await fs.symlink(launcher, command);
-  return { command, native, binDir };
+  return { command, launcher, native, binDir };
 }
 
 describe("Codex app-server runtime artifact", () => {
+  it("rejects cancellation while opening an empty runtime artifact", async () => {
+    await withTempDir("openclaw-codex-runtime-abort-", async (root) => {
+      const command = path.join(root, "codex");
+      await fs.writeFile(command, "");
+      const options = startOptions(command);
+      const controller = new AbortController();
+      const reason = new Error("Runtime capture canceled");
+      const open = fs.open.bind(fs);
+      const opened = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (args[0] === command && typeof args[1] === "number") {
+          controller.abort(reason);
+        }
+        return handle;
+      });
+      try {
+        await expect(
+          captureCodexAppServerRuntimeArtifactBeforeStart({
+            startOptions: options,
+            spawnIdentity: spawnIdentity(options),
+            signal: controller.signal,
+          }),
+        ).rejects.toBe(reason);
+      } finally {
+        opened.mockRestore();
+      }
+    });
+  });
+
   it("binds a native executable and its adjacent code-mode host", async () => {
     await withTempDir("openclaw-codex-runtime-artifact-", async (root) => {
       const command = path.join(root, "codex");
@@ -115,6 +144,7 @@ describe("Codex app-server runtime artifact", () => {
   });
 
   it.runIf(process.platform === "darwin" || process.platform === "linux").each([
+    ["resolved-managed", "package-entrypoint"],
     ["config", "absolute"],
     ["env", "path"],
     ["config", "relative"],
@@ -122,9 +152,15 @@ describe("Codex app-server runtime artifact", () => {
     "binds the official npm launcher selected by %s via %s",
     async (source, selection) => {
       await withTempDir("openclaw-codex-npm-artifact-", async (root) => {
-        const { command, native, binDir } = await createNpmLauncherFixture(root);
+        const { command, launcher, native, binDir } = await createNpmLauncherFixture(root);
         const options = startOptions(
-          selection === "path" ? "codex" : selection === "relative" ? "bin/codex" : command,
+          selection === "package-entrypoint"
+            ? launcher
+            : selection === "path"
+              ? "codex"
+              : selection === "relative"
+                ? "bin/codex"
+                : command,
           {
             commandSource: source,
             cwd: root,
@@ -135,6 +171,40 @@ describe("Codex app-server runtime artifact", () => {
         await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(true);
         await fs.writeFile(native, "native-v2");
         await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(false);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "binds Bun when managed startup does not need Node on the child PATH",
+    async () => {
+      await withTempDir("openclaw-codex-bun-artifact-", async (root) => {
+        const { launcher, binDir } = await createNpmLauncherFixture(root);
+        const bunPath = path.join(binDir, "bun");
+        await fs.writeFile(bunPath, "bun-v1");
+        await fs.rm(path.join(binDir, "node"));
+        const originalExecPath = Object.getOwnPropertyDescriptor(process, "execPath")!;
+        const originalBun = Object.getOwnPropertyDescriptor(process.versions, "bun");
+        try {
+          Object.defineProperty(process, "execPath", { ...originalExecPath, value: bunPath });
+          Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.2" });
+          const { binding } = await captureBinding({
+            options: startOptions(launcher, {
+              commandSource: "resolved-managed",
+              env: { PATH: binDir },
+            }),
+          });
+          await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(true);
+          await fs.writeFile(bunPath, "bun-v2");
+          await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(false);
+        } finally {
+          Object.defineProperty(process, "execPath", originalExecPath);
+          if (originalBun) {
+            Object.defineProperty(process.versions, "bun", originalBun);
+          } else {
+            Reflect.deleteProperty(process.versions, "bun");
+          }
+        }
       });
     },
   );
@@ -273,17 +343,20 @@ describe("Codex app-server runtime artifact", () => {
     });
   });
 
-  it("binds an explicit code-mode host override", async () => {
+  it("ignores the retired code-mode host override and binds the native adjacent host", async () => {
     await withTempDir("openclaw-codex-host-override-", async (root) => {
       const command = path.join(root, "codex");
-      const codeModeHost = path.join(root, "custom-code-mode-host");
+      const codeModeHost = path.join(root, "codex-code-mode-host");
+      const retiredOverride = path.join(root, "custom-code-mode-host");
       await fs.writeFile(command, "native-v1");
       await fs.writeFile(codeModeHost, "host-v1");
       const options = startOptions(command, {
-        env: { CODEX_CODE_MODE_HOST_PATH: codeModeHost },
+        env: { CODEX_CODE_MODE_HOST_PATH: retiredOverride },
       });
 
       const { binding } = await captureBinding({ options });
+      await fs.writeFile(retiredOverride, "unused-host");
+      expect((await captureBinding({ options })).binding).toEqual(binding);
       await fs.writeFile(codeModeHost, "host-v2");
       await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(false);
     });
@@ -336,6 +409,22 @@ describe("Codex app-server runtime artifact", () => {
         spawnIdentity: spawnIdentity(options),
       }),
     ).rejects.toThrow("WebSocket attestation is unsupported");
+  });
+
+  it.each([
+    { name: "default socket", args: ["app-server", "proxy"] },
+    {
+      name: "subcommand-shaped socket",
+      args: ["app-server", "proxy", "--sock", "app-server"],
+    },
+  ])("rejects an app-server proxy with $name before local artifact capture", async ({ args }) => {
+    await withTempDir("openclaw-codex-proxy-artifact-", async (root) => {
+      const command = path.join(root, "codex");
+      await fs.writeFile(command, "native-proxy-v1");
+      await expect(captureBinding({ options: startOptions(command, { args }) })).rejects.toThrow(
+        "proxy attestation is unsupported",
+      );
+    });
   });
 
   it.each([
@@ -413,7 +502,7 @@ describe("Codex app-server runtime artifact", () => {
     });
   });
 
-  it("binds the Windows npm shim, Node entrypoint, native binary, and mixed-case host override", async () => {
+  it("binds the Windows npm shim, Node entrypoint, native binary, and adjacent host", async () => {
     await withTempDir("openclaw-codex-runtime-windows-", async (root) => {
       const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
       const originalExecPath = Object.getOwnPropertyDescriptor(process, "execPath");
@@ -426,7 +515,7 @@ describe("Codex app-server runtime artifact", () => {
       const packageRoot = path.join(root, "vendor", "x86_64-pc-windows-msvc");
       const binDir = path.join(packageRoot, "bin");
       const nativePath = path.join(binDir, "codex.exe");
-      const hostPath = path.join(root, "custom-host.exe");
+      const hostPath = path.join(binDir, "codex-code-mode-host.exe");
       await Promise.all([
         fs.mkdir(path.dirname(entryPath), { recursive: true }),
         fs.mkdir(binDir, { recursive: true }),
@@ -449,7 +538,7 @@ describe("Codex app-server runtime artifact", () => {
           env: {
             PATH: root,
             PATHEXT: ".CMD;.EXE;.BAT",
-            Codex_Code_Mode_Host_Path: hostPath,
+            Codex_Code_Mode_Host_Path: path.join(root, "retired-host.exe"),
           },
         });
         const { binding } = await captureBinding({ options, nativeCommand: nativePath });

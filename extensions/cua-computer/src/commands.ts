@@ -19,7 +19,7 @@ import {
   type CuaDriverSession,
   type CuaToolResult,
 } from "./driver-client.js";
-import { platformActions } from "./driver-result.js";
+import { actionEnvelope, platformActions, projectedToolDetails } from "./driver-result.js";
 import { createLazyCuaExecutionResources } from "./execution-resources.js";
 import {
   adoptGeneration,
@@ -151,17 +151,7 @@ function assertToolSuccess(result: CuaToolResult, tool: string): CuaToolResult {
 }
 
 function structuredContent(result: CuaToolResult, tool: string): Record<string, unknown> {
-  assertToolSuccess(result, tool);
-  if (!result.structuredJson) {
-    throw new Error(`COMPUTER_DRIVER_ERROR: ${tool} returned no structuredContent`);
-  }
-  try {
-    const value: unknown = JSON.parse(result.structuredJson);
-    if (value && typeof value === "object" && !Array.isArray(value)) {
-      return value as Record<string, unknown>;
-    }
-  } catch {}
-  throw new Error(`COMPUTER_DRIVER_ERROR: ${tool} returned invalid structuredContent`);
+  return projectedToolDetails(assertToolSuccess(result, tool), tool);
 }
 
 function desktopGeometry(result: CuaToolResult): CuaDesktopGeometry {
@@ -233,13 +223,14 @@ function createImageProcessor(env: NodeJS.ProcessEnv): ImageProcessor {
 }
 
 function clickArgs(
+  platform: NodeJS.Platform,
   frame: CuaLastFrame,
   params: CuaComputerActParams,
   button: ClickButton,
   count: 1 | 2 | 3,
 ) {
   const point = scalePoint(frame, params.x, params.y, params.action);
-  const modifiers = normalizeModifiers(params.modifiers);
+  const modifiers = normalizeModifiers(params.modifiers, platform);
   if (modifiers.length > 0) {
     throw new Error(
       "COMPUTER_UNSUPPORTED_ACTION: modifier-held desktop clicks are unsupported by cua-driver",
@@ -267,62 +258,56 @@ async function currentFrame(
 }
 
 async function handleDesktopAct(
+  platform: NodeJS.Platform,
   driver: CuaDriverSession,
   frameState: CuaFrameState,
   params: ComputerActParams,
   signal?: AbortSignal,
 ): Promise<string> {
+  // `wait` is local pacing in core and never reaches the native wire.
   if (!(CUA_WIRE_ACTION_NAMES as readonly string[]).includes(params.action)) {
     throw new Error(`COMPUTER_UNSUPPORTED_ACTION: ${params.action}`);
   }
   const desktopParams = params as CuaComputerActParams;
   assertPrimaryDisplay(desktopParams.screenIndex);
-  // `wait` never reaches the wire: core sleeps locally and the Swift wire enum
-  // has no wait case, so accepting it here would fork the computer.act contract.
-  if (
-    desktopParams.action === "hold_key" ||
-    desktopParams.action === "left_mouse_down" ||
-    desktopParams.action === "left_mouse_up"
-  ) {
-    // Upstream has no desktop keyboard-down API, and its Linux mouse hold tools
-    // are window-only, so these actions cannot preserve desktop-scope semantics.
-    throw new Error(`COMPUTER_UNSUPPORTED_ACTION: ${desktopParams.action}`);
+  if (desktopParams.action === "hold_key") {
+    throw new Error("COMPUTER_UNSUPPORTED_ACTION: hold_key; this driver supports key taps only");
+  }
+  if (desktopParams.action === "left_mouse_down" || desktopParams.action === "left_mouse_up") {
+    throw new Error(
+      `COMPUTER_UNSUPPORTED_ACTION: ${desktopParams.action}; ` +
+        (platform === "linux"
+          ? "requires a background window pixel target with windowRef and observationId"
+          : "held mouse buttons are unavailable on this platform"),
+    );
   }
 
   // Every action targets the primary desktop, a global SendInput/XTest/wayland_desktop
   // injection that is inherently foreground and ignores delivery_mode (that
   // background-vs-foreground contract is window-targeted only). We deliberately
   // never send delivery_mode.
+  let result: CuaToolResult;
   switch (desktopParams.action) {
     case "type": {
       if (!desktopParams.text) {
         throw new Error("COMPUTER_INVALID_REQUEST: text is required for type");
       }
-      assertToolSuccess(await driver.typeText(desktopParams.text, signal), "type_text");
+      result = assertToolSuccess(await driver.typeText(desktopParams.text, signal), "type_text");
       break;
     }
     case "key": {
       // press_key applies the modifier array on every backend: X11 via XTest,
       // and native Wayland by internally promoting a modifier chord to
       // hotkey_focused. No separate hotkey call is needed for chords.
-      const chord = parseKeyChord(desktopParams.keys);
-      assertToolSuccess(
-        await driver.pressKey(
-          {
-            key: chord.key,
-            modifiers: chord.modifiers,
-          },
-          signal,
-        ),
-        "press_key",
-      );
+      const chord = parseKeyChord(desktopParams.keys, platform);
+      result = assertToolSuccess(await driver.pressKey(chord, signal), "press_key");
       break;
     }
     case "scroll": {
       if (!desktopParams.scrollDirection) {
         throw new Error("COMPUTER_INVALID_REQUEST: scrollDirection is required for scroll");
       }
-      if (normalizeModifiers(desktopParams.modifiers).length > 0) {
+      if (normalizeModifiers(desktopParams.modifiers, platform).length > 0) {
         throw new Error(
           "COMPUTER_UNSUPPORTED_ACTION: modifier-held scroll is unsupported by cua-driver",
         );
@@ -339,7 +324,7 @@ async function handleDesktopAct(
         left: ScrollDirection.Left,
         right: ScrollDirection.Right,
       }[desktopParams.scrollDirection];
-      assertToolSuccess(
+      result = assertToolSuccess(
         await driver.scroll(
           {
             direction,
@@ -357,51 +342,37 @@ async function handleDesktopAct(
       const frame = await currentFrame(driver, frameState, desktopParams, signal);
       switch (desktopParams.action) {
         case "left_click":
-          assertToolSuccess(
-            await driver.click(clickArgs(frame, desktopParams, ClickButton.Left, 1), signal),
-            "click",
-          );
-          break;
         case "right_click":
-          assertToolSuccess(
-            await driver.click(clickArgs(frame, desktopParams, ClickButton.Right, 1), signal),
-            "click",
-          );
-          break;
         case "middle_click":
-          assertToolSuccess(
-            await driver.click(clickArgs(frame, desktopParams, ClickButton.Middle, 1), signal),
-            "click",
-          );
-          break;
         case "double_click":
-          assertToolSuccess(
-            await driver.click(clickArgs(frame, desktopParams, ClickButton.Left, 2), signal),
+        case "triple_click": {
+          const button =
+            desktopParams.action === "right_click"
+              ? ClickButton.Right
+              : desktopParams.action === "middle_click"
+                ? ClickButton.Middle
+                : ClickButton.Left;
+          const count =
+            desktopParams.action === "double_click"
+              ? 2
+              : desktopParams.action === "triple_click"
+                ? 3
+                : 1;
+          result = assertToolSuccess(
+            await driver.click(clickArgs(platform, frame, desktopParams, button, count), signal),
             "click",
           );
           break;
-        case "triple_click":
-          assertToolSuccess(
-            await driver.click(clickArgs(frame, desktopParams, ClickButton.Left, 3), signal),
-            "click",
-          );
-          break;
+        }
         case "mouse_move": {
           const point = scalePoint(frame, desktopParams.x, desktopParams.y, desktopParams.action);
-          assertToolSuccess(await driver.moveCursor(point, signal), "move_cursor");
+          result = assertToolSuccess(await driver.moveCursor(point, signal), "move_cursor");
           break;
         }
         case "left_click_drag": {
           const from = scalePoint(frame, desktopParams.fromX, desktopParams.fromY, "drag start");
           const to = scalePoint(frame, desktopParams.x, desktopParams.y, "drag end");
-          // The typed desktop drag API has no modifier field. Refuse instead of
-          // silently widening a model request into an unmodified drag.
-          if (normalizeModifiers(desktopParams.modifiers).length > 0) {
-            throw new Error(
-              "COMPUTER_UNSUPPORTED_ACTION: modifier-held drag is unsupported by cua-driver",
-            );
-          }
-          assertToolSuccess(
+          result = assertToolSuccess(
             await driver.drag(
               {
                 fromX: from.x,
@@ -425,7 +396,12 @@ async function handleDesktopAct(
       }
     }
   }
-  return JSON.stringify({ ok: true });
+  return JSON.stringify(
+    actionEnvelope(result, {
+      scope: "desktop",
+      ...(desktopParams.deliveryMode ? { deliveryModeApplicable: false } : {}),
+    }),
+  );
 }
 
 export function createCuaComputerProvider(
@@ -518,18 +494,18 @@ export function createCuaComputerProvider(
         if (closing) {
           throw new Error("COMPUTER_DRIVER_UNAVAILABLE: provider execution is closing");
         }
+        if (!isSupportedPlatform) {
+          throw new Error(
+            platform === "darwin"
+              ? `COMPUTER_DRIVER_UNAVAILABLE: cua-computer requires app-provided ${CUA_DRIVER_ENDPOINT_ENV}`
+              : "COMPUTER_DRIVER_UNAVAILABLE: cua-computer supports macOS, Windows, and Linux",
+          );
+        }
       };
       return {
         snapshot: async (paramsJSON, signal) =>
           await queue.run(async () => {
             assertOpen();
-            if (!isSupportedPlatform) {
-              throw new Error(
-                platform === "darwin"
-                  ? `COMPUTER_DRIVER_UNAVAILABLE: cua-computer requires app-provided ${CUA_DRIVER_ENDPOINT_ENV}`
-                  : "COMPUTER_DRIVER_UNAVAILABLE: cua-computer supports macOS, Windows, and Linux",
-              );
-            }
             const params = parseScreenSnapshotParamsJSON(paramsJSON);
             assertPrimaryDisplay(params.screenIndex);
             const format = params.format ?? "jpeg";
@@ -582,13 +558,6 @@ export function createCuaComputerProvider(
         act: async (paramsJSON, signal) =>
           await queue.run(async () => {
             assertOpen();
-            if (!isSupportedPlatform) {
-              throw new Error(
-                platform === "darwin"
-                  ? `COMPUTER_DRIVER_UNAVAILABLE: cua-computer requires app-provided ${CUA_DRIVER_ENDPOINT_ENV}`
-                  : "COMPUTER_DRIVER_UNAVAILABLE: cua-computer supports macOS, Windows, and Linux",
-              );
-            }
             return await handleWindowAct(
               platform,
               executionDriver,

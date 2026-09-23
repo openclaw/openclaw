@@ -238,12 +238,70 @@ export function getCompactionContent(
             }
             return blockText;
           })
-          .join("");
+          .filter(Boolean)
+          .join("\n");
   return { text, omissionText: [...omissions].join("\n") };
 }
 
 const MAX_OMISSION_MESSAGES = 8;
 const OMISSION_OVERFLOW = "[More image/non-text data omitted from summary input]";
+
+type PersistedSender = {
+  id?: string;
+  name?: string;
+  username?: string;
+};
+
+// Compaction sees both model messages and harness-only AgentMessages. Sender
+// metadata is only meaningful on user turns, so this deliberately accepts the
+// minimal shared shape rather than forcing token accounting through an unsafe
+// Message cast.
+type PersistedSenderCarrier = {
+  role: string;
+};
+
+function readPersistedSender(message: PersistedSenderCarrier): PersistedSender | undefined {
+  if (message.role !== "user") {
+    return undefined;
+  }
+  const metadata = asRecord(Reflect.get(message, "__openclaw"));
+  if (!metadata) {
+    return undefined;
+  }
+  const normalize = (value: unknown): string | undefined => {
+    if (typeof value !== "string") {
+      return undefined;
+    }
+    const normalized = value.replaceAll("\u0000", "").trim();
+    return normalized || undefined;
+  };
+  const sender = {
+    id: normalize(metadata.senderId),
+    name: normalize(metadata.senderName),
+    username: normalize(metadata.senderUsername),
+  };
+  // Display names and usernames are mutable and non-unique. They are useful
+  // labels only once a stable sender ID anchors them; on their own they must
+  // not turn a legacy/partial record into asserted author provenance.
+  return sender.id ? sender : undefined;
+}
+
+/**
+ * Return exactly the persisted-sender text which is projected into a user
+ * conversation label. Keep this shared with token accounting: adding a label
+ * to the prompt without charging it can make bounded compaction overflow.
+ */
+export function formatPersistedSenderSuffix(message: PersistedSenderCarrier): string {
+  const sender = readPersistedSender(message);
+  return sender ? ` sender=${JSON.stringify(sender)}` : "";
+}
+
+function formatConversationSpeaker(message: Message): string {
+  if (message.role !== "user") {
+    return message.role === "toolResult" ? "Tool result" : "User";
+  }
+  return `User${formatPersistedSenderSuffix(message)}`;
+}
 
 /** Serialize LLM messages to plain text for summarization prompts. */
 export function serializeConversation(messages: Message[]): string {
@@ -251,6 +309,11 @@ export function serializeConversation(messages: Message[]): string {
   let omissionMessages = 0;
 
   for (const msg of messages) {
+    // Carriers remain in replay for thinking-prefix binding, not in summaries
+    // where runtime-only context could become durable assistant-authored text.
+    if (msg.role === "user" && msg.runtimeContextCarrier === true) {
+      continue;
+    }
     if (msg.role === "user" || msg.role === "toolResult") {
       const { text, omissionText } = getCompactionContent(msg.content);
       // Fixed ASCII bounds additions to 8 * (82 markers + 17 wrapper) + 55 overflow = 847 bytes.
@@ -265,7 +328,7 @@ export function serializeConversation(messages: Message[]): string {
         .filter(Boolean)
         .join("\n");
       if (content) {
-        parts.push(`[${msg.role === "user" ? "User" : "Tool result"}]: ${content}`);
+        parts.push(`[${formatConversationSpeaker(msg)}]: ${content}`);
       }
     } else if (msg.role === "assistant") {
       const textParts: string[] = [];

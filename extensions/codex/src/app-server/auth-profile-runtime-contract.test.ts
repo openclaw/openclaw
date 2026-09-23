@@ -3,12 +3,12 @@ import path from "node:path";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import { AUTH_PROFILE_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
 import {
   createAppServerHarness,
   createCodexRuntimePlanFixture,
   createParams as createSharedParams,
   runCodexAppServerAttempt as runSharedCodexAppServerAttempt,
-  seedRunSessionOwnerForTest,
   setupRunAttemptTestHooks,
   tempDir,
   threadStartResult,
@@ -20,6 +20,7 @@ import {
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
 import type { CodexAppServerClientOptions } from "./shared-client.js";
+import { createCodexTestOAuthProfile } from "./test-support.js";
 
 /** Keeps native Codex bindings reusable while omitting OpenClaw tools and search. */
 function withPersistentCodexTestToolPolicy(
@@ -141,6 +142,12 @@ function createCodexAuthProfileHarness(params: {
   const seenClientOptions: CodexAppServerClientOptions[] = [];
   const harness = createAppServerHarness(
     async (method) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === params.startMethod) {
         return threadStartResult("thread-auth-contract", { cwd: "" });
       }
@@ -166,13 +173,9 @@ function createCodexAuthProfileHarness(params: {
     seenAgentDirs,
     seenClientOptions,
     async completeTurn() {
-      await harness.notify({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-auth-contract",
-          turnId: "turn-auth-contract",
-          turn: { id: "turn-auth-contract", status: "completed" },
-        },
+      await harness.completeTurn({
+        threadId: "thread-auth-contract",
+        turnId: "turn-auth-contract",
       });
     },
   };
@@ -187,12 +190,48 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
     tmpDir = tempDir;
   });
 
+  it.each(["selected", "bound"] as const)(
+    "rejects a missing %s auth profile before app-server startup",
+    async (selection) => {
+      const sessionFile = path.join(tmpDir, "session.jsonl");
+      const params = createParams(sessionFile, tmpDir);
+      const authProfileId = "openai:missing";
+      if (selection === "selected") {
+        params.authProfileId = authProfileId;
+      } else {
+        await writeCodexAppServerBinding(sessionFile, {
+          threadId: "thread-auth-contract",
+          cwd: tmpDir,
+          authProfileId,
+        });
+      }
+      const clientFactory = vi.fn(async () => {
+        throw new Error("unexpected app-server startup");
+      });
+      const rejection = await runCodexAppServerAttempt(params, { clientFactory }).catch(
+        (error: unknown) => error,
+      );
+      expect(rejection).toBeInstanceOf(Error);
+      expect(rejection).toMatchObject({
+        code: "selected_auth_profile_unavailable",
+        message: expect.stringContaining(
+          'auth profile "openai:missing" was not found in the OpenClaw credential store.',
+        ),
+      });
+      expect(rejection).not.toHaveProperty("status");
+      expect(clientFactory).not.toHaveBeenCalled();
+    },
+  );
+
   it("passes the exact OpenAI Codex auth profile into app-server startup", async () => {
     const harness = createCodexAuthProfileHarness({ startMethod: "thread/start" });
     const sessionFile = path.join(tmpDir, "session.jsonl");
     const params = createParams(sessionFile, tmpDir);
     params.authProfileId = AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId;
     params.agentDir = tmpDir;
+
+    params.authProfileStore.profiles[AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId] =
+      createCodexTestOAuthProfile("synthetic-account");
 
     const run = runCodexAppServerAttempt(params);
     await vi.waitFor(
@@ -223,6 +262,9 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
     // authProfileId is intentionally omitted to exercise the resume-bound profile path.
     const params = createParams(sessionFile, tmpDir);
 
+    params.authProfileStore.profiles[AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId] =
+      createCodexTestOAuthProfile("synthetic-account");
+
     const run = runCodexAppServerAttempt(params);
     await vi.waitFor(
       () =>
@@ -250,6 +292,9 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
     });
     const params = createParams(sessionFile, tmpDir);
     params.authProfileId = AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId;
+
+    params.authProfileStore.profiles[AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId] =
+      createCodexTestOAuthProfile("synthetic-account");
 
     const run = runCodexAppServerAttempt(params);
     await vi.waitFor(

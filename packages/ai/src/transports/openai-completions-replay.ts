@@ -1,11 +1,14 @@
 import type { Context, Model } from "@openclaw/llm-core";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  isGoogleGemini3FlashModel,
+  isGoogleGemini3ProModel,
+} from "../internal/google-model-family.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import {
   GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
-import { isGoogleGemini3FlashModel, isGoogleGemini3ProModel } from "./transport-utils.js";
 
 function isGoogleOpenAICompatModel(model: OpenAIModeModel): boolean {
   const endpointClass = detectOpenAICompletionsCompat(model as Model<"openai-completions">)
@@ -182,7 +185,9 @@ const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
   "mimo-v2-omni",
   "mimo-v2.5",
   "mimo-v2.5-pro",
+  "mimo-v2.6-flash",
   "mimo-v2.6-pro",
+  "mimo-v2.6-pro-ultraspeed",
 ]);
 
 // Tier/access suffixes that some providers append to otherwise identical model

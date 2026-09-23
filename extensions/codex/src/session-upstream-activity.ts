@@ -6,32 +6,16 @@ import type {
   SessionUpstreamProbe,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { CodexAppServerRpcError } from "./app-server/client.js";
 import type { CodexTurn, CodexUserInput } from "./app-server/protocol.js";
-import {
-  sessionBindingIdentity,
-  type CodexAppServerBindingStore,
-} from "./app-server/session-binding.js";
+import { CodexAppServerRpcError, isCodexThreadReadMissingError } from "./app-server/rpc-error.js";
+import { sessionBindingIdentity } from "./app-server/session-binding-record.js";
+import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
 import type {
   CodexSessionCatalogControl,
   CodexSessionCatalogControlFactory,
 } from "./session-catalog-types.js";
 
 const CODEX_UPSTREAM_TURN_LIMIT = 100;
-// codex-rs app-server thread/read maps a gone rollout to JSON-RPC invalid_request
-// with exactly this message prefix (read_thread_view "thread not loaded"). The code
-// alone is generic (other store validation reuses it), so both must match; a harness
-// message rename degrades to the old silent gap instead of unlinking live threads.
-const CODEX_APP_SERVER_INVALID_REQUEST_CODE = -32600;
-const CODEX_THREAD_NOT_LOADED_MESSAGE_PREFIX = "thread not loaded:";
-
-function isCodexThreadGoneError(error: unknown): boolean {
-  return (
-    error instanceof CodexAppServerRpcError &&
-    error.code === CODEX_APP_SERVER_INVALID_REQUEST_CODE &&
-    error.message.startsWith(CODEX_THREAD_NOT_LOADED_MESSAGE_PREFIX)
-  );
-}
 
 type CodexUpstreamControl = Pick<
   CodexSessionCatalogControl,
@@ -147,8 +131,7 @@ function normalizeUserMessageTexts(item: CodexTurn["items"][number]): string[] {
 async function checkCodexUpstreamActivity(
   probes: SessionUpstreamProbe[],
   control: CodexUpstreamControl,
-  resolveThreadId: (probe: SessionUpstreamProbe) => Promise<string> = async (probe) =>
-    probe.threadId,
+  resolveThreadId: (probe: SessionUpstreamProbe) => string = (probe) => probe.threadId,
 ): Promise<SessionUpstreamActivity[]> {
   return await control.withPinnedConnection(async (pinned) => {
     const activities: SessionUpstreamActivity[] = [];
@@ -162,29 +145,33 @@ async function checkCodexUpstreamActivity(
         continue;
       }
       try {
-        const threadId = await resolveThreadId(probe);
-        const page = await pinned.listTurnPage({
-          threadId,
-          limit: CODEX_UPSTREAM_TURN_LIMIT,
-          sortDirection: "desc",
-          itemsView: "full",
-        });
-        const marker = readMarker(probe);
-        if (page.data.length === 0 && marker) {
-          // Deleted threads do NOT reject turns/list: codex-rs load_thread_turns_list_history
-          // swallows ThreadNotFound/no-rollout and returns an empty page, and rollback can
-          // empty a live thread too. thread/read is the existence oracle: it still succeeds
-          // after rollback and rejects "thread not loaded" only once the rollout is gone.
+        const threadId = resolveThreadId(probe);
+        const page = await pinned
+          .listTurnPage({
+            threadId,
+            limit: CODEX_UPSTREAM_TURN_LIMIT,
+            sortDirection: "desc",
+            itemsView: "full",
+          })
+          .catch((error: unknown) => {
+            if (error instanceof CodexAppServerRpcError && error.code === -32_600) {
+              return undefined;
+            }
+            throw error;
+          });
+        if (!page?.data.length && readMarker(probe)) {
+          // Both missing and rolled-back threads can lack readable turns.
+          // Only the exact native metadata read establishes that the thread is gone.
           try {
             await pinned.readThread(threadId, false);
           } catch (error) {
-            if (isCodexThreadGoneError(error)) {
+            if (isCodexThreadReadMissingError(error, threadId)) {
               activities.push({ kind: "missing", sessionKey: probe.sessionKey });
             }
           }
           continue;
         }
-        const activity = classifyCodexUpstreamTurns({ probe, turns: page.data });
+        const activity = page && classifyCodexUpstreamTurns({ probe, turns: page.data });
         if (activity) {
           activities.push(activity);
         }
@@ -202,7 +189,7 @@ export function createChecker(params: {
   control: CodexSessionCatalogControlFactory;
   getRuntimeConfig: () => OpenClawConfig | undefined;
 }): NonNullable<SessionCatalogProvider["checkUpstreamActivity"]> {
-  const resolveThreadId = async (probe: SessionUpstreamProbe) => {
+  const resolveThreadId = (probe: SessionUpstreamProbe) => {
     const config = params.getRuntimeConfig();
     const entry = params.api.runtime.agent.session.getSessionEntry({
       agentId: probe.agentId,
@@ -213,7 +200,7 @@ export function createChecker(params: {
     if (!sessionId) {
       return probe.threadId;
     }
-    const binding = await params.bindingStore.read(
+    const binding = params.bindingStore.read(
       sessionBindingIdentity({ sessionId, sessionKey: probe.sessionKey, config }),
     );
     return binding?.connectionScope === "supervision" &&
@@ -231,7 +218,7 @@ export function createChecker(params: {
       if (!fingerprint) {
         continue;
       }
-      const control = params.control.forUpstream(probe.agentId, fingerprint);
+      const control = await params.control.forUpstream(probe.agentId, fingerprint);
       if (!control) {
         continue;
       }

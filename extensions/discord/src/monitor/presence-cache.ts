@@ -1,9 +1,8 @@
-// Discord plugin module implements presence cache behavior.
 import type { GatewayPresenceUpdate } from "discord-api-types/v10";
 
 /**
  * In-memory cache of Discord user presence data.
- * Populated by PRESENCE_UPDATE gateway events when the GuildPresences intent is enabled.
+ * Populated by GUILD_CREATE snapshots and PRESENCE_UPDATE when GuildPresences is enabled.
  * Per-account maps are capped to prevent unbounded growth (#4948).
  */
 const MAX_PRESENCE_PER_ACCOUNT = 5000;

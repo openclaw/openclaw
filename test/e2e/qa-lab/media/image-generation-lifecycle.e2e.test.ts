@@ -14,6 +14,7 @@ import {
   type MockOpenAiRequestSnapshot,
 } from "../../../../extensions/qa-lab/api.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { createQaPreparedRepoCliCommand } from "../../../helpers/qa-prepared-repo-cli.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 const MODEL_REF = "mock-openai/gpt-5.6-luna";
@@ -194,7 +195,7 @@ describe("image generation task lifecycle through QA-channel", () => {
     }
   });
 
-  it("deduplicates running and recently completed requests around one completion", async () => {
+  it("deduplicates requests and labels internal completion provenance", async () => {
     const state = createQaBusState();
     const transport = createQaChannelTransport(state);
     const bus = await startQaBusServer({ state });
@@ -210,7 +211,7 @@ describe("image generation task lifecycle through QA-channel", () => {
     cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
     const gateway = await gatewayOwner.start({
       repoRoot: REPO_ROOT,
-      useRepoCli: true,
+      command: createQaPreparedRepoCliCommand(REPO_ROOT),
       providerBaseUrl: `${mock.baseUrl}/v1`,
       providerMode: "mock-openai",
       primaryModel: MODEL_REF,
@@ -297,6 +298,22 @@ describe("image generation task lifecycle through QA-channel", () => {
       },
       { interval: 50, timeout: 30_000 },
     );
+
+    const completionReentry = await vi.waitFor(
+      async () => {
+        const request = (await readMockRequests(mock.baseUrl)).find(
+          (snapshot) =>
+            snapshot.allInputText.includes("[Inter-session message]") &&
+            snapshot.allInputText.includes("sourceTool=image_generate"),
+        );
+        if (!request) {
+          throw new Error("image completion did not re-enter the agent session");
+        }
+        return request;
+      },
+      { interval: 50, timeout: 30_000 },
+    );
+    expect(completionReentry.allInputText).toContain("sourceChannel=internal");
 
     await sendExactRequest();
     const completedDuplicate = await waitForToolOutput(mock.baseUrl, "recently succeeded");

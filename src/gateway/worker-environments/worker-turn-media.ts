@@ -36,11 +36,10 @@ import {
   cloneTextContent,
   isWorkerTranscriptMessageFrameSafe,
 } from "../../worker/transcript-message.js";
+import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
-import {
-  MAX_RECONCILIATION_TOTAL_BYTES,
-  MAX_RECONCILIATION_ENTRIES,
-} from "./workspace-manifest.js";
+const MAX_WORKER_ATTACHMENT_BYTES = 256 * 1024 * 1024;
+const MAX_WORKER_ATTACHMENT_FILES = 25_000;
 
 function prepareInput(
   content: Extract<AgentMessage, { role: "user" }>["content"],
@@ -71,7 +70,7 @@ function prepareInput(
 export async function prepareWorkerTurnMedia(params: {
   turn: SessionPlacementTurnParams;
   history: AgentMessage[];
-  localWorkspaceDir: string;
+  workspace: WorkerSessionWorkspace;
   remoteWorkspaceDir: string;
   tunnel: WorkerTunnelHandle;
   isAuthorized: () => boolean;
@@ -96,15 +95,24 @@ export async function prepareWorkerTurnMedia(params: {
   assertCurrent();
   const recordedMedia = recorded ? readPersistedMediaFacts(recorded) : undefined;
   const media = recordedMedia?.length ? recordedMedia : (turn.media ?? []);
-  const localRoots = resolveEffectiveToolFsWorkspaceOnly({
+  const localWorkspace = params.workspace.kind === "local" ? params.workspace.path : undefined;
+  const workspaceOnly = resolveEffectiveToolFsWorkspaceOnly({
     cfg: turn.config,
     agentId: turn.agentId,
-  })
-    ? [params.localWorkspaceDir]
-    : [...getAgentScopedMediaLocalRoots(turn.config ?? {}, turn.agentId), params.localWorkspaceDir];
+  });
+  // Repository sessions have no Gateway workspace root. An empty allowlist
+  // still admits managed inbound media without exposing agent-scoped files.
+  const localRoots = workspaceOnly
+    ? localWorkspace
+      ? [localWorkspace]
+      : []
+    : [
+        ...getAgentScopedMediaLocalRoots(turn.config ?? {}, turn.agentId),
+        ...(localWorkspace ? [localWorkspace] : []),
+      ];
   const modelHasVision = turn.modelHasVision === true;
   const mediaOptions = {
-    workspaceDir: params.localWorkspaceDir,
+    workspaceDir: localWorkspace ?? params.remoteWorkspaceDir,
     model: { input: modelHasVision ? ["text", "image"] : ["text"] },
     maxBytes: MAX_IMAGE_BYTES,
     maxDimensionPx: resolveImageSanitizationLimits(turn.config).maxDimensionPx,
@@ -169,10 +177,7 @@ export async function prepareWorkerTurnMedia(params: {
         return remotePath;
       }
       bytes += data.length;
-      if (
-        bytes > MAX_RECONCILIATION_TOTAL_BYTES ||
-        stagedPaths.size >= MAX_RECONCILIATION_ENTRIES
-      ) {
+      if (bytes > MAX_WORKER_ATTACHMENT_BYTES || stagedPaths.size >= MAX_WORKER_ATTACHMENT_FILES) {
         throw new Error(
           "Cloud worker attachments exceed the workspace transfer budget; send fewer or smaller files.",
         );
@@ -201,7 +206,7 @@ export async function prepareWorkerTurnMedia(params: {
           let data: Buffer;
           try {
             source = path.resolve(
-              fact.workspaceDir ?? params.localWorkspaceDir,
+              fact.workspaceDir ?? localWorkspace ?? params.remoteWorkspaceDir,
               await resolveMediaReferenceLocalPath(ref.resolved),
             );
             assertCurrent();

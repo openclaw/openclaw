@@ -3,6 +3,7 @@ export const channelSurfaceContractPatterns = [
   "src/channels/plugins/contracts/channel-catalog.contract.test.ts",
   "src/channels/plugins/contracts/channel-import-guardrails.test.ts",
   "src/channels/plugins/contracts/group-policy.fallback.contract.test.ts",
+  "src/channels/plugins/contracts/mattermost-read-authority.contract.test.ts",
   "src/channels/plugins/contracts/message-tool-artifact.contract.test.ts",
   "src/channels/plugins/contracts/outbound-payload.contract.test.ts",
   "src/channels/plugins/contracts/*-shard-a.contract.test.ts",
@@ -22,7 +23,6 @@ export const channelRegistryContractPatterns = [
   "src/channels/plugins/contracts/plugin-shape.contract.test.ts",
   "src/channels/plugins/contracts/plugins-core.catalog.paths.contract.test.ts",
   "src/channels/plugins/contracts/plugins-core.loader.contract.test.ts",
-  "src/channels/plugins/contracts/plugins-core.registry.contract.test.ts",
   "src/channels/plugins/contracts/*-shard-c.contract.test.ts",
   "src/channels/plugins/contracts/*-shard-g.contract.test.ts",
 ];
@@ -36,3 +36,5 @@ export const channelSessionContractPatterns = [
   "src/channels/plugins/contracts/*-shard-d.contract.test.ts",
   "src/channels/plugins/contracts/*-shard-h.contract.test.ts",
 ];
+
+export const pluginContractPatterns = ["src/plugins/contracts/**/*.test.ts"];

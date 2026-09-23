@@ -56,8 +56,6 @@ describe("resolveSidebarSessionSubtitle", () => {
   it.each(["stuck", "waiting-on-user"] as const)(
     "keeps a %s observer headline when previews are hidden",
     (health) => {
-      // isCriticalObserverHealth owns these two states; the chat pane announces them
-      // too, so a display preference must not silence them in the sidebar.
       expect(
         resolveSidebarSessionSubtitle({
           session: {
@@ -121,14 +119,14 @@ describe("resolveSidebarSessionSubtitle", () => {
     ).toEqual({ subtitle: undefined, narration: undefined });
   });
 
-  it("uses attention, agent status, observer, narration, then work subtitle precedence", () => {
+  it("leaves the subtitle empty while question attention is in the leading glyph", () => {
     const session: SidebarRecentSession = {
       ...workSession(),
       hasActiveRun: true,
       activeRunIds: ["run-1"],
       status: "running",
       agentStatusNote: "Waiting for deployment",
-      attention: { kind: "question" },
+      attention: { kind: "question", requests: [] },
     };
     const observerDigest = {
       runId: "run-1",
@@ -148,7 +146,7 @@ describe("resolveSidebarSessionSubtitle", () => {
         observerDigest,
       });
 
-    expect(resolve().subtitle).toBe("Waiting for your answer");
+    expect(resolve()).toEqual({ subtitle: undefined, narration: undefined });
     expect(resolve({ attention: { kind: "none" } }).subtitle).toBe("Waiting for deployment");
     expect(resolve({ attention: { kind: "none" }, agentStatusNote: undefined }).subtitle).toBe(
       "Running checks",
@@ -255,7 +253,7 @@ describe("resolveSidebarSessionSubtitle", () => {
     ).toBe("The final reply is durable.");
   });
 
-  it("keeps attention and agent status ahead of the idle digest and last reply", () => {
+  it("keeps subtitle-owned attention and agent status ahead of the idle digest and last reply", () => {
     const session = {
       ...workSession(),
       lastMessagePreview: "The final reply is durable.",
@@ -280,8 +278,17 @@ describe("resolveSidebarSessionSubtitle", () => {
 
     expect(resolve({ agentStatusNote: "Waiting for deployment" })).toBe("Waiting for deployment");
     expect(
-      resolve({ attention: { kind: "question" }, agentStatusNote: "Waiting for deployment" }),
-    ).toBe("Waiting for your answer");
+      resolve({
+        attention: { kind: "question", requests: [] },
+        agentStatusNote: "Waiting for deployment",
+      }),
+    ).toBeUndefined();
+    expect(
+      resolve({
+        attention: { kind: "approval", requests: [] },
+        agentStatusNote: "Waiting for deployment",
+      }),
+    ).toBe("Waiting for approval");
   });
 
   it("does not let a prior last-message preview displace running activity", () => {

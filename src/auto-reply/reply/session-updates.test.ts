@@ -1,8 +1,9 @@
 // Tests session update fanout and persisted lifecycle records.
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 
-const TEST_WORKSPACE_DIR = "/tmp/workspace";
+const TEST_WORKSPACE_DIR = path.resolve("/tmp/workspace");
 
 const {
   buildWorkspaceSkillSnapshotMock,
@@ -11,6 +12,7 @@ const {
   shouldRefreshSnapshotForVersionMock,
   getRemoteSkillEligibilityMock,
   updateSessionEntryMock,
+  loadSessionEntryMock,
   resolveNodeExecEligibilityMock,
 } = vi.hoisted(() => ({
   buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]) => ({
@@ -27,6 +29,7 @@ const {
     hasAnyBin: () => false,
   })),
   updateSessionEntryMock: vi.fn(),
+  loadSessionEntryMock: vi.fn(),
   resolveNodeExecEligibilityMock: vi.fn(() => ({ canExec: false })),
 }));
 
@@ -48,6 +51,7 @@ vi.mock("../../skills/runtime/refresh.js", () => ({
 
 vi.mock("../../skills/runtime/refresh-state.js", () => ({
   getSkillsSnapshotVersion: getSkillsSnapshotVersionMock,
+  getSkillsSourceVersion: getSkillsSnapshotVersionMock,
   shouldRefreshSnapshotForVersion: shouldRefreshSnapshotForVersionMock,
 }));
 
@@ -58,8 +62,13 @@ vi.mock("../../config/sessions.js", () => ({
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
+  loadSessionEntry: loadSessionEntryMock,
   patchSessionEntryCore: vi.fn(),
-  updateSessionEntry: updateSessionEntryMock,
+  updateSessionEntry: async (...args: unknown[]) => {
+    const entry = await updateSessionEntryMock(...args);
+    loadSessionEntryMock.mockReturnValue(entry ?? undefined);
+    return entry;
+  },
 }));
 
 const { ensureSkillSnapshot } = await import("./session-updates.js");
@@ -76,6 +85,7 @@ describe("ensureSkillSnapshot", () => {
       hasAnyBin: () => false,
     });
     updateSessionEntryMock.mockReset();
+    loadSessionEntryMock.mockReset();
     updateSessionEntryMock.mockResolvedValue(null);
     resolveNodeExecEligibilityMock.mockReturnValue({ canExec: false });
   });
@@ -88,7 +98,7 @@ describe("ensureSkillSnapshot", () => {
     "keeps the prepared skill owner for %s",
     async (sessionKey) => {
       vi.stubEnv("OPENCLAW_TEST_FAST", "0");
-      const workspaceDir = `${TEST_WORKSPACE_DIR}/${sessionKey}`;
+      const workspaceDir = path.join(TEST_WORKSPACE_DIR, sessionKey);
 
       await ensureSkillSnapshot({
         agentId: "writer",

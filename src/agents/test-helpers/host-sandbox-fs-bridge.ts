@@ -11,8 +11,10 @@ import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "../san
 /** Creates a sandbox fs bridge from a caller-provided path resolver. */
 export function createSandboxFsBridgeFromResolver(
   resolvePath: (filePath: string, cwd?: string) => SandboxResolvedPath,
+  pathMappings?: SandboxFsBridge["pathMappings"],
 ): SandboxFsBridge {
   return {
+    ...(pathMappings === undefined ? {} : { pathMappings }),
     resolvePath: ({ filePath, cwd }) => resolvePath(filePath, cwd),
     copyFile: async ({ sourcePath, destinationPath, cwd, mkdir = true }) => {
       const source = resolvePath(sourcePath, cwd);
@@ -119,8 +121,13 @@ export function createHostSandboxFsBridge(rootDir: string): SandboxFsBridge {
   const root = path.resolve(rootDir);
 
   const resolvePath = (filePath: string, cwd?: string): SandboxResolvedPath => {
+    // Operations may receive the container path returned by an earlier resolution.
+    const input =
+      filePath === "/workspace" || filePath.startsWith("/workspace/")
+        ? path.join(root, filePath.slice("/workspace".length))
+        : filePath;
     const resolved = resolveSandboxPath({
-      filePath,
+      filePath: input,
       cwd: cwd ?? root,
       root,
     });
@@ -135,23 +142,28 @@ export function createHostSandboxFsBridge(rootDir: string): SandboxFsBridge {
     };
   };
 
-  return createSandboxFsBridgeFromResolver(resolvePath);
+  return createSandboxFsBridgeFromResolver(resolvePath, [
+    { hostRoot: root, containerRoot: "/workspace" },
+  ]);
 }
 
 /** Creates a host-backed bridge that accepts the Docker-style /workspace mount path. */
 export function createContainerWorkspaceSandboxFsBridge(rootDir: string): SandboxFsBridge {
   const root = path.resolve(rootDir);
-  return createSandboxFsBridgeFromResolver((filePath, cwd) => {
-    const normalized = filePath.replace(/\\/g, "/");
-    const relativePath = normalized.startsWith("/workspace/")
-      ? normalized.slice("/workspace/".length)
-      : normalized === "/workspace" || path.resolve(filePath) === root
-        ? ""
-        : path.relative(root, path.resolve(cwd ?? root, filePath)).replace(/\\/g, "/");
-    return {
-      hostPath: path.join(root, relativePath),
-      relativePath,
-      containerPath: relativePath ? path.posix.join("/workspace", relativePath) : "/workspace",
-    };
-  });
+  return createSandboxFsBridgeFromResolver(
+    (filePath, cwd) => {
+      const normalized = filePath.replace(/\\/g, "/");
+      const relativePath = normalized.startsWith("/workspace/")
+        ? normalized.slice("/workspace/".length)
+        : normalized === "/workspace" || path.resolve(filePath) === root
+          ? ""
+          : path.relative(root, path.resolve(cwd ?? root, filePath)).replace(/\\/g, "/");
+      return {
+        hostPath: path.join(root, relativePath),
+        relativePath,
+        containerPath: relativePath ? path.posix.join("/workspace", relativePath) : "/workspace",
+      };
+    },
+    [{ hostRoot: root, containerRoot: "/workspace" }],
+  );
 }

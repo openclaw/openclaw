@@ -8,6 +8,9 @@ export function collectChangedPaths(
   path: string,
   output: Set<string>,
 ): void {
+  if (Object.is(base, target)) {
+    return;
+  }
   if (Array.isArray(base) && Array.isArray(target)) {
     const max = Math.max(base.length, target.length);
     for (let index = 0; index < max; index += 1) {

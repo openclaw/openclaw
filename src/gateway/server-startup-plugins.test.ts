@@ -2,12 +2,20 @@
  * Gateway startup plugin bootstrap tests.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { createPluginRecord } from "../plugins/loader-records.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { PluginInstance } from "../plugins/plugin-instance.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
+import type { ProviderPolicySurface } from "../plugins/provider-policy-surface.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import "./server-startup-bootstrap.test-support.js";
+import { disposePluginRegistryInstances } from "../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 
 const applyPluginAutoEnable = vi.hoisted(() =>
   vi.fn((params: { config: unknown }) => ({
@@ -19,31 +27,34 @@ const applyPluginAutoEnable = vi.hoisted(() =>
 const initSubagentRegistry = vi.hoisted(() => vi.fn());
 const getActivePluginRegistry = vi.hoisted(() => vi.fn<() => PluginRegistry | undefined>());
 const setActivePluginRegistry = vi.hoisted(() => vi.fn());
-const loadGatewayStartupPlugins = vi.hoisted(() =>
-  vi.fn((_params: unknown) => ({
-    pluginRegistry: { diagnostics: [], gatewayHandlers: {}, plugins: [] },
+const resolveProviderPolicySurfaceForOwner = vi.hoisted(() =>
+  vi.fn<(owner: PluginManifestRecord) => ProviderPolicySurface | null>(() => null),
+);
+const prepareGatewayPluginLoad = vi.hoisted(() =>
+  vi.fn((params: { cfg: OpenClawConfig }) => ({
+    pluginRegistry: createEmptyPluginRegistry(),
     gatewayMethods: ["ping"],
+    resolvedConfig: params.cfg,
+    retireGatewayRuntimeBindings: vi.fn(),
   })),
 );
-const pluginManifestRegistry = vi.hoisted(
-  (): PluginManifestRegistry => ({
-    plugins: [
-      {
-        id: "telegram",
-        origin: "bundled",
-        rootDir: "/package/dist/extensions/telegram",
-        source: "/package/dist/extensions/telegram/index.js",
-        manifestPath: "/package/dist/extensions/telegram/package.json",
-        channels: ["telegram"],
-        providers: [],
-        cliBackends: [],
-        skills: [],
-        hooks: [],
-      },
-    ],
-    diagnostics: [],
-  }),
-);
+const pluginManifestRegistry = vi.hoisted((): PluginManifestRegistry => ({
+  plugins: [
+    {
+      id: "telegram",
+      origin: "bundled",
+      rootDir: "/package/dist/extensions/telegram",
+      source: "/package/dist/extensions/telegram/index.js",
+      manifestPath: "/package/dist/extensions/telegram/package.json",
+      channels: ["telegram"],
+      providers: [],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+    },
+  ],
+  diagnostics: [],
+}));
 const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
   const index: PluginMetadataSnapshot["index"] = {
     version: 1,
@@ -62,10 +73,12 @@ const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
     registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: pluginManifestRegistry,
+    bundledManifestRegistry: pluginManifestRegistry,
     plugins: [],
     diagnostics: [],
     byPluginId: new Map(),
     normalizePluginId: (pluginId) => pluginId,
+    declaredProviderOwners: new Map(),
     owners: {
       channels: new Map(),
       channelConfigs: new Map(),
@@ -75,6 +88,7 @@ const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      providerAuthContributions: [],
       modelIdNormalizationPolicies: new Map(),
     },
     metrics: {
@@ -99,7 +113,7 @@ const pluginLookUpTableMetrics = vi.hoisted(() => ({
 }));
 const loadPluginLookUpTable = vi.hoisted(() =>
   vi.fn((_params: unknown) => ({
-    manifestRegistry: pluginManifestRegistry,
+    ...pluginMetadataSnapshot,
     startup: {
       pluginIds: ["telegram"] as string[],
       channelPluginIds: ["telegram"] as string[],
@@ -115,12 +129,7 @@ const listAmbientOnlyConfiguredChannelIds = vi.hoisted(() =>
   vi.fn((_params: unknown) => [] as string[]),
 );
 const runStartupSessionMigration = vi.hoisted(() => vi.fn(async (_params: unknown) => undefined));
-const migrateLegacyDevicePairingStore = vi.hoisted(() =>
-  vi.fn(async (_params: unknown) => undefined),
-);
-const migrateLegacyNodePairingStore = vi.hoisted(() =>
-  vi.fn(async (_params: unknown) => undefined),
-);
+const listLegacyPairingStoreFiles = vi.hoisted(() => vi.fn(async () => [] as string[]));
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: () => "/workspace",
   resolveDefaultAgentId: () => "default",
@@ -149,12 +158,12 @@ vi.mock("../infra/openclaw-root.js", () => ({
   resolveOpenClawPackageRootSync: (params: unknown) => resolveOpenClawPackageRootSync(params),
 }));
 
-vi.mock("../infra/device-pairing-migration.js", () => ({
-  migrateLegacyDevicePairingStore: (params: unknown) => migrateLegacyDevicePairingStore(params),
+vi.mock("../infra/device-pairing-node-desktop-migration.js", () => ({
+  migrateLegacyDesktopStreamOptOuts: async () => 0,
 }));
 
-vi.mock("../infra/node-pairing-migration.js", () => ({
-  migrateLegacyNodePairingStore: (params: unknown) => migrateLegacyNodePairingStore(params),
+vi.mock("../infra/pairing-files.js", () => ({
+  listLegacyPairingStoreFiles: () => listLegacyPairingStoreFiles(),
 }));
 
 vi.mock("../plugins/channel-presence-policy.js", () => ({
@@ -168,6 +177,10 @@ vi.mock("../plugins/plugin-lookup-table.js", () => ({
 
 vi.mock("../plugins/registry.js", () => import("../plugins/registry-empty.js"));
 
+vi.mock("../plugins/provider-public-artifacts.js", () => ({
+  resolveProviderPolicySurfaceForOwner,
+}));
+
 vi.mock("../plugins/runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/runtime.js")>()),
   getActivePluginRegistry,
@@ -179,7 +192,7 @@ vi.mock("./server-methods-list.js", () => ({
 }));
 
 vi.mock("./server-plugin-bootstrap.js", () => ({
-  loadGatewayStartupPlugins: (params: unknown) => loadGatewayStartupPlugins(params),
+  prepareGatewayPluginLoad,
 }));
 
 vi.mock("./server-startup-session-migration.js", () => ({
@@ -234,11 +247,10 @@ describe("runGatewayStartupMaintenance", () => {
   beforeEach(() => {
     runChannelPluginStartupMaintenance.mockClear();
     runStartupSessionMigration.mockClear();
-    migrateLegacyDevicePairingStore.mockClear();
-    migrateLegacyNodePairingStore.mockClear();
+    listLegacyPairingStoreFiles.mockReset().mockResolvedValue([]);
   });
 
-  it("runs channel, session, and ordered pairing maintenance for a normal gateway", async () => {
+  it("runs channel and session maintenance for a normal gateway", async () => {
     const log = createLog();
     const { runGatewayStartupMaintenance } = await import("./server-startup-plugins.js");
 
@@ -259,13 +271,7 @@ describe("runGatewayStartupMaintenance", () => {
       env: process.env,
       log,
     });
-    expect(migrateLegacyDevicePairingStore).toHaveBeenCalledWith({ log });
-    expect(migrateLegacyNodePairingStore).toHaveBeenCalledWith({ log });
-    const deviceMigrationOrder = migrateLegacyDevicePairingStore.mock.invocationCallOrder[0];
-    const nodeMigrationOrder = migrateLegacyNodePairingStore.mock.invocationCallOrder[0];
-    expect(deviceMigrationOrder).toBeDefined();
-    expect(nodeMigrationOrder).toBeDefined();
-    expect(deviceMigrationOrder!).toBeLessThan(nodeMigrationOrder!);
+    expect(log.warn).not.toHaveBeenCalled();
   });
 
   it("skips maintenance for a minimal gateway without channel config", async () => {
@@ -280,8 +286,7 @@ describe("runGatewayStartupMaintenance", () => {
 
     expect(runChannelPluginStartupMaintenance).not.toHaveBeenCalled();
     expect(runStartupSessionMigration).not.toHaveBeenCalled();
-    expect(migrateLegacyDevicePairingStore).not.toHaveBeenCalled();
-    expect(migrateLegacyNodePairingStore).not.toHaveBeenCalled();
+    expect(listLegacyPairingStoreFiles).not.toHaveBeenCalled();
   });
 
   it("runs only channel maintenance for a minimal gateway with recovered channel config", async () => {
@@ -302,8 +307,7 @@ describe("runGatewayStartupMaintenance", () => {
       log,
     });
     expect(runStartupSessionMigration).not.toHaveBeenCalled();
-    expect(migrateLegacyDevicePairingStore).not.toHaveBeenCalled();
-    expect(migrateLegacyNodePairingStore).not.toHaveBeenCalled();
+    expect(listLegacyPairingStoreFiles).not.toHaveBeenCalled();
   });
 });
 
@@ -313,9 +317,10 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     setActivePluginRegistry.mockClear();
     applyPluginAutoEnable.mockClear();
     initSubagentRegistry.mockClear();
-    loadGatewayStartupPlugins.mockClear();
+    prepareGatewayPluginLoad.mockClear();
     listAmbientOnlyConfiguredChannelIds.mockClear().mockReturnValue([]);
     loadPluginLookUpTable.mockClear().mockReturnValue({
+      ...pluginMetadataSnapshot,
       manifestRegistry: pluginManifestRegistry,
       startup: {
         pluginIds: ["telegram"] as string[],
@@ -326,16 +331,14 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     resolveOpenClawPackageRootSync.mockClear().mockReturnValue("/package");
     runChannelPluginStartupMaintenance.mockClear();
     runStartupSessionMigration.mockClear();
-    migrateLegacyDevicePairingStore.mockClear();
-    migrateLegacyNodePairingStore.mockClear();
+    listLegacyPairingStoreFiles.mockReset().mockResolvedValue([]);
   });
   it("does not run startup maintenance", async () => {
     await prepareBootstrapWithRuntimeConfig({});
 
     expect(runChannelPluginStartupMaintenance).not.toHaveBeenCalled();
     expect(runStartupSessionMigration).not.toHaveBeenCalled();
-    expect(migrateLegacyDevicePairingStore).not.toHaveBeenCalled();
-    expect(migrateLegacyNodePairingStore).not.toHaveBeenCalled();
+    expect(listLegacyPairingStoreFiles).not.toHaveBeenCalled();
   });
 
   it("hydrates the subagent registry before plugin bootstrap", async () => {
@@ -440,7 +443,7 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
       dreaming: { enabled: false },
     });
 
-    expect(loadGatewayStartupPlugins).not.toHaveBeenCalled();
+    expect(prepareGatewayPluginLoad).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -449,10 +452,14 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     { minimalTestGateway: true, pluginsEnabled: true, reuseAmbientRegistry: true },
     { minimalTestGateway: true, pluginsEnabled: false, reuseAmbientRegistry: false },
   ])(
-    "publishes the startup registry without runtime loading (minimal=$minimalTestGateway, enabled=$pluginsEnabled)",
+    "keeps the pre-bind registry local without runtime loading (minimal=$minimalTestGateway, enabled=$pluginsEnabled)",
     async ({ minimalTestGateway, pluginsEnabled, reuseAmbientRegistry }) => {
+      const { capturePluginRegistryLifecycleEpoch, markPluginRegistryActive } =
+        await import("../plugins/registry-lifecycle.js");
       const ambientRegistry = createEmptyPluginRegistry();
       ambientRegistry.gatewayHandlers.fixture = vi.fn();
+      markPluginRegistryActive(ambientRegistry);
+      const ambientEpoch = capturePluginRegistryLifecycleEpoch(ambientRegistry);
       getActivePluginRegistry.mockReturnValue(ambientRegistry);
 
       const result = await prepareBootstrapWithRuntimeConfig(
@@ -465,8 +472,11 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
       } else {
         expect(result.pluginRegistry.gatewayHandlers).toEqual({});
       }
-      expect(setActivePluginRegistry).toHaveBeenCalledWith(result.pluginRegistry);
-      expect(loadGatewayStartupPlugins).not.toHaveBeenCalled();
+      expect(capturePluginRegistryLifecycleEpoch(result.pluginRegistry)).toBeDefined();
+      expect(capturePluginRegistryLifecycleEpoch(ambientRegistry)).toBe(ambientEpoch);
+      expect(setActivePluginRegistry).not.toHaveBeenCalled();
+      expect(getActivePluginRegistry()).toBe(ambientRegistry);
+      expect(prepareGatewayPluginLoad).not.toHaveBeenCalled();
     },
   );
 
@@ -484,7 +494,9 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
   it("preserves an explicitly empty manifest snapshot for ambient channel planning", async () => {
     const emptyManifestRegistry: PluginManifestRegistry = { plugins: [], diagnostics: [] };
     loadPluginLookUpTable.mockReturnValueOnce({
+      ...pluginMetadataSnapshot,
       manifestRegistry: emptyManifestRegistry,
+      bundledManifestRegistry: emptyManifestRegistry,
       startup: {
         pluginIds: [],
         channelPluginIds: [],
@@ -534,17 +546,110 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     expect(result.baseGatewayMethods).toEqual(["ping"]);
 
     expect(loadPluginLookUpTable).not.toHaveBeenCalled();
-    expect(loadGatewayStartupPlugins).not.toHaveBeenCalled();
+    expect(prepareGatewayPluginLoad).not.toHaveBeenCalled();
   });
 });
 
 describe("loadGatewayStartupPluginRuntime", () => {
   beforeEach(() => {
-    loadGatewayStartupPlugins.mockClear().mockReturnValue({
-      pluginRegistry: { diagnostics: [], gatewayHandlers: {}, plugins: [] },
+    resolveProviderPolicySurfaceForOwner.mockReset().mockReturnValue(null);
+    prepareGatewayPluginLoad.mockReset().mockImplementation((params) => ({
+      pluginRegistry: createEmptyPluginRegistry(),
       gatewayMethods: ["ping"],
-    });
+      resolvedConfig: params.cfg,
+      retireGatewayRuntimeBindings: vi.fn(),
+    }));
   });
+
+  it.each(["valid", "invalid", "invalid with failed cleanup"] as const)(
+    "validates %s bindings inside the unpublished candidate and owns its disposal",
+    async (outcome) => {
+      const registry = createEmptyPluginRegistry();
+      const record = createPluginRecord({
+        id: "binding-owner",
+        source: "startup-binding-fixture",
+        origin: "workspace",
+        enabled: true,
+        configSchema: false,
+      });
+      registry.plugins.push(record);
+      const instance = new PluginInstance(record.id, { registry, record });
+      const validationError = new Error("synthetic invalid binding");
+      const cleanupError = new Error("synthetic candidate cleanup failure");
+      const cleanup = vi.fn(() => {
+        if (outcome === "invalid with failed cleanup") {
+          throw cleanupError;
+        }
+      });
+      instance.lifecycle.onDispose(cleanup);
+      let validationAuthority: (() => boolean) | undefined;
+      const compileConfiguredBinding = vi.fn(() => {
+        expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(registry);
+        validationAuthority = capturePluginLifecycleAuthority(registry, record);
+        expect(validationAuthority?.()).toBe(true);
+        if (outcome !== "valid") {
+          throw validationError;
+        }
+        return null;
+      });
+      registry.channels.push({
+        pluginId: record.id,
+        source: record.source,
+        plugin: {
+          ...createChannelTestPluginBase({ id: "discord" }),
+          bindings: { compileConfiguredBinding, matchInboundConversation: () => null },
+        },
+      });
+      const config: OpenClawConfig = {
+        bindings: [
+          {
+            type: "acp",
+            agentId: "main",
+            match: { channel: "discord", peer: { kind: "channel", id: "fixture-room" } },
+          },
+        ],
+      };
+      const retireGatewayRuntimeBindings = vi.fn();
+      const candidate = {
+        pluginRegistry: registry,
+        gatewayMethods: [],
+        resolvedConfig: config,
+        retireGatewayRuntimeBindings,
+      };
+      prepareGatewayPluginLoad.mockReturnValueOnce(candidate);
+      const { loadGatewayStartupPluginRuntime } = await import("./server-startup-plugins.js");
+      try {
+        const loading = loadGatewayStartupPluginRuntime({
+          cfg: config,
+          log: createLog(),
+          baseMethods: [],
+          startupPluginIds: [record.id],
+        });
+        if (outcome === "valid") {
+          await expect(loading).resolves.toBe(candidate);
+          expect(cleanup).not.toHaveBeenCalled();
+          expect(retireGatewayRuntimeBindings).not.toHaveBeenCalled();
+        } else {
+          await expect(loading).rejects.toBe(validationError);
+          expect(cleanup).toHaveBeenCalledOnce();
+          expect(instance.lifecycle.signal.aborted).toBe(true);
+          expect(retireGatewayRuntimeBindings).toHaveBeenCalledOnce();
+        }
+        expect(compileConfiguredBinding).toHaveBeenCalledOnce();
+        expect(validationAuthority?.()).toBe(false);
+      } finally {
+        retireGatewayRuntimeBindings();
+        const disposed = await disposePluginRegistryInstances(registry);
+        expect(disposed.failures).toEqual(
+          outcome === "invalid with failed cleanup"
+            ? [{ pluginId: record.id, hookId: "instance", error: cleanupError }]
+            : [],
+        );
+        expect(cleanup).toHaveBeenCalledOnce();
+        expect(instance.lifecycle.signal.aborted).toBe(true);
+      }
+    },
+  );
 
   it("warns after a full startup runtime load when configured memory embedding providers stay unregistered", async () => {
     const log = createLog();
@@ -568,14 +673,127 @@ describe("loadGatewayStartupPluginRuntime", () => {
       startupPluginIds: ["voyage"],
     });
 
-    const startupInput = firstCallArg<{ channelPluginLoadIntent?: "full" | "setup" }>(
-      loadGatewayStartupPlugins,
-    );
+    const startupInput = firstCallArg<{
+      channelPluginLoadIntent?: "full" | "setup";
+      loadIntent: "startup" | "replacement";
+    }>(prepareGatewayPluginLoad);
     expect(startupInput.channelPluginLoadIntent).toBe("full");
+    expect(startupInput.loadIntent).toBe("startup");
     expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining('memory.search.provider="voyage"'),
     );
   });
+
+  it.each(["registered owner", "ready", "inspection failed", "inspection stalled"] as const)(
+    "reports registered memory provider setup per active agent without blocking startup: %s",
+    async (outcome) => {
+      const log = createLog();
+      const registry = createEmptyPluginRegistry();
+      const registeredOwner = createPluginManifestRecordFixture({
+        id: "llama-cpp",
+        contracts: { embeddingProviders: ["local"] },
+      });
+      const disabledOwner = createPluginManifestRecordFixture({
+        id: "a-disabled",
+        contracts: registeredOwner.contracts,
+      });
+      registry.embeddingProviders.push({
+        pluginId: "llama-cpp",
+        source: "synthetic-llama-cpp",
+        provider: { id: "local", create: async () => ({ provider: null }) },
+      });
+      const cfg: OpenClawConfig = {
+        memory: { search: { provider: "local" } },
+        plugins: { entries: { "a-disabled": { enabled: false } } },
+        agents: {
+          entries: {
+            main: { memory: { search: { enabled: false } } },
+            helper: {},
+          },
+        },
+      };
+      const inspectionGate = createDeferred();
+      if (outcome !== "inspection stalled") {
+        inspectionGate.resolve();
+      }
+      const inspectEmbeddingProviderSetup = vi.fn(async () => {
+        await inspectionGate.promise;
+        if (outcome === "inspection failed") {
+          throw new Error("synthetic setup inspection failed");
+        }
+        return outcome === "ready"
+          ? null
+          : {
+              provider: "local",
+              reason: "Local embeddings need a managed llama-server.",
+              fixHint:
+                "Run `openclaw models --agent helper auth login --provider llama-cpp --method local`.",
+            };
+      });
+      const disabledPolicy = {
+        inspectEmbeddingProviderSetup: vi.fn(),
+      };
+      resolveProviderPolicySurfaceForOwner.mockImplementation((owner) =>
+        owner === registeredOwner ? { inspectEmbeddingProviderSetup } : disabledPolicy,
+      );
+      prepareGatewayPluginLoad.mockReturnValueOnce({
+        pluginRegistry: registry,
+        gatewayMethods: ["ping"],
+        resolvedConfig: cfg,
+        retireGatewayRuntimeBindings: vi.fn(),
+      });
+      const { loadGatewayStartupPluginRuntime } = await import("./server-startup-plugins.js");
+
+      let startupCompleted = false;
+      const startup = loadGatewayStartupPluginRuntime({
+        cfg,
+        log,
+        baseMethods: ["ping"],
+        startupPluginIds: ["llama-cpp"],
+        pluginLookUpTable: {
+          ...loadPluginLookUpTable({}),
+          workerProviderIds: [],
+          manifestRegistry: { plugins: [disabledOwner, registeredOwner], diagnostics: [] },
+        },
+      }).then((result) => {
+        startupCompleted = true;
+        return result;
+      });
+      try {
+        await vi.waitFor(() => expect(startupCompleted).toBe(true));
+      } finally {
+        inspectionGate.resolve();
+      }
+      expect((await startup).pluginRegistry).toBe(registry);
+      expect(inspectEmbeddingProviderSetup).toHaveBeenCalledExactlyOnceWith({
+        config: cfg,
+        env: process.env,
+        agentId: "helper",
+        provider: "local",
+      });
+      if (outcome === "registered owner") {
+        expect(resolveProviderPolicySurfaceForOwner).toHaveBeenCalledExactlyOnceWith(
+          registeredOwner,
+        );
+        expect(disabledPolicy.inspectEmbeddingProviderSetup).not.toHaveBeenCalled();
+      }
+      if (outcome === "registered owner" || outcome === "inspection stalled") {
+        await vi.waitFor(() =>
+          expect(log.warn).toHaveBeenCalledWith(
+            expect.stringMatching(/helper.*degraded.*llama-server.*models --agent helper/s),
+          ),
+        );
+      } else if (outcome === "inspection failed") {
+        await vi.waitFor(() =>
+          expect(log.warn).toHaveBeenCalledWith(
+            expect.stringContaining("synthetic setup inspection failed"),
+          ),
+        );
+      } else {
+        expect(log.warn).not.toHaveBeenCalled();
+      }
+    },
+  );
 });
 
 describe("warnUnregisteredConfiguredMemoryEmbeddingProviders", () => {

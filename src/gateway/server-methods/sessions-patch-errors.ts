@@ -6,6 +6,7 @@ import {
 import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../config/sessions/lifecycle.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { SessionWorktreeLifecycleError } from "../../sessions/session-worktree-lifecycle.js";
+import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { sessionLog } from "./sessions-shared.js";
 
@@ -14,6 +15,9 @@ export function invalidSessionPatchOutcome(message: string) {
 }
 
 export function unexpectedPatchError(key: string, error: unknown): ErrorShape {
+  if (error instanceof ModelAccountConnectAuthorityError) {
+    return errorShape(ErrorCodes.FORBIDDEN, error.message);
+  }
   if (error instanceof SessionMutationAuthorizationChangedError) {
     return error.error;
   }
@@ -44,4 +48,22 @@ export function createCommitGuard(key: string, assertCurrent: (() => void) | und
         : unexpectedPatchError(key, error);
     }
   };
+}
+
+/** Every detached preparation must revalidate its exact owners at the synchronous commit. */
+export function assertSessionPatchCommitAllowed(params: {
+  personalModelSelection?: { assertCurrent: () => void };
+  guards: Iterable<() => ErrorShape | undefined>;
+  archiveTransitions: Iterable<{ assertCommitAllowed: () => void }>;
+}): void {
+  params.personalModelSelection?.assertCurrent();
+  for (const guard of params.guards) {
+    const error = guard();
+    if (error) {
+      throw new SessionMutationAuthorizationChangedError(error);
+    }
+  }
+  for (const transition of params.archiveTransitions) {
+    transition.assertCommitAllowed();
+  }
 }

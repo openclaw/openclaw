@@ -21,10 +21,6 @@ import type {
   PluginMetadataSnapshotPluginIdScope,
 } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
-  loadPluginRegistrySnapshot,
-  normalizePluginsConfigWithRegistry,
-} from "../../plugins/plugin-registry.js";
-import {
   resolveActivatableProviderOwnerPluginIds,
   resolveBundledProviderCompatPluginIds,
   resolveOwningPluginIdsForProviderRef,
@@ -45,6 +41,8 @@ export type AgentHarnessPluginSelection = {
   agentId?: string;
 };
 
+export type RuntimePluginLoadPurpose = "agent" | "model-catalog";
+
 function dedupePluginIds(values: readonly string[]): string[] {
   const result: string[] = [];
   for (const value of values) {
@@ -63,23 +61,16 @@ function restrictiveAllowlistOmitsPlugin(config: OpenClawConfig | undefined, plu
 
 function resolveSelectedMemoryPluginIds(params: {
   config: OpenClawConfig | undefined;
-  workspaceDir: string;
-  metadataSnapshot?: PluginMetadataSnapshot;
+  metadataSnapshot: PluginMetadataSnapshot;
 }): string[] {
-  // Honor config-owned test defaults before discovery forces an implicit memory owner.
   if (isTestDefaultMemorySlotDisabled(params.config ?? {})) {
     return [];
   }
-  const registry =
-    params.metadataSnapshot?.index ??
-    loadPluginRegistrySnapshot({ config: params.config, workspaceDir: params.workspaceDir });
   // The generation owns aliases; activation still follows this call's config.
-  const plugins = params.metadataSnapshot
-    ? normalizePluginsConfigWithResolverCore(
-        params.config?.plugins,
-        params.metadataSnapshot.normalizePluginId,
-      )
-    : normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
+  const plugins = normalizePluginsConfigWithResolverCore(
+    params.config?.plugins,
+    params.metadataSnapshot.normalizePluginId,
+  );
   const memorySlot = plugins.slots.memory;
   if (
     typeof memorySlot !== "string" ||
@@ -87,7 +78,9 @@ function resolveSelectedMemoryPluginIds(params: {
   ) {
     return [];
   }
-  const plugin = registry.plugins.find((entry) => entry.pluginId === memorySlot);
+  const plugin = params.metadataSnapshot.index.plugins.find(
+    (entry) => entry.pluginId === memorySlot,
+  );
   if (!plugin?.startup.memory) {
     return [];
   }
@@ -131,6 +124,11 @@ function resolveAgentRuntimeMetadataPluginIds(params: {
     return [];
   }
   const pluginIds = new Set<string>();
+  for (const plugin of params.index.plugins) {
+    if (plugin.startup.agentHarnesses.length) {
+      pluginIds.add(plugin.pluginId);
+    }
+  }
   lookup.addShorthandModelOwners(pluginIds, params.shorthandModelIds ?? []);
   const selections = resolveAgentRuntimePluginSelections(params.config, params.selections);
   const providerIds = dedupePluginIds(selections.map((selection) => selection.provider));
@@ -274,11 +272,18 @@ function withRuntimePluginIdsAllowed(
   if (pluginIds.length === 0 || (!materializeAllowlist && existingAllowlist.length === 0)) {
     return config;
   }
+  const allow = dedupePluginIds([...existingAllowlist, ...pluginIds]);
+  if (
+    allow.length === existingAllowlist.length &&
+    allow.every((pluginId, index) => pluginId === existingAllowlist[index])
+  ) {
+    return config;
+  }
   return {
     ...config,
     plugins: {
       ...config?.plugins,
-      allow: dedupePluginIds([...existingAllowlist, ...pluginIds]),
+      allow,
     },
   };
 }
@@ -321,22 +326,42 @@ export function resolveAgentRuntimePluginLoadPlan(params: {
   workspaceDir: string;
   basePluginIds?: readonly string[];
   selections: readonly AgentHarnessPluginSelection[];
-  metadataSnapshot?: PluginMetadataSnapshot;
+  metadataSnapshot: PluginMetadataSnapshot;
+  purpose?: RuntimePluginLoadPurpose;
 }): { config?: OpenClawConfig; pluginIds?: string[] } {
   let config = params.config;
-  const memoryPluginIds = resolveSelectedMemoryPluginIds({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    metadataSnapshot: params.metadataSnapshot,
-  });
-  const contextEnginePluginId = resolveSelectedContextEnginePluginId(params.config);
+  const includeAgentOwners = params.purpose !== "model-catalog";
+  const memoryPluginIds = includeAgentOwners
+    ? resolveSelectedMemoryPluginIds({
+        config: params.config,
+        metadataSnapshot: params.metadataSnapshot,
+      })
+    : [];
+  const contextEnginePluginId = includeAgentOwners
+    ? resolveSelectedContextEnginePluginId(params.config)
+    : undefined;
   const contextEnginePluginIds = contextEnginePluginId ? [contextEnginePluginId] : [];
   const basePluginIds = (params.basePluginIds ?? []).filter(
     (pluginId) => !restrictiveAllowlistOmitsPlugin(params.config, pluginId),
   );
   const pluginIds = [...basePluginIds, ...memoryPluginIds, ...contextEnginePluginIds];
   const forceActivatedPluginIds = [...memoryPluginIds, ...contextEnginePluginIds];
-  for (const selection of params.selections) {
+  if (params.purpose === "model-catalog") {
+    for (const plugin of params.metadataSnapshot.plugins) {
+      for (const runtime of plugin.activation?.onAgentHarnesses ?? []) {
+        const owners = resolveAgentHarnessOwnerPluginIds({
+          runtime,
+          provider: "",
+          config,
+          workspaceDir: params.workspaceDir,
+          metadataSnapshot: params.metadataSnapshot,
+        });
+        pluginIds.push(...owners);
+        forceActivatedPluginIds.push(...owners);
+      }
+    }
+  }
+  for (const selection of includeAgentOwners ? params.selections : []) {
     const runtime = resolveSelectedAgentHarnessRuntime(selection, config);
     const providerOwnerPluginIds = resolveSelectedProviderOwnerPluginIds({
       provider: selection.provider,
@@ -396,7 +421,7 @@ export function resolveAgentRuntimePluginLoadPlan(params: {
   }
   return {
     ...(config ? { config } : {}),
-    ...(params.basePluginIds === undefined && scopedPluginIds.length === 0
+    ...(includeAgentOwners && params.basePluginIds === undefined && scopedPluginIds.length === 0
       ? {}
       : { pluginIds: scopedPluginIds }),
   };

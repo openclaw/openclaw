@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements channel outbound behavior.
 import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
@@ -51,7 +50,7 @@ async function registerDeliveredWhatsAppApprovalPayload(
   (
     await loadWhatsAppQuestionReactionsModule()
   ).registerWhatsAppQuestionReactionTargetForDeliveredPayload(params);
-  (
+  await (
     await loadWhatsAppApprovalReactionsModule()
   ).registerWhatsAppApprovalReactionTargetForDeliveredPayload(params);
 }

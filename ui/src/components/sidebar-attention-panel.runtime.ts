@@ -1,33 +1,40 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type { NavigationRouteId } from "../app-navigation.ts";
+import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { ScopeUpgradeController } from "../app/device-scope-upgrade-controller.runtime.ts";
+import "../app/device-scope-upgrade-controller.runtime.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
+import type { MentionsCapability } from "../app/mentions.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
+import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import "../styles/sidebar-issues.css";
 import { renderHubTabs } from "./hub-tabs.ts";
 import { icons } from "./icons.ts";
+import type { SidebarAttentionDismissal } from "./sidebar-attention-dismissals.ts";
 import {
   sidebarInboxEntryMatchesTab,
   sidebarInboxTabCounts,
-  type SidebarAttentionDismissal,
   type SidebarAttentionItem,
   type SidebarInboxEntry,
 } from "./sidebar-attention-entries.ts";
 import {
   renderSidebarApprovalItem,
   renderSidebarIssueItem,
+  renderSidebarMentionItem,
   renderSidebarScopeUpgradeItem,
   renderSidebarUpdateSurface,
 } from "./sidebar-issue-item.ts";
 import { ISSUE_TABS, issueTabLabel, type IssueTab } from "./sidebar-issues-tabs.ts";
+import { renderSidebarOutboxItem } from "./sidebar-outbox-item.ts";
 import "./menu-surface.ts";
+
+registerSidebarAttentionEnglish();
 
 // Keep request orchestration behind the same lazy boundary as its Inbox UI;
 // ApplicationContext retains the activated controller across presenters.
-export { ScopeUpgradeController };
+export { ScopeUpgradeController } from "../app/device-scope-upgrade-controller.runtime.ts";
 
 export type SidebarAttentionPanelPosition = { left: number } & (
   | { anchor: "top"; top: number }
@@ -36,12 +43,13 @@ export type SidebarAttentionPanelPosition = { left: number } & (
 
 type SidebarAttentionPanelParams = {
   context: ApplicationContext;
+  mentions: MentionsCapability;
   entries: readonly SidebarInboxEntry[];
   onApprovalDecision: (event: Event, approvalId: string, decision: ExecApprovalDecision) => void;
   onClose: (restoreFocus: boolean) => void;
   onDismiss: (dismissal: SidebarAttentionDismissal) => void;
   onKeydown: (event: KeyboardEvent) => void;
-  onNavigate: (routeId: NavigationRouteId) => void;
+  onNavigate: ApplicationContext["navigate"];
   onOpen: (item: SidebarAttentionItem) => void;
   onScroll: () => void;
   onSelectTab: (tab: IssueTab) => void;
@@ -63,17 +71,38 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
   const visibleDismissals = visibleEntries.flatMap((entry) =>
     entry.dismissal ? [entry.dismissal] : [],
   );
-  const hasVisibleDismissals = visibleDismissals.length > 0;
+  const mentions = params.mentions.snapshot;
+  // Mention acknowledgement belongs to the Gateway, never the browser-local
+  // snooze store used by system and automation incidents.
+  const visibleMentions = visibleEntries.flatMap((entry) =>
+    entry.type === "mention" ? [entry.mention.id] : [],
+  );
+  const mentionDismissals = visibleMentions.filter((id) => !mentions.dismissing.includes(id));
+  const hasVisibleDismissals = visibleDismissals.length > 0 || visibleMentions.length > 0;
+  const canDismissShown = visibleDismissals.length > 0 || mentionDismissals.length > 0;
+  const mentionsTab = params.selectedTab === "mentions";
+  const showMentionStatus =
+    params.context.gateway.snapshot.phase === "connected" &&
+    (mentionsTab || params.selectedTab === "all") &&
+    (mentions.error !== null ||
+      mentions.phase === "loading" ||
+      (mentionsTab && mentions.phase === "unavailable"));
   const tabCounts = sidebarInboxTabCounts(params.entries);
   const renderEntry = (entry: SidebarInboxEntry) => {
     const dismissal = entry.dismissal;
     const onDismiss = dismissal ? () => params.onDismiss(dismissal) : undefined;
     switch (entry.type) {
+      case "outbox":
+        return renderSidebarOutboxItem({
+          entry,
+          context: params.context,
+          onNavigate: params.onNavigate,
+        });
       case "approval":
         return renderSidebarApprovalItem({
           approval: entry.approval,
           context: params.context,
-          onClosePanel: () => params.onClose(false),
+          onNavigate: params.onNavigate,
           onDecision: params.onApprovalDecision,
         });
       case "attention":
@@ -82,6 +111,14 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
           onDismiss,
           onNavigate: params.onNavigate,
           onOpen: params.onOpen,
+        });
+      case "mention":
+        return renderSidebarMentionItem({
+          mention: entry.mention,
+          context: params.context,
+          dismissing: mentions.dismissing.includes(entry.mention.id),
+          onDismiss: () => void params.mentions.dismiss([entry.mention.id]),
+          onNavigate: params.onNavigate,
         });
       case "scopeUpgrade":
         return renderSidebarScopeUpgradeItem({
@@ -132,16 +169,34 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
               type="button"
               class="btn btn--xs btn--ghost sidebar-issues-panel__dismiss-shown"
               style=${hasVisibleDismissals ? nothing : "visibility:hidden"}
-              ?disabled=${!hasVisibleDismissals}
+              ?disabled=${!canDismissShown}
               aria-hidden=${hasVisibleDismissals ? nothing : "true"}
               @click=${() => {
                 for (const dismissal of visibleDismissals) {
                   params.onDismiss(dismissal);
                 }
+                if (mentionDismissals.length > 0) {
+                  void params.mentions.dismiss(mentionDismissals);
+                }
               }}
             >
               ${t("attention.dismissShown")}
             </button>
+            <openclaw-tooltip .content=${t("attention.mentions.notifications")}>
+              <a
+                class="sidebar-brand__icon"
+                aria-label=${t("attention.mentions.notifications")}
+                href=${pathForRoute("notifications", params.context.basePath)}
+                @click=${(event: MouseEvent) => {
+                  if (!shouldHandleNavigationClick(event)) {
+                    return;
+                  }
+                  event.preventDefault();
+                  params.onNavigate("notifications");
+                }}
+                >${icons.settings}</a
+              >
+            </openclaw-tooltip>
             <button
               type="button"
               class="sidebar-brand__icon sidebar-issues-panel__mobile-close"
@@ -177,15 +232,53 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
             tabindex="0"
             @scroll=${params.onScroll}
           >
-            ${visibleEntries.length === 0
-              ? html`<div class="sidebar-issues-panel__empty">
-                  <span class="sidebar-issues-panel__empty-icon" aria-hidden="true"
-                    >${icons.inbox}</span
-                  >
-                  <strong>${t("attention.emptyTitle")}</strong>
-                  <span>${t("attention.emptyBody")}</span>
-                </div>`
-              : nothing}
+            ${
+              showMentionStatus
+                ? html`<div class="sidebar-issues-panel__mentions-note" role="status">
+                    <span
+                      >${t(
+                        mentions.error !== null
+                          ? "attention.mentions.error"
+                          : mentions.phase === "loading"
+                            ? "attention.mentions.loading"
+                            : "attention.mentions.unavailable",
+                      )}</span
+                    >
+                    ${
+                      mentions.error !== null
+                        ? html`<span>${mentions.error}</span>
+                            <button
+                              type="button"
+                              class="sidebar-issues-panel__action"
+                              ?disabled=${mentions.phase === "loading"}
+                              @click=${() => void params.mentions.refresh()}
+                            >
+                              ${t("attention.mentions.refresh")}
+                            </button>`
+                        : nothing
+                    }
+                  </div>`
+                : nothing
+            }
+            ${
+              visibleEntries.length === 0 && !showMentionStatus
+                ? html`<div class="sidebar-issues-panel__empty">
+                    <span class="sidebar-issues-panel__empty-icon" aria-hidden="true"
+                      >${icons.inbox}</span
+                    >
+                    <strong
+                      >${t(
+                        mentionsTab ? "attention.mentions.emptyTitle" : "attention.emptyTitle",
+                      )}</strong
+                    >
+                    <span
+                      >${t(
+                        mentionsTab ? "attention.mentions.emptyBody" : "attention.emptyBody",
+                      )}</span
+                    >
+                  </div>`
+                : nothing
+            }
             ${visibleEntries.map(renderEntry)}
           </div>
           <div
@@ -199,6 +292,13 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
             aria-hidden="true"
           ></div>
         </div>
+        ${
+          mentionsTab
+            ? html`<footer class="sidebar-issues-panel__mentions-note">
+                <span>${t("attention.mentions.retention")}</span>
+              </footer>`
+            : nothing
+        }
       </section>
     </openclaw-menu-surface>`;
 }

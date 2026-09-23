@@ -111,6 +111,7 @@ fun ChatMarkdown(
   textColor: Color,
   isStreaming: Boolean = false,
   bodyStyle: TextStyle = ClawTheme.type.body,
+  progressBars: Boolean = false,
 ) {
   val blocks = remember(text, isStreaming) { segmentChatMarkdown(text, isStreaming) }
   // Parsed nodes survive theme changes; span caches must also key on these styles.
@@ -133,6 +134,7 @@ fun ChatMarkdown(
             inlineStyles = inlineStyles,
             listDepth = 0,
             isStreaming = isStreaming,
+            progressBars = progressBars,
           )
         }
 
@@ -155,6 +157,7 @@ private fun RenderMarkdownBlocks(
   inlineStyles: InlineStyles,
   listDepth: Int,
   isStreaming: Boolean,
+  progressBars: Boolean,
 ) {
   for (block in blocks) {
     when (block) {
@@ -165,6 +168,7 @@ private fun RenderMarkdownBlocks(
           inlineStyles = inlineStyles,
           listDepth = listDepth,
           isStreaming = isStreaming,
+          progressBars = progressBars,
         )
       }
 
@@ -179,6 +183,7 @@ private fun RenderMarkdownBlocks(
           inlineStyles = inlineStyles,
           listDepth = listDepth,
           isStreaming = isStreaming,
+          progressBars = progressBars,
         )
       }
     }
@@ -192,18 +197,29 @@ private fun RenderCommonMarkBlock(
   inlineStyles: InlineStyles,
   listDepth: Int,
   isStreaming: Boolean,
+  progressBars: Boolean,
 ) {
+  if (progressBars) {
+    val progress = remember(current) { parseChatProgressElement(current) }
+    if (progress != null) {
+      ChatProgressBar(progress)
+      return
+    }
+  }
   when (current) {
     is Paragraph -> {
-      RenderParagraph(current, textColor = textColor, inlineStyles = inlineStyles)
+      RenderParagraph(current, textColor = textColor, inlineStyles = inlineStyles, progressBars = progressBars)
     }
 
     is Heading -> {
       val headingText = remember(current, inlineStyles) { buildInlineMarkdown(current.firstChild, inlineStyles) }
+      val anchor = rememberChatReaderAnchor()
       Text(
         text = headingText,
         style = headingStyle(current.level, inlineStyles.baseCallout),
         color = textColor,
+        modifier = anchor?.modifier ?: Modifier,
+        onTextLayout = anchor?.onTextLayout ?: {},
       )
     }
 
@@ -252,6 +268,7 @@ private fun RenderCommonMarkBlock(
             inlineStyles = inlineStyles,
             listDepth = listDepth,
             isStreaming = isStreaming,
+            progressBars = progressBars,
           )
         }
       }
@@ -264,6 +281,7 @@ private fun RenderCommonMarkBlock(
         inlineStyles = inlineStyles,
         listDepth = listDepth,
         isStreaming = isStreaming,
+        progressBars = progressBars,
       )
     }
 
@@ -274,6 +292,7 @@ private fun RenderCommonMarkBlock(
         inlineStyles = inlineStyles,
         listDepth = listDepth,
         isStreaming = isStreaming,
+        progressBars = progressBars,
       )
     }
 
@@ -308,10 +327,13 @@ private fun RenderLiteralHtml(
 ) {
   val literal = source.trim()
   if (literal.isNotEmpty()) {
+    val anchor = rememberChatReaderAnchor()
     Text(
       text = literal,
       style = ClawTheme.type.body.copy(fontFamily = FontFamily.Monospace),
       color = textColor,
+      modifier = anchor?.modifier ?: Modifier,
+      onTextLayout = anchor?.onTextLayout,
     )
   }
 }
@@ -323,6 +345,7 @@ private fun RenderMarkdownDisclosure(
   inlineStyles: InlineStyles,
   listDepth: Int,
   isStreaming: Boolean,
+  progressBars: Boolean,
 ) {
   var isExpanded by rememberSaveable { mutableStateOf(disclosure.isExpanded) }
   val summarySource = chatMarkdownDisclosureSummarySource(disclosure.summary) { nativeString("Details") }
@@ -367,6 +390,7 @@ private fun RenderMarkdownDisclosure(
           inlineStyles = inlineStyles,
           listDepth = listDepth,
           isStreaming = isStreaming,
+          progressBars = progressBars,
         )
       }
     }
@@ -378,6 +402,7 @@ private fun RenderParagraph(
   paragraph: Paragraph,
   textColor: Color,
   inlineStyles: InlineStyles,
+  progressBars: Boolean,
 ) {
   val standaloneImage = remember(paragraph) { standaloneDataImage(paragraph) }
   if (standaloneImage != null) {
@@ -386,15 +411,42 @@ private fun RenderParagraph(
     return
   }
 
-  val annotated = remember(paragraph, inlineStyles) { buildInlineMarkdown(paragraph.firstChild, inlineStyles) }
+  var start = paragraph.firstChild
+  if (progressBars) {
+    while (start != null) {
+      val progress = findChatInlineProgress(start) ?: break
+      var textEnd = progress.start
+      while (textEnd !== start && (textEnd.previous is SoftLineBreak || textEnd.previous is HardLineBreak)) {
+        textEnd = textEnd.previous
+      }
+      RenderInlineMarkdownRange(start, textEnd, textColor, inlineStyles)
+      ChatProgressBar(progress.element)
+      start = progress.after
+      while (start is SoftLineBreak || start is HardLineBreak) start = start.next
+    }
+  }
+  RenderInlineMarkdownRange(start, null, textColor, inlineStyles)
+}
+
+@Composable
+private fun RenderInlineMarkdownRange(
+  start: Node?,
+  endExclusive: Node?,
+  textColor: Color,
+  inlineStyles: InlineStyles,
+) {
+  val annotated = remember(start, endExclusive, inlineStyles) { buildInlineMarkdown(start, inlineStyles, endExclusive) }
   if (annotated.text.trimEnd().isEmpty()) {
     return
   }
 
+  val anchor = rememberChatReaderAnchor()
   Text(
     text = annotated,
     style = inlineStyles.baseCallout,
     color = textColor,
+    modifier = anchor?.modifier ?: Modifier,
+    onTextLayout = anchor?.onTextLayout ?: {},
   )
 }
 
@@ -405,6 +457,7 @@ private fun RenderBulletList(
   inlineStyles: InlineStyles,
   listDepth: Int,
   isStreaming: Boolean,
+  progressBars: Boolean,
 ) {
   Column(
     modifier = Modifier.padding(start = (LIST_INDENT_DP * listDepth).dp),
@@ -420,6 +473,7 @@ private fun RenderBulletList(
           inlineStyles = inlineStyles,
           listDepth = listDepth,
           isStreaming = isStreaming,
+          progressBars = progressBars,
         )
       }
       item = item.next
@@ -434,6 +488,7 @@ private fun RenderOrderedList(
   inlineStyles: InlineStyles,
   listDepth: Int,
   isStreaming: Boolean,
+  progressBars: Boolean,
 ) {
   Column(
     modifier = Modifier.padding(start = (LIST_INDENT_DP * listDepth).dp),
@@ -450,6 +505,7 @@ private fun RenderOrderedList(
           inlineStyles = inlineStyles,
           listDepth = listDepth,
           isStreaming = isStreaming,
+          progressBars = progressBars,
         )
         index += 1
       }
@@ -466,6 +522,7 @@ private fun RenderListItem(
   inlineStyles: InlineStyles,
   listDepth: Int,
   isStreaming: Boolean,
+  progressBars: Boolean,
 ) {
   var contentStart = item.firstChild
   var marker = markerText
@@ -497,6 +554,7 @@ private fun RenderListItem(
         inlineStyles = inlineStyles,
         listDepth = listDepth + 1,
         isStreaming = isStreaming,
+        progressBars = progressBars,
       )
     }
   }
@@ -527,12 +585,15 @@ private fun RenderTableBlock(
       ) {
         for (index in 0 until maxCols) {
           val cell = row.cells.getOrNull(index) ?: AnnotatedString("")
+          val anchor = rememberChatReaderAnchor()
           Text(
             text = cell,
             style = if (row.isHeader) ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold) else inlineStyles.baseCallout,
             color = textColor,
+            onTextLayout = anchor?.onTextLayout ?: {},
             modifier =
               Modifier
+                .then(anchor?.modifier ?: Modifier)
                 .border(1.dp, ClawTheme.colors.textMuted.copy(alpha = 0.22f))
                 .padding(horizontal = 8.dp, vertical = 6.dp)
                 .width(160.dp),
@@ -595,10 +656,12 @@ private fun readTableRow(
 private fun buildInlineMarkdown(
   start: Node?,
   inlineStyles: InlineStyles,
+  endExclusive: Node? = null,
 ): AnnotatedString =
   buildAnnotatedString {
     appendInlineNode(
       node = start,
+      endExclusive = endExclusive,
       inlineCodeBg = inlineStyles.inlineCodeBg,
       inlineCodeColor = inlineStyles.inlineCodeColor,
       linkColor = inlineStyles.linkColor,
@@ -610,9 +673,10 @@ private fun AnnotatedString.Builder.appendInlineNode(
   inlineCodeBg: Color,
   inlineCodeColor: Color,
   linkColor: Color,
+  endExclusive: Node? = null,
 ) {
   var current = node
-  while (current != null) {
+  while (current != null && current !== endExclusive) {
     when (current) {
       is MarkdownTextNode -> {
         append(current.literal)
@@ -1260,11 +1324,12 @@ private fun InlineBase64Image(
   val image = imageState.image
 
   if (image != null) {
+    val anchor = rememberChatReaderAnchor(base64)
     Image(
       bitmap = image,
       contentDescription = mimeType ?: nativeString("Image"),
       contentScale = ContentScale.Fit,
-      modifier = Modifier.fillMaxWidth(),
+      modifier = Modifier.fillMaxWidth().then(anchor?.modifier ?: Modifier),
     )
   } else if (imageState.failed) {
     Text(

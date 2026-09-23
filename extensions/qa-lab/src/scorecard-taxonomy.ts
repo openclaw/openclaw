@@ -1,9 +1,11 @@
 // Qa Lab plugin module validates taxonomy-backed QA scorecard evidence.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
 import { qaCoverageIdSchema } from "./coverage-id.js";
+import { parseQaYamlWithContext } from "./qa-yaml.js";
 import { resolveQaRepoPath, type QaRepoPathKind } from "./repo-path.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
@@ -34,6 +36,49 @@ const qaCoverageEvidenceRoleSchema = z.enum(["primary", "secondary"]);
 export const qaScorecardEvidenceModeSchema = z.enum(["full", "slim"]);
 export const qaScorecardChannelDriverSchema = z.enum(["qa-channel", "crabline", "live"]);
 
+const qaProofClassSchema = z.enum([
+  "fixture-only",
+  "real-plugin/local-protocol",
+  "native-host",
+  "packaged-install/upgrade",
+  "live-channel",
+  "live-provider",
+]);
+const proofDimensionSchema = z.string().trim().min(1);
+const qaProofAlternativeSchema = z
+  .strictObject({
+    sourceRef: proofDimensionSchema.optional(),
+    sourceIntegrity: proofDimensionSchema.optional(),
+    runtime: proofDimensionSchema.optional(),
+    runtimeVersion: proofDimensionSchema.optional(),
+    packageKind: proofDimensionSchema.optional(),
+    packageVersion: proofDimensionSchema.optional(),
+    packageIntegrity: proofDimensionSchema.optional(),
+    protocol: proofDimensionSchema.optional(),
+    accountRef: proofDimensionSchema.optional(),
+    proofClass: qaProofClassSchema.optional(),
+  })
+  .refine((alternative) => Object.keys(alternative).length > 0, "proof alternative is empty");
+
+export const qaProofRequirementsSchema = z
+  .array(
+    z.strictObject({
+      id: qaScorecardIdSchema,
+      coverageId: qaCoverageIdSchema,
+      obligation: z.enum(["required", "advisory"]),
+      owner: proofDimensionSchema,
+      acceptedRef: proofDimensionSchema,
+      alternatives: z.array(qaProofAlternativeSchema).min(1),
+      retryAcceptance: z.enum(["all-recorded-attempts", "selected-attempt"]),
+    }),
+  )
+  .refine(
+    (requirements) =>
+      new Set(requirements.map((requirement) => requirement.id)).size === requirements.length,
+    "duplicate proof requirement id",
+  );
+export type QaProofRequirements = z.infer<typeof qaProofRequirementsSchema>;
+
 const qaScorecardProfileSchema = z.object({
   id: qaScorecardIdSchema,
   description: z.string().trim().min(1),
@@ -42,6 +87,8 @@ const qaScorecardProfileSchema = z.object({
   channelDriver: qaScorecardChannelDriverSchema.default("qa-channel"),
   categoryIds: z.array(qaScorecardIdSchema).default([]),
   coverageIds: z.array(qaCoverageIdSchema).default([]),
+  // Requirements are owner-accepted declarations, never inferred from primary coverage.
+  proofRequirements: qaProofRequirementsSchema.optional(),
 });
 
 function maturityScoreLabelForScore(score: number) {
@@ -52,6 +99,20 @@ function maturityScoreLabelForScore(score: number) {
   }
   throw new Error(`score outside 0-100: ${score}`);
 }
+
+function qaMaturityDecisionSchema<T extends z.ZodType>(value: T) {
+  return z.strictObject({
+    value,
+    rationale: z.string().trim().min(1),
+    reviewer: z.string().trim().min(1),
+    evidence_refs: z.array(z.string().trim().min(1)).min(1),
+    revalidate_when: z.string().trim().min(1),
+  });
+}
+
+const qaMaturityScoreDecisionSchema = qaMaturityDecisionSchema(z.number().int().min(0).max(100));
+const qaMaturityLtsDecisionSchema = qaMaturityDecisionSchema(z.boolean());
+const qaMaturityLevelDecisionSchema = qaMaturityDecisionSchema(z.string().trim().min(1));
 
 const qaMaturityScoreObjectSchema = z
   .strictObject({
@@ -90,6 +151,15 @@ const qaMaturityScoreBundleSchema = z.strictObject({
   ...qaMaturityScoreBundleShape,
 });
 
+// Only authored scores carry decisions; Coverage and computed rollups keep the plain schema.
+const qaMaturityReviewedScoreSchema = qaMaturityScoreObjectSchema.safeExtend({
+  decision: qaMaturityScoreDecisionSchema.optional(),
+});
+const qaMaturityReviewedScoreShape = {
+  quality: qaMaturityReviewedScoreSchema,
+  completeness: qaMaturityReviewedScoreSchema,
+};
+
 const qaMaturityScoreLastRunSchema = z.strictObject({
   status: z.string().trim().min(1).optional(),
   completed_at: z.string().trim().min(1).optional(),
@@ -102,6 +172,7 @@ const qaMaturityScoreCategoryLtsSchema = z.strictObject({
   supported: z.boolean(),
   reason: z.string().trim().min(1).optional(),
   human_override: z.boolean(),
+  decision: qaMaturityLtsDecisionSchema.optional(),
 });
 
 const qaMaturityScoreSurfaceLtsSchema = z.strictObject({
@@ -113,7 +184,7 @@ const qaMaturityScoreSurfaceLtsSchema = z.strictObject({
 const qaMaturityScoreCategorySchema = z.strictObject({
   name: z.string().trim().min(1),
   ...qaMaturityLegacyCoverageShape,
-  ...qaMaturityScoreBundleShape,
+  ...qaMaturityReviewedScoreShape,
   lts: qaMaturityScoreCategoryLtsSchema,
 });
 
@@ -129,7 +200,10 @@ const qaMaturityScoreSurfaceSchema = z.strictObject({
       label: z.string().trim().min(1).optional(),
     }),
   ]),
-  scores: qaMaturityScoreBundleSchema,
+  scores: z.strictObject({
+    ...qaMaturityLegacyCoverageShape,
+    ...qaMaturityReviewedScoreShape,
+  }),
   categories: z.array(qaMaturityScoreCategorySchema),
   lts: qaMaturityScoreSurfaceLtsSchema,
   last_score_run: qaMaturityScoreLastRunSchema.optional(),
@@ -172,11 +246,22 @@ const qaMaturitySurfaceSchema = z.object({
   name: z.string().trim().min(1),
   family: z.string().trim().min(1),
   level: z.string().trim().min(1),
+  level_decision: qaMaturityLevelDecisionSchema.optional(),
   level_code: z.string().trim().min(1).optional(),
   archived: z.boolean().optional(),
   rationale: z.string().trim().min(1).optional(),
   completeness_instructions: z.string().trim().min(1).optional(),
   last_score_run: qaMaturityScoreLastRunSchema.optional(),
+  additional_validation: z
+    .array(
+      z.object({
+        id: qaScorecardIdSchema,
+        name: z.string().trim().min(1),
+        command: z.string().trim().min(1),
+        purpose: z.string().trim().min(1),
+      }),
+    )
+    .optional(),
   categories: z.array(qaMaturityCategorySchema).default([]),
 });
 
@@ -285,6 +370,16 @@ const qaMaturityTaxonomySchema = z
     const coverageIdOwners = new Map<string, { key: string; label: string }>();
     const surfaceIds = new Set<string>();
     for (const [surfaceIndex, surface] of taxonomy.surfaces.entries()) {
+      if (
+        surface.level_decision &&
+        !taxonomy.levels.some((level) => level.id === surface.level_decision?.value)
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["surfaces", surfaceIndex, "level_decision", "value"],
+          message: "decision value must be a declared maturity level ID",
+        });
+      }
       if (surfaceIds.has(surface.id)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -380,6 +475,11 @@ export type QaScorecardEvidenceMode = z.infer<typeof qaScorecardEvidenceModeSche
 export type QaScorecardChannelDriver = z.infer<typeof qaScorecardChannelDriverSchema>;
 type QaMaturityScoreKey = (typeof QA_MATURITY_SCORE_KEYS)[number];
 export type QaMaturityScoreObject = z.infer<typeof qaMaturityScoreObjectSchema>;
+export type QaMaturityDecision = z.infer<
+  | typeof qaMaturityScoreDecisionSchema
+  | typeof qaMaturityLtsDecisionSchema
+  | typeof qaMaturityLevelDecisionSchema
+>;
 export type QaMaturityScoreSurfaceLts = z.infer<typeof qaMaturityScoreSurfaceLtsSchema>;
 type QaMaturityScoreCategory = z.infer<typeof qaMaturityScoreCategorySchema>;
 export type QaMaturityScoreSurface = z.infer<typeof qaMaturityScoreSurfaceSchema>;
@@ -447,6 +547,7 @@ type QaScorecardProfileReport = {
   categoryIds: string[];
   coverageIds: string[];
   scenarioRefs: string[];
+  proofRequirements?: QaProofRequirements;
 };
 
 export type QaScorecardTaxonomyReport = {
@@ -454,6 +555,7 @@ export type QaScorecardTaxonomyReport = {
   title: string | null;
   taxonomy: {
     sourcePath: string;
+    identity: QaMaturityTaxonomyIdentity;
   } | null;
   profileCount: number;
   profiles: QaScorecardProfileReport[];
@@ -508,34 +610,12 @@ function repoRootFromPath(filePath: string) {
   return path.dirname(filePath);
 }
 
-function formatZodIssuePath(pathLocal: PropertyKey[]) {
-  return pathLocal.length ? pathLocal.map(String).join(".") : "<root>";
-}
-
-function parseQaMaturityTaxonomy(value: unknown, label = QA_MATURITY_TAXONOMY_PATH) {
-  const parsed = qaMaturityTaxonomySchema.safeParse(value);
-  if (parsed.success) {
-    return parsed.data;
-  }
-  const issues = parsed.error.issues
-    .map((issue) => `${formatZodIssuePath(issue.path)}: ${issue.message}`)
-    .join("; ");
-  throw new Error(`${label}: ${issues}`);
-}
-
-function parseQaMaturityScores(value: unknown, label = QA_MATURITY_SCORES_PATH) {
-  const parsed = qaMaturityScoresSchema.safeParse(value);
-  if (parsed.success) {
-    return parsed.data;
-  }
-  const issues = parsed.error.issues
-    .map((issue) => `${formatZodIssuePath(issue.path)}: ${issue.message}`)
-    .join("; ");
-  throw new Error(`${label}: ${issues}`);
-}
-
 export function readQaMaturityTaxonomySource(taxonomyPath = QA_MATURITY_TAXONOMY_PATH) {
-  return parseQaMaturityTaxonomy(YAML.parse(fs.readFileSync(taxonomyPath, "utf8")), taxonomyPath);
+  return parseQaYamlWithContext(
+    qaMaturityTaxonomySchema,
+    YAML.parse(fs.readFileSync(taxonomyPath, "utf8")),
+    taxonomyPath,
+  );
 }
 
 export function readValidatedQaMaturityScoreSources(params?: {
@@ -547,7 +627,11 @@ export function readValidatedQaMaturityScoreSources(params?: {
   const taxonomyPath = params?.taxonomyPath ?? QA_MATURITY_TAXONOMY_PATH;
   const scoresPath = params?.scoresPath ?? QA_MATURITY_SCORES_PATH;
   const taxonomy = params?.taxonomy ?? readQaMaturityTaxonomySource(taxonomyPath);
-  const scores = parseQaMaturityScores(YAML.parse(fs.readFileSync(scoresPath, "utf8")), scoresPath);
+  const scores = parseQaYamlWithContext(
+    qaMaturityScoresSchema,
+    YAML.parse(fs.readFileSync(scoresPath, "utf8")),
+    scoresPath,
+  );
   const warnings = validateQaMaturityScoresAgainstTaxonomy({
     coverageScores: params?.coverageScores,
     scores,
@@ -564,7 +648,8 @@ function readQaMaturityTaxonomy(repoRoot: string | undefined) {
   if (!taxonomyPath || !fs.existsSync(taxonomyPath)) {
     return null;
   }
-  return parseQaMaturityTaxonomy(
+  return parseQaYamlWithContext(
+    qaMaturityTaxonomySchema,
     YAML.parse(fs.readFileSync(taxonomyPath, "utf8")) as unknown,
     QA_MATURITY_TAXONOMY_PATH,
   );
@@ -651,6 +736,80 @@ function uniqueSorted(values: Iterable<string>) {
 
 function percent(part: number, total: number) {
   return total === 0 ? 0 : Number(((part / total) * 100).toFixed(1));
+}
+
+export const qaMaturityTaxonomyIdentitySchema = z.strictObject({
+  version: z.literal(1),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+});
+
+export type QaMaturityTaxonomyIdentity = z.infer<typeof qaMaturityTaxonomyIdentitySchema>;
+
+export function qaMaturityTaxonomyIdentity(
+  taxonomy: QaMaturityTaxonomy,
+): QaMaturityTaxonomyIdentity {
+  const byId = <T extends { id: string }>(values: readonly T[]) =>
+    values.toSorted((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
+  const refs = (values: readonly string[]) => [...new Set(values)].toSorted();
+  // Evidence binds to capability meaning and proof obligations, not maturity decisions
+  // or YAML layout. Explicit projection keeps unrelated metadata out of the identity.
+  const semantics = {
+    profiles: byId(taxonomy.profiles).map((profile) =>
+      Object.assign(
+        {
+          id: profile.id,
+          description: profile.description,
+          includeAllCategories: profile.includeAllCategories,
+          categoryIds: refs(profile.categoryIds),
+          coverageIds: refs(profile.coverageIds),
+          channelDriver: profile.channelDriver,
+          evidenceMode: profile.evidenceMode ?? "full",
+        },
+        profile.proofRequirements
+          ? {
+              proofRequirements: byId(profile.proofRequirements).map((requirement) =>
+                Object.assign({}, requirement, {
+                  alternatives: requirement.alternatives.toSorted((left, right) => {
+                    const a = JSON.stringify(left);
+                    const b = JSON.stringify(right);
+                    return a < b ? -1 : a > b ? 1 : 0;
+                  }),
+                }),
+              ),
+            }
+          : {},
+      ),
+    ),
+    surfaces: byId(activeQaMaturityTaxonomySurfaces(taxonomy)).map((surface) => ({
+      id: surface.id,
+      name: surface.name,
+      family: surface.family,
+      completenessInstructions: surface.completeness_instructions ?? null,
+      additionalValidation: byId(surface.additional_validation ?? []).map((validation) => ({
+        id: validation.id,
+        name: validation.name,
+        command: validation.command,
+        purpose: validation.purpose,
+      })),
+      categories: byId(surface.categories).map((category) => ({
+        id: category.id,
+        name: category.name,
+        note: category.category_note,
+        docs: refs(category.docs),
+        features: byId(
+          category.features.map((feature) => ({
+            id: feature.coverageIds[0]!,
+            name: feature.name,
+            description: feature.description ?? null,
+          })),
+        ),
+      })),
+    })),
+  };
+  return {
+    version: 1,
+    sha256: createHash("sha256").update(JSON.stringify(semantics)).digest("hex"),
+  };
 }
 
 export function activeQaMaturityTaxonomySurfaces(taxonomy: QaMaturityTaxonomy) {
@@ -1101,6 +1260,7 @@ function buildQaScorecardTaxonomyReport(params: {
         categoryIds: uniqueSorted(validCategoryIds),
         coverageIds: validCoverageIds,
         scenarioRefs,
+        ...(profile.proofRequirements ? { proofRequirements: profile.proofRequirements } : {}),
       };
     }) ?? [];
 
@@ -1264,6 +1424,7 @@ function buildQaScorecardTaxonomyReport(params: {
     taxonomy: params.taxonomy
       ? {
           sourcePath: QA_MATURITY_TAXONOMY_PATH,
+          identity: qaMaturityTaxonomyIdentity(params.taxonomy),
         }
       : null,
     profileCount: params.taxonomy?.profiles.length ?? 0,

@@ -19,7 +19,11 @@ export function shouldUpdateMattermostDraftToolProgress(
 ): boolean {
   return (
     account.streamingMode !== "off" &&
-    resolveChannelStreamingPreviewToolProgress(account.config, true, account.streamingMode)
+    resolveChannelStreamingPreviewToolProgress(
+      account.config,
+      account.streamingMode !== "progress",
+      account.streamingMode,
+    )
   );
 }
 
@@ -179,10 +183,11 @@ export function resolveMattermostThreadSessionContext(params: {
 export function resolveMattermostPendingHistoryKey(params: {
   kind: ChatType;
   sessionKey: string;
+  threadRootId?: string;
 }): string | null {
-  // DMs always dispatch immediately, so they do not need the pending-room
-  // history window. Keeping them out also avoids one empty bucket per DM thread.
-  return params.kind === "direct" ? null : params.sessionKey;
+  // Flat DMs dispatch immediately. Opted-in threads have an independent session
+  // and need a recoverable context window just like room threads.
+  return params.kind === "direct" && !params.threadRootId ? null : params.sessionKey;
 }
 
 export function resolveMattermostReactionChannelId(

@@ -72,7 +72,7 @@ Description:
   classification instead of maintaining a separate test-helper heuristic.
 
 Options:
-  --base <ref>       Base ref for branch diffs. Default: ${DEFAULT_BASE_REF}
+  --base <ref>       Base ref. Default: HEAD with --staged, otherwise ${DEFAULT_BASE_REF}
   --head <ref>       Head ref for branch diffs. Default: ${DEFAULT_HEAD_REF}
   --no-merge-base    Use a two-dot base..head diff for shallow CI checkouts.
   --staged           Inspect staged changes instead of a branch diff.
@@ -133,8 +133,15 @@ export function formatGithubWarning(finding: TempCreationFinding): string {
 }
 
 function parseArgs(argv: readonly string[]) {
-  const args = {
-    base: DEFAULT_BASE_REF,
+  const args: {
+    base?: string;
+    failOnFindings: boolean;
+    head: string;
+    help: boolean;
+    json: boolean;
+    noMergeBase: boolean;
+    staged: boolean;
+  } = {
     failOnFindings: false,
     head: DEFAULT_HEAD_REF,
     help: false,
@@ -155,9 +162,10 @@ function parseArgs(argv: readonly string[]) {
 }
 
 function readDiff(args: ReturnType<typeof parseArgs>, cwd = process.cwd()): string {
+  const base = args.base ?? DEFAULT_BASE_REF;
   let useMergeBase = !args.noMergeBase;
   if (useMergeBase && !args.staged) {
-    const mergeBase = spawnSync("git", ["merge-base", args.base, args.head], {
+    const mergeBase = spawnSync("git", ["merge-base", base, args.head], {
       cwd,
       encoding: "utf8",
       stdio: ["ignore", "ignore", "pipe"],
@@ -173,16 +181,36 @@ function readDiff(args: ReturnType<typeof parseArgs>, cwd = process.cwd()): stri
       throw new Error(mergeBase.stderr.trim() || "git merge-base failed");
     }
   }
-  const range = useMergeBase ? `${args.base}...${args.head}` : `${args.base}..${args.head}`;
-  const diffArgs = args.staged
-    ? ["diff", "--cached", "--unified=0", "--diff-filter=ACMR", "--"]
-    : ["diff", "--unified=0", "--diff-filter=ACMR", range, "--"];
-  return execFileSync("git", diffArgs, {
-    cwd,
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const range = useMergeBase ? `${base}...${args.head}` : `${base}..${args.head}`;
+  const diffArgs = [
+    "diff",
+    ...(args.staged ? ["--cached", ...(args.base ? [args.base] : [])] : [range]),
+    "--diff-filter=ACMR",
+  ];
+  const readGitDiff = (...options: string[]) =>
+    execFileSync("git", ["--literal-pathspecs", ...diffArgs, ...options], {
+      cwd,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  // Select paths before reading patches so unrelated generated output cannot
+  // exhaust the diff buffer. Both rename/copy endpoints preserve added-line scope.
+  const fields = readGitDiff("--name-status", "-z", "--").split("\0");
+  const paths = new Set<string>();
+  for (let index = 0; index < fields.length;) {
+    const status = fields[index++];
+    const from = fields[index++];
+    if (!status || !from) {
+      break;
+    }
+    const to = status.startsWith("R") || status.startsWith("C") ? fields[index++] : from;
+    if (to && shouldInspectFile(to)) {
+      paths.add(from);
+      paths.add(to);
+    }
+  }
+  return paths.size > 0 ? readGitDiff("--unified=0", "--", ...paths) : "";
 }
 
 function readWorktreeSource(filePath: string, cwd: string): string {

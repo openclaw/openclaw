@@ -69,6 +69,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Screen",
       detailKeys: ["action", "sessionKey", "dock"],
     },
+    theme: {
+      emoji: "🎨",
+      title: "Theme",
+      detailKeys: ["action", "id", "mode"],
+    },
     terminal: {
       emoji: "⌨️",
       title: "Terminal",
@@ -83,6 +88,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       emoji: "🧰",
       title: "Process",
       detailKeys: ["sessionId"],
+    },
+    gateway_process: {
+      emoji: "🧰",
+      title: "Background Shell",
+      detailKeys: ["action", "sessionId"],
     },
     read: {
       emoji: "📖",
@@ -218,7 +228,6 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     progress_card: {
       emoji: "🗺️",
       title: "Progress Card",
-      detailKeys: ["plan.0.step", "markdown"],
     },
     ask_user: {
       emoji: "❓",
@@ -254,6 +263,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       emoji: "🔌",
       title: "Gateway",
       detailKeys: ["action", "path"],
+    },
+    plugins: {
+      emoji: "🧩",
+      title: "Plugins",
+      detailKeys: ["action", "pluginId", "packageName", "query"],
     },
     exec: {
       emoji: "🛠️",
@@ -376,7 +390,15 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     sessions_spawn: {
       emoji: "🧑‍🔧",
       title: "Sub-agent",
-      detailKeys: ["label", "task", "agentId", "model", "thinking", "runTimeoutSeconds", "cleanup"],
+      detailKeys: [
+        "label",
+        "taskName",
+        "agentId",
+        "model",
+        "thinking",
+        "runTimeoutSeconds",
+        "cleanup",
+      ],
     },
     agents_wait: { emoji: "⏳", title: "Wait for Agents", detailKeys: ["ids", "timeoutSeconds"] },
     structured_output: { emoji: "🧾", title: "Structured Output", detailKeys: ["result"] },
@@ -418,6 +440,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       emoji: "🧮",
       title: "Code Execution",
       detailKeys: ["task"],
+    },
+    decision_evaluate: {
+      emoji: "⚖️",
+      title: "Decision Evaluation",
+      detailKeys: [],
     },
     message: MESSAGE_TOOL_DISPLAY_SPEC,
     apply_patch: {

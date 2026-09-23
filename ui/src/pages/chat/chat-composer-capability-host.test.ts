@@ -1,6 +1,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { SkillsLibraryListResult } from "../../../../packages/gateway-protocol/src/index.ts";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot, GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -36,14 +37,6 @@ function createState(): ChatPageHost {
     connected: true,
     sessionKey: "main",
   } as ChatPageHost;
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
 }
 
 describe("ChatComposerCapabilityHost", () => {

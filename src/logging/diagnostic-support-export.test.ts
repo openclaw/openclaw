@@ -6,7 +6,7 @@ import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
-  resetDiagnosticStabilityBundleForTest,
+  uninstallDiagnosticStabilityFatalHook,
   writeDiagnosticStabilityBundleSync,
 } from "./diagnostic-stability-bundle.js";
 import {
@@ -35,18 +35,71 @@ describe("diagnostic support export", () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-support-export-"));
     resetDiagnosticEventsForTest();
     resetDiagnosticStabilityRecorderForTest();
-    resetDiagnosticStabilityBundleForTest();
+    uninstallDiagnosticStabilityFatalHook();
   });
 
   afterEach(() => {
     stopDiagnosticStabilityRecorder();
     resetDiagnosticEventsForTest();
     resetDiagnosticStabilityRecorderForTest();
-    resetDiagnosticStabilityBundleForTest();
+    uninstallDiagnosticStabilityFatalHook();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("writes a shareable zip without raw chats, webhook bodies, or secrets", async () => {
+  it.each(["current", "other-state alias", "marked relocated alias"])(
+    "excludes %s capture files selected as config, logs, or a stability bundle",
+    async (owner) => {
+      const stateDir = path.join(tempDir, "state");
+      let capture = `${stateDir}.update-captures`;
+      if (owner !== "current") {
+        const otherState = path.join(tempDir, "other-state");
+        fs.mkdirSync(otherState);
+        capture = `${otherState}.update-captures`;
+      }
+      fs.mkdirSync(capture);
+      if (owner !== "current") {
+        const alias = path.join(tempDir, "capture-alias");
+        fs.symlinkSync(capture, alias, process.platform === "win32" ? "junction" : "dir");
+        capture = alias;
+      }
+      if (owner === "marked relocated alias") {
+        const original = `${path.join(tempDir, "other-state")}.update-captures`;
+        const moved = path.join(tempDir, "relocated");
+        fs.renameSync(original, moved);
+        fs.unlinkSync(capture);
+        fs.symlinkSync(moved, capture, process.platform === "win32" ? "junction" : "dir");
+        fs.rmdirSync(path.join(tempDir, "other-state"));
+        fs.writeFileSync(
+          path.join(moved, ".openclaw-private-update-capture"),
+          "openclaw-private-update-capture-v1\n",
+        );
+      }
+      const privatePath = path.join(capture, "private.json");
+      const marker = "synthetic-retained-record-not-for-support";
+      fs.writeFileSync(privatePath, JSON.stringify({ agents: { entries: { [marker]: {} } } }));
+      const outputPath = path.join(tempDir, "support.zip");
+      await writeDiagnosticSupportExport({
+        stateDir,
+        env: { OPENCLAW_CONFIG_PATH: privatePath },
+        outputPath,
+        stabilityBundle: privatePath,
+        readLogTail: async () => ({
+          file: privatePath,
+          cursor: 1,
+          size: 1,
+          lines: [JSON.stringify({ msg: marker })],
+          truncated: false,
+          reset: false,
+        }),
+      });
+      const files = await readZipTextEntries(outputPath);
+      expect(Object.values(files).join("\n")).not.toContain(marker);
+      expect(Object.values(files).join("\n")).toContain("Private update captures are excluded");
+      expect(fs.readFileSync(privatePath, "utf8")).toContain(marker);
+    },
+  );
+
+  it("writeDiagnosticSupportExport writes a shareable zip without raw chats, webhook bodies, or secrets", async () => {
     const fakeToken = "sk-test-support-export-secret-token-1234567890";
     const fakeAwsKey = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
     const fakeJwt = [
@@ -227,6 +280,7 @@ describe("diagnostic support export", () => {
           },
           time: "2026-04-22T12:00:00.300Z",
         }),
+        JSON.stringify({ module: `gAAAA${"b".repeat(40_000)}` }),
         `plain fallback ${privateChat} ${fakeToken}`,
       ],
     };
@@ -351,6 +405,7 @@ describe("diagnostic support export", () => {
     expect(sanitizedLogs).toContain("<redacted-aws-key>");
     expect(sanitizedLogs).toContain("<redacted-jwt>");
     expect(sanitizedLogs).toContain('"module":"matrix-auto-reply"');
+    expect(sanitizedLogs).toContain('"module":"gAAAAb…bbbb"');
     expect(sanitizedLogs).toContain('"subsystem":"gateway/channels/matrix"');
     expect(sanitizedLogs).toContain('"logger":"gateway-runtime"');
     expect(sanitizedLogs).toContain('"level":"warn"');
@@ -700,6 +755,7 @@ describe("diagnostic support export", () => {
       env: {
         ...process.env,
         HOME: tempDir,
+        OPENCLAW_CONFIG_PATH: path.join(tempDir, "missing-config.json"),
         OPENCLAW_STATE_DIR: tempDir,
       },
       stateDir: tempDir,
@@ -722,6 +778,7 @@ describe("diagnostic support export", () => {
     });
 
     const entries = await readZipTextEntries(outputPath);
+    expect(entries["summary.md"]).toContain("config file not found");
     expect(Object.keys(entries).toSorted()).toContain("status/gateway-status.json");
     expect(Object.keys(entries).toSorted()).toContain("health/gateway-health.json");
 
@@ -805,6 +862,8 @@ describe("diagnostic support export", () => {
     expect(combined).not.toContain(fakeToken);
     expect(combined).toContain('"parseOk": false');
     expect(combined).toContain("config stat failed with token");
+    expect(entries["summary.md"]).toContain("config stat failed with token");
+    expect(entries["summary.md"]).not.toContain("config file not found");
     expect(combined).toContain("Attach this zip to the bug report");
   });
 

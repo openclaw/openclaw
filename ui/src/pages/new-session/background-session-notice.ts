@@ -1,7 +1,13 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import {
+  autoPromptNotificationsOnSend,
+  hasActiveNotificationPromptGesture,
+  shouldAutoPromptNotificationsOnSend,
+} from "../../app/notifications-auto-prompt.ts";
 import { t } from "../../i18n/index.ts";
+import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import {
@@ -14,6 +20,7 @@ type AgentWaitResult = {
   status?: "error" | "ok" | "pending" | "timeout";
   endedAt?: number;
   error?: string;
+  pendingError?: boolean;
   providerStarted?: boolean;
   stopReason?: string;
 };
@@ -49,16 +56,16 @@ async function notifyWhenBackgroundSessionEnds(params: {
         !observed.error &&
         !observed.stopReason &&
         observed.providerStarted !== true;
-      if (observed.status === "pending") {
+      if (observed.status === "pending" || observed.pendingError === true) {
         await delayRetry();
       } else if (observationalTimeout) {
-        const placement = params.context.placementStartup.get(params.key);
-        if (placement?.phase === "failed") {
-          result = { status: "error", error: placement.error };
-        } else if (params.context.placementStartup.hasPendingTurn(params.key)) {
-          await delayRetry();
+        // Startup display errors can mean unconfirmed delivery, not a failed run.
+        const initialTurn = params.context.placementStartup.get(params.key)?.initialTurn;
+        if (initialTurn?.sendState === "failed" && initialTurn.sendRunId === params.runId) {
+          result = { status: "error", error: initialTurn.sendError };
         } else {
-          result = observed;
+          // A wait deadline is not a run outcome, even after startup custody retires.
+          await delayRetry();
         }
       } else {
         result = observed;
@@ -97,6 +104,17 @@ async function notifyWhenBackgroundSessionEnds(params: {
         : result.stopReason === "rpc"
           ? t("sessionsView.statusKilled")
           : t("sessionsView.statusFailed");
+  const nativeTarget = sessionNavigationTarget({
+    face: "chat",
+    sessionKey: params.key,
+    fallbackAgentId: params.agentId,
+    exactKey: true,
+  });
+  params.context.nativeNotifications?.backgroundSessionCompleted({
+    runId: params.runId,
+    path: nativeTarget.options.pathname,
+    ...(nativeTarget.options.search ? { search: nativeTarget.options.search } : {}),
+  });
   showToast({
     fifo: true,
     message: `${resolveSessionDisplayName(params.key, row)}: ${status}`,
@@ -126,14 +144,16 @@ export function prepareBackgroundSessionCompletion(params: {
   agentId: string;
   client: GatewayBrowserClient;
   context: ApplicationContext;
-  clearDraft: () => void;
 }): (key: string, runId?: string) => boolean {
   return (key, runId) => {
     const normalizedRunId = runId?.trim();
-    if (!params.enabled || !normalizedRunId) {
+    if (!params.enabled) {
       return false;
     }
-    params.clearDraft();
+    // Creation disposition is independent of whether the Gateway returned a watchable run.
+    if (!normalizedRunId) {
+      return true;
+    }
     void notifyWhenBackgroundSessionEnds({
       agentId: params.agentId,
       client: params.client,
@@ -143,4 +163,24 @@ export function prepareBackgroundSessionCompletion(params: {
     });
     return true;
   };
+}
+
+/** Keep notification permission on the original input event, before startup awaits. */
+export function promptNewSessionNotifications(
+  context: ApplicationContext,
+  message: string,
+  hasAttachments: boolean,
+  direct: boolean,
+) {
+  if (
+    shouldAutoPromptNotificationsOnSend({
+      connected: context.gateway.snapshot.phase === "connected",
+      directComposerSend: direct && hasActiveNotificationPromptGesture(),
+      message,
+      hasAttachments,
+      isCommand: parseSlashCommand(message) !== null,
+    })
+  ) {
+    autoPromptNotificationsOnSend(context);
+  }
 }

@@ -1,317 +1,147 @@
-import { createHash, randomUUID } from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
-import { Worker } from "node:worker_threads";
+import { performance } from "node:perf_hooks";
+import { isMainThread, threadId, type Worker } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import { syncDirectoryBestEffortSync } from "../../infra/directory-durability.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import {
+  resolveRuntimeWorkerThreadExecArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
+import { createCpuTrackedWorker } from "../../infra/worker-cpu.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import {
-  encodeSessionArchiveContent,
-  readSessionArchiveContentSync,
-  SESSION_ARCHIVE_ZSTD_SUFFIX,
-} from "./archive-compression.js";
-import { formatSessionArchiveTimestamp, type SessionArchiveReason } from "./artifacts.js";
-import type { SessionLifecycleArchivedTranscript } from "./session-accessor.sqlite-contract.js";
-import {
-  readSessionStateDeleteSnapshot,
-  sqliteSessionStateDeleteSnapshotsEqual,
-} from "./session-accessor.sqlite-delete-snapshot.js";
-import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
-
-export type SessionStateDeletePlan = {
-  agentId: string;
-  archiveDirectory: string;
-  archiveTranscript: boolean;
-  databasePath: string;
-  reason: "deleted" | "reset";
-  sessionId: string;
-  snapshot: SessionStateDeleteSnapshot;
-};
-
-export type MaterializedSessionStateDeletePlan = SessionStateDeletePlan & {
-  archive: MaterializedSessionTranscriptArchive | null;
-  archivedTranscript: SessionLifecycleArchivedTranscript | null;
-};
-
-type MaterializedSessionTranscriptArchive = {
-  archiveName: string;
-  bytes: Uint8Array;
-  createdAt: number;
-  encoding: "identity" | "zstd";
-  sha256: string;
-};
-
-export type TranscriptArchiveWorkerPlan = Pick<
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { runScopedSqliteArchiveOperation } from "./session-accessor.sqlite-archive-session.js";
+import type {
+  MaterializedSessionStateDeletePlan,
   SessionStateDeletePlan,
-  "agentId" | "archiveDirectory" | "databasePath" | "reason" | "sessionId" | "snapshot"
->;
+  TranscriptArchivePublishPlan,
+  TranscriptArchivePublishResult,
+  TranscriptArchiveReadPlan,
+  TranscriptArchiveReadResult,
+  TranscriptArchiveWorkerPlan,
+  TranscriptArchiveWorkerResult,
+} from "./session-accessor.sqlite-archive-types.js";
+import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
+import { sqliteSessionStateDeleteSnapshotsEqual } from "./session-accessor.sqlite-delete-snapshot.js";
+import { withSqliteMutationWorkerCoordination } from "./session-accessor.sqlite-worker-coordination.js";
+import {
+  runSqliteMutationWorkerRequest,
+  type SqliteMutationWorkerValidationOwner,
+  type SqliteWorkerWriteAdmission,
+} from "./session-accessor.sqlite-worker-request.js";
+import type { SessionColdWorkerData } from "./session-cold-storage-worker.js";
 
-export type TranscriptArchiveWorkerResult = {
-  archive: MaterializedSessionTranscriptArchive | null;
-  sessionId: string;
-};
-
-export type TranscriptArchiveWorkerMessage = {
-  type: "done";
-  results: TranscriptArchiveWorkerResult[];
-};
-
-export const MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES = 256 * 1024 * 1024;
-
-export type TranscriptArchivePublishPlan = {
-  agentId: string;
-  archiveDirectory: string;
-  databasePath: string;
-  generation: string;
-  sessionId: string;
-};
-
-export type TranscriptArchivePublishResult = {
-  archivedPath?: string;
-  error?: string;
-  generation: string;
-  sessionId: string;
-};
-
-export type TranscriptArchivePublishWorkerMessage = {
-  type: "published";
-  results: TranscriptArchivePublishResult[];
-};
-
-function resolveSqliteTranscriptArchivePath(params: {
-  archiveDirectory: string;
-  generation?: string;
-  reason: SessionArchiveReason;
-  sessionId: string;
-  nowMs?: number;
-}): string {
-  const archiveDirectory = path.resolve(params.archiveDirectory);
-  const generationSuffix = params.generation ? `.${params.generation}` : "";
-  const archivePath = path.resolve(
-    archiveDirectory,
-    `${params.sessionId}.jsonl.${params.reason}.${formatSessionArchiveTimestamp(params.nowMs)}${generationSuffix}`,
-  );
-  if (path.dirname(archivePath) !== archiveDirectory) {
-    throw new Error(`Cannot archive SQLite transcript outside ${archiveDirectory}`);
-  }
-  return archivePath;
-}
-
-export function encodeMaterializedSessionTranscriptArchive(params: {
-  archiveDirectory: string;
-  content: string;
-  generation: string;
-  reason: SessionArchiveReason;
-  sessionId: string;
-  nowMs?: number;
-}): MaterializedSessionTranscriptArchive {
-  const encoded = encodeSessionArchiveContent(params.content);
-  const createdAt = params.nowMs ?? Date.now();
-  const archivedPath = `${resolveSqliteTranscriptArchivePath({
-    archiveDirectory: params.archiveDirectory,
-    generation: params.generation,
-    reason: params.reason,
-    sessionId: params.sessionId,
-    nowMs: createdAt,
-  })}${encoded.suffix}`;
-  return {
-    archiveName: path.basename(archivedPath),
-    bytes: encoded.bytes,
-    createdAt,
-    encoding: encoded.suffix ? "zstd" : "identity",
-    sha256: createHash("sha256").update(encoded.bytes).digest("hex"),
-  };
-}
-
-function findMatchingSqliteTranscriptArchive(params: {
-  archiveDirectory: string;
-  content: string;
-  reason: SessionArchiveReason;
-  sessionId: string;
-}): string | null {
-  let entries: string[];
-  try {
-    entries = fs.readdirSync(params.archiveDirectory);
-  } catch {
-    return null;
-  }
-  const prefix = `${params.sessionId}.jsonl.${params.reason}.`;
-  for (const entry of entries) {
-    if (!entry.startsWith(prefix) || entry.endsWith(".tmp")) {
-      continue;
-    }
-    const archivePath = path.join(params.archiveDirectory, entry);
-    const compressed = entry.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX);
-    try {
-      const stat = fs.statSync(archivePath);
-      if (!stat.isFile()) {
-        continue;
-      }
-      if (!compressed && stat.size !== Buffer.byteLength(params.content, "utf8")) {
-        continue;
-      }
-      if (readSessionArchiveContentSync(archivePath) === params.content) {
-        return archivePath;
-      }
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-
-/** Writes or reuses a transcript archive and returns its durable path. */
-export function writeTranscriptArchive(params: {
-  archiveDirectory: string;
-  content: string;
-  reason: SessionArchiveReason;
-  sessionId: string;
-}): string {
-  fs.mkdirSync(params.archiveDirectory, { recursive: true });
-  const existing = findMatchingSqliteTranscriptArchive(params);
-  if (existing) {
-    return existing;
-  }
-  // Archives are the long-lived cold tier; compress when the runtime can so
-  // keep-forever retention stays cheap. Plain JSONL is the Bun/older fallback.
-  const encoded = encodeSessionArchiveContent(params.content);
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    const archivePath = `${resolveSqliteTranscriptArchivePath({
-      archiveDirectory: params.archiveDirectory,
-      reason: params.reason,
-      sessionId: params.sessionId,
-      nowMs: Date.now() + attempt,
-    })}${encoded.suffix}`;
-    if (fs.existsSync(archivePath)) {
-      continue;
-    }
-    const tempPath = `${archivePath}.${randomUUID()}.tmp`;
-    try {
-      writeDurableFileExclusive(tempPath, encoded.bytes);
-      fs.renameSync(tempPath, archivePath);
-      syncDirectoryBestEffortSync(params.archiveDirectory);
-      // Full readback is bounded by the same single-generation content held by
-      // this Worker (Node string limits cap both); a partial
-      // or corrupt archive must fail here, before any rows are reclaimed.
-      if (readSessionArchiveContentSync(archivePath) !== params.content) {
-        fs.rmSync(archivePath, { force: true });
-        throw new Error(`SQLite transcript archive verification failed for ${params.sessionId}`);
-      }
-      return archivePath;
-    } catch (error) {
-      fs.rmSync(tempPath, { force: true });
-      if ((error as { code?: unknown })?.code === "EEXIST") {
-        continue;
-      }
-      throw error;
-    }
-  }
-  throw new Error(`Could not create SQLite transcript archive for ${params.sessionId}`);
-}
-
-// Windows rejects fsync on read-only handles, so keep the exclusive writable
-// descriptor open through both the write and durability boundary.
-function writeDurableFileExclusive(filePath: string, content: Buffer): void {
-  const fd = fs.openSync(filePath, "wx", 0o600);
-  try {
-    fs.writeFileSync(fd, content);
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
-export function hashSessionArchiveBytes(bytes: Uint8Array): string {
-  return createHash("sha256").update(bytes).digest("hex");
-}
-
-/** Publishes one exact canonical archive without directory scans or replacement. */
-export function publishEncodedSessionTranscriptArchive(params: {
-  archiveDirectory: string;
-  archiveName: string;
-  bytes: Uint8Array;
-  sha256: string;
-}): string {
-  const archiveDirectory = path.resolve(params.archiveDirectory);
-  const archivePath = path.resolve(archiveDirectory, params.archiveName);
-  if (
-    path.dirname(archivePath) !== archiveDirectory ||
-    path.basename(archivePath) !== params.archiveName
-  ) {
-    throw new Error(`Cannot publish SQLite transcript archive outside ${archiveDirectory}`);
-  }
-  fs.mkdirSync(archiveDirectory, { recursive: true, mode: 0o700 });
-  if (fs.existsSync(archivePath)) {
-    if (hashSessionArchiveBytes(fs.readFileSync(archivePath)) !== params.sha256) {
-      throw new Error(`SQLite transcript archive collision for ${params.archiveName}`);
-    }
-    return archivePath;
-  }
-
-  const tempPath = `${archivePath}.${randomUUID()}.tmp`;
-  writeDurableFileExclusive(tempPath, Buffer.from(params.bytes));
-  try {
-    fs.linkSync(tempPath, archivePath);
-  } catch (error) {
-    if ((error as { code?: unknown }).code !== "EEXIST") {
-      throw error;
-    }
-  } finally {
-    fs.rmSync(tempPath, { force: true });
-  }
-  syncDirectoryBestEffortSync(archiveDirectory);
-  if (hashSessionArchiveBytes(fs.readFileSync(archivePath)) !== params.sha256) {
-    throw new Error(`SQLite transcript archive verification failed for ${params.archiveName}`);
-  }
-  return archivePath;
-}
-
-function resolveSourceWorkerExecArgv(): string[] {
-  // Node 22 can strip the .ts entrypoint itself, but `--import tsx` does not
-  // register tsx's ESM resolver inside a Worker. Explicitly register the
-  // supported programmatic API so source-tree .js specifiers map back to .ts.
-  // Built .js workers do not use this development/test-only preload.
-  const tsxApiUrl = import.meta.resolve("tsx/esm/api");
-  const registerTsx = `import { register } from ${JSON.stringify(tsxApiUrl)}; register();`;
-  return ["--import", `data:text/javascript,${encodeURIComponent(registerTsx)}`];
-}
-
-function spawnSqliteTranscriptArchiveWorker<Result>(params: {
-  expectedMessageType: "done" | "published";
-  workerData: object;
-}): Promise<Result[]> {
+export function createSqliteTranscriptArchiveWorker(workerData: object): Worker {
   const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptArchive);
+  return createCpuTrackedWorker(workerUrl, {
+    resourceLimits: { maxOldGenerationSizeMb: 512 },
+    workerData,
+    execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
+  });
+}
+
+type TranscriptArchiveWorkerOperation<Result> = {
+  assertCurrent?: () => void;
+  signal?: AbortSignal;
+} & (
+  | { expectedMessageType: "done" | "published" | "sized"; workerData: object }
+  | {
+      expectedMessageType: "reclaimed";
+      workerData: SessionColdWorkerData;
+      diagnostics?: SqliteSessionReclamationDiagnostics;
+      onCommitRequest: () => void;
+      withWriteAdmission: SqliteWorkerWriteAdmission<Result>;
+      validationOwner?: SqliteMutationWorkerValidationOwner;
+    }
+);
+
+function spawnSqliteTranscriptArchiveWorkerOperation<Result>(
+  input: TranscriptArchiveWorkerOperation<Result>,
+): Promise<Result[]> {
+  const params =
+    input.expectedMessageType === "reclaimed"
+      ? {
+          ...input,
+          stateContext: captureOpenClawStateWorkerContext({
+            env: input.workerData.plan.databaseOptions.env,
+          }),
+        }
+      : input;
   let worker: Worker;
   try {
-    const sourceWorkerExecArgv = workerUrl.pathname.endsWith(".ts")
-      ? resolveSourceWorkerExecArgv()
-      : undefined;
-    worker = new Worker(workerUrl, {
-      workerData: params.workerData,
-      execArgv: sourceWorkerExecArgv,
-    });
+    worker = createSqliteTranscriptArchiveWorker(params.workerData);
   } catch (error) {
     return Promise.reject(toStringifiedError(error));
+  }
+
+  if (params.expectedMessageType === "reclaimed") {
+    const startedAt = performance.now();
+    const workerThreadId = worker.threadId;
+    let exitCode: number | undefined;
+    if (params.diagnostics) {
+      params.diagnostics.workerThreadId = workerThreadId;
+    }
+    // Cold mutations retain their one-shot cleanup/exit lifetime, never a sweep connection.
+    const operation = withSqliteMutationWorkerCoordination(
+      params.stateContext,
+      { kind: "dedicated", channel: worker },
+      0,
+      (coordination) =>
+        runSqliteMutationWorkerRequest<Result>({
+          transport: { kind: "dedicated", channel: worker },
+          operationId: 0,
+          completion: "exit",
+          onCommitRequest: params.onCommitRequest,
+          withWriteAdmission: params.withWriteAdmission,
+          validationOwner: params.validationOwner,
+          onExit: (code) => {
+            exitCode = code;
+          },
+          dispatch: () =>
+            worker.postMessage(
+              { type: "mutate", coordination },
+              coordination.stateLifecycle ? [coordination.stateLifecycle] : [],
+            ),
+        }),
+    ).then((result) => [result]);
+    const observe = (outcome: "resolved" | "rejected") => {
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      if (elapsedMs >= 1_000) {
+        createSubsystemLogger("session-sqlite").warn("slow SQLite reclamation Worker operation", {
+          pid: process.pid,
+          threadId,
+          isMainThread,
+          workerThreadId,
+          reclamationKind: params.diagnostics?.kind ?? params.workerData.plan.kind,
+          elapsedMs,
+          outcome,
+          exitCode,
+        });
+      }
+    };
+    void operation
+      .then(
+        () => observe("resolved"),
+        () => observe("rejected"),
+      )
+      .catch(() => {});
+    return operation;
   }
 
   return new Promise((resolve, reject) => {
     let results: Result[] | undefined;
     let workerError: Error | undefined;
-    worker.on(
-      "message",
-      (message: TranscriptArchiveWorkerMessage | TranscriptArchivePublishWorkerMessage) => {
-        if (message.type === params.expectedMessageType) {
-          (results ??= []).push(...(message.results as Result[]));
-        }
-      },
-    );
+    worker.on("message", (message: { results: Result[]; type: string }) => {
+      if (message.type === params.expectedMessageType) {
+        (results ??= []).push(...message.results);
+      }
+    });
     worker.once("error", (error) => {
       // An uncaught Worker error is followed by exit. Wait for that event so
       // callers never race the Worker's SQLite/file handles on Windows.
-      workerError = toStringifiedError(error);
+      workerError ??= toStringifiedError(error);
     });
     worker.once("exit", (code) => {
       worker.removeAllListeners();
@@ -334,50 +164,118 @@ function spawnSqliteTranscriptArchiveWorker<Result>(params: {
 
 // Serialize lifecycle archive Workers so this path cannot multiply
 // whole-buffer usage across several Worker heaps at once.
-const sqliteTranscriptArchiveWorkerQueue = new KeyedAsyncQueue();
+const sqliteTranscriptArchiveWorkerQueue = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteTranscriptArchiveWorkerQueue"),
+  () => new KeyedAsyncQueue(),
+);
 const SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY = "lifecycle-archive";
+
+export function runExclusiveSqliteTranscriptArchiveWorker<T>(
+  run: () => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (!signal) {
+    return sqliteTranscriptArchiveWorkerQueue.enqueue(
+      SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY,
+      run,
+    );
+  }
+  return new Promise<T>((resolve, reject) => {
+    let pending: (() => Promise<T>) | undefined = run;
+    const cancel = () => {
+      // Drop execution before releasing the caller's claim; its FIFO slot remains inert.
+      pending = undefined;
+      reject(toStringifiedError(signal.reason));
+    };
+    if (signal.aborted) {
+      cancel();
+      return;
+    }
+    signal.addEventListener("abort", cancel, { once: true });
+    void sqliteTranscriptArchiveWorkerQueue
+      .enqueue(SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY, () => {
+        signal.removeEventListener("abort", cancel);
+        const admitted = pending;
+        pending = undefined;
+        if (!admitted) {
+          throw toStringifiedError(signal.reason);
+        }
+        // Once admitted, even a revoked request must join its physical settlement.
+        return admitted();
+      })
+      .then(resolve, reject);
+  });
+}
+
+export function runSqliteTranscriptArchiveWorkerOperation<Result>(
+  params: TranscriptArchiveWorkerOperation<Result>,
+): Promise<Result[]> {
+  return runExclusiveSqliteTranscriptArchiveWorker(() => {
+    params.assertCurrent?.();
+    return spawnSqliteTranscriptArchiveWorkerOperation<Result>(params);
+  }, params.signal);
+}
 
 function runSqliteTranscriptArchiveWorker(
   plans: readonly TranscriptArchiveWorkerPlan[],
 ): Promise<TranscriptArchiveWorkerResult[]> {
-  return sqliteTranscriptArchiveWorkerQueue.enqueue(
-    SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY,
-    () =>
-      spawnSqliteTranscriptArchiveWorker<TranscriptArchiveWorkerResult>({
-        expectedMessageType: "done",
-        workerData: { operation: "materialize", type: "sqlite-transcript-archive-v2", plans },
-      }),
+  const scoped = runScopedSqliteArchiveOperation(
+    { operation: "materialize", plans },
+    createSqliteTranscriptArchiveWorker,
+    runExclusiveSqliteTranscriptArchiveWorker,
   );
+  if (scoped) {
+    return scoped.then((result) => {
+      if (result.type !== "done") {
+        throw new Error("SQLite archive Worker returned another operation's result");
+      }
+      return result.results;
+    });
+  }
+  return runSqliteTranscriptArchiveWorkerOperation<TranscriptArchiveWorkerResult>({
+    expectedMessageType: "done",
+    workerData: { operation: "materialize", type: "sqlite-transcript-archive-v2", plans },
+  });
 }
 
 export function runSqliteTranscriptArchivePublishWorker(
   plans: readonly TranscriptArchivePublishPlan[],
 ): Promise<TranscriptArchivePublishResult[]> {
-  return sqliteTranscriptArchiveWorkerQueue.enqueue(
-    SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY,
-    () =>
-      spawnSqliteTranscriptArchiveWorker<TranscriptArchivePublishResult>({
-        expectedMessageType: "published",
-        workerData: { operation: "publish", type: "sqlite-transcript-archive-v2", plans },
-      }),
+  const scoped = runScopedSqliteArchiveOperation(
+    { operation: "publish", plans },
+    createSqliteTranscriptArchiveWorker,
+    runExclusiveSqliteTranscriptArchiveWorker,
   );
+  if (scoped) {
+    return scoped.then((result) => {
+      if (result.type !== "published") {
+        throw new Error("SQLite archive Worker returned another operation's result");
+      }
+      return result.results;
+    });
+  }
+  return runSqliteTranscriptArchiveWorkerOperation<TranscriptArchivePublishResult>({
+    expectedMessageType: "published",
+    workerData: { operation: "publish", type: "sqlite-transcript-archive-v2", plans },
+  });
 }
 
-function validateEmptyTranscriptArchivePlan(plan: TranscriptArchiveWorkerPlan): void {
-  const opened = withOpenClawAgentDatabaseReadOnly(
-    (database) => readSessionStateDeleteSnapshot(database.db, plan.sessionId),
-    { agentId: plan.agentId, path: plan.databasePath },
+export async function runSqliteTranscriptArchiveReadWorker(
+  plans: readonly TranscriptArchiveReadPlan[],
+): Promise<TranscriptArchiveReadResult[]> {
+  const scoped = runScopedSqliteArchiveOperation(
+    { operation: "read-final", plans },
+    createSqliteTranscriptArchiveWorker,
+    runExclusiveSqliteTranscriptArchiveWorker,
   );
-  if (!opened.found) {
-    throw new Error(
-      `Cannot archive SQLite transcript ${plan.sessionId}: ${opened.reason.replaceAll("-", " ")}`,
-    );
+  if (!scoped) {
+    throw new Error("SQLite archive reads require their captured database scope");
   }
-  if (!sqliteSessionStateDeleteSnapshotsEqual(opened.value, plan.snapshot)) {
-    throw new Error(
-      `SQLite session state changed before archive materialization for ${plan.sessionId}`,
-    );
+  const result = await scoped;
+  if (result.type !== "final-read") {
+    throw new Error("SQLite archive Worker returned another operation's result");
   }
+  return result.results;
 }
 
 // Reads and encodes one consistent generation outside SQLite write transactions
@@ -387,21 +285,9 @@ export async function materializeSessionStateDeletePlans(
   plans: readonly SessionStateDeletePlan[],
 ): Promise<MaterializedSessionStateDeletePlan[]> {
   const deduped = dedupeSqliteSessionStateDeletePlans(plans);
-  const workerResults: TranscriptArchiveWorkerResult[] = [];
-  const workerPlans: TranscriptArchiveWorkerPlan[] = [];
-  for (const archivePlan of deduped.filter((plan) => plan.archiveTranscript)) {
-    if (archivePlan.snapshot.lastSeq === null) {
-      // Empty transcripts still need a fresh snapshot fence, but have no bytes
-      // to encode off-thread and should not pay Worker startup latency.
-      validateEmptyTranscriptArchivePlan(archivePlan);
-      workerResults.push({ archive: null, sessionId: archivePlan.sessionId });
-      continue;
-    }
-    workerPlans.push(archivePlan);
-  }
-  if (workerPlans.length > 0) {
-    workerResults.push(...(await runSqliteTranscriptArchiveWorker(workerPlans)));
-  }
+  const workerPlans = deduped.filter((plan) => plan.archiveTranscript);
+  const workerResults =
+    workerPlans.length > 0 ? await runSqliteTranscriptArchiveWorker(workerPlans) : [];
   const resultBySessionId = new Map(workerResults.map((result) => [result.sessionId, result]));
 
   return deduped.map((plan) => {

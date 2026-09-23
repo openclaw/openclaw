@@ -1,4 +1,3 @@
-// Feishu plugin module implements reply dispatcher behavior.
 import { formatReasoningMessage, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
@@ -8,7 +7,6 @@ import {
 import {
   createChannelMessageReplyPipeline,
   formatChannelProgressDraftLineForEntry,
-  isChannelProgressDraftWorkToolName,
   resolveChannelPreviewStreamMode,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -20,6 +18,7 @@ import {
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
+import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 import type { ClawdbotConfig, OutboundIdentity, ReplyPayload, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
@@ -33,6 +32,7 @@ import type { MentionTarget } from "./mention-target.types.js";
 import {
   consumeFeishuPresentationFallbackMarker,
   renderFeishuReplyPayload,
+  withinCardTableLimit,
 } from "./presentation-card.js";
 import {
   createFeishuPartialReplyDeliveryError,
@@ -998,26 +998,39 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
     const cardHeader = resolveCardHeader(agentId, identity);
     const cardNote = resolveCardNote(agentId, identity, responsePrefixContextProvider());
+    const useRecoveryCard = withinCardTableLimit(content);
     return await sendChunkedTextReply({
       text: content,
-      useCard: true,
+      useCard: useRecoveryCard,
       infoKind,
       header: cardHeader,
       note: cardNote,
       chunkMentions: requiredMentionTargets,
       sendChunk: async ({ chunk, mentions }) =>
-        await sendStructuredCardFeishu({
-          cfg,
-          to: sendTarget,
-          text: chunk,
-          replyToMessageId: sendReplyToMessageId,
-          replyInThread: effectiveReplyInThread,
-          allowTopLevelReplyFallback,
-          accountId,
-          header: cardHeader,
-          note: cardNote,
-          ...(mentions ? { mentions } : {}),
-        }),
+        useRecoveryCard
+          ? await sendStructuredCardFeishu({
+              cfg,
+              to: sendTarget,
+              text: chunk,
+              replyToMessageId: sendReplyToMessageId,
+              replyInThread: effectiveReplyInThread,
+              allowTopLevelReplyFallback,
+              accountId,
+              header: cardHeader,
+              note: cardNote,
+              ...(mentions ? { mentions } : {}),
+            })
+          : await sendMessageFeishu({
+              cfg,
+              to: sendTarget,
+              text: chunk,
+              preparedPostText: true,
+              replyToMessageId: sendReplyToMessageId,
+              replyInThread: effectiveReplyInThread,
+              allowTopLevelReplyFallback,
+              accountId,
+              ...(mentions ? { mentions } : {}),
+            }),
     });
   };
 
@@ -1381,17 +1394,18 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         );
       const finalTextExceedsStreamingLimit =
         info?.kind === "final" && hasText && text.length > textChunkLimit;
-      const useStaticCard =
-        hasText &&
-        (renderMode === "card" ||
-          (info?.kind === "block" && coreBlockStreamingEnabled && renderMode !== "raw") ||
-          (renderMode === "auto" && shouldUseCard(text)));
+      // Feishu's table ceiling applies to static card elements, not CardKit's streamed markdown.
+      // Keep the intents separate so an active preview cannot fork into an independent post.
+      const cardRenderingRequested =
+        renderMode === "card" ||
+        (info?.kind === "block" && coreBlockStreamingEnabled && renderMode !== "raw") ||
+        (renderMode === "auto" && shouldUseCard(text));
+      const useStaticCard = hasText && cardRenderingRequested && withinCardTableLimit(text);
       const useStreamingCard =
         hasText &&
         streamingEnabled &&
         !finalTextExceedsStreamingLimit &&
-        (info?.kind === "final" || useStaticCard);
-      const useCard = useStaticCard || useStreamingCard;
+        (info?.kind === "final" || cardRenderingRequested);
       const skipTextForDuplicateFinal =
         !hasIndependentPresentation &&
         info?.kind === "final" &&
@@ -1559,7 +1573,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           );
         }
 
-        if (useCard) {
+        // Streaming eligibility can still fall back to a static card, so the provider ceiling
+        // also applies when startup is unavailable or another generation is closing.
+        const useFallbackCard =
+          useStaticCard ||
+          (useStreamingCard &&
+            !isStreamingStartBackedOff(account.accountId) &&
+            withinCardTableLimit(text));
+        if (useFallbackCard) {
           const cardHeader = resolveCardHeader(agentId, identity);
           const cardNote = resolveCardNote(agentId, identity, responsePrefixContextProvider());
           deliveredResults.push(
@@ -1657,28 +1678,21 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           }
         : undefined,
       onReasoningEnd: reasoningPreviewEnabled ? () => false : undefined,
-      onToolStart: previewStreamingEnabled
-        ? (payload: {
-            name?: string;
-            phase?: string;
-            args?: Record<string, unknown>;
-            detailMode?: "explain" | "raw";
-          }) => {
-            if (!isChannelProgressDraftWorkToolName(payload.name)) {
+      onItemEvent: previewStreamingEnabled
+        ? (payload: Parameters<NonNullable<GetReplyOptions["onItemEvent"]>>[0]) => {
+            if (
+              payload.kind === "preamble" ||
+              payload.hideFromChannelProgress ||
+              payload.suppressChannelProgress
+            ) {
               return false;
             }
-            const statusLineLocal = formatChannelProgressDraftLineForEntry(
-              account.config,
-              {
-                event: "tool",
-                name: payload.name,
-                phase: payload.phase,
-                args: payload.args,
-              },
-              {
-                detailMode: payload.detailMode,
-              },
-            );
+            const { kind: itemKind, ...item } = payload;
+            const statusLineLocal = formatChannelProgressDraftLineForEntry(account.config, {
+              event: "item",
+              itemKind,
+              ...item,
+            });
             if (statusLineLocal) {
               return updateStreamingStatusLine(statusLineLocal);
             }

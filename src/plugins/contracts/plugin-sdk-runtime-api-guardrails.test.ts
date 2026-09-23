@@ -42,6 +42,8 @@ const UNGUARDED_RUNTIME_API_PLUGIN_IDS = [
 ] as const;
 
 const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
+  [contractPluginPath({ rootDir: ROOT_DIR, pluginId: "facetime", relativePath: "runtime-api.ts" })]:
+    ['export { createFaceTimeRuntime, type FaceTimeRuntime } from "./src/runtime.js";'],
   [contractPluginPath({
     rootDir: ROOT_DIR,
     pluginId: "diagnostics-otel",
@@ -472,14 +474,14 @@ describe("runtime api guardrails", () => {
     ]);
   });
 
-  it("keeps Matrix's narrow runtime-setter entrypoint pinned to a single export", () => {
+  it("keeps Matrix's runtime-setter entrypoint limited to registration helpers", () => {
     const setterFile = contractPluginPath({
       rootDir: ROOT_DIR,
       pluginId: "matrix",
       relativePath: "runtime-setter-api.ts",
     });
     expect(readExportStatements(setterFile)).toEqual([
-      'export { setMatrixRuntime } from "./src/runtime.js";',
+      'export { setMatrixRuntime, setMatrixRuntimeLifecycle } from "./src/runtime.js";',
     ]);
   });
 

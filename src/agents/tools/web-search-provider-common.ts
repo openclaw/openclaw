@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
-import { createProviderErrorTextRedactor } from "../provider-http-errors.js";
+import { createProviderErrorTextRedactor, ProviderHttpError } from "../provider-http-errors.js";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_TIMEOUT_SECONDS,
@@ -71,16 +71,6 @@ export function resolveSearchCount(value: unknown, fallback: number): number {
 
 export function readConfiguredSecretString(value: unknown, path: string): string | undefined {
   return normalizeSecretInput(normalizeResolvedSecretInputString({ value, path })) || undefined;
-}
-
-export function readProviderEnvValue(envVars: string[]): string | undefined {
-  for (const envVar of envVars) {
-    const value = normalizeSecretInput(process.env[envVar]);
-    if (value) {
-      return value;
-    }
-  }
-  return undefined;
 }
 
 export async function withTrustedWebSearchEndpoint<T>(
@@ -156,7 +146,9 @@ export async function throwWebSearchApiError(
   const message = redact(detail.text || res.statusText, {
     truncated: Boolean(detail.text) && detail.truncated,
   });
-  throw new Error(`${providerLabel} API error (${res.status}): ${message}`);
+  throw new ProviderHttpError(`${providerLabel} API error (${res.status}): ${message}`, {
+    status: res.status,
+  });
 }
 
 export function resolveSiteName(url: string | undefined): string | undefined {

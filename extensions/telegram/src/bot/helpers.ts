@@ -1,10 +1,6 @@
 // Telegram helper module supports helpers behavior.
 import type { Chat, Message } from "grammy/types";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  resolveCommandAuthorization,
-  type CommandAuthorization,
-} from "openclaw/plugin-sdk/command-auth-native";
 import type {
   OpenClawConfig,
   DmPolicy,
@@ -573,33 +569,6 @@ export function isTelegramCommandsAllowFromConfigured(cfg: OpenClawConfig): bool
   );
 }
 
-export function resolveTelegramCommandAuthorization(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  chatId: number;
-  isGroup: boolean;
-  threadSpec: TelegramThreadSpec;
-  senderId?: string;
-  senderUsername?: string;
-}): CommandAuthorization {
-  return resolveCommandAuthorization({
-    ctx: {
-      Provider: "telegram",
-      Surface: "telegram",
-      OriginatingChannel: "telegram",
-      AccountId: params.accountId,
-      ChatType: params.isGroup ? "group" : "direct",
-      From: params.isGroup
-        ? buildTelegramGroupFrom(params.chatId, params.threadSpec)
-        : `telegram:${params.chatId}`,
-      SenderId: params.senderId || undefined,
-      SenderUsername: params.senderUsername || undefined,
-    },
-    cfg: params.cfg,
-    commandAuthorized: false,
-  });
-}
-
 /**
  * Build parentPeer for forum topic binding inheritance.
  * When a message comes from a forum topic, the peer ID includes the topic suffix
@@ -666,6 +635,11 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   }
 
   const replyLike = reply ?? externalReply;
+  const externalOrigin = reply ? undefined : msg.external_reply?.origin;
+  const senderMessage =
+    replyLike && externalOrigin?.type === "user"
+      ? { ...replyLike, from: externalOrigin.sender_user }
+      : replyLike;
   const replyMedia = resolveTelegramPrimaryMedia(replyLike);
   const rawReplyText =
     replyLike && typeof replyLike.text === "string"
@@ -693,7 +667,7 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   if (!body && !replyMedia && !filteredQuoteText && !filteredReplyText) {
     return null;
   }
-  const sender = replyLike ? buildSenderName(replyLike) : undefined;
+  const sender = senderMessage ? buildSenderName(senderMessage) : undefined;
   const senderLabel = sender ?? "unknown sender";
   const source = reply ? "reply_to_message" : "external_reply";
   const quotePosition =
@@ -709,8 +683,8 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   return {
     id: replyLike?.message_id ? String(replyLike.message_id) : undefined,
     sender: senderLabel,
-    senderId: replyLike?.from?.id != null ? String(replyLike.from.id) : undefined,
-    senderUsername: replyLike?.from?.username ?? undefined,
+    senderId: senderMessage?.from?.id != null ? String(senderMessage.from.id) : undefined,
+    senderUsername: senderMessage?.from?.username ?? undefined,
     body: body || undefined,
     mediaType: replyMedia?.kind,
     kind,

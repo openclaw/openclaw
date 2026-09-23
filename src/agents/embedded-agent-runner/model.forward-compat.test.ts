@@ -28,8 +28,10 @@ afterEach(async () => {
   }
 });
 
-vi.mock("../../plugins/provider-external-auth.js", () => ({
-  resolveExternalAuthProfilesWithPlugins: () => [],
+vi.mock("../../plugins/provider-external-auth-core.js", () => ({
+  createProviderExternalAuthResolver: () => ({
+    resolveExternalAuthProfilesWithPlugins: () => [],
+  }),
 }));
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
@@ -124,9 +126,9 @@ function createRegistry(
   } as never;
 }
 
-function runAnthropicOpusForwardCompatFallback() {
+async function runAnthropicOpusForwardCompatFallback() {
   expectResolvedForwardCompatFallbackWithRegistryResult({
-    result: resolveModelWithRegistry({
+    result: await resolveModelWithRegistry({
       provider: "anthropic",
       modelId: "claude-opus-4-6",
       agentDir: state.agentDir(),
@@ -143,9 +145,9 @@ function runAnthropicOpusForwardCompatFallback() {
   });
 }
 
-function runAnthropicSonnetForwardCompatFallback() {
+async function runAnthropicSonnetForwardCompatFallback() {
   expectResolvedForwardCompatFallbackWithRegistryResult({
-    result: resolveModelWithRegistry({
+    result: await resolveModelWithRegistry({
       provider: "anthropic",
       modelId: "claude-sonnet-4-6",
       agentDir: state.agentDir(),
@@ -162,11 +164,11 @@ function runAnthropicSonnetForwardCompatFallback() {
   });
 }
 
-function runClaudeCliSonnetForwardCompatFallback() {
+async function runClaudeCliSonnetForwardCompatFallback() {
   // claude-cli uses Anthropic templates but must preserve the requested provider
   // so downstream auth/transport stays on the CLI integration.
   expectResolvedForwardCompatFallbackWithRegistryResult({
-    result: resolveModelWithRegistry({
+    result: await resolveModelWithRegistry({
       provider: "claude-cli",
       modelId: "claude-sonnet-4-6",
       agentDir: state.agentDir(),
@@ -186,8 +188,8 @@ function runClaudeCliSonnetForwardCompatFallback() {
   });
 }
 
-function runZaiForwardCompatFallback() {
-  const result = resolveModelWithRegistry({
+async function runZaiForwardCompatFallback() {
+  const result = await resolveModelWithRegistry({
     provider: ZAI_GLM5_CASE.provider,
     modelId: ZAI_GLM5_CASE.id,
     agentDir: state.agentDir(),

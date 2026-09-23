@@ -19,12 +19,12 @@ For the short announcement and operator summary, see [BlueBubbles removal and th
 
 The shortest safe path when you already know your old BlueBubbles config:
 
-1. Install the official plugin with `openclaw plugins install @openclaw/imessage`, then restart the Gateway.
+1. Install the official plugin with `openclaw plugins install @openclaw/imessage` and check the [application result](/plugins/manage-plugins#apply-changes-and-inspect).
 2. Verify `imsg` directly on the Mac that runs Messages.app (`imsg chats`, `imsg history`, `imsg send`, `imsg rpc --help`).
 3. Copy behavior keys from `channels.bluebubbles` to `channels.imessage`: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`, `includeAttachments`, `attachmentRoots`, `mediaMaxMb`, `textChunkLimit`, and `actions`.
 4. Drop transport keys that no longer exist: `serverUrl`, `password`, webhook URLs, and BlueBubbles server setup.
 5. If the Gateway is not running on the Messages Mac, set `channels.imessage.cliPath` to the absolute Gateway-local path of an SSH wrapper and keep `dbPath` as an absolute path on that Mac. Set `remoteHost` to the Messages Mac for complex wrappers; OpenClaw auto-detects the simple transparent wrapper shape for compatibility.
-6. Enable `channels.imessage`, restart the Gateway, then run `openclaw channels status --probe --channel imessage`.
+6. Enable `channels.imessage`, then run `openclaw channels status --probe --channel imessage`. Config changes follow [hot reload](/gateway/configuration/hot-reload); start the Gateway if it is offline.
 7. Test one DM, one allowed group, attachments if enabled, and every private API action you expect the agent to use.
 8. Delete the BlueBubbles server and the old `channels.bluebubbles` config after the iMessage path is verified.
 
@@ -174,10 +174,9 @@ This admits the configured senders in any group. Add `groups` entries to scope a
    }
    ```
 
-2. **Cut over and probe.** Set `channels.imessage.enabled: true`, restart the Gateway, and confirm the channel reports healthy:
+2. **Cut over and probe.** Set `channels.imessage.enabled: true`, let [hot reload](/gateway/configuration/hot-reload) apply the change, and confirm the channel reports healthy:
 
    ```bash
-   openclaw gateway restart
    openclaw channels status --probe --channel imessage   # expect "works"; --json shows privateApi.available: true
    ```
 
@@ -220,7 +219,7 @@ iMessage recovers messages missed while the gateway was down: on startup it repl
 
 ## No rollback channel
 
-There is no supported BlueBubbles runtime to switch back to. If iMessage verification fails, set `channels.imessage.enabled: false`, restart the Gateway, fix the `imsg` blocker, and retry the cutover.
+There is no supported BlueBubbles runtime to switch back to. If iMessage verification fails, set `channels.imessage.enabled: false`, verify the channel has stopped with `openclaw channels status`, fix the `imsg` blocker, and retry the cutover. If automatic config reload is off, follow [manual application](/gateway/configuration/hot-reload).
 
 The reply cache lives in SQLite plugin state. `openclaw doctor --fix` imports and archives the old `imessage/reply-cache.jsonl` sidecar when present.
 
@@ -230,4 +229,4 @@ The reply cache lives in SQLite plugin state. `openclaw doctor --fix` imports an
 - [iMessage](/channels/imessage) — full iMessage channel reference, including `imsg launch` setup and capability detection.
 - `/channels/bluebubbles` — legacy URL that redirects to this migration guide.
 - [Pairing](/channels/pairing) — DM authentication and pairing flow.
-- [Channel Routing](/channels/channel-routing) — how the gateway picks a channel for outbound replies.
+- [Channel routing](/channels/channel-routing) — how the gateway picks a channel for outbound replies.

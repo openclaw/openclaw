@@ -2,19 +2,44 @@
 
 install_update_restart_systemctl_shim() {
   local shim_dir="$npm_config_prefix/bin"
+  export XDG_RUNTIME_DIR="$shim_dir/runtime"
+  export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+  local manager_env
+  manager_env="$(node <<'MANAGER_ENV'
+const keys = [
+  "CI", "OPENCLAW_NO_ONBOARD", "OPENCLAW_NO_PROMPT", "OPENCLAW_SKIP_PROVIDERS",
+  "OPENCLAW_SKIP_CHANNELS", "OPENCLAW_DISABLE_BONJOUR",
+  "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS",
+];
+const captured = Object.fromEntries(keys.map((key) => [key, process.env[key] ?? null]));
+const registry = process.env.NPM_CONFIG_REGISTRY || process.env.npm_config_registry || null;
+for (const key of ["NPM_CONFIG_REGISTRY", "npm_config_registry", "BUN_CONFIG_REGISTRY"]) {
+  captured[key] = registry;
+}
+process.stdout.write(JSON.stringify(captured));
+MANAGER_ENV
+  )" || return "$?"
   mkdir -p "$shim_dir"
   cp "$(dirname "${BASH_SOURCE[0]}")/systemd-fixture.mjs" "$shim_dir/systemd-fixture.mjs"
+  node - "$shim_dir/systemd-fixture-runtime.json" \
+    "${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE:-$shim_dir/systemctl-shim.pid}" \
+    "${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG:-$shim_dir/systemctl-shim-gateway.log}" <<'RUNTIME_PATHS'
+const fs = require("node:fs");
+const [file, pidFile, daemonLog] = process.argv.slice(2);
+fs.writeFileSync(file, JSON.stringify({ pidFile, daemonLog }), { mode: 0o600 });
+RUNTIME_PATHS
   cat >"$shim_dir/busctl" <<'BUSCTL'
 #!/usr/bin/env bash
 exec node "$(dirname "$0")/systemd-fixture.mjs" busctl "$@"
 BUSCTL
-  cat >"$shim_dir/systemctl" <<'SHIM'
-#!/usr/bin/env bash
-set -euo pipefail
-
-log_file="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG:-/tmp/openclaw-systemctl-shim.log}"
-pid_file="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE:-/tmp/openclaw-systemctl-shim.pid}"
-daemon_log="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG:-/tmp/openclaw-systemctl-shim-gateway.log}"
+  # Capture endpoint identity once; projected native clients cannot carry fixture-only env.
+  {
+    printf '#!/usr/bin/env bash\nset -euo pipefail\n'
+    printf 'log_file=%q\n' "${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG:-$shim_dir/systemctl-shim.log}"
+    printf 'pid_file=%q\n' "${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE:-$shim_dir/systemctl-shim.pid}"
+    printf 'daemon_log=%q\n' "${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG:-$shim_dir/systemctl-shim-gateway.log}"
+    printf 'manager_env=%q\n' "$manager_env"
+    cat <<'SHIM'
 supervisor_script="${pid_file}.supervisor.mjs"
 manager_script="$(dirname "$0")/systemd-fixture.mjs"
 printf '%s\n' "$*" >>"$log_file"
@@ -51,6 +76,12 @@ if [ "${#filtered[@]}" -gt 2 ] ||
   exit 1
 fi
 
+case "$command" in
+  stop | start | restart | enable | disable)
+    node "$manager_script" record-caller "${log_file}.callers" "$PPID" "$command"
+    ;;
+esac
+
 is_running() {
   [ -s "$pid_file" ] || return 1
   local pid stat_line stat_tail
@@ -86,6 +117,7 @@ unit_path() {
 start_gateway() {
   local exec_start
   exec_start="$(node "$manager_script" command)"
+  node "$manager_script" begin-start
   rm -f "$pid_file" "$supervisor_script"
   rm -f "${daemon_log}.exit.json"
   cat >"$supervisor_script" <<'SUPERVISOR'
@@ -102,6 +134,12 @@ const output = fs.openSync(daemonLog, "a");
 const childEnv = { ...process.env };
 delete childEnv.OPENCLAW_SYSTEMCTL_SHIM_EXEC_START;
 delete childEnv.OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG;
+const managerEnv = JSON.parse(childEnv.OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV);
+delete childEnv.OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV;
+for (const [key, value] of Object.entries(managerEnv)) {
+  delete childEnv[key];
+  if (value !== null) childEnv[key] = value;
+}
 // systemd does not pass transient systemctl-caller update state into the service.
 for (const key of Object.keys(childEnv)) {
   if (key.startsWith("OPENCLAW_UPDATE_")) {
@@ -114,13 +152,26 @@ const restartWindowMs = 60_000;
 const restartBurst = 5;
 const stopTimeoutMs = 30_000;
 const starts = [];
+let totalStarts = 0;
 let firstExit;
 let child;
 let activeGroupPid;
 let drainingGroupPid;
 let stopping = false;
 
+const publishRuntime = (pid, supervisorPid = process.pid) => {
+  const file = `${daemonLog}.runtime.json`;
+  // Both manager adapters observe the ExecStart child, not this synthetic manager.
+  fs.writeFileSync(`${file}.pending`, JSON.stringify({
+    pid, supervisorPid, groupPid: activeGroupPid ?? 0,
+    restarts: totalStarts - 1, entered: Number(process.hrtime.bigint() / 1000n),
+  }));
+  fs.renameSync(`${file}.pending`, file);
+};
+
 const finish = () => {
+  // Retire normal-exit custody before these numeric process identities can be reused.
+  publishRuntime(0, 0);
   try {
     fs.closeSync(output);
   } catch {}
@@ -161,7 +212,7 @@ const drainProcessGroup = (pid, onStopped) => {
   signalProcessGroup(pid, "SIGTERM");
   const forceKill = setTimeout(() => {
     signalProcessGroup(pid, "SIGKILL");
-    complete();
+    // Signal delivery is not settlement; the existing observer must confirm exit.
   }, stopTimeoutMs);
   const finishWhenStopped = () => {
     if (completed) return;
@@ -201,17 +252,20 @@ const start = () => {
     return finish();
   }
   starts.push(now);
+  totalStarts++;
   child = spawn("bash", ["-c", command], {
     detached: true,
     env: childEnv,
     stdio: ["ignore", output, output],
   });
   activeGroupPid = child.pid;
+  publishRuntime(child.pid ?? 0);
   const childGroupPid = activeGroupPid;
   child.on("error", (error) => {
     fs.writeSync(output, `[systemctl-shim] gateway spawn failed: ${String(error)}\n`);
   });
   child.once("close", (code, signal) => {
+    publishRuntime(0);
     const observed = { code, signal, at: new Date().toISOString() };
     firstExit ??= observed;
     try {
@@ -239,6 +293,7 @@ SUPERVISOR
   # leaves Node in that terminal session and can strand its detached gateway.
   OPENCLAW_SYSTEMCTL_SHIM_EXEC_START="$exec_start" \
     OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG="$daemon_log" \
+    OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV="$manager_env" \
     node --input-type=module - "$supervisor_script" "$pid_file" "${daemon_log}.bootstrap.log" <<'START_SUPERVISOR'
 import fs from "node:fs";
 import { spawn } from "node:child_process";
@@ -282,8 +337,9 @@ case "$command" in
   status)
     [ "$system_scope" = 0 ] || exit 1
     [ -z "$unit_name" ] && exit 0
-    [ "$unit_name" = openclaw-gateway.service ] && is_running && exit 0
-    exit 3
+    [ "$unit_name" = openclaw-gateway.service ] || exit 3
+    node "$manager_script" is-active
+    exit "$?"
     ;;
   stop)
     [ "$system_scope" = 0 ] && [ "$unit_name" = openclaw-gateway.service ] || exit 1
@@ -304,8 +360,8 @@ case "$command" in
     ;;
   is-active)
     [ "$system_scope" = 0 ] && [ "$unit_name" = openclaw-gateway.service ] || exit 1
-    is_running && exit 0
-    exit 3
+    node "$manager_script" is-active
+    exit "$?"
     ;;
   show)
     if [ "$system_scope" = "1" ]; then
@@ -336,21 +392,7 @@ case "$command" in
       load_state="$(node "$manager_script" load-state)"
       printf 'Id=%s\nLoadState=%s\n' "$unit_name" "$load_state"
     fi
-    if is_running; then
-      printf 'ActiveState=active\nSubState=running\nMainPID=%s\n' "$(cat "$pid_file")"
-    else
-      printf 'ActiveState=inactive\nSubState=dead\nMainPID=0\n'
-    fi
-    # Missing observations stay unknown, including bootstrap failures.
-    node - "${daemon_log}.exit.json" <<'EXIT_STATUS'
-const fs = require("node:fs");
-try {
-  const { last } = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-  if (Number.isInteger(last.code) && last.code >= 0 && last.code <= 255) {
-    process.stdout.write(`ExecMainStatus=${last.code}\nExecMainCode=exited\n`);
-  }
-} catch {}
-EXIT_STATUS
+    node "$manager_script" runtime
     exit 0
     ;;
   *)
@@ -359,6 +401,7 @@ EXIT_STATUS
     ;;
 esac
 SHIM
+  } >"$shim_dir/systemctl"
   chmod +x "$shim_dir/systemctl" "$shim_dir/busctl"
   export PATH="$shim_dir:$PATH"
 }
@@ -374,91 +417,6 @@ assert_update_restart_service_replaced() {
     return 1
   fi
   echo "Update-owned fixture restart replaced supervisor $previous_pid with $current_pid."
-}
-
-seed_update_restart_probe_device_auth() {
-  node --input-type=module <<'NODE'
-import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-
-const stateDir = process.env.OPENCLAW_STATE_DIR;
-if (!stateDir) {
-  throw new Error("missing OPENCLAW_STATE_DIR");
-}
-
-const base64UrlEncode = (buf) =>
-  buf.toString("base64").replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
-const ed25519SpkiPrefix = Buffer.from("302a300506032b6570032100", "hex");
-const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
-const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
-const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" });
-const spki = crypto.createPublicKey(publicKeyPem).export({ type: "spki", format: "der" });
-const rawPublicKey =
-  spki.length === ed25519SpkiPrefix.length + 32 &&
-  spki.subarray(0, ed25519SpkiPrefix.length).equals(ed25519SpkiPrefix)
-    ? spki.subarray(ed25519SpkiPrefix.length)
-    : spki;
-const publicKeyRaw = base64UrlEncode(rawPublicKey);
-const deviceId = crypto.createHash("sha256").update(rawPublicKey).digest("hex");
-const token = base64UrlEncode(crypto.randomBytes(32));
-const now = Date.now();
-const scopes = ["operator.read"];
-
-function writeJson(filePath, value) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-  try {
-    fs.chmodSync(filePath, 0o600);
-  } catch {
-  }
-}
-
-writeJson(path.join(stateDir, "identity", "device.json"), {
-  version: 1,
-  deviceId,
-  publicKeyPem,
-  privateKeyPem,
-  createdAtMs: now,
-});
-writeJson(path.join(stateDir, "identity", "device-auth.json"), {
-  version: 1,
-  deviceId,
-  tokens: {
-    operator: {
-      token,
-      role: "operator",
-      scopes,
-      updatedAtMs: now,
-    },
-  },
-});
-writeJson(path.join(stateDir, "devices", "paired.json"), {
-  [deviceId]: {
-    deviceId,
-    publicKey: publicKeyRaw,
-    displayName: "upgrade survivor restart probe",
-    platform: process.platform,
-    clientId: "openclaw-cli",
-    clientMode: "probe",
-    role: "operator",
-    roles: ["operator"],
-    scopes,
-    approvedScopes: scopes,
-    tokens: {
-      operator: {
-        token,
-        role: "operator",
-        scopes,
-        createdAtMs: now,
-      },
-    },
-    createdAtMs: now,
-    approvedAtMs: now,
-  },
-});
-writeJson(path.join(stateDir, "devices", "pending.json"), {});
-NODE
 }
 
 write_update_restart_service_auth_env() {
@@ -477,8 +435,8 @@ write_update_restart_service_auth_env() {
 
 migrate_update_restart_probe_device_auth() {
   local doctor_log="$1" command_timeout="$2"
-  # Both setup paths migrate their probe identity under parked, plugin-disabled
-  # config. The published path runs this before creating migration specimens.
+  # Current-install setup repairs state under parked, plugin-disabled config.
+  # The published-upgrade path leaves its migration specimens to the candidate.
   openclaw_e2e_maybe_timeout \
     "$command_timeout" \
     env \
@@ -603,7 +561,7 @@ prepare_update_restart_probe_current_install() {
 
   echo "Preparing candidate-auth gateway for automatic update restart."
   install_update_restart_systemctl_shim
-  seed_update_restart_probe_device_auth
+  # Use the managed service token; setup may already own a canonical device identity.
   # Service installation persists OPENCLAW_CONFIG_PATH, so isolate the canonical file in place.
   # Keep reload off until the manager owns the installed service and its descendants.
   node "$parking_helper" \
@@ -624,7 +582,7 @@ prepare_update_restart_probe_current_install() {
       failure_stage="doctor"
     }
   if [ "$probe_status" -ne 0 ]; then
-    echo "candidate device identity migration failed" >&2
+    echo "candidate setup Doctor failed" >&2
     openclaw_e2e_print_log "$doctor_log" >&2
   fi
   if [ "$probe_status" -eq 0 ]; then

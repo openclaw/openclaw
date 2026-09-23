@@ -2,7 +2,14 @@ import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { MigrationLogger, MigrationMessages } from "./state-migrations.types.js";
+import type {
+  LegacyStateMigrationStepPlan,
+  LegacyStateMigrationStepReceipt,
+  MigrationLogger,
+  MigrationMessages,
+} from "./state-migrations.types.js";
+import { formatUpdateFailureFact } from "./update-failure-facts-format.js";
+import { normalizeUpdateFailureFacts, type UpdateFailureFact } from "./update-failure-facts.js";
 
 type NoticeSource = { notices?: readonly string[] } | undefined;
 
@@ -52,6 +59,95 @@ export function readStartupMigrationWarning(includeSensitive = true): string | u
 
 export function mergeNotices(sources: NoticeSource[]): string[] {
   return [...new Set(sources.flatMap((source) => (source?.notices ? [...source.notices] : [])))];
+}
+
+export function createLegacyStateMigrationStepReceipt(
+  step: Omit<LegacyStateMigrationStepPlan, "outcome">,
+  result: MigrationMessages,
+): LegacyStateMigrationStepReceipt {
+  const refused = result.warnings.length > 0 && result.warningDisposition !== "recoverable";
+  return {
+    ...step,
+    outcome: refused
+      ? "refused"
+      : result.outcome
+        ? result.outcome
+        : result.warnings.length > 0
+          ? "warning"
+          : result.changes.length > 0
+            ? "completed"
+            : "skipped",
+    changes: result.changes,
+    warnings: result.warnings,
+    ...(result.deferred?.length ? { deferred: result.deferred } : {}),
+    ...(result.sqliteFamilies?.length ? { sqliteFamilies: result.sqliteFamilies } : {}),
+    ...(result.refusedAgentDatabasePaths?.length
+      ? { refusedAgentDatabasePaths: result.refusedAgentDatabasePaths }
+      : {}),
+    ...(result.recoveredAgentDatabasePaths?.length
+      ? { recoveredAgentDatabasePaths: result.recoveredAgentDatabasePaths }
+      : {}),
+    ...(result.notices?.length ? { notices: result.notices } : {}),
+    ...(result.rehearsal ? { rehearsal: result.rehearsal } : {}),
+    ...(refused
+      ? {
+          refusal: step.refusal ?? {
+            code: result.refusedAgentDatabasePaths?.length
+              ? "agent-database-ownership-mismatch"
+              : "step-refused",
+            message: result.warnings.join("\n"),
+          },
+        }
+      : {}),
+  };
+}
+
+export class DoctorStateMigrationRefusalError extends Error {
+  readonly stepReceipts: readonly LegacyStateMigrationStepReceipt[];
+  readonly failureFacts: UpdateFailureFact[];
+
+  constructor(stepReceipts: readonly LegacyStateMigrationStepReceipt[]) {
+    const refused = stepReceipts.filter((receipt) => receipt.outcome === "refused");
+    const isBlocked = (receipt: LegacyStateMigrationStepReceipt) =>
+      receipt.refusal?.code === "blocked-by-prior-refusal" ||
+      receipt.refusal?.code === "blocked-by-agent-database-refusal";
+    const failureFacts = normalizeUpdateFailureFacts(
+      refused
+        .toSorted((left, right) => Number(isBlocked(left)) - Number(isBlocked(right)))
+        .flatMap((receipt) =>
+          receipt.refusal
+            ? [{ check: receipt.id, code: receipt.refusal.code, message: receipt.refusal.message }]
+            : [],
+        ),
+    );
+    const onlyAgentOwnershipRefusals =
+      refused.length > 0 &&
+      refused.every(
+        (receipt) =>
+          receipt.refusal?.code === "agent-database-ownership-mismatch" ||
+          receipt.refusal?.code === "blocked-by-agent-database-refusal",
+      );
+    super(
+      [
+        onlyAgentOwnershipRefusals
+          ? "Doctor stopped because an agent database ownership mismatch remains. Independent state repairs were run; repairs requiring the refused database were skipped. Resolve the reported ownership mismatch before retrying."
+          : "Doctor stopped because a state migration refused to continue. Resolve the reported migration failure before retrying. Later repairs were not run.",
+        ...failureFacts.map(formatUpdateFailureFact),
+      ].join("\n"),
+    );
+    this.name = "DoctorStateMigrationRefusalError";
+    this.stepReceipts = [...stepReceipts];
+    this.failureFacts = failureFacts;
+  }
+}
+
+/** Call after the writer closes its receipts, never from its per-step callback. */
+export function throwIfDoctorStateMigrationRefused(
+  stepReceipts: readonly LegacyStateMigrationStepReceipt[] = [],
+): void {
+  if (stepReceipts.some((receipt) => receipt.outcome === "refused")) {
+    throw new DoctorStateMigrationRefusalError(stepReceipts);
+  }
 }
 
 export function logStateMigrationResult(

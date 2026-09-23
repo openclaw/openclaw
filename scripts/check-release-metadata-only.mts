@@ -6,6 +6,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "../packages/normalization-core/src/stable-stringify.ts";
 import { RELEASE_METADATA_PATHS } from "./changed-lanes.mts";
+import { isReleaseChangelogPath } from "./lib/release-changelog.mjs";
 
 const DEFAULT_GIT_TIMEOUT_MS = 60_000;
 const MAX_GIT_TIMEOUT_MS = 10 * 60_000;
@@ -15,6 +16,7 @@ const VERSION_ONLY_TEXT_PATHS = new Set([
   "apps/android/Config/Version.properties",
   "apps/android/version.json",
   "apps/macos/Sources/OpenClaw/Resources/Info.plist",
+  "apps/mobile/version.json",
 ]);
 
 function normalizePath(input: string) {
@@ -50,9 +52,8 @@ export function parseArgs(argv: string[]) {
   const explicitPaths =
     separatorIndex === -1 ? [] : argv.slice(separatorIndex + 1).map(normalizePath);
   const paths: string[] = [];
-  const args = {
+  const args: { staged: boolean; base?: string; head: string; paths: string[] } = {
     staged: false,
-    base: "origin/main",
     head: "HEAD",
     paths,
   };
@@ -107,8 +108,8 @@ function listChangedPaths(args: ReturnType<typeof parseArgs>) {
     );
   }
   const diffArgs = args.staged
-    ? ["diff", "--cached", "--name-only", "--diff-filter=ACMR"]
-    : ["diff", "--name-only", "--diff-filter=ACMR", `${args.base}...${args.head}`];
+    ? ["diff", "--cached", "--name-only", "--diff-filter=ACMR", ...(args.base ? [args.base] : [])]
+    : ["diff", "--name-only", "--diff-filter=ACMR", `${args.base ?? "origin/main"}...${args.head}`];
   return git(diffArgs)
     .split("\n")
     .map(normalizePath)
@@ -124,7 +125,10 @@ function readBlob(ref: string, filePath: string) {
 }
 
 function refsFor(args: ReturnType<typeof parseArgs>) {
-  return args.staged ? { before: "HEAD", after: "" } : { before: args.base, after: args.head };
+  return {
+    before: args.base ?? (args.staged ? "HEAD" : "origin/main"),
+    after: args.staged ? "" : args.head,
+  };
 }
 
 function readBeforeAfter(args: ReturnType<typeof parseArgs>, filePath: string) {
@@ -170,7 +174,7 @@ export function main(argv: string[] = process.argv.slice(2)) {
   const paths = listChangedPaths(args);
 
   for (const filePath of paths) {
-    if (!RELEASE_METADATA_PATHS.has(filePath)) {
+    if (!RELEASE_METADATA_PATHS.has(filePath) && !isReleaseChangelogPath(filePath)) {
       fail(`${filePath}: not a release metadata path; run the normal changed gate`);
     }
   }

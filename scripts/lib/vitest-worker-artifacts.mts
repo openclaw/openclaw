@@ -2,24 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-// Declaration paths are shared metadata; only the runner imports their build values.
-export const runtimeProcessDeclarationEntries = {
-  "infra/runtime-process-entrypoints": "src/infra/runtime-process-entrypoints.ts",
-  "extensions/memory-core/manager-search-knn-entrypoint":
-    "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
-};
-export const vitestWorkerDeclarationEntries = {
-  ...runtimeProcessDeclarationEntries,
-  "agents/command/cli-compaction-runtime.test-support":
-    "src/agents/command/cli-compaction-runtime.test-support.ts",
-  "cron/owner-hardening-runtime.test-support": "src/cron/owner-hardening-runtime.test-support.ts",
-  "gateway/session-title-retention.test-support":
-    "src/gateway/session-title-retention.test-support.ts",
-  "node-host/config-runtime.test-support": "src/node-host/config-runtime.test-support.ts",
-  "skills/library/persistence-runtime.test-support":
-    "src/skills/library/persistence-runtime.test-support.ts",
-  "tui/tui-pty-runtime-test-support": "src/tui/tui-pty-runtime-test-support.ts",
-};
+import { vitestWorkerDeclarationEntries } from "./vitest-worker-declarations.mts";
 
 export type VitestWorkerDescriptor = { directory: string };
 export type VitestWorkerManifest = {
@@ -27,6 +10,7 @@ export type VitestWorkerManifest = {
   inputs: Record<string, string>;
   outputs: Record<string, string>;
   durationMs: number;
+  cacheSignature?: string;
 };
 const root = fileURLToPath(new URL("../../", import.meta.url));
 export const hashVitestWorkerArtifact = (bytes: string | Buffer) =>
@@ -45,6 +29,7 @@ export const VITEST_WORKER_PREPARE_REPLY = "openclaw:test-subprocesses-prepared"
 export async function verifyVitestWorkerArtifacts(
   directory: string,
   manifest?: VitestWorkerManifest,
+  { inputsChangedAfter }: { inputsChangedAfter?: number } = {},
 ) {
   const completed: VitestWorkerManifest =
     manifest ??
@@ -73,6 +58,13 @@ export async function verifyVitestWorkerArtifacts(
           if (hashVitestWorkerArtifact(await fs.promises.readFile(filename)) !== expected) {
             throw new Error(`${changed}: ${name}`);
           }
+          if (
+            !baseDir &&
+            inputsChangedAfter !== undefined &&
+            (await fs.promises.stat(filename)).ctimeMs >= inputsChangedAfter
+          ) {
+            throw new Error(`${changed}: ${name}`);
+          }
         }),
       );
       const failed = settled.find((result) => result.status === "rejected");
@@ -98,13 +90,14 @@ export function isVitestWorkerDeclaration(id: string): boolean {
 }
 
 /** One finite request over the already-owned Node IPC channel; never a path/build request. */
-export function requestVitestWorkerArtifacts(): Promise<void> {
+export function requestVitestWorkerArtifacts(signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (!process.send || !process.connected) {
       reject(new Error("Compiled subprocess owner IPC is unavailable"));
       return;
     }
     const finish = (error?: Error) => {
+      signal?.removeEventListener("abort", onAbort);
       process.off("message", onMessage);
       process.off("disconnect", onDisconnect);
       process.channel?.unref();
@@ -114,6 +107,7 @@ export function requestVitestWorkerArtifacts(): Promise<void> {
         resolve();
       }
     };
+    const onAbort = () => finish(new Error("Compiled subprocess preparation request canceled"));
     const onDisconnect = () => finish(new Error("Compiled subprocess owner disconnected"));
     const onMessage = (message: unknown) => {
       if (
@@ -127,6 +121,11 @@ export function requestVitestWorkerArtifacts(): Promise<void> {
     };
     process.on("message", onMessage);
     process.once("disconnect", onDisconnect);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
     process.channel?.ref();
     process.send(VITEST_WORKER_PREPARE_REQUEST, (error) => {
       if (error) {

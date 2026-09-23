@@ -1,6 +1,7 @@
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
+import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedTelegramAccount } from "./accounts.js";
@@ -13,6 +14,7 @@ import {
   logTelegramOutboundSendOk,
   resolveAcceptedReplyToMessageId,
   sendLogger,
+  toAcceptedThreadScopedParams,
   type TelegramApi,
   type TelegramThreadScopedParams,
 } from "./send-context.js";
@@ -126,10 +128,6 @@ export function createTelegramTextSender(config: {
     };
 
     const start = sender.parts.length;
-    let lastAcceptedParams:
-      | TelegramThreadScopedParams
-      | TelegramRichMessageContextParams
-      | undefined;
     let acceptedReplyToMessageId: number | undefined;
     const deliveryResults: TelegramSendResult[] = [];
     let pendingChunk: PendingChunk | undefined;
@@ -162,7 +160,7 @@ export function createTelegramTextSender(config: {
         finalPart,
       );
       if (keyboardError !== undefined) {
-        // finish() routes this through tracker.fail(), which preserves the
+        // finish() routes this through sender.fail(), which preserves the
         // accepted message IDs in a partial-delivery error.
         if (keyboardError instanceof Error) {
           throw keyboardError;
@@ -187,12 +185,11 @@ export function createTelegramTextSender(config: {
       hasInlineKeyboard: boolean;
     }) => {
       const { messageId } = params;
-      lastAcceptedParams = params.acceptedParams;
       acceptedReplyToMessageId ??= resolveAcceptedReplyToMessageId(params.acceptedParams);
       if (sender.parts.length === start + 1) {
         await beforeFirstAccepted?.();
       }
-      recordSentMessage(chatId, messageId, cfg, {
+      await recordSentMessage(chatId, messageId, cfg, {
         accountId: account.accountId,
         agentId: ownerAgentId,
       });
@@ -234,7 +231,7 @@ export function createTelegramTextSender(config: {
           messageId: lastMessageId,
           operation,
           deliveryKind: "text",
-          messageThreadId: lastAcceptedParams?.message_thread_id,
+          messageThreadId: toAcceptedThreadScopedParams(last?.acceptedParams)?.message_thread_id,
           replyToMessageId: opts.replyToMessageId,
           silent: opts.silent,
           chunkCount: parts.length,
@@ -297,13 +294,19 @@ export function createTelegramTextSender(config: {
       partialDeliveryResult: delivery.partialDeliveryResult,
     };
     const alreadyUsed = options.replyToAlreadyUsed === true;
-    const maxChars = useRichMessages
-      ? resolveTelegramTextChunkLimit({ cfg, accountId: account.accountId })
-      : 4000;
+    const maxChars = Math.min(
+      opts.textLimit ?? Number.POSITIVE_INFINITY,
+      resolveTelegramTextChunkLimit({
+        cfg,
+        accountId: account.accountId,
+        ...(textMode === "html" ? { formatting: { parseMode: "HTML" } } : {}),
+      }),
+    );
     const pages = planTelegramTextDeliveryPages({
       text: textMode === "html" ? renderHtmlText(rawText) : rawText,
       maxChars,
       tableMode,
+      chunkMode: opts.chunkMode ?? resolveChunkMode(cfg, "telegram", account.accountId),
       richMessages: useRichMessages,
       skipEntityDetection: account.config.linkPreview === false,
       ...(textMode === "html" ? { textMode: "html" as const } : {}),
@@ -331,7 +334,7 @@ export function createTelegramTextSender(config: {
       });
       return await delivery.finish(useRichMessages ? "sendRichMessage" : "sendMessage");
     } catch (error) {
-      // Terminal/ambiguous failures escape tracker.reject before its invalidate
+      // Terminal/ambiguous failures escape chunk rejection before its invalidate
       // branch; the projection cursor must not claim clean custody for pages
       // that never landed (main's pre-centralization outer-catch contract).
       if (isChannelPartialDeliveryError(error) || !isTelegramEmptyContentError(error)) {

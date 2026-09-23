@@ -136,28 +136,81 @@ export function saveStoredZaloCredentials(
   });
 }
 
-export function refreshStoredZaloCredentials(
-  profile: string,
-  credentials: Omit<StoredZaloCredentials, "profile">,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  const normalizedProfile = normalizeZalouserCredentialProfile(profile);
-  const store = openZalouserCredentialsStore(env);
-  const update = store.update;
-  if (!update) {
-    throw new Error("Zalo credential refresh requires atomic plugin-state updates");
-  }
-  let saved = true;
-  update(zalouserCredentialStoreKey(normalizedProfile), (current) => {
-    // Background refreshes can finish after logout. Preserve the revocation;
-    // only an explicit QR login may replace it with a new authenticated session.
-    if (isZaloCredentialRevocation(current, normalizedProfile)) {
-      saved = false;
-      return current;
-    }
-    return { profile: normalizedProfile, ...credentials };
+function openAsyncZalouserCredentialsStore(env: NodeJS.ProcessEnv) {
+  return getZalouserRuntime().state.openKeyedStore<ZaloCredentialStateRecord>({
+    namespace: ZALOUSER_CREDENTIALS_NAMESPACE,
+    maxEntries: ZALOUSER_CREDENTIALS_MAX_ENTRIES,
+    overflowPolicy: "reject-new",
+    env,
   });
-  return saved;
+}
+
+export async function loadStoredZaloCredentialsAsync(
+  profile: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<StoredZaloCredentials | null> {
+  const normalizedProfile = normalizeZalouserCredentialProfile(profile);
+  const store = openAsyncZalouserCredentialsStore(env);
+  return normalizeStoredZaloCredentials(
+    await store.lookup(zalouserCredentialStoreKey(normalizedProfile)),
+    normalizedProfile,
+  );
+}
+
+export async function refreshStoredZaloCredentials(
+  profile: string,
+  credentials: Omit<StoredZaloCredentials, "profile" | "createdAt" | "lastUsedAt">,
+  isCurrent: () => boolean,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<StoredZaloCredentials | null> {
+  const normalizedProfile = normalizeZalouserCredentialProfile(profile);
+  const store = openAsyncZalouserCredentialsStore(env);
+  const key = zalouserCredentialStoreKey(normalizedProfile);
+  const now = new Date().toISOString();
+  const prepare = (
+    current: ZaloCredentialStateRecord | undefined,
+  ): StoredZaloCredentials | null => {
+    if (!isCurrent() || isZaloCredentialRevocation(current, normalizedProfile)) {
+      return null;
+    }
+    const existing = normalizeStoredZaloCredentials(current, normalizedProfile);
+    return {
+      ...credentials,
+      profile: normalizedProfile,
+      createdAt: existing?.createdAt ?? now,
+      lastUsedAt: now,
+    };
+  };
+  if (!store.observe || !store.compareAndApply) {
+    // The plugin still supports released hosts predating atomic worker comparisons.
+    if (!store.update) {
+      throw new Error("Zalo credential refresh requires atomic plugin-state updates");
+    }
+    let saved: StoredZaloCredentials | null = null;
+    await store.update(key, (current) => {
+      saved = prepare(current);
+      return saved ?? undefined;
+    });
+    return isCurrent() ? saved : null;
+  }
+  let observed = await store.observe(key);
+  while (isCurrent()) {
+    // Logout's durable marker also fences a refresh already dispatched to the worker.
+    const next = prepare(observed.value);
+    if (!next) {
+      return null;
+    }
+    const result = await store.compareAndApply(key, observed.comparison, {
+      operation: "update",
+      action: "set",
+      value: next,
+    });
+    if (result.status !== "conflict") {
+      return isCurrent() ? next : null;
+    }
+    observed = result.current;
+  }
+  return null;
 }
 
 export function clearStoredZaloCredentials(

@@ -1,8 +1,6 @@
 // Memory Core tests cover manager sync ops.startup-catchup plugin behavior.
 import { AsyncLocalStorage } from "node:async_hooks";
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
@@ -20,24 +18,25 @@ import {
   appendSessionTranscriptMessageByIdentity,
   publishSessionTranscriptUpdateByIdentity,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   SessionStartupCatchupHarness,
   emitSessionTranscriptUpdate,
-  restoreStartupEnv,
-  setStartupConfigPath,
-  setStartupStateDir,
   startupHarnessDatabases,
   resetTranscriptUpdateListener,
 } from "./manager-sync-ops.startup-catchup.test-support.js";
 
 describe("session startup catch-up", () => {
   let stateDir = "";
+  let testState: OpenClawTestState;
 
   beforeEach(async () => {
-    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-startup-"));
-    setStartupStateDir(stateDir);
+    testState = await createOpenClawTestState({
+      prefix: "openclaw-session-startup-",
+      layout: "state-only",
+    });
+    stateDir = testState.stateDir;
     resetTranscriptUpdateListener();
   });
 
@@ -45,19 +44,15 @@ describe("session startup catch-up", () => {
     vi.clearAllTimers();
     vi.useRealTimers();
     resetTranscriptUpdateListener();
-    restoreStartupEnv();
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
     for (const database of startupHarnessDatabases) {
       database.close();
     }
     startupHarnessDatabases.clear();
-    closeOpenClawAgentDatabasesForTest();
-    // Closing the agent databases releases their leases through shared state, which
-    // reopens it, so the shared handle has to be released after that and before the
-    // removal or Windows fails the unlink with EBUSY.
+    await testState.restoreEnv();
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
     resetPluginStateStoreForTests();
-    await fs.rm(stateDir, { recursive: true, force: true });
+    await testState.cleanup();
   });
 
   async function writeSessionFile(
@@ -82,10 +77,8 @@ describe("session startup catch-up", () => {
   }
 
   async function configureTestSessionStore(storePath: string): Promise<void> {
-    const configPath = path.join(stateDir, "openclaw.json");
     await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(configPath, JSON.stringify({ session: { store: storePath } }), "utf-8");
-    setStartupConfigPath(configPath);
+    await testState.writeConfig({ session: { store: storePath } });
     clearRuntimeConfigSnapshot();
     clearConfigCache();
   }
@@ -174,6 +167,9 @@ describe("session startup catch-up", () => {
     await harness.waitForSessionSync();
 
     expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
+    expect(harness.deletedSources).toEqual([
+      { path: stalePath, source: "sessions", expectedHash: "stale-hash" },
+    ]);
     expect(harness.getIndexedSourceState(stalePath)).toBeUndefined();
   });
 
@@ -186,9 +182,7 @@ describe("session startup catch-up", () => {
     const scanError = Object.assign(new Error("transient session archive scan failure"), {
       code: "EIO",
     });
-    const readdirSpy = vi.spyOn(fsSync, "readdirSync").mockImplementation(() => {
-      throw scanError;
-    });
+    const readdirSpy = vi.spyOn(fs, "readdir").mockRejectedValue(scanError);
 
     try {
       const catchUp = harness.catchUp();
@@ -196,6 +190,7 @@ describe("session startup catch-up", () => {
       await expect(catchUp).rejects.toBe(scanError);
       await expect(corpusList).rejects.toBe(scanError);
       expect(harness.syncCalls).toEqual([]);
+      expect(harness.deletedSources).toEqual([]);
       expect(harness.getIndexedSourceState(stalePath)).toEqual({
         path: stalePath,
         hash: "preserved-hash",
@@ -276,7 +271,7 @@ describe("session startup catch-up", () => {
     const harness = new SessionStartupCatchupHarness([
       {
         path: state.path,
-        hash: "current-hash",
+        hash: `sqlite:${state.revisionMs}:current-hash`,
         mtime: state.mtimeMs,
         size: state.size,
       },
@@ -389,7 +384,7 @@ describe("session startup catch-up", () => {
     expect(restarted.indexedPaths).toEqual([]);
   });
 
-  it("indexes a SQLite transcript whose updatedAt rolled back", async () => {
+  it("upgrades an indexed SQLite activity fingerprint during startup catch-up", async () => {
     const session = await writeSqliteSession({
       content: "SQLite rollback",
       updatedAt: 10,
@@ -424,7 +419,7 @@ describe("session startup catch-up", () => {
     expect(harness.indexedContents).toEqual(["User: SQLite rollback"]);
   });
 
-  it("converges an unchanged SQLite updatedAt rollback after deferred session sync", async () => {
+  it("converges a legacy SQLite activity fingerprint without reindexing unchanged text", async () => {
     const session = await writeSqliteSession({ updatedAt: 10 });
     const entry = await buildSessionEntry(session.sessionKey, {
       agentId: "main",
@@ -459,7 +454,7 @@ describe("session startup catch-up", () => {
     expect(harness.indexedContents).toEqual([]);
     expect(harness.getIndexedSourceState(entry.path)).toEqual({
       path: entry.path,
-      hash: entry.hash,
+      hash: `sqlite:${entry.revisionMs}:${entry.hash}`,
       mtime: entry.mtimeMs,
       size: entry.size,
     });
@@ -667,6 +662,7 @@ describe("session startup catch-up", () => {
       expect(timerContexts).toEqual([{ turn: undefined, pendingInput: undefined }]);
 
       await vi.advanceTimersByTimeAsync(6000);
+      await harness.waitForCorpusList();
       await harness.waitForSessionSync();
 
       expect(harness.indexedPaths).toEqual([session.corpusPath]);

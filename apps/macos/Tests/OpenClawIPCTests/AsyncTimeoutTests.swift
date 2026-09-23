@@ -114,16 +114,12 @@ struct AsyncTimeoutTests {
         let operation = CancellationIgnoringOperation()
         let cancellation = CancellationProbe()
         let timeoutCallbacks = Mutex(0)
-        let watchdog = Task {
-            do {
-                try await Task.sleep(for: .seconds(1))
-                await operation.release()
-            } catch {}
-        }
-
-        await #expect(throws: ExpectedTimeout.self) {
+        let clock = ManualTestClock()
+        let deadline = clock.now.advanced(by: .milliseconds(50))
+        let timeout = Task {
             try await AsyncTimeout.withTimeout(
                 seconds: 0.05,
+                clock: clock,
                 onTimeout: {
                     timeoutCallbacks.withLock { $0 += 1 }
                     return ExpectedTimeout()
@@ -137,12 +133,18 @@ struct AsyncTimeoutTests {
                 })
         }
 
+        await operation.waitUntilStarted()
+        await clock.waitForSleep(until: deadline)
+        clock.advance(by: .milliseconds(50))
+        await #expect(throws: ExpectedTimeout.self) {
+            try await timeout.value
+        }
+
         #expect(cancellation.cancelled())
         #expect(await operation.started())
         #expect(await !operation.finished())
         await operation.release()
         await operation.waitUntilFinished()
-        watchdog.cancel()
         #expect(timeoutCallbacks.withLock { $0 } == 1)
     }
 
@@ -210,10 +212,11 @@ struct AsyncTimeoutTests {
         }
 
         task.cancel()
+        let cancelledWhenCallReturned = cancellation.cancelled()
+        #expect(cancelledWhenCallReturned, "Cancellation must reach the operation before cancel() returns")
         await #expect(throws: CancellationError.self) {
             try await task.value
         }
-        #expect(cancellation.cancelled())
         #expect(await !operation.finished())
 
         await operation.release()

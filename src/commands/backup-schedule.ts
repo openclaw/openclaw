@@ -1,4 +1,5 @@
 import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
+import { listCronJobsFromGateway } from "../cli/cron-cli/list-jobs.js";
 import {
   callGatewayFromCli,
   isImplicitLocalGatewayTargetFromCli,
@@ -6,7 +7,10 @@ import {
 } from "../cli/gateway-rpc.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { getRuntimeConfig } from "../config/config.js";
-import type { CronJob } from "../cron/types.js";
+import {
+  SCHEDULED_BACKUP_COMMAND,
+  SCHEDULED_BACKUP_DECLARATION_KEY,
+} from "../cron/backup-command.js";
 import { executeGitCommand } from "../infra/git-exec.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -14,7 +18,6 @@ import { shortenHomePath } from "../utils.js";
 import { GIT_BACKUP_PUSH_CREDENTIAL_WARNING } from "./backup-git.js";
 import { resolveRequiredBackupPath } from "./backup-shared.js";
 
-const BACKUP_CRON_JOB_NAME = "openclaw-backup-scheduled";
 const LOCAL_GATEWAY_REQUIRED_ERROR =
   "backup enable manages backups on the Gateway host and currently requires a local Gateway. Create the cron job manually with openclaw cron add for remote Gateways.";
 
@@ -63,26 +66,13 @@ function buildScheduledArgv(
       )
     : undefined;
   return [
-    "openclaw",
-    "backup",
-    "git",
-    "create",
+    ...SCHEDULED_BACKUP_COMMAND,
     "--repository",
     repositoryPath,
     ...(options.globalOnly ? ["--global"] : agentId ? ["--agent", agentId] : ["--all"]),
     ...(options.push ? ["--push"] : []),
     ...(redactSecrets ? ["--exclude-secrets"] : []),
   ];
-}
-
-async function findScheduledBackup(options: GatewayRpcOpts): Promise<CronJob | undefined> {
-  const response = (await callGatewayFromCli("cron.list", options, {
-    includeDisabled: true,
-    query: BACKUP_CRON_JOB_NAME,
-    limit: 200,
-    offset: 0,
-  })) as { jobs?: CronJob[] };
-  return response.jobs?.find((job) => job.declarationKey === BACKUP_CRON_JOB_NAME);
 }
 
 async function assertLocalGatewayScheduleTarget(options: GatewayRpcOpts): Promise<void> {
@@ -107,8 +97,8 @@ export async function backupEnableCommand(
   }
   const redactSecrets = resolveScheduledRedaction(options);
   const spec = {
-    declarationKey: BACKUP_CRON_JOB_NAME,
-    name: BACKUP_CRON_JOB_NAME,
+    declarationKey: SCHEDULED_BACKUP_DECLARATION_KEY,
+    name: SCHEDULED_BACKUP_DECLARATION_KEY,
     enabled: true,
     schedule: { kind: "every" as const, everyMs },
     sessionTarget: "isolated" as const,
@@ -153,7 +143,8 @@ export async function backupDisableCommand(
   options: GatewayRpcOpts,
 ): Promise<{ removed: boolean }> {
   await assertLocalGatewayScheduleTarget(options);
-  const existing = await findScheduledBackup(options);
+  const { jobs } = await listCronJobsFromGateway(options, { includeDisabled: true });
+  const existing = jobs.find((job) => job.declarationKey === SCHEDULED_BACKUP_DECLARATION_KEY);
   if (!existing) {
     runtime.log("Scheduled Git backups are already disabled.");
     return { removed: false };

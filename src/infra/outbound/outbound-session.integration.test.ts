@@ -1,6 +1,9 @@
+import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { buildConversationIdentity } from "../../config/sessions/conversation-identity.js";
 import {
@@ -10,15 +13,29 @@ import {
 } from "../../config/sessions/conversation-registry.js";
 import {
   loadExactSessionEntry,
+  loadSessionEntryReadOnly,
+  replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  disposeOpenClawAgentDatabaseByPath,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import {
   deliveryContextFromSession,
-  normalizeSessionDeliveryState,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
-import { bindOutboundSessionEntry } from "./outbound-session.js";
+} from "../../utils/delivery-context.read.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import {
+  bindOutboundSessionEntry,
+  captureOutboundSessionBinding,
+  prepareOutboundSessionBinding,
+  resolveOutboundSessionRoute,
+  type OutboundSessionRoute,
+} from "./outbound-session.js";
 
 describe("outbound session persistence", () => {
   let storePath: string;
@@ -30,7 +47,265 @@ describe("outbound session persistence", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     closeOpenClawAgentDatabasesForTest();
+  });
+
+  it.each([" External ", "internal"])(
+    "resolves home paths before carrying only normalized state context (%s)",
+    (supervisorMode) => {
+      const root = tempDirs.make("openclaw-outbound-binding-context-");
+      const captured = captureOutboundSessionBinding({
+        cfg: { session: { store: "~/sessions/{agentId}.json" } },
+        scope: {
+          agentId: "helper",
+          databaseAgentId: "keeper",
+          storePath: path.join(root, "destination.sqlite"),
+          env: {
+            HOME: root,
+            OPENCLAW_HOME: root,
+            OPENCLAW_STATE_DIR: path.join(root, "state-root"),
+            OPENCLAW_SUPERVISOR_MODE: supervisorMode,
+            UNRELATED_BINDING_MARKER: "synthetic",
+          },
+        },
+        sourceSessionKey: "agent:source:main",
+      });
+      const expected = {
+        OPENCLAW_STATE_DIR: path.join(root, "state-root"),
+        ...(supervisorMode === " External " ? { OPENCLAW_SUPERVISOR_MODE: "external" } : {}),
+      };
+      expect(captured.destination.env).toEqual(expected);
+      expect(captured.source?.env).toEqual(expected);
+      expect(captured.source?.storePath).toBe(path.join(root, "sessions", "source.json"));
+    },
+  );
+
+  it("keeps destination and source policy stores separate across asynchronous routing", async () => {
+    const root = tempDirs.make("openclaw-outbound-binding-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+    const destinationPath = path.join(root, "destination.sqlite");
+    openOpenClawAgentDatabase({ agentId: "keeper", path: destinationPath, env });
+    const actor = { type: "human" as const, source: "profile" as const, id: "creator" };
+    const sourceSessionKey = "agent:source:main";
+    const sourceScope = {
+      agentId: "source",
+      sessionKey: sourceSessionKey,
+      storePath: path.join(root, "agents", "source", "agent", "openclaw-agent.sqlite"),
+      env: { ...env },
+    };
+    replaceSessionEntrySync(sourceScope, {
+      sessionId: "source-before-routing",
+      updatedAt: 100,
+      createdVia: "operator",
+      createdActor: actor,
+    });
+    replaceSessionEntrySync(
+      { ...sourceScope, storePath: destinationPath },
+      { sessionId: "destination-decoy", updatedAt: 100 },
+    );
+    const cfg: OpenClawConfig = {};
+    const prepared = prepareOutboundSessionBinding(
+      captureOutboundSessionBinding({
+        cfg,
+        scope: { agentId: "helper", databaseAgentId: "keeper", storePath: destinationPath, env },
+        sourceSessionKey,
+      }),
+    );
+    const route: OutboundSessionRoute = {
+      sessionKey: "agent:helper:reef:direct:peer",
+      baseSessionKey: "agent:helper:reef:direct:peer",
+      peer: { kind: "direct", id: "peer" },
+      chatType: "direct",
+      from: "reef:peer",
+      to: "user:peer",
+    };
+    const resolvedRoute = await resolveOutboundSessionRoute({
+      cfg,
+      channel: "reef",
+      agentId: "helper",
+      target: "user:peer",
+      plugin: {
+        ...createChannelTestPluginBase({ id: "reef" }),
+        messaging: {
+          resolveOutboundSessionRoute: async () => {
+            await Promise.resolve();
+            cfg.session = { store: path.join(root, "changed.sqlite") };
+            env.OPENCLAW_STATE_DIR = path.join(root, "changed-state");
+            vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+            replaceSessionEntrySync(sourceScope, {
+              sessionId: "source-after-routing",
+              updatedAt: 101,
+              createdVia: "operator",
+              createdActor: actor,
+              sandbox: "required",
+            });
+            return route;
+          },
+        },
+      },
+    });
+    expect(resolvedRoute).toEqual(route);
+
+    await bindOutboundSessionEntry({ cfg, channel: "reef", route, sourceSessionKey }, prepared);
+
+    const persisted = loadSessionEntryReadOnly({
+      ...prepared.destination,
+      sessionKey: route.sessionKey,
+    });
+    expect(persisted).toMatchObject({
+      sandbox: "required",
+      createdVia: "operator",
+      createdActor: actor,
+    });
+    expect(deliveryContextFromSession(persisted)).toMatchObject({
+      channel: "reef",
+      to: "user:peer",
+    });
+    expect(
+      loadSessionEntryReadOnly({ ...sourceScope, sessionKey: route.sessionKey }),
+    ).toBeUndefined();
+    expect(
+      loadSessionEntryReadOnly({
+        agentId: "helper",
+        sessionKey: route.sessionKey,
+        storePath: cfg.session?.store,
+      }),
+    ).toBeUndefined();
+  });
+
+  it.each([false, true])(
+    "rechecks route authority after its captured writer queue waits (revoked: %s)",
+    async (revoked) => {
+      const root = tempDirs.make("openclaw-outbound-binding-queue-");
+      const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+      const destinationPath = path.join(root, "destination.sqlite");
+      const scope = {
+        agentId: "helper",
+        databaseAgentId: "keeper",
+        storePath: destinationPath,
+        env,
+      };
+      const databaseOptions = { agentId: "keeper", path: destinationPath, env };
+      openOpenClawAgentDatabase(databaseOptions);
+      const route: OutboundSessionRoute = {
+        sessionKey: "agent:helper:reef:direct:peer",
+        baseSessionKey: "agent:helper:reef:direct:peer",
+        peer: { kind: "direct", id: "peer" },
+        chatType: "direct",
+        from: "reef:peer",
+        to: "user:peer",
+      };
+      replaceSessionEntrySync(
+        { ...scope, sessionKey: route.sessionKey },
+        { sessionId: "retained", updatedAt: 100 },
+      );
+      const prepared = prepareOutboundSessionBinding(
+        captureOutboundSessionBinding({ cfg: {}, scope }),
+      );
+      const entered = createDeferred();
+      const release = createDeferred();
+      const blocker = runOpenClawAgentWriteAdmission(databaseOptions, async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      await Promise.race([entered.promise, blocker]);
+      let allowed = true;
+      const refusal = new Error("route owner changed");
+      const pending = bindOutboundSessionEntry(
+        {
+          cfg: {},
+          channel: "reef",
+          route,
+          assertCommitAllowed: () => {
+            if (!allowed) {
+              throw refusal;
+            }
+          },
+        },
+        prepared,
+      );
+      const result = revoked
+        ? expect(pending).rejects.toBe(refusal)
+        : expect(pending).resolves.toBeUndefined();
+      try {
+        expect(
+          deliveryContextFromSession(
+            loadSessionEntryReadOnly({ ...scope, sessionKey: route.sessionKey }),
+          ),
+        ).toBeUndefined();
+        allowed = !revoked;
+      } finally {
+        release.resolve();
+        await blocker;
+        await result;
+      }
+      const persisted = loadSessionEntryReadOnly({ ...scope, sessionKey: route.sessionKey });
+      expect(persisted?.updatedAt).toBe(100);
+      expect(persisted?.sessionId).toBe("retained");
+      if (revoked) {
+        expect(deliveryContextFromSession(persisted)).toBeUndefined();
+      } else {
+        expect(deliveryContextFromSession(persisted)).toMatchObject({
+          channel: "reef",
+          to: "user:peer",
+        });
+      }
+    },
+  );
+
+  it("refuses a replacement physical source owner with the same logical session", async () => {
+    const root = tempDirs.make("openclaw-outbound-source-owner-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+    const cfg: OpenClawConfig = { session: { store: path.join(root, "{agentId}.sqlite") } };
+    const sourcePath = path.join(root, "source.sqlite");
+    const sourceScope = {
+      agentId: "source",
+      sessionKey: "agent:source:main",
+      storePath: sourcePath,
+      env,
+    };
+    openOpenClawAgentDatabase({ agentId: "source-owner", path: sourcePath, env });
+    replaceSessionEntrySync(sourceScope, {
+      sessionId: "same-session",
+      updatedAt: 100,
+      sandbox: "required",
+    });
+    const destination = {
+      agentId: "helper",
+      databaseAgentId: "destination-owner",
+      storePath: path.join(root, "helper.sqlite"),
+      env,
+    };
+    const prepared = prepareOutboundSessionBinding(
+      captureOutboundSessionBinding({
+        cfg,
+        scope: destination,
+        sourceSessionKey: sourceScope.sessionKey,
+      }),
+    );
+    expect(disposeOpenClawAgentDatabaseByPath(sourcePath, { env })).toBe(true);
+    fs.renameSync(sourcePath, path.join(root, "retired-source.sqlite"));
+    openOpenClawAgentDatabase({ agentId: "replacement", path: sourcePath, env });
+    replaceSessionEntrySync(sourceScope, { sessionId: "same-session", updatedAt: 100 });
+    const route: OutboundSessionRoute = {
+      sessionKey: "agent:helper:reef:direct:peer",
+      baseSessionKey: "agent:helper:reef:direct:peer",
+      peer: { kind: "direct", id: "peer" },
+      chatType: "direct",
+      from: "reef:peer",
+      to: "user:peer",
+    };
+
+    await expect(
+      bindOutboundSessionEntry(
+        { cfg, channel: "reef", route, sourceSessionKey: sourceScope.sessionKey },
+        prepared,
+      ),
+    ).rejects.toThrow("belongs to agent replacement; requested agent source-owner");
+    expect(
+      loadSessionEntryReadOnly({ ...destination, sessionKey: route.sessionKey }),
+    ).toBeUndefined();
   });
 
   it("binds a discovered canonical peer through a different delivery alias", async () => {
@@ -241,5 +516,63 @@ describe("outbound session persistence", () => {
       sessionKey,
       target: to,
     });
+  });
+
+  it("preserves an existing group title for a directory identifier fallback", async () => {
+    const cfg = {
+      session: { store: storePath, groupScope: "per-group" },
+    } as OpenClawConfig;
+    const roomId = "8f560ffb-37e2-4078-a6c4-83e4d72e94b3";
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "directory-chat" }),
+      messaging: {
+        resolveOutboundSessionRoute: () => ({
+          sessionKey: `agent:main:directory-chat:group:${roomId}`,
+          baseSessionKey: `agent:main:directory-chat:group:${roomId}`,
+          peer: { kind: "group" as const, id: roomId },
+          chatType: "group" as const,
+          from: `directory-chat:group:${roomId}`,
+          to: `group:${roomId}`,
+        }),
+      },
+    } satisfies ChannelPlugin;
+    const route = await resolveOutboundSessionRoute({
+      cfg,
+      channel: "directory-chat",
+      plugin,
+      agentId: "main",
+      target: `group:${roomId}`,
+      resolvedTarget: {
+        to: `group:${roomId}`,
+        kind: "group",
+        display: roomId,
+        source: "directory",
+        resolutionSource: "directory",
+      },
+    });
+    expect(route).toBeDefined();
+    if (!route) {
+      return;
+    }
+    expect(route.displayName).toBeUndefined();
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: route.sessionKey, storePath },
+      {
+        sessionId: "existing-directory-group",
+        updatedAt: 100,
+        chatType: "group",
+        subject: "Family",
+      },
+    );
+
+    await bindOutboundSessionEntry({ cfg, channel: "directory-chat", route });
+
+    const persisted = loadExactSessionEntry({
+      agentId: "main",
+      sessionKey: route.sessionKey,
+      storePath,
+    });
+    expect(persisted?.entry.subject).toBe("Family");
+    expect(persisted?.entry.displayName).not.toContain(roomId);
   });
 });

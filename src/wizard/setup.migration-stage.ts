@@ -1,6 +1,7 @@
 // Setup migration staging keeps provider writes isolated until verified promotion.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { clearRuntimeAuthProfileStoreSnapshot } from "../agents/auth-profiles/store.js";
@@ -22,8 +23,13 @@ import {
   disposeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  restoreSetupInferenceConfig,
+  type SetupInferenceConfigTarget,
+  type SetupInferenceConfigWriteOptions,
+} from "../system-agent/setup-inference-transition.js";
 import { hashSetupMigrationConfig } from "./setup.migration-canonical.js";
 import {
   assertDisjointPromotionTargets,
@@ -62,6 +68,7 @@ type SetupMigrationStage = {
   staged: SetupMigrationStagePaths;
   final: SetupMigrationStagePaths;
   configRuntime: MigrationConfigRuntime;
+  inferenceConfigTarget: SetupInferenceConfigTarget;
   getFinalConfig: () => OpenClawConfig;
   getStagedConfig: () => OpenClawConfig;
   replaceStagedConfig: (config: OpenClawConfig) => void;
@@ -310,19 +317,49 @@ export async function createSetupMigrationStage(params: {
     stagedConfig,
     projectToFinal: projectConfigToFinal,
   });
+  const replaceStagedConfig = (config: OpenClawConfig) =>
+    configs.replaceConfigs({ stagedConfig: config, finalConfig: projectConfigToFinal(config) });
+  const writeInferenceConfig = async (
+    config: OpenClawConfig,
+    options: SetupInferenceConfigWriteOptions,
+    expected?: OpenClawConfig,
+  ) => {
+    const before = configs.getStagedConfig();
+    if (expected && !isDeepStrictEqual(before, expected)) {
+      throw new SetupMigrationTargetChangedError(
+        "Staged connection settings changed before activation.",
+      );
+    }
+    options.captureUndo(async () => {
+      const restored = restoreSetupInferenceConfig(configs.getStagedConfig(), before, config);
+      if (restored.written) {
+        replaceStagedConfig(restored.config);
+      }
+      return restored;
+    });
+    replaceStagedConfig(config);
+    return configs.getStagedConfig();
+  };
+  const inferenceConfigTarget: SetupInferenceConfigTarget = {
+    write: writeInferenceConfig,
+    read: async () => {
+      const config = configs.getStagedConfig();
+      return { config, write: (next, options) => writeInferenceConfig(next, options, config) };
+    },
+  };
   openOpenClawAgentDatabase({ agentId, env: stageEnv });
   let databasesDisposed = false;
   let finalAgentDatabaseRegistered = false;
   let retainForRecovery = false;
 
-  const disposeDatabases = () => {
+  const disposeDatabases = async () => {
     if (databasesDisposed) {
       return;
     }
     clearRuntimeAuthProfileStoreSnapshot(stagedAgentDir);
     const stagedAgentDatabasePath = path.join(stagedAgentDir, "openclaw-agent.sqlite");
     disposeOpenClawAgentDatabaseByPath(stagedAgentDatabasePath, { env: stageEnv });
-    closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(stageEnv));
+    await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(stageEnv));
     databasesDisposed = true;
   };
 
@@ -330,18 +367,14 @@ export async function createSetupMigrationStage(params: {
     staged: stagedPaths,
     final: finalPaths,
     configRuntime: configs.runtime,
+    inferenceConfigTarget,
     getFinalConfig: configs.getFinalConfig,
     getStagedConfig: configs.getStagedConfig,
-    replaceStagedConfig(config) {
-      configs.replaceConfigs({
-        stagedConfig: config,
-        finalConfig: projectConfigToFinal(config),
-      });
-    },
+    replaceStagedConfig,
     projectPlanToStage: (plan) => projectPlanTargets(plan, toStage),
     projectResultToFinal: (result) => projectValue(result, toFinal) as MigrationApplyResult,
     async promote({ expectedConfig, continuation, readConfigFile, commitConfigFile }) {
-      disposeDatabases();
+      await disposeDatabases();
       // Bootstrap owns this state-local lock tree; it is not provider output and must not be promoted.
       const gatewayLockDir = resolveGatewayLockDir(stagedStateDir);
       await fs.rm(gatewayLockDir, { recursive: true, force: true });
@@ -492,7 +525,7 @@ export async function createSetupMigrationStage(params: {
       if (retainForRecovery) {
         return;
       }
-      disposeDatabases();
+      await disposeDatabases();
       await Promise.all([
         fs.rm(stagedStateDir, { recursive: true, force: true }),
         fs.rm(stagedWorkspaceDir, { recursive: true, force: true }),

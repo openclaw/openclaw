@@ -1,5 +1,4 @@
 // Gateway RPC handlers for channel lifecycle, status, and account operations.
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -9,6 +8,7 @@ import {
   validateChannelsStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { redactChannelStatusSummaryBaseUrl } from "../../channels/account-snapshot-fields.js";
+import { buildChannelAccountSnapshotFromRuntime } from "../../channels/account-summary.js";
 import { buildChannelUiCatalog } from "../../channels/plugins/catalog.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import {
@@ -19,7 +19,10 @@ import {
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { buildChannelAccountSnapshotFromAccount } from "../../channels/plugins/status.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
-import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import type {
+  ChannelAccountSnapshot,
+  ChannelStatusIssue,
+} from "../../channels/plugins/types.public.js";
 import { resolveUnavailableChannelAccountSnapshot } from "../../channels/status/account-state.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -33,12 +36,17 @@ import {
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   resolveChannelHealthState,
 } from "../channel-health-policy.js";
-import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
-import type {
-  ChannelAccountStartOutcome,
-  ChannelRuntimeSnapshot,
-} from "../server-channel-runtime.types.js";
+import type { ChannelAccountStartOutcome } from "../server-channel-runtime.types.js";
 import { formatForLog } from "../ws-log.js";
+import {
+  resolveChannelGatewayAccountId,
+  resolveRuntimeAccountSnapshot,
+} from "./channels-account.js";
+import {
+  collectGatewayChannelStatusIssues,
+  resolveDeferredChannelReloadIssue,
+} from "./channels-status-issues.js";
+import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
 
@@ -54,6 +62,7 @@ type ChannelStartPayload = {
   accountId: string;
   started: boolean;
   outcome: ChannelAccountStartOutcome;
+  statusIssues?: ChannelStatusIssue[];
 };
 
 type ChannelStopPayload = {
@@ -65,6 +74,14 @@ type ChannelStopPayload = {
 type ChannelOperationParams = {
   channel?: unknown;
   accountId?: unknown;
+};
+
+type ChannelAccountParams = {
+  channelId: ChannelId;
+  accountId?: string | null;
+  cfg: OpenClawConfig;
+  context: GatewayRequestContext;
+  plugin: ChannelPlugin;
 };
 
 function resolveChannelOperationParams<TParams extends ChannelOperationParams>(params: {
@@ -94,11 +111,9 @@ async function respondWithChannelOperationPayload<TPayload>(params: {
   respond: RespondFn;
   run: () => Promise<TPayload>;
 }): Promise<void> {
-  try {
+  await respondUnavailableOnThrow(params.respond, async () => {
     params.respond(true, await params.run(), undefined);
-  } catch (error) {
-    params.respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(error)));
-  }
+  });
 }
 
 const CHANNEL_STATUS_MAX_TIMEOUT_MS = 30_000;
@@ -222,43 +237,9 @@ function resolveChannelsStatusTimeoutMs(params: { probe: boolean; timeoutMsRaw: 
   return Math.min(Math.max(1000, params.timeoutMsRaw), CHANNEL_STATUS_MAX_TIMEOUT_MS);
 }
 
-function resolveRuntimeAccountSnapshot(params: {
-  runtime: ChannelRuntimeSnapshot;
-  channelId: ChannelId;
-  accountId: string;
-}): ChannelAccountSnapshot | undefined {
-  const accounts = params.runtime.channelAccounts[params.channelId];
-  const direct = accounts?.[params.accountId];
-  if (direct) {
-    return direct;
-  }
-  const fallback = params.runtime.channels[params.channelId];
-  return fallback?.accountId === params.accountId ? fallback : undefined;
-}
-
-function resolveChannelGatewayAccountId(params: {
-  plugin: ChannelPlugin;
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): string {
-  // Runtime operations use the same account precedence as channel setup:
-  // explicit request, plugin default, first configured account, then fallback.
-  return (
-    normalizeOptionalString(params.accountId) ||
-    params.plugin.config.defaultAccountId?.(params.cfg) ||
-    params.plugin.config.listAccountIds(params.cfg)[0] ||
-    DEFAULT_ACCOUNT_ID
-  );
-}
-
 /** Log out one channel account through its owning channel plugin. */
-async function logoutChannelAccount(params: {
-  channelId: ChannelId;
-  accountId?: string | null;
-  cfg: OpenClawConfig;
-  context: GatewayRequestContext;
-  plugin: ChannelPlugin;
-}): Promise<ChannelLogoutPayload> {
+async function logoutChannelAccount(params: ChannelAccountParams): Promise<ChannelLogoutPayload> {
+  // Credential removal uses current config rather than a paused runtime's older inventory.
   const resolvedAccountId = resolveChannelGatewayAccountId(params);
   const account = params.plugin.config.resolveAccount(params.cfg, resolvedAccountId);
   // Stop the runtime before clearing channel-owned auth so no active watcher can
@@ -287,17 +268,13 @@ async function logoutChannelAccount(params: {
 }
 
 /** Start one channel account through its owning channel plugin. */
-async function startChannelAccount(params: {
-  channelId: ChannelId;
-  accountId?: string | null;
-  cfg: OpenClawConfig;
-  context: GatewayRequestContext;
-  plugin: ChannelPlugin;
-}): Promise<ChannelStartPayload> {
+async function startChannelAccount(params: ChannelAccountParams): Promise<ChannelStartPayload> {
   if (!params.plugin.gateway?.startAccount) {
     throw new Error(`Channel ${params.channelId} does not support runtime start`);
   }
-  const resolvedAccountId = resolveChannelGatewayAccountId(params);
+  const resolvedAccountId = resolveChannelGatewayAccountId(params, () =>
+    params.context.getRuntimeSnapshot({ channelId: params.channelId, inspectAccounts: false }),
+  );
   const outcomes = await params.context.startChannel(params.channelId, resolvedAccountId, {
     manual: true,
   });
@@ -307,32 +284,40 @@ async function startChannelAccount(params: {
       `Channel ${params.channelId} did not report a start outcome for ${resolvedAccountId}`,
     );
   }
-  const runtime = params.context.getRuntimeSnapshot();
+  const runtime = params.context.getRuntimeSnapshot({
+    channelId: params.channelId,
+    inspectAccounts: false,
+  });
   const started =
     resolveRuntimeAccountSnapshot({
       runtime,
       channelId: params.channelId,
       accountId: resolvedAccountId,
     })?.running === true;
+  const deferredIssue = resolveDeferredChannelReloadIssue(
+    params.context,
+    params.channelId,
+    resolvedAccountId,
+  );
   return {
     channel: params.channelId,
     accountId: resolvedAccountId,
     started,
     outcome,
+    ...(deferredIssue ? { statusIssues: [deferredIssue] } : {}),
   };
 }
 
 /** Stop one channel account through its owning channel plugin. */
-async function stopChannelAccount(params: {
-  channelId: ChannelId;
-  accountId?: string | null;
-  cfg: OpenClawConfig;
-  context: GatewayRequestContext;
-  plugin: ChannelPlugin;
-}): Promise<ChannelStopPayload> {
-  const resolvedAccountId = resolveChannelGatewayAccountId(params);
+async function stopChannelAccount(params: ChannelAccountParams): Promise<ChannelStopPayload> {
+  const resolvedAccountId = resolveChannelGatewayAccountId(params, () =>
+    params.context.getRuntimeSnapshot({ channelId: params.channelId, inspectAccounts: false }),
+  );
   await params.context.stopChannel(params.channelId, resolvedAccountId);
-  const runtime = params.context.getRuntimeSnapshot();
+  const runtime = params.context.getRuntimeSnapshot({
+    channelId: params.channelId,
+    inspectAccounts: false,
+  });
   const stopped =
     resolveRuntimeAccountSnapshot({
       runtime,
@@ -356,11 +341,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
     const timeoutMs = resolveChannelsStatusTimeoutMs({ probe, timeoutMsRaw });
     const rawChannel = (params as { channel?: unknown }).channel;
-    const runtimeConfig = context.getRuntimeConfig();
-    const cfg = resolveGatewayPluginConfig({
-      config: runtimeConfig,
-    });
-    const runtime = context.getRuntimeSnapshot();
+    const cfg = context.getRuntimeConfig();
     const plugins = listReadOnlyChannelPluginsForConfig(cfg);
     const requestedChannel =
       typeof rawChannel === "string"
@@ -382,14 +363,28 @@ export const channelsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const runtime = context.getRuntimeSnapshot({ channelId: requestedChannel });
     const statusWarnings: string[] = [];
 
     const buildAccountSnapshot = async (
       channelId: ChannelId,
       plugin: ChannelPlugin,
       accountId: string,
+      listed: boolean,
     ) => {
       const runtimeSnapshot = resolveRuntimeAccountSnapshot({ runtime, channelId, accountId });
+      if (!listed && runtimeSnapshot) {
+        const snapshot = buildChannelAccountSnapshotFromRuntime(runtimeSnapshot);
+        return {
+          accountId,
+          snapshot:
+            resolveUnavailableChannelAccountSnapshot(cfg, {
+              channelId,
+              accountId,
+              runtime: snapshot,
+            }) ?? snapshot,
+        };
+      }
       const unavailable = resolveUnavailableChannelAccountSnapshot(cfg, {
         channelId,
         accountId,
@@ -492,16 +487,41 @@ export const channelsHandlers: GatewayRequestHandlers = {
 
     const buildChannelAccounts = async (plugin: ChannelPlugin) => {
       const channelId = plugin.id;
-      const accountIds = plugin.config.listAccountIds(cfg);
+      if (runtime.reloadingChannels?.has(channelId)) {
+        const defaultAccount = runtime.channels[channelId];
+        statusWarnings.push(
+          `${channelId}: plugin runtime is paused for reload; reporting recorded account state`,
+        );
+        return {
+          accounts: Object.values(runtime.channelAccounts[channelId] ?? {}),
+          defaultAccountId: runtime.reloadingChannels.get(channelId) ?? DEFAULT_ACCOUNT_ID,
+          defaultAccount,
+          resolvedAccounts: {},
+        };
+      }
+      const configuredAccountIds = plugin.config.listAccountIds(cfg);
+      const configuredAccountIdSet = new Set(configuredAccountIds);
+      const accountIds = [
+        ...new Set([
+          ...configuredAccountIds,
+          ...Object.keys(runtime.channelAccounts[channelId] ?? {}),
+        ]),
+      ];
       const defaultAccountId = resolveChannelDefaultAccountId({
         plugin,
         cfg,
-        accountIds,
+        accountIds: configuredAccountIds,
       });
       const resolvedAccounts: Record<string, unknown> = {};
       const { results } = await runTasksWithConcurrency({
         tasks: accountIds.map(
-          (accountId) => async () => await buildAccountSnapshot(channelId, plugin, accountId),
+          (accountId) => async () =>
+            await buildAccountSnapshot(
+              channelId,
+              plugin,
+              accountId,
+              configuredAccountIdSet.has(accountId),
+            ),
         ),
         limit: probe ? CHANNEL_STATUS_PROBE_CONCURRENCY : accountIds.length || 1,
         onTaskError: (error, index) => {
@@ -519,7 +539,8 @@ export const channelsHandlers: GatewayRequestHandlers = {
         }
       }
       const defaultAccount =
-        accounts.find((entry) => entry.accountId === defaultAccountId) ?? accounts[0];
+        accounts.find((entry) => entry.accountId === defaultAccountId) ??
+        accounts.find((entry) => configuredAccountIdSet.has(entry.accountId));
       return { accounts, defaultAccountId, defaultAccount, resolvedAccounts };
     };
 
@@ -585,6 +606,14 @@ export const channelsHandlers: GatewayRequestHandlers = {
         defaultAccountIdMap[result.pluginId] = result.defaultAccountId;
       }
     }
+    payload.statusIssues = collectGatewayChannelStatusIssues({
+      payload,
+      plugins: statusPlugins,
+      reloadingChannels: runtime.reloadingChannels,
+      defaultAccountIds: defaultAccountIdMap,
+      context,
+      warnings: statusWarnings,
+    });
     if (statusWarnings.length > 0) {
       payload.partial = true;
       payload.warnings = statusWarnings.toSorted().slice(0, 50);
@@ -626,9 +655,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
         startChannelAccount({
           channelId,
           accountId: parsedParams.accountId,
-          cfg: resolveGatewayPluginConfig({
-            config: context.getRuntimeConfig(),
-          }),
+          cfg: context.getRuntimeConfig(),
           context,
           plugin,
         }),
@@ -654,13 +681,12 @@ export const channelsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const accountId = normalizeOptionalString(parsedParams.accountId);
     await respondWithChannelOperationPayload({
       respond,
       run: () =>
         stopChannelAccount({
           channelId,
-          accountId,
+          accountId: parsedParams.accountId,
           cfg: context.getRuntimeConfig(),
           context,
           plugin,
@@ -687,7 +713,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const accountId = normalizeOptionalString(parsedParams.accountId);
+    const accountId = parsedParams.accountId;
     const snapshot = await readConfigFileSnapshot();
     if (!snapshot.valid) {
       respond(

@@ -32,7 +32,7 @@ export type PluginDoctorStateMigrationContext = {
     options: OpenKeyedStoreOptions,
     entries: readonly { key: string; value: unknown; createdAt: number; ttlMs?: number }[],
   ) => void;
-  /** Plugin-wide live-row capacity for import preflight. Older test hosts may omit it. */
+  /** Live plugin rows for import preflight; current hosts report no aggregate limit (Infinity). Older hosts may omit it. */
   getPluginStateCapacity?: () => { liveEntries: number; maxEntries: number };
   readPluginStateEntriesInKeyRange?: (
     namespace: string,
@@ -105,6 +105,14 @@ type PluginDoctorStateMigrationInput = {
   context: PluginDoctorStateMigrationContext;
 };
 
+type PluginDoctorStateMigrationResult = {
+  changes: string[];
+  warnings: string[];
+  notices?: string[];
+  /** Every warning is advisory; required state remains safe for later repairs. */
+  warningDisposition?: "recoverable";
+};
+
 export type PluginDoctorStateMigration = {
   id: string;
   label: string;
@@ -119,9 +127,7 @@ export type PluginDoctorStateMigration = {
     | null;
   migrateLegacyState: (
     params: PluginDoctorStateMigrationInput,
-  ) =>
-    | Promise<{ changes: string[]; warnings: string[]; notices?: string[] }>
-    | { changes: string[]; warnings: string[]; notices?: string[] };
+  ) => Promise<PluginDoctorStateMigrationResult> | PluginDoctorStateMigrationResult;
 };
 
 export type PluginDoctorContractModule = {
@@ -136,7 +142,7 @@ export type PluginDoctorContractModule = {
   stateMigrations?: unknown;
 };
 
-type PluginDoctorCompatibilityNormalizer = (params: { cfg: OpenClawConfig }) => {
+export type PluginDoctorCompatibilityNormalizer = (params: { cfg: OpenClawConfig }) => {
   config: OpenClawConfig;
   changes: string[];
 };

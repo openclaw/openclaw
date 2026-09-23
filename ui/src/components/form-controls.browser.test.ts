@@ -2,6 +2,7 @@
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
+import { withBrowserPage } from "../test-helpers/browser-page.ts";
 import {
   canRunPlaywrightChromium,
   resolvePlaywrightChromiumExecutablePath,
@@ -30,7 +31,11 @@ function readUiCss(): string {
     "ui/src/styles/settings.css",
     "ui/src/styles/config.css",
     "ui/src/styles/usage.css",
+    "ui/src/styles/chat/startup-layout.css",
     "ui/src/styles/chat/layout.css",
+    "ui/src/styles/chat/message-layout.css",
+    "ui/src/styles/chat/composer-surface.css",
+    "ui/src/styles/chat/composer.css",
     "ui/src/styles/sidebar-markdown.css",
     "ui/src/styles/chat/sidebar.css",
     "ui/src/styles/plugins.css",
@@ -155,8 +160,7 @@ afterAll(async () => {
 
 describeBrowserLayout("sensitive input visibility", () => {
   it("removes the mask layer from layout when the value is revealed", async () => {
-    const page = await desktopContext.newPage();
-    try {
+    await withBrowserPage(desktopContext.newPage(), async (page) => {
       await page.setContent(
         `<!doctype html><html data-theme-mode="light"><head><style>${readUiCss()}</style></head><body>${revealedSensitiveInputHtml()}</body></html>`,
       );
@@ -166,23 +170,20 @@ describeBrowserLayout("sensitive input visibility", () => {
         display: getComputedStyle(mask).display,
       }));
       expect(state).toEqual({ hidden: true, display: "none" });
-    } finally {
-      await page.close().catch(() => {});
-    }
+    });
   });
 });
 
 describeBrowserLayout("settings icon buttons", () => {
-  it("keeps plugin and MCP remove glyphs proportionate to settings buttons", async () => {
-    const page = await desktopContext.newPage();
-    try {
+  it("keeps MCP remove glyphs proportionate to settings buttons", async () => {
+    await withBrowserPage(desktopContext.newPage(), async (page) => {
       await page.setContent(`
         <!doctype html>
         <html data-theme-mode="light">
           <head><style>${readUiCss()}</style></head>
           <body>
             <div class="settings-row__control">
-              <button class="btn btn--sm btn--icon plugins-remove" type="button">
+              <button class="btn btn--sm btn--icon mcp-server-remove" type="button" aria-label="Remove synthetic server">
                 <svg viewBox="0 0 24 24"><path d="M3 6h18" /></svg>
               </button>
             </div>
@@ -190,29 +191,78 @@ describeBrowserLayout("settings icon buttons", () => {
         </html>
       `);
 
-      const metrics = await page.locator(".plugins-remove").evaluate((button) => {
-        const glyph = button.querySelector("svg");
-        if (!(glyph instanceof SVGElement)) {
-          throw new Error("Missing remove button glyph");
+      const metrics = await page
+        .getByRole("button", { name: "Remove synthetic server", exact: true })
+        .evaluate((button) => {
+          const glyph = button.querySelector("svg");
+          if (!(glyph instanceof SVGElement)) {
+            throw new Error("Missing remove button glyph");
+          }
+          const buttonRect = button.getBoundingClientRect();
+          const glyphRect = glyph.getBoundingClientRect();
+          return {
+            button: [buttonRect.width, buttonRect.height],
+            glyph: [glyphRect.width, glyphRect.height],
+          };
+        });
+      expect(metrics).toEqual({ button: [32, 32], glyph: [18, 18] });
+    });
+  });
+});
+
+describeBrowserLayout("settings row wrapping", () => {
+  it.each([393, 768, 1200])("keeps long copy beside its tile at %ipx", async (width) => {
+    await withBrowserPage(desktopContext.newPage(), async (page) => {
+      await page.setViewportSize({ width, height: 1000 });
+      const description =
+        "Calendar notes and reminders remain readable before enabling a connector. ".repeat(8);
+      await page.setContent(`<!doctype html><html><head><meta charset="utf-8"><style>${readUiCss()}</style></head>
+        <body><main style="max-width: 1100px">
+          <div class="settings-row plugins-item">
+            <span class="plugins-tile" aria-hidden="true">C</span>
+            <div class="settings-row__text"><span class="settings-row__title">Connector</span>
+              <span class="settings-row__desc">${description}</span></div>
+            <div class="settings-row__control"><button class="btn btn--sm">Disable</button>
+              <button class="btn btn--sm btn--icon" aria-label="Remove connector">×</button></div>
+            <div class="plugins-row-message" role="status">Connector remains disabled.</div>
+          </div>
+        </main></body></html>`);
+      const geometry = await page.locator(".settings-row").evaluate((row) => {
+        const [tile, text, control, message] = Array.from(row.children, (child) =>
+          child.getBoundingClientRect(),
+        );
+        if (!tile || !text || !control || !message) {
+          throw new Error("Missing settings row fixture child");
         }
-        const buttonRect = button.getBoundingClientRect();
-        const glyphRect = glyph.getBoundingClientRect();
+        const style = getComputedStyle(row);
+        const contentWidth =
+          row.clientWidth -
+          Number.parseFloat(style.paddingLeft) -
+          Number.parseFloat(style.paddingRight);
         return {
-          button: [buttonRect.width, buttonRect.height],
-          glyph: [glyphRect.width, glyphRect.height],
+          copyBesideTile:
+            text.left >= tile.right && text.top < tile.bottom && tile.top < text.bottom,
+          desktopControls:
+            control.left >= text.right && control.top < text.bottom && text.top < control.bottom,
+          narrowControls: control.top >= Math.max(tile.bottom, text.bottom),
+          messageBelow: message.top >= Math.max(tile.bottom, text.bottom, control.bottom),
+          messageWidth: message.width,
+          contentWidth,
+          overflow: row.scrollWidth - row.clientWidth,
         };
       });
-      expect(metrics).toEqual({ button: [32, 32], glyph: [18, 18] });
-    } finally {
-      await page.close().catch(() => {});
-    }
+      expect(geometry.copyBesideTile).toBe(true);
+      expect(width <= 640 ? geometry.narrowControls : geometry.desktopControls).toBe(true);
+      expect(geometry.messageBelow).toBe(true);
+      expect(geometry.messageWidth).toBeCloseTo(geometry.contentWidth, 0);
+      expect(geometry.overflow).toBeLessThanOrEqual(1);
+    });
   });
 });
 
 describeBrowserLayout("settings media device controls", () => {
   it("keeps paired selectors the same width across device labels and viewports", async () => {
-    const page = await desktopContext.newPage();
-    try {
+    await withBrowserPage(desktopContext.newPage(), async (page) => {
       await page.setViewportSize({ width: 1200, height: 800 });
       await page.setContent(
         `<!doctype html><html data-theme-mode="light"><head><style>${readUiCss()}</style></head><body>${mediaDeviceRowsHtml()}</body></html>`,
@@ -248,9 +298,7 @@ describeBrowserLayout("settings media device controls", () => {
       expect(mobile[0]?.selectWidth).toBeCloseTo(mobile[1]?.selectWidth ?? 0, 5);
       expect(mobile[0]?.selectWidth).toBeLessThan(340);
       expect(mobile.every((row) => row.selectTop === row.buttonTop)).toBe(true);
-    } finally {
-      await page.close().catch(() => {});
-    }
+    });
   });
 });
 
@@ -365,8 +413,7 @@ describeBrowserLayout("touch-primary form controls", () => {
 
 describeBrowserLayout("mount fallback cursor", () => {
   it("uses the arrow for recovery controls and the hand for its real link", async () => {
-    const page = await desktopContext.newPage();
-    try {
+    await withBrowserPage(desktopContext.newPage(), async (page) => {
       await page.setContent(readStyleSheet("ui/index.html"));
       const cursors = await page.evaluate(() => {
         const cursor = (selector: string) => {
@@ -388,16 +435,13 @@ describeBrowserLayout("mount fallback cursor", () => {
         wait: "default",
         docs: "pointer",
       });
-    } finally {
-      await page.close().catch(() => {});
-    }
+    });
   });
 });
 
 describeBrowserLayout("app chrome interaction styles", () => {
   it("scales sidebar typography with the Control UI text-size preference", async () => {
-    const page = await desktopContext.newPage();
-    try {
+    await withBrowserPage(desktopContext.newPage(), async (page) => {
       await page.setViewportSize({ width: 1200, height: 800 });
       await page.setContent(`
         <!doctype html>
@@ -501,14 +545,84 @@ describeBrowserLayout("app chrome interaction styles", () => {
         const fits = await page.$eval(selector, (node) => node.scrollWidth <= node.clientWidth);
         expect(fits, selector).toBe(true);
       }
-    } finally {
-      await page.close().catch(() => {});
-    }
+    });
   });
 
+  it.each([
+    { label: "merged chat chrome", nativeClass: "", merged: true, search: "visible" },
+    { label: "topbar still shown", nativeClass: "", merged: false, search: "hidden" },
+    {
+      label: "native macOS",
+      nativeClass: "openclaw-native-macos",
+      merged: false,
+      search: "hidden",
+    },
+    { label: "native nav", nativeClass: "openclaw-native-nav", merged: false, search: "hidden" },
+    {
+      label: "native web chrome",
+      nativeClass: "openclaw-native-web-chrome",
+      merged: false,
+      search: "hidden",
+    },
+  ])(
+    "shows the mobile drawer command palette button only where nothing else carries it ($label)",
+    async ({ nativeClass, merged, search }) => {
+      await withBrowserPage(mobileContext.newPage(), async (page) => {
+        await page.setContent(`
+        <!doctype html>
+        <html class="${nativeClass}">
+          <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+            <style>${readUiCss()}</style>
+          </head>
+          <body>
+            <div class="shell shell--mobile-nav ${merged ? "shell--merged-chat-chrome" : ""}">
+              <div class="sidebar-brand">
+                <div class="sidebar-brand__actions">
+                  <button
+                    class="sidebar-brand__icon sidebar-brand__header-control sidebar-brand__desktop-control sidebar-brand__collapse"
+                  ></button>
+                  <button
+                    class="sidebar-brand__icon sidebar-brand__header-control sidebar-brand__desktop-control sidebar-brand__search"
+                  ></button>
+                </div>
+              </div>
+            </div>
+          </body>
+        </html>
+      `);
+
+        const display = await page.evaluate(() => {
+          const read = (selector: string) => {
+            const node = document.querySelector(selector);
+            if (!(node instanceof HTMLElement)) {
+              throw new Error(`Missing mobile drawer fixture ${selector}`);
+            }
+            return getComputedStyle(node).display;
+          };
+          return {
+            collapse: read(".sidebar-brand__collapse"),
+            search: read(".sidebar-brand__search"),
+          };
+        });
+
+        // The drawer has no collapsed state, so the collapse toggle always goes.
+        expect(display.collapse).toBe("none");
+        // Merged chat chrome hides the topbar, leaving the drawer as the only
+        // surface that can carry search. Everywhere else - including every native
+        // host, which never merges - the topbar keeps its own, so a drawer copy
+        // would put two on screen at once.
+        if (search === "visible") {
+          expect(display.search).not.toBe("none");
+        } else {
+          expect(display.search).toBe("none");
+        }
+      });
+    },
+  );
+
   it("scales mobile sidebar variants while preserving the coarse-pointer input floor", async () => {
-    const page = await mobileContext.newPage();
-    try {
+    await withBrowserPage(mobileContext.newPage(), async (page) => {
       await page.setContent(`
         <!doctype html>
         <html>
@@ -568,14 +682,11 @@ describeBrowserLayout("app chrome interaction styles", () => {
       expect(scaled.fileSearch).toBeCloseTo(12 * 1.4, 1);
       expect(scaled.settingsSearch).toBeCloseTo(12.5 * 1.4, 1);
       expect(scaled.navItem).toBeCloseTo(12 * 1.4, 1);
-    } finally {
-      await page.close().catch(() => {});
-    }
+    });
   });
 
   it("uses one canonical scrollbar width while preserving normal content scroll and text entry", async () => {
-    const page = await desktopContext.newPage();
-    try {
+    await withBrowserPage(desktopContext.newPage(), async (page) => {
       await page.setViewportSize({ width: 1200, height: 800 });
       await page.setContent(`
         <!doctype html>
@@ -644,8 +755,6 @@ describeBrowserLayout("app chrome interaction styles", () => {
         settingsSidebarScrollbar: "12px",
         settingsSidebarSelection: "none",
       });
-    } finally {
-      await page.close().catch(() => {});
-    }
+    });
   });
 });

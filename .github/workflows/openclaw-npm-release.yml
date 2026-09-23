@@ -29,6 +29,11 @@ on:
         description: Exact successful Full Release Validation run attempt for this tag/SHA
         required: false
         type: string
+      stable_soak_waiver:
+        description: Operator reason for publishing a stable tag from Full Release Validation evidence recorded without soak; leave empty to require soak.
+        required: false
+        default: ""
+        type: string
       release_evidence_mode:
         description: Publication evidence contract
         required: true
@@ -68,7 +73,7 @@ on:
         required: false
         type: string
       release_candidate_branch:
-        description: Canonical extended-stable branch when a trusted main workflow promotes its immutable tag
+        description: Canonical extended-stable branch when protected release tooling or trusted-main recovery promotes its immutable tag
         required: false
         default: ""
         type: string
@@ -88,7 +93,7 @@ on:
         default: ""
         type: string
       bypass_extended_stable_guard:
-        description: Testing only; relax the extended-stable patch and protected-main month policy on the canonical extended-stable branch
+        description: Testing only; relax the extended-stable patch and trailing-completed-month rule on the canonical extended-stable branch
         required: true
         default: false
         type: boolean
@@ -139,6 +144,12 @@ jobs:
           filter: blob:none
           persist-credentials: false
 
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - name: Validate npm release request
         env:
           BYPASS_EXTENDED_STABLE_GUARD: ${{ inputs.bypass_extended_stable_guard }}
@@ -168,8 +179,8 @@ jobs:
             extended_stable_publish=true
           fi
           if [[ -n "${release_candidate_branch}" ]]; then
-            if [[ "${RELEASE_NPM_DIST_TAG}" != "extended-stable" || "${WORKFLOW_REF}" != "refs/heads/main" ]]; then
-              echo "release_candidate_branch is only valid for an extended-stable publish dispatched from main." >&2
+            if [[ "${RELEASE_NPM_DIST_TAG}" != "extended-stable" ]] || { [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/tags/release-publish/[a-f0-9]{12}-[1-9][0-9]*$ ]]; }; then
+              echo "release_candidate_branch requires extended-stable publication from trusted main or protected release-publish tooling." >&2
               exit 1
             fi
             if [[ ! "${RELEASE_TAG}" =~ ^v([0-9]{4})\.([1-9][0-9]*)\.[1-9][0-9]*$ ]]; then
@@ -308,6 +319,8 @@ jobs:
           printf '%s' "$RUN_JSON" | DIRECT_RELEASE_RECOVERY="${direct_recovery}" node scripts/validate-release-publish-approval.mjs
 
   publish_openclaw_npm:
+    outputs:
+      stable_soak_waiver: ${{ steps.full_manifest.outputs.stable_soak_waiver }}
     # KEEP THE REAL RELEASE/PUBLISH PATH ON A GITHUB-HOSTED RUNNER.
     # npm trusted publishing + provenance requires this to stay on ubuntu-latest.
     needs: [validate_publish_request]
@@ -398,6 +411,52 @@ jobs:
           persist-credentials: false
           sparse-checkout: scripts
 
+      - name: Download full release validation manifest
+        if: ${{ inputs.release_evidence_mode == 'full-release-validation' && inputs.full_release_validation_run_id != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ inputs.full_release_validation_run_attempt }}
+          path: full-release-validation
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.full_release_validation_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify full release validation evidence
+        if: ${{ inputs.release_evidence_mode == 'full-release-validation' && inputs.full_release_validation_run_id != '' }}
+        env:
+          PUBLICATION_CONSUMER: core-npm
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ inputs.full_release_validation_run_attempt }}
+          EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_candidate_branch || github.ref_name }}
+          STRICT_VALIDATOR_FILE: ${{ github.workspace }}/trusted-workflow/scripts/release-ci-summary.mjs
+          TRUSTED_WORKFLOW_FULL_REF: ${{ github.ref }}
+          TRUSTED_WORKFLOW_REF: ${{ github.ref_name }}
+          TRUSTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          EXPECTED_SHA="$(git rev-parse HEAD)"
+          MANIFEST_FILE="full-release-validation/full-release-validation-manifest.json"
+          export EXPECTED_SHA MANIFEST_FILE
+          trusted_main_ref="refs/remotes/origin/main"
+          if [[ "${TRUSTED_WORKFLOW_FULL_REF}" =~ ^refs/tags/release-publish/[a-f0-9]{12}-[1-9][0-9]*$ ]]; then
+            trusted_publisher_ref="refs/tags/${TRUSTED_WORKFLOW_REF}"
+            timeout --signal=TERM --kill-after=10s 120s git fetch --filter=blob:none --no-tags origin \
+              "+${TRUSTED_WORKFLOW_FULL_REF}:${trusted_publisher_ref}"
+            if [[ "$(git rev-parse "${trusted_publisher_ref}^{commit}")" != "${WORKFLOW_SHA}" ]]; then
+              echo "Trusted release-publish tag moved after workflow dispatch." >&2
+              exit 1
+            fi
+          fi
+          timeout --signal=TERM --kill-after=10s 120s git fetch --filter=blob:none --no-tags origin \
+            "+refs/heads/main:${trusted_main_ref}"
+          TRUSTED_MAIN_REF="${trusted_main_ref}" \
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" | \
+            TRUSTED_MAIN_REF="${trusted_main_ref}" \
+            node trusted-workflow/scripts/validate-full-release-validation-evidence.mjs
       - name: Verify preflight run metadata
         id: preflight_run
         env:
@@ -414,24 +473,30 @@ jobs:
           set -euo pipefail
           EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"
           export EXPECTED_RELEASE_SHA
-          preflight_run_path="repos/${GITHUB_REPOSITORY}/actions/runs/${PREFLIGHT_RUN_ID}"
-          if [[ "$PREFLIGHT_RUN_ID" == "$FULL_RELEASE_VALIDATION_RUN_ID" ]]; then
-            [[ "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || exit 1
-            preflight_run_path+="/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}"
-          fi
-          preflight_run_metadata="$(gh api "$preflight_run_path" --jq '{run_attempt,path}')"
-          PREFLIGHT_RUN_ATTEMPT="$(jq -r .run_attempt <<<"$preflight_run_metadata")"
-          RUN_WORKFLOW_PATH="$(jq -r .path <<<"$preflight_run_metadata")"
-          [[ "$PREFLIGHT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || exit 1
-          export PREFLIGHT_RUN_ATTEMPT RUN_WORKFLOW_PATH
-          RUN_JSON="$(gh run view "$PREFLIGHT_RUN_ID" --attempt "$PREFLIGHT_RUN_ATTEMPT" --repo "$GITHUB_REPOSITORY" --json databaseId,attempt,workflowName,headBranch,headSha,event,status,conclusion,url)"
-          printf '%s' "$RUN_JSON" | node trusted-workflow/scripts/openclaw-npm-extended-stable-release.mjs verify-run
-          preflight_head_sha="$(jq -r .headSha <<<"$RUN_JSON")"
-          preflight_head_branch="$(jq -r .headBranch <<<"$RUN_JSON")"
           full_release_preflight=false
-          if [[ "$(jq -r .workflowName <<<"$RUN_JSON")" == "Full Release Validation" ]]; then
-            # verify-run has bound the selected FRV run, attempt, path, and completion.
+          if [[ "$PREFLIGHT_RUN_ID" == "$FULL_RELEASE_VALIDATION_RUN_ID" ]]; then
+            full_manifest="full-release-validation/full-release-validation-manifest.json"
+            resolution="$(node trusted-workflow/scripts/npm-preflight-tooling-identity.mjs \
+              --resolve-full-release-manifest "$full_manifest" \
+              --repository "$GITHUB_REPOSITORY" --run-id "$FULL_RELEASE_VALIDATION_RUN_ID" \
+              --run-attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" --source-sha "$EXPECTED_RELEASE_SHA" \
+              --workflow-sha "$(jq -r .workflowSha "$full_manifest")")"
+            PREFLIGHT_RUN_ID="$(jq -r .producer.runId <<<"$resolution")"
+            PREFLIGHT_RUN_ATTEMPT="$(jq -r .producer.runAttempt <<<"$resolution")"
+            RUN_WORKFLOW_PATH="$(jq -r .run.path <<<"$resolution")"
+            preflight_head_sha="$(jq -r .run.head_sha <<<"$resolution")"
+            preflight_head_branch="$(jq -r .run.head_branch <<<"$resolution")"
             full_release_preflight=true
+          else
+            preflight_run_metadata="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PREFLIGHT_RUN_ID}" --jq '{run_attempt,path}')"
+            PREFLIGHT_RUN_ATTEMPT="$(jq -r .run_attempt <<<"$preflight_run_metadata")"
+            RUN_WORKFLOW_PATH="$(jq -r .path <<<"$preflight_run_metadata")"
+            [[ "$PREFLIGHT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || exit 1
+            export PREFLIGHT_RUN_ATTEMPT RUN_WORKFLOW_PATH
+            RUN_JSON="$(gh run view "$PREFLIGHT_RUN_ID" --attempt "$PREFLIGHT_RUN_ATTEMPT" --repo "$GITHUB_REPOSITORY" --json databaseId,attempt,workflowName,headBranch,headSha,event,status,conclusion,url)"
+            printf '%s' "$RUN_JSON" | node trusted-workflow/scripts/openclaw-npm-extended-stable-release.mjs verify-run
+            preflight_head_sha="$(jq -r .headSha <<<"$RUN_JSON")"
+            preflight_head_branch="$(jq -r .headBranch <<<"$RUN_JSON")"
           fi
           extended_stable_preflight=false
           if [[ "$full_release_preflight" != "true" && "$RELEASE_NPM_DIST_TAG" == "extended-stable" && "$preflight_head_branch" == "$EXPECTED_EXTENDED_STABLE_BRANCH" ]]; then
@@ -483,61 +548,9 @@ jobs:
           fi
           echo "head_sha=${preflight_head_sha}" >> "$GITHUB_OUTPUT"
           echo "head_branch=${preflight_head_branch}" >> "$GITHUB_OUTPUT"
+          echo "run_id=${PREFLIGHT_RUN_ID}" >> "$GITHUB_OUTPUT"
           echo "run_attempt=${PREFLIGHT_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
           echo "workflow_path=${RUN_WORKFLOW_PATH%%@*}" >> "$GITHUB_OUTPUT"
-
-      - name: Download full release validation manifest
-        if: ${{ inputs.release_evidence_mode == 'full-release-validation' && inputs.full_release_validation_run_id != '' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ inputs.full_release_validation_run_attempt }}
-          path: full-release-validation
-          repository: ${{ github.repository }}
-          run-id: ${{ inputs.full_release_validation_run_id }}
-          github-token: ${{ github.token }}
-
-      - name: Verify full release validation evidence
-        if: ${{ inputs.release_evidence_mode == 'full-release-validation' && inputs.full_release_validation_run_id != '' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
-          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
-          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ inputs.full_release_validation_run_attempt }}
-          EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_candidate_branch || github.ref_name }}
-          STRICT_VALIDATOR_FILE: ${{ github.workspace }}/trusted-workflow/scripts/release-ci-summary.mjs
-          TRUSTED_WORKFLOW_FULL_REF: ${{ github.ref }}
-          TRUSTED_WORKFLOW_REF: ${{ github.ref_name }}
-          TRUSTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
-        run: |
-          set -euo pipefail
-          EXPECTED_SHA="$(git rev-parse HEAD)"
-          MANIFEST_FILE="full-release-validation/full-release-validation-manifest.json"
-          export EXPECTED_SHA MANIFEST_FILE
-          trusted_main_ref="refs/remotes/origin/main"
-          if [[ "${TRUSTED_WORKFLOW_FULL_REF}" =~ ^refs/tags/release-publish/[a-f0-9]{12}-[1-9][0-9]*$ ]]; then
-            trusted_publisher_ref="refs/tags/${TRUSTED_WORKFLOW_REF}"
-            timeout --signal=TERM --kill-after=10s 120s git fetch --filter=blob:none --no-tags origin \
-              "+${TRUSTED_WORKFLOW_FULL_REF}:${trusted_publisher_ref}"
-            if [[ "$(git rev-parse "${trusted_publisher_ref}^{commit}")" != "${WORKFLOW_SHA}" ]]; then
-              echo "Trusted release-publish tag moved after workflow dispatch." >&2
-              exit 1
-            fi
-          fi
-          timeout --signal=TERM --kill-after=10s 120s git fetch --filter=blob:none --no-tags origin \
-            "+refs/heads/main:${trusted_main_ref}"
-          TRUSTED_MAIN_REF="${trusted_main_ref}" \
-            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" | \
-            TRUSTED_MAIN_REF="${trusted_main_ref}" \
-            node trusted-workflow/scripts/validate-full-release-validation-evidence.mjs
-          node "$STRICT_VALIDATOR_FILE" \
-            --validate-run "$FULL_RELEASE_VALIDATION_RUN_ID" \
-            --trusted-workflow-ref "$TRUSTED_WORKFLOW_REF" \
-            --trusted-workflow-full-ref "$TRUSTED_WORKFLOW_FULL_REF" \
-            --trusted-workflow-sha "$TRUSTED_WORKFLOW_SHA" \
-            --json \
-            --verifier-source-sha "$WORKFLOW_SHA" \
-            --verifier-source-file "$STRICT_VALIDATOR_FILE" >/dev/null
 
       - name: Download focused release evidence
         if: ${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' }}
@@ -582,27 +595,53 @@ jobs:
           PLUGIN_NPM_RUN_ID: ${{ inputs.plugin_npm_run_id }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           EXPECTED_EXTENDED_STABLE_BRANCH: ${{ inputs.release_candidate_branch || github.ref_name }}
+          EXPECTED_ORCHESTRATOR_BRANCH: ${{ inputs.release_candidate_branch != '' && startsWith(github.ref, 'refs/tags/release-publish/') && github.ref_name || '' }}
+          EXPECTED_ORCHESTRATOR_SHA: ${{ inputs.release_candidate_branch != '' && startsWith(github.ref, 'refs/tags/release-publish/') && github.workflow_sha || '' }}
           RUN_KIND: plugin
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
           EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"
           export EXPECTED_RELEASE_SHA
-          RUN_JSON="$(gh run view "$PLUGIN_NPM_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,displayTitle,headBranch,headSha,event,status,conclusion,url)"
-          printf '%s' "$RUN_JSON" | node scripts/openclaw-npm-extended-stable-release.mjs verify-run
+          RUN_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PLUGIN_NPM_RUN_ID}")"
+          # REST run.name is the dynamic run title; the workflow resource owns its static name.
+          plugin_workflow_id="$(jq -er '.workflow_id | select(type == "number" and . > 0)' <<<"$RUN_JSON")"
+          plugin_workflow_name="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${plugin_workflow_id}" --jq .name)"
+          RUN_JSON="$(jq --arg workflowName "$plugin_workflow_name" '{workflowName: $workflowName, displayTitle: .display_title, headBranch: .head_branch, headSha: .head_sha, event, status, conclusion, url: .html_url, path}' <<<"$RUN_JSON")"
+          export RUN_WORKFLOW_PATH="$(jq -r .path <<<"$RUN_JSON")"
+          export TRUSTED_PLUGIN_WORKFLOW_SHA=""
+          if [[ "$(jq -r .headBranch <<<"$RUN_JSON")" == "main" ]]; then
+            plugin_workflow_sha="$(jq -r .headSha <<<"$RUN_JSON")"
+            if [[ "$WORKFLOW_REF" != "refs/heads/main" || ! "$plugin_workflow_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Plugin recovery evidence requires a main-branch publisher and exact workflow SHA." >&2
+              exit 1
+            fi
+            if ! git -C trusted-workflow cat-file -e "${plugin_workflow_sha}^{commit}" 2>/dev/null; then
+              timeout --signal=TERM --kill-after=10s 120s git -C trusted-workflow fetch \
+                --no-tags --depth=1 origin "$plugin_workflow_sha"
+            fi
+            if ! git -C trusted-workflow merge-base --is-ancestor "$plugin_workflow_sha" "$WORKFLOW_SHA"; then
+              echo "Plugin recovery tooling is not on the trusted publish workflow lineage." >&2
+              exit 1
+            fi
+            export TRUSTED_PLUGIN_WORKFLOW_SHA="$plugin_workflow_sha"
+          fi
+          printf '%s' "$RUN_JSON" | node trusted-workflow/scripts/openclaw-npm-extended-stable-release.mjs verify-run
 
       - name: Download prepared npm tarball
         env:
           GH_TOKEN: ${{ github.token }}
-          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          PREFLIGHT_RUN_ID: ${{ steps.preflight_run.outputs.run_id }}
           PREFLIGHT_RUN_ATTEMPT: ${{ steps.preflight_run.outputs.run_attempt }}
           PREFLIGHT_WORKFLOW_PATH: ${{ steps.preflight_run.outputs.workflow_path }}
+          PREFLIGHT_WORKFLOW_SHA: ${{ steps.preflight_run.outputs.head_sha }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ inputs.full_release_validation_run_attempt }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           preferred_name="openclaw-npm-preflight-${RELEASE_TAG}"
-          if [[ "$PREFLIGHT_WORKFLOW_PATH" == ".github/workflows/full-release-validation.yml" ]]; then
-            preferred_name="$(jq -er '.publicationArtifacts.npmPreflight.artifact.name | select(test("^openclaw-npm-preflight-[A-Za-z0-9_.-]+$"))' full-release-validation/full-release-validation-manifest.json)"
-          fi
           rm -rf preflight-tarball plugin-sdk-api-evidence
           mkdir -p preflight-tarball plugin-sdk-api-evidence
 
@@ -624,13 +663,15 @@ jobs:
             return 1
           }
 
-          if download_named_artifact "${preferred_name}" preflight-tarball; then
+          if [[ "$PREFLIGHT_WORKFLOW_PATH" == ".github/workflows/full-release-validation.yml" || "$PREFLIGHT_WORKFLOW_PATH" == ".github/workflows/full-release-artifacts.yml" ]]; then
+            node trusted-workflow/scripts/npm-preflight-tooling-identity.mjs \
+              --resolve-full-release-manifest full-release-validation/full-release-validation-manifest.json \
+              --repository "$GITHUB_REPOSITORY" --run-id "$FULL_RELEASE_VALIDATION_RUN_ID" \
+              --run-attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" --source-sha "$(git rev-parse HEAD)" \
+              --workflow-sha "$PREFLIGHT_WORKFLOW_SHA" --output-dir preflight-tarball >/dev/null
+          elif download_named_artifact "${preferred_name}" preflight-tarball; then
             echo "Downloaded ${preferred_name}."
           else
-            if [[ "$PREFLIGHT_WORKFLOW_PATH" == ".github/workflows/full-release-validation.yml" ]]; then
-              echo "The exact qualified npm artifact recorded by Full Release Validation is unavailable." >&2
-              exit 1
-            fi
             echo "::warning::${preferred_name} not found; checking run artifacts for a single compatible preflight artifact."
             mapfile -t matches < <(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${PREFLIGHT_RUN_ID}/artifacts" \
               --jq '.artifacts[] | select(.expired != true) | .name' |
@@ -675,8 +716,10 @@ jobs:
           PREFLIGHT_WORKFLOW_SHA: ${{ steps.preflight_run.outputs.head_sha }}
           PREFLIGHT_WORKFLOW_BRANCH: ${{ steps.preflight_run.outputs.head_branch }}
           PREFLIGHT_WORKFLOW_PATH: ${{ steps.preflight_run.outputs.workflow_path }}
-          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          PREFLIGHT_RUN_ID: ${{ steps.preflight_run.outputs.run_id }}
           PREFLIGHT_RUN_ATTEMPT: ${{ steps.preflight_run.outputs.run_attempt }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ inputs.full_release_validation_run_attempt }}
         run: |
           set -euo pipefail
           EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"
@@ -691,8 +734,9 @@ jobs:
             producer_full_ref="refs/tags/${PREFLIGHT_WORKFLOW_BRANCH}"
           fi
           provenance_args=()
-          if [[ "$PREFLIGHT_WORKFLOW_PATH" == ".github/workflows/full-release-validation.yml" ]]; then
-            provenance_args+=(--full-release-manifest full-release-validation/full-release-validation-manifest.json)
+          if [[ "$PREFLIGHT_WORKFLOW_PATH" == ".github/workflows/full-release-validation.yml" || "$PREFLIGHT_WORKFLOW_PATH" == ".github/workflows/full-release-artifacts.yml" ]]; then
+            provenance_args+=(--full-release-manifest full-release-validation/full-release-validation-manifest.json
+              --full-release-run-id "$FULL_RELEASE_VALIDATION_RUN_ID" --full-release-run-attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT")
           fi
           node trusted-workflow/scripts/npm-preflight-tooling-identity.mjs \
             --manifest "$MANIFEST_FILE" \
@@ -835,8 +879,10 @@ jobs:
           echo "tarball_path=$ARTIFACT_TARBALL_PATH" >> "$GITHUB_OUTPUT"
 
       - name: Verify full release validation target
+        id: full_manifest
         if: ${{ inputs.release_evidence_mode == 'full-release-validation' && inputs.full_release_validation_run_id != '' }}
         env:
+          STABLE_SOAK_WAIVER: ${{ inputs.stable_soak_waiver }}
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: |
@@ -847,21 +893,8 @@ jobs:
             ls -la full-release-validation >&2 || true
             exit 1
           fi
-          RERUN_GROUP="$(jq -r '.rerunGroup // ""' "$MANIFEST_FILE")"
-          RUN_RELEASE_SOAK="$(jq -r '.runReleaseSoak // ""' "$MANIFEST_FILE")"
-          PERFORMANCE_BLOCKING="$(jq -r '.controls.performanceBlocking // false' "$MANIFEST_FILE")"
-          if [[ "$RERUN_GROUP" != "all" ]]; then
-            echo "Full release validation must run rerun_group=all before npm publish; got $RERUN_GROUP" >&2
-            exit 1
-          fi
-          if [[ "$RELEASE_NPM_DIST_TAG" != "beta" && "$PERFORMANCE_BLOCKING" != "true" ]]; then
-            echo "Full release validation manifest does not record blocking product performance evidence." >&2
-            exit 1
-          fi
-          if [[ "$RELEASE_TAG" != *"-alpha."* && "$RELEASE_TAG" != *"-beta."* && "$RUN_RELEASE_SOAK" != "true" ]]; then
-            echo "Stable releases require Full Release Validation with runReleaseSoak=true." >&2
-            exit 1
-          fi
+          node trusted-workflow/scripts/lib/release-publish-gates.mts \
+            --consumer core-npm --manifest "$MANIFEST_FILE"
 
       - name: Recheck npm release request
         env:

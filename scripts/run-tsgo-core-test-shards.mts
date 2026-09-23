@@ -23,12 +23,14 @@ const repoRoot = resolveRepoRoot(import.meta.url);
 function runShard(config: string, env: NodeJS.ProcessEnv): Promise<number> {
   return runManagedCommand({
     bin: process.execPath,
-    args: distArtifactEntryArgs(path.join(repoRoot, "scripts/run-tsgo.mts"), [
-      "-b",
-      config,
-      "--builders",
-      "1",
-    ]),
+    shell: false,
+    args: distArtifactEntryArgs(
+      path.join(repoRoot, "scripts/run-tsgo.mts"),
+      // These graphs have no project references. Project mode rechecks root
+      // membership even when a restored build-info file is newer than a new root.
+      ["-p", config, "--incremental"],
+      { native: true },
+    ),
     cwd: repoRoot,
     env,
     requireProcessTreeExit: process.platform !== "win32",
@@ -54,10 +56,14 @@ async function runTsgoCoreTestShards(
         if (!shard || failureCode !== 0) {
           return;
         }
+        const startedAt = performance.now();
         const code = await runShard(shard.config, env).catch((error: unknown) => {
           failureCode = 1;
           throw error;
         });
+        console.error(
+          `[tsgo:${shard.name}] ${code === 0 ? "passed" : `failed (exit ${code})`} in ${((performance.now() - startedAt) / 1000).toFixed(1)}s`,
+        );
         if (code !== 0 && failureCode === 0) {
           failureCode = code;
         }
@@ -93,7 +99,7 @@ export function createChangedCoreTestCheck(paths: readonly string[], env: NodeJS
         throw error;
       }
     },
-    async checkTypes(): Promise<number> {
+    async checkTypes(concurrency = 1): Promise<number> {
       const inspected = graphs;
       graphs = undefined;
       const shards = inspected && selectChangedTsgoCoreTestShards(paths, inspected);
@@ -101,31 +107,12 @@ export function createChangedCoreTestCheck(paths: readonly string[], env: NodeJS
       console.error(
         `[check:changed] core test graphs: ${selected.map((shard) => shard.name).join(", ")}`,
       );
-      return await runTsgoCoreTestShards(selected, { env });
+      return await runTsgoCoreTestShards(selected, { env, concurrency });
     },
   };
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
-  // CI stripes split the serial shard sequence across parallel jobs; the
-  // stripe union is exactly the full shard list, so coverage is unchanged.
-  const stripeFlagIndex = process.argv.indexOf("--stripe");
-  let shards;
-  if (stripeFlagIndex >= 0) {
-    const stripeSpec = process.argv[stripeFlagIndex + 1] ?? "";
-    shards = selectTsgoCoreTestStripe(stripeSpec);
-    if (!shards) {
-      console.error(`Invalid core test stripe (expected i/n): ${stripeSpec}`);
-      process.exit(1);
-    }
-  } else {
-    const requestedGroup = process.argv[2];
-    shards = selectTsgoCoreTestShards(requestedGroup);
-    if (!shards) {
-      console.error(`Unknown core test shard group: ${requestedGroup}`);
-      process.exit(1);
-    }
-  }
   // Each graph is a serial single-project build, so tsgo gains little past four
   // cores; CI stripe jobs opt into overlapping fresh child processes to use the
   // idle cores. Local runs stay serial to keep the heap-bounded default.
@@ -140,5 +127,38 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
     }
   }
 
-  process.exitCode = await runTsgoCoreTestShards(shards, { concurrency });
+  const changedPathsIndex = process.argv.indexOf("--changed-paths-json");
+  if (changedPathsIndex >= 0) {
+    const paths: unknown = JSON.parse(process.argv[changedPathsIndex + 1] ?? "null");
+    if (
+      !Array.isArray(paths) ||
+      paths.length === 0 ||
+      !paths.every((file) => typeof file === "string")
+    ) {
+      throw new Error("--changed-paths-json requires a nonempty JSON string array");
+    }
+    const check = createChangedCoreTestCheck(paths, process.env);
+    process.exitCode = (await check.checkBoundary()) || (await check.checkTypes(concurrency));
+  } else {
+    // CI stripes split the serial shard sequence across parallel jobs; the
+    // stripe union is exactly the full shard list, so coverage is unchanged.
+    const stripeFlagIndex = process.argv.indexOf("--stripe");
+    let shards;
+    if (stripeFlagIndex >= 0) {
+      const stripeSpec = process.argv[stripeFlagIndex + 1] ?? "";
+      shards = selectTsgoCoreTestStripe(stripeSpec);
+      if (!shards) {
+        console.error(`Invalid core test stripe (expected i/n or first-last/n): ${stripeSpec}`);
+        process.exit(1);
+      }
+    } else {
+      const requestedGroup = process.argv[2];
+      shards = selectTsgoCoreTestShards(requestedGroup);
+      if (!shards) {
+        console.error(`Unknown core test shard group: ${requestedGroup}`);
+        process.exit(1);
+      }
+    }
+    process.exitCode = await runTsgoCoreTestShards(shards, { concurrency });
+  }
 }

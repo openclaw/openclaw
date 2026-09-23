@@ -4,32 +4,27 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine
 import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { listMemorySessionTombstones } from "./memory-entry-origins.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import {
   createMemoryForgetFixture,
-  closeMemoryForgetFixture,
   seedMemoryForgetSession,
 } from "./memory-forget.test-helpers.js";
 
 describe("memory forget participant selectors", () => {
-  let stateDir: string;
+  let fixture: Awaited<ReturnType<typeof createMemoryForgetFixture>>;
   let workspaceDir: string;
   let cfg: OpenClawConfig;
 
   beforeEach(async () => {
-    stateDir = tempDirs.make("openclaw-memory-forget-");
-    ({ workspaceDir, cfg } = await createMemoryForgetFixture(stateDir));
+    fixture = await createMemoryForgetFixture();
+    ({ workspaceDir, cfg } = fixture);
   });
 
-  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(() => {
-      closeMemoryForgetFixture();
-      cleanup();
-    }),
-  );
+  afterEach(async () => {
+    await fixture.cleanup();
+  });
 
   it("reports raw participant collisions across namespaces without changing state in dry-run", async () => {
     for (const sessionId of ["profile-match", "agent-match", "unrelated"]) {

@@ -15,10 +15,14 @@ export type HubTabOption<T extends string> = {
 type HubTabsProps<T extends string> = {
   id: string;
   active: T | null;
+  /** Owning selection when active is a provisional display fallback. */
+  requestedActive?: T;
   tabs: ReadonlyArray<HubTabOption<T>>;
   ariaLabel: string;
   panelId: string;
   className?: string;
+  /** Opts this strip into Carapace's segmented-control presentation. */
+  carapace?: boolean;
   variant?: "primary" | "sub";
   onSelect: (tab: T) => void;
   onActivate?: (element: HTMLElement) => void;
@@ -64,7 +68,8 @@ function reclaimFocus(hubId: string, tab: string, element: Element | undefined) 
 
 export function renderHubTabs<T extends string>(props: HubTabsProps<T>): TemplateResult {
   const variant = props.variant ?? "primary";
-  const className = `hub-tabs hub-tabs--${variant} ${props.id}-hub-tabs${props.className ? ` ${props.className}` : ""}`;
+  const requestedActive = props.requestedActive ?? props.active;
+  const className = `hub-tabs hub-tabs--${variant} ${props.id}-hub-tabs${props.carapace ? " oc-segmented" : ""}${props.className ? ` ${props.className}` : ""}`;
   const fallbackFocusValue =
     props.active === null ? props.tabs.find((tab) => !tab.disabled)?.value : null;
   return html`
@@ -83,7 +88,7 @@ export function renderHubTabs<T extends string>(props: HubTabsProps<T>): Templat
             id=${`${props.id}-tab-${tab.value}`}
             panel=${tab.value}
             aria-controls=${props.panelId}
-            class="hub-tab"
+            class="hub-tab ${props.carapace ? "oc-segmented-item" : ""}"
             ?active=${selected}
             ?disabled=${tab.disabled}
             .tabIndex=${selected || tab.value === fallbackFocusValue ? 0 : -1}
@@ -97,7 +102,7 @@ export function renderHubTabs<T extends string>(props: HubTabsProps<T>): Templat
               if (
                 !tab.disabled &&
                 (event.detail > 0 || event.isTrusted) &&
-                tab.value !== props.active
+                tab.value !== requestedActive
               ) {
                 props.onSelect(tab.value);
                 props.onActivate?.(activeElement);
@@ -112,7 +117,7 @@ export function renderHubTabs<T extends string>(props: HubTabsProps<T>): Templat
                 !tab.disabled &&
                 !event.repeat &&
                 (event.key === "Enter" || event.key === " ") &&
-                tab.value !== props.active
+                tab.value !== requestedActive
               ) {
                 event.preventDefault();
                 pendingFocus = {
@@ -127,13 +132,11 @@ export function renderHubTabs<T extends string>(props: HubTabsProps<T>): Templat
             }}
             ${selected ? ref((element) => reclaimFocus(props.id, tab.value, element)) : nothing}
           >
-            ${tab.label}${tab.count == null
-              ? nothing
-              : html`<span class="hub-tab__badge hub-tab__badge--count"
-                  >${tab.count}</span
-                >`}${tab.badge == null
-              ? nothing
-              : html`<span class="hub-tab__badge">${tab.badge}</span>`}
+            ${tab.label}${
+              tab.count == null
+                ? nothing
+                : html`<span class="hub-tab__badge hub-tab__badge--count">${tab.count}</span>`
+            }${tab.badge == null ? nothing : html`<span class="hub-tab__badge">${tab.badge}</span>`}
           </wa-tab>
         `;
       })}

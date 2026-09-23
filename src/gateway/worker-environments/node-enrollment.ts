@@ -1,5 +1,6 @@
 import os from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
+import { isLinkLocalIpAddress, isUnspecifiedIpAddress } from "@openclaw/net-policy/ip";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveGatewayPublicOrigin } from "../../config/gateway-public-origin.js";
 import { ensureDevicePairSetupBootstrapToken } from "../../infra/device-bootstrap.js";
@@ -15,6 +16,7 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../../shared/device-bootstrap-profile.js";
 import { workerBundleArchiveRelativePath } from "../../shared/worker-bundle-hash.js";
 import { WORKER_BOOTSTRAP_ARTIFACT_TRANSFER_PATH } from "../gateway-http-route-contracts.js";
+import { isLoopbackHost } from "../net.js";
 import type { TransferArtifact } from "./artifact-transfer-service.js";
 import type { DeviceWorkerAvailability } from "./device-provider.js";
 import type { NodeBootstrapArtifact } from "./node-bootstrap-artifact.js";
@@ -55,12 +57,21 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     const config = options.getConfig();
     const url = await resolvePairingGatewayUrl(config, {
       env: process.env,
+      useLocalGateway: config.gateway?.mode === "remote",
       publicUrl: resolveConfiguredPairingPublicUrl(config) ?? resolveGatewayPublicOrigin(config),
       networkInterfaces: os.networkInterfaces,
       runCommandWithTimeout: commandRunner,
     });
     if (!url.url) {
       throw new Error(url.error ?? "Cloud node bootstrap cannot resolve the Gateway address");
+    }
+    // Cloud workers call back over the public network; a loopback URL can still be
+    // valid for same-host device pairing, so refuse it at this cloud-only boundary.
+    const host = new URL(url.url).hostname;
+    if (isLoopbackHost(host) || isLinkLocalIpAddress(host) || isUnspecifiedIpAddress(host)) {
+      throw new Error(
+        `Cloud node bootstrap resolved a Gateway address that a cloud worker cannot reach (${url.url}, from ${url.source ?? "unknown"}). Set gateway.publicOrigin (or plugins.entries.device-pair.config.publicUrl) to a URL reachable from the worker, such as a Tailscale Funnel or a reverse-proxied public origin with gateway.trustedProxies, then redispatch.`,
+      );
     }
     preparationSignal.throwIfAborted();
     const artifact = await options.prepareArtifact(record, preparationSignal);
@@ -165,6 +176,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     bundle: TransferArtifact,
     operationSignal?: AbortSignal,
   ): Promise<WorkerNodeRuntimePreparation> => {
+    await options.store.ready();
     const { binding, enrollmentSignal, current } = reserve(record, operationSignal);
     try {
       const prepared = await prepare(record, enrollmentSignal);
@@ -192,11 +204,13 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     record: WorkerEnvironmentRecord,
     operationSignal?: AbortSignal,
   ): Promise<WorkerNodeEnrollment> => {
+    await options.store.ready();
     const { binding, enrollmentSignal, current: requireCurrent } = reserve(record, operationSignal);
     try {
       const prepared = await prepare(record, enrollmentSignal);
       requireCurrent();
-      let current = options.store.ensureNodeEnrollment(record.environmentId);
+      let current = await options.store.ensureNodeEnrollment(record.environmentId);
+      requireCurrent();
       if (
         current.state !== "provisioning" ||
         current.destroyRequestedAtMs !== null ||
@@ -222,7 +236,8 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
         });
         requireCurrent();
         if (issued.status === "completed") {
-          current = options.store.ensureNodeEnrollment(record.environmentId);
+          current = await options.store.ensureNodeEnrollment(record.environmentId);
+          requireCurrent();
           if (!current.nodeDeviceId || current.nodeDeviceId !== issued.deviceId) {
             throw new Error("Worker node enrollment completion did not bind its environment");
           }
@@ -231,6 +246,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
           const config = options.getConfig();
           const resolved = await resolvePairingSetupFromConfig(config, {
             env: process.env,
+            useLocalGateway: config.gateway?.mode === "remote",
             publicUrl:
               resolveConfiguredPairingPublicUrl(config) ?? resolveGatewayPublicOrigin(config),
             bootstrapProfile: CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -282,8 +298,9 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
           const deadline = now() + NODE_ENROLLMENT_TIMEOUT_MS;
           while (now() < deadline) {
             enrollmentSignal.throwIfAborted();
-            const live = options.store.ensureNodeEnrollment(owner.environmentId);
+            const live = options.store.get(owner.environmentId);
             if (
+              !live ||
               live.destroyRequestedAtMs !== null ||
               live.state !== "provisioning" ||
               live.provisionOperationId !== owner.provisionOperationId ||
@@ -350,7 +367,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     prepare: async (record: WorkerEnvironmentRecord, operationSignal?: AbortSignal) => {
       const preflight = new AbortController();
       try {
-        await prepare(
+        const prepared = await prepare(
           record,
           AbortSignal.any([
             signal,
@@ -358,6 +375,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
             ...(operationSignal ? [operationSignal] : []),
           ]),
         );
+        return prepared.artifact.tarballSha256;
       } finally {
         // Preflight creates no transfer grant; release its artifact pin even on success.
         preflight.abort();

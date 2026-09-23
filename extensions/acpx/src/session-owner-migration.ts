@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -14,7 +13,6 @@ import {
   openAcpxProcessLeaseStateStore,
   readAcpxProcessLeaseIdentity,
 } from "./process-lease.js";
-import { resolveAcpxSessionResource } from "./session-resource.js";
 
 type MigrationInput = Parameters<PluginDoctorStateMigration["migrateLegacyState"]>[0];
 type Claim = Awaited<
@@ -51,6 +49,8 @@ async function legacyRecords(input: MigrationInput): Promise<{ directory: string
   if (ids.length === 0) {
     return { directory, ids };
   }
+  // Only legacy records need resource naming; empty directories must not load its runtime graph.
+  const { resolveAcpxSessionResource } = await import("./session-resource.js");
   const evidence = await input.context.inspectAcpSessionClaims?.();
   const { decodeAcpxRuntimeHandleState } = await import("acpx/runtime");
   return {
@@ -163,6 +163,7 @@ async function migrateRecord(
     throw new Error("record ID/name is not a recognized ACPX locator");
   }
   requireStoppedPid(raw.pid);
+  const { resolveAcpxSessionResource } = await import("./session-resource.js");
   const { createFileSessionStore, decodeAcpxRuntimeHandleState, encodeAcpxRuntimeHandleState } =
     await import("acpx/runtime");
   // A roster match alone is never ownership evidence. Canonical metadata and its current
@@ -226,17 +227,23 @@ async function migrateRecord(
   if (!source) {
     throw new Error("pinned ACPX reader rejected the source record");
   }
-  const temporaryId = `.openclaw-owner-${randomUUID()}`;
-  const temporaryPath = recordPath(directory, temporaryId);
-  const file = await fs.open(temporaryPath, "wx", 0o600);
+  // ACPX requires the filename to match the record ID. A private store on the
+  // same filesystem validates the real locator before atomic publication.
+  const temporaryDirectory = await fs.mkdtemp(path.join(directory, ".openclaw-owner-"));
+  const temporarySessions = path.join(temporaryDirectory, "sessions");
+  const temporaryPath = recordPath(temporarySessions, recordId);
   try {
+    await fs.mkdir(temporarySessions, { mode: 0o700 });
+    const file = await fs.open(temporaryPath, "wx", 0o600);
     try {
       await file.writeFile(candidateBytes);
       await file.sync();
     } finally {
       await file.close();
     }
-    const interpreted = await store.load(temporaryId);
+    const interpreted = await createFileSessionStore({ stateDir: temporaryDirectory }).load(
+      recordId,
+    );
     if (
       !interpreted ||
       !isDeepStrictEqual(
@@ -319,7 +326,7 @@ async function migrateRecord(
       });
     }
   } finally {
-    await fs.rm(temporaryPath, { force: true });
+    await fs.rm(temporaryDirectory, { recursive: true, force: true });
   }
 }
 

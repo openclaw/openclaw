@@ -15,10 +15,13 @@ import { resolveSecretInputModeForEnvSelection } from "../../plugins/provider-au
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
+import { setTopLevelChannelEnabledInConfigSection, writeChannelSection } from "./config-helpers.js";
+import type { ChannelSetupAdapter } from "./setup-adapter.types.js";
 import {
   moveSingleAccountChannelSectionToDefaultAccount,
   patchScopedAccountConfig,
 } from "./setup-helpers.js";
+import type { ChannelSetupPromotionSurface } from "./setup-promotion-helpers.js";
 import type {
   ChannelSetupDmPolicy,
   ChannelSetupWizard,
@@ -27,7 +30,6 @@ import type {
   PromptAccountId,
   PromptAccountIdParams,
 } from "./setup-wizard-types.js";
-import type { ChannelSetupAdapter } from "./types.adapters.js";
 
 const loadProviderAuthInput = createLazyRuntimeModule(
   () => import("../../plugins/provider-auth-ref.js"),
@@ -241,7 +243,7 @@ export function setAccountAllowFromForChannel(params: {
   channel: string;
   accountId: string;
   allowFrom: string[];
-  setupSurface?: ChannelSetupAdapter;
+  setupSurface?: ChannelSetupAdapter | ChannelSetupPromotionSurface;
 }): OpenClawConfig {
   const { cfg, channel, accountId, allowFrom } = params;
   return patchConfigForScopedAccount({
@@ -267,17 +269,11 @@ export function patchTopLevelChannelConfigSection(params: {
   for (const field of params.clearFields ?? []) {
     delete channelConfig[field];
   }
-  return {
-    ...params.cfg,
-    channels: {
-      ...params.cfg.channels,
-      [params.channel]: {
-        ...channelConfig,
-        ...(params.enabled ? { enabled: true } : {}),
-        ...params.patch,
-      },
-    },
-  };
+  return writeChannelSection(params.cfg, params.channel, {
+    ...channelConfig,
+    ...(params.enabled ? { enabled: true } : {}),
+    ...params.patch,
+  });
 }
 
 function setTopLevelChannelAllowFrom(params: {
@@ -549,17 +545,7 @@ export function setSetupChannelEnabled(
   channel: string,
   enabled: boolean,
 ): OpenClawConfig {
-  const channelConfig = (cfg.channels?.[channel] as Record<string, unknown> | undefined) ?? {};
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      [channel]: {
-        ...channelConfig,
-        enabled,
-      },
-    },
-  };
+  return setTopLevelChannelEnabledInConfigSection({ cfg, sectionKey: channel, enabled });
 }
 
 function patchConfigForScopedAccount(params: {
@@ -568,7 +554,7 @@ function patchConfigForScopedAccount(params: {
   accountId: string;
   patch: Record<string, unknown>;
   ensureEnabled: boolean;
-  setupSurface?: ChannelSetupAdapter;
+  setupSurface?: ChannelSetupPromotionSurface;
 }): OpenClawConfig {
   const { cfg, channel, accountId, patch, ensureEnabled, setupSurface } = params;
   const channelConfig = cfg.channels?.[channel] as
@@ -588,6 +574,7 @@ function patchConfigForScopedAccount(params: {
   return patchScopedAccountConfig({
     cfg: seededCfg,
     channelKey: channel,
+    accountKeyPolicy: setupSurface?.accountKeyPolicy,
     accountId,
     patch,
     ensureChannelEnabled: ensureEnabled,
@@ -600,7 +587,7 @@ export function patchChannelConfigForAccount(params: {
   channel: AccountScopedChannel;
   accountId: string;
   patch: Record<string, unknown>;
-  setupSurface?: ChannelSetupAdapter;
+  setupSurface?: ChannelSetupAdapter | ChannelSetupPromotionSurface;
 }): OpenClawConfig {
   return patchConfigForScopedAccount({
     ...params,

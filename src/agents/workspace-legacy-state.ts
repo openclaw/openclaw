@@ -7,8 +7,13 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { resolveLegacyStateDirs, resolveStateDir } from "../config/paths.js";
 import { root } from "../infra/fs-safe.js";
 import { pathMayExistSync } from "../infra/path-existence.js";
+import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
+import { formatDoctorStateRepairFailure } from "../infra/state-repair-message.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
+import {
+  resolveCanonicalWorkspacePath,
+  resolveWorkspaceStateIdentity,
+} from "./workspace-state-identity.js";
 
 export const LEGACY_WORKSPACE_STATE_DIRNAME = ".openclaw";
 const LEGACY_WORKSPACE_STATE_FILENAME = "workspace-state.json";
@@ -71,11 +76,12 @@ export function resolveLegacyWorkspaceSourcePaths(
   // while it still exists; destructive cleanup may remove the alias first.
   const workspacePath = path.resolve(resolveUserPath(workspaceDir));
   const canonicalIdentity = resolveWorkspaceStateIdentity(workspaceDir);
+  const canonicalDirectoryPath = resolveCanonicalWorkspacePath(workspaceDir);
   const workspaceKeys = [
     createHash("sha256").update(workspacePath).digest("hex"),
     canonicalIdentity.workspaceKey,
   ];
-  const workspacePaths = [workspacePath, canonicalIdentity.workspacePath];
+  const workspacePaths = [workspacePath, canonicalDirectoryPath];
   const env = options?.env ?? process.env;
   const stateDirs = [
     resolveStateDir(env, options?.homedir),
@@ -84,9 +90,9 @@ export function resolveLegacyWorkspaceSourcePaths(
   return {
     workspacePath,
     setupStatePaths: [
-      path.join(canonicalIdentity.workspacePath, LEGACY_WORKSPACE_STATE_CURRENT_FILENAME),
+      path.join(canonicalDirectoryPath, LEGACY_WORKSPACE_STATE_CURRENT_FILENAME),
       path.join(
-        canonicalIdentity.workspacePath,
+        canonicalDirectoryPath,
         LEGACY_WORKSPACE_STATE_DIRNAME,
         LEGACY_WORKSPACE_STATE_FILENAME,
       ),
@@ -106,12 +112,6 @@ export function resolveLegacyWorkspaceSourcePaths(
       ),
     ),
   };
-}
-
-function pathOrClaimExists(filePath: string): boolean {
-  return (
-    pathMayExistSync(filePath) || pathMayExistSync(`${filePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`)
-  );
 }
 
 /** Share presence-only sibling ownership checks between runtime and Doctor. */
@@ -148,22 +148,29 @@ export function legacyWorkspaceSiblingAttestationMayExist(filePath: string): boo
   }
 }
 
-function hasUnmigratedWorkspaceSources(sources: LegacyWorkspaceSourcePaths): boolean {
+function findUnmigratedWorkspaceSource(sources: LegacyWorkspaceSourcePaths): string | undefined {
+  const withClaims = (paths: string[]) =>
+    paths.flatMap((filePath) => [filePath, `${filePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`]);
   return (
-    sources.setupStatePaths.some(pathOrClaimExists) ||
-    sources.stateDirAttestationPaths.some(pathOrClaimExists) ||
-    sources.siblingAttestationPaths.some(
-      (sourcePath) =>
-        legacyWorkspaceSiblingAttestationMayExist(
-          `${sourcePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`,
-        ) || legacyWorkspaceSiblingAttestationMayExist(sourcePath),
-    )
+    withClaims([...sources.setupStatePaths, ...sources.stateDirAttestationPaths]).find(
+      pathMayExistSync,
+    ) ?? withClaims(sources.siblingAttestationPaths).find(legacyWorkspaceSiblingAttestationMayExist)
   );
 }
 
-function workspaceMigrationError(workspaceDirs: string[], env?: NodeJS.ProcessEnv): Error {
-  return new Error(
-    `Legacy workspace setup state requires migration for ${workspaceDirs.join(", ")}; run ${formatCliCommand("openclaw doctor --fix", env)}.`,
+function workspaceMigrationError(
+  blockedPaths: string[],
+  env?: NodeJS.ProcessEnv,
+  operation?: "doctor",
+): Error {
+  return new StartupMaintenanceRequiredError(
+    "legacy-workspace",
+    operation === "doctor"
+      ? formatDoctorStateRepairFailure(
+          `Legacy workspace setup state requires migration at ${blockedPaths.join(", ")}`,
+          "Stop the Gateway, then restore the retained setup file or claim from a verified backup.",
+        )
+      : `Legacy workspace setup state requires migration for ${blockedPaths.join(", ")}; run ${formatCliCommand("openclaw doctor --fix", env)}.`,
   );
 }
 
@@ -172,12 +179,16 @@ export function assertWorkspaceStateMigrationReady(params: {
   workspaceDirs: readonly string[];
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
+  operation?: "doctor";
 }): void {
-  const blocked = params.workspaceDirs.filter((workspaceDir) =>
-    hasUnmigratedWorkspaceSources(resolveLegacyWorkspaceSourcePaths(workspaceDir, params)),
-  );
+  const blocked = params.workspaceDirs.flatMap((workspaceDir) => {
+    const sourcePath = findUnmigratedWorkspaceSource(
+      resolveLegacyWorkspaceSourcePaths(workspaceDir, params),
+    );
+    return sourcePath ? [params.operation === "doctor" ? sourcePath : workspaceDir] : [];
+  });
   if (blocked.length > 0) {
-    throw workspaceMigrationError(blocked, params.env);
+    throw workspaceMigrationError(blocked, params.env, params.operation);
   }
 }
 
@@ -194,7 +205,8 @@ export function assertNoUnmigratedWorkspaceState(params: { workspaceDir: string 
   if (checkedWorkspaceSourceSets.has(sourceSetKey)) {
     return;
   }
-  if (hasUnmigratedWorkspaceSources(sources)) {
+  const sourcePath = findUnmigratedWorkspaceSource(sources);
+  if (sourcePath) {
     throw workspaceMigrationError([identity.workspacePath]);
   }
   checkedWorkspaceSourceSets.add(sourceSetKey);
@@ -258,7 +270,7 @@ export function prepareLegacyWorkspaceStateReset(
 /** Discard retired workspace files from a pre-removal reset plan. */
 export async function removeLegacyWorkspaceStateForReset(
   plan: LegacyWorkspaceResetPlan,
-  options?: { dryRun?: boolean },
+  options?: { dryRun?: boolean; assertCurrent?: () => void },
 ): Promise<LegacyWorkspaceResetCleanup> {
   const removedPaths: string[] = [];
   const warnings: string[] = [];
@@ -291,6 +303,7 @@ export async function removeLegacyWorkspaceStateForReset(
         }
       }
       if (!options?.dryRun) {
+        options?.assertCurrent?.();
         await sourceRoot.remove(relativePath);
       }
       removedPaths.push(sourcePath);

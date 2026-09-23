@@ -4,17 +4,31 @@ export type WorkerInferenceSessionDrain = {
   release(): void;
 };
 
-type BeginWorkerInferenceSessionDrain = (sessionId: string) => WorkerInferenceSessionDrain;
+export class WorkerInferenceSessionDrainBusyError extends Error {
+  constructor(sessionId: string) {
+    super(`Worker inference drain already owns session ${sessionId}`);
+  }
+}
+
+export type WorkerInferenceCancellation = {
+  readonly runIds: readonly string[];
+  cancel(control?: { assertCurrent?: () => void; onCancelled?: (runId: string) => void }): string[];
+};
+
+type WorkerInferenceSessionControl = {
+  beginDrain: (sessionId: string) => WorkerInferenceSessionDrain;
+  captureCancel: (sessionId: string, runId?: string) => WorkerInferenceCancellation;
+};
 
 // Session lifecycle needs a stronger control without widening the inferred public service shape.
 // The weak registration follows the concrete service instance's lifetime.
-const sessionDrainByService = new WeakMap<object, BeginWorkerInferenceSessionDrain>();
+const sessionControlByService = new WeakMap<object, WorkerInferenceSessionControl>();
 
-export function registerWorkerInferenceSessionDrain(
+export function registerWorkerInferenceSessionControl(
   service: object,
-  beginDrain: BeginWorkerInferenceSessionDrain,
+  control: WorkerInferenceSessionControl,
 ): void {
-  sessionDrainByService.set(service, beginDrain);
+  sessionControlByService.set(service, control);
 }
 
 export function beginWorkerInferenceSessionDrain(
@@ -24,5 +38,16 @@ export function beginWorkerInferenceSessionDrain(
   if (typeof service !== "object" || service === null) {
     return undefined;
   }
-  return sessionDrainByService.get(service)?.(sessionId);
+  return sessionControlByService.get(service)?.beginDrain(sessionId);
+}
+
+export function captureWorkerInferenceCancellation(
+  service: unknown,
+  sessionId: string,
+  runId?: string,
+): WorkerInferenceCancellation | undefined {
+  if (typeof service !== "object" || service === null) {
+    return undefined;
+  }
+  return sessionControlByService.get(service)?.captureCancel(sessionId, runId);
 }

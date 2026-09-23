@@ -1,6 +1,10 @@
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { WebSocket } from "ws";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import { MAX_PAYLOAD_BYTES, MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
+import { prepareGatewayReceiverHandoff, raiseGatewayReceiverPayloadLimit } from "../ws-receiver.js";
 import { scheduleGatewayRequestStart } from "./request-start.js";
 
 const permissions: Promise<void>[] = [];
@@ -22,10 +26,7 @@ describe("Gateway request start fairness", () => {
   it("releases cheap starts in FIFO order without waiting for their work to finish", async () => {
     vi.spyOn(performance, "now").mockReturnValue(0);
     const starts: number[] = [];
-    let release!: () => void;
-    const held = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const { promise: held, resolve: release } = createDeferred();
     const first = requestStart().then(async () => {
       starts.push(0);
       await held;
@@ -107,5 +108,54 @@ describe("Gateway request start fairness", () => {
     expect(scheduleGatewayRequestStart(1)).toBeNull();
     await Promise.all([first, second, third]);
     await expect(requestStart(25 * 1024 * 1024)).resolves.toBeUndefined();
+  });
+});
+
+function receiverSocket(readonly = false): WebSocket {
+  return {
+    _receiver: Object.defineProperty({ _allowSynchronousEvents: false }, "_maxPayload", {
+      value: MAX_PREAUTH_PAYLOAD_BYTES,
+      writable: !readonly,
+    }),
+  } as unknown as WebSocket;
+}
+
+function payloadLimit(socket: WebSocket): number {
+  const receiver = (
+    socket as unknown as {
+      _receiver: {
+        _maxPayload: number;
+      };
+    }
+  )["_receiver"];
+  return receiver["_maxPayload"];
+}
+
+describe("authenticated receiver payload limits", () => {
+  it("raises the receiver limit only after connect", () => {
+    const socket = receiverSocket();
+    const handoff = prepareGatewayReceiverHandoff(socket, "operator");
+    expect(handoff.ok).toBe(true);
+    expect(payloadLimit(socket)).toBe(MAX_PREAUTH_PAYLOAD_BYTES);
+    if (handoff.ok) {
+      handoff.value();
+    }
+    expect(payloadLimit(socket)).toBe(MAX_PAYLOAD_BYTES);
+  });
+
+  it("raises an admitted worker receiver limit", () => {
+    const socket = receiverSocket();
+    expect(raiseGatewayReceiverPayloadLimit(socket, 1_024)).toBe(true);
+    expect(payloadLimit(socket)).toBe(1_024);
+  });
+
+  it("refuses the handoff when the receiver limit cannot be raised", () => {
+    const socket = receiverSocket(true);
+    expect(prepareGatewayReceiverHandoff(socket, "operator")).toMatchObject({
+      ok: false,
+      error: { cause: "unsupported-websocket-receiver" },
+    });
+    expect(raiseGatewayReceiverPayloadLimit(socket, 1_024)).toBe(false);
+    expect(payloadLimit(socket)).toBe(MAX_PREAUTH_PAYLOAD_BYTES);
   });
 });

@@ -1,7 +1,6 @@
 // Agent ACP tests cover ACP runtime integration, embedded agent dispatch, and agent command behavior.
 import fs from "node:fs";
 import path from "node:path";
-import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./agent-command.test-mocks.js";
 import * as acpManagerModule from "../acp/control-plane/manager.js";
@@ -10,7 +9,9 @@ import { deliverAgentCommandResult } from "../agents/command/delivery.runtime.js
 import * as embeddedModule from "../agents/embedded-agent.js";
 import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import * as configIoModule from "../config/io.js";
+import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withTempHomeCore as withTempHomeBase } from "../plugin-sdk/test-helpers/temp-home.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { agentCommand } from "./agent.js";
@@ -82,7 +83,7 @@ vi.mock("../agents/command/delivery.runtime.js", () => ({
 }));
 
 vi.mock("../agents/command/attempt-execution.runtime.js", async () => {
-  const { buildAcpResult } = await vi.importActual<
+  const { buildAcpResult, resolveAcpLifecycleEndFields } = await vi.importActual<
     typeof import("../agents/command/attempt-execution.js")
   >("../agents/command/attempt-execution.js");
   const createAcpVisibleTextAccumulator = () => {
@@ -135,6 +136,7 @@ vi.mock("../agents/command/attempt-execution.runtime.js", async () => {
         data: { text, delta },
       }),
     buildAcpResult,
+    resolveAcpLifecycleEndFields,
     persistAcpTurnTranscript: attemptExecutionMocks.persistAcpTurnTranscript,
   };
 });
@@ -146,7 +148,11 @@ const getAcpSessionManagerSpy = vi.spyOn(acpManagerModule, "getAcpSessionManager
 const runtime = createThrowingTestRuntime();
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "openclaw-agent-acp-" });
+  return withTempHomeBase(fn, {
+    prefix: "openclaw-agent-acp-",
+    // The ACP/runtime fixtures already own plugin selection.
+    env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+  });
 }
 
 function createAcpEnabledConfig(home: string, storePath: string): OpenClawConfig {
@@ -399,12 +405,19 @@ describe("agentCommand ACP runtime routing", () => {
     { name: "completed stop", status: "completed", outcome: "completed" },
     { name: "cancelled result", status: "cancelled", outcome: "failed" },
     { name: "runtime timeout", status: "completed", abort: "timeout", outcome: "failed" },
+    {
+      name: "transcript cancellation",
+      status: "completed",
+      abort: "transcript",
+      outcome: "failed",
+    },
     { name: "late cancellation", status: "completed", abort: "delivery", outcome: "failed" },
   ] as const)(
     "hands off the terminal outcome after real ACP projection: $name",
     async (scenario) => {
       await withAcpSessionEnv(async () => {
         const controller = new AbortController();
+        let transcriptTarget: Parameters<typeof loadTranscriptEvents>[0] | undefined;
         const runTurn = vi.fn(async (input: unknown) => {
           const params = input as Parameters<
             ReturnType<typeof acpManagerModule.getAcpSessionManager>["runTurn"]
@@ -416,6 +429,29 @@ describe("agentCommand ACP runtime routing", () => {
           await params.onEvent?.({ type: "done", status: scenario.status, stopReason: "stop" });
         });
         mockAcpManager({ runTurn });
+        if ("abort" in scenario && scenario.abort === "transcript") {
+          const actualExecution = await vi.importActual<
+            typeof import("../agents/command/attempt-execution.runtime.js")
+          >("../agents/command/attempt-execution.runtime.js");
+          attemptExecutionMocks.emitAcpLifecycleEnd.mockImplementationOnce(
+            actualExecution.emitAcpLifecycleEnd,
+          );
+          attemptExecutionMocks.persistAcpTurnTranscript.mockImplementationOnce(async (input) => {
+            await Promise.resolve();
+            controller.abort();
+            const transcript = input as Parameters<
+              typeof actualExecution.persistAcpTurnTranscript
+            >[0];
+            transcriptTarget = {
+              agentId: transcript.sessionAgentId,
+              sessionId: transcript.sessionId,
+              sessionKey: transcript.sessionKey,
+              storePath: transcript.storePath,
+            };
+            const persisted = await actualExecution.persistAcpTurnTranscript(transcript);
+            return { kind: "persisted", sessionEntry: persisted.sessionEntry };
+          });
+        }
         const actualDelivery = await vi.importActual<
           typeof import("../agents/command/delivery.js")
         >("../agents/command/delivery.js");
@@ -441,10 +477,29 @@ describe("agentCommand ACP runtime routing", () => {
         expect(runEmbeddedAgentSpy).not.toHaveBeenCalled();
         expect(result?.payloads).toEqual([{ text: "ACP reply", mediaUrl: null }]);
         expect(result?.meta.aborted).toBe(
-          scenario.status === "cancelled" || ("abort" in scenario && scenario.abort === "timeout"),
+          scenario.status === "cancelled" || ("abort" in scenario && scenario.abort !== "delivery"),
         );
         expect(vi.mocked(runtime.log).mock.calls.at(-1)?.[0]).toBe(JSON.stringify(result, null, 2));
         expect(readAgentRunTerminalOutcome(result)).toBe(scenario.outcome);
+        if ("abort" in scenario && scenario.abort === "transcript") {
+          if (!transcriptTarget) {
+            throw new Error("Expected the runtime-owned transcript identity");
+          }
+          const transcript = await loadTranscriptEvents(transcriptTarget);
+          expect(transcript).toContainEqual(
+            expect.objectContaining({
+              type: "message",
+              message: expect.objectContaining({
+                role: "assistant",
+                content: [{ type: "text", text: "ACP reply" }],
+                stopReason: "stop",
+              }),
+            }),
+          );
+          expect(
+            attemptExecutionMocks.emitAcpLifecycleEnd.mock.results.at(-1)?.value,
+          ).toMatchObject({ reason: "completed", status: "ok" });
+        }
       });
     },
   );

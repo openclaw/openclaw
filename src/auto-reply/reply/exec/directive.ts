@@ -5,7 +5,7 @@ import {
   type ExecSecurity,
   type ExecTarget,
   normalizeExecTarget,
-} from "../../../infra/exec-approvals.js";
+} from "../../../infra/exec-approvals-core.js";
 import {
   removeDirectiveSpan,
   skipDirectiveArgPrefix,

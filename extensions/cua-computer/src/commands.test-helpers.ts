@@ -92,6 +92,7 @@ export function driver(
     session: "openclaw-test",
     captureScope: 2,
     effectiveScope: 1,
+    desktopCaptureAuthorized: true,
     desktopUnlocked: true,
   }));
   const dispose = vi.fn(async () => {});
@@ -134,9 +135,10 @@ export function driver(
   };
 }
 
-export async function execution(session: CuaDriverSession) {
+export async function execution(session: CuaDriverSession, platform: NodeJS.Platform = "linux") {
   return await createCuaComputerProvider({
-    platform: "linux",
+    platform,
+    env: macOsEndpoint(),
     driver: session,
     imageProcessor: {
       encode: vi.fn(async () => ({ data: Buffer.from("jpeg"), width: 100, height: 50 })),

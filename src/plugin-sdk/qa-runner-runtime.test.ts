@@ -4,6 +4,7 @@
 import path from "node:path";
 import type { Command } from "commander";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { QaRunnerCliRegistration } from "./qa-runner-runtime.js";
 import {
   cleanupTempDirs,
   expectPrivateQaLabRuntimeSurfaceLoad,
@@ -18,8 +19,10 @@ const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
 const tryLoadActivatedBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
 const resolveOpenClawPackageRootSync = vi.hoisted(() => vi.fn());
 
-vi.mock("../plugins/manifest-registry.js", () => ({
+vi.mock("../plugins/manifest-registry-build.js", () => ({
   loadBundledPluginManifestRegistry,
+}));
+vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistryCore,
 }));
 
@@ -78,6 +81,21 @@ describe("plugin-sdk qa-runner-runtime", () => {
     } else {
       process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
     }
+  });
+
+  it("exposes structured thread identity to transport delivery adapters", () => {
+    type Adapter = Awaited<
+      ReturnType<NonNullable<QaRunnerCliRegistration["adapterFactory"]>["create"]>
+    >;
+    const buildAgentDelivery: Adapter["buildAgentDelivery"] = ({ target, threadId }) => ({
+      channel: "linked",
+      replyChannel: "linked",
+      replyTo: threadId ? `${target}:thread:${threadId}` : target,
+    });
+
+    expect(buildAgentDelivery({ target: "channel:room", threadId: "topic-1" }).replyTo).toBe(
+      "channel:room:thread:topic-1",
+    );
   });
 
   it("stays cold until runner discovery is requested", async () => {

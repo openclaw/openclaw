@@ -21,7 +21,11 @@ import {
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import type { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
+import type { AgentTurnParams } from "./agent-runner-execution.types.js";
+import type {
+  buildEmbeddedRunExecutionParams,
+  mintReplyMessageActionTurnCapability,
+} from "./agent-runner-utils.js";
 import type { FollowupRun } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import type { TypingSignaler } from "./typing-mode.js";
@@ -72,6 +76,7 @@ const state = vi.hoisted(() => ({
   resolveCurrentTurnImagesMock: vi.fn(),
   peekSessionMcpRuntimeMock: vi.fn(),
   recordMessageToolRunOutcomeMock: vi.fn(),
+  mintReplyMessageActionTurnCapabilityMock: vi.fn<typeof mintReplyMessageActionTurnCapability>(),
   productionBuildEmbeddedRunExecutionParams: undefined as
     | typeof buildEmbeddedRunExecutionParams
     | undefined,
@@ -265,7 +270,9 @@ vi.mock("./current-turn-images.js", () => ({
   resolveCurrentTurnImages: (params: unknown) => state.resolveCurrentTurnImagesMock(params),
 }));
 
-vi.mock("./agent-runner-utils.js", () => ({
+vi.mock("./agent-runner-utils.js", async () => ({
+  ...(await vi.importActual<typeof import("./agent-runner-utils.js")>("./agent-runner-utils.js")),
+  mintReplyMessageActionTurnCapability: state.mintReplyMessageActionTurnCapabilityMock,
   buildEmbeddedRunExecutionParams: (
     params: Parameters<typeof buildEmbeddedRunExecutionParams>[0],
   ) =>
@@ -344,8 +351,8 @@ export async function getExecuteAgentTurnForTest() {
         fallbackAttempts: outcome.fallback.attempts,
         didLogHeartbeatStrip: outcome.didLogHeartbeatStrip,
         autoCompactionCount: outcome.autoCompactionCount,
-        directlySentBlockKeys: outcome.directlySentBlockKeys,
-        directlySentBlockPayloads: outcome.directlySentBlockPayloads,
+        hasDirectlySentBlockReply: outcome.hasDirectlySentBlockReply,
+        directBlockDeliveries: outcome.directBlockDeliveries,
         terminalFailurePayload: outcome.terminalFailurePayload,
         postCompactionModelFailure: outcome.postCompactionModelFailure,
       };
@@ -398,6 +405,7 @@ export type EmbeddedAgentParams = {
   sessionKey?: string;
   prompt?: string;
   transcriptPrompt?: string;
+  currentInboundContext?: RunEmbeddedAgentInternalParams["currentInboundContext"];
   lifecycleGeneration?: string;
   onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
   onCompactionAccounting?: RunEmbeddedAgentInternalParams["onCompactionAccounting"];
@@ -573,27 +581,6 @@ export function expectNoMockCallWithFields(mock: unknown, fields: Record<string,
   expect(hasMatchingCall).toBe(false);
 }
 
-export function requireMockCallArgWithFields(
-  mock: unknown,
-  fields: Record<string, unknown>,
-  label: string,
-) {
-  const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls ?? [];
-  const found = calls
-    .map((call) => call[0])
-    .find((value) => {
-      if (typeof value !== "object" || value === null) {
-        return false;
-      }
-      const record = value as Record<string, unknown>;
-      return Object.entries(fields).every(([key, expected]) => record[key] === expected);
-    });
-  if (!found) {
-    throw new Error(`missing ${label}`);
-  }
-  return requireRecord(found, label);
-}
-
 export function expectBlockReplyCall(
   onBlockReply: unknown,
   index: number,
@@ -614,13 +601,44 @@ export function makeTestSessionStorePath(): string {
   );
 }
 
+export function createAgentTurnExecutionDefaults() {
+  return {
+    blockReplyPipeline: null,
+    blockStreamingEnabled: false,
+    resolvedBlockStreamingBreak: "message_end",
+    applyReplyToMode: (payload) => payload,
+    shouldEmitToolResult: () => true,
+    shouldEmitToolOutput: () => false,
+    pendingToolTasks: new Set<Promise<void>>(),
+    resetSessionAfterRoleOrderingConflict: async () => false,
+    isHeartbeat: false,
+    sessionKey: "main",
+    getActiveSessionEntry: () => undefined,
+    resolvedVerboseLevel: "off",
+  } satisfies Partial<AgentTurnParams>;
+}
+
+export function createRunAgentTurnParams(followupRun: FollowupRun): AgentTurnParams {
+  return {
+    commandBody: "hello",
+    followupRun,
+    sessionCtx: {
+      Provider: "whatsapp",
+      MessageSid: "msg",
+    },
+    opts: {},
+    typingSignals: createMockTypingSignaler(),
+    ...createAgentTurnExecutionDefaults(),
+  };
+}
+
 export function createMinimalRunAgentTurnParams(overrides?: {
   followupRun?: FollowupRun;
   opts?: GetReplyOptions;
   replyOperation?: ReplyOperation;
   sessionCtx?: TemplateContext;
   typingSignals?: TypingSignaler;
-}) {
+}): AgentTurnParams {
   return {
     commandBody: "fix it",
     followupRun: overrides?.followupRun ?? createFollowupRun(),
@@ -633,18 +651,7 @@ export function createMinimalRunAgentTurnParams(overrides?: {
     opts: overrides?.opts ?? ({} satisfies GetReplyOptions),
     replyOperation: overrides?.replyOperation,
     typingSignals: overrides?.typingSignals ?? createMockTypingSignaler(),
-    blockReplyPipeline: null,
-    blockStreamingEnabled: false,
-    resolvedBlockStreamingBreak: "message_end" as const,
-    applyReplyToMode: (payload: ReplyPayload) => payload,
-    shouldEmitToolResult: () => true,
-    shouldEmitToolOutput: () => false,
-    pendingToolTasks: new Set<Promise<void>>(),
-    resetSessionAfterRoleOrderingConflict: async () => false,
-    isHeartbeat: false,
-    sessionKey: "main",
-    getActiveSessionEntry: () => undefined,
-    resolvedVerboseLevel: "off" as const,
+    ...createAgentTurnExecutionDefaults(),
   };
 }
 
@@ -670,7 +677,11 @@ export function createNonDirectFailureSessionCtx(
   } as unknown as TemplateContext;
 }
 
-export function setupAgentRunnerExecutionTestState() {
+export async function setupAgentRunnerExecutionTestState() {
+  // Each suite awaits collection readiness after its imported mock harnesses register.
+  // Hook timeouts cannot cancel imports; cleanup must not overtake module readiness.
+  await getExecuteAgentTurnForTest();
+
   beforeEach(() => {
     vi.useRealTimers();
     state.runEmbeddedAgentMock.mockReset();
@@ -695,6 +706,7 @@ export function setupAgentRunnerExecutionTestState() {
     state.resolveCurrentTurnImagesMock.mockReset();
     state.peekSessionMcpRuntimeMock.mockReset();
     state.recordMessageToolRunOutcomeMock.mockReset();
+    state.mintReplyMessageActionTurnCapabilityMock.mockReset();
     state.productionBuildEmbeddedRunExecutionParams = undefined;
     state.peekSessionMcpRuntimeMock.mockReturnValue(undefined);
     state.resolveCurrentTurnImagesMock.mockImplementation(

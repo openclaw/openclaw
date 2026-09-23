@@ -18,6 +18,7 @@ export async function publishSessionPatchEffects(params: {
   callerCanManageCron: boolean;
   category: SessionsPatchParams["category"];
   targets: Array<{
+    accessChanged: boolean;
     entry: SessionEntry;
     target: {
       canonicalKey: string;
@@ -28,7 +29,7 @@ export async function publishSessionPatchEffects(params: {
   }>;
 }): Promise<void> {
   const archivedSessionKeys = new Set<string>();
-  for (const { target, entry } of params.targets) {
+  for (const { target, entry, accessChanged } of params.targets) {
     triggerSessionPatchHook({
       cfg: params.cfg,
       sessionEntry: entry,
@@ -43,11 +44,25 @@ export async function publishSessionPatchEffects(params: {
       sessionKey: target.canonicalKey,
       targetAgentId: target.targetAgentId,
     });
-    emitSessionsChanged(params.context, {
-      sessionKey: target.canonicalKey,
-      ...(target.requestedAgentId ? { agentId: target.requestedAgentId } : {}),
-      reason: "patch",
-    });
+    emitSessionsChanged(
+      params.context,
+      {
+        sessionKey: target.canonicalKey,
+        ...(target.requestedAgentId ? { agentId: target.requestedAgentId } : {}),
+        reason: "patch",
+        ...(target.fullPatch.model !== undefined || target.fullPatch.agentRuntime !== undefined
+          ? { catalogChanged: true }
+          : {}),
+      },
+      { accessChanged },
+    );
+    if (typeof target.fullPatch.archived === "boolean") {
+      params.context.sessionActivitySummaries?.handleLifecycle({
+        sessionKey: target.canonicalKey,
+        agentId: target.targetAgentId,
+        reason: target.fullPatch.archived ? "archive" : "unarchive",
+      });
+    }
     if (target.fullPatch.archived === true) {
       archivedSessionKeys.add(target.canonicalKey);
     }
@@ -57,8 +72,21 @@ export async function publishSessionPatchEffects(params: {
   if (params.targets.length > 0 && typeof category === "string" && category.trim()) {
     // A first-use category is a group-catalog mutation: clients reload the
     // catalog only on reason "groups" (the sessions.groups.* siblings emit it).
-    if (ensureSessionGroupRegistered(category)) {
-      emitSessionsChanged(params.context, { reason: "groups" });
+    let catalogChanged: boolean;
+    try {
+      catalogChanged = await ensureSessionGroupRegistered(category);
+    } catch (error) {
+      // The session category is already durable. Preserve that outcome and the
+      // existing same-category patch recovery instead of asking clients to undo it.
+      sessionLog.warn(
+        `sessions.patch: category ${JSON.stringify(category)} was saved, but group registration failed; retry the same category assignment to repair the catalog: ${formatErrorMessage(error)}`,
+      );
+      // Registration may have committed before cleanup failed. Reload the catalog
+      // on uncertain outcomes too, without invalidating unrelated session rows.
+      catalogChanged = true;
+    }
+    if (catalogChanged) {
+      emitSessionsChanged(params.context, { reason: "groups" }, { catalogOnly: true });
     }
   }
   if (params.callerCanManageCron && archivedSessionKeys.size > 0) {

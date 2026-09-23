@@ -9,7 +9,10 @@ export async function runVitestShutdownCommand({
 }: Pick<
   Parameters<typeof runManagedCommand>[0],
   "args" | "cwd" | "env" | "timeoutMs" | "onReady" | "signal"
-> & { maxBytes?: number }) {
+> & {
+  bin?: string;
+  maxBytes?: number;
+}) {
   const stdout = createBoundedChildOutput(maxBytes);
   const stderr = createBoundedChildOutput(maxBytes);
   const controller = new AbortController();
@@ -17,7 +20,7 @@ export async function runVitestShutdownCommand({
   try {
     const code = await runManagedCommand({
       ...options,
-      bin: process.execPath,
+      bin: options.bin ?? process.execPath,
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
       requireProcessTreeExit: process.platform !== "win32",

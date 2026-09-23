@@ -134,11 +134,21 @@ describe("fleet cli", () => {
   });
 
   it("normalizes logs options", async () => {
-    await runFleetCli(["logs", "acme", "--follow", "--tail", "100", "--since", "10m"]);
+    await runFleetCli([
+      "logs",
+      "acme",
+      "--follow",
+      "--timestamps",
+      "--tail",
+      "100",
+      "--since",
+      "10m",
+    ]);
 
     expect(mocks.runFleetLogsCommand).toHaveBeenCalledWith({
       tenant: "acme",
       follow: true,
+      timestamps: true,
       tail: 100,
       since: "10m",
     });
@@ -183,6 +193,7 @@ describe("fleet cli", () => {
     expect(mocks.runFleetLogsCommand).toHaveBeenCalledWith({
       tenant: "tenant-a",
       follow: false,
+      timestamps: false,
       tail: 500,
       since: "10m",
     });
@@ -190,33 +201,15 @@ describe("fleet cli", () => {
   });
 
   it.each([
-    {
-      argv: ["create", "tenant-a", "--runtime", "containerd"],
-      error: /--runtime must be docker or podman/,
-    },
-    {
-      argv: ["create", "tenant-a", "--port", "65536"],
-      error: /--port must be between 1 and 65535/,
-    },
-    {
-      argv: ["create", "tenant-a", "--cpus", "0"],
-      error: /--cpus must be a positive number/,
-    },
-    {
-      argv: ["create", "tenant-a", "--cpus", "0x10"],
-      error: /--cpus must be a positive number/,
-    },
-    {
-      argv: ["logs", "tenant-a", "--tail", "1.5"],
-      error: /--tail must be a positive integer/,
-    },
-    { argv: ["create", "tenant-a", "--disk", "10 g"], error: /--disk/ },
-    {
-      argv: ["create", "tenant-a", "--network", "none"],
-      error: /--network must be bridge or internal/,
-    },
-    { argv: ["restore", "tenant-a"], error: /required option '--from/ },
-  ])("rejects invalid options: $argv", async ({ argv, error }) => {
+    [["create", "tenant-a", "--runtime", "containerd"], /--runtime must be docker or podman/],
+    [["create", "tenant-a", "--port", "65536"], /--port must be between 1 and 65535/],
+    [["create", "tenant-a", "--cpus", "0"], /--cpus must be a positive number/],
+    [["create", "tenant-a", "--cpus", "0x10"], /--cpus must be a positive number/],
+    [["logs", "tenant-a", "--tail", "1.5"], /--tail must be a positive integer/],
+    [["create", "tenant-a", "--disk", "10 g"], /--disk/],
+    [["create", "tenant-a", "--network", "none"], /--network must be bridge or internal/],
+    [["restore", "tenant-a"], /required option '--from/],
+  ])("rejects invalid options: %s", async (argv, error) => {
     await expect(runFleetCli(argv)).rejects.toThrow(error);
     expect(mocks.runFleetCreateCommand).not.toHaveBeenCalled();
     expect(mocks.runFleetLogsCommand).not.toHaveBeenCalled();

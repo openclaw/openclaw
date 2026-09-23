@@ -10,12 +10,10 @@ import {
 } from "./validation.js";
 
 const mockLoadPluginManifestRegistry = vi.hoisted(() =>
-  vi.fn(
-    (): PluginManifestRegistry => ({
-      diagnostics: [],
-      plugins: [],
-    }),
-  ),
+  vi.fn((): PluginManifestRegistry => ({
+    diagnostics: [],
+    plugins: [],
+  })),
 );
 
 function createTelegramSchemaRegistry(): PluginManifestRegistry {
@@ -204,27 +202,6 @@ function createCompatPluginConfigSchemaRegistry(): PluginManifestRegistry {
   };
 }
 
-function createDmPolicyRegistry(params: {
-  channelId: string;
-  dmAllowFromMode?: "topOnly" | "topOrNested" | "nestedOnly";
-}): PluginManifestRegistry {
-  return {
-    diagnostics: [],
-    plugins: [
-      createPluginManifestRecord({
-        id: params.channelId,
-        channels: [params.channelId],
-        packageChannel: {
-          id: params.channelId,
-          ...(params.dmAllowFromMode
-            ? { doctorCapabilities: { dmAllowFromMode: params.dmAllowFromMode } }
-            : {}),
-        },
-      }),
-    ],
-  };
-}
-
 function createPluginManifestRecord(
   overrides: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">,
 ): PluginManifestRecord {
@@ -295,6 +272,85 @@ function setupPluginSchemaWithRequiredDefault() {
 beforeEach(() => {
   clearPluginMetadataLifecycleCaches();
   mockLoadPluginManifestRegistry.mockReset().mockReturnValue({ diagnostics: [], plugins: [] });
+});
+
+describe("validateConfigObjectWithPlugins model metadata", () => {
+  it("does not discover plugins when materialization needs no metadata", () => {
+    expect(validateConfigObjectWithPlugins({ gateway: { mode: "local" } }).ok).toBe(true);
+    expect(mockLoadPluginManifestRegistry).not.toHaveBeenCalled();
+  });
+
+  it.each(["full", "skip"] as const)(
+    "loads catalog defaults before materialization with %s plugin validation",
+    (pluginValidation) => {
+      const source = {
+        plugins: { enabled: true },
+        models: {
+          providers: {
+            fixture: {
+              baseUrl: "https://models.example/v1",
+              models: [{ id: "vision-model", name: "Authored model", contextWindow: 64_000 }],
+            },
+          },
+        },
+      };
+      const original = structuredClone(source);
+      const cost = { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 };
+      mockLoadPluginManifestRegistry.mockReturnValue({
+        diagnostics: [],
+        plugins: [
+          createPluginManifestRecord({
+            id: "fixture",
+            providers: ["fixture"],
+            modelCatalog: {
+              providers: {
+                fixture: {
+                  models: [
+                    {
+                      id: "vision-model",
+                      name: "Catalog model",
+                      reasoning: true,
+                      input: ["text", "image"],
+                      cost,
+                      contextWindow: 128_000,
+                      maxTokens: 16_000,
+                    },
+                  ],
+                },
+              },
+            },
+          }),
+        ],
+      });
+
+      const result = validateConfigObjectWithPlugins(source, { pluginValidation });
+
+      expect(result).toMatchObject({
+        ok: true,
+        config: {
+          models: {
+            providers: {
+              fixture: {
+                models: [
+                  {
+                    id: "vision-model",
+                    name: "Authored model",
+                    reasoning: true,
+                    input: ["text", "image"],
+                    cost,
+                    contextWindow: 64_000,
+                    maxTokens: 16_000,
+                  },
+                ],
+              },
+            },
+          },
+        },
+      });
+      expect(source).toEqual(original);
+      expect(mockLoadPluginManifestRegistry).toHaveBeenCalledOnce();
+    },
+  );
 });
 
 describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)", () => {
@@ -492,118 +548,6 @@ describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)
     expect(result.warnings.some((warning) => warning.path === "channels.discord.allowFrom")).toBe(
       false,
     );
-  });
-});
-
-describe("validateConfigObjectWithPlugins DM policy warnings", () => {
-  it("uses manifest metadata to skip nested-only DM config shapes", () => {
-    const result = validateConfigObjectWithPlugins(
-      {
-        channels: {
-          matrix: {
-            dm: {
-              policy: "open",
-            },
-          },
-        },
-      },
-      {
-        pluginMetadataSnapshot: {
-          manifestRegistry: createDmPolicyRegistry({
-            channelId: "matrix",
-            dmAllowFromMode: "nestedOnly",
-          }),
-        },
-      },
-    );
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(
-        result.warnings.filter((warning) => warning.path.startsWith("channels.matrix")),
-      ).toEqual([]);
-    }
-  });
-
-  it("does not warn for disabled channels or accounts", () => {
-    const result = validateConfigObjectWithPlugins(
-      {
-        channels: {
-          mattermost: {
-            enabled: false,
-            dmPolicy: "open",
-            accounts: {
-              team: {
-                dmPolicy: "open",
-              },
-            },
-          },
-          slack: {
-            accounts: {
-              work: {
-                enabled: false,
-                dmPolicy: "open",
-              },
-            },
-          },
-        },
-      },
-      {
-        pluginMetadataSnapshot: {
-          manifestRegistry: {
-            diagnostics: [],
-            plugins: [
-              ...createDmPolicyRegistry({ channelId: "mattermost" }).plugins,
-              ...createDmPolicyRegistry({ channelId: "slack" }).plugins,
-            ],
-          },
-        },
-      },
-    );
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(
-        result.warnings.filter((warning) => warning.path.startsWith("channels.mattermost")),
-      ).toEqual([]);
-      expect(
-        result.warnings.filter((warning) => warning.path.startsWith("channels.slack")),
-      ).toEqual([]);
-    }
-  });
-
-  it("does not suggest channel allowFrom as sufficient when account allowFrom overrides it", () => {
-    const result = validateConfigObjectWithPlugins(
-      {
-        channels: {
-          mattermost: {
-            allowFrom: ["*"],
-            accounts: {
-              team: {
-                dmPolicy: "open",
-                allowFrom: [],
-              },
-            },
-          },
-        },
-      },
-      {
-        pluginMetadataSnapshot: {
-          manifestRegistry: createDmPolicyRegistry({ channelId: "mattermost" }),
-        },
-      },
-    );
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      const warning = result.warnings.find(
-        (entry) => entry.path === "channels.mattermost.accounts.team.allowFrom",
-      );
-      expect(warning?.message).toContain(
-        "remove channels.mattermost.accounts.team.allowFrom to inherit channels.mattermost.allowFrom",
-      );
-      expect(warning?.message).not.toContain("(or channels.mattermost.allowFrom)");
-    }
   });
 });
 

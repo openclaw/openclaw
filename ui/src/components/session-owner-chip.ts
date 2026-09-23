@@ -3,47 +3,29 @@ import { property } from "lit/decorators.js";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import type { SessionCreatedActor as ProtocolSessionCreatedActor } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionsListResult } from "../api/types.ts";
+import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import { takeGraphemes } from "../lib/graphemes.ts";
 import { resolveAvatar } from "../lib/identity-avatar.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
+import { renderAgentIdentityAvatar } from "./identity-avatar-view.ts";
 import "./viewer-facepile.ts";
 
 export type SessionCreatedActor = ProtocolSessionCreatedActor;
 export type SessionOwnerOption = NonNullable<SessionsListResult["owners"]>[number];
 
-export function listAssignableSessionOwners(params: {
-  facet?: SessionsListResult["owners"];
-  agents?: readonly { id: string; name?: string }[];
-  self?: { id: string; name?: string; avatarUrl?: string } | null;
-}): SessionOwnerOption[] {
-  const owners = new Map((params.facet ?? []).map((owner) => [owner.id, owner]));
-  if (params.self?.id && owners.get(params.self.id)?.type !== "agent") {
-    owners.set(params.self.id, {
-      type: "human",
-      id: params.self.id,
-      identity: { type: "profile", id: params.self.id },
-      ...(params.self.name ? { label: params.self.name } : {}),
-      ...(params.self.avatarUrl ? { avatarUrl: params.self.avatarUrl } : {}),
-    });
-  }
-  for (const agent of params.agents ?? []) {
-    const owner = owners.get(agent.id);
-    owners.set(agent.id, {
-      type: "agent",
-      id: agent.id,
-      identity: { type: "agent", id: agent.id },
-      ...(agent.name ? { label: agent.name } : {}),
-      // Keep the enriched identity, with the roster name when no identity name is configured.
-      ...(owner?.type === "agent" ? owner : {}),
-    });
-  }
-  return [...owners.values()].toSorted(
-    (left, right) =>
-      left.type.localeCompare(right.type) ||
-      (left.label ?? left.id).localeCompare(right.label ?? right.id) ||
-      left.id.localeCompare(right.id),
-  );
+export function sessionSelfOwner(
+  self: AuthenticatedUser | null | undefined,
+): SessionOwnerOption | null {
+  return self
+    ? {
+        type: "human",
+        id: self.id,
+        identity: { type: "profile", id: self.id },
+        label: self.name,
+        avatarUrl: self.avatarUrl,
+      }
+    : null;
 }
 
 export function renderSessionOwnerChip(
@@ -94,6 +76,20 @@ function ownerHue(id: string): number {
 export function renderSessionOwnerAvatar(
   owner: Pick<SessionOwnerOption, "id" | "label" | "avatarUrl" | "identity">,
 ) {
+  if (owner.identity?.type === "agent") {
+    const avatar = resolveAvatar({
+      id: owner.id,
+      identity: owner.identity,
+      name: owner.label,
+      profileAvatarUrl: owner.avatarUrl,
+    });
+    return html`<span
+      class="viewer-avatar viewer-avatar--session"
+      aria-label=${owner.label || owner.id}
+    >
+      ${renderAgentIdentityAvatar({ id: owner.identity.id, avatar: avatar.kind === "profile" ? avatar.url : null })}
+    </span>`;
+  }
   return html`<openclaw-viewer-avatar
     .identity=${owner.identity}
     .user=${{
@@ -110,9 +106,9 @@ export function renderSessionOwnerAvatar(
 
 /**
  * Session-owner avatar. The owner may be reassigned; live viewing only changes
- * avatar saturation. Render only when the Gateway's complete owner facet has 2+
- * identities (solo mode shows no attribution chrome). Human actors use the durable
- * profile projection carried by the session record; actors without it keep stable initials.
+ * avatar saturation. Sidebar rows show attribution only with multiple known humans
+ * among owners and participants. Human actors use the durable
+ * profile projection carried by the session record; typed agents share the agent face fallback.
  */
 class SessionOwnerChip extends OpenClawLightDomElement {
   @property({ attribute: false }) owner: SessionCreatedActor | null = null;
@@ -151,16 +147,18 @@ class SessionOwnerChip extends OpenClawLightDomElement {
     const stacked = this.size === "row" && this.participantCount > 0;
     const chip = html`
       <span
-        class="session-owner-chip session-owner-chip--${this.size} ${this.viewingNow === false
-          ? "session-owner-chip--away"
-          : ""} ${stacked ? "session-owner-stack__front" : ""}"
+        class="session-owner-chip session-owner-chip--${this.size} ${
+          this.viewingNow === false ? "session-owner-chip--away" : ""
+        } ${stacked ? "session-owner-stack__front" : ""}"
         style="--owner-hue: ${ownerHue(owner.id)}"
         role="img"
         aria-label=${accessibleLabel}
         title=${accessibleLabel}
-        >${avatar?.kind === "profile"
-          ? renderSessionOwnerAvatar({ ...owner, id: owner.id })
-          : initials}</span
+        >${
+          owner.identity?.type === "agent" || avatar.kind === "profile"
+            ? renderSessionOwnerAvatar({ ...owner, id: owner.id })
+            : html`<span class="session-owner-chip__initials">${initials}</span>`
+        }</span
       >
     `;
     if (!stacked) {
@@ -172,11 +170,19 @@ class SessionOwnerChip extends OpenClawLightDomElement {
       this.participantCount === 1 && participantTitle
         ? `${accessibleLabel} · ${t("sessionsView.withParticipant", { name: participantTitle })}`
         : `${accessibleLabel} · ${t("sessionsView.withMoreParticipants", { count: String(this.participantCount) })}`;
-    return html`<span class="session-owner-stack" role="group" aria-label=${combinedLabel}>
+    return html`<span
+      class="session-owner-stack ${this.participantCount > 1 ? "session-owner-stack--overflow" : ""}"
+      role="group"
+      aria-label=${combinedLabel}
+    >
       <span class="session-owner-stack__back" aria-hidden="true">
-        ${this.participantCount === 1 && participant
-          ? renderSessionOwnerAvatar({ ...participant, id: participant.identity.id })
-          : html`<span class="session-owner-stack__overflow">+${this.participantCount}</span>`}
+        ${
+          this.participantCount === 1 && participant
+            ? renderSessionOwnerAvatar({ ...participant, id: participant.identity.id })
+            : html`<span class="session-owner-stack__overflow"
+                ><span class="session-owner-stack__count">+${this.participantCount}</span></span
+              >`
+        }
       </span>
       ${chip}
     </span>`;

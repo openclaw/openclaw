@@ -11,6 +11,7 @@ import {
   formatNodeRunnerUpdateRequired,
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
+  resolveNodeWorkerExecutionIssue,
 } from "../../infra/node-runner-inventory.js";
 import {
   nodeWorkerPlanHash,
@@ -32,6 +33,7 @@ import type {
 } from "../node-registry-private.js";
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import { WorkerRunnerCapacityError, WorkerRunnerUnavailableError } from "./tunnel-contract.js";
+import { boundedWorkerError } from "./worker-error.js";
 
 const DEFAULT_RPC_TIMEOUT_MS = 30_000;
 const DEFAULT_POLL_INTERVAL_MS = 250;
@@ -261,9 +263,12 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     deviceId: string;
     signal: AbortSignal;
   }): Promise<NodeWorkerSupervisorNodeProof> => {
-    let nodes: readonly NodeWorkerSupervisorNodeProof[];
+    let node: NodeWorkerSupervisorNodeProof | undefined;
     try {
-      nodes = await raceNodeWorkerOperation(params.transport.listCurrentNodes(), params.signal);
+      node = await raceNodeWorkerOperation(
+        params.transport.getCurrentNode(params.deviceId),
+        params.signal,
+      );
     } catch (error) {
       if (params.signal.aborted) {
         throw error;
@@ -273,7 +278,6 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
         "device worker node discovery is unavailable",
       );
     }
-    const node = nodes.find((candidate) => candidate.nodeId === params.deviceId);
     if (!node) {
       throw new NodeWorkerLaunchTransportError(
         "NOT_CONNECTED",
@@ -330,7 +334,8 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       });
       if (
         params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND &&
-        node.workerHost.environmentSession !== NODE_WORKER_ENVIRONMENT_SESSION_VERSION
+        (node.workerHost.environmentSession !== NODE_WORKER_ENVIRONMENT_SESSION_VERSION ||
+          resolveNodeWorkerExecutionIssue(node.workerHost))
       ) {
         throw new Error(
           formatNodeRunnerUpdateRequired(node.nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE),
@@ -361,9 +366,12 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
         if (code === NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE) {
           throw new WorkerRunnerCapacityError();
         }
+        const detail = result.error?.message?.trim();
         throw new NodeWorkerLaunchTransportError(
           code,
-          `node worker supervisor invocation failed (${code})`,
+          boundedWorkerError(
+            `node worker supervisor ${params.command} failed (${code})${detail ? `: ${detail}` : ""}`,
+          ),
         );
       }
       return parseInvokeReceipt(result.payloadJSON);
@@ -446,7 +454,9 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     } finally {
       deadline.dispose();
     }
-    throw new Error("node worker cancellation outcome is unknown after transport loss");
+    throw new Error(
+      "node worker cancellation did not produce a terminal receipt before its deadline",
+    );
   };
 
   const launch = async (
@@ -469,6 +479,11 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       parent: deadline,
       label: "node worker availability",
     });
+    // Discovery and handoff use the availability grace; dispatched RPCs keep the caller budget.
+    const dispatchDeadline: OperationDeadline = {
+      ...deadline,
+      signal: availabilityDeadline.signal,
+    };
     let mayHaveLaunched = false;
     let dispatchReady = false;
     let pollStatus = false;
@@ -477,6 +492,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       mayHaveLaunched = true;
       if (!dispatchReady) {
         dispatchReady = true;
+        availabilityDeadline.dispose();
         stableRequest.onDispatchReady?.();
       }
     };
@@ -489,15 +505,20 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
           throw new Error("node worker launch authority closed");
         }
         try {
-          const attemptDeadline = dispatchReady ? deadline : availabilityDeadline;
           const receipt = await invoke({
             deviceId: stableRequest.deviceId,
             command: pollStatus
               ? NODE_WORKER_SUPERVISOR_STATUS_COMMAND
               : NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
             payload: pollStatus ? { launchId: input.launchId } : input,
-            isAuthorized: stableRequest.isDispatchAuthorized,
-            deadline: attemptDeadline,
+            isAuthorized: () => {
+              if (!dispatchReady) {
+                // Publish expiry through the signal; a guard throw can orphan the invoke promise.
+                availabilityDeadline.remainingMs();
+              }
+              return stableRequest.isDispatchAuthorized();
+            },
+            deadline: dispatchDeadline,
             ...(!pollStatus
               ? {
                   onDispatchReady: markDispatchReady,
@@ -587,11 +608,10 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       try {
         terminal = await cancelUntilTerminal({ request: stableRequest, expected });
       } catch (cancelError) {
-        throw Object.assign(
-          new Error("node worker launch failed and cancellation could not be confirmed", {
-            cause: error instanceof Error ? error : new Error("node worker launch failed"),
-          }),
-          { cancellationError: cancelError },
+        throw new AggregateError(
+          [error, cancelError],
+          "node worker launch failed and cancellation could not be confirmed",
+          { cause: cancelError },
         );
       }
       if (deadline.signal.aborted || !stableRequest.isDispatchAuthorized()) {

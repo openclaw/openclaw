@@ -304,6 +304,106 @@ describe("discord components", () => {
     ).toThrow("components.modal.fields[0].minValues/maxValues");
   });
 
+  it.each([
+    {
+      label: "top-level text",
+      raw: { text: "    body  " },
+      expected: [{ type: 10, content: "    body  " }],
+    },
+    {
+      label: "text block",
+      raw: { blocks: [{ type: "text", text: "    body  " }] },
+      expected: [{ type: 10, content: "    body  " }],
+    },
+    {
+      label: "section text",
+      raw: {
+        blocks: [
+          {
+            type: "section",
+            text: "    body  ",
+            accessory: {
+              type: "button",
+              button: { label: " Read ", style: "link", url: "https://example.com" },
+            },
+          },
+        ],
+      },
+      expected: [
+        {
+          type: 9,
+          components: [{ type: 10, content: "    body  " }],
+          accessory: { label: "Read" },
+        },
+      ],
+    },
+    {
+      label: "section texts",
+      raw: {
+        blocks: [
+          {
+            type: "section",
+            texts: ["    first  ", "    second  "],
+            accessory: {
+              type: "button",
+              button: { label: " Read ", style: "link", url: "https://example.com" },
+            },
+          },
+        ],
+      },
+      expected: [
+        {
+          type: 9,
+          components: [
+            { type: 10, content: "    first  " },
+            { type: 10, content: "    second  " },
+          ],
+          accessory: { label: "Read" },
+        },
+      ],
+    },
+  ])("preserves $label whitespace through parsing and serialization", ({ raw, expected }) => {
+    const spec = readDiscordComponentSpec(raw);
+    if (!spec) {
+      throw new Error("Expected component spec to be parsed");
+    }
+    expect(buildDiscordComponentMessage({ spec }).components[0]?.serialize()).toMatchObject({
+      type: 17,
+      components: expected,
+    });
+  });
+
+  it.each([
+    {
+      raw: { blocks: [{ type: "text", text: " \n\t " }] },
+      error: "components.blocks[0].text cannot be empty",
+    },
+    {
+      raw: { blocks: [{ type: "text", text: 1 }] },
+      error: "components.blocks[0].text must be a string",
+    },
+    {
+      raw: { blocks: [{ type: "section", texts: [" \n\t "] }] },
+      error: "components.blocks[0].texts[0] cannot be empty",
+    },
+  ])("retains required component body validation: $error", ({ raw, error }) => {
+    expect(() => readDiscordComponentSpec(raw)).toThrow(error);
+  });
+
+  it("keeps optional blank component text absent", () => {
+    const spec = readDiscordComponentSpec({
+      text: " \n\t ",
+      blocks: [{ type: "text", text: "fallback" }],
+    });
+    if (!spec) {
+      throw new Error("Expected component spec to be parsed");
+    }
+    expect(buildDiscordComponentMessage({ spec }).components[0]?.serialize()).toMatchObject({
+      type: 17,
+      components: [{ type: 10, content: "fallback" }],
+    });
+  });
+
   it("parses stringified component specs from MCP object transports", () => {
     const raw = JSON.stringify({ blocks: [{ type: "text", text: "Choose" }] });
 
@@ -347,7 +447,7 @@ describe("discord component registry", () => {
   ).href;
 
   it("registers and consumes component entries", async () => {
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: [{ id: "btn_1", kind: "button", label: "Confirm" }],
       modals: [
         {
@@ -429,9 +529,7 @@ describe("discord component registry", () => {
             init?.method === "GET"
               ? { id: "789", type: 0 }
               : { id: "delivered-message", channel_id: "789" };
-          return new Response(JSON.stringify(message), {
-            headers: { "content-type": "application/json" },
-          });
+          return Response.json(message);
         },
       });
 
@@ -507,7 +605,7 @@ describe("discord component registry", () => {
     expect(cancel.consumptionGroupId).toBe(confirm.consumptionGroupId);
     expect(confirm.consumptionGroupEntryIds).toEqual([confirm.id, cancel.id]);
 
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: result.entries,
       modals: [],
       messageId: "msg_1",
@@ -530,7 +628,7 @@ describe("discord component registry", () => {
     )) as typeof import("./components-registry.js");
 
     clearDiscordComponentEntriesForTest();
-    first.registerDiscordComponentEntries({
+    await first.registerDiscordComponentEntries({
       entries: [{ id: "btn_shared", kind: "button", label: "Shared" }],
       modals: [],
     });
@@ -566,7 +664,7 @@ describe("discord component registry", () => {
   it("expires component entries registered while the process clock is invalid", async () => {
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
     try {
-      registerDiscordComponentEntries({
+      await registerDiscordComponentEntries({
         entries: [{ id: "btn_invalid_clock", kind: "button", label: "Invalid clock" }],
         modals: [],
         ttlMs: 1000,
@@ -586,7 +684,7 @@ describe("discord component registry", () => {
   it("expires component entries whose calculated expiry exceeds the Date range", async () => {
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(MAX_DATE_TIMESTAMP_MS);
     try {
-      registerDiscordComponentEntries({
+      await registerDiscordComponentEntries({
         entries: [{ id: "btn_overflow", kind: "button", label: "Overflow" }],
         modals: [],
         ttlMs: 1000,
@@ -638,7 +736,7 @@ describe("discord component registry", () => {
     const now = 1_700_000_000_000;
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
     try {
-      registerDiscordComponentEntries({
+      await registerDiscordComponentEntries({
         entries: [{ id: "btn_1", kind: "button", label: "Confirm" }],
         modals: [{ id: "mdl_1", title: "Details", fields: [] }],
         ttlMs: 1000,
@@ -647,7 +745,7 @@ describe("discord component registry", () => {
       dateNowSpy.mockRestore();
     }
 
-    await vi.waitFor(() => expect(componentRegister).toHaveBeenCalledTimes(1));
+    expect(componentRegister).toHaveBeenCalledTimes(1);
     expect(componentRegister).toHaveBeenCalledWith(
       "btn_1",
       {
@@ -744,13 +842,13 @@ describe("discord component registry", () => {
       { sessionKey: undefined },
     );
 
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: [componentEntry],
       modals: [modalEntry],
       ttlMs: 1000,
     });
 
-    await vi.waitFor(() => expect(componentRegister).toHaveBeenCalledTimes(1));
+    expect(componentRegister).toHaveBeenCalledTimes(1);
     expect(modalRegister).toHaveBeenCalledTimes(1);
 
     const persistedComponent = componentRegister.mock.calls[0]?.[1] as
@@ -837,7 +935,7 @@ describe("discord component registry", () => {
       logging: { getChildLogger: () => ({ warn }) },
     } as never);
 
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: [{ id: "btn_fallback", kind: "button", label: "Fallback" }],
       modals: [],
     });

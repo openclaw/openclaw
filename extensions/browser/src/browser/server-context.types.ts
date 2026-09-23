@@ -15,12 +15,19 @@ export type { BrowserTab };
 export type BrowserTabTargetOptions = BrowserOperationOptions & {
   /** Resolve only the raw target-id namespace for an id already selected internally. */
   exactTargetId?: true;
+  /** Revalidate the owner after target preparation, before a new native effect. */
+  assertCurrent?: () => Promise<void>;
 };
 
 /** Runtime state for a single profile's Chrome instance. */
 export type ProfileRuntimeState = {
   profile: ResolvedBrowserProfile;
   running: RunningChrome | null;
+  /** Process-memory observation bound to one externally owned browser instance. */
+  externalBrowserMode?: {
+    browserWebSocketUrl: string;
+    headless: Promise<boolean | undefined>;
+  };
   managedLaunchFailure?: {
     consecutiveFailures: number;
     lastFailureAt: number;
@@ -77,7 +84,12 @@ type BrowserProfileActions = {
   listTabs: (options?: BrowserOperationOptions) => Promise<BrowserTab[]>;
   openTab: (
     url: string,
-    opts?: { label?: string; signal?: AbortSignal; timeoutMs?: number },
+    opts?: {
+      label?: string;
+      signal?: AbortSignal;
+      timeoutMs?: number;
+      requireDurableOwnership?: boolean;
+    },
   ) => Promise<BrowserOpenResult>;
   labelTab: (targetId: string, label: string) => Promise<BrowserTab>;
   focusTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<void>;

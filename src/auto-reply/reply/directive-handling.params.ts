@@ -30,7 +30,7 @@ type HandleDirectiveOnlyCoreParams = {
   allowedModelKeys: Set<string>;
   modelPolicy?: ModelVisibilityPolicy;
   allowedModelCatalog: Awaited<
-    ReturnType<typeof import("../../agents/prepared-model-catalog.js").loadPreparedModelCatalog>
+    ReturnType<typeof import("../../agents/prepared-model-catalog.js").readPreparedModelCatalog>
   >;
   thinkingCatalog?: ModelCatalogEntry[];
   resetModelOverride: boolean;
@@ -44,6 +44,7 @@ type HandleDirectiveOnlyCoreParams = {
 
 /** Full directive-only command handler inputs. */
 export type HandleDirectiveOnlyParams = HandleDirectiveOnlyCoreParams & {
+  onRejection?: () => void;
   ctx?: MsgContext;
   messageProvider?: string;
   currentThinkLevel?: ThinkLevel;

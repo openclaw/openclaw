@@ -5,9 +5,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTestPluginApi } from "../plugin-sdk/plugin-test-api.js";
 import { clearLiveCatalogCacheForTests } from "../plugin-sdk/provider-catalog-shared.js";
-import { loadBundledPluginPublicSurface } from "../plugin-sdk/test-helpers/public-surface-loader.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { OpenClawPluginDefinition, ProviderPlugin } from "../plugins/types.js";
+import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import {
@@ -15,7 +16,6 @@ import {
   setRuntimeAuthProfileStoreSnapshot,
 } from "./auth-profiles/runtime-snapshots.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import { planOpenClawModelsJson } from "./models-config.plan.js";
 import { encodePluginModelCatalogRelativePath } from "./plugin-model-catalog.js";
 
@@ -27,7 +27,7 @@ vi.mock("../plugins/provider-discovery.runtime.js", () => ({
 describe("registered Ollama catalog SecretRef ownership", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   beforeAll(async () => {
-    const { default: plugin } = await loadBundledPluginPublicSurface<{
+    const { default: plugin } = await loadBundledPluginFacade<{
       default: OpenClawPluginDefinition;
     }>({ pluginId: "ollama", artifactBasename: "index.js" });
     expectDefined(

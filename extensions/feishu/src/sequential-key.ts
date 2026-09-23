@@ -1,4 +1,3 @@
-// Feishu plugin module implements sequential key behavior.
 import {
   isAbortRequestText,
   isBtwRequestText,
@@ -8,14 +7,16 @@ import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
 export function getFeishuSequentialKey(params: {
   accountId: string;
   event: FeishuMessageEvent;
+  preparedContent?: string;
   botOpenId?: string;
   botName?: string;
 }): string {
-  const { accountId, event, botOpenId, botName } = params;
+  const { accountId, event, botOpenId, botName, preparedContent } = params;
   const chatId = event.message.chat_id?.trim() || "unknown";
   const baseKey = `feishu:${accountId}:${chatId}`;
-  const parsed = parseFeishuMessageEvent(event, botOpenId, botName);
-  const text = parsed.content.trim();
+  const text = (
+    preparedContent ?? parseFeishuMessageEvent(event, botOpenId, botName).content
+  ).trim();
 
   if (isAbortRequestText(text)) {
     return `${baseKey}:control`;

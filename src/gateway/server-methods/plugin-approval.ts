@@ -7,7 +7,7 @@ import {
   validatePluginApprovalRequestParams,
   validatePluginApprovalResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { sanitizeApprovalScope, type ApprovalScope } from "../../infra/approval-scope.js";
+import { sanitizeApprovalScope } from "../../infra/approval-scope.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
   exceedsApprovalTextLimit,
@@ -17,7 +17,6 @@ import {
 import { takeMcpToolApprovalBinding } from "../../infra/mcp-tool-approval-binding.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../../infra/plugin-approval-canonical-decisions.js";
 import type {
-  PluginApprovalRequest,
   PluginApprovalRequestPayload,
   PluginApprovalResolved,
 } from "../../infra/plugin-approvals.js";
@@ -30,30 +29,24 @@ import {
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
-import { runApprovalRequestDeliveries } from "./approval-request-delivery.js";
+import { createApprovalRequestAuthority } from "./approval-request-authority.js";
 import {
   bindApprovalRequesterMetadata,
   bindApprovalReviewerDeviceIds,
-  buildRequestedApprovalEvent,
   handleApprovalResolve,
   handleApprovalWaitDecision,
-  handlePendingApprovalRequest,
   listVisiblePendingApprovalRequests,
   registerPendingApprovalRecord,
   resolveApprovalDecisionParams,
 } from "./approval-shared.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import { handlePendingPluginApprovalRequest } from "./plugin-approval-request-delivery.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-type PluginApprovalIosPushDelivery = {
-  handleRequested?: (
-    request: PluginApprovalRequest,
-    opts?: {
-      isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
-    },
-  ) => Promise<boolean>;
+type PluginApprovalIosPushDelivery = NonNullable<
+  GatewayRequestContext["pluginApprovalIosPushDelivery"]
+> & {
   handleResolved?: (resolved: PluginApprovalResolved) => Promise<void>;
-  handleExpired?: (request: PluginApprovalRequest) => Promise<void>;
 };
 
 /** Create plugin approval handlers backed by the shared approval manager. */
@@ -62,17 +55,18 @@ export function createPluginApprovalHandlers(
   opts?: { forwarder?: ExecApprovalForwarder; iosPushDelivery?: PluginApprovalIosPushDelivery },
 ): GatewayRequestHandlers {
   return {
-    "plugin.approval.list": async ({ respond, client, context }) => {
-      respond(
-        true,
-        listVisiblePendingApprovalRequests({
-          manager,
-          client,
-          approvalKind: "plugin",
-          ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
-        }),
-        undefined,
-      );
+    "plugin.approval.list": async (options) => {
+      using authority = createApprovalRequestAuthority(options);
+      const { respond, client, context } = options;
+      const approvals = await listVisiblePendingApprovalRequests({
+        authority,
+        manager,
+        client,
+        approvalKind: "plugin",
+        ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
+      });
+      authority.assertCurrent();
+      respond(true, approvals, undefined);
     },
     "plugin.approval.request": async ({ params, client, respond, context }) => {
       if (
@@ -85,27 +79,7 @@ export function createPluginApprovalHandlers(
       ) {
         return;
       }
-      const p = params as {
-        pluginId?: string | null;
-        title: string;
-        description: string;
-        detail?: string | null;
-        severity?: string | null;
-        scope?: ApprovalScope | null;
-        toolName?: string | null;
-        toolCallId?: string | null;
-        mcpTool?: { server: string; tool: string };
-        allowedDecisions?: string[] | null;
-        agentId?: string | null;
-        sessionKey?: string | null;
-        approvalReviewerDeviceIds?: string[] | null;
-        turnSourceChannel?: string | null;
-        turnSourceTo?: string | null;
-        turnSourceAccountId?: string | null;
-        turnSourceThreadId?: string | number | null;
-        timeoutMs?: number;
-        twoPhase?: boolean;
-      };
+      const p = params;
       const twoPhase = p.twoPhase === true;
       const timeoutMs = resolvePluginApprovalTimeoutMs(p.timeoutMs);
       const trustedAgentRuntime = client?.internal?.agentRuntimeIdentity;
@@ -256,66 +230,46 @@ export function createPluginApprovalHandlers(
         });
       }
 
-      const decisionPromise = registerPendingApprovalRecord({
+      const registration = await registerPendingApprovalRecord({
         manager,
         record,
         timeoutMs,
         respond,
         context,
       });
-      if (!decisionPromise) {
+      if (!registration) {
         return;
       }
 
-      const requestEvent = buildRequestedApprovalEvent(record, "plugin");
-      const forwardRequest = opts?.forwarder?.handlePluginApprovalRequested?.bind(opts.forwarder);
-      const iosPushRequest = opts?.iosPushDelivery?.handleRequested?.bind(opts.iosPushDelivery);
-
-      await handlePendingApprovalRequest({
+      await handlePendingPluginApprovalRequest({
         manager,
         record,
-        decisionPromise,
         respond,
         context,
         clientConnId: client?.connId,
-        requestEventName: "plugin.approval.requested",
-        requestEvent,
         twoPhase,
-        approvalKind: "plugin",
-        deliverRequest: () =>
-          runApprovalRequestDeliveries({
-            context,
-            record,
-            forward: forwardRequest
-              ? [() => forwardRequest(requestEvent), "plugin approvals: forward request failed"]
-              : undefined,
-            iosPush: iosPushRequest
-              ? [
-                  (isTargetVisible) => iosPushRequest(requestEvent, { isTargetVisible }),
-                  "plugin approvals: iOS push request failed",
-                ]
-              : undefined,
-          }),
-        afterDecision: async (decision) => {
-          if (decision === null) {
-            await opts?.iosPushDelivery?.handleExpired?.(requestEvent);
-          }
-        },
-        afterDecisionErrorLabel: "plugin approvals: iOS push expire failed",
+        forwardRequest: opts?.forwarder?.handlePluginApprovalRequested?.bind(opts.forwarder),
+        getIosPushDelivery: () => opts?.iosPushDelivery,
+        source: "rpc",
       });
     },
 
-    "plugin.approval.waitDecision": async ({ params, respond, client, context }) => {
+    "plugin.approval.waitDecision": async (options) => {
+      using authority = createApprovalRequestAuthority(options);
+      const { params, respond, client, context } = options;
       await handleApprovalWaitDecision({
+        authority,
         manager,
         inputId: (params as { id?: string }).id,
         client,
-        ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
+        ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
         respond,
       });
     },
 
-    "plugin.approval.resolve": async ({ params, respond, client, context }) => {
+    "plugin.approval.resolve": async (options) => {
+      using authority = createApprovalRequestAuthority(options);
+      const { params, respond, client, context } = options;
       const resolveParams = resolveApprovalDecisionParams({
         rawParams: params,
         validate: validatePluginApprovalResolveParams,
@@ -328,6 +282,7 @@ export function createPluginApprovalHandlers(
       const { inputId, decision, reviewer } = resolveParams;
       await handleApprovalResolve({
         approvalKind: "plugin",
+        authority,
         manager,
         inputId,
         decision,

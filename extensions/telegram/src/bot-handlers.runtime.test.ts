@@ -3,10 +3,10 @@ import { Bot } from "grammy";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it, vi } from "vitest";
 import { defaultTelegramBotDeps } from "./bot-deps.js";
-import { registerTelegramHandlers } from "./bot-handlers.runtime.js";
+import { createTelegramHandlers } from "./bot-handlers.runtime.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 
-describe("registerTelegramHandlers", () => {
+describe("createTelegramHandlers", () => {
   it("registers middleware in transport order", () => {
     const bot = new Bot("123456:handler-registration-test");
     const on = vi.spyOn(bot, "on");
@@ -29,7 +29,7 @@ describe("registerTelegramHandlers", () => {
       logger: getChildLogger({ module: "telegram/handler-registration-test" }),
     };
 
-    registerTelegramHandlers(params);
+    createTelegramHandlers(params).register();
 
     expect(on.mock.calls.map(([trigger]) => trigger)).toEqual([
       "my_chat_member",

@@ -47,8 +47,8 @@ const persistedExecAllowlistEntrySchema = z
       lastResolvedPath: z.string().optional(),
     }),
   ])
-  .transform(
-    (value): ExecAllowlistEntry => (typeof value === "string" ? { pattern: value } : value),
+  .transform((value): ExecAllowlistEntry =>
+    typeof value === "string" ? { pattern: value } : value,
   );
 const persistedExecApprovalsAgentSchema = persistedExecApprovalPolicySchema.extend({
   allowlist: z.array(persistedExecAllowlistEntrySchema).optional(),
@@ -113,8 +113,8 @@ export function resolveExecApprovalsSocketPath(): string {
   return path.join(resolveExecApprovalsStateDir().path, EXEC_APPROVALS_SOCKET);
 }
 
-export function resolveExecApprovalsDisplayPath(): string {
-  const stateDir = resolveExecApprovalsStateDir().displayPath;
+export function resolveExecApprovalsDisplayPath(env: NodeJS.ProcessEnv = process.env): string {
+  const stateDir = resolveExecApprovalsStateDir(env).displayPath;
   const locator = path.join("state", "openclaw.sqlite#exec_approvals_config");
   return stateDir === DEFAULT_EXEC_APPROVALS_STATE_DIR
     ? `${stateDir}/${locator}`

@@ -1,14 +1,7 @@
 // Write Cli Startup Metadata script supports OpenClaw repository automation.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import fs, {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import fs, { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -16,6 +9,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import pMap from "p-map";
 import type { RootHelpRenderOptions } from "../src/cli/program/root-help.js";
 import type { OpenClawConfig } from "../src/config/config.js";
+import { replaceFileAtomicSync } from "../src/infra/replace-file.js";
 import { resolveCliStartupRootHelpBundleIdentity } from "./lib/cli-startup-root-help-bundle.js";
 import { terminateManagedChild } from "./lib/managed-child-process.mts";
 
@@ -1087,10 +1081,10 @@ async function writeCliStartupMetadata(options?: {
       supervisor,
     );
 
-  mkdirSync(resolvedDistDir, { recursive: true });
-  writeFileSync(
-    resolvedOutputPath,
-    `${JSON.stringify(
+  const outputDir = fs.realpathSync(path.dirname(resolvedOutputPath));
+  replaceFileAtomicSync({
+    filePath: path.join(outputDir, path.basename(resolvedOutputPath)),
+    content: `${JSON.stringify(
       {
         generatedBy: "scripts/write-cli-startup-metadata.ts",
         generatorSignature,
@@ -1110,8 +1104,11 @@ async function writeCliStartupMetadata(options?: {
       null,
       2,
     )}\n`,
-    "utf8",
-  );
+    // Keep build artifact permissions; the atomic helper defaults to private files/directories.
+    mode: 0o666 & ~process.umask(),
+    dirMode: fs.statSync(outputDir).mode,
+    preserveExistingMode: true,
+  });
 }
 
 function hasAllPrecomputedSubcommandHelpText(value: unknown): boolean {

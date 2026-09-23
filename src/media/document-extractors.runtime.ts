@@ -6,11 +6,6 @@ import type {
   DocumentExtractionResult,
 } from "../plugins/document-extractor-types.js";
 import { resolvePluginDocumentExtractors } from "../plugins/document-extractors.runtime.js";
-import { createConfigScopedPromiseLoader } from "../plugins/plugin-cache-primitives.js";
-
-const documentExtractorLoader = createConfigScopedPromiseLoader((config?: OpenClawConfig) =>
-  resolvePluginDocumentExtractors(config ? { config } : undefined),
-);
 
 /** Runs the first matching plugin document extractor and tags successful results with its extractor id. */
 export async function extractDocumentContent(
@@ -19,7 +14,9 @@ export async function extractDocumentContent(
   },
 ): Promise<(DocumentExtractionResult & { extractor: string }) | null> {
   const mimeType = normalizeLowercaseStringOrEmpty(params.mimeType);
-  const extractors = await documentExtractorLoader.load(params.config);
+  params.signal?.throwIfAborted();
+  const extractors = resolvePluginDocumentExtractors({ config: params.config });
+  params.signal?.throwIfAborted();
   // Keep config and loader-only fields out of plugin calls; extractors receive the SDK request shape.
   const request: DocumentExtractionRequest = {
     buffer: params.buffer,
@@ -29,6 +26,7 @@ export async function extractDocumentContent(
     minTextChars: params.minTextChars,
     ...(params.password ? { password: params.password } : {}),
     ...(params.pageNumbers ? { pageNumbers: params.pageNumbers } : {}),
+    ...(params.signal ? { signal: params.signal } : {}),
     ...(params.onImageExtractionError
       ? { onImageExtractionError: params.onImageExtractionError }
       : {}),
@@ -43,6 +41,7 @@ export async function extractDocumentContent(
     }
     try {
       const result = await extractor.extract(request);
+      params.signal?.throwIfAborted();
       if (result) {
         return {
           ...result,
@@ -50,6 +49,7 @@ export async function extractDocumentContent(
         };
       }
     } catch (error) {
+      params.signal?.throwIfAborted();
       errors.push(error);
     }
   }

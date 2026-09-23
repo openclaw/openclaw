@@ -1,4 +1,3 @@
-// Slack plugin module implements action runtime behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
@@ -13,11 +12,15 @@ import {
 } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import {
+  createLazyRuntimeMethodBinder,
+  createLazyRuntimeModule,
+} from "openclaw/plugin-sdk/lazy-runtime";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedSlackAccount } from "./accounts.js";
+import type { SlackActionContext } from "./action-context.js";
 import {
   resolveSlackAutoThreadId,
   SLACK_PRIVATE_ACTION_DELIVERY_RESULT,
@@ -31,7 +34,6 @@ import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { resolveSlackChannelConfig } from "./monitor/channel-config.js";
 import { isSlackChannelAllowedByPolicy } from "./monitor/policy.js";
 import { hasSlackNativeDataBlock } from "./native-data-blocks.js";
-import type { SlackReplyDeliveryMessage } from "./reply-blocks.js";
 import { mergeSlackSendResults } from "./send-results.js";
 import type { SlackSendResult } from "./send.js";
 import { formatSlackTarget } from "./target-parsing.js";
@@ -55,80 +57,42 @@ const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
 const SLACK_REACTION_RESULT_LIMIT = 100;
 
-type SlackActionsRuntimeModule = typeof import("./actions.js");
-
 const loadSlackActionsRuntime = createLazyRuntimeModule(() => import("./actions.js"));
+const bindSlackAction = createLazyRuntimeMethodBinder(loadSlackActionsRuntime);
 
 const loadSlackAccountsRuntime = createLazyRuntimeModule(() => import("./accounts.runtime.js"));
 const loadSlackChannelTypeRuntime = createLazyRuntimeModule(() => import("./channel-type.js"));
-
-function createLazySlackAction<K extends keyof SlackActionsRuntimeModule>(
-  key: K,
-): SlackActionsRuntimeModule[K] {
-  return (async (...args: unknown[]) => {
-    const runtime = await loadSlackActionsRuntime();
-    const action = runtime[key] as (...actionArgs: unknown[]) => unknown;
-    return action(...args);
-  }) as SlackActionsRuntimeModule[K];
-}
+const bindSlackChannelType = createLazyRuntimeMethodBinder(loadSlackChannelTypeRuntime);
 
 export const slackActionRuntime = {
-  deleteSlackMessage: createLazySlackAction("deleteSlackMessage"),
-  downloadSlackFile: createLazySlackAction("downloadSlackFile"),
-  editSlackMessage: createLazySlackAction("editSlackMessage"),
-  getSlackMemberInfo: createLazySlackAction("getSlackMemberInfo"),
-  listSlackEmojis: createLazySlackAction("listSlackEmojis"),
-  listSlackPins: createLazySlackAction("listSlackPins"),
-  listSlackReactions: createLazySlackAction("listSlackReactions"),
-  openSlackConversation: createLazySlackAction("openSlackConversation"),
+  deleteSlackMessage: bindSlackAction((runtime) => runtime.deleteSlackMessage),
+  downloadSlackFile: bindSlackAction((runtime) => runtime.downloadSlackFile),
+  editSlackMessage: bindSlackAction((runtime) => runtime.editSlackMessage),
+  getSlackMemberInfo: bindSlackAction((runtime) => runtime.getSlackMemberInfo),
+  listSlackEmojis: bindSlackAction((runtime) => runtime.listSlackEmojis),
+  listSlackPins: bindSlackAction((runtime) => runtime.listSlackPins),
+  listSlackReactions: bindSlackAction((runtime) => runtime.listSlackReactions),
+  openSlackConversation: bindSlackAction((runtime) => runtime.openSlackConversation),
   parseSlackBlocksInput,
-  pinSlackMessage: createLazySlackAction("pinSlackMessage"),
-  reactSlackMessage: createLazySlackAction("reactSlackMessage"),
-  readSlackMessages: createLazySlackAction("readSlackMessages"),
-  removeOwnSlackReactions: createLazySlackAction("removeOwnSlackReactions"),
-  removeSlackReaction: createLazySlackAction("removeSlackReaction"),
-  resolveSlackConversationName: createLazySlackAction("resolveSlackConversationName"),
-  resolveSlackConversationInfo: async (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    channelId: string;
-    teamId?: string;
-    operation?: "read" | "write";
-    requireFreshName?: boolean;
-  }) => (await loadSlackChannelTypeRuntime()).resolveSlackConversationInfo(params),
+  pinSlackMessage: bindSlackAction((runtime) => runtime.pinSlackMessage),
+  reactSlackMessage: bindSlackAction((runtime) => runtime.reactSlackMessage),
+  readSlackMessages: bindSlackAction((runtime) => runtime.readSlackMessages),
+  removeOwnSlackReactions: bindSlackAction((runtime) => runtime.removeOwnSlackReactions),
+  removeSlackReaction: bindSlackAction((runtime) => runtime.removeSlackReaction),
+  resolveSlackConversationName: bindSlackAction((runtime) => runtime.resolveSlackConversationName),
+  resolveSlackConversationInfo: bindSlackChannelType(
+    (runtime) => runtime.resolveSlackConversationInfo,
+  ),
   resolveSlackChannelType: async (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
     channelId: string;
   }) => (await loadSlackChannelTypeRuntime()).resolveSlackChannelType(params),
-  sendSlackMessage: createLazySlackAction("sendSlackMessage"),
-  unpinSlackMessage: createLazySlackAction("unpinSlackMessage"),
+  sendSlackMessage: bindSlackAction((runtime) => runtime.sendSlackMessage),
+  unpinSlackMessage: bindSlackAction((runtime) => runtime.unpinSlackMessage),
 };
 
-export type SlackActionContext = {
-  conversationReadOrigin?: ConversationReadInvocationOrigin;
-  requesterAccountId?: string;
-  requesterSenderId?: string;
-  currentChannelProvider?: string;
-  /** Current channel ID for auto-threading. */
-  currentChannelId?: string;
-  /** Routable target for the current conversation when it differs from the channel ID. */
-  currentMessagingTarget?: string;
-  /** Current thread timestamp for auto-threading. */
-  currentThreadTs?: string;
-  /** Reply-to mode for auto-threading. */
-  replyToMode?: "off" | "first" | "all" | "batched";
-  /** Mutable ref to track if a reply was sent for single-use reply modes. */
-  hasRepliedRef?: { value: boolean };
-  /** True when same-channel root posting would leak a thread-originated reply. */
-  sameChannelThreadRequired?: boolean;
-  mediaAccess?: ChannelMessageActionContext["mediaAccess"];
-  /** Allowed local media directories for file uploads. */
-  mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
-  /** Slack-private ordered delivery plan prepared after presentation normalization. */
-  preparedMessages?: readonly SlackReplyDeliveryMessage[];
-};
+export type { SlackActionContext } from "./action-context.js";
 
 function resolveThreadTsFromContext(
   explicitThreadTs: string | undefined,
@@ -365,6 +329,7 @@ async function assertSlackReadTargetAllowed(params: {
       channelId: params.channelId,
       teamId: params.teamId,
       operation: "read",
+      assertDirectAdapterHandoff: params.context?.assertDirectAdapterHandoff,
     });
     if (
       info.type !== "dm" ||
@@ -401,6 +366,7 @@ async function assertSlackReadTargetAllowed(params: {
     teamId: params.teamId,
     operation: "read",
     ...(preliminary.shouldResolveName ? { requireFreshName: true } : {}),
+    assertDirectAdapterHandoff: params.context?.assertDirectAdapterHandoff,
   });
   if (
     preliminary.shouldResolveName &&
@@ -572,6 +538,7 @@ export async function handleSlackAction(
       ...(accountId ? { accountId } : {}),
       ...(tokenOverride ? { token: tokenOverride } : {}),
       teamId,
+      assertDirectAdapterHandoff: context?.assertDirectAdapterHandoff,
     };
   };
 

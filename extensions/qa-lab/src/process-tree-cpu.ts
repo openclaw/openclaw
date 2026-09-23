@@ -1,6 +1,11 @@
-// Qa Lab plugin module implements process tree cpu behavior.
 import { spawnSync } from "node:child_process";
-import { parseStrictFiniteNumber, parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
+import { readFileSync } from "node:fs";
+import {
+  asNonNegativeFiniteNumber,
+  parseStrictFiniteNumber,
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "openclaw/plugin-sdk/number-runtime";
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveQaWindowsPowerShellExePath } from "./windows-system-tools.js";
 
@@ -11,30 +16,6 @@ type ProcessTreeSnapshot = {
 };
 
 const PROCESS_TREE_SNAPSHOT_TIMEOUT_MS = 5_000;
-
-function parsePositiveInteger(value: unknown): number | null {
-  const parsed = parseStrictInteger(value);
-  if (parsed === undefined || parsed <= 0) {
-    return null;
-  }
-  return parsed;
-}
-
-function parseNonNegativeInteger(value: unknown): number | null {
-  const parsed = parseStrictInteger(value);
-  if (parsed === undefined || parsed < 0) {
-    return null;
-  }
-  return parsed;
-}
-
-function parseNonNegativeNumber(value: unknown): number | null {
-  const parsed = parseStrictFiniteNumber(value);
-  if (parsed === undefined || parsed < 0) {
-    return null;
-  }
-  return parsed;
-}
 
 function parsePsCpuTimeMs(raw: string): number | null {
   const match = raw.trim().match(/^(?:(\d+)-)?(\d+):(\d{2}(?:\.\d+)?)(?::(\d{2}(?:\.\d+)?))?$/u);
@@ -80,21 +61,32 @@ function parsePsRssBytes(raw: string): number | null {
   return Math.round(rssKiB * 1024);
 }
 
+function readLinuxProcessRssBytes(pid: number): number | null {
+  try {
+    const status = readFileSync(`/proc/${pid}/status`, "utf8");
+    const match = status.match(/^VmRSS:[ \t]+(\d+)[ \t]+kB[ \t]*$/mu);
+    const rssKiB = parseStrictNonNegativeInteger(match?.[1]);
+    return rssKiB === undefined ? null : rssKiB * 1024;
+  } catch {
+    return null;
+  }
+}
+
 function parseWindowsProcessCpuTimeMs(params: {
   kernelModeTime: unknown;
   userModeTime: unknown;
 }): number | null {
-  const kernelModeTime = parseNonNegativeNumber(params.kernelModeTime);
-  const userModeTime = parseNonNegativeNumber(params.userModeTime);
-  if (kernelModeTime === null || userModeTime === null) {
+  const kernelModeTime = asNonNegativeFiniteNumber(parseStrictFiniteNumber(params.kernelModeTime));
+  const userModeTime = asNonNegativeFiniteNumber(parseStrictFiniteNumber(params.userModeTime));
+  if (kernelModeTime === undefined || userModeTime === undefined) {
     return null;
   }
   return Math.round((kernelModeTime + userModeTime) / 10_000);
 }
 
 function parseWindowsWorkingSetBytes(raw: unknown): number | null {
-  const parsed = parseNonNegativeNumber(raw);
-  return parsed === null ? null : Math.round(parsed);
+  const parsed = asNonNegativeFiniteNumber(parseStrictFiniteNumber(raw));
+  return parsed === undefined ? null : Math.round(parsed);
 }
 
 function parseWindowsProcessTreeSnapshot(raw: string): ProcessTreeSnapshot | null {
@@ -116,9 +108,9 @@ function parseWindowsProcessTreeSnapshot(raw: string): ProcessTreeSnapshot | nul
     if (!isPlainObject(entry)) {
       continue;
     }
-    const pid = parsePositiveInteger(entry.ProcessId);
-    const ppid = parseNonNegativeInteger(entry.ParentProcessId);
-    if (pid === null || ppid === null) {
+    const pid = parseStrictPositiveInteger(entry.ProcessId);
+    const ppid = parseStrictNonNegativeInteger(entry.ParentProcessId);
+    if (pid === undefined || ppid === undefined) {
       continue;
     }
 
@@ -150,7 +142,8 @@ function parseWindowsProcessTreeSnapshot(raw: string): ProcessTreeSnapshot | nul
 function collectProcessTreeMetric(
   rootPid: number,
   childrenByParent: Map<number, number[]>,
-  metricByPid: Map<number, number>,
+  metricByPid: Map<number, number | null>,
+  readRequiredMetric?: (pid: number) => number | null,
 ): number | null {
   if (!metricByPid.has(rootPid)) {
     return null;
@@ -165,7 +158,11 @@ function collectProcessTreeMetric(
       continue;
     }
     seen.add(pid);
-    total += metricByPid.get(pid) ?? 0;
+    const metric = readRequiredMetric ? readRequiredMetric(pid) : (metricByPid.get(pid) ?? 0);
+    if (metric === null) {
+      return null;
+    }
+    total += metric;
     for (const childPid of childrenByParent.get(pid) ?? []) {
       stack.push(childPid);
     }
@@ -228,18 +225,28 @@ function readProcessTreeMetric(params: {
     return null;
   }
 
+  // ps can report zero after a leader exits while its threads still hold memory.
+  // Keep that process in the tree and require an available VmRSS for every member.
+  const readRequiredMetric =
+    process.platform === "linux" && params.posixColumn === "rss="
+      ? readLinuxProcessRssBytes
+      : undefined;
   const childrenByParent = new Map<number, number[]>();
-  const metricByPid = new Map<number, number>();
+  const metricByPid = new Map<number, number | null>();
   for (const line of result.stdout.split("\n")) {
-    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)$/u);
+    const match = line.trim().match(/^(\d+)\s+(\d+)(?:\s+(\S+))?$/u);
     if (!match) {
       continue;
     }
     const [, pidRaw, ppidRaw, metricRaw] = match;
     const pid = Number(pidRaw);
     const ppid = Number(ppidRaw);
-    const metric = params.parsePosixMetric(metricRaw ?? "");
-    if (!Number.isInteger(pid) || !Number.isInteger(ppid) || metric === null) {
+    const metric = readRequiredMetric ? null : params.parsePosixMetric(metricRaw ?? "");
+    if (
+      !Number.isInteger(pid) ||
+      !Number.isInteger(ppid) ||
+      (!readRequiredMetric && metric === null)
+    ) {
       continue;
     }
     metricByPid.set(pid, metric);
@@ -248,7 +255,7 @@ function readProcessTreeMetric(params: {
     childrenByParent.set(ppid, children);
   }
 
-  return collectProcessTreeMetric(rootPid, childrenByParent, metricByPid);
+  return collectProcessTreeMetric(rootPid, childrenByParent, metricByPid, readRequiredMetric);
 }
 
 export function readProcessTreeCpuMs(rootPid: number | null | undefined): number | null {

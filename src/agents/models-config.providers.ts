@@ -5,8 +5,9 @@
  */
 export { resolveImplicitProviders } from "./models-config.providers.implicit.js";
 export {
+  materializeConfiguredProviderCatalogModels,
   normalizeProviderCatalogModelsForConfig,
-  normalizeProviders,
-} from "./models-config.providers.normalize.js";
+} from "./models-config.providers.catalog.js";
+export { normalizeProviders } from "./models-config.providers.normalize.js";
 export type { ProviderConfig } from "./models-config.providers.secrets.js";
 export { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";

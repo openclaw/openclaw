@@ -4,7 +4,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "ui.seamColor":
     "Primary accent color used by UI surfaces for emphasis, badges, and visual identity cues. Use high-contrast values that remain readable across light/dark themes.",
   "ui.prefs.accent":
-    "User-selected Control UI accent color in #RRGGBB format. Overrides ui.seamColor; clear it to restore the configured seam color or theme default.",
+    "Control UI accent: #RRGGBB for a custom color, or 'theme' for the selected theme’s palette. Overrides ui.seamColor; clear it to inherit the configured seam color or theme default.",
   tui: "Terminal UI display settings. Use this section for terminal-only presentation preferences without changing Gateway or other UI behavior.",
   "tui.footer":
     "Terminal UI footer display settings. Keep optional context compact so session, model, goal, and token information stay readable.",
@@ -29,7 +29,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "plugins.entries":
     "Per-plugin settings keyed by plugin ID including enablement and plugin-specific runtime configuration payloads. Use this for scoped plugin tuning without changing global loader policy.",
   "plugins.entries.*.enabled":
-    "Per-plugin enablement override for a specific entry, applied on top of global plugin policy (restart required). Use this to stage plugin rollout gradually across environments.",
+    "Per-plugin enablement override for a specific entry, applied on top of global plugin policy. With the default hybrid reload mode, changes hot-reload the plugin runtime for new agent turns without restarting the Gateway unless the plugin requires a restart for this path. Use this to stage plugin rollout gradually across environments.",
   "plugins.entries.*.hooks":
     "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
   "plugins.entries.*.hooks.allowPromptInjection":
@@ -37,7 +37,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "plugins.entries.*.hooks.allowConversationAccess":
     "Controls whether this plugin may read raw conversation content from typed hooks such as `before_agent_run`, `before_model_resolve`, `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_finalize`, and `agent_end`. Non-bundled plugins must opt in explicitly.",
   "plugins.entries.*.hooks.timeoutMs":
-    "Default timeout in milliseconds for this plugin's typed hooks, capped at 600000. Use this to bound slow plugin hooks without changing plugin code; per-hook values in hooks.timeouts take precedence.",
+    "Default timeout in milliseconds for this plugin's typed hooks, capped at 600000. When unset, each hook uses the plugin's declared timeout or the Gateway's per-hook policy; there is no single fixed default. Per-hook values in hooks.timeouts take precedence.",
   "plugins.entries.*.hooks.timeouts":
     "Per-hook timeout overrides in milliseconds keyed by typed hook name, capped at 600000. Use narrow overrides for known slow hooks such as before_prompt_build or agent_end instead of raising every hook timeout.",
   "plugins.entries.*.subagent":
@@ -69,10 +69,22 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.model.primary": "Primary model (provider/model).",
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
+  "agents.defaults.embeddedAgent.cyberFailover":
+    "Automatic Daybreak escalation for replay-safe OpenAI cyber-policy refusals in the embedded runtime.",
+  "agents.defaults.embeddedAgent.cyberFailover.mode":
+    'Enable automatic escalation ("auto", default) or keep provider refusals terminal ("off").',
+  "agents.defaults.embeddedAgent.cyberFailover.model":
+    "Provider/model target used for automatic cyber-policy escalation.",
+  "agents.defaults.embeddedAgent.cyberFailover.cooloffMs":
+    "How long an unavailable escalation target is skipped for the current session.",
   "agents.defaults.utilityModel":
     "Optional lower-cost model (provider/model or alias) for short internal tasks such as generated titles and progress narration. Unset derives the primary provider's declared small model when available (otherwise the primary model); set to an empty string to disable utility routing.",
   "agents.entries.*.utilityModel":
     "Optional per-agent utility model override for short internal tasks. Overrides agents.defaults.utilityModel.",
+  "agents.defaults.decisionModel":
+    "Optional provider/model for typed choices, scores, and boolean probabilities. Unset or empty disables decision calls. Supporting plugins send bounded task evidence to this provider; chat and utility models are unchanged.",
+  "agents.entries.*.decisionModel":
+    "Per-agent decision model. Unset inherits agents.defaults.decisionModel; an empty string disables decision calls for this agent.",
   "agents.entries.*.models": "Per-agent model catalog overrides keyed by full provider/model IDs.",
   "agents.entries.*.modelPolicy":
     "Per-agent model override policy. An explicit allow list replaces the default policy for this agent.",
@@ -127,7 +139,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.provider":
     "Id of a registered compaction provider plugin used for summarization. When set and the provider is registered, its summarize() method is called instead of the built-in summarizeInStages pipeline. Falls back to built-in on provider failure. Leave unset to use the default built-in summarization.",
   "agents.defaults.compaction.thinkingLevel":
-    'Thinking level used only for embedded OpenClaw compaction summaries: "off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra", or "inherit". The default is "low"; set "inherit" to reuse the session level. The selected level is clamped to the actual compaction model/runtime. Native Codex app-server compaction ignores this setting because its compact request has no per-operation thinking override, and OpenClaw logs a warning.',
+    'Thinking level used only for embedded OpenClaw compaction summaries: "off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra", or "inherit". Defaults to the provider compaction preference, otherwise "low"; native local Ollama prefers "off". Set "inherit" to reuse the session level. Explicit settings override provider defaults, and the selected level is clamped to the actual compaction model/runtime. Native Codex app-server compaction ignores this setting because its compact request has no per-operation thinking override, and OpenClaw logs a warning.',
   "agents.defaults.compaction.keepRecentTokens":
     "Minimum token budget preserved from the most recent conversation window during compaction. Use higher values to protect immediate context continuity and lower values to keep more long-tail history.",
   "agents.defaults.compaction.identifierPolicy":
@@ -203,12 +215,15 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "commands.plugins":
     "Allow /plugins chat command to list discovered plugins and toggle plugin enablement in config (default: false).",
   "commands.debug": "Allow /debug chat command for runtime-only overrides (default: false).",
-  "commands.restart": "Allow /restart and external SIGUSR1 restart requests (default: true).",
+  "commands.restart":
+    "Allow /restart, /update, and external SIGUSR2 restart requests (default: true).",
   "commands.ownerAllowFrom":
     "Explicit owner allowlist for owner-scoped commands. Use channel-native IDs (optionally prefixed like \"whatsapp:+15551234567\"). '*' is ignored.",
   "commands.allowFrom":
     "Defines elevated command allow rules by channel and sender for owner-level command surfaces. Use narrow provider-specific identities so privileged commands are not exposed to broad chat audiences.",
   mcp: "Global MCP server definitions managed by OpenClaw. Embedded OpenClaw and other runtime adapters can consume these servers without storing them inside runtime-owned project settings.",
+  "mcp.sessionIdleTtlMs":
+    "Optional idle eviction for OpenClaw session MCP runtimes in milliseconds. Unset or 0 keeps runtimes alive until session cleanup or Gateway shutdown. Positive values round down; active leases and pending acquisitions prevent eviction. Run-owned runtimes still retire when their one-shot run ends.",
   "mcp.servers":
     "Named MCP server definitions. OpenClaw stores them in its own config and runtime adapters decide which transports are supported at execution time.",
   "mcp.servers.*.codex":

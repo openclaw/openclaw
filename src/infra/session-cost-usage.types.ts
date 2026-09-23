@@ -8,6 +8,20 @@ import type {
 
 export type CostBreakdown = Partial<Usage["cost"]>;
 
+export type UsageCostTranscriptFile = {
+  filePath: string;
+  /** Durable identity when filePath is a transient archive materialization. */
+  sourcePath: string;
+  kind: "jsonl" | "sqlite";
+  size: number;
+  mtimeMs: number;
+  sessionId?: string;
+  device?: number;
+  inode?: number;
+  eventCount?: number;
+  maxSeq?: number;
+};
+
 export type ParsedTranscriptEntry = {
   message: Record<string, unknown>;
   role?: "user" | "assistant";
@@ -64,7 +78,7 @@ export type UsageDailyBucket =
   | { mode: "utc-offset"; utcOffsetMinutes: number }
   | { mode: "time-zone"; timeZone: string };
 
-type SessionDailyUsage = {
+type SessionDailyUsage = CostUsageTotals & {
   date: string; // YYYY-MM-DD
   tokens: number;
   cost: number;
@@ -87,9 +101,7 @@ export type SessionUtcQuarterHourTokenUsage = {
   cacheRead: number;
   cacheWrite: number;
   // Uses the same token total basis as CostUsageTotals: usage.total when present,
-  // otherwise input + output + cacheRead + cacheWrite. This intentionally differs
-  // from legacy dailyBreakdown.tokens, which preserves its existing component-sum
-  // behavior until daily usage buckets are refactored separately.
+  // otherwise input + output + cacheRead + cacheWrite.
   totalTokens: number;
   totalCost: number;
 };
@@ -160,7 +172,6 @@ export type DiscoveredSession = {
   sessionId: string;
   sessionFile: string;
   mtime: number;
-  firstUserMessage?: string;
 };
 
 export type SessionUsageTimePoint = SharedSessionUsageTimePoint;

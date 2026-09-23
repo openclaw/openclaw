@@ -1,0 +1,18 @@
+{
+  "extends": "../tsconfig.json",
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    "**/*.mts",
+    "**/*.cts",
+    "../src/**/*.d.ts",
+    "../src/**/*.d.mts",
+    "../src/**/*.d.cts",
+    "../packages/**/*.d.ts",
+    "../packages/**/*.d.mts",
+    "../packages/**/*.d.cts",
+    "../extensions/**/*.d.ts",
+    "../extensions/**/*.d.mts",
+    "../extensions/**/*.d.cts"
+  ]
+}

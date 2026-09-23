@@ -4,6 +4,7 @@ read_when:
   - You need a durable record of what the Gateway did without storing content
   - You are deciding whether to enable message lifecycle auditing
   - You need to explain what audit records do and do not prove
+  - You are changing or reviewing execution identity, admission provenance, or decision receipts
 title: "Audit history"
 ---
 
@@ -56,26 +57,31 @@ unknown or absent; they never change task behavior and are never copied into
 ## Run identity inspection
 
 Execution identity recording is off by default, including on fresh installs
-and upgrades. Enable it explicitly, then restart the Gateway:
+and upgrades. Enable it explicitly for newly admitted runs:
 
 ```bash
 openclaw config set logging.audit.executionIdentity true
-openclaw gateway restart
 ```
 
 Collection requires both `logging.audit.enabled` and
 `logging.audit.executionIdentity` to be true. Setting either to `false`
-stops new contexts after restart; no environment-variable alias or silent
+stops new contexts immediately; no environment-variable alias or silent
 migration enables the feature. Retained contexts remain inspectable until
 their 30-day expiry.
+
+Audit settings apply without restarting the Gateway. Changes affect subsequent
+events and admissions; accepted writes still drain through the same queue, and
+previously admitted identity contexts remain immutable. Enabling collection
+does not backfill earlier activity or add identity to an already admitted run.
 
 After session work admission succeeds, OpenClaw validates and freezes
 one bounded identity envelope, immediately offers it to the existing audit
 writer queue, and continues the run without waiting for writer readiness,
 SQLite, or persistence. The queue drain initializes schema and HMAC-key state,
 pseudonymizes raw references, constructs the immutable context, validates its
-canonical bytes, and persists it through the process-owned shared-state
-connection. An accepted envelope can therefore be temporarily unavailable to
+canonical bytes, and persists it through the existing shared-state worker.
+The process-owned FIFO retains each accepted item until its worker attempt
+settles. An accepted envelope can therefore be temporarily unavailable to
 inspection while queued work finishes.
 
 Persistence remains best-effort. Queue saturation, storage failure, shutdown
@@ -351,8 +357,9 @@ See [Audit records](/cli/audit) for the full field reference and query filters.
 
 ## Message lifecycle events
 
-Set [`logging.audit.messages`](/gateway/configuration-reference#audit) to choose what
-is recorded, then restart the Gateway:
+Choose message audit metadata in **Settings → Advanced → Logging**, or set
+[`logging.audit.messages`](/gateway/config-observability#audit). Changes apply
+to subsequent message lifecycle events:
 
 - `off` (default): no message records.
 - `direct`: only messages in direct conversations.
@@ -433,6 +440,9 @@ what was recorded, not as proof of what happened:
 - Writes go through a bounded asynchronous process-owned queue; queue
   saturation, storage failure, or a bounded shutdown timeout can drop records
   and log one operational warning.
+- Shutdown drops waiting metadata at its existing deadline but joins submitted
+  worker operations before releasing the writer. Unknown worker outcomes are
+  not replayed; ordinary native lock contention keeps the existing FIFO retry.
 - Crash-ambiguous outbound sends are recorded as `unknown` rather than
   invented outcomes.
 
@@ -442,8 +452,9 @@ compliance archive; if you need one, use an external system fed by
 
 ## Storage, retention, and migration
 
-Records live in the shared state database (`state/openclaw.sqlite`) and are
-written off the delivery hot path. Queries never return records older than 30
+Records live in the shared state database (`state/openclaw.sqlite`). The existing
+shared-state worker executes audit writes and maintenance off the Gateway thread,
+including schema/key first use and write-triggered pruning. Queries never return records older than 30
 days, and the ledger is capped at 100,000 rows; expired rows are pruned during
 startup, hourly maintenance, and later writes. Each ledger or progress cleanup
 transaction deletes at most 1,024 expired rows and schedules more work until
@@ -514,12 +525,22 @@ correlation alone.
 
 ## Querying
 
+The Gateway runs `audit.list` and `audit.activity.list` queries on the shared
+state database worker so SQLite work does not block request handling. Filters
+and the retention cutoff are captured when each read starts; sequence cursors,
+result limits, and the existing `operator.read` permission are unchanged.
+
+`audit.run.inspect` uses the existing read-only worker for identity discovery
+and receipt queries. Missing databases and optional audit tables remain absent;
+inspection does not migrate state or join the audit writer queue. Each request
+captures its selectors, cursors, limits, and retention clock before yielding.
+
 - CLI: [`openclaw audit`](/cli/audit) with filters for agent, session, run,
   kind, status, direction, channel, time bounds, and cursor paging.
 - Gateway RPC: `audit.activity.list` (requires `operator.read`) returns the
   versioned V1 activity event union; the shipped `audit.list` RPC is unchanged
   for older run/tool clients. See
-  [Gateway protocol](/gateway/protocol#audit-ledger-rpc).
+  [Gateway protocol](/gateway/protocol/ledgers#audit-ledger-rpc).
 - Identity RPC: `audit.run.inspect` (requires `operator.read`) accepts one
   `executionId` for exact inspection or one `runId` for bounded discovery. It
   returns the immutable V1 context plus paged safe displays for admission,
@@ -528,9 +549,59 @@ correlation alone.
   when a run has multiple executions. Raw owner receipts remain private to the
   aggregation and storage owners.
 
+## Maintainer invariants
+
+Changes to identity producers, storage, and inspection must preserve these
+boundaries alongside the operator behavior above:
+
+- Only byte-identical canonical replay is idempotent. Retries, fallbacks, and
+  recovery reuse the original admission identity.
+- The parent approval row is the sole authorization owner. Its optional identity
+  companion persists identity only for an exact host-validated source-run binding
+  under explicit collection opt-in; disabled and unbound paths leave the table
+  absent. It must not change approval decisions when provenance is missing,
+  deleted, or corrupt. Do not add eager creation, late binding, dual writes,
+  fallback readers, sidecars, or schema-version workarounds. Changes require
+  older-reader open/use and candidate-reopen proof.
+- Invoker evidence is tri-state: tagged principal-bearing input is `present`,
+  tagged principal-less input is `unknown`, and omission alone is `absent`.
+  Validate the closed raw variant before projection or field dropping; reject
+  malformed, mixed, untagged, or extra-field input instead of normalizing it.
+- Generic decision facts require an explicit product-boundary producer and an
+  operator retention opt-in. The 30-day bound does not authorize default
+  collection. Producers use admission's shared `AuditEventWriter` FIFO; never
+  write the generic store directly, create another writer/key, or pseudonymize
+  locally. The writer alone HMAC-projects raw references before persistence.
+- `enforced` receipt coverage is diagnostic, not authority: emit it only when
+  the owner changed the outcome and the exact context/execution/run tuple
+  validates. After awaited work, synchronously revalidate the exact live owner
+  immediately before the sink, with no intervening await. Stale, released,
+  replaced, or throwing authority emits no receipt, not `unknown`. Same-run
+  wrappers compose owner predicates; distinct admitted runs start new predicate
+  roots. Insufficient decision evidence remains `unknown`.
+- Display trust comes from owner-held call-path provenance, never
+  receipt-controlled `source.owner` or prose. Pair every selected owner row or
+  event with its required opaque selector from the same query/page result.
+  Never derive or requery selectors from private receipt, resolution, or event
+  identifiers, or drop corrupt, oversized, or unlinked outcomes.
+- Admission validates a recursively owned, enumerable, accessor-free data
+  snapshot constructed from descriptors before schema checks or ordinary
+  property reads. Inherited properties are absent; accessors never run.
+  Admission may only validate, bound, freeze, and enqueue: no synchronous
+  SQLite, schema, filesystem, HMAC-key, or readiness work. Audit failure never
+  delays or aborts execution.
+- Public Plugin SDK ingress strips private recovery/admission authority,
+  including JavaScript extra and inherited properties.
+- Host-minted participant evidence is redeemed once against the finalized
+  context and exact plugin record/lifecycle epoch. Mixed participants may remove
+  sender-derived authority only; never widen or erase independent tools, grants,
+  routing, or approval authority.
+- Ask before changing reader scope, default-off collection, retained fields,
+  the 30-day cutoff, maintenance/row bounds, or schema/protocol contracts.
+
 ## Related
 
 - [Audit records CLI](/cli/audit)
-- [Configuration reference](/gateway/configuration-reference#audit)
-- [Gateway protocol](/gateway/protocol#audit-ledger-rpc)
+- [Configuration reference](/gateway/config-observability#audit)
+- [Gateway protocol](/gateway/protocol/ledgers#audit-ledger-rpc)
 - [OpenTelemetry](/gateway/opentelemetry)

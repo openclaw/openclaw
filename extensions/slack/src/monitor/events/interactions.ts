@@ -1,4 +1,3 @@
-// Slack plugin module implements interactions behavior.
 import { truncateSlackText } from "../../truncate.js";
 import type { SlackMonitorContext } from "../context.js";
 import { registerSlackBlockActionHandler, summarizeAction } from "./interactions.block-actions.js";

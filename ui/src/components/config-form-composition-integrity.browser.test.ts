@@ -1,11 +1,54 @@
-// Control UI tests cover schema composition that changes field requiredness.
-import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+// Control UI tests cover schema composition that changes field requiredness.
+import {
+  renderAnalyzedFormFixture,
+  renderObjectFixture,
+} from "../test-helpers/config-form-fixtures.ts";
 import { isSupportedConfigValueValid } from "./config-form.constraints.ts";
-import { renderObject } from "./config-form.node.collection.ts";
-import { analyzeConfigSchema, renderConfigForm, renderNode } from "./config-form.ts";
+import { analyzeConfigSchema } from "./config-form.ts";
 
 describe("config form composition integrity", () => {
+  it("renders object fields guarded by a required-property exclusion", () => {
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: {
+        github: {
+          type: "object",
+          title: "GitHub",
+          properties: { token: { type: "string" } },
+          required: ["token"],
+        },
+        people: { type: "array", items: { type: "string" } },
+        peopleFile: { type: "string" },
+      },
+      required: ["github"],
+      not: { required: ["people", "peopleFile"] },
+    });
+
+    expect(analysis.unsupportedPaths).toEqual([]);
+    expect(
+      isSupportedConfigValueValid(analysis.schema ?? {}, {
+        github: { token: "secret" },
+        people: ["alice"],
+        peopleFile: "people.json",
+      }),
+    ).toBe(false);
+    expect(
+      isSupportedConfigValueValid(analysis.schema ?? {}, {
+        github: { token: "secret" },
+        people: ["alice"],
+      }),
+    ).toBe(true);
+
+    const container = document.createElement("div");
+    renderAnalyzedFormFixture(container, analysis, {
+      value: {},
+      onPatch: vi.fn(),
+    });
+    expect(container.textContent).toContain("Github");
+    expect(container.textContent).not.toContain("Unsupported schema node");
+  });
+
   it("keeps mixed union and allOf compositions fail-closed", () => {
     const analysis = analyzeConfigSchema({
       type: "object",
@@ -37,7 +80,7 @@ describe("config form composition integrity", () => {
     expect(unsupportedUnion.unsupportedPaths).toEqual(["mixed"]);
   });
 
-  it("renders finite boolean unions while keeping open typed unions in Raw mode", () => {
+  it("renders finite boolean unions and string-or-literal unions while keeping constrained unions in Raw mode", () => {
     const analysis = analyzeConfigSchema({
       type: "object",
       properties: {
@@ -49,6 +92,9 @@ describe("config form composition integrity", () => {
         },
         nullableBoolean: {
           anyOf: [{ type: ["boolean", "null"] }, { const: "auto" }],
+        },
+        nullableString: {
+          anyOf: [{ type: ["string", "null"] }, { type: "boolean", const: false }],
         },
         ambiguousBooleanLabel: {
           anyOf: [{ type: "boolean" }, { const: "true" }],
@@ -75,9 +121,9 @@ describe("config form composition integrity", () => {
     });
 
     expect(analysis.unsupportedPaths).toEqual([
-      "retention",
       "guarded",
       "nullableBoolean",
+      "nullableString",
       "ambiguousBooleanLabel",
       "overlappingOneOf",
     ]);
@@ -100,18 +146,10 @@ describe("config form composition integrity", () => {
 
     const onPatch = vi.fn();
     const container = document.createElement("div");
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {},
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: { retention: "30d", mode: "auto", plainMode: "auto" },
-        showAdvanced: true,
-        onShowAdvanced: () => {},
-        onPatch,
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      value: { retention: "30d", mode: "auto", plainMode: "auto" },
+      onPatch,
+    });
 
     const modeControl = [
       ...container.querySelectorAll<HTMLElement & { value: string }>(
@@ -282,18 +320,10 @@ describe("config form composition integrity", () => {
     if (!analysis.schema) {
       return;
     }
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {},
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: { settings: { count: 3, mode: "a" } },
-        showAdvanced: true,
-        onShowAdvanced: () => {},
-        onPatch,
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      value: { settings: { count: 3, mode: "a" } },
+      onPatch,
+    });
 
     const input = container.querySelector<HTMLInputElement>("input[aria-label='Count']");
     expect(input).not.toBeNull();
@@ -333,29 +363,20 @@ describe("config form composition integrity", () => {
   it("does not clear required JSON-backed fields", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
-    render(
-      renderObject(
-        {
-          schema: {
-            type: "object",
-            properties: {
-              payload: {
-                anyOf: [{ type: "object" }, { type: "array" }],
-              },
-            },
-            allOf: [{ required: ["payload"] }],
+    renderObjectFixture(container, {
+      schema: {
+        type: "object",
+        properties: {
+          payload: {
+            anyOf: [{ type: "object" }, { type: "array" }],
           },
-          value: { payload: { enabled: true } },
-          path: ["settings"],
-          hints: {},
-          unsupported: new Set(),
-          disabled: false,
-          onPatch,
         },
-        renderNode,
-      ),
-      container,
-    );
+        allOf: [{ required: ["payload"] }],
+      },
+      value: { payload: { enabled: true } },
+      path: ["settings"],
+      onPatch,
+    });
 
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
     expect(textarea).not.toBeNull();
@@ -396,18 +417,10 @@ describe("config form composition integrity", () => {
     }
 
     const container = document.createElement("div");
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {},
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: { tuple: ["head", 2] },
-        showAdvanced: true,
-        onShowAdvanced: () => {},
-        onPatch: vi.fn(),
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      value: { tuple: ["head", 2] },
+      onPatch: vi.fn(),
+    });
     const inputs = Array.from(container.querySelectorAll<HTMLInputElement>(".cfg-array input"));
     expect(inputs.map((input) => input.type)).toEqual(["text", "number"]);
     const add = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
@@ -436,18 +449,10 @@ describe("config form composition integrity", () => {
 
     const onPatch = vi.fn();
     const container = document.createElement("div");
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {},
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: { settings: { mode: "safe" } },
-        showAdvanced: true,
-        onShowAdvanced: () => {},
-        onPatch,
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      value: { settings: { mode: "safe" } },
+      onPatch,
+    });
     const mode = container.querySelector<HTMLInputElement>("input[aria-label='Mode']");
     expect(mode).not.toBeNull();
     if (!mode) {
@@ -480,18 +485,10 @@ describe("config form composition integrity", () => {
 
     const onPatch = vi.fn();
     const container = document.createElement("div");
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {},
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: { aliases: { custom: "ok" } },
-        showAdvanced: true,
-        onShowAdvanced: () => {},
-        onPatch,
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      value: { aliases: { custom: "ok" } },
+      onPatch,
+    });
     expect(
       Array.from(container.querySelectorAll<HTMLButtonElement>("button")).some(
         (button) => button.textContent?.trim() === "Add Entry",
@@ -526,18 +523,10 @@ describe("config form composition integrity", () => {
     }
 
     const container = document.createElement("div");
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {},
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: { aliases: {} },
-        showAdvanced: true,
-        onShowAdvanced: () => {},
-        onPatch: vi.fn(),
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      value: { aliases: {} },
+      onPatch: vi.fn(),
+    });
     expect(
       Array.from(container.querySelectorAll<HTMLButtonElement>("button")).some(
         (button) => button.textContent?.trim() === "Add Entry",
@@ -569,18 +558,10 @@ describe("config form composition integrity", () => {
 
     const onPatch = vi.fn();
     const container = document.createElement("div");
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {},
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: { nested: "ok", numeric: 2, impossible: "raw-only" },
-        showAdvanced: true,
-        onShowAdvanced: () => {},
-        onPatch,
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      value: { nested: "ok", numeric: 2, impossible: "raw-only" },
+      onPatch,
+    });
     const nested = container.querySelector<HTMLInputElement>("input[aria-label='Nested']");
     const numeric = container.querySelector<HTMLInputElement>("input[aria-label='Numeric']");
     expect(nested?.type).toBe("text");
@@ -594,15 +575,23 @@ describe("config form composition integrity", () => {
     expect(onPatch).not.toHaveBeenCalled();
   });
 
-  it("marks ambiguous non-null type arrays as form-unsafe", () => {
+  it("normalizes primitive type arrays without accepting structured or composed type arrays", () => {
     const analysis = analyzeConfigSchema({
       type: "object",
       properties: {
         numberFirst: { type: ["number", "string"] },
         stringFirst: { type: ["string", "number"] },
+        nullable: { type: ["string", "number", "null"], minimum: 2, maxLength: 4 },
+        structured: { type: ["object", "array"] },
+        composed: { type: ["string", "number"], allOf: [{ minimum: 2 }] },
       },
     });
-    expect(analysis.unsupportedPaths).toEqual(["numberFirst", "stringFirst"]);
+    expect(analysis.unsupportedPaths).toEqual(["structured", "composed"]);
+    expect(analysis.schema?.properties?.nullable).toMatchObject({
+      nullable: true,
+      minimum: 2,
+      maxLength: 4,
+    });
   });
 
   it("marks allOf branches with unenforced constraint keywords as form-unsafe", () => {
@@ -765,18 +754,10 @@ describe("config form composition integrity", () => {
 
     const onPatch = vi.fn();
     const container = document.createElement("div");
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {},
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: { unknown: "raw-only", empty: ["invalid"] },
-        showAdvanced: true,
-        onShowAdvanced: () => {},
-        onPatch,
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      value: { unknown: "raw-only", empty: ["invalid"] },
+      onPatch,
+    });
     const add = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
       (button) => button.textContent?.trim() === "Add",
     );

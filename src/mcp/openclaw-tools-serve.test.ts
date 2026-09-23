@@ -1,5 +1,9 @@
 // OpenClaw MCP tools tests cover core tool server startup and registration.
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { hashSystemAgentOperation } from "../system-agent/operator-approval.js";
 import { resolveToolsMcpAgentId } from "./agent-session-env.js";
 import {
@@ -17,6 +21,8 @@ import {
   resolveOpenClawToolsMcpAgentSessionKey,
 } from "./openclaw-tools-serve.js";
 import { createPluginToolsMcpHandlers } from "./plugin-tools-handlers.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../system-agent/overview.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../system-agent/overview.js")>();
@@ -69,6 +75,35 @@ describe("OpenClaw tools MCP server", () => {
 
     const listed = await handlers.listTools();
     expect(listed.tools.map((tool) => tool.name)).toContain("automations");
+  });
+
+  it("does not expose cron to a persisted sub-agent ACP session", async () => {
+    const tempDir = tempDirs.make("openclaw-mcp-subagent-policy-");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionKey = "agent:main:acp:resumed-child";
+    await replaceSessionEntry({ storePath, sessionKey }, {
+      sessionId: `${sessionKey}-session`,
+      updatedAt: Date.now(),
+      spawnedBy: "agent:main:subagent:parent",
+      spawnDepth: 2,
+      subagentRole: "leaf",
+      subagentControlScope: "none",
+    } as SessionEntry);
+    const handlers = createPluginToolsMcpHandlers(
+      resolveOpenClawToolsForMcp({
+        agentSessionKey: sessionKey,
+        config: { session: { store: storePath } },
+      }),
+    );
+
+    const listed = await handlers.listTools();
+    expect(listed.tools.map((tool) => tool.name)).not.toContain("automations");
+    for (const name of ["automations", "cron"]) {
+      await expect(handlers.callTool({ name, arguments: { action: "status" } })).resolves.toEqual({
+        content: [{ type: "text", text: `Unknown tool: ${name}` }],
+        isError: true,
+      });
+    }
   });
 
   it("gates cron trigger surfaces by the host config", () => {
@@ -217,7 +252,7 @@ describe("OpenClaw tools MCP server", () => {
     expect(armedServer.env?.[OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_APPROVAL_ARMED_ENV]).toBe("1");
   });
 
-  it("reconstructs the delegated refusal from env on the native CLI MCP tool", async () => {
+  it("reconstructs delegated proposal staging from env on the native CLI MCP tool", async () => {
     const operation = {
       kind: "config-set",
       path: "agents.defaults.subagents.thinking",
@@ -241,8 +276,9 @@ describe("OpenClaw tools MCP server", () => {
 
     const text = JSON.stringify(result);
     expect(text).toContain("needs-approval:");
-    expect(text).toContain("OpenClaw operator UI");
-    expect(text).toContain("cannot be applied from this chat");
+    expect(text).toContain("requesting session's permission policy");
+    expect(text).toContain("returns the final outcome");
+    expect(text).not.toContain("OpenClaw operator UI");
     expect(text).not.toContain("ask the user to reply yes");
   });
 });

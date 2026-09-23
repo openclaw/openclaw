@@ -13,12 +13,12 @@ import {
   clearLoadInstalledPluginIndexInstallRecordsCache,
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
-  writePersistedInstalledPluginIndexInstallRecords,
 } from "./installed-plugin-index-records.js";
 import {
   markRetainedManagedNpmInstall,
   resolveRetainedManagedNpmInstallPackageInfo,
 } from "./managed-npm-retention.js";
+import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const PACKAGE_NAME = "@openclaw/discord";
@@ -110,7 +110,7 @@ describe("managed npm generation-dir loader precedence", () => {
     // on disk (the case `isUnavailableManagedNpmInstallRecord` does not cover).
     const stalePackageDir = writeManagedFlat(stateDir, staleVersion);
 
-    await writePersistedInstalledPluginIndexInstallRecords(
+    await seedInstalledPluginIndex(
       {
         discord: {
           source: "npm",
@@ -155,7 +155,7 @@ describe("managed npm generation-dir loader precedence", () => {
     });
     const downgradedPackageDir = writeManagedFlat(stateDir, "1.0.0");
 
-    await writePersistedInstalledPluginIndexInstallRecords(
+    await seedInstalledPluginIndex(
       {
         discord: {
           source: "npm",
@@ -194,7 +194,7 @@ describe("managed npm generation-dir loader precedence", () => {
       stateDir.toUpperCase(),
     );
 
-    await writePersistedInstalledPluginIndexInstallRecords(
+    await seedInstalledPluginIndex(
       {
         discord: {
           source: "npm",
@@ -262,7 +262,7 @@ describe("managed npm generation-dir loader precedence", () => {
       "node_modules",
       ...PACKAGE_NAME.split("/"),
     );
-    await writePersistedInstalledPluginIndexInstallRecords(
+    await seedInstalledPluginIndex(
       {
         discord: {
           source: "npm",
@@ -360,9 +360,9 @@ describe("managed npm generation-dir loader precedence", () => {
     // A managed generation with a higher version exists on disk...
     writeManagedGeneration({ stateDir, version: "2.0.0", generationKey: "discord-managed" });
     // ...but the persisted record points at a custom install outside the npm root.
-    const customInstallPath = path.join(stateDir, "custom", "node_modules", "@openclaw", "discord");
+    const customInstallPath = writeManagedFlat(path.join(stateDir, "custom"), "1.0.0");
 
-    await writePersistedInstalledPluginIndexInstallRecords(
+    await seedInstalledPluginIndex(
       {
         discord: {
           source: "npm",

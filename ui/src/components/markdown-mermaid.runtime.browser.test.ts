@@ -1,5 +1,5 @@
 import { renderMermaidSvg, type MermaidTheme } from "@openclaw/mermaid-renderer";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 
 const theme: MermaidTheme = {
   background: "#18181b",
@@ -15,8 +15,11 @@ function parseSvg(svg: string): Element {
   return new DOMParser().parseFromString(svg, "image/svg+xml").documentElement;
 }
 
-afterEach(() => {
+// The renderer belongs to the page, so these cases share its warm engine.
+// Error cases still dispose it; the file boundary owns final page teardown.
+afterAll(() => {
   window.dispatchEvent(new PageTransitionEvent("pagehide"));
+  expect(document.querySelector("iframe[sandbox='allow-scripts'][srcdoc]")).toBeNull();
 });
 
 describe("Mermaid rendering boundary", () => {
@@ -113,6 +116,15 @@ G --> S`;
       await renderMermaidSvg("flowchart LR\nA[Recovered] --> B[Ready]", theme),
     );
     expect(recovered.textContent).toContain("Recovered");
+  });
+
+  it("preserves Unicode at the sandbox error boundary", async () => {
+    const prefix = "No diagram type detected matching given configuration for text: ";
+    const source = `${"x".repeat(935)}😀`;
+
+    await expect(renderMermaidSvg(source, theme)).rejects.toMatchObject({
+      message: `${prefix}${"x".repeat(935)}`,
+    });
   });
 
   it("blocks image decoding inside Mermaid before the SVG reaches the host", async () => {

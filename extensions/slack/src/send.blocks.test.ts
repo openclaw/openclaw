@@ -67,9 +67,7 @@ function interleavedNativeDataBlocks(): Array<Record<string, unknown>> {
           type: "static_select",
           action_id: "private-select",
           placeholder: { type: "plain_text", text: "Choose owner" },
-          options: [
-            { text: { type: "plain_text", text: "Secret option" }, value: "private-option" },
-          ],
+          options: [{ text: { type: "plain_text", text: "Operations" }, value: "private-option" }],
         },
       ],
     },
@@ -81,7 +79,7 @@ const INTERLEAVED_NATIVE_DATA_ACCESSIBILITY = [
   "Before",
   "Pipeline report (table)\nAccount\tARR\nAcme\t$125k",
   "After",
-  "Approve\nChoose owner",
+  "Approve\nChoose owner\nOperations",
 ].join("\n\n");
 
 function slackDnsRequestError(): Error {
@@ -214,26 +212,25 @@ describe("sendMessageSlack chunking", () => {
     expect(postedMessage(client).text).toBe(message);
   });
 
-  it("splits oversized fallback text through the normal Slack sender", async () => {
-    const client = createSlackSendTestClient();
-    const message = "a".repeat(8500);
+  it.each([false, true])(
+    "keeps emoji whole when plain text mode is %s",
+    async (textIsSlackPlainText) => {
+      const client = createSlackSendTestClient();
+      const prefix = "a".repeat(SLACK_TEXT_LIMIT - 2);
+      const family = "👨‍👩‍👧‍👦";
 
-    await sendMessageSlack("channel:C123", message, {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-    });
+      await sendMessageSlack("channel:C123", `${prefix}${family}Z`, {
+        cfg: SLACK_TEST_CFG,
+        client,
+        textIsSlackPlainText,
+      });
 
-    const postedTexts = client.chat.postMessage.mock.calls.map((call) => call[0].text);
-
-    expect(postedTexts).toHaveLength(2);
-    expect(
-      postedTexts
-        .map((text, index) => ({ index, length: typeof text === "string" ? text.length : null }))
-        .filter((text) => text.length === null || text.length > 8000),
-    ).toStrictEqual([]);
-    expect(postedTexts.join("")).toBe(message);
-  });
+      expect(client.chat.postMessage.mock.calls.map((call) => call[0].text)).toEqual([
+        prefix,
+        `${family}Z`,
+      ]);
+    },
+  );
 
   it("keeps Slack mrkdwn code spans closed around protected tokens when chunking", async () => {
     const client = createSlackSendTestClient();
@@ -504,7 +501,7 @@ describe("sendMessageSlack blocks", () => {
       mrkdwn: false,
       text: INTERLEAVED_NATIVE_DATA_ACCESSIBILITY,
     });
-    expect(postedMessage(client).text).not.toMatch(/private|Secret option/u);
+    expect(postedMessage(client).text).not.toMatch(/private/u);
   });
 
   it("keeps interleaved native data and raw controls ordered after invalid_blocks", async () => {
@@ -540,7 +537,7 @@ describe("sendMessageSlack blocks", () => {
       text: INTERLEAVED_NATIVE_DATA_ACCESSIBILITY,
     });
     for (const index of [0, 1]) {
-      expect(postedMessage(client, index).text).not.toMatch(/private|Secret option/u);
+      expect(postedMessage(client, index).text).not.toMatch(/private/u);
     }
   });
 

@@ -75,7 +75,7 @@ struct LocalChatFixture {
         subject: "Mobile command center",
         modelProvider: "openai",
         modelID: "gpt-5.6-sol",
-        modelName: "GPT-5.6 Sol",
+        modelName: "GPT-5.6",
         modelSelectionTarget: "global",
         additionalModels: [
             OpenClawChatModelChoice(
@@ -233,7 +233,7 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
         if ProcessInfo.processInfo.arguments.contains("--openclaw-unavailable-model-fixture") {
             return try OpenClawChatGatewayPayloadCodec.decodeModelChoices(Data(#"""
             {"models":[
-              {"id":"gpt-5.6-sol","name":"GPT-5.6 Sol","provider":"openai",
+              {"id":"gpt-5.6-sol","name":"GPT-5.6","provider":"openai",
                "available":true,"contextWindow":128000},
               {"id":"claude-opus-4-1","name":"Claude Opus 4.1","provider":"anthropic",
                "available":false,"unavailableReason":"missing-auth","contextWindow":200000}
@@ -243,7 +243,7 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
         if ProcessInfo.processInfo.arguments.contains("--openclaw-selected-model-auth-failure-fixture") {
             return try OpenClawChatGatewayPayloadCodec.decodeModelChoices(Data(#"""
             {"models":[
-              {"id":"gpt-5.6-sol","name":"GPT-5.6 Sol","provider":"openai",
+              {"id":"gpt-5.6-sol","name":"GPT-5.6","provider":"openai",
                "available":false,"unavailableReason":"auth-failed","contextWindow":128000},
               {"id":"claude-opus-4-1","name":"Claude Opus 4.1","provider":"anthropic",
                "available":true,"contextWindow":200000}
@@ -255,7 +255,8 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
                 modelID: self.fixture.modelID,
                 name: self.fixture.modelName,
                 provider: self.fixture.modelProvider,
-                contextWindow: 128_000),
+                contextWindow: 128_000,
+                supportsFastMode: true),
         ] + self.fixture.additionalModels
     }
 
@@ -653,6 +654,16 @@ private actor LocalFixtureChatStore {
 
     private static func seedMessages(fixture: LocalChatFixture) -> [OpenClawChatMessage] {
         let now = Date().timeIntervalSince1970 * 1000
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-long-chat-fixture") {
+            return [
+                self.message(role: "user", text: "Prepare a detailed project review.", timestamp: now),
+                self.message(
+                    role: "assistant",
+                    text: String(repeating: "Earlier response context. ", count: 120),
+                    timestamp: now + 1),
+                self.message(role: "assistant", text: "OPENCLAW_LONG_CHAT_LATEST", timestamp: now + 2),
+            ]
+        }
         return fixture.seedMessages.enumerated().map { index, text in
             self.message(role: "assistant", text: text, timestamp: now + Double(index))
         }

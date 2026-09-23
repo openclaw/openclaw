@@ -1,8 +1,14 @@
 // Verifies that nested session tools keep execution identity without narrowing discovery policy.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "../acp/runtime/registry.js";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import * as inProcessGateway from "./tools/in-process-gateway.js";
 
 type GatewayRequest = { method: string; params?: Record<string, unknown> };
 type OpenClawToolsOptions = NonNullable<Parameters<typeof createOpenClawTools>[0]>;
@@ -33,6 +39,19 @@ vi.mock("./tools/embedded-gateway-stub.js", () => ({
   createEmbeddedCallGateway: createEmbeddedCallGatewayMock,
 }));
 
+// This factory suite supplies authorized embedded rows. Registered producer and
+// result-owner boundaries are exercised by sessions-list-privacy.test.ts.
+vi.mock("../gateway/session-list-read-result.js", () => ({
+  withCurrentSessionListRows: async <T>(
+    rows: readonly object[],
+    consume: (visible: readonly boolean[]) => T,
+    requireOwner: boolean,
+  ) => {
+    expect(requireOwner).toBe(true);
+    return consume(rows.map(() => true));
+  },
+}));
+
 vi.mock("./openclaw-plugin-tools.js", () => ({
   resolveOpenClawPluginToolsForOptions: () => [],
 }));
@@ -61,6 +80,8 @@ function requireTool(tools: ReturnType<typeof createOpenClawTools>, name: string
 }
 
 afterEach(() => {
+  unregisterAcpRuntimeBackend("session-context-test");
+  resetPluginRuntimeStateForTest();
   clearRuntimeConfigSnapshot();
   setEmbeddedMode(false);
   embeddedGatewayCalls.mockClear();
@@ -69,6 +90,128 @@ afterEach(() => {
 });
 
 describe("openclaw session lookup context", () => {
+  let matrixPlugin: ChannelPlugin;
+
+  beforeAll(async () => {
+    ({ matrixPlugin } = await loadBundledPluginFacade<{ matrixPlugin: ChannelPlugin }>({
+      pluginId: "matrix",
+      artifactBasename: "channel-plugin-api.js",
+    }));
+  });
+
+  it.each([
+    { source: "runtime", runtimeEnabled: true, pinnedEnabled: false, available: true },
+    { source: "runtime", runtimeEnabled: false, pinnedEnabled: true, available: false },
+    { source: "pinned", runtimeEnabled: false, pinnedEnabled: true, available: true },
+    { source: "pinned", runtimeEnabled: true, pinnedEnabled: false, available: false },
+  ] as const)(
+    "uses $source spawn capabilities (runtime=$runtimeEnabled, pinned=$pinnedEnabled)",
+    async ({ source, runtimeEnabled, pinnedEnabled, available }) => {
+      setActivePluginRegistry(
+        createTestRegistry([{ pluginId: "matrix", source: "test", plugin: matrixPlugin }]),
+      );
+      registerAcpRuntimeBackend({
+        id: "session-context-test",
+        runtime: {
+          async ensureSession() {
+            throw new Error("Capability discovery must not create an ACP session");
+          },
+          async *runTurn() {},
+          async cancel() {},
+          async close() {},
+        },
+      });
+      const capabilityConfig = (enabled: boolean) => ({
+        acp: { enabled, backend: "session-context-test" },
+        tools: { swarm: enabled },
+        session: { threadBindings: { spawnSessions: true } },
+        channels: {
+          matrix: {
+            accounts: { work: { threadBindings: { spawnSessions: enabled } } },
+          },
+        },
+      });
+      setRuntimeConfigSnapshot(capabilityConfig(runtimeEnabled));
+      const tools = createOpenClawTools({
+        agentSessionKey: "agent:main:matrix:channel:!room:example.org",
+        agentChannel: "matrix",
+        agentAccountId: "work",
+        config: capabilityConfig(pinnedEnabled),
+        sessionConfigSource: source,
+        disablePluginTools: true,
+        wrapBeforeToolCallHook: false,
+      });
+      const tool = requireTool(tools, "sessions_spawn");
+
+      expect(tools.some((candidate) => candidate.name === "agents_wait")).toBe(available);
+      expect(tool.parameters).toHaveProperty(
+        "properties.mode.enum",
+        available ? ["run", "session"] : ["run"],
+      );
+      expect(tool.parameters).toHaveProperty(
+        "properties.runtime.enum",
+        available ? ["subagent", "acp"] : ["subagent"],
+      );
+      if (available) {
+        expect(tool.parameters).toHaveProperty("properties.thread.type", "boolean");
+        expect(tool.parameters).toHaveProperty("properties.collect.type", "boolean");
+      } else {
+        expect(tool.parameters).not.toHaveProperty("properties.thread");
+        expect(tool.parameters).not.toHaveProperty("properties.collect");
+        await expect(
+          tool.execute("disabled-acp", { runtime: "acp", task: "must not start" }),
+        ).resolves.toMatchObject({
+          details: {
+            status: "error",
+            error: expect.stringContaining("ACP is disabled by policy"),
+          },
+        });
+      }
+    },
+  );
+
+  it.each([
+    { scope: "global", mainKey: "main", runSessionKey: "global" },
+    {
+      scope: "global",
+      mainKey: "conversation",
+      runSessionKey: "global",
+    },
+    { scope: "per-sender", mainKey: "main", runSessionKey: "global" },
+    {
+      scope: "global",
+      mainKey: "main",
+      runSessionKey: "agent:research:dashboard:control",
+    },
+  ] as const)("routes progress cards to $runSessionKey under $scope scope", async (scenario) => {
+    const gatewayCall = vi.spyOn(inProcessGateway, "callInProcessGatewayTool").mockResolvedValue({
+      card: null,
+    });
+    try {
+      const tools = createOpenClawTools({
+        config: {
+          agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+          session: { scope: scenario.scope, mainKey: scenario.mainKey },
+        },
+        agentSessionKey: "agent:research:main",
+        runSessionKey: scenario.runSessionKey,
+        requesterAgentIdOverride: "research",
+        disablePluginTools: true,
+        disableMessageTool: true,
+        wrapBeforeToolCallHook: false,
+      });
+
+      await requireTool(tools, "progress_card").execute("synthetic-progress", {});
+
+      expect(gatewayCall).toHaveBeenCalledWith("progressCard.put", {
+        sessionKey: scenario.runSessionKey,
+        agentId: "research",
+      });
+    } finally {
+      gatewayCall.mockRestore();
+    }
+  });
+
   it("binds nested session lookups to the durable caller", async () => {
     const runSessionKey = "agent:research:main";
     setEmbeddedMode(true);

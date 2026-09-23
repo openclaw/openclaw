@@ -6,7 +6,12 @@ import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveBrewExecutable, resolveBrewPathDirs } from "./brew.js";
 
-const HOMEBREW_ENV_KEYS = ["HOMEBREW_BREW_FILE", "HOMEBREW_PREFIX"] as const;
+const HOMEBREW_ENV_KEYS = [
+  "HOMEBREW_BREW_FILE",
+  "HOMEBREW_CURL_PATH",
+  "HOMEBREW_GIT_PATH",
+  "HOMEBREW_PREFIX",
+] as const;
 
 describe("brew helpers", () => {
   async function writeExecutable(filePath: string) {
@@ -54,7 +59,7 @@ describe("brew helpers", () => {
     });
   });
 
-  it("ignores HOMEBREW_BREW_FILE and HOMEBREW_PREFIX by default", async () => {
+  it("ignores Homebrew executable, selector, and prefix env overrides by default", async () => {
     await withTestDir({ prefix: "openclaw-brew-" }, async (tmp) => {
       const explicit = path.join(tmp, "custom", "brew");
       const prefix = path.join(tmp, "prefix");
@@ -69,11 +74,15 @@ describe("brew helpers", () => {
       await withHomebrewEnv(
         {
           HOMEBREW_BREW_FILE: explicit,
+          HOMEBREW_CURL_PATH: explicit,
+          HOMEBREW_GIT_PATH: explicit,
           HOMEBREW_PREFIX: prefix,
         },
         async () => {
           const env: NodeJS.ProcessEnv = {
             HOMEBREW_BREW_FILE: explicit,
+            HOMEBREW_CURL_PATH: explicit,
+            HOMEBREW_GIT_PATH: explicit,
             HOMEBREW_PREFIX: prefix,
           };
           await withPathEnv("", async () => {

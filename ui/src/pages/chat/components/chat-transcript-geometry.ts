@@ -1,5 +1,5 @@
-import type { Virtualizer } from "@tanstack/virtual-core";
-import type { ReactiveControllerHost } from "lit";
+import { measureElement, type Virtualizer } from "@tanstack/virtual-core";
+import type { ReactiveController, ReactiveControllerHost } from "lit";
 
 function transcriptScrollMargin(element: Element | null): number {
   if (!(element instanceof HTMLElement) || typeof getComputedStyle !== "function") {
@@ -44,7 +44,7 @@ export function initialTranscriptRect(host: ReactiveControllerHost) {
 export function measureConnectedTranscriptRows(
   scrollElement: HTMLDivElement | null,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
-): void {
+): boolean {
   const rect = scrollElement?.getBoundingClientRect();
   if (
     !scrollElement ||
@@ -52,15 +52,114 @@ export function measureConnectedTranscriptRows(
     !rect?.width ||
     !rect.height
   ) {
-    return;
+    return false;
   }
   // Width changes and retired smooth commands can have undelivered sizes.
   // Ordinary row refs stay on TanStack's observer path; never clear its cache.
+  let changed = false;
   for (const row of scrollElement.querySelectorAll<HTMLElement>(".chat-virtual-row")) {
-    virtualizer.resizeItem(virtualizer.indexFromElement(row), row.offsetHeight);
+    const index = virtualizer.indexFromElement(row);
+    // Rows are border-boxes; read their fractional layout height, not a scaled
+    // client rect when a containing board or sidebar is transitioning.
+    const height = Number.parseFloat(getComputedStyle(row).height);
+    const key = virtualizer.options.getItemKey(index);
+    const previousSize = virtualizer.itemSizeCache.get(key);
+    virtualizer.resizeItem(index, Number.isFinite(height) ? height : row.offsetHeight);
+    changed ||= virtualizer.itemSizeCache.get(key) !== previousSize;
   }
+  return changed;
+}
+
+export function measureTranscriptRow(
+  element: HTMLElement,
+  entry: ResizeObserverEntry | undefined,
+  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+): number {
+  // Rounded row heights accumulate when skipped overscan uses those measurements.
+  const size = entry?.borderBoxSize?.[0]?.blockSize ?? measureElement(element, entry, virtualizer);
+  if (size === 0 && virtualizer.scrollElement?.clientHeight === 0) {
+    // A hidden panel has no row geometry. Retain the last measurement instead
+    // of replacing it with zero and moving the restored viewport.
+    const index = virtualizer.indexFromElement(element);
+    return (
+      virtualizer.itemSizeCache.get(virtualizer.options.getItemKey(index)) ??
+      virtualizer.options.estimateSize(index)
+    );
+  }
+  return size;
 }
 
 export function maxTranscriptScrollOffset(element: HTMLElement | null): number | null {
-  return element ? Math.max(0, element.scrollHeight - element.clientHeight) : null;
+  return element && element.clientHeight > 0
+    ? Math.max(0, element.scrollHeight - element.clientHeight)
+    : null;
+}
+
+export function reconcileInitialTranscriptOffset(
+  element: HTMLDivElement | null,
+  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+): "pending" | "settled" | "corrected" {
+  const maxOffset = maxTranscriptScrollOffset(element);
+  const offset = virtualizer.scrollOffset;
+  if (maxOffset === null || offset === null) {
+    return "pending";
+  }
+  if (offset >= 0 && offset <= maxOffset) {
+    return "settled";
+  }
+  if (maxOffset !== 0) {
+    return "pending";
+  }
+  // An underfilled end anchor clamps to zero without a native scroll event.
+  virtualizer.scrollOffset = 0;
+  virtualizer.scrollToOffset(0);
+  return "corrected";
+}
+
+export class PositionRailGutterController implements ReactiveController {
+  private frame: number | null = null;
+
+  constructor(
+    private readonly host: ReactiveControllerHost & {
+      readonly scrollElement: HTMLDivElement | null;
+    },
+    private readonly inner: () => HTMLDivElement | null,
+  ) {
+    host.addController(this);
+  }
+
+  hostUpdated(): void {
+    if (this.frame !== null) {
+      return;
+    }
+    // Nested Lit children can still be replacing footer content. A synchronous
+    // layout read here clamps scrolling against that intermediate viewport.
+    this.frame = requestAnimationFrame(() => {
+      this.frame = null;
+      this.sync();
+    });
+  }
+
+  hostDisconnected(): void {
+    if (this.frame !== null) {
+      cancelAnimationFrame(this.frame);
+      this.frame = null;
+    }
+  }
+
+  sync(): void {
+    const viewport = this.host.scrollElement;
+    const inner = this.inner();
+    if (!viewport?.isConnected || inner?.parentElement !== viewport) {
+      return;
+    }
+    const left = viewport.getBoundingClientRect().left + viewport.clientLeft;
+    const gutter = inner.getBoundingClientRect().left - left;
+    // The conversation region stays fixed when its composer resizes the scrollport.
+    const region = viewport.closest<HTMLElement>(".chat-main__conversation") ?? viewport;
+    viewport.style.setProperty("--chat-position-rail-viewport-height", `${region.clientHeight}px`);
+    // Reserve room for the compact left rail and breathing space, including
+    // when a saved width fills the pane.
+    viewport.toggleAttribute("data-position-rail-gutter", gutter >= 68);
+  }
 }

@@ -1,6 +1,6 @@
 // Route resolution tests cover resolving channel route targets from input.
 import { describe, expect, test, vi } from "vitest";
-import { resolveAgentConfig } from "../agents/agent-scope-config.js";
+import { AgentSelectionRequiredError, resolveAgentConfig } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as routingBindings from "./bindings.js";
 import {
@@ -8,7 +8,6 @@ import {
   listExactDirectMessageBindingPeerIds,
   resolveAgentRoute,
   resolveInboundLastRouteSessionKey,
-  resolveUnknownDirectMessageRoute,
 } from "./resolve-route.js";
 
 type ResolvedRouteExpectation = {
@@ -895,6 +894,7 @@ describe("parentPeer binding inheritance (thread support)", () => {
     expectResolvedRoute(route, {
       agentId: params.expectedAgentId,
       matchedBy: params.expectedMatchedBy,
+      sessionKey: `agent:${params.expectedAgentId}:discord:channel:thread-456`,
     });
   }
 
@@ -920,6 +920,24 @@ describe("parentPeer binding inheritance (thread support)", () => {
       expectedMatchedBy: "binding.peer",
     });
   });
+
+  test.each([threadPeer.id, defaultParentPeer.id])(
+    "rejects an unknown agent in the first matching binding for %s instead of falling back",
+    (peerId) => {
+      expect(() =>
+        resolveDiscordThreadRoute({
+          cfg: {
+            agents: { entries: { fallback: {} } },
+            bindings: [
+              makeDiscordPeerBinding("missing", peerId),
+              makeDiscordPeerBinding("fallback", peerId),
+              { agentId: "fallback", match: { channel: "discord" } },
+            ],
+          },
+        }),
+      ).toThrow(AgentSelectionRequiredError);
+    },
+  );
 
   test("parent peer binding wins over guild binding", () => {
     expectDiscordThreadRoute({
@@ -1267,10 +1285,11 @@ describe("unknown direct-message route decisions", () => {
       match: { channel: "telegram", accountId: "*" },
     });
 
-    const route = resolveUnknownDirectMessageRoute({
+    const route = resolveAgentRoute({
       cfg: { bindings },
       channel: "telegram",
       accountId: "default",
+      peer: { kind: "direct", id: "" },
     });
 
     expect(route.matchedBy).toBe(expectedMatchedBy);
@@ -1328,7 +1347,20 @@ describe("wildcard peer bindings (peer.id=*)", () => {
     expect(route.matchedBy).toBe("default");
   });
 
-  test("exact peer binding wins over wildcard peer binding", () => {
+  test.each([
+    {
+      name: "exact peer binding wins over wildcard peer binding",
+      peerId: "+1000",
+      agentId: "exact",
+      matchedBy: "binding.peer",
+    },
+    {
+      name: "wildcard peer binding wins over default fallback for unmatched peers",
+      peerId: "+9999",
+      agentId: "wild",
+      matchedBy: "binding.peer.wildcard",
+    },
+  ])("$name", ({ peerId, agentId, matchedBy }) => {
     const cfg: OpenClawConfig = {
       agents: { list: [{ id: "exact" }, { id: "wild" }] },
       bindings: [
@@ -1354,42 +1386,10 @@ describe("wildcard peer bindings (peer.id=*)", () => {
       cfg,
       channel: "whatsapp",
       accountId: "biz",
-      peer: { kind: "direct", id: "+1000" },
+      peer: { kind: "direct", id: peerId },
     });
-    expect(route.agentId).toBe("exact");
-    expect(route.matchedBy).toBe("binding.peer");
-  });
-
-  test("wildcard peer binding wins over default fallback for unmatched peers", () => {
-    const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "exact" }, { id: "wild" }] },
-      bindings: [
-        {
-          agentId: "wild",
-          match: {
-            channel: "whatsapp",
-            accountId: "biz",
-            peer: { kind: "direct", id: "*" },
-          },
-        },
-        {
-          agentId: "exact",
-          match: {
-            channel: "whatsapp",
-            accountId: "biz",
-            peer: { kind: "direct", id: "+1000" },
-          },
-        },
-      ],
-    };
-    const route = resolveAgentRoute({
-      cfg,
-      channel: "whatsapp",
-      accountId: "biz",
-      peer: { kind: "direct", id: "+9999" },
-    });
-    expect(route.agentId).toBe("wild");
-    expect(route.matchedBy).toBe("binding.peer.wildcard");
+    expect(route.agentId).toBe(agentId);
+    expect(route.matchedBy).toBe(matchedBy);
   });
 
   test("group wildcard peer matches any group peer", () => {
@@ -1418,6 +1418,23 @@ describe("wildcard peer bindings (peer.id=*)", () => {
 });
 
 describe("resolved route cache keys", () => {
+  test("keeps cached routes independent of returned route mutations", () => {
+    const input: Parameters<typeof resolveAgentRoute>[0] = {
+      cfg: { agents: { entries: { main: {} } } },
+      channel: "discord",
+      peer: { kind: "direct", id: "user-1" },
+    };
+    let route = resolveAgentRoute(input);
+    const expected = { ...route };
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      route.agentId = "caller-owned-agent";
+      route.sessionKey = "caller-owned-session";
+      route = resolveAgentRoute(input);
+      expect(route).toEqual(expected);
+    }
+  });
+
   test("does not reuse a cached route when peer and guild fields contain cache separators", () => {
     const cfg: OpenClawConfig = {
       agents: { list: [{ id: "whole-peer" }, { id: "guild-room" }] },
@@ -1543,6 +1560,107 @@ describe("resolved route cache keys", () => {
         guildId: "-",
       }),
       { agentId: "hyphen-guild", matchedBy: "binding.guild" },
+    );
+  });
+
+  test("keeps peer presence, kind, and id distinct across cached route tiers", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          { id: "channel-wide" },
+          { id: "account-wide" },
+          { id: "any-direct" },
+          { id: "any-group" },
+          { id: "known-direct" },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "known-direct",
+          match: {
+            channel: "telegram",
+            accountId: "default",
+            peer: { kind: "direct", id: "known" },
+          },
+        },
+        {
+          agentId: "any-direct",
+          match: {
+            channel: "telegram",
+            accountId: "default",
+            peer: { kind: "direct", id: "*" },
+          },
+        },
+        {
+          agentId: "any-group",
+          match: {
+            channel: "telegram",
+            accountId: "default",
+            peer: { kind: "group", id: "*" },
+          },
+        },
+        {
+          agentId: "account-wide",
+          match: { channel: "telegram", accountId: "work" },
+        },
+        {
+          agentId: "channel-wide",
+          match: { channel: "telegram", accountId: "*" },
+        },
+      ],
+    };
+
+    expectResolvedRoute(resolveAgentRoute({ cfg, channel: "telegram", accountId: "default" }), {
+      agentId: "channel-wide",
+      matchedBy: "binding.channel",
+    });
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "telegram",
+        accountId: "default",
+        peer: { kind: "direct", id: "" },
+      }),
+      { agentId: "any-direct", matchedBy: "binding.peer.wildcard" },
+    );
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "telegram",
+        accountId: "default",
+        peer: { kind: "group", id: "" },
+      }),
+      {
+        agentId: "any-group",
+        matchedBy: "binding.peer.wildcard",
+        sessionKey: "agent:any-group:telegram:group:unknown",
+      },
+    );
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "telegram",
+        accountId: "default",
+        peer: { kind: "direct", id: "known" },
+      }),
+      { agentId: "known-direct", matchedBy: "binding.peer" },
+    );
+    expectResolvedRoute(resolveAgentRoute({ cfg, channel: "telegram", accountId: "work" }), {
+      agentId: "account-wide",
+      matchedBy: "binding.account",
+    });
+    expectResolvedRoute(resolveAgentRoute({ cfg, channel: "telegram", accountId: "default" }), {
+      agentId: "channel-wide",
+      matchedBy: "binding.channel",
+    });
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "telegram",
+        accountId: "default",
+        peer: { kind: "direct", id: "" },
+      }),
+      { agentId: "any-direct", matchedBy: "binding.peer.wildcard" },
     );
   });
 });

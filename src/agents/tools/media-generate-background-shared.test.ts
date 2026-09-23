@@ -1,5 +1,6 @@
 // Background media generation tests cover detached task completion, requester
 // wake delivery, and direct media fallback behavior.
+import { AsyncLocalStorage } from "node:async_hooks";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   runWithOwnedSessionTranscriptWrite,
@@ -50,10 +51,36 @@ vi.mock("../../tasks/task-registry-delivery-runtime.js", () => taskRegistryDeliv
 vi.mock("../../tasks/cron-run-continuation-cleanup.js", () => cronContinuationCleanupMocks);
 
 import {
+  createDefaultMediaGenerateBackgroundScheduler,
   createMediaGenerationTaskLifecycle,
   scheduleMediaGenerationTaskCompletion,
   shouldDetachMediaGenerationTask,
 } from "./media-generate-background-shared.js";
+
+describe("createDefaultMediaGenerateBackgroundScheduler", () => {
+  it("runs genuinely detached work outside request-scoped async context", async () => {
+    const requestContext = new AsyncLocalStorage<string>();
+    let resolveWork!: () => void;
+    const completed = new Promise<void>((resolve) => {
+      resolveWork = resolve;
+    });
+    const observedContexts: Array<string | undefined> = [];
+    const scheduler = createDefaultMediaGenerateBackgroundScheduler({
+      toolName: "image_generate",
+      onCrash: vi.fn(),
+    });
+
+    requestContext.run("matrix-monitor-task", () => {
+      scheduler(async () => {
+        observedContexts.push(requestContext.getStore());
+        resolveWork();
+      });
+    });
+
+    await completed;
+    expect(observedContexts).toEqual([undefined]);
+  });
+});
 
 beforeEach(() => {
   resetGeneratedMediaTaskActivityForTests();
@@ -355,6 +382,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
         model: "gpt-image-1",
         count: 1,
         wakeResult: "generated",
+        attachments: [{ type: "image" as const, path: "/tmp/proof.png" }],
       }),
     });
 
@@ -400,6 +428,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
         model: "gpt-image-1",
         count: 1,
         wakeResult: "generated",
+        attachments: [{ type: "image" as const, path: "/tmp/proof.png" }],
         mediaUrls: ["/tmp/proof.png"],
       }),
     });
@@ -410,6 +439,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     expect(detachedTaskRuntimeMocks.completeTaskRunByRunId).toHaveBeenCalledWith(
       expect.objectContaining({
         terminalOutcome: "blocked",
+        terminalSummary: expect.stringContaining('path="/tmp/proof.png"'),
       }),
     );
     expect(
@@ -671,6 +701,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
         model: "gpt-image-1",
         count: 1,
         wakeResult: "generated",
+        attachments: [{ type: "image" as const, path: "/tmp/proof.png" }],
       }),
     });
 
@@ -689,8 +720,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
         count: 1,
         terminalResult: {
           terminalOutcome: "blocked",
-          terminalSummary:
-            "Required completion delivery failed before reaching the requester: requester wake failed.",
+          terminalSummary: expect.stringContaining('path="/tmp/proof.png"'),
         },
       }),
     );

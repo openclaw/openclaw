@@ -1,4 +1,3 @@
-// Telegram plugin module implements outbound adapter behavior.
 import {
   resolveOutboundSendDep,
   sanitizeForPlainText,
@@ -11,18 +10,12 @@ import {
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
-import {
-  resolveSendableOutboundReplyParts,
-  sendPayloadMediaSequenceOrFallback,
-} from "openclaw/plugin-sdk/reply-payload";
-import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { mergeTelegramAccountConfig, resolveDefaultTelegramAccountId } from "./accounts.js";
 import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "./button-types.js";
 import { TELEGRAM_MAX_CAPTION_LENGTH, telegramCaptionDeliveryMetadata } from "./caption.js";
-import { splitTelegramHtmlChunks } from "./format.js";
 import {
   canonicalizeTelegramPresentationPayload,
   resolveTelegramInteractiveTextFallback,
@@ -63,16 +56,6 @@ async function resolveDefaultTelegramSend(deps?: OutboundSendDeps): Promise<Tele
   );
 }
 
-function chunkTelegramOutboundText(
-  text: string,
-  limit: number,
-  ctx?: { formatting?: OutboundDeliveryFormattingOptions },
-): string[] {
-  return ctx?.formatting?.parseMode === "HTML"
-    ? splitTelegramHtmlChunks(text, limit)
-    : chunkMarkdownTextWithMode(text, limit, ctx?.formatting?.chunkMode ?? "length");
-}
-
 async function resolveTelegramSendContext(params: {
   cfg: NonNullable<TelegramSendOpts>["cfg"];
   deps?: OutboundSendDeps;
@@ -83,6 +66,7 @@ async function resolveTelegramSendContext(params: {
   threadId?: string | number | null;
   formatting?: OutboundDeliveryFormattingOptions;
   silent?: boolean;
+  signal?: AbortSignal;
   gatewayClientScopes?: readonly string[];
   onDeliveryResult?: Parameters<
     NonNullable<ChannelOutboundAdapter["sendText"]>
@@ -97,12 +81,15 @@ async function resolveTelegramSendContext(params: {
     verbose: false;
     textMode?: "html";
     tableMode?: OutboundDeliveryFormattingOptions["tableMode"];
+    textLimit?: number;
+    chunkMode?: TelegramSendOpts["chunkMode"];
     messageThreadId?: number;
     replyToMessageId?: number;
     replyToIdSource?: TelegramSendOpts["replyToIdSource"];
     replyToMode?: TelegramSendOpts["replyToMode"];
     accountId?: string;
     silent?: boolean;
+    signal?: AbortSignal;
     gatewayClientScopes?: readonly string[];
     onDeliveryResult?: TelegramSendOpts["onDeliveryResult"];
     onPlatformSendDispatch?: TelegramSendOpts["onPlatformSendDispatch"];
@@ -121,6 +108,7 @@ async function resolveTelegramSendContext(params: {
       ...(params.replyToMode !== undefined ? { replyToMode: params.replyToMode } : {}),
       accountId: params.accountId ?? undefined,
       silent: params.silent,
+      signal: params.signal,
       gatewayClientScopes: params.gatewayClientScopes,
       onDeliveryResult: params.onDeliveryResult
         ? async (result) => {
@@ -133,6 +121,8 @@ async function resolveTelegramSendContext(params: {
       assertPlatformSendAuthorized: params.assertDirectAdapterHandoff,
       ...(params.formatting?.parseMode === "HTML" ? { textMode: "html" as const } : {}),
       tableMode: params.formatting?.tableMode,
+      textLimit: params.formatting?.textLimit,
+      chunkMode: params.formatting?.chunkMode,
     },
   };
 }
@@ -306,7 +296,7 @@ export async function sendTelegramPayloadMessages(params: {
   react: TelegramReactionFn;
   to: string;
   payload: ReplyPayload;
-  baseOpts: Omit<NonNullable<TelegramSendOpts>, "buttons" | "mediaUrl" | "quoteText">;
+  baseOpts: Omit<NonNullable<TelegramSendOpts>, "buttons" | "mediaUrl" | "mediaUrls" | "quoteText">;
 }): Promise<Awaited<ReturnType<TelegramSendFn>>> {
   const payload = canonicalizeTelegramPresentationPayload(params.payload, {
     allowWebAppButtons: parseTelegramTarget(params.to).chatType === "direct",
@@ -386,29 +376,19 @@ export async function sendTelegramPayloadMessages(params: {
   if (payload.videoAsNote === true && mediaUrls.length !== 1) {
     throw new Error("Telegram video notes require exactly one media attachment.");
   }
-  const shouldConsumeImplicitReplyTarget =
-    payloadOpts.replyToIdSource === "implicit" &&
-    payloadOpts.replyToMode !== undefined &&
-    isSingleUseReplyToMode(payloadOpts.replyToMode);
-  const consumedImplicitReplyPayloadOpts = shouldConsumeImplicitReplyTarget
-    ? {
-        ...payloadOpts,
-        replyToMessageId: undefined,
-        replyToIdSource: undefined,
-        replyToMode: undefined,
-      }
-    : payloadOpts;
-  let implicitReplyTargetAvailable = true;
   if (reactionEmoji) {
     if (typeof replyToMessageId !== "number") {
       throw new Error("Telegram reaction requires a reply target");
     }
     await params.baseOpts.onPlatformSendDispatch?.();
+    params.baseOpts.signal?.throwIfAborted();
     params.baseOpts.assertPlatformSendAuthorized?.();
     const reactionResult = await params.react(params.to, replyToMessageId, reactionEmoji, {
       cfg: params.baseOpts.cfg,
       accountId: params.baseOpts.accountId,
       gatewayClientScopes: params.baseOpts.gatewayClientScopes,
+      signal: params.baseOpts.signal,
+      assertPlatformSendAuthorized: params.baseOpts.assertPlatformSendAuthorized,
       verbose: false,
     });
     if (!reactionResult.ok) {
@@ -419,30 +399,15 @@ export async function sendTelegramPayloadMessages(params: {
     return { messageId: String(replyToMessageId), chatId: params.to };
   }
 
-  // Telegram allows reply_markup on media; attach buttons only to the first send.
-  return await sendPayloadMediaSequenceOrFallback({
-    text,
-    mediaUrls,
-    fallbackResult: { messageId: "unknown", chatId: params.to },
-    sendNoMedia: async () =>
-      await params.send(params.to, text, {
-        ...payloadOpts,
-        ...projectionOptions(true),
-        buttons,
-      }),
-    send: async ({ text: textLocal, mediaUrl, index, isFirst }) => {
-      const mediaPayloadOpts =
-        shouldConsumeImplicitReplyTarget && !implicitReplyTargetAvailable
-          ? consumedImplicitReplyPayloadOpts
-          : payloadOpts;
-      implicitReplyTargetAvailable = false;
-      return await params.send(params.to, textLocal, {
-        ...mediaPayloadOpts,
-        ...projectionOptions(index === mediaUrls.length - 1),
-        mediaUrl,
-        ...(isFirst ? { buttons } : {}),
-      });
-    },
+  return await params.send(params.to, text, {
+    ...payloadOpts,
+    ...projectionOptions(true),
+    ...(mediaUrls.length === 1
+      ? { mediaUrl: mediaUrls[0] }
+      : mediaUrls.length > 1
+        ? { mediaUrls }
+        : {}),
+    buttons,
   });
 }
 
@@ -454,8 +419,9 @@ export function createTelegramOutboundAdapter(
 
   return {
     deliveryMode: "direct",
-    chunker: chunkTelegramOutboundText,
-    chunkerMode: "markdown",
+    sendPayloadGroupsMedia: true,
+    // Telegram splits parsed content; raw Markdown cuts lose code ownership.
+    chunker: null,
     extractMarkdownImages: true,
     textChunkLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
     preserveMarkdownDetails: ({ cfg, accountId }) =>
@@ -569,7 +535,14 @@ export function createTelegramOutboundAdapter(
         },
       });
     },
-    pinDeliveredMessage: async ({ cfg, target, messageId, pin, gatewayClientScopes }) => {
+    pinDeliveredMessage: async ({
+      cfg,
+      target,
+      messageId,
+      pin,
+      gatewayClientScopes,
+      assertDirectAdapterHandoff,
+    }) => {
       const { pinMessageTelegram } = await loadSendModule();
       const outboundTo = normalizeTelegramOutboundTarget(target.to);
       const pinTarget = parseTelegramTarget(outboundTo);
@@ -579,6 +552,7 @@ export function createTelegramOutboundAdapter(
         notify: pin.notify,
         verbose: false,
         gatewayClientScopes,
+        assertPlatformSendAuthorized: assertDirectAdapterHandoff,
       });
     },
     resolveEffectiveTextChunkLimit: ({ cfg, accountId, formatting }) =>

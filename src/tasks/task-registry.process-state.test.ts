@@ -1,6 +1,7 @@
 // Verifies process-state persistence across fresh task registry module loads.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
+import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
 
 describe("task registry process state", () => {
   it("shares state across duplicate module instances", async () => {
@@ -40,17 +41,18 @@ describe("task registry process state", () => {
     firstState.tasks.clear();
   });
 
-  it("does not duplicate task event listeners when modules are reset", async () => {
+  it("preserves task lifecycle observers without duplicating listeners across module loads", async () => {
     const events = await import("../infra/agent-events.js");
     const firstStore = await import("./task-registry.store.js");
+    const onEvent = vi.fn();
     const store = {
+      ...createInMemoryTaskRegistryStore(),
       loadSnapshot: () => ({ tasks: new Map(), deliveryStates: new Map() }),
-      saveSnapshot: () => {},
     };
-    firstStore.configureTaskRegistryRuntime({ store });
+    firstStore.configureTaskRegistryRuntime({ store, observers: { onEvent } });
     const firstRegistry = await import("./task-registry.js");
-    const firstState = await import("./task-registry-state.js");
-    firstState.resetTaskRegistryListenerState();
+    const firstListener = await import("./task-registry-listener-state.js");
+    firstListener.resetTaskRegistryListenerState();
     events.resetAgentEventsForTest();
     firstRegistry.ensureTaskRegistryReady();
 
@@ -59,7 +61,7 @@ describe("task registry process state", () => {
     const secondStore = await import("./task-registry.store.js");
     secondStore.configureTaskRegistryRuntime({ store });
     const secondRegistry = await import("./task-registry.js");
-    const secondState = await import("./task-registry-state.js");
+    const secondListener = await import("./task-registry-listener-state.js");
 
     try {
       secondRegistry.ensureTaskRegistryReady();
@@ -86,9 +88,29 @@ describe("task registry process state", () => {
 
       expect(secondRegistry.getTaskById(task!.taskId)?.toolUseCount).toBe(2);
       expect(secondRegistry.getTaskById(task!.taskId)?.lastToolName).toBe("exec");
+      secondRegistry.finalizeTaskRecordByRunId({
+        runId: task!.runId!,
+        runtime: "subagent",
+        status: "succeeded",
+        endedAt: Date.now(),
+        terminalSummary: "Finished the delegated work.",
+      });
+      expect(secondRegistry.getTaskById(task!.taskId)?.status).toBe("succeeded");
+      expect(onEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "upserted",
+          task: expect.objectContaining({ taskId: task!.taskId, status: "succeeded" }),
+        }),
+      );
+      expect(onEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "upserted",
+          task: expect.objectContaining({ taskId: task!.taskId, status: "running" }),
+        }),
+      );
     } finally {
-      firstState.resetTaskRegistryListenerState();
-      secondState.resetTaskRegistryListenerState();
+      firstListener.resetTaskRegistryListenerState();
+      secondListener.resetTaskRegistryListenerState();
       events.resetAgentEventsForTest();
       firstStore.resetTaskRegistryRuntimeForTests();
       secondStore.resetTaskRegistryRuntimeForTests();

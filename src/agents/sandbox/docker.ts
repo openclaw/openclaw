@@ -6,7 +6,7 @@ import { markOpenClawExecEnv } from "../../infra/openclaw-exec-env.js";
  * Wraps Docker spawn, environment sanitization, container inspection, creation, and exec behavior.
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
+import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { computeSandboxConfigHash } from "./config-hash.js";
 import { DEFAULT_SANDBOX_IMAGE, SANDBOX_DOCKER_CREATE_ARGS_EPOCH } from "./constants.js";
 import {
@@ -18,7 +18,25 @@ import {
   type SandboxContainerEngine,
   type SandboxContainerEngineTarget,
 } from "./container-engine.js";
+import {
+  containerState,
+  readContainerLabel,
+  recordedPodmanContainerState,
+} from "./container-inspect.js";
+import {
+  admitSandboxContainerSource,
+  bindSandboxContainerSource,
+  releaseSandboxContainerSource,
+  withSandboxContainerLifecycle,
+  type ContainerSourceLease,
+} from "./container-lifecycle.js";
 import { handleHotSandboxConfigMismatch } from "./current-config.js";
+import { throwAfterPartialSandboxCleanup } from "./docker-partial-cleanup.js";
+import {
+  prepareSandboxMountPlan,
+  sandboxMountPlanMatchesContainer,
+  type SandboxMountPlan,
+} from "./mount-plan.js";
 import {
   assertPodmanSandboxTarget,
   bindPodmanSandboxEngine,
@@ -28,7 +46,12 @@ import {
   resolvePodmanSandboxRuntimeInfo,
   type PodmanSandboxRuntimeInfo,
 } from "./podman-runtime.js";
-import { readRegistryEntry, removeRegistryEntry, updateRegistry } from "./registry.js";
+import {
+  completeSandboxRegistryReservation,
+  readRegistryEntry,
+  removeRegistryEntry,
+  updateRegistry,
+} from "./registry.js";
 import {
   resolveDockerEnvPolicyEpoch,
   sanitizeExplicitSandboxEnvVars,
@@ -36,16 +59,7 @@ import {
 import { buildSandboxContainerName, slugifySessionKey } from "./shared.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 import { validateSandboxSecurity } from "./validate-sandbox-security.js";
-import {
-  appendReadOnlyWorkspaceSkillMountArgs,
-  appendWorkspaceMountArgs,
-  filterBindsConflictingWithProtectedMounts,
-  formatReadOnlyWorkspaceSkillMountHashState,
-  resolveReadOnlyWorkspaceSkillMounts,
-  resolveProtectedSkillMountContainerPaths,
-  SANDBOX_MOUNT_FORMAT_VERSION,
-  type ReadOnlyWorkspaceSkillMount,
-} from "./workspace-mounts.js";
+import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
 
 export {
   DOCKER_SANDBOX_ENGINE,
@@ -64,6 +78,14 @@ export {
   validateSandboxContainerEngineTarget,
 } from "./podman-runtime.js";
 export type { PodmanSandboxRuntimeInfo } from "./podman-runtime.js";
+export {
+  containerState,
+  dockerContainerState,
+  readContainerLabel,
+  readDockerContainerLabel,
+  readDockerContainerEnvVar,
+  readDockerPort,
+} from "./container-inspect.js";
 export { resolveDockerEnvPolicyEpoch } from "./sanitize-env-vars.js";
 
 type ExecDockerRawOptions = ExecContainerRawOptions;
@@ -78,7 +100,6 @@ export async function execDockerRaw(
 const log = createSubsystemLogger("docker");
 
 const HOT_CONTAINER_WINDOW_MS = 5 * 60 * 1000;
-const sandboxContainerLifecycleQueue = new KeyedAsyncQueue();
 
 type ExecDockerOptions = ExecDockerRawOptions;
 
@@ -89,68 +110,6 @@ export async function execDocker(args: string[], opts?: ExecDockerOptions) {
     stderr: result.stderr.toString("utf8"),
     code: result.code,
   };
-}
-
-export async function readDockerContainerLabel(
-  containerName: string,
-  label: string,
-): Promise<string | null> {
-  return await readContainerLabel(DOCKER_SANDBOX_ENGINE, containerName, label);
-}
-
-export async function readContainerLabel(
-  engine: SandboxContainerEngine,
-  containerName: string,
-  label: string,
-): Promise<string | null> {
-  const result = await execContainer(
-    engine,
-    ["inspect", "-f", `{{ index .Config.Labels "${label}" }}`, containerName],
-    { allowFailure: true },
-  );
-  if (result.code !== 0) {
-    return null;
-  }
-  const raw = result.stdout.trim();
-  if (!raw || raw === "<no value>") {
-    return null;
-  }
-  return raw;
-}
-
-export async function readDockerContainerEnvVar(
-  containerName: string,
-  envVar: string,
-): Promise<string | null> {
-  const result = await execDocker(
-    ["inspect", "-f", "{{range .Config.Env}}{{println .}}{{end}}", containerName],
-    { allowFailure: true },
-  );
-  if (result.code !== 0) {
-    return null;
-  }
-  for (const line of result.stdout.split(/\r?\n/)) {
-    if (line.startsWith(`${envVar}=`)) {
-      return line.slice(envVar.length + 1);
-    }
-  }
-  return null;
-}
-
-export async function readDockerPort(containerName: string, port: number) {
-  const result = await execDocker(["port", containerName, `${port}/tcp`], {
-    allowFailure: true,
-  });
-  if (result.code !== 0) {
-    return null;
-  }
-  const line = result.stdout.trim().split(/\r?\n/)[0] ?? "";
-  const match = line.match(/:(\d+)\s*$/);
-  if (!match) {
-    return null;
-  }
-  const mapped = Number.parseInt(match[1] ?? "", 10);
-  return Number.isFinite(mapped) ? mapped : null;
 }
 
 const DOCKER_DAEMON_UNAVAILABLE_MARKERS = [
@@ -202,10 +161,6 @@ async function inspectContainerImage(
   throw new Error(`Failed to inspect sandbox image with ${engine.displayName}: ${stderr}`);
 }
 
-export async function ensureDockerImage(image: string) {
-  await ensureContainerImage(DOCKER_SANDBOX_ENGINE, image);
-}
-
 export async function ensureContainerImage(engine: SandboxContainerEngine, image: string) {
   const imageState = await inspectContainerImage(engine, image);
   if (imageState === "exists") {
@@ -226,51 +181,6 @@ export async function ensureContainerImage(engine: SandboxContainerEngine, image
   }
   throw new Error(
     `Sandbox image not found in ${engine.displayName}: ${image}. Build or pull it first.`,
-  );
-}
-
-export async function dockerContainerState(name: string) {
-  return await containerState(DOCKER_SANDBOX_ENGINE, name);
-}
-
-export async function containerState(engine: SandboxContainerEngine, name: string) {
-  const result = await execContainer(engine, ["inspect", "-f", "{{.State.Running}}", name], {
-    allowFailure: true,
-  });
-  if (result.code !== 0) {
-    return { exists: false, running: false };
-  }
-  return { exists: true, running: result.stdout.trim() === "true" };
-}
-
-function isPodmanContainerNotFound(stderr: string): boolean {
-  // Target changes are destructive only after Podman confirms absence. Treat
-  // connection and authorization failures as unknown so the old runtime stays registered.
-  return (
-    /no such container/iu.test(stderr) ||
-    /no container with name or id .* found/iu.test(stderr) ||
-    /container .* does not exist/iu.test(stderr)
-  );
-}
-
-async function recordedPodmanContainerState(engine: SandboxContainerEngine, name: string) {
-  const result = await execContainer(engine, ["inspect", "-f", "{{.State.Running}}", name], {
-    allowFailure: true,
-  });
-  if (result.code === 0) {
-    return { exists: true, running: result.stdout.trim() === "true" };
-  }
-  if (isPodmanContainerNotFound(result.stderr)) {
-    return { exists: false, running: false };
-  }
-  const detail = result.stderr.trim();
-  throw Object.assign(
-    new Error(
-      detail
-        ? `Unable to inspect recorded Podman sandbox runtime ${name}: ${detail}`
-        : `Unable to inspect recorded Podman sandbox runtime ${name} (exit ${result.code})`,
-    ),
-    { code: result.code },
   );
 }
 
@@ -462,8 +372,11 @@ async function createSandboxContainer(params: {
   skillsWorkspaceDir?: string;
   scopeKey: string;
   configHash?: string;
-  readOnlyWorkspaceSkillMounts: readonly ReadOnlyWorkspaceSkillMount[];
+  mountPlan: SandboxMountPlan;
   podmanRuntimeInfo?: PodmanSandboxRuntimeInfo;
+  onAllocated?: (id: string) => void;
+  assertCurrent?: () => void;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
 }) {
   const { engine, name, cfg, workspaceDir, scopeKey } = params;
   const podmanPolicy =
@@ -474,7 +387,7 @@ async function createSandboxContainer(params: {
           workspaceDir,
           workspaceAccess: params.workspaceAccess,
           agentWorkspaceDir: params.agentWorkspaceDir,
-          readOnlyWorkspaceSkillMounts: params.readOnlyWorkspaceSkillMounts,
+          readOnlyWorkspaceSkillMounts: params.mountPlan.readOnlyWorkspaceSkillMounts,
           runtimeInfo: params.podmanRuntimeInfo,
         })
       : undefined;
@@ -493,45 +406,33 @@ async function createSandboxContainer(params: {
     args.push(...podmanPolicy.extraCreateArgs);
   }
   args.push("--workdir", cfg.workdir);
-  appendWorkspaceMountArgs({
-    args,
-    workspaceDir,
-    agentWorkspaceDir: params.agentWorkspaceDir,
-    skillsWorkspaceDir: params.skillsWorkspaceDir,
-    workdir: cfg.workdir,
-    workspaceAccess: params.workspaceAccess,
-    readOnlyWorkspaceSkillMounts: params.readOnlyWorkspaceSkillMounts,
-    includeReadOnlyWorkspaceSkillMounts: false,
-  });
-  // Protected skill overlays are authoritative. Remove exact destination
-  // collisions before Docker or Podman sees duplicate mount arguments.
-  const protectedPaths = resolveProtectedSkillMountContainerPaths(
-    params.readOnlyWorkspaceSkillMounts,
-  );
-  let safeBinds = cfg.binds;
-  if (protectedPaths.size > 0 && cfg.binds?.length) {
-    safeBinds = filterBindsConflictingWithProtectedMounts(cfg.binds, protectedPaths);
-    const skipped = cfg.binds.filter((b) => !safeBinds!.includes(b));
-    for (const bind of skipped) {
-      log.warn(
-        `sandbox: skipping user bind "${bind}" — container path conflicts with a protected read-only skill mount`,
-      );
-    }
+  for (const bind of params.mountPlan.skippedBinds) {
+    log.warn(
+      `sandbox: skipping user bind "${bind}" — container path conflicts with a protected read-only skill mount`,
+    );
   }
-  appendCustomBinds(args, safeBinds ? { ...cfg, binds: safeBinds } : cfg);
-  appendReadOnlyWorkspaceSkillMountArgs({
-    args,
-    readOnlyWorkspaceSkillMounts: params.readOnlyWorkspaceSkillMounts,
-  });
-  await withContainerEnvFile(env, async (envFile) => {
+  appendCustomBinds(args, { ...cfg, binds: params.mountPlan.binds });
+  const created = await withContainerEnvFile(env, async (envFile) => {
     args.push("--env-file", envFile, cfg.image, "sleep", "infinity");
-    await execContainer(engine, args);
+    params.assertCurrent?.();
+    return await execContainer(engine, args);
   });
-  await execContainer(engine, ["start", name]);
+  const containerId = created.stdout.trim();
+  if (!/^[a-f0-9]{64}$/u.test(containerId)) {
+    throw new Error("Container creation did not return an immutable container ID.");
+  }
+  params.onAllocated?.(containerId);
+  params.assertCurrent?.();
+  await execContainer(engine, ["start", containerId]);
 
   if (cfg.setupCommand?.trim()) {
-    await execContainer(engine, ["exec", "-i", name, "/bin/sh", "-lc", cfg.setupCommand]);
+    params.assertCurrent?.();
+    await execContainer(engine, ["exec", "-i", containerId, "/bin/sh", "-lc", cfg.setupCommand], {
+      signal: params.operatorAuthority?.signal,
+    });
   }
+  params.assertCurrent?.();
+  return containerId;
 }
 
 async function readContainerConfigHash(
@@ -542,12 +443,16 @@ async function readContainerConfigHash(
 }
 
 type EnsureSandboxContainerParams = {
+  workspaceSource?: "managed-worktree";
+  assertCurrent?: () => void;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   engine?: SandboxContainerEngine;
   podmanTarget?: SandboxContainerEngineTarget;
   scopeKey: string;
   workspaceDir: string;
   agentWorkspaceDir: string;
   skillsWorkspaceDir?: string;
+  readOnlyResourceMounts?: Array<{ hostPath: string; containerPath: string }>;
   cfg: SandboxConfig;
   requireCurrentConfig?: boolean;
 };
@@ -563,14 +468,22 @@ export async function ensureSandboxContainer(params: EnsureSandboxContainerParam
 
   // Independent agent runs can converge on one container resource. Serialize the
   // full lifecycle so followers re-read state after create, start, or replace.
-  return await sandboxContainerLifecycleQueue.enqueue(containerName, async () => {
-    return await ensureSandboxContainerLifecycle(params, containerName);
-  });
+  const assertCurrent = () => {
+    params.operatorAuthority?.assertCurrent();
+    params.assertCurrent?.();
+  };
+  return await withSandboxContainerLifecycle(
+    containerName,
+    params.cfg.scope === "shared" ? undefined : params.operatorAuthority,
+    (source) =>
+      ensureSandboxContainerLifecycle({ ...params, assertCurrent }, containerName, source),
+  );
 }
 
 async function ensureSandboxContainerLifecycle(
   params: EnsureSandboxContainerParams,
   containerName: string,
+  source: ContainerSourceLease | undefined,
 ) {
   const configuredEngine = params.engine ?? DOCKER_SANDBOX_ENGINE;
   const podmanRuntimeInfo =
@@ -581,7 +494,16 @@ async function ensureSandboxContainerLifecycle(
   const engine = podmanRuntimeInfo
     ? bindPodmanSandboxEngine(podmanRuntimeInfo.target)
     : configuredEngine;
+  params.assertCurrent?.();
   let existingRegistryEntry = await readRegistryEntry(containerName);
+  if (
+    existingRegistryEntry?.runtimeState === "removing" ||
+    existingRegistryEntry?.runtimeState === "removing-pending"
+  ) {
+    throw new Error(
+      `Sandbox ${containerName} is being removed; retry after sandbox recreate completes.`,
+    );
+  }
   if (engine.id === "podman" && existingRegistryEntry) {
     if (!existingRegistryEntry.backendTarget) {
       throw Object.assign(
@@ -608,12 +530,18 @@ async function ensureSandboxContainerLifecycle(
       existingRegistryEntry = null;
     }
   }
-  const readOnlyWorkspaceSkillMounts = resolveReadOnlyWorkspaceSkillMounts({
+  const mountPlan = await prepareSandboxMountPlan({
+    engine,
     workspaceDir: params.workspaceDir,
+    workspaceSource: params.workspaceSource,
+    assertCurrent: params.assertCurrent,
     agentWorkspaceDir: params.agentWorkspaceDir,
     skillsWorkspaceDir: params.skillsWorkspaceDir,
     workdir: params.cfg.docker.workdir,
     workspaceAccess: params.cfg.workspaceAccess,
+    binds: params.cfg.docker.binds,
+    tmpfs: params.cfg.docker.tmpfs,
+    readOnlyResourceMounts: params.readOnlyResourceMounts,
   });
   const genericConfigHash = computeSandboxConfigHash({
     docker: params.cfg.docker,
@@ -623,9 +551,7 @@ async function ensureSandboxContainerLifecycle(
     agentWorkspaceDir: params.agentWorkspaceDir,
     mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
     createArgsEpoch: SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
-    readOnlyWorkspaceSkillMounts: formatReadOnlyWorkspaceSkillMountHashState(
-      readOnlyWorkspaceSkillMounts,
-    ),
+    managedMounts: mountPlan.binds,
   });
   const expectedHash =
     engine.id === "podman"
@@ -636,13 +562,35 @@ async function ensureSandboxContainerLifecycle(
         })
       : genericConfigHash;
   const now = Date.now();
-  const state = await containerState(engine, containerName);
+  const needsSetupReservation =
+    Boolean(params.cfg.docker.setupCommand?.trim()) ||
+    existingRegistryEntry?.runtimeState === "pending";
+  const state = await containerState(engine, containerName, { strict: needsSetupReservation });
+  let containerId = "";
+  if (state.exists) {
+    const identity = await execContainer(
+      engine,
+      ["inspect", "--format", "{{.Id}}", containerName],
+      {
+        signal: AbortSignal.timeout(5_000),
+      },
+    );
+    containerId = identity.stdout.trim();
+    if (!/^[a-f0-9]{64}$/u.test(containerId)) {
+      throw new Error("Container inspect did not return an immutable container ID.");
+    }
+  }
   let hasContainer = state.exists;
   let running = state.running;
   let currentHash: string | null = null;
   let hashMismatch = false;
   const registryEntry = existingRegistryEntry ?? undefined;
   if (hasContainer) {
+    if (registryEntry?.runtimeState === "pending") {
+      throw new Error(
+        `Sandbox ${containerName} setup did not complete. Inspect the retained container and preserve needed data before explicitly recreating it.`,
+      );
+    }
     currentHash = await readContainerConfigHash(engine, containerName);
     if (!currentHash) {
       currentHash = registryEntry?.configHash ?? null;
@@ -654,38 +602,126 @@ async function ensureSandboxContainerLifecycle(
         running &&
         (typeof lastUsedAtMs !== "number" || now - lastUsedAtMs < HOT_CONTAINER_WINDOW_MS);
       if (isHot) {
+        const mountsMatch =
+          params.requireCurrentConfig ||
+          (await sandboxMountPlanMatchesContainer({ engine, containerName, plan: mountPlan }));
         handleHotSandboxConfigMismatch({
           containerName,
           scope: params.cfg.scope,
           sessionKey: params.scopeKey,
+          mountsChanged: !mountsMatch,
           ...(params.requireCurrentConfig !== undefined
             ? { requireCurrentConfig: params.requireCurrentConfig }
             : {}),
         });
       } else {
-        await execContainer(engine, ["rm", "-f", containerName], { allowFailure: true });
+        params.assertCurrent?.();
+        const removed = await execContainer(engine, ["rm", "-f", containerId], {
+          allowFailure: true,
+        });
+        if (
+          removed.code !== 0 &&
+          !/no such (?:container|object)|does not exist/iu.test(removed.stderr)
+        ) {
+          throw new Error(`Sandbox replacement failed; custody retained: ${removed.stderr.trim()}`);
+        }
+        releaseSandboxContainerSource(engine, containerName, containerId);
         hasContainer = false;
         running = false;
       }
     }
   }
   if (!hasContainer) {
-    await createSandboxContainer({
-      engine,
-      name: containerName,
-      cfg: params.cfg.docker,
-      dockerTmpfsSource: params.cfg.dockerTmpfsSource,
+    const readyEntry = {
+      containerName,
+      backendId: engine.id,
+      ...(podmanRuntimeInfo ? { backendTarget: podmanRuntimeInfo.target } : {}),
+      runtimeLabel: containerName,
+      sessionKey: params.scopeKey,
       workspaceDir: params.workspaceDir,
-      workspaceAccess: params.cfg.workspaceAccess,
-      agentWorkspaceDir: params.agentWorkspaceDir,
-      skillsWorkspaceDir: params.skillsWorkspaceDir,
-      scopeKey: params.scopeKey,
+      createdAtMs: now,
+      lastUsedAtMs: now,
+      image: params.cfg.docker.image,
+      configLabelKind: "Image" as const,
       configHash: expectedHash,
-      readOnlyWorkspaceSkillMounts,
-      podmanRuntimeInfo,
-    });
-  } else if (!running) {
-    await execContainer(engine, ["start", containerName]);
+    };
+    // Preserve managed mount custody and unfinished one-time setup before any
+    // provider allocation, including a crash or revocation before publication.
+    if (params.workspaceSource === "managed-worktree" || needsSetupReservation) {
+      params.assertCurrent?.();
+      await updateRegistry(
+        needsSetupReservation ? { ...readyEntry, runtimeState: "pending" } : readyEntry,
+      );
+    }
+    let allocated = false;
+    try {
+      containerId = await createSandboxContainer({
+        engine,
+        name: containerName,
+        cfg: params.cfg.docker,
+        dockerTmpfsSource: params.cfg.dockerTmpfsSource,
+        workspaceDir: params.workspaceDir,
+        workspaceAccess: params.cfg.workspaceAccess,
+        agentWorkspaceDir: params.agentWorkspaceDir,
+        skillsWorkspaceDir: params.skillsWorkspaceDir,
+        scopeKey: params.scopeKey,
+        configHash: expectedHash,
+        mountPlan,
+        podmanRuntimeInfo,
+        onAllocated: (id) => {
+          allocated = true;
+          containerId = id;
+          if (source) {
+            bindSandboxContainerSource({ engine, name: containerName, id, owner: source });
+          }
+        },
+        assertCurrent: params.assertCurrent,
+        operatorAuthority: params.operatorAuthority,
+      });
+      if (needsSetupReservation) {
+        await completeSandboxRegistryReservation(readyEntry);
+      } else if (params.workspaceSource !== "managed-worktree") {
+        await updateRegistry(readyEntry);
+      }
+      params.assertCurrent?.();
+      return { containerName, containerId };
+    } catch (creationError) {
+      if (!allocated) {
+        throw creationError;
+      }
+      if (params.operatorAuthority?.signal?.aborted) {
+        // Revocation stops a proven-private generation without deleting its
+        // writable layer. Shared/unknown environments remain running.
+        if (params.workspaceSource !== "managed-worktree" && !needsSetupReservation) {
+          await updateRegistry(readyEntry);
+        }
+        throw creationError;
+      }
+      await throwAfterPartialSandboxCleanup({
+        engine,
+        containerName,
+        containerId,
+        creationError,
+        onRemoved: () => releaseSandboxContainerSource(engine, containerName, containerId),
+      });
+    }
+  } else {
+    params.assertCurrent?.();
+    if (
+      await admitSandboxContainerSource({
+        engine,
+        name: containerName,
+        id: containerId,
+        running,
+        source,
+      })
+    ) {
+      running = false;
+    }
+    params.assertCurrent?.();
+    if (!running) {
+      await execContainer(engine, ["start", containerId]);
+    }
   }
   await updateRegistry({
     containerName,
@@ -693,11 +729,13 @@ async function ensureSandboxContainerLifecycle(
     ...(podmanRuntimeInfo ? { backendTarget: podmanRuntimeInfo.target } : {}),
     runtimeLabel: containerName,
     sessionKey: params.scopeKey,
+    workspaceDir: params.workspaceDir,
     createdAtMs: now,
     lastUsedAtMs: now,
     image: params.cfg.docker.image,
     configLabelKind: "Image",
-    configHash: hashMismatch && running ? (currentHash ?? undefined) : expectedHash,
+    configHash: hashMismatch ? (currentHash ?? undefined) : expectedHash,
   });
-  return containerName;
+  params.assertCurrent?.();
+  return { containerName, containerId };
 }

@@ -54,11 +54,19 @@ suite.define(() => {
 
         try {
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
-          const header = page.locator(".chat-pane__header").first();
+          const header = page.locator(
+            "openclaw-chat-pane.chat-pane-cache__pane--active .chat-pane__header",
+          );
           await header.waitFor();
           await header.locator(".workspace-icon").waitFor();
 
           const geometry = await header.evaluate((root) => {
+            const main = root
+              .closest("openclaw-chat-pane")
+              ?.querySelector('[data-region="main"]:not([hidden])');
+            if (!main) {
+              throw new Error("Task header requires visible main content");
+            }
             const centerY = (selector: string) => {
               const node = root.querySelector(selector);
               if (!node) {
@@ -86,6 +94,8 @@ suite.define(() => {
               separatorDisplays: [
                 ...root.querySelectorAll<HTMLElement>(".chat-pane__crumb-sep"),
               ].map((node) => getComputedStyle(node).display),
+              headerBottom: root.getBoundingClientRect().bottom,
+              contentTop: main.getBoundingClientRect().top,
             };
           });
 
@@ -93,6 +103,7 @@ suite.define(() => {
             Math.abs(geometry.menu - geometry.nav),
             JSON.stringify(geometry),
           ).toBeLessThanOrEqual(0.1);
+          expect(geometry.contentTop).toBeGreaterThanOrEqual(geometry.headerBottom - 0.1);
           if (viewport.label === "desktop") {
             for (const center of [
               geometry.projectIcon,
@@ -147,7 +158,7 @@ suite.define(() => {
     { height: 844, label: "portrait", width: 390 },
     { height: 393, label: "short landscape", width: 852 },
   ] as const) {
-    it(`keeps compact ${viewport.label} transcript search below the floating header`, async () => {
+    it(`keeps compact ${viewport.label} transcript search below the task header`, async () => {
       const context = await suite.newBrowserContext({
         locale: "en-US",
         serviceWorkers: "block",
@@ -161,7 +172,7 @@ suite.define(() => {
       try {
         await page.goto(`${suite.server.baseUrl}chat`);
         await page.locator(".agent-chat__composer-combobox > textarea").focus();
-        await page.keyboard.press("Control+f");
+        await page.keyboard.press("ControlOrMeta+f");
         const search = page.locator(".agent-chat__search-bar input");
         await search.waitFor();
         const [headerBox, searchBox] = await Promise.all([
@@ -199,7 +210,7 @@ suite.define(() => {
           const style = getComputedStyle(element);
           return { bottom: style.marginBottom, left: style.marginLeft, right: style.marginRight };
         });
-        expect(margins).toEqual({ bottom: "48px", left: "4px", right: "4px" });
+        expect(margins).toEqual({ bottom: "40px", left: "12px", right: "12px" });
       } finally {
         await suite.closeBrowserContext(context);
       }

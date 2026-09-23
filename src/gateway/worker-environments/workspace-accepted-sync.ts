@@ -1,7 +1,7 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerWorkspaceCommand } from "./tunnel-contract.js";
 import {
@@ -11,10 +11,8 @@ import {
   type AcceptedWorkspaceSettlementOutcome,
 } from "./workspace-accepted-publication.js";
 import type { WorkspaceHashMemo, WorkspaceReconcileMetrics } from "./workspace-hash-memo.js";
-import {
-  serializeWorkerWorkspaceManifest,
-  type WorkerWorkspaceManifest,
-} from "./workspace-manifest.js";
+import { serializeWorkspaceManifest } from "./workspace-manifest-worker.js";
+import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { changedPaths, manifestNodes } from "./workspace-reconcile.js";
 import {
   captureRemoteWorkspaceManifest,
@@ -76,8 +74,9 @@ function createAcceptedWorkspacePublisher(params: {
     manifest: WorkerWorkspaceManifest;
     conflictPaths: string[];
   }) => {
-    const acceptedRaw = serializeWorkerWorkspaceManifest(accepted.manifest);
-    const acceptedDigest = createHash("sha256").update(acceptedRaw).digest("hex");
+    const serialized = await serializeWorkspaceManifest(accepted.manifest);
+    const acceptedRaw = serialized.raw;
+    const acceptedDigest = serialized.manifestRef.slice("sha256:".length);
     if (`sha256:${acceptedDigest}` !== accepted.manifestRef) {
       throw new Error("Accepted workspace manifest does not match its reference");
     }
@@ -224,7 +223,7 @@ function createAcceptedWorkspacePublisher(params: {
       const transferPaths = [...changed].filter((entryPath) => acceptedNodes.has(entryPath));
       if (transferPaths.length > 0) {
         const temporaryDirectory = await fs.mkdtemp(
-          path.join(os.tmpdir(), "openclaw-worker-workspace-accepted-"),
+          path.join(resolvePreferredOpenClawTmpDir(), "openclaw-worker-workspace-accepted-"),
         );
         const transferListPath = path.join(temporaryDirectory, "transfer-list");
         try {

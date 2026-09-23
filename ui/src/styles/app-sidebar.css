@@ -1,0 +1,51 @@
+/* The lobster uses this ledge even when the invitation is disabled. */
+.sidebar-shell__invite {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  margin-inline: calc(-1 * var(--sidebar-pad-x));
+}
+
+.shell--mobile-nav .sidebar-shell {
+  --sidebar-session-row-floor: 44px;
+}
+
+/* The mobile drawer keeps management actions in its always-reachable menu. */
+.shell--mobile-nav .sidebar-recent-session {
+  padding-right: 0;
+
+  &.session-row-host {
+    --session-row-actions-reserve: 48px;
+  }
+
+  :is([data-sidebar-session-pin], [data-sidebar-session-archive]) {
+    display: none;
+  }
+
+  .session-action--touch-menu {
+    display: inline-flex;
+    width: 44px;
+    height: 44px;
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+.shell--mobile-nav .sidebar-zone-entry .sidebar-recent-session {
+  padding-right: 4px;
+}
+
+.shell--mobile-nav .sidebar-recent-session:not(.sidebar-recent-session--child) {
+  .sidebar-recent-session__text {
+    padding-right: var(--session-row-actions-reserve);
+  }
+
+  > .sidebar-recent-session__aside {
+    top: 50%;
+  }
+
+  /* The text container already reserves the menu slot, including on hover/focus. */
+  .sidebar-recent-session__title-row {
+    padding-right: 0;
+  }
+}

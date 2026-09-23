@@ -4,25 +4,21 @@
  * Moves legacy single-account channel config into account-scoped config records.
  */
 import { getLoadedChannelPluginForRead } from "./registry-loaded.js";
+import type { ChannelSetupAdapter } from "./setup-adapter.types.js";
 import {
   collectSingleAccountPromotionEntries,
   isCommonSingleAccountPromotionKey,
   isSetupSingleAccountPromotionKey,
 } from "./setup-promotion-keys.js";
 
-type ChannelSectionBase = {
-  defaultAccount?: string;
-  accounts?: Record<string, Record<string, unknown>>;
-};
-
-export type ChannelSetupPromotionSurface = {
-  configPromotion?: "preserve-root";
-  singleAccountKeysToMove?: readonly string[];
-  namedAccountPromotionKeys?: readonly string[];
-  resolveSingleAccountPromotionTarget?: (params: {
-    channel: ChannelSectionBase;
-  }) => string | undefined;
-};
+export type ChannelSetupPromotionSurface = Pick<
+  ChannelSetupAdapter,
+  | "accountKeyPolicy"
+  | "configPromotion"
+  | "singleAccountKeysToMove"
+  | "namedAccountPromotionKeys"
+  | "resolveSingleAccountPromotionTarget"
+>;
 
 type SingleAccountPromotionParams = {
   channelKey: string;

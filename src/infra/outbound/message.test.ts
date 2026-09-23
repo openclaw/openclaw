@@ -139,6 +139,7 @@ describe("sendMessage", () => {
     mocks.resolveRuntimePluginRegistry.mockClear();
 
     mocks.getChannelPlugin.mockReturnValue({
+      id: "forum",
       outbound: { deliveryMode: "direct", sendText: vi.fn() },
     });
     mocks.resolveOutboundTarget.mockImplementation(({ to }: { to: string }) => ({ ok: true, to }));
@@ -639,6 +640,9 @@ describe("sendMessage", () => {
 
       expect(result.deliveryStatus).toBe("suppressed");
       expect(result).toMatchObject({ suppressionReason: reason });
+      expect(result.sentBeforeError).toBe(
+        reason === "adapter_returned_no_identity" ? true : undefined,
+      );
       expect(result.payloadOutcomes).toEqual([
         {
           index: 0,

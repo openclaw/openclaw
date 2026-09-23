@@ -1,4 +1,4 @@
-// Browser tests cover server context.hot reload profiles plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunningChrome } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
@@ -103,22 +103,13 @@ vi.mock("./pw-ai-module.js", () => ({
 
 const { getRuntimeConfig } = await import("../config/config.js");
 const { resolveBrowserConfig, resolveProfile } = await import("./config.js");
-const { refreshResolvedBrowserConfigFromDisk, resolveBrowserProfileWithHotReload } =
-  await import("./resolved-config-refresh.js");
+const { refreshResolvedBrowserConfigFromDisk } = await import("./resolved-config-refresh.js");
 
 function requireValue<T>(value: T | null | undefined, message: string): T {
   if (value == null) {
     throw new Error(message);
   }
   return value;
-}
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
 }
 
 function runtimeState(
@@ -234,29 +225,21 @@ describe("server-context hot-reload profiles", () => {
     mockState.cachedConfig = null;
   });
 
-  it("forProfile hot-reloads newly added profiles from config", () => {
+  it("refreshes newly added profiles independently of the config cache", () => {
     const { cfg, state } = createBrowserState();
 
     expect(cfg.browser?.profiles?.desktop).toBeUndefined();
 
-    expect(
-      resolveBrowserProfileWithHotReload({
-        current: state,
-        refreshConfigFromDisk: true,
-        name: "desktop",
-      }),
-    ).toBeNull();
+    refreshProfiles(state);
+    expect(resolveProfile(state.resolved, "desktop")).toBeNull();
 
     mockState.cfgProfiles.desktop = { cdpUrl: "http://127.0.0.1:9222", color: "#0066CC" };
 
     const staleCfg = getRuntimeConfig();
     expect(staleCfg.browser?.profiles?.desktop).toBeUndefined();
 
-    const profile = resolveBrowserProfileWithHotReload({
-      current: state,
-      refreshConfigFromDisk: true,
-      name: "desktop",
-    });
+    refreshProfiles(state);
+    const profile = resolveProfile(state.resolved, "desktop");
     expect(profile?.name).toBe("desktop");
     expect(profile?.cdpUrl).toBe("http://127.0.0.1:9222");
 
@@ -264,19 +247,6 @@ describe("server-context hot-reload profiles", () => {
 
     const stillStaleCfg = getRuntimeConfig();
     expect(stillStaleCfg.browser?.profiles?.desktop).toBeUndefined();
-  });
-
-  it("forProfile still throws for profiles that don't exist in fresh config", () => {
-    const { state } = createBrowserState();
-
-    // Profile that doesn't exist anywhere should still throw
-    expect(
-      resolveBrowserProfileWithHotReload({
-        current: state,
-        refreshConfigFromDisk: true,
-        name: "nonexistent",
-      }),
-    ).toBeNull();
   });
 
   it.each(["constructor", "prototype"] as const)(
@@ -301,17 +271,14 @@ describe("server-context hot-reload profiles", () => {
     },
   );
 
-  it("forProfile refreshes existing profile config after getRuntimeConfig cache updates", () => {
+  it("refreshes existing profile config after config cache updates", () => {
     const { state } = createBrowserState();
 
     mockState.cfgProfiles.openclaw = { cdpPort: 19999, color: "#FF4500" };
     mockState.cachedConfig = null;
 
-    const after = resolveBrowserProfileWithHotReload({
-      current: state,
-      refreshConfigFromDisk: true,
-      name: "openclaw",
-    });
+    refreshProfiles(state);
+    const after = resolveProfile(state.resolved, "openclaw");
     expect(after?.cdpPort).toBe(19999);
     expect(state.resolved.profiles.openclaw?.cdpPort).toBe(19999);
   });
@@ -329,11 +296,8 @@ describe("server-context hot-reload profiles", () => {
     };
 
     for (let request = 0; request < 3; request += 1) {
-      const resolved = resolveBrowserProfileWithHotReload({
-        current: state,
-        refreshConfigFromDisk: true,
-        name: "chrome",
-      });
+      refreshProfiles(state);
+      const resolved = resolveProfile(state.resolved, "chrome");
 
       expect(resolved?.cdpUrl).toBe(expectedUrl);
       expect(state.extensionRelays?.get("chrome")).toBe(relay);
@@ -424,8 +388,8 @@ describe("server-context hot-reload profiles", () => {
 
   it("never re-adopts a relay credential while an unexposed close is still pending", async () => {
     const { state, runtime, relay } = createExtensionRelayFixture();
-    const closeStarted = deferred();
-    const closeReleased = deferred();
+    const closeStarted = createDeferred<void>();
+    const closeReleased = createDeferred<void>();
     relay.close.mockImplementationOnce(async () => {
       closeStarted.resolve();
       await closeReleased.promise;
@@ -447,16 +411,6 @@ describe("server-context hot-reload profiles", () => {
     await closing;
     await getProfileLifecycle(runtime).tail;
     expect(relay.close).toHaveBeenCalledOnce();
-  });
-
-  it("listProfiles refreshes config before enumerating profiles", () => {
-    const { state } = createBrowserState();
-
-    mockState.cfgProfiles.desktop = { cdpPort: 19999, color: "#0066CC" };
-    mockState.cachedConfig = null;
-
-    refreshProfiles(state);
-    expect(Object.keys(state.resolved.profiles)).toContain("desktop");
   });
 
   it("captures the old profile before adopting changed invariants", async () => {
@@ -609,8 +563,8 @@ describe("server-context hot-reload profiles", () => {
       name: "work",
       config: { cdpPort: 18801, color: "#0066CC" },
     });
-    const launchA = deferred();
-    const launchAStarted = deferred();
+    const launchA = createDeferred<void>();
+    const launchAStarted = createDeferred<void>();
     const adopted: string[] = [];
     const revisionA = getProfileLifecycle(runtime).configRevision;
     const pendingA = enqueueCurrentProfileStart(state, runtime, async (signal, generation) => {
@@ -690,8 +644,8 @@ describe("server-context hot-reload profiles", () => {
     });
     expect(oldRuntime.running).toBeNull();
     const lateRunning = { pid: 321 } as RunningChrome;
-    const launch = deferred();
-    const launchStarted = deferred();
+    const launch = createDeferred<void>();
+    const launchStarted = createDeferred<void>();
     const pendingStart = enqueueCurrentProfileStart(state, oldRuntime, async () => {
       launchStarted.resolve();
       await launch.promise;

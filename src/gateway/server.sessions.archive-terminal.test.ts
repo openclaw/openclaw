@@ -3,6 +3,7 @@ import { afterEach, expect, onTestFinished, test, vi } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { TerminalSessionManager } from "./terminal/session-manager.js";
 import {
   agentTerminalOwner,
@@ -18,7 +19,8 @@ import {
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
-afterEach(() => {
+afterEach(async () => {
+  await disposeSessionReadContexts();
   closeOpenClawStateDatabaseForTest();
 });
 

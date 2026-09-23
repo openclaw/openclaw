@@ -8,7 +8,8 @@ import type {
 import { formatUiExternalText } from "../../lib/format-error.ts";
 
 export const MODEL_SETUP_DETECT_TIMEOUT_MS = 40_000;
-export const MODEL_SETUP_VERIFY_TIMEOUT_MS = 30_000;
+// Match native setup: the Gateway's 90-second inference probe also needs startup allowance.
+export const MODEL_SETUP_VERIFY_TIMEOUT_MS = 150_000;
 const MODEL_SETUP_ACTIVATE_TIMEOUT_MS = 480_000;
 export const MODEL_SETUP_AUTH_START_TIMEOUT_MS = 30_000;
 export const MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS = null;
@@ -17,6 +18,20 @@ export type ModelSetupPageState =
   | { phase: "loading" }
   | { phase: "ready"; result: SystemAgentSetupDetectResult }
   | { phase: "detect-error"; message: string };
+
+export function preparedModelPageState(
+  result: SystemAgentSetupDetectResult,
+  modelTarget?: "utility",
+): ModelSetupPageState {
+  // Preparation may persist an unverified model; hide only the prepared role.
+  return {
+    phase: "ready",
+    result:
+      modelTarget === "utility"
+        ? { ...result, utilityModel: undefined, setupModel: undefined }
+        : { ...result, configuredModel: undefined, setupComplete: false },
+  };
+}
 
 export type ModelSetupActivationState =
   | { phase: "idle" }
@@ -27,29 +42,56 @@ export type ModelSetupActivationState =
       status: Exclude<NonNullable<SystemAgentSetupActivateResult["status"]>, "ok">;
       error: string;
     }
-  | { phase: "success"; modelRef: string; latencyMs?: number; warning?: string };
+  | {
+      phase: "success";
+      modelRef: string;
+      modelTarget?: "utility";
+      latencyMs?: number;
+      warning?: string;
+    };
 
 type ModelSetupVerifyFailure = Extract<SystemAgentSetupVerifyResult, { ok: false }>;
 
 export type ModelSetupVerifyState =
   | { phase: "idle" }
   | { phase: "checking" }
-  | { phase: "ok"; modelRef: string; latencyMs?: number }
+  | { phase: "ok"; modelRef: string; modelTarget?: "utility"; latencyMs?: number }
   | { phase: "failed"; status: ModelSetupVerifyFailure["status"]; error: string };
 
-export type ModelSetupWizardState =
+export type ModelSetupWizardResult =
+  | WizardNextResult
+  | { done: true; status: "not-admitted"; error: string };
+
+type ModelSetupWizardPhase =
   | { phase: "idle" }
   | { phase: "starting"; authChoice: string }
   | {
       phase: "step";
       authChoice: string;
       step: WizardStep;
+      externalAuthInput?: boolean;
       busy: boolean;
       validationError: string | null;
     }
   | { phase: "done"; authChoice: string; preparedModelRef?: string }
   | { phase: "cancelled"; message: string }
   | { phase: "error"; message: string };
+
+export type ModelSetupWizardState = ModelSetupWizardPhase & { authLabel?: string };
+export type ModelSetupWizardDraft = { stepId: string | null; value: unknown };
+
+export function updateModelSetupWizardDraft(
+  draft: ModelSetupWizardDraft,
+  state: ModelSetupWizardState,
+): ModelSetupWizardDraft {
+  if (state.phase === "idle") {
+    return { stepId: null, value: undefined };
+  }
+  if (state.phase === "step" && state.step.id !== draft.stepId) {
+    return { stepId: state.step.id, value: initialWizardValue(state.step) };
+  }
+  return draft;
+}
 
 export function activationTimeoutForKind(kind: string): number {
   // Match the Gateway-owned provider-auth wizard lifetime, including user sign-in.
@@ -81,6 +123,7 @@ export function mapActivationResult(params: {
     return {
       phase: "success",
       modelRef: result.modelRef,
+      ...(result.modelTarget ? { modelTarget: result.modelTarget } : {}),
       ...(typeof result.latencyMs === "number" ? { latencyMs: result.latencyMs } : {}),
       ...(warning ? { warning } : {}),
     };
@@ -98,6 +141,7 @@ export function mapVerifyResult(result: SystemAgentSetupVerifyResult): ModelSetu
     return {
       phase: "ok",
       modelRef: result.modelRef,
+      ...(result.modelTarget ? { modelTarget: result.modelTarget } : {}),
       ...(typeof result.latencyMs === "number" ? { latencyMs: result.latencyMs } : {}),
     };
   }
@@ -106,7 +150,7 @@ export function mapVerifyResult(result: SystemAgentSetupVerifyResult): ModelSetu
 
 export function wizardStateFromResult(
   authChoice: string,
-  result: WizardNextResult,
+  result: ModelSetupWizardResult,
   fallbackError: string,
 ): ModelSetupWizardState {
   if (!result.done && result.step) {

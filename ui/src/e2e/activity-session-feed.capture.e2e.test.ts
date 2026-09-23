@@ -368,13 +368,15 @@ suite.define(() => {
         await waitForControlUiRoute(page, { pathname: "/activity", routeId: "activity" });
         const activityPage = page.locator("openclaw-activity-page");
         await expect.poll(() => activityPage.count()).toBe(1);
-        const titleLeft = await activityPage
-          .locator(".page-title")
+        // The title sits centered in the toolbar row; the intro copy and the
+        // mode tabs share the content's left edge below it.
+        const introLeft = await activityPage
+          .locator(".page-sub")
           .evaluate((element) => element.getBoundingClientRect().left);
         const tabsLeft = await activityPage
           .locator(".activity-mode-tabs")
           .evaluate((element) => element.getBoundingClientRect().left);
-        expect(Math.abs(titleLeft - tabsLeft)).toBeLessThanOrEqual(8);
+        expect(Math.abs(introLeft - tabsLeft)).toBeLessThanOrEqual(8);
         await activityPage.locator(".activity-feed__people-trigger").click();
         await expect
           .poll(() =>
@@ -450,12 +452,7 @@ suite.define(() => {
         });
 
         await page.locator('[data-online-user-id="profile-alice"]').click();
-        const personCard = page.getByRole("dialog", { name: "Activity for Alice Chen" });
-        await personCard.waitFor({ state: "visible" });
-        await personCard.getByRole("link", { name: "View activity", exact: true }).click();
-        await expect
-          .poll(() => new URL(page.url()).searchParams.get("person"))
-          .toBe("profile-alice");
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/activity/profile-alice");
         await expect
           .poll(() => activityPage.locator('[data-activity-identity="profile-alice"]').isVisible())
           .toBe(true);
@@ -473,12 +470,10 @@ suite.define(() => {
         });
 
         await activityPage.locator(".activity-feed__people-clear").click();
-        await expect.poll(() => new URL(page.url()).searchParams.get("person")).toBeNull();
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/activity");
         await activityPage.locator(".activity-feed__people-trigger").click();
         await activityPage.locator('[data-activity-person="profile-carol"]').click();
-        await expect
-          .poll(() => new URL(page.url()).searchParams.get("person"))
-          .toBe("profile-carol");
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/activity/profile-carol");
         await expect.poll(() => activitySession(nightlyMaintenanceKey).count()).toBe(1);
         await expect
           .poll(() =>
@@ -493,7 +488,7 @@ suite.define(() => {
         });
 
         await activityPage.locator(".activity-feed__people-clear").click();
-        await expect.poll(() => new URL(page.url()).searchParams.get("person")).toBeNull();
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/activity");
         await page.setViewportSize({ height: 844, width: 390 });
 
         const peopleControl = activityPage.locator(".activity-feed__people-control");
@@ -534,9 +529,7 @@ suite.define(() => {
         ).toEqual({ backgroundColor: "rgba(0, 0, 0, 0)", borderTopWidth: "0px" });
         await activityPage.locator(".activity-feed__people-trigger").click();
         await activityPage.locator('[data-activity-person="profile-carol"]').click();
-        await expect
-          .poll(() => new URL(page.url()).searchParams.get("person"))
-          .toBe("profile-carol");
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/activity/profile-carol");
         await expect.poll(() => activitySession(nightlyMaintenanceKey).count()).toBe(1);
         await expect
           .poll(() => activityFeed.locator('[data-activity-created-via="cron"]').count())

@@ -45,7 +45,10 @@ function collectPluginLocalClosure(entryFile: string): string[] {
     }
     visited.add(fileName);
     for (const specifier of listStaticRelativeImports(path.join(SOURCE_DIR, fileName))) {
-      const resolved = `${specifier.replace(/^\.\//, "").replace(/\.js$/, "")}.ts`;
+      const resolved = path.relative(
+        SOURCE_DIR,
+        path.resolve(SOURCE_DIR, path.dirname(fileName), specifier.replace(/\.js$/, ".ts")),
+      );
       if (fs.existsSync(path.join(SOURCE_DIR, resolved))) {
         pending.push(resolved);
       }
@@ -55,6 +58,15 @@ function collectPluginLocalClosure(entryFile: string): string[] {
 }
 
 describe("telegram state migration import boundary", () => {
+  it("keeps state detection off the config repair artifact closure", () => {
+    const closure = collectPluginLocalClosure("../doctor-contract-api.ts");
+
+    expect(closure).not.toContain("state-migrations.ts");
+    expect(closure).toEqual(
+      expect.arrayContaining(["../config-doctor-api.ts", "doctor-contract.ts"]),
+    );
+  });
+
   it("keeps runtime stores off the doctor discovery closure", () => {
     const closure = collectPluginLocalClosure("state-migrations.ts");
 

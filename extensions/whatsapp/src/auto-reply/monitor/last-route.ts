@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements last route behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { formatError } from "../../session.js";
@@ -24,7 +23,7 @@ export function updateLastRouteInBackground(params: {
   to: string;
   accountId?: string;
   ctx?: MsgContext;
-  warn: (obj: unknown, msg: string) => void;
+  warn: (obj: object, msg: string) => void;
 }) {
   const storePath = resolveStorePath(params.cfg.session?.store, {
     agentId: params.storeAgentId,

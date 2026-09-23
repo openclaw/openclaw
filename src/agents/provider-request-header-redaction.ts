@@ -158,8 +158,10 @@ export async function readProviderResponseErrorText(
   response: Response,
   limitBytes: number,
   headers: HeadersInit,
+  signal?: AbortSignal,
 ): Promise<string> {
   const result = await readResponseTextPrefix(response, limitBytes, {
+    signal,
     chunkTimeoutMs: 10_000,
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`error body read stalled for ${chunkTimeoutMs}ms`),

@@ -20,21 +20,66 @@ export type {
   LiveTransportQaSuiteCommandOptions,
 } from "./qa-runner-runtime.js";
 
+/** Inspect hot transcript evidence without admitting a writer or restoring cold sessions. */
+export async function visitQaSqliteTranscriptEvents(
+  databasePath: string,
+  visit: (eventJson: string) => void,
+): Promise<void> {
+  const [{ openNodeSqliteDatabase }, { tableExists, tableHasColumn }, queries, payload] =
+    await Promise.all([
+      import("../infra/node-sqlite.js"),
+      import("../state/openclaw-state-db-schema-helpers.js"),
+      import("../infra/kysely-sync.js"),
+      import("../config/sessions/transcript-payload.js"),
+    ]);
+  const database = openNodeSqliteDatabase(databasePath, { readOnly: true });
+  try {
+    if (!tableExists(database, "transcript_events")) {
+      return;
+    }
+    const db = queries.getNodeSqliteKysely<{
+      transcript_events: { session_id: string; seq: number; event_json: string };
+    }>(database);
+    // QA release fixtures can belong to a published pre-compression schema.
+    const eventJson = tableHasColumn(database, "transcript_events", "event_zstd")
+      ? payload.transcriptEventJsonSql(database).as("event_json")
+      : "event_json";
+    for (const row of queries.iterateSqliteQuerySync(
+      database,
+      db.selectFrom("transcript_events").select(eventJson).orderBy("session_id").orderBy("seq"),
+    )) {
+      if (typeof row.event_json === "string") {
+        visit(row.event_json);
+      }
+    }
+  } finally {
+    database.close();
+  }
+}
+
 /** Release only this QA root's parent stores before its files are removed. */
 export async function closeQaRuntimeStores(tempRoot: string): Promise<void> {
-  const [auth, agents, state, paths] = await Promise.all([
+  const [
+    auth,
+    { closeOpenClawAgentDatabasesAsync },
+    state,
+    paths,
+    { closeIdleSqliteCoordinators },
+  ] = await Promise.all([
     import("../agents/auth-profiles/sqlite.js"),
     import("../state/openclaw-agent-db.js"),
     import("../state/openclaw-state-db.js"),
     import("../state/openclaw-state-db.paths.js"),
+    import("../infra/sqlite-coordinator.js"),
   ]);
   // Agent close releases leases through shared state. Keep that owner alive
   // until every scoped handle closes, or exit-time release can recreate the root.
   auth.closeAuthProfileReadPool({ kind: "root", rootPath: tempRoot });
-  agents.closeOpenClawAgentDatabases(tempRoot);
-  state.closeOpenClawStateDatabaseByPath(
+  await closeOpenClawAgentDatabasesAsync(tempRoot);
+  await state.closeOpenClawStateDatabaseByPathAsync(
     paths.resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: path.join(tempRoot, "state") }),
   );
+  closeIdleSqliteCoordinators(tempRoot);
 }
 
 type QaRuntimeSurface = {

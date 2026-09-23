@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { readCachedTelegramBotInfo, writeCachedTelegramBotInfo } from "./bot-info-cache.js";
 import type { TelegramBotInfo } from "./bot-info.js";
 import { telegramPlugin } from "./channel.js";
@@ -67,14 +68,6 @@ function installTelegramRuntime() {
   } as unknown as TelegramRuntime;
   setTelegramRuntime(telegramRuntime);
   return telegramRuntime;
-}
-
-function createRuntimeEnvMock() {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
 }
 
 function createTelegramConfig(
@@ -243,7 +236,10 @@ describe("telegramPlugin gateway startup", () => {
     expect(monitorOptions.useWebhook).toBe(false);
   });
 
-  it("starts a multi-agent account with its routed owner", async () => {
+  it.each([
+    { owner: "main", accountPattern: "*" },
+    { owner: "ops", accountPattern: "default" },
+  ])("starts a multi-agent account with routed owner $owner", async ({ owner, accountPattern }) => {
     installTelegramRuntime();
     probeTelegram.mockResolvedValue({
       ok: false,
@@ -258,7 +254,7 @@ describe("telegramPlugin gateway startup", () => {
         entries: { main: {}, ops: {}, research: {} },
       },
       channels: { telegram: { botToken: "123456:bad-token" } },
-      bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "*" } }],
+      bindings: [{ agentId: owner, match: { channel: "telegram", accountId: accountPattern } }],
     } as OpenClawConfig;
     const account = telegramPlugin.config.resolveAccount(cfg, "default");
     const startAccount = telegramPlugin.gateway?.startAccount;
@@ -270,7 +266,7 @@ describe("telegramPlugin gateway startup", () => {
 
     expect(latestMonitorOptions()).toMatchObject({
       accountId: "default",
-      ownerAgentId: "main",
+      ownerAgentId: owner,
     });
   });
 
@@ -439,7 +435,7 @@ describe("telegramPlugin gateway startup", () => {
       accountId: "ops",
       prevCfg: createTelegramConfig("ops"),
       nextCfg: createTelegramConfig("ops", { botToken: "123456:new-token" }),
-      runtime: createRuntimeEnvMock(),
+      runtime: createRuntimeSpies(),
     });
 
     await expect(
@@ -462,7 +458,7 @@ describe("telegramPlugin gateway startup", () => {
       accountId: "ops",
       prevCfg: createTelegramConfig("ops"),
       nextCfg: createTelegramConfig("ops", { timeoutSeconds: 60 }),
-      runtime: createRuntimeEnvMock(),
+      runtime: createRuntimeSpies(),
     });
 
     await expect(
@@ -484,7 +480,7 @@ describe("telegramPlugin gateway startup", () => {
     await telegramPlugin.lifecycle?.onAccountRemoved?.({
       accountId: "ops",
       prevCfg: createTelegramConfig("ops"),
-      runtime: createRuntimeEnvMock(),
+      runtime: createRuntimeSpies(),
     });
 
     await expect(
@@ -511,7 +507,7 @@ describe("telegramPlugin gateway startup", () => {
       accountId: "ops",
       account,
       cfg,
-      runtime: createRuntimeEnvMock(),
+      runtime: createRuntimeSpies(),
     });
 
     expect(result).toEqual({ cleared: true, envToken: false, loggedOut: true });
@@ -547,7 +543,7 @@ describe("telegramPlugin gateway startup", () => {
       accountId: "ops",
       account: telegramPlugin.config.resolveAccount(cfg, "ops"),
       cfg,
-      runtime: createRuntimeEnvMock(),
+      runtime: createRuntimeSpies(),
     });
 
     expect(result).toEqual({ cleared: true, envToken: false, loggedOut: false });

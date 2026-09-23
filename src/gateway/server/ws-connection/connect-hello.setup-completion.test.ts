@@ -30,10 +30,10 @@ vi.mock("../health-state.js", () => ({
 
 vi.mock("../../../state/user-profiles.js", () => ({
   hasMultipleSessionSharingIdentities: vi.fn(() => false),
-  listProfiles: vi.fn(() => []),
 }));
 
 vi.mock("../../control-ui-plugin-tabs.js", () => ({
+  listControlUiLinkReaders: vi.fn(() => []),
   listControlUiPluginTabs: vi.fn(() => []),
   listControlUiPluginWidgetKinds: vi.fn(() => []),
 }));
@@ -49,118 +49,142 @@ afterEach(() => {
 });
 
 describe("sendGatewayHello setup completion ordering", () => {
-  it("persists setup status before the successful hello handoff can pause", async () => {
-    await withOpenClawTestState(
-      { label: "ws-setup-completion-order", layout: "state-only" },
-      async () => {
-        const paired: PairedDevice = {
-          deviceId: "device-setup-order",
-          publicKey: "public-key-setup-order",
-          displayName: "Test phone",
-          createdAtMs: 1,
-          approvedAtMs: 2,
-        };
-        persistDevicePairingStoreState(
-          { pendingById: {}, pairedByDeviceId: { [paired.deviceId]: paired } },
-          undefined,
-          "paired",
-        );
-        const issued = await issueDevicePairSetupBootstrapToken({
-          profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
-        });
-        await expect(
-          verifyDeviceBootstrapToken({
-            token: issued.token,
-            deviceId: paired.deviceId,
-            publicKey: paired.publicKey,
-            role: "operator",
-            scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
-          }),
-        ).resolves.toEqual({ ok: true });
-
-        const handoffStarted = createDeferred();
-        const releaseHandoff = createDeferred();
-        const broadcast = vi.fn();
-        const context = {
-          handler: {
-            getClient: () => null,
-            connId: "conn-setup-order",
-            gatewayMethods: [],
-            events: [],
-            buildRequestContext: () => ({
-              broadcast,
-              nodeRegistry: { get: () => undefined },
+  it.each([false, true])(
+    "persists setup status before presence publication (failure=%s)",
+    async (presenceFails) => {
+      await withOpenClawTestState(
+        { label: "ws-setup-completion-order", layout: "state-only" },
+        async () => {
+          const paired: PairedDevice = {
+            deviceId: "device-setup-order",
+            publicKey: "public-key-setup-order",
+            displayName: "Test phone",
+            createdAtMs: 1,
+            approvedAtMs: 2,
+          };
+          persistDevicePairingStoreState(
+            { pendingById: {}, pairedByDeviceId: { [paired.deviceId]: paired } },
+            undefined,
+            "paired",
+          );
+          const issued = await issueDevicePairSetupBootstrapToken({
+            profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+          });
+          await expect(
+            verifyDeviceBootstrapToken({
+              token: issued.token,
+              deviceId: paired.deviceId,
+              publicKey: paired.publicKey,
+              role: "operator",
+              scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
             }),
-            refreshHealthSnapshot: vi.fn(async () => ({})),
-            close: vi.fn(),
-            advanceHandshakePhase: vi.fn(),
-            setCloseCause: vi.fn(),
-            logGateway: { warn: vi.fn() },
-            logHealth: { error: vi.fn() },
-          },
-          frame: { id: "hello-setup-order" },
-          connectParams: {
-            client: {
-              id: "openclaw-ios",
-              version: "dev",
-              platform: "test",
-              mode: "backend",
+          ).resolves.toEqual({ ok: true });
+
+          const handoffStarted = createDeferred();
+          const releaseHandoff = createDeferred();
+          const onHelloDelivered = vi.fn();
+          const broadcast = vi.fn((event: string) => {
+            if (presenceFails && event === "presence") {
+              throw new Error("test presence publication failure");
+            }
+          });
+          const context = {
+            handler: {
+              getClient: () => ({ presenceKey: "conn-setup-order", socket: { readyState: 1 } }),
+              isClosed: () => false,
+              connId: "conn-setup-order",
+              gatewayMethods: [],
+              events: [],
+              buildRequestContext: () => ({
+                broadcast,
+                incrementPresenceVersion: () => 2,
+                getHealthVersion: () => 1,
+                nodeRegistry: { get: () => undefined },
+              }),
+              refreshHealthSnapshot: vi.fn(async () => ({})),
+              close: vi.fn(),
+              advanceHandshakePhase: vi.fn(),
+              setCloseCause: vi.fn(),
+              logGateway: { warn: vi.fn() },
+              logHealth: { error: vi.fn() },
             },
+            frame: { id: "hello-setup-order" },
+            connectParams: {
+              client: {
+                id: "openclaw-ios",
+                version: "dev",
+                platform: "test",
+                mode: "backend",
+              },
+              role: "operator",
+              scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
+            },
+            configSnapshot: {},
+            sendFrame: vi.fn(async () => {
+              handoffStarted.resolve();
+              await releaseHandoff.promise;
+            }),
+            onHelloDelivered,
+            pendingNodePairingCleanup: {},
+            releasePendingNodePairingCleanup: vi.fn(async () => undefined),
+          };
+          const state = {
+            resolvedAuth: { mode: "none" },
             role: "operator",
             scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
-          },
-          configSnapshot: {},
-          sendFrame: vi.fn(async () => {
-            handoffStarted.resolve();
-            await releaseHandoff.promise;
-          }),
-          pendingNodePairingCleanup: {},
-          releasePendingNodePairingCleanup: vi.fn(async () => undefined),
-        };
-        const state = {
-          resolvedAuth: { mode: "none" },
-          role: "operator",
-          scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
-          device: { id: paired.deviceId },
-          devicePublicKey: paired.publicKey,
-          hasTokenAuth: false,
-          hasPasswordAuth: false,
-          bootstrapTokenCandidate: issued.token,
-          authResult: { ok: true, method: "bootstrap-token" },
-          authMethod: "bootstrap-token",
-          issuedBootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
-          handoffBootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
-          deviceToken: null,
-          bootstrapDeviceTokens: [],
-        };
+            device: { id: paired.deviceId },
+            devicePublicKey: paired.publicKey,
+            hasTokenAuth: false,
+            hasPasswordAuth: false,
+            bootstrapTokenCandidate: issued.token,
+            authResult: { ok: true, method: "bootstrap-token" },
+            authMethod: "bootstrap-token",
+            issuedBootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+            handoffBootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+            deviceToken: null,
+            bootstrapDeviceTokens: [],
+          };
 
-        const hello = sendGatewayHello(context as never, state as never, {});
-        await handoffStarted.promise;
-        const completionAtHandoff = await readDevicePairSetupCompletion({
-          setupId: issued.setupId,
-        });
-        releaseHandoff.resolve();
-        await hello;
-        const completionAfterHandoff = await readDevicePairSetupCompletion({
-          setupId: issued.setupId,
-        });
+          const hello = sendGatewayHello(context as never, state as never, {});
+          await handoffStarted.promise;
+          const completionAtHandoff = await readDevicePairSetupCompletion({
+            setupId: issued.setupId,
+          });
+          releaseHandoff.resolve();
+          if (presenceFails) {
+            await expect(hello).rejects.toThrow("test presence publication failure");
+          } else {
+            await hello;
+          }
+          const completionAfterHandoff = await readDevicePairSetupCompletion({
+            setupId: issued.setupId,
+          });
 
-        expect(completionAtHandoff).toMatchObject({
-          setupId: issued.setupId,
-          deviceId: paired.deviceId,
-          deviceName: paired.displayName,
-          access: "limited",
-          deliveryState: "uncertain",
-        });
-        expect(completionAfterHandoff).toMatchObject({ deliveryState: "confirmed" });
-        expect(broadcast).toHaveBeenCalledWith(
-          "device.pair.setup.completed",
-          expect.objectContaining({ setupId: issued.setupId }),
-          { dropIfSlow: true },
-        );
-      },
-    );
-  });
+          expect(completionAtHandoff).toMatchObject({
+            setupId: issued.setupId,
+            deviceId: paired.deviceId,
+            deviceName: paired.displayName,
+            access: "limited",
+            deliveryState: "uncertain",
+          });
+          expect(completionAfterHandoff).toMatchObject({ deliveryState: "confirmed" });
+          expect(onHelloDelivered).toHaveBeenCalledOnce();
+          expect(onHelloDelivered.mock.invocationCallOrder[0]).toBeLessThan(
+            broadcast.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+          );
+          expect(broadcast).toHaveBeenCalledWith(
+            "device.pair.setup.completed",
+            expect.objectContaining({ setupId: issued.setupId }),
+            { dropIfSlow: true },
+          );
+          const publications = broadcast.mock.calls.map(([event]) => event);
+          expect(publications.indexOf("device.pair.setup.completed")).toBeLessThan(
+            publications.indexOf("presence"),
+          );
+        },
+      );
+    },
+  );
 
   it("keeps correlated setup completion uncertain when hello delivery fails", async () => {
     await withOpenClawTestState(
@@ -192,6 +216,7 @@ describe("sendGatewayHello setup completion ordering", () => {
 
         const broadcast = vi.fn();
         const close = vi.fn();
+        const onHelloDelivered = vi.fn();
         const context = {
           handler: {
             getClient: () => null,
@@ -216,6 +241,7 @@ describe("sendGatewayHello setup completion ordering", () => {
           sendFrame: vi.fn(async () => {
             throw new Error("socket closed");
           }),
+          onHelloDelivered,
           pendingNodePairingCleanup: {},
           releasePendingNodePairingCleanup: vi.fn(async () => undefined),
         };
@@ -239,6 +265,7 @@ describe("sendGatewayHello setup completion ordering", () => {
         await sendGatewayHello(context as never, state as never, {});
 
         expect(close).toHaveBeenCalled();
+        expect(onHelloDelivered).not.toHaveBeenCalled();
         expect(broadcast).toHaveBeenCalledWith(
           "device.pair.setup.deliveryUncertain",
           expect.objectContaining({ setupId: issued.setupId, deviceId: paired.deviceId }),
@@ -322,6 +349,7 @@ describe("sendGatewayHello setup completion ordering", () => {
           },
           configSnapshot: {},
           sendFrame: vi.fn(async () => undefined),
+          onHelloDelivered: vi.fn(),
           pendingNodePairingCleanup: {},
           releasePendingNodePairingCleanup: vi.fn(async () => undefined),
         };
@@ -414,6 +442,7 @@ describe("sendGatewayHello setup completion ordering", () => {
           sendFrame: vi.fn(async () => {
             throw new Error("socket closed");
           }),
+          onHelloDelivered: vi.fn(),
           pendingNodePairingCleanup: {},
           releasePendingNodePairingCleanup: vi.fn(async () => undefined),
         };

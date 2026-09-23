@@ -1,15 +1,26 @@
 // Kill tree tests cover process tree termination and platform-specific fallbacks.
 import { EventEmitter } from "node:events";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 
-const { readFileSyncMock, spawnMock, spawnSyncMock } = vi.hoisted(() => ({
+const { opendirSyncMock, readFileSyncMock, spawnMock, spawnSyncMock } = vi.hoisted(() => ({
+  opendirSyncMock: vi.fn(),
   readFileSyncMock: vi.fn(),
   spawnMock: vi.fn(),
   spawnSyncMock: vi.fn(),
 }));
 
 vi.mock("node:fs", () => ({
+  opendirSync: (...args: unknown[]) => opendirSyncMock(...args),
   readFileSync: (...args: unknown[]) => readFileSyncMock(...args),
 }));
 
@@ -52,14 +63,56 @@ function mockIsProcessGroupLeader(...pids: number[]) {
   });
 }
 
+type ProcFixture = {
+  children?: number[];
+  ppid?: number;
+  starttime?: string | (() => string);
+};
+
+function createAttachedTreeFixture() {
+  // The walker excludes its own PID. Fixture descendants must stay distinct
+  // from the real test process, including when CI assigns a familiar PID.
+  const rootPid = process.pid + 1;
+  return { rootPid, childPid: rootPid + 1, grandchildPid: rootPid + 2, foreignPid: rootPid + 3 };
+}
+
+function mockProcTree(nodes: Record<number, ProcFixture>) {
+  readFileSyncMock.mockImplementation((filePath: string) => {
+    const match = filePath.match(/^\/proc\/(\d+)\/(stat|task\/\d+\/children)$/);
+    const pid = Number(match?.[1]);
+    const node = nodes[pid];
+    if (!match || !node) {
+      throw new Error("unexpected proc path");
+    }
+    if (match[2] !== "stat") {
+      return (node.children ?? []).join(" ");
+    }
+    const starttime = typeof node.starttime === "function" ? node.starttime() : node.starttime;
+    if (starttime === undefined) {
+      throw new Error("process identity unavailable");
+    }
+    // proc(5) places ppid at field 4 and starttime at field 22, after comm.
+    return `${pid} (fixture) S ${node.ppid ?? 1} ${pid} ${pid} 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ${starttime} 0`;
+  });
+}
+
 describe("killProcessTree", () => {
-  let killSpy: ReturnType<typeof vi.spyOn>;
+  let killSpy: MockInstance<typeof process.kill>;
 
   beforeAll(async () => {
     ({ killProcessTree, signalProcessTree, signalPtySessionTree } = await import("./kill-tree.js"));
   });
 
   beforeEach(() => {
+    opendirSyncMock.mockReset();
+    opendirSyncMock.mockImplementation((file: string) => {
+      const pid = file.match(/^\/proc\/(\d+)\/task$/)?.[1];
+      let returned = false;
+      return {
+        readSync: () => (returned ? null : ((returned = true), { name: pid })),
+        closeSync: vi.fn(),
+      };
+    });
     readFileSyncMock.mockReset();
     readFileSyncMock.mockImplementation(() => {
       throw new Error("proc unavailable");
@@ -200,12 +253,9 @@ describe("killProcessTree", () => {
     });
   });
 
-  it("on Unix sends SIGTERM first and skips SIGKILL when process exits", async () => {
+  it("on Unix never probes a reused positive PID after its selected group disappears", async () => {
     killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
       if (pid === -3333 && signal === 0) {
-        throw new Error("ESRCH");
-      }
-      if (pid === 3333 && signal === 0) {
         throw new Error("ESRCH");
       }
       return true;
@@ -220,41 +270,54 @@ describe("killProcessTree", () => {
       expect(killSpy).toHaveBeenCalledWith(-3333, "SIGTERM");
       expect(killSpy).not.toHaveBeenCalledWith(-3333, "SIGKILL");
       expect(killSpy).not.toHaveBeenCalledWith(3333, "SIGKILL");
+      expect(killSpy.mock.calls.every((call: unknown[]) => call[0] === -3333)).toBe(true);
     });
   });
 
-  it("on Unix sends SIGKILL after grace period when process is still alive", async () => {
-    killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
-      if (pid === -4444 && signal === 0) {
+  it.each([false, true])(
+    "on Unix keeps grace escalation group-only (group vanishes: %s)",
+    async (vanishes) => {
+      killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
+        if (pid === -4444 && signal === "SIGKILL" && vanishes) {
+          throw new Error("ESRCH");
+        }
         return true;
-      }
-      return true;
-    }) as typeof process.kill);
+      }) as typeof process.kill);
 
-    await withMockedPlatform("linux", async () => {
-      mockIsProcessGroupLeader(4444);
-      killProcessTree(4444, { graceMs: 5 });
+      await withMockedPlatform("linux", async () => {
+        mockIsProcessGroupLeader(4444);
+        killProcessTree(4444, { graceMs: 5 });
 
-      await vi.advanceTimersByTimeAsync(5);
+        await vi.advanceTimersByTimeAsync(5);
 
-      expect(killSpy).toHaveBeenCalledWith(-4444, "SIGTERM");
-      expect(killSpy).toHaveBeenCalledWith(-4444, "SIGKILL");
-    });
-  });
+        expect(killSpy).toHaveBeenCalledWith(-4444, "SIGTERM");
+        expect(killSpy).toHaveBeenCalledWith(-4444, "SIGKILL");
+        expect(killSpy.mock.calls.every((call: unknown[]) => call[0] === -4444)).toBe(true);
+      });
+    },
+  );
 
-  it("on Unix force-kills synchronously without SIGTERM or delayed escalation", async () => {
-    killSpy.mockImplementation(() => true);
+  it.each([false, true])(
+    "on Unix keeps immediate force-kill group-only (group missing: %s)",
+    async (missing) => {
+      killSpy.mockImplementation((pid: number) => {
+        if (pid === -4949 && missing) {
+          throw new Error("ESRCH");
+        }
+        return true;
+      });
 
-    await withMockedPlatform("linux", async () => {
-      mockIsProcessGroupLeader(4949);
-      killProcessTree(4949, { force: true });
-      await vi.advanceTimersByTimeAsync(60_000);
+      await withMockedPlatform("linux", async () => {
+        mockIsProcessGroupLeader(4949);
+        killProcessTree(4949, { force: true });
+        await vi.advanceTimersByTimeAsync(60_000);
 
-      expect(killSpy).toHaveBeenCalledTimes(1);
-      expect(killSpy).toHaveBeenCalledWith(-4949, "SIGKILL");
-      expect(killSpy).not.toHaveBeenCalledWith(-4949, "SIGTERM");
-    });
-  });
+        expect(killSpy).toHaveBeenCalledTimes(1);
+        expect(killSpy).toHaveBeenCalledWith(-4949, "SIGKILL");
+        expect(killSpy).not.toHaveBeenCalledWith(-4949, "SIGTERM");
+      });
+    },
+  );
 
   it("on Unix force-kills a live detached group even after the parent pid exits", async () => {
     killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
@@ -268,35 +331,391 @@ describe("killProcessTree", () => {
     }) as typeof process.kill);
 
     await withMockedPlatform("linux", async () => {
-      mockIsProcessGroupLeader(4545);
-      killProcessTree(4545, { graceMs: 5 });
+      killProcessTree(4545, { graceMs: 5, detached: true });
 
       await vi.advanceTimersByTimeAsync(5);
 
       expect(killSpy).toHaveBeenCalledWith(-4545, "SIGTERM");
       expect(killSpy).toHaveBeenCalledWith(-4545, "SIGKILL");
       expect(killSpy).not.toHaveBeenCalledWith(4545, "SIGKILL");
+      expect(spawnSyncMock).not.toHaveBeenCalled();
     });
   });
 
-  it("on Unix skips group kill when detached:false to avoid SIGTERMing the parent's own process group (#71662)", async () => {
+  it.each([false, true])(
+    "on Unix cleans attached descendants without signaling the parent's process group (self entry: %s)",
+    async (includeSelf) => {
+      const { rootPid, childPid, grandchildPid } = createAttachedTreeFixture();
+      killSpy.mockImplementation(() => true);
+      mockProcTree({
+        [rootPid]: {
+          starttime: "100",
+          children: [childPid, ...(includeSelf ? [process.pid] : [])],
+        },
+        [childPid]: { starttime: "101", ppid: rootPid, children: [grandchildPid] },
+        [grandchildPid]: { starttime: "102", ppid: childPid },
+        [process.pid]: { starttime: "103", ppid: rootPid },
+      });
+
+      await withMockedPlatform("linux", async () => {
+        killProcessTree(rootPid, { graceMs: 10, detached: false });
+        await vi.advanceTimersByTimeAsync(10);
+
+        // The attached tree shares the gateway's group. Signal descendants first,
+        // then reverify their captured identities before the delayed force kill.
+        expect(killSpy.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([
+          [grandchildPid, "SIGTERM"],
+          [childPid, "SIGTERM"],
+          [rootPid, "SIGTERM"],
+          [grandchildPid, "SIGKILL"],
+          [childPid, "SIGKILL"],
+          [rootPid, "SIGKILL"],
+        ]);
+        expect(killSpy.mock.calls.some(([pid]) => pid < 0)).toBe(false);
+        expect(killSpy).not.toHaveBeenCalledWith(process.pid, expect.anything());
+      });
+    },
+  );
+
+  it("on Unix signals attached descendants before the root through signalProcessTree", async () => {
+    const { rootPid, childPid } = createAttachedTreeFixture();
+    killSpy.mockImplementation(() => true);
+    mockProcTree({
+      [rootPid]: { starttime: "100", children: [childPid] },
+      [childPid]: { starttime: "101", ppid: rootPid },
+    });
+    await withMockedPlatform("linux", async () => {
+      const completed = vi.fn();
+      signalProcessTree(rootPid, "SIGTERM", { detached: false, onComplete: completed });
+      expect(killSpy.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([
+        [childPid, "SIGTERM"],
+        [rootPid, "SIGTERM"],
+      ]);
+      expect(completed).toHaveBeenCalledOnce();
+      expect(killSpy.mock.calls.some(([pid]) => pid < 0)).toBe(false);
+    });
+  });
+
+  it("on Unix force-kills attached descendants before the root", async () => {
+    const { rootPid, childPid } = createAttachedTreeFixture();
+    killSpy.mockImplementation(() => true);
+    mockProcTree({
+      [rootPid]: { starttime: "100", children: [childPid] },
+      [childPid]: { starttime: "101", ppid: rootPid },
+    });
+    await withMockedPlatform("linux", async () => {
+      killProcessTree(rootPid, { force: true, detached: false });
+      await vi.advanceTimersByTimeAsync(10);
+      expect(killSpy.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([
+        [childPid, "SIGKILL"],
+        [rootPid, "SIGKILL"],
+      ]);
+      expect(killSpy.mock.calls.some(([pid]) => pid < 0)).toBe(false);
+    });
+  });
+
+  it("on macOS signals only the attached root without a reusable process identity", async () => {
+    killSpy.mockImplementation(() => true);
+
+    await withMockedPlatform("darwin", async () => {
+      signalProcessTree(5585, "SIGTERM", { detached: false });
+
+      expect(killSpy).toHaveBeenCalledWith(5585, "SIGTERM");
+      expect(spawnSyncMock).not.toHaveBeenCalled();
+      expect(
+        (killSpy.mock.calls as Array<[number, NodeJS.Signals | number | undefined]>).some(
+          ([pid]) => typeof pid === "number" && pid < 0,
+        ),
+      ).toBe(false);
+    });
+  });
+
+  it("on Unix skips recycled-PID escalation when the process instance changed", async () => {
+    const { rootPid, childPid } = createAttachedTreeFixture();
+    let rootStarttime = "100";
+    killSpy.mockImplementation(() => true);
+    mockProcTree({
+      [rootPid]: { starttime: () => rootStarttime, children: [childPid] },
+      [childPid]: { starttime: "101", ppid: rootPid },
+    });
+    await withMockedPlatform("linux", async () => {
+      killProcessTree(rootPid, { graceMs: 10, detached: false });
+      expect(killSpy.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([
+        [childPid, "SIGTERM"],
+        [rootPid, "SIGTERM"],
+      ]);
+      // A recycled root no longer owns the captured process identity.
+      rootStarttime = "9999";
+      await vi.advanceTimersByTimeAsync(10);
+      expect(killSpy).not.toHaveBeenCalledWith(rootPid, "SIGKILL");
+      expect(killSpy.mock.calls.some(([pid]) => pid < 0)).toBe(false);
+    });
+  });
+
+  it("on Linux binds each child identity before traversing its own descendants", async () => {
+    const { rootPid, childPid, grandchildPid } = createAttachedTreeFixture();
+    killSpy.mockImplementation(() => true);
+    mockProcTree({
+      [rootPid]: { starttime: "100", children: [childPid] },
+      // Its identity disappeared before capture. Do not read the replacement's children.
+      [childPid]: { children: [grandchildPid] },
+    });
+    await withMockedPlatform("linux", async () => {
+      killProcessTree(rootPid, { graceMs: 10, detached: false });
+      await vi.advanceTimersByTimeAsync(10);
+      expect(readFileSyncMock).toHaveBeenCalledWith(`/proc/${childPid}/stat`, "utf8");
+      expect(readFileSyncMock).not.toHaveBeenCalledWith(
+        `/proc/${childPid}/task/${childPid}/children`,
+        "utf8",
+      );
+      expect(killSpy.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([
+        [rootPid, "SIGTERM"],
+        [rootPid, "SIGKILL"],
+      ]);
+      expect(killSpy).not.toHaveBeenCalledWith(childPid, expect.anything());
+      expect(killSpy).not.toHaveBeenCalledWith(grandchildPid, expect.anything());
+    });
+  });
+
+  it("on Linux rejects a recycled child PID whose replacement no longer belongs to the parent", async () => {
+    const { rootPid, childPid, grandchildPid, foreignPid } = createAttachedTreeFixture();
+    killSpy.mockImplementation(() => true);
+    mockProcTree({
+      [rootPid]: { starttime: "100", children: [childPid] },
+      // A valid replacement identity still belongs to a different parent.
+      [childPid]: { starttime: "888", ppid: foreignPid, children: [grandchildPid] },
+      [grandchildPid]: { starttime: "889", ppid: childPid },
+    });
+    await withMockedPlatform("linux", async () => {
+      killProcessTree(rootPid, { graceMs: 10, detached: false });
+      await vi.advanceTimersByTimeAsync(10);
+      expect(killSpy.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([
+        [rootPid, "SIGTERM"],
+        [rootPid, "SIGKILL"],
+      ]);
+      expect(killSpy).not.toHaveBeenCalledWith(childPid, expect.anything());
+      expect(killSpy).not.toHaveBeenCalledWith(grandchildPid, expect.anything());
+    });
+  });
+
+  it("on Linux revalidates a non-root parent before reading its children", async () => {
+    const { rootPid, childPid, grandchildPid } = createAttachedTreeFixture();
+    let childStarttime = "200";
+    killSpy.mockImplementation(() => true);
+    mockProcTree({
+      [rootPid]: { starttime: "100", children: [childPid] },
+      [childPid]: {
+        ppid: rootPid,
+        children: [grandchildPid],
+        starttime: () => {
+          // Capture sees the original process; revalidation sees its replacement.
+          const captured = childStarttime;
+          childStarttime = "777";
+          return captured;
+        },
+      },
+      [grandchildPid]: { starttime: "778", ppid: childPid },
+    });
+    await withMockedPlatform("linux", async () => {
+      killProcessTree(rootPid, { graceMs: 10, detached: false });
+      await vi.advanceTimersByTimeAsync(10);
+      expect(killSpy.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([
+        [rootPid, "SIGTERM"],
+        [rootPid, "SIGKILL"],
+      ]);
+    });
+  });
+
+  it("on Linux revalidates the root identity before reading its children", async () => {
+    const { rootPid, childPid } = createAttachedTreeFixture();
+    let rootStarttime = "300";
+    killSpy.mockImplementation(() => true);
+    mockProcTree({
+      [rootPid]: {
+        children: [childPid],
+        starttime: () => {
+          const captured = rootStarttime;
+          rootStarttime = "666";
+          return captured;
+        },
+      },
+      [childPid]: { starttime: "667", ppid: rootPid },
+    });
+    await withMockedPlatform("linux", async () => {
+      killProcessTree(rootPid, { graceMs: 10, detached: false });
+      await vi.advanceTimersByTimeAsync(10);
+      // Neither the recycled root nor its replacement's child is authorized.
+      expect(killSpy.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([]);
+    });
+  });
+
+  it("on Linux stops traversing once the PID cap is reached mid-list", async () => {
+    const { rootPid } = createAttachedTreeFixture();
+    const childPids = Array.from({ length: 4098 }, (_, i) => rootPid + i + 1);
+    killSpy.mockImplementation(() => true);
+    mockProcTree({
+      [rootPid]: { starttime: "100", children: childPids },
+      ...Object.fromEntries(
+        childPids.map((pid) => [pid, { starttime: String(pid), ppid: rootPid }]),
+      ),
+    });
+    await withMockedPlatform("linux", async () => {
+      killProcessTree(rootPid, { graceMs: 10, detached: false });
+      await vi.advanceTimersByTimeAsync(10);
+      const probedChildStats = new Set(
+        readFileSyncMock.mock.calls.flatMap(([file]) => {
+          const match = String(file).match(/^\/proc\/(\d+)\/stat$/);
+          return match && Number(match[1]) > rootPid ? [Number(match[1])] : [];
+        }),
+      );
+      // The root fills one of 4096 slots. The next child must not even be probed.
+      expect(probedChildStats.size).toBe(4095);
+      expect(probedChildStats.has(childPids[4095]!)).toBe(false);
+      const signaledChildren = killSpy.mock.calls
+        .filter(([pid, signal]) => pid > rootPid && signal !== 0)
+        .map(([pid]) => pid);
+      expect(new Set(signaledChildren).size).toBe(4095);
+      expect(readFileSyncMock).toHaveBeenCalledWith(
+        `/proc/${rootPid}/task/${rootPid}/children`,
+        "utf8",
+      );
+    });
+  });
+
+  it("on Linux rejects a child beyond the advertised depth cap", async () => {
+    const { rootPid } = createAttachedTreeFixture();
+    const chainPids = Array.from({ length: 129 }, (_, i) => rootPid + i);
+    const overCapPid = rootPid + 129;
+    killSpy.mockImplementation(() => true);
+    mockProcTree(
+      Object.fromEntries(
+        [...chainPids, overCapPid].map((pid, index) => [
+          pid,
+          {
+            starttime: String(100 + index),
+            ppid: index === 0 ? 1 : pid - 1,
+            children: pid === overCapPid ? [] : [pid + 1],
+          },
+        ]),
+      ),
+    );
+    await withMockedPlatform("linux", async () => {
+      killProcessTree(rootPid, { graceMs: 10, detached: false });
+      await vi.advanceTimersByTimeAsync(10);
+      // Reach the last permitted level; only its level-129 child is excluded.
+      expect(killSpy).toHaveBeenCalledWith(overCapPid - 1, "SIGTERM");
+      expect(readFileSyncMock).not.toHaveBeenCalledWith(`/proc/${overCapPid}/stat`, "utf8");
+      expect(killSpy).not.toHaveBeenCalledWith(overCapPid, expect.anything());
+    });
+  });
+
+  it("on Unix force-escalates one attached snapshot without rebuilding it", async () => {
+    const { rootPid, childPid } = createAttachedTreeFixture();
+    killSpy.mockImplementation(() => true);
+    mockProcTree({
+      [rootPid]: { starttime: "100", children: [childPid] },
+      [childPid]: { starttime: "101", ppid: rootPid },
+    });
+    await withMockedPlatform("linux", async () => {
+      const termination = killProcessTree(rootPid, { graceMs: 10, detached: false });
+      termination?.force();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(killSpy.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([
+        [childPid, "SIGTERM"],
+        [rootPid, "SIGTERM"],
+        [childPid, "SIGKILL"],
+        [rootPid, "SIGKILL"],
+      ]);
+    });
+  });
+
+  it("on Unix skips an attached descendant without an identity during escalation", async () => {
+    const { rootPid, childPid } = createAttachedTreeFixture();
+    killSpy.mockImplementation(() => true);
+    mockProcTree({
+      [rootPid]: { starttime: "100", children: [childPid] },
+      [childPid]: {},
+    });
+    await withMockedPlatform("linux", async () => {
+      killProcessTree(rootPid, { graceMs: 10, detached: false });
+      await vi.advanceTimersByTimeAsync(10);
+      expect(killSpy).not.toHaveBeenCalledWith(childPid, "SIGTERM");
+      expect(killSpy).not.toHaveBeenCalledWith(childPid, "SIGKILL");
+      expect(killSpy).toHaveBeenCalledWith(rootPid, "SIGTERM");
+      expect(killSpy).toHaveBeenCalledWith(rootPid, "SIGKILL");
+    });
+  });
+
+  it.each([
+    { force: false, signal: "SIGTERM", expired: false },
+    { force: true, signal: "SIGKILL", expired: false },
+    { force: false, signal: "SIGTERM", expired: true },
+    { force: true, signal: "SIGKILL", expired: true },
+  ] as const)(
+    "on Linux immediately signals only the owned root when identity capture fails: %j",
+    async ({ force, signal, expired }) => {
+      killSpy.mockImplementation(() => true);
+      readFileSyncMock.mockImplementation(() => {
+        if (!expired) {
+          throw new Error("root identity unavailable");
+        }
+        vi.setSystemTime(Date.now() + 501);
+        return "5594 (root) S 1 5594 5594 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 100 0";
+      });
+
+      await withMockedPlatform("linux", async () => {
+        const handle = killProcessTree(5594, { force, graceMs: 10, detached: false });
+        expect(handle).toBeUndefined();
+        expect(killSpy.mock.calls).toEqual([[5594, signal]]);
+        expect(vi.getTimerCount()).toBe(0);
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(killSpy.mock.calls).toEqual([[5594, signal]]);
+      });
+    },
+  );
+
+  it("on Unix keeps an attached descendant snapshot after its root exits", async () => {
+    const { rootPid, childPid } = createAttachedTreeFixture();
+    let rootAlive = true;
     killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
-      if (pid === 5555 && signal === 0) {
+      if (signal === 0 && pid === rootPid && !rootAlive) {
         throw new Error("ESRCH");
       }
       return true;
     }) as typeof process.kill);
+    mockProcTree({
+      [rootPid]: { starttime: "100", children: [childPid] },
+      [childPid]: { starttime: "101", ppid: rootPid },
+    });
+    await withMockedPlatform("linux", async () => {
+      killProcessTree(rootPid, { graceMs: 10, detached: false });
+      rootAlive = false;
+      await vi.advanceTimersByTimeAsync(10);
+      expect(killSpy).toHaveBeenCalledWith(childPid, "SIGKILL");
+      expect(killSpy).not.toHaveBeenCalledWith(rootPid, "SIGKILL");
+    });
+  });
+
+  it("on Unix force-kills only the verified root when attached descendants cannot be enumerated", async () => {
+    killSpy.mockImplementation(() => true);
+    readFileSyncMock.mockImplementation((filePath: string) => {
+      if (filePath === "/proc/5555/stat") {
+        return "5555 (root) S 1 5555 5555 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 100 0";
+      }
+      throw new Error("descendant enumeration unavailable");
+    });
 
     await withMockedPlatform("linux", async () => {
       killProcessTree(5555, { graceMs: 10, detached: false });
       await vi.advanceTimersByTimeAsync(10);
 
-      // Direct pid kill is fine. Group kill (`-pid`) is FORBIDDEN here because
-      // when the child wasn't spawned detached, its process group is the
-      // gateway's group — `-pid` would SIGTERM the gateway itself.
       expect(killSpy).toHaveBeenCalledWith(5555, "SIGTERM");
-      expect(killSpy).not.toHaveBeenCalledWith(-5555, "SIGTERM");
-      expect(killSpy).not.toHaveBeenCalledWith(-5555, "SIGKILL");
+      expect(killSpy).toHaveBeenCalledWith(5555, "SIGKILL");
+      expect(
+        (killSpy.mock.calls as Array<[number, NodeJS.Signals | number | undefined]>).some(
+          ([pid]) => typeof pid === "number" && pid < 0,
+        ),
+      ).toBe(false);
     });
   });
 
@@ -361,6 +780,7 @@ describe("killProcessTree", () => {
       await vi.advanceTimersByTimeAsync(10);
 
       expect(killSpy).toHaveBeenCalledWith(9999, "SIGTERM");
+      expect(killSpy).toHaveBeenCalledWith(9999, "SIGKILL");
       expect(killSpy).not.toHaveBeenCalledWith(-9999, "SIGTERM");
       expect(killSpy).not.toHaveBeenCalledWith(-9999, "SIGKILL");
     });
@@ -378,20 +798,28 @@ describe("killProcessTree", () => {
     });
   });
 
-  it("on Unix sends a single requested tree signal without scheduling escalation", async () => {
-    killSpy.mockImplementation(() => true);
+  it.each([false, true])(
+    "on Unix keeps a requested signal group-only (group missing: %s)",
+    async (missing) => {
+      killSpy.mockImplementation((pid: number) => {
+        if (pid === -7777 && missing) {
+          throw new Error("ESRCH");
+        }
+        return true;
+      });
 
-    await withMockedPlatform("linux", async () => {
-      mockIsProcessGroupLeader(7777);
-      signalProcessTree(7777, "SIGTERM");
+      await withMockedPlatform("linux", async () => {
+        mockIsProcessGroupLeader(7777);
+        signalProcessTree(7777, "SIGTERM");
 
-      await vi.advanceTimersByTimeAsync(60_000);
+        await vi.advanceTimersByTimeAsync(60_000);
 
-      expect(killSpy).toHaveBeenCalledTimes(1);
-      expect(killSpy).toHaveBeenCalledWith(-7777, "SIGTERM");
-      expect(killSpy).not.toHaveBeenCalledWith(-7777, "SIGKILL");
-    });
-  });
+        expect(killSpy).toHaveBeenCalledTimes(1);
+        expect(killSpy).toHaveBeenCalledWith(-7777, "SIGTERM");
+        expect(killSpy).not.toHaveBeenCalledWith(-7777, "SIGKILL");
+      });
+    },
+  );
 
   it("rescans a PTY session for job-control groups created after the first snapshot", async () => {
     killSpy.mockImplementation(() => true);

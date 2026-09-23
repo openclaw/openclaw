@@ -1,14 +1,17 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { messageClientSourcesKey } from "../../../../src/chat/message-client-source.js";
 import {
-  isToolCallContentType,
-  isToolResultContentType,
-} from "../../../../src/chat/tool-content.js";
+  extractAssistantTextForPhase,
+  resolveAssistantMessagePhase,
+} from "../../../../src/shared/chat-message-content.js";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
-import { extractTextCached } from "../../lib/chat/message-extract.ts";
+import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
-import { isContextCompactionActivity } from "./chat-progress.ts";
+import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
 import { prepareMessagesForGrouping } from "./chat-thread-duplicates.ts";
 import { userTurnRunId } from "./chat-thread-items.ts";
 import {
@@ -19,18 +22,20 @@ import {
   assistantGroupIsForwardedBoundary,
   chatItemStartsUserTurn,
   hasForwardedSource,
-  safeNormalizeMessage,
 } from "./chat-turn-boundary.ts";
 import { indexTurnContinuations, persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 
-function assistantMessageKind(message: unknown) {
-  if (isContextCompactionActivity(message)) {
-    return "compaction";
-  }
+function assistantMessageKind(message: unknown, visibleContent: MessageGroup["visibleContent"]) {
   if (isKeyedAssistantStreamFallbackMessage(message)) {
     return "commentary";
   }
-  return messageHasVisibleReplyContent(message) ? "reply" : "activity";
+  // A response can contain both phases; any explicit answer remains visible.
+  if (extractAssistantTextForPhase(message, { phase: "final_answer" })) {
+    return "final_answer";
+  }
+  return (
+    resolveAssistantMessagePhase(message) ?? (visibleContent === "none" ? "activity" : "reply")
+  );
 }
 
 function stampReplyAttribution(
@@ -52,6 +57,10 @@ function stampReplyAttribution(
 
   let latestUserSender: MessageGroup["sender"];
   for (const item of items) {
+    if (item.kind === "stream") {
+      item.replyToSender = latestUserSender;
+      continue;
+    }
     if (item.kind !== "group") {
       continue;
     }
@@ -85,6 +94,17 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
 
     const { item, normalized } = prepared;
     const role = normalizeRoleForGrouping(normalized.role);
+    // Classify after content projection and keep the fact with its group; later
+    // presentation passes reuse it, while a rebuild sees in-place message changes.
+    const visibleContent = resolveMessageVisibleContent(item.message, normalized);
+    const source = {
+      message: item.message,
+      key: item.key,
+      duplicateCount: item.duplicateCount,
+      hasVisibleContent:
+        visibleContent === "non-text" ||
+        Boolean(resolveMessageDisplayMarkdown(item.message, normalized).trim()),
+    };
     const senderLabel =
       role === "user" || role === "assistant" ? (normalized.senderLabel ?? null) : null;
     const sender = role === "user" ? normalized.sender : undefined;
@@ -102,8 +122,8 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
     const splitsAssistantKind =
       role === "assistant" &&
       currentGroup?.role === "assistant" &&
-      assistantMessageKind(currentGroup.messages[0]?.message) !==
-        assistantMessageKind(item.message);
+      assistantMessageKind(currentGroup.messages[0]?.message, currentGroup.visibleContent) !==
+        assistantMessageKind(item.message, visibleContent);
 
     if (
       !currentGroup ||
@@ -112,9 +132,12 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
       currentGroup.runId !== runId ||
       currentUserTurnIdentity !== userTurnIdentity ||
       splitsAssistantKind ||
+      messageClientSourcesKey(currentGroup.sourceClients ?? []) !==
+        messageClientSourcesKey(normalized.sourceClients ?? []) ||
       (shouldSplitBySender &&
         ((!sender?.identity && currentGroup.senderLabel !== senderLabel) ||
           currentGroup.senderSession?.sessionKey !== normalized.senderSession?.sessionKey ||
+          currentGroup.senderSession?.label !== normalized.senderSession?.label ||
           senderIdentityKey(currentGroup.sender) !== senderIdentityKey(sender)))
     ) {
       if (currentGroup) {
@@ -128,17 +151,18 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
         senderLabel,
         ...(normalized.senderSession ? { senderSession: normalized.senderSession } : {}),
         ...(sender ? { sender } : {}),
-        messages: [{ message: item.message, key: item.key, duplicateCount: item.duplicateCount }],
+        ...(normalized.sourceClients ? { sourceClients: normalized.sourceClients } : {}),
+        messages: [source],
+        visibleContent,
         timestamp,
         isStreaming: false,
         ...(runId ? { runId } : {}),
       };
     } else {
-      currentGroup.messages.push({
-        message: item.message,
-        key: item.key,
-        duplicateCount: item.duplicateCount,
-      });
+      if (visibleContent === "non-text" || currentGroup.visibleContent === "none") {
+        currentGroup.visibleContent = visibleContent;
+      }
+      currentGroup.messages.push(source);
     }
   }
 
@@ -154,6 +178,7 @@ export type StreamRunRenderItem = {
   key: string;
   runId?: string;
   boundaryId?: string;
+  replyToSender?: MessageGroup["replyToSender"];
   parts: Array<Extract<ChatItem, { kind: "stream" | "reading-indicator" }>>;
 };
 export function coalesceStreamRuns(
@@ -169,6 +194,7 @@ export function coalesceStreamRuns(
         kind: "stream-run",
         key: `stream-run:${first.key}`,
         parts: run,
+        replyToSender: run.find((part) => part.kind === "stream")?.replyToSender,
         ...(runId ? { runId } : {}),
         ...(boundaryId ? { boundaryId } : {}),
       });
@@ -207,54 +233,49 @@ export type ActivityRunRenderItem = {
 
 type TurnRenderItem = RenderChatItem | StreamRunRenderItem;
 
+// User input, forwarded messages and structural markers bound presentation reordering.
+function isTurnOutputGroup(item: TurnRenderItem): item is MessageGroup {
+  return (
+    item.kind === "group" &&
+    (item.role === "assistant" || item.role === "tool") &&
+    !assistantGroupIsForwardedBoundary(item)
+  );
+}
+
 function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
   if (item.kind !== "group" || item.isStreaming || groupHasVisibleReplyContent(item, false)) {
     return false;
   }
   const role = item.role.toLowerCase();
-  return role === "tool" || (role === "assistant" && !assistantGroupIsForwardedBoundary(item));
-}
-
-// Attachment/canvas/media-only replies carry no text but are still the turn's
-// visible outcome; they must never fold into the work rollup. Normalized
-// content passes unknown block types through (e.g. raw image blocks), so
-// only tool and thinking blocks are activity rather than visible outcomes.
-function messageHasVisibleReplyContent(message: unknown, includeText = true): boolean {
-  if (includeText && extractTextCached(message)?.trim()) {
-    return true;
-  }
-  const content = safeNormalizeMessage(message)?.content ?? [];
-  return content.some((block) => {
-    if (block.type === "text") {
-      return includeText && Boolean(block.text?.trim());
-    }
-    return (
-      block.type !== "thinking" &&
-      !isToolCallContentType(block.type) &&
-      !isToolResultContentType(block.type)
-    );
-  });
+  return (
+    role === "tool" ||
+    (role === "assistant" &&
+      !assistantGroupIsForwardedBoundary(item) &&
+      assistantMessageKind(item.messages[0]?.message, item.visibleContent) !== "final_answer")
+  );
 }
 
 function groupHasVisibleReplyContent(group: MessageGroup, includeText = true): boolean {
-  return group.messages.some(({ message }) => messageHasVisibleReplyContent(message, includeText));
+  return group.visibleContent === "non-text" || (includeText && group.visibleContent === "text");
 }
 
 export function assistantGroupCanOwnActiveRunStatus(group: MessageGroup): boolean {
   return (
     group.role.toLowerCase() === "assistant" &&
     !assistantGroupIsForwardedBoundary(group) &&
-    !group.messages.every(({ message }) => isContextCompactionActivity(message)) &&
     groupHasVisibleReplyContent(group)
   );
 }
 
-// History carries no final-vs-commentary marker (commentary exists only as
-// live stream segments), so the last assistant group with visible content
-// stands in for the final reply. Turns whose last content is commentary
-// merely collapse less; the visible reply is never folded away.
+// Unphased providers keep the last-visible-reply policy. Explicit commentary
+// cannot move the completed-work boundary past an already delivered answer.
 function isFinalReplyGroup(item: TurnRenderItem): boolean {
-  return item.kind === "group" && !item.isStreaming && assistantGroupCanOwnActiveRunStatus(item);
+  return (
+    item.kind === "group" &&
+    !item.isStreaming &&
+    assistantGroupCanOwnActiveRunStatus(item) &&
+    assistantMessageKind(item.messages[0]?.message, item.visibleContent) !== "commentary"
+  );
 }
 
 function turnUserMessages(turn: TurnRenderItem[]): unknown[] {
@@ -271,14 +292,18 @@ function turnUserMessages(turn: TurnRenderItem[]): unknown[] {
 }
 
 /**
- * Once a turn is done, its intermediate work (tool groups and assistant
- * commentary before the final reply) collapses behind one "Worked for X"
- * disclosure so the thread reads final-output-first. Live turns stay fully
- * expanded; the collapse itself is the done signal.
+ * Once a turn is done, collect its activity above the preserved answers in one
+ * "Worked for X" disclosure. Each partition retains source order without changing
+ * the stored transcript. Live turns stay expanded; structural markers stay anchored.
  */
 export function collapseCompletedTurnWork(
   items: TurnRenderItem[],
-  opts: { sessionKey: string; runWorking: boolean; searchActive?: boolean },
+  opts: {
+    sessionKey: string;
+    runWorking: boolean;
+    searchActive?: boolean;
+    session?: Pick<GatewaySessionRow, "key" | "lastRunId" | "status" | "runtimeMs">;
+  },
 ): Array<TurnRenderItem | WorkGroupRenderItem> {
   const [scope, agentId, kind, sessionId, ...extraParts] = normalizeLowercaseStringOrEmpty(
     opts.sessionKey,
@@ -368,32 +393,66 @@ export function collapseCompletedTurnWork(
       result.push(...turn);
       continue;
     }
-    const segmentEnd = finalReplyIndex >= 0 ? finalReplyIndex - 1 : turn.length - 1;
-    let segmentStart = segmentEnd + 1;
-    for (let index = segmentEnd; index >= 0; index -= 1) {
-      const candidate = turn[index];
-      if (!candidate || !isCollapsibleWorkGroup(candidate)) {
+    // Partition the answer's output segment, including work after the last answer.
+    // Never move activity across a user, forwarded input, or structural marker.
+    let segmentStart = finalReplyIndex >= 0 ? finalReplyIndex : turn.length - 1;
+    let segmentEnd = segmentStart;
+    while (segmentStart > 0 && isTurnOutputGroup(turn[segmentStart - 1]!)) {
+      segmentStart -= 1;
+    }
+    // Independent reply-less runs retain their own activity rollup, rather than
+    // becoming work for an earlier answer merely because no user spoke between them.
+    const replyRunIds = runIdsWithVisibleReplies(turn);
+    while (segmentEnd + 1 < turn.length) {
+      const next = turn[segmentEnd + 1]!;
+      if (!isTurnOutputGroup(next) || (next.runId && !replyRunIds.has(next.runId))) {
         break;
       }
-      segmentStart = index;
+      segmentEnd += 1;
     }
-    const groups = turn.slice(segmentStart, segmentEnd + 1) as MessageGroup[];
+    const groups: MessageGroup[] = [];
+    const answers: TurnRenderItem[] = [];
+    for (let index = segmentStart; index <= segmentEnd; index += 1) {
+      const item = turn[index]!;
+      // Only a later answer can put a failed result inside completed work.
+      // Share the renderer's error classification, including structured results.
+      if (
+        index !== finalReplyIndex &&
+        isCollapsibleWorkGroup(item) &&
+        (finalReplyIndex < 0 ||
+          index < finalReplyIndex ||
+          !item.messages.some(({ message }) =>
+            extractToolCardsCached(message).some(isToolCardError),
+          ))
+      ) {
+        groups.push(item);
+      } else {
+        answers.push(item);
+      }
+    }
     const firstGroup = groups[0];
     if (!firstGroup) {
       result.push(...turn);
       continue;
     }
-    const boundary = turn[0];
-    const boundaryTimestamp =
-      boundary &&
-      boundary.kind !== "stream-run" &&
-      chatItemStartsUserTurn(boundary) &&
-      "timestamp" in boundary
-        ? boundary.timestamp
+    // Message timestamps describe creation, not completion of the final model
+    // request. Only the lifecycle owner can supply elapsed time for this run.
+    // Older history without matching lifecycle facts keeps an untimed disclosure.
+    const session = opts.session;
+    const runtimeMs = session?.runtimeMs;
+    const durationMs =
+      session?.key === opts.sessionKey &&
+      terminalReply.runId !== undefined &&
+      session.lastRunId === terminalReply.runId &&
+      (session.status === "done" ||
+        session.status === "failed" ||
+        session.status === "timeout" ||
+        session.status === "killed") &&
+      typeof runtimeMs === "number" &&
+      Number.isFinite(runtimeMs) &&
+      runtimeMs >= 0
+        ? runtimeMs
         : null;
-    const startTimestamp = boundaryTimestamp == null ? firstGroup.timestamp : boundaryTimestamp;
-    const endTimestamp = terminalReply.timestamp;
-    const durationMs = endTimestamp > startTimestamp ? endTimestamp - startTimestamp : null;
     const continuationBoundary = turns[continuationTurnIndexes.get(turnIndex) ?? -1]?.[0];
     result.push(...turn.slice(0, segmentStart));
     result.push({
@@ -405,7 +464,7 @@ export function collapseCompletedTurnWork(
       groups,
       durationMs,
     });
-    result.push(...turn.slice(segmentEnd + 1));
+    result.push(...answers, ...turn.slice(segmentEnd + 1));
   }
   return result;
 }

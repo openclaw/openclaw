@@ -1,7 +1,7 @@
 import {
   PENDING_FINAL_DELIVERY_CLEAR_PATCH,
   sanitizePendingFinalDeliveryText,
-} from "../../auto-reply/reply/pending-final-delivery.js";
+} from "../../auto-reply/reply/pending-final-delivery-state.js";
 import type {
   InternalSessionEntry as SessionEntry,
   MainRestartRecoveryState,
@@ -158,6 +158,16 @@ export function isMainSessionRecoveryPending(entry: SessionEntry, sessionKey: st
     !state?.foregroundClaims &&
     !state?.reservation &&
     !state?.tombstone
+  );
+}
+
+/** Failed foreground admission can leave an unfinished recovery cycle behind. */
+export function isMainSessionRecoveryReconciliationCandidate(entry: SessionEntry): boolean {
+  return (
+    (entry.status === undefined || entry.status === "running" || entry.status === "failed") &&
+    entry.abortedLastRun !== true &&
+    entry.mainRestartRecovery !== undefined &&
+    !entry.mainRestartRecovery.tombstone
   );
 }
 
@@ -343,6 +353,7 @@ export function transitionMainSessionRecovery(
         });
       }
       entry.status = "running";
+      entry.activeWriterRunId = undefined;
       entry.lifecycleRunId = undefined;
       entry.lastRunId = undefined;
       entry.abortedLastRun = true;
@@ -374,7 +385,7 @@ export function transitionMainSessionRecovery(
         isMainRestartRecoveryCandidate(entry, command.sessionKey) &&
         !entry.mainRestartRecovery
       ) {
-        // Rows interrupted by an older shipped version acquire identity before scanning.
+        // Acquire recovery identity before scanning interrupted rows.
         entry.mainRestartRecovery = createCycle(command.cycleId);
       }
       let state = entry.mainRestartRecovery;

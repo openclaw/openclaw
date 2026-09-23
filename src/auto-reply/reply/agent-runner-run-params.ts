@@ -7,8 +7,8 @@ import {
 import { findModelInCatalog, modelSupportsInput } from "../../agents/model-catalog-lookup.js";
 import { modelTransportRoutesMatch } from "../../agents/model-compat-catalog.js";
 import {
+  findConfiguredProviderModel,
   resolveMergedModelProviderConfig,
-  resolveMergedModelProviderModels,
 } from "../../config/model-provider-config.js";
 import type { resolveProviderScopedAuthProfile } from "./agent-runner-auth-profile.js";
 import type { FollowupRun } from "./queue.js";
@@ -37,6 +37,7 @@ export function resolveModelFallbackOptions(
     modelOverrideSource: run.modelOverrideSource,
     hasAutoFallbackProvenance: run.hasAutoFallbackProvenance === true,
     modelSelectionLocked: run.modelSelectionLocked,
+    subagentSpawnLineage: run.subagentSpawnLineage,
   });
   return {
     cfg: config,
@@ -78,10 +79,12 @@ export async function resolveRunModelHasVision(params: {
 }): Promise<boolean> {
   const { run, provider, model } = params;
   const providerConfig = resolveMergedModelProviderConfig(run.config, provider);
-  const configured = resolveMergedModelProviderModels({
-    models: providerConfig?.models,
-    normalizeModelId: normalizeLowercaseStringOrEmpty,
-  }).get(normalizeLowercaseStringOrEmpty(model));
+  const configured = findConfiguredProviderModel(
+    providerConfig,
+    provider,
+    model,
+    normalizeLowercaseStringOrEmpty,
+  );
   if (configured?.input !== undefined) {
     return modelSupportsInput(configured, "image");
   }
@@ -127,6 +130,7 @@ export async function buildEmbeddedRunBaseParams(params: {
     modelOverrideSource: params.run.modelOverrideSource,
     hasAutoFallbackProvenance: params.run.hasAutoFallbackProvenance === true,
     modelSelectionLocked: params.run.modelSelectionLocked,
+    subagentSpawnLineage: params.run.subagentSpawnLineage,
   });
   const modelFallbacksOverride = modelFallbackOverrideFromAvailability(modelFallbackAvailability);
   const enforceFinalTag = resolveEnforceFinalTagWithResolver(
@@ -137,6 +141,7 @@ export async function buildEmbeddedRunBaseParams(params: {
   );
   // Runtime policy keys may differ from session keys for direct-message scoped policy.
   const runParams = {
+    providerReviewAcknowledgment: params.run.providerReviewAcknowledgment,
     sessionFile: params.run.sessionFile,
     workspaceDir: params.run.workspaceDir,
     cwd: params.run.cwd,
@@ -157,11 +162,12 @@ export async function buildEmbeddedRunBaseParams(params: {
     approvalReviewerDeviceId: params.run.approvalReviewerDeviceId,
     enforceFinalTag,
     silentExpected: params.run.silentExpected,
-    allowEmptyAssistantReplyAsSilent: params.run.allowEmptyAssistantReplyAsSilent,
     terminalReplyExpectation: params.run.terminalReplyExpectation,
     silentReplyPromptMode: params.run.silentReplyPromptMode,
     sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
     clientCaps: params.run.clientCaps,
+    bootstrapUserProfileId: params.run.bootstrapUserProfileId,
+    gatewayUiCommandTarget: params.run.gatewayUiCommandTarget,
     toolBindings: params.run.toolBindings,
     taskSuggestionDeliveryMode: params.run.taskSuggestionDeliveryMode,
     skillWorkshopProposalRevision: params.run.skillWorkshopProposalRevision,
@@ -169,6 +175,7 @@ export async function buildEmbeddedRunBaseParams(params: {
     provider: params.provider,
     model: params.model,
     modelHasVision: await resolveRunModelHasVision(params),
+    requestedRouteResolution: "resolved" as const,
     modelSelectionLocked: params.run.modelSelectionLocked,
     modelFallbackAvailability,
     modelFallbacksOverride,
@@ -181,6 +188,7 @@ export async function buildEmbeddedRunBaseParams(params: {
     execOverrides: params.run.execOverrides,
     bashElevated: params.run.bashElevated,
     timeoutMs: params.run.timeoutMs,
+    runTimeoutOverrideMs: params.run.runTimeoutOverrideMs,
     runId: params.runId,
     promptCacheKey: params.promptCacheKey,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,

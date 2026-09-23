@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { vi, type Mock } from "vitest";
+import { setDiscordRuntime } from "../runtime.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
@@ -26,20 +27,18 @@ type DiscordComponentRuntimeMocks = {
   upsertPairingRequestMock: AsyncUnknownMock;
 };
 
-const runtimeMocks = vi.hoisted(
-  (): DiscordComponentRuntimeMocks => ({
-    buildPluginBindingResolvedTextMock: vi.fn(),
-    dispatchPluginInteractiveHandlerMock: vi.fn(),
-    dispatchReplyMock: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(),
-    enqueueSystemEventMock: vi.fn(),
-    readAllowFromStoreMock: vi.fn(),
-    readSessionUpdatedAtMock: vi.fn(),
-    recordInboundSessionMock: vi.fn(),
-    resolveStorePathMock: vi.fn(),
-    resolvePluginConversationBindingApprovalMock: vi.fn(),
-    upsertPairingRequestMock: vi.fn(),
-  }),
-);
+const runtimeMocks = vi.hoisted((): DiscordComponentRuntimeMocks => ({
+  buildPluginBindingResolvedTextMock: vi.fn(),
+  dispatchPluginInteractiveHandlerMock: vi.fn(),
+  dispatchReplyMock: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(),
+  enqueueSystemEventMock: vi.fn(),
+  readAllowFromStoreMock: vi.fn(),
+  readSessionUpdatedAtMock: vi.fn(),
+  recordInboundSessionMock: vi.fn(),
+  resolveStorePathMock: vi.fn(),
+  resolvePluginConversationBindingApprovalMock: vi.fn(),
+  upsertPairingRequestMock: vi.fn(),
+}));
 
 export const readAllowFromStoreMock: AsyncUnknownMock = runtimeMocks.readAllowFromStoreMock;
 export const dispatchPluginInteractiveHandlerMock: AsyncUnknownMock =
@@ -183,6 +182,7 @@ vi.mock("../interactive-dispatch.js", async () => {
 });
 
 export function resetDiscordComponentRuntimeMocks() {
+  setDiscordRuntime(createPluginRuntimeMock());
   dispatchPluginInteractiveHandlerMock.mockReset().mockResolvedValue({
     matched: false,
     handled: false,

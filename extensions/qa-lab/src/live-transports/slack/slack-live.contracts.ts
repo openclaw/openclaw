@@ -1,14 +1,16 @@
 // QA Lab Slack live domain contracts and wire schemas.
-import type { createSlackWebClient } from "@openclaw/slack/api.js";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { z } from "zod";
 import type { QaGatewayChild } from "../../gateway-child.js";
 import { splitQaModelRef } from "../../model-selection.js";
 
-export type SlackQaWebClient = ReturnType<typeof createSlackWebClient>;
+type SlackQaRuntime = typeof import("@openclaw/slack/test-api.js");
+type CreateSlackWebClient = SlackQaRuntime["createSlackWebClient"];
+
+export type SlackQaWebClient = ReturnType<CreateSlackWebClient>;
 export type SlackQaFetchFunction = NonNullable<
-  NonNullable<Parameters<typeof createSlackWebClient>[1]>["fetch"]
+  NonNullable<Parameters<CreateSlackWebClient>[1]>["fetch"]
 >;
 type WebClient = SlackQaWebClient;
 
@@ -116,11 +118,14 @@ export function assertSlackCodexApprovalModelSupported(modelRef: string) {
 
 export type SlackQaMessageScenarioRun = {
   afterNoReply?: (context: SlackQaScenarioContext) => Promise<string | void>;
+  captureBeforeReply?: (messages: readonly SlackObservedMessage[]) => boolean;
   cleanup?: (context: Omit<SlackQaScenarioContext, "sentTs">) => Promise<void>;
   kind?: "message";
   expectReply: boolean;
   input: string;
   matchText: string;
+  /** Observation window for negative scenarios; must stay below the enclosing flow deadline. */
+  noReplyObservationMs?: number;
   preserveGatewayDebug?: boolean;
   settleObservedMs?: number;
   verify?: (message: SlackMessage, context: { requestThreadTs: string; sentTs: string }) => void;
@@ -197,6 +202,7 @@ export type SlackQaConfigOverrides = {
   messageTool?: boolean;
   progress?: {
     commentary?: boolean;
+    style?: "compact";
     toolProgress: boolean;
     verboseDefault?: "off" | "on" | "full";
   };
@@ -317,6 +323,24 @@ export const slackPostMessageSchema = z.object({
 const slackHistoryMessageSchema = z.object({
   bot_id: z.string().optional(),
   blocks: z.array(z.unknown()).optional(),
+  files: z
+    .array(
+      z.object({
+        id: z.string().min(1),
+        name: z.string().optional(),
+        mimetype: z.string().optional(),
+      }),
+    )
+    .optional(),
+  reactions: z
+    .array(
+      z.object({
+        name: z.string(),
+        users: z.array(z.string()).optional(),
+        count: z.number().optional(),
+      }),
+    )
+    .optional(),
   text: z.string().optional(),
   thread_ts: z.string().optional(),
   ts: z.string().min(1),
@@ -328,6 +352,7 @@ export type SlackMessage = Omit<z.infer<typeof slackHistoryMessageSchema>, "ts">
 export const slackHistorySchema = z.object({
   ok: z.boolean().optional(),
   messages: z.array(slackHistoryMessageSchema).optional(),
+  response_metadata: z.object({ next_cursor: z.string().optional() }).optional(),
 });
 
 export const slackRepliesSchema = z.object({

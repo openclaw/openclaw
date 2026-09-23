@@ -11,17 +11,12 @@ import type {
   SessionsUsageTotals,
   SessionUsageTimePoint,
 } from "./data-types.ts";
-import type { ProviderUsageSnapshot, UsageSnapshotResult } from "./request-usage-snapshot.ts";
+import type { ProviderUsageSnapshot } from "./request-usage-snapshot.ts";
 
 export type UsageSessionEntry = SessionsUsageEntry;
 export type UsageTotals = SessionsUsageTotals;
 export type CostDailyEntry = CostUsageDailyEntry;
 export type UsageAggregates = SessionsUsageResult["aggregates"];
-
-export type UsageTaskValue = {
-  epoch: object;
-  snapshot: UsageSnapshotResult;
-};
 
 export type UsageContextDetail = {
   weight: UsageSessionEntry["contextWeight"];
@@ -46,6 +41,7 @@ export type UsageRouteData = {
     scope: "instance" | "family";
     timeZone: "local" | "utc";
     agentId: string | null;
+    creatorKey?: string;
   };
   result: SessionsUsageResult | null;
   costSummary: CostUsageSummary | null;
@@ -83,6 +79,7 @@ type UsageDataState = {
   error: string | null;
   sessions: UsageSessionEntry[];
   agents: string[];
+  creatorOptions: NonNullable<SessionsUsageResult["creatorOptions"]>;
   sessionsLimitReached: boolean; // True if 1000 session cap was hit
   totals: UsageTotals | null;
   aggregates: UsageAggregates | null;
@@ -94,7 +91,7 @@ type UsageDataState = {
   providerUsageUnavailable: boolean;
 };
 
-export type UsageFilterState = {
+type UsageFilterState = {
   startDate: string;
   endDate: string;
   scope: "instance" | "family";
@@ -102,6 +99,7 @@ export type UsageFilterState = {
   selectedDays: string[]; // Support multiple day selection
   selectedHours: number[]; // Support multiple hour selection
   agentId: string | null;
+  creatorKey: string | null;
   query: string;
   queryDraft: string;
   timeZone: "local" | "utc";
@@ -146,10 +144,11 @@ type UsageCallbacks = {
     onEndDateChange: (date: string) => void;
     onScopeChange: (scope: "instance" | "family") => void;
     onAgentChange: (agentId: string | null) => void;
+    onCreatorChange: (creatorKey: string | null) => void;
     onRefresh: () => void;
     onTimeZoneChange: (zone: "local" | "utc") => void;
     onToggleHeaderPinned: () => void;
-    onSelectDay: (day: string, shiftKey: boolean) => void; // Support shift-click
+    onSelectDay: (day: string, shiftKey: boolean, orderedDays: string[]) => void;
     onSelectHour: (hour: number, shiftKey: boolean) => void;
     onClearDays: () => void;
     onClearHours: () => void;
@@ -180,9 +179,6 @@ type UsageCallbacks = {
     onTimeSeriesModeChange: (mode: "cumulative" | "per-turn") => void;
     onTimeSeriesBreakdownChange: (mode: "total" | "by-type") => void;
     onTimeSeriesCursorRangeChange: (start: number | null, end: number | null) => void;
-    onRetryTimeSeries: () => void;
-    onRetrySessionLogs: () => void;
-    onRetryContextWeight: () => void;
   };
 };
 

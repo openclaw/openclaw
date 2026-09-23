@@ -1,5 +1,5 @@
-// Assistant error formatting helpers normalize assistant-visible error payloads.
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractHttpResponseBody } from "./http-error-response.js";
 const ERROR_PAYLOAD_PREFIX_RE =
@@ -41,6 +41,7 @@ type ErrorPayload = Record<string, unknown>;
 type ApiErrorInfo = {
   httpCode?: string;
   type?: string;
+  code?: string;
   message?: string;
   requestId?: string;
 };
@@ -57,38 +58,28 @@ export function formatProviderRefusalText(message: { diagnostics?: unknown }): s
   const category = asOptionalRecord(asOptionalRecord(refusal)?.details)?.category;
   const safeCategory =
     typeof category === "string" && /^[a-z0-9_-]{1,64}$/i.test(category) ? category : undefined;
+  if (safeCategory === "misalignment") {
+    return "Chat stopped as a precaution. Review the findings in chat before continuing.";
+  }
   return `The provider refused this request${safeCategory ? ` (category: ${safeCategory})` : ""}. Revise the request and try again.`;
 }
 
 function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+  const record = asOptionalRecord(payload);
+  if (!record) {
     return false;
   }
-  const record = payload as ErrorPayload;
   if (record.type === "error") {
     return true;
   }
   if (typeof record.request_id === "string" || typeof record.requestId === "string") {
     return true;
   }
-  if ("error" in record) {
-    const err = record.error;
-    if (err && typeof err === "object" && !Array.isArray(err)) {
-      const errRecord = err as ErrorPayload;
-      if (
-        typeof errRecord.message === "string" ||
-        typeof errRecord.type === "string" ||
-        typeof errRecord.code === "string"
-      ) {
-        return true;
-      }
-    }
-    // Flat error payloads: {"error":"insufficient_balance","message":"..."}
-    if (typeof err === "string" && typeof record.message === "string") {
-      return true;
-    }
-  }
-  return false;
+  const error = asOptionalRecord(record.error);
+  return (
+    [error?.message, error?.type, error?.code].some((value) => typeof value === "string") ||
+    (typeof record.error === "string" && typeof record.message === "string")
+  );
 }
 
 export function parseApiErrorPayload(raw?: string): ErrorPayload | null {
@@ -99,24 +90,16 @@ export function parseApiErrorPayload(raw?: string): ErrorPayload | null {
   if (!trimmed) {
     return null;
   }
-  const candidates = [trimmed];
-  if (ERROR_PAYLOAD_PREFIX_RE.test(trimmed)) {
-    candidates.push(trimmed.replace(ERROR_PAYLOAD_PREFIX_RE, "").trim());
+  const candidate = trimmed.replace(ERROR_PAYLOAD_PREFIX_RE, "").trim();
+  if (!candidate.startsWith("{") || !candidate.endsWith("}")) {
+    return null;
   }
-  for (const candidate of candidates) {
-    if (!candidate.startsWith("{") || !candidate.endsWith("}")) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(candidate) as unknown;
-      if (isErrorPayloadObject(parsed)) {
-        return parsed;
-      }
-    } catch {
-      // ignore parse errors
-    }
+  try {
+    const parsed = JSON.parse(candidate) as unknown;
+    return isErrorPayloadObject(parsed) ? parsed : null;
+  } catch {
+    return null;
   }
-  return null;
 }
 
 function extractHttpStatusMatch(
@@ -144,22 +127,11 @@ export function extractProviderWrappedHttpStatus(
 
 /** Extract an explicitly labeled provider HTTP status without matching embedded numeric text. */
 export function extractErrorHttpStatus(raw: string): { code: number; rest: string } | null {
-  const trimmed = raw.trim();
-  const direct =
-    extractLeadingHttpStatus(trimmed) ??
-    extractProviderWrappedHttpStatus(trimmed) ??
-    extractHttpStatusMatch(trimmed.match(LABELED_HTTP_STATUS_RE));
-  if (direct) {
-    return direct;
-  }
-  const unwrapped = trimmed.replace(ERROR_STATUS_ENVELOPE_RE, "");
-  if (unwrapped === trimmed) {
-    return null;
-  }
+  const candidate = raw.trim().replace(ERROR_STATUS_ENVELOPE_RE, "");
   return (
-    extractLeadingHttpStatus(unwrapped) ??
-    extractProviderWrappedHttpStatus(unwrapped) ??
-    extractHttpStatusMatch(unwrapped.match(LABELED_HTTP_STATUS_RE))
+    extractLeadingHttpStatus(candidate) ??
+    extractProviderWrappedHttpStatus(candidate) ??
+    extractHttpStatusMatch(candidate.match(LABELED_HTTP_STATUS_RE))
   );
 }
 
@@ -214,50 +186,43 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
   let httpCode: string | undefined;
   let candidate = trimmed;
 
-  const httpPrefix = extractHttpStatusMatch(candidate.match(/^(\d{3})\s+(.+)$/s));
+  const httpPrefix = extractLeadingHttpStatus(candidate);
   if (httpPrefix) {
     httpCode = String(httpPrefix.code);
     candidate = httpPrefix.rest;
   }
 
-  const payload = parseApiErrorPayload(candidate);
+  let payload = parseApiErrorPayload(candidate);
   if (!payload) {
     return null;
   }
-
-  const requestId =
-    typeof payload.request_id === "string"
-      ? payload.request_id
-      : typeof payload.requestId === "string"
-        ? payload.requestId
-        : undefined;
-
-  const topType = typeof payload.type === "string" ? payload.type : undefined;
-  const topMessage = typeof payload.message === "string" ? payload.message : undefined;
-
-  let errType: string | undefined;
-  let errMessage: string | undefined;
-  if (payload.error && typeof payload.error === "object" && !Array.isArray(payload.error)) {
-    const err = payload.error as Record<string, unknown>;
-    if (typeof err.type === "string") {
-      errType = err.type;
+  // A proxy can wrap the terminal upstream error in its ordered attempt history.
+  for (let depth = 0; depth < 4; depth++) {
+    const attempts: unknown = asOptionalRecord(payload.error)?.attempts;
+    const finalAttempt = Array.isArray(attempts) ? asOptionalRecord(attempts.at(-1)) : undefined;
+    const details = finalAttempt?.details;
+    if (!isErrorPayloadObject(details)) {
+      break;
     }
-    if (typeof err.code === "string" && !errType) {
-      errType = err.code;
-    }
-    if (typeof err.message === "string") {
-      errMessage = err.message;
-    }
-  } else if (typeof payload.error === "string") {
-    // Flat error payloads: {"error":"insufficient_balance","message":"..."}
-    errType = payload.error;
+    payload = details;
   }
 
+  const error = asOptionalRecord(payload.error);
+  const errorCode = readStringField(error, "code");
+  const errorType = readStringField(error, "type");
+  // A nested code also supplies the type when that type is blank or absent.
+  const type = error
+    ? errorCode !== undefined && !errorType
+      ? errorCode
+      : errorType
+    : readStringField(payload, "error");
+  const code = errorCode ?? readStringField(payload, "code");
   return {
     httpCode,
-    type: errType ?? topType,
-    message: errMessage ?? topMessage,
-    requestId,
+    type: type ?? readStringField(payload, "type"),
+    ...(code === undefined ? {} : { code }),
+    message: readStringField(error, "message") ?? readStringField(payload, "message"),
+    requestId: readStringField(payload, "request_id") ?? readStringField(payload, "requestId"),
   };
 }
 
@@ -304,4 +269,66 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
   }
 
   return trimmed.length > 600 ? `${truncateUtf16Safe(trimmed, 600)}…` : trimmed;
+}
+
+const REFUSED_TRANSPORT_CODE_RE = /\beconnrefused\b/i;
+const INTERRUPTED_TRANSPORT_CODE_RE = /\beconnreset\b|\beconnaborted\b|\benetreset\b|\bepipe\b/i;
+const DNS_TRANSPORT_CODE_RE = /\benotfound\b|\beai_again\b/i;
+const UNREACHABLE_TRANSPORT_CODE_RE = /\benetunreach\b|\behostunreach\b|\behostdown\b/i;
+
+export function isKnownTransportErrorCode(value: string): boolean {
+  return [
+    REFUSED_TRANSPORT_CODE_RE,
+    INTERRUPTED_TRANSPORT_CODE_RE,
+    DNS_TRANSPORT_CODE_RE,
+    UNREACHABLE_TRANSPORT_CODE_RE,
+  ].some((pattern) => pattern.exec(value)?.[0] === value);
+}
+
+export function formatTransportErrorCopy(raw: string): string | undefined {
+  if (!raw || isCloudflareOrHtmlErrorPage(raw)) {
+    return undefined;
+  }
+  const lower = normalizeLowercaseStringOrEmpty(raw);
+  if (
+    REFUSED_TRANSPORT_CODE_RE.test(raw) ||
+    lower.includes("connection refused") ||
+    lower.includes("actively refused")
+  ) {
+    return "LLM request failed: connection refused by the provider endpoint.";
+  }
+  if (
+    INTERRUPTED_TRANSPORT_CODE_RE.test(raw) ||
+    lower.includes("socket hang up") ||
+    lower.includes("connection reset") ||
+    lower.includes("connection aborted")
+  ) {
+    return "LLM request failed: network connection was interrupted.";
+  }
+  if (
+    DNS_TRANSPORT_CODE_RE.test(raw) ||
+    lower.includes("getaddrinfo") ||
+    lower.includes("no such host") ||
+    lower.includes("dns")
+  ) {
+    return "LLM request failed: DNS lookup for the provider endpoint failed.";
+  }
+  if (
+    UNREACHABLE_TRANSPORT_CODE_RE.test(raw) ||
+    lower.includes("network is unreachable") ||
+    lower.includes("host is unreachable")
+  ) {
+    return "LLM request failed: the provider endpoint is unreachable from this host.";
+  }
+  if (
+    lower.includes("fetch failed") ||
+    lower.includes("connection error") ||
+    lower.includes("network request failed")
+  ) {
+    return "LLM request failed: network connection error.";
+  }
+  if (raw.includes("网络错误") || raw.includes("网络异常") || raw.includes("连接错误")) {
+    return "LLM request failed: provider reported a network error.";
+  }
+  return undefined;
 }

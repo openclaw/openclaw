@@ -10,7 +10,7 @@ type SidebarSessionSubtitle = {
   narration: string | undefined;
 };
 
-/** Resolves the single subtitle slot without displacing pending attention. */
+/** Resolves the single subtitle slot without displacing visible status. */
 export function resolveSidebarSessionSubtitle(params: {
   session: SidebarRecentSession;
   hasDisplay: boolean;
@@ -24,6 +24,11 @@ export function resolveSidebarSessionSubtitle(params: {
   > | null;
 }): SidebarSessionSubtitle {
   const { session } = params;
+  // Question attention owns the leading hand tooltip; repeating or replacing
+  // it with lower-priority activity here makes the action row needlessly tall.
+  if (session.attention.kind === "question") {
+    return { subtitle: undefined, narration: undefined };
+  }
   const attention = sessionAttentionSubtitle(session.attention);
   const running = session.hasActiveRun;
   const activeRunIds = session.activeRunIds ?? [];
@@ -46,12 +51,10 @@ export function resolveSidebarSessionSubtitle(params: {
     (session.lastReadAt ?? 0) < projectedDigest.updatedAt,
   );
   const observer = running || finalDigestUnread ? projectedDigest?.headline : undefined;
-  // Preview off hides ambient text only. Attention and a critical observer headline
-  // survive the toggle: errors, pending approvals, and the stuck / waiting-on-user
-  // health states are things the operator must act on. isCriticalObserverHealth owns
-  // that classification and the chat pane announces the same two states, so a display
-  // preference must not silence them here — that would turn a visible non-outcome into
-  // a silent one.
+  // Preview off hides ambient text only. Subtitle-owned attention and a critical
+  // observer headline survive the toggle: errors, pending approvals, and the
+  // stuck / waiting-on-user health states still belong beside their session, even
+  // when the operator hides routine activity previews.
   if (!params.showPreview) {
     const critical = isCriticalObserverHealth(projectedDigest?.health) ? observer : undefined;
     return { subtitle: attention ?? critical, narration: undefined };

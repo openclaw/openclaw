@@ -4,9 +4,23 @@ import {
   isArchivePathWithin,
   normalizeArchivePath,
   normalizeArchiveRoot,
+  type BackupSymbolicLink,
 } from "../infra/backup-archive-path-policy.js";
 import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
 import { isRecord } from "../utils.js";
+import { buildBackupArchivePath } from "./backup-shared.js";
+
+export function backupManifestSizeError(bytes: number): Error | undefined {
+  const maxBytes = 1024 * 1024;
+  return bytes > maxBytes
+    ? new Error(`Backup manifest exceeds ${maxBytes} byte limit.`)
+    : undefined;
+}
+
+type BackupManifestSqliteSnapshot = { sourcePath: string } & (
+  | { role: "global" }
+  | { role: "agent"; agentId: string }
+);
 
 export type BackupManifest = {
   schemaVersion: number;
@@ -31,6 +45,9 @@ export type BackupManifest = {
     sourcePath: string;
     archivePath: string;
   }>;
+  /** Capture-time canonical database inventory; absent in legacy archives. */
+  sqliteSnapshots?: BackupManifestSqliteSnapshot[];
+  externalSymbolicLinks?: BackupSymbolicLink[];
   skipped?: Array<{
     kind?: string;
     sourcePath?: string;
@@ -43,7 +60,7 @@ function parseBackupManifestSourcePath(value: unknown, label: string): string {
   if (typeof value !== "string" || value.includes("\0")) {
     throw new Error(`Backup manifest ${label} has an invalid sourcePath.`);
   }
-  const windowsPath = /^[A-Za-z]:[\\/]/u.test(value);
+  const windowsPath = /^(?:[A-Za-z]:[\\/]|\\\\(?![?.]\\))/u.test(value);
   const normalized = windowsPath ? path.win32.normalize(value) : path.posix.normalize(value);
   if ((!windowsPath && !value.startsWith("/")) || normalized !== value) {
     throw new Error(`Backup manifest ${label} sourcePath must be absolute and normalized.`);
@@ -78,7 +95,7 @@ function parseBackupManifestAgentRoots(
       throw new Error("Backup manifest agent root has an invalid or noncanonical agentId.");
     }
     const normalizedSourcePath = parseBackupManifestSourcePath(sourcePath, "agent root");
-    const windowsPath = /^[A-Za-z]:[\\/]/u.test(normalizedSourcePath);
+    const windowsPath = /^(?:[A-Za-z]:[\\/]|\\\\(?![?.]\\))/u.test(normalizedSourcePath);
     const sourcePathKey = windowsPath
       ? normalizeWindowsPathForComparison(normalizedSourcePath)
       : normalizedSourcePath;
@@ -90,6 +107,53 @@ function parseBackupManifestAgentRoots(
     agentRoots.push({ agentId, sourcePath: normalizedSourcePath });
   }
   return agentRoots;
+}
+
+function parseBackupManifestSqliteSnapshots(
+  value: unknown,
+): BackupManifestSqliteSnapshot[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error("Backup manifest sqliteSnapshots must be an array.");
+  }
+  const owners = new Set<string>();
+  const paths = new Set<string>();
+  return value.map((snapshot) => {
+    if (
+      !isRecord(snapshot) ||
+      (snapshot.role !== "global" && snapshot.role !== "agent") ||
+      Object.keys(snapshot).some(
+        (key) =>
+          key !== "sourcePath" &&
+          key !== "role" &&
+          !(snapshot.role === "agent" && key === "agentId"),
+      )
+    ) {
+      throw new Error("Backup manifest contains an invalid SQLite snapshot owner.");
+    }
+    const sourcePath = parseBackupManifestSourcePath(snapshot.sourcePath, "SQLite snapshot");
+    let identity: { role: "global" } | { role: "agent"; agentId: string };
+    if (snapshot.role === "global") {
+      identity = { role: "global" };
+    } else {
+      const agentId = snapshot.agentId;
+      if (typeof agentId !== "string" || !agentId || normalizeAgentId(agentId) !== agentId) {
+        throw new Error("Backup manifest SQLite snapshot has an invalid agentId.");
+      }
+      identity = { role: "agent", agentId };
+    }
+    const owner = identity.role === "global" ? "global" : `agent:${identity.agentId}`;
+    // Archives must restore portably, even when created on a case-sensitive host.
+    const sourceKey = sourcePath.replaceAll("\\", "/").normalize("NFC").toLowerCase();
+    if (owners.has(owner) || paths.has(sourceKey)) {
+      throw new Error("Backup manifest contains duplicate SQLite snapshot ownership.");
+    }
+    owners.add(owner);
+    paths.add(sourceKey);
+    return { sourcePath, ...identity };
+  });
 }
 
 export function parseBackupManifest(raw: string): BackupManifest {
@@ -137,6 +201,23 @@ export function parseBackupManifest(raw: string): BackupManifest {
     });
   }
 
+  const externalSymbolicLinks: BackupSymbolicLink[] = [];
+  if (parsed.externalSymbolicLinks !== undefined) {
+    if (!Array.isArray(parsed.externalSymbolicLinks)) {
+      throw new Error("Backup manifest externalSymbolicLinks must be an array.");
+    }
+    for (const link of parsed.externalSymbolicLinks) {
+      if (
+        !isRecord(link) ||
+        typeof link.entryPath !== "string" ||
+        typeof link.linkpath !== "string"
+      ) {
+        throw new Error("Backup manifest contains an invalid external symbolic link.");
+      }
+      externalSymbolicLinks.push({ entryPath: link.entryPath, linkpath: link.linkpath });
+    }
+  }
+
   return {
     schemaVersion: 1,
     archiveRoot: parsed.archiveRoot,
@@ -158,6 +239,8 @@ export function parseBackupManifest(raw: string): BackupManifest {
         }
       : undefined,
     assets,
+    sqliteSnapshots: parseBackupManifestSqliteSnapshots(parsed.sqliteSnapshots),
+    ...(parsed.externalSymbolicLinks === undefined ? {} : { externalSymbolicLinks }),
   };
 }
 
@@ -170,9 +253,8 @@ export function verifyBackupManifestEntries(manifest: BackupManifest, entries: S
   const archiveRoot = normalizeArchiveRoot(manifest.archiveRoot);
   const manifestEntryPath = path.posix.join(archiveRoot, "manifest.json");
   const normalizedEntries = [...entries];
-  const normalizedEntrySet = new Set(normalizedEntries);
 
-  if (!normalizedEntrySet.has(manifestEntryPath)) {
+  if (!entries.has(manifestEntryPath)) {
     throw new Error(`Archive is missing manifest entry: ${manifestEntryPath}`);
   }
 
@@ -188,12 +270,38 @@ export function verifyBackupManifestEntries(manifest: BackupManifest, entries: S
     if (!isArchivePathWithin(assetArchivePath, payloadRoot)) {
       throw new Error(`Manifest asset path is outside payload root: ${asset.archivePath}`);
     }
-    const exact = normalizedEntrySet.has(assetArchivePath);
-    const nested = normalizedEntries.some(
-      (entry) => entry !== assetArchivePath && isArchivePathWithin(entry, assetArchivePath),
-    );
-    if (!exact && !nested) {
+    if (
+      !entries.has(assetArchivePath) &&
+      !normalizedEntries.some((entry) => isArchivePathWithin(entry, assetArchivePath))
+    ) {
       throw new Error(`Archive is missing payload for manifest asset: ${assetArchivePath}`);
+    }
+  }
+}
+
+/** The capture-time inventory, never today's filesystem, defines required database coverage. */
+export function verifyBackupSqliteCoverage(
+  manifest: BackupManifest,
+  requiredSnapshots: readonly BackupManifestSqliteSnapshot[],
+  verifiedSnapshots: readonly ({ archivePath: string } & (
+    | { role: "global" }
+    | { role: "agent"; agentId: string }
+  ))[],
+): void {
+  for (const required of [...(manifest.sqliteSnapshots ?? []), ...requiredSnapshots]) {
+    const expectedPath = buildBackupArchivePath(manifest.archiveRoot, required.sourcePath);
+    if (
+      !verifiedSnapshots.some(
+        (verified) =>
+          verified.archivePath === expectedPath &&
+          verified.role === required.role &&
+          (required.role === "global" ||
+            (verified.role === "agent" && verified.agentId === required.agentId)),
+      )
+    ) {
+      throw new Error(
+        `Backup lacks verified canonical SQLite coverage for ${required.sourcePath}.`,
+      );
     }
   }
 }

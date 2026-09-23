@@ -83,12 +83,14 @@ describe("Ollama paired-node Gateway inference", () => {
           },
         });
 
+        const gatewayEntryArgs =
+          process.env.OPENCLAW_E2E_USE_PREBUILT_DIST === "1"
+            ? ["dist/entry.js"]
+            : ["--import", "tsx", "src/entry.ts"];
         gateway = spawn(
           process.execPath,
           [
-            "--import",
-            "tsx",
-            "src/entry.ts",
+            ...gatewayEntryArgs,
             "gateway",
             "--port",
             String(gatewayPort),
@@ -272,9 +274,10 @@ describe("Ollama paired-node Gateway inference", () => {
         ]);
         try {
           if (gateway) {
-            await stopChildProcess(gateway, 2_000).catch((error: unknown) => {
-              // Keep live-child state for diagnosis without leaking this fixture's process environment.
-              state.restoreEnv();
+            await stopChildProcess(gateway, 2_000).catch(async (error: unknown) => {
+              // The child keeps its copied env and retained files; join the parent's
+              // state work before restoring selectors for the next fixture.
+              await state.restoreEnv();
               throw error;
             });
           }

@@ -1,5 +1,29 @@
+import { classifyGatewayProbePath } from "../gateway/gateway-http-route-contracts.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
+
+const reservedTabSlugs = new Set([
+  "api",
+  "plugins",
+  "plugin",
+  "focus",
+  "approve",
+  "ask",
+  "share",
+  "j",
+  "v1",
+  "ui",
+  "mcp-app-sandbox",
+  "__openclaw__",
+  "__openclaw",
+  "sessions",
+  "agent",
+  "agents",
+]);
+
+export function isReservedControlUiTabSlug(slug: string): boolean {
+  return reservedTabSlugs.has(slug) || classifyGatewayProbePath(`/${slug}`) !== "outside";
+}
 
 export function validateControlUiNativeRoutePlacement(params: {
   record: PluginRecord;

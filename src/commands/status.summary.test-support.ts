@@ -1,10 +1,43 @@
 /** Shared status-summary cases for session runtime and context-window projection. */
 import { describe, expect, it, vi } from "vitest";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
+import * as stateDatabaseCache from "../state/openclaw-state-db-cache.js";
+import { createSqliteWalHealth } from "./sqlite-wal-health.test-support.js";
 
 type GetStatusSummary = typeof import("../status/summary.js").getStatusSummary;
 type StatusSummaryRuntime = typeof import("../status/summary.runtime.js").statusSummaryRuntime;
 type SessionStore = Record<string, Record<string, unknown>>;
+
+export function registerStatusSummaryWalCases(getSummary: GetStatusSummary): void {
+  it.each([true, false])(
+    "preserves WAL facts with includeSensitive=%s",
+    async (includeSensitive) => {
+      const error = "SYNTHETIC_PRIVATE_STORAGE_DETAIL";
+      const sqliteWal = createSqliteWalHealth({
+        state: "error",
+        walBytes: 1024,
+        databaseBytes: 4096,
+        logFrames: null,
+        checkpointedFrames: null,
+        consecutiveBlocked: 0,
+        error,
+      });
+      const observation = vi
+        .spyOn(stateDatabaseCache, "readOpenClawStateWalHealth")
+        .mockReturnValueOnce(sqliteWal);
+      try {
+        const summary = await getSummary({ includeSensitive });
+        expect(summary.sqliteWal).toEqual({
+          ...sqliteWal,
+          error: includeSensitive ? error : undefined,
+        });
+        expect(JSON.stringify(summary).includes(error)).toBe(includeSensitive);
+      } finally {
+        observation.mockRestore();
+      }
+    },
+  );
+}
 
 export function registerStatusSummarySessionRowCases(params: {
   getStatusSummary: () => ReturnType<GetStatusSummary>;

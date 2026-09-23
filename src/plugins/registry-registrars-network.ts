@@ -10,6 +10,9 @@ import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-poli
 import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findPluginHttpRouteRegistrationConflicts } from "./http-route-overlap.js";
+import { getPluginHttpRouteViews, replacePluginHttpRoutes } from "./http-route-owner.js";
+import { wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
+import { capturePluginLifecycleAuthority, getPluginRecordRegistry } from "./registry-lifecycle.js";
 import {
   resolvePluginRegistrationCapabilities,
   type PluginRegistryState,
@@ -19,6 +22,10 @@ import type {
   PluginHttpRouteRegistration,
   PluginRecord,
 } from "./registry-types.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "./runtime/gateway-request-scope.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import type {
   OpenClawPluginChannelRegistration,
@@ -30,14 +37,28 @@ import type {
 
 const GATEWAY_METHOD_DISPATCH_CONTRACT = "authenticated-request";
 
-function adaptPluginGatewayMethodHandler(handler: GatewayRequestHandler): GatewayRequestHandler {
+function adaptPluginGatewayMethodHandler(
+  handler: GatewayRequestHandler,
+  mayDispatch: boolean,
+): GatewayRequestHandler {
   return async (opts) => {
     let responded = false;
     const respond: RespondFn = (ok, payload, error, meta) => {
       responded = true;
       opts.respond(ok, payload, error, meta);
     };
-    const result = (await handler({ ...opts, respond })) as unknown;
+    const scope = getPluginRuntimeGatewayRequestScope();
+    const invoke = () => handler({ ...opts, respond });
+    // A declared authenticated-request contract composes RPCs with the exact
+    // admitted client, never a synthetic identity or inherited unrelated grant.
+    const result = (
+      scope
+        ? await withPluginRuntimeGatewayRequestScope(
+            { ...scope, gatewayMethodDispatchAllowed: mayDispatch && scope.client != null },
+            invoke,
+          )
+        : await invoke()
+    ) as unknown;
     if (!responded && result !== undefined) {
       respond(true, result);
     }
@@ -47,6 +68,7 @@ function adaptPluginGatewayMethodHandler(handler: GatewayRequestHandler): Gatewa
 export function createNetworkRegistrars(state: PluginRegistryState) {
   const {
     registry,
+    createRegistration,
     coreGatewayMethods,
     pluginsWithChannelRegistrationConflict,
     pushDiagnostic,
@@ -69,7 +91,10 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       reportRegistrationError(record, `gateway method already registered: ${trimmed}`);
       return;
     }
-    const wrappedHandler = adaptPluginGatewayMethodHandler(handler);
+    const wrappedHandler = adaptPluginGatewayMethodHandler(
+      handler,
+      canDispatchGatewayMethods(record),
+    );
     registry.gatewayHandlers[trimmed] = wrappedHandler;
     const normalizedScope = normalizePluginGatewayMethodScope(trimmed, opts?.scope);
     if (normalizedScope.coercedToReservedAdmin) {
@@ -114,13 +139,13 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       );
       return;
     }
-    registry.sessionCatalogs.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      provider: { ...provider, id, label },
-      source: record.source,
-      rootDir: record.rootDir,
-    });
+    const normalizedProvider = { ...provider, id, label };
+    registry.sessionCatalogs.push(
+      createRegistration(record, {
+        provider:
+          state.getNativeCatalogGate(record)?.catalog(normalizedProvider) ?? normalizedProvider,
+      }),
+    );
   };
 
   const describeHttpRouteOwner = (entry: PluginHttpRouteRegistration): string => {
@@ -129,7 +154,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     return `${plugin} (${source})`;
   };
 
-  const canDispatchGatewayMethodsFromHttpRoute = (record: PluginRecord): boolean =>
+  const canDispatchGatewayMethods = (record: PluginRecord): boolean =>
     (record.contracts?.gatewayMethodDispatch ?? []).includes(GATEWAY_METHOD_DISPATCH_CONTRACT);
 
   const registerHttpRoute = (record: PluginRecord, params: OpenClawPluginHttpRouteParams) => {
@@ -147,7 +172,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     }
     const match = params.match ?? "exact";
     const { authOverlap, canonicalMatches } = findPluginHttpRouteRegistrationConflicts(
-      registry.httpRoutes,
+      [...new Set(getPluginHttpRouteViews(registry, record.id).flatMap((view) => view.httpRoutes))],
       {
         path: normalizedPath,
         match,
@@ -163,9 +188,6 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       );
       return;
     }
-    const existingIndex = canonicalMatches[0]
-      ? registry.httpRoutes.indexOf(canonicalMatches[0])
-      : -1;
     const registration = {
       pluginId: record.id,
       path: normalizedPath,
@@ -176,38 +198,24 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       ...(params.gatewayRuntimeScopeSurface
         ? { gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface }
         : {}),
-      ...(canDispatchGatewayMethodsFromHttpRoute(record)
-        ? { gatewayMethodDispatchAllowed: true }
-        : {}),
+      ...(canDispatchGatewayMethods(record) ? { gatewayMethodDispatchAllowed: true } : {}),
       ...(params.nodeCapability ? { nodeCapability: { ...params.nodeCapability } } : {}),
       source: record.source,
     } satisfies PluginHttpRouteRegistration;
-    if (existingIndex >= 0) {
-      const existing = registry.httpRoutes[existingIndex];
-      if (!existing) {
-        return;
-      }
-      const foreignOwner = canonicalMatches.find((route) => route.pluginId !== record.id);
-      if (foreignOwner) {
-        reportRegistrationError(
-          record,
-          params.replaceExisting
-            ? `http route replacement rejected: ${normalizedPath} (${match}) owned by ${describeHttpRouteOwner(foreignOwner)}`
-            : `http route already registered: ${normalizedPath} (${match}) by ${describeHttpRouteOwner(foreignOwner)}`,
-        );
-        return;
-      }
-      registry.httpRoutes[existingIndex] = registration;
-      for (const route of canonicalMatches.toReversed()) {
-        const index = registry.httpRoutes.indexOf(route);
-        if (index >= 0 && index !== existingIndex) {
-          registry.httpRoutes.splice(index, 1);
-        }
-      }
+    const foreignOwner = canonicalMatches.find((route) => route.pluginId !== record.id);
+    if (foreignOwner) {
+      reportRegistrationError(
+        record,
+        params.replaceExisting
+          ? `http route replacement rejected: ${normalizedPath} (${match}) owned by ${describeHttpRouteOwner(foreignOwner)}`
+          : `http route already registered: ${normalizedPath} (${match}) by ${describeHttpRouteOwner(foreignOwner)}`,
+      );
       return;
     }
-    record.httpRoutes += 1;
-    registry.httpRoutes.push(registration);
+    if (!canonicalMatches.length) {
+      record.httpRoutes += 1;
+    }
+    replacePluginHttpRoutes(registry, registration, canonicalMatches, true);
   };
 
   const registerHostedMediaResolver = (
@@ -218,13 +226,11 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       reportRegistrationError(record, "hosted media resolver registration missing resolver");
       return;
     }
-    registry.hostedMediaResolvers.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      resolver,
-      source: record.source,
-      rootDir: record.rootDir,
-    });
+    registry.hostedMediaResolvers.push(
+      createRegistration(record, {
+        resolver,
+      }),
+    );
   };
 
   const registerMcpServerConnectionResolver = (
@@ -242,16 +248,12 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     const existingIndex = registry.mcpServerConnectionResolvers.findIndex(
       (entry) => entry.resolver.serverName === serverName,
     );
-    const registration = {
-      pluginId: record.id,
-      pluginName: record.name,
+    const registration = createRegistration(record, {
       resolver: {
         serverName,
         resolve: resolver.resolve,
       },
-      source: record.source,
-      rootDir: record.rootDir,
-    };
+    });
     if (existingIndex >= 0) {
       const existing = registry.mcpServerConnectionResolvers[existingIndex];
       // Resolver ownership is an authorization boundary: connection identity
@@ -298,75 +300,65 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       return;
     }
     const id = plugin.id;
-    const existingRuntime = registry.channels.find((entry) => entry.plugin.id === id);
-    if (registrationCapabilities.runtimeChannel && existingRuntime) {
-      if (existingRuntime.pluginId === record.id) {
-        existingRuntime.plugin = plugin;
-        existingRuntime.pluginName = record.name;
-        existingRuntime.resolveChannelRuntime = resolveChannelRuntime;
-        existingRuntime.origin = record.origin;
-        existingRuntime.source = record.source;
-        existingRuntime.rootDir = record.rootDir;
-        const existingSetup = registry.channelSetups.find((entry) => entry.plugin.id === id);
-        if (existingSetup) {
-          existingSetup.plugin = plugin;
-          existingSetup.pluginName = record.name;
-          existingSetup.origin = record.origin;
-          existingSetup.source = record.source;
-          existingSetup.enabled = record.enabled;
-          existingSetup.rootDir = record.rootDir;
-        }
-        return;
-      }
+    const existingRuntime = registrationCapabilities.runtimeChannel
+      ? registry.channels.find((entry) => entry.plugin.id === id)
+      : undefined;
+    const existingSetup = registry.channelSetups.find((entry) => entry.plugin.id === id);
+    const existing = existingRuntime ?? existingSetup;
+    if (existing && existing.pluginId !== record.id) {
       reportRegistrationError(
         record,
-        `channel already registered: ${id} (${existingRuntime.pluginId})`,
+        `${existingRuntime ? "channel" : "channel setup"} already registered: ${id} (${existing.pluginId})`,
       );
       pluginsWithChannelRegistrationConflict.add(record.id);
       return;
     }
-    const existingSetup = registry.channelSetups.find((entry) => entry.plugin.id === id);
-    if (existingSetup) {
-      if (existingSetup.pluginId === record.id) {
-        existingSetup.plugin = plugin;
-        existingSetup.pluginName = record.name;
-        existingSetup.origin = record.origin;
-        existingSetup.source = record.source;
-        existingSetup.enabled = record.enabled;
-        existingSetup.rootDir = record.rootDir;
-        return;
+    const metadata = {
+      // Normalization copied the input; teardown must retain its registration owner.
+      plugin: wrapCurrentPluginInstance(plugin),
+      pluginName: record.name,
+      origin: record.origin,
+      source: record.source,
+      rootDir: record.rootDir,
+    };
+    // Bind the selected registration; unchanged instances can move to a new registry.
+    const captureReadAuthority = () => {
+      const currentRegistry = getPluginRecordRegistry(registry, record);
+      const entry = currentRegistry.channels.find((candidate) => candidate.plugin.id === id);
+      const ownerCurrent = capturePluginLifecycleAuthority(currentRegistry, record, {
+        scopedRuntime: true,
+      });
+      const isCurrent = () =>
+        ownerCurrent?.() === true &&
+        (record.origin === "bundled" || record.trustedOfficialInstall === true) &&
+        entry !== undefined &&
+        getPluginRecordRegistry(registry, record).channels.includes(entry) &&
+        entry.pluginId === record.id &&
+        entry.plugin === metadata.plugin &&
+        entry.captureReadAuthority === captureReadAuthority;
+      return isCurrent() ? isCurrent : undefined;
+    };
+    if (existing) {
+      if (existingRuntime) {
+        Object.assign(existingRuntime, metadata, { resolveChannelRuntime, captureReadAuthority });
       }
-      reportRegistrationError(
-        record,
-        `channel setup already registered: ${id} (${existingSetup.pluginId})`,
-      );
-      pluginsWithChannelRegistrationConflict.add(record.id);
+      if (existingSetup) {
+        Object.assign(existingSetup, metadata, { enabled: record.enabled });
+      }
       return;
     }
     if (!record.channelIds.includes(id)) {
       record.channelIds.push(id);
     }
-    registry.channelSetups.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      plugin,
-      origin: record.origin,
-      source: record.source,
-      enabled: record.enabled,
-      rootDir: record.rootDir,
-    });
-    if (!registrationCapabilities.runtimeChannel) {
-      return;
+    registry.channelSetups.push({ ...metadata, pluginId: record.id, enabled: record.enabled });
+    if (registrationCapabilities.runtimeChannel) {
+      registry.channels.push({
+        ...metadata,
+        pluginId: record.id,
+        resolveChannelRuntime,
+        captureReadAuthority,
+      });
     }
-    registry.channels.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      plugin,
-      resolveChannelRuntime,
-      origin: record.origin,
-      source: record.source,
-      rootDir: record.rootDir,
-    });
   };
 
   return {

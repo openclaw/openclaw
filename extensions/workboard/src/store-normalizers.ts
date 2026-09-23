@@ -96,8 +96,20 @@ export function normalizeBoardMetadata(
     1000,
     "board description",
   );
-  const icon = normalizeBoundedString(input.icon, fallback?.icon, 40, "board icon");
-  const color = normalizeBoundedString(input.color, fallback?.color, 40, "board color");
+  const clearAppearance = input.clearAppearance === undefined ? [] : input.clearAppearance;
+  if (
+    !Array.isArray(clearAppearance) ||
+    clearAppearance.some((field) => field !== "icon" && field !== "color")
+  ) {
+    throw new Error("clearAppearance must be an array containing only icon or color.");
+  }
+  // Legacy empty/null inputs preserve appearance. Explicit clears take precedence.
+  const icon = clearAppearance.includes("icon")
+    ? undefined
+    : normalizeBoundedString(input.icon, fallback?.icon, 40, "board icon");
+  const color = clearAppearance.includes("color")
+    ? undefined
+    : normalizeBoundedString(input.color, fallback?.color, 40, "board color");
   let automationJobId = fallback?.automationJobId;
   if (Object.hasOwn(input, "automationJobId")) {
     automationJobId = normalizeOptionalString(input.automationJobId);

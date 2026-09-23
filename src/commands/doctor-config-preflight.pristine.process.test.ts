@@ -1,22 +1,41 @@
 // Process regressions for pristine startup eligibility and deferred config observation.
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
-import { afterAll, describe, expect, it } from "vitest";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import {
+  createBuiltRuntime,
   createSourceRuntime,
   runIsolatedModuleScript,
 } from "./doctor-config-preflight.process.test-support.js";
+import { doctorConfigRuntimeEntrypoints } from "./doctor-config-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 
 describe("gateway startup-migration refusal", () => {
   it("skips state-only checkpoint work when config and state remain absent", async () => {
     const root = await fs.promises.realpath(tempDirs.make("openclaw-configless-checkpoint-"));
-    const runtimeRoot = createSourceRuntime(root);
+    const preparedPreflightUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.preflight);
+    const compiled = preparedPreflightUrl.pathname.endsWith(".js");
+    const runtimeRoot = compiled
+      ? createBuiltRuntime(root, fileURLToPath(new URL("../", preparedPreflightUrl)))
+      : createSourceRuntime(root);
+    // Both observers share the prepared graph; package discovery still belongs to this fixture.
+    const runtimeUrl = (entry: Parameters<typeof resolveRuntimeWorkerUrl>[0]) =>
+      resolveRuntimeWorkerUrl({
+        ...entry,
+        ...(compiled
+          ? { root: runtimeRoot }
+          : {
+              currentModuleUrl: pathToFileURL(
+                path.join(runtimeRoot, "src", "commands", "doctor-config-runtime.test-support.ts"),
+              ).href,
+            }),
+      }).href;
     const stateDir = path.join(root, "state");
     const configPath = path.join(root, "openclaw.json");
     const env: NodeJS.ProcessEnv = {
@@ -36,12 +55,8 @@ describe("gateway startup-migration refusal", () => {
     delete env.VITEST_POOL_ID;
     delete env.VITEST_WORKER_ID;
 
-    const preflightUrl = pathToFileURL(
-      path.join(runtimeRoot, "src", "commands", "doctor-config-preflight.ts"),
-    ).href;
-    const checkpointUrl = pathToFileURL(
-      path.join(runtimeRoot, "src", "infra", "startup-migration-checkpoint.ts"),
-    ).href;
+    const preflightUrl = runtimeUrl(doctorConfigRuntimeEntrypoints.preflight);
+    const checkpointUrl = runtimeUrl(doctorConfigRuntimeEntrypoints.checkpoint);
     const script = `
       const steps = [];
       const { runDoctorConfigPreflight } = await import(${JSON.stringify(preflightUrl)});
@@ -90,6 +105,34 @@ describe("gateway startup-migration refusal", () => {
 });
 
 describe("CLI pristine startup after early config observation", () => {
+  let runtimeRoot: string;
+  let runtimeTempDir: string;
+  let processEntrypointsUrl: string | null = null;
+
+  beforeAll(() => {
+    // Source CLI hooks and prepared child workers share this fixture's private package assets.
+    const root = fs.realpathSync(tempDirs.make("openclaw-cli-pristine-runtime-"));
+    const preparedPreflightUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.preflight);
+    const compiled = preparedPreflightUrl.pathname.endsWith(".js");
+    runtimeRoot = compiled
+      ? createBuiltRuntime(root, fileURLToPath(new URL("../", preparedPreflightUrl)))
+      : createSourceRuntime(root);
+    processEntrypointsUrl = compiled
+      ? pathToFileURL(
+          path.join(
+            runtimeRoot,
+            "dist",
+            "legacy-finalizer",
+            "src",
+            "infra",
+            "runtime-process-entrypoints.js",
+          ),
+        ).href
+      : null;
+    runtimeTempDir = path.join(root, "tmp");
+    fs.mkdirSync(runtimeTempDir);
+  });
+
   it.each([
     { name: "explicit Gateway target", explicit: true, existingState: false, stateful: false },
     { name: "configured Gateway target", explicit: false, existingState: false, stateful: false },
@@ -99,7 +142,6 @@ describe("CLI pristine startup after early config observation", () => {
     "preserves the migration decision for $name",
     async ({ explicit, existingState, stateful }) => {
       const root = fs.realpathSync(tempDirs.make("openclaw-cli-pristine-observation-"));
-      const runtimeRoot = createSourceRuntime(root);
       const stateDir = path.join(root, "state");
       const configPath = path.join(root, "openclaw.json");
       const timelinePath = path.join(root, "timeline.jsonl");
@@ -124,7 +166,9 @@ describe("CLI pristine startup after early config observation", () => {
         XDG_DATA_HOME: path.join(root, "xdg-data"),
         XDG_STATE_HOME: path.join(root, "xdg-state"),
         XDG_CACHE_HOME: path.join(root, "cache"),
-        TMPDIR: root,
+        TMPDIR: runtimeTempDir,
+        TMP: runtimeTempDir,
+        TEMP: runtimeTempDir,
         NO_COLOR: "1",
       };
       delete env.NODE_ENV;
@@ -180,7 +224,12 @@ describe("CLI pristine startup after early config observation", () => {
             return { shortCircuit: true,
               url: "data:text/javascript," + encodeURIComponent(${JSON.stringify(rpcSource)}) };
           }
-          return nextResolve(specifier, context);
+          const resolved = nextResolve(specifier, context);
+          if (${JSON.stringify(processEntrypointsUrl)} &&
+              resolved.url === ${JSON.stringify(sourceUrl("infra/runtime-process-entrypoints.ts"))}) {
+            return { ...resolved, url: ${JSON.stringify(processEntrypointsUrl)} };
+          }
+          return resolved;
         },
       });
       if (${existingState}) {

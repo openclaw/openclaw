@@ -85,6 +85,8 @@ export function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch)
     }
     if (typeof patch.timeoutSeconds === "number") {
       next.timeoutSeconds = patch.timeoutSeconds;
+    } else if (patch.timeoutSeconds === null) {
+      delete next.timeoutSeconds;
     }
     if (typeof patch.noOutputTimeoutSeconds === "number") {
       next.noOutputTimeoutSeconds = patch.noOutputTimeoutSeconds;
@@ -102,6 +104,8 @@ export function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch)
     }
     if (typeof patch.timeoutSeconds === "number") {
       next.timeoutSeconds = patch.timeoutSeconds;
+    } else if (patch.timeoutSeconds === null) {
+      delete next.timeoutSeconds;
     }
     if (typeof patch.toolBudget === "number") {
       next.toolBudget = patch.toolBudget;
@@ -138,6 +142,8 @@ export function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch)
   }
   if (typeof patch.timeoutSeconds === "number") {
     next.timeoutSeconds = patch.timeoutSeconds;
+  } else if (patch.timeoutSeconds === null) {
+    delete next.timeoutSeconds;
   }
   if (typeof patch.lightContext === "boolean") {
     next.lightContext = patch.lightContext;
@@ -171,7 +177,7 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
       ...(patch.cwd !== undefined ? { cwd: patch.cwd } : {}),
       ...(patch.env !== undefined ? { env: patch.env } : {}),
       ...(patch.input !== undefined ? { input: patch.input } : {}),
-      ...(patch.timeoutSeconds !== undefined ? { timeoutSeconds: patch.timeoutSeconds } : {}),
+      ...(typeof patch.timeoutSeconds === "number" ? { timeoutSeconds: patch.timeoutSeconds } : {}),
       ...(patch.noOutputTimeoutSeconds !== undefined
         ? { noOutputTimeoutSeconds: patch.noOutputTimeoutSeconds }
         : {}),
@@ -188,7 +194,7 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     const next: Extract<CronPayload, { kind: "script" }> = {
       kind: "script",
       script: patch.script,
-      ...(patch.timeoutSeconds !== undefined ? { timeoutSeconds: patch.timeoutSeconds } : {}),
+      ...(typeof patch.timeoutSeconds === "number" ? { timeoutSeconds: patch.timeoutSeconds } : {}),
       ...(patch.toolBudget !== undefined ? { toolBudget: patch.toolBudget } : {}),
     };
     applyToolsAllowPatch(next, patch);
@@ -209,7 +215,7 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     ...(typeof patch.model === "string" ? { model: patch.model } : {}),
     ...(Array.isArray(patch.fallbacks) ? { fallbacks: patch.fallbacks } : {}),
     ...(typeof patch.thinking === "string" ? { thinking: patch.thinking } : {}),
-    ...(patch.timeoutSeconds !== undefined ? { timeoutSeconds: patch.timeoutSeconds } : {}),
+    ...(typeof patch.timeoutSeconds === "number" ? { timeoutSeconds: patch.timeoutSeconds } : {}),
     ...(patch.lightContext !== undefined ? { lightContext: patch.lightContext } : {}),
     ...(patch.allowUnsafeExternalContent !== undefined
       ? { allowUnsafeExternalContent: patch.allowUnsafeExternalContent }

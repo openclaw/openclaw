@@ -260,6 +260,7 @@ class WearSessionScopeTest {
         selectedSession = previousSession,
         selectedModelRef = "openai/old",
         models = listOf(WearModel("openai/old", "Old")),
+        modelCatalogRefreshFailed = true,
         messages = listOf(WearChatMessage("m1", "assistant", "old reply", 1)),
         streamText = "old stream",
         activeRunId = "run-old",
@@ -274,6 +275,7 @@ class WearSessionScopeTest {
     assertNull(switched.activeRunId)
     assertEquals(emptyList<WearSession>(), switched.sessions)
     assertEquals(emptyList<WearModel>(), switched.models)
+    assertFalse(switched.modelCatalogRefreshFailed)
     assertEquals(emptyList<WearChatMessage>(), switched.messages)
   }
 
@@ -293,6 +295,7 @@ class WearSessionScopeTest {
         activeAgentId = "main",
         selectedModelRef = "openai/old",
         models = listOf(WearModel("openai/new", "New")),
+        modelCatalogRefreshFailed = true,
         messages = listOf(WearChatMessage("m1", "assistant", "old reply", 1)),
         streamText = "old stream",
         activeRunId = "run-old",
@@ -303,6 +306,7 @@ class WearSessionScopeTest {
     assertEquals(nextSession, switched.selectedSession)
     assertEquals("openai/new", switched.selectedModelRef)
     assertEquals("main", switched.activeAgentId)
+    assertFalse(switched.modelCatalogRefreshFailed)
     assertEquals(emptyList<WearModel>(), switched.models)
     assertEquals(emptyList<WearChatMessage>(), switched.messages)
     assertNull(switched.streamText)
@@ -325,6 +329,9 @@ class WearSessionScopeTest {
         sessions = listOf(selectedSession),
         selectedSession = selectedSession,
         selectedModelRef = "openai/model-59",
+        modelCatalogRefreshFailed = true,
+        modelSearchQuery = "model",
+        modelSearchResults = listOf(WearModel("openai/old-search", "Old search")),
         models =
           listOf(
             WearModel("openai/model-0", "Model 0"),
@@ -335,6 +342,9 @@ class WearSessionScopeTest {
     val switched = state.switchModelContext("openai/model-0")
 
     assertEquals("openai/model-0", switched.selectedModelRef)
+    assertFalse(switched.modelCatalogRefreshFailed)
+    assertNull(switched.modelSearchQuery)
+    assertTrue(switched.modelSearchResults.isEmpty())
     assertEquals("openai/model-0", switched.selectedSession?.modelRef)
     assertEquals("openai/model-0", switched.sessions.single().modelRef)
     assertEquals(emptyList<WearModel>(), switched.models)
@@ -491,6 +501,25 @@ class WearSessionScopeTest {
     assertEquals(current, transition.state)
     assertFalse(transition.reloadHistory)
     assertNull(transition.observedMessage)
+  }
+
+  @Test
+  fun anEmptyAnonymousCanonicalStreamStillNeedsIdentityReconciliation() {
+    val current = activeTerminalState(activeRunId = null).copy(streamText = "")
+    val transition = reduceWearTerminalChatEvent(current, terminalEvent("error", "older-run"))
+    assertEquals(current, transition.state)
+    assertTrue(transition.reloadHistory)
+    assertNull(transition.state.replyTerminal)
+  }
+
+  @Test
+  fun aCompletedOutcomeDoesNotOwnLaterTerminalOnlyRuns() {
+    val completed = reduceWearTerminalChatEvent(activeTerminalState(), terminalEvent("aborted", "active-run")).state
+    // Stale traffic is fenced by the wire sequence/epoch owner, not by a completed run ID.
+    val later = reduceWearTerminalChatEvent(completed, terminalEvent("error", "later-run"))
+    assertEquals(WearReplyOutcome.Error, later.state.replyTerminal?.outcome)
+    assertEquals("later-run", later.state.replyTerminal?.runId)
+    assertTrue(later.reloadHistory)
   }
 
   private fun assertUncertainTerminalPreservesReplyAndReloadsHistory(

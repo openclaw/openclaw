@@ -183,7 +183,10 @@ export function buildSlackNativeDataAccessibilityText(
     const isNativeData = hasSlackNativeDataBlock([block]);
     const rendered =
       renderSlackNativeDataPlainTextBlock(block) ??
-      renderSlackBlockFallbackText(block, { nativeDataFormat: "plain" }) ??
+      renderSlackBlockFallbackText(block, {
+        nativeDataFormat: "plain",
+        includeSelectOptions: true,
+      }) ??
       (isNativeData ? SLACK_MALFORMED_NATIVE_DATA_FALLBACK : undefined);
     if (!rendered || (isNativeData && consumeFromBase(rendered))) {
       continue;

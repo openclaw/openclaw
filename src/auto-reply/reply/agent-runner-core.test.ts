@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { resolveReplyCompletion } from "../../agents/reply-completion.js";
+import { resolveFallbackTransition } from "../fallback-state.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import {
+  buildSilentFallbackFailurePayload,
   resolveAdmittedRunSessionFile,
   resolveReplyRunDeliveryContext,
 } from "./agent-runner-core.js";
@@ -58,5 +62,52 @@ describe("resolveReplyRunDeliveryContext", () => {
       accountId: "work",
       threadId,
     });
+  });
+});
+
+describe("buildSilentFallbackFailurePayload", () => {
+  const selected = { provider: "openai", model: "primary-model" };
+  const other = { provider: "anthropic", model: "fallback-model" };
+  const transition = resolveFallbackTransition({
+    selectedProvider: selected.provider,
+    selectedModel: selected.model,
+    activeProvider: other.provider,
+    activeModel: other.model,
+    attempts: [],
+  });
+  const base = {
+    fallbackTransition: transition,
+    fallbackFailureKnown: true,
+    fallbackAttempts: [],
+    cfg: {},
+    completion: resolveReplyCompletion("required", "empty"),
+  };
+
+  it("surfaces both model identities when a required fallback reply is missing", () => {
+    const payload = buildSilentFallbackFailurePayload({
+      ...base,
+      cfg: { agents: { defaults: { silentReply: { group: "allow" } } } },
+    });
+
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toContain(transition.selectedModelRef);
+    expect(payload?.text).toContain(transition.activeModelRef);
+    expect(getReplyPayloadMetadata(payload ?? {})?.deliverDespiteSourceReplySuppression).toBe(true);
+  });
+
+  it.each([
+    resolveReplyCompletion("optional", "empty"),
+    ...(["ready", "delivered", "pending", "blocked"] as const).map((evidence) =>
+      resolveReplyCompletion("required", evidence),
+    ),
+  ])("does not synthesize a failure for $expectation/$outcome", (completion) => {
+    expect(buildSilentFallbackFailurePayload({ ...base, completion })).toBeUndefined();
+  });
+
+  it.each([
+    { fallbackFailureKnown: false },
+    { fallbackTransition: { ...transition, fallbackActive: false } },
+  ])("requires an active failed fallback: %j", (fallback) => {
+    expect(buildSilentFallbackFailurePayload({ ...base, ...fallback })).toBeUndefined();
   });
 });

@@ -6,7 +6,9 @@ import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,7 +18,6 @@ import {
 } from "./dreaming-state.js";
 import { listMemoryEntryOrigins, recordMemoryEntryOrigins } from "./memory-entry-origins.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
-import { buildPromotionRecallAnnotations } from "./short-term-promotion-metadata.js";
 import {
   applyShortTermPromotions,
   rankShortTermPromotionCandidates,
@@ -44,7 +45,9 @@ describe("memory forget", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     resetPluginStateStoreForTests();
     vi.unstubAllEnvs();
@@ -60,12 +63,18 @@ describe("memory forget", () => {
   }
 
   it.each([
-    { action: "merged", failOrigins: false },
-    { action: "superseded", failOrigins: false },
-    { action: "merged", failOrigins: true },
+    { action: "merged", failOrigins: false, fileFailure: "none" },
+    { action: "superseded", failOrigins: false, fileFailure: "none" },
+    { action: "merged", failOrigins: true, fileFailure: "none" },
+    { action: "merged", failOrigins: false, fileFailure: "close" },
+    { action: "merged", failOrigins: false, fileFailure: "close-permission" },
+    { action: "merged", failOrigins: false, fileFailure: "rename-unchanged" },
+    { action: "merged", failOrigins: false, fileFailure: "rename-changed" },
+    { action: "merged", failOrigins: false, fileFailure: "rename-unreadable" },
+    { action: "merged", failOrigins: false, fileFailure: "rename-published" },
   ] as const)(
-    "preserves workspace deletion lineage for $action (origin failure: $failOrigins)",
-    async ({ action, failOrigins }) => {
+    "preserves workspace deletion lineage for $action (origin failure: $failOrigins, file failure: $fileFailure)",
+    async ({ action, failOrigins, fileFailure }) => {
       cfg = {
         agents: {
           defaults: { workspace: workspaceDir },
@@ -149,20 +158,11 @@ describe("memory forget", () => {
       });
       const promoted = candidates[0];
       expect(promoted).toBeDefined();
-      const resultEntry = `- ${promoted!.snippet} Source: ${promoted!.path}#L1-L1 ${buildPromotionRecallAnnotations(promoted!)}`;
       const output = JSON.stringify({
-        memory: `# Long-Term Memory\n${resultEntry}\n`,
-        operations: [
-          { candidateKey: promoted!.key, action, resultEntry, priorEntries: [priorEntry] },
-        ],
+        operations: [{ candidateKey: promoted!.key, action, priorEntries: [priorEntry] }],
       });
       const subagent = {
-        run: vi.fn(async () => ({ runId: "shared-consolidation" })),
-        waitForRun: vi.fn(async () => ({ status: "ok" })),
-        getSessionMessages: vi.fn(async () => ({
-          messages: [{ role: "assistant", content: output }],
-        })),
-        deleteSession: vi.fn(async () => undefined),
+        complete: vi.fn(async () => ({ text: output })),
       };
 
       if (failOrigins) {
@@ -171,6 +171,66 @@ describe("memory forget", () => {
           WHEN NEW.entry_key != 'retired-entry'
           BEGIN SELECT RAISE(ABORT, 'injected origin write failure'); END;
         `);
+      }
+      let renamed = false;
+      let fileFaultInjected = false;
+      let memoryRenameCalls = 0;
+      let readbackBlocked = false;
+      const fileError = Object.assign(
+        new Error("synthetic atomic memory failure"),
+        fileFailure === "close" ? {} : { code: "EPERM", errno: -1 },
+      );
+      const externalMemory = "# Memory\n\nKeep this newer external edit.\n";
+      if (fileFailure !== "none") {
+        const rename = fs.rename.bind(fs);
+        const open = fs.open.bind(fs);
+        const readFile = fs.readFile.bind(fs);
+        vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+          if (readbackBlocked && args[0] === memoryPath) {
+            throw Object.assign(new Error("synthetic unavailable rename readback"), {
+              code: "EIO",
+            });
+          }
+          return await readFile(...args);
+        });
+        vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+          if (String(to) === memoryPath) {
+            memoryRenameCalls += 1;
+            if (!fileFaultInjected && fileFailure.startsWith("rename-")) {
+              fileFaultInjected = true;
+              if (fileFailure === "rename-published") {
+                await rename(from, to);
+                renamed = true;
+              } else if (fileFailure === "rename-changed") {
+                await fs.writeFile(memoryPath, externalMemory);
+              } else if (fileFailure === "rename-unreadable") {
+                readbackBlocked = true;
+              }
+              throw fileError;
+            }
+            await rename(from, to);
+            renamed = true;
+          } else {
+            await rename(from, to);
+          }
+        });
+        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+          const handle = await open(...args);
+          if (
+            fileFailure.startsWith("close") &&
+            path.basename(String(args[0])).startsWith("MEMORY.md.promotion.")
+          ) {
+            const close = handle.close.bind(handle);
+            handle.close = async () => {
+              await close();
+              if (renamed && !fileFaultInjected) {
+                fileFaultInjected = true;
+                throw fileError;
+              }
+            };
+          }
+          return handle;
+        });
       }
       const application = applyShortTermPromotions({
         agentId: "alpha",
@@ -182,6 +242,82 @@ describe("memory forget", () => {
         nowMs,
         ...thresholds,
       });
+      if (fileFailure === "rename-unchanged") {
+        const applied = await application;
+        expect(applied.applied).toBe(1);
+        expect(memoryRenameCalls).toBe(2);
+        const memory = await fs.readFile(memoryPath, "utf8");
+        expect(memory).toContain("openclaw-memory-promotion:retired-entry");
+        expect(memory).toContain(`openclaw-memory-promotion:${promoted!.key}`);
+        expect(listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] })).toEqual(
+          [],
+        );
+        await forgetMemoryEntries({ cfg, agentId: "gamma", sessionIds: ["private-session"] });
+        expect(await fs.readFile(memoryPath, "utf8")).toContain(
+          `openclaw-memory-promotion:${promoted!.key}`,
+        );
+        return;
+      }
+      if (fileFailure !== "none") {
+        const failed = await application.then(
+          () => {
+            throw new Error("expected the atomic publication failure");
+          },
+          (error: unknown) => error,
+        );
+        readbackBlocked = false;
+        expect(failed).toMatchObject({
+          message: fileError.message,
+          name: fileError.name,
+          cause: fileError,
+        });
+        if (fileFailure !== "close") {
+          expect(failed).toMatchObject({ code: "EPERM", cause: { errno: -1 } });
+        }
+        expect(fileFaultInjected).toBe(true);
+        expect(memoryRenameCalls).toBe(1);
+        const published = fileFailure.startsWith("close") || fileFailure === "rename-published";
+        expect(renamed).toBe(published);
+        if (published) {
+          expect(await fs.readFile(memoryPath, "utf8")).toContain(
+            `openclaw-memory-promotion:${promoted!.key}`,
+          );
+        } else {
+          expect(await fs.readFile(memoryPath, "utf8")).toBe(
+            fileFailure === "rename-changed" ? externalMemory : previousMemory,
+          );
+        }
+        expect(
+          (await readShortTermRecallEntries({ workspaceDir, nowMs }))[0]?.promotedAt,
+        ).toBeUndefined();
+        expect(
+          (
+            await readMemoryCoreWorkspaceEntries<{ content: string }>({
+              namespace: DREAMING_MEMORY_BACKUP_NAMESPACE,
+              workspaceDir,
+            })
+          ).map(({ value }) => value.content),
+        ).toEqual([previousMemory]);
+        expect(
+          listMemoryEntryOrigins({ agentId: "gamma", entryKeys: ["retired-entry"] }),
+        ).toHaveLength(1);
+        expect(
+          listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] }),
+        ).toMatchObject([{ entryKey: promoted!.key, sessionId: "private-session" }]);
+        const report = await forgetMemoryEntries({
+          cfg,
+          agentId: "gamma",
+          sessionIds: ["private-session"],
+        });
+        expect(report.entryKeys).toContain(promoted!.key);
+        expect(await fs.readFile(memoryPath, "utf8")).not.toContain(
+          `openclaw-memory-promotion:${promoted!.key}`,
+        );
+        expect(listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] })).toEqual(
+          [],
+        );
+        return;
+      }
       if (failOrigins) {
         await expect(application).rejects.toThrow("injected origin write failure");
         await expect(fs.readFile(memoryPath, "utf8")).resolves.toBe(previousMemory);
@@ -211,6 +347,7 @@ describe("memory forget", () => {
       ).toBeUndefined();
 
       expect(await fs.readFile(diaryPath, "utf8")).toContain(snippet);
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       resetPluginStateStoreForTests();
@@ -385,6 +522,7 @@ describe("memory forget", () => {
       candidates,
       nowMs,
       memoryFileMaxChars: 450,
+      maxPriorEntryLossFraction: 1,
       ...thresholds,
     });
     expect(promoted.appended).toBe(1);

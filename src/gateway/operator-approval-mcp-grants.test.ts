@@ -1,7 +1,6 @@
-import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { buildCodexUserMcpServersThreadConfigPatch } from "../agents/cli-runner/bundle-mcp-codex.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { buildCodexUserMcpServersThreadConfigPatchForRuntime } from "../agents/cli-runner/bundle-mcp-codex.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -15,13 +14,22 @@ import {
 } from "../infra/agent-run-registry.js";
 import { loadExecApprovalsReadOnly } from "../infra/exec-approvals-store.js";
 import { registerMcpToolApprovalBinding } from "../infra/mcp-tool-approval-binding.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
 import { createPluginApprovalHandlers } from "./server-methods/plugin-approval.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
+import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
+import { createTestRuntimeSecretsActivator } from "./server-startup-config.test-support.js";
 
-const dirs = useAutoCleanupTempDirTracker(afterEach);
 const auxiliaries: ReturnType<typeof createGatewayAuxHandlers>[] = [];
+let fixture: OpenClawTestState | undefined;
 const cfg: OpenClawConfig = {
   agents: { list: [{ id: "main" }, { id: "other" }] },
   mcp: { servers: { "project.docs": { command: "docs-mcp" } } },
@@ -30,10 +38,12 @@ const cfg: OpenClawConfig = {
 function gateway() {
   const aux = createGatewayAuxHandlers({
     log: {},
-    activateRuntimeSecrets: async () => {
-      throw new Error("unexpected secrets reload");
-    },
-    sharedGatewaySessionGenerationState: { current: undefined, required: null },
+    getNativeApprovalRouteCoordinator: () => undefined,
+    activateRuntimeSecrets: createTestRuntimeSecretsActivator(),
+    sharedGatewaySessionGenerationState: new SharedGatewaySessionGenerationState({
+      current: undefined,
+      required: null,
+    }),
     resolveSharedGatewaySessionGenerationForConfig: () => undefined,
     clients: [],
     channelManager: {
@@ -49,20 +59,24 @@ function gateway() {
   return aux;
 }
 
-beforeEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  vi.stubEnv("OPENCLAW_STATE_DIR", fs.realpathSync(dirs.make("mcp-tool-grants-")));
+beforeEach(async () => {
+  if (fixture) {
+    throw new Error("Previous auxiliary owner cleanup did not finish");
+  }
+  fixture = await createOpenClawTestState({ label: "mcp-tool-grants" });
   setRuntimeConfigSnapshot(cfg);
 });
-afterEach(() => {
-  for (const aux of auxiliaries.splice(0)) {
-    aux.unregisterApprovalAuthorityObserver();
-    aux.questionManager.reset();
+afterEach(async () => {
+  for (const aux of auxiliaries) {
+    await aux.stopOperatorInteractions();
   }
+  auxiliaries.length = 0;
   resetAgentRunRegistryForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   clearRuntimeConfigSnapshot();
-  vi.unstubAllEnvs();
+  await fixture?.cleanup();
+  fixture = undefined;
 });
 
 async function requestGrant(
@@ -100,6 +114,7 @@ async function requestGrant(
           ...request.mcpTool,
           isActive: options.isActive ?? (() => true),
         });
+  const acknowledged = createDeferred();
   const args = {
     req: { method: "plugin.approval.request", params: request, id: "request-1" },
     params: request,
@@ -120,7 +135,7 @@ async function requestGrant(
             },
           }),
     },
-    respond: vi.fn(),
+    respond: vi.fn(() => acknowledged.resolve()),
     isWebchatConnect: () => false,
     context: {
       broadcast: vi.fn(),
@@ -133,20 +148,24 @@ async function requestGrant(
   const pending = createPluginApprovalHandlers(aux.pluginApprovalManager)[
     "plugin.approval.request"
   ]!(args);
-  await vi.waitFor(() => expect(args.respond).toHaveBeenCalled());
-  releaseBinding?.();
-  const record = aux.pluginApprovalManager.listPendingRecords()[0];
-  if (!record) {
-    await pending;
-    throw new Error("MCP approval request did not register");
+  try {
+    await Promise.race([acknowledged.promise, pending]);
+    expect(args.respond).toHaveBeenCalled();
+    const record = (await aux.pluginApprovalManager.listPendingRecords())[0];
+    if (!record) {
+      await pending;
+      throw new Error("MCP approval request did not register");
+    }
+    return { aux, authority, pending, record };
+  } finally {
+    releaseBinding?.();
   }
-  return { aux, authority, pending, record };
 }
 
 describe("gateway MCP tool grants", () => {
   it("mints once for the authenticated agent and projects the grant after gateway restart", async () => {
     const { aux, pending, record } = await requestGrant({ agentId: "other" });
-    expect(aux.pluginApprovalManager.resolve(record.id, "allow-always")).toBe(true);
+    expect(await aux.pluginApprovalManager.resolve(record.id, "allow-always")).toBe(true);
     await pending;
     const expected = {
       server: "project.docs",
@@ -155,17 +174,23 @@ describe("gateway MCP tool grants", () => {
       addedAt: expect.any(Number),
     };
     expect(loadExecApprovalsReadOnly().agents).toEqual({ main: { mcpTools: [expected] } });
-    expect(aux.pluginApprovalManager.resolve(record.id, "allow-always")).toBe(false);
+    expect(await aux.pluginApprovalManager.resolve(record.id, "allow-always")).toBe(false);
+    await aux.stopOperatorInteractions();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const restarted = gateway();
     expect(restarted.pluginApprovalManager.runtimeEpoch).not.toBe(
       aux.pluginApprovalManager.runtimeEpoch,
     );
     expect(loadExecApprovalsReadOnly().agents).toEqual({ main: { mcpTools: [expected] } });
-    expect(buildCodexUserMcpServersThreadConfigPatch(cfg, { agentId: "main" })).toMatchObject({
+    expect(
+      await buildCodexUserMcpServersThreadConfigPatchForRuntime(cfg, { agentId: "main" }),
+    ).toMatchObject({
       mcp_servers: { "project.docs": { tools: { write_note: { approval_mode: "approve" } } } },
     });
-    expect(buildCodexUserMcpServersThreadConfigPatch(cfg, { agentId: "other" })).not.toMatchObject({
+    expect(
+      await buildCodexUserMcpServersThreadConfigPatchForRuntime(cfg, { agentId: "other" }),
+    ).not.toMatchObject({
       mcp_servers: { "project.docs": { tools: { write_note: { approval_mode: "approve" } } } },
     });
   });
@@ -209,7 +234,7 @@ describe("gateway MCP tool grants", () => {
     if (options.closed) {
       releaseAgentRunDelegatedAuthority(authority);
     }
-    aux.pluginApprovalManager.resolve(record.id, options.decision ?? "allow-always");
+    await aux.pluginApprovalManager.resolve(record.id, options.decision ?? "allow-always");
     await pending;
     expect(loadExecApprovalsReadOnly().agents).toEqual({});
   });
@@ -218,19 +243,21 @@ describe("gateway MCP tool grants", () => {
     let active = true;
     const { aux, pending, record } = await requestGrant({ isActive: () => active });
     active = false;
-    expect(aux.pluginApprovalManager.resolve(record.id, "allow-always")).toBe(true);
+    expect(await aux.pluginApprovalManager.resolve(record.id, "allow-always")).toBe(true);
     await pending;
     expect(loadExecApprovalsReadOnly().agents).toEqual({});
-    expect(aux.pluginApprovalManager.getSnapshot(record.id)?.mcpToolApprovalActive).toBeUndefined();
+    expect(
+      (await aux.pluginApprovalManager.getSnapshot(record.id))?.mcpToolApprovalActive,
+    ).toBeUndefined();
   });
 
   it("rejects an unadvertised allow-always without minting", async () => {
     const { aux, pending, record } = await requestGrant({
       allowedDecisions: ["allow-once", "deny"],
     });
-    expect(aux.pluginApprovalManager.resolve(record.id, "allow-always")).toBe(false);
+    expect(await aux.pluginApprovalManager.resolve(record.id, "allow-always")).toBe(false);
     expect(loadExecApprovalsReadOnly().agents).toEqual({});
-    aux.pluginApprovalManager.resolve(record.id, "deny");
+    await aux.pluginApprovalManager.resolve(record.id, "deny");
     await pending;
   });
 });

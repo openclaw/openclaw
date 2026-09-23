@@ -1,6 +1,7 @@
 /** Tests auth-profile backed MCP bearer projection. */
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createAuthProfileStoreFixture } from "./auth-profiles/credential-fixtures.test-support.js";
 import { resolveMcpBearerBundleConfig, withMcpAuthProfileBearer } from "./mcp-auth-profile.js";
 import * as mcpHttpFetch from "./mcp-http-fetch.js";
 
@@ -10,7 +11,7 @@ const authMocks = vi.hoisted(() => ({
   resolveMcpOAuthAccessToken: vi.fn(),
 }));
 
-vi.mock("./auth-profiles/store.js", () => ({
+vi.mock("./auth-profiles/store-runtime.js", () => ({
   loadAuthProfileStoreForSecretsRuntime: authMocks.loadAuthProfileStoreForSecretsRuntime,
 }));
 
@@ -173,17 +174,16 @@ describe("mcp auth profile bearer projection", () => {
   });
 
   it("rejects static token profiles instead of pretending they are refreshable", async () => {
-    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValueOnce({
-      version: 1,
-      profiles: {
+    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValueOnce(
+      createAuthProfileStoreFixture({
         "ducktape:static": {
           type: "token",
           provider: "ducktape",
           token: "expired-static-token",
           expires: 1,
         },
-      },
-    });
+      }),
+    );
 
     await expect(
       resolveMcpBearerBundleConfig({

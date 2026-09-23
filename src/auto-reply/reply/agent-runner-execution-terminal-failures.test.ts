@@ -1,20 +1,31 @@
 import { describe, expect, it, vi } from "vitest";
+import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import {
   formatBillingErrorMessage,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+  renderHeartbeatRunFailureCopy,
 } from "../../agents/failover/user-copy.js";
-import { AgentHarnessSessionSupersededError } from "../../agents/harness/errors.js";
-import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import {
+  AgentHarnessPreflightError,
+  AgentHarnessSessionSupersededError,
+} from "../../agents/harness/errors.js";
+import {
+  createAgentRunRestartAbortError,
+  createAgentRunSupersededAbortError,
+  createSessionPlacementSettlementClosedAbortError,
+} from "../../agents/run-termination.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions } from "../types.js";
 import {
+  createAgentTurnExecutionDefaults,
   setupAgentRunnerExecutionTestState,
   GENERIC_RUN_FAILURE_TEXT,
   getExecuteAgentTurnForTest,
+  createRunAgentTurnParams,
   createMockTypingSignaler,
   createFollowupRun,
   createMockReplyOperation,
@@ -27,7 +38,7 @@ import {
 import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: terminal failures", () => {
   it("surfaces billing guidance for mixed-cause fallback exhaustion", async () => {
@@ -44,28 +55,7 @@ describe("executeAgentTurn: terminal failures", () => {
     );
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeAgentTurn(createRunAgentTurnParams(createFollowupRun()));
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -104,18 +94,7 @@ describe("executeAgentTurn: terminal failures", () => {
       } as unknown as TemplateContext,
       opts: {},
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
 
     expect(result.kind).toBe("final");
@@ -149,18 +128,7 @@ describe("executeAgentTurn: terminal failures", () => {
       } as unknown as TemplateContext,
       opts: {},
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
 
     expect(result.kind).toBe("final");
@@ -196,28 +164,7 @@ describe("executeAgentTurn: terminal failures", () => {
     );
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeAgentTurn(createRunAgentTurnParams(createFollowupRun()));
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -254,18 +201,7 @@ describe("executeAgentTurn: terminal failures", () => {
       replyOperation,
       opts: {},
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
 
     expect(result.kind).toBe("final");
@@ -308,18 +244,7 @@ describe("executeAgentTurn: terminal failures", () => {
       replyOperation,
       opts: {},
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
 
     expect(result.kind).toBe("final");
@@ -333,6 +258,43 @@ describe("executeAgentTurn: terminal failures", () => {
     expect(failCall[1]).toBeInstanceOf(CommandLaneClearedError);
   });
 
+  it("returns a visible failure when settlement closes without supersession", async () => {
+    const agentEvents = await import("../../infra/agent-events.js");
+    const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
+    const replyOperation = createReplyOperation({
+      sessionKey: "agent:main:closed-terminal",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    replyOperation.setPhase("running");
+    const error = createSessionPlacementSettlementClosedAbortError();
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(error);
+    try {
+      const { executeAgentTurn } = await import("./agent-runner-execution.js");
+      const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ replyOperation }));
+      expect(result.outcome.kind).toBe("rejected");
+      if (result.outcome.kind === "rejected") {
+        expect(result.outcome.payload.text).toBeTruthy();
+        expect(result.outcome.payload.text).not.toBe(SILENT_REPLY_TOKEN);
+      }
+      expect(replyOperation.result).toMatchObject({ kind: "failed", code: "run_failed" });
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      const terminals = emitAgentEvent.mock.calls
+        .map(([event]) => event)
+        .filter(
+          (event) =>
+            event.runId === result.runId &&
+            event.stream === "lifecycle" &&
+            (event.data.phase === "end" || event.data.phase === "error"),
+        );
+      expect(terminals).toHaveLength(1);
+      expect(terminals[0]?.data.phase).toBe("error");
+      expect(terminals[0]?.data.stopReason).not.toBe("superseded");
+    } finally {
+      replyOperation.complete();
+    }
+  });
+
   it.each([
     { reason: "restart", code: "aborted_for_restart", phase: "end", stopReason: "restart" },
     { reason: "user", code: "aborted_by_user", phase: "error", stopReason: "aborted" },
@@ -343,9 +305,24 @@ describe("executeAgentTurn: terminal failures", () => {
       phase: "error",
       stopReason: "superseded",
     },
+    {
+      reason: "superseded",
+      code: "aborted_for_supersession",
+      phase: "error",
+      stopReason: "superseded",
+      restartError: true,
+    },
+    {
+      reason: "user",
+      code: "aborted_by_user",
+      phase: "error",
+      stopReason: "timeout",
+      supersededError: true,
+    },
   ] as const)(
-    "records one $stopReason abort terminal event without returning a reply",
-    async ({ reason, code, phase, stopReason }) => {
+    "records one $stopReason abort terminal event without returning a reply ($restartError)",
+    async (testCase) => {
+      const { reason, code, phase, stopReason } = testCase;
       const agentEvents = await import("../../infra/agent-events.js");
       const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
       const upstreamAbort = new AbortController();
@@ -369,13 +346,22 @@ describe("executeAgentTurn: terminal failures", () => {
                 : new Error("caller cancelled");
           upstreamAbort.abort(abortReason);
         }
+        if ("restartError" in testCase) {
+          throw createAgentRunRestartAbortError();
+        }
+        if ("supersededError" in testCase) {
+          throw createAgentRunSupersededAbortError();
+        }
         throw Object.assign(new Error("aborted"), { name: "AbortError" });
       });
 
       try {
         const { executeAgentTurn } = await import("./agent-runner-execution.js");
         const result = await executeAgentTurn({
-          ...createMinimalRunAgentTurnParams({ replyOperation }),
+          ...createMinimalRunAgentTurnParams({
+            replyOperation: "supersededError" in testCase ? undefined : replyOperation,
+          }),
+          opts: { abortSignal: upstreamAbort.signal },
           isRestartRecoveryArmed: () => true,
         });
 
@@ -424,18 +410,7 @@ describe("executeAgentTurn: terminal failures", () => {
       replyOperation,
       opts: {},
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
       isRestartRecoveryArmed: () => true,
     });
 
@@ -534,18 +509,7 @@ describe("executeAgentTurn: terminal failures", () => {
       } as unknown as TemplateContext,
       opts: { runId: "run-provider-failure" } as GetReplyOptions,
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
 
     expect(result.kind).toBe("final");
@@ -563,27 +527,42 @@ describe("executeAgentTurn: terminal failures", () => {
           (event as { runId?: unknown }).runId === "run-provider-failure" &&
           (event as { stream?: unknown }).stream === "lifecycle" &&
           data?.phase === "error" &&
-          data.fallbackExhaustedFailure === true
+          data.executionSettled === true
         );
       });
     expect(terminalFailureEvent).toBeDefined();
   });
 
-  it("surfaces CLI max-turn recovery context at normal verbosity", async () => {
-    const recoveryText =
-      "Claude CLI stopped after reaching the maximum number of turns (limit: 1). " +
-      "OpenClaw run: run-max-turns. OpenClaw session: session-1. Claude session: claude-session-1. " +
-      "Tool actions may already have run; verify their effects before retrying. " +
-      "Retry with a higher --max-turns value or a narrower task.";
-    const maxTurns = new FailoverError(recoveryText, {
-      reason: "unknown",
+  it.each([
+    {
+      name: "max-turn",
       code: "cli_max_turns",
+      recoveryText:
+        "Claude CLI stopped after reaching the maximum number of turns (limit: 1). " +
+        "OpenClaw run: run-max-turns. OpenClaw session: session-1. Claude session: claude-session-1. " +
+        "Tool actions may already have run; verify their effects before retrying. " +
+        "Retry with a higher --max-turns value or a narrower task.",
+    },
+    {
+      name: "hook-stopped",
+      code: "cli_turn_stopped",
+      recoveryText:
+        "Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: tool_use). " +
+        "OpenClaw run: run-hook-stopped. OpenClaw session: session-1. Claude session: claude-session-1. " +
+        "Tool actions may already have run; verify their effects before retrying. " +
+        "A Claude Code hook stopped this turn; user-scope hooks (including plugin hooks) " +
+        "apply to headless runs — move or disable that hook.",
+    },
+  ])("surfaces CLI $name recovery context at normal verbosity", async ({ code, recoveryText }) => {
+    const terminalStop = new FailoverError(recoveryText, {
+      reason: "unknown",
+      code,
       provider: "claude-cli",
       model: "sonnet",
     });
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new AggregateError(
-        [maxTurns, new Error("fork successor persistence failed")],
+        [terminalStop, new Error("fork successor persistence failed")],
         "CLI turn failed and its fork successor could not be persisted",
       ),
     );
@@ -616,6 +595,26 @@ describe("executeAgentTurn: terminal failures", () => {
     }
     expect(result.payload.text).toBe(HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT);
     expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
+    expect(result.payload.text).not.toContain("/new");
+  });
+
+  it("includes heartbeat preflight reasons in terminal failure replies", async () => {
+    const message =
+      "Codex session became active in another runner; wait for it to finish before continuing";
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(new AgentHarnessPreflightError(message));
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams(),
+      isHeartbeat: true,
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind !== "final") {
+      throw new Error("expected final reply");
+    }
+    expect(result.payload.text).toBe(renderHeartbeatRunFailureCopy(message));
+    expect(result.payload.isError).toBe(true);
     expect(result.payload.text).not.toContain("/new");
   });
 
@@ -681,18 +680,17 @@ describe("executeAgentTurn: terminal failures", () => {
 
   it("explains that CLI background tasks share the timed-out parent process", () => {
     const payload = buildKnownAgentRunFailureReplyPayload({
-      err: new FailoverError("CLI exceeded timeout (600s) and was terminated.", {
-        reason: "timeout",
-        provider: "claude-cli",
-        code: "cli_overall_timeout",
-        cliTimeout: {
+      err: createCliTimeoutError(
+        { provider: "claude-cli" },
+        {
           mode: "overall",
           timeoutSeconds: 600,
           observedActivity: true,
           activeToolCount: 1,
           backgroundTaskCount: 1,
         },
-      }),
+        "cli_overall_timeout",
+      ),
       sessionCtx: createMinimalRunAgentTurnParams().sessionCtx,
       resolvedVerboseLevel: "off",
     });
@@ -778,17 +776,7 @@ describe("executeAgentTurn: terminal failures", () => {
       } as unknown as TemplateContext,
       opts: {},
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
+      ...createAgentTurnExecutionDefaults(),
       resolvedVerboseLevel: "on",
     });
 

@@ -58,7 +58,24 @@ export type ComputerToolTransport = {
   }) => Promise<unknown>;
 };
 
-export type ComputerTarget = { nodeId: string; screenIndex: number };
+export type ComputerHost =
+  | { host: "gateway" }
+  | { host: "node"; nodeId: string; environmentId?: string };
+
+export type ComputerTarget = ComputerHost & { screenIndex: number };
+
+export function computerHostKey(target: ComputerHost): string {
+  return target.host === "gateway" ? "gateway" : `node:${target.nodeId}`;
+}
+
+export function computerTargetDetails(target: ComputerHost) {
+  return target.host === "gateway"
+    ? { target: "gateway" as const }
+    : {
+        node: target.nodeId,
+        ...(target.environmentId ? { environmentId: target.environmentId } : {}),
+      };
+}
 
 export type ComputerFrame = {
   target: ComputerTarget;
@@ -76,9 +93,12 @@ export type ScreenshotCapture = {
 };
 
 export type ComputerObservationState = {
-  nodeId: string;
+  targetKey: string;
   providerGeneration: string;
   observationId: string;
+  imageCoordinates?:
+    | { kind: "unavailable" }
+    | { kind: "available"; scaleX: number; scaleY: number };
 };
 
 export type ComputerContextEpoch = {

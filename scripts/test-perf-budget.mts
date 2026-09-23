@@ -6,53 +6,11 @@ import {
   isStrictAffirmativeValue,
   parseFlagArgs,
   stringFlag,
-  type FlagSpec,
 } from "./lib/arg-utils.mts";
-import {
-  budgetFloatFlag,
-  parseBudgetNumber,
-  readBudgetEnvNumber,
-} from "./lib/budget-number-args.mts";
+import { budgetFloatFlag, readBudgetEnvNumber } from "./lib/budget-number-args.mts";
 import { coerceErrorMessage } from "./lib/error-format.mts";
 import { formatMs } from "./lib/vitest-report-cli-utils.mts";
 import { readJsonFile, runVitestJsonReport } from "./test-report-utils.mts";
-
-type PerfBudgetOptions = {
-  baselineWallMs: number | null;
-  config: string;
-  maxRegressionPct: number;
-  maxWallMs: number | null;
-  reportOnly: boolean;
-};
-
-function nullableBudgetFloatFlag(
-  flag: string,
-  key: "baselineWallMs" | "maxWallMs",
-): FlagSpec<PerfBudgetOptions> {
-  return {
-    consume(argv, index) {
-      if (argv[index] !== flag) {
-        return null;
-      }
-      const value = argv[index + 1];
-      if (!value || value.startsWith("-")) {
-        throw new Error(`${flag} requires a value`);
-      }
-      return {
-        flag,
-        nextIndex: index + 1,
-        repeatable: false,
-        apply(target) {
-          const parsed = parseBudgetNumber(value, flag);
-          if (parsed === null) {
-            throw new Error(`${flag} requires a value`);
-          }
-          target[key] = parsed;
-        },
-      };
-    },
-  };
-}
 
 function parseArgs(argv: readonly string[], env = process.env) {
   const opts = parseFlagArgs(
@@ -66,8 +24,8 @@ function parseArgs(argv: readonly string[], env = process.env) {
     },
     [
       stringFlag("--config", "config"),
-      nullableBudgetFloatFlag("--max-wall-ms", "maxWallMs"),
-      nullableBudgetFloatFlag("--baseline-wall-ms", "baselineWallMs"),
+      budgetFloatFlag("--max-wall-ms", "maxWallMs"),
+      budgetFloatFlag("--baseline-wall-ms", "baselineWallMs"),
       budgetFloatFlag("--max-regression-pct", "maxRegressionPct"),
       booleanFlag("--report-only", "reportOnly", true),
     ],

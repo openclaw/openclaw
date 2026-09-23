@@ -41,9 +41,12 @@ export async function buildNodeInstallPlan(params: {
   nodeId?: string;
   displayName?: string;
   installedAppsSharing?: boolean;
+  commands?: string[];
+  allCommands?: boolean;
   runtime: GatewayDaemonRuntime;
   devMode?: boolean;
   runtimePath?: string;
+  pinnedRuntimePath?: string;
   wrapperPath?: string;
   warn?: DaemonInstallWarnFn;
 }): Promise<NodeInstallPlan> {
@@ -53,6 +56,7 @@ export async function buildNodeInstallPlan(params: {
     runtime: params.runtime,
     devMode: params.devMode,
     runtimePath: params.runtimePath,
+    pinnedRuntimePath: params.pinnedRuntimePath,
     wrapperPath,
   });
   const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
@@ -64,6 +68,8 @@ export async function buildNodeInstallPlan(params: {
     nodeId: params.nodeId,
     displayName: params.displayName,
     installedAppsSharing: params.installedAppsSharing,
+    commands: params.commands,
+    allCommands: params.allCommands,
     dev: devMode,
     runtime: params.runtime,
     runtimePath,
@@ -80,6 +86,7 @@ export async function buildNodeInstallPlan(params: {
 
   const environment = buildNodeServiceEnvironment({
     env: params.env,
+    runtime: params.runtime,
     // Match the Gateway install path so supervised services keep the chosen
     // runtime toolchain on PATH for sibling binaries when needed.
     extraPathDirs: resolveDaemonRuntimeBinDir(runtimePath),

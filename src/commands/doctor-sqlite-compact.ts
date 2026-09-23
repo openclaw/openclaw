@@ -48,18 +48,27 @@ export function compactDoctorSqliteFile(
     database.exec("PRAGMA trusted_schema = OFF;");
     options.validateBeforeMutation?.(database);
     const before = readCompactSnapshot(database, options.sqlitePath);
-    assertSqliteIntegrity(database, options.sqlitePath);
-    checkpointTruncate(database, options.sqlitePath);
-    database.exec("PRAGMA auto_vacuum = INCREMENTAL;");
-    // NONE databases need a full rewrite to add pointer maps. Existing auto-vacuum
-    // stores can release free pages without repacking; explicit compact still repacks.
-    database.exec(
-      options.operation === "import-finalize" && before.autoVacuum !== 0
-        ? "PRAGMA incremental_vacuum;"
-        : "VACUUM;",
-    );
-    checkpointTruncate(database, options.sqlitePath);
-    const { integrityCheck } = assertSqliteIntegrity(database, options.sqlitePath);
+    let { integrityCheck } = assertSqliteIntegrity(database, options.sqlitePath);
+    const alreadyCompact =
+      options.operation === "import-finalize" &&
+      before.autoVacuum === 2 &&
+      before.freelistPages === 0 &&
+      before.walSizeBytes === 0;
+    // A verified no-op needs neither a file mutation nor a second full-file scan.
+    // Explicit compaction still repacks partially filled pages.
+    if (!alreadyCompact) {
+      checkpointDoctorSqliteFile(database, options.sqlitePath);
+      database.exec("PRAGMA auto_vacuum = INCREMENTAL;");
+      // NONE databases need a full rewrite to add pointer maps. Existing auto-vacuum
+      // stores can release free pages without repacking; explicit compact still repacks.
+      database.exec(
+        options.operation === "import-finalize" && before.autoVacuum !== 0
+          ? "PRAGMA incremental_vacuum;"
+          : "VACUUM;",
+      );
+      checkpointDoctorSqliteFile(database, options.sqlitePath);
+      ({ integrityCheck } = assertSqliteIntegrity(database, options.sqlitePath));
+    }
     const after = readCompactSnapshot(database, options.sqlitePath);
     const beforeBytes = before.dbSizeBytes + before.walSizeBytes;
     const afterBytes = after.dbSizeBytes + after.walSizeBytes;
@@ -95,7 +104,7 @@ export function compactDoctorSqliteFile(
   return result;
 }
 
-function checkpointTruncate(database: DatabaseSync, sqlitePath: string): void {
+export function checkpointDoctorSqliteFile(database: DatabaseSync, sqlitePath: string): void {
   const row = database.prepare("PRAGMA wal_checkpoint(TRUNCATE);").get() as
     | Record<string, unknown>
     | undefined;

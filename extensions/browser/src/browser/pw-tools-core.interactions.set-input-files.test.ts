@@ -1,5 +1,6 @@
 // Browser tests cover pw tools core.interactions.set input files plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS } from "./constants.js";
 
 const readFile = vi.fn();
 const stat = vi.fn();
@@ -130,6 +131,7 @@ describe("setFileChooserFilesViaPlaywright", () => {
     expect(readFile).not.toHaveBeenCalled();
     expect(fileChooser.setFiles).toHaveBeenCalledWith(["/private/tmp/openclaw/uploads/ok.txt"], {
       timeout: 250,
+      signal: expect.any(AbortSignal),
     });
   });
 
@@ -157,7 +159,7 @@ describe("setFileChooserFilesViaPlaywright", () => {
           lastModifiedMs: 1700000000000,
         },
       ],
-      { timeout: 250 },
+      { timeout: 250, signal: expect.any(AbortSignal) },
     );
   });
 });
@@ -193,7 +195,10 @@ describe("setInputFilesViaPlaywright", () => {
     expect(stat).not.toHaveBeenCalled();
     expect(readFile).not.toHaveBeenCalled();
     expect(detectMime).not.toHaveBeenCalled();
-    expect(setInputFiles).toHaveBeenCalledWith(["/private/tmp/openclaw/uploads/ok.txt"]);
+    expect(setInputFiles).toHaveBeenCalledWith(["/private/tmp/openclaw/uploads/ok.txt"], {
+      timeout: DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
+      signal: expect.any(AbortSignal),
+    });
     expect(setInputFiles).toHaveBeenCalledTimes(1);
     expect(elementHandle).not.toHaveBeenCalled();
   });
@@ -215,14 +220,17 @@ describe("setInputFilesViaPlaywright", () => {
       buffer: Buffer.from("upload contents"),
       filePath: "/private/tmp/openclaw/uploads/ok.txt",
     });
-    expect(setInputFiles).toHaveBeenCalledWith([
-      {
-        name: "ok.txt",
-        mimeType: "text/plain",
-        buffer: Buffer.from("upload contents"),
-        lastModifiedMs: 1700000000000,
-      },
-    ]);
+    expect(setInputFiles).toHaveBeenCalledWith(
+      [
+        {
+          name: "ok.txt",
+          mimeType: "text/plain",
+          buffer: Buffer.from("upload contents"),
+          lastModifiedMs: 1700000000000,
+        },
+      ],
+      { timeout: DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS, signal: expect.any(AbortSignal) },
+    );
     expect(setInputFiles).toHaveBeenCalledTimes(1);
     expect(elementHandle).not.toHaveBeenCalled();
   });
@@ -239,14 +247,17 @@ describe("setInputFilesViaPlaywright", () => {
       ssrfPolicy: {},
     });
 
-    expect(setInputFiles).toHaveBeenCalledWith([
-      {
-        name: "ok.txt",
-        mimeType: "application/octet-stream",
-        buffer: Buffer.from("upload contents"),
-        lastModifiedMs: 1700000000000,
-      },
-    ]);
+    expect(setInputFiles).toHaveBeenCalledWith(
+      [
+        {
+          name: "ok.txt",
+          mimeType: "application/octet-stream",
+          buffer: Buffer.from("upload contents"),
+          lastModifiedMs: 1700000000000,
+        },
+      ],
+      { timeout: DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS, signal: expect.any(AbortSignal) },
+    );
   });
 
   it("checks the Playwright aggregate payload size cap before reading guarded remote upload files", async () => {
@@ -280,14 +291,17 @@ describe("setInputFilesViaPlaywright", () => {
     });
 
     expect(readFile).toHaveBeenCalledWith("/private/tmp/openclaw/uploads/ok.txt");
-    expect(setInputFiles).toHaveBeenCalledWith([
-      {
-        name: "ok.txt",
-        mimeType: "text/plain",
-        buffer: Buffer.from("upload contents"),
-        lastModifiedMs: 1700000000000,
-      },
-    ]);
+    expect(setInputFiles).toHaveBeenCalledWith(
+      [
+        {
+          name: "ok.txt",
+          mimeType: "text/plain",
+          buffer: Buffer.from("upload contents"),
+          lastModifiedMs: 1700000000000,
+        },
+      ],
+      { timeout: DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS, signal: expect.any(AbortSignal) },
+    );
   });
 
   it("checks the aggregate cap across multiple guarded remote upload payloads", async () => {
@@ -329,7 +343,10 @@ describe("setInputFilesViaPlaywright", () => {
     expect(stat).not.toHaveBeenCalled();
     expect(readFile).not.toHaveBeenCalled();
     expect(detectMime).not.toHaveBeenCalled();
-    expect(setInputFiles).toHaveBeenCalledWith(["/private/tmp/openclaw/uploads/ok.txt"]);
+    expect(setInputFiles).toHaveBeenCalledWith(["/private/tmp/openclaw/uploads/ok.txt"], {
+      timeout: DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
+      signal: expect.any(AbortSignal),
+    });
     expect(withPageNavigationRequestGuard).toHaveBeenCalledTimes(1);
     expect(setInputFiles).toHaveBeenCalledTimes(1);
     expect(assertPageNavigationCompletedSafely).toHaveBeenCalledTimes(1);
@@ -353,14 +370,17 @@ describe("setInputFilesViaPlaywright", () => {
       buffer: Buffer.from("upload contents"),
       filePath: "/private/tmp/openclaw/uploads/ok.txt",
     });
-    expect(setInputFiles).toHaveBeenCalledWith([
-      {
-        name: "ok.txt",
-        mimeType: "text/plain",
-        buffer: Buffer.from("upload contents"),
-        lastModifiedMs: 1700000000000,
-      },
-    ]);
+    expect(setInputFiles).toHaveBeenCalledWith(
+      [
+        {
+          name: "ok.txt",
+          mimeType: "text/plain",
+          buffer: Buffer.from("upload contents"),
+          lastModifiedMs: 1700000000000,
+        },
+      ],
+      { timeout: DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS, signal: expect.any(AbortSignal) },
+    );
     expect(withPageNavigationRequestGuard).toHaveBeenCalledTimes(1);
     expect(setInputFiles).toHaveBeenCalledTimes(1);
     expect(elementHandle).not.toHaveBeenCalled();

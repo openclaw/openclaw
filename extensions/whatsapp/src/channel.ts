@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements channel behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
@@ -15,17 +14,10 @@ import {
   resolveWhatsAppAgentReactionGuidance,
 } from "./channel-actions.js";
 import { whatsappChannelOutbound, whatsappMessageAdapter } from "./channel-outbound.js";
-import {
-  loadWhatsAppChannelRuntime,
-  readWhatsAppAccountLinkState,
-} from "./channel-runtime-loader.js";
+import { loadWhatsAppChannelRuntime } from "./channel-runtime-loader.js";
 import { whatsappCommandPolicy } from "./command-policy.js";
 import { formatWhatsAppConfigAllowFromEntries } from "./config-accessors.js";
 import { resolveWhatsAppMentionStripRegexes } from "./group-intro.js";
-import {
-  resolveWhatsAppGroupRequireMention,
-  resolveWhatsAppGroupToolPolicy,
-} from "./group-policy.js";
 import { checkWhatsAppHeartbeatReady } from "./heartbeat.js";
 import {
   isWhatsAppGroupJid,
@@ -38,8 +30,7 @@ import {
 import { getWhatsAppRuntime } from "./runtime.js";
 import { sendTypingWhatsApp } from "./send.js";
 import { resolveWhatsAppOutboundSessionRoute } from "./session-route.js";
-import { whatsappSetupContract } from "./setup-core.js";
-import { createWhatsAppPluginBase, whatsappSetupWizardProxy } from "./shared.js";
+import { createWhatsAppPluginBase } from "./shared.js";
 import { collectWhatsAppStatusIssues } from "./status-issues.js";
 
 const loadWhatsAppDirectoryConfig = createLazyRuntimeModule(() => import("./directory-config.js"));
@@ -81,16 +72,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       },
     },
     base: {
-      ...createWhatsAppPluginBase({
-        groups: {
-          resolveRequireMention: resolveWhatsAppGroupRequireMention,
-          resolveToolPolicy: resolveWhatsAppGroupToolPolicy,
-        },
-        setupWizard: whatsappSetupWizardProxy,
-        setupContract: whatsappSetupContract,
-        isConfigured: (account) => Boolean(account.authDir),
-        isLinked: async (account) => await readWhatsAppAccountLinkState(account.authDir),
-      }),
+      ...createWhatsAppPluginBase(),
       allowlist: buildDmGroupAccountAllowlistAdapter({
         channelId: "whatsapp",
         resolveAccount: resolveWhatsAppAccount,

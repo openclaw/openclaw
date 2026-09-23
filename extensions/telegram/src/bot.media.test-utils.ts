@@ -1,4 +1,5 @@
 // Telegram helper module supports bot.media utils behavior.
+import type { PhotoSize } from "grammy/types";
 import * as ssrf from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, beforeAll, beforeEach, expect, vi, type Mock } from "vitest";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
@@ -18,6 +19,10 @@ export const TELEGRAM_TEST_TIMINGS = {
   mediaGroupFlushMs: 20,
   textFragmentGapMs: 30,
 } as const;
+
+export function createTelegramPhotoForTest(fileId: string): PhotoSize {
+  return { file_id: fileId, file_unique_id: `unique-${fileId}`, width: 100, height: 100 };
+}
 
 let createTelegramBotRef: typeof import("./bot.js").createTelegramBot;
 let replySpyRef: ReturnType<typeof vi.fn>;

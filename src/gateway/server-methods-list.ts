@@ -5,19 +5,14 @@ import {
   GATEWAY_EVENT_DEVICE_PAIR_CHANGED,
   GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
   GATEWAY_EVENT_UPDATE_AVAILABLE,
+  GATEWAY_EVENT_UPDATE_RUN_CHANGED,
 } from "./events.js";
-import { listCoreAdvertisedGatewayMethodNames } from "./methods/core-descriptors.js";
-import { GATEWAY_AUX_METHODS } from "./server-aux-methods.js";
+import { listCoreAdvertisedGatewayMethodNames } from "./methods/core-method-policy.js";
 
 type GatewayMethodChannelPlugin = {
   gatewayMethods?: readonly string[];
   gatewayMethodDescriptors?: readonly { name: string }[];
 };
-
-/** Lists core methods intentionally advertised to gateway clients. */
-function listCoreGatewayMethods(): string[] {
-  return listCoreAdvertisedGatewayMethodNames();
-}
 
 function listChannelGatewayMethods(): string[] {
   const methods: string[] = [];
@@ -35,7 +30,7 @@ function listChannelGatewayMethods(): string[] {
 /** Returns the de-duplicated gateway method catalog advertised through method-list APIs. */
 export function listGatewayMethods(): string[] {
   return Array.from(
-    new Set([...listCoreGatewayMethods(), ...GATEWAY_AUX_METHODS, ...listChannelGatewayMethods()]),
+    new Set([...listCoreAdvertisedGatewayMethodNames(), ...listChannelGatewayMethods()]),
   );
 }
 
@@ -45,6 +40,7 @@ export const GATEWAY_EVENTS = [
   "agent",
   "chat",
   "chat.metadata.changed",
+  "models.snapshot",
   "ui.command",
   "session.approval",
   "session.message",
@@ -57,11 +53,14 @@ export const GATEWAY_EVENTS = [
   "session.tool",
   "sessions.changed",
   "controlUi.sessionPullRequests.changed",
+  "plugins.controlUi.changed",
   "presence",
   "tick",
   "talk.mode",
   "talk.event",
+  "talk.voice.change",
   "shutdown",
+  "gateway.suspension",
   "health",
   "heartbeat",
   "cron",
@@ -70,6 +69,7 @@ export const GATEWAY_EVENTS = [
   "node.pair.requested",
   "node.pair.resolved",
   "node.presence",
+  "node.hostStats",
   GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
   "node.invoke.cancel",
   "node.invoke.input",
@@ -81,6 +81,8 @@ export const GATEWAY_EVENTS = [
   "device.pair.setup.deliveryUncertain",
   "users.prefs.changed",
   "skills.changed",
+  "plugins.changed",
+  "plugins.install.progress",
   "voicewake.changed",
   "voicewake.routing.changed",
   "exec.approval.requested",
@@ -94,6 +96,8 @@ export const GATEWAY_EVENTS = [
   "terminal.data",
   "terminal.exit",
   GATEWAY_EVENT_UPDATE_AVAILABLE,
+  GATEWAY_EVENT_UPDATE_RUN_CHANGED,
   "portal.changed",
   "progressCard.changed",
+  "mentions.changed",
 ];

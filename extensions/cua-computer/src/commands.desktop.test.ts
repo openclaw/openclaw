@@ -8,6 +8,63 @@ import { driver, execution, macOsEndpoint, result } from "./commands.test-helper
 import { ClickButton, ScrollDirection } from "./driver-client.js";
 
 describe("cua-computer desktop frames", () => {
+  it.each([
+    { action: "key", method: "pressKey", params: { keys: "up" } },
+    { action: "type", method: "typeText", params: { text: "hello" } },
+    { action: "left_click", method: "click", params: { x: 10, y: 20 } },
+    { action: "mouse_move", method: "moveCursor", params: { x: 10, y: 20 } },
+    {
+      action: "scroll",
+      method: "scroll",
+      params: { x: 10, y: 20, scrollDirection: "down" },
+    },
+    {
+      action: "left_click_drag",
+      method: "drag",
+      params: { fromX: 1, fromY: 2, x: 10, y: 20 },
+    },
+  ] as const)(
+    "preserves native effect evidence for desktop $action",
+    async ({ action, method, params }) => {
+      const input = driver();
+      input[method].mockResolvedValue({
+        ...result({}),
+        action: {
+          effect: 3,
+          route: 2,
+          delivery: { mode: 1 },
+          escalation: { target: 3, reason: 3 },
+        },
+      });
+      const computer = await execution(input.session);
+      try {
+        const screen = JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}'));
+        const frame =
+          action === "key" || action === "type"
+            ? {}
+            : { displayFrameId: screen.displayFrameId, refWidth: screen.width };
+        const response = JSON.parse(
+          await computer.act(
+            JSON.stringify({ action, ...params, ...frame, deliveryMode: "background" }),
+          ),
+        );
+        expect(response).toMatchObject({
+          ok: true,
+          effect: "suspected_noop",
+          escalation: { recommended: "desktop", reasonCode: "suspected_noop" },
+          details: {
+            route: "global_input",
+            deliveryMode: "foreground",
+            scope: "desktop",
+            deliveryModeApplicable: false,
+          },
+        });
+      } finally {
+        await computer.close("completion");
+      }
+    },
+  );
+
   it.each(
     (
       [
@@ -172,34 +229,39 @@ describe("cua-computer desktop frames", () => {
     },
   );
 
-  it("uses one typed session for snapshot and frame-authorized click", async () => {
-    const { session, getDesktopState, getScreenSize, click } = driver();
-    const computer = await execution(session);
-    const screen = JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}')) as {
-      displayFrameId: string;
-      width: number;
-    };
-    await computer.act(
-      JSON.stringify({
-        action: "left_click",
-        displayFrameId: screen.displayFrameId,
-        refWidth: screen.width,
-        x: 10,
-        y: 20,
-      }),
-    );
-    expect(getDesktopState).toHaveBeenCalledOnce();
-    expect(getScreenSize).toHaveBeenCalledOnce();
-    expect(click).toHaveBeenCalledWith(
-      {
-        x: 10,
-        y: 20,
-        button: ClickButton.Left,
-        count: 1,
-      },
-      undefined,
-    );
-  });
+  it.each([
+    { action: "left_click", button: ClickButton.Left, count: 1 },
+    { action: "right_click", button: ClickButton.Right, count: 1 },
+    { action: "middle_click", button: ClickButton.Middle, count: 1 },
+    { action: "double_click", button: ClickButton.Left, count: 2 },
+    { action: "triple_click", button: ClickButton.Left, count: 3 },
+  ])(
+    "uses one typed session for snapshot and frame-authorized $action",
+    async ({ action, button, count }) => {
+      const { session, getDesktopState, getScreenSize, click } = driver();
+      const computer = await execution(session);
+      try {
+        const screen = JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}')) as {
+          displayFrameId: string;
+          width: number;
+        };
+        await computer.act(
+          JSON.stringify({
+            action,
+            displayFrameId: screen.displayFrameId,
+            refWidth: screen.width,
+            x: 10,
+            y: 20,
+          }),
+        );
+        expect(getDesktopState).toHaveBeenCalledOnce();
+        expect(getScreenSize).toHaveBeenCalledOnce();
+        expect(click).toHaveBeenCalledExactlyOnceWith({ x: 10, y: 20, button, count }, undefined);
+      } finally {
+        await computer.close("completion");
+      }
+    },
+  );
 
   it("maps scroll and key through typed SDK enums", async () => {
     const { session, typeText, pressKey } = driver();

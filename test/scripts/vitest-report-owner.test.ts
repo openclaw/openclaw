@@ -1,11 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { parseCLI, type JsonTestResults } from "vitest/node";
+import type { VitestReportCapture } from "../../scripts/lib/vitest-report-capture.mts";
 import { isPidDefinitelyDead } from "../../src/shared/pid-alive.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { createVitestReportFixture, type ReportFixtureMode } from "./vitest-report-fixture.js";
+import {
+  createVitestReportFixture,
+  reportChunkTestFiles,
+  type ReportFixtureMode,
+} from "./vitest-report-fixture.js";
 
 const json = (file: string) => JSON.parse(fs.readFileSync(file, "utf8"));
+const serialized = (values: unknown[]) => values.map((value) => JSON.stringify(value)).toSorted();
 const inventory = (report: {
   testResults: { assertionResults: { fullName: string; status: string }[] }[];
 }) =>
@@ -26,7 +33,13 @@ const expected = [
 
 describe.skipIf(process.platform === "win32")("native multi-invocation report ownership", () => {
   const dirs = useAutoCleanupTempDirTracker(afterEach);
-  const run = (mode: ReportFixtureMode) => createVitestReportFixture(dirs.make("oc-report-"))(mode);
+  const cacheDirs = useAutoCleanupTempDirTracker(afterAll);
+  let compileCache: string;
+  beforeAll(() => {
+    compileCache = cacheDirs.make("oc-report-compile-");
+  });
+  const reportFixture = (root: string) => createVitestReportFixture(root, undefined, compileCache);
+  const run = (mode: ReportFixtureMode) => reportFixture(dirs.make("oc-report-"))(mode);
 
   it.each([
     ["serial", "projects", false, "SIGABRT", 134],
@@ -40,7 +53,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     "preserves shard crashes: %s entry=%s report=%s signal=%s",
     { timeout: 60000 },
     async (mode, entry, report, crashSignal, exitCode) => {
-      const result = await createVitestReportFixture(dirs.make("oc-report-crash-"))(mode, {
+      const result = await reportFixture(dirs.make("oc-report-crash-"))(mode, {
         entry,
         report,
         crashSignal,
@@ -67,6 +80,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
   it.each([
     "serial",
     "parallel",
+    "grouped",
     "batch",
     "batch-parallel",
     "retry",
@@ -91,7 +105,44 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
         expect(fs.existsSync(part.blob)).toBe(true);
         expect(json(`${part.json}.capture.json`).ended).toBeTruthy();
       }
+      if (mode === "grouped") {
+        const captures = parts.map((part: { json: string }) => json(`${part.json}.capture.json`));
+        expect(captures.map((capture: { projects: unknown[] }) => capture.projects)).toEqual([
+          [
+            {
+              name: "alpha",
+              namePrefix: "",
+              root: path.join(captures[0].root, "test/vitest"),
+              config: path.join(captures[0].root, "test/vitest/vitest.alpha.config.ts"),
+              pool: "threads",
+            },
+          ],
+          [
+            {
+              name: "beta",
+              namePrefix: "",
+              root: captures[1].root,
+              config: path.join(
+                captures[1].root,
+                "test/vitest/vitest.agents-embedded-agent.config.ts",
+              ),
+              pool: "forks",
+            },
+          ],
+        ]);
+        const replay = json(path.join(result.reportSet!, "aggregate.json.capture.json"));
+        expect(replay.modules).toEqual(
+          captures.flatMap((capture: { modules: unknown[] }) => capture.modules),
+        );
+        expect(index.merge).toMatchObject({ code: 0, signal: null });
+      }
       if (mode === "watchdog") {
+        expect(
+          fs.readFileSync(
+            path.join(path.dirname(path.dirname(result.output)), "cold-started"),
+            "utf8",
+          ),
+        ).toBe("started");
         expect(index.entries[0].attempts).toHaveLength(2);
         expect(index.entries[0].attempts[0].outcome.noOutputTimedOut).toBe(true);
       }
@@ -111,12 +162,119 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     },
   );
 
+  it("loads each file-backed merge project once and preserves its identity and caches", async () => {
+    const result = await run("config-load-once");
+    expect(result.code, result.stderr).toBe(0);
+    expect(inventory(json(result.output))).toEqual(expected);
+    expect(
+      fs
+        .readFileSync(path.join(path.dirname(result.output), "config-loads.txt"), "utf8")
+        .trimEnd()
+        .split("\n")
+        .toSorted(),
+    ).toEqual(["alpha", "beta"]);
+    const replay = json(path.join(result.reportSet!, "aggregate.json.capture.json"));
+    const root = path.dirname(path.dirname(result.output));
+    const defaultCache = path.join(root, "node_modules/.vitest-cache");
+    expect(fs.readFileSync(path.join(defaultCache, "canary"), "utf8")).toBe("another cache owner");
+    expect(fs.readFileSync(path.join(defaultCache, "_metadata.json"), "utf8")).toBe(
+      '{"lockfileHash":"unrelated-owner"}',
+    );
+    for (const name of ["alpha", "beta"]) {
+      expect(json(path.join(root, `fs-cache-${name}/_metadata.json`)).lockfileHash).toBeTypeOf(
+        "string",
+      );
+    }
+    expect(replay.projects).toEqual(
+      (
+        [
+          ["alpha", "test/vitest/vitest.unit-fast-isolated.config.ts"],
+          ["beta", "test/vitest/vitest.agents-embedded-agent.config.ts"],
+        ] as const
+      ).map(([name, config]) => ({
+        name,
+        namePrefix: "",
+        root,
+        config: path.join(root, config),
+        pool: "forks",
+      })),
+    );
+  }, 60_000);
+
+  it("replays named nested containers that share a leaf config", async () => {
+    const result = await run("nested-shared-leaf");
+    expect(result.code, result.stderr).toBe(0);
+    expect(inventory(json(result.output))).toEqual(
+      [...expected.slice(0, 2), ...expected].toSorted((left, right) => {
+        const leftKey = left.join(",");
+        const rightKey = right.join(",");
+        return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+      }),
+    );
+    const index = json(path.join(result.reportSet!, "index.json"));
+    const captures = index.entries.map(
+      (entry: { attempts: { json: string }[] }): VitestReportCapture =>
+        json(`${entry.attempts.at(-1)!.json}.capture.json`),
+    );
+    const root = path.dirname(path.dirname(result.output));
+    const projects: unknown[] = captures.flatMap(
+      (capture: VitestReportCapture) => capture.projects,
+    );
+    expect(serialized(projects)).toEqual(
+      [
+        {
+          name: "outer (inner) (alpha)",
+          namePrefix: "outer (inner)",
+          root,
+          config: path.join(root, "test/vitest/vitest.alpha.config.ts"),
+          pool: "threads",
+        },
+        {
+          name: "other (alpha)",
+          namePrefix: "other",
+          root,
+          config: path.join(root, "test/vitest/vitest.alpha.config.ts"),
+          pool: "threads",
+        },
+        {
+          name: "beta",
+          namePrefix: "",
+          root: path.join(root, "test/vitest"),
+          config: path.join(root, "test/vitest/vitest.beta.config.ts"),
+          pool: "forks",
+        },
+      ]
+        .map((project) => JSON.stringify(project))
+        .toSorted(),
+    );
+    const modules: Array<{ namePrefix: string }> = captures.flatMap(
+      (capture: VitestReportCapture) => capture.modules,
+    );
+    expect(modules.map((module) => module.namePrefix).toSorted()).toEqual([
+      "",
+      "other",
+      "outer (inner)",
+    ]);
+    expect(
+      fs
+        .readFileSync(path.join(path.dirname(result.output), "config-loads.txt"), "utf8")
+        .trimEnd()
+        .split("\n")
+        .toSorted(),
+    ).toEqual(["alpha", "alpha", "beta"]);
+    const replay = json(
+      path.join(result.reportSet!, "aggregate.json.capture.json"),
+    ) as VitestReportCapture;
+    expect(serialized(replay.projects)).toEqual(serialized(projects));
+    expect(serialized(replay.modules)).toEqual(serialized(modules));
+  }, 60_000);
+
   it(
     "publishes a wholly live-aware real-home batch without consuming the caller home",
     { timeout: 60000 },
     async () => {
       const root = dirs.make("oc-report-real-home-");
-      const result = await createVitestReportFixture(root)("batch-real-home");
+      const result = await reportFixture(root)("batch-real-home");
 
       expect(result.code, result.stderr).toBe(0);
       expect(result.signal).toBeNull();
@@ -131,7 +289,120 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     },
   );
 
-  it.each(["failure", "batch-failure", "unhandled"] as const)(
+  it.each([
+    {
+      name: "scalar empty-inline output",
+      option: "--outputFile=",
+      mode: "failure",
+      entry: undefined,
+      betaOnly: false,
+    },
+    {
+      name: "dotted empty-inline output",
+      option: "--outputFile.json=",
+      mode: "failure",
+      entry: undefined,
+      betaOnly: false,
+    },
+    {
+      name: "nonempty output ending in equals",
+      option: "attached",
+      mode: "failure",
+      entry: "projects",
+      betaOnly: true,
+    },
+    {
+      name: "batch empty-inline output",
+      option: "--outputFile=",
+      mode: "batch-failure",
+      entry: undefined,
+      betaOnly: false,
+    },
+  ] as const)(
+    "preserves real failed tests with $name",
+    { timeout: 60000 },
+    async ({ option, mode, entry, betaOnly }) => {
+      const root = dirs.make("oc-report-output-operand-");
+      const output = path.join(root, "reports", betaOnly ? "result.json=" : "result.json");
+      const outputArgs =
+        option === "attached" ? [`--outputFile=${output}`, "beta.test.ts"] : [option, output];
+      const nativeArgs = [
+        "--reporter=verbose",
+        "--reporter=json",
+        ...outputArgs,
+        "--passWithNoTests",
+      ];
+      const parsed = parseCLI(["vitest", "run", ...nativeArgs]);
+      const requested = parsed.options.outputFile;
+      expect(typeof requested === "string" ? requested : requested?.json).toBe(output);
+      expect(parsed.filter).toEqual(betaOnly ? ["beta.test.ts"] : []);
+      const result = await reportFixture(root)(mode, {
+        entry,
+        report: false,
+        nativeArgs,
+      });
+      const report: JsonTestResults = json(output);
+      const cases = (betaOnly ? expected.slice(2) : expected).map(([name, status]) => [
+        name,
+        name === "beta/one" ? "failed" : status,
+      ]);
+
+      expect(inventory(report), result.stderr).toEqual(cases);
+      const failed = report.testResults
+        .flatMap((file) => file.assertionResults)
+        .find((test) => test.fullName.trim() === "beta/one");
+      expect(failed?.failureMessages).toEqual(
+        expect.arrayContaining([expect.stringContaining("expected 1 to be 2")]),
+      );
+      expect(result.code, result.stderr).toBe(1);
+      expect(result.signal).toBeNull();
+      const index = json(path.join(result.reportSet!, "index.json"));
+      expect(index.complete).toBe(true);
+      expect(index.requested).toBe(output);
+      expect(index.aggregate).toBe(output);
+      expect(index.merge).toMatchObject({ code: 1, signal: null });
+    },
+  );
+
+  it.each(["--outputFile.blob", "--outputFile.blob="])(
+    "preserves native no-tests refusal after %s",
+    { timeout: 60000 },
+    async (option) => {
+      const root = dirs.make("oc-report-following-option-");
+      const output = path.join(root, "reports", "result.json");
+      const nativeArgs = [
+        "--reporter=json",
+        `--outputFile.json=${output}`,
+        option,
+        "--passWithNoTests=false",
+      ];
+      const parsed = parseCLI(["vitest", "run", ...nativeArgs]);
+      expect(parsed.options.outputFile).toEqual({ json: output, blob: true });
+      expect(parsed.options.passWithNoTests).toBe(false);
+      expect(parsed.filter).toEqual([]);
+
+      const result = await reportFixture(root)("empty", {
+        entry: "projects",
+        report: false,
+        nativeArgs,
+      });
+      const index = json(path.join(result.reportSet!, "index.json"));
+      const attempt = index.entries[0].attempts[0];
+      const capture: VitestReportCapture = json(`${attempt.json}.capture.json`);
+      expect(capture.passWithNoTests, result.stderr).toBe(false);
+      expect(capture.command).toContain("--passWithNoTests=false");
+      expect(capture.modules).toEqual([]);
+      expect(capture.ended?.reason).toBe("failed");
+      expect(attempt.outcome).toMatchObject({ code: 1, signal: null });
+      expect(result.code, result.stderr).toBe(1);
+      expect(result.signal).toBeNull();
+      expect(index.complete).toBe(false);
+      expect(index.entries[1].attempts).toEqual([]);
+      expect(fs.existsSync(output)).toBe(false);
+    },
+  );
+
+  it.each(["failure", "batch-failure", "unhandled", "suite-error"] as const)(
     "publishes complete evidence without erasing native failure: %s",
     { timeout: 60000 },
     async (mode) => {
@@ -141,10 +412,20 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
       if (mode === "failure" || mode === "batch-failure") {
         cases[2]![1] = "failed";
       }
+      if (mode === "suite-error") {
+        cases.push(["broken suite body", "passed"]);
+      }
       expect(inventory(json(result.output))).toEqual(cases);
       const index = json(path.join(result.reportSet!, "index.json"));
       expect(index.complete).toBe(true);
       expect(index.entries[1].attempts[0].outcome.code).toBe(1);
+      if (mode === "suite-error") {
+        const capture = json(`${index.entries[1].attempts[0].json}.capture.json`);
+        expect(capture.ended).toMatchObject({ reason: "failed", failedModules: 1, suiteErrors: 1 });
+        expect(json(path.join(result.reportSet!, "aggregate.json.capture.json")).ended).toEqual(
+          capture.ended,
+        );
+      }
       if (mode === "unhandled") {
         const part = index.entries[1].attempts[0].json;
         expect(json(part).success).toBe(true);
@@ -153,6 +434,19 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
       }
     },
   );
+
+  it.each([
+    ["config-error", "owned configuration failure"],
+    ["pool-identity", "Native merge project identity changed"],
+    ["nested-shared-leaf-name-drift", "Native merge project identity changed"],
+    ["nested-shared-leaf-root-drift", "Native merge project identity changed"],
+  ] as const)("retains the old output on %s", { timeout: 60000 }, async (mode, diagnostic) => {
+    const result = await run(mode);
+    expect(result.code, result.stderr).toBe(1);
+    expect(result.stderr).toContain(diagnostic);
+    expect(json(path.join(result.reportSet!, "index.json")).complete).toBe(false);
+    expect(fs.readFileSync(result.output, "utf8")).toBe("old report");
+  });
 
   it.each([
     "missing",
@@ -318,7 +612,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     "leaves native control execution with the project child: %s",
     { timeout: 60000 },
     async (_, nativeArgs, kind) => {
-      const result = await createVitestReportFixture(dirs.make("oc-report-control-"))("serial", {
+      const result = await reportFixture(dirs.make("oc-report-control-"))("serial", {
         entry: "projects",
         nativeArgs: [...nativeArgs],
       });
@@ -352,7 +646,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     "preserves sibling and single-process metadata ownership: %s %s %j",
     { timeout: 60000 },
     async (mode, entry, nativeArgs, helpBlocks, tests) => {
-      const result = await createVitestReportFixture(dirs.make("oc-report-control-"))(mode, {
+      const result = await reportFixture(dirs.make("oc-report-control-"))(mode, {
         entry,
         nativeArgs: [...nativeArgs],
       });
@@ -371,7 +665,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
   );
 
   it("keeps non-report metadata native", { timeout: 60000 }, async () => {
-    const result = await createVitestReportFixture(dirs.make("oc-report-control-"))("serial", {
+    const result = await reportFixture(dirs.make("oc-report-control-"))("serial", {
       entry: "projects",
       nativeArgs: ["--help"],
       report: false,
@@ -388,6 +682,35 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     expect(json(path.join(result.reportSet!, "index.json")).complete).toBe(true);
   });
 
+  it(
+    "merges an empty grouped selection with its executed direct child",
+    { timeout: 60000 },
+    async () => {
+      const result = await reportFixture(dirs.make("oc-report-empty-group-"))("grouped", {
+        entry: "projects",
+        nativeArgs: ["--project=beta", "--passWithNoTests"],
+      });
+      const index = json(path.join(result.reportSet!, "index.json"));
+      const captures = index.entries.map(
+        (entry: { attempts: { json: string; outcome: { code: number } }[] }) => {
+          const attempt = entry.attempts.at(-1)!;
+          expect(attempt.outcome.code).toBe(0);
+          return json(`${attempt.json}.capture.json`);
+        },
+      );
+      expect(captures[0].modules).toEqual([]);
+      expect(captures[0].ended.reason).toBe("passed");
+      expect(captures[1].modules).toHaveLength(1);
+      expect(result.code, result.stderr).toBe(0);
+      expect(inventory(json(result.output))).toEqual(expected.slice(2));
+      expect(index.complete).toBe(true);
+      expect(captures[0].projects).toEqual([]);
+      expect(json(path.join(result.reportSet!, "aggregate.json.capture.json")).modules).toEqual(
+        captures[1].modules,
+      );
+    },
+  );
+
   it("leaves a single invocation native", { timeout: 60000 }, async () => {
     const result = await run("single");
     expect(result.code, result.stderr).toBe(0);
@@ -395,19 +718,46 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     expect(inventory(json(result.output))).toEqual(expected.slice(0, 2));
   });
 
+  it("rejects executed same-name projects with different roots", { timeout: 60000 }, async () => {
+    const result = await reportFixture(dirs.make("oc-report-project-conflict-"))(
+      "grouped-conflict",
+      { entry: "projects", nativeArgs: ["--project=beta"] },
+    );
+    const index = json(path.join(result.reportSet!, "index.json"));
+    const modules = index.entries.map(
+      (entry: { attempts: { json: string; outcome: { code: number } }[] }) => {
+        const attempt = entry.attempts.at(-1)!;
+        expect(attempt.outcome.code).toBe(0);
+        expect(inventory(json(attempt.json))).toEqual(expected.slice(2));
+        const capture = json(`${attempt.json}.capture.json`);
+        expect(capture.modules).toHaveLength(1);
+        return capture.modules[0];
+      },
+    );
+    expect(modules.map((module: { name: string }) => module.name)).toEqual(["beta", "beta"]);
+    expect(modules[0].root).not.toBe(modules[1].root);
+    expect(modules[0].taskId).not.toBe(modules[1].taskId);
+    expect(result.code, result.stderr).toBe(1);
+    expect(result.stderr).toContain('Project name "beta"');
+    expect(result.stderr).toContain("is not unique");
+    expect(index.complete).toBe(false);
+    expect(fs.existsSync(result.output)).toBe(false);
+  });
+
   it("merges actual planner chunks of the same config once each", { timeout: 60000 }, async () => {
     const result = await run("chunks");
     expect(result.code, result.stderr).toBe(0);
     expect(inventory(json(result.output))).toEqual(
-      Array.from({ length: 2 }, (_, i) => [`chunk/${i}`, "passed"]),
+      reportChunkTestFiles.map((_, index) => [`chunk/${String(index).padStart(2, "0")}`, "passed"]),
     );
+    expect(result.reportSet).toBeTypeOf("string");
     const index = json(path.join(result.reportSet!, "index.json"));
-    expect(
-      index.entries.map((entry: { includePatterns: string[] }) => entry.includePatterns),
-    ).toEqual([
-      ["extensions/telegram/src/owned-one.test.ts"],
-      ["extensions/telegram/src/owned-two.test.ts"],
-    ]);
+    const chunks: string[][] = index.entries.map(
+      (entry: { includePatterns: string[] }) => entry.includePatterns,
+    );
+    expect(chunks.map((chunk) => chunk.length)).toEqual([6, 5]);
+    expect(chunks.flat().toSorted()).toEqual(reportChunkTestFiles);
+    expect(index.complete).toBe(true);
     expect(new Set(index.entries.map((entry: { config: string }) => entry.config)).size).toBe(1);
   });
 });

@@ -10,6 +10,7 @@ import {
   type QaGatewayChild,
 } from "../../../../extensions/qa-lab/api.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { createQaPreparedRepoCliCommand } from "../../../helpers/qa-prepared-repo-cli.js";
 
 type JsonObject = Record<string, unknown>;
 type TelegramCall = { method: string; body: JsonObject };
@@ -232,10 +233,11 @@ test("introduces itself once when Telegram reports joining an allowed supergroup
         const gatewayOwner = createQaGatewayChild();
         let gateway: QaGatewayChild | undefined;
         try {
+          const repoRoot = path.resolve(import.meta.dirname, "../../../..");
           mock = await startQaMockOpenAiServer();
           gateway = await gatewayOwner.start({
-            repoRoot: path.resolve(import.meta.dirname, "../../../.."),
-            useRepoCli: true,
+            repoRoot,
+            command: createQaPreparedRepoCliCommand(repoRoot),
             providerBaseUrl: `${apiRoot}/v1`,
             transportBaseUrl: apiRoot,
             transport: {

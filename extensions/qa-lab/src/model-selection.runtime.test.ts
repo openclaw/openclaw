@@ -33,56 +33,26 @@ describe("qa model selection runtime", () => {
     );
   });
 
-  it("keeps the OpenAI live default when an API key is configured", () => {
-    resolveEnvApiKey.mockReturnValue({ apiKey: "sk-test" });
-
-    expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.6");
+  it("selects live defaults without reading credentials", () => {
+    expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.6-luna");
     expect(resolveQaRuntimeModelPair({ providerMode: "live-frontier" })).toEqual({
-      primaryModel: "openai/gpt-5.6",
-      alternateModel: "openai/gpt-5.6-luna",
+      primaryModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.6-terra",
     });
+    expect(resolveEnvApiKey).not.toHaveBeenCalled();
     expect(loadAuthProfileStoreForRuntime).not.toHaveBeenCalled();
   });
 
-  it.each(["oauth", "token"] as const)(
-    "prefers the Codex live default for a stored %s profile",
-    (type) => {
-      loadAuthProfileStoreForRuntime.mockReturnValue({
-        profiles: {
-          "openai:user@example.com": {
-            provider: "openai",
-            type,
-          },
-        },
-      });
-
-      expect(resolveQaRuntimeModelPair({ providerMode: "live-frontier" })).toEqual({
-        primaryModel: "openai/gpt-5.6-luna",
-        alternateModel: "openai/gpt-5.6-sol",
-      });
-      expect(loadAuthProfileStoreForRuntime).toHaveBeenCalledWith(undefined, {
-        readOnly: true,
-        allowKeychainPrompt: false,
-        externalCliProviderIds: ["openai"],
-      });
-    },
-  );
-
-  it("keeps the OpenAI live default when stored OpenAI profiles are available", () => {
-    loadAuthProfileStoreForRuntime.mockReturnValue({
-      profiles: {
-        "openai:api-key": {
-          provider: "openai",
-          type: "api_key",
-        },
-      },
-    });
-
-    expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.6");
+  it("preserves an explicit preferred live model", () => {
+    expect(
+      defaultQaRuntimeModelForMode("live-frontier", {
+        preferredLiveModel: "anthropic/claude-sonnet-4-6",
+      }),
+    ).toBe("anthropic/claude-sonnet-4-6");
   });
 
-  it.each(["openai/gpt-5.6", "openai/gpt-5.6-sol"])(
-    "derives Luna after explicit Sol primary %s",
+  it.each(["openai/gpt-5.6", "openai/gpt-5.6-sol", "openai/gpt-5.6-terra"])(
+    "derives Luna after explicit primary %s",
     (primaryModel) => {
       expect(resolveQaRuntimeModelPair({ providerMode: "live-frontier", primaryModel })).toEqual({
         primaryModel,
@@ -91,7 +61,7 @@ describe("qa model selection runtime", () => {
     },
   );
 
-  it("derives Sol after an explicit Luna primary", () => {
+  it("derives Terra after an explicit Luna primary", () => {
     expect(
       resolveQaRuntimeModelPair({
         providerMode: "live-frontier",
@@ -99,7 +69,7 @@ describe("qa model selection runtime", () => {
       }),
     ).toEqual({
       primaryModel: "openai/gpt-5.6-luna",
-      alternateModel: "openai/gpt-5.6-sol",
+      alternateModel: "openai/gpt-5.6-terra",
     });
   });
 
@@ -111,7 +81,7 @@ describe("qa model selection runtime", () => {
       }),
     ).toEqual({
       primaryModel: "anthropic/claude-sonnet-4-6",
-      alternateModel: "openai/gpt-5.6",
+      alternateModel: "openai/gpt-5.6-luna",
     });
   });
 

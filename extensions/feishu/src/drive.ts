@@ -1,13 +1,21 @@
-// Feishu plugin module implements drive behavior.
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  formatErrorMessage,
+  PlatformMessageNotDispatchedError,
+} from "openclaw/plugin-sdk/error-runtime";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
-import { encodeQuery, extractReplyText, formatFeishuApiError } from "./comment-shared.js";
+import {
+  encodeQuery,
+  extractReplyText,
+  FeishuReplyCommentError,
+  formatFeishuApiError,
+} from "./comment-shared.js";
 import { parseFeishuCommentTarget, type CommentFileType } from "./comment-target.js";
 import { FeishuDriveSchema, type FeishuDriveParams } from "./drive-schema.js";
+import { withFeishuMessageDispatch } from "./send-context.js";
 import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
 import {
   feishuExternalToolResult as jsonResult,
@@ -43,28 +51,6 @@ type FeishuDriveApiResponse<T> = {
   msg?: string;
   data?: T;
 };
-
-class FeishuReplyCommentError extends Error {
-  httpStatus?: number;
-  feishuCode?: number | string;
-  feishuMsg?: string;
-  feishuLogId?: string;
-
-  constructor(params: {
-    message: string;
-    httpStatus?: number;
-    feishuCode?: number | string;
-    feishuMsg?: string;
-    feishuLogId?: string;
-  }) {
-    super(params.message);
-    this.name = "FeishuReplyCommentError";
-    this.httpStatus = params.httpStatus;
-    this.feishuCode = params.feishuCode;
-    this.feishuMsg = params.feishuMsg;
-    this.feishuLogId = params.feishuLogId;
-  }
-}
 
 type FeishuDriveCommentReply = {
   reply_id?: string;
@@ -524,16 +510,18 @@ async function addComment(
     throw new Error("block_id is only supported for docx comments");
   }
   const response = assertDriveApiSuccess(
-    await requestDriveApi<FeishuDriveApiResponse<Record<string, unknown>>>({
-      client,
-      method: "POST",
-      url: `/open-apis/drive/v1/files/${encodeURIComponent(params.file_token)}/new_comments`,
-      data: {
-        file_type: params.file_type,
-        reply_elements: buildReplyElements(params.content),
-        ...(params.block_id?.trim() ? { anchor: { block_id: params.block_id.trim() } } : {}),
-      },
-    }),
+    await withFeishuMessageDispatch(() =>
+      requestDriveApi<FeishuDriveApiResponse<Record<string, unknown>>>({
+        client,
+        method: "POST",
+        url: `/open-apis/drive/v1/files/${encodeURIComponent(params.file_token)}/new_comments`,
+        data: {
+          file_type: params.file_type,
+          reply_elements: buildReplyElements(params.content),
+          ...(params.block_id?.trim() ? { anchor: { block_id: params.block_id.trim() } } : {}),
+        },
+      }),
+    ),
   );
   return {
     success: true,
@@ -583,24 +571,26 @@ async function replyComment(
   )}/replies`;
   const query = { file_type: params.file_type };
   try {
-    const response = await requestDriveApi<FeishuDriveApiResponse<Record<string, unknown>>>({
-      client,
-      method: "POST",
-      url,
-      query,
-      data: {
-        content: {
-          elements: [
-            {
-              type: "text_run",
-              text_run: {
-                text: params.content,
+    const response = await withFeishuMessageDispatch(() =>
+      requestDriveApi<FeishuDriveApiResponse<Record<string, unknown>>>({
+        client,
+        method: "POST",
+        url,
+        query,
+        data: {
+          content: {
+            elements: [
+              {
+                type: "text_run",
+                text_run: {
+                  text: params.content,
+                },
               },
-            },
-          ],
+            ],
+          },
         },
-      },
-    });
+      }),
+    );
     if (response.code === 0) {
       return {
         success: true,
@@ -620,7 +610,10 @@ async function replyComment(
       feishuLogId: response.log_id,
     });
   } catch (error) {
-    if (error instanceof FeishuReplyCommentError) {
+    if (
+      error instanceof FeishuReplyCommentError ||
+      error instanceof PlatformMessageNotDispatchedError
+    ) {
       throw error;
     }
     const meta = extractDriveApiErrorMeta(error);
@@ -722,19 +715,14 @@ export async function deliverCommentThreadText(
 // ============ Tool Registration ============
 
 export function registerFeishuDriveTools(api: OpenClawPluginApi) {
-  if (!api.config) {
-    return;
-  }
-
-  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(api.config);
-  if (!toolsCfg.drive) {
-    return;
-  }
-
   type FeishuDriveExecuteParams = FeishuDriveParams & { accountId?: string };
 
   api.registerTool(
     (ctx) => {
+      const cfg = ctx.runtimeConfig ?? ctx.config ?? api.config;
+      if (!cfg || !resolveAnyEnabledFeishuToolsConfig(cfg).drive) {
+        return null;
+      }
       const defaultAccountId = ctx.agentAccountId;
       return {
         name: "feishu_drive",
@@ -747,7 +735,7 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
           const p = params as FeishuDriveExecuteParams;
           try {
             const client = createFeishuToolClient({
-              api,
+              cfg,
               executeParams: p,
               defaultAccountId,
               requiredTool: { family: "drive", label: "Drive" },

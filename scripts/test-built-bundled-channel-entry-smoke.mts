@@ -60,30 +60,44 @@ function smokeInInstalledLayout() {
   const nodeModulesRoot = path.join(tempRoot, "node_modules");
   const installedPackageRoot = path.join(nodeModulesRoot, "openclaw");
   try {
-    fs.mkdirSync(nodeModulesRoot, { recursive: true });
-    fs.symlinkSync(packageRoot, installedPackageRoot, "dir");
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--preserve-symlinks",
-        fileURLToPath(import.meta.url),
-        "--package-root",
-        installedPackageRoot,
-      ],
-      {
-        env: { ...process.env, [installedLayoutEnv]: "1" },
-        stdio: "inherit",
-      },
+    fs.mkdirSync(installedPackageRoot, { recursive: true });
+    fs.copyFileSync(
+      path.join(packageRoot, "package.json"),
+      path.join(installedPackageRoot, "package.json"),
     );
-    return result.status ?? 1;
+    fs.cpSync(path.join(packageRoot, "dist"), path.join(installedPackageRoot, "dist"), {
+      recursive: true,
+      mode: fs.constants.COPYFILE_FICLONE,
+    });
+    fs.symlinkSync(
+      fs.realpathSync(path.join(packageRoot, "node_modules")),
+      path.join(installedPackageRoot, "node_modules"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    return smokeInstalledPackageOnPlainNode(installedPackageRoot);
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 }
 
-if (process.env[installedLayoutEnv] !== "1" && !packageRootLooksInstalled(packageRoot)) {
+// tsx's CJS hook would resolve the plugin loader's require(esm) graph (execa ->
+// npm-run-path -> unicorn-magic) with the require condition; probe on plain Node.
+function smokeInstalledPackageOnPlainNode(installedPackageRoot: string) {
+  const result = spawnSync(
+    process.execPath,
+    [fileURLToPath(import.meta.url), "--package-root", installedPackageRoot],
+    { env: { ...process.env, [installedLayoutEnv]: "1" }, stdio: "inherit" },
+  );
+  return result.status ?? 1;
+}
+
+if (process.env[installedLayoutEnv] !== "1") {
   // Let the layout owner's finally run before terminating this process.
-  process.exit(smokeInInstalledLayout());
+  process.exit(
+    packageRootLooksInstalled(packageRoot)
+      ? smokeInstalledPackageOnPlainNode(packageRoot)
+      : smokeInInstalledLayout(),
+  );
 }
 
 async function importBuiltModule(absolutePath: string): Promise<unknown> {

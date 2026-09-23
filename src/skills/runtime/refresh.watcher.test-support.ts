@@ -1,7 +1,44 @@
+import { EventEmitter } from "node:events";
+import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, vi } from "vitest";
+import type { FSWatcherEventMap } from "chokidar";
+import { afterEach, beforeEach, expect, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 
-type WatchEvent = "add" | "addDir" | "all" | "change" | "unlink" | "unlinkDir" | "raw" | "error";
+export function useSkillsWatcherFixture() {
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterEach(async () => {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+      const { closeSkillsWatchers } = await import("./refresh.js");
+      await closeSkillsWatchers(true);
+      cleanup();
+    }),
+  );
+  let fixtureRoot: string;
+  let workspaceDir: string;
+
+  async function createFixtureDirectory(relativePath: string): Promise<string> {
+    const directory = path.join(fixtureRoot, relativePath);
+    await fs.mkdir(directory, { recursive: true });
+    return directory;
+  }
+
+  beforeEach(async () => {
+    fixtureRoot = tempDirs.make("openclaw-watch-fixture-");
+    workspaceDir = await createFixtureDirectory("workspace");
+    await createFixtureDirectory("workspace/skills");
+  });
+
+  return {
+    createFixtureDirectory,
+    get workspaceDir() {
+      return workspaceDir;
+    },
+  };
+}
+
+type WatchEvent = keyof FSWatcherEventMap;
 type WatchCallback = (...args: unknown[]) => void;
 type WatchOptions = {
   depth: number;
@@ -14,20 +51,23 @@ type WatchOptions = {
 };
 
 function createMockWatcher() {
-  const handlers = new Map<WatchEvent, WatchCallback[]>();
+  const events = new EventEmitter();
   const watcher = {
     closed: false,
+    getWatched: vi.fn((): Record<string, string[]> => ({})),
     on: vi.fn((event: WatchEvent, callback: WatchCallback) => {
-      handlers.set(event, [...(handlers.get(event) ?? []), callback]);
+      events.on(event, callback);
       return watcher;
     }),
     close: vi.fn(async () => {
+      if (watcher.closed) {
+        return;
+      }
       watcher.closed = true;
+      events.removeAllListeners();
     }),
     emit: (event: WatchEvent, ...args: unknown[]) => {
-      for (const callback of handlers.get(event) ?? []) {
-        callback(...args);
-      }
+      events.emit(event, ...args);
     },
   };
   return watcher;
@@ -40,18 +80,35 @@ export function createSkillsWatcherMock() {
     createdWatchers.push(watcher);
     return watcher;
   });
+  const nativeWatchMock = (watchRoot: string, ignored: WatchOptions["ignored"]) =>
+    watchMock(watchRoot, { depth: 0, followSymlinks: false, usePolling: false, ignored });
   function watchForSkillRoot(root: string) {
-    // Distinguish logical subscriptions that share one physical ancestor by
-    // their public traversal filter, rather than depending on watcher order.
-    const index = watchMock.mock.calls.findLastIndex(
-      ([, options]) =>
-        !options.ignored(path.join(root, "SKILL.md")) &&
-        options.ignored(path.join(path.dirname(root), "SKILL.md")),
+    // Existing roots have their own recursive watcher. Missing roots share a
+    // shallow ancestor whose public traversal filter admits the logical path.
+    const normalizedRoot = root.replaceAll("\\", "/");
+    let index = watchMock.mock.calls.findLastIndex(
+      ([watchRoot, options], candidate) =>
+        watchRoot === normalizedRoot && options.depth > 0 && !createdWatchers[candidate]?.closed,
     );
+    if (index < 0) {
+      let closest = -1;
+      for (const [candidate, [watchRoot, options]] of watchMock.mock.calls.entries()) {
+        if (
+          !createdWatchers[candidate]?.closed &&
+          options.depth === 0 &&
+          normalizedRoot.startsWith(watchRoot.endsWith("/") ? watchRoot : `${watchRoot}/`) &&
+          !options.ignored(path.join(root, "SKILL.md")) &&
+          watchRoot.length >= closest
+        ) {
+          index = candidate;
+          closest = watchRoot.length;
+        }
+      }
+    }
     expect(index, `watch subscription for ${root}`).toBeGreaterThanOrEqual(0);
     const [watchRoot, options] = watchMock.mock.calls[index]!;
     return { watchRoot, options, watcher: createdWatchers[index]! };
   }
 
-  return { createdWatchers, watchMock, watchForSkillRoot };
+  return { createdWatchers, watchMock, nativeWatchMock, watchForSkillRoot };
 }

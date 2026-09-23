@@ -1,9 +1,12 @@
 // Covers install-policy checks for packages and plugin installs.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { requireNodeTool } from "../../test/helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isPidAlive } from "../shared/pid-alive.js";
 import {
   killPidIfAlive,
   waitForPidFile,
@@ -195,7 +198,7 @@ describe("runInstallPolicy", () => {
         },
       },
       env: {
-        PATH: path.dirname(process.execPath),
+        PATH: path.dirname(requireNodeTool("node")),
       },
       request: baseRequest(sourceDir),
     });
@@ -209,20 +212,21 @@ describe("runInstallPolicy", () => {
       const forkScriptPath = await writeForkingNoOutputScript(sourceDir);
       const pidPath = path.join(sourceDir, "forked.pid");
       let childPid: number | undefined;
+      let resultPromise: ReturnType<typeof runInstallPolicy> | undefined;
       const nativeSetTimeout = globalThis.setTimeout;
-      const noOutputTimeouts: Array<() => void> = [];
+      let noOutputTimeout: (() => void) | undefined;
       const setTimeoutSpy = vi
         .spyOn(globalThis, "setTimeout")
         .mockImplementation((callback, delay, ...args) => {
           if (delay === 1_000) {
-            noOutputTimeouts.push(() => callback(...args));
+            noOutputTimeout = () => callback(...args);
             return nativeSetTimeout(() => undefined, 60_000);
           }
           return nativeSetTimeout(callback, delay, ...args);
         });
 
       try {
-        const resultPromise = runInstallPolicy({
+        resultPromise = runInstallPolicy({
           config: {
             security: {
               installPolicy: {
@@ -242,13 +246,8 @@ describe("runInstallPolicy", () => {
         });
         void resultPromise.catch(() => undefined);
         childPid = await waitForPidFile(pidPath);
-        await vi.waitFor(
-          () => {
-            expect(noOutputTimeouts.length).toBeGreaterThanOrEqual(2);
-          },
-          { timeout: 5_000 },
-        );
-        noOutputTimeouts.at(-1)?.();
+        expect(isPidAlive(childPid)).toBe(true);
+        expectDefined(noOutputTimeout, "no-output timeout")();
         const result = await resultPromise;
 
         expect(result?.blocked?.reason).toContain("policy command produced no output");
@@ -256,6 +255,7 @@ describe("runInstallPolicy", () => {
       } finally {
         setTimeoutSpy.mockRestore();
         killPidIfAlive(childPid);
+        await resultPromise?.catch(() => {});
       }
     },
   );

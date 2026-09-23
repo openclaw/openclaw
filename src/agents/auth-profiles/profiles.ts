@@ -5,21 +5,30 @@
  */
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { normalizeAuthProfileCredential } from "./credential-normalize.js";
+import { withOAuthProfileLocks, type OAuthProfileLockKey } from "./oauth-profile-lock.js";
+import { removeOAuthRefreshGenerationPeers } from "./oauth-refresh-peers.js";
+import { resolveSharedAuthStorePath } from "./path-resolve.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import { removeRuntimeExternalProfileReferences } from "./runtime-external-profile-references.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import {
   ensureAuthProfileStoreForLocalUpdate,
+  loadAuthProfileStoreWithoutExternalProfiles,
+  saveAuthProfileStore,
+  updateAuthProfileStoreWithLock,
+} from "./store-runtime.js";
+import {
   isSharedMainAuthProfileAgentDir,
   resolvePersistedAuthProfileOwnerAgentDir,
   resolveRuntimeAuthProfileAgentDir,
-  saveAuthProfileStore,
-  updateAuthProfileStoreWithLock,
 } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 import { resetAuthProfileFailureState } from "./usage-state.js";
@@ -28,13 +37,10 @@ export {
   listProfilesForProvider,
   resolveSubscriptionAuthModeForProfiles,
 } from "./profile-list.js";
-export {
-  upsertAuthProfileAfterLoginWithLockOrThrow,
-  upsertAuthProfileWithLock,
-  upsertAuthProfileWithLockOrThrow,
-} from "./upsert-with-lock.js";
+export { upsertAuthProfileWithLock, upsertAuthProfileWithLockOrThrow } from "./upsert-with-lock.js";
 
 const authProfileProfilesLog = createSubsystemLogger("agent/embedded");
+const OAUTH_REMOVAL_MAX_ATTEMPTS = 3;
 
 function listProviderAuthStateEntries<T>(
   entries: Record<string, T> | undefined,
@@ -74,23 +80,12 @@ function replaceProviderAuthState<T>(
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
-function updateSuccessfulUsageStatsEntry(
-  store: AuthProfileStore,
-  profileId: string,
-  lastUsed?: number,
-): void {
-  store.usageStats = store.usageStats ?? {};
-  store.usageStats[profileId] = resetAuthProfileFailureState(
-    store.usageStats[profileId] ?? {},
-    lastUsed === undefined ? undefined : { lastUsed },
-  );
-}
-
 /** Sets or clears explicit auth profile order for a provider. */
 export async function setAuthProfileOrder(params: {
   agentDir?: string;
   provider: string;
   order?: string[] | null;
+  sharedStoreWrite?: boolean;
 }): Promise<AuthProfileStore | null> {
   const providerKey = resolveProviderIdForAuth(params.provider);
   const sanitized =
@@ -99,6 +94,7 @@ export async function setAuthProfileOrder(params: {
 
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
+    sharedStoreWrite: params.sharedStoreWrite,
     // Preserve requested IDs that the agent inherits (not owns) so the local
     // save path does not prune them from the order. Without this, a secondary
     // agent's `models auth order set --agent` accepts an inherited profile ID
@@ -129,10 +125,10 @@ export async function promoteAuthProfileInOrder(params: {
   profileId: string;
   createIfMissing?: boolean;
   createFromOrder?: string[];
-}): Promise<AuthProfileStore | null> {
+}): Promise<Result<AuthProfileStore, "lock-contention">> {
   const providerKey = resolveProviderIdForAuth(params.provider);
   const effectiveStore = ensureAuthProfileStoreForLocalUpdate(params.agentDir);
-  return await updateAuthProfileStoreWithLock({
+  const updated = await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
     saveOptions: { preserveOrderProfileIds: [params.profileId, ...(params.createFromOrder ?? [])] },
     updater: (store) => {
@@ -174,6 +170,7 @@ export async function promoteAuthProfileInOrder(params: {
       return true;
     },
   });
+  return updated === null ? err("lock-contention") : ok(updated);
 }
 
 /** Upserts an auth profile immediately into the local store. */
@@ -192,13 +189,8 @@ export function upsertAuthProfile(params: {
   });
 }
 
-/** Removes auth profiles and related state for a provider, optionally narrowed to exact IDs. */
-export async function removeProviderAuthProfilesWithLock(params: {
-  provider: string;
-  agentDir?: string;
-  profileIds?: readonly string[];
-}): Promise<AuthProfileStore | null> {
-  const agentDir = resolveRuntimeAuthProfileAgentDir(params.agentDir);
+function providerAuthStoreOwners(requestedAgentDir?: string): Array<string | undefined> {
+  const agentDir = resolveRuntimeAuthProfileAgentDir(requestedAgentDir);
   const owners: Array<string | undefined> = [agentDir];
   if (
     agentDir &&
@@ -210,22 +202,35 @@ export async function removeProviderAuthProfilesWithLock(params: {
     // Other agents must not erase credentials inherited from the shared store.
     owners.unshift(undefined);
   }
-  let updated: AuthProfileStore | null = null;
-  for (const owner of owners) {
-    updated = await updateAuthProfileStoreWithLock({
-      agentDir: owner,
-      updater: (store) =>
-        removeProfileReferences(
-          store,
-          new Set(params.profileIds ?? listProfilesForProvider(store, params.provider)),
-          params.profileIds ? undefined : params.provider,
-        ),
-    });
-    if (updated === null) {
+  return owners;
+}
+
+/** Removes auth profiles and related state for a provider, optionally narrowed to exact IDs. */
+export async function removeProviderAuthProfilesWithLock(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  agentDir?: string;
+  profileIds?: readonly string[];
+}): Promise<AuthProfileStore | null> {
+  const owners = providerAuthStoreOwners(params.agentDir);
+  for (let attempt = 0; attempt < OAUTH_REMOVAL_MAX_ATTEMPTS; attempt += 1) {
+    const targets = owners.map((owner) =>
+      createAuthProfileRemovalTarget({
+        agentDir: owner,
+        ...(params.profileIds
+          ? { profileIds: new Set(params.profileIds) }
+          : { provider: params.provider }),
+      }),
+    );
+    const result = await removeAuthProfileTargetsWithLocks(targets, params.cfg ?? {});
+    if (result.kind === "updated") {
+      return result.stores.at(-1) ?? null;
+    }
+    if (result.kind === "contention") {
       return null;
     }
   }
-  return updated;
+  return null;
 }
 
 function removeProfileReferences(
@@ -247,15 +252,135 @@ function removeProfileReferences(
   return true;
 }
 
-/** Removes selected auth profiles and every state pointer that references them. */
-export async function removeAuthProfilesWithLock(params: {
-  profileIds: readonly string[];
+type AuthProfileRemovalTarget = {
   agentDir?: string;
-}): Promise<AuthProfileStore | null> {
-  const profileIds = new Set(params.profileIds);
-  return await updateAuthProfileStoreWithLock({
+  profileIds: ReadonlySet<string>;
+  provider?: string;
+  expectedProfiles: ReadonlyMap<string, AuthProfileCredential | undefined>;
+};
+
+function createAuthProfileRemovalTarget(params: {
+  agentDir?: string;
+  profileIds?: ReadonlySet<string>;
+  provider?: string;
+}): AuthProfileRemovalTarget {
+  // Removal compares the physical write target, without inherited credentials.
+  const store = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
+    allowKeychainPrompt: false,
+    inheritedAuthDir: params.agentDir,
+  });
+  const profileIds =
+    params.profileIds ?? new Set(listProfilesForProvider(store, params.provider ?? ""));
+  return {
     agentDir: params.agentDir,
-    updater: (store) => removeProfileReferences(store, profileIds),
+    profileIds,
+    ...(params.provider ? { provider: params.provider } : {}),
+    expectedProfiles: new Map(
+      [...profileIds].map((profileId) => [profileId, store.profiles[profileId]]),
+    ),
+  };
+}
+
+function authProfileRemovalTargetMatches(
+  target: AuthProfileRemovalTarget,
+  store: AuthProfileStore,
+): boolean {
+  if (target.provider) {
+    const currentProfileIds = new Set(listProfilesForProvider(store, target.provider));
+    if (
+      currentProfileIds.size !== target.profileIds.size ||
+      [...currentProfileIds].some((profileId) => !target.profileIds.has(profileId))
+    ) {
+      return false;
+    }
+  }
+  return [...target.expectedProfiles].every(([profileId, expected]) =>
+    isDeepStrictEqual(store.profiles[profileId], expected),
+  );
+}
+
+type AuthProfileRemovalResult =
+  | { kind: "retry" }
+  | { kind: "contention" }
+  | { kind: "updated"; stores: AuthProfileStore[] };
+
+function readSurvivingRemovalProfiles(
+  targets: readonly AuthProfileRemovalTarget[],
+): ReadonlyMap<string, AuthProfileCredential> {
+  const surviving = new Map<string, AuthProfileCredential>();
+  for (const target of targets) {
+    const store = loadAuthProfileStoreWithoutExternalProfiles(target.agentDir, {
+      allowKeychainPrompt: false,
+      inheritedAuthDir: target.agentDir,
+    });
+    for (const profileId of target.profileIds) {
+      const credential = store.profiles[profileId];
+      if (credential) {
+        surviving.set(profileId, credential);
+      }
+    }
+  }
+  return surviving;
+}
+
+async function removeAuthProfileTargetsWithLocks(
+  targets: readonly AuthProfileRemovalTarget[],
+  cfg: OpenClawConfig,
+): Promise<AuthProfileRemovalResult> {
+  const lockKeys: OAuthProfileLockKey[] = targets.flatMap((target) =>
+    [...target.expectedProfiles].flatMap(([profileId, credential]) =>
+      credential?.type === "oauth" ? [{ profileId, provider: credential.provider }] : [],
+    ),
+  );
+  return await withOAuthProfileLocks(lockKeys, async () => {
+    for (const target of targets) {
+      const current = loadAuthProfileStoreWithoutExternalProfiles(target.agentDir, {
+        allowKeychainPrompt: false,
+        inheritedAuthDir: target.agentDir,
+      });
+      if (!authProfileRemovalTargetMatches(target, current)) {
+        return { kind: "retry" };
+      }
+    }
+
+    for (const target of targets) {
+      for (const [profileId, credential] of target.expectedProfiles) {
+        if (credential?.type !== "oauth") {
+          continue;
+        }
+        await removeOAuthRefreshGenerationPeers({
+          cfg,
+          ownerDatabasePath: target.agentDir
+            ? resolveAuthProfileDatabasePath(target.agentDir)
+            : resolveSharedAuthStorePath(),
+          profileId,
+          generation: credential,
+        });
+      }
+    }
+
+    const stores: AuthProfileStore[] = [];
+    for (const target of targets) {
+      let stale = false;
+      const updated = await updateAuthProfileStoreWithLock({
+        agentDir: target.agentDir,
+        updater: (store) => {
+          if (!authProfileRemovalTargetMatches(target, store)) {
+            stale = true;
+            return false;
+          }
+          return removeProfileReferences(store, target.profileIds, target.provider);
+        },
+      });
+      if (updated === null) {
+        return { kind: "contention" };
+      }
+      if (stale) {
+        return { kind: "retry" };
+      }
+      stores.push(updated);
+    }
+    return { kind: "updated", stores };
   });
 }
 
@@ -265,31 +390,67 @@ export async function removeAuthProfilesWithLock(params: {
  * store lets the profile reappear on the next status read and auth warmup.
  */
 export async function removeAuthProfilesAcrossOwnerStores(params: {
+  cfg?: OpenClawConfig;
+  provider?: string;
   agentDir?: string;
   profileIds: readonly string[];
+  beforeRemove?: (profileIds: readonly string[]) => Promise<void>;
+  onIncomplete?: (survivingProfiles: ReadonlyMap<string, AuthProfileCredential>) => Promise<void>;
 }): Promise<boolean> {
-  const profilesByOwner = new Map<string | undefined, Set<string>>([
-    [params.agentDir, new Set(params.profileIds)],
-  ]);
-  for (const profileId of params.profileIds) {
-    const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
-      agentDir: params.agentDir,
-      profileId,
-    });
-    const ownerProfiles = profilesByOwner.get(ownerAgentDir) ?? new Set<string>();
-    ownerProfiles.add(profileId);
-    profilesByOwner.set(ownerAgentDir, ownerProfiles);
+  const profileIds = new Set(params.profileIds);
+  if ([...profileIds].some(isUserModelAuthProfileId)) {
+    throw new Error(
+      "Personal model accounts are managed in Settings → Profile → Connected accounts. Clearing a default keeps the credential; revoke access with the provider instead of removing a shared auth profile.",
+    );
   }
-  for (const [ownerAgentDir, profileIds] of profilesByOwner) {
-    const updatedStore = await removeAuthProfilesWithLock({
-      profileIds: [...profileIds],
-      agentDir: ownerAgentDir,
-    });
-    if (!updatedStore) {
+  for (let attempt = 0; attempt < OAUTH_REMOVAL_MAX_ATTEMPTS; attempt += 1) {
+    const owners =
+      params.provider === undefined ? [params.agentDir] : providerAuthStoreOwners(params.agentDir);
+    // An explicit main dir and the implicit shared owner can name one legacy database.
+    // Capture it once, or the first removal makes its duplicate target look stale.
+    const profilesByOwner = new Map(
+      owners.map((owner) => [
+        isSharedMainAuthProfileAgentDir(owner) ? undefined : owner,
+        new Set(profileIds),
+      ]),
+    );
+    for (const profileId of profileIds) {
+      const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
+        agentDir: params.agentDir,
+        profileId,
+      });
+      const ownerProfiles = profilesByOwner.get(ownerAgentDir) ?? new Set<string>();
+      ownerProfiles.add(profileId);
+      profilesByOwner.set(ownerAgentDir, ownerProfiles);
+    }
+    const targets = [...profilesByOwner].map(([agentDir, ownerProfileIds]) =>
+      createAuthProfileRemovalTarget({
+        agentDir,
+        ...(params.provider !== undefined
+          ? { provider: params.provider }
+          : { profileIds: ownerProfileIds }),
+      }),
+    );
+    // Config cleanup must not make a later credential generation eligible for this removal.
+    let result: AuthProfileRemovalResult;
+    try {
+      await params.beforeRemove?.([
+        ...new Set(targets.flatMap((target) => [...target.profileIds])),
+      ]);
+      result = await removeAuthProfileTargetsWithLocks(targets, params.cfg ?? {});
+    } catch (error) {
+      await params.onIncomplete?.(readSurvivingRemovalProfiles(targets));
+      throw error;
+    }
+    if (result.kind === "updated") {
+      return true;
+    }
+    if (result.kind === "contention" || params.beforeRemove) {
+      await params.onIncomplete?.(readSurvivingRemovalProfiles(targets));
       return false;
     }
   }
-  return true;
+  return false;
 }
 
 /** Clear the last-good profile pointer for a provider under the store lock. */
@@ -301,6 +462,7 @@ export async function clearLastGoodProfileWithLock(params: {
   const providerKey = resolveProviderIdForAuth(params.provider);
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
+    profileId: params.profileId,
     updater: (store) => {
       const matches = listProviderAuthStateEntries(store.lastGood, providerKey);
       if (!matches.some(([, profileId]) => profileId === params.profileId)) {
@@ -322,26 +484,42 @@ export async function markAuthProfileSuccess(params: {
   const { store, provider, profileId, agentDir } = params;
   const providerKey = resolveProviderIdForAuth(provider);
   const profile = store.profiles[profileId];
-  if (!profile || resolveProviderIdForAuth(profile.provider) !== providerKey) {
+  if (
+    !profile ||
+    profile.setup?.replacement ||
+    resolveProviderIdForAuth(profile.provider) !== providerKey
+  ) {
     return;
   }
   const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({ agentDir, profileId });
-  const inherited = ownerAgentDir === undefined && !isSharedMainAuthProfileAgentDir(agentDir);
+  const personal = isUserModelAuthProfileId(profileId);
+  const inherited =
+    !personal && ownerAgentDir === undefined && !isSharedMainAuthProfileAgentDir(agentDir);
+  const updatesSelection = !inherited && !personal;
   const lastUsed = Date.now();
   let applied = false;
   const updated = await updateAuthProfileStoreWithLock({
     agentDir: ownerAgentDir,
+    profileId,
     updater: (freshStore) => {
       const freshProfile = freshStore.profiles[profileId];
-      if (!freshProfile || resolveProviderIdForAuth(freshProfile.provider) !== providerKey) {
+      if (
+        !freshProfile ||
+        freshProfile.setup?.replacement ||
+        resolveProviderIdForAuth(freshProfile.provider) !== providerKey
+      ) {
         return false;
       }
       // Inherited selection ownership is not defined. Clear shared health in
       // the credential owner without changing its last-good or rotation state.
-      if (!inherited) {
+      if (updatesSelection) {
         freshStore.lastGood = replaceProviderAuthState(freshStore.lastGood, providerKey, profileId);
       }
-      updateSuccessfulUsageStatsEntry(freshStore, profileId, inherited ? undefined : lastUsed);
+      freshStore.usageStats ??= {};
+      freshStore.usageStats[profileId] = resetAuthProfileFailureState(
+        freshStore.usageStats[profileId] ?? {},
+        { lastProbeAt: Date.now(), ...(inherited ? {} : { lastUsed }) },
+      );
       applied = true;
       return true;
     },
@@ -351,7 +529,7 @@ export async function markAuthProfileSuccess(params: {
     if (usage) {
       store.usageStats = { ...store.usageStats, [profileId]: usage };
     }
-    if (!inherited) {
+    if (updatesSelection) {
       store.lastGood = replaceProviderAuthState(store.lastGood, providerKey, profileId);
     }
     return;

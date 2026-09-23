@@ -1,6 +1,7 @@
 // Slack plugin module implements relay-backed inbound event transport.
 import { Buffer } from "node:buffer";
 import { isIP } from "node:net";
+import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   computeBackoff,
   sleepWithAbort,
@@ -12,9 +13,9 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-import WebSocket, { type ClientOptions, type RawData } from "ws";
+import { type ClientOptions, type RawData, WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { SlackSendIdentity } from "../send.js";
-import type { SlackMessageEvent } from "../types.js";
+import { parseSlackMessageEvent, type SlackMessageEvent } from "../types.js";
 import type { SlackIdentityHealth } from "./enterprise-install.js";
 import { formatUnknownError, SLACK_SOCKET_RECONNECT_POLICY } from "./reconnect-policy.js";
 
@@ -23,6 +24,8 @@ export type SlackRelaySourceConfig = {
   authToken: string;
   gatewayId: string;
 };
+
+export { requireSlackMessageEvent } from "../types.js";
 
 export type SlackRelayIdentity = SlackSendIdentity;
 
@@ -104,7 +107,7 @@ function openRelayWebSocket(
   }
   return new Promise((resolve, reject) => {
     const url = buildRelayWebSocketUrl(config);
-    const ws = new WebSocket(url, buildRelayWebSocketOptions(config.authToken));
+    const ws = new WebSocket(url, buildRelayWebSocketOptions(config.authToken, url));
 
     const cleanup = () => {
       ws.off("open", onOpen);
@@ -126,7 +129,7 @@ function openRelayWebSocket(
       reject(new Error(formatRelayClose(code, reason)));
     };
     const onAbort = () => {
-      cleanup();
+      // Keep terminal listeners until ws emits the error from closing a connecting socket.
       closeRelayWebSocket(ws);
       reject(new Error("Slack relay websocket aborted during connect"));
     };
@@ -232,8 +235,13 @@ async function handleRelayFrame(params: {
   sendRelayAck(params.ws, event.deliveryId);
 }
 
-export function buildRelayWebSocketOptions(authToken: string): ClientOptions {
+export function buildRelayWebSocketOptions(authToken: string, url: string): ClientOptions {
+  // ws supplies createConnection, bypassing Node's global proxy agent.
+  const agent = url.startsWith("wss:")
+    ? createNodeProxyAgent({ mode: "env", targetUrl: url, protocol: "https" })
+    : undefined;
   return {
+    ...(agent ? { agent } : {}),
     headers: {
       Authorization: `Bearer ${authToken}`,
     },
@@ -304,8 +312,8 @@ function extractRelaySlackMessageEvent(
   const routeKind = stringValue(routeRecord?.kind);
   const routeKey = stringValue(routeRecord?.key);
   const payload = asOptionalRecord(record.payload);
-  const event = asOptionalRecord(payload?.event);
-  if (event?.type !== "message" || typeof event.channel !== "string") {
+  const event = parseSlackMessageEvent(payload?.event);
+  if (!event) {
     return undefined;
   }
   if (!deliveryId || !routeKind || !SLACK_RELAY_ROUTE_KINDS.has(routeKind) || !routeKey) {
@@ -313,7 +321,7 @@ function extractRelaySlackMessageEvent(
   }
   return {
     deliveryId,
-    message: event as SlackMessageEvent,
+    message: event,
     route: {
       kind: routeKind as SlackRelayRoute["kind"],
       key: routeKey,

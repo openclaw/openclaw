@@ -10,7 +10,7 @@ import { syncDirectoryIfSupported } from "../infra/directory-durability.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { sameFileIdentity, type FileIdentityStat } from "../infra/fs-safe-advanced.js";
-import { FsSafeError, root as createFsSafeRoot } from "../infra/fs-safe.js";
+import { FsSafeError, root as createFsSafeRoot, walkDirectory } from "../infra/fs-safe.js";
 import {
   MAX_MEMORY_HOST_PUBLIC_EXPORT_BYTES,
   serializeMemoryHostEventExport,
@@ -224,22 +224,6 @@ export { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 export { resolveSessionAgentId } from "./agent-scope-runtime.js";
 export { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 
-async function listMarkdownFilesRecursive(rootDir: string): Promise<string[]> {
-  const entries = await fs.readdir(rootDir, { withFileTypes: true }).catch(() => []);
-  const files: string[] = [];
-  for (const entry of entries) {
-    const fullPath = path.join(rootDir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await listMarkdownFilesRecursive(fullPath)));
-      continue;
-    }
-    if (entry.isFile() && entry.name.endsWith(".md")) {
-      files.push(fullPath);
-    }
-  }
-  return files.toSorted((left, right) => left.localeCompare(right));
-}
-
 async function materializeMemoryHostEventExport(params: {
   workspaceDir: string;
 }): Promise<{ absolutePath: string; relativePath: string } | undefined> {
@@ -267,7 +251,7 @@ async function materializeMemoryHostEventExport(params: {
   return memoryHostEventExportQueue.enqueue(owner.queueKey, async () => {
     const absolutePath = path.join(workspaceKey, ...owner.relativePath.split("/"));
     return await withFileLock(owner.lockTarget, MEMORY_HOST_EVENT_EXPORT_LOCK_OPTIONS, async () => {
-      const storedEvents = listStoredMemoryHostEvents({
+      const storedEvents = await listStoredMemoryHostEvents({
         workspaceDir: workspaceKey,
         limit: MAX_MEMORY_HOST_PUBLIC_EXPORT_EVENTS,
       });
@@ -474,7 +458,13 @@ async function listMemoryWorkspacePublicArtifacts(params: {
   }
 
   const memoryDir = path.join(params.workspaceDir, "memory");
-  for (const absolutePath of await listMarkdownFilesRecursive(memoryDir)) {
+  const memoryFiles = await walkDirectory(memoryDir, {
+    symlinks: "skip",
+    include: (entry) => entry.kind === "file" && entry.name.endsWith(".md"),
+  });
+  for (const { path: absolutePath } of memoryFiles.entries.toSorted((left, right) =>
+    left.path.localeCompare(right.path),
+  )) {
     const relativePath = path.relative(params.workspaceDir, absolutePath).replace(/\\/g, "/");
     artifacts.push({
       kind: relativePath.startsWith("memory/dreaming/") ? "dream-report" : "daily-note",

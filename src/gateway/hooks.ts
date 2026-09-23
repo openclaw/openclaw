@@ -6,9 +6,8 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { listAgentIds } from "../agents/agent-scope-config.js";
+import { listAgentIds, tryResolveAgentOperationAgentId } from "../agents/agent-scope-config.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
-import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import {
   type PersistedSessionStoreOwner,
   resolvePersistedSessionStoreOwnerForKey,
@@ -80,7 +79,7 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
     throw new Error("hooks.path may not be '/'");
   }
   const mappings = resolveHookMappings(cfg.hooks);
-  const defaultAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
+  const defaultAgentId = tryResolveAgentOperationAgentId(cfg);
   // Global hook runs write a literal shared row, whose durable owner must win
   // over ambient hook defaults after migration sidecar state is gone.
   const globalSessionStoreOwner =
@@ -558,15 +557,15 @@ export function resolveEffectiveHookTargetAgentId(
   }
   if (
     persistedOwner.kind === "configured" &&
-    resolvedAgentId &&
-    resolvedAgentId !== persistedOwner.agentId
+    selectedAgentId &&
+    selectedAgentId !== persistedOwner.agentId
   ) {
     return {
       ok: false,
       code: "owner-conflict",
-      agentId: resolvedAgentId,
+      agentId: selectedAgentId,
       ownerAgentId: persistedOwner.agentId,
-      error: `agentId "${resolvedAgentId}" conflicts with global session-store owner "${persistedOwner.agentId}"; use agentId "${persistedOwner.agentId}" or update agents.defaults.sessionStore.agentId`,
+      error: `agentId "${selectedAgentId}" conflicts with global session-store owner "${persistedOwner.agentId}"; use agentId "${persistedOwner.agentId}" or update agents.defaults.sessionStore.agentId`,
     };
   }
   const effectiveAgentId =
