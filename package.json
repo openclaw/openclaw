@@ -1977,6 +1977,7 @@
     "release:prep:version": "node scripts/release-preflight.mjs --fix --scope version",
     "release:publish-preflight": "node --import ./scripts/tsx.mjs scripts/release-publish-preflight.mts",
     "release:version": "node --import ./scripts/tsx.mjs scripts/release-version.ts",
+    "repro:134700": "node --import ./scripts/tsx.mjs scripts/repro-134700.mts",
     "runtime-sidecars:check": "node --import ./scripts/tsx.mjs scripts/generate-runtime-sidecar-paths-baseline.ts --check",
     "runtime-sidecars:gen": "node --import ./scripts/tsx.mjs scripts/generate-runtime-sidecar-paths-baseline.ts --write",
     "sqlite:sessions-schema:check": "node --import ./scripts/tsx.mjs scripts/generate-sqlite-session-schema-baseline.ts --check",
