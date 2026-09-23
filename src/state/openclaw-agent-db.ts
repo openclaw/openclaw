@@ -23,6 +23,7 @@ import {
   deferSqlitePostCommitPublication,
   withSqlitePostCommitPublications,
 } from "../infra/sqlite-post-commit.js";
+import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
@@ -76,6 +77,7 @@ import {
   closeOpenClawAgentDatabases,
   refreshAgentDatabaseIdleTimer,
   retainAgentDatabase,
+  retainIncognitoSharedState,
   retainFailedAgentDatabaseClose,
   revokePendingAgentDatabaseOpen,
   type PendingAgentDatabaseOpen,
@@ -255,12 +257,14 @@ function* openOpenClawAgentDatabaseSteps(
       synchronous: "NORMAL",
     });
     ensureOpenClawAgentSchema(db, agentId, pathname);
+    admitSqliteSchema(db);
     registerOpenClawAgentDatabaseIdentity(db);
     const database = { agentId, db, path: pathname, walMaintenance };
     cache.incognito.add(database);
     cache.unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
     cache.databases.set(pathname, database);
     cache.generation += 1;
+    retainIncognitoSharedState(db, options.env);
     getOpenClawDatabaseMaintenanceScope()?.own(database.db, "agent-handles", () =>
       closeMaintenanceAgentDatabase(database),
     );
@@ -419,6 +423,7 @@ function* openOpenClawAgentDatabaseSteps(
       }
     })();
     ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
+    admitSqliteSchema(db);
     const database = { agentId, db, path: pathname, walMaintenance };
     openedDatabase = database;
     if (hasAgentDatabaseMaintenanceAuthority()) {

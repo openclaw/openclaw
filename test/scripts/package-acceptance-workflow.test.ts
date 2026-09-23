@@ -23,6 +23,7 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { buildFullReleaseCandidateBinding } from "../../scripts/full-release-candidate-contract.mjs";
 import { FULL_RELEASE_WAIT_TIMEOUT_MINUTES } from "../../scripts/full-release-validation-at-sha.mts";
+import { listRecordedFirstHopSourceVersions } from "../../scripts/lib/update-first-hop-lanes.mjs";
 import { parseUpgradeSurvivorScenarios } from "../../scripts/lib/upgrade-survivor-policy.mjs";
 import { createReleaseWorkflowMatrixPlan } from "../../scripts/plan-release-workflow-matrix.mjs";
 import {
@@ -76,6 +77,7 @@ const CI_WORKFLOW = ".github/workflows/ci.yml";
 const PERFORMANCE_WORKFLOW = ".github/workflows/openclaw-performance.yml";
 const PUBLICATION_CONTRACT_FILES = [
   "scripts/full-release-publication-contract.mjs",
+  "scripts/full-release-flake-policy.mjs",
   "scripts/clawhub-prepared-artifact.mjs",
   "scripts/clawhub-parent-authorization.mjs",
   "scripts/plugin-publication-artifact.mjs",
@@ -206,6 +208,8 @@ const frozenAdmissionClosure = [
   "scripts/lib/docker-e2e-plan.mts",
   "scripts/lib/docker-e2e-scenarios.mts",
   "scripts/lib/official-external-channel-catalog.json",
+  "scripts/lib/update-compat-inventory.json",
+  "scripts/lib/update-first-hop-lanes.mjs",
   "scripts/lib/upgrade-survivor-policy.mjs",
   "scripts/lib/upgrade-survivor-scenarios.json",
   "scripts/lib/release-version.mjs",
@@ -1049,7 +1053,9 @@ describe("frozen admission workflow barriers", () => {
         ],
       );
       const plan = f.selection();
-      expect(plan.docker).toHaveLength(71);
+      // One targeted group per recorded first-hop source joins the fixed lanes.
+      const firstHopLanes = listRecordedFirstHopSourceVersions().length;
+      expect(plan.docker).toHaveLength(70 + firstHopLanes);
       const planned = Date.now();
       const result = f.run("Admit frozen source contracts", {}, "", { timeout: 360_000 });
       console.info(
@@ -1066,9 +1072,9 @@ describe("frozen admission workflow barriers", () => {
       const bytes = readFileSync(join(f.root, "frozen-admission.json"));
       expect(bytes.length).toBeLessThanOrEqual(262_144);
       const record = JSON.parse(bytes.toString("utf8"));
-      expect(record.evaluations).toHaveLength(72);
+      expect(record.evaluations).toHaveLength(71 + firstHopLanes);
       const children = reconstructAdmissionEvaluations(record);
-      expect(children).toHaveLength(72);
+      expect(children).toHaveLength(71 + firstHopLanes);
       const { digest, provenance: _provenance, ...content } = record;
       expect(digest).toBe(createHash("sha256").update(JSON.stringify(content)).digest("hex"));
       expect(record.status).toBe("UNRESOLVED");
@@ -2966,6 +2972,7 @@ function runFullReleaseInputValidation(
       RELEASE_PROFILE: releaseProfile,
       SKIP_PACKAGE_TELEGRAM_E2E: skipTelegram,
       TELEGRAM_WAIVER: options.telegramWaiver ?? "",
+      LANE_WAIVER: "",
       RERUN_GROUP: options.rerunGroup ?? "all",
       LIVE_SUITE_FILTER: options.liveSuiteFilter ?? "",
       TARGET_CONTEXT_REF: "",
@@ -3077,6 +3084,7 @@ printf '%s\\n' "$value"
       GITHUB_OUTPUT: outputPath,
       PATH: `${fakeBin}:${process.env.PATH}`,
       RELEASE_PROFILE: params.releaseProfile ?? "beta",
+      LANE_WAIVER: "",
       RUN_RELEASE_SOAK: params.runReleaseSoak ?? "false",
       RERUN_GROUP: params.rerunGroup ?? "all",
       CROSS_OS_SUITE_FILTER: params.crossOsSuiteFilter ?? "",
@@ -3156,6 +3164,7 @@ function runReleaseChecksInputValidation(
       RELEASE_RUN_RELEASE_SOAK_INPUT: runReleaseSoak,
       RELEASE_SKIP_PACKAGE_TELEGRAM_E2E_INPUT: skipTelegram,
       TELEGRAM_WAIVER: options.telegramWaiver ?? "",
+      LANE_WAIVER: "",
     },
   });
   return { outputPath, result };
@@ -3267,6 +3276,7 @@ function runFullReleaseCandidateRequest(packagePublished: boolean) {
       UPGRADE_SURVIVOR_BASELINE: "openclaw@latest",
       UPGRADE_SURVIVOR_BASELINES: "",
       UPGRADE_SURVIVOR_SCENARIOS: "",
+      LANE_WAIVER: "",
     },
   });
   const output = Object.fromEntries(
@@ -3418,6 +3428,7 @@ function runFullReleaseChildDispatch(
     CI_RELEASE_SCOPE: "full",
     CODEX_PLUGIN_SPEC: "",
     CROSS_OS_SUITE_FILTER: "",
+    EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: "[]",
     FAIL_FAST: "false",
     GH_TOKEN: "fixture-token",
     LIVE_SUITE_FILTER: "",
@@ -3441,6 +3452,7 @@ function runFullReleaseChildDispatch(
     SCENARIO: "",
     SKIP_PACKAGE_TELEGRAM_E2E: "false",
     TELEGRAM_WAIVER: "",
+    LANE_WAIVER: "",
     TARGET_CONTEXT_REF: "",
     TARGET_REF: "main",
     TARGET_SHA: "b".repeat(40),
@@ -5689,6 +5701,7 @@ const fs=require("node:fs");fs.writeFileSync("install-proof.json",JSON.stringify
     },
   ])("carries the $name artifact owner without replacing publication authority", async (mode) => {
     const stableSoakWaiver = mode.fullReleasePreflight ? "Soak infrastructure unavailable" : "";
+    const laneWaiver = mode.fullReleasePreflight ? "Telegram lane blocked: operator approved" : "";
     const producerRunId = mode.independentProducer ? "333" : "111";
     const fullReleaseRunId = mode.fullReleasePreflight ? "111" : "222";
     const qualifiedName = `openclaw-npm-preflight-${"a".repeat(40)}`;
@@ -5719,6 +5732,7 @@ const fs=require("node:fs");fs.writeFileSync("install-proof.json",JSON.stringify
     const expressions: Record<string, string> = {
       "${{ inputs.preflight_run_id }}": "111",
       "${{ inputs.stable_soak_waiver }}": stableSoakWaiver,
+      "${{ inputs.lane_waiver }}": laneWaiver,
       "${{ inputs.full_release_validation_run_id }}": fullReleaseRunId,
     };
     for (const [name, value] of Object.entries(target.outputs ?? {})) {
@@ -5833,6 +5847,7 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     const dispatch = fixture.events().find((event) => event.startsWith("dispatch:"));
     expect(dispatch).toContain("-f preflight_run_id=111");
     expect(dispatch).toContain(`-f stable_soak_waiver=${stableSoakWaiver}`);
+    expect(dispatch).toContain(`-f lane_waiver=${laneWaiver}`);
     expect(dispatch).toContain(`-f full_release_validation_run_id=${fullReleaseRunId}`);
 
     const proof = fixture.run(
@@ -6779,7 +6794,9 @@ wait_for_run openclaw-npm-release.yml 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPRO
       'verify_child_run_sha "$workflow" "$run_id" "$expected_sha" || return 1',
       'approve_pending_deployments "${workflow}" "${run_id}" "${expected_sha}"',
       'dispatch_workflow_at_ref "${RELEASE_TAG}" "${TARGET_SHA}" android-release.yml',
-      'wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}"',
+      'wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}" "" true "" false',
+      "if ! wait_for_plugin_npm_release; then",
+      'printf \'%s\\0\' "${npm_args[@]}" > "${RUNNER_TEMP}/plugin-npm-dispatch-args"',
       'wait_for_run_background openclaw-npm-release.yml "${openclaw_npm_run_id}" "${PARENT_WORKFLOW_SHA}"',
       '-f release_publish_branch="${PARENT_WORKFLOW_BRANCH}"',
       '-f release_publish_full_ref="${PARENT_WORKFLOW_FULL_REF}"',
@@ -8440,6 +8457,7 @@ test "$package_manager" = "pnpm@12.1.0"
         RELEASE_TAG: "${{ inputs.tag }}",
         RELEASE_NPM_DIST_TAG: "${{ inputs.npm_dist_tag }}",
         STABLE_SOAK_WAIVER: "${{ inputs.stable_soak_waiver }}",
+        LANE_WAIVER: "${{ inputs.lane_waiver }}",
       });
     }
     expect(validationStep.env?.EXPECTED_RELEASE_PROFILE).toBe("${{ inputs.release_profile }}");
@@ -8658,18 +8676,30 @@ test "$package_manager" = "pnpm@12.1.0"
     const decisionDownloads = workflowStep(summary, "Download release decision attempts");
     const drainDownloads = workflowStep(summary, "Download diagnostic drain attempts");
 
-    expect(decision.needs).toEqual(["resolve_target", "release_execution_plan"]);
-    expect(drain.needs).toEqual(["resolve_target", "release_execution_plan"]);
+    expect(decision.needs).toEqual([
+      "resolve_target",
+      "release_execution_plan",
+      "automatic_flake_retry",
+    ]);
+    expect(drain.needs).toEqual([
+      "resolve_target",
+      "release_execution_plan",
+      "automatic_flake_retry",
+    ]);
     expect(decision.if).toBe("always()");
     expect(drain.if).toBe("always()");
     expect(decisionStep.run).toBe(drainStep.run);
     expect(decisionStep.env).toMatchObject({
       FAIL_FAST: "${{ inputs.fail_fast }}",
       FULL_RELEASE_STATE_MODE: "decision",
+      FULL_RELEASE_RETRY_RECORDS_PATH: "${{ runner.temp }}/full-release-flake-retry-records",
+      FULL_RELEASE_RETRY_OWNER_RESULT: "${{ needs.automatic_flake_retry.result }}",
     });
     expect(drainStep.env).toMatchObject({
       FAIL_FAST: "false",
       FULL_RELEASE_STATE_MODE: "drain",
+      FULL_RELEASE_RETRY_RECORDS_PATH: "${{ runner.temp }}/full-release-flake-retry-records",
+      FULL_RELEASE_RETRY_OWNER_RESULT: "${{ needs.automatic_flake_retry.result }}",
     });
     expectTextToIncludeAll(decisionStep.run, [
       'node scripts/full-release-validation-state.mjs "$FULL_RELEASE_STATE_MODE"',
@@ -8764,50 +8794,95 @@ test "$package_manager" = "pnpm@12.1.0"
 
   it("pins every Full Release Validation artifact download to the canonical action", () => {
     const workflow = readWorkflow(FULL_RELEASE_VALIDATION_WORKFLOW);
-    const downloadSteps = Object.values(workflow.jobs ?? {}).flatMap((job) =>
-      (job.steps ?? []).filter((step) => step.uses?.startsWith("actions/download-artifact@")),
+    const downloadSteps = Object.entries(workflow.jobs ?? {}).flatMap(([jobId, job]) =>
+      (job.steps ?? [])
+        .filter((step) => step.uses?.startsWith("actions/download-artifact@"))
+        .map((step) => ({ jobId, step })),
     );
 
-    expect(downloadSteps).toHaveLength(8);
+    expect(downloadSteps).toHaveLength(12);
     expect(
-      downloadSteps.map((step) => [
+      downloadSteps.map(({ jobId, step }) => [
+        jobId,
         step.name,
         step.with?.name ?? step.with?.pattern,
         step.with?.path,
       ]),
     ).toEqual([
       [
+        "evidence_reuse",
         "Download publication admission for reuse budgeting",
         "full-release-publication-admission-${{ github.run_id }}-1",
         "${{ runner.temp }}/full-release-publication-admission",
       ],
       [
+        "release_execution_plan",
         "Restore immutable release execution plan artifact",
         "full-release-execution-plan-${{ github.run_id }}",
         "${{ github.workspace }}/full-release-execution-plan",
       ],
       [
+        "release_execution_plan",
         "Download immutable publication admission",
         "full-release-publication-admission-${{ github.run_id }}-1",
         "${{ runner.temp }}/full-release-publication-admission",
       ],
-      ...Array.from({ length: 3 }, () => [
+      [
+        "automatic_flake_retry",
+        "Download immutable release execution plan",
+        "full-release-execution-plan-${{ github.run_id }}",
+        "${{ github.workspace }}/full-release-execution-plan",
+      ],
+      [
+        "automatic_flake_retry",
+        "Restore automatic retry intent artifact",
+        "full-release-flake-intent-${{ github.run_id }}-${{ matrix.child }}",
+        "${{ github.workspace }}/full-release-flake-intent",
+      ],
+      [
+        "release_decision",
         "Download immutable release execution plan",
         "full-release-execution-plan-${{ github.run_id }}",
         "${{ runner.temp }}/full-release-execution-plan",
-      ]),
+      ],
       [
+        "release_decision",
+        "Download automatic retry records",
+        "full-release-flake-retry-${{ github.run_id }}-*-${{ github.run_attempt }}",
+        "${{ runner.temp }}/full-release-flake-retry-records",
+      ],
+      [
+        "diagnostic_drain",
+        "Download immutable release execution plan",
+        "full-release-execution-plan-${{ github.run_id }}",
+        "${{ runner.temp }}/full-release-execution-plan",
+      ],
+      [
+        "diagnostic_drain",
+        "Download automatic retry records",
+        "full-release-flake-retry-${{ github.run_id }}-*-${{ github.run_attempt }}",
+        "${{ runner.temp }}/full-release-flake-retry-records",
+      ],
+      [
+        "summary",
+        "Download immutable release execution plan",
+        "full-release-execution-plan-${{ github.run_id }}",
+        "${{ runner.temp }}/full-release-execution-plan",
+      ],
+      [
+        "summary",
         "Download release decision attempts",
         "full-release-decision-${{ github.run_id }}-*",
         "${{ runner.temp }}/full-release-decision-attempts",
       ],
       [
+        "summary",
         "Download diagnostic drain attempts",
         "full-release-diagnostics-${{ github.run_id }}-*",
         "${{ runner.temp }}/full-release-diagnostic-attempts",
       ],
     ]);
-    for (const step of downloadSteps) {
+    for (const { step } of downloadSteps) {
       expect(step.uses).toBe(DOWNLOAD_ARTIFACT_V8);
     }
   });
@@ -14107,6 +14182,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     mkdirSync(join(root, "lib", "cross-os-release-checks"), { recursive: true });
     for (const source of [
       "scripts/release-ci-summary.mjs",
+      "scripts/full-release-flake-retry.mjs",
       "scripts/full-release-validation-policy.mjs",
       ...PUBLICATION_CONTRACT_FILES,
       "scripts/lib/release-changelog.mjs",

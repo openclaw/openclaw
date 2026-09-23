@@ -129,6 +129,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/projects-doctor.mjs!",
   "scripts/e2e/lib/upgrade-survivor/published-plugin-registry.mjs!",
   "scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs!",
+  // The compiler below exposes the runner's inline Node imports.
+  "scripts/e2e/lib/upgrade-survivor/run.sh!",
   "scripts/e2e/lib/upgrade-survivor/schema-expectation.mjs!",
   // update-restart-auth.sh installs this manager/launch adapter into the fixture bin directory.
   "scripts/e2e/lib/upgrade-survivor/systemd-fixture.mjs!",
@@ -200,9 +202,13 @@ const repositoryScriptEntries = [
   "scripts/print-live-docker-plugin-selection.mjs!",
   "scripts/qa-coverage-report.ts!",
   "scripts/qa-parity-report.ts!",
+  // Docker/release workflows launch the warning relay from copied harness roots.
+  "scripts/relay-build-limit-warnings.mts",
   "scripts/resolve-frozen-codex-live-suite.mjs!",
   // Changed-file checks invoke this targeted UI Stylelint entrypoint by path.
   "scripts/run-stylelint.mts!",
+  // lint-swift.sh launches the SwiftLint policy wrapper by absolute path.
+  "scripts/run-swiftlint.mts",
   // Path-spawned test roots are development entries; `!` would audit dev tools as production.
   "scripts/run-vitest-child.mts",
   // The isolated Vitest adapter executes this entry by path inside its container.
@@ -272,6 +278,25 @@ function compileFrvWorkflowConsumers(source: string, filePath: string): string {
   return names.size
     ? `import { ${[...names].join(", ")} } from "../../scripts/frv-test-exclusions.mjs";`
     : "";
+}
+
+function compileUpgradeSurvivorShellConsumers(source: string, filePath: string): string {
+  if (path.resolve(filePath) !== path.resolve("scripts/e2e/lib/upgrade-survivor/run.sh")) {
+    return "";
+  }
+  const imports = source.match(
+    /^[ \t]*import\s*\{[^}]+\}\s*from\s*["']\.\/scripts\/[^"'\r\n]+["'];?/gmu,
+  );
+  return (imports ?? [])
+    .map((declaration) =>
+      declaration.replace(/["'](\.\/scripts\/[^"']+)["']/u, (_match, specifier: string) => {
+        const relative = path
+          .relative(path.dirname(filePath), path.resolve(specifier))
+          .replaceAll("\\", "/");
+        return JSON.stringify(relative.startsWith(".") ? relative : `./${relative}`);
+      }),
+    )
+    .join("\n");
 }
 
 const rootEntries = [
@@ -561,7 +586,7 @@ const ignoredTestSupportFiles = [
 ] as const;
 
 const config = {
-  compilers: { yml: compileFrvWorkflowConsumers },
+  compilers: { yml: compileFrvWorkflowConsumers, sh: compileUpgradeSurvivorShellConsumers },
   ignoreFiles: [
     // Production mode excludes dev/maintainer executables. The full-tree
     // companion config removes this exclusion and audits them as script roots.
@@ -643,7 +668,7 @@ const config = {
         ...rootBundledPluginRuntimeDependencies,
       ],
       // Platform tools, installed CLIs, and shell builtins used by scripts and boundary tests.
-      ignoreBinaries: ["mint", "ngrok", "open", "openclaw", "sleep", "xcrun"],
+      ignoreBinaries: ["mint", "ngrok", "open", "openclaw", "sleep", "swiftlint", "xcrun"],
       // The stylelint config lives under config/, not a root default path.
       stylelint: { config: ["config/stylelint.config.mjs"] },
       project: [
@@ -881,6 +906,8 @@ const config = {
       "chrome-extension/options.js!",
       "chrome-extension/popup.js!",
       "scripts/copy-chrome-extension.mjs!",
+      // The opt-in browser benchmark is documented and invoked directly by path.
+      "scripts/bench-lightweight.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/canvas`]: bundledPluginWorkspace([
       // Package build/copy scripts are invoked from package.json.

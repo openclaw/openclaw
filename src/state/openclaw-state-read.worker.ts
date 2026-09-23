@@ -23,7 +23,6 @@ import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/work
 import { ExecutionDecisionCursorError } from "../audit/execution-decision-receipts.js";
 import { inspectExecutionIdentityRunInDatabase } from "../audit/execution-identity-context.js";
 import { observeCronRunRecoveryInDatabase } from "../cron/store/run-recovery.read.js";
-import { getFleetCellInDatabase, listFleetCellsInDatabase } from "../fleet/registry.kernel.js";
 import {
   readGitHubPublicationRequest,
   readKnownGitHubPublicationPullRequestUrlsInDatabase,
@@ -77,9 +76,11 @@ import {
   withOpenClawStateReadOnlyLocation,
 } from "./openclaw-state-db-read-connection.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import { readStateRegistryCommand } from "./openclaw-state-read-registry.js";
 import type { OpenClawStateReadReply } from "./openclaw-state-read.types.js";
 import { isReadRequest } from "./openclaw-state-read.validation.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
+import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.js";
 import {
   listUserChannelIdentitiesInDatabase,
   resolveUserChannelIdentityInDatabase,
@@ -589,6 +590,19 @@ serveOwnedWorkerTasks(
                     ),
                   };
                 }
+                if (command.type === "sessionRepositoryWorkspaces.find") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    workspaces: runSqliteDeferredTransactionSync(db, () =>
+                      command.owners.flatMap((owner) => {
+                        const workspace = findSessionRepositoryWorkspaceInDatabase(db, owner);
+                        return workspace ? [workspace] : [];
+                      }),
+                    ),
+                  };
+                }
                 if (command.type === "sandboxRegistry.list") {
                   return {
                     ok: true,
@@ -641,19 +655,7 @@ serveOwnedWorkerTasks(
                     ),
                   };
                 }
-                return command.type === "fleet.list"
-                  ? {
-                      ok: true,
-                      type: "fleet.list",
-                      sourceAdmitted,
-                      cells: listFleetCellsInDatabase(db),
-                    }
-                  : {
-                      ok: true,
-                      type: "fleet.get",
-                      sourceAdmitted,
-                      cell: getFleetCellInDatabase(db, command.tenantId),
-                    };
+                return readStateRegistryCommand(db, command);
               },
               input.databasePath,
               input.location,

@@ -71,9 +71,6 @@ vi.mock("../logging/log-tail.js", () => ({
 }));
 
 vi.mock("./logs-cli.runtime.js", () => ({
-  buildGatewayConnectionDetails: (
-    ...args: Parameters<typeof import("../gateway/call.js").buildGatewayConnectionDetails>
-  ) => buildGatewayConnectionDetails(...args),
   readSystemdServiceRuntime: (
     ...args: Parameters<typeof import("../daemon/systemd.js").readSystemdServiceRuntime>
   ) => readSystemdServiceRuntime(...args),

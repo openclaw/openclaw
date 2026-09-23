@@ -550,18 +550,15 @@ in Testbox unless explicitly doing local proof.
 
 ## Legacy compatibility
 
-Compatibility leniency is narrow and time boxed:
+Package Acceptance applies current metadata and persistence contracts without
+the retired pre-June 2026 warning or skip paths. Reproducing acceptance of those
+historical candidates requires their historical `workflow_ref` tooling.
 
-- Packages through `2026.4.25`, including `2026.4.25-beta.*`, may tolerate
-  already-shipped package metadata gaps in Package Acceptance.
-- The published `2026.4.26` package may warn for local build metadata stamp
-  files already shipped.
-- Later packages must satisfy modern contracts. The same gaps fail instead of
-  warning or skipping.
-
-Do not add new startup migrations for these old shapes. Add or extend a doctor
-repair, then prove it with `upgrade-survivor`, `published-upgrade-survivor`, or
-`update-restart-auth` when the update command owns the restart.
+For retained upgrade contracts, keep migrations in Doctor and prove changes with
+`upgrade-survivor`, `published-upgrade-survivor`, or `update-restart-auth` when the
+update command owns the restart. Pre-June task and flow sidecar imports are
+retired; use the [intermediate upgrade procedure](/install/updating) to preserve
+those records.
 
 ## Adding coverage
 

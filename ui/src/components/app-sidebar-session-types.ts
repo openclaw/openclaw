@@ -13,7 +13,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { SessionRunStatus } from "../api/types.ts";
+import type { GatewaySessionRow, SessionRunStatus } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
 import type { SessionChannelPresentation } from "../lib/session-channel.ts";
@@ -124,6 +124,7 @@ export type SidebarRecentSession = {
   pinnable: boolean;
   archived?: boolean;
   visibility?: SessionVisibility;
+  sharingRole?: GatewaySessionRow["sharingRole"];
   draftOwnedBySelf?: boolean;
   category?: string;
   icon?: string;

@@ -141,39 +141,29 @@ export function planOutboundTextMessageUnits(params: {
     return withDeliveryTopology([planTextUnit(params.text, 0)]);
   }
 
-  if (params.chunkMode === "newline") {
-    const blockChunks =
-      (params.chunkerMode ?? "text") === "markdown"
+  const blockChunks =
+    params.chunkMode !== "newline"
+      ? [params.text]
+      : (params.chunkerMode ?? "text") === "markdown"
         ? chunkMarkdownTextWithMode(params.text, params.textLimit, "newline")
         : chunkByParagraph(params.text, params.textLimit);
-
-    if (!blockChunks.length && params.text) {
-      blockChunks.push(params.text);
-    }
-
-    const units: OutboundMessageUnit[] = [];
-    for (const blockChunk of blockChunks) {
-      const chunks = chunkTextForPlan({
-        text: blockChunk,
-        limit: params.textLimit,
-        chunker: params.chunker,
-        formatting: params.formatting,
-      });
-      for (const chunk of chunks) {
-        units.push(planTextUnit(chunk, units.length, params.chunkedTextFormatting));
-      }
-    }
-    return withDeliveryTopology(units);
+  if (!blockChunks.length && params.text) {
+    blockChunks.push(params.text);
   }
 
-  return withDeliveryTopology(
-    chunkTextForPlan({
-      text: params.text,
+  const units: OutboundMessageUnit[] = [];
+  for (const blockChunk of blockChunks) {
+    const chunks = chunkTextForPlan({
+      text: blockChunk,
       limit: params.textLimit,
       chunker: params.chunker,
       formatting: params.formatting,
-    }).map((chunk, index) => planTextUnit(chunk, index, params.chunkedTextFormatting)),
-  );
+    });
+    for (const chunk of chunks) {
+      units.push(planTextUnit(chunk, units.length, params.chunkedTextFormatting));
+    }
+  }
+  return withDeliveryTopology(units);
 }
 
 /**

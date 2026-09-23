@@ -11,6 +11,7 @@ import {
 } from "../../app/notifications-auto-prompt.ts";
 import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/settings.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
+import { hasUnrestrictedModelCatalogSnapshot } from "../../lib/model-catalog-cache.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import {
   canonicalUiSessionKeyForPersistence,
@@ -224,6 +225,11 @@ export function createPageState(
     chatModelPickerOpenSessionKey: null,
     chatModelsLoading: false,
     chatModelCatalog: [],
+    chatModelCatalogInitialized: hasUnrestrictedModelCatalogSnapshot(
+      context.gateway.snapshot.client,
+    ),
+    chatModelSelectionPolicy: undefined,
+    chatModelCatalogRetired: false,
     chatModelCatalogError: null,
     chatAccountSelection: null,
     modelAuthStatusRequestVersion: 0,

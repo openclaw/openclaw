@@ -16,6 +16,7 @@ import {
   createNodeTestShardBundles,
   createNodeTestShards,
   createSelectedNodeTestShardBundles,
+  createUiRealGatewayTestShards,
   createUiTestShardGroups,
   createVitestCacheWarmGroups,
   hasCompleteStartupCorpusCoverage,
@@ -28,7 +29,6 @@ import {
 import {
   isCiProofTestFile,
   isReleaseOnlyRuntimeTestFile,
-  RELEASE_ONLY_RUNTIME_TEST_FILES,
 } from "../../scripts/lib/ci-proof-test-inventory.mts";
 import * as proofTestInventory from "../../scripts/lib/ci-proof-test-inventory.mts";
 import { isRuntimePlacementIncludePatterns } from "../../scripts/lib/ci-test-timings-schema.mts";
@@ -102,7 +102,11 @@ import {
 import { createUnitFastVitestConfig } from "../vitest/vitest.unit-fast.config.ts";
 import { createUnitVitestConfigWithOptions } from "../vitest/vitest.unit.config.ts";
 import { createWizardVitestConfig } from "../vitest/vitest.wizard.config.ts";
-import { listMatchedTestFiles, listTestFiles } from "./ci-node-test-plan.test-support.js";
+import {
+  expectRuntimeReleaseInventory,
+  listMatchedTestFiles,
+  listTestFiles,
+} from "./ci-node-test-plan.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -114,11 +118,16 @@ describe("Control UI release-only inventories", () => {
     "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts";
   const releaseOnlyRealGateway = new Set([
     "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
+    "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
     automationManagement,
     "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
     "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
     "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
+    "ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts",
+    "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
+    "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
+    "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
   ]);
   const tours = [
     "ui/src/e2e/board-fixture.e2e.test.ts",
@@ -128,6 +137,49 @@ describe("Control UI release-only inventories", () => {
     "ui/src/e2e/settings-layout.e2e.test.ts",
     "ui/src/e2e/theme-muted-contrast.e2e.test.ts",
   ];
+
+  function expectRealGatewayCoverage(
+    e2eGroups: Parameters<typeof createUiRealGatewayTestShards>[0],
+    expectedFiles: readonly string[],
+  ) {
+    const desktop = "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts";
+    const shards = createUiRealGatewayTestShards(e2eGroups);
+    expect(
+      shards.map(({ shard, shard_count, run_desktop }) => ({
+        shard,
+        shard_count,
+        run_desktop,
+      })),
+    ).toEqual([
+      { shard: 1, shard_count: 2, run_desktop: expectedFiles.includes(desktop) },
+      { shard: 2, shard_count: 2, run_desktop: false },
+    ]);
+    const files = shards.flatMap((shard) => [
+      ...shard.groups.flatMap((group) => {
+        expect(group.configs).toEqual(["test/vitest/vitest.ui-e2e-prebuilt.config.ts"]);
+        expect(group.includePatterns.length).toBeGreaterThan(0);
+        expect(group.includePatterns).not.toContain(desktop);
+        return group.includePatterns;
+      }),
+      ...(shard.run_desktop ? [desktop] : []),
+    ]);
+    // Array equality also catches duplicate ownership between jobs or desktop proof.
+    expect(files.toSorted()).toEqual(expectedFiles.toSorted());
+    for (const file of [
+      "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
+      "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
+      "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
+      "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
+      "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
+      "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
+      "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
+    ]) {
+      expect(shards[0]?.groups[0]?.includePatterns).toContain(file);
+    }
+    expect(shards[1]?.groups[0]?.includePatterns).toContain(
+      "ui/src/e2e/chat-flow.catalog-bootstrap.e2e.test.ts",
+    );
+  }
 
   it("omits only the named exhaustive matrices from ordinary UI owners", () => {
     const groups = createUiTestShardGroups({ includeReleaseOnlyTests: false });
@@ -156,30 +208,48 @@ describe("Control UI release-only inventories", () => {
     expect(groups.ui[0]?.includePatterns?.some((file) => file.endsWith(".e2e.test.ts"))).toBe(
       false,
     );
+    expectRealGatewayCoverage(
+      groups.e2e,
+      uiE2eRealGatewayTestFiles.filter((file) => !releaseOnlyRealGateway.has(file)),
+    );
   });
 
   it("retains directly edited matrices without widening from their source owner", () => {
-    const groups = createUiTestShardGroups({
+    const options = {
       includeReleaseOnlyTests: false,
       changedPaths: [
         entry,
         ...tours,
-        automationManagement,
+        ...releaseOnlyRealGateway,
         "ui/src/components/app-sidebar.ts",
         "ui/src/e2e",
       ],
-    });
+    };
+    const groups = createUiTestShardGroups(options);
     expect(groups.e2e[0]?.includePatterns).toContain(entry);
     expect(
-      groups.e2e[0]?.includePatterns?.filter((file) => releaseOnlyRealGateway.has(file)),
-    ).toEqual([automationManagement]);
+      groups.e2e[0]?.includePatterns?.filter((file) => releaseOnlyRealGateway.has(file)).toSorted(),
+    ).toEqual(
+      uiE2eRealGatewayTestFiles.filter((file) => releaseOnlyRealGateway.has(file)).toSorted(),
+    );
     expect(groups.e2e[0]?.includePatterns).toEqual(expect.arrayContaining(tours));
     expect(groups.e2e[0]?.includePatterns).not.toContain(embed);
     expect(groups.ui[0]?.includePatterns).not.toContain(sidebar);
+    expectRealGatewayCoverage(groups.e2e, uiE2eRealGatewayTestFiles);
+    expectRealGatewayCoverage(
+      createUiTestShardGroups({
+        includeReleaseOnlyTests: false,
+        changedPaths: [automationManagement, "ui/src/e2e", "ui/src/pages/usage/usage-page.ts"],
+      }).e2e,
+      uiE2eRealGatewayTestFiles.filter(
+        (file) => !releaseOnlyRealGateway.has(file) || file === automationManagement,
+      ),
+    );
   });
 
   it("leaves the complete canonical config inventories in full release validation", () => {
-    expect(createUiTestShardGroups()).toEqual({
+    const groups = createUiTestShardGroups();
+    expect(groups).toEqual({
       ui: [{ configs: ["ui/vitest.config.ts"], shard_name: "ui/vitest.config.ts" }],
       e2e: [
         {
@@ -188,6 +258,7 @@ describe("Control UI release-only inventories", () => {
         },
       ],
     });
+    expectRealGatewayCoverage(groups.e2e, uiE2eRealGatewayTestFiles);
   });
 });
 
@@ -4114,6 +4185,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         .filter(
           (shard) =>
             shard.shardName === "core-runtime-config" ||
+            shard.shardName === "agentic-cli" ||
             shard.includePatterns?.some(isReleaseOnlyRuntimeTestFile),
         )
         .map((shard) => shard.shardName);
@@ -4126,56 +4198,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           includeReleaseOnlyRuntimeTests: false,
           changedPaths: ["src/config/state-startup-corpus.test-support.ts"],
         });
-        const files = (plan: CompactNodeTestShard[]) =>
-          plan.flatMap((shard) => shard.groups.flatMap((group) => group.includePatterns ?? []));
-        const beforeFiles = files(before);
-        const afterFiles = files(after);
-        const fullCommandTimingParents = new Set(
-          before.flatMap((shard) =>
-            shard.groups
-              .filter((group) => group.configs.includes("test/vitest/vitest.commands.config.ts"))
-              .map((group) => {
-                const key = group.timing_key ?? group.shard_name;
-                return parseCompactSplitTimingKey(key)?.parentShardName ?? key;
-              }),
-          ),
-        );
-        expect(beforeFiles.filter((file) => !afterFiles.includes(file)).toSorted()).toEqual(
-          RELEASE_ONLY_RUNTIME_TEST_FILES.filter(
-            (file) => compactMode === "pull-request" || !file.startsWith("test/scripts/"),
-          ).toSorted(),
-        );
-        expect(afterFiles.filter((file) => !beforeFiles.includes(file))).toEqual([]);
-        expect(afterFiles).toContain("src/config/config-startup-corpus.test.ts");
-        for (const owner of reducedOwners) {
-          const owns = (group: { shard_name: string }) =>
-            group.shard_name === owner || group.shard_name.startsWith(`${owner}-hosted-`);
-          const reduced = after.flatMap((shard) => shard.groups).filter(owns);
-          const retainedFiles = before
-            .flatMap((shard) => shard.groups)
-            .filter(owns)
-            .flatMap((group) => group.includePatterns ?? [])
-            .filter((file) => !isReleaseOnlyRuntimeTestFile(file));
-          expect(reduced.flatMap((group) => group.includePatterns ?? []).toSorted(), owner).toEqual(
-            retainedFiles.toSorted(),
-          );
-          if (retainedFiles.length === 0) {
-            expect(reduced, owner).toEqual([]);
-          }
-          for (const group of reduced) {
-            const timingKey = expectDefined(group.timing_key, "reduced runtime timing identity");
-            const timingParent =
-              parseCompactSplitTimingKey(timingKey)?.parentShardName ?? timingKey;
-            expect(fullCommandTimingParents.has(timingParent), `${owner}: ${timingParent}`).toBe(
-              false,
-            );
-            expect(timingParent.replace(/#file-parallel-(?:2|8)$/u, "")).toBe(
-              owner === "agentic-control-plane-agent-chat"
-                ? `changed-${owner}-parallel-native-serial${parseCompactSplitTimingKey(timingKey) ? "-stripes" : ""}`
-                : `changed-${owner}`,
-            );
-          }
-        }
+        expectRuntimeReleaseInventory({ before, after, reducedOwners, compactMode });
       }
     },
   );
@@ -6147,7 +6170,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     "package.json",
     "pnpm-lock.yaml",
     "pnpm-workspace.yaml",
-    "patches/vitest@5.0.0.patch",
+    "patches/vitest@5.0.1.patch",
     ".github/workflows/ci.yml",
     ".github/ISSUE_TEMPLATE/bug_report.md",
     ".crabbox.yaml",
@@ -6246,8 +6269,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(createChangedExtensionFallbackShards([target])).toEqual([]);
   });
 
-  it("prepares the sticker provider runtime in extension fallback", () => {
-    const target = "extensions/telegram/src/sticker-cache.selection.test.ts";
+  it.each([
+    "extensions/telegram/src/sticker-cache.selection.test.ts",
+    "extensions/telegram/src/bot.create-telegram-bot.native-pipeline.test.ts",
+  ])("prepares the provider runtime in extension fallback for %s", (target) => {
     const owners = createChangedExtensionFallbackShards([target]).filter((shard) =>
       (shard.groups ?? [shard]).some((group) => group.includePatterns?.includes(target)),
     );

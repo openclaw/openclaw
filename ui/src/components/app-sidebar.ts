@@ -398,7 +398,13 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   }
 
   toggleSessionPin(session: SidebarRecentSession): void {
-    void this.sessionOrganizer.patchSession(session, { pinned: !session.pinned });
+    void this.sessionOrganizer.patchSession(
+      session,
+      { pinned: !session.pinned },
+      {
+        sessionScope: true,
+      },
+    );
   }
 
   toggleSessionMenu(

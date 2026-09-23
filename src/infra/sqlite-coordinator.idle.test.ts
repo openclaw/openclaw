@@ -35,7 +35,7 @@ const ownerUrl = resolveRuntimeWorkerUrl(storageProcessTestEntrypoints.stateData
 
 function observeConnections() {
   const { DatabaseSync } = requireNodeSqlite();
-  const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+  const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockClear();
   return () => new Set(exec.mock.contexts.filter((context) => context instanceof DatabaseSync));
 }
 

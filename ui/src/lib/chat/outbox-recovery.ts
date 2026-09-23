@@ -1,3 +1,4 @@
+import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import { getSafeSessionStorage } from "../../local-storage.ts";
 import { resolveUiConversationIdentity, hasUiSessionDefaults } from "../sessions/session-key.ts";
 import {
@@ -49,6 +50,7 @@ export function captureChatOutboxRecoveryDestination(
     !storage ||
     !hasUiSessionDefaults(state) ||
     state.selectedChatSessionIncognito ||
+    isIncognitoSessionKey(scope.sessionKey) ||
     (state.connected && state.client && !state.client.recoveryScopeReady)
   ) {
     return null;

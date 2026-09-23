@@ -5,8 +5,6 @@ import type {
   WorkerLiveEventResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { normalizeToolPolicyName } from "../../agents/tool-policy.js";
-import { onSessionIdentityMutation } from "../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { projectAgentToolActivity } from "../../infra/agent-activity-events.js";
 import {
   emitAgentEventIfCurrent,
@@ -18,7 +16,6 @@ import {
   getAgentRunContext,
   getAgentRunContextOwnership,
   getAgentRunContextOwnerStatus,
-  registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -29,13 +26,6 @@ import {
   recordWorkerLiveTrajectoryEvent,
 } from "./live-event-projection.js";
 import {
-  isValidLiveSessionBinding,
-  matchesSessionIdentityMutation,
-  prepareBoundLiveSessionSafely,
-  type BoundLiveSession,
-  type WorkerLiveSessionBinding,
-} from "./live-event-session-binding.js";
-import {
   fenceReleasedWorkerLiveRun,
   hasReachableBufferedTerminal,
   releaseWorkerLiveRun,
@@ -45,7 +35,10 @@ import {
   type PendingLiveEvent,
   type WorkerLiveCredentialRotation,
 } from "./live-event-window.js";
-import { captureWorkerTurnFinishing } from "./placement-turn-claim-events.js";
+import {
+  captureWorkerTurnFinishing,
+  type WorkerTurnTranscriptSource,
+} from "./placement-turn-claim-events.js";
 import { captureWorkerTurnLiveEventOwner } from "./worker-turn-run-owner.js";
 
 const DEFAULT_WINDOW_SIZE = 128;
@@ -61,12 +54,9 @@ export type WorkerLiveEventApplicationResult =
 type WorkerLiveEventFailure = Extract<WorkerLiveEventApplicationResult, { ok: false }>;
 
 type WorkerLiveEventReceiverOptions = {
-  getConfig: () => OpenClawConfig;
   maxActiveRuns?: number;
   maxPendingBytes?: number;
   maxSessions?: number;
-  startupBindings: readonly WorkerLiveSessionBinding[];
-  startupOwners: ReadonlyMap<string, number>;
   windowSize?: number;
 };
 
@@ -78,28 +68,21 @@ function capacityExceeded(): WorkerLiveEventFailure {
   return { ok: false, details: { reason: "capacity-exceeded" } };
 }
 
-export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOptions) {
-  const boundSessions = new Map<string, BoundLiveSession>();
-  const sessionBindings = new Map<string, WorkerLiveSessionBinding>();
+function isCancelledFinishing(
+  request: WorkerLiveEventParams,
+  owner: PendingLiveEvent["runOwner"],
+): boolean {
+  return (
+    owner?.isCancelled() === true &&
+    request.event.kind === "lifecycle" &&
+    request.event.payload.phase === "finishing" &&
+    request.event.payload.aborted === true
+  );
+}
+
+export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOptions = {}) {
   const fencedEnvironmentEpochs = new Map<string, number>();
-  const staleSessions = new Set<string>();
   const windows = new Map<string, LiveEventWindow>();
-  const startupBindingOwners = new Map(
-    options.startupBindings
-      .filter(isValidLiveSessionBinding)
-      .map(({ environmentId, runEpoch }) => [environmentId, runEpoch]),
-  );
-  // Only an owner corroborated by the same persisted binding may seed a
-  // post-restart ACK. Unmatched owner rows must restart from zero.
-  const startupOwners = new Map(
-    [...options.startupOwners].filter(
-      ([environmentId, ownerEpoch]) =>
-        environmentId.length > 0 &&
-        Number.isSafeInteger(ownerEpoch) &&
-        ownerEpoch >= 0 &&
-        startupBindingOwners.get(environmentId) === ownerEpoch,
-    ),
-  );
   const windowSize = Math.max(1, Math.floor(options.windowSize ?? DEFAULT_WINDOW_SIZE));
   const maxActiveRuns = Math.max(1, Math.floor(options.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS));
   const maxPendingBytes = Math.max(
@@ -107,29 +90,6 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     Math.floor(options.maxPendingBytes ?? DEFAULT_MAX_PENDING_BYTES),
   );
   const maxSessions = Math.max(1, Math.floor(options.maxSessions ?? DEFAULT_MAX_SESSIONS));
-  let committedConfig = options.getConfig();
-  for (const binding of options.startupBindings) {
-    if (!isValidLiveSessionBinding(binding)) {
-      continue;
-    }
-    const existing = sessionBindings.get(binding.sessionId);
-    if (
-      !existing ||
-      binding.runEpoch > existing.runEpoch ||
-      (binding.runEpoch === existing.runEpoch && binding.environmentId === existing.environmentId)
-    ) {
-      sessionBindings.set(binding.sessionId, { ...binding });
-    }
-  }
-  for (const binding of sessionBindings.values()) {
-    const prepared = prepareBoundLiveSessionSafely(committedConfig, binding);
-    if (prepared) {
-      boundSessions.set(binding.sessionId, prepared);
-    } else {
-      staleSessions.add(binding.sessionId);
-    }
-  }
-
   const rotateCredential = (rotation: WorkerLiveCredentialRotation): boolean =>
     rotateWorkerLiveEventCredential(windows.get(rotation.sessionId), rotation);
 
@@ -141,109 +101,6 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     window.pending.clear();
     window.pendingBytes = 0;
     window.terminalRuns.clear();
-  };
-
-  const bindSessionWithConfig = (
-    binding: WorkerLiveSessionBinding,
-    config: OpenClawConfig,
-  ): boolean => {
-    if (!isValidLiveSessionBinding(binding)) {
-      return false;
-    }
-    const existing = sessionBindings.get(binding.sessionId);
-    if (
-      (existing && binding.runEpoch < existing.runEpoch) ||
-      (existing &&
-        binding.runEpoch === existing.runEpoch &&
-        binding.environmentId !== existing.environmentId)
-    ) {
-      return false;
-    }
-    const prepared = prepareBoundLiveSessionSafely(config, binding);
-    if (!prepared) {
-      if (
-        existing?.environmentId === binding.environmentId &&
-        existing.runEpoch === binding.runEpoch
-      ) {
-        // Retain the last target for key-based identity matching, but gate delivery
-        // as stale until target resolution succeeds again.
-        staleSessions.add(binding.sessionId);
-      }
-      return false;
-    }
-    const window = windows.get(binding.sessionId);
-    if (
-      window &&
-      (window.environmentId !== binding.environmentId || window.runEpoch !== binding.runEpoch)
-    ) {
-      clearWindow(window);
-    }
-    sessionBindings.set(binding.sessionId, { ...binding });
-    boundSessions.set(binding.sessionId, prepared);
-    staleSessions.delete(binding.sessionId);
-    const retainedWindow = windows.get(binding.sessionId);
-    if (retainedWindow) {
-      retainedWindow.target = prepared.target;
-      for (const [runId, owned] of retainedWindow.activeRuns) {
-        if (
-          getAgentRunContextOwnerStatus(runId, owned.claimId, owned.lifecycleGeneration) ===
-          "active"
-        ) {
-          registerAgentRunContext(
-            runId,
-            {
-              ...(prepared.target.agentId ? { agentId: prepared.target.agentId } : {}),
-              isControlUiVisible: owned.controlUiVisible,
-              lifecycleGeneration: owned.lifecycleGeneration,
-              projectSessionActive: true,
-              sessionId: binding.sessionId,
-              sessionKey: prepared.target.sessionKey,
-            },
-            owned.claimId,
-          );
-        }
-      }
-    }
-    return true;
-  };
-
-  const bindSession = (binding: WorkerLiveSessionBinding): boolean =>
-    bindSessionWithConfig(binding, committedConfig);
-
-  const rebindAll = (config: OpenClawConfig): void => {
-    committedConfig = config;
-    for (const binding of sessionBindings.values()) {
-      bindSessionWithConfig(binding, committedConfig);
-    }
-  };
-
-  let unsubscribeSessionIdentityMutation: (() => void) | undefined;
-  const start = (): void => {
-    if (unsubscribeSessionIdentityMutation) {
-      return;
-    }
-    unsubscribeSessionIdentityMutation = onSessionIdentityMutation((mutation) => {
-      for (const binding of sessionBindings.values()) {
-        if (
-          matchesSessionIdentityMutation(binding, boundSessions.get(binding.sessionId), mutation)
-        ) {
-          if (!bindSessionWithConfig(binding, committedConfig)) {
-            // Keep stale binding after identity invalidates its cursor and claims.
-            startupOwners.delete(binding.environmentId);
-            const window = windows.get(binding.sessionId);
-            if (window) {
-              clearWindow(window);
-            }
-          }
-        }
-      }
-    });
-    // Re-resolve targets after subscribing to close the startup mutation gap.
-    for (const binding of sessionBindings.values()) {
-      if (!bindSessionWithConfig(binding, committedConfig)) {
-        startupOwners.delete(binding.environmentId);
-      }
-    }
   };
 
   const resyncRequired = (ackedSeq: number): WorkerLiveEventFailure => ({
@@ -264,34 +121,30 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     params: {
       identity: WorkerConnectionIdentity;
       request: WorkerLiveEventParams;
+      source: WorkerTurnTranscriptSource;
+      readAckedSeq: () => number;
     },
   ): WorkerLiveEventApplicationResult | LiveEventWindow => {
-    const binding = boundSessions.get(sessionId);
-    if (!binding) {
-      return { ok: false, details: { reason: "session-not-attached" } };
-    }
-    if (
-      binding.environmentId !== params.identity.environmentId ||
-      binding.runEpoch !== params.request.runEpoch
-    ) {
-      return { ok: false, details: { reason: "epoch-mismatch" } };
-    }
-    if (staleSessions.has(sessionId)) {
-      return { ok: false, details: { reason: "session-not-attached" } };
-    }
     let window = windows.get(sessionId);
+    if (
+      window &&
+      (window.environmentId !== params.identity.environmentId ||
+        window.runEpoch !== params.request.runEpoch)
+    ) {
+      if (params.request.runEpoch <= window.runEpoch) {
+        return { ok: false, details: { reason: "epoch-mismatch" } };
+      }
+      clearWindow(window);
+      window = undefined;
+    }
     if (window) {
-      if (
-        params.request.runEpoch !== window.runEpoch ||
-        params.identity.credentialHash !== window.credentialHash ||
-        params.identity.environmentId !== window.environmentId
-      ) {
+      if (params.identity.credentialHash !== window.credentialHash) {
         return { ok: false, details: { reason: "epoch-mismatch" } };
       }
     } else {
-      const startupOwnerEpoch = startupOwners.get(params.identity.environmentId);
-      if (startupOwnerEpoch !== params.request.runEpoch && params.request.lastAckedSeq !== 0) {
-        return resyncRequired(0);
+      const ackedSeq = params.readAckedSeq();
+      if (params.request.lastAckedSeq > ackedSeq) {
+        return resyncRequired(ackedSeq);
       }
       if (windows.size >= maxSessions) {
         // Evict the oldest settled, registry-quiescent window; it rebinds via
@@ -318,7 +171,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       window = {
         activeApplications: 0,
         activeRuns: new Map(),
-        ackedSeq: params.request.lastAckedSeq,
+        ackedSeq,
         credentialHash: params.identity.credentialHash,
         environmentId: params.identity.environmentId,
         pending: new Map(),
@@ -326,12 +179,16 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
         trajectoryWrites: new Set(),
         runEpoch: params.request.runEpoch,
         sessionId,
-        target: binding.target,
+        source: params.source,
         terminalRuns: new Map(),
       };
       windows.set(sessionId, window);
-      // Seed one process-lost window; later windows for this owner start at zero.
-      startupOwners.delete(params.identity.environmentId);
+    }
+    if (window.source !== params.source) {
+      if (window.activeRuns.size > 0 || window.pending.size > 0 || window.activeApplications > 0) {
+        return invalidEvent();
+      }
+      window.source = params.source;
     }
     return window;
   };
@@ -378,8 +235,8 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       if (
         ownerStatus !== "active" ||
         context?.sessionId !== window.sessionId ||
-        context.sessionKey !== window.target.sessionKey ||
-        context.agentId !== window.target.agentId ||
+        context.sessionKey !== window.source.sessionTarget.sessionKey ||
+        context.agentId !== window.source.sessionTarget.agentId ||
         context.lifecycleGeneration !== owned.lifecycleGeneration ||
         context.isControlUiVisible !== owned.controlUiVisible
       ) {
@@ -416,9 +273,9 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     if (
       existingContext &&
       (existingContext.sessionId !== window.sessionId ||
-        existingContext.sessionKey !== window.target.sessionKey ||
+        existingContext.sessionKey !== window.source.sessionTarget.sessionKey ||
         (existingContext.agentId !== undefined &&
-          existingContext.agentId !== window.target.agentId) ||
+          existingContext.agentId !== window.source.sessionTarget.agentId) ||
         existingContext.lifecycleGeneration !== lifecycleGeneration)
     ) {
       return invalidEvent();
@@ -429,12 +286,14 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     const claimId = claimAgentRunContext(
       runId,
       {
-        ...(window.target.agentId ? { agentId: window.target.agentId } : {}),
+        ...(window.source.sessionTarget.agentId
+          ? { agentId: window.source.sessionTarget.agentId }
+          : {}),
         isControlUiVisible: controlUiVisible,
         lifecycleGeneration,
         projectSessionActive: true,
         sessionId: window.sessionId,
-        sessionKey: window.target.sessionKey,
+        sessionKey: window.source.sessionTarget.sessionKey,
       },
       {
         exclusive: existingContext === undefined,
@@ -455,7 +314,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       controlUiVisible,
       emissionMode,
       lifecycleGeneration,
-      trajectoryRecorder: createWorkerLiveTrajectoryRecorder({ runId, target: window.target }),
+      trajectoryRecorder: createWorkerLiveTrajectoryRecorder({ runId, source: window.source }),
       toolArgsByCallId: new Map<string, unknown>(),
     };
     window.activeRuns.set(runId, claimed);
@@ -468,13 +327,10 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     allowBufferedTerminalCapacity: boolean,
     recordApplied: PendingLiveEvent["recordApplied"],
     runOwner: PendingLiveEvent["runOwner"],
+    source: WorkerTurnTranscriptSource,
   ): WorkerLiveEventFailure | undefined => {
     if (runOwner?.isCancelled()) {
-      if (
-        request.event.kind !== "lifecycle" ||
-        request.event.payload.phase !== "finishing" ||
-        request.event.payload.aborted !== true
-      ) {
+      if (!isCancelledFinishing(request, runOwner)) {
         return invalidEvent();
       }
       // Cancellation retires live publication before the worker finishes.
@@ -482,6 +338,11 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       window.terminalRuns.set(request.runId, request.seq);
       releaseWorkerLiveRun(window, request.runId);
       return undefined;
+    }
+    try {
+      source.receiptAuthority();
+    } catch {
+      return invalidEvent();
     }
     const owned = claimRun(window, request.runId, allowBufferedTerminalCapacity);
     if ("ok" in owned) {
@@ -521,10 +382,18 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
         ? [itemEvent, event]
         : [event, itemEvent]
       : [event];
-    const ownsPublication = () =>
-      window.activeRuns.get(request.runId) === owned &&
-      getAgentRunContextOwnerStatus(request.runId, owned.claimId, owned.lifecycleGeneration) ===
-        "active";
+    const ownsPublication = () => {
+      try {
+        source.receiptAuthority();
+      } catch {
+        return false;
+      }
+      return (
+        window.activeRuns.get(request.runId) === owned &&
+        getAgentRunContextOwnerStatus(request.runId, owned.claimId, owned.lifecycleGeneration) ===
+          "active"
+      );
+    };
     for (const emission of emissions) {
       if (!ownsPublication()) {
         return invalidEvent();
@@ -558,15 +427,24 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     first: WorkerLiveEventParams,
     firstApplied: PendingLiveEvent["recordApplied"],
     firstOwner: PendingLiveEvent["runOwner"],
+    firstSource: WorkerTurnTranscriptSource,
     firstPending?: PendingLiveEvent,
   ): WorkerLiveEventApplicationResult => {
     let request: WorkerLiveEventParams | undefined = first;
     let buffered = firstPending;
     let recordApplied = firstPending ? firstPending.recordApplied : firstApplied;
     let runOwner = firstPending ? firstPending.runOwner : firstOwner;
+    let source = firstPending?.source ?? firstSource;
     let publishedPrefix = false;
     while (request) {
-      const failed = publish(window, request, buffered !== undefined, recordApplied, runOwner);
+      const failed = publish(
+        window,
+        request,
+        buffered !== undefined,
+        recordApplied,
+        runOwner,
+        source,
+      );
       if (failed) {
         if (failed.details.reason === "capacity-exceeded" && buffered) {
           // Keep the ordered tail retryable while the active prefix claim drains.
@@ -608,13 +486,18 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       buffered = next;
       recordApplied = next.recordApplied;
       runOwner = next.runOwner;
+      source = next.source;
     }
     return { ok: true, result: { ackedSeq: window.ackedSeq } };
   };
 
   const applyToWindow = (
     window: LiveEventWindow,
-    params: { identity: WorkerConnectionIdentity; request: WorkerLiveEventParams },
+    params: {
+      identity: WorkerConnectionIdentity;
+      request: WorkerLiveEventParams;
+      source: WorkerTurnTranscriptSource;
+    },
   ): WorkerLiveEventApplicationResult => {
     if (params.request.seq <= window.ackedSeq) {
       return { ok: true, result: { ackedSeq: window.ackedSeq } };
@@ -635,7 +518,14 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     }
     if (seq === expectedSeq) {
       const pending = window.pending.get(seq);
-      return drain(window, pending?.request ?? params.request, recordApplied, runOwner, pending);
+      return drain(
+        window,
+        pending?.request ?? params.request,
+        recordApplied,
+        runOwner,
+        params.source,
+        pending,
+      );
     }
     if (window.pending.has(seq)) {
       return { ok: true, result: { ackedSeq: window.ackedSeq } };
@@ -644,7 +534,13 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     if (window.pendingBytes + sizeBytes > maxPendingBytes) {
       return resyncWindow(window);
     }
-    window.pending.set(seq, { request: params.request, sizeBytes, recordApplied, runOwner });
+    window.pending.set(seq, {
+      request: params.request,
+      sizeBytes,
+      recordApplied,
+      runOwner,
+      source: params.source,
+    });
     window.pendingBytes += sizeBytes;
     return { ok: true, result: { ackedSeq: window.ackedSeq } };
   };
@@ -652,6 +548,8 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
   const apply = async (params: {
     identity: WorkerConnectionIdentity;
     request: WorkerLiveEventParams;
+    source: WorkerTurnTranscriptSource;
+    readAckedSeq: () => number;
   }): Promise<WorkerLiveEventApplicationResult> => {
     if (!params.identity.sessionId) {
       return { ok: false, details: { reason: "session-not-attached" } };
@@ -680,7 +578,16 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
         await Promise.all(window.trajectoryWrites);
       }
       if (result.ok) {
-        if (windows.get(sessionId) !== window || staleSessions.has(sessionId)) {
+        if (
+          !isCancelledFinishing(params.request, captureWorkerTurnLiveEventOwner(params.identity))
+        ) {
+          try {
+            params.source.receiptAuthority();
+          } catch {
+            return invalidEvent();
+          }
+        }
+        if (windows.get(sessionId) !== window) {
           return { ok: false, details: { reason: "session-not-attached" } };
         }
         if (window.credentialHash !== params.identity.credentialHash) {
@@ -693,17 +600,8 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     }
   };
 
-  const clearEnvironment = (environmentId: string): void => {
-    startupOwners.delete(environmentId);
-    let fencedEpoch = fencedEnvironmentEpochs.get(environmentId) ?? -1;
-    for (const [sessionId, binding] of sessionBindings) {
-      if (binding.environmentId === environmentId) {
-        fencedEpoch = Math.max(fencedEpoch, binding.runEpoch);
-        sessionBindings.delete(sessionId);
-        boundSessions.delete(sessionId);
-        staleSessions.delete(sessionId);
-      }
-    }
+  const clearEnvironment = (environmentId: string, ownerEpoch: number): void => {
+    let fencedEpoch = Math.max(fencedEnvironmentEpochs.get(environmentId) ?? -1, ownerEpoch);
     for (const window of windows.values()) {
       if (window.environmentId === environmentId) {
         fencedEpoch = Math.max(fencedEpoch, window.runEpoch);
@@ -720,19 +618,13 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
   };
 
   const clear = (): void => {
-    unsubscribeSessionIdentityMutation?.();
-    unsubscribeSessionIdentityMutation = undefined;
     for (const window of windows.values()) {
       clearWindow(window);
     }
-    boundSessions.clear();
-    sessionBindings.clear();
     fencedEnvironmentEpochs.clear();
-    staleSessions.clear();
-    startupOwners.clear();
   };
 
-  return { apply, bindSession, clear, clearEnvironment, rebindAll, rotateCredential, start };
+  return { apply, clear, clearEnvironment, rotateCredential };
 }
 
 export type WorkerLiveEventReceiver = ReturnType<typeof createWorkerLiveEventReceiver>;

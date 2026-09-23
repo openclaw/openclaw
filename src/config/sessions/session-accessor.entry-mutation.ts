@@ -1,23 +1,33 @@
 import { isDeepStrictEqual } from "node:util";
+import { isMainThread } from "node:worker_threads";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
+import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import {
   resolveAccessStorePath,
   loadSessionEntry,
   patchSessionEntryCore,
 } from "./session-accessor.entry.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
-import { readSessionCreationSnapshot } from "./session-accessor.sqlite-creation-read.js";
-import "./session-accessor.sqlite-entry.js";
+import { readSessionCreationSnapshotInDatabase } from "./session-accessor.sqlite-creation-read.js";
+import { createSessionEntryWithTranscriptInWorker } from "./session-accessor.sqlite-creation-worker.js";
+import { hasPreparedNativeSessionDeletion } from "./session-accessor.sqlite-deletion.js";
 import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
+import "./session-accessor.sqlite-entry.js";
 import { forkSessionTranscriptFromParent } from "./session-accessor.sqlite-parent-session.js";
 import {
+  captureLifecycleDatabaseScope,
+  resolveSqliteScope,
+  prepareSqliteScope,
   resolveSqliteTranscriptScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-store.js";
+import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
 import type {
   SessionAccessScope,
   SessionEntryUpdateOptions,
@@ -33,6 +43,7 @@ import type {
   SessionEntryCreateWithTranscriptOptions,
 } from "./session-accessor.types.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
+import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 export {
   recordInboundSessionMeta,
@@ -63,15 +74,33 @@ export async function createSessionEntryWithTranscript<TError = string>(
     | SessionEntryCreateWithTranscriptPrepareResult<TError>,
   options: SessionEntryCreateWithTranscriptOptions = {},
 ): Promise<SessionEntryCreateWithTranscriptResult<TError>> {
-  const storePath = resolveAccessStorePath(scope);
+  const captured = {
+    ...scope,
+    env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
+  };
+  const storePath = resolveAccessStorePath(captured);
   const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
-  // The incognito sentinel is scoped to env; its path alone cannot identify the memory store.
-  const storeScope = { agentId, env: scope.env, storePath };
-  const { normalizedKey, legacyKeys, ...context } = readSessionCreationSnapshot({
-    ...storeScope,
-    sessionKey: scope.sessionKey,
-  });
-  const created = await createEntry(context);
+  const target = { ...captured, agentId, storePath };
+  const resolved = captureLifecycleDatabaseScope(
+    isMainThread ? await prepareSqliteScope(target) : resolveSqliteScope(target),
+  );
+  if (
+    isMainThread &&
+    supportsOpenClawAgentDatabaseExecution(toDatabaseOptions(resolved)) &&
+    !hasPreparedNativeSessionDeletion()
+  ) {
+    return createSessionEntryWithTranscriptInWorker(resolved, createEntry, options);
+  }
+  // Process-held, already executing, maintenance, and native rollback scopes keep their kernels.
+  const storeScope = { agentId, env: resolved.env, storePath: resolved.path };
+  // The resolved path is a physical locator, not the original logical store selector.
+  // Re-resolving a missing custom-agent suffix as a shared store would assign it to main.
+  const creationDatabase = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const { normalizedKey, legacyKeys, labels, ...context } = readSessionCreationSnapshotInDatabase(
+    creationDatabase,
+    scope.sessionKey,
+  );
+  const created = await createEntry({ ...context, isLabelInUse: (label) => labels.has(label) });
   if (!created.ok) {
     return { ok: false, error: created.error, phase: "entry" };
   }
@@ -134,6 +163,9 @@ export async function createSessionEntryWithTranscript<TError = string>(
         }
       : {}),
     ...(onLifecycleCommitted ? { onLifecycleCommitted: () => onLifecycleCommitted(entry) } : {}),
+    ...(options.afterCommitted
+      ? { afterCommitted: (source) => options.afterCommitted!(entry, source) }
+      : {}),
   });
   return { ok: true, entry, sessionFile: normalizedKey };
 }

@@ -13,6 +13,7 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { expandUpdateFirstHopCompatLanes } from "../../scripts/lib/update-first-hop-lanes.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
@@ -23,6 +24,8 @@ const closure = [
   "scripts/lib/docker-e2e-plan.mts",
   "scripts/lib/docker-e2e-scenarios.mts",
   "scripts/lib/official-external-channel-catalog.json",
+  "scripts/lib/update-compat-inventory.json",
+  "scripts/lib/update-first-hop-lanes.mjs",
   "scripts/lib/upgrade-survivor-policy.mjs",
   "scripts/lib/upgrade-survivor-scenarios.json",
   "scripts/lib/release-version.mjs",
@@ -488,7 +491,6 @@ describe("frozen admission upgrade Docker aliases", () => {
     "live-cli-backend-claude",
     "live-cli-backend-gemini",
     "update-first-hop-compat",
-    "update-run-package-self-upgrade",
     "release-user-journey",
     "release-upgrade-user-journey",
   ])("keeps unselected upgrade contracts inert for %s", (lane) => {
@@ -510,10 +512,11 @@ describe("frozen admission upgrade Docker aliases", () => {
       const oid = f.selected.git("rev-parse", `${f.selected.sha}:${path}`);
       rmSync(join(f.selected.root, ".git/objects", oid.slice(0, 2), oid.slice(2)));
     }
-    const result = f.run({ docker: { lanes: [lane] } });
+    const lanes = expandUpdateFirstHopCompatLanes([lane]);
+    const result = f.run({ docker: { lanes } });
     expect(result.status, result.stderr).toBe(0);
     const record = JSON.parse(result.stdout);
-    expect(record.docker).toEqual({ lanes: [lane], omitted: [], status: "ADMITTED" });
+    expect(record.docker).toEqual({ lanes, omitted: [], status: "ADMITTED" });
     expect(record.selection.consumers).toEqual(lane === "plugins-offline" ? ["plugins"] : []);
     expect(record.contracts.map((contract: { consumer: string }) => contract.consumer)).toEqual(
       record.selection.consumers,

@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import path from "node:path";
 import { normalizeAgentDirRegistryPath } from "../agents/agent-dir-registry.js";
 import {
@@ -16,13 +15,11 @@ import type {
   OpenClawStateDatabase,
   OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
+import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "./openclaw-state-db-readonly.js";
 import { ensureAgentDeletionJournalSchema } from "./openclaw-state-db-schema-additive.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
-import {
-  resolveOpenClawRegisteredAgentDatabasePath,
-  resolveOpenClawStateSqlitePath,
-} from "./openclaw-state-db.paths.js";
+import { resolveOpenClawRegisteredAgentDatabasePath } from "./openclaw-state-db.paths.js";
 
 type AgentDeletionDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -323,10 +320,9 @@ function parseCleanupPaths(value: string): AgentDeletionJournalCleanupPath[] {
 
 /** Read the journal through an already validated shared-state connection. */
 export function readAgentDeletionJournalInDatabase(
-  database: OpenClawStateDatabase,
+  database: Pick<OpenClawStateDatabase, "db">,
   agentId: string,
 ): AgentDeletionJournalEntry | undefined {
-  ensureAgentDeletionJournalSchema(database.db);
   const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
@@ -342,13 +338,8 @@ export function readAgentDeletionJournal(
   agentId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): AgentDeletionJournalEntry | undefined {
-  const databasePath = path.resolve(
-    options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env),
-  );
-  if (!existsSync(databasePath)) {
-    return undefined;
-  }
-  return runOpenClawStateWriteTransaction(
+  // Worker commit guards must read current authority without joining the worker's writer lock.
+  return withExistingOpenClawStateDatabaseCurrentReadOnly(
     (database) => readAgentDeletionJournalInDatabase(database, agentId),
     options,
   );

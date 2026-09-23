@@ -13,7 +13,10 @@ import type {
   TaskNotificationDeliveryUpdate,
 } from "./task-notification.operation.js";
 import type { TaskCreateInput, TaskCreateResult } from "./task-registry-create.kernel.js";
-import type { TaskRecordTransitionReceipt } from "./task-registry-transition.kernel.js";
+import type {
+  TaskRecordTransitionReceipt,
+  TaskWorkerTransitionInput,
+} from "./task-registry-transition.kernel.js";
 import type {
   TaskExecutionOwner,
   TaskPersistenceReceipt,
@@ -21,6 +24,10 @@ import type {
 } from "./task-registry.types.js";
 
 export type TaskInitialWorkerOperations = {
+  "tasks.transitionRunRow": {
+    input: Extract<TaskWorkerTransitionInput, { kind: "state" | "delivery" }>;
+    output: TaskRecordTransitionReceipt | null;
+  };
   "tasks.bindRunOwner": {
     input: {
       taskId: string;

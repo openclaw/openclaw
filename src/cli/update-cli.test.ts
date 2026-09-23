@@ -44,7 +44,7 @@ import {
 } from "../infra/update-doctor-result.js";
 import { resolveUpdateInstallRoot } from "../infra/update-install-root.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-managed-service-handoff-cleanup.js";
-import type { UpdateRunRecord } from "../infra/update-run-record.js";
+import type { RetainUpdateRuntime } from "../infra/update-retained-runtime.js";
 import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import * as windowsPrivateDirectory from "../infra/windows-private-directory.js";
@@ -90,6 +90,7 @@ import {
   packageTargetStatus,
 } from "./update-cli/update-cli-package.test-support.js";
 import { registerAlreadyCurrentAdmissionTests } from "./update-cli/update-command-current-admission.test-support.js";
+import { registerUpdatePreflightTests } from "./update-cli/update-command-preflight.test-support.js";
 import * as runtimeRecovery from "./update-cli/update-command-runtime-recovery.test-support.js";
 import { createGlobalUserServiceCommand } from "./update-cli/update-command-service-state.test-support.js";
 import { isLegacyUpdateDoctorCommand } from "./update-cli/update-command-transport.test-support.js";
@@ -137,6 +138,7 @@ const managedUpdateHandoff = vi.hoisted(() => ({
   cancel: vi.fn(),
 }));
 const candidateValidation = vi.hoisted(() => vi.fn());
+const retainUpdateRuntime = vi.hoisted(() => vi.fn<RetainUpdateRuntime>());
 const systemdPolicy = vi.hoisted(() =>
   vi.fn<typeof import("../daemon/systemd-maintenance.js").prepareSystemdGatewayMaintenance>(),
 );
@@ -247,10 +249,7 @@ vi.mock("../infra/update-retained-runtime.js", async (importOriginal) => {
   const withRetainedUpdateRuntime: typeof actual.withRetainedUpdateRuntime = (
     moduleUrl,
     operation,
-  ) =>
-    actual.withRetainedUpdateRuntime(moduleUrl, () =>
-      operation(async ({ assertCurrent }) => assertCurrent()),
-    );
+  ) => actual.withRetainedUpdateRuntime(moduleUrl, () => operation(retainUpdateRuntime));
   return { withRetainedUpdateRuntime };
 });
 vi.mock("../infra/update-candidate-state.js", async (importOriginal) => ({
@@ -1509,6 +1508,7 @@ describe("update-cli", () => {
     }
     restartHealthTestControl.snapshot = undefined;
     vi.resetAllMocks();
+    retainUpdateRuntime.mockImplementation(async ({ assertCurrent }) => assertCurrent());
     systemdPolicy.mockResolvedValue(false);
     mockUpdateStateSnapshotWorker(fixtureStateDatabases);
     // Service simulations do not provide foreign-platform ACL libraries. Keep
@@ -7071,128 +7071,25 @@ describe("update-cli", () => {
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
   });
 
-  it("records low disk space before target lookup and still runs package updates", async () => {
-    await mockPackageInstallAtCaseDir();
-    mockCurrentProcessFreshDoctor();
-    vi.spyOn(fsSync, "statfsSync").mockReturnValue(
-      statfsFixture({
-        bavail: 256,
-        bsize: 1024 * 1024,
-      }),
-    );
-    const targetLookups: Array<{ output: string; steps: UpdateRunRecord["steps"] }> = [];
-    const resolveTag = vi.mocked(resolveNpmChannelTag).getMockImplementation()!;
-    vi.mocked(resolveNpmChannelTag).mockImplementation(async (...args) => {
-      targetLookups.push({
-        output: getLogOutput(),
-        steps: listUpdateRuns({ limit: 1 })[0]?.steps ?? [],
-      });
-      return await resolveTag(...args);
-    });
-
-    await updateCommand({ yes: true });
-
-    expect(targetLookups).toContainEqual({
-      output: expect.stringContaining("Low disk space near"),
-      steps: expect.arrayContaining([
-        expect.objectContaining({
-          step: "warning:disk-space-preflight",
-          status: "completed",
-          detail: expect.stringContaining("256 MiB available"),
-        }),
-      ]),
-    });
-    expectPackageInstallSpec("openclaw@9999.0.0");
-    const preflightParams = vi
-      .mocked(fetchNpmPackageTargetStatus)
-      .mock.calls.find(([params]) => params.target === "9999.0.0")?.[0];
-    expect(preflightParams).toEqual(
-      expect.objectContaining({
-        target: "9999.0.0",
-        spec: "openclaw@9999.0.0",
-        cwd: process.cwd(),
-      }),
-    );
-    expect(packageInstallCommandCall()?.[1].env).toBe(preflightParams?.env);
-    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+  registerUpdatePreflightTests({
+    mockPackageInstallAtCaseDir,
+    mockCurrentProcessFreshDoctor,
+    statfsFixture,
+    resolveNpmChannelTag,
+    fetchNpmPackageTargetStatus,
+    listUpdateRuns,
+    updateCommand,
+    getLogOutput,
+    getErrorOutput,
+    lastWriteJsonCall,
+    expectPackageInstallSpec,
+    packageInstallCommandCall,
+    defaultRuntime,
+    retainUpdateRuntime,
+    initializeExistingUpdateProfile,
+    profileStateDir,
+    makeTempDir: (prefix) => tempDirs.make(prefix),
   });
-
-  it.each(["insufficient", "alternative", "unknown", "plenty", "package-only"] as const)(
-    "checks initial snapshot capacity before staging (%s)",
-    async (scenario) => {
-      const pkgRoot = await mockPackageInstallAtCaseDir();
-      initializeExistingUpdateProfile();
-      const stateDir = await fs.realpath(profileStateDir());
-      const captureDir = `${stateDir}.update-captures`;
-      await fs.mkdir(captureDir);
-      vi.stubEnv("TMPDIR", tempDirs.make("initial-snapshot-temp-"));
-      vi.spyOn(fsSync, "statfsSync").mockImplementation((checkedPath) => {
-        if (scenario === "unknown") {
-          throw new Error("capacity unavailable");
-        }
-        const location = String(checkedPath);
-        const low =
-          scenario === "insufficient" ||
-          (scenario === "alternative" && location !== captureDir) ||
-          (scenario === "package-only" && location === path.dirname(pkgRoot));
-        return statfsFixture({ bavail: low ? 32 : 2048, bsize: 1024 * 1024 });
-      });
-      const allocate = vi.spyOn(fs, "mkdtemp");
-
-      const update = updateCommand({ yes: true, json: true });
-      if (scenario === "insufficient") {
-        await expect(update).rejects.toMatchObject({ code: 1 });
-      } else {
-        await update;
-      }
-
-      const record = listUpdateRuns({ limit: 1 })[0];
-      if (scenario === "insufficient") {
-        expect(lastWriteJsonCall()).toMatchObject({
-          status: "error",
-          reason: "snapshot-capacity-insufficient",
-        });
-        expect(packageInstallCommandCall()).toBeUndefined();
-        expect(
-          allocate.mock.calls.some(
-            ([prefix]) =>
-              prefix.includes(".openclaw.update-stage-") ||
-              prefix.includes("openclaw-update-canary-"),
-          ),
-        ).toBe(false);
-        expect(record).toMatchObject({
-          status: "failed",
-          reason: "snapshot-capacity-insufficient",
-        });
-        expect(record?.steps).toContainEqual(
-          expect.objectContaining({
-            step: "snapshot-space-preflight",
-            status: "failed",
-            snapshotCapacity: expect.objectContaining({
-              pluginBytes: null,
-              candidates: expect.arrayContaining([
-                expect.objectContaining({ availableBytes: 32 * 1024 * 1024 }),
-              ]),
-            }),
-          }),
-        );
-        expect(getErrorOutput()).toContain("MiB needed");
-        expect(getErrorOutput()).toContain("32 MiB free");
-        expect(getErrorOutput()).toContain("Free space on a reported filesystem or set TMPDIR");
-        expect(getErrorOutput()).toContain("SQLite family");
-      } else {
-        expectPackageInstallSpec("openclaw@9999.0.0");
-        expect(lastWriteJsonCall()).toMatchObject({ status: "ok" });
-        expect(
-          record?.steps.filter((step) => step.step.startsWith("warning:snapshot-space-preflight")),
-        ).toEqual([]);
-        expect(record?.steps.map(({ detail }) => detail).join("\n")).toContain("SQLite family");
-        expect(record?.steps.map(({ detail }) => detail).join("\n")).toContain("openclaw.sqlite");
-        expect(getErrorOutput()).not.toContain("SQLite family");
-        expect(getErrorOutput()).not.toContain("Snapshot capacity estimate incomplete");
-      }
-    },
-  );
 
   const packageUpdateInGatewayMessage = [
     "Package updates cannot run from inside the gateway service process.",
@@ -10392,7 +10289,7 @@ describe("update-cli", () => {
     "continues package-to-Git updates from the published checkout after its alias is retargeted",
     async () => {
       const root = tempDirs.make("openclaw-update-git-alias-");
-      const { nodeModules } = await setupInstalledPackageAtNodeModules(
+      const { nodeModules, pkgRoot } = await setupInstalledPackageAtNodeModules(
         path.join(root, "package", "lib", "node_modules"),
       );
       const targetRoot = path.join(root, "checkout-target");
@@ -10406,7 +10303,7 @@ describe("update-cli", () => {
       const sha = "a".repeat(40);
       vi.mocked(updateGitCheckout).mockImplementationOnce(
         async ({ gitRoot: stagingRoot, opts: options }) => {
-          expect(stagingRoot).not.toBe(publishedRoot);
+          expect(options.gitArtifactStorageRoot).toBe(path.dirname(stagingRoot));
           await options.inspectGitTarget({});
           await writeOpenClawPackageFixture(stagingRoot, "2026.8.17", {
             git: true,
@@ -10457,6 +10354,16 @@ describe("update-cli", () => {
       expect(installCall?.[0]).toContain(candidateRoot);
       expect(installCall?.[0]).not.toContain(checkoutAlias);
       expect(installCall?.[1].cwd).toBe(candidateRoot);
+      expect(retainUpdateRuntime).toHaveBeenCalledWith(
+        expect.objectContaining({
+          installTarget: expect.objectContaining({
+            manager: "npm",
+            globalRoot: nodeModules,
+            packageRoot: pkgRoot,
+          }),
+          mutationRoots: expect.arrayContaining([pkgRoot, checkoutAlias]),
+        }),
+      );
       await expect(fs.readdir(replacementRoot)).resolves.toEqual([]);
     },
   );

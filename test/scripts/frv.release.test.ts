@@ -1524,6 +1524,20 @@ describe("publication status real CLI", () => {
     );
   });
 
+  it("routes exact rerun selectors through the real CLI before any mutation", async () => {
+    const result = await runPublicationCli(publicationFixture(), [
+      "rerun",
+      "--run",
+      "77",
+      "--job",
+      "missing:test",
+    ]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("job selector names an unselected child: missing");
+    expect(result.calls).toHaveLength(1);
+    expect(result.calls[0]?.slice(0, 3)).toEqual(["run", "download", "77"]);
+  });
+
   it.each(["continue", "verify"])(
     "preserves legacy %s plan refusal without publication reads",
     async (command) => {
@@ -1553,6 +1567,11 @@ describe("publication status real CLI", () => {
     fixture.publisherJobs.push({ ...job(unsafe), id: 8899, run_id: 88, run_attempt: 1, steps: [] });
     const result = await runPublicationCli(fixture);
     expect(result.status).toBe(0);
+    expect(
+      JSON.parse(result.stdout).children.every(
+        (child: Record<string, unknown>) => !Object.hasOwn(child, "jobs"),
+      ),
+    ).toBe(true);
     expect(result.stdout + result.stderr).not.toMatch(/synthetic-secret|private\/fixture/u);
     expect(result.stdout + result.stderr).not.toContain("\u001b");
   });

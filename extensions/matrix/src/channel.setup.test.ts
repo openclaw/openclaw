@@ -10,6 +10,7 @@ vi.mock("./matrix/actions/verification.js", () => ({
   bootstrapMatrixVerification: verificationMocks.bootstrapMatrixVerification,
 }));
 
+import { matrixSetupPlugin } from "./channel.setup.js";
 import { matrixConfigAdapter } from "./config-adapter.js";
 import { runMatrixSetupBootstrapAfterConfigWrite } from "./setup-bootstrap.js";
 import { matrixSetupAdapter } from "./setup-core.js";
@@ -124,6 +125,30 @@ describe("matrix setup post-write bootstrap", () => {
     );
     expect(matrixSetupAdapter.namedAccountPromotionKeys).toContain("homeserver");
     expect(matrixSetupAdapter.resolveSingleAccountPromotionTarget).toBeTypeOf("function");
+  });
+
+  it.each([
+    { name: "empty", env: {}, configured: false },
+    {
+      name: "scoped account",
+      env: {
+        MATRIX_OPS_HOMESERVER: "https://matrix.example.org",
+        MATRIX_OPS_ACCESS_TOKEN: "scoped-token",
+      },
+      configured: true,
+    },
+  ])("uses the supplied $name environment for configured state", async ({ env, configured }) => {
+    await withSavedEnv(
+      { MATRIX_HOMESERVER: "https://ambient.example.org", MATRIX_ACCESS_TOKEN: "ambient-token" },
+      async () => {
+        await expect(
+          matrixSetupPlugin.config.hasConfiguredStateAsync!({
+            cfg: { channels: { matrix: {} } },
+            env,
+          }),
+        ).resolves.toBe(configured);
+      },
+    );
   });
 
   it("bootstraps verification for newly added encrypted accounts", async () => {

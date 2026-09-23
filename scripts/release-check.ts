@@ -29,9 +29,10 @@ import {
   type BundledExtension,
   type ExtensionPackageJson as PackageJson,
 } from "./lib/bundled-extension-manifest.ts";
+import { reportLimitViolations } from "./lib/check-limits.mts";
 import { GATEWAY_RUN_CHUNK_METADATA_VERSION } from "./lib/gateway-run-chunk-metadata.mts";
 import { importToolingTypeScript } from "./lib/import-tooling-typescript.mts";
-import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mts";
+import { collectPackUnpackedSizeFindings } from "./lib/npm-pack-budget.mts";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import { isLegacyPluginDependencyInstallStagePath } from "./lib/package-dist-inventory.ts";
 import { collectBundledPluginPackageDependencySpecs } from "./lib/plugin-package-dependencies.mts";
@@ -664,6 +665,7 @@ export function createPackedCompletionSmokeEnv(
 
 export function collectPackedInstalledPackageVerificationErrors(params: {
   additionalCompanionManifestRoots?: string[];
+  allowLegacyGeneratedOwnership?: boolean;
   expectedVersion: string;
   installedBinaryVersion?: string;
   packageRoot: string;
@@ -673,6 +675,7 @@ export function collectPackedInstalledPackageVerificationErrors(params: {
   ) as { version?: string };
   const errors = collectInstalledPackageErrors({
     additionalCompanionManifestRoots: params.additionalCompanionManifestRoots,
+    allowLegacyGeneratedOwnership: params.allowLegacyGeneratedOwnership,
     expectedVersion: params.expectedVersion,
     installedVersion: packageJson.version?.trim() ?? "",
     packageRoot: params.packageRoot,
@@ -686,6 +689,12 @@ export function collectPackedInstalledPackageVerificationErrors(params: {
     );
   }
   return errors;
+}
+
+export function allowsLegacyGeneratedOwnershipForSourceRoot(sourceRoot: string): boolean {
+  return !existsSync(
+    resolve(sourceRoot, "scripts/lib/runtime-dependency-ownership-build-plugin.mts"),
+  );
 }
 
 function verifyPackedInstalledPackage(params: {
@@ -711,6 +720,7 @@ function verifyPackedInstalledPackage(params: {
     // The selected source checkout is immutable release input. Its companion
     // manifests are the exact inputs packed by the following plugin preflight.
     additionalCompanionManifestRoots: [resolve("extensions")],
+    allowLegacyGeneratedOwnership: allowsLegacyGeneratedOwnershipForSourceRoot(resolve()),
     expectedVersion: params.expectedVersion,
     installedBinaryVersion,
     packageRoot: params.packageRoot,
@@ -1299,8 +1309,9 @@ function checkPluginSdkExports(rootDir: string) {
   }
 }
 
-export function collectCriticalPluginSdkEntrypointSizeErrors(rootDir = process.cwd()): string[] {
+export function collectCriticalPluginSdkEntrypointSizeFindings(rootDir = process.cwd()) {
   const errors: string[] = [];
+  const violations: { file: string; title: string; message: string }[] = [];
   for (const specifier of CRITICAL_PLUGIN_SDK_SIZE_CHECK_SPECIFIERS) {
     const subpath = specifier.slice("openclaw/plugin-sdk/".length);
     const relativePath = `dist/plugin-sdk/${subpath}.js`;
@@ -1315,12 +1326,14 @@ export function collectCriticalPluginSdkEntrypointSizeErrors(rootDir = process.c
       continue;
     }
     if (stat.size > MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES) {
-      errors.push(
-        `${relativePath} is ${stat.size} bytes, exceeding ${MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES} bytes. Keep public SDK package entrypoints lazy and avoid bundling compiler/runtime internals.`,
-      );
+      violations.push({
+        file: `src/plugin-sdk/${subpath}.ts`,
+        title: "Plugin SDK entrypoint size budget",
+        message: `${relativePath} is ${stat.size} bytes, exceeding ${MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES} bytes. Keep public SDK package entrypoints lazy and avoid bundling compiler/runtime internals.`,
+      });
     }
   }
-  return errors;
+  return { errors, violations };
 }
 
 function runCriticalPluginSdkEntrypointImportSmoke(packageRoot: string) {
@@ -1470,11 +1483,13 @@ async function verifyPackedContents(
 ): Promise<void> {
   await checkPackedTargetBootstrap(process.cwd(), packedRoot);
   checkPluginSdkExports(packedRoot);
-  const criticalPluginSdkEntrypointErrors =
-    collectCriticalPluginSdkEntrypointSizeErrors(packedRoot);
-  if (criticalPluginSdkEntrypointErrors.length > 0) {
+  const criticalPluginSdkEntrypoints = collectCriticalPluginSdkEntrypointSizeFindings(packedRoot);
+  const criticalPluginSdkSizeFailed = reportLimitViolations(
+    criticalPluginSdkEntrypoints.violations,
+  );
+  if (criticalPluginSdkEntrypoints.errors.length > 0 || criticalPluginSdkSizeFailed) {
     throw new Error(
-      `release-check: critical plugin-sdk entrypoint validation failed:\n- ${criticalPluginSdkEntrypointErrors.join("\n- ")}`,
+      `release-check: critical plugin-sdk entrypoint validation failed.${criticalPluginSdkEntrypoints.errors.length > 0 ? `\n- ${criticalPluginSdkEntrypoints.errors.join("\n- ")}` : ""}`,
     );
   }
   // The tarball verifier owns lifecycle and target-declared dist layout. It
@@ -1491,9 +1506,15 @@ async function verifyPackedContents(
 
   const forbidden = collectForbiddenPackPaths(paths);
   const forbiddenContent = collectForbiddenPackContentPaths(paths, packedRoot);
-  const sizeErrors = collectNpmPackUnpackedSizeErrors(results);
+  const packSize = collectPackUnpackedSizeFindings(results);
+  const packSizeFailed = reportLimitViolations(packSize.violations);
 
-  if (forbidden.length > 0 || forbiddenContent.length > 0 || sizeErrors.length > 0) {
+  if (
+    forbidden.length > 0 ||
+    forbiddenContent.length > 0 ||
+    packSize.errors.length > 0 ||
+    packSizeFailed
+  ) {
     if (forbidden.length > 0) {
       console.error("release-check: forbidden files in npm pack:");
       for (const path of forbidden) {
@@ -1506,9 +1527,9 @@ async function verifyPackedContents(
         console.error(`  - ${path}`);
       }
     }
-    if (sizeErrors.length > 0) {
-      console.error("release-check: npm pack unpacked size budget exceeded:");
-      for (const error of sizeErrors) {
+    if (packSize.errors.length > 0) {
+      console.error("release-check: invalid npm pack unpacked size metadata:");
+      for (const error of packSize.errors) {
         console.error(`  - ${error}`);
       }
     }

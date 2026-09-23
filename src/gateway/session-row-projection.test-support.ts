@@ -206,6 +206,7 @@ export function createSessionRowProjectionFixture(params: {
       return row
         ? {
             agentId: row.agentId,
+            generation: row.generation,
             canonicalKey: row.key,
             entry: row.entry,
             storeKey: row.key,
@@ -213,6 +214,10 @@ export function createSessionRowProjectionFixture(params: {
             storePath: row.storeTarget.storePath,
           }
         : null;
+    },
+    sharingTargetState(query) {
+      const target = projection.sharingTarget(query);
+      return target ? { status: "ready", target } : { status: "missing" };
     },
     hasMembership: (path, key, identity) =>
       [...rows.values()].some(
@@ -224,11 +229,13 @@ export function createSessionRowProjectionFixture(params: {
     },
     dirtyRowCount: 0,
     needsMaterialization: false,
+    getPolicyConfig: () => cfg,
     state: {
       get revision() {
         return revisionToken;
       },
       cfg,
+      policyConfig: cfg,
       modelCatalog,
       rowContext,
       scope: (options) => ({
