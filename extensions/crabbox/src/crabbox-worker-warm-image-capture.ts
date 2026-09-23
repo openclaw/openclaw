@@ -67,6 +67,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
       profile: CrabboxProfile;
       forkedCheckpointId?: string;
       projectCaptureRequired?: true;
+      projectCaptureReplay?: true;
     },
     prepareSource?: () => Promise<void>,
   ): Promise<boolean> {
@@ -146,8 +147,12 @@ export function createCrabboxWarmImageCapture(dependencies: {
           if (
             state === "available" &&
             owner.purpose === "session" &&
+            !context.projectCaptureReplay &&
             owner.choice.kind === "checkpoint" &&
             owner.choice.checkpointId === existing.image.checkpointId &&
+            context.forkedCheckpointId === existing.image.checkpointId &&
+            (existing.image.pinned ||
+              Date.now() - existing.image.createdAtMs < dependencies.policy.refreshAfterMs) &&
             owner.cacheKey !== null &&
             existing.image.cacheKey === owner.cacheKey &&
             runtimeMatches &&

@@ -205,6 +205,69 @@ describe("Crabbox prepared image demand and custody", () => {
     expect((await listCrabboxWarmImages(crabboxState))[0]?.lastDemandAtMs).toBe(now + 60_000);
   });
 
+  it.each([
+    { reason: "expired image", aged: true, pinned: false, replay: false, captures: 2 },
+    { reason: "pinned expired image", aged: true, pinned: true, replay: false, captures: 1 },
+    { reason: "interrupted preparation", aged: false, pinned: false, replay: true, captures: 2 },
+  ])("preserves capture policy for a changed commit after $reason", async (scenario) => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const preparation = {
+      key: "c".repeat(64),
+      cacheKey: "d".repeat(64),
+      purpose: "reserve" as const,
+      demandAtMs: now,
+    };
+    let captures = 0;
+    const { provider } = createWarmProvider(({ argv }) =>
+      argv[2] === "create"
+        ? checkpointResult(
+            ++captures === 1 ? CHECKPOINT_ID : "chk_commit_b",
+            argv[argv.indexOf("--id") + 1]!,
+            "available",
+          )
+        : undefined,
+    );
+    const source = projectOptions([], new AbortController(), preparation);
+    source.options.project.baseCommit = "a".repeat(40);
+    const lease = await provider.provision(PROFILE, "capture-policy-source", source.options);
+    await provider.destroy({ leaseId: lease.leaseId, profile: PROFILE });
+    if (scenario.pinned) {
+      await provider.images.pin(CHECKPOINT_ID, true);
+    }
+    clock.mockReturnValue(now + (scenario.aged ? 86_400_000 : 0));
+    const next = {
+      ...preparation,
+      key: "e".repeat(64),
+      purpose: "session" as const,
+      demandAtMs: Date.now(),
+    };
+    if (scenario.replay) {
+      const controller = new AbortController();
+      const interrupted = projectOptions([], controller, next);
+      interrupted.options.project.prepare.mockImplementationOnce(async () => {
+        controller.abort();
+        return { seedKey: PROJECT_KEY, cacheHit: false, captureRequired: true };
+      });
+      await expect(
+        provider.provision(PROFILE, "capture-policy-changed", interrupted.options),
+      ).rejects.toMatchObject({ name: "AbortError" });
+      expect(interrupted.options.beginNodeEnrollment).not.toHaveBeenCalled();
+    }
+    const changed = projectOptions([], new AbortController(), next);
+    changed.options.project.prepare.mockResolvedValueOnce({
+      seedKey: PROJECT_KEY,
+      cacheHit: scenario.replay,
+      ...(scenario.replay ? {} : { captureRequired: true }),
+    });
+    await provider.provision(PROFILE, "capture-policy-changed", changed.options);
+    expect(captures).toBe(scenario.captures);
+    expect(changed.options.beginNodeEnrollment).toHaveBeenCalledOnce();
+    expect((await listCrabboxWarmImages(crabboxState))[0]?.baseCommit).toBe(
+      scenario.captures === 2 ? BASE_COMMIT : "a".repeat(40),
+    );
+  });
+
   it.each(["cold", "warm"] as const)(
     "does not record session demand when %s enrollment fails",
     async (kind) => {
