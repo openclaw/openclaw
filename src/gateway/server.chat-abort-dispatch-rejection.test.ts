@@ -340,7 +340,8 @@ describe("gateway WebSocket chat abort ownership", () => {
 
   test("does not let a late abort replace an established dispatch error", async () => {
     const sessionDirectory = temporaryDirectories.make("openclaw-chat-error-late-abort-");
-    testState.sessionStorePath = path.join(sessionDirectory, "sessions.json");
+    const storePath = path.join(sessionDirectory, "sessions.json");
+    testState.sessionStorePath = storePath;
     await writeSessionStore({
       entries: {
         main: {
@@ -354,6 +355,7 @@ describe("gateway WebSocket chat abort ownership", () => {
     const dispatchRelease = createDeferred();
     const runId = "real-websocket-dispatch-error-before-late-abort";
     const terminalStates = trackChatTerminalStates(socket, runId);
+    let admissionRelease: Promise<void> | undefined;
 
     try {
       await connectOk(socket);
@@ -375,19 +377,19 @@ describe("gateway WebSocket chat abort ownership", () => {
         timeout: 2_000,
       });
 
-      const errorFrame = onceMessage(
-        socket,
-        (frame) =>
-          frame.type === "event" &&
-          frame.event === "chat" &&
-          frame.payload?.runId === runId &&
-          frame.payload?.state === "error",
-        2_000,
-      );
-      dispatchRelease.resolve();
-      await expect(errorFrame).resolves.toMatchObject({
-        payload: { runId, state: "error" },
+      admissionRelease = getSessionWorkAdmissionRelease({
+        scope: storePath,
+        identities: ["main", "agent:main:main", "sess-main"],
       });
+      if (!admissionRelease) {
+        throw new Error("Held dispatch must retain its session admission");
+      }
+      dispatchRelease.resolve();
+      await admissionRelease;
+      // Admission releases after error publication; this response also joins its wire delivery.
+      const barrier = await rpcReq(socket, "chat.history", { sessionKey: "main" });
+      expect(barrier.ok).toBe(true);
+      expect(terminalStates).toEqual(["error"]);
 
       const lateAbort = await rpcReq(socket, "chat.abort", {
         sessionKey: "main",
@@ -402,6 +404,7 @@ describe("gateway WebSocket chat abort ownership", () => {
       expect(terminalStates).toEqual(["error"]);
     } finally {
       dispatchRelease.resolve();
+      await admissionRelease;
       socket.close();
     }
   });
