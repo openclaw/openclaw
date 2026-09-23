@@ -247,6 +247,8 @@ export function buildWhatsAppQaConfig(
       : {}),
     ...(statusReactionsEnabled
       ? {
+          ackReaction: "👀",
+          ackReactionScope: "direct" as const,
           statusReactions: {
             ...baseCfg.messages?.statusReactions,
             enabled: true,
@@ -283,15 +285,6 @@ export function buildWhatsAppQaConfig(
         enabled: true,
         defaultAccount: params.sutAccountId,
         ...whatsappHistoryLimit,
-        ...(statusReactionsEnabled
-          ? {
-              ackReaction: {
-                ...baseCfg.channels?.whatsapp?.ackReaction,
-                direct: true,
-                emoji: "👀",
-              },
-            }
-          : {}),
         ...(params.overrides?.actions
           ? {
               actions: {
