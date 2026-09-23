@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { readConfigFileSnapshot } from "../../../config/config.js";
 import { createConfigIoContext } from "../../../config/io.context.js";
 import { createConfigIO } from "../../../config/io.factory.js";
@@ -16,6 +17,8 @@ import {
 import { writeOpenClawConfig } from "../../../config/test-helpers.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
 import { validateConfigObjectWithPlugins } from "../../../config/validation.js";
+import { isPathInside } from "../../../infra/path-guards.js";
+import * as pluginModuleLoader from "../../../plugins/plugin-module-loader-cache.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { VERSION } from "../../../version.js";
@@ -51,6 +54,17 @@ function invalidSnapshot(params: {
 
 describe("automatic startup config repair", () => {
   it("preserves a resolved legacy channel owner in the same repair as the explicit roster", async () => {
+    const coreSourceRoot = fileURLToPath(new URL("../../../", import.meta.url));
+    const loadModule = pluginModuleLoader.getCachedPluginModuleLoader;
+    const nativeRepair = vi
+      .spyOn(pluginModuleLoader, "getCachedPluginModuleLoader")
+      .mockImplementation((options) => {
+        if (isPathInside(coreSourceRoot, options.modulePath)) {
+          throw new Error("Host core must retain its native module graph during binding repair");
+        }
+        return loadModule(options);
+      });
+    onTestFinished(() => nativeRepair.mockRestore());
     await withOpenClawTestState({ prefix: "openclaw-channel-owner-repair-" }, async (state) => {
       await state.writeConfig({
         agents: { list: [{ id: "${LEGACY_CHANNEL_AGENT}" }, { id: "main" }] },
