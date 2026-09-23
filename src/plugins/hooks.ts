@@ -17,6 +17,11 @@ import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { projectModelContextMessages } from "../shared/model-context-message.js";
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
+import {
+  projectAgentEndEvent,
+  withAgentRunId,
+  withoutIncognitoLlmContent,
+} from "./hook-agent-observations.js";
 import { readClaimingHookAdmission, type ClaimingHookAdmission } from "./hook-claim-admission.js";
 import {
   type GateHookResult,
@@ -971,16 +976,6 @@ export function createHookRunner(
   // Agent Hooks
   // =========================================================================
 
-  function withAgentRunId<TEvent extends { runId?: string }>(
-    event: TEvent,
-    ctx: PluginHookAgentContext,
-  ): TEvent {
-    if (event.runId || !ctx.runId) {
-      return event;
-    }
-    return { ...event, runId: ctx.runId };
-  }
-
   /**
    * Run before_prompt_build hook.
    * Allows plugins to inject context and system prompt before prompt submission.
@@ -1083,7 +1078,7 @@ export function createHookRunner(
     ctx: PluginHookAgentContext,
     optionsLocal?: VoidHookRunOptions,
   ): Promise<void> {
-    return runVoidHook("agent_end", withAgentRunId(event, ctx), ctx, optionsLocal);
+    return runVoidHook("agent_end", projectAgentEndEvent(event, ctx), ctx, optionsLocal);
   }
 
   /**
@@ -1445,8 +1440,8 @@ export function createHookRunner(
     runBeforeAgentReply: bindClaimingHook("before_agent_reply"),
     runModelCallStarted: bindVoidHook("model_call_started"),
     runModelCallEnded: bindVoidHook("model_call_ended"),
-    runLlmInput: bindVoidHook("llm_input"),
-    runLlmOutput: bindVoidHook("llm_output"),
+    runLlmInput: withoutIncognitoLlmContent(bindVoidHook("llm_input")),
+    runLlmOutput: withoutIncognitoLlmContent(bindVoidHook("llm_output")),
     runBeforeAgentFinalize,
     runAgentEnd,
     /**

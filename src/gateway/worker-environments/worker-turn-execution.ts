@@ -216,6 +216,8 @@ export async function executeWorkerTurn(
       runtimeInstanceId: placement.environmentId,
       placements: params.placements,
       sessionKey: placement.sessionKey,
+      sessionTarget: transcriptTarget,
+      assertSourceCurrent: assertContextCurrent,
       turn,
       turnClaim: params.turnClaim,
     });

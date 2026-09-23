@@ -12,12 +12,12 @@ export type GatewaySessionStoreLookup = {
   canonicalValidationError?: Error;
 };
 
-export function findCanonicalStoreMatch(
-  store: Record<string, SessionEntry>,
+export function findCanonicalStoreMatch<Entry extends SessionEntry>(
+  store: Record<string, Entry>,
   candidates: readonly string[],
   onCanonicalError?: (error: Error) => void,
-): { entry: SessionEntry; key: string } | undefined {
-  const matches = new Map<string, { entry: SessionEntry; key: string }>();
+): { entry: Entry; key: string } | undefined {
+  const matches = new Map<string, { entry: Entry; key: string }>();
   for (const candidate of candidates) {
     const trimmed = normalizeOptionalString(candidate) ?? "";
     if (!trimmed) {

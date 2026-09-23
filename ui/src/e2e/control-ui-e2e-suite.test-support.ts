@@ -256,15 +256,15 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
         for (const registration of registrations) {
           registration.release();
         }
-        // Release all gates before joining installation and every active handler.
-        // A first request or URL change does not settle later matching fetches.
-        // Playwright's wait mode drains handlers without suppressing their errors.
+        // Release all gates, then join registration and active page/context callbacks.
+        // A first request does not settle later fetches; wait mode preserves their errors.
         await runQaGatewayFixture(
           () => settleControlUiCleanup(registrations.map(({ installed }) => installed)),
           () =>
-            settleControlUiCleanup(
-              [...held.pages.keys()].map((page) => page.unrouteAll({ behavior: "wait" })),
-            ),
+            settleControlUiCleanup([
+              ...[...held.pages.keys()].map((page) => page.unrouteAll({ behavior: "wait" })),
+              context.unrouteAll({ behavior: "wait" }),
+            ]),
           () => context.close(),
         );
         held.pages.clear();

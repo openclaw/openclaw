@@ -40,7 +40,9 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
 import { resolveUpdateCandidatePluginPath } from "./update-candidate-paths.js";
+import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import { resolveUpdateCandidatePluginSourceEntries } from "./update-candidate-plugin-sources.js";
+import { verifyUpdateCandidatePluginTree } from "./update-candidate-plugin-tree-links.js";
 import {
   assertUpdateCandidatePluginCopySource,
   copyUpdateCandidatePluginTrees,
@@ -418,7 +420,9 @@ export async function prepareUpdateCandidatePlugins(
 /** Rebind admitted paths only; newer records or locator owners require a fresh inventory. */
 export async function copyUpdateCandidatePlugins(
   plan: UpdateCandidatePluginPlan,
-  params: UpdateCandidatePluginProjectionParams,
+  params: UpdateCandidatePluginProjectionParams & {
+    onCodeLink?: (fact: UpdateCandidatePluginCodeLink) => void;
+  },
 ): Promise<Record<string, string>> {
   const targetStateDir = resolvePathViaExistingAncestorSync(path.resolve(params.targetStateDir));
   if (plan.stateDir !== path.resolve(params.stateDir)) {
@@ -482,6 +486,14 @@ export async function copyUpdateCandidatePlugins(
         alias,
         entry.file ? "file" : process.platform === "win32" ? "junction" : "dir",
       );
+    }
+    if ((await fs.lstat(alias)).isSymbolicLink()) {
+      await verifyUpdateCandidatePluginTree(alias, {
+        privateRoot: targetStateDir,
+        candidateRoot: plan.trees.candidateRoot,
+        hostLinks: new Set(),
+        onCodeLink: params.onCodeLink,
+      });
     }
   }
   if (copied) {

@@ -293,7 +293,7 @@ describe("FRV continuation preflight", () => {
       rerunFailed: vi.fn(),
       rerunParent: vi.fn(),
     };
-    return { client, producer, logs, plan: plan([selected]) };
+    return { client, producer, logs, selected, plan: plan([selected]) };
   }
 
   it("retries only failed npm producer jobs, preserves green diagnostics, and verifies the parent", async () => {
@@ -324,6 +324,54 @@ describe("FRV continuation preflight", () => {
       "77": 2,
       "101": 1,
     });
+  });
+
+  it("recovers a failed child before the npm dispatch job exposes its completed log", async () => {
+    const fixture = artifactFixture();
+    const readParentJobs = fixture.client.getParentJobs;
+    let childAttempt = 1;
+    let parentAttempt = 1;
+    fixture.client.getParentJobs = async () =>
+      (await readParentJobs()).map((entry) =>
+        entry.name === "Prepare release npm artifacts" && childAttempt === 1
+          ? Object.assign(entry, { status: "in_progress", conclusion: "" })
+          : entry,
+      );
+    fixture.client.getRun.mockImplementation(async (id: string) =>
+      id === "81"
+        ? fixture.producer
+        : id === "77"
+          ? rootRun(parentAttempt, parentAttempt === 1 ? "failure" : "success")
+          : runFor(fixture.selected, childAttempt, childAttempt === 1 ? "failure" : "success"),
+    );
+    fixture.client.getAttemptJobs = async () => [
+      job("test", childAttempt === 1 ? "failure" : "success"),
+    ];
+    fixture.client.rerunFailed.mockImplementation(async (id: string) => {
+      expect(id).toBe("101");
+      childAttempt = 2;
+    });
+    fixture.client.rerunParent.mockImplementation(async () => {
+      parentAttempt = 2;
+    });
+    vi.useFakeTimers();
+    try {
+      const result = expect(
+        continueFailed(
+          fixture.plan,
+          "77",
+          {
+            ...fixture.client,
+            verify: async () => "{}",
+          },
+          { operationDeadline: Date.now() + 60_000 },
+        ),
+      ).resolves.toMatchObject({ action: "reran-parent" });
+      await Promise.all([result, vi.advanceTimersByTimeAsync(60_000)]);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(fixture.client.rerunFailed).toHaveBeenCalledExactlyOnceWith("101");
   });
 
   it.each(["failure", "cancelled", "timed_out"])(
@@ -847,6 +895,256 @@ describe("FRV same-parent recovery", () => {
     expect(parentReruns).toBe(1);
   });
 
+  it("retries each terminal child while the parent and other child attempts are still active", async () => {
+    const first = child("normalCi", "101");
+    const second = child("pluginPrerelease", "202");
+    const children = [first, second];
+    const childRuns = new Map<string, { attempt: number; conclusion: string | null }>([
+      ["101", { attempt: 1, conclusion: "failure" }],
+      ["202", { attempt: 1, conclusion: null }],
+    ]);
+    const parent = { attempt: 1, conclusion: null as string | null };
+    const events: string[] = [];
+    const client = {
+      ...controllerClient(children, childRuns, parent),
+      rerunFailed: async (runId: string) => {
+        expect(parent.conclusion).toBeNull();
+        events.push(runId);
+        if (runId === "101") {
+          expect(childRuns.get("202")?.conclusion).toBeNull();
+          childRuns.set("101", { attempt: 2, conclusion: null });
+          childRuns.set("202", { attempt: 1, conclusion: "failure" });
+        } else {
+          expect(childRuns.get("101")?.conclusion).toBeNull();
+          childRuns.set("101", { attempt: 2, conclusion: "success" });
+          childRuns.set("202", { attempt: 2, conclusion: "success" });
+          parent.conclusion = "failure";
+        }
+      },
+      rerunParent: async () => {
+        events.push("parent");
+        parent.attempt = 2;
+        parent.conclusion = "success";
+      },
+      verify: vi.fn(async () => "{}"),
+    };
+    vi.useFakeTimers();
+    try {
+      const result = expect(
+        continueFailed(plan(children), "77", client, {
+          operationDeadline: Date.now() + 100,
+        }),
+      ).resolves.toMatchObject({
+        action: "reran-parent",
+        reruns: [
+          { child: "normalCi", sourceRunAttempt: 1, runAttempt: 2 },
+          { child: "pluginPrerelease", sourceRunAttempt: 1, runAttempt: 2 },
+        ],
+      });
+      await Promise.all([result, vi.advanceTimersByTimeAsync(60_000)]);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(events).toEqual(["101", "202", "parent"]);
+    expect(client.verify).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])(
+    "reruns the exact carried failed job once, including ambiguous response=%s",
+    async (ambiguous) => {
+      const selected = child("normalCi", "101");
+      const childRuns = new Map([["101", { attempt: 2, conclusion: "failure" }]]);
+      const parent = { attempt: 1, conclusion: "failure" };
+      const client = {
+        ...controllerClient([selected], childRuns, parent),
+        getAttemptJobs: async (_runId: string, attempt: number) =>
+          attempt === 1
+            ? [
+                { ...job("selected", "failure"), id: 11, run_id: 101, run_attempt: 1 },
+                { ...job("unrelated", "failure"), id: 12, run_id: 101, run_attempt: 1 },
+              ]
+            : attempt === 2
+              ? [job("other", "success")]
+              : [job("selected", "success")],
+        rerunJob: vi.fn(async () => {
+          childRuns.set("101", { attempt: 3, conclusion: "failure" });
+          if (ambiguous) {
+            throw Object.assign(new Error("read ECONNRESET after dispatch"), {
+              code: "ECONNRESET",
+            });
+          }
+        }),
+        rerunFailed: vi.fn(async () => {
+          throw new Error("HTTP 403: targeted job must not use failed-jobs API");
+        }),
+        rerunParent: vi.fn(),
+        verify: vi.fn(),
+      };
+      await expect(
+        continueFailed(plan([selected]), "77", client, {
+          job: "normalCi:selected",
+        }),
+      ).rejects.toThrow("complete green composite: normalCi");
+      expect(client.rerunJob).toHaveBeenCalledExactlyOnceWith(11);
+      expect(client.rerunFailed).not.toHaveBeenCalled();
+      expect(client.rerunParent).not.toHaveBeenCalled();
+    },
+  );
+
+  it("waits only for the selected child before sending a targeted job rerun and reseals afterward", async () => {
+    const selected = child("normalCi", "101");
+    const sibling = child("pluginPrerelease", "202");
+    const childRuns = new Map<string, { attempt: number; conclusion: string | null }>([
+      ["101", { attempt: 1, conclusion: null }],
+      ["202", { attempt: 1, conclusion: null }],
+    ]);
+    const parent = { attempt: 1, conclusion: null as string | null };
+    const controller = controllerClient([selected, sibling], childRuns, parent);
+    let selectedReads = 0;
+    const client = {
+      ...controller,
+      getRun: async (runId: string) => {
+        if (runId === "101" && ++selectedReads === 2) {
+          childRuns.set("101", { attempt: 1, conclusion: "failure" });
+        }
+        return controller.getRun(runId);
+      },
+      getAttemptJobs: async (runId: string, attempt: number) => [
+        {
+          ...job("selected", attempt === 1 && runId === "101" ? "failure" : "success"),
+          id: 11,
+          run_id: Number(runId),
+          run_attempt: attempt,
+        },
+      ],
+      rerunJob: vi.fn(async () => {
+        expect(childRuns.get("202")?.conclusion).toBeNull();
+        expect(parent.conclusion).toBeNull();
+        childRuns.set("101", { attempt: 2, conclusion: "success" });
+        childRuns.set("202", { attempt: 1, conclusion: "success" });
+        parent.conclusion = "failure";
+      }),
+      rerunFailed: vi.fn(),
+      rerunParent: vi.fn(async () => {
+        parent.attempt = 2;
+        parent.conclusion = "success";
+      }),
+      verify: vi.fn(async () => "{}"),
+    };
+    vi.useFakeTimers();
+    try {
+      const result = expect(
+        continueFailed(plan([selected, sibling]), "77", client, {
+          job: "normalCi:selected",
+          operationDeadline: Date.now() + 60_000,
+        }),
+      ).resolves.toMatchObject({
+        action: "reran-parent",
+        reruns: [{ jobId: 11, jobName: "selected", sourceRunAttempt: 1, runAttempt: 2 }],
+      });
+      await Promise.all([result, vi.advanceTimersByTimeAsync(60_000)]);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(client.rerunJob).toHaveBeenCalledExactlyOnceWith(11);
+    expect(client.rerunFailed).not.toHaveBeenCalled();
+    expect(client.rerunParent).toHaveBeenCalledExactlyOnceWith("77");
+  });
+
+  it.each([
+    ["normalCi", "success"],
+    ["normalCi", "neutral"],
+    ["npmTelegram", "failure"],
+  ])("honors exact job eligibility independently of %s child policy", async (key, conclusion) => {
+    const selected = child(key, "101");
+    const selectedPlan = { ...plan([selected]), releaseProfile: "full" };
+    const childRuns = new Map([["101", { attempt: 1, conclusion }]]);
+    const parent = { attempt: 1, conclusion: "success" };
+    const client = {
+      ...controllerClient([selected], childRuns, parent),
+      getAttemptJobs: async (_id: string, attempt: number) => [
+        {
+          ...job("selected", attempt === 1 ? conclusion : "success"),
+          id: 11,
+          run_id: 101,
+          run_attempt: attempt,
+        },
+      ],
+      rerunJob: vi.fn(async () => {
+        childRuns.set("101", { attempt: 2, conclusion: "success" });
+      }),
+      rerunFailed: vi.fn(),
+      rerunParent: vi.fn(async () => {
+        parent.attempt = 2;
+      }),
+      verify: vi.fn(async () => "{}"),
+    };
+    const result = continueFailed(selectedPlan, "77", client, { job: `${key}:selected` });
+    await expect(result).resolves.toMatchObject({ action: "reran-parent" });
+    expect(client.rerunJob).toHaveBeenCalledExactlyOnceWith(11);
+    expect(client.rerunFailed).not.toHaveBeenCalled();
+  });
+
+  it.each(["attempt", "triggering actor"])(
+    "revalidates the selected child %s immediately before its targeted mutation",
+    async (change) => {
+      const scenario = rerunScenario({
+        childBefore: [
+          [1, "failure"],
+          [1, "failure"],
+          change === "attempt"
+            ? [2, "success"]
+            : [1, "failure", undefined, undefined, "other-operator"],
+        ],
+      });
+      const client = {
+        ...scenario.client,
+        getAttemptJobs: async (_id: string, attempt: number) => [
+          {
+            ...job("test", attempt === 1 ? "failure" : "success"),
+            id: 11,
+            run_id: 101,
+            run_attempt: attempt,
+          },
+        ],
+        rerunJob: vi.fn(async () => {
+          throw new Error("HTTP 403: unexpected job dispatch");
+        }),
+      };
+      await expect(
+        continueFailed(plan([scenario.selected]), "77", client, { job: "normalCi:test" }),
+      ).rejects.toThrow("child 101 changed before rerun dispatch");
+      expect(client.rerunJob).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["conclusion", "run_id", "run_attempt", "duplicate"])(
+    "rejects changed %s job evidence before a targeted POST",
+    async (change) => {
+      const selected = child("normalCi", "101");
+      const scenario = rerunScenario({});
+      let reads = 0;
+      const client = {
+        ...scenario.client,
+        getAttemptJobs: async () => {
+          const raw = { ...job("test", "failure"), id: 11, run_id: 101, run_attempt: 1 };
+          if (++reads > 1) {
+            if (change === "duplicate") {
+              return [raw, { ...raw, id: 12 }];
+            }
+            Reflect.set(raw, change, change === "conclusion" ? "success" : 999);
+          }
+          return [raw];
+        },
+        rerunJob: vi.fn(),
+      };
+      await expect(
+        continueFailed(plan([selected]), "77", client, { job: "normalCi:test" }),
+      ).rejects.toThrow("job identity changed");
+      expect(client.rerunJob).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     ["settles", "normalCi", "success"],
     ["persists", "normalCi", "success"],
@@ -1233,6 +1531,322 @@ describe("FRV same-parent recovery", () => {
   });
 });
 
+describe("FRV manual and automatic retry ownership", () => {
+  function scenario(includeSibling = false) {
+    const selected = child("normalCi", "101");
+    const children = includeSibling ? [selected, child("pluginPrerelease", "202")] : [selected];
+    const childRuns = new Map(
+      children.map((entry) => [entry.runId, { attempt: 1, conclusion: "failure" }]),
+    );
+    const parent = { attempt: 1, conclusion: "failure" as string | null };
+    const owner = (key: string, attempt = 1) => ({
+      name: `Automatic retry (${key})`,
+      run_attempt: attempt,
+      status: "completed",
+    });
+    const state = {
+      originalActive: false,
+      owners: children.map((entry) => owner(entry.key)),
+      parentSha: SHA,
+    };
+    const base = controllerClient(children, childRuns, parent);
+    const client = {
+      ...base,
+      getRun: async (id: string) => ({
+        ...(await base.getRun(id)),
+        ...(id === "77" ? { head_sha: state.parentSha } : {}),
+      }),
+      getRunAttempt: async (id: string) =>
+        id === "77" ? rootRun(1, state.originalActive ? null : "failure") : base.getRunAttempt(id),
+      getParentJobs: async () => [...(await base.getParentJobs()), ...state.owners],
+      getAttemptJobs: async (id: string, attempt: number) => [
+        {
+          ...job("test", attempt === 1 ? "failure" : "success"),
+          id: Number(id) * 10,
+          run_id: Number(id),
+          run_attempt: attempt,
+        },
+      ],
+      getManualRetryAuthority: vi.fn(async (_plan: Record<string, unknown>, _key: string) => ({
+        outcome: "not-attempted" as "not-attempted" | "rejected",
+      })),
+      rerunFailed: vi.fn(async (id: string) => {
+        childRuns.set(id, { attempt: childRuns.get(id)!.attempt + 1, conclusion: "success" });
+      }),
+      rerunJob: vi.fn(async () => {
+        childRuns.set("101", { attempt: childRuns.get("101")!.attempt + 1, conclusion: "success" });
+      }),
+      rerunParent: vi.fn(async () => {
+        parent.attempt += 1;
+        parent.conclusion = "success";
+      }),
+      verify: vi.fn(async () => "{}"),
+    };
+    return {
+      childRuns,
+      client,
+      owner,
+      parent,
+      plan: { ...plan(children), knownFlakyJobs: children.map((entry) => `${entry.key}:declared`) },
+      state,
+    };
+  }
+
+  it.each(["active", "missing", "duplicate", "current-active", "current-missing"])(
+    "waits for %s automatic ownership even when the selected job is not declared flaky",
+    async (kind) => {
+      const fixture = scenario();
+      fixture.parent.conclusion = null;
+      fixture.state.originalActive = !kind.startsWith("current-");
+      if (kind === "active") {
+        fixture.state.owners[0]!.status = "in_progress";
+      }
+      if (kind === "missing") {
+        fixture.state.owners = [];
+      }
+      if (kind === "duplicate") {
+        fixture.state.owners.push(fixture.owner("normalCi"));
+      }
+      if (kind.startsWith("current-")) {
+        fixture.parent.attempt = 2;
+      }
+      if (kind === "current-active") {
+        fixture.state.owners.push({ ...fixture.owner("normalCi", 2), status: "in_progress" });
+      }
+      vi.useFakeTimers();
+      vi.stubEnv("OPENCLAW_FRV_POLL_MS", "50");
+      try {
+        const result = expect(
+          continueFailed(fixture.plan, "77", fixture.client, {
+            job: "normalCi:test",
+            operationDeadline: Date.now() + 200,
+          }),
+        ).resolves.toMatchObject({ action: "reran-parent" });
+        await vi.advanceTimersByTimeAsync(25);
+        expect(fixture.client.rerunJob).not.toHaveBeenCalled();
+        expect(fixture.client.getManualRetryAuthority).not.toHaveBeenCalled();
+        fixture.state.originalActive = false;
+        fixture.state.owners = [fixture.owner("normalCi")];
+        fixture.parent.conclusion = "failure";
+        await Promise.all([result, vi.advanceTimersByTimeAsync(100)]);
+      } finally {
+        vi.useRealTimers();
+        vi.unstubAllEnvs();
+      }
+      expect(fixture.client.rerunJob).toHaveBeenCalledExactlyOnceWith(1010);
+      expect(fixture.client.getManualRetryAuthority).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["missing", "duplicate"])(
+    "refuses %s original ownership after completion",
+    async (kind) => {
+      const fixture = scenario();
+      fixture.state.owners =
+        kind === "missing" ? [] : [fixture.owner("normalCi"), fixture.owner("normalCi")];
+      await expect(continueFailed(fixture.plan, "77", fixture.client)).rejects.toThrow(
+        "automatic retry original owner is missing or ambiguous: normalCi",
+      );
+      expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
+      expect(fixture.client.getManualRetryAuthority).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["not-attempted", "rejected"] as const)(
+    "admits attempt one only after the shared helper proves %s",
+    async (outcome) => {
+      const fixture = scenario();
+      fixture.client.getManualRetryAuthority.mockResolvedValue({ outcome });
+      await expect(continueFailed(fixture.plan, "77", fixture.client)).resolves.toMatchObject({
+        reruns: [{ child: "normalCi", sourceRunAttempt: 1, runAttempt: 2 }],
+      });
+      expect(fixture.client.rerunFailed).toHaveBeenCalledExactlyOnceWith("101");
+    },
+  );
+
+  it.each([false, true])(
+    "holds unresolved receipts locally and provenance failures globally=%s",
+    async (global) => {
+      const fixture = scenario(true);
+      fixture.client.getManualRetryAuthority.mockImplementation(async (_plan, key) => {
+        if (key === "normalCi") {
+          throw Object.assign(
+            new Error("unresolved retry receipt"),
+            global ? { code: "FRV_PARENT_PROVENANCE" } : {},
+          );
+        }
+        return { outcome: "not-attempted" };
+      });
+      await expect(continueFailed(fixture.plan, "77", fixture.client)).rejects.toThrow(
+        "unresolved retry receipt",
+      );
+      expect(fixture.client.rerunFailed.mock.calls).toEqual(global ? [] : [["202"]]);
+      expect(fixture.client.rerunParent).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retries an eligible child while its sibling automatic owner is active", async () => {
+    const fixture = scenario(true);
+    fixture.state.originalActive = true;
+    fixture.parent.conclusion = null;
+    fixture.state.owners[1]!.status = "in_progress";
+    fixture.client.rerunFailed.mockImplementation(async (id) => {
+      expect(id).toBe("101");
+      expect(fixture.state.owners[1]!.status).toBe("in_progress");
+      fixture.childRuns.set("101", { attempt: 2, conclusion: "success" });
+      fixture.childRuns.set("202", { attempt: 2, conclusion: "success" });
+      fixture.state.owners[1]!.status = "completed";
+      fixture.state.originalActive = false;
+      fixture.parent.conclusion = "failure";
+    });
+    await expect(continueFailed(fixture.plan, "77", fixture.client)).resolves.toMatchObject({
+      reruns: [{ child: "normalCi", runAttempt: 2 }],
+    });
+    expect(fixture.client.rerunFailed).toHaveBeenCalledExactlyOnceWith("101");
+    expect(fixture.client.getManualRetryAuthority.mock.calls.map((call) => call[1])).toEqual([
+      "normalCi",
+    ]);
+  });
+
+  it("finishes delayed global owner admission before posting an undeclared sibling retry", async () => {
+    const fixture = scenario(true);
+    fixture.plan.knownFlakyJobs = ["normalCi:declared"];
+    let signalOwnerRead!: () => void;
+    const readingOwner = new Promise<void>((resolve) => {
+      signalOwnerRead = resolve;
+    });
+    let allowOwnerRead!: () => void;
+    const releaseOwner = new Promise<void>((resolve) => {
+      allowOwnerRead = resolve;
+    });
+    const getRun = fixture.client.getRun;
+    let parentReads = 0;
+    fixture.client.getRun = async (id) => {
+      if (id === "77" && ++parentReads === 2) {
+        signalOwnerRead();
+        await releaseOwner;
+        fixture.state.parentSha = "f".repeat(40);
+      }
+      return getRun(id);
+    };
+    vi.useFakeTimers();
+    try {
+      const result = expect(
+        continueFailed(fixture.plan, "77", fixture.client),
+      ).rejects.toMatchObject({ code: "FRV_PARENT_PROVENANCE" });
+      await readingOwner;
+      await vi.advanceTimersByTimeAsync(0);
+      const postsWhileOwnerPending = fixture.client.rerunFailed.mock.calls.length;
+      allowOwnerRead();
+      await result;
+      expect(postsWhileOwnerPending).toBe(0);
+      expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
+      expect(fixture.client.rerunParent).not.toHaveBeenCalled();
+    } finally {
+      allowOwnerRead();
+      vi.useRealTimers();
+    }
+  });
+
+  it("checks common parent provenance after all final child reads and before any POST", async () => {
+    const fixture = scenario(true);
+    fixture.plan.knownFlakyJobs = ["normalCi:declared"];
+    const getRun = fixture.client.getRun;
+    let siblingReads = 0;
+    fixture.client.getRun = async (id) => {
+      const run = await getRun(id);
+      if (id === "202" && ++siblingReads === 3) {
+        fixture.state.parentSha = "f".repeat(40);
+      }
+      return run;
+    };
+    await expect(continueFailed(fixture.plan, "77", fixture.client)).rejects.toMatchObject({
+      code: "FRV_PARENT_PROVENANCE",
+    });
+    expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
+    expect(fixture.client.rerunParent).not.toHaveBeenCalled();
+  });
+
+  it("readmits a newer parent attempt before sending a retry admitted by its older owner", async () => {
+    const fixture = scenario();
+    const getRun = fixture.client.getRun;
+    let childReads = 0;
+    fixture.client.getRun = async (id) => {
+      const run = await getRun(id);
+      if (id === "101" && ++childReads === 3) {
+        fixture.parent.attempt = 2;
+        fixture.parent.conclusion = null;
+        fixture.state.owners.push({ ...fixture.owner("normalCi", 2), status: "in_progress" });
+      }
+      return run;
+    };
+    vi.useFakeTimers();
+    vi.stubEnv("OPENCLAW_FRV_POLL_MS", "50");
+    try {
+      const result = expect(
+        continueFailed(fixture.plan, "77", fixture.client, {
+          operationDeadline: Date.now() + 200,
+        }),
+      ).resolves.toMatchObject({ action: "reran-parent" });
+      await vi.advanceTimersByTimeAsync(25);
+      const postsWhileNewOwnerActive = fixture.client.rerunFailed.mock.calls.length;
+      fixture.state.owners[1]!.status = "completed";
+      fixture.parent.conclusion = "failure";
+      await Promise.all([result, vi.advanceTimersByTimeAsync(100)]);
+      expect(postsWhileNewOwnerActive).toBe(0);
+      expect(fixture.client.rerunFailed).toHaveBeenCalledExactlyOnceWith("101");
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("permits manual attempt three for a carried attempt-one job without repeating historical authority", async () => {
+    const fixture = scenario();
+    fixture.childRuns.set("101", { attempt: 2, conclusion: "failure" });
+    const readJobs = fixture.client.getAttemptJobs;
+    fixture.client.getAttemptJobs = async (id, attempt) =>
+      attempt === 2
+        ? [{ ...job("other", "success"), id: 1011, run_id: 101, run_attempt: 2 }]
+        : readJobs(id, attempt);
+    await expect(
+      continueFailed(fixture.plan, "77", fixture.client, { job: "normalCi:test" }),
+    ).resolves.toMatchObject({
+      reruns: [{ sourceRunAttempt: 2, acceptedRunAttempt: 1, runAttempt: 3 }],
+    });
+    expect(fixture.client.getManualRetryAuthority).not.toHaveBeenCalled();
+    expect(fixture.client.rerunJob).toHaveBeenCalledExactlyOnceWith(1010);
+  });
+
+  it.each(["parent", "owner"])(
+    "rechecks live %s after awaited historical authority",
+    async (changed) => {
+      const fixture = scenario();
+      fixture.client.getManualRetryAuthority.mockImplementation(async () => {
+        if (changed === "parent") {
+          fixture.state.parentSha = "f".repeat(40);
+        } else {
+          fixture.state.owners[0]!.status = "in_progress";
+        }
+        return { outcome: "not-attempted" };
+      });
+      vi.useFakeTimers();
+      try {
+        const result = expect(
+          continueFailed(fixture.plan, "77", fixture.client, {
+            operationDeadline: Date.now() + 100,
+          }),
+        ).rejects.toThrow(changed === "parent" ? "parent identity changed" : "timed out");
+        await Promise.all([result, vi.advanceTimersByTimeAsync(200)]);
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
+      expect(fixture.client.rerunParent).not.toHaveBeenCalled();
+    },
+  );
+});
+
 describe("FRV rerun API", () => {
   it("uses the direct failed-jobs and parent rerun endpoints", async () => {
     const calls: string[][] = [];
@@ -1241,9 +1855,11 @@ describe("FRV rerun API", () => {
         calls.push(args);
       },
     });
+    await client.rerunJob(1001);
     await client.rerunFailed("101");
     await client.rerunParent("77");
     expect(calls).toEqual([
+      ["api", "-X", "POST", `repos/${REPOSITORY}/actions/jobs/1001/rerun`],
       ["api", "-X", "POST", `repos/${REPOSITORY}/actions/runs/101/rerun-failed-jobs`],
       ["api", "-X", "POST", `repos/${REPOSITORY}/actions/runs/77/rerun`],
     ]);

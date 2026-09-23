@@ -58,11 +58,17 @@
 
 .chat-working-indicator__status {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 6px;
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
   font-variant-numeric: tabular-nums;
+}
+
+.chat-working-indicator__preamble {
+  flex-basis: 100%;
+  overflow-wrap: anywhere;
 }
 
 .chat-working-indicator__elapsed {

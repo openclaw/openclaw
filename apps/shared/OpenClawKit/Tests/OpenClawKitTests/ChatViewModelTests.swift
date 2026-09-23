@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import OpenClawKit
 import OpenClawProtocol
 import Testing
@@ -9605,18 +9606,23 @@ struct ChatViewModelTests {
         #expect(vm.modelSelectionID == next.selectionID)
     }
 
-    @Test @MainActor func `failed newest catalog refresh retains the last accepted auth gate`() async throws {
-        let staleRefreshGate = AsyncGate()
+    @Test(arguments: [false, true])
+    @MainActor func `failed catalog refresh retains choices only without policy invalidation`(
+        modelSelectionChanged: Bool) async throws
+    {
+        let staleRefreshGate = SessionSubscribeGate()
         let unavailable = modelChoice(
-            id: "claude-opus-4-6",
-            name: "Claude Opus 4.6",
+            id: "previous",
+            name: "Previous choice",
+            provider: "fixture",
             available: false,
             unavailableReason: "auth-failed")
         let available = modelChoice(
-            id: "claude-opus-4-6",
-            name: "Claude Opus 4.6",
+            id: "previous",
+            name: "Previous choice",
+            provider: "fixture",
             available: true)
-        let (transport, vm) = await makeViewModel(
+        let (_, vm) = await makeViewModel(
             historyResponses: [historyPayload()],
             sessionsResponses: [sessionsResponse(sessionEntry(
                 key: "main",
@@ -9642,15 +9648,34 @@ struct ChatViewModelTests {
         vm.input = "hello"
 
         let staleRefresh = Task { await vm.fetchModels() }
-        try await waitUntil("older catalog refresh starts") {
-            await transport.modelAgentIDs().count >= 2
+        await staleRefreshGate.waitUntilBlocked()
+        if modelSelectionChanged {
+            let failedRefresh = AsyncGate()
+            withObservationTracking {
+                _ = vm.modelCatalogMessage
+            } onChange: {
+                Task { await failedRefresh.open() }
+            }
+            let event = try #require(OpenClawChatGatewayPayloadCodec.event(from: EventFrame(
+                type: "event", event: "chat.metadata.changed",
+                payload: AnyCodable(["modelSelectionChanged": true]))))
+            vm.handleTransportEvent(event)
+            #expect(vm.modelChoices.isEmpty, "Policy retirement must happen before the queued refresh starts")
+            #expect(!vm.canSelectModel(available.selectionID))
+            #expect(!vm.canSelectDefaultModel)
+            await failedRefresh.wait()
+        } else {
+            await vm.fetchModels()
         }
-        await vm.fetchModels()
-        await staleRefreshGate.open()
+        await staleRefreshGate.release()
         await staleRefresh.value
 
-        #expect(vm.modelChoices.first?.available == false)
-        #expect(!vm.canSend)
+        #expect(vm.modelChoices == (modelSelectionChanged ? [] : [unavailable]))
+        #expect(vm.modelSelectionID == (modelSelectionChanged
+            ? OpenClawChatViewModel.defaultModelSelectionID : unavailable.selectionID))
+        #expect(vm.sessions.first?.model == unavailable.modelID)
+        #expect(vm.input == "hello")
+        if !modelSelectionChanged { #expect(!vm.canSend) }
     }
 
     @Test @MainActor func `offline draft remains eligible for durable queue despite auth failure`() async throws {

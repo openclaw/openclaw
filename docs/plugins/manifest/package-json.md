@@ -111,7 +111,14 @@ A `persistedAuthState` checker whose data comes exclusively from the host's keye
 }
 ```
 
-Use `env.allOf` when every listed variable is required and `env.anyOf` when any one non-empty variable is enough. If a tiny non-runtime check needs more than environment metadata, use `specifier` plus `exportName` as shown for `persistedAuthState`. A complete, non-empty `specifier` and `exportName` pair takes precedence over `env`. If either field is absent or blank, the probe uses its `env` metadata without loading a module. If the check needs full config resolution or the real channel runtime, keep that logic in the plugin `config.hasConfiguredState` hook instead.
+Use `env.allOf` when every listed variable is required and `env.anyOf` when any one non-empty variable is enough. If a tiny non-runtime check needs more than environment metadata, use `specifier` plus `exportName` as shown for `persistedAuthState`. A complete, non-empty `specifier` and `exportName` pair takes precedence over `env`. If either field is absent or blank, the probe uses its `env` metadata without loading a module.
+
+Declared `configuredState` metadata owns both positive and negative bootstrap
+results. A negative result does not fall through to runtime hooks or stored
+credentials. Channels without that declaration retain the legacy
+`config.hasConfiguredState` fallback. Operational checks that require current
+stored credentials use `config.hasConfiguredStateAsync`; keep them separate
+from activation based on config and environment variables.
 
 For both state probes, OpenClaw builds rewrite source specifiers only for complete module pairs, naming the exact emitted JavaScript artifact, including its `.js` or `.cjs` extension. Env-backed incomplete pairs are preserved unchanged. Built checkout metadata uses paths relative to the plugin root; standalone packages use the plugin-local `dist/` directory.
 

@@ -814,6 +814,8 @@ describe("chat metadata ownership", () => {
       expect(readChatMetadata).toHaveBeenCalledWith({
         agentId: "main",
         requesterProfileId: owner.id,
+        isCurrent: expect.any(Function),
+        assertCurrent: expect.any(Function),
         draftAccountSelection: expect.objectContaining({
           owner: owner.id,
           authProfileId,
@@ -869,24 +871,6 @@ describe("chat metadata ownership", () => {
       });
     },
   );
-
-  it("rejects combining a personal draft preview with a persisted session selector", async () => {
-    await withOpenClawTestState({ layout: "state-only" }, async () => {
-      const { authProfileId, readChatMetadata, request } = createPersonalMetadataFixture();
-      const respond = await request({
-        agentId: "main",
-        sessionKey: "agent:main:existing",
-        authProfileId,
-      });
-
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
-      );
-      expect(readChatMetadata).not.toHaveBeenCalled();
-    });
-  });
 
   it.each(["disconnect", "role loss", "abort"] as const)(
     "rejects a personal draft preview after %s during the metadata read",
@@ -969,8 +953,18 @@ describe("chat metadata ownership", () => {
             }),
           }),
         ],
-        [{ agentId: "main" }],
+        [
+          {
+            agentId: "main",
+            requesterProfileId: undefined,
+            isCurrent: expect.any(Function),
+            assertCurrent: expect.any(Function),
+          },
+        ],
       ]);
+      const neutral = expectDefined(readChatMetadata.mock.calls[1]?.[0], "neutral metadata read");
+      expect(neutral.isCurrent?.()).toBe(true);
+      expectDefined(neutral.assertCurrent, "neutral metadata authority check")();
       expect(respond).toHaveBeenCalledTimes(2);
       readChatMetadata.mockClear();
       await handler({

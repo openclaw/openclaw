@@ -62,9 +62,10 @@ export function renderChatWorkingIndicator(
   const waitingApproval = options.waitingApproval === true;
   const neutral = (options.mascot ?? currentThemeBranding().mascot) === "none";
   const continuation = options.presentation === "continuation";
+  const preamble = !waitingApproval && !options.startupLabel ? part.preamble : undefined;
   const statusLabel = waitingApproval
     ? t("chat.waitingForApproval")
-    : options.startupLabel || t("common.working");
+    : options.startupLabel || preamble || t("common.working");
   const working = !waitingApproval && !options.startupLabel;
   // Providers report exact usage at response boundaries, not per text delta.
   // Keep the latest count visible while the run continues through tools.
@@ -96,7 +97,16 @@ export function renderChatWorkingIndicator(
             `
       }
       <span class="chat-working-indicator__status">
-        <span class=${working && !continuation ? "sr-only" : ""}>${statusLabel}</span>
+        <span
+          class=${
+            preamble
+              ? "chat-working-indicator__preamble"
+              : working && !continuation
+                ? "sr-only"
+                : ""
+          }
+          >${statusLabel}</span
+        >
         ${
           waitingApproval
             ? nothing
@@ -115,7 +125,7 @@ export function renderChatWorkingIndicator(
                   >${outputTokensLabel(outputTokens)}</span
                 >
               `
-            : working
+            : working && !preamble
               ? html`
                   <openclaw-working-phrase
                     aria-hidden="true"

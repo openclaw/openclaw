@@ -17,7 +17,7 @@ import {
   tasks,
 } from "./task-registry-state.js";
 import type { TaskRecordTransitionReceipt } from "./task-registry-transition.kernel.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
 
 const log = createSubsystemLogger("tasks/executor");
 
@@ -29,6 +29,7 @@ export async function settleTaskRecordTransitionAsync(
     {
       type:
         | "tasks.bindRunOwner"
+        | "tasks.transitionRunRow"
         | "tasks.settleUnstarted"
         | "tasks.finalizeActive"
         | "tasks.acknowledgeStateChange"
@@ -44,7 +45,14 @@ export async function settleTaskRecordTransitionAsync(
   const { taskId } = command.input;
   assertCurrent();
   // Activity observers may reenter persistence, so flush before worker admission.
-  if (command.type === "tasks.settleUnstarted" || command.type === "tasks.finalizeActive") {
+  if (
+    command.type === "tasks.settleUnstarted" ||
+    command.type === "tasks.finalizeActive" ||
+    (command.type === "tasks.transitionRunRow" &&
+      command.input.kind === "state" &&
+      command.input.params.status !== undefined &&
+      isTerminalTaskStatus(command.input.params.status))
+  ) {
     const { expectedTask } = command.input;
     try {
       assertTaskRegistryOwnerCurrent(context, store);

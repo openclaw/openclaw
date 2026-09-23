@@ -12,7 +12,8 @@ import type {
 const log = createSubsystemLogger("agents/prepared-model-runtime");
 
 type PreparedModelRuntimePublicationEvent =
-  | { phase: "invalidated" | "published"; modelFactsChanged?: false }
+  | { phase: "invalidated"; modelFactsChanged?: false; replacement?: Promise<void> }
+  | { phase: "published"; modelFactsChanged?: false }
   | { phase: "failed"; error: Error }
   // Publication owners alone can prove that model facts stayed unchanged.
   | {

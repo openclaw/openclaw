@@ -21,6 +21,7 @@ import {
   clearBlockedPageRef,
   clearBlockedPageRefsForCdpUrl,
   clearBlockedTarget,
+  closeConnectionScopedPageBrowser,
   clearBlockedTargetsForCdpUrl,
   connectBrowser,
   evictStalePlaywrightBrowserConnection,
@@ -45,6 +46,8 @@ import {
   gotoPageWithNavigationGuard,
   isPolicyDenyNavigationError,
 } from "./pw-session-navigation.js";
+import { isConnectionScopedPage } from "./pw-session-page-target.js";
+import type { PlaywrightOwnedPage } from "./pw-session-page.types.js";
 import {
   ensurePageState,
   getObservedBrowserStateForPage,
@@ -253,16 +256,21 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
 async function withPlaywrightSafeReadReconnect<T>(
   opts: {
     cdpUrl: string;
+    engine?: "chromium" | "lightpanda";
     ssrfPolicy?: SsrFPolicy;
     signal: AbortSignal;
   },
   run: (browser: Browser) => Promise<T>,
 ): Promise<T> {
-  const connected = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
+  const connected = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy, undefined, opts.engine);
   try {
     return await run(connected.browser);
   } catch (err) {
-    if (!isRecoverablePlaywrightDisconnectError(err) || opts.signal.aborted) {
+    if (
+      connected.engine === "lightpanda" ||
+      !isRecoverablePlaywrightDisconnectError(err) ||
+      opts.signal.aborted
+    ) {
       throw err;
     }
     evictStalePlaywrightBrowserConnection(opts.cdpUrl, connected.browser);
@@ -277,13 +285,14 @@ async function withPlaywrightSafeReadReconnect<T>(
 async function readPagesViaPlaywright(
   opts: {
     cdpUrl: string;
+    engine?: "chromium" | "lightpanda";
     ssrfPolicy?: SsrFPolicy;
     requireCompleteTargetList?: boolean;
   },
   signal: AbortSignal,
 ): Promise<PlaywrightPageEnumeration> {
   return await withPlaywrightSafeReadReconnect(
-    { cdpUrl: opts.cdpUrl, ssrfPolicy: opts.ssrfPolicy, signal },
+    { cdpUrl: opts.cdpUrl, ssrfPolicy: opts.ssrfPolicy, signal, engine: opts.engine },
     async (browser) => {
       signal.throwIfAborted();
       const contexts = opts.requireCompleteTargetList ? browser.contexts() : [];
@@ -463,6 +472,7 @@ type PlaywrightPageEnumeration =
 /** List pages through the persistent Playwright connection. */
 export async function listPagesViaPlaywright(opts: {
   cdpUrl: string;
+  engine?: "chromium" | "lightpanda";
   ssrfPolicy?: SsrFPolicy;
   timeoutMs?: number;
   requireCompleteTargetList?: boolean;
@@ -517,18 +527,21 @@ export async function listPagesViaPlaywright(opts: {
 export async function createPageViaPlaywright(
   opts: {
     cdpUrl: string;
+    engine?: "chromium" | "lightpanda";
     url: string;
     cdpPolicy?: SsrFPolicy;
     signal?: AbortSignal;
+    /** Caller authority is checked at each effect boundary, independently of cancellation. */
+    assertCurrent?: () => void;
+    /** Own an empty context; never reuse profile cookies for a session-scoped dashboard. */
+    isolatedContext?: true;
   } & BrowserNavigationPolicyOptions,
-): Promise<{
-  targetId: string;
-  title: string;
-  url: string;
-  type: string;
-  close: () => Promise<void>;
-}> {
-  opts.signal?.throwIfAborted();
+): Promise<PlaywrightOwnedPage> {
+  const assertCurrent = () => {
+    opts.signal?.throwIfAborted();
+    opts.assertCurrent?.();
+  };
+  assertCurrent();
   const targetUrl = opts.url.trim() || "about:blank";
   const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
     browserProxyMode: opts.browserProxyMode,
@@ -538,24 +551,45 @@ export async function createPageViaPlaywright(
     ...navigationPolicy,
     signal: opts.signal,
   });
-  opts.signal?.throwIfAborted();
-  const { browser } = await connectBrowser(opts.cdpUrl, opts.cdpPolicy ?? opts.ssrfPolicy);
-  opts.signal?.throwIfAborted();
-  const context = browser.contexts()[0] ?? (await browser.newContext());
-  opts.signal?.throwIfAborted();
-  ensureContextState(context);
-
-  const page = await context.newPage();
+  assertCurrent();
+  const { browser, engine } = await connectBrowser(
+    opts.cdpUrl,
+    opts.cdpPolicy ?? opts.ssrfPolicy,
+    undefined,
+    opts.engine,
+  );
+  assertCurrent();
+  // Refusing a second connection-scoped page must not close the existing one.
+  // Keep this check before allocation and outside the new-page cleanup owner.
+  if (engine === "lightpanda" && (await getAllPages(browser)).length > 0) {
+    throw new Error(
+      "Lightpanda supports one page per connection. Navigate the existing tab, or close it before opening another.",
+    );
+  }
+  assertCurrent();
+  const context = opts.isolatedContext
+    ? await browser.newContext({ acceptDownloads: false })
+    : (browser.contexts()[0] ?? (await browser.newContext()));
+  let page: Page | undefined;
   const close = async () => {
-    await page.close();
+    if (opts.isolatedContext) {
+      await context.close();
+    } else if (engine === "lightpanda") {
+      await closeConnectionScopedPageBrowser(opts.cdpUrl, browser);
+    } else {
+      await page?.close();
+    }
   };
   let navigationClosedBlockedTarget = false;
   try {
-    opts.signal?.throwIfAborted();
+    assertCurrent();
+    ensureContextState(context);
+    page = await context.newPage();
+    assertCurrent();
     ensurePageState(page);
     clearBlockedPageRef(opts.cdpUrl, page);
     const createdTargetId = (await pageTargetInfo(page).catch(() => null))?.targetId ?? null;
-    opts.signal?.throwIfAborted();
+    assertCurrent();
     clearBlockedTarget(opts.cdpUrl, createdTargetId ?? undefined);
 
     if (targetUrl !== "about:blank") {
@@ -568,14 +602,14 @@ export async function createPageViaPlaywright(
           timeoutMs: 30_000,
           ...navigationPolicy,
           targetId: createdTargetId ?? undefined,
-          assertPageCurrent: () => opts.signal?.throwIfAborted(),
+          assertPageCurrent: assertCurrent,
         });
       } catch (error) {
         // Guarded navigation already owns close/quarantine for a policy denial.
         navigationClosedBlockedTarget = isPolicyDenyNavigationError(error);
         throw error;
       }
-      opts.signal?.throwIfAborted();
+      assertCurrent();
       await assertPageNavigationCompletedSafely({
         cdpUrl: opts.cdpUrl,
         page,
@@ -586,15 +620,24 @@ export async function createPageViaPlaywright(
     }
 
     const tid = createdTargetId ?? (await pageTargetInfo(page).catch(() => null))?.targetId ?? null;
-    opts.signal?.throwIfAborted();
+    assertCurrent();
     if (!tid) {
       throw new Error("Failed to get targetId for new page");
     }
     const title = await page.title().catch(() => "");
-    opts.signal?.throwIfAborted();
-    return { targetId: tid, title, url: page.url(), type: "page", close };
+    assertCurrent();
+    const retainedPage = page;
+    return {
+      targetId: tid,
+      title,
+      url: page.url(),
+      type: "page",
+      close,
+      isCurrent: () =>
+        browser.isConnected() && !retainedPage.isClosed() && context.pages().includes(retainedPage),
+    };
   } catch (error) {
-    if (!navigationClosedBlockedTarget) {
+    if (opts.isolatedContext || !navigationClosedBlockedTarget) {
       await close().catch(() => {});
     }
     throw error;
@@ -621,7 +664,14 @@ export async function closePageByTargetIdViaPlaywright(opts: {
     }
     assertBrowserDashboardTabCanClose(targetId);
   }
-  await page.close();
+  if (isConnectionScopedPage(page)) {
+    const browser = page.context().browser();
+    if (browser) {
+      await closeConnectionScopedPageBrowser(opts.cdpUrl, browser);
+    }
+  } else {
+    await page.close();
+  }
 }
 
 /**
@@ -633,11 +683,12 @@ export async function focusPageByTargetIdViaPlaywright(opts: {
   targetId: string;
   ssrfPolicy?: SsrFPolicy;
   signal?: AbortSignal;
-  assertCurrent?: () => Promise<void>;
+  assertCurrent?: () => void | Promise<void>;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
-  if (opts.assertCurrent) {
-    await opts.assertCurrent();
+  const assertion = opts.assertCurrent?.();
+  if (assertion) {
+    await assertion;
   }
   opts.signal?.throwIfAborted();
   await page.bringToFront();

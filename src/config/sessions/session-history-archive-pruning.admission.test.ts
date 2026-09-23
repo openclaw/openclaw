@@ -17,11 +17,14 @@ import {
   captureStateDatabaseCoordinatorRuntime,
   resolveStateDatabaseCoordinatorPath,
 } from "../../infra/state-database-coordinator.js";
+import { drainAgentDatabaseResources } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   createOpenClawTestState,
@@ -29,6 +32,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import * as diskBudgetFiles from "./disk-budget-files.js";
 import * as diskBudget from "./disk-budget.js";
+import { runExclusiveSqliteTranscriptArchiveWorker } from "./session-accessor.sqlite-archive.js";
 import {
   loadSessionEntryReadOnly,
   replaceSessionEntry,
@@ -74,6 +78,133 @@ function own<T>(promise: Promise<T>): Promise<T> {
   void promise.catch(() => {});
   return promise;
 }
+
+it.each([false, true])(
+  "keeps native page cleanup outside archive admission (incognito: %s)",
+  async (incognito) => {
+    const options = {
+      agentId: "main",
+      env: state.env,
+      ...(incognito
+        ? { path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }) }
+        : {}),
+    };
+    const database = openOpenClawAgentDatabase(options);
+    const nativeReclaim = vi.spyOn(database.walMaintenance, "reclaimFreePages");
+    const maintenance = incognito
+      ? undefined
+      : createOpenClawDatabaseMaintenanceScope(() => undefined);
+    const entered = createDeferred();
+    const release = createDeferred();
+    releases.push(release.resolve);
+    const blocker = own(
+      runExclusiveSqliteTranscriptArchiveWorker(async () => {
+        entered.resolve();
+        await release.promise;
+      }),
+    );
+    await entered.promise;
+    const pageComplete = createDeferred();
+    let archiveRead = false;
+    const run = () =>
+      pageReclamation.withSqliteSessionPageReclamation(
+        options,
+        async (reclaim, _assertCurrent, _databaseOptions, archives) => {
+          expect(await reclaim(1)).toMatchObject({ checkpointCompleted: true });
+          pageComplete.resolve();
+          return archives.withWriter(async () => {
+            archiveRead = true;
+            return archives.read();
+          });
+        },
+      );
+    const work = own(maintenance ? maintenance.run(run) : run());
+    void work.catch(pageComplete.reject);
+    try {
+      await withTestTimeout(
+        pageComplete.promise,
+        10_000,
+        "Native page cleanup waited for archive admission",
+      );
+      expect(nativeReclaim).toHaveBeenCalledOnce();
+      if (incognito) {
+        await expect(work).resolves.toBeNull();
+        expect(archiveRead).toBe(true);
+        expect(fs.existsSync(database.path)).toBe(false);
+      } else {
+        expect(archiveRead).toBe(false);
+      }
+      release.resolve();
+      await expect(work).resolves.toBeNull();
+      expect(archiveRead).toBe(true);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([blocker, work]);
+      await maintenance?.close();
+    }
+  },
+);
+
+it("retires a queued archive removal without waiting for unrelated archive work", async () => {
+  const fixture = await publishedArchive();
+  const entered = createDeferred();
+  const release = createDeferred();
+  const queued = createDeferred();
+  releases.push(release.resolve);
+  const blocker = own(
+    runExclusiveSqliteTranscriptArchiveWorker(async () => {
+      entered.resolve();
+      await release.promise;
+    }),
+  );
+  await entered.promise;
+  const withPages = pageReclamation.withSqliteSessionPageReclamation;
+  vi.spyOn(pageReclamation, "withSqliteSessionPageReclamation").mockImplementation(
+    <T>(...args: Parameters<typeof withPages<T>>) => {
+      const [input, run] = args;
+      return withPages(input, (reclaim, assertCurrent, options, archives) =>
+        run(reclaim, assertCurrent, options, {
+          ...archives,
+          withWriter: (operation) => {
+            const work = archives.withWriter(operation);
+            queued.resolve();
+            return work;
+          },
+        }),
+      );
+    },
+  );
+  const work = own(
+    pruneAllSessionTranscriptArchivesToHighWater({
+      archiveDirectory: path.dirname(fixture.archivePath),
+      databaseOptions: fixture.options,
+      highWaterBytes: 1,
+      storePath: fixture.storePath,
+    }),
+  );
+  void work.catch(queued.reject);
+  let retirement: Promise<void> | undefined;
+  try {
+    await withTestTimeout(queued.promise, 10_000, "Archive removal did not reach admission");
+    retirement = own(
+      drainAgentDatabaseResources(
+        { path: fixture.options.path, agentId: fixture.options.agentId },
+        async () => undefined,
+      ),
+    );
+    await withTestTimeout(retirement, 10_000, "Retirement waited on queued archive removal");
+    release.resolve();
+    const failure: unknown = await work.catch((error: unknown) => error);
+    await blocker;
+    expect(fixture.readArchive()).toEqual(fixture.originalArchive);
+    expect(fs.readFileSync(fixture.archivePath)).toEqual(fixture.archivedBytes);
+    expect(failure).toBeInstanceOf(Error);
+    expect(String(failure)).toMatch(/revoked|closed/);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([blocker, work, retirement]);
+  }
+});
 
 async function publishedArchive(content = "synthetic retained archive payload") {
   const sessionsDir = state.sessionsDir();

@@ -213,7 +213,10 @@ export async function waitForViaPlaywright(
     }
     if (fn) {
       if (opts.assertCurrent) {
-        await assertInteractionCurrent(opts);
+        const assertion = assertInteractionCurrent(opts);
+        if (assertion) {
+          await assertion;
+        }
         throwIfInteractionAborted(opts.signal);
       }
       // Passing the live document handle makes Playwright fail instead of
@@ -221,7 +224,10 @@ export async function waitForViaPlaywright(
       const documentHandle = await page.evaluateHandle(() => globalThis.document);
       try {
         if (opts.assertCurrent) {
-          await assertInteractionCurrent(opts);
+          const assertion = assertInteractionCurrent(opts);
+          if (assertion) {
+            await assertion;
+          }
         }
         throwIfInteractionAborted(opts.signal);
         await waitFor(

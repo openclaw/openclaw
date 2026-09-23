@@ -178,3 +178,11 @@ describe("resolveToolProfileOptions", () => {
     }
   });
 });
+
+it("does not advertise personal instructions in the capability-unknown fallback catalog", () => {
+  expect(
+    resolveToolSections(null)
+      .flatMap((section) => section.tools)
+      .some((tool) => tool.id === "personal_instructions"),
+  ).toBe(false);
+});

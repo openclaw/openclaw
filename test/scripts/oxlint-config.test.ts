@@ -696,13 +696,32 @@ describe("oxlint config", () => {
 
   it("keeps native cap scopes and correctness while making only CI limits advisory", () => {
     const root = fs.realpathSync(createTempDir("openclaw-oxlint-ci-limits-"));
-    fs.copyFileSync(".oxlintrc.json", path.join(root, ".oxlintrc.json"));
+    const config = readJson(".oxlintrc.json") as OxlintConfig;
+    fs.writeFileSync(
+      path.join(root, ".oxlintrc.json"),
+      JSON.stringify({
+        ...config,
+        env: { browser: true },
+        globals: { configuredGlobal: "readonly" },
+        rules: { ...config.rules, "no-undef": "error" },
+        ignorePatterns: [...(config.ignorePatterns ?? []), "src/ignored-by-config.ts"],
+        overrides: [
+          ...(config.overrides ?? []),
+          {
+            files: ["src/disabled/**"],
+            rules: { "max-lines": "off" },
+          },
+        ],
+      }),
+    );
     fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
     const sources = {
       "src/oversized.ts": 702,
       "src/within-cap.test.ts": 902,
       "extensions/copilot/src/event-bridge.ts": 902,
       "src/generated/ignored.ts": 1402,
+      "src/ignored-by-config.ts": 1402,
+      "src/disabled/ignored.ts": 1402,
     };
     for (const [file, lines] of Object.entries(sources)) {
       fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
@@ -712,6 +731,7 @@ describe("oxlint config", () => {
       );
     }
     fs.writeFileSync(path.join(root, "src/correctness.ts"), "export var legacy = 1;\n");
+    fs.writeFileSync(path.join(root, "src/globals.js"), "window.console.log(configuredGlobal);\n");
     for (const { github, correctness } of [
       { github: false, correctness: false },
       { github: true, correctness: false },
@@ -727,6 +747,7 @@ describe("oxlint config", () => {
           "--format",
           "json",
           ...Object.keys(sources),
+          "src/globals.js",
           ...(correctness ? ["src/correctness.ts"] : []),
         ],
         {
@@ -760,6 +781,41 @@ describe("oxlint config", () => {
         expect(
           report.diagnostics.find((diagnostic) => diagnostic.code === "eslint(no-var)")?.severity,
         ).toBe("error");
+      }
+    }
+  });
+
+  it("preserves native config validation locally and in Actions", () => {
+    const root = fs.realpathSync(createTempDir("openclaw-oxlint-invalid-limit-"));
+    fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
+    fs.writeFileSync(path.join(root, "fixture.ts"), "console.log(1);\n");
+    const invalidConfigs = [
+      ...["not-a-severity", 3, null].map((severity) =>
+        JSON.stringify({
+          categories: { correctness: "off" },
+          rules: { "max-lines": [severity, { max: 1 }] },
+        }),
+      ),
+      '{categories: {correctness: "off"}, rules: {"max-lines": ["error", {max: 1}]}}',
+    ];
+    for (const config of invalidConfigs) {
+      fs.writeFileSync(path.join(root, ".oxlintrc.json"), config);
+      for (const github of [false, true]) {
+        const result = spawnSync(
+          process.execPath,
+          [path.resolve("scripts/run-oxlint.mts"), "--openclaw-focused-config", "fixture.ts"],
+          {
+            cwd: root,
+            encoding: "utf8",
+            env: { ...process.env, GITHUB_ACTIONS: github ? "true" : "false" },
+          },
+        );
+        expect(result.error).toBeUndefined();
+        expect(
+          result.status,
+          `${config} / Actions=${github}: ${result.stdout}${result.stderr}`,
+        ).toBe(1);
+        expect(result.stdout + result.stderr).toContain("Failed to parse");
       }
     }
   });

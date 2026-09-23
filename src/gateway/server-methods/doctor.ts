@@ -565,7 +565,12 @@ function resolveDoctorMemoryTarget(
   agentId: string;
   workspaceDir: string;
 } | null {
-  const resolved = resolveDoctorMemoryAgent(context, params, respond);
+  // Apply the same ambient-owner fallback that doctor.memory.status uses so
+  // that legacy clients (e.g. embedded UI builds that pre-date the agent-
+  // selection gate) do not get a hard rejection on multi-agent installs when
+  // a single default agent can be unambiguously resolved.
+  const omittedAgentId = tryResolveAmbientOwnerAgentId(context.getRuntimeConfig());
+  const resolved = resolveDoctorMemoryAgent(context, params, respond, omittedAgentId);
   if (!resolved) {
     return null;
   }

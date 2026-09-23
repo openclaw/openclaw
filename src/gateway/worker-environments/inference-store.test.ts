@@ -160,7 +160,17 @@ describe("worker inference SQLite store", () => {
       store: managerStore,
     });
     const { frames, sink } = createSink();
-    const result = manager.start({ identity: IDENTITY, request: REQUEST, sink });
+    const result = manager.start({
+      identity: IDENTITY,
+      sessionTarget: {
+        agentId: "main",
+        sessionId: REQUEST.sessionId,
+        sessionKey: "agent:main:inference-store",
+        storePath: path.join(root, "sessions.sqlite"),
+      },
+      request: REQUEST,
+      sink,
+    });
     if (!result.ok) {
       throw new Error(`start failed: ${result.reason}`);
     }

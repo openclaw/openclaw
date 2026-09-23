@@ -12,6 +12,11 @@ read_when:
 happens in child workflows so a failed box can be rerun without restarting the
 whole release.
 
+An operator can declare exact flaky jobs before dispatch with
+`known_flaky_jobs_json`. Each declared child gets one recorded automatic retry
+wave; a repeated failure remains a blocker. See
+[Automatic retries for declared flakes](/reference/full-release-validation/continuation#automatic-retries-for-declared-flakes).
+
 This page is an index. The reference is documented on seven pages, one per
 reader job. Open the page that matches your task and complete that validation
 pass there.
@@ -21,15 +26,15 @@ For a frozen target, declare exact test omissions in the initial request; see
 The Node and extension inputs validate the selected inventory and remain bound
 to the immutable coverage identity.
 
-| Page                                                                                                | Read it when                                                                              |
-| --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| [Dispatch a validation run](/reference/full-release-validation/dispatch)                            | Starting a run: Code SHA, Tooling SHA, helper inputs, and the immutable execution plan.   |
-| [Continue a failed validation](/reference/full-release-validation/continuation)                     | Rerunning failed child jobs on an existing parent, and the post-merge continuation proof. |
-| [Extended-stable and changelog-only validation](/reference/full-release-validation/extended-stable) | Extended-stable dispatch, changelog-only reuse, coverage policies, and Telegram waivers.  |
-| [Top-level stages](/reference/full-release-validation/stages)                                       | The umbrella stage matrix, evidence reuse, artifact producers, and decision states.       |
-| [Release checks stages](/reference/full-release-validation/release-checks)                          | The `OpenClaw Release Checks` stage matrix and the Docker release-path chunks.            |
-| [Release profiles and focused reruns](/reference/full-release-validation/profiles)                  | Comparing profile coverage and picking a focused `rerun_group` or suite filter.           |
-| [Evidence to keep](/reference/full-release-validation/evidence)                                     | Recording evidence after a pass, and the backing workflow files.                          |
+| Page                                                                                                | Read it when                                                                                       |
+| --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| [Dispatch a validation run](/reference/full-release-validation/dispatch)                            | Starting a run: Code SHA, Tooling SHA, helper inputs, and the immutable execution plan.            |
+| [Continue a failed validation](/reference/full-release-validation/continuation)                     | Rerunning one job or failed children on an existing parent, and the post-merge continuation proof. |
+| [Extended-stable and changelog-only validation](/reference/full-release-validation/extended-stable) | Extended-stable dispatch, changelog-only reuse, coverage policies, and Telegram waivers.           |
+| [Top-level stages](/reference/full-release-validation/stages)                                       | The umbrella stage matrix, evidence reuse, artifact producers, and decision states.                |
+| [Release checks stages](/reference/full-release-validation/release-checks)                          | The `OpenClaw Release Checks` stage matrix and the Docker release-path chunks.                     |
+| [Release profiles and focused reruns](/reference/full-release-validation/profiles)                  | Comparing profile coverage and picking a focused `rerun_group` or suite filter.                    |
+| [Evidence to keep](/reference/full-release-validation/evidence)                                     | Recording evidence after a pass, and the backing workflow files.                                   |
 
 ## Where each section moved
 

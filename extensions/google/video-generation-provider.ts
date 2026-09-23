@@ -28,6 +28,7 @@ import {
 } from "./generation-provider-metadata.js";
 import { resolveGoogleApiClientHeaders } from "./google-api-client-header.js";
 import { createGoogleGenAI, type GoogleGenAIClient } from "./google-genai-runtime.js";
+import { stripGoogleProviderPrefix } from "./model-id.js";
 
 const DEFAULT_TIMEOUT_MS = 180_000;
 const POLL_INTERVAL_MS = 10_000;
@@ -52,17 +53,10 @@ function resolveGoogleVideoRestBaseUrl(configuredBaseUrl?: string): string {
 }
 
 function resolveGoogleVideoRestModelPath(model: string): string {
-  const trimmed = normalizeOptionalString(model) || DEFAULT_GOOGLE_VIDEO_MODEL;
-  if (trimmed.startsWith("google/models/")) {
-    return trimmed.slice("google/".length);
-  }
-  if (trimmed.startsWith("models/")) {
-    return trimmed;
-  }
-  if (trimmed.startsWith("google/")) {
-    return `models/${trimmed.slice("google/".length)}`;
-  }
-  return `models/${trimmed}`;
+  const id = stripGoogleProviderPrefix(
+    normalizeOptionalString(model) || DEFAULT_GOOGLE_VIDEO_MODEL,
+  );
+  return id.startsWith("models/") ? id : `models/${id}`;
 }
 
 function parseVideoSize(size: string | undefined): { width: number; height: number } | undefined {
@@ -492,6 +486,17 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
           }),
         },
       });
+      const generateViaRest = () =>
+        generateGoogleVideoViaRest({
+          baseUrl: restBaseUrl,
+          headers: authHeaders,
+          deadline,
+          model,
+          prompt: req.prompt,
+          durationSeconds,
+          aspectRatio,
+          resolution,
+        });
       let usedRestFallback = false;
       let operation;
       try {
@@ -511,16 +516,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
           throw error;
         }
         usedRestFallback = true;
-        operation = await generateGoogleVideoViaRest({
-          baseUrl: restBaseUrl,
-          headers: authHeaders,
-          deadline,
-          model,
-          prompt: req.prompt,
-          durationSeconds,
-          aspectRatio,
-          resolution,
-        });
+        operation = await generateViaRest();
       }
 
       if (!usedRestFallback) {
@@ -547,16 +543,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
       }
       let generatedVideos = extractGeneratedVideos(operation);
       if (generatedVideos.length === 0 && !hasReferenceInputs && !usedRestFallback) {
-        operation = await generateGoogleVideoViaRest({
-          baseUrl: restBaseUrl,
-          headers: authHeaders,
-          deadline,
-          model,
-          prompt: req.prompt,
-          durationSeconds,
-          aspectRatio,
-          resolution,
-        });
+        operation = await generateViaRest();
         generatedVideos = extractGeneratedVideos(operation);
       }
       if (generatedVideos.length === 0) {

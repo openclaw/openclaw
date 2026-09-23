@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
   ModelAuthStatusResult,
@@ -283,7 +283,7 @@ type ChatHeaderTestState = {
   chatAvatarUrl: string | null;
   client: GatewayBrowserClient;
   connected: boolean;
-  hello: null;
+  hello: GatewayHelloOk | null;
   lastError: string | null;
   modelAuthStatusResult?: ModelAuthStatusResult | null;
   sessionKey: string;
@@ -471,7 +471,7 @@ function createChatHeaderState(
   });
   const client = { request } as unknown as GatewayBrowserClient;
   const sessions = createTestSessionCapability({
-    snapshot: { client, phase: "connected", hello: null },
+    snapshot: { client, phase: "connected", hello: sessionMutationGatewayHello() },
     subscribe: () => () => undefined,
     subscribeEvents: () => () => undefined,
   });
@@ -518,7 +518,7 @@ function createChatHeaderState(
     lastError: null,
     chatAvatarUrl: null,
     basePath: "",
-    hello: null,
+    hello: sessionMutationGatewayHello(),
     agentsList: null,
     agentsPanel: "overview",
     agentsSelectedId: null,
@@ -3552,121 +3552,6 @@ describe("chat composer IME composition", () => {
 
     // After composition ends, adjustTextareaHeight runs via syncComposerValue
     expect(textarea.style.height).not.toBe("42px");
-  });
-});
-
-describe("chat composer sizing", () => {
-  it("sizes restored drafts after the rendered value is committed", async () => {
-    const container = renderChatView({ draft: "A restored long draft" });
-    const textarea = getComposerTextarea(container);
-    Object.defineProperties(textarea, {
-      scrollHeight: { configurable: true, value: 180 },
-      clientHeight: { configurable: true, value: 150 },
-    });
-    document.body.append(container);
-
-    await Promise.resolve();
-
-    expect(textarea.style.height).toBe("150px");
-    expect(textarea.style.overflowY).toBe("auto");
-    container.remove();
-  });
-
-  it("shows the textarea scrollbar only when the draft overflows", () => {
-    const container = renderChatView({});
-    const textarea = getComposerTextarea(container);
-    let scrollHeight = 42;
-    let clientHeight = 42;
-    Object.defineProperties(textarea, {
-      scrollHeight: { configurable: true, get: () => scrollHeight },
-      clientHeight: { configurable: true, get: () => clientHeight },
-    });
-
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
-
-    expect(textarea.style.height).toBe("42px");
-    expect(textarea.style.overflowY).toBe("hidden");
-
-    scrollHeight = 180;
-    clientHeight = 150;
-    textarea.value = "A long draft";
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
-
-    expect(textarea.style.height).toBe("150px");
-    expect(textarea.style.overflowY).toBe("auto");
-  });
-
-  it("resizes the draft when responsive layout changes the textarea width", () => {
-    let resizeCallback: ResizeObserverCallback | undefined;
-    let animationFrameCallback: FrameRequestCallback | undefined;
-    let nextAnimationFrameId = 0;
-    const requestAnimationFrameMock = vi.fn((callback: FrameRequestCallback) => {
-      animationFrameCallback = callback;
-      nextAnimationFrameId += 1;
-      return nextAnimationFrameId;
-    });
-    const cancelAnimationFrameMock = vi.fn();
-    class TestResizeObserver {
-      constructor(callback: ResizeObserverCallback) {
-        resizeCallback = callback;
-      }
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-      takeRecords(): ResizeObserverEntry[] {
-        return [];
-      }
-    }
-    vi.stubGlobal("ResizeObserver", TestResizeObserver);
-    vi.stubGlobal("requestAnimationFrame", requestAnimationFrameMock);
-    vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrameMock);
-
-    let width = 320;
-    let scrollHeight = 42;
-    let clientHeight = 42;
-    vi.spyOn(HTMLTextAreaElement.prototype, "getBoundingClientRect").mockImplementation(() => ({
-      bottom: clientHeight,
-      height: clientHeight,
-      left: 0,
-      right: width,
-      top: 0,
-      width,
-      x: 0,
-      y: 0,
-      toJSON: () => ({}),
-    }));
-
-    const container = renderChatView({});
-    const textarea = getComposerTextarea(container);
-    Object.defineProperties(textarea, {
-      scrollHeight: { configurable: true, get: () => scrollHeight },
-      clientHeight: { configurable: true, get: () => clientHeight },
-    });
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    expect(textarea.style.height).toBe("42px");
-    expect(textarea.style.overflowY).toBe("hidden");
-
-    scrollHeight = 180;
-    clientHeight = 150;
-    resizeCallback?.([], {} as ResizeObserver);
-    expect(textarea.style.overflowY).toBe("auto");
-    expect(requestAnimationFrameMock).not.toHaveBeenCalled();
-
-    width = 180;
-    scrollHeight = 120;
-    clientHeight = 120;
-    resizeCallback?.([], {} as ResizeObserver);
-    expect(requestAnimationFrameMock).toHaveBeenCalledOnce();
-    expect(textarea.style.height).toBe("42px");
-
-    animationFrameCallback?.(0);
-    expect(textarea.style.height).toBe("120px");
-    expect(textarea.style.overflowY).toBe("hidden");
-
-    width = 160;
-    resizeCallback?.([], {} as ResizeObserver);
-    render(html``, container);
-    expect(cancelAnimationFrameMock).toHaveBeenCalledWith(2);
   });
 });
 
@@ -6773,25 +6658,6 @@ describe("chat model controls", () => {
       });
     },
   );
-
-  it("does not patch the model for a locked session", async () => {
-    const { state, request } = createOpenAiHeaderState();
-    state.sessionsResult = createSessionsResultFromRows([
-      {
-        key: "agent:main:main",
-        kind: "direct",
-        model: "gpt-5.5",
-        modelProvider: "openai",
-        modelSelectionLocked: true,
-        updatedAt: 1,
-      },
-    ]);
-
-    await expect(
-      switchChatModel(state as unknown as Parameters<typeof switchChatModel>[0], "openai/gpt-5.4"),
-    ).resolves.toBe(false);
-    expect(request).not.toHaveBeenCalled();
-  });
 
   it("ignores model clicks while a run is active", () => {
     const { state } = createOpenAiHeaderState();

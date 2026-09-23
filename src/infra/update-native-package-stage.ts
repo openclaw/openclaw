@@ -5,10 +5,8 @@ import { sha256Hex } from "./crypto-digest.js";
 import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
 import { hasErrnoCode } from "./errors.js";
 import { mergePathPrepend } from "./path-prepend.js";
-import {
-  resolvePnpmGlobalDirFromGlobalRoot,
-  type ResolvedGlobalInstallTarget,
-} from "./update-global.js";
+import type { ResolvedGlobalInstallTarget } from "./update-global.js";
+import { resolveNativePackageProjectRoot } from "./update-native-package-owner.js";
 import { resolvePnpmCandidateEnv } from "./update-package-manager.js";
 import {
   relocateRuntimeLauncher,
@@ -126,10 +124,7 @@ export async function prepareNativePackageStage(params: {
     installTarget.manager === "bun"
       ? resolveBunGlobalInstallOwner(installTarget.packageRoot, env)
       : null;
-  const ownerRoot =
-    installTarget.manager === "pnpm"
-      ? resolvePnpmGlobalDirFromGlobalRoot(installTarget.globalRoot)
-      : bunOwner?.globalProjectRoot;
+  const ownerRoot = resolveNativePackageProjectRoot(installTarget, env);
   const liveBinDir = params.globalBinDir?.trim();
   if (!ownerRoot || !liveBinDir) {
     throw new Error(
