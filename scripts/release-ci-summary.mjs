@@ -1163,14 +1163,19 @@ export function releaseAdvisoryJobEvidence(
         }))
         .filter(({ reason }) => reason !== "")
         .toSorted((left, right) => compareReleaseJobsByName(left.job, right.job))
-        .map(({ job, reason }) => ({
-          child,
-          job: job.name,
-          status: job.status,
-          conclusion: job.conclusion,
-          policy: "advisory",
-          ...(reason === "lane_waiver" ? { reason } : {}),
-        }));
+        .map(({ job, reason }) => {
+          const entry = {
+            child,
+            job: job.name,
+            status: job.status,
+            conclusion: job.conclusion,
+            policy: "advisory",
+          };
+          if (reason === "lane_waiver") {
+            entry.reason = reason;
+          }
+          return entry;
+        });
     });
 }
 
