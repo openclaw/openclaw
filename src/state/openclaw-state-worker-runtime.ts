@@ -1,9 +1,4 @@
-import {
-  readAuthProfileRows,
-  SHARED_AUTH_STORE_STATE_KEY,
-} from "../agents/auth-profiles/sqlite-json.js";
-import { isMissingDatabasePath } from "../agents/auth-profiles/sqlite-read-pool.js";
-import type { AuthProfileRowRead } from "../agents/auth-profiles/types.js";
+import { executeAuthProfileReadCommand } from "../agents/auth-profiles/read.worker.js";
 import {
   readNativeHookRelayBridgeSnapshotFromDatabase,
   listNativeHookRelayBridgeSnapshotsInDatabase,
@@ -126,7 +121,6 @@ import {
 } from "./agent-provenance.kernel.js";
 import { ensureAgentProvenanceSchema } from "./agent-provenance.schema.js";
 import { recordBackupRunInDatabase } from "./backup-run-records.kernel.js";
-import { readConfigMachineState } from "./config-machine-state.js";
 import { isOnboardingRecommendationWriteCommand } from "./onboarding-recommendations.contract.js";
 import { executeOnboardingRecommendationCommand } from "./onboarding-recommendations.kernel.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
@@ -145,7 +139,6 @@ import type {
   OpenClawStateWorkerInspectionOperations,
   OpenClawStateWorkerCleanupOperations,
 } from "./openclaw-state-worker-contract.js";
-import { readUserModelAuthProfile } from "./user-model-accounts.js";
 import { executeUserPreferenceCommand } from "./user-preferences.worker.js";
 import { executeUserProfileCommand, isUserProfileCommand } from "./user-profiles.worker.js";
 
@@ -204,40 +197,7 @@ export function executeSharedStateCommand(
     command.type === "authProfiles.sharedOwnership" ||
     command.type === "authProfiles.personal"
   ) {
-    const read = () => {
-      const options = {
-        path: context.databasePath,
-        env: getSqliteWorkerStateContext().environment,
-      };
-      if (command.type === "authProfiles.sharedOwnership") {
-        return readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, options);
-      }
-      if (command.type === "authProfiles.personal") {
-        return readUserModelAuthProfile(command.input.profileId, options);
-      }
-      const missing: AuthProfileRowRead = {
-        store: { status: "missing", reason: "database" },
-        state: { status: "missing", reason: "database" },
-        cacheable: false,
-      };
-      try {
-        return (
-          withExistingOpenClawStateDatabaseReadOnly(
-            ({ db }) => readAuthProfileRows(db, context.databasePath, "shared-state"),
-            options,
-          ) ?? missing
-        );
-      } catch {
-        return isMissingDatabasePath(context.databasePath)
-          ? missing
-          : {
-              store: { status: "unreadable" as const },
-              state: { status: "unreadable" as const },
-              cacheable: false,
-            };
-      }
-    };
-    return command.input.artifactPreserving ? withArtifactPreservingStateReads(read) : read();
+    return executeAuthProfileReadCommand(command, context.databasePath);
   }
   if (command.type === "promotions.markNotified" || command.type === "promotions.recordClaim") {
     return executePromotionCommand(

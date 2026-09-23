@@ -551,7 +551,25 @@ it.each([
           expect(receipt).toMatchObject({
             status: "ok",
             configHash: "unchanged",
-            warnings: [expect.stringContaining("live agent databases are unchanged")],
+            warnings: [
+              expect.stringContaining("live agent databases are unchanged"),
+              ...[
+                "acpx",
+                "active-memory",
+                "canvas",
+                "codex",
+                "crabbox",
+                "device-pair",
+                "memory-core",
+                "memory-lancedb",
+                "memory-wiki",
+                "voice-call",
+                "workboard",
+              ].map(
+                (id) =>
+                  `${id} migration declares no data resources; its private state is not in the recovery set`,
+              ),
+            ],
           });
           expect(output).toContain("live agent databases are unchanged");
           expect(output).not.toContain("Doctor complete.");

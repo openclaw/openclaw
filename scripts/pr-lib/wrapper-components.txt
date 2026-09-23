@@ -723,7 +723,6 @@ src/infra/sqlite-maintenance-cache.ts
 src/infra/sqlite-number.ts
 src/infra/sqlite-pinned-read-snapshot.ts
 src/infra/sqlite-post-commit.ts
-src/infra/sqlite-pinned-read-snapshot.ts
 src/infra/sqlite-private-directory.ts
 src/infra/sqlite-read-cache.ts
 src/infra/sqlite-reader-lifecycle.ts
