@@ -220,23 +220,39 @@ describe("runHeartbeatOnce failure delivery", () => {
       name: "retains composite pending-final content after delivering only its terminal warning",
       sibling: true,
       failure: "none",
+      notify: true,
     },
     {
       name: "clears an exact pending-final warning after delivering it",
       sibling: false,
       failure: "none",
+      notify: true,
     },
     {
       name: "retains queued warning custody after a proven no-send transport failure",
       sibling: false,
       failure: "not-sent",
+      notify: true,
     },
     {
       name: "retains durable queue custody and ambiguity after a transport failure",
       sibling: false,
       failure: "ambiguous",
+      notify: true,
     },
-  ])("$name", async ({ sibling, failure }) => {
+    {
+      name: "suppresses a quiet warning without retiring unrelated pending content",
+      sibling: true,
+      failure: "none",
+      notify: false,
+    },
+    {
+      name: "retires a quiet warning so recovery cannot deliver it later",
+      sibling: false,
+      failure: "none",
+      notify: false,
+    },
+  ])("$name", async ({ sibling, failure, notify }) => {
     const fail = failure !== "none";
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = createConfig({ tmpDir, storePath });
@@ -267,7 +283,7 @@ describe("runHeartbeatOnce failure delivery", () => {
         const replies = createTerminalToolFailureReply(
           {
             outcome: fail ? "blocked" : "no_change",
-            notify: fail,
+            notify,
             summary: "Message delivery was denied.",
           },
           warning,
@@ -305,7 +321,12 @@ describe("runHeartbeatOnce failure delivery", () => {
       ).resolves.toEqual({ status: "failed", reason: "agent-tool-failure" });
 
       const sessionStore = readSessionStoreForTest<SessionEntry>(storePath);
-      expectTelegramSend(sendTelegram, { text: warning, cfg });
+      if (notify) {
+        expectTelegramSend(sendTelegram, { text: warning, cfg });
+      } else {
+        expect(sendTelegram).not.toHaveBeenCalled();
+        expect(await loadPendingDeliveries()).toHaveLength(0);
+      }
       if (fail) {
         // The durable queue owns both failures; its exact record carries replay safety.
         expect(sessionStore[sessionKey]?.pendingFinalDelivery).toMatchObject({
@@ -335,7 +356,7 @@ describe("runHeartbeatOnce failure delivery", () => {
           text: pendingText,
           deliveries: [
             { id: "original-delivery", state: "prepared" },
-            { id: "warning-delivery", state: "delivered" },
+            { id: "warning-delivery", state: notify ? "delivered" : "suppressed" },
           ],
         });
       } else {
