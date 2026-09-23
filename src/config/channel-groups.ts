@@ -7,6 +7,7 @@ import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./typ
 export type ChannelGroupConfig = {
   requireMention?: boolean;
   ingest?: boolean;
+  ingestFrom?: string[];
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
 };

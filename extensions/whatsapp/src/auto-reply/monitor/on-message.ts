@@ -14,7 +14,10 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveWhatsAppAccount } from "../../accounts.js";
 import { resolveWhatsAppGroupSessionRoute } from "../../group-session-key.js";
 import { getPrimaryIdentityId, getSenderIdentity } from "../../identity.js";
-import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
+import {
+  isWhatsAppIngestOnlyAdmission,
+  requireWhatsAppInboundAdmission,
+} from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { normalizeE164 } from "../../text-runtime.js";
 import { buildMentionConfig } from "../mentions.js";
@@ -136,7 +139,11 @@ export function createWebOnMessageHandler(params: {
     const peerId = resolvePeerId(normalizedMsg);
     const msg = withDirectSenderPeer(normalizedMsg, peerId);
     const admission = requireWhatsAppInboundAdmission(msg);
-    if (admission.ingress.admission !== "dispatch" && admission.ingress.admission !== "observe") {
+    if (
+      admission.ingress.admission !== "dispatch" &&
+      admission.ingress.admission !== "observe" &&
+      !isWhatsAppIngestOnlyAdmission(admission)
+    ) {
       return;
     }
     const conversationId = admission.conversation.id;
