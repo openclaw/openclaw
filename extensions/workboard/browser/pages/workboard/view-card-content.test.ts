@@ -43,7 +43,15 @@ it("leaves settled labels untouched until their available width changes", () => 
   mutations.observe(labels, { attributes: true, childList: true, subtree: true });
   const notifyResize = () =>
     resize(
-      [{ target: labels, contentRect: { width } } as ResizeObserverEntry],
+      [
+        {
+          target: labels,
+          contentRect: new DOMRect(0, 0, width, 24),
+          borderBoxSize: [],
+          contentBoxSize: [],
+          devicePixelContentBoxSize: [],
+        },
+      ],
       {} as ResizeObserver,
     );
   try {
