@@ -117,6 +117,7 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.text === next.text &&
         previous.label === next.label &&
         previous.startsTurn === next.startsTurn &&
+        previous.boundaryId === next.boundaryId &&
         previous.timestamp === next.timestamp
       );
     case "divider":
@@ -143,6 +144,7 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
       return (
         previous.kind === "reading-indicator" &&
         previous.startedAt === next.startedAt &&
+        previous.preamble === next.preamble &&
         previous.runId === next.runId &&
         previous.boundaryId === next.boundaryId
       );

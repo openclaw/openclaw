@@ -15,7 +15,6 @@ const {
   autoMigrateLegacyStateDir,
   autoMigrateLegacyState,
   autoMigrateLegacyPluginDoctorState,
-  autoMigrateLegacyTaskStateSidecars,
   repairLegacyCronStoreWithoutPrompt,
   readMigrationCheckpointStatus,
   startupMigrationLeaseRelease,
@@ -186,7 +185,6 @@ describe("runDoctorConfigPreflight state migration startup outcomes", () => {
     expect(repairLegacyCronStoreWithoutPrompt).not.toHaveBeenCalled();
     expect(autoMigrateLegacyState).not.toHaveBeenCalled();
     expect(autoMigrateLegacyPluginDoctorState).not.toHaveBeenCalled();
-    expect(autoMigrateLegacyTaskStateSidecars).not.toHaveBeenCalled();
     expect(recordSuccessfulStateMigrations).not.toHaveBeenCalled();
     expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
     expect(startupMigrationLeaseRelease).not.toHaveBeenCalled();

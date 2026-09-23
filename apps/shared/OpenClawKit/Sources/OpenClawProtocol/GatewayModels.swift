@@ -9220,6 +9220,7 @@ public struct ModelsListParams: Codable, Sendable {
 
 public struct ModelsListResult: Codable, Sendable {
     public let models: [ModelChoice]
+    public let modelselectionpolicy: [String: AnyCodable]?
     public let decisionmodels: [[String: AnyCodable]]?
     public let defaultmodels: [String: AnyCodable]?
     public let refreshfailed: Bool?
@@ -9229,6 +9230,7 @@ public struct ModelsListResult: Codable, Sendable {
 
     public init(
         models: [ModelChoice],
+        modelselectionpolicy: [String: AnyCodable]? = nil,
         decisionmodels: [[String: AnyCodable]]? = nil,
         defaultmodels: [String: AnyCodable]? = nil,
         refreshfailed: Bool? = nil,
@@ -9237,6 +9239,7 @@ public struct ModelsListResult: Codable, Sendable {
         provideroutcomes: [[String: AnyCodable]]? = nil)
     {
         self.models = models
+        self.modelselectionpolicy = modelselectionpolicy
         self.decisionmodels = decisionmodels
         self.defaultmodels = defaultmodels
         self.refreshfailed = refreshfailed
@@ -9247,6 +9250,7 @@ public struct ModelsListResult: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case models
+        case modelselectionpolicy = "modelSelectionPolicy"
         case decisionmodels = "decisionModels"
         case defaultmodels = "defaultModels"
         case refreshfailed = "refreshFailed"
@@ -14963,6 +14967,92 @@ public struct SessionPerson: Codable, Sendable {
         case label
         case avatarurl = "avatarUrl"
         case sessioncount = "sessionCount"
+    }
+}
+
+public struct SessionPortalCloseParams: Codable, Sendable {
+    public let id: String
+    public let environmentid: String
+    public let sessionkey: String
+    public let agentid: String?
+
+    public init(
+        id: String,
+        environmentid: String,
+        sessionkey: String,
+        agentid: String? = nil)
+    {
+        self.id = id
+        self.environmentid = environmentid
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case environmentid = "environmentId"
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+    }
+}
+
+public struct SessionPortalListParams: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String?
+    public let environmentid: String
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil,
+        environmentid: String)
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.environmentid = environmentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case environmentid = "environmentId"
+    }
+}
+
+public struct SessionPortalOpenParams: Codable, Sendable {
+    public let environmentid: String
+    public let port: Int
+    public let title: String?
+    public let description: String?
+    public let path: String?
+    public let sessionkey: String
+    public let agentid: String?
+
+    public init(
+        environmentid: String,
+        port: Int,
+        title: String? = nil,
+        description: String? = nil,
+        path: String? = nil,
+        sessionkey: String,
+        agentid: String? = nil)
+    {
+        self.environmentid = environmentid
+        self.port = port
+        self.title = title
+        self.description = description
+        self.path = path
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case environmentid = "environmentId"
+        case port
+        case title
+        case description
+        case path
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
     }
 }
 

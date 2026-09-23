@@ -461,62 +461,104 @@ describe("worker turn execution", () => {
     },
   );
 
-  it("withholds approval-bound exec on an actually placed scheduled turn", async () => {
-    seedActivePlacement();
-    let descriptor: WorkerLaunchPlan | undefined;
-    const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async ({ plan }) => {
-      descriptor = roundTripWorkerLaunchDescriptor(
-        completeWorkerLaunchDescriptor(plan, {
-          kind: "unix",
-          socketPath: "/tmp/worker-approval.sock",
-        }),
-      );
-      throw new WorkerRunnerCapacityError();
-    });
-    const tunnel: WorkerTunnelHandle = {
-      environmentId: ENVIRONMENT_ID,
-      ownerEpoch: OWNER_EPOCH,
-      launchTurn,
-      measureLaunchTurn,
-      runWorkspaceCommand: vi.fn(),
-      quiesceWorkspace: vi.fn(),
-      syncWorkspace: vi.fn(),
-      reconcileWorkspace: vi.fn(),
-      stop: vi.fn(async () => {}),
-    };
-    const environments = {
-      ...unusedEnvironments(),
-      get: vi.fn(() => attachedEnvironment()),
-      acquireTurnCredential: vi.fn(async () => credential()),
-      startTunnel: vi.fn(async () => tunnel),
-    };
-    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
-    const runLocal = vi.fn();
-    await expect(
-      provider.executeTurn(
-        { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: "run-scheduled" },
-        {
-          ...turn("run-scheduled"),
-          permissionMode: "full",
-          execSession: { permissionMode: "full" },
-          execOverrides: { host: "gateway", security: "full", ask: "off" },
-          toolsAllow: ["exec", "process"],
-          scheduledToolPolicy: {
-            version: 1,
-            mode: "trusted",
-            execTarget: { host: "gateway", ask: "always" },
+  it.each(
+    ([undefined, "merge", "replace"] as const).flatMap((mode) => [
+      { mode, reasoning: false, thinkingLevelMap: undefined, expected: "off" },
+      { mode, reasoning: true, thinkingLevelMap: { high: null }, expected: "medium" },
+    ]),
+  )(
+    "honors configured worker Ultra effort $expected in mode $mode with scheduled tools",
+    async (testCase) => {
+      seedActivePlacement();
+      let descriptor: WorkerLaunchPlan | undefined;
+      const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async ({ plan }) => {
+        descriptor = roundTripWorkerLaunchDescriptor(
+          completeWorkerLaunchDescriptor(plan, {
+            kind: "unix",
+            socketPath: "/tmp/worker-approval.sock",
+          }),
+        );
+        throw new WorkerRunnerCapacityError();
+      });
+      const tunnel: WorkerTunnelHandle = {
+        environmentId: ENVIRONMENT_ID,
+        ownerEpoch: OWNER_EPOCH,
+        launchTurn,
+        measureLaunchTurn,
+        runWorkspaceCommand: vi.fn(),
+        quiesceWorkspace: vi.fn(),
+        syncWorkspace: vi.fn(),
+        reconcileWorkspace: vi.fn(),
+        stop: vi.fn(async () => {}),
+      };
+      const environments = {
+        ...unusedEnvironments(),
+        get: vi.fn(() => attachedEnvironment()),
+        acquireTurnCredential: vi.fn(async () => credential()),
+        startTunnel: vi.fn(async () => tunnel),
+      };
+      const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+      const runLocal = vi.fn();
+      await expect(
+        provider.executeTurn(
+          {
+            sessionId: SESSION_ID,
+            sessionKey: SESSION_KEY,
+            agentId: "main",
+            runId: "run-scheduled",
           },
-        },
-        runLocal,
-      ),
-    ).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
-    expect(launchTurn).toHaveBeenCalledOnce();
-    expect(runLocal).not.toHaveBeenCalled();
-    expect(descriptor?.assignment.toolAuthority).toMatchObject({
-      allowedToolNames: [],
-      exec: { host: "gateway", security: "full", ask: "always" },
-    });
-  });
+          {
+            ...turn("run-scheduled"),
+            thinkLevel: "ultra",
+            provider: "custom",
+            model: "plain",
+            config: {
+              models: {
+                mode: testCase.mode,
+                providers: {
+                  custom: {
+                    baseUrl: "https://example.invalid/v1",
+                    api: "openai-completions",
+                    models: [
+                      {
+                        id: "plain",
+                        name: "Plain",
+                        reasoning: testCase.reasoning,
+                        thinkingLevelMap: testCase.thinkingLevelMap,
+                        input: ["text"],
+                        contextWindow: 8192,
+                        maxTokens: 2048,
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+            permissionMode: "full",
+            execSession: { permissionMode: "full" },
+            execOverrides: { host: "gateway", security: "full", ask: "off" },
+            toolsAllow: ["exec", "process"],
+            scheduledToolPolicy: {
+              version: 1,
+              mode: "trusted",
+              execTarget: { host: "gateway", ask: "always" },
+            },
+          },
+          runLocal,
+        ),
+      ).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
+      expect(launchTurn).toHaveBeenCalledOnce();
+      expect(descriptor?.assignment.inferenceOptions.reasoning).toBe(testCase.expected);
+      expect(descriptor?.assignment.systemPrompt).toContain("Ultra active for this turn");
+      expect(descriptor?.assignment.systemPrompt).not.toContain("Use `sessions_spawn`");
+      expect(runLocal).not.toHaveBeenCalled();
+      expect(descriptor?.assignment.toolAuthority).toMatchObject({
+        allowedToolNames: [],
+        exec: { host: "gateway", security: "full", ask: "always" },
+      });
+    },
+  );
 
   it.each([
     [WORKER_LAUNCH_V2_PROTOCOL_FEATURE],

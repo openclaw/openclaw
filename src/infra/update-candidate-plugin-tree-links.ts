@@ -4,6 +4,10 @@ import path from "node:path";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { sameFileMutationFingerprint } from "./file-descriptor.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
+import {
+  captureUpdateCandidatePluginCodeLink,
+  type UpdateCandidatePluginCodeLink,
+} from "./update-candidate-plugin-code-links.js";
 import { relocateRuntimePath } from "./update-runtime-relocation.js";
 
 export type UpdateCandidatePluginTreeEntry = {
@@ -203,26 +207,30 @@ export function assertUpdateCandidatePluginLinkTarget(
 
 export async function verifyUpdateCandidatePluginTree(
   file: string,
-  params: { privateRoot: string; candidateRoot: string; hostLinks: Set<string> },
+  params: {
+    privateRoot: string;
+    candidateRoot: string;
+    hostLinks: Set<string>;
+    onCodeLink?: (fact: UpdateCandidatePluginCodeLink) => void;
+  },
 ): Promise<void> {
-  const stat = await fs.lstat(file);
+  const stat = await fs.lstat(file, { bigint: true });
+  const link = stat.isSymbolicLink() ? await fs.readlink(file) : undefined;
   if (params.hostLinks.has(file)) {
     if (
       !stat.isSymbolicLink() ||
-      path.resolve(path.dirname(file), await fs.readlink(file)) !== params.candidateRoot
+      path.resolve(path.dirname(file), link!) !== params.candidateRoot
     ) {
       throw new Error("Copied plugin host link does not target the update");
     }
+    params.onCodeLink?.(captureUpdateCandidatePluginCodeLink(file, stat, link!));
     return;
   }
   // Inspect the entry before traversal, including standalone module aliases;
   // following a copied root link can otherwise accept an entirely live tree.
   if (stat.isSymbolicLink()) {
-    assertUpdateCandidatePluginLinkTarget(
-      file,
-      path.resolve(path.dirname(file), await fs.readlink(file)),
-      params,
-    );
+    assertUpdateCandidatePluginLinkTarget(file, path.resolve(path.dirname(file), link!), params);
+    params.onCodeLink?.(captureUpdateCandidatePluginCodeLink(file, stat, link!));
     return;
   }
   if (stat.isDirectory()) {

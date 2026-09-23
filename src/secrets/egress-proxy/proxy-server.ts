@@ -9,8 +9,8 @@ import {
 import { Agent as HttpsAgent } from "node:https";
 import net, { type Socket } from "node:net";
 import path from "node:path";
-import type { Duplex, Readable, Writable } from "node:stream";
-import { createServer as createTlsServer, rootCertificates } from "node:tls";
+import { Readable, type Duplex, type Writable } from "node:stream";
+import { createSecureContext, createServer as createTlsServer, rootCertificates } from "node:tls";
 import { URL } from "node:url";
 import { normalizeExactAllowedHost as normalizeHostname } from "../exact-hostname.js";
 import {
@@ -41,7 +41,7 @@ import {
 const PROXY_AUTH_USERNAME = "openclaw";
 const PROXY_AUTH_REALM = "OpenClaw secret egress";
 
-type SecretEgressProxyAuditEvent = {
+export type SecretEgressProxyAuditEvent = {
   kind: "forwarded" | "refused";
   host: string;
   substituted: boolean;
@@ -63,7 +63,10 @@ export type SecretEgressProxyHandle = {
   caCertPath: string;
   proxyOrigin: string;
   getCertificateStatus: () => SecretEgressCertificateStatus;
-  registerProcess: (bindings?: readonly SecretEgressSentinelBinding[]) => SecretEgressProcessGrant;
+  registerProcess: (
+    bindings?: readonly SecretEgressSentinelBinding[],
+    isActive?: () => boolean,
+  ) => SecretEgressProcessGrant;
   stop: () => Promise<void>;
 };
 
@@ -72,8 +75,10 @@ type RegisteredProcess = {
   sentinelBindings: Map<string, { allowedHosts: Set<string>; name: string }>;
   token: Buffer;
   isActive: () => boolean;
+  resolveSentinel: (sentinel: string) => string | undefined;
   resources: Set<Readable | Writable>;
   tlsServers: Map<string, SecretEgressTlsContext>;
+  upstreamTlsAgent: HttpsAgent;
 };
 
 function parseConnectTarget(rawTarget: string | undefined): ConnectTarget {
@@ -151,7 +156,7 @@ function resolveRegisteredSentinel(params: {
       secretName: binding.name,
     });
   }
-  return resolveSecretSentinel(params.sentinel);
+  return params.registered.resolveSentinel(params.sentinel);
 }
 
 function swapRequestText(params: {
@@ -233,12 +238,15 @@ export async function startSecretEgressProxyServer(params: {
   allowedHosts?: readonly string[];
   bypassHosts?: readonly string[];
   onAudit: (event: SecretEgressProxyAuditEvent) => void;
+  resolveSentinel?: (sentinel: string) => string | undefined;
 }): Promise<SecretEgressProxyHandle> {
   const certificates = await createSecretEgressCertificates(params.caDir);
   const { caPem } = certificates;
   const trustBundlePath = path.join(params.caDir, "trust-bundle.pem");
   fs.writeFileSync(trustBundlePath, `${rootCertificates.join("\n")}\n${caPem}`, { mode: 0o644 });
-  const upstreamTlsAgent = new HttpsAgent({
+  // The CA set is immutable for this proxy lifetime. A new proxy owns new trust;
+  // leaf renewal does not change it. Share only parsed CAs across process grants.
+  const upstreamSecureContext = createSecureContext({
     ca: [...rootCertificates, caPem],
   });
   const bypassHosts = new Set((params.bypassHosts ?? []).map(normalizeHostname));
@@ -259,6 +267,18 @@ export async function startSecretEgressProxyServer(params: {
     if (!registered.resources.has(resource)) {
       registered.resources.add(resource);
       resource.once("close", () => registered.resources.delete(resource));
+      const wasFlowing = resource instanceof Readable && resource.readableFlowing === true;
+      // A shared revocation can precede its cleanup message. Fence every stream
+      // before its pipe listeners hand another chunk to HTTP, TLS, or a tunnel.
+      resource.prependListener("data", () => {
+        if (!registered.isActive()) {
+          revokeRegistration(registered);
+        }
+      });
+      // Installing a guard must not drain queued WebSocket frames before pipe().
+      if (resource instanceof Readable && !wasFlowing) {
+        resource.pause();
+      }
       // Revocation aborts HTTP/TLS streams as well as raw sockets. Their expected
       // reset errors must stay local instead of becoming uncaught Gateway errors.
       resource.on("error", () => resource.destroy());
@@ -271,6 +291,7 @@ export async function startSecretEgressProxyServer(params: {
   const revokeRegistration = (registered: RegisteredProcess) => {
     registrations.delete(registered);
     registered.sentinelBindings.clear();
+    registered.upstreamTlsAgent.destroy();
     for (const resource of registered.resources) {
       resource.destroy();
     }
@@ -311,7 +332,7 @@ export async function startSecretEgressProxyServer(params: {
       return "invalid-proxy-auth";
     }
     for (const registered of registrations.values()) {
-      if (timingSafeEqual(candidate, registered.token)) {
+      if (registered.isActive() && timingSafeEqual(candidate, registered.token)) {
         return registered;
       }
     }
@@ -410,7 +431,7 @@ export async function startSecretEgressProxyServer(params: {
           substituted: swappedUrl.substituted || swappedHeaders.substituted,
         };
       },
-      upstreamTlsAgent,
+      upstreamTlsAgent: forward.registered.upstreamTlsAgent,
       isActive: forward.registered.isActive,
       ownResource: (resource) => ownResource(forward.registered, resource),
       releaseResponse: () => {
@@ -608,7 +629,7 @@ export async function startSecretEgressProxyServer(params: {
     caCertPath: certificates.caCertPath,
     proxyOrigin,
     getCertificateStatus: certificates.getStatus,
-    registerProcess: (bindings = []) => {
+    registerProcess: (bindings = [], isActive = () => true) => {
       if (stopped) {
         throw new Error("Secret egress proxy has stopped");
       }
@@ -623,9 +644,20 @@ export async function startSecretEgressProxyServer(params: {
           ]),
         ),
         token: randomBytes(32),
-        isActive: () => !stopped && registrations.has(registered),
+        isActive: () => !stopped && registrations.has(registered) && isActive(),
+        resolveSentinel: params.resolveSentinel ?? resolveSecretSentinel,
         resources: new Set(),
         tlsServers: new Map(),
+        // Node pools by origin. Grant ownership keeps connections and TLS sessions
+        // isolated and lets revocation destroy idle sockets as well as live work.
+        upstreamTlsAgent: new HttpsAgent({
+          secureContext: upstreamSecureContext,
+          keepAlive: true,
+          maxSockets: 64,
+          maxTotalSockets: 64,
+          maxFreeSockets: 4,
+          timeout: 30_000,
+        }),
       };
       registrations.add(registered);
       // Basic is deliberately used because curl and Go net/http derive it from
@@ -656,7 +688,6 @@ export async function startSecretEgressProxyServer(params: {
       for (const registered of registrations.values()) {
         revokeRegistration(registered);
       }
-      upstreamTlsAgent.destroy();
       for (const socket of sockets) {
         socket.destroy();
       }

@@ -6,9 +6,18 @@ import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { readLiveRegistryWorktreeIds } from "./registry-read.js";
-import { getRegistryWorktree, insertRegistryWorktree, updateRegistryWorktree } from "./registry.js";
+import {
+  getRegistryWorktree,
+  getRegistryWorktreeProvisionedChunk,
+  getRegistryWorktreeProvisionedPaths,
+  getRegistryWorktreeProvisionedState,
+  insertRegistryWorktree,
+  insertRegistryWorktreeProvisionedChunk,
+  updateRegistryWorktree,
+} from "./registry.js";
 import { ManagedWorktreeService } from "./service.js";
 import { initializeManagedWorktreeTestRepository } from "./service.test-support.js";
 import type { ManagedWorktreeRecord } from "./types.js";
@@ -44,7 +53,7 @@ describe("managed worktree registry worker reads", () => {
     expect(getRegistryWorktree(env, created.id)?.removedAt).toBe(now);
   });
 
-  it("creates and reopens the captured registry without host SQL or checkout reconciliation", async () => {
+  it("reads captured registry records and provisioned snapshots without host SQL or checkout reconciliation", async () => {
     const stateDir = tempDirs.make("worktree-registry-worker-");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     const service = new ManagedWorktreeService({ env });
@@ -75,6 +84,15 @@ describe("managed worktree registry worker reads", () => {
       clearCounters();
     }
 
+    expect(await getRegistryWorktreeProvisionedPaths(env, "missing")).toBeUndefined();
+    expect(await getRegistryWorktreeProvisionedState(env, "missing")).toBeUndefined();
+    expect(
+      await getRegistryWorktreeProvisionedChunk(env, {
+        worktreeId: "missing",
+        path: "synthetic.bin",
+        chunkIndex: 0,
+      }),
+    ).toBeUndefined();
     expect(await service.listRegistryRecords()).toEqual([]);
     expect(await readLiveRegistryWorktreeIds(env)).toEqual([]);
     expect((await fs.stat(path.join(stateDir, "state", "openclaw.sqlite"))).isFile()).toBe(true);
@@ -112,9 +130,23 @@ describe("managed worktree registry worker reads", () => {
       createdAt: 20,
       runEndCleanup: { outcome: "failed", at: 30, reason: "synthetic cleanup failure" },
     };
-    insertRegistryWorktree(env, newer);
+    insertRegistryWorktree(env, newer, { provisionedPaths: ["legacy.local"] });
     insertRegistryWorktree(env, older);
     insertRegistryWorktree(env, removed);
+    const provisionedState = [{ path: "synthetic.bin", mode: 0o600, chunks: 2 }];
+    updateRegistryWorktree(env, older.id, { provisionedState });
+    const chunks = [Uint8Array.from([0, 255, 10]), Uint8Array.from([127, 0, 1])];
+    for (const [chunkIndex, data] of chunks.entries()) {
+      insertRegistryWorktreeProvisionedChunk(env, {
+        worktreeId: older.id,
+        path: "synthetic.bin",
+        chunkIndex,
+        data,
+      });
+    }
+    openOpenClawStateDatabase({ env })
+      .db.prepare("UPDATE worktrees SET provisioned_paths_json = ? WHERE id = ?")
+      .run("{malformed", removed.id);
     await closeOpenClawStateDatabaseAsync();
     clearCounters();
 
@@ -125,6 +157,46 @@ describe("managed worktree registry worker reads", () => {
     expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
 
     env.OPENCLAW_STATE_DIR = stateDir;
+    const snapshotReads = Promise.all([
+      getRegistryWorktreeProvisionedPaths(env, older.id),
+      getRegistryWorktreeProvisionedState(env, older.id),
+    ]);
+    env.OPENCLAW_STATE_DIR = path.join(stateDir, "unused-state");
+    expect(await snapshotReads).toEqual([["synthetic.bin"], provisionedState]);
+    env.OPENCLAW_STATE_DIR = stateDir;
+    const selectedChunk = { worktreeId: older.id, path: "synthetic.bin", chunkIndex: 0 };
+    const firstChunk = getRegistryWorktreeProvisionedChunk(env, selectedChunk);
+    selectedChunk.path = "different.bin";
+    selectedChunk.chunkIndex = 1;
+    env.OPENCLAW_STATE_DIR = path.join(stateDir, "unused-state");
+    expect(Array.from((await firstChunk)!)).toEqual(Array.from(chunks[0]!));
+    env.OPENCLAW_STATE_DIR = stateDir;
+    expect(
+      Array.from(
+        (await getRegistryWorktreeProvisionedChunk(env, {
+          worktreeId: older.id,
+          path: "synthetic.bin",
+          chunkIndex: 1,
+        }))!,
+      ),
+    ).toEqual(Array.from(chunks[1]!));
+    expect(
+      await getRegistryWorktreeProvisionedChunk(env, {
+        worktreeId: older.id,
+        path: "synthetic.bin",
+        chunkIndex: 2,
+      }),
+    ).toBeUndefined();
+    expect(await getRegistryWorktreeProvisionedPaths(env, newer.id)).toEqual(["legacy.local"]);
+    expect(await getRegistryWorktreeProvisionedState(env, newer.id)).toBeUndefined();
+    expect(await getRegistryWorktreeProvisionedPaths(env, removed.id)).toBeUndefined();
+    expect(await getRegistryWorktreeProvisionedState(env, removed.id)).toBeUndefined();
+    await closeOpenClawStateDatabaseAsync();
+    expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+    await expect(fs.stat(path.join(stateDir, "unused-state"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
     const liveIds = readLiveRegistryWorktreeIds(env);
     env.OPENCLAW_STATE_DIR = path.join(stateDir, "unused-state");
     expect((await liveIds).toSorted()).toEqual([older.id, newer.id]);

@@ -94,6 +94,8 @@ export function executeTaskRegistryCommand(
     return observeTaskAgentEventInDatabase(open(), command.input);
   }
   if (
+    command.type === "tasks.bindRunOwner" ||
+    command.type === "tasks.transitionRunRow" ||
     command.type === "tasks.updateNotificationDelivery" ||
     command.type === "tasks.acknowledgeStateChange" ||
     command.type === "tasks.createRecord" ||

@@ -42,22 +42,6 @@ const directivePersistLoader = createLazyImportLoader(
   () => import("./directive-handling.persist.runtime.js"),
 );
 
-function loadCommandsStatus() {
-  return commandsStatusLoader.load();
-}
-
-function loadDirectiveLevels() {
-  return directiveLevelsLoader.load();
-}
-
-function loadDirectiveImpl() {
-  return directiveImplLoader.load();
-}
-
-function loadDirectivePersist() {
-  return directivePersistLoader.load();
-}
-
 function hasOnlyModelDirective(directives: InlineDirectives): boolean {
   return (
     directives.hasModelDirective &&
@@ -203,6 +187,7 @@ export async function applyInlineDirectiveOverrides(params: {
   let { contextTokens } = params;
   const directiveModelState = {
     modelPolicy: modelState.modelPolicy,
+    operatorAuthority: modelState.operatorAuthority,
     allowedModelKeys: modelState.allowedModelKeys,
     allowedModelCatalog: modelState.allowedModelCatalog,
     policyAliasIndex: modelState.policyAliasIndex,
@@ -308,6 +293,7 @@ export async function applyInlineDirectiveOverrides(params: {
       defaultModel,
       aliasIndex,
       modelPolicy: modelState.modelPolicy,
+      operatorAuthority: modelState.operatorAuthority,
       allowedModelKeys: modelState.allowedModelKeys,
       allowedModelCatalog: modelState.allowedModelCatalog,
       provider,
@@ -369,7 +355,7 @@ export async function applyInlineDirectiveOverrides(params: {
   ) => {
     let rejected = false;
     const currentLevels = await (
-      await loadDirectiveLevels()
+      await directiveLevelsLoader.load()
     ).resolveCurrentDirectiveLevels({
       sessionEntry,
       agentEntry: persistenceState ? undefined : agentEntry,
@@ -381,7 +367,7 @@ export async function applyInlineDirectiveOverrides(params: {
     });
     const thinkingCatalog = await modelState.resolveThinkingCatalog();
     const reply = await (
-      await loadDirectiveImpl()
+      await directiveImplLoader.load()
     ).handleDirectiveOnly({
       ...createDirectiveHandlingBase(),
       ...currentLevels,
@@ -420,6 +406,7 @@ export async function applyInlineDirectiveOverrides(params: {
         defaultModel,
         aliasIndex,
         modelPolicy: modelState.modelPolicy,
+        operatorAuthority: modelState.operatorAuthority,
         allowedModelKeys: modelState.allowedModelKeys,
         allowedModelCatalog: modelState.allowedModelCatalog,
         provider,
@@ -443,7 +430,7 @@ export async function applyInlineDirectiveOverrides(params: {
           return directiveRejection("model-runtime-invalid", runtime.errorText);
         }
         const applied = await (
-          await loadDirectivePersist()
+          await directivePersistLoader.load()
         ).applySessionModelSelection({
           cfg,
           agentId,
@@ -456,6 +443,7 @@ export async function applyInlineDirectiveOverrides(params: {
           currentProvider: provider,
           currentModel: model,
           modelPolicy: modelState.modelPolicy,
+          operatorAuthority: modelState.operatorAuthority,
           modelCatalog: modelState.allowedModelCatalog,
           thinkingCatalog: modelState.allowedModelCatalog,
           canPersistStickyModelSelection,
@@ -520,7 +508,7 @@ export async function applyInlineDirectiveOverrides(params: {
     } = currentLevels;
     let statusReply: ReplyPayload | undefined;
     if (directives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender) {
-      const { buildStatusReply } = await loadCommandsStatus();
+      const { buildStatusReply } = await commandsStatusLoader.load();
       const targetSessionEntry = sessionStore[sessionKey] ?? sessionEntry;
       statusReply = await buildStatusReply({
         cfg,

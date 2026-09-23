@@ -30,8 +30,12 @@ export function buildSessionListRowMetadataContext(params: {
   sessionKeys?: readonly string[];
   subagentRuns?: SessionListRowContext["subagentRuns"];
   projectedAgentRuns?: ProjectedAgentRunIndex;
+  projectedSubagentActivity?: ReadonlySet<string>;
   userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
-}): SessionListRowContext {
+}): SessionListRowContext & {
+  projectedAgentRuns: ProjectedAgentRunIndex;
+  projectedSubagentActivity: ReadonlySet<string>;
+} {
   const subagentRuns =
     params.subagentRuns ?? buildSubagentSessionListReadIndex(params.now, params.sessionKeys);
   const projectedAgentRuns = params.projectedAgentRuns ?? buildProjectedAgentRunIndex();
@@ -46,7 +50,9 @@ export function buildSessionListRowMetadataContext(params: {
   return {
     subagentRuns,
     projectedAgentRuns,
-    projectedSubagentActivity: buildProjectedSubagentActivity(subagentRuns, projectedAgentRuns),
+    projectedSubagentActivity:
+      params.projectedSubagentActivity ??
+      buildProjectedSubagentActivity(subagentRuns, projectedAgentRuns),
     subagentRunsByChildSessionKey: subagentRuns.runsByChildSessionKey,
     configuredDefaultModelByAgent: new Map(),
     thinkingFactsByModelRef: new Map(),

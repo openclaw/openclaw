@@ -202,6 +202,9 @@ export function buildQaToolSearchArgs(
       ].join("\n"),
     };
   }
+  if (failureMode && targetTool === "sessions_spawn") {
+    return { task: "" };
+  }
   if (failureMode) {
     return { __qaFailureMode: "denied-input" };
   }
@@ -343,6 +346,7 @@ export function buildQaToolSearchArgs(
       label: "runtime-tool-fixture",
       mode: "run",
       thread: false,
+      expectsCompletionMessage: false,
     };
   }
   if (targetTool === "memory_recall") {

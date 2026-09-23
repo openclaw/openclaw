@@ -11,6 +11,7 @@ import { EMPTY_LINK_READERS } from "../../components/link-reader-target.ts";
 import { renderPanelLoadingSkeleton } from "../../components/panel-loading-skeleton.ts";
 import { t } from "../../i18n/index.ts";
 import { registerBackgroundTasksEnglish } from "../../i18n/locales/en-background-tasks.ts";
+import { registerFilePreviewEnglish } from "../../i18n/locales/en-file-preview.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { formatKeyboardShortcutCombo } from "../../lib/keyboard-shortcut-catalog.ts";
 import type { ControlUiRegistration } from "../../plugins/control-ui-capability.ts";
@@ -38,6 +39,7 @@ import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 import { sidebarMainPanel } from "./sidebar-layout.ts";
 
 registerBackgroundTasksEnglish();
+registerFilePreviewEnglish();
 
 type SidebarPanelDefinitionParams = {
   state: ChatPageHost;

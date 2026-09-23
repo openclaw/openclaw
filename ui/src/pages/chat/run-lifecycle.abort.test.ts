@@ -35,7 +35,8 @@ describe("hasAbortableSessionRun", () => {
   });
 });
 
-type AbortHost = Parameters<typeof replayPendingChatAbort>[0];
+type AbortHost = Parameters<typeof replayPendingChatAbort>[0] &
+  Parameters<typeof reconcileChatRunLifecycle>[0];
 
 function makeAbortHost(over: Partial<AbortHost> = {}): AbortHost {
   return {
@@ -418,6 +419,7 @@ describe("handleAbortChat", () => {
 
     expect(host.pendingAbort).toEqual({
       sourceClient: client,
+      recoveryScope: client.recoveryScope,
       sessionKey: "agent:main",
       conversation: { sessionKey: "agent:main" },
       runId: "run-main",
@@ -438,6 +440,7 @@ describe("replayPendingChatAbort", () => {
       client,
       pendingAbort: {
         sourceClient: client,
+        recoveryScope: client.recoveryScope,
         runId: "run-main",
         sessionKey: "global",
         agentId: "work",
@@ -476,6 +479,7 @@ describe("replayPendingChatAbort", () => {
         },
         pendingAbort: {
           sourceClient: client,
+          recoveryScope: client.recoveryScope,
           runId: "run-main",
           sessionKey: "global",
           agentId: "work",
@@ -488,7 +492,7 @@ describe("replayPendingChatAbort", () => {
       expect(request).not.toHaveBeenCalled();
       expect(host.pendingAbort).toBeNull();
       if (sameScope) {
-        expect(host.chatError).toContain("operator.write");
+        expect(host.chatError).toContain("operator.sessions.write");
       } else {
         expect(host.chatError).toBe("Current scope warning");
       }
@@ -507,6 +511,7 @@ describe("replayPendingChatAbort", () => {
       chatRunId: "run-main",
       pendingAbort: {
         sourceClient: client,
+        recoveryScope: client.recoveryScope,
         runId: "run-main",
         sessionKey: "agent:main:telegram:direct:queued-user",
         conversation: { sessionKey: "agent:main:telegram:direct:queued-user", agentId: "main" },
@@ -528,6 +533,7 @@ describe("replayPendingChatAbort", () => {
       client: createTestGatewayClient(replacementRequest),
       pendingAbort: {
         sourceClient,
+        recoveryScope: sourceClient.recoveryScope,
         runId: "run-main",
         sessionKey: "agent:main:telegram:direct:queued-user",
         conversation: { sessionKey: "agent:main:telegram:direct:queued-user", agentId: "main" },

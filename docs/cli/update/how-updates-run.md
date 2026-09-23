@@ -57,6 +57,14 @@ stop with a warning naming those counts; missing custody information never block
 the update. The next Gateway starts with the refreshed service policy. An operator drop-in
 that still shortens the native timeout is preserved and reported.
 
+Maintenance drain uses the service's local credentials, including an existing
+paired operator identity when no shared token or password is configured. It does
+not create an identity or request new pairing. Older installed updaters that omit
+this identity can report `device identity required` and wait until their existing
+drain deadline before stopping with a warning. A newer candidate cannot change
+that already-running updater; subsequent updates use the corrected local control
+client after installation.
+
 Explicit package artifacts, such as tarball paths and URLs, compare known build
 IDs before a same-version no-op. Matching known identity leaves the package unchanged;
 different or missing identity continues through normal update validation and
@@ -749,6 +757,8 @@ the sentinel.
   </Step>
   <Step id="build-a-candidate" title="Build the update">
     Stable, beta, and dev updates install dependencies and build in a temporary worktree while the old Gateway serves. Dev rebases the staged checkout first so local commits are preserved and the build validates the exact source that will be activated. On POSIX, staging uses a private directory in the checkout's existing ignored `.artifacts` area. By default, the full workspace stays on the checkout filesystem, not a potentially small system temporary filesystem. An existing `.artifacts` redirect is honored as an operator storage choice, just like the build cache. Existing checkout, parent, and artifact directory permissions are not changed. Windows keeps its short system-drive staging path. Only dev updates walk back through earlier commits; stable and beta updates validate their selected target.
+
+    When switching a package installation to a new Git checkout, POSIX builds use artifact storage inside the private clone transaction on the destination filesystem. Publishing the checkout leaves the build directory in place until runtime preparation and cleanup finish.
 
     Git object transfer reads its prepared pack directly from disk. Packs above 256 MiB record a size warning and continue when the installed Git object volume has room for the measured pack and index. A known shortfall reports `snapshot-capacity-insufficient` before stopping the Gateway; unknown free space remains a warning. The pack import duration is recorded with the update steps. This check is separate from state-snapshot placement and runtime build-cache exclusions.
 

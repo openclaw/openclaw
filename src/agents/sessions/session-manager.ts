@@ -5,10 +5,7 @@
  * behavior are split into focused internal modules.
  */
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
-import {
-  appendTranscriptMessageSync,
-  type SessionTranscriptRuntimeTarget,
-} from "../../config/sessions/session-accessor.js";
+import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "../../config/sessions/session-accessor.sqlite-active-context.js";
 import { prepareTranscriptRewriteSync } from "../../config/sessions/session-accessor.sqlite-branch-rewrite.js";
 import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-contract.js";
@@ -21,6 +18,7 @@ import {
   validateSessionTranscriptContextVersion,
 } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import { loadTranscriptReadSnapshotSync } from "../../config/sessions/session-accessor.sqlite-read.js";
+import { appendTranscriptMessageSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import {
   assertCurrentSessionTranscriptHeader,
   findSessionTranscriptHeader,
@@ -425,7 +423,10 @@ export class SessionManager extends SessionManagerBranching {
     );
   }
 
-  /** Appends to the current transcript leaf without hydrating its history. */
+  /**
+   * @deprecated Retained for the v2026.9.5 plugin SDK contract.
+   * Removal requires a versioned SDK replacement and plugin migration window.
+   */
   static appendMessageToTranscript(
     target: SessionTranscriptRuntimeTarget,
     message: Message | CustomMessage | BashExecutionMessage,

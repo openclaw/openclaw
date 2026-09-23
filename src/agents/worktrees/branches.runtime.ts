@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { requireGitCommandOutput } from "../../infra/git-exec.js";
+import { WorktreeRepositoryError } from "./errors.js";
 import { insideGitCheckout, runGit } from "./git.js";
 import { resolveCheckoutRootFromRealPath } from "./repository-paths.js";
 import type { ManagedWorktreeBranch, ManagedWorktreeBranchesResult } from "./types.js";
@@ -85,6 +86,10 @@ export async function readRepositoryBranches(
     sourceRoot = await resolveCheckoutRootFromRealPath(requested, repoRoot);
   } catch (error) {
     if (options.includeRepositoryStatus) {
+      // An unborn checkout supports direct sessions, but has no worktree base yet.
+      if (error instanceof WorktreeRepositoryError && error.reason === "unborn") {
+        return { branches: [], repositoryStatus: "not_git" };
+      }
       return { branches: [], repositoryStatus: "unavailable" };
     }
     throw error;

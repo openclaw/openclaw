@@ -4,6 +4,11 @@ const currentModuleUrl = import.meta.url;
 export const SQLITE_READONLY_CHILD_ARG = "--openclaw-sqlite-readonly-child";
 
 export const runtimeProcessEntrypoints = {
+  secretEgressProxy: {
+    currentModuleUrl,
+    sourceWorkerName: "../secrets/egress-proxy/proxy.worker",
+    distWorkerPath: "secrets/egress-proxy/proxy.worker.js",
+  },
   codeModeNode: {
     currentModuleUrl,
     sourceWorkerName: "../agents/code-mode-node.worker",
@@ -173,6 +178,11 @@ export const runtimeProcessEntrypoints = {
     currentModuleUrl,
     sourceWorkerName: "../agents/sessions/session-manager-metadata.worker",
     distWorkerPath: "agents/sessions/session-manager-metadata.worker.js",
+  },
+  sessionTranscriptReports: {
+    currentModuleUrl,
+    sourceWorkerName: "../config/sessions/session-accessor.sqlite-transcript-reports.worker",
+    distWorkerPath: "config/sessions/session-accessor.sqlite-transcript-reports.worker.js",
   },
   sessionTranscriptReconcile: {
     currentModuleUrl,

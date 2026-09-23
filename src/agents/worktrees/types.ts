@@ -129,3 +129,15 @@ export type ManagedWorktreeGcResult = {
   /** Null when incomplete inventory or size measurements prevent a conclusion. */
   limitsSatisfied: boolean | null;
 };
+
+/** Explicit early retirement only for a snapshot whose source remains retained. */
+export type RetireManagedWorktreeSnapshotParams = {
+  id: string;
+  expectedSnapshotRef: string;
+  expectedSnapshotOid: string;
+  expectedRemovedAt: number;
+  retainedSourceRef: string;
+  expectedRetainedSourceOid: string;
+  signal?: AbortSignal;
+  commitGuard?: () => void;
+};

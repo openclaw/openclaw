@@ -298,16 +298,36 @@ export function resumeSubagentRun(runId: string, source: "live" | "restore" = "l
     // A steer restart deliberately leaves the shared task writable for its
     // successor run, so the retired row must not terminalize it.
     if (entry.execution.outcome && entry.suppressAnnounceReason !== "steer-restart") {
-      finalizeSubagentTaskRun(subagentLifecycleController.options, {
-        entry,
-        outcome: entry.execution.outcome,
+      const outcome = entry.execution.outcome;
+      resumedRuns.add(runId);
+      void runWithGatewayIndependentRootWorkAdmission(async () => {
+        await finalizeSubagentTaskRun(subagentLifecycleController.options, { entry, outcome });
+        resumedRuns.delete(runId);
+        if (subagentRuns.get(runId) === entry) {
+          resumeFinalizedSubagentRun(runId, entry, source);
+        }
+      }, "subagents:resume-task-settlement").catch((error: unknown) => {
+        resumedRuns.delete(runId);
+        log.warn("subagent task settlement deferred before cleanup", { runId, error });
+        if (subagentRuns.get(runId) === entry) {
+          scheduleSubagentDeliveryResumeRetry(runId, entry, GATEWAY_ADMISSION_RETRY_DELAY_MS);
+        }
       });
+      return;
     }
   } catch (error) {
     log.warn("subagent task settlement deferred before cleanup", { runId, error });
     scheduleSubagentDeliveryResumeRetry(runId, entry, GATEWAY_ADMISSION_RETRY_DELAY_MS);
     return;
   }
+  resumeFinalizedSubagentRun(runId, entry, source);
+}
+
+function resumeFinalizedSubagentRun(
+  runId: string,
+  entry: SubagentRunRecord,
+  source: "live" | "restore",
+) {
   const yieldedWakeWaitingForDelivery =
     entry.requesterSettleWake?.requesterYieldBatch === true &&
     (entry.delivery?.status === "pending" ||
@@ -652,6 +672,8 @@ function addSubagentRunForTests(entry: SubagentRunRecord) {
 
 export const markSubagentRunTerminated = subagentRunManager.markSubagentRunTerminated;
 export const discardSubagentTerminalDelivery = SubagentLifecycleController.discardTerminalDelivery;
+export const cancelSubagentRequesterSettleWake =
+  subagentLifecycleController.cancelRequesterSettleWake;
 
 export { prependAgentSteeringPrompt };
 

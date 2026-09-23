@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { tsImport } from "tsx/esm/api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -17,7 +18,11 @@ import {
 } from "./workspace-hash-memo.js";
 import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { preflightWorkspaceApply, readActualWorkspaceManifest } from "./workspace-reconcile.js";
-import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
+
+// Generate the wire script through the source runtime loader, which preserves
+// function names. Vitest's own transform does not exercise that closure boundary.
+const { REMOTE_WORKSPACE_MANIFEST_JS }: typeof import("./workspace-sync-scripts.js") =
+  await tsImport("./workspace-sync-scripts.ts", import.meta.url);
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());

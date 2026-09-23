@@ -5,6 +5,7 @@ import { t } from "../i18n/index.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
 import { ImageLightboxGalleryController } from "./image-lightbox-gallery.ts";
+import { panImageWithKeyboard } from "./image-lightbox-keyboard.ts";
 import { imageLightboxStyles } from "./image-lightbox.styles.ts";
 import type { ImageLightboxGallery, ImageLightboxItem } from "./image-lightbox.types.ts";
 import "./modal-dialog.ts";
@@ -657,7 +658,14 @@ class OpenClawImageLightbox extends OpenClawLitElement {
   }
 
   private handleKeydown = (event: KeyboardEvent) => {
-    if (this.hasGallery && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+    if (panImageWithKeyboard(event, this.panzoom)) {
+      return;
+    }
+    if (
+      this.hasGallery &&
+      !event.shiftKey &&
+      (event.key === "ArrowLeft" || event.key === "ArrowRight")
+    ) {
       event.preventDefault();
       event.stopPropagation();
       void this.navigate((event.key === "ArrowRight" ? 1 : -1) * this.direction);

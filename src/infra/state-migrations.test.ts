@@ -70,10 +70,7 @@ import {
   migrateLegacyCurrentConversationBindings,
   migrateLegacyPluginBindingApprovals,
 } from "./state-migrations.runtime-state.js";
-import {
-  resetAutoMigrateLegacyStateDirForTest,
-  resetAutoMigrateLegacyTaskStateSidecarsForTest,
-} from "./state-migrations.state-dir.js";
+import { resetAutoMigrateLegacyStateDirForTest } from "./state-migrations.state-dir.js";
 import { loadVoiceWakeRoutingConfig } from "./voicewake-routing.js";
 import { loadVoiceWakeConfig, setVoiceWakeTriggers } from "./voicewake.js";
 
@@ -807,7 +804,6 @@ async function createLegacyStateFixture(params?: { includePreKey?: boolean }) {
 afterEach(async () => {
   vi.useRealTimers();
   pluginDoctorStateMigrationEntries.entries = [];
-  resetAutoMigrateLegacyTaskStateSidecarsForTest();
   resetAutoMigrateLegacyStateDirForTest();
   await closeDatabaseTestCohorts(migrationDatabaseClosers);
   resetPluginRuntimeStateForTest();

@@ -62,46 +62,15 @@ function cronSessionEntry(
   };
 }
 
-async function persistExactCronLifecycle(options: {
-  entry: SessionEntry;
-  eventRunId: string;
-  eventSessionId?: string;
-}): Promise<SessionEntry | undefined> {
-  let currentEntry = structuredClone(options.entry);
-  persistenceMocks.loadSessionEntry.mockReset().mockReturnValue({
-    storePath: "/tmp/sessions.json",
-    canonicalKey: exactCronSessionKey,
-    entry: currentEntry,
-  });
-  persistenceMocks.updateSessionEntry
-    .mockReset()
-    .mockImplementation(async (...args: Parameters<UpdateSessionEntry>) => {
-      const [, update] = args;
-      const patch = await update(structuredClone(currentEntry), {
-        existingEntry: structuredClone(currentEntry),
-      });
-      if (patch) {
-        currentEntry = { ...currentEntry, ...patch };
-      }
-      return currentEntry;
-    });
-  await persistGatewaySessionLifecycleEvent({
-    sessionKey: exactCronSessionKey,
-    event: {
-      ts: 2_000,
-      sessionId: options.eventSessionId ?? "cron-session-id",
-      runId: options.eventRunId,
-      data: { phase: "end", startedAt: 1_300, endedAt: 1_950 },
-    },
-  });
-  return currentEntry;
-}
-
-async function persistLifecycle(entry: SessionEntry, event: LifecycleEvent): Promise<SessionEntry> {
+async function persistLifecycle(
+  entry: SessionEntry,
+  event: LifecycleEvent,
+  sessionKey = "agent:main:main",
+): Promise<SessionEntry> {
   let currentEntry = structuredClone(entry);
   persistenceMocks.loadSessionEntry.mockReset().mockReturnValue({
     storePath: "/tmp/sessions.json",
-    canonicalKey: "agent:main:main",
+    canonicalKey: sessionKey,
     entry: currentEntry,
   });
   persistenceMocks.updateSessionEntry
@@ -117,7 +86,7 @@ async function persistLifecycle(entry: SessionEntry, event: LifecycleEvent): Pro
       return currentEntry;
     });
   await persistGatewaySessionLifecycleEvent({
-    sessionKey: "agent:main:main",
+    sessionKey,
     event,
   });
   return currentEntry;
@@ -498,6 +467,34 @@ describe("session lifecycle state", () => {
       abortedLastRun,
     });
   });
+
+  it.each([
+    { name: "visible run", controlUiVisible: true, isHeartbeat: false, lastActivityAt: 1_800 },
+    { name: "heartbeat", controlUiVisible: true, isHeartbeat: true, lastActivityAt: 1_000 },
+    { name: "hidden run", controlUiVisible: false, isHeartbeat: false, lastActivityAt: 1_000 },
+  ])(
+    "records unread-worthy completion activity for a $name",
+    async ({ controlUiVisible, isHeartbeat, lastActivityAt }) => {
+      const persisted = await persistLifecycle(
+        {
+          sessionId: "session-id",
+          updatedAt: 1_000,
+          lastActivityAt: 1_000,
+          startedAt: 1_050,
+          status: "running",
+        },
+        {
+          ts: 2_000,
+          sessionId: "session-id",
+          controlUiVisible,
+          isHeartbeat,
+          data: { phase: "end", endedAt: 1_800 },
+        },
+      );
+
+      expect(persisted.lastActivityAt).toBe(lastActivityAt);
+    },
+  );
 
   it("persists a compact failure reason and clears it when a new run starts", async () => {
     const failed = await persistLifecycle(
@@ -972,7 +969,16 @@ describe("session lifecycle state", () => {
       expectedStatus: "running",
     },
   ])("direct persistence $name", async (testCase) => {
-    const persisted = await persistExactCronLifecycle(testCase);
+    const persisted = await persistLifecycle(
+      testCase.entry,
+      {
+        ts: 2_000,
+        sessionId: testCase.eventSessionId ?? "cron-session-id",
+        runId: testCase.eventRunId,
+        data: { phase: "end", startedAt: 1_300, endedAt: 1_950 },
+      },
+      exactCronSessionKey,
+    );
 
     expect(persisted?.status).toBe(testCase.expectedStatus);
     // One exact-row write only. Continuation settlement owns base projection.

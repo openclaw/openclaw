@@ -9,7 +9,10 @@ import {
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { hasUiSessionDefaults } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
+import {
+  isExpiredIncognitoSession,
+  isInitialChatHistoryUnavailable,
+} from "./chat-history-state.ts";
 import {
   flushStoredChatOutbox,
   resumeStoredChatOutboxes as resumeStoredChatOutboxesDrain,
@@ -184,6 +187,9 @@ export async function retryQueuedChatMessage(
     return;
   }
   const item = host.chatQueue.find((entry) => entry.id === id);
+  if (isExpiredIncognitoSession(host, item?.sessionKey ?? host.sessionKey)) {
+    return;
+  }
   const retriesFailedDelivery = item?.sendState === "failed" && !item.localCommandName;
   const retriesUnconfirmed = item !== undefined && hasUncertainChatDelivery(item);
   if (isQueuedMessageBeingEdited(host, id)) {

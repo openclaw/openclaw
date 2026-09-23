@@ -125,13 +125,13 @@ async function fixture(withInstructions = true, contextText = "synthetic persona
 
 describe("private inference HTTP relay", () => {
   it.each([
-    { zstd: false, withInstructions: true },
+    { zstd: false, withInstructions: true, query: "?cursor=synthetic%2Fa%5Cb%2Ec" },
     { zstd: true, withInstructions: true },
     { zstd: false, withInstructions: false },
     { zstd: true, withInstructions: false },
   ])(
     "preserves auth and native input (zstd=$zstd, top-level instructions=$withInstructions)",
-    async ({ zstd, withInstructions }) => {
+    async ({ zstd, withInstructions, query = "" }) => {
       const { proxy, body } = await fixture(withInstructions);
       let forwarded: unknown;
       transport.fetch.mockImplementation(async (args) => {
@@ -141,7 +141,9 @@ describe("private inference HTTP relay", () => {
         expect(args.init.duplex).toBe("half");
         const bytes = zstd ? zstdDecompressSync(wire) : wire;
         forwarded = JSON.parse(bytes.toString());
-        expect(args.url).toBe("https://api.openai.com/v1/responses");
+        const target = new URL(args.url);
+        expect(target.origin + target.pathname).toBe("https://api.openai.com/v1/responses");
+        expect(target.searchParams.get("cursor")).toBe(query ? "synthetic/a\\b.c" : null);
         expect(args.init.headers.authorization).toBe("Bearer synthetic-native-auth");
         expect(args.capture).toBe(false);
         expect(args.mode).toBe("trusted_env_proxy");
@@ -154,7 +156,7 @@ describe("private inference HTTP relay", () => {
         };
       });
       const bytes = Buffer.from(JSON.stringify(body));
-      const response = await post(proxy.baseUrl + "/responses", {
+      const response = await post(proxy.baseUrl + "/responses" + query, {
         method: "POST",
         body: zstd ? zstdCompressSync(bytes) : bytes,
         headers: {
@@ -245,8 +247,17 @@ describe("private inference WebSocket relay", () => {
       }
       const { proxy } = await fixture();
       const socket = new WebSocket(proxy.baseUrl.replace("http:", "ws:") + "/responses");
+      socket.on("error", () => {});
       try {
-        await once(socket, "error");
+        const [, response] = await once(socket, "unexpected-response");
+        const chunks: Buffer[] = [];
+        for await (const chunk of response) {
+          chunks.push(Buffer.from(chunk));
+        }
+        expect(response.statusCode).toBe(502);
+        expect(Buffer.concat(chunks).toString()).toBe(
+          "Codex parent-local inference transport failed; retry on a fresh connection.",
+        );
         expect(transport.resolve).toHaveBeenCalledOnce();
         expect(transport.proxyAgent).toHaveBeenCalledOnce();
         expect(transport.dials).toEqual([]);
@@ -255,6 +266,39 @@ describe("private inference WebSocket relay", () => {
       }
     },
   );
+
+  it("returns a complete sanitized rejection when upstream closes before upgrading", async () => {
+    const server = createServer();
+    server.on("upgrade", (_request, socket) => socket.destroy());
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("fixture did not listen");
+    }
+    transport.upstream = "ws://127.0.0.1:" + address.port;
+    const { proxy } = await fixture();
+    const socket = new WebSocket(proxy.baseUrl.replace("http:", "ws:") + "/responses");
+    socket.on("error", () => {});
+    try {
+      const [, response] = await once(socket, "unexpected-response");
+      const chunks: Buffer[] = [];
+      for await (const chunk of response) {
+        chunks.push(Buffer.from(chunk));
+      }
+      expect(response.statusCode).toBe(502);
+      expect(Buffer.concat(chunks).toString()).toBe(
+        "Codex parent-local inference transport failed; retry on a fresh connection.",
+      );
+    } finally {
+      socket.terminate();
+      proxy.close();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
 
   it.each(["https://127.0.0.1/v1", "https://service.internal/v1"])(
     "rejects blocked hostname %s before proxy or DNS work",

@@ -7,9 +7,9 @@ import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   getSessionRepositoryWorkspaceStore,
-  type SessionRepositoryWorkspaceRecord,
   type SessionRepositoryWorkspaceStore,
 } from "../../state/session-repository-workspaces.js";
+import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
 import {
   readGitHubRepositoryPublicationBlob,
   readGitHubRepositoryPublicationMetadata,

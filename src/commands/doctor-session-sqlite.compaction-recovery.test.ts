@@ -5,6 +5,11 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import { createSessionSqliteMigrationRun } from "../infra/session-sqlite-migration-manifest.js";
+import {
+  readOnlySqliteValidationSnapshot,
+  resolveTargetSqlitePath,
+} from "../infra/session-sqlite-migration-readers.js";
 import {
   AGENT_DATABASE_MAINTENANCE_LEASE,
   claimOpenClawAgentDatabaseLease,
@@ -18,11 +23,6 @@ import {
 import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
 import { readPersistedQuarantineRow } from "../state/openclaw-quarantine-store.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { createSessionSqliteMigrationRun } from "./doctor-session-sqlite-migration-run.js";
-import {
-  readOnlySqliteValidationSnapshot,
-  resolveTargetSqlitePath,
-} from "./doctor-session-sqlite-readers.js";
 import { recoverDoctorSessionSqliteTargets } from "./doctor-session-sqlite-recover-report.js";
 import { createDoctorSessionSqliteTargetReport } from "./doctor-session-sqlite-types.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";

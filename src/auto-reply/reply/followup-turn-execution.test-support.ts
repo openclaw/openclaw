@@ -5,15 +5,10 @@ import { createMockReplyOperation } from "./test-helpers.js";
 const followupTurnTestState = vi.hoisted(() => ({
   execute: vi.fn(),
   loadEntryReadOnly: vi.fn(),
-  reset: vi.fn(),
 }));
 
 vi.mock("./agent-runner-execution.js", () => ({
   executeAgentTurn: (...args: unknown[]) => followupTurnTestState.execute(...args),
-}));
-
-vi.mock("./agent-runner-session-reset.js", () => ({
-  resetReplyRunSession: (...args: unknown[]) => followupTurnTestState.reset(...args),
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", async () => {

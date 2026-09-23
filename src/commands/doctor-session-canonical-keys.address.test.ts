@@ -107,12 +107,44 @@ describe("Doctor stored session addresses", () => {
           entry: { sessionId: "legacy-history", updatedAt: 1 },
           eventText: "kept legacy history",
         });
+        const childKey = "agent:ops:child";
+        insertLegacySession({
+          ...scope,
+          sessionKey: childKey,
+          entry: {
+            sessionId: "child-history",
+            updatedAt: 1,
+            parentSessionKey: sessionKey,
+            spawnedBy: sessionKey,
+            forkSource: {
+              sessionKey,
+              sessionId: "legacy-history",
+              entryId: "legacy-history-message",
+            },
+          },
+        });
+        const retiredScope = {
+          ...scope,
+          agentId: "main",
+          storePath: store.replace("{agentId}", "main"),
+          sessionKey,
+        };
+        replaceSessionEntrySync(retiredScope, { sessionId: "retired-history", updatedAt: 1 });
+        await persistSessionTranscriptTurn(
+          { ...retiredScope, sessionId: "retired-history" },
+          {
+            expectedSessionId: "retired-history",
+            messages: [{ message: { role: "user", content: "kept retired history" } }],
+            updateMode: "none",
+          },
+        );
+        const retiredBefore = loadExactSessionEntryReadOnly(retiredScope);
         expect(
           await repairCanonicalSessionKeys({ apply: false, cfg, env: state.env }),
-        ).toMatchObject({ foundGroups: 1, repairedGroups: 0 });
+        ).toMatchObject({ foundGroups: 2, repairedGroups: 0 });
         expect(
           await repairCanonicalSessionKeys({ apply: true, cfg, env: state.env }),
-        ).toMatchObject({ foundGroups: 1, repairedGroups: 1, removedRows: 1 });
+        ).toMatchObject({ foundGroups: 2, repairedGroups: 2, removedRows: 1 });
         expect(loadExactSessionEntryReadOnly({ ...scope, sessionKey })).toBeUndefined();
         const repairedScope = { ...scope, sessionKey: "agent:ops:work" };
         expect(loadExactSessionEntryReadOnly(repairedScope)?.entry.sessionId).toBe(
@@ -122,6 +154,23 @@ describe("Doctor stored session addresses", () => {
           await loadTranscriptEvents({ ...repairedScope, sessionId: "legacy-history" }),
         ).toContainEqual(
           expect.objectContaining({ message: { role: "user", content: "kept legacy history" } }),
+        );
+        expect(
+          loadExactSessionEntryReadOnly({ ...scope, sessionKey: childKey })?.entry,
+        ).toMatchObject({
+          parentSessionKey: repairedScope.sessionKey,
+          spawnedBy: repairedScope.sessionKey,
+          forkSource: {
+            sessionKey: repairedScope.sessionKey,
+            sessionId: "legacy-history",
+            entryId: "legacy-history-message",
+          },
+        });
+        expect(loadExactSessionEntryReadOnly(retiredScope)).toEqual(retiredBefore);
+        expect(
+          await loadTranscriptEvents({ ...retiredScope, sessionId: "retired-history" }),
+        ).toContainEqual(
+          expect.objectContaining({ message: { role: "user", content: "kept retired history" } }),
         );
         expect(
           await repairCanonicalSessionKeys({ apply: true, cfg, env: state.env }),

@@ -340,13 +340,21 @@ export function createNativeRunParams(
 /** Replaces the lightweight default with the admitted host boundary used in production. */
 export async function bindProductionHarnessHostCapabilitiesForTest(
   params: EmbeddedRunAttemptParams,
+  operatorSource?: Parameters<
+    typeof createAgentHarnessHostCapabilitiesForTest
+  >[0]["operatorSource"],
 ): Promise<() => void> {
   const factory = getCodexTestToolFactory(params);
   if (factory) {
     await setHostToolFactoryForTest(params, factory);
   }
   const { hostCapabilities: _hostCapabilities, ...attempt } = params;
-  const host = await createAgentHarnessHostCapabilitiesForTest({ attempt, pluginId: "codex" });
+  const host = await createAgentHarnessHostCapabilitiesForTest({
+    attempt,
+    pluginId: "codex",
+    nativeModelPolicySupport: "exact",
+    operatorSource,
+  });
   params.hostCapabilities = host.capabilities;
   let active = true;
   const close = () => {

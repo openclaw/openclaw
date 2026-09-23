@@ -60,7 +60,7 @@ import {
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabaseByPathAsync,
   listOpenIncognitoAgentDatabases,
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
@@ -92,6 +92,7 @@ import {
   settleWorkspaceRuns,
   waitForCreatedSessionRun,
 } from "./server.sessions.create.projects.test-support.js";
+import { expectNonAdminWorktreeSetupIsSkipped } from "./server.sessions.create.worktree-scope.test-support.js";
 import { listSessionGroups } from "./session-groups.js";
 import {
   resolveSessionMutationAuthorization,
@@ -196,6 +197,12 @@ const {
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
+
+async function closeIncognitoSessionDatabases() {
+  for (const { agentId, storePath } of listOpenIncognitoAgentDatabases()) {
+    await closeOpenClawAgentDatabaseByPathAsync(storePath, agentId);
+  }
+}
 
 async function withFixedOwnerSessionStore(
   scope: "global" | "per-sender",
@@ -1524,21 +1531,10 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
       },
     });
     const durableCollisionKey = "agent:main:dashboard:incognito-durable-collision";
-    const durableCollisionUpdatedAt = Date.now();
-    persistentDatabase.db
-      .prepare(
-        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, 'durable-collision', ?, ?)",
-      )
-      .run(
-        durableCollisionKey,
-        JSON.stringify({ sessionId: "durable-collision", updatedAt: durableCollisionUpdatedAt }),
-        durableCollisionUpdatedAt,
-      );
-    persistentDatabase.db
-      .prepare(
-        "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at) VALUES ('durable-collision', ?, 'conversation', ?, ?)",
-      )
-      .run(durableCollisionKey, durableCollisionUpdatedAt, durableCollisionUpdatedAt);
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: durableCollisionKey, storePath },
+      sessionStoreEntry("durable-collision"),
+    );
     const parse = vi.spyOn(JSON, "parse");
     try {
       const rejectedExplicitDashboard = await directSessionReq("sessions.create", {
@@ -1558,7 +1554,7 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
       parse.mockRestore();
     }
   } finally {
-    closeOpenClawAgentDatabasesForTest();
+    await closeIncognitoSessionDatabases();
   }
 });
 
@@ -1583,7 +1579,7 @@ test("incognito webchat rejects a vanished non-default-agent session before disp
     const sessionKey = requireNonEmptyString(created.payload?.key, "incognito webchat key");
     const sessionId = requireNonEmptyString(created.payload?.sessionId, "incognito webchat id");
 
-    closeOpenClawAgentDatabasesForTest();
+    await closeIncognitoSessionDatabases();
     dispatchInboundMessageMock.mockClear();
     const stale = await rpcReq(ws, "chat.send", {
       sessionKey,
@@ -1610,7 +1606,7 @@ test("incognito webchat rejects a vanished non-default-agent session before disp
     ).toBeUndefined();
   } finally {
     ws.close();
-    closeOpenClawAgentDatabasesForTest();
+    await closeIncognitoSessionDatabases();
   }
 });
 
@@ -1701,7 +1697,7 @@ test("createGatewaySession rechecks admin scope after incognito inheritance reso
       createGatewaySession({ ...base, requestingOperatorScopes: ["operator.admin"] }),
     ).resolves.toMatchObject({ ok: true, entry: { incognito: true } });
   } finally {
-    closeOpenClawAgentDatabasesForTest();
+    await closeIncognitoSessionDatabases();
   }
 });
 
@@ -1737,7 +1733,6 @@ test("createGatewaySession forwards its commit guard into main-session reset", a
     );
   } finally {
     testState.sessionConfig = undefined;
-    closeOpenClawAgentDatabasesForTest();
   }
 });
 
@@ -1974,7 +1969,7 @@ test("incognito operator RPCs treat identityless connections as owner-equivalent
     admin.ws.close();
     reader.ws.close();
     writer.ws.close();
-    closeOpenClawAgentDatabasesForTest();
+    await closeIncognitoSessionDatabases();
   }
 });
 
@@ -3935,46 +3930,10 @@ test.each(["direct path", "symlink escape"])(
 );
 
 test("sessions.create skips the worktree setup script for non-admin callers", async () => {
-  const openClawState = await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "openclaw-worktree-setup-scope-",
+  await expectNonAdminWorktreeSetupIsSkipped({
+    workspaceTemplate: gitWorkspaceTemplate,
+    prepareSessionStore: createSessionStoreDir,
   });
-  const root = openClawState.root;
-  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, root);
-  await fs.mkdir(path.join(workspace, ".openclaw"), { recursive: true });
-  const setupScript = path.join(workspace, ".openclaw", "worktree-setup.sh");
-  await fs.writeFile(setupScript, "#!/bin/sh\ntouch setup-marker.txt\n");
-  await fs.chmod(setupScript, 0o755);
-  closeOpenClawStateDatabaseForTest();
-  testState.agentConfig = { workspace };
-  await createSessionStoreDir();
-  let worktreeId: string | undefined;
-  try {
-    const created = await directSessionReq<{
-      key: string;
-      worktree: { id: string; path: string; branch: string };
-    }>(
-      "sessions.create",
-      { agentId: "main", worktree: true },
-      { client: { connect: { scopes: ["operator.write"] } } as never },
-    );
-    expect(created.ok).toBe(true);
-    const worktree = requireNonEmptyString(created.payload?.worktree.path, "worktree path");
-    worktreeId = created.payload?.worktree.id;
-    // Write-scoped callers get provisioning but never repo-script execution.
-    await expect(fs.stat(path.join(worktree, "setup-marker.txt"))).rejects.toThrow();
-  } finally {
-    if (worktreeId) {
-      await managedWorktrees.remove({
-        id: worktreeId,
-        reason: "test-cleanup",
-        allowSnapshotLoss: true,
-      });
-    }
-    await disposeSessionReadContexts();
-    testState.agentConfig = undefined;
-    await openClawState.cleanup();
-  }
 });
 
 test.each([

@@ -13,6 +13,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
+import {
   isProcessAlive,
   waitForChildClose,
   waitForDead,
@@ -22,6 +26,8 @@ import {
 } from "../helpers/process-wait.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import { quote, setupFixture } from "./docker-all-harness-fixture.test-support.js";
+import { assertFixtureProcessGroupStopped } from "./exited-descendant-reaper.test-support.js";
+import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 const laneNames = ["gateway-network", "gateway-concurrency", "live-models"];
@@ -1848,13 +1854,7 @@ describe("Docker scheduler publication settlement", () => {
                 .children()
                 .filter(({ owner: commandOwner }) => commandOwner === schedulerPid);
               expect(commands).toHaveLength(1);
-              let probeError: unknown;
-              try {
-                process.kill(-commands[0]!.pid, 0);
-              } catch (error) {
-                probeError = error;
-              }
-              expect(probeError).toMatchObject({ code: "ESRCH" });
+              assertFixtureProcessGroupStopped(commands[0]!.pid);
               for (let turn = 1; turn <= 2; turn += 1) {
                 process.kill(schedulerPid, "SIGTERM");
                 await waitForFile(checkpoint + ".term-" + turn, 5_000);
@@ -1958,13 +1958,7 @@ describe("Docker scheduler publication settlement", () => {
           for (const { pid } of owner.children()) {
             expect(isProcessAlive(pid)).toBe(false);
             if (siblingLogs) {
-              let groupError: unknown;
-              try {
-                process.kill(-pid, 0);
-              } catch (error) {
-                groupError = error;
-              }
-              expect(groupError).toMatchObject({ code: "ESRCH" });
+              assertFixtureProcessGroupStopped(pid);
             }
           }
         },
@@ -2161,7 +2155,7 @@ describe("Docker scheduler publication settlement", () => {
           ).toEqual([]);
           for (const { pid } of owner.children()) {
             expect(isProcessAlive(pid)).toBe(false);
-            expect(() => process.kill(-pid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
+            assertFixtureProcessGroupStopped(pid);
           }
         },
         () => cleanupStaggerFixture(owner),
@@ -2290,13 +2284,17 @@ describe("Docker scheduler publication settlement", () => {
             expect(
               JSON.parse(readFileSync(path.join(fixture.root, "logs", "failures.json"), "utf8")),
             ).not.toHaveProperty("status");
-            for (const [script, args, expected] of [
-              ["docker-e2e.mts", ["summary", summaryPath, "Docker scheduler"], "Status: `failed`"],
-              ["docker-e2e-timings.mts", [summaryPath], "Status: failed"],
+            for (const [entrypoint, args, expected] of [
+              [
+                toolingMtsEntrypoints.dockerSummary,
+                ["summary", summaryPath, "Docker scheduler"],
+                "Status: `failed`",
+              ],
+              [toolingMtsEntrypoints.dockerTimings, [summaryPath], "Status: failed"],
             ] as const) {
               const output = execFileSync(
                 process.execPath,
-                ["--import", "tsx", path.join("scripts", script), ...args],
+                [...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(entrypoint)), ...args],
                 { encoding: "utf8", timeout: 10_000 },
               );
               expect(output).toContain(expected);

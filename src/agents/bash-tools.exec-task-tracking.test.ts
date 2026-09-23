@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ExecProcessOutcome } from "./bash-tools.exec-runtime.js";
+import type { ExecProcessOutcome } from "./bash-tools.exec-types.js";
 
 const taskRuntime = vi.hoisted(() => ({
   createRunningTaskRun: vi.fn(),

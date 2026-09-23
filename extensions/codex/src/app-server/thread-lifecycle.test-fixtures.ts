@@ -319,6 +319,10 @@ function createTrackedThreadLifecycleHostCapability(): ThreadLifecycleTestHostCa
     kind: "agent-harness-host-capability",
     version: 1,
     assertActive,
+    retainSourceAuthority: () => {
+      assertActive();
+      return undefined;
+    },
     bindToolSurface: (tools) => {
       assertActive();
       return tools.map((tool) => {
@@ -407,6 +411,15 @@ export function createAppServerOptions(): CodexAppServerRuntimeOptions {
     loopDetectionPreToolUseRelay: true,
     requestTimeoutMs: 60_000,
     approvalPolicy: "never",
+    approvalsReviewer: "user",
+    sandbox: "workspace-write",
+  } as unknown as CodexAppServerRuntimeOptions;
+}
+
+export function createThreadRequestAppServerOptions(): CodexAppServerRuntimeOptions {
+  return {
+    start: createAppServerOptions().start,
+    approvalPolicy: "on-request",
     approvalsReviewer: "user",
     sandbox: "workspace-write",
   } as unknown as CodexAppServerRuntimeOptions;

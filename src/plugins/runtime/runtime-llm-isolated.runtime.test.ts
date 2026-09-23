@@ -364,7 +364,7 @@ describe("runtime.llm.complete isolated agent runtime", () => {
     await expect(
       llm.complete({
         messages: [{ role: "user", content: "Return JSON" }],
-        reasoning: "ultra",
+        reasoning: "max",
         execution: { mode: "isolated-agent-runtime" },
       }),
     ).rejects.toMatchObject({ code: "LLM_ISOLATED_INPUT_REJECTED" });

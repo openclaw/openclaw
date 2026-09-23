@@ -31,7 +31,12 @@ import {
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
 import * as localCheckRuntime from "../../scripts/lib/local-check-runtime.mts";
 import { createCompactSplitTimingGeneration } from "../../scripts/lib/vitest-shard-metadata.mts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
+import { toolingProbeRuntimeEntrypoints } from "./tooling-probe-runtime.test-support.mts";
 
 function uiLog(files: Record<string, number>, overhead = 0.6) {
   const body = Object.values(files).reduce((sum, value) => sum + value, 0);
@@ -792,9 +797,10 @@ if (args[1] === "--help") {
           [
             "--require",
             clock,
-            "--import",
-            "tsx",
-            "scripts/ci-refit-test-timings.mts",
+            ...resolveRuntimeWorkerArgv(
+              resolveRuntimeWorkerUrl(toolingProbeRuntimeEntrypoints.ciRefitTestTimings),
+              process.execPath,
+            ),
             "--runs",
             String(count),
             "--repo",

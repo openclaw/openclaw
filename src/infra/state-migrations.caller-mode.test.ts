@@ -21,10 +21,6 @@ import {
   autoMigrateLegacyState,
   planLegacyStateMigrationsReadOnly,
 } from "./state-migrations.doctor.js";
-import {
-  resolveLegacyFlowRunsSidecarPath,
-  resolveLegacyTaskRunsSidecarPath,
-} from "./state-migrations.storage.js";
 import type { LegacyStateMigrationPlan } from "./state-migrations.types.js";
 
 const tempDirs = createTrackedTempDirs();
@@ -303,51 +299,6 @@ describe("legacy state migration caller mode", () => {
       outcome: "deferred",
       refusal: { code: "blocked-by-prior-refusal" },
     });
-  });
-
-  it("binds task sidecar databases as SQLite plan inputs", async () => {
-    const fixture = await makeFixture();
-    fs.writeFileSync(fixture.configPath, "{}\n");
-    const taskRunsPath = resolveLegacyTaskRunsSidecarPath(fixture.stateDir);
-    const flowRunsPath = resolveLegacyFlowRunsSidecarPath(fixture.stateDir);
-    const databases = [taskRunsPath, flowRunsPath].map((databasePath) => {
-      fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-      const database = new DatabaseSync(databasePath);
-      database.exec(
-        "PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0; CREATE TABLE marker (value TEXT); INSERT INTO marker VALUES ('pending');",
-      );
-      return database;
-    });
-
-    try {
-      const plan = await planLegacyStateMigrationsReadOnly({
-        mode: "doctor",
-        candidate: candidateAt(fixture.root),
-        snapshot: createCallerModeSnapshot(fixture),
-        env: fixture.env,
-      });
-
-      expect(plan.steps.find((step) => step.id === "task-state-sidecars")).toMatchObject({
-        source: [
-          { kind: "sqlite", path: taskRunsPath },
-          { kind: "sqlite", path: flowRunsPath },
-        ],
-        target: [{ kind: "sqlite", path: resolveOpenClawStateSqlitePath(fixture.env) }],
-        requiredness: "required",
-        outcome: "planned",
-      });
-
-      databases[0]?.exec("INSERT INTO marker VALUES ('later-wal-row')");
-      const updatedPlan = await planLegacyStateMigrationsReadOnly({
-        mode: "doctor",
-        candidate: candidateAt(fixture.root),
-        snapshot: createCallerModeSnapshot(fixture),
-        env: fixture.env,
-      });
-      expect(updatedPlan.snapshot.stateDigest).not.toBe(plan.snapshot.stateDigest);
-    } finally {
-      databases.forEach((database) => database.close());
-    }
   });
 
   it("defers an absent named-profile workspace until its external path is bound", async () => {
@@ -806,22 +757,23 @@ describe("legacy state migration caller mode", () => {
       // oxlint-disable-next-line typescript/unbound-method
       const originalPrepare = DatabaseSync.prototype.prepare;
       const externalQueries: string[] = [];
-      vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(
-        function (this: DatabaseSync, sql) {
-          const databases = originalPrepare.call(this, "PRAGMA database_list").all() as Array<{
-            file?: unknown;
-          }>;
-          if (
-            databases.some(
-              (entry) =>
-                typeof entry.file === "string" && path.resolve(entry.file) === externalDatabasePath,
-            )
-          ) {
-            externalQueries.push(sql);
-          }
-          return originalPrepare.call(this, sql);
-        },
-      );
+      vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+        this: DatabaseSync,
+        sql,
+      ) {
+        const databases = originalPrepare.call(this, "PRAGMA database_list").all() as Array<{
+          file?: unknown;
+        }>;
+        if (
+          databases.some(
+            (entry) =>
+              typeof entry.file === "string" && path.resolve(entry.file) === externalDatabasePath,
+          )
+        ) {
+          externalQueries.push(sql);
+        }
+        return originalPrepare.call(this, sql);
+      });
       const plan = await planLegacyStateMigrationsReadOnly({
         mode: "doctor",
         candidate: candidateAt(fixture.root),

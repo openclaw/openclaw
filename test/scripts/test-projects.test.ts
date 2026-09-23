@@ -14,6 +14,7 @@ import {
 import { resolveDefaultVitestNoOutputTimeoutMs } from "../../scripts/lib/vitest-process-env.mts";
 import { resolveVitestRuntimeCliSelections } from "../../scripts/lib/vitest-runtime-selection.mts";
 import { resolveShardTimingKey } from "../../scripts/lib/vitest-shard-metadata.mts";
+import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
 import {
   applyDefaultVitestCachePaths,
   applyDefaultVitestNoOutputTimeout,
@@ -37,6 +38,10 @@ import {
   withRetryNoOutputTimeout,
   writeVitestIncludeFile,
 } from "../../scripts/test-projects.test-support.mts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { withEnv } from "../../src/test-utils/env.js";
 import { listGitTrackedFiles, toRepoPath } from "../../src/test-utils/repo-files.js";
 import { agentVitestProjectOwners } from "../vitest/vitest.agents-paths.mjs";
@@ -101,9 +106,19 @@ describe("test runtime prerequisites", () => {
       ["extensions/telegram/src/sticker-cache.selection.test.ts"],
       "runtime",
     ],
+    [
+      "Telegram native sticker pipeline",
+      ["extensions/telegram/src/bot.create-telegram-bot.native-pipeline.test.ts"],
+      "runtime",
+    ],
     ["Telegram polling runtime", ["extensions/telegram/src/polling-session.test.ts"], "runtime"],
     ["Telegram config", ["test/vitest/vitest.extension-telegram.config.ts"], "runtime"],
     ["ordinary Telegram test", ["extensions/telegram/src/sequential-key.test.ts"], undefined],
+    [
+      "ordinary Telegram worker test",
+      ["extensions/telegram/src/message-dispatch-dedupe.test.ts"],
+      undefined,
+    ],
     ["all plugins", ["extensions"], "private-qa"],
     ["full local suite", [], "private-qa"],
     ["ACP CLI process", ["src/cli/acp-cli-exit.process.test.ts"], "runtime"],
@@ -939,7 +954,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("routes the Vitest fork patch and its fixture to lifecycle proof", () => {
     expectChangedTargets(
-      ["patches/vitest@5.0.0.patch"],
+      ["patches/vitest@5.0.1.patch"],
       [
         "test/scripts/run-vitest-profile.test.ts",
         "test/scripts/run-vitest-state-cleanup.test.ts",
@@ -3206,10 +3221,15 @@ describe("scripts/test-projects changed-target routing", () => {
       withTinyFileTree({}, (tempDir) => {
         const result = spawnSync(
           process.execPath,
-          ["--import", "tsx", "scripts/test-projects.mts", helpFlag],
+          [
+            ...resolveRuntimeWorkerArgv(
+              resolveRuntimeWorkerUrl(scriptModuleEntrypoints.testProjects),
+            ),
+            helpFlag,
+          ],
           {
             encoding: "utf8",
-            // Own the child's tsx cache so unrelated host transforms cannot delay help.
+            // Keep the native help probe inside its invocation-owned temporary directory.
             env: { ...process.env, TMPDIR: tempDir, TMP: tempDir, TEMP: tempDir },
             timeout: 5_000,
           },
@@ -3326,8 +3346,14 @@ describe("scripts/test-projects changed-target routing", () => {
     },
     {
       title: "routes fake-timer unit-fast tests to the serial fake-timer lane",
-      target: "src/acp/control-plane/manager.test.ts",
+      target: "src/acp/translator.stop-reason.test.ts",
       config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+      includePattern: "src/acp/translator.stop-reason.test.ts",
+    },
+    {
+      title: "routes ACP session signal tests to the host broker lane",
+      target: "src/acp/control-plane/manager.test.ts",
+      config: "test/vitest/vitest.infra.config.ts",
       includePattern: "src/acp/control-plane/manager.test.ts",
     },
   ])("$title", ({ target, config, includePattern }) => {

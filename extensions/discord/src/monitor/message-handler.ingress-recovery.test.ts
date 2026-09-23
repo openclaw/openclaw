@@ -17,6 +17,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resolveIngressRetryDelayMs } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildDiscordInboundJob } from "./inbound-job.js";
 import { createDiscordIngressMonitor, type DiscordIngressLifecycle } from "./ingress.js";
@@ -512,6 +513,76 @@ describe("Discord durable ingress settlement", () => {
             text: "reply from rebuilt route",
           }));
           const deliver = vi.fn(async (_payload: { text?: string }) => {});
+          const attempts = outcome === "replacement" ? 2 : DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS;
+          const committedDispositions = Array.from({ length: attempts }, () =>
+            createDeferred<void>(),
+          );
+          for (const disposition of committedDispositions) {
+            void disposition.promise.catch(() => {});
+          }
+          const dispositionObservers: Promise<void>[] = [];
+          let dispositionCount = 0;
+          let dispositionError: Error | undefined;
+          const rejectDisposition = (error: unknown) => {
+            dispositionError ??=
+              error instanceof Error
+                ? error
+                : new Error("Ingress disposition failed", { cause: error });
+            for (const disposition of committedDispositions) {
+              disposition.reject(dispositionError);
+            }
+          };
+          const observeDisposition = (
+            kind: "release" | "complete" | "fail",
+            ref: Parameters<DiscordQueue["release"]>[0],
+            promise: Promise<boolean>,
+            recordAttempt = true,
+          ) => {
+            if ((typeof ref === "string" ? ref : ref.id) !== messageId) {
+              return promise;
+            }
+            const index = dispositionCount++;
+            const disposition = committedDispositions[index];
+            const expectedKind =
+              index < attempts - 1 ? "release" : outcome === "replacement" ? "complete" : "fail";
+            dispositionObservers.push(
+              promise.then((committed) => {
+                if (!disposition || kind !== expectedKind || !committed || !recordAttempt) {
+                  rejectDisposition(
+                    new Error(
+                      `Unexpected ingress disposition ${index + 1}: ${kind}, committed=${committed}, recordAttempt=${recordAttempt}`,
+                    ),
+                  );
+                  return;
+                }
+                disposition.resolve();
+              }, rejectDisposition),
+            );
+            return promise;
+          };
+          const release = queue.release.bind(queue);
+          const releaseSpy = vi
+            .spyOn(queue, "release")
+            .mockImplementation((ref, options) =>
+              observeDisposition(
+                "release",
+                ref,
+                release(ref, options),
+                options?.recordAttempt !== false,
+              ),
+            );
+          const complete = queue.complete.bind(queue);
+          const completeSpy = vi
+            .spyOn(queue, "complete")
+            .mockImplementation((ref, options) =>
+              observeDisposition("complete", ref, complete(ref, options)),
+            );
+          const fail = queue.fail.bind(queue);
+          const failSpy = vi
+            .spyOn(queue, "fail")
+            .mockImplementation((ref, options) =>
+              observeDisposition("fail", ref, fail(ref, options)),
+            );
           const handler = createDiscordMessageHandler({
             ...params,
             cfg,
@@ -570,9 +641,18 @@ describe("Discord durable ingress settlement", () => {
           });
           try {
             await handler(rawMessage(messageId, channelId, Date.now()) as never, {} as never);
-            const attempts = outcome === "replacement" ? 2 : DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS;
             for (let attempt = 0; attempt < attempts; attempt += 1) {
-              await vi.advanceTimersByTimeAsync(3 * 60_000);
+              // Admission starts detached dispatch; only a committed disposition permits retry time.
+              await committedDispositions[attempt]!.promise;
+              if (attempt < attempts - 1) {
+                const pending = await queue.listPending();
+                expect(pending).toHaveLength(1);
+                expect(pending[0]).toMatchObject({ id: messageId, attempts: attempt + 1 });
+                expect(await queue.listClaims()).toEqual([]);
+                const retryDelay = resolveIngressRetryDelayMs(pending[0]!, undefined, Date.now());
+                expect(retryDelay).toBeGreaterThan(0);
+                await vi.advanceTimersByTimeAsync(retryDelay);
+              }
             }
             await vi.waitFor(async () => {
               expect(await queue.listPending()).toEqual([]);
@@ -609,9 +689,18 @@ describe("Discord durable ingress settlement", () => {
               });
             }
           } finally {
-            await handler.deactivate();
-            unregisterSessionBindingAdapter({ ...conversation, adapter });
+            try {
+              await handler.deactivate();
+            } finally {
+              await Promise.all(dispositionObservers);
+              releaseSpy.mockRestore();
+              completeSpy.mockRestore();
+              failSpy.mockRestore();
+              unregisterSessionBindingAdapter({ ...conversation, adapter });
+            }
           }
+          expect(dispositionError).toBeUndefined();
+          expect(dispositionCount).toBe(attempts);
         });
       } finally {
         vi.useRealTimers();

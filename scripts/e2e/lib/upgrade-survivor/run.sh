@@ -1422,10 +1422,6 @@ resolve_candidate_version() {
     echo "could not resolve candidate version from $CANDIDATE_KIND:$CANDIDATE_SPEC" >&2
     return 1
   fi
-  OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(
-    node scripts/e2e/lib/package-compat.mjs "$candidate_version"
-  )"
-  export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 }
 
 resolve_candidate_install_mode() {
@@ -1875,8 +1871,7 @@ assert_volume_idempotence() {
   budget="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_VOLUME_IDEMPOTENCE_BUDGET_SECONDS 60)"
   echo "SQLite volume idempotence doctor completed in ${idempotence_seconds}s (budget ${budget}s)."
   if [ "$idempotence_seconds" -gt "$budget" ]; then
-    echo "SQLite volume idempotence exceeded budget: ${idempotence_seconds}s > ${budget}s" >&2
-    return 1
+    node scripts/lib/check-limits.mts scripts/e2e/lib/upgrade-survivor/run.sh "Upgrade idempotence budget" "SQLite volume idempotence exceeded budget: ${idempotence_seconds}s > ${budget}s" || return "$?"
   fi
   OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE="$survival_assert_stage" \
     node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
@@ -1966,9 +1961,10 @@ start_gateway() {
   ready_epoch="$(node -e "process.stdout.write(String(Date.now()))")" || return "$?"
   start_seconds=$(((ready_epoch - start_epoch + 999) / 1000))
   if [ "$start_seconds" -gt "$budget" ]; then
-    echo "gateway startup exceeded survivor budget: ${start_seconds}s > ${budget}s" >&2
-    openclaw_e2e_print_log "$GATEWAY_LOG" >&2
-    return 1
+    if ! node scripts/lib/check-limits.mts scripts/e2e/lib/upgrade-survivor/run.sh "Upgrade startup budget" "gateway startup exceeded survivor budget: ${start_seconds}s > ${budget}s"; then
+      openclaw_e2e_print_log "$GATEWAY_LOG" >&2
+      return 1
+    fi
   fi
 }
 
@@ -2008,9 +2004,10 @@ check_gateway_status() {
   status_end="$(node -e "process.stdout.write(String(Date.now()))")"
   status_seconds=$(((status_end - status_start + 999) / 1000))
   if [ "$status_seconds" -gt "$budget" ]; then
-    echo "gateway status exceeded survivor budget: ${status_seconds}s > ${budget}s" >&2
-    openclaw_e2e_print_log "$STATUS_JSON" >&2
-    return 1
+    if ! node scripts/lib/check-limits.mts scripts/e2e/lib/upgrade-survivor/run.sh "Upgrade status budget" "gateway status exceeded survivor budget: ${status_seconds}s > ${budget}s"; then
+      openclaw_e2e_print_log "$STATUS_JSON" >&2
+      return 1
+    fi
   fi
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-status-json "$STATUS_JSON"
 }

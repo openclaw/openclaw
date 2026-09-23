@@ -206,6 +206,12 @@ const runtimeConsumers = [
     mode: "runtime" as const,
     dir: "extensions",
   })),
+  {
+    file: "extensions/telegram/src/bot.create-telegram-bot.native-pipeline.test.ts",
+    configs: ["test/vitest/vitest.extension-database-workers.config.ts"],
+    mode: "runtime",
+    dir: "extensions",
+  },
   ...[
     "src/cli/acp-cli-exit.process.test.ts",
     "src/cli/update-dry-run-state.process.test.ts",
@@ -405,7 +411,7 @@ export async function prepareVitestRuntime(
   });
 }
 
-export function isE2eBuildSkipped(env: NodeJS.ProcessEnv) {
+function isE2eBuildSkipped(env: NodeJS.ProcessEnv) {
   return env.OPENCLAW_E2E_SKIP_BUILD === "1" || env.OPENCLAW_E2E_USE_PREBUILT_DIST === "1";
 }
 
