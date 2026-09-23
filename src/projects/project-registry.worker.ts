@@ -67,25 +67,26 @@ export function executeProjectRegistryCommand(
   }
   ensureProjectRegistrySchema(options);
   const db = options.database.db;
-  switch (command.type) {
-    case "projects.findRoot":
-      return resolveRecordedProjectRootInDatabase(db, command.input.repoRoot);
-    case "projects.list":
-      return listProjectRegistryInDatabase(db);
-    case "projects.resolve":
-      return resolveProjectRegistryInDatabase(db, command.input.id);
-    case "projects.insert":
-      return runCheckoutLeaseTransaction(command.input, options, "projects.registry.insert", (tx) =>
-        insertProjectRegistryInDatabase(tx, command.input.project),
-      );
-    case "projects.resolveRefreshOwner":
-      return runCheckoutLeaseTransaction(
-        command.input,
-        options,
-        "projects.registry.refresh-owner.resolve",
-        (tx) => resolveProjectCloneRefreshOwnerInDatabase(tx, command.input.project),
-      );
+  if (command.type === "projects.findRoot") {
+    return resolveRecordedProjectRootInDatabase(db, command.input.repoRoot);
   }
+  if (command.type === "projects.list") {
+    return listProjectRegistryInDatabase(db);
+  }
+  if (command.type === "projects.resolve") {
+    return resolveProjectRegistryInDatabase(db, command.input.id);
+  }
+  if (command.type === "projects.insert") {
+    return runCheckoutLeaseTransaction(command.input, options, "projects.registry.insert", (tx) =>
+      insertProjectRegistryInDatabase(tx, command.input.project),
+    );
+  }
+  return runCheckoutLeaseTransaction(
+    command.input,
+    options,
+    "projects.registry.refresh-owner.resolve",
+    (tx) => resolveProjectCloneRefreshOwnerInDatabase(tx, command.input.project),
+  );
 }
 
 // Registry writes are admitted only under the checkout lease for the same repo root.
