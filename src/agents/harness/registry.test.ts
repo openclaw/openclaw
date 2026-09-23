@@ -1,6 +1,7 @@
 // Exercises agent harness registration, ownership metadata, and selection handoff.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { markPluginRegistryRetired } from "../../plugins/registry-lifecycle.js";
 import {
@@ -10,6 +11,7 @@ import {
   withPluginRegistrationContext,
 } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import {
   clearAgentHarnesses,
   disposeRegisteredAgentHarnesses,
@@ -276,6 +278,40 @@ describe("agent harness registry", () => {
     await disposeRegisteredAgentHarnesses();
 
     expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("admits plugin-owned harness disposal through cleanup authority", async () => {
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "cleanup-harness", status: "loaded" });
+    registry.plugins.push(record);
+
+    const instance = new PluginInstance(record.id, { record, registry });
+    const cleanup = vi.fn();
+    const harness = instance.wrap({
+      ...makeHarness("cleanup-harness"),
+      dispose: async () => {
+        instance.run(() => cleanup());
+      },
+    });
+
+    const snapshot = captureActivePluginRegistrySnapshot();
+    try {
+      setActivePluginRegistry(registry);
+      withPluginRegistrationContext(registry, record.id, () => {
+        registerAgentHarness(harness);
+      });
+
+      await instance.drain();
+
+      expect(() => instance.run(() => undefined)).toThrow("reloaded or disabled");
+
+      await disposeRegisteredAgentHarnesses();
+
+      expect(cleanup).toHaveBeenCalledOnce();
+    } finally {
+      restoreActivePluginRegistrySnapshot(snapshot);
+      await instance.dispose();
+    }
   });
 
   it("keeps model-specific harnesses behind plugin registration in auto mode", () => {

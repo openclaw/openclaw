@@ -3,6 +3,7 @@
  */
 import { retainCliRegistryHarnesses } from "../../cli/runtime-cleanup-scope.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { getPluginValueInstance, runPluginCleanup } from "../../plugins/plugin-instance-scope.js";
 import { isPluginRegistryRetired } from "../../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import {
@@ -53,15 +54,18 @@ export function registerAgentHarness(
   ) {
     throw new Error("native compaction requires the registry-owned Codex harness");
   }
+  const normalizedHarness = {
+    ...harness,
+    id,
+    pluginId: harness.pluginId ?? (pluginId === "core" ? undefined : pluginId),
+  };
+  const ownedHarness =
+    getPluginValueInstance(harness)?.adopt(normalizedHarness) ?? normalizedHarness;
   const entry = {
     pluginId,
     source: "runtime",
     ...(options?.nativeCompaction ? { nativeCompaction: options.nativeCompaction } : {}),
-    harness: {
-      ...harness,
-      id,
-      pluginId: harness.pluginId ?? (pluginId === "core" ? undefined : pluginId),
-    },
+    harness: ownedHarness,
   };
   const existingIndex = harnesses.findIndex((registration) => registration.harness.id === id);
   if (existingIndex !== -1) {
@@ -169,6 +173,8 @@ async function disposeAgentHarness(harness: AgentHarness): Promise<void> {
 /** Calls each registered harness dispose hook during registry shutdown or reload. */
 export async function disposeRegisteredAgentHarnesses(): Promise<void> {
   await Promise.all(
-    listRegisteredAgentHarnesses().map(({ harness }) => disposeAgentHarness(harness)),
+    listRegisteredAgentHarnesses().map(({ harness }) =>
+      runPluginCleanup(harness, () => disposeAgentHarness(harness)),
+    ),
   );
 }
