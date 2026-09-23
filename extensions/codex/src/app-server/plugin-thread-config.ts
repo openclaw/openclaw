@@ -5,6 +5,7 @@
 import crypto from "node:crypto";
 import { codexAppIdentityKey } from "./app-identity.js";
 import { defaultCodexAppInventoryCache, CodexAppInventoryCache } from "./app-inventory-cache.js";
+import { stringifyCodexPolicy } from "./config-policy-json.js";
 import {
   resolveCodexPluginsPolicy,
   type CodexPluginDestructiveApprovalMode,
@@ -180,34 +181,8 @@ export async function buildCodexPluginThreadConfig(
     });
   }
 
-  let inventory =
-    policy.pluginPolicies.length > 0
-      ? await readCodexPluginInventory({
-          pluginConfig: params.pluginConfig,
-          policy,
-          request: threadRequest,
-          appCache,
-          appCacheKey: params.appCacheKey,
-          appInventoryCacheKey: threadAppCacheKey,
-          configCwd: params.configCwd,
-          metadataCache: params.metadataCache,
-          nowMs: params.nowMs,
-          suppressAppInventoryRefresh: true,
-        })
-      : emptyCodexPluginInventory(policy);
-  const appInventoryRefreshDeferredForActivation =
-    inventory.records.some((record) => record.activationRequired) &&
-    shouldRefreshMissingAppInventory(params, policy, inventory);
-  if (shouldWaitForInitialAppInventory(params, policy, inventory)) {
-    await refreshCodexPluginAppInventory(params, appCache, {
-      // OpenClaw is missing its process-local snapshot, but Codex may already
-      // have a current inventory. Avoid rebuilding the entire remote catalog
-      // during thread startup; post-install and readiness repair still force.
-      forceRefetch: false,
-      reason: "initial_missing",
-      targetAppIds: collectCodexPluginOwnedAppIds(inventory),
-    });
-    inventory = await readCodexPluginInventory({
+  const readInventory = (suppressAppInventoryRefresh?: true) =>
+    readCodexPluginInventory({
       pluginConfig: params.pluginConfig,
       policy,
       request: threadRequest,
@@ -217,10 +192,33 @@ export async function buildCodexPluginThreadConfig(
       configCwd: params.configCwd,
       metadataCache: params.metadataCache,
       nowMs: params.nowMs,
+      suppressAppInventoryRefresh,
     });
+  let inventory =
+    policy.pluginPolicies.length > 0
+      ? await readInventory(true)
+      : emptyCodexPluginInventory(policy);
+  const refreshInventory = async (options: { forceRefetch: boolean; reason: string }) => {
+    await refreshCodexPluginAppInventory(params, appCache, {
+      ...options,
+      targetAppIds: collectCodexPluginOwnedAppIds(inventory),
+    });
+    inventory = await readInventory();
     inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
       pluginConfig: params.pluginConfig,
       appCacheKey: params.appCacheKey,
+    });
+  };
+  const appInventoryRefreshDeferredForActivation =
+    inventory.records.some((record) => record.activationRequired) &&
+    shouldRefreshMissingAppInventory(params, policy, inventory);
+  if (shouldWaitForInitialAppInventory(params, policy, inventory)) {
+    await refreshInventory({
+      // OpenClaw is missing its process-local snapshot, but Codex may already
+      // have a current inventory. Avoid rebuilding the entire remote catalog
+      // during thread startup; post-install and readiness repair still force.
+      forceRefetch: false,
+      reason: "initial_missing",
     });
   }
   const activationDiagnostics: CodexPluginThreadConfigDiagnostic[] = [];
@@ -259,47 +257,15 @@ export async function buildCodexPluginThreadConfig(
     !postInstallRefreshRequired &&
     shouldRefreshMissingAppInventory(params, policy, inventory);
   if (postInstallRefreshRequired || deferredMissingRefreshRequired) {
-    await refreshCodexPluginAppInventory(params, appCache, {
+    await refreshInventory({
       forceRefetch: true,
       reason: postInstallRefreshRequired ? "post_install" : "deferred_missing",
-      targetAppIds: collectCodexPluginOwnedAppIds(inventory),
-    });
-    inventory = await readCodexPluginInventory({
-      pluginConfig: params.pluginConfig,
-      policy,
-      request: threadRequest,
-      appCache,
-      appCacheKey: params.appCacheKey,
-      appInventoryCacheKey: threadAppCacheKey,
-      configCwd: params.configCwd,
-      metadataCache: params.metadataCache,
-      nowMs: params.nowMs,
-    });
-    inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
-      pluginConfig: params.pluginConfig,
-      appCacheKey: params.appCacheKey,
     });
   }
   if (shouldForceRefreshCodexNotReadyPluginApps(params, policy, inventory)) {
-    await refreshCodexPluginAppInventory(params, appCache, {
+    await refreshInventory({
       forceRefetch: true,
       reason: "not_ready_plugin_apps",
-      targetAppIds: collectCodexPluginOwnedAppIds(inventory),
-    });
-    inventory = await readCodexPluginInventory({
-      pluginConfig: params.pluginConfig,
-      policy,
-      request: threadRequest,
-      appCache,
-      appCacheKey: params.appCacheKey,
-      appInventoryCacheKey: threadAppCacheKey,
-      configCwd: params.configCwd,
-      metadataCache: params.metadataCache,
-      nowMs: params.nowMs,
-    });
-    inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
-      pluginConfig: params.pluginConfig,
-      appCacheKey: params.appCacheKey,
     });
   }
 
@@ -729,20 +695,5 @@ function mergeJsonObjects(left: JsonObject, right: JsonObject): JsonObject {
 }
 
 function fingerprintJson(value: JsonValue): string {
-  return crypto.createHash("sha256").update(stringifyCodexPluginPolicy(value)).digest("hex");
-}
-
-export function stringifyCodexPluginPolicy(value: unknown): string {
-  // Fingerprints must be process-stable across object insertion order so prompt
-  // cache and thread-binding comparisons do not churn between runs.
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stringifyCodexPluginPolicy(item)).join(",")}]`;
-  }
-  if (value && typeof value === "object") {
-    return `{${Object.entries(value)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => `${JSON.stringify(key)}:${stringifyCodexPluginPolicy(item)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
+  return crypto.createHash("sha256").update(stringifyCodexPolicy(value)).digest("hex");
 }
