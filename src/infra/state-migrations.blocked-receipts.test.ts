@@ -242,11 +242,9 @@ describe("blocked migration receipt provenance", () => {
         database.exec("PRAGMA user_version = 999");
         database.close();
       } else {
-        vi.spyOn(stateDatabase, "repairOpenClawStateDatabaseSchemaIfNeeded").mockImplementationOnce(
-          () => {
-            throw new Error(failure.message);
-          },
-        );
+        vi.spyOn(stateDatabase, "prepareOpenClawStateDatabaseSchema").mockImplementationOnce(() => {
+          throw new Error(failure.message);
+        });
       }
       const receipts: LegacyStateMigrationStepReceipt[] = [];
 

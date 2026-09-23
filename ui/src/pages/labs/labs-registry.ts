@@ -72,6 +72,19 @@ function readConfiguredFeatureEnabled(
 
 export const LAB_FEATURES = [
   {
+    id: "decisionAssistance",
+    title: () => t("labsPage.decisionAssistance.title"),
+    description: () => t("labsPage.decisionAssistance.description"),
+    docsUrl: "https://docs.openclaw.ai/concepts/experimental-features#decision-assistance",
+    configPath: ["agents", "defaults", "experimental", "decisionAssistance"],
+    onValue: true,
+    offValue: false,
+    activeValues: [true],
+    readEnabled: null,
+    enableAlso: null,
+    resetScope: "gate",
+  },
+  {
     id: "codeMode",
     title: () => t("labsPage.codeMode.title"),
     description: () => t("labsPage.codeMode.description"),

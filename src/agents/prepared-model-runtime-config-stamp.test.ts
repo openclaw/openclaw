@@ -121,7 +121,7 @@ describe("prepared model runtime config stamps", () => {
         },
       },
     });
-    mocks.resolveAgentEffectiveModelPrimary.mockReturnValue("custom/model");
+    mocks.resolveNativeModelPrimary.mockReturnValue("custom/model");
     mocks.configuredWorkspaces.set("default", fixture.state.workspaceDir);
     mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
     await refreshPreparedModelRuntimeSnapshots(config, {

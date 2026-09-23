@@ -6,7 +6,7 @@ import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generati
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { normalizeOptionalAgentRuntimeId, isDefaultAgentRuntimeId } from "../agent-runtime-id.js";
 import {
-  resolveAgentEffectiveModelPrimary,
+  resolveNativeModelPrimary,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agent-scope.js";
@@ -409,7 +409,7 @@ export function augmentPreparedModelCatalogWithAgentHarness(params: {
     agentDir,
     workspaceDir,
     defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: resolveAgentEffectiveModelPrimary(params.input.config, agentId),
+    defaultModel: resolveNativeModelPrimary(params.input.config, agentId),
     nativeSelection: params.nativeSelection,
     snapshot: params.snapshot,
     preparedSnapshot: params.preparedSnapshot,

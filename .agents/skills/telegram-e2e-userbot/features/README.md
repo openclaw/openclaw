@@ -86,6 +86,27 @@ held, then release it after the behavior checkpoint:
 }
 ```
 
+For a definite transport rejection, use `telegramApiReject`. It rejects one
+matching request before forwarding it to Telegram, with a non-retriable synthetic
+Bot API 400. `skip` counts matching requests; optional `bodyIncludes` matches the
+raw request body, so an ASCII final marker can select the final send rather than
+the progress message. The summary records method, occurrence, and
+`upstreamForwarded: false` in `scenario.telegramApiRequestRejections`; an empty
+list means the fault did not fire and cannot support a failure claim.
+
+```json
+{
+  "actions": [
+    { "type": "telegramApiReject", "method": "sendMessage", "bodyIncludes": "FINAL_MARKER" },
+    { "type": "send", "atMs": 1000, "text": "Reply exactly FINAL_MARKER" }
+  ]
+}
+```
+
+Select `deleteMessage` without a body filter to reject the next cleanup deletion.
+Use the existing hold/release controls for accepted-but-unacknowledged delivery;
+a pre-upstream rejection does not model uncertainty.
+
 Follow-up drain controls hold one session callback at a known point, then
 release it after the behavior checkpoint:
 

@@ -575,7 +575,13 @@ export function projectChatTranscript(
       }
     }
   }
-  const realtimeConversation = renderRealtimeTalkConversation(props);
+  const persistedIds = new Set(props.messages.map(persistedMessageEntryId));
+  const realtimeConversation = renderRealtimeTalkConversation({
+    ...props,
+    realtimeTalkConversation: props.realtimeTalkConversation?.filter(
+      (entry) => !entry.transcriptId || !persistedIds.has(entry.transcriptId),
+    ),
+  });
   if (realtimeConversation !== nothing) {
     transcriptRows.push({
       kind: "content",

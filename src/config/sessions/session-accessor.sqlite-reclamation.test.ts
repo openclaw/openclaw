@@ -843,7 +843,7 @@ test("a synchronous writer reports actual reclamation service time inside its BE
       })
       .filter(
         (record) =>
-          record.message === "slow SQLite transaction lock wait" &&
+          record.message === "slow SQLite transaction step" &&
           isRecord(record["1"]) &&
           record["1"].operation === "agent.write",
       );

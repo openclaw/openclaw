@@ -331,9 +331,7 @@ suite.define(() => {
             stage = "open Sessions";
             await page.goto(new URL("/sessions", url).href);
             await waitForControlUiGatewayReady(page);
-            const session = page
-              .locator("tr[aria-controls]")
-              .filter({ hasText: "Thinking status" });
+            const session = page.getByRole("row").filter({ hasText: "Thinking status" });
             await session.waitFor({ state: "visible" });
             await session.press("Enter");
             const thinking = page.locator(".session-details-row select").first();

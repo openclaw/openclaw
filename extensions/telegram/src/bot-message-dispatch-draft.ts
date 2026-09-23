@@ -266,7 +266,7 @@ export async function rotateAnswerLaneForNewMessage(turn: Turn) {
   await retireAnswerLane(turn);
 }
 
-export async function rotateAnswerLaneAfterToolProgress(turn: Turn): Promise<boolean> {
+async function rotateAnswerLaneAfterToolProgress(turn: Turn): Promise<boolean> {
   if (!turn.activeAnswerDraftIsToolProgressOnly) {
     return false;
   }
@@ -580,19 +580,9 @@ export function beginDraftQueuedFollowup(turn: Turn): void {
 }
 
 export async function cleanupDrafts(turn: Turn, superseded: boolean): Promise<void> {
-  for (const lane of [turn.answerLane, turn.reasoningLane]) {
-    const stream = lane.stream;
-    if (!stream) {
-      continue;
-    }
-    if (superseded) {
-      await stream.discard();
-    } else if (lane.finalized) {
-      await stream.stop();
-    } else {
-      await stream.clear();
-    }
-  }
+  await turn.previewLifecycle.cleanup({
+    failed: superseded || turn.dispatchError != null || turn.agentRunFailed,
+  });
 }
 
 export const waitForDraftEvents = (turn: Turn) => turn.draftEventQueue;

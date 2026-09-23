@@ -68,6 +68,22 @@ const PACKAGE_BUILDER_NODE_SCRIPT = `node() {
 }
 export -f node`;
 
+const PACKAGE_BUILD_CONTEXT_PROBE_SCRIPT = `docker_build_run() {
+  local build_context=""
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      openclaw_package=*)
+        build_context="\${arg#openclaw_package=}"
+        ;;
+    esac
+  done
+
+  test -n "$build_context"
+  test -f "$build_context/openclaw-current.tgz"
+  printf "%s\\n" "$build_context" >"$TMPDIR/build-context-seen"
+}`;
+
 const PASSTHROUGH_TIMEOUT_SCRIPT = `#!/usr/bin/env bash
 case "$1" in
   --kill-after=1s)
@@ -1881,21 +1897,7 @@ ${PACKAGE_BUILDER_NODE_SCRIPT}
 
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
-docker_build_run() {
-  local build_context=""
-  local arg
-  for arg in "$@"; do
-    case "$arg" in
-      openclaw_package=*)
-        build_context="\${arg#openclaw_package=}"
-        ;;
-    esac
-  done
-
-  test -n "$build_context"
-  test -f "$build_context/openclaw-current.tgz"
-  printf "%s\\n" "$build_context" >"$TMPDIR/build-context-seen"
-}
+${PACKAGE_BUILD_CONTEXT_PROBE_SCRIPT}
 
 docker_e2e_build_or_reuse \\
   openclaw-test-image \\
@@ -1928,21 +1930,7 @@ export OPENCLAW_CURRENT_PACKAGE_TGZ
 
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
-docker_build_run() {
-  local build_context=""
-  local arg
-  for arg in "$@"; do
-    case "$arg" in
-      openclaw_package=*)
-        build_context="\${arg#openclaw_package=}"
-        ;;
-    esac
-  done
-
-  test -n "$build_context"
-  test -f "$build_context/openclaw-current.tgz"
-  printf "%s\\n" "$build_context" >"$TMPDIR/build-context-seen"
-}
+${PACKAGE_BUILD_CONTEXT_PROBE_SCRIPT}
 
 docker_e2e_build_or_reuse \\
   openclaw-test-image \\

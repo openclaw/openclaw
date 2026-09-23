@@ -7,6 +7,7 @@ import {
   UPDATE_RUN_ID_ENV,
   readControlPlaneUpdateSentinelMeta,
 } from "../../infra/update-control-plane-sentinel.js";
+import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { createManagedHandoffProcessIdentityReader } from "../../infra/update-managed-service-handoff-process.js";
@@ -263,19 +264,11 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
     process.env[POST_CORE_UPDATE_RESULT_PATH_ENV],
   );
   assertCurrent?.();
-  await withPluginLifecycleLease({ assertCurrent }, async (lease) => {
-    await completeSourceUpdateRuntime({
-      root: params.root,
-      timeoutMs: params.timeoutMs,
-      lease,
-      beforePersistentEffect: assertCurrent,
-    });
-  });
-  assertCurrent?.();
   let maintenance: Awaited<
     ReturnType<typeof import("../../commands/doctor-maintenance.js").beginDoctorMaintenance>
   >;
   let outcome: { pluginUpdate: PostCorePluginUpdateResult } | { error: unknown };
+  let producedPluginUpdate: PostCorePluginUpdateResult | undefined;
   try {
     outcome = {
       pluginUpdate: await withCommandProcessScope(async () => {
@@ -307,17 +300,28 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
           );
           recordDoctorWarnings();
         };
-        if (!parentOwnsCompletion) {
-          const { beginDoctorMaintenance } = await import("../../commands/doctor-maintenance.js");
-          assertCurrent?.();
-          maintenance = await beginDoctorMaintenance({
+        const { beginDoctorMaintenance } = await import("../../commands/doctor-maintenance.js");
+        assertCurrent?.();
+        maintenance = await beginDoctorMaintenance({
+          // Parent-owned completion retains native service custody, not state admission.
+          root: parentOwnsCompletion ? null : params.root,
+          options: { repair: true, nonInteractive: true, json: params.opts.json },
+          runtime: { ...defaultRuntime, log: defaultRuntime.error },
+          ...(params.opts.run ? { assertCurrent } : {}),
+        });
+        assertCurrent?.();
+        // Each fresh Doctor holds its own database fences after admission.
+        await maintenance?.releaseState();
+        await withPluginLifecycleLease({ assertCurrent }, async (lease) => {
+          await completeSourceUpdateRuntime({
             root: params.root,
-            options: { repair: true, nonInteractive: true, json: params.opts.json },
-            runtime: { ...defaultRuntime, log: defaultRuntime.error },
+            timeoutMs: params.timeoutMs,
+            lease,
+            beforePersistentEffect: assertCurrent,
           });
-          assertCurrent?.();
-          // The parent parks the service; each fresh Doctor holds its own database fences.
-          await maintenance?.releaseState();
+        });
+        assertCurrent?.();
+        if (!parentOwnsCompletion) {
           // Shipped parents expect the child to prepare migration plugins and settle
           // Doctor before plugin config writes; Doctor owns that preparation and its guards.
           const warning = await runUpdateFinalizationDoctorInFreshProcess({
@@ -362,6 +366,7 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
             : undefined,
           assertCurrent,
         });
+        producedPluginUpdate = pluginUpdate;
         // Shipped parents can stop the child as soon as its result appears.
         // Their completion stays here, after the producer releases its lease.
         if (!parentOwnsCompletion) {
@@ -394,7 +399,36 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
       }),
     };
   } catch (error) {
-    outcome = { error };
+    outcome =
+      error instanceof DoctorMaintenanceRefusalError && error.refusal.kind === "deferred"
+        ? {
+            pluginUpdate: {
+              ...(producedPluginUpdate ?? {
+                changed: false,
+                sync: {
+                  changed: false,
+                  switchedToBundled: [],
+                  switchedToNpm: [],
+                  warnings: [],
+                  errors: [],
+                },
+                npm: { changed: false, outcomes: [] },
+                integrityDrifts: [],
+              }),
+              status: "warning",
+              warnings: [
+                ...(producedPluginUpdate?.warnings ?? []),
+                {
+                  reason: "doctor-advisory",
+                  message: error.message,
+                  guidance: [
+                    "After other OpenClaw processes release state, run `openclaw doctor --fix`.",
+                  ],
+                },
+              ],
+            },
+          }
+        : { error };
   }
   // A legacy parent can terminate this child as soon as its result appears.
   // Settle child work and restore service custody before publishing either outcome.
@@ -403,7 +437,9 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
     const failures = "error" in outcome ? [outcome.error] : [];
     for (const restore of [
       async () =>
-        owned.finish((await readConfigFileSnapshot({ skipPluginValidation: true })).config),
+        owned.finish(
+          (await readConfigFileSnapshot({ skipPluginValidation: true, observe: false })).config,
+        ),
       () => owned.release(),
     ]) {
       if (failures.some(hasCommandProcessCleanupError)) {

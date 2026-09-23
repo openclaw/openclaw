@@ -1,6 +1,4 @@
 // Gateway daemon install plan builder, including service env and SecretRef passthrough policy.
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -30,7 +28,7 @@ import {
   readEnvironmentValueSource,
   readManagedServiceEnvKeysFromEnvironment,
 } from "../daemon/service-managed-env.js";
-import { isNonMinimalServicePathEntry } from "../daemon/service-path-policy.js";
+import { mergeServicePath } from "../daemon/service-path-policy.js";
 import {
   resolveManagedGatewayServiceCommand,
   type GatewayServiceCommandConfig,
@@ -438,104 +436,6 @@ function collectPluginConfigSecretRefs(params: {
     context,
   });
   return context.assignments.map((assignment) => assignment.ref);
-}
-
-function mergeServicePath(
-  nextPath: string | undefined,
-  existingPath: string | undefined,
-  tmpDir: string | undefined,
-  platform: NodeJS.Platform,
-): string | undefined {
-  const segments: string[] = [];
-  const seen = new Set<string>();
-  const normalizedTmpDirs = [tmpDir, os.tmpdir()]
-    .map((value) => value?.trim())
-    .filter((value): value is string => Boolean(value))
-    .map((value) => path.resolve(value));
-  const realTmpDirs = normalizedTmpDirs.map((tmpRoot) => {
-    try {
-      return path.normalize(fs.realpathSync.native(tmpRoot));
-    } catch {
-      return tmpRoot;
-    }
-  });
-  const isSameOrChildPath = (candidate: string, parent: string) =>
-    candidate === parent || candidate.startsWith(`${parent}${path.sep}`);
-  const isUnsafeProcPath = (candidate: string) =>
-    candidate === `${path.sep}proc` || candidate.startsWith(`${path.sep}proc${path.sep}`);
-  const realpathExistingPath = (candidate: string): string | undefined => {
-    const parts: string[] = [];
-    let current = candidate;
-    while (current && current !== path.dirname(current)) {
-      try {
-        const realCurrent = path.normalize(fs.realpathSync.native(current));
-        return path.normalize(path.join(realCurrent, ...parts.toReversed()));
-      } catch {
-        parts.push(path.basename(current));
-        current = path.dirname(current);
-      }
-    }
-    try {
-      return path.normalize(path.join(fs.realpathSync.native(current), ...parts.toReversed()));
-    } catch {
-      return undefined;
-    }
-  };
-  const normalizePreservedPathSegment = (segment: string): string | undefined => {
-    if (!path.isAbsolute(segment)) {
-      return undefined;
-    }
-    const normalized = path.normalize(segment);
-    if (isUnsafeProcPath(normalized)) {
-      return undefined;
-    }
-    const cwd = path.resolve(process.cwd());
-    if (isSameOrChildPath(normalized, cwd)) {
-      return undefined;
-    }
-    try {
-      const realSegment = realpathExistingPath(normalized);
-      const realCwd = path.normalize(fs.realpathSync.native(cwd));
-      if (realSegment && isSameOrChildPath(realSegment, realCwd)) {
-        return undefined;
-      }
-    } catch {
-      // Legacy PATH entries may no longer exist; keep filtering best-effort.
-    }
-    return normalized;
-  };
-  const shouldPreserveNormalizedPathSegment = (segment: string) => {
-    if (isNonMinimalServicePathEntry(segment, platform)) {
-      return false;
-    }
-    const resolved = path.resolve(segment);
-    const realResolved = realpathExistingPath(resolved) ?? resolved;
-    return ![...normalizedTmpDirs, ...realTmpDirs].some(
-      (tmpRoot) => isSameOrChildPath(resolved, tmpRoot) || isSameOrChildPath(realResolved, tmpRoot),
-    );
-  };
-  const addPath = (value: string | undefined, options?: { preserve?: boolean }) => {
-    if (typeof value !== "string" || value.trim().length === 0) {
-      return;
-    }
-    for (const segment of value.split(path.delimiter)) {
-      const trimmed = segment.trim();
-      const candidate = options?.preserve ? normalizePreservedPathSegment(trimmed) : trimmed;
-      if (options?.preserve && (!candidate || !shouldPreserveNormalizedPathSegment(candidate))) {
-        continue;
-      }
-      if (!candidate || seen.has(candidate)) {
-        continue;
-      }
-      seen.add(candidate);
-      segments.push(candidate);
-    }
-  };
-  addPath(nextPath);
-  if (platform !== "darwin") {
-    addPath(existingPath, { preserve: true });
-  }
-  return segments.length > 0 ? segments.join(path.delimiter) : undefined;
 }
 
 // Operator opt-in env vars that should survive service regeneration even though

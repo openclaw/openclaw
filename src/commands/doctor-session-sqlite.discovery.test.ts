@@ -6,12 +6,10 @@ import { loadExactSessionEntry } from "../config/sessions/session-accessor.sqlit
 import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
 import { searchSessionTranscriptsReadOnlySync as searchSessionTranscripts } from "../config/sessions/session-transcript-search.js";
 import * as sessionTargets from "../config/sessions/targets.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   readMigrationArtifactIdentity,
   moveMigrationArtifact,
-} from "./doctor-session-sqlite-artifact.js";
+} from "../infra/session-sqlite-migration-artifact.js";
 import {
   createSessionSqliteMigrationRun,
   recordPlannedMigrationMoves,
@@ -19,9 +17,11 @@ import {
   updateMigrationManifestTarget,
   writeSessionSqliteMigrationManifest,
   type SessionSqliteMigrationMove,
-} from "./doctor-session-sqlite-migration-run.js";
-import * as migrationRun from "./doctor-session-sqlite-migration-run.js";
-import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
+} from "../infra/session-sqlite-migration-manifest.js";
+import * as migrationRun from "../infra/session-sqlite-migration-manifest.js";
+import { resolveTargetSqlitePath } from "../infra/session-sqlite-migration-readers.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { collectRecoveryInventory } from "./doctor-session-sqlite-recovery-inventory.js";
 import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restore.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";

@@ -3,13 +3,13 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { prepareGithubIssue } from "../infra/github-issue.js";
+import * as migrationRun from "../infra/session-sqlite-migration-manifest.js";
 import {
   claimSessionSqliteMigrationGithubIssue,
   clearSessionSqliteMigrationGithubIssueClaim,
   createSessionSqliteMigrationFailureIssue,
   writeSessionSqliteMigrationFailureReports,
 } from "./doctor-session-sqlite-failure.js";
-import * as migrationRun from "./doctor-session-sqlite-migration-run.js";
 import { createDoctorSessionSqliteTargetReport } from "./doctor-session-sqlite-types.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import {

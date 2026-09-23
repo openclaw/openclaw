@@ -22,8 +22,10 @@ export function resolveConfigValue(config: string): string | undefined {
   if (config.startsWith("!")) {
     return executeCommand(config);
   }
-  const envValue = process.env[config];
-  return envValue || config;
+  if (Object.hasOwn(process.env, config)) {
+    return process.env[config] || undefined;
+  }
+  return config;
 }
 
 function executeWithConfiguredShell(command: string): {
@@ -105,8 +107,10 @@ export function resolveConfigValueUncached(config: string): string | undefined {
   if (config.startsWith("!")) {
     return executeCommandUncached(config);
   }
-  const envValue = process.env[config];
-  return envValue || config;
+  if (Object.hasOwn(process.env, config)) {
+    return process.env[config] || undefined;
+  }
+  return config;
 }
 
 export function resolveConfigValueOrThrow(config: string, description: string): string {

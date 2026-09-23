@@ -7,7 +7,6 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
-import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing as promptProbeTesting } from "../../scripts/anthropic-prompt-probe.ts";
 import { testing as claudeUsageTesting } from "../../scripts/debug-claude-usage.ts";
@@ -23,6 +22,11 @@ import {
   redactJsonValueForDevToolLog,
 } from "../../scripts/lib/dev-tooling-safety.ts";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
+import { scriptProcessEntrypoints } from "../../scripts/script-process-runtime.test-support.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
 import { isProcessAlive, waitForChildClose, waitForDead } from "../helpers/process-wait.js";
@@ -30,6 +34,7 @@ import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 
 const tempDirs: string[] = [];
 const testNodeExecPath = resolveTestNodeExecPath();
+const promptProbeUrl = resolveRuntimeWorkerUrl(scriptProcessEntrypoints.anthropicPromptProbe);
 
 async function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
   const started = Date.now();
@@ -46,8 +51,7 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Pr
 
 // writeFileSync is not atomic for concurrent readers: the pid file can exist
 // before its payload is flushed, so wait for non-empty content or the parse
-// races into NaN under parallel-suite load. Generous budget: probe children
-// boot node + tsx before the descendant pid lands.
+// races into NaN under parallel-suite load.
 async function waitForPidFile(pidPath: string, timeoutMs = 15_000): Promise<number> {
   let content = "";
   await waitForCondition(() => {
@@ -825,26 +829,22 @@ describe("script-specific dev tooling hardening", () => {
       const owner = createVitestResourceOwner(tempRoot);
       const descendantPidPath = path.join(tempRoot, "descendant.pid");
       const fakeClaudeBin = await writeFakePromptCli(tempRoot, descendantPidPath, "escaped-output");
-      const probe = spawn(
-        process.execPath,
-        ["--import", "tsx", "scripts/anthropic-prompt-probe.ts"],
-        {
-          cwd: process.cwd(),
-          env: {
-            ...process.env,
-            CLAUDE_BIN: fakeClaudeBin,
-            OPENCLAW_PROMPT_TRANSPORT: "direct",
-            OPENCLAW_PROMPT_CAPTURE: "0",
-            OPENCLAW_PROMPT_KEEP_TMP: "0",
-            OPENCLAW_PROMPT_TIMEOUT_MS: "10000",
-            OPENCLAW_PROMPT_LIST_JSON: JSON.stringify(["cleanup uncertainty", "must not run"]),
-            TMPDIR: tempRoot,
-            TMP: tempRoot,
-            TEMP: tempRoot,
-          },
-          stdio: ["ignore", "pipe", "pipe"],
+      const probe = spawn(process.execPath, resolveRuntimeWorkerArgv(promptProbeUrl), {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          CLAUDE_BIN: fakeClaudeBin,
+          OPENCLAW_PROMPT_TRANSPORT: "direct",
+          OPENCLAW_PROMPT_CAPTURE: "0",
+          OPENCLAW_PROMPT_KEEP_TMP: "0",
+          OPENCLAW_PROMPT_TIMEOUT_MS: "10000",
+          OPENCLAW_PROMPT_LIST_JSON: JSON.stringify(["cleanup uncertainty", "must not run"]),
+          TMPDIR: tempRoot,
+          TMP: tempRoot,
+          TEMP: tempRoot,
         },
-      );
+        stdio: ["ignore", "pipe", "pipe"],
+      });
       let stdout = "";
       let stderr = "";
       let descendantPid = 0;
@@ -963,21 +963,17 @@ describe("script-specific dev tooling hardening", () => {
       const descendantPidPath = path.join(tempRoot, "descendant.pid");
       let descendantPid = 0;
       const fakeClaudeBin = await writeFakePromptCli(tempRoot, descendantPidPath);
-      const probe = spawn(
-        process.execPath,
-        ["--import", "tsx", "scripts/anthropic-prompt-probe.ts"],
-        {
-          cwd: process.cwd(),
-          env: {
-            ...process.env,
-            CLAUDE_BIN: fakeClaudeBin,
-            OPENCLAW_PROMPT_TEXT: "parent signal cleanup proof",
-            OPENCLAW_PROMPT_TIMEOUT_MS: "10000",
-            OPENCLAW_PROMPT_TRANSPORT: "direct",
-          },
-          stdio: "ignore",
+      const probe = spawn(process.execPath, resolveRuntimeWorkerArgv(promptProbeUrl), {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          CLAUDE_BIN: fakeClaudeBin,
+          OPENCLAW_PROMPT_TEXT: "parent signal cleanup proof",
+          OPENCLAW_PROMPT_TIMEOUT_MS: "10000",
+          OPENCLAW_PROMPT_TRANSPORT: "direct",
         },
-      );
+        stdio: "ignore",
+      });
 
       try {
         descendantPid = await waitForPidFile(descendantPidPath);
@@ -1156,9 +1152,7 @@ describe("script-specific dev tooling hardening", () => {
         [
           "import childProcess from 'node:child_process';",
           "import fs from 'node:fs';",
-          `const { testing } = await import(${JSON.stringify(
-            pathToFileURL(path.resolve("scripts/anthropic-prompt-probe.ts")).href,
-          )});`,
+          `const { testing } = await import(${JSON.stringify(promptProbeUrl.href)});`,
           "const signalController = testing.createPromptProbeParentSignalController();",
           `const child = childProcess.spawn(process.execPath, ['--input-type=module', '--eval', ${JSON.stringify(leaderScript)}], { detached: true, stdio: 'ignore' });`,
           "let stopPromise;",
@@ -1179,9 +1173,13 @@ describe("script-specific dev tooling hardening", () => {
         ].join("\n"),
         "utf8",
       );
-      const runner = spawn(process.execPath, ["--import", "tsx", runnerPath], {
-        stdio: "ignore",
-      });
+      const runner = spawn(
+        process.execPath,
+        [...resolveRuntimeWorkerArgv(promptProbeUrl).slice(0, -1), runnerPath],
+        {
+          stdio: "ignore",
+        },
+      );
 
       try {
         await waitForCondition(() => existsSync(readyPath));

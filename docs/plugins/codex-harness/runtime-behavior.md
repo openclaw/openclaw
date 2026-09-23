@@ -260,6 +260,11 @@ These limits apply across chats and native child agents sharing the relay.
 Queue capacity or deadline exhaustion returns a retryable busy response.
 Sustained overload can still fail a turn after Codex exhausts its retries.
 
+If an admitted WebSocket cannot connect upstream, the relay returns HTTP `502`;
+an upstream handshake deadline returns `504`. These errors use a fixed message
+without credentials or model content. Native Codex keeps control of retries and
+HTTPS fallback. Provider HTTP failures retain their original status and body.
+
 After a completed provider failure, you can continue in the same chat with its
 existing configuration. OpenClaw retains the configured native thread, including
 for `/codex resume` of that chat's already-bound thread. Native provider policy refusals

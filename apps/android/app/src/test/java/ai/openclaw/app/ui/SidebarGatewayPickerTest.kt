@@ -604,12 +604,21 @@ class SidebarGatewayPickerTest {
       model.attachRuntimeUi(lifecycleOwner, PermissionRequester(app))
     }
     showSidebarAndComposer(composerLifecycleOwner = lifecycleOwner)
+    // Compose idleness does not join the initial IO history load. Its fixture run
+    // must be adopted before the controller can accept a terminal event for it.
+    composeRule.waitUntil {
+      composeRule.runOnIdle {
+        !model.chatHistoryLoading.value && model.chatSelectedActiveRunPresentation.value.runId == "android-screenshot-active-run"
+      }
+    }
     composeRule.runOnIdle {
       ReflectionHelpers.getField<ChatController>(runtime, "chat").handleGatewayEvent(
         "agent",
         """{"sessionKey":"${model.chatSessionKey.value}","runId":"android-screenshot-active-run","seq":1,"stream":"lifecycle","data":{"phase":"end"}}""",
       )
     }
+    // The composer consumes the ViewModel bridge, not the controller's immediate state.
+    composeRule.waitUntil { composeRule.runOnIdle { model.pendingRunCount.value == 0 } }
     val owner = model.captureChatShareOwner()
     composeRule
       .onNode(SemanticsMatcher("Voice options") { it.config.getOrNull(SemanticsActions.OnLongClick)?.label == "Voice options" })

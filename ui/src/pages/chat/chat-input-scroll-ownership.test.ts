@@ -86,6 +86,25 @@ describe("sender-local scroll intent", () => {
     expect(state.chatFollowLocked).toBe(true);
     expect(state.chatUserNearBottom).toBe(false);
   });
+  it("keeps following when this browser's spoken input is persisted", () => {
+    const state = setup();
+    state.realtimeTalkConversation = [
+      {
+        id: "rt-1",
+        role: "user",
+        text: "Local speech",
+        isStreaming: false,
+        transcriptId: "voice:local-call:1",
+      },
+    ];
+    state.chatMessages = [userMessage("voice-local", "voice:local-call:1")];
+    state.requestUpdate?.();
+    expect(state.chatFollowLocked).toBe(false);
+    expect(state.chatUserNearBottom).toBe(true);
+    state.chatMessages = [...state.chatMessages, userMessage("voice-remote", "voice:other-call:1")];
+    state.requestUpdate?.();
+    expect(state.chatFollowLocked).toBe(true);
+  });
   it("does not infer local intent from the same authenticated sender profile", () => {
     const state = setup();
     state.chatMessages = [userMessage("another-browser")];

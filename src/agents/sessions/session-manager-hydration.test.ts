@@ -12,7 +12,7 @@ import { prepareSessionTranscriptHydration } from "../../config/sessions/session
 import { SessionTranscriptStorageUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
-import { historyPages } from "../../config/sessions/session-transcript-worker-resources.js";
+import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { SessionManager, type SessionEntry } from "../../plugin-sdk/agent-sessions.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -249,20 +249,23 @@ it("does not publish a stale retarget over a manager changed while its worker re
     const manager = SessionManager.inMemory("/detached");
     const release = createDeferredCore();
     const entered = createDeferredCore();
-    const spy = vi
-      .spyOn(WorkerTaskPool.prototype, "run")
-      .mockImplementationOnce(function (this: WorkerTaskPool<unknown, unknown>, input, options) {
-        spy.mockRestore();
-        return this.run(async () => {
-          entered.resolve();
-          await release.promise;
-          return typeof input === "function" ? await input() : input;
-        }, options);
-      });
+    const spy = vi.spyOn(historyLane.pool, "run").mockImplementationOnce((input, options) => {
+      spy.mockRestore();
+      return historyLane.pool.run(async () => {
+        entered.resolve();
+        await release.promise;
+        return typeof input === "function" ? await input() : input;
+      }, options);
+    });
     const pending = manager.setSessionTargetAsync(target);
     const refused = expect(pending).rejects.toThrow("changed during transcript hydration");
     try {
-      await entered.promise;
+      await Promise.race([
+        entered.promise,
+        refused.then(() => {
+          throw new Error("Retarget settled before the intercepted worker read");
+        }),
+      ]);
       manager.appendMessage(makeUserMessage("newer detached view", 2));
       release.resolve();
       await refused;
@@ -299,9 +302,9 @@ it.each(["hydration", "current-turn"] as const)(
       const entered = createDeferredCore();
       const queued = createDeferredCore();
       const release = createDeferredCore();
-      const run = historyPages.run.bind(historyPages);
+      const run = historyLane.pool.run.bind(historyLane.pool);
       let submissions = 0;
-      const spy = vi.spyOn(historyPages, "run").mockImplementation((input, options) => {
+      const spy = vi.spyOn(historyLane.pool, "run").mockImplementation((input, options) => {
         if (submissions++ === 0) {
           return run(async () => {
             entered.resolve();
@@ -317,7 +320,7 @@ it.each(["hydration", "current-turn"] as const)(
       const reads: Promise<unknown>[] = [predecessor];
       try {
         await entered.promise;
-        expect(historyPages.getSnapshot()).toMatchObject({ activeTasks: 1, pendingTasks: 1 });
+        expect(historyLane.pool.getSnapshot()).toMatchObject({ activeTasks: 1, pendingTasks: 1 });
         const controller = new AbortController();
         const reason = new Error("queued hydration cancelled");
         const canceled =
@@ -335,9 +338,9 @@ it.each(["hydration", "current-turn"] as const)(
         const refused = expect(canceled).rejects.toBe(reason);
         reads.push(canceled, refused);
         await queued.promise;
-        expect(historyPages.getSnapshot()).toMatchObject({ activeTasks: 1, pendingTasks: 2 });
+        expect(historyLane.pool.getSnapshot()).toMatchObject({ activeTasks: 1, pendingTasks: 2 });
         controller.abort(reason);
-        expect(historyPages.getSnapshot()).toMatchObject({ activeTasks: 1, pendingTasks: 1 });
+        expect(historyLane.pool.getSnapshot()).toMatchObject({ activeTasks: 1, pendingTasks: 1 });
         await refused;
         release.resolve();
         expect((await predecessor).buildSessionContext().messages).toEqual([
@@ -396,22 +399,25 @@ it.each(["abort", "database-close"] as const)(
       const controller = new AbortController();
       const received = createDeferredCore();
       const release = createDeferredCore();
-      const spy = vi
-        .spyOn(WorkerTaskPool.prototype, "run")
-        .mockImplementationOnce(function (this: WorkerTaskPool<unknown, unknown>, input, options) {
-          spy.mockRestore();
-          return this.run(input, options).then(async (result) => {
-            received.resolve();
-            await release.promise;
-            return result;
-          });
+      const spy = vi.spyOn(historyLane.pool, "run").mockImplementationOnce((input, options) => {
+        spy.mockRestore();
+        return historyLane.pool.run(input, options).then(async (result) => {
+          received.resolve();
+          await release.promise;
+          return result;
         });
+      });
       const pending = SessionManager.openAsync(target, undefined, undefined, controller.signal);
       const refused = expect(pending).rejects.toThrow(
         reason === "abort" ? "cancelled hydration" : "revoked",
       );
       try {
-        await received.promise;
+        await Promise.race([
+          received.promise,
+          refused.then(() => {
+            throw new Error("Hydration settled before the intercepted reply");
+          }),
+        ]);
         if (reason === "abort") {
           controller.abort(new Error("cancelled hydration"));
         } else {
@@ -788,22 +794,41 @@ it.each(["canonical", "custom"])(
       const entered = createDeferredCore();
       const release = createDeferredCore();
       let transferred: unknown;
-      const dispatch = vi
-        .spyOn(WorkerTaskPool.prototype, "run")
-        .mockImplementationOnce(function (this: WorkerTaskPool<unknown, unknown>, input, options) {
-          dispatch.mockRestore();
-          return this.run(async () => {
-            entered.resolve();
-            await release.promise;
-            transferred = typeof input === "function" ? await input() : input;
-            return transferred;
-          }, options);
-        });
+      const dispatch =
+        layout === "canonical"
+          ? vi.spyOn(historyLane.pool, "run").mockImplementationOnce((input, options) => {
+              dispatch.mockRestore();
+              return historyLane.pool.run(async () => {
+                entered.resolve();
+                await release.promise;
+                const request = typeof input === "function" ? await input() : input;
+                transferred = request;
+                return request;
+              }, options);
+            })
+          : vi
+              .spyOn(WorkerTaskPool.prototype, "run")
+              .mockImplementationOnce(
+                function (this: WorkerTaskPool<unknown, unknown>, input, options) {
+                  dispatch.mockRestore();
+                  return this.run(async () => {
+                    entered.resolve();
+                    await release.promise;
+                    transferred = typeof input === "function" ? await input() : input;
+                    return transferred;
+                  }, options);
+                },
+              );
       const inputTarget = { ...target, env };
       const pending = SessionManager.openAsync(inputTarget);
       const result = expect(pending).resolves.toBeInstanceOf(SessionManager);
       try {
-        await entered.promise;
+        await Promise.race([
+          entered.promise,
+          result.then(() => {
+            throw new Error("Hydration settled before the intercepted environment transfer");
+          }),
+        ]);
         env.OpenClaw_State_Dir = state.path("later-state");
         env.OpenClaw_Supervisor_Mode = "changed-after-capture";
         expect(process.platform).toBe(hostPlatform);

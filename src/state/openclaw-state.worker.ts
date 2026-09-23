@@ -24,6 +24,11 @@ import type {
   OpenClawStateWorkerOpenPreparation,
 } from "./openclaw-state-worker-contract.js";
 
+const loadAgentCleanup = createLazyRuntimeModule(
+  () => import("./openclaw-agent-execution-cleanup.worker.js"),
+);
+let agentCleanup: typeof import("./openclaw-agent-execution-cleanup.worker.js") | undefined;
+
 const loadRuntime = createLazyRuntimeModule(() => import("./openclaw-state-worker-runtime.js"));
 let runtime: typeof import("./openclaw-state-worker-runtime.js") | undefined;
 
@@ -83,6 +88,14 @@ function createSharedStateWorkerBackend(
   };
   return {
     [SQLITE_WORKER_PREPARE_COMMAND](commandType) {
+      if (commandType === "agentDatabases.releaseExitedLease") {
+        if (agentCleanup) {
+          return undefined;
+        }
+        return loadAgentCleanup().then((loaded) => {
+          agentCleanup = loaded;
+        });
+      }
       if (
         commandType === "plugins.metadata.read" ||
         commandType === "database.inspectIdle" ||
@@ -131,6 +144,16 @@ function createSharedStateWorkerBackend(
             nativeDatabase = database;
           }
         }
+      }
+      if (command.type === "agentDatabases.releaseExitedLease") {
+        if (!agentCleanup) {
+          throw new Error("Agent database cleanup runtime is not prepared");
+        }
+        return agentCleanup.executeAgentDatabaseCleanupCommand(
+          command,
+          open(),
+          getSqliteWorkerStateContext().environment,
+        );
       }
       if (command.type === "stateLease.acquire") {
         return acquireOpenClawStateLeaseInWorker(command.input, context.databasePath, open);

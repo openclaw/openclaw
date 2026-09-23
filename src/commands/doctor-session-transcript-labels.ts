@@ -11,11 +11,11 @@ import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targe
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import {
   projectExistingAgentDatabaseTargets,
   resolveTargetSqliteOptions,
-} from "./doctor-session-sqlite-readers.js";
+} from "../infra/session-sqlite-migration-readers.js";
+import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import { ReadOnlySqliteTranscriptReader } from "./doctor-session-sqlite-transcript-readers.js";
 
 const NOTE_TITLE = "Session transcript labels";

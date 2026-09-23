@@ -3,16 +3,14 @@ import { once } from "node:events";
 import { stat } from "node:fs/promises";
 import { registerHooks } from "node:module";
 import { setImmediate } from "node:timers/promises";
-import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { WebSocketServer } from "ws";
-import {
-  WORKER_PROTOCOL_FEATURES,
-  WORKER_PUBLIC_INGRESS_PATH,
-  WORKER_RPC_SET_VERSION,
-} from "../../packages/gateway-protocol/src/schema/worker-admission.ts";
-import { parseWorkerLaunchDescriptor } from "./launch-descriptor.ts";
+const [mode, workspaceDir, runtimeUrl, launchDescriptorUrl, admissionUrl, websocketDataUrl] =
+  process.argv.slice(2);
+const { WORKER_PROTOCOL_FEATURES, WORKER_PUBLIC_INGRESS_PATH, WORKER_RPC_SET_VERSION } =
+  await import(admissionUrl);
+const { parseWorkerLaunchDescriptor } = await import(launchDescriptorUrl);
+const { rawDataToString } = await import(websocketDataUrl);
 
-const [mode, workspaceDir] = process.argv.slice(2);
 assert(["rejected", "cancelled", "import-error", "accepted"].includes(mode));
 const previousStateDir = process.env.OPENCLAW_STATE_DIR;
 const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
@@ -30,12 +28,13 @@ process.on("worker-import:work", (name) => work.push(name));
 // the runtime, connection, abort controller, and environment cleanup remain real.
 const hooks = registerHooks({
   resolve(specifier, context, nextResolve) {
-    const name = context.parentURL?.endsWith("/worker.runtime.ts")
-      ? {
-          "./embedded-agent.runtime.js": "embedded",
-          "./inference-stream.runtime.js": "inference",
-        }[specifier]
-      : undefined;
+    const name =
+      context.parentURL === runtimeUrl
+        ? {
+            "embedded-agent.runtime.js": "embedded",
+            "inference-stream.runtime.js": "inference",
+          }[new URL(specifier, context.parentURL).pathname.split("/").at(-1)]
+        : undefined;
     if (!name) {
       return nextResolve(specifier, context);
     }
@@ -53,7 +52,7 @@ const hooks = registerHooks({
     return { url: `data:text/javascript,${encodeURIComponent(source)}`, shortCircuit: true };
   },
 });
-const { runWorkerDescriptor } = await import("./worker.runtime.ts");
+const { runWorkerDescriptor } = await import(runtimeUrl);
 const controller = new AbortController();
 const connected = Promise.withResolvers();
 const disconnected = Promise.withResolvers();

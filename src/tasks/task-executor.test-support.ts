@@ -16,6 +16,7 @@ import {
 import { hoisted } from "./task-executor.mocks.test-support.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { createManagedTaskFlow as createManagedTaskFlowOrNull } from "./task-flow-runtime-internal.js";
+import { captureTaskDeliveryWork } from "./task-registry-delivery.test-support.js";
 import type { TaskRecord } from "./task-registry.types.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
@@ -83,13 +84,18 @@ export async function withTaskExecutorStateDir(
     resetAgentEventsForTest();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
+    using deliveries = captureTaskDeliveryWork();
     try {
       await run(stateDir);
     } finally {
-      resetSystemEventsForTest();
-      resetAgentEventsForTest();
-      resetTaskRegistryForTests({ persist: false });
-      resetTaskFlowRegistryForTests({ persist: false });
+      try {
+        await deliveries.settle();
+      } finally {
+        resetSystemEventsForTest();
+        resetAgentEventsForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+      }
     }
   });
 }

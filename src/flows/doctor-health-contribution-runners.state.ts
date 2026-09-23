@@ -203,7 +203,6 @@ export async function runSessionSnapshotsHealth(ctx: DoctorHealthFlowContext): P
   await noteSessionSnapshotHealth({
     cfg: ctx.cfg,
     env: ctx.env ?? process.env,
-    shouldRepair: ctx.prompter.shouldRepair,
   });
 }
 

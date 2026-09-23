@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { FailoverError } from "../../agents/failover-error.js";
+import { coerceToFailoverError, FailoverError } from "../../agents/failover-error.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
 } from "../../agents/failover/user-copy.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
+import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
@@ -157,23 +158,71 @@ describe("buildExternalRunFailureReply", () => {
     expect(reply.text).not.toContain(message);
   });
 
-  it("forwards classified provider copy when verbose detail is off", () => {
-    const message = "opaque provider response with secret-canary";
-    const reply = buildExternalRunFailureReply(
-      {
-        message,
-        error: new FailoverError(message, {
+  it.each([
+    {
+      name: "provider overload",
+      makeError: () =>
+        new FailoverError("opaque provider response with secret-canary", {
           reason: "overloaded",
           provider: "openai",
           model: "test-model",
         }),
-      },
+      localWorker: false,
+    },
+    {
+      name: "typed local worker timeout",
+      makeError: () => new WorkerTaskError("worker task timed out: secret-canary", "timeout"),
+      localWorker: true,
+    },
+    {
+      name: "wrapped local worker timeout",
+      makeError: () =>
+        new Error("preparation failed: secret-canary", {
+          cause: new WorkerTaskError("worker task timed out", "timeout"),
+        }),
+      localWorker: true,
+    },
+    {
+      name: "actual provider HTTP timeout with a local diagnostic cause",
+      makeError: () =>
+        Object.assign(
+          new Error("worker task timed out: secret-canary", {
+            cause: new WorkerTaskError("worker task timed out", "timeout"),
+          }),
+          { status: 408 },
+        ),
+      localWorker: false,
+    },
+    {
+      name: "untyped matching timeout text",
+      makeError: () => new Error("worker task timed out"),
+      localWorker: false,
+    },
+    {
+      name: "non-timeout worker failure with matching text",
+      makeError: () => new WorkerTaskError("worker task timed out", "failed"),
+      localWorker: false,
+    },
+  ])("preserves failure origin for $name", ({ makeError, localWorker }) => {
+    const error = coerceToFailoverError(makeError(), { provider: "openai", model: "test-model" });
+    if (!error) {
+      throw new Error("Expected the existing failover classifier to recognize the fixture");
+    }
+    const reply = buildExternalRunFailureReply(
+      { message: error.message, error },
       { includeDetails: false },
     );
-
-    expect(reply.text).toContain("openai/test-model");
-    expect(reply.text).not.toContain("secret-canary");
-    expect(reply.text).not.toBe(GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
     expect(reply.isGenericRunnerFailure).toBe(false);
+    expect(reply.text).not.toContain("secret-canary");
+    if (localWorker) {
+      expect(reply.text).toMatch(/local worker/i);
+      expect(reply.text).not.toMatch(/HTTP|openai\/test-model|context preparation/);
+    } else {
+      expect(reply.text).toContain("openai/test-model");
+      expect(reply.text).not.toMatch(/local worker/i);
+      if (error.reason === "timeout") {
+        expect(reply.text).toContain("HTTP 408");
+      }
+    }
   });
 });

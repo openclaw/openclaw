@@ -60,11 +60,15 @@ describe("Windows skills watcher paths", () => {
           config: siblingConfig,
         });
         const shared = watchForSkillRoot(siblingRoot).watcher;
+        const emitRawAndDrain = async (rawPath: string) => {
+          shared.emit("raw", "rename", rawPath, { watchedPath: root });
+          await Promise.resolve();
+        };
         if (phase === "reconciliation") {
           refreshModule.ensureSkillsWatcher({ workspaceDir, config });
         }
         await fs.mkdir(sourceRoot, { recursive: true });
-        shared.emit("raw", "rename", "left", { watchedPath: root });
+        await emitRawAndDrain("left");
         const retired =
           phase === "reconciliation" ? watchForSkillRoot(sourceRoot).watcher : undefined;
         const originalLstat = fsSync.lstatSync;
@@ -95,7 +99,7 @@ describe("Windows skills watcher paths", () => {
         if (phase === "acquisition") {
           refreshModule.ensureSkillsWatcher({ workspaceDir, config });
         } else {
-          shared.emit("raw", "rename", "left", { watchedPath: root });
+          await emitRawAndDrain("left");
         }
         expect(watchMock.mock.calls.some(([watched]) => watched.includes("$Deleted"))).toBe(false);
         expect(watchForSkillRoot(sourceRoot).watchRoot).toBe(root.replaceAll("\\", "/"));
@@ -110,27 +114,27 @@ describe("Windows skills watcher paths", () => {
           path.join(skillDir, "SKILL.md"),
           "---\nname: returned-proof\ndescription: Recreated root\n---\n",
         );
-        shared.emit("raw", "rename", "left", { watchedPath: root });
+        await emitRawAndDrain("left");
         const replacement = watchForSkillRoot(sourceRoot).watcher;
         // Recreate can precede the retired generation's final ready/unlink events.
         retired?.emit("ready");
         retired?.emit("all", "unlinkDir", sourceRoot);
-        const readyWatchers = [...createdWatchers];
-        for (const watcher of readyWatchers) {
+        for (const watcher of createdWatchers) {
           if (!watcher.closed) {
             watcher.emit("ready");
           }
         }
         await vi.advanceTimersByTimeAsync(250);
         expect(getSkillsSourceVersion(workspaceDir)).toBeGreaterThan(sourceVersion);
-        expect(watchForSkillRoot(sourceRoot).watcher).toBe(replacement);
+        expect(replacement.closed).toBe(true);
+        expect(watchForSkillRoot(sourceRoot).watcher.closed).toBe(false);
         refreshModule.ensureSkillsWatcher({
           workspaceDir,
           config: { skills: { load: { watch: false } } },
         });
         expect(shared.closed).toBe(false);
         await fs.mkdir(siblingRoot, { recursive: true });
-        shared.emit("raw", "rename", "right", { watchedPath: root });
+        await emitRawAndDrain("right");
         expect(watchForSkillRoot(siblingRoot).watchRoot).toBe(siblingRoot.replaceAll("\\", "/"));
       } finally {
         Object.defineProperty(process, "platform", platform);

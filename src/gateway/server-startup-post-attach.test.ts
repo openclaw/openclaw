@@ -4625,24 +4625,23 @@ describe("startGatewayPostAttachRuntime", () => {
   });
 });
 
-function createCronHost() {
-  return {
-    status: vi.fn<PluginServiceCronHost["status"]>(async () => ({
-      enabled: true,
-      triggersEnabled: true,
-      storePath: "/synthetic/openclaw.sqlite",
-      storage: "sqlite",
-      sqlitePath: "/synthetic/openclaw.sqlite",
-      jobs: 0,
-      nextWakeAtMs: null,
-    })),
-    list: vi.fn<PluginServiceCronHost["list"]>(),
-    add: vi.fn<PluginServiceCronHost["add"]>(),
-    update: vi.fn<PluginServiceCronHost["update"]>(),
-    remove: vi.fn<PluginServiceCronHost["remove"]>(),
-    removeStaleJobFamily: vi.fn<PluginServiceCronHost["removeStaleJobFamily"]>(),
-  } satisfies PluginServiceCronHost;
-}
+const createCronHost = (): PluginServiceCronHost => ({
+  enqueueRun: vi.fn<PluginServiceCronHost["enqueueRun"]>(),
+  status: vi.fn<PluginServiceCronHost["status"]>(async () => ({
+    enabled: true,
+    triggersEnabled: true,
+    storePath: "/synthetic/openclaw.sqlite",
+    storage: "sqlite",
+    sqlitePath: "/synthetic/openclaw.sqlite",
+    jobs: 0,
+    nextWakeAtMs: null,
+  })),
+  list: vi.fn<PluginServiceCronHost["list"]>(),
+  add: vi.fn<PluginServiceCronHost["add"]>(),
+  update: vi.fn<PluginServiceCronHost["update"]>(),
+  remove: vi.fn<PluginServiceCronHost["remove"]>(),
+  removeStaleJobFamily: vi.fn<PluginServiceCronHost["removeStaleJobFamily"]>(),
+});
 
 function createPostAttachRuntimeDeps(
   overrides: Partial<PostAttachRuntimeDeps> = {},

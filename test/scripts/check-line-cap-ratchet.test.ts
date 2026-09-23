@@ -40,7 +40,7 @@ function fixture(lines = 5, severity = "warn", ignorePatterns: string[] = []) {
       ignorePatterns,
       overrides: [
         {
-          files: ["src/**/*.ts"],
+          files: ["**/*.ts"],
           excludeFiles: ["**/generated/**"],
           rules: {
             "max-lines": [severity, { max: 3, skipBlankLines: true, skipComments: true }],
@@ -105,24 +105,41 @@ describe("line-cap growth ratchet", () => {
     ).toEqual([]);
   });
 
-  it.each(["warn", "error"])(
-    "ratchets %s diagnostics across renames, staged and untracked sources",
-    (severity) => {
+  it.skipIf(process.platform === "win32")("preserves native filenames beginning with file:", () => {
+    vi.stubEnv("TERMINAL_EMULATOR", "");
+    const root = fixture();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    git(root, "mv", "src/file.ts", "file:ordinary.ts");
+    fs.writeFileSync(path.join(root, "file:ordinary.ts"), source(4));
+    expect(main(root, ["--base", "HEAD"])).toBe(0);
+  });
+
+  it.each([
+    { severity: "warn", terminal: "" },
+    { severity: "error", terminal: "JetBrains-JediTerm" },
+  ])(
+    "ratchets $severity diagnostics in terminal '$terminal' across renames, staged and untracked sources",
+    ({ severity, terminal }) => {
+      vi.stubEnv("TERMINAL_EMULATOR", terminal);
       const root = fixture(5, severity);
+      const scratch = tempDirs.make("openclaw-line-cap-scratch-");
+      const scratchAlias = path.join(root, "scratch-alias");
+      fs.symlinkSync(scratch, scratchAlias, process.platform === "win32" ? "junction" : "dir");
+      vi.stubEnv(process.platform === "win32" ? "TEMP" : "TMPDIR", scratchAlias);
       const errors = vi.spyOn(console, "error").mockImplementation(() => {});
       vi.spyOn(console, "log").mockImplementation(() => {});
-      git(root, "mv", "src/file.ts", "src/renamed.ts");
-      fs.writeFileSync(
-        path.join(root, "src/renamed.ts"),
-        source(4) + "\n/* comment\n comment */\n",
-      );
+      fs.writeFileSync(path.join(root, "src/file.ts"), source(5) + "// changed comment\n");
       expect(main(root, ["--base", "HEAD"])).toBe(0);
-      fs.writeFileSync(path.join(root, "src/renamed.ts"), source(6));
+      const renamed = "src/renamed space #%.ts";
+      git(root, "mv", "src/file.ts", renamed);
+      fs.writeFileSync(path.join(root, renamed), source(4) + "\n/* comment\n comment */\n");
+      expect(main(root, ["--base", "HEAD"])).toBe(0);
+      fs.writeFileSync(path.join(root, renamed), source(6));
       git(root, "add", ".");
-      fs.writeFileSync(path.join(root, "src/renamed.ts"), source(4));
+      fs.writeFileSync(path.join(root, renamed), source(4));
       expect(main(root, ["--base", "HEAD", "--staged"])).toBe(1);
       expect(errors).toHaveBeenCalledWith(
-        expect.stringContaining("src/renamed.ts: 5 -> 6 counted lines (cap 3)"),
+        expect.stringContaining(`${renamed}: 5 -> 6 counted lines (cap 3)`),
       );
       expect(main(root, ["--base", "HEAD"])).toBe(0);
       fs.mkdirSync(path.join(root, "src/generated"));

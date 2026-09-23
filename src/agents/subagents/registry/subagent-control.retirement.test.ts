@@ -42,10 +42,7 @@ import {
   markSubagentRunTerminated,
   resumeSubagentRun,
 } from "./subagent-registry.js";
-import {
-  settleSubagentRegistryPersistenceWork,
-  writeSubagentSessionEntry,
-} from "./subagent-registry.persistence.test-support.js";
+import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import { upsertSubagentRunRowInDatabase } from "./subagent-registry.store.kernel.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
@@ -172,7 +169,7 @@ it.each([
             await testing.sweepOnceForTests();
             if (transition === "retirement write rollback") {
               await vi.waitFor(() => expect(retirementRejected).toBe(true));
-              await settleSubagentRegistryPersistenceWork();
+              await fixture.settle();
               expect(subagentRuns.get("ancestor")).toBe(ancestor);
               persist.mockImplementation(persistSubagentRunsToDiskOrThrow);
             } else {
@@ -640,9 +637,9 @@ describe("restored historical cancellation ownership", () => {
     persistRetiredOwner(input);
     restore();
     resumeSubagentRun(input.subagent.runId, "restore");
-    await settleSubagentRegistryPersistenceWork();
+    await fixture.settle();
     await testing.sweepOnceForTests();
-    await settleSubagentRegistryPersistenceWork();
+    await fixture.settle();
 
     const saved = loadSubagentRegistryFromSqlite().get(input.subagent.runId)!;
     expect(saved.killReconciliation).toBeUndefined();
@@ -689,9 +686,9 @@ describe("restored historical cancellation ownership", () => {
       persistRetiredOwner(input, true);
       restore();
       resumeSubagentRun(input.subagent.runId, "restore");
-      await settleSubagentRegistryPersistenceWork();
+      await fixture.settle();
       await testing.sweepOnceForTests();
-      await settleSubagentRegistryPersistenceWork();
+      await fixture.settle();
 
       expect(
         loadSubagentRegistryFromSqlite().get(input.subagent.runId)?.requesterSettleWake,
@@ -703,7 +700,7 @@ describe("restored historical cancellation ownership", () => {
         error: "Cancelled by operator.",
       });
       await testing.sweepOnceForTests();
-      await settleSubagentRegistryPersistenceWork();
+      await fixture.settle();
       expect(loadSubagentRegistryFromSqlite().has(input.subagent.runId)).toBe(false);
       expect(wake).toHaveBeenCalledOnce();
       expectNoExecutionReplay();
@@ -719,9 +716,9 @@ describe("restored historical cancellation ownership", () => {
     upsertSubagentRunRowInDatabase(openOpenClawStateDatabase(), bindSubagentRunRecord(updated));
 
     resumeSubagentRun(input.subagent.runId, "restore");
-    await settleSubagentRegistryPersistenceWork();
+    await fixture.settle();
     await testing.sweepOnceForTests();
-    await settleSubagentRegistryPersistenceWork();
+    await fixture.settle();
 
     expect(loadSubagentRegistryFromSqlite().get(input.subagent.runId)).toEqual(updated);
     expect(wake).not.toHaveBeenCalled();
@@ -738,7 +735,7 @@ describe("restored historical cancellation ownership", () => {
       BEGIN SELECT RAISE(ABORT, 'retirement write rejected'); END`);
     try {
       expect(() => resumeSubagentRun(input.subagent.runId, "restore")).not.toThrow();
-      await settleSubagentRegistryPersistenceWork();
+      await fixture.settle();
       const saved = loadSubagentRegistryFromSqlite().get(input.subagent.runId)!;
       expect(saved.killReconciliation).toEqual(input.subagent.killReconciliation);
       expect(saved.requesterSettleWake).toEqual(input.subagent.requesterSettleWake);
@@ -748,7 +745,7 @@ describe("restored historical cancellation ownership", () => {
     }
 
     resumeSubagentRun(input.subagent.runId, "restore");
-    await settleSubagentRegistryPersistenceWork();
+    await fixture.settle();
     expect(
       loadSubagentRegistryFromSqlite().get(input.subagent.runId)?.requesterSettleWake,
     ).toBeUndefined();
@@ -776,10 +773,10 @@ describe("restored historical cancellation ownership", () => {
     upsertSubagentRunRowInDatabase(openOpenClawStateDatabase(), bindSubagentRunRecord(successor));
     restore();
     resumeSubagentRun(input.subagent.runId, "restore");
-    await settleSubagentRegistryPersistenceWork();
+    await fixture.settle();
     const before = loadSubagentRegistryFromSqlite().get(successor.runId);
     await testing.sweepOnceForTests();
-    await settleSubagentRegistryPersistenceWork();
+    await fixture.settle();
 
     expect(loadSubagentRegistryFromSqlite().get(successor.runId)).toEqual(before);
     expect(wake).not.toHaveBeenCalled();
@@ -800,9 +797,9 @@ describe("restored historical cancellation ownership", () => {
     delete input.task.endedAt;
     persistRetiredOwner(input, true);
     restore();
-    await settleSubagentRegistryPersistenceWork();
+    await fixture.settle();
     await testing.sweepOnceForTests();
-    await settleSubagentRegistryPersistenceWork();
+    await fixture.settle();
 
     const saved = loadSubagentRegistryFromSqlite().get(input.subagent.runId)!;
     expect(saved.requesterSettleWake).toBeUndefined();
