@@ -406,8 +406,9 @@ Store environment values never enter the Codex app-server process, native
 shell, sandbox exec-server, ACP children, sandbox exec, or node exec.
 
 This Codex-native feature is separate from
-[OpenClaw Code Mode](/tools/code-mode), an opt-in JavaScript runtime
-for generic OpenClaw runs with a different `exec` input shape. For the
+[OpenClaw Code Mode](/tools/code-mode), a separate JavaScript runtime with its
+own automatic per-model activation and explicit overrides. It has a different
+`exec` input shape. For the
 broader model/provider/runtime split, start with
 [Agent runtimes](/concepts/agent-runtimes): `openai/gpt-6-astra` is the model
 ref, `codex` is the runtime, and Telegram, Discord, Slack, or another
@@ -475,8 +476,8 @@ same child result after the parent replies.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Managed Codex app-server `0.154.0`. The plugin ships and manages
-  `@openai/codex` `0.154.0` by default, so a `codex` command on `PATH` does not
+- Managed Codex app-server `0.155.1`. The plugin ships and manages
+  `@openai/codex` `0.155.1` by default, so a `codex` command on `PATH` does not
   affect normal startup. Explicit custom, remote, and macOS desktop-owned
   app-servers must report a parseable semantic version of `0.149.0` or newer.
   Newer versions continue with a compatibility warning and normal runtime

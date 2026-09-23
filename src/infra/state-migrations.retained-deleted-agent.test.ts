@@ -8,13 +8,14 @@ import { listAuthProfileRepairCandidates } from "../commands/doctor-auth-legacy-
 import { maybeMigrateModelCatalogCredentials } from "../commands/doctor-model-catalog-credentials.js";
 import { createDoctorPrompter } from "../commands/doctor-prompter.js";
 import { repairCanonicalSessionKeys } from "../commands/doctor-session-canonical-keys.js";
-import { projectExistingAgentDatabaseTargets } from "../commands/doctor-session-sqlite-readers.js";
+import { runDoctorSessionSqlite } from "../commands/doctor-session-sqlite.js";
 import { noteSessionTranscriptHeaderHealth } from "../commands/doctor-session-transcript-headers.js";
 import { noteSessionTranscriptLabelHealth } from "../commands/doctor-session-transcript-labels.js";
 import { noteSessionTranscriptHealth } from "../commands/doctor-session-transcripts.js";
 import { noteStateIntegrity } from "../commands/doctor-state-integrity.js";
 import { detectTelegramGeneralTopicConversationRepairs } from "../commands/doctor-telegram-general-topic-conversations.js";
 import { maybeRepairCodexSessionRoutes } from "../commands/doctor/shared/codex-route-session-repair.js";
+import { assertSessionStoreMigrationComplete } from "../config/sessions/startup-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import {
@@ -38,6 +39,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { projectExistingAgentDatabaseTargets } from "./session-sqlite-migration-readers.js";
 import { autoMigrateLegacyState } from "./state-migrations.doctor.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "./state-migrations.media-persistence-targets.js";
 import {
@@ -108,6 +110,15 @@ describe("Doctor with a deleted agent database", () => {
       scannedStores: 1,
     });
     unregisterOpenClawAgentDatabase({ agentId: "main", path: databasePath, env });
+    const activeAlias = path.join(stateDir, "active-alias.sqlite");
+    fs.linkSync(databasePath, activeAlias);
+    try {
+      await expect(
+        runDoctorSessionSqlite({ allAgents: true, cfg, env, mode: "import" }),
+      ).rejects.toThrow("hard-linked path");
+    } finally {
+      fs.unlinkSync(activeAlias);
+    }
     fs.writeFileSync(
       path.join(path.dirname(databasePath), "models.json"),
       JSON.stringify({
@@ -135,6 +146,15 @@ describe("Doctor with a deleted agent database", () => {
       prompter: createDoctorPrompter({ runtime, options: { repair: true, nonInteractive: true } }),
     });
     expect(catalogs).toMatchObject({ detected: 1, migrated: 1, warnings: [] });
+    const activeLegacyStore = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    fs.mkdirSync(path.dirname(activeLegacyStore), { recursive: true });
+    fs.writeFileSync(
+      activeLegacyStore,
+      JSON.stringify({ "agent:main:legacy": { sessionId: "active-legacy", updatedAt: 1 } }),
+    );
+    expect(() => assertSessionStoreMigrationComplete({ cfg, env, operation: "doctor" })).toThrow(
+      "Legacy session store requires migration",
+    );
   });
 
   it("records shared auth as held for deleted main even with a surviving physical registration", async () => {
@@ -332,6 +352,12 @@ describe("Doctor with a deleted agent database", () => {
           : {}),
       });
       const agentDir = path.dirname(retainedPath);
+      const retainedStore = path.join(stateDir, "agents", "retired", "sessions", "sessions.json");
+      const retainedStoreBytes = JSON.stringify({
+        "agent:retired:legacy": { sessionId: "retired-legacy", updatedAt: 1 },
+      });
+      fs.mkdirSync(path.dirname(retainedStore), { recursive: true });
+      fs.writeFileSync(retainedStore, retainedStoreBytes);
       const workspaceDir = path.join(stateDir, "workspace-retired");
       beginAgentDeletionJournal(
         {
@@ -410,6 +436,9 @@ describe("Doctor with a deleted agent database", () => {
         expect(result.warnings).toEqual(expect.arrayContaining(migration!.warnings));
         expect(fs.existsSync(execPath)).toBe(false);
         if (registered && location === "default") {
+          await expect(
+            runDoctorSessionSqlite({ cfg, env, mode: "import", agent: "retired" }),
+          ).rejects.toThrow("hard-linked path");
           await noteSessionTranscriptHealth({
             cfg,
             env,
@@ -459,6 +488,33 @@ describe("Doctor with a deleted agent database", () => {
         await expect(
           assertOpenClawDatabasesReady({ env, operation: "gateway-restart" }),
         ).resolves.toBeUndefined();
+        expect(() =>
+          assertSessionStoreMigrationComplete({ cfg, env, operation: "doctor" }),
+        ).not.toThrow();
+        expect(fs.readFileSync(retainedStore, "utf8")).toBe(retainedStoreBytes);
+        if (registered && location === "default") {
+          const globalStore = path.join(stateDir, "sessions", "sessions.json");
+          fs.mkdirSync(path.dirname(globalStore), { recursive: true });
+          fs.writeFileSync(globalStore, retainedStoreBytes);
+          const assertGlobalReady = () =>
+            assertSessionStoreMigrationComplete({
+              cfg: { agents: { ownership: "explicit", entries: { retired: {} } } },
+              env,
+              operation: "doctor",
+            });
+          expect(assertGlobalReady).not.toThrow();
+          expect(fs.readFileSync(globalStore, "utf8")).toBe(retainedStoreBytes);
+          fs.writeFileSync(
+            globalStore,
+            JSON.stringify({
+              "agent:retired:legacy": { sessionId: "retired-legacy", updatedAt: 1 },
+              "agent:unassigned:legacy": { sessionId: "unknown-legacy", updatedAt: 1 },
+            }),
+          );
+          expect(assertGlobalReady).toThrow("Legacy session store requires migration");
+          fs.writeFileSync(globalStore, "{}");
+          expect(assertGlobalReady).toThrow("Legacy session store requires migration");
+        }
         expect(fs.readFileSync(retainedPath).equals(before)).toBe(true);
       }
       expect(() => openOpenClawAgentDatabase({ agentId: "retired", env })).toThrow(

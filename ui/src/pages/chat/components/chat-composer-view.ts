@@ -209,18 +209,29 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
   }
   const disabledReasonId = paneDomId(props.paneId, "disabled-reason");
   const composerAlerts = showComposerInput
-    ? renderChatVoiceStatus({
-        status:
-          props.realtimeTalkCameraError || props.realtimeTalkVoice?.error
-            ? "error"
-            : props.realtimeTalkStatus,
-        detail: props.realtimeTalkVoice?.error ?? props.realtimeTalkDetail,
-        onUseSystemDefaultMicrophone: props.onUseSystemDefaultMicrophone,
-        onDismissError:
-          props.realtimeTalkCameraError || props.realtimeTalkVoice?.error
-            ? undefined
-            : props.onDismissRealtimeTalkError,
-      })
+    ? html`
+        ${renderChatVoiceStatus({
+          status:
+            props.realtimeTalkCameraError || props.realtimeTalkVoice?.error
+              ? "error"
+              : props.realtimeTalkStatus,
+          detail: props.realtimeTalkVoice?.error ?? props.realtimeTalkDetail,
+          onUseSystemDefaultMicrophone: props.onUseSystemDefaultMicrophone,
+          onDismissError:
+            props.realtimeTalkCameraError || props.realtimeTalkVoice?.error
+              ? undefined
+              : props.onDismissRealtimeTalkError,
+        })}
+        ${
+          props.realtimeTalkInputNotice
+            ? renderChatVoiceStatus({
+                status: "error",
+                detail: props.realtimeTalkInputNotice,
+                onDismissError: props.onDismissRealtimeTalkInputNotice,
+              })
+            : nothing
+        }
+      `
     : nothing;
   const offlineText = props.offline
     ? props.queuedOutboxCount
@@ -277,7 +288,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     : renderChatRunStatusIndicator(composerRunStatus);
   const fallbackStatus = renderFallbackIndicator(props.fallbackStatus);
   const progressCard = props.progressCard
-    ? html`<div class="agent-chat__progress-float">
+    ? html`<div class="agent-chat__progress-float" ?hidden=${!showComposer}>
         ${renderSessionProgressCard(
           props.progressCard,
           "composer",
@@ -288,12 +299,12 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           props.runActive,
           props.collapseTaskProgress,
           {
+            presented: showComposer,
             gatewayScope: props.gatewayScope,
             sessionIdentity: props.progressCardIdentity,
-            activeRunId: props.runId,
+            cardLifetime: props.progressCardLifetime,
             readingHistory: props.readingHistory,
             onManipulate: props.onProgressManipulate,
-            completedRunId: props.runStatus?.phase === "done" ? props.runStatus.runId : null,
           },
           props.connected && canCompose ? props.progressCardRefresh : undefined,
         )}
@@ -301,6 +312,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     : props.progressCardInitialLoading
       ? html`<div
           class="agent-chat__progress-float agent-chat__progress-float--loading"
+          ?hidden=${!showComposer}
           aria-hidden="true"
         ></div>`
       : nothing;
@@ -492,9 +504,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                         ? slashMenuListboxId
                         : undefined,
                     )}
-                    aria-expanded=${ifDefined(
+                    aria-haspopup=${ifDefined(
                       slashMenuVisible || skillMenuVisible || mentionMenuVisible || emojiMenuVisible
-                        ? "true"
+                        ? "listbox"
                         : undefined,
                     )}
                     aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}

@@ -433,7 +433,9 @@ export async function listProjectedSessions(params: {
       page = selectPage();
       return page.selection.entries.flatMap(([key]) => {
         const target = page.prepared.getTarget(key);
-        return target ? [{ ...target, storePath: target.storeTarget.storePath }] : [];
+        return target
+          ? [{ agentId: target.agentId, key: target.key, storePath: target.storeTarget.storePath }]
+          : [];
       });
     },
     () => {
@@ -450,7 +452,12 @@ export async function listProjectedSessions(params: {
         const sessions = selection.entries.flatMap(([key], index) => {
           const target = getTarget(key);
           const record =
-            target && projection.describe({ ...target, storePath: target.storeTarget.storePath });
+            target &&
+            projection.describe({
+              agentId: target.agentId,
+              key: target.key,
+              storePath: target.storeTarget.storePath,
+            });
           if (!record) {
             return [];
           }

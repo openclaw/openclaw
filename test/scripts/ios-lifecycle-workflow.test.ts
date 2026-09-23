@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-type Command = { tool: string; args: string[] };
+type Command = { tool: string; args: string[]; destination?: string; settings?: string };
 
 const workflow: { jobs: Record<string, { steps: { name?: string; run?: string }[] }> } = parse(
   readFileSync(".github/workflows/ci.yml", "utf8"),
@@ -16,9 +16,13 @@ const watchStep = workflow.jobs["ios-build"]?.steps.find(
 const voiceStep = workflow.jobs["ios-build"]?.steps.find(
   (step) => step.name === "Run focused iOS voice cleanup simulator tests",
 );
+const prepareStep = workflow.jobs["ios-build"]?.steps.find(
+  (step) => step.name === "Prepare iOS simulator",
+);
+const buildStep = workflow.jobs["ios-build"]?.steps.find((step) => step.name === "Build iOS app");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function runSimulatorStep(mode = "ready", step = watchStep) {
+function runSimulatorStep(mode = "ready", steps = [watchStep], env: Record<string, string> = {}) {
   const root = tempDirs.make("openclaw-watch-workflow-");
   const bin = path.join(root, "bin");
   const harnessLib = path.join(root, ".ci-harness", "scripts", "lib");
@@ -31,18 +35,23 @@ function runSimulatorStep(mode = "ready", step = watchStep) {
   writeFileSync(
     runner,
     String.raw`
-import { appendFileSync, existsSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 const [tool, ...args] = process.argv.slice(2);
 const root = process.env.WATCH_FIXTURE_ROOT;
 const mode = process.env.WATCH_FIXTURE_MODE;
-appendFileSync(path.join(root, "commands.jsonl"), JSON.stringify({ tool, args }) + "\n");
-if (tool === "xcrun") {
+appendFileSync(path.join(root, "commands.jsonl"), JSON.stringify({
+  tool, args, destination: process.env.IOS_DEST,
+  settings: process.env.XCODE_XCCONFIG_FILE ? readFileSync(process.env.XCODE_XCCONFIG_FILE, "utf8") : undefined,
+}) + "\n");
+if (tool === "uname") {
+  console.log("arm64");
+} else if (tool === "xcrun") {
   if (args[1] === "list") {
     console.log(JSON.stringify({ devices: { watch: [
-      { name: mode === "voice" ? "iPhone fixture" : "Apple Watch fixture", isAvailable: true, udid: "watch-fixture" }
+      { name: mode.startsWith("voice") ? "iPhone fixture" : "Apple Watch fixture", isAvailable: true, udid: "watch-fixture" }
     ] } }));
-  } else if (args[1] === "bootstatus" && mode === "boot-failed") {
+  } else if (args[1] === "bootstatus" && mode.endsWith("boot-failed")) {
     process.exit(23);
   } else if (args[1] === "install" && !existsSync(args[3])) {
     process.exit(24);
@@ -66,15 +75,22 @@ if (tool === "xcrun") {
 }
 `,
   );
-  for (const tool of ["xcrun", "xcodebuild"]) {
+  for (const tool of ["xcrun", "xcodebuild", "pnpm", "uname"]) {
     const executable = path.join(bin, tool);
     writeFileSync(executable, `#!/bin/sh\nexec '${process.execPath}' '${runner}' '${tool}' "$@"\n`);
     chmodSync(executable, 0o755);
   }
-  if (!step?.run) {
-    throw new Error("Missing Watch simulator workflow step");
-  }
-  const result = spawnSync("bash", ["--noprofile", "--norc", "-c", step.run], {
+  const environmentFile = path.join(root, "github-env");
+  writeFileSync(environmentFile, "");
+  const script = steps
+    .map((step) => {
+      if (!step?.run) {
+        throw new Error("Missing simulator workflow step");
+      }
+      return `${step.run}\nset -a\nsource "$GITHUB_ENV"\nset +a`;
+    })
+    .join("\n");
+  const result = spawnSync("/bin/bash", ["--noprofile", "--norc", "-c", script], {
     cwd: root,
     encoding: "utf8",
     env: {
@@ -83,6 +99,12 @@ if (tool === "xcrun") {
       RUNNER_TEMP: root,
       WATCH_FIXTURE_ROOT: root,
       WATCH_FIXTURE_MODE: mode,
+      GITHUB_ENV: environmentFile,
+      IOS_CI_PHASE: "smoke",
+      HISTORICAL_TARGET: "false",
+      IOS_DEST: "",
+      XCODE_XCCONFIG_FILE: "",
+      ...env,
     },
   });
   const commands: Command[] = readFileSync(path.join(root, "commands.jsonl"), "utf8")
@@ -159,9 +181,54 @@ describe.skipIf(process.platform === "win32")("Watch simulator workflow", () => 
 });
 
 describe.skipIf(process.platform === "win32")("iOS voice cleanup workflow", () => {
-  it("executes cleanup and sibling suites with normal Debug simulator signing", () => {
-    const { result, commands } = runSimulatorStep("voice", voiceStep);
+  it.each([
+    ["tests", "false"],
+    ["smoke", "true"],
+  ])("keeps the generic simulator build for phase=%s historical=%s", (phase, historical) => {
+    const { result, commands } = runSimulatorStep("voice", [buildStep], {
+      IOS_CI_PHASE: phase,
+      HISTORICAL_TARGET: historical,
+    });
     expect(result.status, result.stderr).toBe(0);
+    expect(commands).toEqual([{ tool: "pnpm", args: ["ios:build"], destination: "" }]);
+  });
+
+  it("retains universal build settings and verbose diagnostics in full manual validation", () => {
+    const { result, commands } = runSimulatorStep("voice", [prepareStep, buildStep, voiceStep], {
+      IOS_CI_PHASE: "tests",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const appBuild = commands.find((command) => command.tool === "pnpm");
+    expect(appBuild?.destination).toBe("");
+    expect(commands.every((command) => command.settings === undefined)).toBe(true);
+    const testRun = commands.find((command) => command.tool === "xcodebuild");
+    expect(testRun?.args).toEqual(
+      expect.arrayContaining(["-collect-test-diagnostics", "on-failure"]),
+    );
+  });
+
+  it("stops before compilation and XCTest when the selected iPhone cannot boot", () => {
+    const { result, commands } = runSimulatorStep("voice-boot-failed", [
+      prepareStep,
+      buildStep,
+      voiceStep,
+    ]);
+    expect(result.status).toBe(23);
+    expect(commands.every((command) => command.tool === "xcrun")).toBe(true);
+  });
+
+  it("executes cleanup and sibling suites with normal Debug simulator signing", () => {
+    const { result, commands } = runSimulatorStep("voice", [prepareStep, buildStep, voiceStep]);
+    expect(result.status, result.stderr).toBe(0);
+    const appBuild = commands.find((command) => command.tool === "pnpm");
+    expect(appBuild?.destination).toBe("platform=iOS Simulator,id=watch-fixture");
+    expect(appBuild?.settings).toBe("ARCHS = arm64\nCOMPILER_INDEX_STORE_ENABLE = NO\n");
+    expect(
+      commands.filter((command) => command.tool === "xcrun").map((command) => command.args),
+    ).toEqual([
+      ["simctl", "list", "devices", "available", "--json"],
+      ["simctl", "bootstatus", "watch-fixture", "-b"],
+    ]);
     const builds = commands.filter((command) => command.tool === "xcodebuild");
     expect(builds).toHaveLength(1);
     const build = builds[0];
@@ -178,6 +245,9 @@ describe.skipIf(process.platform === "win32")("iOS voice cleanup workflow", () =
       "-only-testing:OpenClawTests/OpenClawTypographyTests",
     ]);
     expect(build.args).toEqual(expect.arrayContaining(["-configuration", "Debug", "test"]));
+    expect(build.args).toContain(appBuild?.destination);
+    expect(build.settings).toBe(appBuild?.settings);
+    expect(build.args).toEqual(expect.arrayContaining(["-collect-test-diagnostics", "never"]));
     expect(build.args.some((arg) => arg.startsWith("CODE_SIGN"))).toBe(false);
   });
 });

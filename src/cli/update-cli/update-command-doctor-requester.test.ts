@@ -13,6 +13,8 @@ import {
 } from "../../infra/update-requester-authority.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import * as processRunner from "../../process/exec.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   linkUserChannelIdentity,
   unlinkUserChannelIdentity,
@@ -29,9 +31,9 @@ const { executionParams, mocks, successfulUpdate } =
 
 it.each(
   (["package", "git"] as const).flatMap((kind) =>
-    (["healthy", "requester-revoked", "requester-reassigned", "run-replaced"] as const).map(
-      (fault) => ({ kind, fault }),
-    ),
+    (
+      ["healthy", "migrated", "requester-revoked", "requester-reassigned", "run-replaced"] as const
+    ).map((fault) => ({ kind, fault })),
   ),
 )(
   "delegates $kind Doctor without reusing its suspended parent ($fault)",
@@ -69,6 +71,7 @@ it.each(
       const input=JSON.parse(raw);
       await withDelegatedUpdateCommandExecutor(input.executor,input.runId,input.root,async fence=>{
         fence.assertCurrent();
+        ${fault === "migrated" ? `const {DatabaseSync}=await import('node:sqlite');const db=new DatabaseSync(${JSON.stringify(resolveOpenClawStateSqlitePath(env))});db.exec(${JSON.stringify(`BEGIN IMMEDIATE; PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}; UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1} WHERE meta_key = 'primary'; COMMIT;`)});db.close();` : ""}
         fs.writeFileSync(${JSON.stringify(marker)},"owned");
       });
     `,
@@ -79,7 +82,7 @@ it.each(
         isCurrent: () => requesterCurrent,
       };
       let reassignRequester: (() => void) | undefined;
-      if (fault === "requester-reassigned") {
+      if (fault === "requester-reassigned" || fault === "migrated") {
         const options = { env };
         const ada = ensureProfileForEmail("ada@example.test", options);
         const grace = ensureProfileForEmail("grace@example.test", options);
@@ -190,7 +193,7 @@ it.each(
         params.opts.run!.executorFence = await executor.enter(root);
         return executeMutableUpdate(params);
       });
-      if (fault !== "healthy") {
+      if (fault !== "healthy" && fault !== "migrated") {
         await expect(update).rejects.toThrow("requester-revoked");
         await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
         await expect(fs.stat(received)).rejects.toMatchObject({ code: "ENOENT" });
@@ -200,6 +203,9 @@ it.each(
           steps: [{ name: "openclaw doctor", exitCode: 0 }],
         });
         expect(await fs.readFile(marker, "utf8")).toBe("owned");
+        if (fault === "migrated") {
+          expect(requesterAuthority.isCurrent).toThrow(/newer schema version/);
+        }
       }
       expect(reachedSpawn).toBe(true);
       expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });

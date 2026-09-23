@@ -278,6 +278,7 @@ const runtimeConsumers = [
     dir: "",
   })),
   ...[
+    "src/gateway/server.acp-native-model.product.test.ts",
     "src/gateway/server-sidecar-retention.test.ts",
     "src/gateway/server.config-patch.test.ts",
   ].map((file) => ({
@@ -404,7 +405,7 @@ export async function prepareVitestRuntime(
   });
 }
 
-export function isE2eBuildSkipped(env: NodeJS.ProcessEnv) {
+function isE2eBuildSkipped(env: NodeJS.ProcessEnv) {
   return env.OPENCLAW_E2E_SKIP_BUILD === "1" || env.OPENCLAW_E2E_USE_PREBUILT_DIST === "1";
 }
 

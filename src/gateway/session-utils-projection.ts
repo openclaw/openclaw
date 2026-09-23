@@ -30,8 +30,12 @@ export function buildSessionListRowMetadataContext(params: {
   sessionKeys?: readonly string[];
   subagentRuns?: SessionListRowContext["subagentRuns"];
   projectedAgentRuns?: ProjectedAgentRunIndex;
+  projectedSubagentActivity?: ReadonlySet<string>;
   userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
-}): SessionListRowContext {
+}): SessionListRowContext & {
+  projectedAgentRuns: ProjectedAgentRunIndex;
+  projectedSubagentActivity: ReadonlySet<string>;
+} {
   const subagentRuns =
     params.subagentRuns ?? buildSubagentSessionListReadIndex(params.now, params.sessionKeys);
   const projectedAgentRuns = params.projectedAgentRuns ?? buildProjectedAgentRunIndex();
@@ -46,7 +50,9 @@ export function buildSessionListRowMetadataContext(params: {
   return {
     subagentRuns,
     projectedAgentRuns,
-    projectedSubagentActivity: buildProjectedSubagentActivity(subagentRuns, projectedAgentRuns),
+    projectedSubagentActivity:
+      params.projectedSubagentActivity ??
+      buildProjectedSubagentActivity(subagentRuns, projectedAgentRuns),
     subagentRunsByChildSessionKey: subagentRuns.runsByChildSessionKey,
     configuredDefaultModelByAgent: new Map(),
     thinkingFactsByModelRef: new Map(),
@@ -199,6 +205,7 @@ export function resolveGatewaySessionRuntimeProjection(params: {
   agentId: string;
   sessionKey: string;
   entry?: SessionEntry;
+  preparedAcpMeta?: SessionEntry["acp"] | null;
   rowContext?: SessionListRowContext;
   metadataSnapshot?: PluginMetadataSnapshot;
 }) {
@@ -207,9 +214,11 @@ export function resolveGatewaySessionRuntimeProjection(params: {
   // replacement lifecycle while projecting the original entry.
   const acpMeta =
     entry?.acp ??
-    (entry
-      ? readAcpSessionMetaForEntry({ cfg, sessionKey, agentId, entry })
-      : readAcpSessionMeta({ sessionKey, agentId }));
+    (params.preparedAcpMeta !== undefined
+      ? (params.preparedAcpMeta ?? undefined)
+      : entry
+        ? readAcpSessionMetaForEntry({ cfg, sessionKey, agentId, entry })
+        : readAcpSessionMeta({ sessionKey, agentId }));
   const agentRuntime = resolveCurrentSessionAgentRuntimeMetadata({
     cfg: params.cfg,
     agentScope: { kind: "prepared", agentId: params.agentId },

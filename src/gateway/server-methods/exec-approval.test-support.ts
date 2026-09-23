@@ -2,7 +2,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi, type TestContext } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createPreparedTestApprovalManager } from "../exec-approval-manager.test-support.js";
+import {
+  createPreparedTestApprovalManager,
+  createTestApprovalFixture,
+} from "../exec-approval-manager.test-support.js";
 import { createChatRunState } from "../server-chat-state.js";
 import {
   waitForApprovalAccepted,
@@ -80,12 +83,15 @@ function toExecApprovalRequestContext(context: {
   hasExecApprovalClients?: () => boolean;
   chatAbortedRuns?: Map<string, number>;
 }): ExecApprovalRequestArgs["context"] {
-  return context as unknown as ExecApprovalRequestArgs["context"];
+  return {
+    getRuntimeConfig: () => ({}),
+    ...context,
+  } as unknown as ExecApprovalRequestArgs["context"];
 }
 
-function toExecApprovalResolveContext(context: {
-  broadcast: (event: string, payload: unknown) => void;
-}): ExecApprovalResolveArgs["context"] {
+function toExecApprovalResolveContext(
+  context: { broadcast?: (event: string, payload: unknown) => void } = {},
+): ExecApprovalResolveArgs["context"] {
   return {
     getRuntimeConfig: () => ({}),
     ...context,
@@ -104,7 +110,7 @@ export async function getExecApproval(params: {
   )({
     params: { id: params.id } as ExecApprovalGetArgs["params"],
     respond: params.respond as unknown as ExecApprovalGetArgs["respond"],
-    context: {} as ExecApprovalGetArgs["context"],
+    context: toExecApprovalResolveContext(),
     client: params.client ?? null,
     req: { id: "req-get", type: "req", method: "exec.approval.get" },
     isWebchatConnect: execApprovalNoop,
@@ -122,7 +128,7 @@ export async function listExecApprovals(params: {
   )({
     params: {} as never,
     respond: params.respond as never,
-    context: {} as never,
+    context: toExecApprovalResolveContext(),
     client: params.client ?? null,
     req: { id: "req-list", type: "req", method: "exec.approval.list" },
     isWebchatConnect: execApprovalNoop,
@@ -241,9 +247,12 @@ export async function waitExecApproval(params: {
 
 export async function createExecApprovalFixture(
   testContext: TestContext,
-  opts?: { config?: OpenClawConfig },
+  opts?: { config?: OpenClawConfig; preparePersistence?: boolean },
 ) {
-  const fixture = await createPreparedTestApprovalManager(testContext);
+  const fixture =
+    opts?.preparePersistence === false
+      ? createTestApprovalFixture(testContext)
+      : await createPreparedTestApprovalManager(testContext);
   const { manager } = fixture;
   const handlers = createExecApprovalHandlers(manager);
   const broadcasts: Array<{ event: string; payload: unknown }> = [];
@@ -264,7 +273,7 @@ export async function expectRejectedExecApprovalRequest(
   params: Record<string, unknown>,
   message: string,
 ) {
-  const fixture = await createExecApprovalFixture(testContext);
+  const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
   return await fixture.run(async () => {
     const { handlers, respond, context } = fixture;
     await requestExecApproval({ handlers, respond, context, params });

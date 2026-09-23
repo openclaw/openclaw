@@ -206,7 +206,7 @@ renaming its existing Git branch. Concurrent naming requests share the same work
 if that request fails, a waiting dashboard request retries once. If both model
 routes fail, the session uses a two-word crustacean-themed name.
 
-Collapsed tool rows keep the tool label visible and truncate long summaries with an ellipsis. Tool and subagent activity rows use the same text size and weight. Inline subagent rows show only ongoing work: running, queued, or waiting. Running subagents show their title beside an animated indicator. Completed, failed, cancelled, and timed-out runs disappear immediately and remain available in the **Tasks** history. Subagent previews and their hover text flatten Markdown into a single plain-text line, including unfinished emphasis in live updates. Open the subagent details for a compact activity feed with formatted assistant text, grouped tool calls, and timestamps. Expand a tool row to inspect each command, path, or query. The panel shows current progress above the feed; finished tasks show their outcome and duration. **Show earlier** loads history without moving the entry you were reading. New activity follows the bottom only while you are already there.
+Collapsed tool rows keep the tool label visible and truncate long summaries with an ellipsis. Completed answers stay visible outside collapsed work, including when a later Gateway notice arrives. Tool and subagent activity rows use the same text size and weight. Inline subagent rows show only ongoing work: running, queued, or waiting. Running subagents show their title beside an animated indicator. Completed, failed, cancelled, and timed-out runs disappear immediately and remain available in the **Tasks** history. Subagent previews and their hover text flatten Markdown into a single plain-text line, including unfinished emphasis in live updates. Open the subagent details for a compact activity feed with formatted assistant text, grouped tool calls, and timestamps. Expand a tool row to inspect each command, path, or query. The panel shows current progress above the feed; finished tasks show their outcome and duration. **Show earlier** loads history without moving the entry you were reading. New activity follows the bottom only while you are already there.
 
 Tool activity summaries count the operations inside a workflow rather than counting its wrapper again. Execution calls show the agent-provided purpose when available; titles describe intended work, while results determine success or failure. Recorded child calls appear under their operation instead of as separate peer rows. Expand the operation to inspect its children, then expand a child for its command, full output, and reported exit status. **Tool input** retains the wrapper's source and output. Collapsed operations include failures from their children, even when the wrapper or later calls succeed. Error messages and diagnostic paths stay inside the expandable tool details. Nested relationships use recorded call metadata from the same run and survive reloading; calls without an available, unambiguous parent stay separate. Untitled command previews flatten line breaks and truncate long commands; expanded details retain the original source.
 
@@ -307,6 +307,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - When a run is aborted, partial assistant text can still be shown in the UI.
     - Gateway persists aborted partial assistant text into transcript history when buffered output exists.
     - Persisted entries include abort metadata so transcript consumers can tell abort partials from normal completion output.
+    - If a reply cannot be saved, stopping still succeeds and the chat shows a save warning. Copy any visible text you want to keep before leaving the chat; it may not be available when you reopen the conversation.
 
   </Accordion>
 </AccordionGroup>
@@ -397,7 +398,9 @@ Authored in-page HTML links such as `href="#section"` scroll within the preview,
 in `strict` mode. This leaves the original file and **Source** unchanged; authored
 base URLs, links targeting another window, and download links keep their behavior.
 
-Workspace file reads and edits retain their existing 256 KiB limit.
+Workspace file reads and edits retain their existing 256 KiB limit. After a successful save, Files refreshes its metadata and Review refreshes its diff without switching the active panel or clearing the current Files search.
+Code previews and editors are named by their filename and reachable with Tab,
+including read-only previews. In-file search announces its result count.
 For workspace HTML, **Edit**, in-file search, and explicit `file:line` navigation
 open **Source**. Switching back to **Preview** renders the latest unsaved editor
 text without saving it. Switching views preserves the editor, undo history, and
@@ -611,9 +614,13 @@ When the message contains
 multiple images, use **Previous image** / **Next image**, the left and right arrow
 keys, or a horizontal swipe to move through that message's images. Navigation
 stops at either end and reverses direction in right-to-left layouts. Pinch or use
-the zoom controls to inspect details; dragging while zoomed pans the image.
+the zoom controls to inspect details; dragging or holding Shift while pressing
+an arrow key pans the zoomed image. The keyboard shortcuts dialog lists these controls.
 Press Escape, select **Close image preview**, or click outside the image to close
 and return focus to the tile you opened.
+
+Inline audio players support five-second seeking with the arrow keys, including
+when the seek slider has focus. The slider announces the current time and duration.
 
 Images attached to assistant progress messages appear inline while the task continues and remain visible after reloading the conversation. Remote attachment URLs do not need a filename extension: the Gateway detects the media type and serves the preview through the same authenticated media path used for final replies. Documents keep their file cards.
 

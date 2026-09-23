@@ -86,7 +86,7 @@ export function captureSessionStoreReadCandidates(storePath: string): SessionSto
   const candidates = new Map<string, SessionStoreReadCandidate>();
   const add = (candidate: SessionStoreReadCandidate) =>
     candidates.set(JSON.stringify(candidate), candidate);
-  if (!target.agentId && !storePath.endsWith(".sqlite")) {
+  if (!target.agentId && !target.shared) {
     add(captureSessionStoreReadCandidate(target.path, "sibling-family"));
   }
   add(captureSessionStoreReadCandidate(target.path));

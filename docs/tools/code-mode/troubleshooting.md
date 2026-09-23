@@ -39,10 +39,16 @@ remain successful.
 
 JavaScript syntax errors are rejected during source preparation, before any
 nested tool dispatch. The bounded diagnostic includes a one-based source line
-and column. Correct the source and submit a new `exec`; OpenClaw does not repair
+and column. Malformed JavaScript reports its syntax error before module-access
+checks. Correct the source and submit a new `exec`; OpenClaw does not repair
 or replay it automatically. This no-dispatch outcome does not enable
 `restartSafe` or change the result's `replaySafe` flag. Exceptions thrown by valid
 guest code, including `SyntaxError`, remain runtime failures.
+
+The current parser has a known limitation with division immediately after an
+optional keyword-named property, such as `value?.return / 2 / 3`. This is valid
+JavaScript, but source preparation rejects it before tool dispatch. Parenthesize
+the property access: `(value?.return) / 2 / 3`.
 
 Errors returned to the guest are plain data; host `Error` instances, stack
 objects and prototypes are not passed through the JSON result bridge. This

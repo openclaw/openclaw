@@ -81,6 +81,8 @@ export function createDiscordMessageProgressRuntime(params: {
           }
         }
       : undefined,
+    // Queued turns can finish after dispatch closeout has already cleaned up.
+    onQueuedFollowupSettled: draftPreview.draftStream ? () => draftPreview.cleanup() : undefined,
     suppressDefaultToolProgressMessages:
       (params.sourceRepliesAreToolOnly && params.reactions.statusReactionsExplicitlyEnabled) ||
       draftPreview.suppressDefaultToolProgressMessages

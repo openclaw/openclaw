@@ -116,6 +116,7 @@ export function createCodexAppServerAgentHarness(
     delegatedExecutionPluginIds: ["voice-call"],
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
     conversationToolPolicySupport: "exact",
+    nativeModelPolicySupport: "exact",
     conversationToolPolicySafeDenyTools: CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
     conversationToolPolicyNativeTools: CODEX_NATIVE_TOOL_REQUIREMENTS,
     deliveryDefaults: {
@@ -213,10 +214,12 @@ export function createCodexAppServerAgentHarness(
       const { createCodexAppServerModelCatalog } =
         await import("./src/app-server/model-catalog.js");
       if (disposed) {
-        return [];
+        return { entries: [] };
       }
       modelCatalog ??= createCodexAppServerModelCatalog(harnessRuntimeId);
-      return await modelCatalog.load(params, resolveAttemptPluginConfig(params.config));
+      return {
+        entries: await modelCatalog.load(params, resolveAttemptPluginConfig(params.config)),
+      };
     },
     readModelCatalogReadiness: (params) =>
       modelCatalog?.read(params, resolveAttemptPluginConfig(params.config)),

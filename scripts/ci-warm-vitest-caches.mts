@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildChildEnv } from "./ci-run-node-test-shard.mts";
 import { createVitestCacheWarmGroups } from "./lib/ci-node-test-plan.mts";
-import { BUN_UI_TEST_ENV } from "./lib/ci-test-runtime.mts";
+import { BUN_UI_TEST_ENV, resolveCiTestRuntimeSelections } from "./lib/ci-test-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 
 // Consumer entrypoints choose their own reusable cache leaves; the planner owns
@@ -15,10 +15,11 @@ if (!ui?.includePatterns) {
   throw new Error("Missing UI cache seed");
 }
 const scratch = mkdtempSync(join(tmpdir(), "openclaw-cache-warm-"));
+const collectionArgs = ["--testNamePattern=(?!)"];
 const baseEnv: NodeJS.ProcessEnv = {
   ...process.env,
   OPENCLAW_CI_TEST_RUNTIME_POLICY: "node",
-  OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--testNamePattern=(?!)"]',
+  OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify(collectionArgs),
   OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1",
   OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: "1",
   // The final Node UI collection prunes both roots after all producers join.
@@ -52,7 +53,7 @@ try {
     if (!tooling?.includePatterns) {
       throw new Error("Missing hosted CI-routing cache seed");
     }
-    await collect("pnpm", ["test", ...tooling.includePatterns, "--testNamePattern=(?!)"], {
+    await collect("pnpm", ["test", ...tooling.includePatterns, ...collectionArgs], {
       ...baseEnv,
       OPENCLAW_TEST_PROJECTS_PARALLEL: "3",
     });
@@ -69,15 +70,41 @@ try {
             .flatMap((group) => group.includePatterns ?? []),
         ),
       );
-      await collect("pnpm", [script, "--testNamePattern=(?!)"], {
+      await collect("pnpm", [script, ...collectionArgs], {
         ...baseEnv,
         OPENCLAW_TEST_PROJECTS_PARALLEL: concurrency,
         OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
       });
     }
+    // Direct entrypoints retain the complete Node seed. Bun collects only
+    // compatible files already admitted to the bounded hosted inventory.
+    const bunGroups = tooling.configs.flatMap((config) =>
+      resolveCiTestRuntimeSelections(
+        { configs: [config], includePatterns: tooling.includePatterns, vitestArgs: collectionArgs },
+        "bun-compatible",
+      ).flatMap((selection) =>
+        selection.runtime === "bun"
+          ? [
+              {
+                configs: [config],
+                includePatterns: selection.includePatterns ?? tooling.includePatterns,
+                shard_name: `cache-warm:hosted-bun:${config}`,
+              },
+            ]
+          : [],
+      ),
+    );
+    if (bunGroups.length > 0) {
+      await collect(process.execPath, ["--import", "tsx", "scripts/ci-run-node-test-shard.mts"], {
+        ...baseEnv,
+        OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-compatible",
+        OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(bunGroups),
+      });
+    }
   } else {
     await collect(process.execPath, ["--import", "tsx", "scripts/ci-run-node-test-shard.mts"], {
       ...baseEnv,
+      OPENCLAW_CI_TEST_RUNTIME_POLICY: "dual",
       OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(groups.filter((group) => group !== ui)),
     });
   }
@@ -95,7 +122,7 @@ try {
   delete bunEnv.OPENCLAW_VITEST_INCLUDE_FILE;
   await collect(
     process.execPath,
-    ["scripts/run-vitest.mjs", "run", "--config", ...ui.configs, "--testNamePattern=(?!)"],
+    ["scripts/run-vitest.mjs", "run", "--config", ...ui.configs, ...collectionArgs],
     bunEnv,
   );
   await collect(process.execPath, ["--import", "tsx", "scripts/ci-run-node-test-shard.mts"], {

@@ -1,3 +1,6 @@
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
@@ -12,7 +15,6 @@ import { createAgentDedupeLifecycle } from "../agent-turn/agent-dedupe-lifecycle
 import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import * as transcriptPersistence from "./chat-transcript-persistence.js";
-import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { sessionAbortHandlers } from "./sessions-abort.js";
 import type { RespondFn } from "./types.js";
 

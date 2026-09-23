@@ -21,11 +21,11 @@ import {
   loadSessionEntry,
   MAX_SESSION_PARTICIPANTS,
   patchSessionEntryCore,
-  recordSessionParticipant,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { copySessionNodeArtifactsForRepair } from "./session-accessor.sqlite-node-artifacts.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import type { SessionParticipantIdentity } from "./session-participant-identity.js";
 
 const profile = (id: string): SessionParticipantIdentity => ({ type: "profile", id });

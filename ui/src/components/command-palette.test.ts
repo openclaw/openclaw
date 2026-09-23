@@ -68,7 +68,7 @@ describe("CommandPalette search", () => {
       }
       throw new Error(`Unexpected method: ${method}`);
     });
-    const { gateway } = createGateway(true, {
+    const { gateway, emit, setConnected } = createGateway(true, {
       methods: ["cron.list"],
       request,
     });
@@ -87,10 +87,19 @@ describe("CommandPalette search", () => {
     item?.click();
     expect(palette.onNavigate).toHaveBeenCalledWith("cron");
 
+    await vi.advanceTimersByTimeAsync(60_000);
     await enterQuery(palette, "invoices");
     await vi.advanceTimersByTimeAsync(200);
     await vi.waitFor(() => expect(palette.textContent).toContain("Nightly invoices"));
     expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(1);
+
+    emit("cron");
+    await vi.advanceTimersByTimeAsync(200);
+    expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(2);
+    setConnected(false);
+    setConnected(true);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(3);
   });
 
   it.each([false, true])(
@@ -425,6 +434,9 @@ describe("CommandPalette search", () => {
 
     expect(list).not.toHaveBeenCalled();
     expect(palette.querySelector('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
+    expect(palette.querySelector('[role="listbox"]')?.getAttribute("aria-label")).toBe(
+      palette.querySelector("textarea")?.getAttribute("aria-label"),
+    );
     expect(palette.textContent).not.toContain("Searching sessions");
   });
 
@@ -814,7 +826,7 @@ describe("CommandPalette search", () => {
 
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await palette.updateComplete;
-    expect(palette.onNavigate).toHaveBeenCalledExactlyOnceWith("config");
+    expect(palette.onNavigate).toHaveBeenCalledExactlyOnceWith("appearance");
     expect(palette.isOpen).toBe(false);
   });
 

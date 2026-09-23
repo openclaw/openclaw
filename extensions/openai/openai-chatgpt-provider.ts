@@ -39,7 +39,7 @@ import {
   OPENAI_GPT_55_MODEL_ID as OPENAI_CODEX_GPT_55_MODEL_ID,
   OPENAI_GPT_55_PRO_MODEL_ID as OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
   OPENAI_GPT_56_VARIANT_MODEL_IDS as OPENAI_CODEX_GPT_56_MODEL_IDS,
-  OPENAI_GPT_6_ASTRA_MODEL_ID,
+  OPENAI_GPT_6_MODEL_IDS,
 } from "./model-route-contract.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
@@ -107,6 +107,7 @@ const OPENAI_CODEX_GPT_55_PRO_TEMPLATE_MODEL_IDS = [
   ...OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS,
 ] as const;
 const OPENAI_CODEX_IMAGE_CAPABLE_MODEL_IDS = [
+  ...OPENAI_GPT_6_MODEL_IDS,
   ...OPENAI_CODEX_GPT_56_MODEL_IDS,
   OPENAI_CODEX_GPT_55_MODEL_ID,
   OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
@@ -163,7 +164,7 @@ function matchesOpenAICodexImageCapableModel(modelId: string, modelName?: string
 
 /**
  * Restore native `["text", "image"]` input capability on resolved Codex rows
- * for known image-capable modern model IDs (GPT-5.4 through GPT-5.6).
+ * for known image-capable modern model IDs.
  * Persisted/configured model rows can omit the `input` field
  * entirely when they were written by older OpenClaw versions. When that row wins
  * the catalog merge, `modelSupportsInput(entry, "image")` returns false and the
@@ -226,7 +227,7 @@ function resolveCodexForwardCompatModel(
   const lower = normalizeLowercaseStringOrEmpty(trimmedModelId);
   const synthBaseUrl = ctx.providerConfig?.baseUrl ?? OPENAI_CODEX_BASE_URL;
 
-  if (lower === OPENAI_GPT_6_ASTRA_MODEL_ID) {
+  if (OPENAI_GPT_6_MODEL_IDS.some((modelId) => modelId === lower)) {
     // Discovery owns account-specific limits; the manifest supplies offline metadata.
     const catalogModel = OPENAI_MANIFEST_MODELS.find((model) => model.id === lower);
     if (!catalogModel || catalogModel.contextWindow === undefined) {

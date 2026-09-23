@@ -3633,7 +3633,7 @@ describe("config io write", () => {
 
           await expect(
             writeConfigFile({ gateway: { mode: "local", port: 19001 } }),
-          ).rejects.toThrow(/runtime snapshot refresh failed: synthetic refresh failure/);
+          ).rejects.toThrow(/config changed since last load/);
 
           await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(concurrentRaw);
         });

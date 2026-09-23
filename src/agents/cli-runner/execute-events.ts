@@ -1,6 +1,7 @@
 import { projectAgentToolActivity } from "../../infra/agent-activity-events.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
+import { markToolExecutionLivenessDiagnosticEvent } from "../../infra/diagnostic-tool-execution-liveness.js";
 import { projectProgressCardChannelUpdate } from "../../session-cards/progress-card-channel-summary.js";
 import { isAgentPlanProgressToolName } from "../../session-cards/progress-card-input.js";
 import type {
@@ -224,7 +225,7 @@ export function createCliEventHandlers(params: {
       toolName: event.name,
       kind: event.kind,
     });
-    emitTrustedDiagnosticEvent({
+    const diagnosticEvent = {
       type: "tool.execution.started",
       runId: runParams.runId,
       sessionId: runParams.sessionId,
@@ -234,7 +235,17 @@ export function createCliEventHandlers(params: {
       toolSource: resolveCliToolSource(event.name, event.kind),
       toolOwner: "cli-runner",
       toolCallId: event.toolCallId,
-    });
+    } as const;
+    // Claude enforces this MCP response timeout. Keep recovery behind that
+    // deadline while the request is still in the CLI's own tool runtime.
+    const timeoutMs = context.managedMcpToolTimeoutMs;
+    emitTrustedDiagnosticEvent(
+      timeoutMs !== undefined && event.name.startsWith("mcp__openclaw__")
+        ? markToolExecutionLivenessDiagnosticEvent(diagnosticEvent, {
+            deadlineAtMs: startedAt + timeoutMs,
+          })
+        : diagnosticEvent,
+    );
     emitCliToolUseStart(event);
   };
   const emitParsedToolTerminal = (event: {

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { sqliteReadOnlyCompileCacheParentEntrypoint } from "./sqlite-readonly-worker.compile-cache-runtime.test-support.js";
 
@@ -29,6 +30,7 @@ describe.each(["sync", "async", "scoped"] as const)("SQLite child compile cache 
         [
           ...resolveRuntimeWorkerArgv(
             resolveRuntimeWorkerUrl(sqliteReadOnlyCompileCacheParentEntrypoint),
+            resolveTestNodeExecPath(),
           ),
           root,
           mode,

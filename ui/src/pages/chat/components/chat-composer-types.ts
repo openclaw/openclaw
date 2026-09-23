@@ -97,6 +97,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   fallbackStatus?: FallbackStatus | null;
   progressCard?: ProgressCard | null;
   progressCardIdentity?: string;
+  progressCardLifetime?: object;
   progressCardInitialLoading?: boolean;
   progressCardRefresh?: SessionProgressCardRefreshAction;
   gatewayScope?: object;
@@ -139,6 +140,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   realtimeTalkActive?: boolean;
   realtimeTalkStatus?: RealtimeTalkStatus;
   realtimeTalkDetail?: string | null;
+  realtimeTalkInputNotice?: string | null;
   realtimeTalkInputLevel?: RealtimeTalkLevelSignal;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   realtimeTalkVideoStream?: MediaStream | null;
@@ -173,6 +175,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onToggleRealtimeCamera?: () => void;
   onSwitchRealtimeCamera?: () => void;
   onDismissRealtimeTalkError?: () => void;
+  onDismissRealtimeTalkInputNotice?: () => void;
   onUseSystemDefaultMicrophone?: () => Promise<void>;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;

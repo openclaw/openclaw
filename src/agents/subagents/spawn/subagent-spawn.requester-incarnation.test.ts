@@ -1,4 +1,7 @@
 import "./subagent-spawn-model.mocks.shared.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { installSpawnAuthorityFixture } from "./subagent-spawn.authority.test-support.js";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
@@ -29,7 +32,6 @@ import {
 } from "../registry/subagent-registry.persistence.test-support.js";
 import { loadSubagentRunsByRunIdsFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
 import { spawnAcpDirect } from "./acp-spawn.js";
-import { installSpawnAuthorityFixture } from "./subagent-spawn.authority.test-support.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 

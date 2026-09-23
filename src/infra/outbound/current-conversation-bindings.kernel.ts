@@ -9,6 +9,7 @@ import {
   prepareSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
 } from "../kysely-sync.js";
+import { runSqliteDeferredTransactionSync } from "../sqlite-transaction.js";
 import { currentConversationBindingRow } from "./current-conversation-binding-row.js";
 import { normalizeConversationRef } from "./session-binding-normalization.js";
 import type { ConversationRef, SessionBindingRecord } from "./session-binding.types.js";
@@ -266,6 +267,7 @@ export function updateCurrentConversationBindingRecordInDatabase(
 export function inspectCurrentConversationBindingRecordInDatabase(
   db: DatabaseSync,
   conversation: ConversationRef,
+  now = Date.now(),
 ): SessionBindingRecord | null {
   const row = readCurrentConversationBindingRow(
     db,
@@ -273,7 +275,20 @@ export function inspectCurrentConversationBindingRecordInDatabase(
     buildConversationKey(conversation),
   );
   const record = row ? bindingRowsToRecords([row])[0] : undefined;
-  return record && !isBindingExpired(record) ? record : null;
+  return record && !isBindingExpired(record, now) ? record : null;
+}
+
+/** Higher-priority absences and later fallback rows must come from the same snapshot. */
+export function readCurrentConversationBindingSelectionInDatabase(
+  db: DatabaseSync,
+  conversations: readonly ConversationRef[],
+): Array<SessionBindingRecord | null> {
+  return runSqliteDeferredTransactionSync(db, () => {
+    const now = Date.now();
+    return conversations.map((conversation) =>
+      inspectCurrentConversationBindingRecordInDatabase(db, conversation, now),
+    );
+  });
 }
 
 export function readCurrentConversationBindingResolutionInDatabase(

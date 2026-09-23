@@ -22,7 +22,11 @@ import { isVitestRuntimeEnv } from "../../../infra/env.js";
 import { root } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
-import { parseAgentSessionKey, toAgentStoreSessionKey } from "../../../routing/session-key.js";
+import {
+  isIncognitoSessionKey,
+  parseAgentSessionKey,
+  toAgentStoreSessionKey,
+} from "../../../routing/session-key.js";
 import { shortenHomePath } from "../../../utils.js";
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
@@ -299,14 +303,18 @@ const saveSessionToMemory: HookHandler = (event) => {
   if ((event.type !== "command" || !isResetCommand) && !isAutoReset) {
     return undefined;
   }
-  const agentId = requireSessionMemoryAgentId(event);
-
   const context = event.context;
   const sessionEntry = (
     event.type === "command"
       ? (context.previousSessionEntry ?? context.sessionEntry)
       : context.sessionEntry
-  ) as { sessionId?: string } | undefined;
+  ) as { sessionId?: string; incognito?: boolean } | undefined;
+  // Reset hooks run before the process-local session is retired. Never turn its
+  // live transcript or a previously captured excerpt into durable workspace memory.
+  if (isIncognitoSessionKey(event.sessionKey) || sessionEntry?.incognito === true) {
+    return undefined;
+  }
+  const agentId = requireSessionMemoryAgentId(event);
   const cfg = context.cfg as OpenClawConfig | undefined;
   // Gateway and soft-reset hooks already run before mutation; chat resets carry
   // the snapshot captured by session initialization before closing the window.

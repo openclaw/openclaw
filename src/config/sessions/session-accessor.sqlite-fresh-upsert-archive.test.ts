@@ -86,12 +86,19 @@ describe("fresh session creation with pending transcript archives", () => {
   it("creates a fresh session without retrying an unrelated failed export, which deletion can still recover", async () => {
     const collisionPath = await failUnrelatedArchiveExport();
     const pendingArchive = readArchive();
+    const owner = {
+      actor: { type: "human" as const, id: "profile-owner" },
+      assignedBy: { type: "agent" as const, id: "main" },
+      assignedAt: 42,
+    };
 
     const [creation] = await Promise.allSettled([
-      createSessionEntryWithTranscript(freshScope(), () => ({ ok: true, entry: freshEntry })),
+      createSessionEntryWithTranscript(freshScope(), () => ({ ok: true, entry: freshEntry }), {
+        resolveOwnerAssignment: () => owner,
+      }),
     ]);
 
-    expect(loadSessionEntry(freshScope())).toMatchObject(freshEntry);
+    expect(loadSessionEntry(freshScope())).toMatchObject({ ...freshEntry, owner });
     await expect(
       loadTranscriptEvents({ ...freshScope(), sessionId: freshEntry.sessionId }),
     ).resolves.toContainEqual(

@@ -1,12 +1,14 @@
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import * as store from "./operator-approval-store.js";
 import * as native from "./operator-approval-store.kernel.js";
+import { getOperatorApprovalResolutionKey } from "./operator-approval-store.rows.js";
 import * as nativeTransitions from "./operator-approval-store.transitions.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -101,18 +103,79 @@ it("preserves serialized records, first-answer wins, consumption and history thr
   );
 });
 
-it("runs pending scans and expiry without opening a SQLite statement on the requesting thread", async () => {
+it("runs lookup, pending scans, expiry and history without host SQLite calls through close", async () => {
   const databaseOptions = options();
   await store.insertOperatorApproval({ approval: approval("off-thread"), databaseOptions });
-  const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(() => {
-    throw new Error("SQLite statement reached the requesting thread");
+  const sqlite = requireNodeSqlite();
+  const counters = [
+    vi.spyOn(sqlite.DatabaseSync.prototype, "prepare"),
+    vi.spyOn(sqlite.DatabaseSync.prototype, "exec"),
+    ...(["get", "all", "run", "iterate"] as const).map((method) =>
+      vi.spyOn(sqlite.StatementSync.prototype, method),
+    ),
+  ];
+  try {
+    const calibration = new sqlite.DatabaseSync(":memory:");
+    try {
+      calibration.exec("CREATE TABLE calibration (value INTEGER)");
+      calibration.prepare("INSERT INTO calibration VALUES (?)").run(1);
+      const read = calibration.prepare("SELECT value FROM calibration");
+      read.get();
+      read.all();
+      expect([...read.iterate()]).toHaveLength(1);
+      expect(counters.every((counter) => counter.mock.calls.length > 0)).toBe(true);
+    } finally {
+      calibration.close();
+      counters.forEach((counter) => counter.mockClear());
+    }
+    const pending = await store.listPendingOperatorApprovals({ nowMs: 2000, databaseOptions });
+    expect(pending.map((record) => record.id)).toEqual(["off-thread"]);
+    expect(
+      (await store.expireDueOperatorApprovals({ nowMs: 10_000, databaseOptions })).affected,
+    ).toBe(1);
+    expect(
+      await store.getOperatorApprovalDetailed({ id: "off-thread", nowMs: 10_001, databaseOptions }),
+    ).toMatchObject({ outcome: "found", record: { status: "expired" } });
+    expect(
+      await store.listTerminalOperatorApprovals({ nowMs: 10_002, databaseOptions }),
+    ).toMatchObject({ records: [{ id: "off-thread", status: "expired" }] });
+    await closeOpenClawStateDatabaseAsync();
+    expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+  } finally {
+    counters.forEach((counter) => counter.mockRestore());
+  }
+});
+
+it("keeps native reads between earlier and later worker mutations", async () => {
+  const databaseOptions = options();
+  const inserted = store.insertOperatorApproval({ approval: approval("ordered"), databaseOptions });
+  const nativeRead = store.getOperatorApprovalDetailed({
+    id: "ordered",
+    nowMs: 2000,
+    databaseOptions,
+    guard: { family: "native-compatibility", assertCurrent() {} },
   });
-  const pending = await store.listPendingOperatorApprovals({ nowMs: 2000, databaseOptions });
-  expect(pending.map((record) => record.id)).toEqual(["off-thread"]);
-  expect(
-    (await store.expireDueOperatorApprovals({ nowMs: 10_000, databaseOptions })).affected,
-  ).toBe(1);
-  expect(prepare).not.toHaveBeenCalled();
+  const resolved = store.resolveOperatorApproval({
+    id: "ordered",
+    decision: "allow-once",
+    resolver: { kind: "device", id: "reviewer" },
+    nowMs: 3000,
+    databaseOptions,
+  });
+  const [insertResult, readResult, resolveResult] = await Promise.all([
+    inserted,
+    nativeRead,
+    resolved,
+  ]);
+  expect(insertResult.outcome).toBe("inserted");
+  expect(readResult).toMatchObject({
+    outcome: "found",
+    record: { status: "pending", decision: null },
+  });
+  expect(resolveResult).toMatchObject({
+    outcome: "resolved",
+    record: { status: "allowed", decision: "allow-once" },
+  });
 });
 
 it("leaves the default approval clock to the worker when dispatching a public read", async () => {
@@ -150,4 +213,94 @@ it("revalidates live authority after dispatch and rolls back refused decisions",
   expect(
     await store.getOperatorApprovalDetailed({ id: "guarded", nowMs: 2000, databaseOptions }),
   ).toMatchObject({ outcome: "found", record: { status: "pending", decision: null } });
+});
+
+it.each(["worker", "native-compatibility"] as const)(
+  "publishes %s receipts only for a committed winning verdict",
+  async (family) => {
+    const databaseOptions = options();
+    await store.insertOperatorApproval({ approval: approval("receipt-rollback"), databaseOptions });
+    const onCommitted = vi.fn();
+    let refuse = true;
+    let current = true;
+    if (family === "worker") {
+      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+      vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+        (admit) =>
+          createAdmission((request, grant) => {
+            if (request.stage === "commit" && refuse) {
+              current = false;
+            }
+            return admit(request, grant);
+          }),
+      );
+    }
+    const input = {
+      id: "receipt-rollback",
+      decision: "allow-once" as const,
+      resolver: { kind: "runtime" as const, id: null },
+      nowMs: 2000,
+      databaseOptions,
+      onCommitted,
+      guard: {
+        family,
+        assertCurrent: () => {
+          if (family === "native-compatibility" && refuse) {
+            const observed = native.getOperatorApprovalDetailedInDatabase({
+              id: "receipt-rollback",
+              nowMs: 2000,
+              databaseOptions,
+            });
+            current = observed.outcome !== "found" || observed.record.decision !== "allow-once";
+          }
+          if (!current) {
+            throw new Error("synthetic commit refusal");
+          }
+        },
+      },
+    };
+    await expect(store.resolveOperatorApproval(input)).rejects.toThrow("synthetic commit refusal");
+    expect(onCommitted).not.toHaveBeenCalled();
+    refuse = false;
+    current = true;
+    expect(
+      await store.getOperatorApprovalDetailed({ id: input.id, nowMs: 2000, databaseOptions }),
+    ).toMatchObject({ outcome: "found", record: { status: "pending" } });
+    const winner = await store.resolveOperatorApproval(input);
+    expect(winner.outcome).toBe("resolved");
+    if (winner.outcome !== "resolved") {
+      throw new Error("Expected committed resolution");
+    }
+    expect(onCommitted).toHaveBeenCalledExactlyOnceWith(
+      getOperatorApprovalResolutionKey(winner.record),
+    );
+    expect(await store.resolveOperatorApproval(input)).toMatchObject({
+      outcome: "already-resolved",
+    });
+    expect(onCommitted).toHaveBeenCalledTimes(1);
+  },
+);
+
+it("queues a brief approval burst through shared input admission", async () => {
+  const databaseOptions = options();
+  await store.insertOperatorApproval({ approval: approval("burst"), databaseOptions });
+  const outcomes = await Promise.allSettled(
+    Array.from({ length: 129 }, (_, index) =>
+      store.getOperatorApprovalDetailed({
+        id: "burst",
+        nowMs: 2000,
+        databaseOptions,
+        ...(index % 2 === 0
+          ? { guard: { family: "native-compatibility" as const, assertCurrent() {} } }
+          : {}),
+      }),
+    ),
+  );
+  expect(outcomes).toHaveLength(129);
+  for (const outcome of outcomes) {
+    expect(outcome).toMatchObject({
+      status: "fulfilled",
+      value: { outcome: "found", record: { status: "pending", decision: null } },
+    });
+  }
 });

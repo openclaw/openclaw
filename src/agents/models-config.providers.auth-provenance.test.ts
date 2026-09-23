@@ -587,7 +587,6 @@ describe("models-config provider auth provenance", () => {
     {
       name: "keeps a profile with a one-model cooldown",
       usage: {
-        cooldownUntil: Date.now() + 60_000,
         cooldownReason: "rate_limit" as const,
         cooldownModel: "gpt-5.5",
       },
@@ -597,7 +596,6 @@ describe("models-config provider auth provenance", () => {
     {
       name: "demotes a profile-wide cooldown",
       usage: {
-        cooldownUntil: Date.now() + 60_000,
         cooldownReason: "rate_limit" as const,
       },
       expectedProfile: "backup",
@@ -612,7 +610,7 @@ describe("models-config provider auth provenance", () => {
         key: "cooldown-backup-key",
       };
       fixture.store.usageStats = {
-        [fixture.profileId]: usage,
+        [fixture.profileId]: { ...usage, cooldownUntil: Date.now() + 60_000 },
       };
       fixture.emitOutcome();
 

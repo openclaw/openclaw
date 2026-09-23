@@ -11,7 +11,7 @@ import {
 } from "./session-capability.test-support.ts";
 import type { SessionListSnapshot } from "./session-capability.ts";
 
-const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 200;
+const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 5_000;
 
 function rowPinned(result: SessionsListResult | null, key: string): boolean {
   return result?.sessions.find((row) => row.key === key)?.pinned === true;

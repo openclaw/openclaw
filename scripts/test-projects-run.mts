@@ -31,7 +31,7 @@ import { getVitestWorkerDescriptor } from "./lib/vitest-worker-bootstrap.mts";
 import { createVitestWorkerRun, type VitestWorkerRun } from "./lib/vitest-worker-run.mts";
 import { resolveVitestSpawnParams, spawnWatchedVitestProcess } from "./run-vitest.mts";
 import {
-  applyDefaultMultiSpecVitestCachePaths,
+  applyDefaultVitestCachePaths,
   applyDefaultVitestNoOutputTimeout,
   applyFullExtensionsHeapBudget,
   applyParallelVitestCachePaths,
@@ -359,7 +359,7 @@ export async function runTestProjects(
       spec.timingIncludePatterns = inheritedIncludePatterns;
     }
   }
-  const runSpecs: VitestRunSpec[] = applyDefaultMultiSpecVitestCachePaths(
+  const runSpecs: VitestRunSpec[] = applyDefaultVitestCachePaths(
     applyDefaultVitestNoOutputTimeout(
       applyFullExtensionsHeapBudget(rawRunSpecs, { env: baseEnv }),
       {

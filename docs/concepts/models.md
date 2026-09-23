@@ -80,12 +80,14 @@ Removing an explicit default model policy from an included config preserves an e
 
 The same `provider/model` behaves differently depending on where it came from:
 
-| Source                                                                  | Behavior                                                                                                                                                                                                                                                       |
-| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Configured default (`agents.defaults.model.primary`, per-agent primary) | Normal starting point; uses `agents.defaults.model.fallbacks`.                                                                                                                                                                                                 |
-| Auto fallback                                                           | Temporary recovery state, stored as `modelOverrideSource: "auto"`. OpenClaw periodically reprobes the original primary, clears the auto selection on recovery, and announces fallback/recovery transitions once per state change.                              |
-| User session selection                                                  | Exact and strict. `/model`, the model picker, `session_status(model=...)`, and `sessions.patch` store `modelOverrideSource: "user"`. If that provider/model becomes unreachable, the run fails visibly instead of falling through to another configured model. |
-| Cron `--model` / payload `model`                                        | Per-job primary. Still uses configured fallbacks unless the job supplies its own payload `fallbacks` (`fallbacks: []` forces a strict run).                                                                                                                    |
+| Source                                               | Behavior                                                                                                                                                                                                                                                       |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Configured default (`agents.defaults.model.primary`) | Normal native starting point; uses `agents.defaults.model.fallbacks`.                                                                                                                                                                                          |
+| Native agent primary                                 | Strict unless the agent supplies `model.fallbacks`; an explicit `[]` disables fallback.                                                                                                                                                                        |
+| ACP agent primary                                    | Selects the external harness model. Native calls use the configured native default and inherit its fallback list unless the agent supplies `model.fallbacks`. Explicit native session and subagent selections still apply.                                     |
+| Auto fallback                                        | Temporary recovery state, stored as `modelOverrideSource: "auto"`. OpenClaw periodically reprobes the original primary, clears the auto selection on recovery, and announces fallback/recovery transitions once per state change.                              |
+| User session selection                               | Exact and strict. `/model`, the model picker, `session_status(model=...)`, and `sessions.patch` store `modelOverrideSource: "user"`. If that provider/model becomes unreachable, the run fails visibly instead of falling through to another configured model. |
+| Cron `--model` / payload `model`                     | Per-job primary. Still uses configured fallbacks unless the job supplies its own payload `fallbacks` (`fallbacks: []` forces a strict run).                                                                                                                    |
 
 Other selection rules:
 
@@ -433,8 +435,11 @@ is no central provider fallback. Manifest values remain authoritative, so
 hydration only fills undefined metadata and never supplies transport settings
 or prices. Costs still come from each provider's pricing policy. Only rows with
 tool calling and text output are imported, and rows models.dev marks deprecated
-or retired are skipped. Hydration errors fail publication and preserve the last
-published artifact instead of publishing an incomplete replacement. This is a
+or retired are skipped. If models.dev itself is unreachable or malformed,
+publication fails and the last published artifact stays in place. A single
+missing or renamed upstream provider only skips that provider's hydration; its
+manifest rows still publish, so one provider cannot block catalog updates for
+the rest. This is a
 publication-time contract: it adds no Gateway fetches or hot reload, and updated
 metadata still becomes visible after a Gateway restart.
 Its scheduled workflow checks OpenClaw's default-branch plugin manifests and

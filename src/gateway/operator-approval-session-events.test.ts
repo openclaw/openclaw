@@ -548,7 +548,64 @@ describe("operator approval session events", () => {
     });
   });
 
-  it("refreshes a pending replay when a terminal event precedes the worker reply", async () => {
+  it("shares only matching audiences and reviewers while checking each waiting client", async () => {
+    const databaseOptions = createDatabaseOptions();
+    await insertPendingApproval({
+      databaseOptions,
+      id: "shared-replay",
+      audienceSessionKeys: [SOURCE_SESSION_KEY],
+      createdAtMs: 1_000,
+      expiresAtMs: 10_000,
+    });
+    const clients = ["revoked", "retained", "other-reviewer"].map((connId) =>
+      createClient({
+        connId,
+        scopes: ["operator.approvals"],
+        deviceId: connId === "other-reviewer" ? "other-device" : "reviewer-device",
+      }),
+    );
+    const { runtime } = createRuntime({ clients, databaseOptions, now: () => 5_000 });
+    const selected = createDeferredCore();
+    const reply = createDeferredCore();
+    const list = operatorApprovalStore.listPendingOperatorApprovals;
+    const delayed = vi
+      .spyOn(operatorApprovalStore, "listPendingOperatorApprovals")
+      .mockImplementationOnce(async (params) => {
+        const records = await list(params);
+        selected.resolve();
+        await reply.promise;
+        return records;
+      });
+    const revoked = runtime.replay(SOURCE_SESSION_KEY, clients[0]!);
+    const rejected = expect(revoked).rejects.toThrow("replay authority is no longer current");
+    const retained = runtime.replay(SOURCE_SESSION_KEY, clients[1]!);
+    const otherReviewer = runtime.replay(SOURCE_SESSION_KEY, clients[2]!);
+    const otherSession = runtime.replay(SIBLING_SESSION_KEY, clients[1]!);
+    try {
+      await selected.promise;
+      clients[0]!.connect.scopes = [];
+      reply.resolve();
+      await rejected;
+      expect((await retained).replay.approvals.map(({ id }) => id)).toEqual(["shared-replay"]);
+      expect((await otherReviewer).replay.approvals).toEqual([]);
+      expect((await otherSession).replay.approvals).toEqual([]);
+      expect(delayed.mock.calls.length).toBe(3);
+      // Completed work is not cached: storage truth can change without a lifecycle publication.
+      await resolveOperatorApproval({
+        id: "shared-replay",
+        decision: "deny",
+        resolver: { kind: "device", id: "reviewer-device" },
+        nowMs: 5_001,
+        databaseOptions,
+      });
+      expect((await runtime.replay(SOURCE_SESSION_KEY, clients[1]!)).replay.approvals).toEqual([]);
+    } finally {
+      reply.resolve();
+      await Promise.allSettled([revoked, retained, otherReviewer, otherSession]);
+    }
+  });
+
+  it("invalidates a pending replay when a terminal event precedes the worker reply", async () => {
     const databaseOptions = createDatabaseOptions();
     const pending = await insertPendingApproval({
       databaseOptions,
@@ -599,10 +656,11 @@ describe("operator approval session events", () => {
         new Set(["reviewer"]),
       );
       reply.resolve();
-      const prepared = await preparation;
+      expect((await preparation).isCurrent()).toBe(false);
+      const prepared = await runtime.replay(SOURCE_SESSION_KEY, reviewer);
       expect(prepared.isCurrent()).toBe(true);
       expect(prepared.replay.approvals).toEqual([]);
-      expect(delayedReply).toHaveBeenCalledTimes(2);
+      expect(delayedReply.mock.calls.length).toBe(2);
     } finally {
       reply.resolve();
       await preparation;

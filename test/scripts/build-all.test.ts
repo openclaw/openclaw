@@ -31,9 +31,18 @@ import { listBundledPluginBuildEntries } from "../../scripts/lib/bundled-plugin-
 import { createManagedCommandInvocation } from "../../scripts/lib/managed-child-process.mts";
 import { TSDOWN_UNIFIED_CONFIG_GROUP } from "../../scripts/lib/tsdown-config-groups.mts";
 import { runNodeMain } from "../../scripts/run-node.mts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { toolingProbeRuntimeEntrypoints } from "./tooling-probe-runtime.test-support.mts";
 
 const testNodeExecPath = resolveTestNodeExecPath();
+const buildAllUrl = resolveRuntimeWorkerUrl(toolingProbeRuntimeEntrypoints.buildAll);
+const buildArtifactCacheUrl = resolveRuntimeWorkerUrl(
+  toolingProbeRuntimeEntrypoints.buildArtifactCache,
+);
 
 function getBuildAllStep(label: string) {
   const step = BUILD_ALL_STEPS.find((entry) => entry.label === label);
@@ -353,7 +362,7 @@ describe("resolveBuildAllSteps", () => {
     for (const args of [["--help"], ["cliStartup", "--help"]]) {
       const result = spawnSync(
         testNodeExecPath,
-        ["--import", "tsx", "scripts/build-all.mts", ...args],
+        [...resolveRuntimeWorkerArgv(buildAllUrl, testNodeExecPath), ...args],
         {
           cwd: process.cwd(),
           encoding: "utf8",
@@ -371,7 +380,7 @@ describe("resolveBuildAllSteps", () => {
   it("rejects unknown CLI args without starting build steps", () => {
     const result = spawnSync(
       testNodeExecPath,
-      ["--import", "tsx", "scripts/build-all.mts", "cliStartup", "--bogus"],
+      [...resolveRuntimeWorkerArgv(buildAllUrl, testNodeExecPath), "cliStartup", "--bogus"],
       {
         cwd: process.cwd(),
         encoding: "utf8",
@@ -1250,15 +1259,14 @@ describe("resolveBuildStepCacheState", () => {
       const result = spawnSync(
         testNodeExecPath,
         [
-          "--import",
-          "./scripts/tsx.mjs",
+          ...resolveRuntimeWorkerArgv(buildArtifactCacheUrl, testNodeExecPath).slice(0, -1),
           "--input-type=module",
           "-e",
           `
             import assert from "node:assert/strict";
             import fs from "node:fs";
             import path from "node:path";
-            import { listCacheFiles } from "./scripts/lib/build-artifact-cache.mts";
+            import { listCacheFiles } from ${JSON.stringify(buildArtifactCacheUrl.href)};
             const root = process.argv[1];
             const directory = path.join(root, "src");
             const [template] = fs.readdirSync(directory, { withFileTypes: true });

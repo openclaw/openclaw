@@ -1,5 +1,6 @@
 // Covers Telegram question delivery capture and native final edit.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type * as TelegramSend from "./send.js";
 
 const hoisted = vi.hoisted(() => ({
   edit: vi.fn(),
@@ -21,15 +22,19 @@ vi.mock("openclaw/plugin-sdk/question-gateway-runtime", async (importOriginal) =
     },
   };
 });
-vi.mock("./send.js", () => ({
+vi.mock("./send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof TelegramSend>()),
   editMessageReplyMarkupTelegram: hoisted.editMarkup,
   editMessageTelegram: hoisted.edit,
 }));
 
 import { telegramCaptionDeliveryMetadata } from "./caption.js";
 import { createTelegramOutboundAdapter } from "./outbound-adapter.js";
+import { sendMessageTelegram } from "./send.js";
+import { useTelegramHttpFixture } from "./send.telegram-http.test-support.js";
 
 describe("Telegram question finalization", () => {
+  const fixture = useTelegramHttpFixture();
   beforeEach(() => {
     hoisted.edit.mockReset();
     hoisted.editMarkup.mockReset();
@@ -95,40 +100,52 @@ describe("Telegram question finalization", () => {
     );
   });
 
-  it("finalizes an unthreaded caption without changing its public delivery metadata", async () => {
-    const meta = { telegramDeliveredText: "Choose one", telegramHasInlineKeyboard: true };
-    telegramCaptionDeliveryMetadata.add(meta);
+  it("finalizes an accepted unthreaded media question by editing its caption", async () => {
+    const send = await vi.importActual<typeof TelegramSend>("./send.js");
+    hoisted.edit.mockImplementation(send.editMessageTelegram);
+    hoisted.editMarkup.mockImplementation(send.editMessageReplyMarkupTelegram);
+    const result = await sendMessageTelegram("123", "Choose one", {
+      cfg: fixture.cfg,
+      api: fixture.bot.api,
+      mediaUrl: fixture.photoPath,
+      mediaLocalRoots: [fixture.mediaDir],
+      buttons: fixture.buttons,
+    });
     const outbound = createTelegramOutboundAdapter();
 
     await outbound.afterDeliverPayload?.({
-      cfg: {},
+      cfg: fixture.cfg,
       target: { channel: "telegram", to: "123" },
       payload: {
         text: "Choose one",
-        mediaUrls: ["https://example.com/photo.jpg"],
+        mediaUrls: [fixture.photoPath],
         channelData: {
           askUser: { questionId: "ask_0123456789abcdef0123456789abcdef" },
         },
       },
-      results: [{ channel: "telegram", messageId: "70", meta }],
+      results: [{ channel: "telegram", ...result }],
     });
 
     await hoisted.registration?.finalize("Answered: yes");
 
-    expect(hoisted.edit).toHaveBeenCalledWith(
-      "123",
-      "70",
-      "Choose one\n\nAnswered: yes",
-      expect.objectContaining({ editMode: "caption" }),
-    );
-    expect(Object.keys(meta)).toEqual(["telegramDeliveredText", "telegramHasInlineKeyboard"]);
+    expect(fixture.requests.map(({ method }) => method)).toEqual([
+      "sendPhoto",
+      "editMessageReplyMarkup",
+      "editMessageCaption",
+    ]);
+    expect(fixture.requests[1]?.fields).toMatchObject({
+      chat_id: "123",
+      message_id: Number(result.messageId),
+      reply_markup: { inline_keyboard: [] },
+    });
+    expect(fixture.requests[2]?.fields).toMatchObject({
+      chat_id: "123",
+      message_id: Number(result.messageId),
+      caption: "Choose one\n\nAnswered: yes",
+    });
   });
 
-  it.each([
-    { kind: "photo", fileName: "photo.jpg" },
-    { kind: "document", fileName: "document.pdf" },
-    { kind: "video", fileName: "video.mp4" },
-  ])("finalizes $kind questions as bounded media captions", async ({ fileName }) => {
+  it("finalizes media-receipt questions as bounded captions", async () => {
     const deliveredText = "Q".repeat(1000);
     const statusLine = `Answered: ${"A".repeat(190)}`;
     const outbound = createTelegramOutboundAdapter();
@@ -138,7 +155,7 @@ describe("Telegram question finalization", () => {
       target: { channel: "telegram", to: "-100123:topic:77", accountId: "default" },
       payload: {
         text: deliveredText,
-        mediaUrls: [`https://example.com/${fileName}`],
+        mediaUrls: ["https://example.com/photo.jpg"],
         channelData: {
           askUser: { questionId: "ask_0123456789abcdef0123456789abcdef" },
         },

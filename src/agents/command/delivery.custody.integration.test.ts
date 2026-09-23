@@ -124,6 +124,7 @@ describe("native completion final-send custody", () => {
           await replaceSessionEntry(target, admittedEntry);
           const payloads = [{ text: "The completed child result" }];
           const marker = await persistPendingFinalDeliveryMarker({
+            agentId: target.agentId,
             deliver: true,
             sessionStore: { [key]: admittedEntry },
             sessionKey: key,

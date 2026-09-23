@@ -10,6 +10,8 @@ sidebarTitle: "Settings"
 
 Everything under Settings, plus the settings-owned pages the sidebar links to.
 
+**Back to app** returns to the workspace page you were using before opening Settings, including its selected session and URL filters. Escape does the same when an editor or dialog is not using that key. Moving between Settings pages does not change the return destination.
+
 Use **Search settings** to find pages and configuration fields. Search for **Typography**, **font**, or **Chat prose** to jump to the Interface and Chat prose font controls in Appearance. Authored schema tags remain searchable with `tag:<name>` but are not displayed as field badges. Tags are not inferred from setting names, sensitivity, or complexity. For a field authored with a `storage` tag, combine it with text such as `Log tag:storage File`. Multiple tags require a field to match every tag.
 
 Model menus with more than eight choices include search. Filter by model name or provider/model reference, then choose a result to apply it. Typing or dismissing the menu leaves the current selection unchanged. Short menus stay compact, and custom model entry remains available where the setting supports it.
@@ -95,7 +97,7 @@ Gateway in this browser without reconnecting. Session edits and connection edits
 have independent Save/Apply and Discard actions. Switching Gateways restores
 that Gateway's saved session selection.
 
-Open **Settings → Gateway** to see the **Gateway Host** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and space for each mounted local disk. Linux EFI boot partitions mounted at `/boot/efi` or `/efi` are omitted. The card shares a five-second `system.info` refresh with the activity graphs while visible; mounted-disk discovery reuses its ten-second snapshot. CPU count and model share a two-second snapshot; process counters and event-loop health stay live on every request. Linux disk sampling reads filesystem statistics directly and does not require the `df` utility. The RPC requires the `operator.read` scope. If mounted-disk discovery is unavailable, the card retains the state-directory disk reading when available. Connections without the required scope omit the card. Shimmer placeholders appear while the first stats are being fetched and remain still with reduced motion enabled; refreshes keep the previous readings and uptime visible. Disk paths appear in their labels without duplicate tooltips.
+Open **Settings → Gateway** to see the **Gateway Host** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and space for each mounted local disk. Linux EFI boot partitions mounted at `/boot/efi` or `/efi` are omitted. The card shares a five-second `system.info` refresh with the activity graphs while visible; mounted-disk discovery reuses its ten-second snapshot. CPU count and model are sampled once when the Gateway process starts; restart the Gateway to reflect CPU topology changes. Process counters, load averages, and event-loop health stay live on every request. Linux disk sampling reads filesystem statistics directly and does not require the `df` utility. The RPC requires the `operator.read` scope. If mounted-disk discovery is unavailable, the card retains the state-directory disk reading when available. Connections without the required scope omit the card. Shimmer placeholders appear while the first stats are being fetched and remain still with reduced motion enabled; refreshes keep the previous readings and uptime visible. Disk paths appear in their labels without duplicate tooltips.
 
 The **Connection** card also shows average ping and p50, p95, and p99 round-trip
 times in milliseconds. It samples every five seconds while the page is visible
@@ -299,6 +301,11 @@ show the installed → target short commit SHAs on a separate line below the com
 count. **Compare on GitHub** opens a comparison when the tracked upstream is
 a GitHub repository; other installs show plain revisions. This distinguishes
 revisions that share a version number.
+After a checkout refresh, the count, revisions, and comparison link describe the
+same checked upstream. An automatic update campaign keeps its announced target;
+its displayed comparison stays bound to that target. If the installed revision
+has changed, the campaign shows its target without an outdated count or link.
+Commit details from a different comparison stay hidden.
 
 After confirmation, one update view shows the ordered phases, current or last
 step details, and verification results for the service, version, plugins,

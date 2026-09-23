@@ -1,5 +1,6 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderDecisionModelPicker } from "./decision-model-picker.ts";
 import { renderModelPicker } from "./model-picker.ts";
 import type { SelectPicker } from "./select-picker.ts";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
@@ -290,4 +291,69 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       0,
     );
   });
+  it.each([390, 1280])(
+    "fits grouped decisions and supports native header keyboard controls at %i pixels",
+    async (width) => {
+      const { page, userEvent } = await import("vitest/browser");
+      await page.viewport(width, 844);
+      const host = document.createElement("div");
+      host.style.cssText = "position:fixed;right:12px;top:32px;width:90px";
+      document.body.append(host);
+      const onChange = vi.fn();
+      render(
+        html`${renderDecisionModelPicker({
+            id: "decisions",
+            models: [
+              { provider: "alpha", id: "one", name: "Alpha decision model", pluginId: "alpha" },
+              { provider: "beta", id: "two", name: "Beta decision model", pluginId: "beta" },
+            ],
+            value: "alpha/one",
+            disabled: false,
+            onChange,
+          })}<button id="after-picker">Next field</button>`,
+        host,
+      );
+      const picker = host.querySelector<SelectPicker>("openclaw-select-picker")!;
+      await picker.updateComplete;
+      const trigger = page.getByRole("button", {
+        name: "Decision Model: Alpha decision model",
+        exact: true,
+      });
+      await trigger.click();
+      const search = page.getByRole("combobox", { name: "Search", exact: true });
+      await expect.element(search).toHaveFocus();
+      const alpha = page.getByRole("button", { name: "Alpha 1", exact: true });
+      await userEvent.keyboard("{Tab}");
+      await expect.element(alpha).toHaveFocus();
+      await userEvent.keyboard("{Enter}");
+      await expect.element(alpha).toHaveAttribute("aria-expanded", "false");
+      expect(onChange).not.toHaveBeenCalled();
+      await userEvent.keyboard(" ");
+      await expect.element(alpha).toHaveAttribute("aria-expanded", "true");
+      const menu = picker.querySelector<HTMLElement>(".picker-select__menu")!;
+      const bounds = menu.getBoundingClientRect();
+      expect(bounds.left).toBeGreaterThanOrEqual(0);
+      expect(bounds.right).toBeLessThanOrEqual(innerWidth);
+      expect(bounds.bottom).toBeLessThanOrEqual(innerHeight);
+      for (const label of picker.querySelectorAll<HTMLElement>(
+        "[role=option] .picker-select__label",
+      )) {
+        expect(label.scrollWidth).toBeLessThanOrEqual(label.clientWidth);
+      }
+      await userEvent.keyboard("{Tab}{Tab}");
+      await expect
+        .element(page.getByRole("button", { name: "Next field", exact: true }))
+        .toHaveFocus();
+      await expect.element(trigger).toHaveAttribute("aria-expanded", "false");
+      expect(onChange).not.toHaveBeenCalled();
+      await trigger.click();
+      await search.fill("beta");
+      await expect
+        .element(page.getByRole("option", { name: "Beta decision model", exact: true }))
+        .toBeVisible();
+      await userEvent.keyboard("{Enter}");
+      expect(onChange).toHaveBeenCalledExactlyOnceWith("beta/two");
+      await expect.element(trigger).toHaveFocus();
+    },
+  );
 });

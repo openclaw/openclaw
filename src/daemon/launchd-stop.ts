@@ -1,9 +1,23 @@
 /** LaunchAgent stop semantics and in-service maintenance parking. */
+import { isDeepStrictEqual } from "node:util";
+import { readLockPayloadSync, resolveGatewayLockPaths } from "../infra/gateway-lock.js";
+import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
 import { formatPortDiagnostics } from "../infra/ports-format.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
 import { probePortUsage } from "../infra/ports-probe.js";
+import { GatewayRestartPreparationError } from "../infra/restart-intent-error.js";
+import {
+  prepareGatewayRestartIntentLegacyProcess,
+  writeGatewayServiceRestartIntentSync,
+} from "../infra/restart-intent.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
-import { isPidDefinitelyDead } from "../shared/pid-alive.js";
+import { resolveUpdateInstallRoot } from "../infra/update-install-root.js";
+import { createManagedHandoffLeaseStore } from "../infra/update-managed-service-handoff-lease.js";
+import {
+  getFileLockProcessStartTime,
+  isPidAlive,
+  isPidDefinitelyDead,
+} from "../shared/pid-alive.js";
 import { sleep } from "../utils.js";
 import { isCurrentProcessInsideLaunchdService } from "./launchd-current-service.js";
 import {
@@ -16,13 +30,19 @@ import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "./launchd-plist.js";
 import { scheduleDetachedLaunchdMaintenancePark } from "./launchd-restart-handoff.js";
 import {
   probeLaunchAgentState,
+  readLaunchAgentProgramArguments,
+  readLaunchAgentRuntime,
   resolveLaunchAgentGatewayContext,
   resolveLaunchAgentGuiDomain,
 } from "./launchd-runtime.js";
 import { formatLine } from "./output.js";
+import { mergeGatewayServiceEnv } from "./service-env-merge.js";
 import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
 import type { GatewayServiceControlArgs, GatewayServiceEnv } from "./service-types.js";
-import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
+import {
+  assertGatewayServiceUpdateCurrent,
+  isUpdateOwnedGatewayServiceCommand,
+} from "./service-update-authority.js";
 
 const LAUNCH_AGENT_STOP_PORT_RELEASE_TIMEOUT_MS = LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS * 1_000;
 const LAUNCH_AGENT_STOP_PORT_RELEASE_POLL_MS = 100;
@@ -145,16 +165,39 @@ export async function stopLaunchAgent({
   const serviceTarget = `${domain}/${label}`;
   const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
 
+  const updateOwned = isUpdateOwnedGatewayServiceCommand();
+  let intentEnv = serviceEnv;
+  const assertNativeCurrent = () => {
+    assertCurrent?.();
+    assertGatewayServiceUpdateCurrent();
+  };
   const insideService = await isCurrentProcessInsideLaunchdService(label, process.env);
   const assertStopCurrent = async () => {
-    if (insideService) {
+    assertNativeCurrent();
+    // Classify from the live lease too: losing an inherited marker cannot turn a
+    // transferred executor into a direct-original updater. The row is not a grant;
+    // both the captured caller fence and the handoff owner must still be current.
+    const handoff =
+      updateOwned && updateHandoff
+        ? createManagedHandoffLeaseStore().read(resolveUpdateInstallRoot(updateHandoff.root))
+        : undefined;
+    const transferred =
+      handoff?.kind === "current" &&
+      (handoff.lease.helper.pid !== handoff.lease.executor.pid ||
+        handoff.lease.helper.startIdentity !== handoff.lease.executor.startIdentity);
+    if (
+      insideService ||
+      transferred ||
+      (updateOwned && intentEnv.OPENCLAW_UPDATE_RUN_HANDOFF === "1")
+    ) {
       // Retain the ancestry decision after bootout; losing the label does not
       // make a delegated updater an independent operator.
       const authorized =
+        updateOwned &&
         updateHandoff &&
         (await (
           await import("../infra/update-managed-service-handoff.js")
-        ).isCurrentManagedServiceUpdateHandoffProcess(updateHandoff));
+        ).isCurrentManagedServiceUpdateHandoffProcess({ ...updateHandoff, env: intentEnv }));
       if (!authorized) {
         throw launchAgentStopError(
           serviceTarget,
@@ -162,33 +205,108 @@ export async function stopLaunchAgent({
         );
       }
     }
-    assertCurrent?.();
+    assertNativeCurrent();
   };
   await assertStopCurrent();
   const initialPid = verifyLaunchAgentStopProbe(
     serviceTarget,
     await probeLaunchAgentState(serviceTarget, 5_000),
   );
+  let clearIntent: (() => void) | undefined;
+  let assertServingCurrent = assertNativeCurrent;
   let warning: string | undefined;
-  if (persistDisable) {
-    await assertStopCurrent();
-    const disabled = await execLaunchctl(["disable", serviceTarget]);
-    if (disabled.code === 0) {
-      reportMutation("disable");
-    } else {
-      warning = `launchctl disable failed; used bootout fallback without persisting disable: ${formatLaunchctlResultDetail(disabled)}`;
+  try {
+    if (updateOwned) {
+      const command = await readLaunchAgentProgramArguments(serviceEnv, { requireEffective: true });
+      assertNativeCurrent();
+      if (!command) {
+        throw new GatewayRestartPreparationError("service-command");
+      }
+      intentEnv = mergeGatewayServiceEnv(serviceEnv, command);
+      await assertStopCurrent();
+      const owner = readGatewayOwnerLease({ env: intentEnv, current: true });
+      const legacyLockPath = owner ? undefined : resolveGatewayLockPaths(intentEnv).stateLockPath;
+      const legacyLock = legacyLockPath ? readLockPayloadSync(legacyLockPath, true) : undefined;
+      const legacyProcess = await prepareGatewayRestartIntentLegacyProcess({
+        env: intentEnv,
+        command,
+        runtimePid: initialPid,
+        readRuntime: () => readLaunchAgentRuntime(serviceEnv),
+        assertCurrent: assertNativeCurrent,
+      });
+      const currentProbe = await probeLaunchAgentState(serviceTarget, 5_000);
+      await assertStopCurrent();
+      if (verifyLaunchAgentStopProbe(serviceTarget, currentProbe) !== initialPid) {
+        throw new GatewayRestartPreparationError("serving-owner");
+      }
+      const assertIntentCurrent = () => {
+        assertNativeCurrent();
+        // Published Gateways can have only a file lock. An absent SQLite owner
+        // cannot attest that the native wrapper or its serving child is unchanged.
+        if (
+          legacyProcess &&
+          (!legacyLock ||
+            !legacyLockPath ||
+            !isPidAlive(legacyProcess.pid) ||
+            getFileLockProcessStartTime(legacyProcess.pid, intentEnv) !== legacyProcess.startTime ||
+            !isPidAlive(legacyLock.pid) ||
+            getFileLockProcessStartTime(legacyLock.pid, intentEnv) !== legacyLock.startTime ||
+            !isDeepStrictEqual(legacyLock, readLockPayloadSync(legacyLockPath, true)))
+        ) {
+          throw new GatewayRestartPreparationError("serving-owner");
+        }
+        const currentOwner = readGatewayOwnerLease({ env: intentEnv, current: true });
+        if (
+          currentOwner?.owner !== owner?.owner ||
+          currentOwner?.pid !== owner?.pid ||
+          currentOwner?.startedAt !== owner?.startedAt ||
+          currentOwner?.state !== owner?.state
+        ) {
+          throw new GatewayRestartPreparationError("serving-owner");
+        }
+      };
+      assertServingCurrent = assertIntentCurrent;
+      // False means a verified stopped service with no serving owner. Recording
+      // failure for a serving process throws; never treat it as best-effort.
+      writeGatewayServiceRestartIntentSync({
+        env: intentEnv,
+        service: { kind: "launchd", name: label },
+        nativePid: initialPid,
+        nativeStopped: currentProbe.state !== "running",
+        legacyProcess,
+        reason: "update.run",
+        assertCurrent: assertIntentCurrent,
+        onRecorded: (clear) => {
+          clearIntent = clear;
+        },
+      });
     }
-  }
+    if (persistDisable) {
+      await assertStopCurrent();
+      assertServingCurrent();
+      const disabled = await execLaunchctl(["disable", serviceTarget]);
+      if (disabled.code === 0) {
+        reportMutation("disable");
+      } else {
+        warning = `launchctl disable failed; used bootout fallback without persisting disable: ${formatLaunchctlResultDetail(disabled)}`;
+      }
+    }
 
-  // A stopped but loaded job can still respawn. Both stop modes must boot it out;
-  // --disable additionally preserves the operator's policy across login/reboot.
-  await assertStopCurrent();
-  const bootout = await execLaunchctl(["bootout", serviceTarget], LAUNCH_AGENT_STOP_TIMEOUT_MS);
-  if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
-    throw launchAgentStopError(
-      serviceTarget,
-      `launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`,
-    );
+    // A stopped but loaded job can still respawn. Both stop modes must boot it out;
+    // --disable additionally preserves the operator's policy across login/reboot.
+    await assertStopCurrent();
+    assertServingCurrent();
+    const bootout = await execLaunchctl(["bootout", serviceTarget], LAUNCH_AGENT_STOP_TIMEOUT_MS);
+    if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
+      throw launchAgentStopError(
+        serviceTarget,
+        `launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`,
+      );
+    }
+  } catch (error) {
+    // Revocation can close native authority; compare-and-clear still owns only our row.
+    clearIntent?.();
+    throw error;
   }
   reportMutation(persistDisable ? "disable-bootout" : "bootout");
   await waitForLaunchAgentUnloaded(serviceTarget, initialPid, assertCurrent);

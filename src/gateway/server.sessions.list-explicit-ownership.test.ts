@@ -5,7 +5,10 @@ import {
   deleteSessionEntryLifecycle,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
-import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../config/sessions/session-sharing-store.native.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";

@@ -149,7 +149,9 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
         gateway.subscribeEvents((event) => {
           if (
             this.context?.gateway === gateway &&
-            (event.event === "config.changed" || event.event === "chat.metadata.changed")
+            (event.event === "cron" ||
+              event.event === "config.changed" ||
+              event.event === "chat.metadata.changed")
           ) {
             if (this.open) {
               void this.ensureCatalogItems(true);

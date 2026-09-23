@@ -30,6 +30,7 @@ import {
 } from "./subagent-registry-completion.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
+  cancelSubagentRequesterSettleWake,
   claimSubagentRunKill,
   markSubagentRunTerminated,
   releaseSubagentRunKillClaim,
@@ -171,6 +172,14 @@ export async function killSubagentRun(params: {
     });
   const initialTargetState = resolveSubagentKillTargetState(params.entry);
   if (initialTargetState) {
+    if (params.suppressTaskDelivery && params.entry.requesterSettleWake) {
+      await cancelSubagentRequesterSettleWake(params.entry, () => {
+        params.cancellationControl?.assertCurrent();
+        if (!isCurrent()) {
+          throw new Error("Subagent ownership changed during cancellation; retry.");
+        }
+      });
+    }
     if (
       params.entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
       params.entry.suppressAnnounceReason !== "steer-restart"

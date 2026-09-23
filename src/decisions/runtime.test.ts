@@ -1,14 +1,22 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
+import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withOperatorToolGatewayAuthority } from "../gateway/server-plugin-in-process-dispatch.js";
+import { createSyntheticPluginRuntimeClient } from "../gateway/server-plugin-runtime-client.js";
+import * as currentPluginMetadata from "../plugins/current-plugin-metadata-state.js";
 import { runPluginRegisterSyncInRegistry } from "../plugins/loader-module-runtime.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { evaluateDecisionInRegistry, prepareDecisionProviderReload } from "./runtime.js";
 import type {
   DecisionBatch,
@@ -88,6 +96,98 @@ afterEach(() => {
 });
 
 describe("registered decision capability", () => {
+  it("requires a current Gateway binding for scoped operator decisions", async () => {
+    const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
+    const host = registered(evaluate);
+    setRuntimeConfigSnapshot(config);
+    await expect(
+      withPluginRuntimeGatewayRequestScope(
+        {
+          client: createSyntheticPluginRuntimeClient({
+            operatorRoleActor: { kind: "operator", profileId: "decision-reader" },
+            scopes: ["operator.write"],
+          }),
+          isWebchatConnect: () => false,
+        },
+        () => host.api.runtime.decisions.evaluate(batch, options()),
+      ),
+    ).rejects.toThrow("Decision evaluation requires its current Gateway binding.");
+    expect(evaluate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { model: "fixture-v1", source: "agent-tool" },
+    { model: "shortcut", source: "direct-tool" },
+    { model: "shortcut", source: "unbound-operator" },
+  ] as const)(
+    "enforces requester exclusions for $model from $source while preserving independent system decisions",
+    async ({ model, source }) => {
+      const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
+      const host = registered(evaluate);
+      const metadata = createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "fixture-normalizer",
+            modelIdNormalization: {
+              providers: { fixture: { aliases: { shortcut: "fixture-v1" } } },
+            },
+          },
+        ],
+      });
+      const snapshot = vi
+        .spyOn(currentPluginMetadata, "getProcessGatewayPluginMetadataSnapshot")
+        .mockReturnValue(metadata);
+      onTestFinished(() => snapshot.mockRestore());
+      const selected: OpenClawConfig = {
+        agents: {
+          entries: { main: {} },
+          defaults: { model: "fixture/permitted", decisionModel: `fixture/${model}` },
+        },
+      };
+      setRuntimeConfigSnapshot(selected);
+      const operatorAuthority = createAdmittedRunOperatorAuthority({
+        profileId: "decision-reader",
+        scopes: ["operator.write"],
+        assertCurrent: () => {},
+        modelPolicy: prepareOperatorModelPolicy({
+          cfg: selected,
+          policy: { sourceAgent: "main", allow: ["fixture/*"], deny: ["fixture/fixture-v1"] },
+          manifestPlugins: metadata,
+        }),
+      });
+      const invoke = () => host.api.runtime.decisions.evaluate(batch, options());
+      await expect(
+        source === "agent-tool"
+          ? withGatewayToolCallerIdentity(
+              { agentId: "main", sessionKey: "agent:main:reader", operatorAuthority },
+              invoke,
+            )
+          : withOperatorToolGatewayAuthority(
+              {
+                authenticatedUserProfile: {
+                  profileId: operatorAuthority.profileId,
+                  displayName: "Decision Reader",
+                  hasAvatar: false,
+                  updatedAt: 1,
+                },
+                scopes: ["operator.write"],
+                ...(source === "direct-tool" ? { operatorRunAuthority: operatorAuthority } : {}),
+              },
+              invoke,
+            ),
+      ).rejects.toThrow(
+        source === "unbound-operator"
+          ? "requires original Gateway authority"
+          : "cannot use this model",
+      );
+      expect(evaluate).not.toHaveBeenCalled();
+      await expect(host.api.runtime.decisions.evaluate(batch, options())).resolves.toMatchObject({
+        status: "ok",
+      });
+      expect(evaluate).toHaveBeenCalledOnce();
+      expect(evaluate.mock.calls[0]?.[1].model).toBe(model);
+    },
+  );
   it.each([" fixture", "fixture ", "fixture/model"])(
     "rejects a provider ID that cannot round-trip through selection: %j",
     async (providerId) => {

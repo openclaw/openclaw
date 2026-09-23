@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { validateConfigObject } from "./validation-core.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("Cloudflare Access OIDC GitHub identity config", () => {
@@ -108,6 +109,67 @@ describe("gateway operator role config", () => {
     agents: ["guest-agent"],
     scopes: ["operator.read", "operator.write"],
   };
+
+  test("validates model source, scoped aliases, empty membership and future-family exclusions", () => {
+    const result = validateConfigObject({
+      agents: {
+        entries: {
+          shared: { model: "fixture/primary", models: { "fixture/fallback": { alias: "backup" } } },
+        },
+      },
+      gateway: {
+        roles: {
+          default: "guest",
+          definitions: {
+            guest: {
+              ...validRole,
+              modelPolicy: {
+                sourceAgent: " SHARED ",
+                allow: ["backup"],
+                deny: ["fixture/restricted-*"],
+              },
+            },
+            paused: { ...validRole, modelPolicy: { allow: [] } },
+          },
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.gateway?.roles?.definitions.guest?.modelPolicy).toEqual({
+        sourceAgent: "shared",
+        allow: ["backup"],
+        deny: ["fixture/restricted-*"],
+      });
+    }
+  });
+
+  test.each([
+    { sourceAgent: "missing", deny: ["fixture/restricted-*"] },
+    { sourceAgent: "shared", deny: ["unknown-alias"] },
+    { sourceAgent: "shared", deny: ["fixture/*restricted"] },
+    { sourceAgent: "shared", deny: ["*/restricted-*"] },
+    { sourceAgent: "shared", deny: ["fixture/restricted-**"] },
+    { sourceAgent: "shared", deny: ["fixture*"] },
+    { sourceAgent: "shared", deny: ["fixture/restricted- *"] },
+  ])("rejects model exclusions that cannot be applied as configured: %j", (modelPolicy) => {
+    const result = validateConfigObject({
+      agents: { entries: { shared: { model: "fixture/primary" } } },
+      gateway: {
+        roles: { default: "guest", definitions: { guest: { ...validRole, modelPolicy } } },
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: expect.stringContaining("gateway.roles.definitions.guest.modelPolicy"),
+          }),
+        ]),
+      );
+    }
+  });
 
   test.each(["none", "view", "suggest", "write"])(
     "accepts the closed foreign-session access level %s",
