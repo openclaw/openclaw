@@ -210,10 +210,6 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
     expect(actions.getBoundingClientRect().top).toBe(actionTop);
 
     await document.fonts.ready;
-    const nextFrame = () =>
-      new Promise<void>((resolve) => {
-        requestAnimationFrame(() => resolve());
-      });
     const styleChanges: MutationRecord[] = [];
     const observer = new MutationObserver((records) => styleChanges.push(...records));
     observer.observe(input, { attributes: true, attributeFilter: ["style"] });

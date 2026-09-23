@@ -30,6 +30,7 @@ import { renderShellLazyOverlays, type ShellLazyOverlayHost } from "./app-shell-
 import type { ShellViewCallbacks } from "./app-shell-view-callbacks.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import { canGoBackInNativeEmbed } from "./browser.ts";
+import type { ApplicationNavigationOptions } from "./context.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 import {
   APP_SIDEBAR_ELEMENT,
@@ -74,17 +75,18 @@ export interface ShellViewHost
   newSessionRouteAgentId(): string;
   enabledRouteIds(): readonly RouteId[];
   exitSettings(): void;
-  handleNativeNewSession(): void;
+  readonly handleNativeNewSession: () => void;
   handleSettingsSearchQueryChange(query: string): Promise<void>;
   handleThemeChange(event: CustomEvent<ThemeModeChangeDetail>): void;
   nativeNavCollapsed(): boolean;
   openApprovals(): void;
-  openPalette(): void;
+  readonly openPalette: () => void;
+  readonly navigate: (routeId: string, options?: ApplicationNavigationOptions) => void;
   refreshControlUi: () => Promise<boolean>;
   recoverNotFoundRoute: () => boolean;
   requestUpdate(): void;
   resizeNavigation(splitRatio: number): void;
-  toggleNavigationSurface(trigger?: HTMLElement): void;
+  readonly toggleNavigationSurface: (trigger?: HTMLElement) => void;
 }
 
 export function renderApplicationShell(host: ShellViewHost) {
