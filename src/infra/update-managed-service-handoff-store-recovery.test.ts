@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { withConfigWriteLock } from "../config/write-lock.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { captureManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-database.js";
 import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
 
 const fixture = vi.hoisted(() => ({ root: "" }));
@@ -59,6 +61,56 @@ unix("keeps the private mode once an ordinary lease has been admitted", () => {
   expect(store.acquire(install, "owner", { kind: "update" }).kind).toBe("acquired");
   expect(fileMode()).toBe(0o600);
 });
+
+unix.each([false, true])(
+  "forwards transaction warnings to the handoff sink (existing: %s)",
+  (existing) => {
+    const options = { databasePath, serviceManagerEnv: {} };
+    const originalInstall = path.join(fixture.root, "original");
+    const nextInstall = path.join(fixture.root, "next");
+    fs.mkdirSync(originalInstall);
+    fs.mkdirSync(nextInstall);
+    expect(
+      createManagedHandoffLeaseStore(options).acquire(originalInstall, "original", {
+        kind: "update",
+      }).kind,
+    ).toBe("acquired");
+    const logger = { warn: vi.fn() };
+    const store = createManagedHandoffLeaseStore(
+      {
+        ...options,
+        existingIdentity: existing
+          ? captureManagedUpdateLeaseDatabaseIdentity(databasePath)
+          : undefined,
+      },
+      logger,
+    );
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    // oxlint-disable-next-line typescript/unbound-method -- exec.call restores the actual database receiver.
+    const exec = DatabaseSync.prototype.exec;
+    vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (this: DatabaseSync, sql) {
+      const result = exec.call(this, sql);
+      if (sql === "BEGIN IMMEDIATE" || sql === "COMMIT") {
+        now += 1_000;
+      }
+      return result;
+    });
+    expect(store.acquire(nextInstall, "next", { kind: "update" }).kind).toBe("acquired");
+    expect(logger.warn).toHaveBeenCalledTimes(2);
+    for (const step of ["begin", "commit"]) {
+      expect(logger.warn).toHaveBeenCalledWith(
+        "slow SQLite transaction lock wait",
+        expect.objectContaining({ step, elapsedMs: 1_000, async: false }),
+      );
+    }
+    expect(store.read(originalInstall)).toMatchObject({
+      kind: "current",
+      lease: { owner: "original" },
+    });
+    expect(store.read(nextInstall)).toMatchObject({ kind: "current", lease: { owner: "next" } });
+  },
+);
 
 const retainedStores = () =>
   fs.readdirSync(fixture.root).filter((name) => name.includes(".sqlite.unsafe-file."));

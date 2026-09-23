@@ -362,3 +362,23 @@ it("keeps migrated finalization free of eager CLI registration", () => {
   const validationOnly = new Set(["src/cli/daemon-cli.ts", "src/cli/daemon-cli/register.ts"]);
   expect(closure.filter((file) => validationOnly.has(file))).toEqual([]);
 });
+
+it("keeps heartbeat transactions free of default reporting while retaining storage guards", () => {
+  const closure = collectRuntimeImportClosure(process.cwd(), [
+    "src/state/openclaw-state-lease-heartbeat.worker.ts",
+  ]);
+  const defaultReporting = new Set([
+    "src/infra/sqlite-transaction.ts",
+    "src/logging/subsystem.ts",
+    "src/logging/logger.ts",
+    "src/logging/logger-file-transport.ts",
+  ]);
+  expect(closure.filter((file) => defaultReporting.has(file))).toEqual([]);
+  expect(closure).toEqual(
+    expect.arrayContaining([
+      "src/infra/sqlite-transaction-core.ts",
+      "src/infra/fs-safe-advanced.ts",
+      "src/logging/redact.ts",
+    ]),
+  );
+});

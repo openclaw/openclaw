@@ -7,7 +7,7 @@ import {
   sqliteErrorCode,
   sqliteExtendedResultCode,
 } from "../infra/sqlite-error-diagnostics.js";
-import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteTransactionSync } from "../infra/sqlite-transaction-core.js";
 import {
   acquireStateDatabaseCoordinator,
   StateDatabaseCoordinatorContentionError,
@@ -114,7 +114,7 @@ const renew = (explicit = false): number | undefined => {
         db,
         0,
         () =>
-          runSqliteImmediateTransactionSync(
+          runSqliteTransactionSync(
             db,
             () => {
               if (Atomics.load(shared, state.status) >= state.closed) {
@@ -127,6 +127,7 @@ const renew = (explicit = false): number | undefined => {
                 processOwner?.identity,
               );
             },
+            "immediate",
             { logger: { warn() {} } },
           ),
         { lockFailureReporting: "suppress" },

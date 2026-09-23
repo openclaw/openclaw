@@ -748,6 +748,7 @@ src/infra/sqlite-staging-token.ts
 src/infra/sqlite-store.worker.ts
 src/infra/sqlite-strict.ts
 src/infra/sqlite-terminal-open-latch.ts
+src/infra/sqlite-transaction-core.ts
 src/infra/sqlite-transaction.ts
 src/infra/sqlite-user-version.ts
 src/infra/sqlite-wal-checkpoint.ts

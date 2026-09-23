@@ -9,7 +9,7 @@ import { isPathInside } from "./path-guards.js";
 import { applyPrivateModeSync } from "./private-mode.js";
 import { isSqliteLockError, withSqliteNativeOpen } from "./sqlite-error-diagnostics.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "./sqlite-handle-lifecycle.js";
-import { sqliteWriteAdmissionServicesForLocation } from "./sqlite-transaction.js";
+import { sqliteWriteAdmissionServicesForLocation } from "./sqlite-transaction-core.js";
 
 export const SqliteCoordinatorError = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteCoordinatorError"),
